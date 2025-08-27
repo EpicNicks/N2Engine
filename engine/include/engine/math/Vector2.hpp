@@ -1,28 +1,18 @@
 #pragma once
 
+#include "VectorN.hpp"
+
 namespace N2Engine
 {
     namespace Math
     {
-        struct Vector2
+        struct Vector2 : public VectorN<float, 2>
         {
         public:
-            float x = 0.0f, y = 0.0f;
+            float &x = vector[0];
+            float &y = vector[1];
 
-            float Magnitude() const;
-            float Length() const;
-
-            static float Distance(const Vector2 &a, const Vector2 &b);
-
-            Vector2 operator+(const Vector2 &other) const;
-            Vector2 operator-(const Vector2 &other) const;
-            Vector2 operator*(float other) const;
-            Vector2 operator/(float other) const;
-
-            bool operator==(const Vector2 &other) const;
-            bool operator!=(const Vector2 &other) const;
+            Vector2(const VectorN<float, 2> &base) : VectorN<float, 2>(base) {}
         };
-
-        Vector2 operator*(float f, Vector2 v);
     }
 }
