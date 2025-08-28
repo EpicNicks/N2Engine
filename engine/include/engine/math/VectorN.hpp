@@ -17,6 +17,15 @@ namespace N2Engine
         public:
             std::array<T, DIMENSION> vector;
 
+            VectorN(std::initializer_list<T> items)
+            {
+                if (items.size() != DIMENSION)
+                {
+                    throw std::invalid_argument("Initializer list size must match vector dimension");
+                }
+                std::copy(items.begin(), items.end(), vector.begin());
+            }
+
             T Magnitude() const
             {
                 T sumOfSquares = T{0};
@@ -165,7 +174,7 @@ namespace N2Engine
                 result.vector.fill(T{1});
                 return result;
             }
-            static VectorN One()
+            static VectorN Zero()
             {
                 VectorN result;
                 result.vector.fill(T{0});
