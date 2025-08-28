@@ -70,6 +70,41 @@ namespace N2Engine
                 return result;
             }
 
+            static VectorN Lerp(const VectorN &a, const VectorN &b, T t)
+            {
+                VectorN result;
+                for (std::size_t i = 0; i < DIMENSION; i++)
+                {
+                    result[i] = a[i] + t * (b[i] - a[i]);
+                }
+                return result;
+            }
+
+            static VectorN Slerp(const VectorN &a, const VectorN &b, T t)
+            {
+                T dot = a.Dot(b);
+                dot = std::clamp(dot, T{-1}, T{1});
+
+                if (std::abs(dot) > T{0.9995})
+                {
+                    return Lerp(a, b, t);
+                }
+
+                T theta = std::acos(dot) * t;
+                VectorN relative = (b - a * dot).Normalized();
+                return a * std::cos(theta) + relative * std::sin(theta);
+            }
+
+            VectorN Lerp(const VectorN &other, T t) const
+            {
+                return Lerp(*this, other, t);
+            }
+
+            VectorN Slerp(const VectorN &other, T t) const
+            {
+                return Slerp(*this, other, t);
+            }
+
             T &operator[](std::size_t index)
             {
                 return vector[index];
@@ -170,14 +205,17 @@ namespace N2Engine
 
             static VectorN One()
             {
-                VectorN result;
-                result.vector.fill(T{1});
-                return result;
+                return CreateUniform(T{1});
             }
             static VectorN Zero()
             {
+                return CreateUniform(T{0});
+            }
+
+            static VectorN CreateUniform(T t)
+            {
                 VectorN result;
-                result.vector.fill(T{0});
+                result.vector.fill(t);
                 return result;
             }
         };
