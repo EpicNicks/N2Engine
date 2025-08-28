@@ -282,7 +282,7 @@ namespace N2Engine
 
         Vector3 Quaternion::Rotate(const Vector3 &vector) const
         {
-            Vector3 qvec(x, y, z);
+            Vector3 qvec{x, y, z};
             Vector3 uv = qvec.Cross(vector);
             Vector3 uuv = qvec.Cross(uv);
 

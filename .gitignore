@@ -1,0 +1,36 @@
+# IDE/Editor directories
+.vscode/
+.vs/
+*.swp
+*.swo
+*~
+
+# Build directories
+bin/
+build/
+out/
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Compiled files
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.exe
+
+# OS specific
+.DS_Store
+Thumbs.db

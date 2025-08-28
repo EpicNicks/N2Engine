@@ -17,6 +17,11 @@ namespace N2Engine
         public:
             std::array<T, DIMENSION> vector;
 
+            VectorN()
+            {
+                vector.fill(T{0});
+            }
+
             VectorN(std::initializer_list<T> items)
             {
                 if (items.size() != DIMENSION)
