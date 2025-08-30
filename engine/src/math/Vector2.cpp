@@ -1,6 +1,6 @@
 #include <cmath>
 
-#include "Vector2.hpp"
+#include "engine/math/Vector2.hpp"
 
 using namespace N2Engine::Math;
 

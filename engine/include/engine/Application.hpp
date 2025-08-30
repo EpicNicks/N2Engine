@@ -1,12 +1,12 @@
 #pragma once
-#include "SceneManager.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
 
 class Application
 {
     friend class SceneManager;
 
 private:
-    Application() {}
+    Application();
     Application(const Application &) = delete;
     Application &operator=(const Application &) = delete;
 

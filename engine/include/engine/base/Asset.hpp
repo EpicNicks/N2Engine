@@ -1,6 +1,6 @@
 #pragma once
 
-#include "UUID.hpp"
+#include "engine/math/UUID.hpp"
 
 namespace N2Engine
 {
@@ -10,6 +10,7 @@ namespace N2Engine
         Math::UUID _uuid;
 
     public:
+        Asset();
         Math::UUID GetUUID();
     };
 }

@@ -1,6 +1,6 @@
-#include "Quaternion.hpp"
-#include "Vector3.hpp"
-#include "Matrix.hpp"
+#include "engine/math/Quaternion.hpp"
+#include "engine/math/Vector3.hpp"
+#include "engine/math/Matrix.hpp"
 #include <cmath>
 #include <algorithm>
 

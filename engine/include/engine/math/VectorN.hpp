@@ -3,6 +3,8 @@
 #include <array>
 #include <cmath>
 #include <type_traits>
+#include <algorithm>
+#include <stdexcept>
 
 namespace N2Engine
 {

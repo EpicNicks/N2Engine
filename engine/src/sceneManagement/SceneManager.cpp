@@ -1,4 +1,4 @@
-#include "SceneManager.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
 
 SceneManager &SceneManager::GetInstance()
 {

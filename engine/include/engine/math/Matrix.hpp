@@ -37,6 +37,16 @@ namespace N2Engine
                 return data[row * N + col];
             }
 
+            constexpr T &operator[](std::size_t row, std::size_t col)
+            {
+                return data[row * N + col];
+            }
+
+            constexpr const T &operator[](std::size_t row, std::size_t col) const
+            {
+                return data[row * N + col];
+            }
+
             void fill(const T &value) { data.fill(value); }
 
             constexpr Matrix operator+(const Matrix &other) const

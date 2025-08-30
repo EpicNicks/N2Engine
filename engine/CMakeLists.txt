@@ -19,10 +19,11 @@ target_include_directories(engine
 
 # Set target properties
 set_target_properties(engine PROPERTIES
-    CXX_STANDARD 20
+    CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS OFF
 )
 
 # Add any necessary libraries
 # target_link_libraries(engine PUBLIC/PRIVATE other_libs)
+target_link_libraries(engine PRIVATE renderer)
