@@ -2,15 +2,8 @@
 
 #include "Renderer.hpp"
 
-// Platform-specific Vulkan surface extensions
-#ifdef _WIN32
-#define VK_USE_PLATFORM_WIN32_KHR
-#elif defined(__linux__)
-#define VK_USE_PLATFORM_XLIB_KHR
-#define VK_USE_PLATFORM_WAYLAND_KHR
-#elif defined(__APPLE__)
-#define VK_USE_PLATFORM_METAL_EXT
-#endif
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
 
 #include <vulkan/vulkan.h>
 
@@ -86,7 +79,7 @@ namespace Renderer
             ~VulkanRenderer() override;
 
             // IRenderer implementation
-            bool Initialize(void *windowHandle, uint32_t width, uint32_t height) override;
+            bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) override;
             void Shutdown() override;
             void Resize(uint32_t width, uint32_t height) override;
 
@@ -112,7 +105,7 @@ namespace Renderer
             // Initialization
             bool CreateInstance();
             bool SetupDebugMessenger();
-            bool CreateSurface(void *windowHandle);
+            bool CreateSurface(GLFWwindow *windowHandle);
             bool PickPhysicalDevice();
             bool CreateLogicalDevice();
             bool CreateSwapChain();
