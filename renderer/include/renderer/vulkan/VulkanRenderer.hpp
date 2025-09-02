@@ -1,11 +1,9 @@
 #pragma once
 
-#include "Renderer.hpp"
-
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
+#include "renderer/common/Renderer.hpp"
 
 #include <vulkan/vulkan.h>
+#include <GLFW/glfw3.h>
 
 #include <vector>
 #include <optional>

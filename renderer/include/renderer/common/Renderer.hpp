@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <GLFW/glfw3.h>
 
 namespace Renderer
 {
@@ -42,7 +43,7 @@ namespace Renderer
             virtual ~IRenderer() = default;
 
             // Lifecycle
-            virtual bool Initialize(void *windowHandle, uint32_t width, uint32_t height) = 0;
+            virtual bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) = 0;
             virtual void Shutdown() = 0;
             virtual void Resize(uint32_t width, uint32_t height) = 0;
 

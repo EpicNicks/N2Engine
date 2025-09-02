@@ -1,37 +1,76 @@
-target_include_directories(renderer PUBLIC include)
+include(FetchContent)
 
-set(RENDERER_SOURCES
-    # Public interface
-    src/renderer.cpp
-    src/buffer.cpp
-    src/texture.cpp
-    src/shader.cpp
-    src/render_pass.cpp
-    
-    # Vulkan implementation
-    src/vulkan/vulkan_renderer.cpp
-    src/vulkan/vulkan_buffer.cpp
-    src/vulkan/vulkan_texture.cpp
-    src/vulkan/vulkan_shader.cpp
-    src/vulkan/vulkan_device.cpp
-    src/vulkan/vulkan_swapchain.cpp
-    src/vulkan/vulkan_command_buffer.cpp
-    src/vulkan/vulkan_memory_allocator.cpp
-    
-    # Common utilities
-    src/common/resource_manager.cpp
-    src/common/validation.cpp
+# Automatically find all source files in the renderer directory
+file(GLOB_RECURSE RENDERER_SOURCES
+    "src/*.cpp"
+    "src/*.cc" 
+    "src/*.cxx"
 )
 
-add_library(renderer STATIC ${RENDERER_SOURCES})
+# Only create library if we have source files
+if(RENDERER_SOURCES)
+    add_library(renderer STATIC ${RENDERER_SOURCES})
+else()
+    # Create an interface library if no source files exist yet
+    add_library(renderer INTERFACE)
+endif()
 
 find_package(Vulkan REQUIRED)
+
+# Configure GLFW with Vulkan support
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_VULKAN_STATIC OFF CACHE BOOL "" FORCE)  # Use dynamic Vulkan linking
+
 FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG 3.3.8
+    GIT_TAG 3.4
 )
 FetchContent_MakeAvailable(glfw)
 
-target_include_directories(renderer PRIVATE ${Vulkan_INCLUDE_DIRS} glfw)
-target_link_libraries(renderer PRIVATE ${Vulkan_LIBRARIES})
+# Configure target after it's created
+if(RENDERER_SOURCES)
+    # Add compile definitions to ensure Vulkan support
+    target_compile_definitions(renderer PRIVATE 
+        GLFW_INCLUDE_VULKAN
+        VK_USE_PLATFORM_XLIB_KHR  # For Linux X11
+    )
+    
+    target_include_directories(renderer 
+        PUBLIC 
+            include
+        PRIVATE
+            src
+            ${Vulkan_INCLUDE_DIRS}
+    )
+    
+    target_link_libraries(renderer 
+        PUBLIC 
+            glfw 
+            Vulkan::Vulkan  # Use modern CMake Vulkan target
+    )
+    
+    # Set target properties
+    set_target_properties(renderer PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+else()
+    # For interface library, just set up the dependencies
+    target_compile_definitions(renderer INTERFACE 
+        GLFW_INCLUDE_VULKAN
+    )
+    
+    target_include_directories(renderer INTERFACE 
+        include
+        ${Vulkan_INCLUDE_DIRS}
+    )
+    
+    target_link_libraries(renderer INTERFACE 
+        glfw 
+        Vulkan::Vulkan
+    )
+endif()
