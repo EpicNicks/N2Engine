@@ -1,5 +1,6 @@
 # IDE/Editor directories
-.vscode/
+.vscode/settings.json.user
+.vscode/*.log
 .vs/
 *.swp
 *.swo

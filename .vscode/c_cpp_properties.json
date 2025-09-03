@@ -1,0 +1,28 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/engine/include/engine/sceneManagement",
+                "${workspaceFolder}/renderer/include",
+                "${workspaceFolder}/engine/include",
+                "${workspaceFolder}/build/_deps/glfw-src/include",
+                "/usr/include/vulkan"
+            ],
+            "defines": [
+                "GLFW_INCLUDE_VULKAN",
+                "VK_USE_PLATFORM_XLIB_KHR",
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE"
+            ],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c17",
+            "cppStandard": "c++23",
+            "intelliSenseMode": "linux-gcc-x64",
+            "configurationProvider": "ms-vscode.cmake-tools"
+        }
+    ],
+    "version": 4
+}
