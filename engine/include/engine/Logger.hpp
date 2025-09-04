@@ -3,6 +3,7 @@
 #include <string>
 #include "engine/base/EventHandler.hpp"
 
+// meant to be received by any GUI or shell and otherwise not used elsewhere directly in the engine
 class Logger
 {
 public:

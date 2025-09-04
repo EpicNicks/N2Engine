@@ -1,16 +1,19 @@
 #pragma once
 
-#include "engine/math/UUID.hpp"
+#include <math/UUID.hpp>
 
 namespace N2Engine
 {
-    class Asset
+    namespace Base
     {
-    private:
-        Math::UUID _uuid;
+        class Asset
+        {
+        private:
+            Math::UUID _uuid;
 
-    public:
-        Asset();
-        Math::UUID GetUUID();
-    };
+        public:
+            Asset();
+            Math::UUID GetUUID();
+        };
+    }
 }

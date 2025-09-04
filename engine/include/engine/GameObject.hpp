@@ -6,7 +6,7 @@
 
 namespace N2Engine
 {
-    class GameObject : public Asset
+    class GameObject : public Base::Asset
     {
     public:
         std::string name;
