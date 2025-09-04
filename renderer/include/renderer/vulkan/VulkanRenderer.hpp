@@ -13,7 +13,6 @@ namespace Renderer
 {
     namespace Vulkan
     {
-
         struct QueueFamilyIndices
         {
             std::optional<uint32_t> graphicsFamily;
@@ -70,6 +69,20 @@ namespace Renderer
             VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
         };
 
+        struct GPUInfo
+        {
+            VkPhysicalDevice device;
+            std::string name;
+            VkPhysicalDeviceType type;
+            uint64_t vramMB;
+            uint32_t vendorId;
+            bool isSupported;
+
+            uint32_t driverVersion;
+            uint32_t apiVersion;
+            VkPhysicalDeviceLimits limits;
+        };
+
         class VulkanRenderer : public Renderer::Common::IRenderer
         {
         public:
@@ -99,12 +112,17 @@ namespace Renderer
             void SetWireframe(bool enabled) override;
             const char *GetRendererName() const override { return "Vulkan Renderer"; }
 
+            std::vector<GPUInfo> GetCompatibleGPUs();
+            bool SelectGPU(VkPhysicalDevice device);
+            VkPhysicalDevice GetRecommendedGPU(const std::vector<GPUInfo> &gpus);
+
         private:
             // Initialization
             bool CreateInstance();
             bool SetupDebugMessenger();
             bool CreateSurface(GLFWwindow *windowHandle);
             bool PickPhysicalDevice();
+            uint32_t VulkanRenderer::ScoreDevice(VkPhysicalDevice device);
             bool CreateLogicalDevice();
             bool CreateSwapChain();
             bool CreateImageViews();

@@ -85,3 +85,44 @@
 - `Command Pool → Command Buffers`  
 
 Everything else is somewhat flexible.
+
+
+## Logical Device Creation
+
+Currently set to basic values. Fields which should be configurable:
+
+### High Priority
+#### Queue Configuration
+- Queue count per family to allow multiple queues for threading
+- type of queue family to request other than present queues
+- graphics vs compute priorities
+
+#### Device Features
+- enabling other features than samplerAnisotropy such as
+  - tesselation
+  - geometry shaders
+  - compute shaders
+  - multisampling
+  - wide lines
+  - etc
+
+#### Extensions
+- different device extensions required for different rendering techniques such as
+  - ray tracing
+  - mesh shaders
+  - variable rate shading
+
+#### Sample Config
+**Sample Config Type and API signature**
+```cpp
+struct DeviceConfig {
+    std::vector<const char*> extensions;
+    VkPhysicalDeviceFeatures features{};
+    uint32_t graphicsQueueCount = 1;
+    uint32_t presentQueueCount = 1;
+    float queuePriority = 1.0f;
+    bool enableValidation = false;
+};
+
+bool CreateLogicalDevice(const DeviceConfig& config);
+```
