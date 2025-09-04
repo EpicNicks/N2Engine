@@ -1,6 +1,6 @@
 #pragma once
 
-#include "engine/math/VectorN.hpp"
+#include "math/VectorN.hpp"
 
 namespace N2Engine
 {

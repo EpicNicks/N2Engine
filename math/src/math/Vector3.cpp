@@ -1,4 +1,4 @@
-#include "engine/math/Vector3.hpp"
+#include "math/Vector3.hpp"
 #include <cmath>
 #include <algorithm>
 

@@ -30,6 +30,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glfw)
 
+target_include_directories(renderer PRIVATE MathCore::math)
+
 # Configure target after it's created
 if(RENDERER_SOURCES)
     # Add compile definitions to ensure Vulkan support

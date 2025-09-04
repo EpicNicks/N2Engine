@@ -4,9 +4,9 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "${workspaceFolder}/engine/include/engine/sceneManagement",
                 "${workspaceFolder}/renderer/include",
                 "${workspaceFolder}/engine/include",
+                "${workspaceFolder}/math/include",
                 "${workspaceFolder}/build/_deps/glfw-src/include",
                 "/usr/include/vulkan"
             ],
