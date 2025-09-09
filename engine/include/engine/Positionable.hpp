@@ -18,6 +18,7 @@ namespace N2Engine
     public:
         using WeakGameObjectPtr = std::weak_ptr<GameObject>;
         using Ptr = std::shared_ptr<GameObject>;
+        using Matrix4 = Math::Matrix<float, 4, 4>;
 
     private:
         WeakGameObjectPtr _gameObject;
@@ -68,7 +69,7 @@ namespace N2Engine
         void SetLocalTransform(const Transform &transform);
 
         // Transform matrix access
-        const Transform &GetLocalTransform() const { return _localTransform; }
+        const Transform &GetLocalTransform() const;
         const Transform &GetGlobalTransform() const;
         Matrix4 GetLocalToWorldMatrix() const;
         Matrix4 GetWorldToLocalMatrix() const;
@@ -83,6 +84,6 @@ namespace N2Engine
         void OnHierarchyChanged();
 
         // Debug/Editor support
-        bool IsGlobalTransformDirty() const { return _globalTransformDirty; }
+        bool IsGlobalTransformDirty() const;
     };
 }

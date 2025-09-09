@@ -2,6 +2,7 @@
 
 using namespace N2Engine;
 using namespace N2Engine::Math;
+using namespace N2Engine::Base;
 
 UUID Asset::GetUUID()
 {

@@ -14,7 +14,16 @@ namespace N2Engine
         using Matrix4 = Math::Matrix<float, 4, 4>;
 
     private:
-        Matrix4 _transform;
+        Math::Vector3 _position{0.0f, 0.0f, 0.0f};
+        Math::Quaternion _rotation = Math::Quaternion::Identity();
+        Math::Vector3 _scale{1.0f, 1.0f, 1.0f};
+
+        mutable Matrix4 _cachedMatrix;
+        mutable bool _matrixDirty = true;
+
+        void BuildMatrix() const;
+
+        const Matrix4 &GetMatrix() const;
 
         void SetPosition(Math::Vector3 position);
         void SetRotation(Math::Quaternion rotation);
@@ -26,10 +35,10 @@ namespace N2Engine
         Math::Quaternion GetRotation() const;
         Math::Vector3 GetScale() const;
 
-        static constexpr Transform Identity();
+        static Transform Identity();
         static Transform Combine(const Transform &parent, const Transform &child);
 
-        bool Transform::operator==(const Transform &other) const;
-        bool Transform::operator!=(const Transform &other) const;
+        bool operator==(const Transform &other) const;
+        bool operator!=(const Transform &other) const;
     };
 }

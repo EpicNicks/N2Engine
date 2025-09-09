@@ -8,6 +8,8 @@
 #include <vector>
 #include <optional>
 #include <unordered_map>
+#include <string>
+#include <array>
 
 namespace Renderer
 {
@@ -122,7 +124,7 @@ namespace Renderer
             bool SetupDebugMessenger();
             bool CreateSurface(GLFWwindow *windowHandle);
             bool PickPhysicalDevice();
-            uint32_t VulkanRenderer::ScoreDevice(VkPhysicalDevice device);
+            uint32_t ScoreDevice(VkPhysicalDevice device);
             bool CreateLogicalDevice();
             bool CreateSwapChain();
             bool CreateImageViews();

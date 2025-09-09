@@ -1,5 +1,7 @@
 #include "engine/sceneManagement/SceneManager.hpp"
 
+using namespace N2Engine;
+
 SceneManager &SceneManager::GetInstance()
 {
     static SceneManager instance;

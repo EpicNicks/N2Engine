@@ -26,3 +26,4 @@ set_target_properties(math PROPERTIES
 )
 
 # Add any necessary libraries
+target_compile_definitions(math PRIVATE _USE_MATH_DEFINES)

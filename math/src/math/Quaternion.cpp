@@ -3,6 +3,7 @@
 #include "math/Matrix.hpp"
 #include <cmath>
 #include <algorithm>
+#include <numbers>
 
 using namespace N2Engine::Math;
 
@@ -302,7 +303,7 @@ Vector3 Quaternion::ToEulerAngles() const
 
     float sinp = 2 * (w * y - z * x);
     if (std::abs(sinp) >= 1)
-        euler.y = std::copysign(M_PI / 2, sinp);
+        euler.y = std::copysign(std::numbers::pi / 2, sinp);
     else
         euler.y = std::asin(sinp);
 

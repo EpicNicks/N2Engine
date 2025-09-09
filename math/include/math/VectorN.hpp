@@ -77,6 +77,19 @@ namespace N2Engine
                 return result;
             }
 
+            /**
+             * The Hadamard product (element-wise multiplication)
+             */
+            VectorN Scale(const VectorN &other) const
+            {
+                VectorN result;
+                for (std::size_t i = 0; i < DIMENSION; i++)
+                {
+                    result[i] = (*this)[i] * other[i];
+                }
+                return result;
+            }
+
             static VectorN Lerp(const VectorN &a, const VectorN &b, T t)
             {
                 VectorN result;
