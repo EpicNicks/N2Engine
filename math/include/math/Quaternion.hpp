@@ -8,10 +8,11 @@ namespace N2Engine
         class Vector3; // Forward declaration
         template <typename T, std::size_t M, std::size_t N>
         class Matrix; // Forward declaration
-        using Matrix4f = Matrix<float, 4, 4>;
 
         class Quaternion
         {
+            using Matrix4f = Matrix<float, 4, 4>;
+
         public:
             float w, x, y, z;
 
@@ -33,7 +34,9 @@ namespace N2Engine
             Quaternion operator+(const Quaternion &other) const;
             Quaternion operator-(const Quaternion &other) const;
             Quaternion operator*(const Quaternion &other) const;
+            Vector3 operator*(const Vector3 &other) const;
             Quaternion operator*(float scalar) const;
+
             Quaternion operator/(float scalar) const;
 
             Quaternion &operator+=(const Quaternion &other);

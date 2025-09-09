@@ -1,9 +1,22 @@
 #pragma once
 
 #include <string>
+#include <memory>
+#include <vector>
 
-struct Scene
+class GameObject;
+
+namespace N2Engine
 {
-public:
-    std::string sceneName;
-};
+    struct Scene
+    {
+
+    private:
+        std::vector<std::shared_ptr<GameObject>> _sceneGameObjects;
+
+    public:
+        std::string sceneName;
+
+        bool DestroyGameObject(std::shared_ptr<GameObject> gameObject);
+    };
+}

@@ -5,6 +5,9 @@
 #include <stdexcept>
 #include <initializer_list>
 #include <iostream>
+#include <algorithm>
+
+#include "math/Vector3.hpp"
 
 namespace N2Engine
 {
@@ -14,8 +17,6 @@ namespace N2Engine
         class Matrix
         {
         public:
-            using value_type = T;
-
             std::array<T, M * N> data{};
 
             constexpr Matrix() = default;
@@ -92,6 +93,23 @@ namespace N2Engine
                 return result;
             }
 
+            constexpr bool operator==(const Matrix<T, M, N> &other) const
+            {
+                for (size_t i = 0; i < M * N; i++)
+                {
+                    if (data[i] != other.data[i])
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            constexpr bool operator!=(const Matrix<T, M, N> &other) const
+            {
+                return !(*this == other);
+            }
+
             constexpr Matrix<T, N, M> transpose() const
             {
                 Matrix<T, N, M> result;
@@ -160,6 +178,21 @@ namespace N2Engine
                         std::cout << (*this)(i, j) << " ";
                     std::cout << "\n";
                 }
+            }
+
+            Vector3 TransformPoint(const Vector3 &point) const
+                requires(M == 4 && N == 4)
+            {
+
+                T x = static_cast<T>(point.x) * (*this)(0, 0) + static_cast<T>(point.y) * (*this)(0, 1) + static_cast<T>(point.z) * (*this)(0, 2) + (*this)(0, 3);
+                T y = static_cast<T>(point.x) * (*this)(1, 0) + static_cast<T>(point.y) * (*this)(1, 1) + static_cast<T>(point.z) * (*this)(1, 2) + (*this)(1, 3);
+                T z = static_cast<T>(point.x) * (*this)(2, 0) + static_cast<T>(point.y) * (*this)(2, 1) + static_cast<T>(point.z) * (*this)(2, 2) + (*this)(2, 3);
+                T w = static_cast<T>(point.x) * (*this)(3, 0) + static_cast<T>(point.y) * (*this)(3, 1) + static_cast<T>(point.z) * (*this)(3, 2) + (*this)(3, 3);
+
+                if (w != T{0})
+                    return Vector3{static_cast<float>(x / w), static_cast<float>(y / w), static_cast<float>(z / w)};
+                else
+                    return Vector3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
             }
 
         private:

@@ -50,6 +50,8 @@
         "set": "cpp",
         "optional": "cpp",
         "fstream": "cpp",
-        "span": "cpp"
+        "span": "cpp",
+        "cinttypes": "cpp",
+        "typeindex": "cpp"
     }
 }
