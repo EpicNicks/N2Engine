@@ -52,6 +52,14 @@
         "fstream": "cpp",
         "span": "cpp",
         "cinttypes": "cpp",
-        "typeindex": "cpp"
+        "typeindex": "cpp",
+        "generator": "cpp",
+        "format": "cpp",
+        "charconv": "cpp",
+        "coroutine": "cpp",
+        "queue": "cpp",
+        "ranges": "cpp",
+        "text_encoding": "cpp",
+        "variant": "cpp"
     }
 }

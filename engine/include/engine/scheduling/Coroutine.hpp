@@ -1,0 +1,32 @@
+#pragma once
+
+#include <generator>
+#include <optional>
+
+class ICoroutineWait;
+
+namespace N2Engine
+{
+    namespace Scheduling
+    {
+        class Coroutine
+        {
+        private:
+            bool _isComplete{false};
+            std::generator<ICoroutineWait> _gen;
+            std::optional<ICoroutineWait> _currentYield;
+
+        public:
+            explicit Coroutine(std::generator<ICoroutineWait> gen) : _gen{std::move(gen)} {};
+
+            Coroutine(const Coroutine &) = delete;
+            Coroutine &operator=(const Coroutine &) = delete;
+            Coroutine(Coroutine &&) = default;
+            Coroutine &operator=(Coroutine &&) = default;
+
+            bool IsComplete() const;
+
+            bool MoveNext();
+        };
+    }
+}
