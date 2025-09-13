@@ -1,16 +1,19 @@
 #pragma once
 #include "engine/sceneManagement/SceneManager.hpp"
 
-class Application
+namespace N2Engine
 {
-    friend class SceneManager;
+    class Application
+    {
+        friend class SceneManager;
 
-private:
-    Application();
-    Application(const Application &) = delete;
-    Application &operator=(const Application &) = delete;
+    private:
+        Application();
+        Application(const Application &) = delete;
+        Application &operator=(const Application &) = delete;
 
-public:
-    static Application &GetInstance();
-    void Run();
-};
+    public:
+        static Application &GetInstance();
+        void Run();
+    };
+}

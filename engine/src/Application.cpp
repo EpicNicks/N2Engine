@@ -1,6 +1,9 @@
 #include "engine/Application.hpp"
+#include "engine/Time.hpp"
 
 #include <renderer/vulkan/VulkanRenderer.hpp>
+
+using namespace N2Engine;
 
 Application &Application::GetInstance()
 {
@@ -14,6 +17,8 @@ void Application::Run()
     Renderer::Vulkan::VulkanRenderer renderer;
     for (;;)
     {
+        Time::Update();
+
         renderer.BeginFrame();
         // renderer.DrawMesh() triangle goes here
         renderer.EndFrame();
@@ -23,4 +28,5 @@ void Application::Run()
 
 Application::Application()
 {
+    Time::Init();
 }

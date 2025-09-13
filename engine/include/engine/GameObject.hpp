@@ -6,8 +6,11 @@
 #include <unordered_map>
 #include <typeindex>
 #include <type_traits>
+#include <generator>
 
 #include "engine/Component.hpp"
+#include "engine/scheduling/CoroutineWait.hpp"
+#include "engine/scheduling/Coroutine.hpp"
 
 // Forward declarations
 namespace Math
@@ -24,6 +27,8 @@ namespace N2Engine
 
     class GameObject : public std::enable_shared_from_this<GameObject>
     {
+        friend class Scene;
+
     public:
         using Ptr = std::shared_ptr<GameObject>;
         using WeakPtr = std::weak_ptr<GameObject>;
@@ -123,14 +128,15 @@ namespace N2Engine
         void Destroy();
         bool IsDestroyed() const;
 
+        Scheduling::Coroutine *StartCoroutine(std::generator<Scheduling::ICoroutineWait> &&coroutine);
+        bool StopCoroutine(Scheduling::Coroutine *coroutine);
+        void StopAllCoroutines();
+
         // Static utility methods
         static Ptr FindGameObjectByName(const std::string &name, Scene *scene);
         static std::vector<Ptr> FindGameObjectsByTag(const std::string &tag, Scene *scene);
-
-        friend class Scene;
     };
 
-    // Template implementations - Moved outside class to help linters
     template <typename T, typename... Args>
     inline std::shared_ptr<T> GameObject::AddComponent(Args &&...args)
     {
@@ -138,7 +144,6 @@ namespace N2Engine
 
         auto typeIndex = std::type_index(typeid(T));
 
-        // Check if component already exists (if it's a singleton component)
         if constexpr (T::IsSingleton)
         {
             if (auto existing = GetComponent<T>())

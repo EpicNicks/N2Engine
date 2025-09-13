@@ -22,20 +22,15 @@ namespace N2Engine
             void (*_move_fn)(void *, void *);
 
         public:
-            // Template constructor for type erasure
             template <typename T>
             ICoroutineWait(T &&wait_obj)
             {
                 using DecayedT = std::decay_t<T>;
-                static_assert(sizeof(DecayedT) <= STORAGE_SIZE,
-                              "Wait object too large for fixed storage");
-                static_assert(alignof(DecayedT) <= STORAGE_ALIGN,
-                              "Wait object alignment too strict");
+                static_assert(sizeof(DecayedT) <= STORAGE_SIZE, "Wait object too large for fixed storage");
+                static_assert(alignof(DecayedT) <= STORAGE_ALIGN, "Wait object alignment too strict");
 
-                // Construct object in storage
                 new (_storage) DecayedT(std::forward<T>(wait_obj));
 
-                // Set up function pointers
                 _wait_fn = [](const void *ptr) -> bool
                 {
                     return static_cast<const DecayedT *>(ptr)->Wait();
@@ -57,21 +52,18 @@ namespace N2Engine
                 };
             }
 
-            // Copy constructor
             ICoroutineWait(const ICoroutineWait &other)
                 : _wait_fn(other._wait_fn), _destroy_fn(other._destroy_fn), _copy_fn(other._copy_fn), _move_fn(other._move_fn)
             {
                 _copy_fn(_storage, other._storage);
             }
 
-            // Move constructor
             ICoroutineWait(ICoroutineWait &&other) noexcept
                 : _wait_fn(other._wait_fn), _destroy_fn(other._destroy_fn), _copy_fn(other._copy_fn), _move_fn(other._move_fn)
             {
                 _move_fn(_storage, other._storage);
             }
 
-            // Assignment operators
             ICoroutineWait &operator=(const ICoroutineWait &other)
             {
                 if (this != &other)
@@ -100,23 +92,31 @@ namespace N2Engine
                 return *this;
             }
 
-            // Destructor
             ~ICoroutineWait()
             {
                 _destroy_fn(_storage);
             }
 
-            // Main interface
             bool Wait()
             {
                 return _wait_fn(_storage);
             }
         };
 
-        // Your concrete wait classes - no inheritance needed!
         class WaitForNextFrame
         {
         public:
+            bool Wait();
+        };
+
+        class WaitForFrames
+        {
+        private:
+            uint32_t _waitFrames{};
+            uint32_t _elapsedFrames{};
+
+        public:
+            explicit WaitForFrames(uint32_t frames) : _waitFrames{frames} {}
             bool Wait();
         };
 
@@ -124,7 +124,7 @@ namespace N2Engine
         {
         private:
             float _waitSeconds{};
-            mutable float _elapsedSeconds{}; // mutable since Wait() is const
+            float _elapsedSeconds{};
 
         public:
             explicit WaitForSeconds(float seconds) : _waitSeconds{seconds} {}
