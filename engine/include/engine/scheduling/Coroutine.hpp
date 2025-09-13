@@ -3,7 +3,7 @@
 #include <generator>
 #include <optional>
 
-class ICoroutineWait;
+#include "engine/scheduling/CoroutineWait.hpp"
 
 namespace N2Engine
 {

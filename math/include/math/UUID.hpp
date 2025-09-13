@@ -2,6 +2,7 @@
 
 #include <array>
 #include <string>
+#include <cstdint>
 
 namespace N2Engine
 {

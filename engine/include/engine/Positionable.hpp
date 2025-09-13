@@ -46,9 +46,9 @@ namespace N2Engine
         explicit Positionable(WeakGameObjectPtr gameObject);
 
         // Local transform access (stored directly)
-        const Math::Vector3 &GetLocalPosition() const { return _localTransform.GetPosition(); }
-        const Math::Quaternion &GetLocalRotation() const { return _localTransform.GetRotation(); }
-        const Math::Vector3 &GetLocalScale() const { return _localTransform.GetScale(); }
+        const Math::Vector3 GetLocalPosition() const { return _localTransform.GetPosition(); }
+        const Math::Quaternion GetLocalRotation() const { return _localTransform.GetRotation(); }
+        const Math::Vector3 GetLocalScale() const { return _localTransform.GetScale(); }
 
         void SetLocalPosition(const Math::Vector3 &position);
         void SetLocalRotation(const Math::Quaternion &rotation);

@@ -5,11 +5,10 @@
 #include <vector>
 #include <functional>
 
+#include "engine/GameObject.hpp"
+
 namespace N2Engine
 {
-
-    class GameObject;
-
     struct Scene
     {
     private:
@@ -39,7 +38,7 @@ namespace N2Engine
         template <typename T>
         std::shared_ptr<T> FindObjectByType(bool includeInactive) const;
         template <typename T>
-        std::vector<std::shared_ptr<T>> Scene::FindObjectsByType(bool includeInactive) const;
+        std::vector<std::shared_ptr<T>> FindObjectsByType(bool includeInactive) const;
 
         void Update();
         void Clear();
@@ -61,9 +60,9 @@ namespace N2Engine
                       {
             bool shouldProcess = includeInactive || gameObject->IsActive();
             
-            if (shouldProcess && gameObject->HasComponent<T>())
+            if (shouldProcess && gameObject->template HasComponent<T>())
             {
-                result = gameObject->GetComponent<T>();
+                result = gameObject->template GetComponent<T>();
                 return true;
             }
             return false; });
@@ -80,18 +79,18 @@ namespace N2Engine
         {
             TraverseAll([&](std::shared_ptr<GameObject> gameObject)
                         {
-                if (gameObject->HasComponent<T>())
+                if (gameObject->template HasComponent<T>())
                 {
-                    result.push_back(gameObject->GetComponent<T>());
+                    result.push_back(gameObject->template GetComponent<T>());
                 } });
         }
         else
         {
             TraverseAllActive([&](std::shared_ptr<GameObject> gameObject)
                               {
-                if (gameObject->HasComponent<T>())
+                if (gameObject->template HasComponent<T>())
                 {
-                    result.push_back(gameObject->GetComponent<T>());
+                    result.push_back(gameObject->template GetComponent<T>());
                 } });
         }
 
