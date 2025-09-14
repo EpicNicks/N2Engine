@@ -24,6 +24,10 @@ set_target_properties(engine PROPERTIES
     CXX_EXTENSIONS OFF
 )
 
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_definitions(engine PRIVATE N2ENGINE_DEBUG=1)
+endif()
+
 # Add any necessary libraries
 # target_link_libraries(engine PUBLIC/PRIVATE other_libs)
 target_link_libraries(engine PRIVATE renderer)

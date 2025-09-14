@@ -95,6 +95,7 @@ namespace Renderer
             bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) override;
             void Shutdown() override;
             void Resize(uint32_t width, uint32_t height) override;
+            void Clear(float r, float g, float b, float a) override;
 
             void BeginFrame() override;
             void EndFrame() override;
@@ -240,6 +241,8 @@ namespace Renderer
 
             // View/projection matrices
             UniformBufferObject _ubo{};
+
+            float _clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
             // Constants
             static const int MAX_FRAMES_IN_FLIGHT = 2;

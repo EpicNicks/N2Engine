@@ -9,12 +9,14 @@ namespace N2Engine
     {
         friend class Application;
 
+        using TimePoint = std::chrono::high_resolution_clock::time_point;
+
     private:
         static float unscaledDeltaTime;
         static float time;
         static float unscaledTime;
         static float timeScale;
-        static std::chrono::high_resolution_clock::time_point lastFrameTime;
+        static TimePoint lastFrameTime;
 
         static void Init();
         static void Update();

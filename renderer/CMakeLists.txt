@@ -2,10 +2,9 @@ include(FetchContent)
 
 # Help CMake find Vulkan on Windows if VULKAN_SDK isn't set
 if(WIN32 AND NOT DEFINED ENV{VULKAN_SDK})
-    # Try to find Vulkan SDK in common installation locations
     file(GLOB VULKAN_SDK_DIRS "C:/VulkanSDK/*")
     if(VULKAN_SDK_DIRS)
-        list(GET VULKAN_SDK_DIRS -1 VULKAN_SDK_PATH) # Get the latest version
+        list(GET VULKAN_SDK_DIRS -1 VULKAN_SDK_PATH)
         set(ENV{VULKAN_SDK} ${VULKAN_SDK_PATH})
         message(STATUS "Found Vulkan SDK at: ${VULKAN_SDK_PATH}")
     endif()
@@ -14,7 +13,7 @@ endif()
 # Automatically find all source files in the renderer directory
 file(GLOB_RECURSE RENDERER_SOURCES
     "src/*.cpp"
-    "src/*.cc" 
+    "src/*.cc"
     "src/*.cxx"
 )
 
@@ -22,17 +21,18 @@ file(GLOB_RECURSE RENDERER_SOURCES
 if(RENDERER_SOURCES)
     add_library(renderer STATIC ${RENDERER_SOURCES})
 else()
-    # Create an interface library if no source files exist yet
     add_library(renderer INTERFACE)
 endif()
 
+# Find graphics APIs
 find_package(Vulkan REQUIRED)
+find_package(OpenGL REQUIRED)
 
-# Configure GLFW with Vulkan support
+# Configure GLFW
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_VULKAN_STATIC OFF CACHE BOOL "" FORCE)  # Use dynamic Vulkan linking
+set(GLFW_VULKAN_STATIC OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     glfw
@@ -41,7 +41,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glfw)
 
-target_include_directories(renderer PRIVATE MathCore::math)
+# Add GLAD
+add_library(glad ${CMAKE_SOURCE_DIR}/external/glad/src/glad.c)
+target_include_directories(glad PUBLIC ${CMAKE_SOURCE_DIR}/external/glad/include)
 
 # Platform-specific defines
 if(WIN32)
@@ -52,48 +54,36 @@ elseif(APPLE)
     set(VULKAN_PLATFORM_DEFINE "VK_USE_PLATFORM_MACOS_MVK")
 endif()
 
-# Configure target after it's created
-if(RENDERER_SOURCES)
-    # Add compile definitions to ensure Vulkan support
-    target_compile_definitions(renderer PRIVATE 
-        GLFW_INCLUDE_VULKAN
-        ${VULKAN_PLATFORM_DEFINE}
-    )
-    
-    target_include_directories(renderer 
-        PUBLIC 
-            include
-        PRIVATE
-            src
-            ${Vulkan_INCLUDE_DIRS}
-    )
-    
-    target_link_libraries(renderer 
-        PUBLIC 
-            glfw 
-            Vulkan::Vulkan  # Use modern CMake Vulkan target
-    )
-    
-    # Set target properties
-    set_target_properties(renderer PROPERTIES
-        CXX_STANDARD 23
-        CXX_STANDARD_REQUIRED ON
-        CXX_EXTENSIONS OFF
-    )
-else()
-    # For interface library, just set up the dependencies
-    target_compile_definitions(renderer INTERFACE 
-        GLFW_INCLUDE_VULKAN
-        ${VULKAN_PLATFORM_DEFINE}
-    )
-    
-    target_include_directories(renderer INTERFACE 
+# Include GLAD in renderer target so headers can find it
+target_include_directories(renderer
+    PUBLIC
         include
+        ${CMAKE_SOURCE_DIR}/external/glad/include
+    PRIVATE
+        src
         ${Vulkan_INCLUDE_DIRS}
-    )
-    
-    target_link_libraries(renderer INTERFACE 
-        glfw 
+        MathCore::math
+)
+
+# Compile definitions
+target_compile_definitions(renderer PRIVATE 
+    GLFW_INCLUDE_NONE
+    GLFW_INCLUDE_VULKAN
+    ${VULKAN_PLATFORM_DEFINE}
+)
+
+# Link libraries
+target_link_libraries(renderer
+    PUBLIC
+        glad
+        glfw
+        OpenGL::GL
         Vulkan::Vulkan
-    )
-endif()
+)
+
+# Set standard
+set_target_properties(renderer PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+)

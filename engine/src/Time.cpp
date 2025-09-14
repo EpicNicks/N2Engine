@@ -3,6 +3,12 @@
 
 using namespace N2Engine;
 
+Time::TimePoint Time::lastFrameTime = std::chrono::high_resolution_clock::now();
+float Time::unscaledTime = 0.0f;
+float Time::time = 0.0f;
+float Time::timeScale = 1.0f;
+float Time::unscaledDeltaTime = 0.0f;
+
 float Time::GetDeltaTime()
 {
     return unscaledDeltaTime * timeScale;

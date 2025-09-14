@@ -26,6 +26,84 @@ VulkanRenderer::~VulkanRenderer()
     Shutdown();
 }
 
+void VulkanRenderer::Clear(float r, float g, float b, float a)
+{
+    _clearColor[0] = r;
+    _clearColor[1] = g;
+    _clearColor[2] = b;
+    _clearColor[3] = a;
+}
+
+void Renderer::Vulkan::VulkanRenderer::BeginFrame()
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::EndFrame()
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::Present()
+{
+}
+
+uint32_t Renderer::Vulkan::VulkanRenderer::CreateMesh(const Renderer::Common::MeshData &meshData)
+{
+    return 0;
+}
+
+void Renderer::Vulkan::VulkanRenderer::DestroyMesh(uint32_t meshId)
+{
+}
+
+uint32_t Renderer::Vulkan::VulkanRenderer::CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels)
+{
+    return 0;
+}
+
+void Renderer::Vulkan::VulkanRenderer::DestroyTexture(uint32_t textureId)
+{
+}
+
+uint32_t Renderer::Vulkan::VulkanRenderer::CreateMaterial(uint32_t textureId)
+{
+    return 0;
+}
+
+void Renderer::Vulkan::VulkanRenderer::DestroyMaterial(uint32_t materialId)
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::SetViewProjection(const float *view, const float *projection)
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::DrawMesh(uint32_t meshId, const float *modelMatrix, uint32_t materialId)
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::DrawObjects(const std::vector<Renderer::Common::RenderObject> &objects)
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::SetWireframe(bool enabled)
+{
+}
+
+std::vector<GPUInfo> Renderer::Vulkan::VulkanRenderer::GetCompatibleGPUs()
+{
+    return std::vector<GPUInfo>();
+}
+
+bool Renderer::Vulkan::VulkanRenderer::SelectGPU(VkPhysicalDevice device)
+{
+    return false;
+}
+
+VkPhysicalDevice Renderer::Vulkan::VulkanRenderer::GetRecommendedGPU(const std::vector<GPUInfo> &gpus)
+{
+    return VkPhysicalDevice();
+}
+
 bool VulkanRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height)
 {
     _swapChainExtent = {width, height};
@@ -68,6 +146,13 @@ bool VulkanRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32
     return true;
 }
 
+void Renderer::Vulkan::VulkanRenderer::Shutdown()
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::Resize(uint32_t width, uint32_t height)
+{
+}
 bool VulkanRenderer::CreateInstance()
 {
     if (ENABLE_VALIDATION_LAYERS && !CheckValidationLayerSupport())
@@ -119,6 +204,25 @@ std::vector<const char *> VulkanRenderer::GetRequiredExtensions()
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
     return extensions;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CheckValidationLayerSupport()
+{
+    return false;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer &buffer, VkDeviceMemory &bufferMemory)
+{
+    return false;
+}
+
+void Renderer::Vulkan::VulkanRenderer::CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
+{
+}
+
+uint32_t Renderer::Vulkan::VulkanRenderer::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties)
+{
+    return 0;
 }
 
 bool VulkanRenderer::SetupDebugMessenger()
@@ -214,6 +318,11 @@ bool VulkanRenderer::IsDeviceSuitable(VkPhysicalDevice device)
     return indices.IsComplete() && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
 }
 
+bool Renderer::Vulkan::VulkanRenderer::CheckDeviceExtensionSupport(VkPhysicalDevice device)
+{
+    return false;
+}
+
 uint32_t VulkanRenderer::ScoreDevice(VkPhysicalDevice device)
 {
     VkPhysicalDeviceProperties props;
@@ -289,6 +398,11 @@ QueueFamilyIndices VulkanRenderer::FindQueueFamilies(VkPhysicalDevice device)
         i++;
     }
     return indices;
+}
+
+SwapChainSupportDetails Renderer::Vulkan::VulkanRenderer::QuerySwapChainSupport(VkPhysicalDevice device)
+{
+    return SwapChainSupportDetails();
 }
 
 bool VulkanRenderer::CreateLogicalDevice()
@@ -408,8 +522,10 @@ VkSurfaceFormatKHR VulkanRenderer::ChooseSwapSurfaceFormat(const std::vector<VkS
     return availableFormats[0];
 }
 
-VkPresentModeKHR VulkanRenderer::ChooseSwapPresentMode(const std::vector<VkPresentModeKHR> &availablePresentModes)
+VkPresentModeKHR VulkanRenderer::ChooseSwapPresentMode(
+    const std::vector<VkPresentModeKHR> &availablePresentModes)
 {
+    // Prefer triple buffering (mailbox mode) if available
     for (const auto &availablePresentMode : availablePresentModes)
     {
         if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR)
@@ -417,9 +533,15 @@ VkPresentModeKHR VulkanRenderer::ChooseSwapPresentMode(const std::vector<VkPrese
             return availablePresentMode;
         }
     }
+
+    // Fallback to FIFO (vsync)
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
+VkExtent2D Renderer::Vulkan::VulkanRenderer::ChooseSwapExtent(const VkSurfaceCapabilitiesKHR &capabilities)
+{
+    return VkExtent2D();
+}
 bool VulkanRenderer::CreateImageViews()
 {
     _swapChainImageViews.resize(_swapChainImages.size());
@@ -434,6 +556,11 @@ bool VulkanRenderer::CreateImageViews()
         }
     }
     return true;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage &image, VkDeviceMemory &imageMemory)
+{
+    return false;
 }
 
 VkImageView VulkanRenderer::CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags)
@@ -455,6 +582,46 @@ VkImageView VulkanRenderer::CreateImageView(VkImage image, VkFormat format, VkIm
         return VK_NULL_HANDLE;
     }
     return imageView;
+}
+
+void Renderer::Vulkan::VulkanRenderer::TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout)
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height)
+{
+}
+
+VkFormat Renderer::Vulkan::VulkanRenderer::FindDepthFormat()
+{
+    return VkFormat();
+}
+
+VkFormat Renderer::Vulkan::VulkanRenderer::FindSupportedFormat(const std::vector<VkFormat> &candidates, VkImageTiling tiling, VkFormatFeatureFlags features)
+{
+    return VkFormat();
+}
+
+bool Renderer::Vulkan::VulkanRenderer::HasStencilComponent(VkFormat format)
+{
+    return false;
+}
+
+VkCommandBuffer Renderer::Vulkan::VulkanRenderer::BeginSingleTimeCommands()
+{
+    return VkCommandBuffer();
+}
+
+void Renderer::Vulkan::VulkanRenderer::EndSingleTimeCommands(VkCommandBuffer commandBuffer)
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::CleanupSwapChain()
+{
+}
+
+void Renderer::Vulkan::VulkanRenderer::RecreateSwapChain()
+{
 }
 
 bool VulkanRenderer::CreateRenderPass()
@@ -512,4 +679,70 @@ bool VulkanRenderer::CreateRenderPass()
     renderPassInfo.pDependencies = &dependency;
 
     return vkCreateRenderPass(_device, &renderPassInfo, nullptr, &_renderPass) == VK_SUCCESS;
+}
+
+bool VulkanRenderer::CreateDescriptorSetLayout()
+{
+    // Uniform buffer binding (for MVP matrices)
+    VkDescriptorSetLayoutBinding uboLayoutBinding{};
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.pImmutableSamplers = nullptr;
+    // Texture sampler binding
+    VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+    samplerLayoutBinding.binding = 1;
+    samplerLayoutBinding.descriptorCount = 1;
+    samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerLayoutBinding.pImmutableSamplers = nullptr;
+    samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {uboLayoutBinding, samplerLayoutBinding};
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+
+    return vkCreateDescriptorSetLayout(_device, &layoutInfo, nullptr, &_descriptorSetLayout) == VK_SUCCESS;
+}
+// TODO: continue implementing, handle configurability
+
+bool Renderer::Vulkan::VulkanRenderer::CreateGraphicsPipeline()
+{
+    return false;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CreateCommandPool()
+{
+    return false;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CreateDepthResources()
+{
+    return false;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CreateFramebuffers()
+{
+    return false;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CreateUniformBuffers()
+{
+    return false;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CreateDescriptorPool()
+{
+    return false;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CreateCommandBuffers()
+{
+    return false;
+}
+
+bool Renderer::Vulkan::VulkanRenderer::CreateSyncObjects()
+{
+    return false;
 }

@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
 namespace Renderer
@@ -46,6 +47,7 @@ namespace Renderer
             virtual bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) = 0;
             virtual void Shutdown() = 0;
             virtual void Resize(uint32_t width, uint32_t height) = 0;
+            virtual void Clear(float r, float g, float b, float a) = 0;
 
             // Frame management
             virtual void BeginFrame() = 0;
@@ -69,8 +71,5 @@ namespace Renderer
             virtual void SetWireframe(bool enabled) = 0;
             virtual const char *GetRendererName() const = 0;
         };
-
-        // Factory function
-        std::unique_ptr<IRenderer> CreateVulkanRenderer();
     }
 }

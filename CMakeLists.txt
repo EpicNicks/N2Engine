@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(N2Engine VERSION 1.0.0 LANGUAGES CXX)
+project(N2Engine VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,6 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_subdirectory(math)
 add_subdirectory(renderer)
 add_subdirectory(engine)
+add_subdirectory(test_project)
+
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
