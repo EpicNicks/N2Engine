@@ -542,7 +542,7 @@ GLenum OpenGLRenderer::GetOpenGLInternalFormat(uint32_t channels)
 }
 
 // Factory function
-std::unique_ptr<Renderer::Common::IRenderer> CreateOpenGLRenderer()
+std::unique_ptr<Renderer::Common::IRenderer> Renderer::OpenGL::CreateOpenGLRenderer()
 {
     return std::make_unique<OpenGLRenderer>();
 }

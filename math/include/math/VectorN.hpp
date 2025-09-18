@@ -24,6 +24,9 @@ namespace N2Engine
                 vector.fill(T{0});
             }
 
+            VectorN(const VectorN &other) : vector(other.vector) {}
+            VectorN(VectorN &&other) noexcept : vector(std::move(other.vector)) {}
+
             VectorN(std::initializer_list<T> items)
             {
                 if (items.size() != DIMENSION)
@@ -31,6 +34,19 @@ namespace N2Engine
                     throw std::invalid_argument("Initializer list size must match vector dimension");
                 }
                 std::copy(items.begin(), items.end(), vector.begin());
+            }
+
+            explicit VectorN(const std::array<T, DIMENSION> &arr) : vector(arr) {}
+            explicit VectorN(std::array<T, DIMENSION> &&arr) : vector(std::move(arr)) {}
+
+            template <typename Iterator>
+            VectorN(Iterator first, Iterator last)
+            {
+                if (std::distance(first, last) != DIMENSION)
+                {
+                    throw std::invalid_argument("Iterator range size must match vector dimension");
+                }
+                std::copy(first, last, vector.begin());
             }
 
             T Magnitude() const

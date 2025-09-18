@@ -364,7 +364,7 @@ bool Quaternion::IsIdentity(float tolerance) const
            std::abs(z) <= tolerance;
 }
 
-Quaternion operator*(float scalar, const Quaternion &q)
+Quaternion N2Engine::Math::operator*(float scalar, const Quaternion &q)
 {
     return q * scalar;
 }

@@ -16,5 +16,10 @@ public:
 
     static N2Engine::Base::EventHandler<std::string, LogLevel> logEvent;
 
-    static void Log(std::string log, LogLevel level);
+    static void Log(const std::string &log, LogLevel level);
+
+    // helpers
+    static void Info(const std::string &log);
+    static void Warn(const std::string &log);
+    static void Error(const std::string &log);
 };

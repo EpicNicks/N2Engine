@@ -2,9 +2,9 @@
 setlocal
 
 REM --- Delete previous build directory to avoid stale caches ---
-if exist build (
-    rmdir /s /q build
-)
+@REM if exist build (
+@REM     rmdir /s /q build
+@REM )
 
 REM --- Configure CMake explicitly for MinGW ---
 cmake -S . -B build -G "MinGW Makefiles" ^

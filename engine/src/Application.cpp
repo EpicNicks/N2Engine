@@ -4,11 +4,6 @@
 
 #include <iostream>
 
-#include <renderer/vulkan/VulkanRenderer.hpp>
-#include <renderer/opengl/OpenGLRenderer.hpp>
-#include <memory>
-#include <GLFW/glfw3.h>
-
 using namespace N2Engine;
 
 Application &Application::GetInstance()
@@ -17,107 +12,81 @@ Application &Application::GetInstance()
     return instance;
 }
 
+Window &Application::GetWindow()
+{
+    return _window;
+}
+
+Camera *Application::GetMainCamera()
+{
+    return _mainCamera.get();
+}
+
 void Application::Init()
 {
 #ifdef N2ENGINE_DEBUG
     Logger::logEvent += [](const std::string &msg, Logger::LogLevel level)
     {
-        const char *levelStr = (level == Logger::LogLevel::Info) ? "INFO" : (level == Logger::LogLevel::Warn) ? "WARN"
-                                                                                                              : "ERROR";
+        const char *levelStr;
+        switch (level)
+        {
+        case Logger::LogLevel::Info:
+            levelStr = "INFO";
+            break;
+        case Logger::LogLevel::Warn:
+            levelStr = "WARN";
+            break;
+        case Logger::LogLevel::Error:
+            levelStr = "ERROR";
+            break;
+        default:
+            levelStr = "INFO";
+            break;
+        }
         std::cout << "[" << levelStr << "] " << msg << std::endl;
     };
 #endif
     Time::Init();
+    _window.InitWindow();
+
+    _mainCamera = std::make_unique<Camera>();
+
+    const Vector2i windowDimensions = _window.GetWindowDimensions();
+    const float aspect = (float)windowDimensions[0] / (float)windowDimensions[1];
+
+    _mainCamera->SetPerspective(45.0f, aspect, 0.1f, 100.0f);
+    _mainCamera->SetPosition(Math::Vector3{0.0f, 0.0f, 3.0f});
+
+    Logger::Log("Camera initialized", Logger::LogLevel::Info);
 }
 
 void Application::Run()
 {
-    if (!glfwInit())
-    {
-        Logger::Log("Failed to initialize GLFW", Logger::LogLevel::Error);
-        return;
-    }
-
-    // Determine which renderer to use BEFORE creating window
-    AppRenderer appRenderer = ReadAppRendererFromConfig();
-
-    // Configure GLFW hints based on chosen renderer
-    if (appRenderer == AppRenderer::Vulkan)
-    {
-        // Configure for Vulkan - no OpenGL context needed
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    }
-    else
-    {
-        // Configure for OpenGL 3.3
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-
-#ifdef __APPLE__
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#endif
-    }
-
-    const GLFWvidmode *vidMode = glfwGetVideoMode(glfwGetPrimaryMonitor());
-    const int WIDTH = vidMode->width / 2;
-    const int HEIGHT = vidMode->height / 2;
-
-    GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, "My Engine", nullptr, nullptr);
-    if (!window)
-    {
-        Logger::Log("Failed to create GLFW window", Logger::LogLevel::Error);
-        glfwTerminate();
-        return;
-    }
-
-    // Create renderer based on configuration
-    std::unique_ptr<Renderer::Common::IRenderer> renderer = nullptr;
-
-    if (appRenderer == AppRenderer::Vulkan)
-    {
-        renderer = std::make_unique<Renderer::Vulkan::VulkanRenderer>();
-        Logger::Log("Using Vulkan renderer", Logger::LogLevel::Info);
-    }
-    else
-    {
-        renderer = std::make_unique<Renderer::OpenGL::OpenGLRenderer>();
-        Logger::Log("Using OpenGL renderer", Logger::LogLevel::Info);
-    }
-
-    // Initialize the chosen renderer
-    if (!renderer->Initialize(window, WIDTH, HEIGHT))
-    {
-        Logger::Log("Failed to initialize renderer", Logger::LogLevel::Error);
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return;
-    }
 
     // Main render loop
-    while (!glfwWindowShouldClose(window))
+    while (!_window.ShouldClose())
     {
+        _window.PollEvents();
         Time::Update();
 
-        renderer->BeginFrame();
-
-        // Your rendering code goes here
-        renderer->Clear(0.1f, 0.1f, 0.1f, 1.0f);
-
-        renderer->EndFrame();
-        renderer->Present();
-
-        glfwPollEvents();
+        Render();
     }
-
-    // Cleanup
-    renderer.reset();
-    glfwDestroyWindow(window);
-    glfwTerminate();
 }
 
-AppRenderer Application::ReadAppRendererFromConfig() const
+void Application::Render()
 {
-    // TODO
-    return AppRenderer::OpenGL;
+    auto *renderer = _window.GetRenderer();
+
+    renderer->BeginFrame();
+
+    _window.Clear();
+    const Matrix4 &viewMatrix = _mainCamera->GetViewMatrix();
+    const Matrix4 &projectionMatrix = _mainCamera->GetProjectionMatrix();
+    renderer->SetViewProjection(viewMatrix.data.data(), projectionMatrix.data.data());
+
+    // TODO: Render scene objects here
+    // This is where you'd iterate through your scene and render meshes
+
+    renderer->EndFrame();
+    renderer->Present();
 }
