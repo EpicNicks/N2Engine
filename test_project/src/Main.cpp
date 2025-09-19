@@ -276,7 +276,7 @@ void TestEngine()
 
     auto quadObject = std::make_shared<N2Engine::GameObject>("TestQuad");
     auto quadRenderer = quadObject->AddComponent<N2Engine::Example::QuadRenderer>();
-    quadRenderer->SetColor(N2Engine::Common::Color{1.0f, 1.0f, 1.0f, 1.0f});
+    quadRenderer->SetColor(N2Engine::Common::Color{N2Engine::Common::Color::Cyan()});
 
     auto positionable = quadObject->GetPositionable();
     // In your main() function, try this:

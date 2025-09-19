@@ -151,18 +151,12 @@ Matrix4 Camera::GetViewProjectionMatrix() const
 
 void Camera::UpdateViewMatrix() const
 {
-    // Create view matrix from position and rotation
-    // First, create the camera's transformation matrix
-    Matrix4 cameraMatrix = _rotation.ToMatrix();
+    // Create translation and rotation matrices separately
+    Matrix4 translation = Matrix4::Translation(-_position);
+    Matrix4 rotation = _rotation.Inverse().ToMatrix(); // Inverse rotation
 
-    // Set the translation (assuming your Matrix4 has a way to set translation)
-    // You'll need to adapt this based on your Matrix4 implementation
-    cameraMatrix(0, 3) = _position.x;
-    cameraMatrix(1, 3) = _position.y;
-    cameraMatrix(2, 3) = _position.z;
-
-    // View matrix is the inverse of the camera's world matrix
-    _viewMatrix = cameraMatrix.inverse();
+    // View matrix = inverse rotation * inverse translation
+    _viewMatrix = rotation * translation;
 }
 
 Frustum Camera::GetViewFrustum() const

@@ -66,8 +66,8 @@ void Application::Init()
     const float aspect = (float)windowDimensions[0] / (float)windowDimensions[1];
 
     //_mainCamera->SetPerspective(45.0f, aspect, 0.1f, 100.0f);
-    _mainCamera->SetOrthographic(-10.0f, 10.0f, -10.0f, 10.0f, -10.0f, 10.0f);
-    _mainCamera->SetPosition(Math::Vector3{0.0f, 0.0f, 3.0f});
+    _mainCamera->SetOrthographic(-10.0f, 10.0f, -10.0f, 10.0f, 0.0f, 100.0f);
+    _mainCamera->SetPosition(Math::Vector3{0.0f, 0.0f, 10.0f});
 
     Logger::Info("Camera initialized");
 }
@@ -106,6 +106,7 @@ void Application::Render()
 
     const Matrix4 &viewMatrix = _mainCamera->GetViewMatrix();
     const Matrix4 &projectionMatrix = _mainCamera->GetProjectionMatrix();
+
     renderer->SetViewProjection(viewMatrix.data.data(), projectionMatrix.data.data());
 
     if (SceneManager::GetCurSceneIndex() != -1)

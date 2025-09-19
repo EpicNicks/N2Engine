@@ -196,6 +196,17 @@ namespace N2Engine
                 }
                 return difference;
             }
+
+            VectorN operator-() const
+            {
+                VectorN difference;
+                for (std::size_t i = 0; i < DIMENSION; i++)
+                {
+                    difference[i] = -(*this)[i];
+                }
+                return difference;
+            }
+
             VectorN operator*(T scalar) const
             {
                 VectorN result;

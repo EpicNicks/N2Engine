@@ -15,6 +15,9 @@ namespace N2Engine
 {
     namespace Math
     {
+        /**
+         * A Row-Major MxN matrix of element type T, implemented with a std::array<T, M x N> underneath
+         */
         template <typename T, std::size_t M, std::size_t N>
         class Matrix
         {
@@ -193,6 +196,18 @@ namespace N2Engine
                 return ss.str();
             }
 
+            // #region 4x4 specialization methods
+
+            static constexpr Matrix Translation(const Vector3 &translation)
+                requires(M == 4 && N == 4)
+            {
+                Matrix result = identity();
+                result(0, 3) = static_cast<T>(translation.x);
+                result(1, 3) = static_cast<T>(translation.y);
+                result(2, 3) = static_cast<T>(translation.z);
+                return result;
+            }
+
             Vector3 TransformPoint(const Vector3 &point) const
                 requires(M == 4 && N == 4)
             {
@@ -207,6 +222,8 @@ namespace N2Engine
                 else
                     return Vector3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
             }
+
+            // #endregion
 
         private:
             constexpr Matrix<T, M - 1, N - 1> minor(std::size_t row, std::size_t col) const

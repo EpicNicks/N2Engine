@@ -460,18 +460,9 @@ void OpenGLRenderer::DrawMesh(uint32_t meshId, const float *modelMatrix, uint32_
     const ShaderUniforms &uniforms = uniformIt->second;
 
     // Set uniforms
-    if (uniforms.modelLoc != -1)
-    {
-        glUniformMatrix4fv(uniforms.modelLoc, 1, GL_FALSE, modelMatrix);
-    }
-    if (uniforms.viewLoc != -1)
-    {
-        glUniformMatrix4fv(uniforms.viewLoc, 1, GL_FALSE, m_viewMatrix);
-    }
-    if (uniforms.projectionLoc != -1)
-    {
-        glUniformMatrix4fv(uniforms.projectionLoc, 1, GL_FALSE, m_projectionMatrix);
-    }
+    SetMatrix4fv(uniforms.modelLoc, modelMatrix);
+    SetMatrix4fv(uniforms.viewLoc, m_viewMatrix);
+    SetMatrix4fv(uniforms.projectionLoc, m_projectionMatrix);
 
     // Bind texture if material has one
     if (material.textureId != 0)
@@ -577,7 +568,8 @@ void OpenGLRenderer::SetMatrix4fv(GLint location, const float *matrix)
 {
     if (location != -1)
     {
-        glUniformMatrix4fv(location, 1, GL_FALSE, matrix);
+        // GL_TRUE to pass Row-Major (Transposed compared to default) matrices
+        glUniformMatrix4fv(location, 1, GL_TRUE, matrix);
     }
 }
 
