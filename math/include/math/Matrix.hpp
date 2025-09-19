@@ -6,6 +6,8 @@
 #include <initializer_list>
 #include <iostream>
 #include <algorithm>
+#include <string>
+#include <sstream>
 
 #include "math/Vector3.hpp"
 
@@ -170,14 +172,25 @@ namespace N2Engine
                 return adj * (1 / det);
             }
 
-            void print() const
+            std::string toString() const
             {
-                for (std::size_t i = 0; i < M; ++i)
+                std::ostringstream ss;
+                ss << "[";
+                for (std::size_t row = 0; row < M; ++row)
                 {
-                    for (std::size_t j = 0; j < N; ++j)
-                        std::cout << (*this)(i, j) << " ";
-                    std::cout << "\n";
+                    if (row > 0)
+                    {
+                        ss << "\n";
+                    }
+                    for (std::size_t col = 0; col < N; ++col)
+                    {
+                        if (col > 0)
+                            ss << " ";
+                        ss << data[row * N + col];
+                    }
                 }
+                ss << "]";
+                return ss.str();
             }
 
             Vector3 TransformPoint(const Vector3 &point) const

@@ -7,6 +7,8 @@
 
 using namespace N2Engine::Scheduling;
 
+std::unordered_map<N2Engine::GameObject *, std::vector<std::unique_ptr<Coroutine>>> CoroutineScheduler::coroutines;
+
 void CoroutineScheduler::Update()
 {
     std::vector<std::pair<GameObject *, Coroutine *>> coroutinesToRemove;

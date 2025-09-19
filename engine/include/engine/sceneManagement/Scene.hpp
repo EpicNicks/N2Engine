@@ -4,18 +4,29 @@
 #include <memory>
 #include <vector>
 #include <functional>
+#include <queue>
 
-#include "engine/GameObject.hpp"
+#include <renderer/common/Renderer.hpp>
 
 namespace N2Engine
 {
-    struct Scene
+    class Component;
+    class GameObject;
+
+    class Scene
     {
+        friend class SceneManager;
+        friend class Application;
+        friend class GameObject;
+
     private:
         std::vector<std::shared_ptr<GameObject>> _rootGameObjects;
+        std::vector<std::shared_ptr<Component>> _components;
+        std::queue<std::shared_ptr<Component>> _attachQueue;
 
     public:
         std::string sceneName;
+        Scene(const std::string &name);
 
         void AddRootGameObject(std::shared_ptr<GameObject> gameObject);
 
@@ -44,56 +55,13 @@ namespace N2Engine
         void Clear();
 
     private:
+        void Render(Renderer::Common::IRenderer *renderer);
+        void RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Common::IRenderer *renderer);
         void TraverseGameObjectRecursive(std::shared_ptr<GameObject> gameObject,
                                          std::function<void(std::shared_ptr<GameObject>)> callback,
                                          bool onlyActive = false) const;
         bool TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject,
                                      std::function<bool(std::shared_ptr<GameObject>)> callback) const;
+        void AddComponentToAttachQueue(std::shared_ptr<Component> component);
     };
-
-    template <typename T>
-    std::shared_ptr<T> Scene::FindObjectByType(bool includeInactive) const
-    {
-        std::shared_ptr<T> result = nullptr;
-
-        TraverseUntil([&](std::shared_ptr<GameObject> gameObject) -> bool
-                      {
-            bool shouldProcess = includeInactive || gameObject->IsActive();
-            
-            if (shouldProcess && gameObject->template HasComponent<T>())
-            {
-                result = gameObject->template GetComponent<T>();
-                return true;
-            }
-            return false; });
-
-        return result;
-    }
-
-    template <typename T>
-    std::vector<std::shared_ptr<T>> Scene::FindObjectsByType(bool includeInactive) const
-    {
-        std::vector<std::shared_ptr<T>> result;
-
-        if (includeInactive)
-        {
-            TraverseAll([&](std::shared_ptr<GameObject> gameObject)
-                        {
-                if (gameObject->template HasComponent<T>())
-                {
-                    result.push_back(gameObject->template GetComponent<T>());
-                } });
-        }
-        else
-        {
-            TraverseAllActive([&](std::shared_ptr<GameObject> gameObject)
-                              {
-                if (gameObject->template HasComponent<T>())
-                {
-                    result.push_back(gameObject->template GetComponent<T>());
-                } });
-        }
-
-        return result;
-    }
 }

@@ -26,8 +26,16 @@ namespace N2Engine
 
             VectorN(const VectorN &other) : vector(other.vector) {}
             VectorN(VectorN &&other) noexcept : vector(std::move(other.vector)) {}
+            VectorN &operator=(const VectorN &other)
+            {
+                if (this != &other)
+                {
+                    vector = other.vector;
+                }
+                return *this;
+            }
 
-            VectorN(std::initializer_list<T> items)
+            constexpr VectorN(std::initializer_list<T> items)
             {
                 if (items.size() != DIMENSION)
                 {

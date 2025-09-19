@@ -41,7 +41,7 @@ namespace N2Engine
 
         WeakPtr _parent;
         std::vector<Ptr> _children;
-        std::shared_ptr<Positionable> _positionable;
+        std::shared_ptr<Positionable> _positionable = nullptr;
 
         // Component system
         std::vector<std::shared_ptr<Component>> _components;
@@ -99,8 +99,8 @@ namespace N2Engine
         bool HasPositionable() const;
 
         // Component system - Template declarations
-        template <typename T, typename... Args>
-        std::shared_ptr<T> AddComponent(Args &&...args);
+        template <typename T>
+        std::shared_ptr<T> AddComponent();
 
         template <typename T>
         std::shared_ptr<T> GetComponent() const;
@@ -136,73 +136,4 @@ namespace N2Engine
         static Ptr FindGameObjectByName(const std::string &name, Scene *scene);
         static std::vector<Ptr> FindGameObjectsByTag(const std::string &tag, Scene *scene);
     };
-
-    template <typename T, typename... Args>
-    inline std::shared_ptr<T> GameObject::AddComponent(Args &&...args)
-    {
-        static_assert(std::is_base_of_v<Component, T>, "T must inherit from Component");
-
-        auto typeIndex = std::type_index(typeid(T));
-
-        if constexpr (T::IsSingleton)
-        {
-            if (auto existing = GetComponent<T>())
-            {
-                return existing;
-            }
-        }
-
-        auto component = std::make_shared<T>(std::forward<Args>(args)...);
-        component->_gameObject = weak_from_this();
-
-        _components.push_back(component);
-        _componentMap[typeIndex] = component;
-
-        component->OnAttached();
-        return component;
-    }
-
-    template <typename T>
-    inline std::shared_ptr<T> GameObject::GetComponent() const
-    {
-        static_assert(std::is_base_of_v<Component, T>, "T must inherit from Component");
-
-        auto typeIndex = std::type_index(typeid(T));
-        auto it = _componentMap.find(typeIndex);
-        if (it != _componentMap.end())
-        {
-            return std::static_pointer_cast<T>(it->second);
-        }
-        return nullptr;
-    }
-
-    template <typename T>
-    inline std::vector<std::shared_ptr<T>> GameObject::GetComponents() const
-    {
-        static_assert(std::is_base_of_v<Component, T>, "T must inherit from Component");
-
-        std::vector<std::shared_ptr<T>> result;
-        for (const auto &component : _components)
-        {
-            if (auto casted = std::dynamic_pointer_cast<T>(component))
-            {
-                result.push_back(casted);
-            }
-        }
-        return result;
-    }
-
-    template <typename T>
-    inline bool GameObject::HasComponent() const
-    {
-        return GetComponent<T>() != nullptr;
-    }
-
-    template <typename T>
-    inline bool GameObject::RemoveComponent()
-    {
-        auto typeIndex = std::type_index(typeid(T));
-        return RemoveComponent(typeIndex);
-    }
-
 }

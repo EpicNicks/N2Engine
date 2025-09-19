@@ -16,15 +16,12 @@ namespace N2Engine
     class Positionable
     {
     public:
-        using WeakGameObjectPtr = std::weak_ptr<GameObject>;
-        using Ptr = std::shared_ptr<GameObject>;
         using Matrix4 = Math::Matrix<float, 4, 4>;
 
     private:
-        WeakGameObjectPtr _gameObject;
-
         // Only store local transform - global is calculated on demand
         Transform _localTransform;
+        GameObject &_gameObject;
 
         // Cached global transform with dirty tracking
         mutable Transform _cachedGlobalTransform;
@@ -43,7 +40,7 @@ namespace N2Engine
         std::shared_ptr<Positionable> GetParentPositionable() const;
 
     public:
-        explicit Positionable(WeakGameObjectPtr gameObject);
+        explicit Positionable(GameObject &gameObject);
 
         // Local transform access (stored directly)
         const Math::Vector3 GetLocalPosition() const { return _localTransform.GetPosition(); }

@@ -4,6 +4,7 @@
 #include "engine/Window.hpp"
 #include "engine/Camera.hpp"
 
+#include <string>
 #include <memory>
 
 namespace N2Engine
@@ -27,6 +28,7 @@ namespace N2Engine
         static Application &GetInstance();
 
         void Init();
+        void Init(const Scene &initialScene);
         void Run();
 
         Camera *GetMainCamera();

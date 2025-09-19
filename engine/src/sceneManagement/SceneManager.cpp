@@ -1,4 +1,6 @@
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/Logger.hpp"
+#include <string>
 
 using namespace N2Engine;
 
@@ -10,7 +12,7 @@ SceneManager &SceneManager::GetInstance()
 
 Scene &SceneManager::GetCurScene()
 {
-    return GetInstance()._scenes[GetInstance().GetCurSceneIndex()];
+    return GetInstance()[GetInstance().GetCurSceneIndex()];
 }
 
 int SceneManager::GetCurSceneIndex()
@@ -22,7 +24,7 @@ void SceneManager::LoadScene(int sceneIndex)
 {
     if (sceneIndex < 0 || sceneIndex >= GetInstance()._scenes.size())
     {
-        // log error maybe
+        Logger::Error("Scene index: " + std::to_string(sceneIndex) + " out of range");
         return;
     }
     GetInstance()._curSceneIndex = sceneIndex;
@@ -39,5 +41,15 @@ void SceneManager::LoadScene(std::string &sceneName)
             return;
         }
     }
-    // log error maybe
+    Logger::Error("Scene name not found: " + sceneName);
+}
+
+Scene &SceneManager::operator[](int index)
+{
+    return _scenes[index];
+}
+
+const Scene &SceneManager::operator[](int index) const
+{
+    return _scenes[index];
 }

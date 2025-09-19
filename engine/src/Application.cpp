@@ -1,6 +1,7 @@
 #include "engine/Application.hpp"
 #include "engine/Time.hpp"
 #include "engine/Logger.hpp"
+#include "engine/sceneManagement/Scene.hpp"
 
 #include <iostream>
 
@@ -25,22 +26,28 @@ Camera *Application::GetMainCamera()
 void Application::Init()
 {
 #ifdef N2ENGINE_DEBUG
+
+#define RED(x) "\033[31m" x "\033[0m"
+#define GREEN(x) "\033[32m" x "\033[0m"
+#define YELLOW(x) "\033[33m" x "\033[0m"
+#define BLUE(x) "\033[34m" x "\033[0m"
+
     Logger::logEvent += [](const std::string &msg, Logger::LogLevel level)
     {
         const char *levelStr;
         switch (level)
         {
         case Logger::LogLevel::Info:
-            levelStr = "INFO";
+            levelStr = BLUE("INFO");
             break;
         case Logger::LogLevel::Warn:
-            levelStr = "WARN";
+            levelStr = YELLOW("WARN");
             break;
         case Logger::LogLevel::Error:
-            levelStr = "ERROR";
+            levelStr = RED("ERROR");
             break;
         default:
-            levelStr = "INFO";
+            levelStr = BLUE("INFO");
             break;
         }
         std::cout << "[" << levelStr << "] " << msg << std::endl;
@@ -58,6 +65,14 @@ void Application::Init()
     _mainCamera->SetPosition(Math::Vector3{0.0f, 0.0f, 3.0f});
 
     Logger::Log("Camera initialized", Logger::LogLevel::Info);
+}
+
+void Application::Init(const Scene &initialScene)
+{
+    Init();
+    SceneManager::GetInstance()._scenes.push_back(initialScene);
+    SceneManager::GetInstance()._curSceneIndex = 0;
+    Logger::Info("Initial scene loaded: " + initialScene.sceneName);
 }
 
 void Application::Run()
@@ -84,8 +99,10 @@ void Application::Render()
     const Matrix4 &projectionMatrix = _mainCamera->GetProjectionMatrix();
     renderer->SetViewProjection(viewMatrix.data.data(), projectionMatrix.data.data());
 
-    // TODO: Render scene objects here
-    // This is where you'd iterate through your scene and render meshes
+    if (SceneManager::GetCurSceneIndex() != -1)
+    {
+        SceneManager::GetCurScene().Render(renderer);
+    }
 
     renderer->EndFrame();
     renderer->Present();

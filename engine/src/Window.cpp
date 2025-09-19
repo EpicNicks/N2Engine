@@ -115,6 +115,15 @@ bool Window::ShouldClose() const
     return glfwWindowShouldClose(_window);
 }
 
+void Window::SetTitle(const std::string &title)
+{
+    _title = title;
+    if (_window)
+    {
+        glfwSetWindowTitle(_window, _title.c_str());
+    }
+}
+
 AppRenderer Window::ReadAppRendererFromConfig() const
 {
     // TODO

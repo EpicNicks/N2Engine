@@ -4,6 +4,15 @@
 using namespace N2Engine::Common;
 using namespace N2Engine::Math;
 
+Color &Color::operator=(const Color &other)
+{
+    if (this != &other)
+    {
+        VectorN<float, 4>::operator=(other);
+    }
+    return *this;
+}
+
 Color Color::White()
 {
     return Color{1.0f, 1.0f, 1.0f, 1.0f};

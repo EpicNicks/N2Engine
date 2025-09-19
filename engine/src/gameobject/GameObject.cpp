@@ -295,7 +295,7 @@ void GameObject::CreatePositionable()
 {
     if (!_positionable)
     {
-        _positionable = std::make_shared<Positionable>(weak_from_this());
+        _positionable = std::make_shared<Positionable>(*this);
     }
 }
 
@@ -364,6 +364,10 @@ size_t GameObject::GetComponentCount() const
 void GameObject::SetScene(Scene *scene)
 {
     _scene = scene;
+    for (const auto &component : _components)
+    {
+        _scene->AddComponentToAttachQueue(component);
+    }
 
     // Recursively set scene for children
     for (auto &child : _children)

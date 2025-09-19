@@ -4,7 +4,7 @@
 using namespace N2Engine;
 using namespace N2Engine::Math;
 
-Positionable::Positionable(WeakGameObjectPtr gameObject)
+Positionable::Positionable(GameObject &gameObject)
     : _gameObject(gameObject)
 {
     // Initialize with identity transform
@@ -186,14 +186,11 @@ void Positionable::MarkGlobalTransformDirty() const
 
 void Positionable::MarkChildrenGlobalTransformDirty() const
 {
-    if (auto gameObj = _gameObject.lock())
+    for (const auto &child : _gameObject.GetChildren())
     {
-        for (const auto &child : gameObj->GetChildren())
+        if (auto childPositionable = child->GetPositionable())
         {
-            if (auto childPositionable = child->GetPositionable())
-            {
-                childPositionable->MarkGlobalTransformDirty();
-            }
+            childPositionable->MarkGlobalTransformDirty();
         }
     }
 }
@@ -224,12 +221,10 @@ Transform Positionable::CalculateGlobalTransform() const
 
 std::shared_ptr<Positionable> Positionable::GetParentPositionable() const
 {
-    if (auto gameObj = _gameObject.lock())
+    _gameObject;
+    if (auto parent = _gameObject.GetParent())
     {
-        if (auto parent = gameObj->GetParent())
-        {
-            return parent->GetPositionable();
-        }
+        return parent->GetPositionable();
     }
     return nullptr;
 }

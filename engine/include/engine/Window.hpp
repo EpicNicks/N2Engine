@@ -1,8 +1,11 @@
 #pragma once
 
+#include <string>
+
 #include <renderer/opengl/OpenGLRenderer.hpp>
 #include <renderer/vulkan/VulkanRenderer.hpp>
 #include <math/VectorN.hpp>
+
 #include "engine/common/Color.hpp"
 
 namespace N2Engine
@@ -21,6 +24,7 @@ namespace N2Engine
     private:
         GLFWwindow *_window;
         std::unique_ptr<Renderer::Common::IRenderer> _renderer;
+        std::string _title{"N2Engine Application"};
 
     public:
         Common::Color clearColor;
@@ -36,6 +40,9 @@ namespace N2Engine
         Renderer::Common::IRenderer *GetRenderer() const;
 
         Vector2i GetWindowDimensions() const;
+
+        std::string GetTitle() const { return _title; }
+        void SetTitle(const std::string &title);
 
     private:
         AppRenderer ReadAppRendererFromConfig() const;

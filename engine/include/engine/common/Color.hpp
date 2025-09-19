@@ -28,6 +28,10 @@ namespace N2Engine
             static Color Transparent();
             static Color FromHex(std::uint32_t hexValue);
             std::uint32_t ToHex() const;
+
+            Color(const Color &other) : VectorN(other) {}
+
+            Color &operator=(const Color &other);
         };
     }
 }

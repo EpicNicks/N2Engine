@@ -4,6 +4,38 @@
 
 using namespace N2Engine;
 
+Scene::Scene(const std::string &name)
+    : sceneName(name), _rootGameObjects()
+{
+}
+
+void Scene::Render(Renderer::Common::IRenderer *renderer)
+{
+    // Render all root GameObjects (which will recursively render their children)
+    for (const auto &rootObject : _rootGameObjects)
+    {
+        if (rootObject->IsActiveInHierarchy())
+        {
+            RenderRecursive(rootObject, renderer);
+        }
+    }
+}
+
+void Scene::RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Common::IRenderer *renderer)
+{
+    if (gameObject == nullptr || !gameObject->IsActiveInHierarchy())
+    {
+        return;
+    }
+
+    // handle rendering
+
+    for (const auto &child : gameObject->GetChildren())
+    {
+        RenderRecursive(child, renderer);
+    }
+}
+
 void Scene::AddRootGameObject(std::shared_ptr<GameObject> gameObject)
 {
     if (!gameObject || gameObject->GetParent())
@@ -162,6 +194,11 @@ bool Scene::TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject,
     }
 
     return false;
+}
+
+void Scene::AddComponentToAttachQueue(std::shared_ptr<Component> component)
+{
+    _attachQueue.push(component);
 }
 
 void Scene::Update()

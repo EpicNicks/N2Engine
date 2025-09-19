@@ -10,20 +10,21 @@ namespace N2Engine
     {
         friend class GameObject;
 
-    private:
-        std::unique_ptr<GameObject> _gameObject;
+    protected:
+        GameObject &_gameObject;
+
+        Component(GameObject &gameObject);
 
     public:
         // used if the attached GameObject is active as well, hierarchy is checked at that level
         bool isActive;
+        GameObject &GetGameObject() const;
 
-        GameObject *GetGameObject() const;
-
-        virtual void OnAttach() = 0;
-        virtual void OnUpdate() = 0;
-        virtual void OnDestroy() = 0;
-        virtual void OnEnable() = 0;
-        virtual void OnDisable() = 0;
+        virtual void OnAttach() {}
+        virtual void OnUpdate() {}
+        virtual void OnDestroy() {}
+        virtual void OnEnable() {}
+        virtual void OnDisable() {}
 
         static constexpr bool IsSingleton = false;
     };
