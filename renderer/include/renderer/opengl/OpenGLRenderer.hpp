@@ -29,8 +29,18 @@ namespace Renderer
 
         struct Material
         {
-            GLuint textureId;
+            uint32_t shaderId;  // Changed from textureId to shaderId
+            uint32_t textureId; // Keep texture support
             bool isValid;
+        };
+
+        struct ShaderUniforms
+        {
+            GLint modelLoc = -1;
+            GLint viewLoc = -1;
+            GLint projectionLoc = -1;
+            GLint textureLoc = -1;
+            // Add more uniforms as needed
         };
 
         class OpenGLRenderer : public Common::IRenderer
@@ -45,9 +55,12 @@ namespace Renderer
             void Resize(uint32_t width, uint32_t height) override;
             void Clear(float r, float g, float b, float a) override;
 
-            // Shader Management (New!)
-            bool CreateShaderProgram(const char *vertexSource, const char *fragmentSource);
-            bool LoadShaderProgram(const std::string &vertexPath, const std::string &fragmentPath);
+            // Multi-shader management (new interface)
+            uint32_t CreateShaderProgram(const char *vertexSource, const char *fragmentSource) override;
+            uint32_t LoadShaderProgram(const std::string &vertexPath, const std::string &fragmentPath) override;
+            void UseShaderProgram(uint32_t shaderId) override;
+            void DestroyShaderProgram(uint32_t shaderId) override;
+            bool IsValidShader(uint32_t shaderId) const override;
 
             // Frame management
             void BeginFrame() override;
@@ -59,7 +72,7 @@ namespace Renderer
             void DestroyMesh(uint32_t meshId) override;
             uint32_t CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) override;
             void DestroyTexture(uint32_t textureId) override;
-            uint32_t CreateMaterial(uint32_t textureId) override;
+            uint32_t CreateMaterial(uint32_t shaderId, uint32_t textureId = 0) override;
             void DestroyMaterial(uint32_t materialId) override;
 
             // Rendering
@@ -71,20 +84,25 @@ namespace Renderer
             void SetWireframe(bool enabled) override;
             const char *GetRendererName() const override;
 
+            // Helper method to get material's shader ID
+            uint32_t GetMaterialShader(uint32_t materialId) const;
+
         private:
             // OpenGL objects
             GLFWwindow *m_window;
             uint32_t m_width;
             uint32_t m_height;
 
-            // Shader program
-            GLuint m_shaderProgram;
-
-            // Uniform locations
             GLint m_modelLoc;
             GLint m_viewLoc;
             GLint m_projectionLoc;
             GLint m_textureLoc;
+
+            // Multi-shader management
+            std::unordered_map<uint32_t, GLuint> m_shaderPrograms;
+            std::unordered_map<uint32_t, ShaderUniforms> m_shaderUniforms;
+            uint32_t m_nextShaderId;
+            uint32_t m_currentShader;
 
             // View/Projection matrices
             float m_viewMatrix[16];
@@ -102,6 +120,8 @@ namespace Renderer
 
             // State
             bool m_wireframeEnabled;
+
+            float m_clearColor[4];
 
             std::string LoadShaderFromFile(const std::string &filepath);
             GLuint CompileShader(const char *source, GLenum shaderType);

@@ -54,12 +54,19 @@ namespace Renderer
             virtual void EndFrame() = 0;
             virtual void Present() = 0;
 
+            // Shader management
+            virtual uint32_t CreateShaderProgram(const char *vertexSource, const char *fragmentSource) = 0;
+            virtual uint32_t LoadShaderProgram(const std::string &vertexPath, const std::string &fragmentPath) = 0;
+            virtual void UseShaderProgram(uint32_t shaderId) = 0;
+            virtual void DestroyShaderProgram(uint32_t shaderId) = 0;
+            virtual bool IsValidShader(uint32_t shaderId) const = 0;
+
             // Resource management
             virtual uint32_t CreateMesh(const MeshData &meshData) = 0;
             virtual void DestroyMesh(uint32_t meshId) = 0;
             virtual uint32_t CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) = 0;
             virtual void DestroyTexture(uint32_t textureId) = 0;
-            virtual uint32_t CreateMaterial(uint32_t textureId) = 0;
+            virtual uint32_t CreateMaterial(uint32_t shaderId, uint32_t textureId = 0) = 0;
             virtual void DestroyMaterial(uint32_t materialId) = 0;
 
             // Rendering

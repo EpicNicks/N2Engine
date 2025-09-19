@@ -16,6 +16,9 @@ namespace N2Engine
         static float time;
         static float unscaledTime;
         static float timeScale;
+        // TODO: fixed intervals for physics
+        //  TODO: physics for that matter
+        // static float fixedDeltaTime;
         static TimePoint lastFrameTime;
 
         static void Init();

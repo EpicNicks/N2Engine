@@ -51,7 +51,11 @@ namespace N2Engine
         template <typename T>
         std::vector<std::shared_ptr<T>> FindObjectsByType(bool includeInactive) const;
 
+        void ProcessAttachQueue();
         void Update();
+        void FixedUpdate();
+        void LateUpdate();
+        void AdvanceCoroutines();
         void Clear();
 
     private:

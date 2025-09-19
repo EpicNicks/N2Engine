@@ -10,11 +10,12 @@ namespace N2Engine
 {
     namespace Example
     {
-        class QuadRenderer : public Component, public IRenderable
+        class QuadRenderer : public IRenderable
         {
         private:
             uint32_t _meshId = 0;
             uint32_t _materialId = 0;
+            uint32_t _shaderId = 0;
             bool _resourcesInitialized = false;
 
             // Rendering properties
@@ -31,6 +32,8 @@ namespace N2Engine
             void Render(Renderer::Common::IRenderer *renderer) override;
             void InitializeRenderResources(Renderer::Common::IRenderer *renderer) override;
             void CleanupRenderResources(Renderer::Common::IRenderer *renderer) override;
+
+            void OnUpdate() override;
 
             // Properties
             void SetColor(const Common::Color &color) { _color = color; }

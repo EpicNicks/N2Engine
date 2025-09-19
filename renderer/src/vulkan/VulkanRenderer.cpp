@@ -64,7 +64,7 @@ void Renderer::Vulkan::VulkanRenderer::DestroyTexture(uint32_t textureId)
 {
 }
 
-uint32_t Renderer::Vulkan::VulkanRenderer::CreateMaterial(uint32_t textureId)
+uint32_t Renderer::Vulkan::VulkanRenderer::CreateMaterial(uint32_t shaderId, uint32_t textureId)
 {
     return 0;
 }
@@ -745,4 +745,31 @@ bool Renderer::Vulkan::VulkanRenderer::CreateCommandBuffers()
 bool Renderer::Vulkan::VulkanRenderer::CreateSyncObjects()
 {
     return false;
+}
+
+uint32_t VulkanRenderer::CreateShaderProgram(const char *vertexSource, const char *fragmentSource)
+{
+    std::cerr << "VulkanRenderer::CreateShaderProgram not implemented yet" << std::endl;
+    return 0; // Return 0 to indicate failure
+}
+
+uint32_t VulkanRenderer::LoadShaderProgram(const std::string &vertexPath, const std::string &fragmentPath)
+{
+    std::cerr << "VulkanRenderer::LoadShaderProgram not implemented yet" << std::endl;
+    return 0;
+}
+
+void VulkanRenderer::UseShaderProgram(uint32_t shaderId)
+{
+    std::cerr << "VulkanRenderer::UseShaderProgram not implemented yet" << std::endl;
+}
+
+void VulkanRenderer::DestroyShaderProgram(uint32_t shaderId)
+{
+    std::cerr << "VulkanRenderer::DestroyShaderProgram not implemented yet" << std::endl;
+}
+
+bool VulkanRenderer::IsValidShader(uint32_t shaderId) const
+{
+    return false; // No shaders are valid in stub implementation
 }

@@ -18,7 +18,7 @@ namespace N2Engine
     public:
         // used if the attached GameObject is active as well, hierarchy is checked at that level
         bool isActive;
-        GameObject &GetGameObject() const;
+        GameObject &GetGameObject();
 
         virtual void OnAttach() {}
         virtual void OnUpdate() {}

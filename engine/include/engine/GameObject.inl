@@ -24,7 +24,8 @@ namespace N2Engine
         _components.push_back(component);
         _componentMap[typeIndex] = component;
 
-        if (SceneManager::GetCurSceneIndex() != -1)
+        // if GO has already been added to scene and this component is new
+        if (_scene != nullptr && SceneManager::GetCurSceneIndex() != -1)
         {
             SceneManager::GetCurScene().AddComponentToAttachQueue(component);
         }

@@ -5,6 +5,8 @@
 #include <type_traits>
 #include <algorithm>
 #include <stdexcept>
+#include <string>
+#include <sstream>
 
 namespace N2Engine
 {
@@ -147,6 +149,22 @@ namespace N2Engine
             VectorN Slerp(const VectorN &other, T t) const
             {
                 return Slerp(*this, other, t);
+            }
+
+            std::string toString()
+            {
+                std::ostringstream ss;
+                ss << "[";
+                for (int i = 0; i < vector.size(); i++)
+                {
+                    ss << std::to_string(vector[i]);
+                    if (i < vector.size() - 1)
+                    {
+                        ss << ",";
+                    }
+                }
+                ss << "]";
+                return ss.str();
             }
 
             T &operator[](std::size_t index)

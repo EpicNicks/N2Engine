@@ -5,27 +5,298 @@
 
 #include <engine/GameObject.inl>
 
-#include <iostream>
+#include <renderer/opengl/OpenGLRenderer.hpp>
+#include <GLFW/glfw3.h>
 
-int main()
+#include <iostream>
+#include <cmath>
+
+// Simple vertex shader source
+const char *vertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoord;
+layout (location = 3) in vec4 aColor;
+
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProjection;
+
+out vec4 vertexColor;
+
+void main()
+{
+    gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+    vertexColor = aColor;
+}
+)";
+
+// Simple fragment shader source
+const char *fragmentShaderSource = R"(
+#version 330 core
+in vec4 vertexColor;
+out vec4 FragColor;
+
+void main()
+{
+    FragColor = vertexColor;
+}
+)";
+
+// Window dimensions
+const uint32_t WINDOW_WIDTH = 800;
+const uint32_t WINDOW_HEIGHT = 600;
+
+// Create identity matrix
+void createIdentityMatrix(float *matrix)
+{
+    for (int i = 0; i < 16; i++)
+    {
+        matrix[i] = 0.0f;
+    }
+    for (int i = 0; i < 4; i++)
+    {
+        matrix[i * 4 + i] = 1.0f;
+    }
+}
+
+// Create simple orthographic projection matrix
+void createOrthographicMatrix(float *matrix, float left, float right, float bottom, float top, float nearB, float farB)
+{
+    for (int i = 0; i < 16; i++)
+    {
+        matrix[i] = 0.0f;
+    }
+
+    matrix[0] = 2.0f / (right - left);
+    matrix[5] = 2.0f / (top - bottom);
+    matrix[10] = -2.0f / (farB - nearB);
+    matrix[12] = -(right + left) / (right - left);
+    matrix[13] = -(top + bottom) / (top - bottom);
+    matrix[14] = -(farB + nearB) / (farB - nearB);
+    matrix[15] = 1.0f;
+}
+
+// GLFW error callback
+void errorCallback(int error, const char *description)
+{
+    std::cerr << "GLFW Error " << error << ": " << description << std::endl;
+}
+
+// GLFW framebuffer size callback
+void framebufferSizeCallback(GLFWwindow *window, int width, int height)
+{
+    auto *renderer = static_cast<Renderer::OpenGL::OpenGLRenderer *>(glfwGetWindowUserPointer(window));
+    if (renderer)
+    {
+        renderer->Resize(width, height);
+    }
+}
+
+void TestRenderer()
+{
+    // Initialize GLFW
+    if (!glfwInit())
+    {
+        std::cerr << "Failed to initialize GLFW" << std::endl;
+        return;
+    }
+
+    // Set GLFW error callback
+    glfwSetErrorCallback(errorCallback);
+
+    // Configure GLFW
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+    // Create window
+    GLFWwindow *window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Triangle Test", nullptr, nullptr);
+    if (!window)
+    {
+        std::cerr << "Failed to create GLFW window" << std::endl;
+        glfwTerminate();
+        return;
+    }
+
+    // Create renderer
+    auto renderer = Renderer::OpenGL::CreateOpenGLRenderer();
+    auto *openglRenderer = static_cast<Renderer::OpenGL::OpenGLRenderer *>(renderer.get());
+
+    // Set window user pointer for callbacks
+    glfwSetWindowUserPointer(window, openglRenderer);
+    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
+
+    // Initialize renderer
+    if (!renderer->Initialize(window, WINDOW_WIDTH, WINDOW_HEIGHT))
+    {
+        std::cerr << "Failed to initialize renderer" << std::endl;
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+
+    std::cout << "Using: " << renderer->GetRendererName() << std::endl;
+
+    // Create triangle mesh data
+    Renderer::Common::MeshData triangleData;
+
+    // Define triangle vertices (in normalized device coordinates)
+    triangleData.vertices = {
+        // Vertex 1 (top, red)
+        {
+            {0.0f, 0.5f, 0.0f},      // position
+            {0.0f, 0.0f, 1.0f},      // normal (pointing toward camera)
+            {0.5f, 1.0f},            // texture coordinates
+            {1.0f, 0.0f, 0.0f, 1.0f} // color (red)
+        },
+        // Vertex 2 (bottom-left, green)
+        {
+            {-0.5f, -0.5f, 0.0f},    // position
+            {0.0f, 0.0f, 1.0f},      // normal
+            {0.0f, 0.0f},            // texture coordinates
+            {0.0f, 1.0f, 0.0f, 1.0f} // color (green)
+        },
+        // Vertex 3 (bottom-right, blue)
+        {
+            {0.5f, -0.5f, 0.0f},     // position
+            {0.0f, 0.0f, 1.0f},      // normal
+            {1.0f, 0.0f},            // texture coordinates
+            {0.0f, 0.0f, 1.0f, 1.0f} // color (blue)
+        }};
+
+    // Define triangle indices
+    triangleData.indices = {0, 1, 2};
+
+    // Create mesh
+    uint32_t triangleMesh = renderer->CreateMesh(triangleData);
+    if (triangleMesh == 0)
+    {
+        std::cerr << "Failed to create triangle mesh" << std::endl;
+        renderer->Shutdown();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+
+    // Create shader program
+    uint32_t shaderProgram = renderer->CreateShaderProgram(vertexShaderSource, fragmentShaderSource);
+    if (shaderProgram == 0)
+    {
+        std::cerr << "Failed to create shader program" << std::endl;
+        renderer->DestroyMesh(triangleMesh);
+        renderer->Shutdown();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+
+    // Create material
+    uint32_t material = renderer->CreateMaterial(shaderProgram, 0); // No texture
+    if (material == 0)
+    {
+        std::cerr << "Failed to create material" << std::endl;
+        renderer->DestroyShaderProgram(shaderProgram);
+        renderer->DestroyMesh(triangleMesh);
+        renderer->Shutdown();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return;
+    }
+
+    // Set up matrices
+    float modelMatrix[16];
+    float viewMatrix[16];
+    float projectionMatrix[16];
+
+    createIdentityMatrix(modelMatrix);
+    createIdentityMatrix(viewMatrix);
+    createOrthographicMatrix(projectionMatrix, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f);
+
+    // Set view and projection matrices
+    renderer->SetViewProjection(viewMatrix, projectionMatrix);
+
+    // Set clear color to dark gray
+    renderer->Clear(0.2f, 0.3f, 0.3f, 1.0f);
+
+    std::cout << "Rendering triangle. Press ESC to exit." << std::endl;
+
+    // Main render loop
+    while (!glfwWindowShouldClose(window))
+    {
+        // Poll events
+        glfwPollEvents();
+
+        // Handle input
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+        {
+            glfwSetWindowShouldClose(window, true);
+        }
+
+        // Rotate the triangle for some animation
+        static float angle = 0.0f;
+        angle += 0.01f;
+
+        // Create rotation matrix for model
+        float cosA = cosf(angle);
+        float sinA = sinf(angle);
+        createIdentityMatrix(modelMatrix);
+        modelMatrix[0] = cosA;
+        modelMatrix[1] = sinA;
+        modelMatrix[4] = -sinA;
+        modelMatrix[5] = cosA;
+
+        // Begin frame
+        renderer->BeginFrame();
+
+        // Draw triangle
+        renderer->DrawMesh(triangleMesh, modelMatrix, material);
+
+        // End frame and present
+        renderer->EndFrame();
+        renderer->Present();
+    }
+
+    // Cleanup
+    std::cout << "Cleaning up..." << std::endl;
+    renderer->DestroyMaterial(material);
+    renderer->DestroyShaderProgram(shaderProgram);
+    renderer->DestroyMesh(triangleMesh);
+    renderer->Shutdown();
+
+    glfwDestroyWindow(window);
+    glfwTerminate();
+}
+
+void TestEngine()
 {
     std::cout << "Creating scene..." << std::endl;
     N2Engine::Scene testScene{"Test Scene"};
 
     auto quadObject = std::make_shared<N2Engine::GameObject>("TestQuad");
     auto quadRenderer = quadObject->AddComponent<N2Engine::Example::QuadRenderer>();
-    quadRenderer->SetColor(N2Engine::Common::Color::Red());
+    quadRenderer->SetColor(N2Engine::Common::Color{1.0f, 1.0f, 1.0f, 1.0f});
 
     auto positionable = quadObject->GetPositionable();
+    // In your main() function, try this:
     positionable->SetPosition(N2Engine::Math::Vector3{0.0f, 0.0f, 0.0f});
-    positionable->SetScale(N2Engine::Math::Vector3{1.0f, 1.0f, 1.0f});
-    positionable->SetRotation(N2Engine::Math::Quaternion::FromEulerAngles(0, 0, 45.0f));
+    positionable->SetRotation(N2Engine::Math::Quaternion::FromEulerAngles(0, 0, 0.0f));
+    positionable->SetScale(N2Engine::Math::Vector3{3.0f, 3.0f, 1.0f});
 
     testScene.AddRootGameObject(quadObject);
 
     N2Engine::Application &application = N2Engine::Application::GetInstance();
     application.Init(testScene);
+    application.GetWindow().clearColor = N2Engine::Common::Color::Magenta();
+    // application.GetMainCamera()->LookAt(quadObject->GetPositionable()->GetPosition());
 
     application.Run();
+}
+
+int main()
+{
+    // TestRenderer();
+    TestEngine();
     return 0;
 }

@@ -1,9 +1,13 @@
 #include "engine/Application.hpp"
 #include "engine/Time.hpp"
 #include "engine/Logger.hpp"
-#include "engine/sceneManagement/Scene.hpp"
 
+#include <engine/example/QuadRenderer.hpp>
+#include "engine/sceneManagement/Scene.hpp"
+#include "engine/GameObject.hpp"
 #include <iostream>
+#include <string>
+#include <memory>
 
 using namespace N2Engine;
 
@@ -61,10 +65,11 @@ void Application::Init()
     const Vector2i windowDimensions = _window.GetWindowDimensions();
     const float aspect = (float)windowDimensions[0] / (float)windowDimensions[1];
 
-    _mainCamera->SetPerspective(45.0f, aspect, 0.1f, 100.0f);
+    //_mainCamera->SetPerspective(45.0f, aspect, 0.1f, 100.0f);
+    _mainCamera->SetOrthographic(-10.0f, 10.0f, -10.0f, 10.0f, -10.0f, 10.0f);
     _mainCamera->SetPosition(Math::Vector3{0.0f, 0.0f, 3.0f});
 
-    Logger::Log("Camera initialized", Logger::LogLevel::Info);
+    Logger::Info("Camera initialized");
 }
 
 void Application::Init(const Scene &initialScene)
@@ -77,13 +82,17 @@ void Application::Init(const Scene &initialScene)
 
 void Application::Run()
 {
-
     // Main render loop
     while (!_window.ShouldClose())
     {
         _window.PollEvents();
         Time::Update();
-
+        if (SceneManager::GetCurSceneIndex() != -1)
+        {
+            Scene &curScene = SceneManager::GetCurScene();
+            curScene.ProcessAttachQueue();
+            curScene.Update();
+        }
         Render();
     }
 }
@@ -92,9 +101,9 @@ void Application::Render()
 {
     auto *renderer = _window.GetRenderer();
 
+    _window.Clear();
     renderer->BeginFrame();
 
-    _window.Clear();
     const Matrix4 &viewMatrix = _mainCamera->GetViewMatrix();
     const Matrix4 &projectionMatrix = _mainCamera->GetProjectionMatrix();
     renderer->SetViewProjection(viewMatrix.data.data(), projectionMatrix.data.data());

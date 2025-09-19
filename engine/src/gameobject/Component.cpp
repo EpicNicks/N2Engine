@@ -4,11 +4,11 @@
 
 using namespace N2Engine;
 
-GameObject &Component::GetGameObject() const
+GameObject &Component::GetGameObject()
 {
     return _gameObject;
 }
 
-Component::Component(GameObject &gameObject) : _gameObject(gameObject)
+Component::Component(GameObject &gameObject) : _gameObject(gameObject), isActive{true}
 {
 }

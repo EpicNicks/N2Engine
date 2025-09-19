@@ -8,7 +8,10 @@
 using namespace Renderer::OpenGL;
 
 OpenGLRenderer::OpenGLRenderer()
-    : m_window(nullptr), m_width(0), m_height(0), m_shaderProgram(0), m_modelLoc(-1), m_viewLoc(-1), m_projectionLoc(-1), m_textureLoc(-1), m_nextMeshId(1), m_nextTextureId(1), m_nextMaterialId(1), m_wireframeEnabled(false)
+    : m_window(nullptr), m_width(0), m_height(0),
+      m_modelLoc(-1), m_viewLoc(-1), m_projectionLoc(-1), m_textureLoc(-1),
+      m_nextShaderId(1), m_currentShader(0),
+      m_nextMeshId(1), m_nextTextureId(1), m_nextMaterialId(1), m_wireframeEnabled(false)
 {
     // Initialize matrices to identity
     memset(m_viewMatrix, 0, sizeof(m_viewMatrix));
@@ -29,8 +32,10 @@ OpenGLRenderer::~OpenGLRenderer()
 
 void OpenGLRenderer::Clear(float r, float g, float b, float a)
 {
-    glClearColor(r, g, b, a);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    m_clearColor[0] = r;
+    m_clearColor[1] = g;
+    m_clearColor[2] = b;
+    m_clearColor[3] = a;
 }
 
 bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height)
@@ -96,12 +101,15 @@ void OpenGLRenderer::Shutdown()
     // Clear materials
     m_materials.clear();
 
-    // Clean up shader program
-    if (m_shaderProgram)
+    // Clean up all shader programs
+    for (auto &pair : m_shaderPrograms)
     {
-        glDeleteProgram(m_shaderProgram);
-        m_shaderProgram = 0;
+        glDeleteProgram(pair.second);
     }
+    m_shaderPrograms.clear();
+    m_shaderUniforms.clear();
+
+    m_currentShader = 0;
 }
 
 void OpenGLRenderer::Resize(uint32_t width, uint32_t height)
@@ -111,63 +119,96 @@ void OpenGLRenderer::Resize(uint32_t width, uint32_t height)
     glViewport(0, 0, width, height);
 }
 
-bool OpenGLRenderer::CreateShaderProgram(const char *vertexSource, const char *fragmentSource)
+uint32_t OpenGLRenderer::CreateShaderProgram(const char *vertexSource, const char *fragmentSource)
 {
     if (!vertexSource || !fragmentSource)
     {
         std::cerr << "Invalid shader source provided" << std::endl;
-        return false;
+        return 0;
     }
 
     GLuint vertexShader = CompileShader(vertexSource, GL_VERTEX_SHADER);
     if (vertexShader == 0)
-    {
-        return false;
-    }
+        return 0;
 
     GLuint fragmentShader = CompileShader(fragmentSource, GL_FRAGMENT_SHADER);
     if (fragmentShader == 0)
     {
         glDeleteShader(vertexShader);
-        return false;
+        return 0;
     }
 
-    // Clean up existing program if it exists
-    if (m_shaderProgram)
-    {
-        glDeleteProgram(m_shaderProgram);
-    }
-
-    m_shaderProgram = LinkProgram(vertexShader, fragmentShader);
-
+    GLuint program = LinkProgram(vertexShader, fragmentShader);
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
-    if (m_shaderProgram == 0)
-    {
-        return false;
-    }
+    if (program == 0)
+        return 0;
 
-    // Get uniform locations
-    m_modelLoc = glGetUniformLocation(m_shaderProgram, "uModel");
-    m_viewLoc = glGetUniformLocation(m_shaderProgram, "uView");
-    m_projectionLoc = glGetUniformLocation(m_shaderProgram, "uProjection");
-    m_textureLoc = glGetUniformLocation(m_shaderProgram, "uTexture");
+    // Store the program and get uniform locations
+    uint32_t shaderId = m_nextShaderId++;
+    m_shaderPrograms[shaderId] = program;
 
-    return true;
+    // Cache uniform locations
+    ShaderUniforms uniforms;
+    uniforms.modelLoc = glGetUniformLocation(program, "uModel");
+    uniforms.viewLoc = glGetUniformLocation(program, "uView");
+    uniforms.projectionLoc = glGetUniformLocation(program, "uProjection");
+    uniforms.textureLoc = glGetUniformLocation(program, "uTexture");
+    m_shaderUniforms[shaderId] = uniforms;
+
+    return shaderId;
 }
 
-bool OpenGLRenderer::LoadShaderProgram(const std::string &vertexPath, const std::string &fragmentPath)
+uint32_t OpenGLRenderer::LoadShaderProgram(const std::string &vertexPath, const std::string &fragmentPath)
 {
     std::string vertexSource = LoadShaderFromFile(vertexPath);
     std::string fragmentSource = LoadShaderFromFile(fragmentPath);
 
     if (vertexSource.empty() || fragmentSource.empty())
     {
-        return false;
+        return 0;
     }
 
     return CreateShaderProgram(vertexSource.c_str(), fragmentSource.c_str());
+}
+
+void OpenGLRenderer::UseShaderProgram(uint32_t shaderId)
+{
+    if (m_currentShader == shaderId)
+        return; // Already using this shader
+
+    auto it = m_shaderPrograms.find(shaderId);
+    if (it != m_shaderPrograms.end())
+    {
+        glUseProgram(it->second);
+        m_currentShader = shaderId;
+    }
+    else
+    {
+        std::cerr << "Invalid shader ID: " << shaderId << std::endl;
+    }
+}
+
+void OpenGLRenderer::DestroyShaderProgram(uint32_t shaderId)
+{
+    auto it = m_shaderPrograms.find(shaderId);
+    if (it != m_shaderPrograms.end())
+    {
+        glDeleteProgram(it->second);
+        m_shaderPrograms.erase(it);
+        m_shaderUniforms.erase(shaderId);
+
+        if (m_currentShader == shaderId)
+        {
+            m_currentShader = 0;
+        }
+    }
+}
+
+bool OpenGLRenderer::IsValidShader(uint32_t shaderId) const
+{
+    return m_shaderPrograms.find(shaderId) != m_shaderPrograms.end();
 }
 
 std::string OpenGLRenderer::LoadShaderFromFile(const std::string &filepath)
@@ -194,18 +235,16 @@ std::string OpenGLRenderer::LoadShaderFromFile(const std::string &filepath)
 
 void OpenGLRenderer::BeginFrame()
 {
-    glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+    glClearColor(m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    // Use our shader program (if one is loaded)
-    if (m_shaderProgram)
-    {
-        glUseProgram(m_shaderProgram);
+    // temporary
+    // glDisable(GL_DEPTH_TEST);
+    // glDisable(GL_CULL_FACE);
 
-        // Set view and projection matrices
-        SetMatrix4fv(m_viewLoc, m_viewMatrix);
-        SetMatrix4fv(m_projectionLoc, m_projectionMatrix);
-    }
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
 
     // Set wireframe mode
     if (m_wireframeEnabled)
@@ -346,21 +385,32 @@ void OpenGLRenderer::DestroyTexture(uint32_t textureId)
     }
 }
 
-uint32_t OpenGLRenderer::CreateMaterial(uint32_t textureId)
+uint32_t OpenGLRenderer::CreateMaterial(uint32_t shaderId, uint32_t textureId)
 {
-    auto texIt = m_textures.find(textureId);
-    if (texIt == m_textures.end() || !texIt->second.isValid)
+    if (!IsValidShader(shaderId))
     {
+        std::cerr << "Invalid shader ID provided to CreateMaterial: " << shaderId << std::endl;
         return 0;
     }
 
     Material material = {};
-    material.textureId = textureId;
+    material.shaderId = shaderId;
+    material.textureId = textureId; // 0 means no texture
     material.isValid = true;
 
     uint32_t materialId = m_nextMaterialId++;
     m_materials[materialId] = material;
     return materialId;
+}
+
+uint32_t OpenGLRenderer::GetMaterialShader(uint32_t materialId) const
+{
+    auto it = m_materials.find(materialId);
+    if (it != m_materials.end() && it->second.isValid)
+    {
+        return it->second.shaderId;
+    }
+    return 0;
 }
 
 void OpenGLRenderer::DestroyMaterial(uint32_t materialId)
@@ -382,12 +432,6 @@ void OpenGLRenderer::SetViewProjection(const float *view, const float *projectio
 
 void OpenGLRenderer::DrawMesh(uint32_t meshId, const float *modelMatrix, uint32_t materialId)
 {
-    if (!m_shaderProgram)
-    {
-        std::cerr << "No shader program loaded! Call CreateShaderProgram() or LoadShaderProgram() first." << std::endl;
-        return;
-    }
-
     auto meshIt = m_meshes.find(meshId);
     if (meshIt == m_meshes.end() || !meshIt->second.isValid)
     {
@@ -400,19 +444,49 @@ void OpenGLRenderer::DrawMesh(uint32_t meshId, const float *modelMatrix, uint32_
         return;
     }
 
-    auto textureIt = m_textures.find(materialIt->second.textureId);
-    if (textureIt == m_textures.end() || !textureIt->second.isValid)
+    const Material &material = materialIt->second;
+
+    // Use the material's shader
+    UseShaderProgram(material.shaderId);
+
+    // Get uniform locations for the current shader
+    auto uniformIt = m_shaderUniforms.find(material.shaderId);
+    if (uniformIt == m_shaderUniforms.end())
     {
+        std::cerr << "No uniforms found for shader ID: " << material.shaderId << std::endl;
         return;
     }
 
-    // Set model matrix
-    SetMatrix4fv(m_modelLoc, modelMatrix);
+    const ShaderUniforms &uniforms = uniformIt->second;
 
-    // Bind texture
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, textureIt->second.handle);
-    glUniform1i(m_textureLoc, 0);
+    // Set uniforms
+    if (uniforms.modelLoc != -1)
+    {
+        glUniformMatrix4fv(uniforms.modelLoc, 1, GL_FALSE, modelMatrix);
+    }
+    if (uniforms.viewLoc != -1)
+    {
+        glUniformMatrix4fv(uniforms.viewLoc, 1, GL_FALSE, m_viewMatrix);
+    }
+    if (uniforms.projectionLoc != -1)
+    {
+        glUniformMatrix4fv(uniforms.projectionLoc, 1, GL_FALSE, m_projectionMatrix);
+    }
+
+    // Bind texture if material has one
+    if (material.textureId != 0)
+    {
+        auto textureIt = m_textures.find(material.textureId);
+        if (textureIt != m_textures.end() && textureIt->second.isValid)
+        {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, textureIt->second.handle);
+            if (uniforms.textureLoc != -1)
+            {
+                glUniform1i(uniforms.textureLoc, 0);
+            }
+        }
+    }
 
     // Draw mesh
     const Mesh &mesh = meshIt->second;

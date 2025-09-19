@@ -1,6 +1,9 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/IRenderable.hpp"
 #include <algorithm>
+
+#include "engine/GameObject.inl"
 
 using namespace N2Engine;
 
@@ -28,7 +31,14 @@ void Scene::RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Co
         return;
     }
 
-    // handle rendering
+    auto renderableComponents = gameObject->GetComponents<IRenderable>();
+    for (auto &renderable : renderableComponents)
+    {
+        if (renderable && renderable->isActive) // Assuming components have an IsEnabled check
+        {
+            renderable->Render(renderer);
+        }
+    }
 
     for (const auto &child : gameObject->GetChildren())
     {
@@ -201,14 +211,43 @@ void Scene::AddComponentToAttachQueue(std::shared_ptr<Component> component)
     _attachQueue.push(component);
 }
 
+void Scene::ProcessAttachQueue()
+{
+    while (!_attachQueue.empty())
+    {
+        std::shared_ptr<Component> c = _attachQueue.front();
+        _attachQueue.pop();
+        c->OnAttach();
+
+        // attach has been called, now can be updated
+        _components.push_back(c);
+    }
+}
+
 void Scene::Update()
 {
-    // Update all active GameObjects in hierarchy order
-    TraverseAllActive([](std::shared_ptr<GameObject> gameObject)
-                      {
-                          // Call update on components, handle transforms, etc.
-                          // This ensures parent objects are updated before children
-                      });
+    for (const auto &c : _components)
+    {
+        if (c->GetGameObject().IsActiveInHierarchy() && c->isActive)
+        {
+            c->OnUpdate();
+        }
+    }
+}
+
+void Scene::FixedUpdate()
+{
+    // todo
+}
+
+void Scene::LateUpdate()
+{
+    // todo
+}
+
+void Scene::AdvanceCoroutines()
+{
+    // todo: call CoroutineScheduler on all values for key = component->gameObject
 }
 
 void Scene::Clear()
