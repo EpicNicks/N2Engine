@@ -1,10 +1,11 @@
 #include "engine/Application.hpp"
 #include "engine/Time.hpp"
 #include "engine/Logger.hpp"
-
-#include <engine/example/QuadRenderer.hpp>
+#include "engine/example/QuadRenderer.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/GameObject.hpp"
+
+#include <math/MathRegistrar.hpp>
 #include <iostream>
 #include <string>
 #include <memory>
@@ -65,7 +66,7 @@ void Application::Init()
     };
 #endif
 
-    Math::InitMatrixSIMD();
+    Math::InitializeSIMD();
     Time::Init();
     _window.InitWindow();
 

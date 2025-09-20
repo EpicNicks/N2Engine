@@ -1202,12 +1202,4 @@ namespace N2Engine::Math
             return result;
         }
     };
-
-    // Math library initialization
-    inline void InitMatrixSIMD()
-    {
-        Matrix<float, 4, 4>::InitializeSIMD();
-        Matrix<float, 3, 3>::InitializeSIMD();
-        // Matrix<float, 2, 2> doesn't need SIMD initialization
-    }
 }
