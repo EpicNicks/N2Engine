@@ -25,5 +25,7 @@ set_target_properties(math PROPERTIES
     CXX_EXTENSIONS OFF
 )
 
+target_compile_options(math PUBLIC -msse2 -msse4.1)
+
 # Add any necessary libraries
 target_compile_definitions(math PRIVATE _USE_MATH_DEFINES)

@@ -7,17 +7,7 @@
 
 using namespace N2Engine::Math;
 
-const float Quaternion::EPSILON = 1e-6f;
-
-// Constructors
-Quaternion::Quaternion() : w(1.0f), x(0.0f), y(0.0f), z(0.0f)
-{
-}
-
-Quaternion::Quaternion(float w, float x, float y, float z) : w(w), x(x), y(y), z(z)
-{
-}
-
+// Constructor implementations
 Quaternion::Quaternion(const Vector3 &axis, float angle)
 {
     float halfAngle = angle * 0.5f;
@@ -44,27 +34,11 @@ Quaternion::Quaternion(float pitch, float yaw, float roll)
     z = cr * cp * sy - sr * sp * cy;
 }
 
-Quaternion Quaternion::Identity()
-{
-    return Quaternion(1.0f, 0.0f, 0.0f, 0.0f);
-}
-
-Quaternion Quaternion::FromAxisAngle(const Vector3 &axis, float angle)
-{
-    return Quaternion(axis, angle);
-}
-
-Quaternion Quaternion::FromEulerAngles(float pitch, float yaw, float roll)
-{
-    return Quaternion(pitch, yaw, roll);
-}
-
+// Static factory methods
 Quaternion Quaternion::LookRotation(const Vector3 &forward, const Vector3 &up)
 {
     Vector3 f = forward.Normalized();
-
     Vector3 r = up.Cross(f).Normalized();
-
     Vector3 u = f.Cross(r);
 
     float trace = r.x + u.y + f.z;
@@ -110,6 +84,7 @@ Quaternion Quaternion::Slerp(const Quaternion &a, const Quaternion &b, float t)
 {
     float dot = a.Dot(b);
     Quaternion b_copy = b;
+
     if (dot < 0.0f)
     {
         b_copy = Quaternion(-b.w, -b.x, -b.y, -b.z);
@@ -137,30 +112,7 @@ Quaternion Quaternion::Lerp(const Quaternion &a, const Quaternion &b, float t)
     return ((1.0f - t) * a + t * b).Normalized();
 }
 
-Quaternion Quaternion::operator+(const Quaternion &other) const
-{
-    return Quaternion(w + other.w, x + other.x, y + other.y, z + other.z);
-}
-
-Quaternion Quaternion::operator-(const Quaternion &other) const
-{
-    return Quaternion(w - other.w, x - other.x, y - other.y, z - other.z);
-}
-
-Quaternion Quaternion::operator*(const Quaternion &other) const
-{
-    return Quaternion(
-        w * other.w - x * other.x - y * other.y - z * other.z,
-        w * other.x + x * other.w + y * other.z - z * other.y,
-        w * other.y - x * other.z + y * other.w + z * other.x,
-        w * other.z + x * other.y - y * other.x + z * other.w);
-}
-
-Quaternion Quaternion::operator*(float scalar) const
-{
-    return Quaternion(w * scalar, x * scalar, y * scalar, z * scalar);
-}
-
+// Non-SIMD operations that require Vector3
 Vector3 Quaternion::operator*(const Vector3 &vector) const
 {
     return Rotate(vector);
@@ -169,49 +121,13 @@ Vector3 Quaternion::operator*(const Vector3 &vector) const
 Quaternion Quaternion::operator/(float scalar) const
 {
     float invScalar = 1.0f / scalar;
-    return Quaternion(w * invScalar, x * invScalar, y * invScalar, z * invScalar);
-}
-
-Quaternion &Quaternion::operator+=(const Quaternion &other)
-{
-    w += other.w;
-    x += other.x;
-    y += other.y;
-    z += other.z;
-    return *this;
-}
-
-Quaternion &Quaternion::operator-=(const Quaternion &other)
-{
-    w -= other.w;
-    x -= other.x;
-    y -= other.y;
-    z -= other.z;
-    return *this;
-}
-
-Quaternion &Quaternion::operator*=(const Quaternion &other)
-{
-    *this = *this * other;
-    return *this;
-}
-
-Quaternion &Quaternion::operator*=(float scalar)
-{
-    w *= scalar;
-    x *= scalar;
-    y *= scalar;
-    z *= scalar;
-    return *this;
+    return *this * invScalar;
 }
 
 Quaternion &Quaternion::operator/=(float scalar)
 {
     float invScalar = 1.0f / scalar;
-    w *= invScalar;
-    x *= invScalar;
-    y *= invScalar;
-    z *= invScalar;
+    *this *= invScalar;
     return *this;
 }
 
@@ -228,54 +144,12 @@ bool Quaternion::operator!=(const Quaternion &other) const
     return !(*this == other);
 }
 
-float Quaternion::Length() const
-{
-    return std::sqrt(w * w + x * x + y * y + z * z);
-}
-
-float Quaternion::LengthSquared() const
-{
-    return w * w + x * x + y * y + z * z;
-}
-
-Quaternion Quaternion::Normalized() const
-{
-    float length = Length();
-    if (length < EPSILON)
-        return Identity();
-    return *this / length;
-}
-
-Quaternion &Quaternion::Normalize()
-{
-    float length = Length();
-    if (length >= EPSILON)
-    {
-        *this /= length;
-    }
-    else
-    {
-        *this = Identity();
-    }
-    return *this;
-}
-
-Quaternion Quaternion::Conjugate() const
-{
-    return Quaternion(w, -x, -y, -z);
-}
-
 Quaternion Quaternion::Inverse() const
 {
     float lengthSq = LengthSquared();
     if (lengthSq < EPSILON)
         return Identity();
     return Conjugate() / lengthSq;
-}
-
-float Quaternion::Dot(const Quaternion &other) const
-{
-    return w * other.w + x * other.x + y * other.y + z * other.z;
 }
 
 float Quaternion::Angle(const Quaternion &other) const
@@ -286,6 +160,7 @@ float Quaternion::Angle(const Quaternion &other) const
 
 Vector3 Quaternion::Rotate(const Vector3 &vector) const
 {
+    // Optimized quaternion-vector rotation
     Vector3 qvec{x, y, z};
     Vector3 uv = qvec.Cross(vector);
     Vector3 uuv = qvec.Cross(uv);
@@ -297,16 +172,19 @@ Vector3 Quaternion::ToEulerAngles() const
 {
     Vector3 euler;
 
+    // Roll (x-axis rotation)
     float sinr_cosp = 2 * (w * x + y * z);
     float cosr_cosp = 1 - 2 * (x * x + y * y);
     euler.x = std::atan2(sinr_cosp, cosr_cosp);
 
+    // Pitch (y-axis rotation)
     float sinp = 2 * (w * y - z * x);
     if (std::abs(sinp) >= 1)
         euler.y = std::copysign(std::numbers::pi / 2, sinp);
     else
         euler.y = std::asin(sinp);
 
+    // Yaw (z-axis rotation)
     float siny_cosp = 2 * (w * z + x * y);
     float cosy_cosp = 1 - 2 * (y * y + z * z);
     euler.z = std::atan2(siny_cosp, cosy_cosp);
@@ -364,7 +242,71 @@ bool Quaternion::IsIdentity(float tolerance) const
            std::abs(z) <= tolerance;
 }
 
-Quaternion N2Engine::Math::operator*(float scalar, const Quaternion &q)
+// SIMD initialization
+void Quaternion::InitializeSIMD()
 {
-    return q * scalar;
+    if (initialized)
+        return;
+
+    // Use the same CPU features detection as Matrix class
+    static struct
+    {
+        bool sse2_support = false;
+        bool sse41_support = false;
+
+        void DetectFeatures()
+        {
+#ifdef _WIN32
+            int cpui[4];
+            __cpuid(cpui, 1);
+            sse2_support = (cpui[3] & (1 << 26)) != 0;
+            sse41_support = (cpui[2] & (1 << 19)) != 0;
+#elif defined(__GNUC__) || defined(__clang__)
+            unsigned int eax, ebx, ecx, edx;
+            if (__get_cpuid(1, &eax, &ebx, &ecx, &edx))
+            {
+                sse2_support = (edx & (1 << 26)) != 0;
+                sse41_support = (ecx & (1 << 19)) != 0;
+            }
+#endif
+        }
+
+        bool HasSSE2() const { return sse2_support; }
+        bool HasSSE41() const { return sse41_support; }
+    } features;
+
+    static bool features_detected = false;
+    if (!features_detected)
+    {
+        features.DetectFeatures();
+        features_detected = true;
+    }
+
+    if (features.HasSSE41())
+    {
+        add_func = &AddSSE2;
+        sub_func = &SubSSE2;
+        mul_func = &MulSSE2;
+        scalar_mul_func = &ScalarMulSSE2;
+        dot_func = &DotSSE41;             // SSE4.1 has better dot product
+        length_func = &LengthSSE41;       // SSE4.1 has better sqrt
+        normalize_func = &NormalizeSSE41; // SSE4.1 has better normalization
+    }
+    else if (features.HasSSE2())
+    {
+        add_func = &AddSSE2;
+        sub_func = &SubSSE2;
+        mul_func = &MulSSE2;
+        scalar_mul_func = &ScalarMulSSE2;
+        dot_func = &DotSSE2;
+        length_func = &LengthSSE2;
+        normalize_func = &NormalizeSSE2;
+    }
+    else
+    {
+        // Function pointers already initialized to scalar versions
+        // No need to change anything
+    }
+
+    initialized = true;
 }

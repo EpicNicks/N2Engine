@@ -161,7 +161,7 @@ void QuadRenderer::Render(Renderer::Common::IRenderer *renderer)
     // Logger::Info("\n" + finalMatrix.toString());
 
     // Pass the final matrix to the renderer
-    renderer->DrawMesh(_meshId, finalMatrix.data.data(), _materialId);
+    renderer->DrawMesh(_meshId, finalMatrix.Data(), _materialId);
 }
 
 void QuadRenderer::CleanupRenderResources(Renderer::Common::IRenderer *renderer)

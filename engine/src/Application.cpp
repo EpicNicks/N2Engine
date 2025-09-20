@@ -65,6 +65,7 @@ void Application::Init()
     };
 #endif
 
+    Math::InitMatrixSIMD();
     Time::Init();
     _window.InitWindow();
 
@@ -115,7 +116,7 @@ void Application::Render()
     const Matrix4 &viewMatrix = _mainCamera->GetViewMatrix();
     const Matrix4 &projectionMatrix = _mainCamera->GetProjectionMatrix();
 
-    renderer->SetViewProjection(viewMatrix.data.data(), projectionMatrix.data.data());
+    renderer->SetViewProjection(viewMatrix.Data(), projectionMatrix.Data());
 
     if (SceneManager::GetCurSceneIndex() != -1)
     {
