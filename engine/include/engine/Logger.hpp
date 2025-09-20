@@ -1,6 +1,10 @@
 #pragma once
 
 #include <string>
+#include <ostream>
+#include <streambuf>
+#include <memory>
+
 #include "engine/base/EventHandler.hpp"
 
 // meant to be received by any GUI or shell and otherwise not used elsewhere directly in the engine
@@ -22,4 +26,51 @@ public:
     static void Info(const std::string &log);
     static void Warn(const std::string &log);
     static void Error(const std::string &log);
+
+    class StreamRedirector
+    {
+    public:
+        std::streambuf *originalBuf;
+
+    private:
+        std::ostream &stream;
+
+        class LoggerStreambuf : public std::streambuf
+        {
+        private:
+            std::streambuf *originalBuf;
+            Logger::LogLevel logLevel;
+            std::string lineBuffer;
+            bool echoToOriginal;
+
+        public:
+            LoggerStreambuf(std::streambuf *original, Logger::LogLevel level, bool echo = true);
+
+        protected:
+            int overflow(int c) override;
+            int sync() override;
+        };
+
+        std::unique_ptr<LoggerStreambuf> logger_buf;
+
+    public:
+        // Constructor takes any output stream
+        StreamRedirector(std::ostream &stream, LogLevel level = LogLevel::Info, bool echoToOriginal = true);
+        ~StreamRedirector();
+
+        // Prevent copying and moving for safety
+        StreamRedirector(const StreamRedirector &) = delete;
+        StreamRedirector &operator=(const StreamRedirector &) = delete;
+        StreamRedirector(StreamRedirector &&) = delete;
+        StreamRedirector &operator=(StreamRedirector &&) = delete;
+    };
+
+    // Convenience factory methods
+    static std::streambuf *RedirectStdout(LogLevel level = LogLevel::Info, bool echo = true);
+    static std::streambuf *RedirectStderr(LogLevel level = LogLevel::Error, bool echo = true);
+    static std::streambuf *RedirectStream(std::ostream &stream, LogLevel level = LogLevel::Info, bool echo = true);
+
+private:
+    static std::vector<std::unique_ptr<StreamRedirector>> _streamRedirectors;
+    static void AddStreamRedirector(std::unique_ptr<StreamRedirector> &&streamRedirector);
 };

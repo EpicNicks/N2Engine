@@ -36,7 +36,14 @@ void Application::Init()
 #define YELLOW(x) "\033[33m" x "\033[0m"
 #define BLUE(x) "\033[34m" x "\033[0m"
 
-    Logger::logEvent += [](const std::string &msg, Logger::LogLevel level)
+    auto originalStdout = Logger::RedirectStdout(Logger::LogLevel::Info, false);
+    // auto originalStderr =
+    Logger::RedirectStderr(Logger::LogLevel::Error, false);
+
+    static auto originalStdoutStream = std::make_unique<std::ostream>(originalStdout);
+    // static auto originalStderrStream = std::make_unique<std::ostream>(originalStderr);
+
+    Logger::logEvent += [this](const std::string &msg, Logger::LogLevel level)
     {
         const char *levelStr;
         switch (level)
@@ -54,9 +61,10 @@ void Application::Init()
             levelStr = BLUE("INFO");
             break;
         }
-        std::cout << "[" << levelStr << "] " << msg << std::endl;
+        *originalStdoutStream << "[" << levelStr << "] " << msg << std::endl;
     };
 #endif
+
     Time::Init();
     _window.InitWindow();
 

@@ -15,7 +15,8 @@
         "VK_USE_PLATFORM_XLIB_KHR",
         "_DEBUG",
         "UNICODE",
-        "_UNICODE"
+        "_UNICODE",
+        "N2ENGINE_DEBUG"
       ],
       "compilerPath": "/usr/bin/gcc",
       "cStandard": "c17",
@@ -39,7 +40,8 @@
         "_DEBUG",
         "UNICODE", 
         "_UNICODE",
-        "_WIN32_WINNT=0x0601"
+        "_WIN32_WINNT=0x0601",
+        "N2ENGINE_DEBUG"
       ],
       "compilerPath": "g++.exe",
       "cStandard": "c17",

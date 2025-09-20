@@ -271,7 +271,6 @@ void TestRenderer()
 
 void TestEngine()
 {
-    std::cout << "Creating scene..." << std::endl;
     N2Engine::Scene testScene{"Test Scene"};
 
     auto quadObject = std::make_shared<N2Engine::GameObject>("TestQuad");
