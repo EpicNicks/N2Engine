@@ -1,9 +1,12 @@
 #include "math/Quaternion.hpp"
 #include "math/Vector3.hpp"
 #include "math/Matrix.hpp"
+#include "math/CpuInfo.hpp"
+
 #include <cmath>
 #include <algorithm>
 #include <numbers>
+#include <iostream>
 
 using namespace N2Engine::Math;
 
@@ -248,42 +251,11 @@ void Quaternion::InitializeSIMD()
     if (initialized)
         return;
 
-    // Use the same CPU features detection as Matrix class
-    static struct
+    CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
+    if (features.sse41)
     {
-        bool sse2_support = false;
-        bool sse41_support = false;
+        std::cout << "Using SSE4.1 implementations for Quaternion\n";
 
-        void DetectFeatures()
-        {
-#ifdef _WIN32
-            int cpui[4];
-            __cpuid(cpui, 1);
-            sse2_support = (cpui[3] & (1 << 26)) != 0;
-            sse41_support = (cpui[2] & (1 << 19)) != 0;
-#elif defined(__GNUC__) || defined(__clang__)
-            unsigned int eax, ebx, ecx, edx;
-            if (__get_cpuid(1, &eax, &ebx, &ecx, &edx))
-            {
-                sse2_support = (edx & (1 << 26)) != 0;
-                sse41_support = (ecx & (1 << 19)) != 0;
-            }
-#endif
-        }
-
-        bool HasSSE2() const { return sse2_support; }
-        bool HasSSE41() const { return sse41_support; }
-    } features;
-
-    static bool features_detected = false;
-    if (!features_detected)
-    {
-        features.DetectFeatures();
-        features_detected = true;
-    }
-
-    if (features.HasSSE41())
-    {
         add_func = &AddSSE2;
         sub_func = &SubSSE2;
         mul_func = &MulSSE2;
@@ -292,8 +264,10 @@ void Quaternion::InitializeSIMD()
         length_func = &LengthSSE41;       // SSE4.1 has better sqrt
         normalize_func = &NormalizeSSE41; // SSE4.1 has better normalization
     }
-    else if (features.HasSSE2())
+    else if (features.sse2)
     {
+        std::cout << "Using SSE2 implementations for Quaternion\n";
+
         add_func = &AddSSE2;
         sub_func = &SubSSE2;
         mul_func = &MulSSE2;

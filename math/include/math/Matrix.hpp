@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <string>
+#include <iostream>
 
 #ifdef _WIN32
 #include <intrin.h>
@@ -15,40 +16,11 @@
 #include <cpuid.h>
 #endif
 
+#include "math/CpuInfo.hpp"
 #include "math/Vector3.hpp"
 
 namespace N2Engine::Math
 {
-    // CPU Feature Detection (shared across all specializations)
-    class CPUFeatures
-    {
-    private:
-        bool sse2_support = false;
-        bool sse41_support = false;
-
-        void DetectFeatures()
-        {
-#ifdef _WIN32
-            int cpui[4];
-            __cpuid(cpui, 1);
-            sse2_support = (cpui[3] & (1 << 26)) != 0;
-            sse41_support = (cpui[2] & (1 << 19)) != 0;
-#elif defined(__GNUC__) || defined(__clang__)
-            unsigned int eax, ebx, ecx, edx;
-            if (__get_cpuid(1, &eax, &ebx, &ecx, &edx))
-            {
-                sse2_support = (edx & (1 << 26)) != 0;
-                sse41_support = (ecx & (1 << 19)) != 0;
-            }
-#endif
-        }
-
-    public:
-        CPUFeatures() { DetectFeatures(); }
-        bool HasSSE2() const { return sse2_support; }
-        bool HasSSE41() const { return sse41_support; }
-    };
-
     // Helper for horizontal add in SSE2
     namespace detail
     {
@@ -386,10 +358,12 @@ namespace N2Engine::Math
             if (initialized)
                 return;
 
-            static CPUFeatures features;
+            static CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
 
-            if (features.HasSSE41())
+            if (features.sse41)
             {
+                std::cout << "Using SSE4.1 implementations for Matrix\n";
+
                 multiply_func = &MultiplySSE2;
                 add_func = &AddSSE2;
                 sub_func = &SubSSE2;
@@ -399,8 +373,10 @@ namespace N2Engine::Math
                 inverse_func = &InverseSSE2;
                 determinant_func = &DeterminantSSE2;
             }
-            else if (features.HasSSE2())
+            else if (features.sse2)
             {
+                std::cout << "Using SSE2 implementations for Matrix\n";
+
                 multiply_func = &MultiplySSE2;
                 add_func = &AddSSE2;
                 sub_func = &SubSSE2;
@@ -580,23 +556,23 @@ namespace N2Engine::Math
 
             for (size_t i = 0; i < 4; ++i)
             {
-                __m128 row0 = _mm_set1_ps(a.data[i * 4 + 0]);
-                __m128 row1 = _mm_set1_ps(a.data[i * 4 + 1]);
-                __m128 row2 = _mm_set1_ps(a.data[i * 4 + 2]);
-                __m128 row3 = _mm_set1_ps(a.data[i * 4 + 3]);
+                __m128 a_i0_broadcast = _mm_set1_ps(a.data[i * 4 + 0]);
+                __m128 a_i1_broadcast = _mm_set1_ps(a.data[i * 4 + 1]);
+                __m128 a_i2_broadcast = _mm_set1_ps(a.data[i * 4 + 2]);
+                __m128 a_i3_broadcast = _mm_set1_ps(a.data[i * 4 + 3]);
 
-                __m128 col0 = _mm_load_ps(&b.data[0]);
-                __m128 col1 = _mm_load_ps(&b.data[4]);
-                __m128 col2 = _mm_load_ps(&b.data[8]);
-                __m128 col3 = _mm_load_ps(&b.data[12]);
+                __m128 bRow0 = _mm_load_ps(&b.data[0]);
+                __m128 bRow1 = _mm_load_ps(&b.data[4]);
+                __m128 bRow2 = _mm_load_ps(&b.data[8]);
+                __m128 bRow3 = _mm_load_ps(&b.data[12]);
 
                 __m128 result_row = _mm_add_ps(
                     _mm_add_ps(
-                        _mm_mul_ps(row0, col0),
-                        _mm_mul_ps(row1, col1)),
+                        _mm_mul_ps(a_i0_broadcast, bRow0),
+                        _mm_mul_ps(a_i1_broadcast, bRow1)),
                     _mm_add_ps(
-                        _mm_mul_ps(row2, col2),
-                        _mm_mul_ps(row3, col3)));
+                        _mm_mul_ps(a_i2_broadcast, bRow2),
+                        _mm_mul_ps(a_i3_broadcast, bRow3)));
 
                 _mm_store_ps(&result.data[i * 4], result_row);
             }
@@ -900,9 +876,9 @@ namespace N2Engine::Math
             if (initialized)
                 return;
 
-            static CPUFeatures features;
+            CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
 
-            if (features.HasSSE2())
+            if (features.sse2)
             {
                 multiply_func = &MultiplySSE2;
                 add_func = &AddSSE2;
