@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <string>
+#include <memory>
 
 #include "engine/sceneManagement/Scene.hpp"
 
@@ -12,16 +13,27 @@ namespace N2Engine
         friend class Application;
 
     private:
+        struct SceneChange
+        {
+            bool _updatingScene = false;
+            int _pendingSceneIndex = -1;
+        };
+
+        SceneChange _sceneChange;
+
         int _curSceneIndex = -1;
-        std::vector<Scene> _scenes;
+        std::vector<std::unique_ptr<Scene>> _scenes;
 
         static SceneManager &GetInstance();
 
+        static void ProcessAnyPendingSceneChange();
+
     public:
         static int GetCurSceneIndex();
-        static Scene &GetCurScene();
+        static Scene &GetCurSceneRef();
         static void LoadScene(int sceneIndex);
         static void LoadScene(std::string &sceneName);
+        static void AddScene(std::unique_ptr<Scene> &&scene);
 
         Scene &operator[](int index);
         const Scene &operator[](int index) const;

@@ -5,12 +5,18 @@
 #include "engine/GameObject.inl"
 
 #include <algorithm>
+#include <memory>
 
 using namespace N2Engine;
 
 Scene::Scene(const std::string &name)
     : sceneName(name), _rootGameObjects()
 {
+}
+
+std::unique_ptr<Scene> Scene::Create(const std::string &name)
+{
+    return std::unique_ptr<Scene>(new Scene{name});
 }
 
 void Scene::Render(Renderer::Common::IRenderer *renderer)
@@ -35,7 +41,7 @@ void Scene::RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Co
     auto renderableComponents = gameObject->GetComponents<IRenderable>();
     for (auto &renderable : renderableComponents)
     {
-        if (renderable && renderable->isActive) // Assuming components have an IsEnabled check
+        if (renderable && renderable->GetIsActive())
         {
             renderable->Render(renderer);
         }
@@ -51,16 +57,14 @@ void Scene::AddRootGameObject(std::shared_ptr<GameObject> gameObject)
 {
     if (!gameObject || gameObject->GetParent())
     {
-        // Don't add null objects or objects that already have a parent
         return;
     }
 
-    // Check if already in scene
     auto it = std::find(_rootGameObjects.begin(), _rootGameObjects.end(), gameObject);
     if (it == _rootGameObjects.end())
     {
         _rootGameObjects.push_back(gameObject);
-        gameObject->SetScene(this); // Assuming you have this method
+        gameObject->SetScene(this);
     }
 }
 
@@ -196,6 +200,17 @@ bool Scene::TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject,
     return false;
 }
 
+void Scene::OnAllActiveComponents(std::function<void(std::shared_ptr<Component>)> callback)
+{
+    for (const auto &c : _components)
+    {
+        if (c->GetGameObject().IsActiveInHierarchy() && c->GetIsActive())
+        {
+            callback(c);
+        }
+    }
+}
+
 void Scene::AddComponentToAttachQueue(std::shared_ptr<Component> component)
 {
     _attachQueue.push(component);
@@ -216,40 +231,31 @@ void Scene::ProcessAttachQueue()
 
 void Scene::Update()
 {
-    for (const auto &c : _components)
-    {
-        if (c->GetGameObject().IsActiveInHierarchy() && c->isActive)
-        {
-            c->OnUpdate();
-        }
-    }
+    OnAllActiveComponents([](std::shared_ptr<Component> component)
+                          { component->OnUpdate(); });
 }
 
 void Scene::FixedUpdate()
 {
-    for (const auto &c : _components)
-    {
-        if (c->GetGameObject().IsActiveInHierarchy() && c->isActive)
-        {
-            c->OnFixedUpdate();
-        }
-    }
+    OnAllActiveComponents([](std::shared_ptr<Component> component)
+                          { component->OnFixedUpdate(); });
 }
 
 void Scene::LateUpdate()
 {
-    for (const auto &c : _components)
-    {
-        if (c->GetGameObject().IsActiveInHierarchy() && c->isActive)
-        {
-            c->OnLateUpdate();
-        }
-    }
+    OnAllActiveComponents([](std::shared_ptr<Component> component)
+                          { component->OnLateUpdate(); });
 }
 
 void Scene::AdvanceCoroutines()
 {
     Scheduling::CoroutineScheduler::Update();
+}
+
+void Scene::OnApplicationQuit()
+{
+    OnAllActiveComponents([](std::shared_ptr<Component> component)
+                          { component->OnApplicationQuit(); });
 }
 
 void Scene::Clear()
@@ -319,6 +325,13 @@ void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject)
         }
     }
     gameObject->StopAllCoroutines();
+    for (auto &component : gameObject->GetAllComponents())
+    {
+        if (component)
+        {
+            component->_isMarkedForDestruction = true;
+        }
+    }
 }
 
 void Scene::PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject)

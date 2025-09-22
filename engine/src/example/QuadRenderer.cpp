@@ -41,12 +41,12 @@ void QuadRenderer::OnUpdate()
         positionable->SetRotation(Math::Quaternion::FromEulerAngles(0.0f, angle, 0.0f));
 
         // Also try a slight wobble on position to make it more visible
-        float wobbleX = sin(totalTime * 2.0f) * 0.5f;
-        float wobbleY = cos(totalTime * 3.0f) * 0.3f;
-        positionable->SetPosition(Math::Vector3{wobbleX, wobbleY, 0.0f});
+        // float wobbleX = sin(totalTime * 2.0f) * 0.5f;
+        // float wobbleY = cos(totalTime * 3.0f) * 0.3f;
+        // positionable->SetPosition(Math::Vector3{wobbleX, wobbleY, 0.0f});
     }
 
-    mainCamera->SetPosition(mainCamera->GetPosition() + Math::Vector3{Time::GetDeltaTime(), Time::GetDeltaTime(), -Time::GetDeltaTime()});
+    // mainCamera->SetPosition(mainCamera->GetPosition() + Math::Vector3{Time::GetDeltaTime(), Time::GetDeltaTime(), -Time::GetDeltaTime()});
 }
 
 void QuadRenderer::InitializeRenderResources(Renderer::Common::IRenderer *renderer)

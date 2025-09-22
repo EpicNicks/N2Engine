@@ -27,7 +27,7 @@ namespace N2Engine
         // if GO has already been added to scene and this component is new
         if (_scene != nullptr && SceneManager::GetCurSceneIndex() != -1)
         {
-            SceneManager::GetCurScene().AddComponentToAttachQueue(component);
+            SceneManager::GetCurSceneRef().AddComponentToAttachQueue(component);
         }
         // otherwise the component will be added once added to the scene
 

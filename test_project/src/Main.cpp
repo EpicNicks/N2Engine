@@ -271,7 +271,9 @@ void TestRenderer()
 
 void TestEngine()
 {
-    N2Engine::Scene testScene{"Test Scene"};
+    N2Engine::Application &application = N2Engine::Application::GetInstance();
+    auto testScene = N2Engine::Scene::Create("Test Scene");
+    application.Init(std::move(testScene));
 
     auto quadObject = N2Engine::GameObject::Create("TestQuad");
 
@@ -284,10 +286,8 @@ void TestEngine()
     positionable->SetRotation(N2Engine::Math::Quaternion::FromEulerAngles(0, 0, 0.0f));
     positionable->SetScale(N2Engine::Math::Vector3{3.0f, 3.0f, 1.0f});
 
-    testScene.AddRootGameObject(quadObject);
+    N2Engine::SceneManager::GetCurSceneRef().AddRootGameObject(quadObject);
 
-    N2Engine::Application &application = N2Engine::Application::GetInstance();
-    application.Init(testScene);
     application.GetWindow().clearColor = N2Engine::Common::Color::Magenta();
     // application.GetMainCamera()->LookAt(quadObject->GetPositionable()->GetPosition());
 

@@ -12,13 +12,17 @@ namespace N2Engine
         using TimePoint = std::chrono::high_resolution_clock::time_point;
 
     private:
-        static float unscaledDeltaTime;
-        static float time;
-        static float unscaledTime;
+        static double scaledDeltaTime;
+        static double unscaledDeltaTime;
+
+        static double time;
+        static double unscaledTime;
+
         static float timeScale;
-        // TODO: fixed intervals for physics
-        //  TODO: physics for that matter
-        // static float fixedDeltaTime;
+
+        static double fixedDeltaTime;
+        static double fixedUnscaledDeltaTime;
+
         static TimePoint lastFrameTime;
 
         static void Init();
@@ -26,9 +30,12 @@ namespace N2Engine
 
     public:
         static float GetDeltaTime();
+        static float GetFixedDeltaTime();
         static float GetUnscaledDeltaTime();
         static float GetTime();
         static float GetUnscaledTime();
+        static float GetFixedUnscaledDeltaTime();
+
         static void SetTimeScale(float scale);
         static float GetTimeScale();
     };

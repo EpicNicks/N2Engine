@@ -76,33 +76,51 @@ void Application::Init()
     const Vector2i windowDimensions = _window.GetWindowDimensions();
     const float aspect = (float)windowDimensions[0] / (float)windowDimensions[1];
 
-    //_mainCamera->SetPerspective(45.0f, aspect, 0.1f, 100.0f);
-    _mainCamera->SetOrthographic(-10.0f, 10.0f, -10.0f, 10.0f, 0.0f, 100.0f);
+    _mainCamera->SetPerspective(45.0f, aspect, 0.1f, 100.0f);
+    // _mainCamera->SetOrthographic(-10.0f, 10.0f, -10.0f, 10.0f, 0.0f, 100.0f);
     _mainCamera->SetPosition(Math::Vector3{0.0f, 0.0f, 10.0f});
 
     Logger::Info("Camera initialized");
 }
 
-void Application::Init(const Scene &initialScene)
+void Application::Init(std::unique_ptr<Scene> &&initialScene)
 {
     Init();
-    SceneManager::GetInstance()._scenes.push_back(initialScene);
-    SceneManager::GetInstance()._curSceneIndex = 0;
-    Logger::Info("Initial scene loaded: " + initialScene.sceneName);
+    SceneManager &instance = SceneManager::GetInstance();
+    instance._scenes.push_back(std::move(initialScene));
+    instance._curSceneIndex = 0;
+    Logger::Info("Initial scene loaded: " + instance.GetCurSceneRef().sceneName);
 }
 
 void Application::Run()
 {
-    // Main render loop
+    // ---- Fixed timestep setup ----
+    const double fixedStep = Time::GetFixedUnscaledDeltaTime();
+    double accumulator = 0.0;
+
+    // Initialize last frame time for accumulator
+    double lastTime = Time::GetUnscaledTime();
+
     while (!_window.ShouldClose())
     {
         _window.PollEvents();
+
         Time::Update();
+        double now = Time::GetUnscaledTime();
+        double frameTime = now - lastTime;
+        lastTime = now;
+
+        accumulator += frameTime;
         if (SceneManager::GetCurSceneIndex() != -1)
         {
-            Scene &curScene = SceneManager::GetCurScene();
+            Scene &curScene = SceneManager::GetCurSceneRef();
             curScene.ProcessAttachQueue();
-            curScene.FixedUpdate();
+
+            while (accumulator >= Time::GetFixedUnscaledDeltaTime())
+            {
+                curScene.FixedUpdate();
+                accumulator -= Time::GetFixedUnscaledDeltaTime();
+            }
             curScene.Update();
             curScene.AdvanceCoroutines();
             curScene.LateUpdate();
@@ -110,9 +128,10 @@ void Application::Run()
         Render();
         if (SceneManager::GetCurSceneIndex() != -1)
         {
-            Scene &curScene = SceneManager::GetCurScene();
+            Scene &curScene = SceneManager::GetCurSceneRef();
             curScene.ProcessDestroyed();
         }
+        SceneManager::ProcessAnyPendingSceneChange();
     }
 }
 
@@ -130,9 +149,19 @@ void Application::Render()
 
     if (SceneManager::GetCurSceneIndex() != -1)
     {
-        SceneManager::GetCurScene().Render(renderer);
+        SceneManager::GetCurSceneRef().Render(renderer);
     }
 
     renderer->EndFrame();
     renderer->Present();
+}
+
+void Application::Quit()
+{
+    if (SceneManager::GetCurSceneIndex() != -1)
+    {
+        Scene &curScene = SceneManager::GetCurSceneRef();
+        curScene.OnApplicationQuit();
+    }
+    std::exit(0);
 }

@@ -28,8 +28,10 @@ namespace N2Engine
         static Application &GetInstance();
 
         void Init();
-        void Init(const Scene &initialScene);
+        void Init(std::unique_ptr<Scene> &&initialScene);
         void Run();
+
+        static void Quit();
 
         Camera *GetMainCamera();
         Window &GetWindow();

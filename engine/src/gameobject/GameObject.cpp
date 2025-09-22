@@ -98,7 +98,7 @@ void GameObject::NotifyActiveChanged()
     // Notify all components
     for (auto &component : _components)
     {
-        if (component->isActive = IsActiveInHierarchy())
+        if (component->_isActive = IsActiveInHierarchy())
         {
             component->OnEnable();
         }
@@ -118,11 +118,15 @@ void GameObject::NotifyActiveChanged()
 void GameObject::SetParent(Ptr parent, bool keepWorldPosition)
 {
     if (parent.get() == this)
-        return; // Can't parent to self
+    {
+        return;
+    }
 
     auto oldParent = _parent.lock();
     if (oldParent == parent)
-        return; // Already has this parent
+    {
+        return;
+    }
 
     // Remove from old parent
     if (oldParent)
@@ -139,6 +143,11 @@ void GameObject::SetParent(Ptr parent, bool keepWorldPosition)
     {
         _parent.reset();
         _activeInHierarchyDirty = true;
+
+        if (_scene)
+        {
+            _scene->AddRootGameObject(shared_from_this());
+        }
     }
 }
 
@@ -198,7 +207,9 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
 void GameObject::RemoveChild(Ptr child, bool keepWorldPosition)
 {
     if (!child)
+    {
         return;
+    }
 
     auto it = std::find(_children.begin(), _children.end(), child);
     if (it != _children.end())
@@ -237,12 +248,6 @@ void GameObject::RemoveChild(Ptr child, bool keepWorldPosition)
             {
                 child->GetPositionable()->OnHierarchyChanged();
             }
-        }
-
-        // Clear scene reference if removing from scene root
-        if (!child->_parent.lock())
-        {
-            child->SetScene(nullptr);
         }
     }
 }
