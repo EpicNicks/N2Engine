@@ -5,6 +5,9 @@
 
 namespace N2Engine
 {
+    /**
+     * An interface for components which should render to the screen
+     */
     class IRenderable : public Component
     {
         using Component::Component;

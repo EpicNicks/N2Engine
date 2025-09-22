@@ -237,12 +237,24 @@ void Scene::Update()
 
 void Scene::FixedUpdate()
 {
-    // todo
+    for (const auto &c : _components)
+    {
+        if (c->GetGameObject().IsActiveInHierarchy() && c->isActive)
+        {
+            c->OnFixedUpdate();
+        }
+    }
 }
 
 void Scene::LateUpdate()
 {
-    // todo
+    for (const auto &c : _components)
+    {
+        if (c->GetGameObject().IsActiveInHierarchy() && c->isActive)
+        {
+            c->OnLateUpdate();
+        }
+    }
 }
 
 void Scene::AdvanceCoroutines()

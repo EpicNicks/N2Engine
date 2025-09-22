@@ -47,9 +47,6 @@ void QuadRenderer::OnUpdate()
     }
 
     mainCamera->SetPosition(mainCamera->GetPosition() + Math::Vector3{Time::GetDeltaTime(), Time::GetDeltaTime(), -Time::GetDeltaTime()});
-
-    // _gameObject.GetPositionable()->SetScale(_gameObject.GetPositionable()->GetScale() + Math::Vector3::CreateUniform(Time::GetDeltaTime()));
-    // Logger::Info("scale: " + _gameObject.GetPositionable()->GetScale().toString());
 }
 
 void QuadRenderer::InitializeRenderResources(Renderer::Common::IRenderer *renderer)
@@ -92,7 +89,6 @@ void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
     Renderer::Common::MeshData quadData;
 
     // Quad vertices (centered at origin, 1x1 size)
-    // Normal is now {0.0f, 0.0f, -1.0f} to face toward -Z (toward camera)
     quadData.vertices = {
         // Bottom-left
         {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {_color.r, _color.g, _color.b, _color.a}},
@@ -102,13 +98,6 @@ void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
         {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {_color.r, _color.g, _color.b, _color.a}},
         // Top-left
         {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {_color.r, _color.g, _color.b, _color.a}}};
-
-    // quadData.vertices = {
-    //     // Positions in clip space - this will fill screen
-    //     {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-    //     {{0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-    //     {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-    //     {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}};
 
     // Two triangles: (0,1,2) and (0,2,3)
     quadData.indices = {0, 1, 2, 0, 2, 3};
@@ -157,8 +146,6 @@ void QuadRenderer::Render(Renderer::Common::IRenderer *renderer)
 
     // Combine: finalMatrix = worldMatrix * scaleMatrix
     Positionable::Matrix4 finalMatrix = worldMatrix * scaleMatrix;
-
-    // Logger::Info("\n" + finalMatrix.toString());
 
     // Pass the final matrix to the renderer
     renderer->DrawMesh(_meshId, finalMatrix.Data(), _materialId);

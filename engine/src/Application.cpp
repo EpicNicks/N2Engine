@@ -4,6 +4,7 @@
 #include "engine/example/QuadRenderer.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/scheduling/CoroutineScheduler.hpp"
 
 #include <math/MathRegistrar.hpp>
 #include <iostream>
@@ -101,7 +102,10 @@ void Application::Run()
         {
             Scene &curScene = SceneManager::GetCurScene();
             curScene.ProcessAttachQueue();
+            curScene.FixedUpdate();
             curScene.Update();
+            Scheduling::CoroutineScheduler::Update();
+            curScene.LateUpdate();
         }
         Render();
     }

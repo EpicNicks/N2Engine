@@ -320,6 +320,8 @@ bool GameObject::RemoveComponent(const std::type_index &type)
     if (it != _componentMap.end())
     {
         auto component = it->second;
+        // Notify component
+        component->OnDestroy();
 
         // Remove from map
         _componentMap.erase(it);
@@ -330,9 +332,6 @@ bool GameObject::RemoveComponent(const std::type_index &type)
         {
             _components.erase(vecIt);
         }
-
-        // Notify component
-        component->OnDestroy();
 
         return true;
     }

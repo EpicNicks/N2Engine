@@ -22,6 +22,8 @@ namespace N2Engine
 
         virtual void OnAttach() {}
         virtual void OnUpdate() {}
+        virtual void OnFixedUpdate() {}
+        virtual void OnLateUpdate() {}
         virtual void OnDestroy() {}
         virtual void OnEnable() {}
         virtual void OnDisable() {}
