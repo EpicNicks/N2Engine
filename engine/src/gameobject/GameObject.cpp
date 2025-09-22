@@ -22,7 +22,7 @@ GameObject::GameObject(const std::string &name) : _name(name)
     _scene = nullptr;
 }
 
-GameObject::~GameObject()
+void GameObject::Purge()
 {
     // Clean up components
     for (auto &component : _components)
@@ -50,10 +50,16 @@ GameObject::~GameObject()
 
 bool GameObject::IsActiveInHierarchy() const
 {
+    if (_isMarkedForDestruction)
+    {
+        return false;
+    }
+
     if (_activeInHierarchyDirty)
     {
         UpdateActiveInHierarchyCache();
     }
+
     return _activeInHierarchyCached;
 }
 
@@ -92,7 +98,7 @@ void GameObject::NotifyActiveChanged()
     // Notify all components
     for (auto &component : _components)
     {
-        if (IsActiveInHierarchy())
+        if (component->isActive = IsActiveInHierarchy())
         {
             component->OnEnable();
         }
@@ -377,7 +383,8 @@ void GameObject::SetScene(Scene *scene)
 
 void GameObject::Destroy()
 {
-    if (_scene)
+    _isMarkedForDestruction = true;
+    if (_scene != nullptr)
     {
         _scene->DestroyGameObject(shared_from_this());
     }
@@ -385,8 +392,7 @@ void GameObject::Destroy()
 
 bool GameObject::IsDestroyed() const
 {
-    // Check if this GameObject is marked for destruction or has been removed from scene
-    return _scene == nullptr && _parent.expired() && _children.empty();
+    return _isMarkedForDestruction;
 }
 
 Scheduling::Coroutine *GameObject::StartCoroutine(std::generator<N2Engine::Scheduling::ICoroutineWait> &&coroutine)

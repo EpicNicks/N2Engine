@@ -1,9 +1,10 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/IRenderable.hpp"
-#include <algorithm>
-
 #include "engine/GameObject.inl"
+
+#include <algorithm>
 
 using namespace N2Engine;
 
@@ -82,19 +83,8 @@ bool Scene::DestroyGameObject(std::shared_ptr<GameObject> gameObject)
         return false;
     }
 
-    if (!gameObject->GetParent())
-    {
-        return RemoveRootGameObject(gameObject);
-    }
-
-    auto parent = gameObject->GetParent();
-    if (parent)
-    {
-        parent->RemoveChild(gameObject);
-        return true;
-    }
-
-    return false;
+    _markedForDestructionQueue.push(gameObject);
+    return true;
 }
 
 void Scene::TraverseAll(std::function<void(std::shared_ptr<GameObject>)> callback) const
@@ -259,7 +249,7 @@ void Scene::LateUpdate()
 
 void Scene::AdvanceCoroutines()
 {
-    // todo: call CoroutineScheduler on all values for key = component->gameObject
+    Scheduling::CoroutineScheduler::Update();
 }
 
 void Scene::Clear()
@@ -270,4 +260,91 @@ void Scene::Clear()
         root->SetScene(nullptr);
     }
     _rootGameObjects.clear();
+}
+
+void Scene::ProcessDestroyed()
+{
+    std::vector<std::shared_ptr<GameObject>> markedObjects;
+
+    while (!_markedForDestructionQueue.empty())
+    {
+        auto rootObject = _markedForDestructionQueue.front();
+        _markedForDestructionQueue.pop();
+
+        if (!rootObject || rootObject->_isMarkedForDestruction)
+        {
+            continue;
+        }
+
+        // Mark hierarchy and collect objects in one pass
+        MarkHierarchyForDestruction(rootObject, markedObjects);
+    }
+
+    for (auto &obj : markedObjects)
+    {
+        CallOnDestroyForGameObject(obj);
+    }
+    for (auto &obj : markedObjects)
+    {
+        PurgeMarkedGameObject(obj);
+    }
+}
+
+void Scene::MarkHierarchyForDestruction(std::shared_ptr<GameObject> gameObject, std::vector<std::shared_ptr<GameObject>> &markedObjects)
+{
+    if (!gameObject || gameObject->_isMarkedForDestruction)
+        return;
+
+    // Mark this object
+    gameObject->_isMarkedForDestruction = true;
+
+    // Collect it immediately
+    markedObjects.push_back(gameObject);
+
+    // Recursively mark and collect all children
+    auto children = gameObject->GetChildren(); // Copy to avoid iterator issues
+    for (auto &child : children)
+    {
+        MarkHierarchyForDestruction(child, markedObjects);
+    }
+}
+
+void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject)
+{
+    for (auto &component : gameObject->GetAllComponents())
+    {
+        if (component)
+        {
+            component->OnDestroy();
+        }
+    }
+    gameObject->StopAllCoroutines();
+}
+
+void Scene::PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject)
+{
+    // Remove from parent or scene root
+    if (auto parent = gameObject->GetParent())
+    {
+        // Only remove if parent isn't also being destroyed
+        if (!parent->_isMarkedForDestruction)
+        {
+            parent->RemoveChild(gameObject, false);
+        }
+    }
+    else
+    {
+        RemoveRootGameObject(gameObject);
+    }
+
+    // Remove from components list
+    _components.erase(
+        std::remove_if(_components.begin(), _components.end(),
+                       [&gameObject](const std::shared_ptr<Component> &comp)
+                       {
+                           return &comp->GetGameObject() == gameObject.get();
+                       }),
+        _components.end());
+
+    gameObject->Purge();
 }

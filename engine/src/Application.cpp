@@ -104,10 +104,15 @@ void Application::Run()
             curScene.ProcessAttachQueue();
             curScene.FixedUpdate();
             curScene.Update();
-            Scheduling::CoroutineScheduler::Update();
+            curScene.AdvanceCoroutines();
             curScene.LateUpdate();
         }
         Render();
+        if (SceneManager::GetCurSceneIndex() != -1)
+        {
+            Scene &curScene = SceneManager::GetCurScene();
+            curScene.ProcessDestroyed();
+        }
     }
 }
 

@@ -36,6 +36,7 @@ namespace N2Engine
     private:
         std::string _name;
         bool _isActive = true;
+        bool _isMarkedForDestruction = false;
         mutable bool _activeInHierarchyCached = true;
         mutable bool _activeInHierarchyDirty = true;
 
@@ -56,12 +57,12 @@ namespace N2Engine
         void UpdateActiveInHierarchyCache() const;
         void NotifyActiveChanged();
         void SetScene(Scene *scene);
+        void Purge();
 
     public:
         // Construction
         static Ptr Create(const std::string &name = "GameObject");
         explicit GameObject(const std::string &name);
-        ~GameObject();
 
         // Basic properties
         const std::string &GetName() const { return _name; }
@@ -124,7 +125,6 @@ namespace N2Engine
         // Scene management
         Scene *GetScene() const { return _scene; }
 
-        // Utility
         void Destroy();
         bool IsDestroyed() const;
 

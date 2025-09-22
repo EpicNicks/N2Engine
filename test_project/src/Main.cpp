@@ -273,7 +273,8 @@ void TestEngine()
 {
     N2Engine::Scene testScene{"Test Scene"};
 
-    auto quadObject = std::make_shared<N2Engine::GameObject>("TestQuad");
+    auto quadObject = N2Engine::GameObject::Create("TestQuad");
+
     auto quadRenderer = quadObject->AddComponent<N2Engine::Example::QuadRenderer>();
     quadRenderer->SetColor(N2Engine::Common::Color{N2Engine::Common::Color::Cyan()});
 

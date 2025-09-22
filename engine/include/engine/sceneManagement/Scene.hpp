@@ -24,6 +24,8 @@ namespace N2Engine
         std::vector<std::shared_ptr<Component>> _components;
         std::queue<std::shared_ptr<Component>> _attachQueue;
 
+        std::queue<std::shared_ptr<GameObject>> _markedForDestructionQueue;
+
     public:
         std::string sceneName;
         Scene(const std::string &name);
@@ -56,16 +58,18 @@ namespace N2Engine
         void FixedUpdate();
         void LateUpdate();
         void AdvanceCoroutines();
+        void ProcessDestroyed();
         void Clear();
 
     private:
         void Render(Renderer::Common::IRenderer *renderer);
         void RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Common::IRenderer *renderer);
-        void TraverseGameObjectRecursive(std::shared_ptr<GameObject> gameObject,
-                                         std::function<void(std::shared_ptr<GameObject>)> callback,
-                                         bool onlyActive = false) const;
-        bool TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject,
-                                     std::function<bool(std::shared_ptr<GameObject>)> callback) const;
+        void TraverseGameObjectRecursive(std::shared_ptr<GameObject> gameObject, std::function<void(std::shared_ptr<GameObject>)> callback, bool onlyActive = false) const;
+        bool TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject, std::function<bool(std::shared_ptr<GameObject>)> callback) const;
         void AddComponentToAttachQueue(std::shared_ptr<Component> component);
+
+        void MarkHierarchyForDestruction(std::shared_ptr<GameObject> gameObject, std::vector<std::shared_ptr<GameObject>> &markedObjects);
+        void CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject);
+        void PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject);
     };
 }

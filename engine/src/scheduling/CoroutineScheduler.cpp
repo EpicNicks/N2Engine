@@ -12,6 +12,7 @@ std::unordered_map<N2Engine::GameObject *, std::vector<std::unique_ptr<Coroutine
 void CoroutineScheduler::Update()
 {
     std::vector<std::pair<GameObject *, Coroutine *>> coroutinesToRemove;
+    CleanupInvalid();
 
     for (auto &[gameObject, coroutineList] : coroutines)
     {
@@ -110,6 +111,27 @@ void CoroutineScheduler::CleanupCompleted(const std::vector<std::pair<GameObject
                     coroutines.erase(it);
                 }
             }
+        }
+    }
+}
+
+void CoroutineScheduler::CleanupInvalid()
+{
+    for (auto it = coroutines.begin(); it != coroutines.end();)
+    {
+        GameObject *gameObject = it->first;
+
+        if (gameObject == nullptr || !gameObject->IsActiveInHierarchy() || gameObject->IsDestroyed())
+        {
+            it = coroutines.erase(it);
+        }
+        else if (it->second.empty())
+        {
+            it = coroutines.erase(it);
+        }
+        else
+        {
+            ++it;
         }
     }
 }

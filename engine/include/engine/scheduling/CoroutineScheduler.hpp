@@ -26,6 +26,7 @@ namespace N2Engine
         private:
             static bool AdvanceCoroutine(Coroutine *coroutine);
             static void CleanupCompleted(const std::vector<std::pair<GameObject *, Coroutine *>> &coroutinesToRemove);
+            static void CleanupInvalid();
         };
     }
 }
