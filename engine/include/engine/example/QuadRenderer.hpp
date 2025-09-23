@@ -18,6 +18,8 @@ namespace N2Engine
             uint32_t _shaderId = 0;
             bool _resourcesInitialized = false;
 
+            Renderer::Common::IRenderer *_cachedRenderer = nullptr;
+
             // Rendering properties
             Common::Color _color{Common::Color::White()}; // White by default
             Math::Vector3 _size{Math::Vector3::One()};    // 1x1 quad by default
@@ -26,14 +28,12 @@ namespace N2Engine
 
         public:
             QuadRenderer(GameObject &gameObject);
-            virtual ~QuadRenderer();
 
             // IRenderable interface
             void Render(Renderer::Common::IRenderer *renderer) override;
             void InitializeRenderResources(Renderer::Common::IRenderer *renderer) override;
             void CleanupRenderResources(Renderer::Common::IRenderer *renderer) override;
-
-            void OnUpdate() override;
+            void OnDestroy() override;
 
             // Properties
             void SetColor(const Common::Color &color) { _color = color; }
