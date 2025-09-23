@@ -117,6 +117,7 @@ namespace Renderer
             void SetViewProjection(const float *view, const float *projection) override;
             void DrawMesh(uint32_t meshId, const float *modelMatrix, uint32_t materialId) override;
             void DrawObjects(const std::vector<Renderer::Common::RenderObject> &objects) override;
+            void OnResize(int width, int height) override;
 
             void SetWireframe(bool enabled) override;
             const char *GetRendererName() const override { return "Vulkan Renderer"; }

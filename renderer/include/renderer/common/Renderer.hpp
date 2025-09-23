@@ -73,6 +73,7 @@ namespace Renderer
             virtual void SetViewProjection(const float *view, const float *projection) = 0;
             virtual void DrawMesh(uint32_t meshId, const float *modelMatrix, uint32_t materialId) = 0;
             virtual void DrawObjects(const std::vector<RenderObject> &objects) = 0;
+            virtual void OnResize(int width, int height) = 0;
 
             // Debug
             virtual void SetWireframe(bool enabled) = 0;

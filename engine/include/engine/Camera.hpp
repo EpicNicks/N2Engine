@@ -34,6 +34,14 @@ namespace N2Engine
 
     class Camera
     {
+    public:
+        enum class OrthographicResizeMode
+        {
+            MaintainVertical,   // Keep vertical size, adjust horizontal
+            MaintainHorizontal, // Keep horizontal size, adjust vertical
+            MaintainLarger      // Keep larger dimension, adjust smaller
+        };
+
     private:
         mutable Matrix4 _viewMatrix;
         mutable Matrix4 _projectionMatrix;
@@ -62,6 +70,8 @@ namespace N2Engine
         float _orthoBottom = -1.0f;
         float _orthoTop = 1.0f;
 
+        OrthographicResizeMode _orthoResizeMode = OrthographicResizeMode::MaintainVertical;
+
     public:
         // Position and orientation
         void SetPosition(const Math::Vector3 &position);
@@ -71,6 +81,11 @@ namespace N2Engine
         // Projection settings
         void SetPerspective(float fov, float aspect, float nearPlane, float farPlane);
         void SetOrthographic(float left, float right, float bottom, float top, float nearPlane, float farPlane);
+
+        void SetOrthographicResizeMode(OrthographicResizeMode mode) { _orthoResizeMode = mode; }
+
+        void UpdateAspectRatio(float newAspect);
+        float GetAspectRatio() const { return _aspectRatio; }
 
         // Matrix getters
         const Matrix4 &GetViewMatrix() const;

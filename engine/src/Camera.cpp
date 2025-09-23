@@ -86,6 +86,62 @@ void Camera::SetPerspective(float fov, float aspect, float nearPlane, float farP
     _projectionDirty = true;
 }
 
+void Camera::UpdateAspectRatio(float newAspect)
+{
+    if (_projectionType == ProjectionType::Perspective)
+    {
+        _aspectRatio = newAspect;
+        _projectionDirty = true;
+    }
+    else if (_projectionType == ProjectionType::Orthographic)
+    {
+        float horizontalCenter = (_orthoRight + _orthoLeft) * 0.5f;
+        float verticalCenter = (_orthoTop + _orthoBottom) * 0.5f;
+
+        switch (_orthoResizeMode)
+        {
+        case OrthographicResizeMode::MaintainVertical:
+        {
+            float verticalSize = (_orthoTop - _orthoBottom) * 0.5f;
+            float horizontalSize = verticalSize * newAspect;
+            _orthoLeft = horizontalCenter - horizontalSize;
+            _orthoRight = horizontalCenter + horizontalSize;
+            break;
+        }
+        case OrthographicResizeMode::MaintainHorizontal:
+        {
+            float horizontalSize = (_orthoRight - _orthoLeft) * 0.5f;
+            float verticalSize = horizontalSize / newAspect;
+            _orthoBottom = verticalCenter - verticalSize;
+            _orthoTop = verticalCenter + verticalSize;
+            break;
+        }
+        case OrthographicResizeMode::MaintainLarger:
+        {
+            float currentWidth = _orthoRight - _orthoLeft;
+            float currentHeight = _orthoTop - _orthoBottom;
+            float currentAspect = currentWidth / currentHeight;
+
+            if (newAspect > currentAspect)
+            {
+                float newHalfWidth = (currentHeight * newAspect) * 0.5f;
+                _orthoLeft = horizontalCenter - newHalfWidth;
+                _orthoRight = horizontalCenter + newHalfWidth;
+            }
+            else
+            {
+                float newHalfHeight = (currentWidth / newAspect) * 0.5f;
+                _orthoBottom = verticalCenter - newHalfHeight;
+                _orthoTop = verticalCenter + newHalfHeight;
+            }
+            break;
+        }
+        }
+
+        _projectionDirty = true;
+    }
+}
+
 void Camera::UpdateProjectionMatrix() const
 {
     // Clear the matrix

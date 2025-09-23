@@ -35,5 +35,7 @@ namespace N2Engine
 
         Camera *GetMainCamera();
         Window &GetWindow();
+
+        void OnWindowResize(int width, int height);
     };
 }

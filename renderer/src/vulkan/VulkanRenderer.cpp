@@ -85,6 +85,9 @@ void Renderer::Vulkan::VulkanRenderer::DrawObjects(const std::vector<Renderer::C
 {
 }
 
+void Renderer::Vulkan::VulkanRenderer::OnResize(int width, int height)
+{
+}
 void Renderer::Vulkan::VulkanRenderer::SetWireframe(bool enabled)
 {
 }

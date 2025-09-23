@@ -165,3 +165,18 @@ void Application::Quit()
     }
     std::exit(0);
 }
+
+void Application::OnWindowResize(int width, int height)
+{
+    if (_mainCamera && width > 0 && height > 0)
+    {
+        // Calculate new aspect ratio
+        const float newAspect = static_cast<float>(width) / static_cast<float>(height);
+
+        // Update camera's aspect ratio - this will automatically trigger
+        // projection matrix recalculation on next frame
+        _mainCamera->UpdateAspectRatio(newAspect);
+
+        // Logger::Info("Window resized to " + std::to_string(width) + "x" + std::to_string(height) + ", aspect ratio: " + std::to_string(newAspect));
+    }
+}

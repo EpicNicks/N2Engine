@@ -1,5 +1,6 @@
 #include "engine/Window.hpp"
 #include "engine/Logger.hpp"
+#include "engine/Application.hpp"
 
 using namespace N2Engine;
 
@@ -48,6 +49,9 @@ void Window::InitWindow()
         glfwTerminate();
         return;
     }
+
+    glfwSetWindowSizeCallback(_window, FramebufferSizeCallback);
+    glfwSetWindowUserPointer(_window, this);
 
     // Create renderer based on configuration
     _renderer = nullptr;
@@ -128,4 +132,24 @@ AppRenderer Window::ReadAppRendererFromConfig() const
 {
     // TODO
     return AppRenderer::OpenGL;
+}
+
+void Window::FramebufferSizeCallback(GLFWwindow *window, int width, int height)
+{
+    Window *windowInstance = static_cast<Window *>(glfwGetWindowUserPointer(window));
+    if (windowInstance)
+    {
+        windowInstance->OnWindowResize(width, height);
+    }
+}
+
+void Window::OnWindowResize(int width, int height)
+{
+    if (_renderer)
+    {
+        _renderer->OnResize(width, height);
+    }
+
+    // Notify the application about the resize so it can update the camera
+    Application::GetInstance().OnWindowResize(width, height);
 }

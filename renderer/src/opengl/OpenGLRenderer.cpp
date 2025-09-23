@@ -494,6 +494,18 @@ void OpenGLRenderer::DrawObjects(const std::vector<Common::RenderObject> &object
     }
 }
 
+void Renderer::OpenGL::OpenGLRenderer::OnResize(int width, int height)
+{
+    if (width == 0 || height == 0)
+    {
+        return;
+    }
+
+    glViewport(0, 0, width, height);
+
+    m_width = static_cast<uint32_t>(width);
+    m_height = static_cast<uint32_t>(height);
+}
 void OpenGLRenderer::SetWireframe(bool enabled)
 {
     m_wireframeEnabled = enabled;

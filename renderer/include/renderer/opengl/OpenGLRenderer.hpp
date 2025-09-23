@@ -79,6 +79,7 @@ namespace Renderer
             void SetViewProjection(const float *view, const float *projection) override;
             void DrawMesh(uint32_t meshId, const float *modelMatrix, uint32_t materialId) override;
             void DrawObjects(const std::vector<Common::RenderObject> &objects) override;
+            void OnResize(int width, int height) override;
 
             // Debug
             void SetWireframe(bool enabled) override;

@@ -26,6 +26,9 @@ namespace N2Engine
         std::unique_ptr<Renderer::Common::IRenderer> _renderer;
         std::string _title{"N2Engine Application"};
 
+        static void FramebufferSizeCallback(GLFWwindow *window, int width, int height);
+        void OnWindowResize(int width, int height);
+
     public:
         Common::Color clearColor;
 
