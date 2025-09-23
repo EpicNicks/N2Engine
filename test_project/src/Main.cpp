@@ -11,6 +11,8 @@
 #include <iostream>
 #include <cmath>
 
+#include "test_project/Spin.hpp"
+
 // Simple vertex shader source
 const char *vertexShaderSource = R"(
 #version 330 core
@@ -274,6 +276,7 @@ void TestEngine()
     N2Engine::Application &application = N2Engine::Application::GetInstance();
     auto testScene = N2Engine::Scene::Create("Test Scene");
     application.Init(std::move(testScene));
+    application.GetWindow().clearColor = N2Engine::Common::Color::Magenta();
 
     auto quadObject = N2Engine::GameObject::Create("TestQuad");
 
@@ -281,14 +284,15 @@ void TestEngine()
     quadRenderer->SetColor(N2Engine::Common::Color{N2Engine::Common::Color::Cyan()});
 
     auto positionable = quadObject->GetPositionable();
-    // In your main() function, try this:
     positionable->SetPosition(N2Engine::Math::Vector3{0.0f, 0.0f, 0.0f});
     positionable->SetRotation(N2Engine::Math::Quaternion::FromEulerAngles(0, 0, 0.0f));
     positionable->SetScale(N2Engine::Math::Vector3{3.0f, 3.0f, 1.0f});
 
+    auto spinComponent = quadObject->AddComponent<Spin>();
+    spinComponent->degreesPerSecond = -2.0f;
+
     N2Engine::SceneManager::GetCurSceneRef().AddRootGameObject(quadObject);
 
-    application.GetWindow().clearColor = N2Engine::Common::Color::Magenta();
     // application.GetMainCamera()->LookAt(quadObject->GetPositionable()->GetPosition());
 
     application.Run();

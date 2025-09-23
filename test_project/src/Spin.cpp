@@ -8,6 +8,10 @@
 
 using namespace N2Engine;
 
+Spin::Spin(N2Engine::GameObject &gameObject) : Component(gameObject)
+{
+}
+
 void Spin::OnUpdate()
 {
     // Logger::Info("delta time: " + std::to_string(Time::GetDeltaTime()));
@@ -19,7 +23,7 @@ void Spin::OnUpdate()
     totalTime += Time::GetDeltaTime();
 
     // Rotate the quad around Y axis
-    float angle = totalTime * 1.0f; // 1 radian per second
+    float angle = totalTime * degreesPerSecond; // 1 radian per second
 
     auto positionable = _gameObject.GetPositionable();
     if (positionable)

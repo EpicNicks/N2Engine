@@ -1,12 +1,12 @@
 # Collect all source files
-file(GLOB_RECURSE ENGINE_SOURCES
+file(GLOB_RECURSE MATH_SOURCES
     "src/*.cpp"
     "src/*.cc"
     "src/*.cxx"
 )
 
 # Create the static library
-add_library(math STATIC ${ENGINE_SOURCES})
+add_library(math STATIC ${MATH_SOURCES})
 add_library(MathCore::math ALIAS math)
 
 # Set include directories
