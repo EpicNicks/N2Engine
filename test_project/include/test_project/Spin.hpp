@@ -15,4 +15,5 @@ public:
 public:
     Spin(N2Engine::GameObject &gameObject);
     void OnUpdate() override;
+    void OnAttach() override;
 };

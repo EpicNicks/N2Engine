@@ -2,14 +2,31 @@
 #include <engine/Application.hpp>
 #include <engine/Time.hpp>
 #include <engine/GameObject.hpp>
+#include <engine/GameObject.inl>
 #include <engine/Positionable.hpp>
+#include <engine/example/QuadRenderer.hpp>
 
 #include "test_project/Spin.hpp"
+
+#include <memory>
 
 using namespace N2Engine;
 
 Spin::Spin(N2Engine::GameObject &gameObject) : Component(gameObject)
 {
+}
+
+void Spin::OnAttach()
+{
+    auto positionable = _gameObject.GetPositionable();
+    positionable->SetPosition(N2Engine::Math::Vector3{0.0f, 0.0f, 0.0f});
+    positionable->SetRotation(N2Engine::Math::Quaternion::FromEulerAngles(0, 0, 0.0f));
+    positionable->SetScale(N2Engine::Math::Vector3{3.0f, 3.0f, 1.0f});
+
+    if (auto quadComponent = _gameObject.GetComponent<N2Engine::Example::QuadRenderer>())
+    {
+        quadComponent->SetColor(N2Engine::Common::Color{N2Engine::Common::Color::Green()});
+    }
 }
 
 void Spin::OnUpdate()

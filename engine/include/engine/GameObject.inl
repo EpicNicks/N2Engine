@@ -67,7 +67,10 @@ namespace N2Engine
     template <typename T>
     inline bool GameObject::HasComponent() const
     {
-        return GetComponent<T>() != nullptr;
+        static_assert(std::is_base_of_v<Component, T>, "T must inherit from Component");
+
+        auto typeIndex = std::type_index(typeid(T));
+        return _componentMap.find(typeIndex) != _componentMap.end();
     }
 
     template <typename T>

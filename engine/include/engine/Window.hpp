@@ -18,6 +18,18 @@ namespace N2Engine
         OpenGL,
     };
 
+    enum class WindowMode
+    {
+        Windowed,
+        Fullscreen,
+        BorderlessWindowed
+    };
+
+    struct WindowData
+    {
+        int width, height, posX, posY;
+    };
+
     class Window
     {
 
@@ -25,6 +37,8 @@ namespace N2Engine
         GLFWwindow *_window;
         std::unique_ptr<Renderer::Common::IRenderer> _renderer;
         std::string _title{"N2Engine Application"};
+        WindowMode _windowMode{WindowMode::Windowed};
+        WindowData windowData{};
 
         static void FramebufferSizeCallback(GLFWwindow *window, int width, int height);
         void OnWindowResize(int width, int height);
@@ -43,11 +57,14 @@ namespace N2Engine
         Renderer::Common::IRenderer *GetRenderer() const;
 
         Vector2i GetWindowDimensions() const;
+        void SetWindowMode(WindowMode windowMode);
 
         std::string GetTitle() const { return _title; }
         void SetTitle(const std::string &title);
 
     private:
         AppRenderer ReadAppRendererFromConfig() const;
+        void SaveWindowedState();
+        GLFWmonitor *GetCurrentMonitor();
     };
 }

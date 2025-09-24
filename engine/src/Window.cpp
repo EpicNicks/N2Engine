@@ -2,10 +2,15 @@
 #include "engine/Logger.hpp"
 #include "engine/Application.hpp"
 
+#include <algorithm>
+
 using namespace N2Engine;
 
 Window::Window()
-    : _window(nullptr), _renderer(nullptr), clearColor(Common::Color::Black())
+    : _window(nullptr),
+      _renderer(nullptr),
+      clearColor(Common::Color::Black()),
+      _windowMode(WindowMode::Windowed)
 {
 }
 
@@ -49,6 +54,11 @@ void Window::InitWindow()
         glfwTerminate();
         return;
     }
+
+    // Initialize windowed state with current window properties
+    windowData.width = WIDTH;
+    windowData.height = HEIGHT;
+    glfwGetWindowPos(_window, &windowData.posX, &windowData.posY);
 
     glfwSetWindowSizeCallback(_window, FramebufferSizeCallback);
     glfwSetWindowUserPointer(_window, this);
@@ -152,4 +162,112 @@ void Window::OnWindowResize(int width, int height)
 
     // Notify the application about the resize so it can update the camera
     Application::GetInstance().OnWindowResize(width, height);
+}
+
+void Window::SetWindowMode(WindowMode windowMode)
+{
+    if (_windowMode == windowMode)
+    {
+        return;
+    }
+
+    // Save current windowed state if transitioning from windowed mode
+    if (_windowMode == WindowMode::Windowed)
+    {
+        SaveWindowedState();
+    }
+
+    switch (windowMode)
+    {
+    case WindowMode::Windowed:
+    {
+        // Restore to windowed mode
+        glfwSetWindowMonitor(_window, nullptr, windowData.posX, windowData.posY, windowData.width, windowData.height, 0);
+        break;
+    }
+    case WindowMode::Fullscreen:
+    {
+        // Find which monitor the window is currently on
+        GLFWmonitor *monitor = GetCurrentMonitor();
+        const GLFWvidmode *mode = glfwGetVideoMode(monitor);
+
+        glfwSetWindowMonitor(_window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+        break;
+    }
+    case WindowMode::BorderlessWindowed:
+    {
+        // Find which monitor the window is currently on
+        GLFWmonitor *monitor = GetCurrentMonitor();
+        const GLFWvidmode *mode = glfwGetVideoMode(monitor);
+
+        int monitorX, monitorY;
+        glfwGetMonitorPos(monitor, &monitorX, &monitorY);
+
+        // Set to windowed mode but covering the full monitor
+        glfwSetWindowMonitor(_window, nullptr, monitorX, monitorY, mode->width, mode->height, 0);
+
+        // Remove window decorations (title bar, borders)
+        glfwSetWindowAttrib(_window, GLFW_DECORATED, GLFW_FALSE);
+
+        // Make sure it's on top
+        glfwSetWindowAttrib(_window, GLFW_FLOATING, GLFW_TRUE);
+        break;
+    }
+    }
+
+    // If transitioning back to windowed, restore decorations
+    if (windowMode == WindowMode::Windowed && _windowMode == WindowMode::BorderlessWindowed)
+    {
+        glfwSetWindowAttrib(_window, GLFW_DECORATED, GLFW_TRUE);
+        glfwSetWindowAttrib(_window, GLFW_FLOATING, GLFW_FALSE);
+    }
+
+    _windowMode = windowMode;
+}
+
+void Window::SaveWindowedState()
+{
+    if (_windowMode == WindowMode::Windowed)
+    {
+        glfwGetWindowPos(_window, &windowData.posX, &windowData.posY);
+        glfwGetWindowSize(_window, &windowData.width, &windowData.height);
+    }
+}
+
+GLFWmonitor *Window::GetCurrentMonitor()
+{
+    int windowX, windowY, windowWidth, windowHeight;
+    glfwGetWindowPos(_window, &windowX, &windowY);
+    glfwGetWindowSize(_window, &windowWidth, &windowHeight);
+
+    int monitorCount;
+    GLFWmonitor **monitors = glfwGetMonitors(&monitorCount);
+
+    GLFWmonitor *bestMonitor = nullptr;
+    int bestOverlap = 0;
+
+    for (int i = 0; i < monitorCount; i++)
+    {
+        GLFWmonitor *monitor = monitors[i];
+        const GLFWvidmode *mode = glfwGetVideoMode(monitor);
+        int monitorX, monitorY;
+        glfwGetMonitorPos(monitor, &monitorX, &monitorY);
+
+        // Calculate overlap between window and monitor
+        int overlapLeft = std::max(windowX, monitorX);
+        int overlapTop = std::max(windowY, monitorY);
+        int overlapRight = std::min(windowX + windowWidth, monitorX + mode->width);
+        int overlapBottom = std::min(windowY + windowHeight, monitorY + mode->height);
+
+        int overlapArea = std::max(0, overlapRight - overlapLeft) * std::max(0, overlapBottom - overlapTop);
+
+        if (overlapArea > bestOverlap)
+        {
+            bestOverlap = overlapArea;
+            bestMonitor = monitor;
+        }
+    }
+
+    // Fallback to primary monitor if no overlap found
+    return bestMonitor ? bestMonitor : glfwGetPrimaryMonitor();
 }

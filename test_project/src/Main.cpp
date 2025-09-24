@@ -278,15 +278,11 @@ void TestEngine()
     application.Init(std::move(testScene));
     application.GetWindow().clearColor = N2Engine::Common::Color::Magenta();
 
+    application.GetWindow().SetWindowMode(N2Engine::WindowMode::BorderlessWindowed);
+
     auto quadObject = N2Engine::GameObject::Create("TestQuad");
 
     auto quadRenderer = quadObject->AddComponent<N2Engine::Example::QuadRenderer>();
-    quadRenderer->SetColor(N2Engine::Common::Color{N2Engine::Common::Color::Cyan()});
-
-    auto positionable = quadObject->GetPositionable();
-    positionable->SetPosition(N2Engine::Math::Vector3{0.0f, 0.0f, 0.0f});
-    positionable->SetRotation(N2Engine::Math::Quaternion::FromEulerAngles(0, 0, 0.0f));
-    positionable->SetScale(N2Engine::Math::Vector3{3.0f, 3.0f, 1.0f});
 
     auto spinComponent = quadObject->AddComponent<Spin>();
     spinComponent->degreesPerSecond = -2.0f;
