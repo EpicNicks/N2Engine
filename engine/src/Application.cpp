@@ -94,10 +94,7 @@ void Application::Init(std::unique_ptr<Scene> &&initialScene)
 
 void Application::Run()
 {
-    // ---- Fixed timestep setup ----
-    const double fixedStep = Time::GetFixedUnscaledDeltaTime();
-    double accumulator = 0.0;
-
+    double fixedTimestepAccumulator = 0.0;
     // Initialize last frame time for accumulator
     double lastTime = Time::GetUnscaledTime();
 
@@ -110,16 +107,16 @@ void Application::Run()
         double frameTime = now - lastTime;
         lastTime = now;
 
-        accumulator += frameTime;
+        fixedTimestepAccumulator += frameTime;
         if (SceneManager::GetCurSceneIndex() != -1)
         {
             Scene &curScene = SceneManager::GetCurSceneRef();
             curScene.ProcessAttachQueue();
 
-            while (accumulator >= Time::GetFixedUnscaledDeltaTime())
+            while (fixedTimestepAccumulator >= Time::GetFixedUnscaledDeltaTime())
             {
                 curScene.FixedUpdate();
-                accumulator -= Time::GetFixedUnscaledDeltaTime();
+                fixedTimestepAccumulator -= Time::GetFixedUnscaledDeltaTime();
             }
             curScene.Update();
             curScene.AdvanceCoroutines();
