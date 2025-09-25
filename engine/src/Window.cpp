@@ -196,21 +196,16 @@ void Window::SetWindowMode(WindowMode windowMode)
     }
     case WindowMode::BorderlessWindowed:
     {
-        // Find which monitor the window is currently on
         GLFWmonitor *monitor = GetCurrentMonitor();
         const GLFWvidmode *mode = glfwGetVideoMode(monitor);
 
         int monitorX, monitorY;
         glfwGetMonitorPos(monitor, &monitorX, &monitorY);
-
-        // Set to windowed mode but covering the full monitor
+        glfwSetWindowAttrib(_window, GLFW_DECORATED, GLFW_FALSE);
+        // prevent minimizing when losing focus
+        glfwSetWindowAttrib(_window, GLFW_AUTO_ICONIFY, GLFW_FALSE);
         glfwSetWindowMonitor(_window, nullptr, monitorX, monitorY, mode->width, mode->height, 0);
 
-        // Remove window decorations (title bar, borders)
-        glfwSetWindowAttrib(_window, GLFW_DECORATED, GLFW_FALSE);
-
-        // Make sure it's on top
-        glfwSetWindowAttrib(_window, GLFW_FLOATING, GLFW_TRUE);
         break;
     }
     }
