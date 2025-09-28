@@ -49,7 +49,7 @@ namespace N2Engine
             explicit VectorN(const std::array<T, DIMENSION> &arr) : vector(arr) {}
             explicit VectorN(std::array<T, DIMENSION> &&arr) : vector(std::move(arr)) {}
 
-            template <typename Iterator>
+            template <std::input_iterator Iterator>
             VectorN(Iterator first, Iterator last)
             {
                 if (std::distance(first, last) != DIMENSION)

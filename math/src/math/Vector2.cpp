@@ -4,6 +4,7 @@
 
 using namespace N2Engine::Math;
 
+Vector2::Vector2(float x, float y) : Vector2{x, y} {}
 Vector2::Vector2(const VectorN<float, 2> &base) : VectorN<float, 2>(base) {}
 Vector2::Vector2(const Vector2 &other) : VectorN<float, 2>(other) {}
 

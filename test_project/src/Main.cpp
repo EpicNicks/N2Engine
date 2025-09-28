@@ -5,6 +5,11 @@
 
 #include <engine/GameObject.inl>
 
+#include <engine/input/ActionMap.hpp>
+#include <engine/input/InputBinding.hpp>
+#include <engine/input/InputSystem.hpp>
+#include <engine/input/InputMapping.hpp>
+
 #include <renderer/opengl/OpenGLRenderer.hpp>
 #include <GLFW/glfw3.h>
 
@@ -12,6 +17,7 @@
 #include <cmath>
 
 #include "test_project/Spin.hpp"
+#include "test_project/CameraController.hpp"
 
 // Simple vertex shader source
 const char *vertexShaderSource = R"(
@@ -273,23 +279,34 @@ void TestRenderer()
 
 void TestEngine()
 {
-    N2Engine::Application &application = N2Engine::Application::GetInstance();
-    auto testScene = N2Engine::Scene::Create("Test Scene");
+    using namespace N2Engine;
+
+    Application &application = Application::GetInstance();
+
+    // TO MOVE TO GUI SCENE EDITOR
+    auto testScene = Scene::Create("Test Scene");
     application.Init(std::move(testScene));
-    application.GetWindow().clearColor = N2Engine::Common::Color::Magenta();
+    application.GetWindow().clearColor = Common::Color::Magenta();
 
-    application.GetWindow().SetWindowMode(N2Engine::WindowMode::BorderlessWindowed);
+    application.GetWindow().SetWindowMode(WindowMode::BorderlessWindowed);
 
-    auto quadObject = N2Engine::GameObject::Create("TestQuad");
-
-    auto quadRenderer = quadObject->AddComponent<N2Engine::Example::QuadRenderer>();
-
+    auto quadObject = GameObject::Create("TestQuad");
+    auto quadRenderer = quadObject->AddComponent<Example::QuadRenderer>();
     auto spinComponent = quadObject->AddComponent<Spin>();
     spinComponent->degreesPerSecond = -2.0f;
 
-    N2Engine::SceneManager::GetCurSceneRef().AddRootGameObject(quadObject);
+    auto cameraControlObject = GameObject::Create("Camera Controller");
+    cameraControlObject->AddComponent<CameraController>();
 
-    // application.GetMainCamera()->LookAt(quadObject->GetPositionable()->GetPosition());
+    SceneManager::GetCurSceneRef().AddRootGameObject(quadObject);
+    SceneManager::GetCurSceneRef().AddRootGameObject(cameraControlObject);
+
+    // TO MOVE TO INPUT SYSTEM, PARSING INPUT OBJECT
+    auto inputSystem = application.GetWindow().GetInputSystem();
+    inputSystem->AddActionMap(std::make_unique<Input::ActionMap>("Camera Controls"));
+    auto cameraMoveInputAction = std::make_unique<Input::InputAction>("Camera Move");
+    cameraMoveInputAction->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::W, Input::Key::S, Input::Key::A, Input::Key::D));
+    inputSystem->GetCurActionMap()->AddInputAction(std::move(cameraMoveInputAction));
 
     application.Run();
 }

@@ -1,17 +1,34 @@
 #pragma once
 
+#include <unordered_map>
+#include <memory>
+#include <string>
+
 namespace N2Engine
 {
+    class Window;
+
     namespace Input
     {
+        class ActionMap;
+
         class InputSystem
         {
-            // TODO: create an interface for assigning input events to glfw input
-            //  possibility 1: map of key -> EventHandler<void>
-            //  need to also account for controller input which would pass a vector
-            //  maybe include a map of key -> EventHandler<Vector2> etc
+        private:
+            Window &_window;
+            std::unordered_map<std::string, std::unique_ptr<ActionMap>> _actionMaps;
+            std::string _curActionMapName;
 
-            // for now should be a simple mapping to glfw but should be portable for changes which could require owning windowing
+        public:
+            InputSystem(Window &window) : _window{window} {};
+            ~InputSystem();
+
+            ActionMap *LoadActionMap(std::string name);
+            void AddActionMap(std::unique_ptr<ActionMap> &&actionMap);
+
+            ActionMap *GetCurActionMap();
+
+            void Update();
         };
     }
 }

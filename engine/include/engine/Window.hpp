@@ -10,6 +10,12 @@
 
 namespace N2Engine
 {
+    namespace Input
+    {
+        class InputBinding;
+        class InputSystem;
+    }
+
     using Vector2i = Math::VectorN<int, 2>;
 
     enum class AppRenderer
@@ -32,10 +38,12 @@ namespace N2Engine
 
     class Window
     {
+        friend class Input::InputBinding;
 
     private:
         GLFWwindow *_window;
         std::unique_ptr<Renderer::Common::IRenderer> _renderer;
+        std::unique_ptr<Input::InputSystem> _inputSystem;
         std::string _title{"N2Engine Application"};
         WindowMode _windowMode{WindowMode::Windowed};
         WindowData windowData{};
@@ -48,6 +56,7 @@ namespace N2Engine
 
     public:
         Window();
+        ~Window();
 
         void InitWindow();
         bool ShouldClose() const;
@@ -55,6 +64,7 @@ namespace N2Engine
         void Shutdown();
         void Clear();
         Renderer::Common::IRenderer *GetRenderer() const;
+        Input::InputSystem *GetInputSystem() const;
 
         Vector2i GetWindowDimensions() const;
         void SetWindowMode(WindowMode windowMode);

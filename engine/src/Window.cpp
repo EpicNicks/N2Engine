@@ -2,6 +2,10 @@
 #include "engine/Logger.hpp"
 #include "engine/Application.hpp"
 
+#include "engine/input/InputSystem.hpp"
+#include "engine/input/ActionMap.hpp"
+#include "engine/input/InputBinding.hpp"
+
 #include <algorithm>
 
 using namespace N2Engine;
@@ -13,6 +17,8 @@ Window::Window()
       _windowMode(WindowMode::Windowed)
 {
 }
+
+Window::~Window() = default;
 
 void Window::InitWindow()
 {
@@ -85,6 +91,8 @@ void Window::InitWindow()
         glfwTerminate();
         return;
     }
+
+    _inputSystem = std::make_unique<Input::InputSystem>(*this);
 }
 
 Vector2i Window::GetWindowDimensions() const
@@ -104,9 +112,15 @@ Renderer::Common::IRenderer *Window::GetRenderer() const
     return _renderer.get();
 }
 
+Input::InputSystem *Window::GetInputSystem() const
+{
+    return _inputSystem.get();
+}
+
 void Window::PollEvents()
 {
     glfwPollEvents();
+    _inputSystem->Update();
 }
 
 void Window::Shutdown()

@@ -62,6 +62,8 @@
         "text_encoding": "cpp",
         "variant": "cpp",
         "chrono": "cpp",
-        "ratio": "cpp"
+        "ratio": "cpp",
+        "map": "cpp",
+        "expected": "cpp"
     }
 }
