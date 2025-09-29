@@ -307,26 +307,42 @@ void TestEngine()
          cameraControlObject,
          standardInputHandler});
 
-    // TO MOVE TO INPUT SYSTEM, PARSING INPUT OBJECT
-    application.GetWindow().GetInputSystem()->MakeActionMap(
-        "Main Controls",
-        [&](Input::ActionMap *actionMap)
+    auto connectedGamepads = application.GetWindow().GetInputSystem()->GetConnectedGamepads();
+    if (connectedGamepads.size() > 0)
+    {
+        std::cout << "Connected Gamepads: {\n";
+        for (const auto &gamepadInfo : connectedGamepads)
         {
-            actionMap
-                ->MakeInputAction(
-                    "Camera Move",
-                    [&](Input::InputAction *inputAction)
-                    {
-                        inputAction->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::W, Input::Key::S, Input::Key::A, Input::Key::D));
-                    })
-                .MakeInputAction(
-                    "Quit",
-                    [&](Input::InputAction *inputAction)
-                    {
-                        inputAction->AddBinding(std::make_unique<Input::ButtonBinding>(application.GetWindow(), Input::Key::Escape));
-                    });
-        });
-    application.GetWindow().GetInputSystem()->LoadActionMap("Main Controls");
+            std::cout << "\tName: " << gamepadInfo.name << ", Id: " << gamepadInfo.gamepadId << "\n";
+        }
+        std::cout << "}\n";
+    }
+
+    // TO MOVE TO INPUT SYSTEM, PARSING INPUT OBJECT
+    application
+        .GetWindow()
+        .GetInputSystem()
+        ->MakeActionMap(
+            "Main Controls",
+            [&](Input::ActionMap *actionMap)
+            {
+                actionMap
+                    ->MakeInputAction(
+                        "Camera Move",
+                        [&](Input::InputAction *inputAction)
+                        {
+                            inputAction
+                                ->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::W, Input::Key::S, Input::Key::A, Input::Key::D))
+                                .AddBinding(std::make_unique<Input::GamepadStickBinding>(application.GetWindow(), Input::GamepadAxis::LeftX, Input::GamepadAxis::LeftY, 0, 0.25));
+                        })
+                    .MakeInputAction(
+                        "Quit",
+                        [&](Input::InputAction *inputAction)
+                        {
+                            inputAction->AddBinding(std::make_unique<Input::ButtonBinding>(application.GetWindow(), Input::Key::Escape));
+                        });
+            })
+        .LoadActionMap("Main Controls");
 
     application.Run();
 }

@@ -1,6 +1,8 @@
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/ActionMap.hpp"
 #include "engine/input/InputBinding.hpp"
+#define GLFW_INCLUDE_NONE
+#include <glfw/glfw3.h>
 
 using namespace N2Engine::Input;
 
@@ -47,6 +49,42 @@ ActionMap *InputSystem::GetCurActionMap()
         return _actionMaps.at(_curActionMapName).get();
     }
     return nullptr;
+}
+
+std::vector<GamepadInfo> InputSystem::GetConnectedGamepads() const
+{
+    std::vector<GamepadInfo> result;
+    for (int i = GLFW_JOYSTICK_1; i <= GLFW_JOYSTICK_LAST; ++i)
+    {
+        if (glfwJoystickPresent(i))
+        {
+            if (glfwJoystickIsGamepad(i))
+            {
+                const char *name = glfwGetGamepadName(i);
+                if (name)
+                {
+                    result.push_back({name, i});
+                }
+                else
+                {
+                    result.push_back({"Namless Gamepad", i});
+                }
+            }
+            else
+            {
+                const char *name = glfwGetJoystickName(i);
+                if (name)
+                {
+                    result.push_back({"Unrecognized Gamepad Mapping: " + std::string(name), i});
+                }
+                else
+                {
+                    result.push_back({"Namless Unrecognized Gamepad Mapping", i});
+                }
+            }
+        }
+    }
+    return result;
 }
 
 void InputSystem::Update()

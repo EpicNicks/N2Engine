@@ -13,6 +13,12 @@ namespace N2Engine
     {
         class ActionMap;
 
+        struct GamepadInfo
+        {
+            std::string name;
+            int gamepadId;
+        };
+
         class InputSystem
         {
         private:
@@ -30,6 +36,8 @@ namespace N2Engine
             InputSystem &MakeActionMap(const std::string name, std::function<void(ActionMap *)> pActionMap);
 
             ActionMap *GetCurActionMap();
+
+            std::vector<GamepadInfo> GetConnectedGamepads() const;
 
             void Update();
         };

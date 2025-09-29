@@ -31,6 +31,38 @@ InputValue AxisBinding::getValue()
     return 0.0f;
 }
 
+InputValue GamepadStickBinding::getValue()
+{
+    GLFWgamepadstate state;
+    if (glfwGetGamepadState(gamepadId, &state))
+    {
+        int glfwXAxis = GamepadAxisToGLFW.at(xAxis);
+        int glfwYAxis = GamepadAxisToGLFW.at(yAxis);
+
+        float x = state.axes[glfwXAxis];
+        float y = state.axes[glfwYAxis];
+
+        // Apply radial deadzone (better than per-axis deadzone)
+        Vector2 stick(x, y);
+        float magnitude = stick.Magnitude();
+
+        if (magnitude < deadzone)
+        {
+            return Vector2(0.0f, 0.0f);
+        }
+
+        // Optional: Normalize the magnitude range after deadzone
+        // This prevents a "dead spot" feel
+        float normalizedMag = (magnitude - deadzone) / (1.0f - deadzone);
+        if (normalizedMag > 1.0f)
+            normalizedMag = 1.0f;
+
+        return stick.Normalized() * normalizedMag;
+    }
+
+    return Vector2(0.0f, 0.0f);
+}
+
 InputValue Vector2CompositeBinding::getValue()
 {
     float x = 0.0f, y = 0.0f;

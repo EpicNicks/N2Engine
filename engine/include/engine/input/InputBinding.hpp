@@ -50,6 +50,23 @@ namespace N2Engine
             InputValue getValue() override;
         };
 
+        class GamepadStickBinding : public InputBinding
+        {
+            GamepadAxis xAxis;
+            GamepadAxis yAxis;
+            int gamepadId;
+            float deadzone;
+
+        public:
+            GamepadStickBinding(GLFWwindow *win, GamepadAxis xAxis, GamepadAxis yAxis, int joyId = 0, float deadzone = 0.15f)
+                : InputBinding(win), xAxis(xAxis), yAxis(yAxis), gamepadId(joyId), deadzone(deadzone) {}
+
+            GamepadStickBinding(Window &win, GamepadAxis xAxis, GamepadAxis yAxis, int joyId = 0, float deadzone = 0.15f)
+                : InputBinding(win), xAxis(xAxis), yAxis(yAxis), gamepadId(joyId), deadzone(deadzone) {}
+
+            InputValue getValue() override;
+        };
+
         class Vector2CompositeBinding : public InputBinding
         {
             Key up, down, left, right;
