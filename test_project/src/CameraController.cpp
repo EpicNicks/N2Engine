@@ -1,10 +1,7 @@
 #include "test_project/CameraController.hpp"
 
 #include <engine/Application.hpp>
-#include <engine/input/InputSystem.hpp>
-#include <engine/input/ActionMap.hpp>
-#include <engine/input/InputBinding.hpp>
-#include <engine/input/InputMapping.hpp>
+#include <engine/input/Input.hpp>
 
 #include <memory>
 
@@ -30,8 +27,7 @@ struct CameraController::Impl
 void CameraController::OnAttach()
 {
     Application &application = Application::GetInstance();
-    Input::ActionMap *actionMap = application.GetWindow().GetInputSystem()->LoadActionMap("Camera Controls");
-    if (actionMap != nullptr)
+    if (Input::ActionMap *actionMap = application.GetWindow().GetInputSystem()->LoadActionMap("Main Controls"); actionMap != nullptr)
     {
         Input::InputAction &cameraMoveInputAction = (*actionMap)["Camera Move"];
         cameraMoveInputAction.GetOnStateChanged() += [this](Input::InputAction &inputAction)

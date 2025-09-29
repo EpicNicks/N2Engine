@@ -18,6 +18,7 @@
 
 #include "test_project/Spin.hpp"
 #include "test_project/CameraController.hpp"
+#include "test_project/StandardInputHandler.hpp"
 
 // Simple vertex shader source
 const char *vertexShaderSource = R"(
@@ -298,12 +299,21 @@ void TestEngine()
     auto cameraControlObject = GameObject::Create("Camera Controller");
     cameraControlObject->AddComponent<CameraController>();
 
+    auto standardInputHandler = GameObject::Create("Standard Input Handler");
+    standardInputHandler->AddComponent<StandardInputHandler>();
+
     SceneManager::GetCurSceneRef().AddRootGameObject(quadObject);
     SceneManager::GetCurSceneRef().AddRootGameObject(cameraControlObject);
+    SceneManager::GetCurSceneRef().AddRootGameObject(standardInputHandler);
 
     // TO MOVE TO INPUT SYSTEM, PARSING INPUT OBJECT
     auto inputSystem = application.GetWindow().GetInputSystem();
-    inputSystem->AddActionMap(std::make_unique<Input::ActionMap>("Camera Controls"));
+    inputSystem->AddActionMap(std::make_unique<Input::ActionMap>("Main Controls"));
+
+    auto quitApplicationInputAction = std::make_unique<Input::InputAction>("Quit");
+    quitApplicationInputAction->AddBinding(std::make_unique<Input::ButtonBinding>(application.GetWindow(), Input::Key::Escape));
+    inputSystem->GetCurActionMap()->AddInputAction(std::move(quitApplicationInputAction));
+
     auto cameraMoveInputAction = std::make_unique<Input::InputAction>("Camera Move");
     cameraMoveInputAction->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::W, Input::Key::S, Input::Key::A, Input::Key::D));
     inputSystem->GetCurActionMap()->AddInputAction(std::move(cameraMoveInputAction));
