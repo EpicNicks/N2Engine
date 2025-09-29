@@ -326,6 +326,7 @@ void TestEngine()
                         inputAction->AddBinding(std::make_unique<Input::ButtonBinding>(application.GetWindow(), Input::Key::Escape));
                     });
         });
+    application.GetWindow().GetInputSystem()->LoadActionMap("Main Controls");
 
     application.Run();
 }

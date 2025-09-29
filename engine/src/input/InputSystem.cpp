@@ -28,6 +28,10 @@ InputSystem &InputSystem::MakeActionMap(const std::string name, std::function<vo
 
 ActionMap *InputSystem::LoadActionMap(std::string name)
 {
+    if (_curActionMapName == name)
+    {
+        return GetCurActionMap();
+    }
     if (auto it = _actionMaps.find(name); it != _actionMaps.end())
     {
         _curActionMapName = it->first;
