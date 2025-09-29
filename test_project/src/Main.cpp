@@ -302,21 +302,30 @@ void TestEngine()
     auto standardInputHandler = GameObject::Create("Standard Input Handler");
     standardInputHandler->AddComponent<StandardInputHandler>();
 
-    SceneManager::GetCurSceneRef().AddRootGameObject(quadObject);
-    SceneManager::GetCurSceneRef().AddRootGameObject(cameraControlObject);
-    SceneManager::GetCurSceneRef().AddRootGameObject(standardInputHandler);
+    SceneManager::GetCurSceneRef().AddRootGameObjects(
+        {quadObject,
+         cameraControlObject,
+         standardInputHandler});
 
     // TO MOVE TO INPUT SYSTEM, PARSING INPUT OBJECT
-    auto inputSystem = application.GetWindow().GetInputSystem();
-    inputSystem->AddActionMap(std::make_unique<Input::ActionMap>("Main Controls"));
-
-    auto quitApplicationInputAction = std::make_unique<Input::InputAction>("Quit");
-    quitApplicationInputAction->AddBinding(std::make_unique<Input::ButtonBinding>(application.GetWindow(), Input::Key::Escape));
-    inputSystem->GetCurActionMap()->AddInputAction(std::move(quitApplicationInputAction));
-
-    auto cameraMoveInputAction = std::make_unique<Input::InputAction>("Camera Move");
-    cameraMoveInputAction->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::W, Input::Key::S, Input::Key::A, Input::Key::D));
-    inputSystem->GetCurActionMap()->AddInputAction(std::move(cameraMoveInputAction));
+    application.GetWindow().GetInputSystem()->MakeActionMap(
+        "Main Controls",
+        [&](Input::ActionMap *actionMap)
+        {
+            actionMap
+                ->MakeInputAction(
+                    "Camera Move",
+                    [&](Input::InputAction *inputAction)
+                    {
+                        inputAction->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::W, Input::Key::S, Input::Key::A, Input::Key::D));
+                    })
+                .MakeInputAction(
+                    "Quit",
+                    [&](Input::InputAction *inputAction)
+                    {
+                        inputAction->AddBinding(std::make_unique<Input::ButtonBinding>(application.GetWindow(), Input::Key::Escape));
+                    });
+        });
 
     application.Run();
 }

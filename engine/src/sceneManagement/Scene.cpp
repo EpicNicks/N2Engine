@@ -68,6 +68,22 @@ void Scene::AddRootGameObject(std::shared_ptr<GameObject> gameObject)
     }
 }
 
+void Scene::AddRootGameObjects(const std::vector<std::shared_ptr<GameObject>> &gameObjects)
+{
+    for (const auto &gameObject : gameObjects)
+    {
+        AddRootGameObject(gameObject);
+    }
+}
+
+void Scene::AddRootGameObjects(std::initializer_list<std::shared_ptr<GameObject>> gameObjects)
+{
+    for (const auto &gameObject : gameObjects)
+    {
+        AddRootGameObject(gameObject);
+    }
+}
+
 bool Scene::RemoveRootGameObject(std::shared_ptr<GameObject> gameObject)
 {
     auto it = std::find(_rootGameObjects.begin(), _rootGameObjects.end(), gameObject);

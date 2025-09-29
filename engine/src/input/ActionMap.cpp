@@ -87,9 +87,10 @@ void InputAction::SetDisabled(bool disabled)
     // Note: State transition handling is done in Update() via HandleDisabledTransition()
 }
 
-void InputAction::AddBinding(std::unique_ptr<InputBinding> binding)
+InputAction &InputAction::AddBinding(std::unique_ptr<InputBinding> binding)
 {
     _bindings.push_back(std::move(binding));
+    return *this;
 }
 
 InputValue InputAction::CalculateCombinedValue()
@@ -240,6 +241,14 @@ void ActionMap::Update()
 ActionMap &ActionMap::AddInputAction(std::unique_ptr<InputAction> inputAction)
 {
     _inputActions.insert_or_assign(inputAction->GetName(), std::move(inputAction));
+    return *this;
+}
+
+ActionMap &ActionMap::MakeInputAction(const std::string name, std::function<void(InputAction *)> pAction)
+{
+    auto inputAction = std::make_unique<InputAction>(name);
+    pAction(inputAction.get());
+    AddInputAction(std::move(inputAction));
     return *this;
 }
 

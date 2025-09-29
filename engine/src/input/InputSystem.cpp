@@ -18,6 +18,14 @@ void InputSystem::AddActionMap(std::unique_ptr<ActionMap> &&actionMap)
     }
 }
 
+InputSystem &InputSystem::MakeActionMap(const std::string name, std::function<void(ActionMap *)> pActionMap)
+{
+    auto actionMap = std::make_unique<ActionMap>(name);
+    pActionMap(actionMap.get());
+    AddActionMap(std::move(actionMap));
+    return *this;
+}
+
 ActionMap *InputSystem::LoadActionMap(std::string name)
 {
     if (auto it = _actionMaps.find(name); it != _actionMaps.end())

@@ -60,7 +60,7 @@ namespace N2Engine
             void Update();
 
             // Add bindings
-            void AddBinding(std::unique_ptr<InputBinding> binding);
+            InputAction &AddBinding(std::unique_ptr<InputBinding> binding);
 
             // Disabled property with proper state handling
             bool GetDisabled() const { return _disabled; }
@@ -98,6 +98,7 @@ namespace N2Engine
 
             ActionMap(std::string mapName) : name(std::move(mapName)) {}
             ActionMap &AddInputAction(std::unique_ptr<InputAction> inputAction);
+            ActionMap &MakeInputAction(const std::string name, std::function<void(InputAction *)> pAction);
             bool RemoveInputAction(const std::string &name);
             void Update();
 

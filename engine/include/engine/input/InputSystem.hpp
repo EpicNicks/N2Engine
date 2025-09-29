@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <memory>
 #include <string>
+#include <functional>
 
 namespace N2Engine
 {
@@ -25,6 +26,8 @@ namespace N2Engine
 
             ActionMap *LoadActionMap(std::string name);
             void AddActionMap(std::unique_ptr<ActionMap> &&actionMap);
+
+            InputSystem &MakeActionMap(const std::string name, std::function<void(ActionMap *)> pActionMap);
 
             ActionMap *GetCurActionMap();
 

@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <initializer_list>
 #include <functional>
 #include <queue>
 
@@ -33,6 +34,8 @@ namespace N2Engine
         static std::unique_ptr<Scene> Create(const std::string &name);
 
         void AddRootGameObject(std::shared_ptr<GameObject> gameObject);
+        void AddRootGameObjects(const std::vector<std::shared_ptr<GameObject>> &gameObjects);
+        void AddRootGameObjects(std::initializer_list<std::shared_ptr<GameObject>> gameObjects);
 
         bool RemoveRootGameObject(std::shared_ptr<GameObject> gameObject);
 
