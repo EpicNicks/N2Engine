@@ -37,28 +37,30 @@ void QuadRenderer::InitializeRenderResources(Renderer::Common::IRenderer *render
 
 void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
 {
-    const char *vertexShader =
-        "#version 330 core\n"
-        "layout (location = 0) in vec3 aPos;\n"
-        "layout (location = 1) in vec3 aNormal;\n"
-        "layout (location = 2) in vec2 aTexCoord;\n"
-        "layout (location = 3) in vec4 aColor;\n"
-        "uniform mat4 uModel;\n"
-        "uniform mat4 uView;\n"
-        "uniform mat4 uProjection;\n"
-        "out vec4 vertexColor;\n"
-        "void main() {\n"
-        "    gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);\n"
-        "    vertexColor = aColor;\n"
-        "}";
+    const char *vertexShader = R"(
+        #version 330 core
+        layout (location = 0) in vec3 aPos;
+        layout (location = 1) in vec3 aNormal;
+        layout (location = 2) in vec2 aTexCoord;
+        layout (location = 3) in vec4 aColor;
+        uniform mat4 uModel;
+        uniform mat4 uView;
+        uniform mat4 uProjection;
+        out vec4 vertexColor;
+        void main() {
+            gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+            vertexColor = aColor;
+        }
+        )";
 
-    const char *fragmentShader =
-        "#version 330 core\n"
-        "in vec4 vertexColor;\n"
-        "out vec4 FragColor;\n"
-        "void main() {\n"
-        "    FragColor = vertexColor;\n"
-        "}";
+    const char *fragmentShader = R"(
+        #version 330 core
+        in vec4 vertexColor;
+        out vec4 FragColor;
+        void main() {
+            FragColor = vertexColor;
+        }
+        )";
 
     _shaderId = renderer->CreateShaderProgram(vertexShader, fragmentShader);
 
