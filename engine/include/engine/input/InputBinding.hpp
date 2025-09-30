@@ -56,13 +56,15 @@ namespace N2Engine
             GamepadAxis yAxis;
             int gamepadId;
             float deadzone;
+            bool invertXAxis;
+            bool invertYAxis;
 
         public:
-            GamepadStickBinding(GLFWwindow *win, GamepadAxis xAxis, GamepadAxis yAxis, int joyId = 0, float deadzone = 0.15f)
-                : InputBinding(win), xAxis(xAxis), yAxis(yAxis), gamepadId(joyId), deadzone(deadzone) {}
+            GamepadStickBinding(GLFWwindow *win, GamepadAxis xAxis, GamepadAxis yAxis, int joyId = 0, float deadzone = 0.15f, bool invertX = false, bool invertY = false)
+                : InputBinding(win), xAxis(xAxis), yAxis(yAxis), gamepadId(joyId), deadzone(deadzone), invertXAxis(invertX), invertYAxis(invertY) {}
 
-            GamepadStickBinding(Window &win, GamepadAxis xAxis, GamepadAxis yAxis, int joyId = 0, float deadzone = 0.15f)
-                : InputBinding(win), xAxis(xAxis), yAxis(yAxis), gamepadId(joyId), deadzone(deadzone) {}
+            GamepadStickBinding(Window &win, GamepadAxis xAxis, GamepadAxis yAxis, int joyId = 0, float deadzone = 0.15f, bool invertX = false, bool invertY = false)
+                : InputBinding(win), xAxis(xAxis), yAxis(yAxis), gamepadId(joyId), deadzone(deadzone), invertXAxis(invertX), invertYAxis(invertY) {}
 
             InputValue getValue() override;
         };

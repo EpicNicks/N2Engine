@@ -13,8 +13,8 @@ namespace N2Engine
         friend class Scene;
 
     protected:
-        GameObject &_gameObject;
-        bool _isMarkedForDestruction = false;
+        GameObject &_gameObject;              // will be resolved by hierarchy
+        bool _isMarkedForDestruction = false; // not persistent state
         bool _isActive = true;
 
         Component(GameObject &gameObject);

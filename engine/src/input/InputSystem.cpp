@@ -61,26 +61,12 @@ std::vector<GamepadInfo> InputSystem::GetConnectedGamepads() const
             if (glfwJoystickIsGamepad(i))
             {
                 const char *name = glfwGetGamepadName(i);
-                if (name)
-                {
-                    result.push_back({name, i});
-                }
-                else
-                {
-                    result.push_back({"Namless Gamepad", i});
-                }
+                result.push_back(name != nullptr ? GamepadInfo{name, i} : GamepadInfo{"Namless Gamepad", i});
             }
             else
             {
                 const char *name = glfwGetJoystickName(i);
-                if (name)
-                {
-                    result.push_back({"Unrecognized Gamepad Mapping: " + std::string(name), i});
-                }
-                else
-                {
-                    result.push_back({"Namless Unrecognized Gamepad Mapping", i});
-                }
+                result.push_back(name != nullptr ? GamepadInfo{"Unrecognized Gamepad Mapping: " + std::string(name), i} : GamepadInfo{"Namless Unrecognized Gamepad Mapping", i});
             }
         }
     }

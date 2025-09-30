@@ -39,8 +39,8 @@ InputValue GamepadStickBinding::getValue()
         int glfwXAxis = GamepadAxisToGLFW.at(xAxis);
         int glfwYAxis = GamepadAxisToGLFW.at(yAxis);
 
-        float x = state.axes[glfwXAxis];
-        float y = state.axes[glfwYAxis];
+        float x = (invertXAxis ? -1 : 1) * state.axes[glfwXAxis];
+        float y = (invertYAxis ? -1 : 1) * state.axes[glfwYAxis];
 
         // Apply radial deadzone (better than per-axis deadzone)
         Vector2 stick(x, y);
