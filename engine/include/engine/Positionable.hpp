@@ -2,6 +2,7 @@
 
 #include <math/Vector3.hpp>
 #include <math/Quaternion.hpp>
+#include <nlohmann/json.hpp>
 #include "engine/Transform.hpp"
 #include <memory>
 
@@ -76,6 +77,10 @@ namespace N2Engine
         Math::Vector3 TransformDirection(const Math::Vector3 &direction) const;
         Math::Vector3 InverseTransformPoint(const Math::Vector3 &point) const;
         Math::Vector3 InverseTransformDirection(const Math::Vector3 &direction) const;
+
+        // Serialization
+        nlohmann::json Serialize() const;
+        void Deserialize(const nlohmann::json &j);
 
         // Hierarchy change notification
         void OnHierarchyChanged();

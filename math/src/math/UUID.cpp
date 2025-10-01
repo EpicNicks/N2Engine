@@ -6,6 +6,34 @@
 
 using namespace N2Engine::Math;
 
+UUID::UUID(const std::string &str)
+{
+    // Initialize to zero
+    bytes.fill(0);
+
+    if (str.empty())
+    {
+        return;
+    }
+
+    // Remove dashes and parse hex
+    std::string cleaned;
+    for (char c : str)
+    {
+        if (c != '-')
+        {
+            cleaned += c;
+        }
+    }
+
+    // Parse hex string into bytes (2 hex chars = 1 byte)
+    for (size_t i = 0; i < 16 && i * 2 < cleaned.length(); ++i)
+    {
+        std::string byteStr = cleaned.substr(i * 2, 2);
+        bytes[i] = static_cast<uint8_t>(std::stoul(byteStr, nullptr, 16));
+    }
+}
+
 UUID::UUID()
 {
     std::random_device rd;
@@ -22,9 +50,9 @@ UUID::UUID()
         bytes[i + 8] = static_cast<uint8_t>((low >> (i * 8)) & 0xFF);
     }
 
-    // Set version to 4 -----
+    // Set version to 4 (UUID v4)
     bytes[6] = (bytes[6] & 0x0F) | 0x40;
-    // Set variant to 10x -----
+    // Set variant to 10x
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
 }
 

@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <functional>
 #include <queue>
+#include <nlohmann/json.hpp>
 
 #include <renderer/common/Renderer.hpp>
 
@@ -66,6 +67,9 @@ namespace N2Engine
         void ProcessDestroyed();
         void OnApplicationQuit();
         void Clear();
+
+        nlohmann::json Serialize() const;
+        static std::shared_ptr<Scene> Deserialize(const nlohmann::json &j);
 
     private:
         void Render(Renderer::Common::IRenderer *renderer);

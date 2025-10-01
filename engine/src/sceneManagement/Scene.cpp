@@ -3,6 +3,7 @@
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/IRenderable.hpp"
 #include "engine/GameObject.inl"
+#include "engine/serialization/ReferenceResolver.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -376,4 +377,51 @@ void Scene::PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject)
         _components.end());
 
     gameObject->Purge();
+}
+
+using json = nlohmann::json;
+json Scene::Serialize() const
+{
+    json j;
+    j["name"] = sceneName;
+
+    json roots = json::array();
+    for (const auto &root : _rootGameObjects)
+    {
+        roots.push_back(root->Serialize());
+    }
+    j["rootGameObjects"] = roots;
+
+    return j;
+}
+
+std::shared_ptr<Scene> Scene::Deserialize(const json &j)
+{
+    auto scene = std::shared_ptr<Scene>(new Scene(""));
+
+    if (j.contains("name"))
+    {
+        scene->sceneName = j["name"];
+    }
+
+    // Create reference resolver for this scene
+    ReferenceResolver resolver;
+
+    // Phase 1: Deserialize all GameObjects and Components
+    // This creates all objects and registers them with the resolver
+    if (j.contains("rootGameObjects"))
+    {
+        for (const auto &rootJson : j["rootGameObjects"])
+        {
+            auto root = GameObject::Deserialize(rootJson, &resolver);
+            scene->_rootGameObjects.push_back(root);
+            root->SetScene(scene.get());
+        }
+    }
+
+    // Phase 2: Resolve all references
+    // This fills in all the GameObject and Component references
+    resolver.ResolveAll();
+
+    return scene;
 }

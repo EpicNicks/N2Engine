@@ -7,7 +7,9 @@
 #include <typeindex>
 #include <type_traits>
 #include <generator>
+#include <nlohmann/json.hpp>
 
+#include "engine/base/Asset.hpp"
 #include "engine/Component.hpp"
 #include "engine/scheduling/CoroutineWait.hpp"
 #include "engine/scheduling/Coroutine.hpp"
@@ -24,8 +26,13 @@ namespace N2Engine
     class Transform;
     class Scene;
     class Positionable;
+    class ReferenceResolver;
 
-    class GameObject : public std::enable_shared_from_this<GameObject>
+    /**
+     * Container class for Components
+     * Unlike Unity, may or may not have a transform/positionable
+     */
+    class GameObject : public Base::Asset, public std::enable_shared_from_this<GameObject>
     {
         friend class Scene;
 
@@ -131,6 +138,10 @@ namespace N2Engine
         Scheduling::Coroutine *StartCoroutine(std::generator<Scheduling::ICoroutineWait> &&coroutine);
         bool StopCoroutine(Scheduling::Coroutine *coroutine);
         void StopAllCoroutines();
+
+        // Serialization
+        nlohmann::json Serialize() const;
+        static Ptr Deserialize(const nlohmann::json &j, ReferenceResolver *resolver = nullptr);
 
         // Static utility methods
         static Ptr FindGameObjectByName(const std::string &name, Scene *scene);

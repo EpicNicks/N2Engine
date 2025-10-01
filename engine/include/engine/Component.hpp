@@ -1,28 +1,41 @@
 #pragma once
 
 #include <memory>
+#include <nlohmann/json.hpp>
+#include "engine/base/Asset.hpp"
 
 namespace N2Engine
 {
     class GameObject;
     class Scene;
+    class ReferenceResolver;
 
-    class Component
+    /**
+     * Base class for all components
+     * Components are attached to GameObjects and provide functionality
+     */
+    class Component : public Base::Asset
     {
         friend class GameObject;
         friend class Scene;
 
     protected:
-        GameObject &_gameObject;              // will be resolved by hierarchy
-        bool _isMarkedForDestruction = false; // not persistent state
+        GameObject &_gameObject;
+        bool _isMarkedForDestruction = false;
         bool _isActive = true;
 
         Component(GameObject &gameObject);
 
     public:
-        // used if the attached GameObject is active as well, hierarchy is checked at that level
         GameObject &GetGameObject();
 
+        // Serialization interface
+        virtual nlohmann::json Serialize() const;
+        virtual void Deserialize(const nlohmann::json &j);
+        virtual void Deserialize(const nlohmann::json &j, ReferenceResolver *resolver);
+        virtual std::string GetTypeName() const = 0;
+
+        // Lifecycle methods
         virtual void OnAttach() {}
         virtual void OnUpdate() {}
         virtual void OnFixedUpdate() {}

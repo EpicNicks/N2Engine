@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <engine/Component.hpp>
+#include <engine/common/ScriptUtils.hpp>
 
 namespace N2Engine
 {
@@ -24,4 +25,6 @@ public:
     ~CameraController();
     void OnAttach() override;
     void OnUpdate() override;
+
+    std::string GetTypeName() const override { return NAMEOF(CameraController); }
 };

@@ -53,6 +53,11 @@ namespace N2Engine
             explicit Quaternion(const Vector3 &axis, float angle);
             explicit Quaternion(float pitch, float yaw, float roll);
 
+            float GetW() const { return w; }
+            float GetX() const { return x; }
+            float GetY() const { return y; }
+            float GetZ() const { return z; }
+
             // Static factory methods
             static Quaternion Identity()
             {

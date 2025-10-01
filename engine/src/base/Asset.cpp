@@ -4,9 +4,14 @@ using namespace N2Engine;
 using namespace N2Engine::Math;
 using namespace N2Engine::Base;
 
-UUID Asset::GetUUID()
+UUID Asset::GetUUID() const
 {
     return _uuid;
+}
+
+void Asset::SetUUID(const UUID &uuid)
+{
+    _uuid = uuid;
 }
 
 Asset::Asset() : _uuid{} {}

@@ -3,8 +3,11 @@
 #include "engine/Positionable.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
+#include "engine/serialization/ComponentRegistry.hpp"
+#include "engine/serialization/ReferenceResolver.hpp"
 
 #include <algorithm>
+#include <nlohmann/json.hpp>
 
 using namespace N2Engine;
 
@@ -530,4 +533,109 @@ std::vector<GameObject::Ptr> GameObject::FindGameObjectsByTag(const std::string 
     // This would require a tag system to be implemented
     // For now, return empty vector
     return {};
+}
+
+using json = nlohmann::json;
+
+json GameObject::Serialize() const
+{
+    json j;
+
+    // Serialize Asset base class (UUID)
+    j["uuid"] = GetUUID().ToString();
+
+    // GameObject-specific data
+    j["name"] = _name;
+    j["isActive"] = _isActive;
+
+    // Positionable (optional)
+    if (_positionable)
+    {
+        j["positionable"] = _positionable->Serialize();
+    }
+
+    // Components
+    json components = json::array();
+    for (const auto &component : _components)
+    {
+        json compJson;
+        compJson["type"] = component->GetTypeName();
+        compJson["data"] = component->Serialize();
+        components.push_back(compJson);
+    }
+    j["components"] = components;
+
+    // Children (recursive)
+    json children = json::array();
+    for (const auto &child : _children)
+    {
+        children.push_back(child->Serialize());
+    }
+    j["children"] = children;
+
+    return j;
+}
+
+GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolver)
+{
+    // Create GameObject with UUID
+    Math::UUID uuid(j["uuid"].get<std::string>());
+    auto go = std::shared_ptr<GameObject>(new GameObject(j["name"].get<std::string>()));
+    go->_uuid = uuid; // Restore original UUID
+
+    // Register this GameObject in the resolver
+    if (resolver)
+    {
+        resolver->RegisterGameObject(uuid, go);
+    }
+
+    if (j.contains("isActive"))
+    {
+        go->_isActive = j["isActive"];
+    }
+
+    // Deserialize Positionable
+    if (j.contains("positionable"))
+    {
+        go->CreatePositionable();
+        go->_positionable->Deserialize(j["positionable"]);
+    }
+
+    // Deserialize Components
+    if (j.contains("components"))
+    {
+        for (const auto &compJson : j["components"])
+        {
+            std::string typeName = compJson["type"];
+            auto component = ComponentRegistry::Instance().Create(typeName, *go);
+
+            if (component)
+            {
+                // Register component in resolver BEFORE deserializing
+                if (resolver && compJson["data"].contains("uuid"))
+                {
+                    Math::UUID compUUID(compJson["data"]["uuid"].get<std::string>());
+                    resolver->RegisterComponent(compUUID, component);
+                }
+
+                // Deserialize with resolver for reference resolution
+                component->Deserialize(compJson["data"], resolver);
+
+                go->_components.push_back(component);
+                go->_componentMap[std::type_index(typeid(*component))] = component;
+            }
+        }
+    }
+
+    // Deserialize Children (recursive)
+    if (j.contains("children"))
+    {
+        for (const auto &childJson : j["children"])
+        {
+            auto child = GameObject::Deserialize(childJson, resolver);
+            go->AddChild(child, false); // Don't keep world position during load
+        }
+    }
+
+    return go;
 }

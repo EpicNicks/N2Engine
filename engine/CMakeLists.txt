@@ -12,7 +12,7 @@ add_library(engine STATIC ${ENGINE_SOURCES})
 target_include_directories(engine 
     PUBLIC 
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/json/include>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/nlohmann/include>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src

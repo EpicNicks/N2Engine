@@ -1,6 +1,7 @@
 #pragma once
 
 #include <engine/Component.hpp>
+#include <engine/common/ScriptUtils.hpp>
 
 namespace N2Engine
 {
@@ -13,4 +14,5 @@ public:
     StandardInputHandler(N2Engine::GameObject &gameObject);
     ~StandardInputHandler();
     void OnAttach() override;
+    std::string GetTypeName() const override { return NAMEOF(StandardInputHandler); }
 };

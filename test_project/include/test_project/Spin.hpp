@@ -1,6 +1,7 @@
 #pragma once
 
 #include <engine/Component.hpp>
+#include <engine/common/ScriptUtils.hpp>
 
 namespace N2Engine
 {
@@ -16,4 +17,6 @@ public:
     Spin(N2Engine::GameObject &gameObject);
     void OnAttach() override;
     void OnUpdate() override;
+
+    std::string GetTypeName() const override { return NAMEOF(Spin); }
 };

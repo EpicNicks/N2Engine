@@ -6,6 +6,8 @@
 #include "engine/common/Color.hpp"
 #include <math/Vector3.hpp>
 
+#include "engine/common/ScriptUtils.hpp"
+
 namespace N2Engine
 {
     namespace Example
@@ -28,6 +30,8 @@ namespace N2Engine
 
         public:
             QuadRenderer(GameObject &gameObject);
+
+            std::string GetTypeName() const override { return NAMEOF(QuadRenderer); }
 
             // IRenderable interface
             void Render(Renderer::Common::IRenderer *renderer) override;

@@ -8,13 +8,14 @@ namespace N2Engine
     {
         class Asset
         {
-        private:
+        protected:
             Math::UUID _uuid;
 
         public:
             Asset();
             Asset(Math::UUID uuid);
-            Math::UUID GetUUID();
+            Math::UUID GetUUID() const;
+            void SetUUID(const Math::UUID &uuid);
         };
     }
 }
