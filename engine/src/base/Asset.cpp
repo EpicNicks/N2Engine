@@ -10,3 +10,5 @@ UUID Asset::GetUUID()
 }
 
 Asset::Asset() : _uuid{} {}
+
+Asset::Asset(UUID uuid) : _uuid{uuid} {}

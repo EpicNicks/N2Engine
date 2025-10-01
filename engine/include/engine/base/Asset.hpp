@@ -13,6 +13,7 @@ namespace N2Engine
 
         public:
             Asset();
+            Asset(Math::UUID uuid);
             Math::UUID GetUUID();
         };
     }
