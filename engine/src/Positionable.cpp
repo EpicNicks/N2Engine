@@ -1,5 +1,6 @@
 #include "engine/Positionable.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/serialization/MathSerialization.hpp"
 
 using namespace N2Engine;
 using namespace N2Engine::Math;
@@ -279,27 +280,10 @@ json Positionable::Serialize() const
 {
     json j;
 
-    // Serialize local transform
-
-    auto localPosition = GetLocalPosition();
-    auto localRotation = GetLocalRotation();
-    auto localScale = GetLocalScale();
-
-    j["localPosition"] = {
-        {"x", localPosition.x},
-        {"y", localPosition.y},
-        {"z", localPosition.z}};
-
-    j["localRotation"] = {
-        {"x", localRotation.GetX()},
-        {"y", localRotation.GetY()},
-        {"z", localRotation.GetZ()},
-        {"w", localRotation.GetW()}};
-
-    j["localScale"] = {
-        {"x", localScale.x},
-        {"y", localScale.y},
-        {"z", localScale.z}};
+    // Much simpler now - nlohmann::json knows how to serialize these types
+    j["localPosition"] = GetLocalPosition();
+    j["localRotation"] = GetLocalRotation();
+    j["localScale"] = GetLocalScale();
 
     return j;
 }
@@ -308,27 +292,16 @@ void Positionable::Deserialize(const json &j)
 {
     if (j.contains("localPosition"))
     {
-        float x = j["localPosition"]["x"];
-        float y = j["localPosition"]["y"];
-        float z = j["localPosition"]["z"];
-        SetLocalPosition(Math::Vector3(x, y, z));
+        SetLocalPosition(j["localPosition"].get<Math::Vector3>());
     }
 
     if (j.contains("localRotation"))
     {
-        // Construct a new Quaternion since members are private
-        float w = j["localRotation"]["w"];
-        float x = j["localRotation"]["x"];
-        float y = j["localRotation"]["y"];
-        float z = j["localRotation"]["z"];
-        SetLocalRotation(Math::Quaternion(w, x, y, z));
+        SetLocalRotation(j["localRotation"].get<Math::Quaternion>());
     }
 
     if (j.contains("localScale"))
     {
-        float x = j["localScale"]["x"];
-        float y = j["localScale"]["y"];
-        float z = j["localScale"]["z"];
-        SetLocalScale(Math::Vector3(x, y, z));
+        SetLocalScale(j["localScale"].get<Math::Vector3>());
     }
 }

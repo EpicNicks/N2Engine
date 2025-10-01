@@ -1,6 +1,8 @@
 #pragma once
 
 #include <renderer/common/Renderer.hpp>
+#include "engine/serialization/ComponentRegistry.hpp"
+#include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/Component.hpp"
 
 namespace N2Engine
@@ -8,9 +10,9 @@ namespace N2Engine
     /**
      * An interface for components which should render to the screen
      */
-    class IRenderable : public Component
+    class IRenderable : public SerializableComponent
     {
-        using Component::Component;
+        using SerializableComponent::SerializableComponent;
 
     public:
         virtual ~IRenderable() = default;

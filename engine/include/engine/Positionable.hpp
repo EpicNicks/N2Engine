@@ -2,9 +2,11 @@
 
 #include <math/Vector3.hpp>
 #include <math/Quaternion.hpp>
-#include <nlohmann/json.hpp>
-#include "engine/Transform.hpp"
 #include <memory>
+
+#include <nlohmann/json.hpp>
+
+#include "engine/Transform.hpp"
 
 namespace N2Engine
 {

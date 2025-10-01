@@ -17,6 +17,9 @@ namespace N2Engine
             float &b = vector[2];
             float &a = vector[3];
 
+            Color(const Color &other) : VectorN(other) {}
+            Color &operator=(const Color &other);
+
             static Color White();
             static Color Black();
             static Color Red();
@@ -28,10 +31,6 @@ namespace N2Engine
             static Color Transparent();
             static Color FromHex(std::uint32_t hexValue);
             std::uint32_t ToHex() const;
-
-            Color(const Color &other) : VectorN(other) {}
-
-            Color &operator=(const Color &other);
         };
     }
 }

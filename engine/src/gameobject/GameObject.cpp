@@ -549,9 +549,9 @@ json GameObject::Serialize() const
     j["isActive"] = _isActive;
 
     // Positionable (optional)
-    if (_positionable)
+    if (HasPositionable())
     {
-        j["positionable"] = _positionable->Serialize();
+        j["positionable"] = GetPositionable()->Serialize();
     }
 
     // Components

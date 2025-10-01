@@ -3,10 +3,11 @@
 #include "engine/Positionable.hpp"
 #include "engine/Logger.hpp"
 #include "engine/Time.hpp"
+#include "engine/Application.hpp"
+#include "engine/serialization/MathSerialization.hpp"
 
 #include <math/Matrix.hpp>
 #include <string>
-#include "engine/Application.hpp"
 
 using namespace N2Engine;
 using namespace N2Engine::Example;
@@ -15,6 +16,8 @@ QuadRenderer::QuadRenderer(GameObject &gameObject)
     : IRenderable(gameObject), _color{Common::Color::White()}, _size{Math::Vector3::One()}
 {
     _gameObject.CreatePositionable();
+    RegisterMember(NAMEOF(_color), _color);
+    RegisterMember(NAMEOF(_size), _size);
 }
 
 void QuadRenderer::OnDestroy()

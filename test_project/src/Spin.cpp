@@ -12,8 +12,9 @@
 
 using namespace N2Engine;
 
-Spin::Spin(N2Engine::GameObject &gameObject) : Component(gameObject)
+Spin::Spin(N2Engine::GameObject &gameObject) : SerializableComponent(gameObject)
 {
+    RegisterMember(NAMEOF(degreesPerSecond), degreesPerSecond);
 }
 
 void Spin::OnAttach()
