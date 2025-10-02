@@ -547,6 +547,10 @@ json GameObject::Serialize() const
     // GameObject-specific data
     j["name"] = _name;
     j["isActive"] = _isActive;
+    if (_prefabReference.has_value())
+    {
+        j["prefabReference"] = _prefabReference->ToString();
+    }
 
     // Positionable (optional)
     if (HasPositionable())
@@ -592,6 +596,11 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
     if (j.contains("isActive"))
     {
         go->_isActive = j["isActive"];
+    }
+
+    if (j.contains("prefabReference"))
+    {
+        go->_prefabReference = Math::UUID(j["prefabReference"].get<std::string>());
     }
 
     // Deserialize Positionable

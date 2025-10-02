@@ -66,6 +66,10 @@
         "map": "cpp",
         "expected": "cpp",
         "string.h": "c",
-        "glad.h": "c"
+        "glad.h": "c",
+        "any": "cpp",
+        "codecvt": "cpp",
+        "forward_list": "cpp",
+        "valarray": "cpp"
     }
 }

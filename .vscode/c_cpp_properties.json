@@ -6,9 +6,11 @@
         "${workspaceFolder}/**",
         "${workspaceFolder}/renderer/include",
         "${workspaceFolder}/engine/include",
+        "${workspaceFolder}/editor/include",
         "${workspaceFolder}/math/include",
         "${workspaceFolder}/renderer/src",
         "${workspaceFolder}/engine/src",
+        "${workspaceFolder}/editor/src",
         "${workspaceFolder}/math/src",
         "${workspaceFolder}/build/_deps/glfw-src/include",
         "/usr/include/vulkan"
@@ -33,9 +35,11 @@
         "${workspaceFolder}/**",
         "${workspaceFolder}/renderer/include",
         "${workspaceFolder}/engine/include",
+        "${workspaceFolder}/editor/include",
         "${workspaceFolder}/math/include",
         "${workspaceFolder}/renderer/src",
         "${workspaceFolder}/engine/src",
+        "${workspaceFolder}/editor/src",
         "${workspaceFolder}/math/src",
         "${workspaceFolder}/build/_deps/glfw-src/include",
         "${env:VULKAN_SDK}/Include"

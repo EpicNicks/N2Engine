@@ -26,7 +26,7 @@ set_target_properties(engine PROPERTIES
 )
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_compile_definitions(engine PRIVATE N2ENGINE_DEBUG=1)
+    target_compile_definitions(engine PUBLIC N2ENGINE_DEBUG=1)
 endif()
 
 # Add any necessary libraries

@@ -14,6 +14,7 @@ namespace N2Engine
     }
 }
 
+// Simple component, no serializable state
 class CameraController : public N2Engine::Component
 {
 private:

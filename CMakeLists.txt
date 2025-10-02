@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_subdirectory(math)
 add_subdirectory(renderer)
 add_subdirectory(engine)
+add_subdirectory(editor)
 add_subdirectory(test_project)
 
 

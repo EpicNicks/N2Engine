@@ -7,6 +7,8 @@
 #include <typeindex>
 #include <type_traits>
 #include <generator>
+#include <optional>
+
 #include <nlohmann/json.hpp>
 
 #include "engine/base/Asset.hpp"
@@ -43,6 +45,7 @@ namespace N2Engine
     private:
         std::string _name;
         bool _isActive = true;
+        std::optional<Math::UUID> _prefabReference;
         bool _isMarkedForDestruction = false;
         mutable bool _activeInHierarchyCached = true;
         mutable bool _activeInHierarchyDirty = true;
