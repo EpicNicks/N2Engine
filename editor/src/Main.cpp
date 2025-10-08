@@ -1,8 +1,8 @@
 
-#include <iostream>
+#include <print>
 
 int main()
 {
-    std::cout << "Hello, N2Engine Editor!" << std::endl;
+    std::println("Hello, N2Engine Editor!");
     return 0;
 }

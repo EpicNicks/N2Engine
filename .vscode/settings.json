@@ -70,6 +70,7 @@
         "any": "cpp",
         "codecvt": "cpp",
         "forward_list": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "print": "cpp"
     }
 }
