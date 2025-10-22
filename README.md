@@ -28,7 +28,24 @@ A C++ Game Engine I am building for learning using vulkan
     - Rendering
     - Physics
     - Input and Windowing
+  - Scripting languages
+    - Lua
 
 ### Stretch Goals
 - create a functioning game engine editor
 - create a graphics backend using vulkan
+
+## Requirements
+- [The Vulkan SDK](https://vulkan.lunarg.com/)
+- CMake
+  - [Windows](https://cmake.org/download/)
+  - Linux: Install your distribution's package
+    - Debian/Ubuntu: ```sudo apt install cmake```
+    - Arch: ```sudo pacman -S cmake```
+    - Gentoo: ```emerge dev-build/cmake```
+- G++ -> GCC 11
+  - Windows: w64devkit or some other environment which provides a version of G++
+  - Linux: Install your distribution's package
+    - Debian/Ubuntu: ```sudo apt install build-essential```
+    - Arch: ```sudo pacman -S base-devel```
+    - Gentoo: you already have it
