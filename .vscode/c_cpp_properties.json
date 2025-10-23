@@ -21,7 +21,10 @@
         "_DEBUG",
         "UNICODE",
         "_UNICODE",
-        "N2ENGINE_DEBUG"
+        "N2ENGINE_DEBUG",
+        "__AVX__",
+        "__AVX2__",
+        "__SSE4_1__"
       ],
       "compilerPath": "/usr/bin/gcc",
       "cStandard": "c17",
@@ -30,7 +33,7 @@
       "configurationProvider": "ms-vscode.cmake-tools"
     },
     {
-      "name": "Win32",
+      "name": "Win32-GCC",
       "includePath": [
         "${workspaceFolder}/**",
         "${workspaceFolder}/renderer/include",
@@ -48,15 +51,59 @@
         "GLFW_INCLUDE_VULKAN",
         "VK_USE_PLATFORM_WIN32_KHR",
         "_DEBUG",
-        "UNICODE", 
+        "UNICODE",
         "_UNICODE",
         "_WIN32_WINNT=0x0601",
-        "N2ENGINE_DEBUG"
+        "N2ENGINE_DEBUG",
+        "__AVX__",
+        "__AVX2__",
+        "__SSE4_1__"
       ],
       "compilerPath": "g++.exe",
       "cStandard": "c17",
-      "cppStandard": "c++23", 
+      "cppStandard": "c++23",
       "intelliSenseMode": "windows-gcc-x64",
+      "configurationProvider": "ms-vscode.cmake-tools"
+    },
+    {
+      "name": "Win32-MSVC",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "${workspaceFolder}/renderer/include",
+        "${workspaceFolder}/engine/include",
+        "${workspaceFolder}/editor/include",
+        "${workspaceFolder}/math/include",
+        "${workspaceFolder}/renderer/src",
+        "${workspaceFolder}/engine/src",
+        "${workspaceFolder}/editor/src",
+        "${workspaceFolder}/math/src",
+        "${workspaceFolder}/build/_deps/glfw-src/include",
+        "${env:VULKAN_SDK}/Include",
+        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/*/include",
+        "C:/Program Files (x86)/Windows Kits/10/Include/*/ucrt",
+        "C:/Program Files (x86)/Windows Kits/10/Include/*/um",
+        "C:/Program Files (x86)/Windows Kits/10/Include/*/shared"
+      ],
+      "defines": [
+        "GLFW_INCLUDE_VULKAN",
+        "VK_USE_PLATFORM_WIN32_KHR",
+        "_DEBUG",
+        "UNICODE",
+        "_UNICODE",
+        "_WIN32",
+        "_WIN64",
+        "_MSC_VER",
+        "_WIN32_WINNT=0x0601",
+        "N2ENGINE_DEBUG",
+        "__AVX__",
+        "__AVX2__",
+        "__SSE4_1__",
+        "__SSE2__"
+      ],
+      "compilerPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+      "cStandard": "c17",
+      "cppStandard": "c++20",
+      "intelliSenseMode": "windows-msvc-x64",
       "configurationProvider": "ms-vscode.cmake-tools"
     }
   ],

@@ -33,3 +33,8 @@ target_link_libraries(editor PRIVATE
     renderer 
     MathCore::math
 )
+
+if (NOT MSVC)
+    # experimental C++23 features for G++
+    target_link_libraries(editor PRIVATE "-lstdc++exp")
+endif()

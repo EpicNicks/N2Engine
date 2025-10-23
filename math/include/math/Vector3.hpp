@@ -1,5 +1,17 @@
 #pragma once
 
+// Define compiler-conditional macros for SIMD target attributes
+#if defined(__GNUC__) || defined(__clang__)
+#define TARGET_AVX __attribute__((target("avx")))
+#define TARGET_AVX2 __attribute__((target("avx2")))
+#define TARGET_FMA __attribute__((target("fma")))
+#else
+// MSVC doesn't need/support target attributes
+#define TARGET_AVX
+#define TARGET_AVX2
+#define TARGET_FMA
+#endif
+
 #include <cmath>
 #include <immintrin.h>
 #include <numbers>
@@ -842,7 +854,7 @@ namespace N2Engine
 
 // ===== AVX IMPLEMENTATIONS =====
 #ifdef __AVX__
-            __attribute__((target("avx"))) static Vector3 AddAVX(const Vector3 &a, const Vector3 &b)
+            TARGET_AVX static Vector3 AddAVX(const Vector3 &a, const Vector3 &b)
             {
                 Vector3 result;
                 __m256 a_extended = _mm256_castps128_ps256(a.simd_data);
@@ -853,7 +865,7 @@ namespace N2Engine
                 return result;
             }
 
-            __attribute__((target("avx"))) static Vector3 SubAVX(const Vector3 &a, const Vector3 &b)
+            TARGET_AVX static Vector3 SubAVX(const Vector3 &a, const Vector3 &b)
             {
                 Vector3 result;
                 __m256 a_extended = _mm256_castps128_ps256(a.simd_data);
@@ -864,7 +876,7 @@ namespace N2Engine
                 return result;
             }
 
-            __attribute__((target("avx"))) static Vector3 ScalarMulAVX(const Vector3 &v, float scalar)
+            TARGET_AVX static Vector3 ScalarMulAVX(const Vector3 &v, float scalar)
             {
                 Vector3 result;
                 __m256 v_extended = _mm256_castps128_ps256(v.simd_data);
@@ -875,7 +887,7 @@ namespace N2Engine
                 return result;
             }
 
-            __attribute__((target("avx"))) static void AddBatchAVX(const Vector3 *a, const Vector3 *b, Vector3 *result, size_t count)
+            TARGET_AVX static void AddBatchAVX(const Vector3 *a, const Vector3 *b, Vector3 *result, size_t count)
             {
                 size_t i = 0;
                 for (; i + 1 < count; i += 2)
@@ -903,7 +915,7 @@ namespace N2Engine
                 }
             }
 
-            __attribute__((target("avx"))) static void DotBatchAVX(const Vector3 *a, const Vector3 *b, float *result, size_t count)
+            TARGET_AVX static void DotBatchAVX(const Vector3 *a, const Vector3 *b, float *result, size_t count)
             {
                 size_t i = 0;
                 for (; i + 1 < count; i += 2)
@@ -936,7 +948,7 @@ namespace N2Engine
                 }
             }
 
-            __attribute__((target("avx"))) static void NormalizeBatchAVX(Vector3 *vectors, size_t count)
+            TARGET_AVX static void NormalizeBatchAVX(Vector3 *vectors, size_t count)
             {
                 size_t i = 0;
                 for (; i + 1 < count; i += 2)
@@ -970,7 +982,7 @@ namespace N2Engine
                 }
             }
 
-            __attribute__((target("avx"))) static void ProcessVector3ArrayAVX(const Vector3 *input, Vector3 *output, size_t count, float scalar)
+            TARGET_AVX static void ProcessVector3ArrayAVX(const Vector3 *input, Vector3 *output, size_t count, float scalar)
             {
                 size_t i = 0;
                 const size_t avx_batch_size = 8;

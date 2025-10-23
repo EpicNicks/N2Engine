@@ -26,7 +26,19 @@ set_target_properties(math PROPERTIES
     CXX_EXTENSIONS OFF
 )
 
-target_compile_options(math PUBLIC -msse2 -msse4.1 -mavx)
+if(MSVC)
+    # MSVC flags for SSE/AVX
+    target_compile_options(math PUBLIC 
+        /arch:AVX         # Enables AVX (includes SSE2, SSE4.1)
+    )
+else()
+    # GCC/Clang flags
+    target_compile_options(math PUBLIC 
+        -msse2 
+        -msse4.1 
+        -mavx
+    )
+endif()
 
 # Add any necessary libraries
 target_compile_definitions(math PRIVATE _USE_MATH_DEFINES)
