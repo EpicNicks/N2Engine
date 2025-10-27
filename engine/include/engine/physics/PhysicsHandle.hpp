@@ -18,7 +18,13 @@ namespace N2Engine
             {
                 return index == other.index && generation == other.generation;
             }
+            bool operator!=(const PhysicsBodyHandle &other) const
+            {
+                return !(*this == other);
+            }
         };
+
+        inline constexpr PhysicsBodyHandle INVALID_PHYSICS_HANDLE = PhysicsBodyHandle{};
     }
 }
 

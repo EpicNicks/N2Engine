@@ -333,7 +333,7 @@ void TestEngine()
                         {
                             inputAction
                                 ->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::W, Input::Key::S, Input::Key::A, Input::Key::D))
-                                .AddBinding(std::make_unique<Input::GamepadStickBinding>(application.GetWindow(), Input::GamepadAxis::LeftX, Input::GamepadAxis::LeftY, 0, 0.25, false, true));
+                                .AddBinding(std::make_unique<Input::GamepadStickBinding>(application.GetWindow(), Input::GamepadAxis::LeftX, Input::GamepadAxis::LeftY, 0, 0.25f, false, true));
                         })
                     .MakeInputAction(
                         "Camera Rotate",
@@ -341,7 +341,7 @@ void TestEngine()
                         {
                             inputAction
                                 ->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::Up, Input::Key::Down, Input::Key::Left, Input::Key::Right))
-                                .AddBinding(std::make_unique<Input::GamepadStickBinding>(application.GetWindow(), Input::GamepadAxis::RightX, Input::GamepadAxis::RightY, 0, 0.25));
+                                .AddBinding(std::make_unique<Input::GamepadStickBinding>(application.GetWindow(), Input::GamepadAxis::RightX, Input::GamepadAxis::RightY, 0, 0.25f));
                         })
                     .MakeInputAction(
                         "Quit",

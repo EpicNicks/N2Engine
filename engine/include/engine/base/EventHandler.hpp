@@ -42,6 +42,11 @@ namespace N2Engine
                 for (auto &sub : _subscribers)
                     sub.func(args...);
             }
+
+            size_t GetSubscriberCount() const
+            {
+                return _subscribers.size();
+            }
         };
 
     }

@@ -5,11 +5,16 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
+#include "engine/physics/physx/PhysXBackend.hpp"
 
 #include <math/MathRegistrar.hpp>
 #include <iostream>
 #include <string>
 #include <memory>
+
+#ifdef N2ENGINE_DEBUG
+#include <string_view>
+#endif
 
 using namespace N2Engine;
 
@@ -45,7 +50,7 @@ void Application::Init()
     static auto originalStdoutStream = std::make_unique<std::ostream>(originalStdout);
     // static auto originalStderrStream = std::make_unique<std::ostream>(originalStderr);
 
-    Logger::logEvent += [this](const std::string &msg, Logger::LogLevel level)
+    Logger::logEvent += [this](std::string_view msg, Logger::LogLevel level)
     {
         const char *levelStr;
         switch (level)
@@ -81,6 +86,20 @@ void Application::Init()
     _mainCamera->SetPosition(Math::Vector3{0.0f, 0.0f, 10.0f});
 
     Logger::Info("Camera initialized");
+
+    _3DphysicsBackend = std::make_unique<Physics::PhysXBackend>();
+    if (!_3DphysicsBackend->Initialize())
+    {
+        Logger::Error("Failed to initialize PhysX backend!");
+        Logger::Warn("Physics will be disabled. Game will continue without physics simulation.");
+        _3DphysicsBackend.reset();
+    }
+    else
+    {
+        Logger::Info("3D Physics backend initialized successfully");
+    }
+
+    Logger::Info("3D Physics backend initialized");
 }
 
 void Application::Init(std::unique_ptr<Scene> &&initialScene)
@@ -115,7 +134,7 @@ void Application::Run()
 
             while (fixedTimestepAccumulator >= Time::GetFixedUnscaledDeltaTime())
             {
-                curScene.FixedUpdate();
+                PhysicsUpdate(curScene);
                 fixedTimestepAccumulator -= Time::GetFixedUnscaledDeltaTime();
             }
             curScene.Update();
@@ -176,4 +195,26 @@ void Application::OnWindowResize(int width, int height)
 
         // Logger::Info("Window resized to " + std::to_string(width) + "x" + std::to_string(height) + ", aspect ratio: " + std::to_string(newAspect));
     }
+}
+
+void Application::PhysicsUpdate(Scene &scene)
+{
+    if (_3DphysicsBackend)
+    {
+        _3DphysicsBackend->ApplyPendingChanges();
+        scene.FixedUpdate();
+        _3DphysicsBackend->Update(Time::GetFixedDeltaTime());
+
+        // Sync physics results back to GameObjects
+        // notify collision events
+    }
+    else
+    {
+        scene.FixedUpdate();
+    }
+}
+
+Physics::IPhysicsBackend *Application::Get3DPhysicsBackend() const
+{
+    return _3DphysicsBackend.get();
 }

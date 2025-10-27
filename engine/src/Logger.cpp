@@ -1,24 +1,41 @@
 #include "engine/Logger.hpp"
 #include <iostream>
 
-N2Engine::Base::EventHandler<std::string, Logger::LogLevel> Logger::logEvent;
+using namespace N2Engine;
 
-void Logger::Log(const std::string &log, Logger::LogLevel level)
+N2Engine::Base::EventHandler<std::string_view, Logger::LogLevel> Logger::logEvent;
+bool Logger::broadcastUnbroadcastLogs = false;
+std::queue<Logger::QueuedLog> Logger::_logQueue;
+
+void Logger::Log(std::string_view log, Logger::LogLevel level)
 {
-    logEvent(log, level);
+    if (broadcastUnbroadcastLogs && logEvent.GetSubscriberCount() == 0)
+    {
+        _logQueue.push({std::string(log), level});
+    }
+    else
+    {
+        while (!_logQueue.empty())
+        {
+            auto &queuedLog = _logQueue.front();
+            logEvent(queuedLog.message, queuedLog.level);
+            _logQueue.pop();
+        }
+        logEvent(log, level);
+    }
 }
 
-void Logger::Info(const std::string &log)
+void Logger::Info(std::string_view log)
 {
     Log(log, LogLevel::Info);
 }
 
-void Logger::Warn(const std::string &log)
+void Logger::Warn(std::string_view log)
 {
     Log(log, LogLevel::Warn);
 }
 
-void Logger::Error(const std::string &log)
+void Logger::Error(std::string_view log)
 {
     Log(log, LogLevel::Error);
 }

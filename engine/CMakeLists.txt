@@ -16,6 +16,8 @@ target_include_directories(engine
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+target_link_directories(engine PRIVATE ${PHYSX_LIB_DIR})
+
 set_target_properties(engine PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
@@ -31,11 +33,21 @@ if(WIN32)
         ${PHYSX_ROOT}/physx/bin/win.x86_64.vc143.mt/debug
         ${PHYSX_ROOT}/physx/bin/win.x86_64.vc143.mt/release
     )
+    set_target_properties(engine PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
 endif()
+
+target_compile_definitions(
+    engine PUBLIC 
+        N2ENGINE_PHYSX_ENABLED=1
+        N2ENGINE_DEBUG=1
+)
 
 target_link_libraries(engine 
     PRIVATE 
         renderer
         MathCore::math
+    PUBLIC
         ${PHYSX_LIBS}
 )

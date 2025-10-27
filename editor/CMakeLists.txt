@@ -38,3 +38,15 @@ if (NOT MSVC)
     # experimental C++23 features for G++
     target_link_libraries(editor PRIVATE "-lstdc++exp")
 endif()
+
+if(WIN32)
+    add_custom_command(TARGET editor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PHYSX_ROOT}/physx/bin/win.x86_64.vc143.mt/$<LOWER_CASE:$<CONFIG>>/PhysX_64.dll"
+            "${PHYSX_ROOT}/physx/bin/win.x86_64.vc143.mt/$<LOWER_CASE:$<CONFIG>>/PhysXCommon_64.dll"
+            "${PHYSX_ROOT}/physx/bin/win.x86_64.vc143.mt/$<LOWER_CASE:$<CONFIG>>/PhysXFoundation_64.dll"
+            "${PHYSX_ROOT}/physx/bin/win.x86_64.vc143.mt/$<LOWER_CASE:$<CONFIG>>/PhysXCooking_64.dll"
+            $<TARGET_FILE_DIR:editor>
+        COMMENT "Copying PhysX DLLs to editor directory"
+    )
+endif()

@@ -3,6 +3,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include "engine/base/Asset.hpp"
+#include "engine/physics/PhysicsTypes.hpp"
 
 namespace N2Engine
 {
@@ -44,6 +45,15 @@ namespace N2Engine
         virtual void OnEnable() {}
         virtual void OnDisable() {}
         virtual void OnApplicationQuit() {}
+
+        // physics collision events
+        virtual void OnCollisionEnter(Physics::Collision collision) {}
+        virtual void OnCollisionStay(Physics::Collision collision) {}
+        virtual void OnCollisionExit(Physics::Collision collision) {}
+
+        virtual void OnTriggerEnter(Physics::Trigger trigger) {}
+        virtual void OnTriggerStay(Physics::Trigger trigger) {}
+        virtual void OnTriggerExit(Physics::Trigger trigger) {}
 
         bool IsDestroyed();
         bool GetIsActive();

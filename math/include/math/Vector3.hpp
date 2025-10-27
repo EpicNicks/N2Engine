@@ -5,11 +5,13 @@
 #define TARGET_AVX __attribute__((target("avx")))
 #define TARGET_AVX2 __attribute__((target("avx2")))
 #define TARGET_FMA __attribute__((target("fma")))
+#define TARGET_SSE4_1 __attribute__((target("sse4.1")))
 #else
 // MSVC doesn't need/support target attributes
 #define TARGET_AVX
 #define TARGET_AVX2
 #define TARGET_FMA
+#define TARGET_SSE4_1
 #endif
 
 #include <cmath>
@@ -37,7 +39,10 @@ namespace N2Engine
             {
                 struct
                 {
-                    float x, y, z, w; // w is padding for SIMD
+                    float x;
+                    float y;
+                    float z;
+                    float w; // padding for SIMD
                 };
                 __m128 simd_data;
             };
@@ -781,20 +786,20 @@ namespace N2Engine
 
 // ===== SSE4.1 IMPLEMENTATIONS =====
 #ifdef __SSE4_1__
-            __attribute__((target("sse4.1"))) static float DotSSE41(const Vector3 &a, const Vector3 &b)
+            TARGET_SSE4_1 static float DotSSE41(const Vector3 &a, const Vector3 &b)
             {
                 __m128 result = _mm_dp_ps(a.simd_data, b.simd_data, 0x71);
                 return _mm_cvtss_f32(result);
             }
 
-            __attribute__((target("sse4.1"))) static float LengthSSE41(const Vector3 &v)
+            TARGET_SSE4_1 static float LengthSSE41(const Vector3 &v)
             {
                 __m128 dot = _mm_dp_ps(v.simd_data, v.simd_data, 0x71);
                 __m128 length = _mm_sqrt_ss(dot);
                 return _mm_cvtss_f32(length);
             }
 
-            __attribute__((target("sse4.1"))) static Vector3 NormalizeSSE41(const Vector3 &v)
+            TARGET_SSE4_1 static Vector3 NormalizeSSE41(const Vector3 &v)
             {
                 __m128 length_sq = _mm_dp_ps(v.simd_data, v.simd_data, 0x7F);
 
@@ -813,13 +818,13 @@ namespace N2Engine
                 return result;
             }
 
-            __attribute__((target("sse4.1"))) static float DistanceSSE41(const Vector3 &a, const Vector3 &b)
+            TARGET_SSE4_1 static float DistanceSSE41(const Vector3 &a, const Vector3 &b)
             {
                 Vector3 diff = SubSSE2(a, b);
                 return LengthSSE41(diff);
             }
 
-            __attribute__((target("sse4.1"))) static Vector3 FloorSSE41(const Vector3 &v)
+            TARGET_SSE4_1 static Vector3 FloorSSE41(const Vector3 &v)
             {
                 Vector3 result;
                 result.simd_data = _mm_floor_ps(v.simd_data);
@@ -827,7 +832,7 @@ namespace N2Engine
                 return result;
             }
 
-            __attribute__((target("sse4.1"))) static Vector3 CeilSSE41(const Vector3 &v)
+            TARGET_SSE4_1 static Vector3 CeilSSE41(const Vector3 &v)
             {
                 Vector3 result;
                 result.simd_data = _mm_ceil_ps(v.simd_data);
@@ -835,7 +840,7 @@ namespace N2Engine
                 return result;
             }
 
-            __attribute__((target("sse4.1"))) static Vector3 RoundSSE41(const Vector3 &v)
+            TARGET_SSE4_1 static Vector3 RoundSSE41(const Vector3 &v)
             {
                 Vector3 result;
                 result.simd_data = _mm_round_ps(v.simd_data, _MM_FROUND_TO_NEAREST_INT);

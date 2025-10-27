@@ -2,7 +2,18 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug test_project",
+            "name": "Debug test_project (MSVC)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/Debug/test_project.exe",
+            "args": [],
+            "stopAtEntry": true,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "externalTerminal"
+        },
+        {
+            "name": "Debug test_project (GDB/MinGW)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/Debug/test_project/test_project.exe",
@@ -20,6 +31,17 @@
                     "ignoreFailures": true
                 }
             ]
+        },
+        {
+            "name": "Debug editor (MSVC)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/Debug/editor.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "integratedTerminal"
         }
     ]
 }

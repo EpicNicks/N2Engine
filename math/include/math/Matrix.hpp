@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <span>
 #include <immintrin.h>
 #include <stdexcept>
 #include <initializer_list>
@@ -58,6 +59,16 @@ namespace N2Engine::Math
         constexpr const T &operator()(std::size_t row, std::size_t col) const
         {
             return data[row * N + col];
+        }
+
+        constexpr std::span<T> operator[](std::size_t row)
+        {
+            return std::span<T>(data.data() + row * N, N);
+        }
+
+        constexpr std::span<const T> operator[](std::size_t row) const
+        {
+            return std::span<const T>(data.data() + row * N, N);
         }
 
         constexpr void fill(const T &value) { data.fill(value); }

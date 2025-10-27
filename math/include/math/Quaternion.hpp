@@ -4,6 +4,19 @@
 #include <immintrin.h>
 #include <numbers>
 
+#if defined(__GNUC__) || defined(__clang__)
+#define TARGET_AVX __attribute__((target("avx")))
+#define TARGET_AVX2 __attribute__((target("avx2")))
+#define TARGET_FMA __attribute__((target("fma")))
+#define TARGET_SSE4_1 __attribute__((target("sse4.1")))
+#else
+// MSVC doesn't need/support target attributes
+#define TARGET_AVX
+#define TARGET_AVX2
+#define TARGET_FMA
+#define TARGET_SSE4_1
+#endif
+
 #ifdef _WIN32
 #include <intrin.h>
 #elif defined(__GNUC__) || defined(__clang__)
@@ -331,20 +344,20 @@ namespace N2Engine
 
 // ===== SSE4.1 IMPLEMENTATIONS =====
 #ifdef __SSE4_1__
-            __attribute__((target("sse4.1"))) static float DotSSE41(const Quaternion &a, const Quaternion &b)
+            TARGET_SSE4_1 static float DotSSE41(const Quaternion &a, const Quaternion &b)
             {
                 __m128 result = _mm_dp_ps(a.simd_data, b.simd_data, 0xF1);
                 return _mm_cvtss_f32(result);
             }
 
-            __attribute__((target("sse4.1"))) static float LengthSSE41(const Quaternion &q)
+            TARGET_SSE4_1 static float LengthSSE41(const Quaternion &q)
             {
                 __m128 dot = _mm_dp_ps(q.simd_data, q.simd_data, 0xF1);
                 __m128 length = _mm_sqrt_ss(dot);
                 return _mm_cvtss_f32(length);
             }
 
-            __attribute__((target("sse4.1"))) static Quaternion NormalizeSSE41(const Quaternion &q)
+            TARGET_SSE4_1 static Quaternion NormalizeSSE41(const Quaternion &q)
             {
                 __m128 length_sq = _mm_dp_ps(q.simd_data, q.simd_data, 0xFF);
 

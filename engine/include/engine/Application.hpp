@@ -3,6 +3,7 @@
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/Window.hpp"
 #include "engine/Camera.hpp"
+#include "engine/physics/IPhysicsBackend.hpp"
 
 #include <string>
 #include <memory>
@@ -16,6 +17,7 @@ namespace N2Engine
     private:
         Window _window;
         std::unique_ptr<Camera> _mainCamera;
+        std::unique_ptr<Physics::IPhysicsBackend> _3DphysicsBackend = nullptr;
 
     private:
         Application() = default;
@@ -30,6 +32,7 @@ namespace N2Engine
         void Init();
         void Init(std::unique_ptr<Scene> &&initialScene);
         void Run();
+        void PhysicsUpdate(Scene &scene);
 
         static void Quit();
 
@@ -37,5 +40,7 @@ namespace N2Engine
         Window &GetWindow();
 
         void OnWindowResize(int width, int height);
+
+        Physics::IPhysicsBackend *Get3DPhysicsBackend() const;
     };
 }
