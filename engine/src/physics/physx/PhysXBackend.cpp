@@ -2,6 +2,8 @@
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/ICollider.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/GameObject.inl"
+#include "engine/Component.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
 #include "engine/Logger.hpp"
@@ -16,6 +18,8 @@
 
 #include <format>
 #include <algorithm>
+#include <memory>
+#include <vector>
 
 using namespace physx;
 #endif
@@ -952,20 +956,26 @@ namespace N2Engine::Physics
             {
                 Collision collisionForA = CreateCollisionData(event.pair, *event.data, true);
 
-                // Call on Rigidbody if present
-                if (dataA->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataA->rigidbody->OnCollisionEnter(collisionForA);
+                    comp->OnCollisionEnter(collisionForA);
                 }
 
-                // Call on all Colliders
-                for (ICollider *collider : dataA->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnCollisionEnter(collisionForA);
-                    }
-                }
+                // // Call on Rigidbody if present
+                // if (dataA->rigidbody)
+                // {
+                //     dataA->rigidbody->OnCollisionEnter(collisionForA);
+                // }
+
+                // // Call on all Colliders
+                // for (ICollider *collider : dataA->colliders)
+                // {
+                //     if (collider)
+                //     {
+                //         collider->OnCollisionEnter(collisionForA);
+                //     }
+                // }
             }
 
             // Call on Body B's components
@@ -973,20 +983,26 @@ namespace N2Engine::Physics
             {
                 Collision collisionForB = CreateCollisionData(event.pair, *event.data, false);
 
-                // Call on Rigidbody if present
-                if (dataB->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataB->rigidbody->OnCollisionEnter(collisionForB);
+                    comp->OnCollisionEnter(collisionForB);
                 }
 
-                // Call on all Colliders
-                for (ICollider *collider : dataB->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnCollisionEnter(collisionForB);
-                    }
-                }
+                // // Call on Rigidbody if present
+                // if (dataB->rigidbody)
+                // {
+                //     dataB->rigidbody->OnCollisionEnter(collisionForB);
+                // }
+
+                // // Call on all Colliders
+                // for (ICollider *collider : dataB->colliders)
+                // {
+                //     if (collider)
+                //     {
+                //         collider->OnCollisionEnter(collisionForB);
+                //     }
+                // }
             }
 
             // Clean up
@@ -1007,36 +1023,48 @@ namespace N2Engine::Physics
             {
                 Collision collisionForA = CreateCollisionData(pair, baseData, true);
 
-                if (dataA->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataA->rigidbody->OnCollisionStay(collisionForA);
+                    comp->OnCollisionStay(collisionForA);
                 }
 
-                for (ICollider *collider : dataA->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnCollisionStay(collisionForA);
-                    }
-                }
+                // if (dataA->rigidbody)
+                // {
+                //     dataA->rigidbody->OnCollisionStay(collisionForA);
+                // }
+
+                // for (ICollider *collider : dataA->colliders)
+                // {
+                //     if (collider)
+                //     {
+                //         collider->OnCollisionStay(collisionForA);
+                //     }
+                // }
             }
 
             if (dataB)
             {
                 Collision collisionForB = CreateCollisionData(pair, baseData, false);
 
-                if (dataB->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataB->rigidbody->OnCollisionStay(collisionForB);
+                    comp->OnCollisionStay(collisionForB);
                 }
 
-                for (ICollider *collider : dataB->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnCollisionStay(collisionForB);
-                    }
-                }
+                // if (dataB->rigidbody)
+                // {
+                //     dataB->rigidbody->OnCollisionStay(collisionForB);
+                // }
+
+                // for (ICollider *collider : dataB->colliders)
+                // {
+                //     if (collider)
+                //     {
+                //         collider->OnCollisionStay(collisionForB);
+                //     }
+                // }
             }
         }
 
@@ -1050,36 +1078,48 @@ namespace N2Engine::Physics
             {
                 Collision collisionForA = CreateCollisionData(event.pair, *event.data, true);
 
-                if (dataA->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataA->rigidbody->OnCollisionExit(collisionForA);
+                    comp->OnCollisionExit(collisionForA);
                 }
 
-                for (ICollider *collider : dataA->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnCollisionExit(collisionForA);
-                    }
-                }
+                // if (dataA->rigidbody)
+                // {
+                //     dataA->rigidbody->OnCollisionExit(collisionForA);
+                // }
+
+                // for (ICollider *collider : dataA->colliders)
+                // {
+                //     if (collider)
+                //     {
+                //         collider->OnCollisionExit(collisionForA);
+                //     }
+                // }
             }
 
             if (dataB)
             {
                 Collision collisionForB = CreateCollisionData(event.pair, *event.data, false);
 
-                if (dataB->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataB->rigidbody->OnCollisionExit(collisionForB);
+                    comp->OnCollisionExit(collisionForB);
                 }
 
-                for (ICollider *collider : dataB->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnCollisionExit(collisionForB);
-                    }
-                }
+                // if (dataB->rigidbody)
+                // {
+                //     dataB->rigidbody->OnCollisionExit(collisionForB);
+                // }
+
+                // for (ICollider *collider : dataB->colliders)
+                // {
+                //     if (collider)
+                //     {
+                //         collider->OnCollisionExit(collisionForB);
+                //     }
+                // }
             }
 
             delete event.data;
