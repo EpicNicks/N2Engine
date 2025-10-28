@@ -15,10 +15,10 @@ namespace N2Engine::Physics
      * Can exist without a Rigidbody (creates static body)
      * Can have Rigidbody (uses Rigidbody's body)
      */
-    class Collider : public Component
+    class ICollider : public Component
     {
     public:
-        virtual ~Collider() = default;
+        virtual ~ICollider() = default;
 
         void OnAttach() override;
         void OnDestroy() override;
@@ -40,6 +40,8 @@ namespace N2Engine::Physics
 
         virtual void OnTriggerEnter(const Physics::Trigger &trigger) {}
         virtual void OnTriggerExit(const Physics::Trigger &trigger) {}
+
+        void OnTransformChanged();
 
         // Internal
         Physics::PhysicsBodyHandle GetHandle() const { return _handle; }

@@ -9,8 +9,9 @@ namespace N2Engine::Physics
 {
     enum class BodyType
     {
-        Static, // Doesn't move (ground, walls)
-        Dynamic // Affected by forces (player, enemies, projectiles)
+        Static,   // Doesn't move (ground, walls)
+        Dynamic,  // Affected by forces (player, enemies, projectiles)
+        Kinematic // Moves via transform, not affected by forces (moving platforms)
     };
 
     /**
@@ -59,6 +60,9 @@ namespace N2Engine::Physics
         // ========== Trigger Callbacks ==========
         virtual void OnTriggerEnter(const Physics::Trigger &trigger) {}
         virtual void OnTriggerExit(const Physics::Trigger &trigger) {}
+
+        // ========== Notify Rigidbody of Transform Changes ==========
+        void OnTransformChanged();
 
     private:
         Physics::PhysicsBodyHandle _handle;

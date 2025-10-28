@@ -206,7 +206,9 @@ void Application::PhysicsUpdate(Scene &scene)
         _3DphysicsBackend->Update(Time::GetFixedDeltaTime());
 
         // Sync physics results back to GameObjects
+        _3DphysicsBackend->SyncTransforms();
         // notify collision events
+        _3DphysicsBackend->ProcessCollisionCallbacks();
     }
     else
     {

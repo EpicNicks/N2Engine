@@ -41,7 +41,7 @@ namespace N2Engine
 
 namespace N2Engine::Physics
 {
-    class Collider;
+    class ICollider;
     struct Collision;
     struct Trigger;
 
@@ -64,21 +64,17 @@ namespace N2Engine::Physics
         void SyncTransforms() override;
         void ProcessCollisionCallbacks() override;
 
-        PhysicsBodyHandle CreateDynamicBody(
-            const Math::Vector3 &position,
-            const Math::Quaternion &rotation,
-            float mass,
-            Rigidbody *rigidbody = nullptr) override;
+        PhysicsBodyHandle CreateDynamicBody(const Math::Vector3 &position, const Math::Quaternion &rotation, float mass, Rigidbody *rigidbody = nullptr, bool isKinematic = false) override;
 
-        PhysicsBodyHandle CreateStaticBody(
-            const Math::Vector3 &position,
-            const Math::Quaternion &rotation,
-            Rigidbody *rigidbody = nullptr) override;
+        PhysicsBodyHandle CreateStaticBody(const Math::Vector3 &position, const Math::Quaternion &rotation, Rigidbody *rigidbody = nullptr) override;
 
         void DestroyBody(PhysicsBodyHandle handle) override;
 
-        void RegisterCollider(PhysicsBodyHandle handle, Collider *collider) override;
-        void UnregisterCollider(PhysicsBodyHandle handle, Collider *collider) override;
+        void RegisterCollider(PhysicsBodyHandle handle, ICollider *collider) override;
+        void UnregisterCollider(PhysicsBodyHandle handle, ICollider *collider) override;
+
+        void SetBodyTransform(PhysicsBodyHandle handle, const Math::Vector3 &position, const Math::Quaternion &rotation) override;
+        void SetStaticBodyTransform(PhysicsBodyHandle handle, const Math::Vector3 &position, const Math::Quaternion &rotation) override;
 
         void AddSphereCollider(
             PhysicsBodyHandle body,
@@ -148,8 +144,8 @@ namespace N2Engine::Physics
             bool active = false;
 
             // Component references
-            Rigidbody *rigidbody = nullptr;    // Can be null (static objects)
-            std::vector<Collider *> colliders; // Can be multiple colliders per body
+            Rigidbody *rigidbody = nullptr;     // Can be null (static objects)
+            std::vector<ICollider *> colliders; // Can be multiple colliders per body
         };
 
         std::vector<BodyData> _bodies;

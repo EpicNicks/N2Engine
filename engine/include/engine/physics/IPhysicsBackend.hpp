@@ -8,7 +8,7 @@
 namespace N2Engine::Physics
 {
     class Rigidbody;
-    class Collider;
+    class ICollider;
     /**
      * Abstract interface for physics backends
      * Allows swapping between PhysX, Bullet, Jolt, etc.
@@ -31,11 +31,7 @@ namespace N2Engine::Physics
         virtual void ProcessCollisionCallbacks() = 0;
 
         // ========== Body Creation/Destruction ==========
-        virtual PhysicsBodyHandle CreateDynamicBody(
-            const Math::Vector3 &position,
-            const Math::Quaternion &rotation,
-            float mass,
-            Rigidbody *rigidbody = nullptr) = 0;
+        virtual PhysicsBodyHandle CreateDynamicBody(const Math::Vector3 &position, const Math::Quaternion &rotation, float mass, Rigidbody *rigidbody = nullptr, bool isKinematic = false) = 0;
 
         virtual PhysicsBodyHandle CreateStaticBody(
             const Math::Vector3 &position,
@@ -46,8 +42,15 @@ namespace N2Engine::Physics
 
         // ========== Component Registration ==========
         // Allow Colliders to register themselves with an existing body
-        virtual void RegisterCollider(PhysicsBodyHandle handle, Collider *collider) = 0;
-        virtual void UnregisterCollider(PhysicsBodyHandle handle, Collider *collider) = 0;
+        virtual void RegisterCollider(PhysicsBodyHandle handle, ICollider *collider) = 0;
+        virtual void UnregisterCollider(PhysicsBodyHandle handle, ICollider *collider) = 0;
+
+        // ========== Transform Updates (for Transform -> Physics syncing) ==========
+        // For kinematic bodies - smooth interpolated movement
+        virtual void SetBodyTransform(PhysicsBodyHandle handle, const Math::Vector3 &position, const Math::Quaternion &rotation) = 0;
+
+        // For static bodies - direct position update (expensive!)
+        virtual void SetStaticBodyTransform(PhysicsBodyHandle handle, const Math::Vector3 &position, const Math::Quaternion &rotation) = 0;
 
         // ========== Shape Attachment ==========
         virtual void AddSphereCollider(

@@ -3,32 +3,50 @@
 #include "engine/Application.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/Logger.hpp"
 
 #include <memory>
 
 namespace N2Engine::Physics
 {
-    void Collider::OnAttach()
+    void ICollider::OnAttach()
     {
         auto *backend = Application::GetInstance().Get3DPhysicsBackend();
         if (!backend)
             return;
 
+        // If we were already initialized, clean up first
+        if (_handle.IsValid())
+        {
+            // Destroy old body if we owned it
+            if (_ownsBody)
+            {
+                backend->DestroyBody(_handle);
+            }
+            _handle = Physics::INVALID_PHYSICS_HANDLE;
+            _ownsBody = false;
+        }
+
         // Check if GameObject has a Rigidbody
         std::shared_ptr<Rigidbody> rb = _gameObject.GetComponent<Rigidbody>();
 
-        if (rb && rb->GetHandle().IsValid())
+        if (rb && !rb->IsDestroyed() && rb->GetHandle().IsValid())
         {
             // Use Rigidbody's existing body
             _handle = rb->GetHandle();
             _ownsBody = false;
+
+            Logger::Info(std::format("Collider attached to Rigidbody on GameObject: {}", _gameObject.GetName()));
         }
         else
         {
             // No Rigidbody - create our own static body
             std::shared_ptr<Positionable> positionable = _gameObject.GetPositionable();
             if (!positionable)
-                return;
+            {
+                _gameObject.CreatePositionable();
+                positionable = _gameObject.GetPositionable();
+            }
 
             _handle = backend->CreateStaticBody(
                 positionable->GetPosition(),
@@ -37,9 +55,11 @@ namespace N2Engine::Physics
             );
 
             _ownsBody = true;
+
+            Logger::Info(std::format("Collider created static body for GameObject: {}", _gameObject.GetName()));
         }
 
-        // Attach the collider shape
+        // Attach the collider shape to the body
         if (_handle.IsValid())
         {
             AttachShape(backend);
@@ -49,19 +69,26 @@ namespace N2Engine::Physics
             {
                 backend->SetIsTrigger(_handle, true);
             }
+
+            // Register this collider with the backend
+            backend->RegisterCollider(_handle, this);
         }
     }
 
-    void Collider::OnDestroy()
+    void ICollider::OnDestroy()
     {
         if (!_handle.IsValid())
-            return;
-
-        // Only destroy body if we created it (not owned by Rigidbody)
-        if (_ownsBody)
         {
-            auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-            if (backend)
+            return;
+        }
+
+        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
+        if (backend)
+        {
+            backend->UnregisterCollider(_handle, this);
+
+            // Only destroy body if we created it (not owned by Rigidbody)
+            if (_ownsBody)
             {
                 backend->DestroyBody(_handle);
             }
@@ -71,7 +98,7 @@ namespace N2Engine::Physics
         _ownsBody = false;
     }
 
-    void Collider::SetIsTrigger(bool isTrigger)
+    void ICollider::SetIsTrigger(bool isTrigger)
     {
         _isTrigger = isTrigger;
 
@@ -85,10 +112,36 @@ namespace N2Engine::Physics
         }
     }
 
-    void Collider::SetMaterial(const Physics::PhysicsMaterial &material)
+    void ICollider::SetMaterial(const Physics::PhysicsMaterial &material)
     {
         _material = material;
         // TODO: Update existing shapes if already created
     }
 
-} // namespace N2Engine
+    void ICollider::OnTransformChanged()
+    {
+        if (_ownsBody)
+        { // This is a static collider
+            static int moveCount = 0;
+            if (++moveCount % 10 == 0)
+            {
+                Logger::Warn("Static collider being moved frequently. Consider using a Kinematic Rigidbody instead!");
+            }
+
+            auto *backend = Application::GetInstance().Get3DPhysicsBackend();
+            if (!backend)
+            {
+                return;
+            }
+            auto positionable = GetGameObject().GetPositionable();
+            if (!positionable)
+            {
+                GetGameObject().CreatePositionable();
+                positionable = GetGameObject().GetPositionable();
+            }
+            // Update PhysX static body (expensive)
+            backend->SetStaticBodyTransform(_handle, positionable->GetPosition(), positionable->GetRotation());
+        }
+    }
+
+}

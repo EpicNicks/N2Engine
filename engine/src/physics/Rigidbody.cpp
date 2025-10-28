@@ -1,6 +1,8 @@
 #include "engine/physics/Rigidbody.hpp"
+#include "engine/physics/ICollider.hpp"
 #include "engine/Application.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/GameObject.inl"
 #include "engine/Positionable.hpp"
 #include "engine/Logger.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
@@ -33,22 +35,22 @@ namespace N2Engine::Physics
             return;
         }
 
-        std::shared_ptr<Positionable> positionable = _gameObject.GetPositionable();
+        std::shared_ptr<Positionable> positionable = GetGameObject().GetPositionable();
         if (!positionable)
         {
-            Logger::Error("Rigidbody requires a Transform component");
-            return;
+            GetGameObject().CreatePositionable();
+            positionable = GetGameObject().GetPositionable();
         }
 
         // Create physics body based on type
-        if (_bodyType == BodyType::Dynamic)
+        if (_bodyType == BodyType::Dynamic || _bodyType == BodyType::Kinematic)
         {
             _handle = backend->CreateDynamicBody(
                 positionable->GetPosition(),
                 positionable->GetRotation(),
                 _mass,
-                this // Pass this component as the rigidbody pointer
-            );
+                this, // Pass this component as the rigidbody pointer
+                _bodyType == BodyType::Kinematic);
 
             if (_handle.IsValid())
             {
@@ -81,6 +83,12 @@ namespace N2Engine::Physics
         }
 
         _initialized = true;
+
+        std::vector<std::shared_ptr<ICollider>> colliders = GetGameObject().GetComponents<ICollider>();
+        for (const auto &collider : colliders)
+        {
+            collider->OnAttach();
+        }
     }
 
     void Rigidbody::OnDestroy()
@@ -272,4 +280,54 @@ namespace N2Engine::Physics
         return Math::Vector3::Zero();
     }
 
+    void Rigidbody::OnTransformChanged()
+    {
+        if (!_initialized)
+            return;
+
+        // Only sync Transform → Physics for KINEMATIC bodies
+        // Static bodies: shouldn't move (but we'll allow it with a warning)
+        // Dynamic bodies: physics controls them, not transforms
+
+        if (_bodyType == BodyType::Dynamic)
+        {
+            // Dynamic bodies are controlled BY physics, not by transform
+            // Ignore manual transform changes
+            return;
+        }
+
+        auto positionable = GetGameObject().GetPositionable();
+        if (!positionable)
+        {
+            GetGameObject().CreatePositionable();
+            positionable = GetGameObject().GetPositionable();
+        }
+
+        const Transform &globalTransform = positionable->GetGlobalTransform();
+
+        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
+        if (!backend)
+            return;
+
+        if (_bodyType == BodyType::Kinematic)
+        {
+            // KINEMATIC: Smooth script-controlled movement
+            backend->SetBodyTransform(
+                _handle,
+                globalTransform.GetPosition(),
+                globalTransform.GetRotation());
+        }
+        else if (_bodyType == BodyType::Static)
+        {
+            // STATIC: Allow but warn (expensive!)
+            backend->SetStaticBodyTransform(
+                _handle,
+                globalTransform.GetPosition(),
+                globalTransform.GetRotation());
+
+#ifdef N2ENGINE_DEBUG
+            Logger::Warn("Moving a Static Rigidbody! Consider using Kinematic type instead.");
+#endif
+        }
+    }
 }

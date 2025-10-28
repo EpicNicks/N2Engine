@@ -12,6 +12,11 @@ namespace N2Engine
 {
     class GameObject;
 
+    namespace Physics
+    {
+        class Rigidbody;
+    }
+
     /**
      * Handles spatial transformation for GameObjects that need positioning.
      * Uses lazy evaluation and dirty flagging for optimal performance.
@@ -25,6 +30,8 @@ namespace N2Engine
         // Only store local transform - global is calculated on demand
         Transform _localTransform;
         GameObject &_gameObject;
+
+        mutable std::shared_ptr<Physics::Rigidbody> _attachedRigidbody = nullptr;
 
         // Cached global transform with dirty tracking
         mutable Transform _cachedGlobalTransform;
@@ -41,6 +48,8 @@ namespace N2Engine
         void UpdateGlobalTransform() const;
         Transform CalculateGlobalTransform() const;
         std::shared_ptr<Positionable> GetParentPositionable() const;
+
+        void NotifyPhysicsComponents() const;
 
     public:
         explicit Positionable(GameObject &gameObject);

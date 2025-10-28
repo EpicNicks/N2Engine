@@ -1,6 +1,13 @@
 #include "engine/Positionable.hpp"
 #include "engine/GameObject.hpp"
+#include "engine/GameObject.inl"
 #include "engine/serialization/MathSerialization.hpp"
+
+#include "engine/physics/Rigidbody.hpp"
+#include "engine/physics/ICollider.hpp"
+
+#include <vector>
+#include <memory>
 
 using namespace N2Engine;
 using namespace N2Engine::Math;
@@ -136,6 +143,22 @@ void Positionable::SetLocalPositionAndRotation(const Math::Vector3 &position, co
     }
 }
 
+void Positionable::NotifyPhysicsComponents() const
+{
+    if (_attachedRigidbody && !_attachedRigidbody->IsDestroyed() || (_attachedRigidbody = _gameObject.GetComponent<Physics::Rigidbody>()))
+    {
+        _attachedRigidbody->OnTransformChanged();
+    }
+    else
+    {
+        std::vector<std::shared_ptr<Physics::ICollider>> colliders = _gameObject.GetComponents<Physics::ICollider>();
+        for (const auto &collider : colliders)
+        {
+            collider->OnTransformChanged();
+        }
+    }
+}
+
 void Positionable::SetPositionAndRotation(const Math::Vector3 &position, const Math::Quaternion &rotation)
 {
     auto parentPositionable = GetParentPositionable();
@@ -179,6 +202,7 @@ void Positionable::MarkGlobalTransformDirty() const
 {
     if (!_globalTransformDirty)
     {
+        NotifyPhysicsComponents();
         _globalTransformDirty = true;
         _hierarchyVersion++;
         MarkChildrenGlobalTransformDirty();
