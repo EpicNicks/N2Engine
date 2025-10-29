@@ -840,10 +840,12 @@ namespace N2Engine::Physics
             if (pairs[i].status & PxPairFlag::eNOTIFY_TOUCH_FOUND)
             {
                 _newTriggers.push_back({pair});
+                _activeTriggers.insert(pair);
             }
             else if (pairs[i].status & PxPairFlag::eNOTIFY_TOUCH_LOST)
             {
                 _endedTriggers.push_back({pair});
+                _activeTriggers.erase(pair);
             }
         }
     }
@@ -901,9 +903,7 @@ namespace N2Engine::Physics
         return collision;
     }
 
-    Trigger PhysXBackend::CreateTriggerData(
-        const CollisionPair &pair,
-        bool isForBodyA)
+    Trigger PhysXBackend::CreateTriggerData(const CollisionPair &pair, bool isForBodyA)
     {
         Trigger trigger;
 
@@ -951,7 +951,6 @@ namespace N2Engine::Physics
             BodyData *dataA = GetBodyData(event.pair.bodyA);
             BodyData *dataB = GetBodyData(event.pair.bodyB);
 
-            // Call on Body A's components
             if (dataA)
             {
                 Collision collisionForA = CreateCollisionData(event.pair, *event.data, true);
@@ -961,24 +960,7 @@ namespace N2Engine::Physics
                 {
                     comp->OnCollisionEnter(collisionForA);
                 }
-
-                // // Call on Rigidbody if present
-                // if (dataA->rigidbody)
-                // {
-                //     dataA->rigidbody->OnCollisionEnter(collisionForA);
-                // }
-
-                // // Call on all Colliders
-                // for (ICollider *collider : dataA->colliders)
-                // {
-                //     if (collider)
-                //     {
-                //         collider->OnCollisionEnter(collisionForA);
-                //     }
-                // }
             }
-
-            // Call on Body B's components
             if (dataB)
             {
                 Collision collisionForB = CreateCollisionData(event.pair, *event.data, false);
@@ -988,21 +970,6 @@ namespace N2Engine::Physics
                 {
                     comp->OnCollisionEnter(collisionForB);
                 }
-
-                // // Call on Rigidbody if present
-                // if (dataB->rigidbody)
-                // {
-                //     dataB->rigidbody->OnCollisionEnter(collisionForB);
-                // }
-
-                // // Call on all Colliders
-                // for (ICollider *collider : dataB->colliders)
-                // {
-                //     if (collider)
-                //     {
-                //         collider->OnCollisionEnter(collisionForB);
-                //     }
-                // }
             }
 
             // Clean up
@@ -1028,19 +995,6 @@ namespace N2Engine::Physics
                 {
                     comp->OnCollisionStay(collisionForA);
                 }
-
-                // if (dataA->rigidbody)
-                // {
-                //     dataA->rigidbody->OnCollisionStay(collisionForA);
-                // }
-
-                // for (ICollider *collider : dataA->colliders)
-                // {
-                //     if (collider)
-                //     {
-                //         collider->OnCollisionStay(collisionForA);
-                //     }
-                // }
             }
 
             if (dataB)
@@ -1052,19 +1006,6 @@ namespace N2Engine::Physics
                 {
                     comp->OnCollisionStay(collisionForB);
                 }
-
-                // if (dataB->rigidbody)
-                // {
-                //     dataB->rigidbody->OnCollisionStay(collisionForB);
-                // }
-
-                // for (ICollider *collider : dataB->colliders)
-                // {
-                //     if (collider)
-                //     {
-                //         collider->OnCollisionStay(collisionForB);
-                //     }
-                // }
             }
         }
 
@@ -1083,19 +1024,6 @@ namespace N2Engine::Physics
                 {
                     comp->OnCollisionExit(collisionForA);
                 }
-
-                // if (dataA->rigidbody)
-                // {
-                //     dataA->rigidbody->OnCollisionExit(collisionForA);
-                // }
-
-                // for (ICollider *collider : dataA->colliders)
-                // {
-                //     if (collider)
-                //     {
-                //         collider->OnCollisionExit(collisionForA);
-                //     }
-                // }
             }
 
             if (dataB)
@@ -1107,19 +1035,6 @@ namespace N2Engine::Physics
                 {
                     comp->OnCollisionExit(collisionForB);
                 }
-
-                // if (dataB->rigidbody)
-                // {
-                //     dataB->rigidbody->OnCollisionExit(collisionForB);
-                // }
-
-                // for (ICollider *collider : dataB->colliders)
-                // {
-                //     if (collider)
-                //     {
-                //         collider->OnCollisionExit(collisionForB);
-                //     }
-                // }
             }
 
             delete event.data;
@@ -1136,39 +1051,51 @@ namespace N2Engine::Physics
             {
                 Trigger triggerForA = CreateTriggerData(event.pair, true);
 
-                if (dataA->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataA->rigidbody->OnTriggerEnter(triggerForA);
-                }
-
-                for (ICollider *collider : dataA->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnTriggerEnter(triggerForA);
-                    }
+                    comp->OnTriggerEnter(triggerForA);
                 }
             }
 
             if (dataB)
             {
                 Trigger triggerForB = CreateTriggerData(event.pair, false);
-
-                if (dataB->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataB->rigidbody->OnTriggerEnter(triggerForB);
-                }
-
-                for (ICollider *collider : dataB->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnTriggerEnter(triggerForB);
-                    }
+                    comp->OnTriggerEnter(triggerForB);
                 }
             }
         }
         _newTriggers.clear();
+
+        // ===== OnTriggerStay =====
+        for (const auto &pair : _activeTriggers)
+        {
+            BodyData *dataA = GetBodyData(pair.bodyA);
+            BodyData *dataB = GetBodyData(pair.bodyB);
+
+            if (dataA)
+            {
+                Trigger triggerForA = CreateTriggerData(pair, true);
+                std::vector<std::shared_ptr<Component>> components = dataA->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
+                {
+                    comp->OnTriggerStay(triggerForA);
+                }
+            }
+
+            if (dataB)
+            {
+                Trigger triggerForB = CreateTriggerData(pair, false);
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
+                {
+                    comp->OnTriggerStay(triggerForB);
+                }
+            }
+        }
 
         // ===== OnTriggerExit =====
         for (const auto &event : _endedTriggers)
@@ -1179,36 +1106,20 @@ namespace N2Engine::Physics
             if (dataA)
             {
                 Trigger triggerForA = CreateTriggerData(event.pair, true);
-
-                if (dataA->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataA->rigidbody->OnTriggerExit(triggerForA);
-                }
-
-                for (ICollider *collider : dataA->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnTriggerExit(triggerForA);
-                    }
+                    comp->OnTriggerExit(triggerForA);
                 }
             }
 
             if (dataB)
             {
                 Trigger triggerForB = CreateTriggerData(event.pair, false);
-
-                if (dataB->rigidbody)
+                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                for (const auto &comp : components)
                 {
-                    dataB->rigidbody->OnTriggerExit(triggerForB);
-                }
-
-                for (ICollider *collider : dataB->colliders)
-                {
-                    if (collider)
-                    {
-                        collider->OnTriggerExit(triggerForB);
-                    }
+                    comp->OnTriggerExit(triggerForB);
                 }
             }
         }

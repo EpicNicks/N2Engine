@@ -217,8 +217,6 @@ namespace N2Engine::Physics
             }
         };
 
-        std::unordered_set<CollisionPair, CollisionPairHash> _activeCollisions;
-
         struct CollisionEvent
         {
             CollisionPair pair;
@@ -230,10 +228,12 @@ namespace N2Engine::Physics
             CollisionPair pair;
         };
 
-        std::vector<CollisionEvent> _newCollisions;   // OnCollisionEnter
+        std::vector<CollisionEvent> _newCollisions; // OnCollisionEnter
+        std::unordered_set<CollisionPair, CollisionPairHash> _activeCollisions;
         std::vector<CollisionEvent> _endedCollisions; // OnCollisionExit
         std::vector<TriggerEvent> _newTriggers;       // OnTriggerEnter
-        std::vector<TriggerEvent> _endedTriggers;     // OnTriggerExit
+        std::unordered_set<CollisionPair, CollisionPairHash> _activeTriggers;
+        std::vector<TriggerEvent> _endedTriggers; // OnTriggerExit
 
         // Helper to create Collision/Trigger data with resolved references
         Collision CreateCollisionData(
