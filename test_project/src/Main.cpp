@@ -202,8 +202,8 @@ void TestRenderer()
     }
 
     // Create material
-    uint32_t material = renderer->CreateMaterial(shaderProgram, 0); // No texture
-    if (material == 0)
+    Renderer::Common::IMaterial *material = renderer->CreateMaterial(shaderProgram, 0); // No texture
+    if (material == nullptr)
     {
         std::cerr << "Failed to create material" << std::endl;
         renderer->DestroyShaderProgram(shaderProgram);

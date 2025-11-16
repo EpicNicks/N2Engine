@@ -79,7 +79,7 @@ void Window::InitWindow()
     }
     else
     {
-        _renderer = std::make_unique<Renderer::OpenGL::OpenGLRenderer>();
+        _renderer = Renderer::OpenGL::CreateOpenGLRenderer();
         Logger::Log("Using OpenGL renderer", Logger::LogLevel::Info);
     }
 

@@ -105,17 +105,16 @@ namespace Renderer
             void DestroyMesh(uint32_t meshId) override;
             uint32_t CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) override;
             void DestroyTexture(uint32_t textureId) override;
-            uint32_t CreateMaterial(uint32_t shaderId, uint32_t textureId = 0) override;
-            void DestroyMaterial(uint32_t materialId) override;
+            Common::IMaterial *CreateMaterial(uint32_t shaderId, uint32_t textureId = 0) override;
+            void DestroyMaterial(Renderer::Common::IMaterial *material) override;
 
             uint32_t CreateShaderProgram(const char *vertexSource, const char *fragmentSource) override;
-            uint32_t LoadShaderProgram(const std::string &vertexPath, const std::string &fragmentPath) override;
             void UseShaderProgram(uint32_t shaderId) override;
             void DestroyShaderProgram(uint32_t shaderId) override;
             bool IsValidShader(uint32_t shaderId) const override;
 
             void SetViewProjection(const float *view, const float *projection) override;
-            void DrawMesh(uint32_t meshId, const float *modelMatrix, uint32_t materialId) override;
+            void DrawMesh(uint32_t meshId, const float *modelMatrix, Common::IMaterial *material) override;
             void DrawObjects(const std::vector<Renderer::Common::RenderObject> &objects) override;
             void OnResize(int width, int height) override;
 

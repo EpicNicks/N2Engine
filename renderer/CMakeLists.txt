@@ -79,6 +79,7 @@ target_link_libraries(renderer
         glfw
         OpenGL::GL
         Vulkan::Vulkan
+        MathCore::math
 )
 
 # Set standard

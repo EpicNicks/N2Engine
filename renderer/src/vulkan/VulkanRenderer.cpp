@@ -64,12 +64,12 @@ void Renderer::Vulkan::VulkanRenderer::DestroyTexture(uint32_t textureId)
 {
 }
 
-uint32_t Renderer::Vulkan::VulkanRenderer::CreateMaterial(uint32_t shaderId, uint32_t textureId)
+Renderer::Common::IMaterial *Renderer::Vulkan::VulkanRenderer::CreateMaterial(uint32_t shaderId, uint32_t textureId)
 {
     return 0;
 }
 
-void Renderer::Vulkan::VulkanRenderer::DestroyMaterial(uint32_t materialId)
+void Renderer::Vulkan::VulkanRenderer::DestroyMaterial(Renderer::Common::IMaterial *material)
 {
 }
 
@@ -77,7 +77,7 @@ void Renderer::Vulkan::VulkanRenderer::SetViewProjection(const float *view, cons
 {
 }
 
-void Renderer::Vulkan::VulkanRenderer::DrawMesh(uint32_t meshId, const float *modelMatrix, uint32_t materialId)
+void Renderer::Vulkan::VulkanRenderer::DrawMesh(uint32_t meshId, const float *modelMatrix, Renderer::Common::IMaterial *material)
 {
 }
 
@@ -754,12 +754,6 @@ uint32_t VulkanRenderer::CreateShaderProgram(const char *vertexSource, const cha
 {
     std::cerr << "VulkanRenderer::CreateShaderProgram not implemented yet" << std::endl;
     return 0; // Return 0 to indicate failure
-}
-
-uint32_t VulkanRenderer::LoadShaderProgram(const std::string &vertexPath, const std::string &fragmentPath)
-{
-    std::cerr << "VulkanRenderer::LoadShaderProgram not implemented yet" << std::endl;
-    return 0;
 }
 
 void VulkanRenderer::UseShaderProgram(uint32_t shaderId)

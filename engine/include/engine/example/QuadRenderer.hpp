@@ -1,11 +1,12 @@
 #pragma once
 
+#include <math/Vector3.hpp>
+#include <renderer/common/Renderer.hpp>
+#include <renderer/common/IMaterial.hpp>
+
 #include "engine/Component.hpp"
 #include "engine/IRenderable.hpp"
-#include "renderer/common/Renderer.hpp"
 #include "engine/common/Color.hpp"
-#include <math/Vector3.hpp>
-
 #include "engine/common/ScriptUtils.hpp"
 
 namespace N2Engine
@@ -16,7 +17,7 @@ namespace N2Engine
         {
         private:
             uint32_t _meshId = 0;
-            uint32_t _materialId = 0;
+            Renderer::Common::IMaterial *_material = nullptr;
             uint32_t _shaderId = 0;
             bool _resourcesInitialized = false;
 
