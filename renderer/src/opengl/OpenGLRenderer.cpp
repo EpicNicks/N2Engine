@@ -12,8 +12,7 @@ using namespace Renderer::OpenGL;
 
 OpenGLRenderer::OpenGLRenderer()
     : m_window(nullptr), m_width(0), m_height(0),
-      m_nextShaderId(1), m_currentShader(0),
-      m_nextMeshId(1), m_nextTextureId(1), m_wireframeEnabled(false)
+      m_currentShader(0), m_nextMeshId(1), m_nextTextureId(1), m_wireframeEnabled(false)
 {
     // Initialize matrices to identity
     memset(m_viewMatrix, 0, sizeof(m_viewMatrix));
@@ -123,9 +122,8 @@ uint32_t OpenGLRenderer::CreateShaderProgram(const char *vertexSource, const cha
         return 0;
     }
 
-    uint32_t shaderId = m_nextShaderId++;
-    m_shaderPrograms[shaderId] = shader;
-    return shaderId;
+    m_shaderPrograms[shader->GetId()] = shader;
+    return shader->GetId();
 }
 
 void OpenGLRenderer::UseShaderProgram(uint32_t shaderId)

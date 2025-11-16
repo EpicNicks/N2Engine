@@ -80,7 +80,6 @@ namespace Renderer::OpenGL
 
         // Shader storage - use shared_ptr so materials can share
         std::unordered_map<uint32_t, std::shared_ptr<OpenGLShader>> m_shaderPrograms;
-        uint32_t m_nextShaderId;
         uint32_t m_currentShader;
 
         // View/Projection matrices

@@ -34,11 +34,9 @@ namespace Renderer::OpenGL
         void SetFloat(const std::string &name, float value) override;
         void SetInt(const std::string &name, int value) override;
         void SetBool(const std::string &name, bool value) override;
-
         void SetVec2(const std::string &name, const N2Engine::Math::Vector2 &value) override;
         void SetVec3(const std::string &name, const N2Engine::Math::Vector3 &value) override;
         void SetVec4(const std::string &name, const N2Engine::Math::Vector4 &value) override;
-
         void SetMat4(const std::string &name, const N2Engine::Math::Matrix<float, 4, 4> &value) override;
 
         // Convenience overloads
