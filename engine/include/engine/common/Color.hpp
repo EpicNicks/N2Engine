@@ -18,6 +18,7 @@ namespace N2Engine
             float &a = vector[3];
 
             Color(const Color &other) : VectorN(other) {}
+            Color(const VectorN<float, 4> &other) : VectorN(other) {}
             Color &operator=(const Color &other);
 
             static Color White();
