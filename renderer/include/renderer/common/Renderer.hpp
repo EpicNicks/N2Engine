@@ -9,6 +9,7 @@
 #include <GLFW/glfw3.h>
 
 #include "renderer/common/IMaterial.hpp"
+#include "renderer/common/IShader.hpp"
 
 namespace Renderer::Common
 {
@@ -57,9 +58,9 @@ namespace Renderer::Common
         virtual void Present() = 0;
 
         // Shader management
-        virtual uint32_t CreateShaderProgram(const char *vertexSource, const char *fragmentSource) = 0;
-        virtual void UseShaderProgram(uint32_t shaderId) = 0;
-        virtual void DestroyShaderProgram(uint32_t shaderId) = 0;
+        virtual IShader *CreateShaderProgram(const char *vertexSource, const char *fragmentSource) = 0;
+        virtual void UseShaderProgram(IShader *shader) = 0;
+        virtual bool DestroyShaderProgram(IShader *shader) = 0;
         virtual bool IsValidShader(uint32_t shaderId) const = 0;
 
         // Resource management
@@ -67,7 +68,7 @@ namespace Renderer::Common
         virtual void DestroyMesh(uint32_t meshId) = 0;
         virtual uint32_t CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) = 0;
         virtual void DestroyTexture(uint32_t textureId) = 0;
-        virtual IMaterial *CreateMaterial(uint32_t shaderId, uint32_t textureId = 0) = 0;
+        virtual IMaterial *CreateMaterial(IShader *shader, uint32_t textureId = 0) = 0;
         virtual void DestroyMaterial(IMaterial *material) = 0;
 
         // Rendering
@@ -75,6 +76,9 @@ namespace Renderer::Common
         virtual void DrawMesh(uint32_t meshId, const float *modelMatrix, IMaterial *material) = 0;
         virtual void DrawObjects(const std::vector<RenderObject> &objects) = 0;
         virtual void OnResize(int width, int height) = 0;
+
+        virtual IShader *GetStandardUnlitShader() const = 0;
+        virtual IShader *GetStandardLitShader() const = 0;
 
         // Debug
         virtual void SetWireframe(bool enabled) = 0;

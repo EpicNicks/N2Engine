@@ -43,9 +43,9 @@ namespace Renderer::OpenGL
         void Clear(float r, float g, float b, float a) override;
 
         // Shader management
-        uint32_t CreateShaderProgram(const char *vertexSource, const char *fragmentSource) override;
-        void UseShaderProgram(uint32_t shaderId) override;
-        void DestroyShaderProgram(uint32_t shaderId) override;
+        Common::IShader *CreateShaderProgram(const char *vertexSource, const char *fragmentSource) override;
+        void UseShaderProgram(Common::IShader *shader) override;
+        bool DestroyShaderProgram(Common::IShader *shader) override;
         bool IsValidShader(uint32_t shaderId) const override;
 
         // Frame management
@@ -60,7 +60,7 @@ namespace Renderer::OpenGL
         void DestroyTexture(uint32_t textureId) override;
 
         // Updated material management
-        Common::IMaterial *CreateMaterial(uint32_t shaderId, uint32_t textureId = 0) override;
+        Common::IMaterial *CreateMaterial(Common::IShader *shader, uint32_t textureId = 0) override;
         void DestroyMaterial(Common::IMaterial *material) override;
 
         // Rendering - updated signature
@@ -73,10 +73,16 @@ namespace Renderer::OpenGL
         void SetWireframe(bool enabled) override;
         const char *GetRendererName() const override;
 
+        Common::IShader *GetStandardUnlitShader() const override;
+        Common::IShader *GetStandardLitShader() const override;
+
     private:
         GLFWwindow *m_window;
         uint32_t m_width;
         uint32_t m_height;
+
+        Common::IShader *m_standardUnlitShader;
+        Common::IShader *m_standardLitShader;
 
         // Shader storage - use shared_ptr so materials can share
         std::unordered_map<uint32_t, std::shared_ptr<OpenGLShader>> m_shaderPrograms;
@@ -108,6 +114,8 @@ namespace Renderer::OpenGL
         void SetMatrix4fv(GLint location, const float *matrix);
         GLenum GetOpenGLFormat(uint32_t channels);
         GLenum GetOpenGLInternalFormat(uint32_t channels);
+
+        void CreateStandardShaders();
     };
 
     std::unique_ptr<Common::IRenderer> CreateOpenGLRenderer();

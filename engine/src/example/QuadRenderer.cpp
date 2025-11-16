@@ -84,7 +84,7 @@ void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
         }
     )";
 
-    _shaderId = renderer->CreateShaderProgram(vertexShader, fragmentShader);
+    _shader = renderer->CreateShaderProgram(vertexShader, fragmentShader);
 
     // Create a simple quad (two triangles forming a square)
     Renderer::Common::MeshData quadData;
@@ -108,7 +108,7 @@ void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
     quadData.indices = {0, 1, 2, 0, 2, 3};
 
     _meshId = renderer->CreateMesh(quadData);
-    _material = renderer->CreateMaterial(_shaderId, 0); // No texture for now
+    _material = renderer->CreateMaterial(_shader, 0); // No texture for now
 }
 
 void QuadRenderer::Render(Renderer::Common::IRenderer *renderer)
@@ -174,10 +174,10 @@ void QuadRenderer::CleanupRenderResources(Renderer::Common::IRenderer *renderer)
         _material = nullptr;
     }
 
-    if (_shaderId != 0)
+    if (_shader != 0)
     {
-        renderer->DestroyShaderProgram(_shaderId); // Clean up the shader
-        _shaderId = 0;
+        renderer->DestroyShaderProgram(_shader); // Clean up the shader
+        _shader = 0;
     }
 
     _resourcesInitialized = false;

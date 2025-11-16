@@ -1,11 +1,11 @@
-#include "renderer/vulkan/VulkanRenderer.hpp"
-
 #include <cstring>
 #include <cstdint>
 #include <functional>
 #include <span>
 #include <iostream>
 #include <set>
+
+#include "renderer/vulkan/VulkanRenderer.hpp"
 
 using namespace Renderer::Vulkan;
 
@@ -64,7 +64,7 @@ void Renderer::Vulkan::VulkanRenderer::DestroyTexture(uint32_t textureId)
 {
 }
 
-Renderer::Common::IMaterial *Renderer::Vulkan::VulkanRenderer::CreateMaterial(uint32_t shaderId, uint32_t textureId)
+Renderer::Common::IMaterial *Renderer::Vulkan::VulkanRenderer::CreateMaterial(Renderer::Common::IShader *shader, uint32_t textureId)
 {
     return 0;
 }
@@ -750,23 +750,34 @@ bool Renderer::Vulkan::VulkanRenderer::CreateSyncObjects()
     return false;
 }
 
-uint32_t VulkanRenderer::CreateShaderProgram(const char *vertexSource, const char *fragmentSource)
+Renderer::Common::IShader *VulkanRenderer::CreateShaderProgram(const char *vertexSource, const char *fragmentSource)
 {
     std::cerr << "VulkanRenderer::CreateShaderProgram not implemented yet" << std::endl;
     return 0; // Return 0 to indicate failure
 }
 
-void VulkanRenderer::UseShaderProgram(uint32_t shaderId)
+void VulkanRenderer::UseShaderProgram(Renderer::Common::IShader *shaderId)
 {
     std::cerr << "VulkanRenderer::UseShaderProgram not implemented yet" << std::endl;
 }
 
-void VulkanRenderer::DestroyShaderProgram(uint32_t shaderId)
+bool VulkanRenderer::DestroyShaderProgram(Renderer::Common::IShader *shader)
 {
     std::cerr << "VulkanRenderer::DestroyShaderProgram not implemented yet" << std::endl;
+    return false;
 }
 
 bool VulkanRenderer::IsValidShader(uint32_t shaderId) const
 {
     return false; // No shaders are valid in stub implementation
+}
+
+Renderer::Common::IShader *VulkanRenderer::GetStandardUnlitShader() const
+{
+    return nullptr; // Stub implementation
+}
+
+Renderer::Common::IShader *VulkanRenderer::GetStandardLitShader() const
+{
+    return nullptr; // Stub implementation
 }

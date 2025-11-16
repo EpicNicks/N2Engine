@@ -1,15 +1,16 @@
 #pragma once
 
-#include "renderer/common/Renderer.hpp"
-
-#include <vulkan/vulkan.h>
-#include <GLFW/glfw3.h>
-
 #include <vector>
 #include <optional>
 #include <unordered_map>
 #include <string>
 #include <array>
+
+#include <vulkan/vulkan.h>
+#include <GLFW/glfw3.h>
+
+#include "renderer/common/Renderer.hpp"
+#include "renderer/common/IShader.hpp"
 
 namespace Renderer
 {
@@ -105,12 +106,12 @@ namespace Renderer
             void DestroyMesh(uint32_t meshId) override;
             uint32_t CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) override;
             void DestroyTexture(uint32_t textureId) override;
-            Common::IMaterial *CreateMaterial(uint32_t shaderId, uint32_t textureId = 0) override;
+            Common::IMaterial *CreateMaterial(Common::IShader *shader, uint32_t textureId = 0) override;
             void DestroyMaterial(Renderer::Common::IMaterial *material) override;
 
-            uint32_t CreateShaderProgram(const char *vertexSource, const char *fragmentSource) override;
-            void UseShaderProgram(uint32_t shaderId) override;
-            void DestroyShaderProgram(uint32_t shaderId) override;
+            Common::IShader *CreateShaderProgram(const char *vertexSource, const char *fragmentSource) override;
+            void UseShaderProgram(Common::IShader *shader) override;
+            bool DestroyShaderProgram(Common::IShader *shader) override;
             bool IsValidShader(uint32_t shaderId) const override;
 
             void SetViewProjection(const float *view, const float *projection) override;
@@ -124,6 +125,9 @@ namespace Renderer
             std::vector<GPUInfo> GetCompatibleGPUs();
             bool SelectGPU(VkPhysicalDevice device);
             VkPhysicalDevice GetRecommendedGPU(const std::vector<GPUInfo> &gpus);
+
+            virtual Common::IShader *GetStandardUnlitShader() const override;
+            virtual Common::IShader *GetStandardLitShader() const override;
 
         private:
             // Initialization

@@ -69,6 +69,8 @@ bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    CreateStandardShaders();
+
     return true;
 }
 
@@ -112,7 +114,7 @@ void OpenGLRenderer::Resize(uint32_t width, uint32_t height)
     glViewport(0, 0, width, height);
 }
 
-uint32_t OpenGLRenderer::CreateShaderProgram(const char *vertexSource, const char *fragmentSource)
+Renderer::Common::IShader *OpenGLRenderer::CreateShaderProgram(const char *vertexSource, const char *fragmentSource)
 {
     auto shader = std::make_shared<OpenGLShader>(); // shared_ptr instead of unique_ptr
 
@@ -123,32 +125,59 @@ uint32_t OpenGLRenderer::CreateShaderProgram(const char *vertexSource, const cha
     }
 
     m_shaderPrograms[shader->GetId()] = shader;
-    return shader->GetId();
+    return shader.get();
 }
 
-void OpenGLRenderer::UseShaderProgram(uint32_t shaderId)
+void OpenGLRenderer::UseShaderProgram(Common::IShader *shader)
 {
-    if (m_currentShader == shaderId)
-        return;
-
-    auto it = m_shaderPrograms.find(shaderId);
-    if (it != m_shaderPrograms.end())
+    if (!shader)
     {
-        it->second->Bind();
-        m_currentShader = shaderId;
+        return;
+    }
+    if (auto *openglShader = dynamic_cast<OpenGLShader *>(shader))
+    {
+        GLuint shaderId = openglShader->GetId();
+        if (m_currentShader != shaderId)
+        {
+            auto it = m_shaderPrograms.find(shaderId);
+            if (it != m_shaderPrograms.end())
+            {
+                it->second->Bind();
+                m_currentShader = shaderId;
+            }
+        }
+    }
+    else
+    {
+        std::cerr << "Error: Attempted to use a non-OpenGL shader with OpenGLRenderer." << std::endl;
     }
 }
 
-void OpenGLRenderer::DestroyShaderProgram(uint32_t shaderId)
+bool OpenGLRenderer::DestroyShaderProgram(Common::IShader *shader)
 {
-    auto it = m_shaderPrograms.find(shaderId);
-    if (it != m_shaderPrograms.end())
+    if (!shader)
     {
-        m_shaderPrograms.erase(it); // unique_ptr handles cleanup
-        if (m_currentShader == shaderId)
+        return false;
+    }
+    if (auto *openglShader = dynamic_cast<OpenGLShader *>(shader))
+    {
+        GLuint shaderId = openglShader->GetId();
+        auto it = m_shaderPrograms.find(shaderId);
+        if (it != m_shaderPrograms.end())
         {
-            m_currentShader = 0;
+            m_shaderPrograms.erase(it); // unique_ptr handles cleanup
+            if (m_currentShader == shaderId)
+            {
+                m_currentShader = 0;
+            }
+            return true;
         }
+        return false;
+    }
+    else
+    {
+        std::cerr << "Error: Attempted to destroy a non-OpenGL shader with OpenGLRenderer." << std::endl;
+        return false;
     }
 }
 
@@ -310,12 +339,28 @@ void OpenGLRenderer::DestroyTexture(uint32_t textureId)
     }
 }
 
-Renderer::Common::IMaterial *OpenGLRenderer::CreateMaterial(uint32_t shaderId, uint32_t textureId)
+Renderer::Common::IMaterial *OpenGLRenderer::CreateMaterial(Common::IShader *shader, uint32_t textureId)
 {
+    if (!shader)
+    {
+        std::cerr << "Null shader provided to CreateMaterial." << std::endl;
+        return nullptr;
+    }
+
+    auto *openglShader = dynamic_cast<OpenGLShader *>(shader);
+    if (!openglShader)
+    {
+        std::cerr << "Error: Attempted to create material with a non-OpenGL shader." << std::endl;
+        return nullptr;
+    }
+
+    uint32_t shaderId = openglShader->GetId();
+
+    // Ensure shader is managed by this renderer
     auto shaderIt = m_shaderPrograms.find(shaderId);
     if (shaderIt == m_shaderPrograms.end())
     {
-        std::cerr << "Invalid shader ID provided to CreateMaterial: " << shaderId << std::endl;
+        std::cerr << "Shader not managed by this renderer in CreateMaterial: " << shaderId << std::endl;
         return nullptr;
     }
 
@@ -550,6 +595,129 @@ GLenum OpenGLRenderer::GetOpenGLInternalFormat(uint32_t channels)
     default:
         return GL_RGB8;
     }
+}
+
+void OpenGLRenderer::CreateStandardShaders()
+{
+    // UNLIT SHADER - No lighting, just colors
+    const char *unlitVert = R"(
+        #version 330 core
+        layout (location = 0) in vec3 aPos;
+        layout (location = 1) in vec3 aNormal;
+        layout (location = 2) in vec2 aTexCoord;
+        layout (location = 3) in vec4 aColor;
+        
+        uniform mat4 uModel;
+        uniform mat4 uView;
+        uniform mat4 uProjection;
+        
+        out vec2 fragTexCoord;
+        
+        void main() {
+            gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+            fragTexCoord = aTexCoord;
+        }
+    )";
+
+    const char *unlitFrag = R"(
+        #version 330 core
+        
+        uniform vec4 uAlbedo;  // Material color
+        uniform sampler2D uTexture;
+        uniform bool uHasTexture;
+        
+        in vec2 fragTexCoord;
+        out vec4 FragColor;
+        
+        void main() {
+            vec4 color = uAlbedo;
+            if (uHasTexture) {
+                color *= texture(uTexture, fragTexCoord);
+            }
+            FragColor = color;
+        }
+    )";
+
+    m_standardUnlitShader = CreateShaderProgram(unlitVert, unlitFrag);
+
+    // STANDARD LIT SHADER - Simple directional + ambient
+    const char *litVert = R"(
+        #version 330 core
+        layout (location = 0) in vec3 aPos;
+        layout (location = 1) in vec3 aNormal;
+        layout (location = 2) in vec2 aTexCoord;
+        layout (location = 3) in vec4 aColor;
+        
+        uniform mat4 uModel;
+        uniform mat4 uView;
+        uniform mat4 uProjection;
+        
+        out vec3 fragNormal;
+        out vec3 fragWorldPos;
+        out vec2 fragTexCoord;
+        
+        void main() {
+            vec4 worldPos = uModel * vec4(aPos, 1.0);
+            fragWorldPos = worldPos.xyz;
+            fragNormal = mat3(uModel) * aNormal;  // Transform normal to world space
+            fragTexCoord = aTexCoord;
+            gl_Position = uProjection * uView * worldPos;
+        }
+    )";
+
+    const char *litFrag = R"(
+        #version 330 core
+        
+        // Material properties
+        uniform vec4 uAlbedo;
+        uniform sampler2D uTexture;
+        uniform bool uHasTexture;
+        
+        // Scene lighting (set by renderer each frame)
+        uniform vec3 uAmbientLight;
+        uniform vec3 uDirectionalLightDir;
+        uniform vec3 uDirectionalLightColor;
+        uniform float uDirectionalLightIntensity;
+        
+        in vec3 fragNormal;
+        in vec3 fragWorldPos;
+        in vec2 fragTexCoord;
+        
+        out vec4 FragColor;
+        
+        void main() {
+            // Get base color
+            vec4 albedo = uAlbedo;
+            if (uHasTexture) {
+                albedo *= texture(uTexture, fragTexCoord);
+            }
+            
+            // Ambient
+            vec3 ambient = uAmbientLight;
+            
+            // Directional light
+            vec3 N = normalize(fragNormal);
+            vec3 L = normalize(-uDirectionalLightDir);
+            float NdotL = max(dot(N, L), 0.0);
+            vec3 diffuse = uDirectionalLightColor * uDirectionalLightIntensity * NdotL;
+            
+            // Combine
+            vec3 lighting = ambient + diffuse;
+            FragColor = vec4(lighting * albedo.rgb, albedo.a);
+        }
+    )";
+
+    m_standardLitShader = CreateShaderProgram(litVert, litFrag);
+}
+
+Renderer::Common::IShader *OpenGLRenderer::GetStandardUnlitShader() const
+{
+    return m_standardUnlitShader;
+}
+
+Renderer::Common::IShader *OpenGLRenderer::GetStandardLitShader() const
+{
+    return m_standardLitShader;
 }
 
 // Factory function

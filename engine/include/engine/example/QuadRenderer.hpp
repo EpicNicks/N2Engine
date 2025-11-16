@@ -3,6 +3,7 @@
 #include <math/Vector3.hpp>
 #include <renderer/common/Renderer.hpp>
 #include <renderer/common/IMaterial.hpp>
+#include <renderer/common/IShader.hpp>
 
 #include "engine/Component.hpp"
 #include "engine/IRenderable.hpp"
@@ -18,7 +19,7 @@ namespace N2Engine
         private:
             uint32_t _meshId = 0;
             Renderer::Common::IMaterial *_material = nullptr;
-            uint32_t _shaderId = 0;
+            Renderer::Common::IShader *_shader = 0;
             bool _resourcesInitialized = false;
 
             Renderer::Common::IRenderer *_cachedRenderer = nullptr;

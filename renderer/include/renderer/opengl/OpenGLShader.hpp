@@ -39,10 +39,10 @@ namespace Renderer::OpenGL
         void SetVec4(const std::string &name, const N2Engine::Math::Vector4 &value) override;
         void SetMat4(const std::string &name, const N2Engine::Math::Matrix<float, 4, 4> &value) override;
 
-        // Convenience overloads
-        void SetVec2(const std::string &name, float x, float y) override;
-        void SetVec3(const std::string &name, float x, float y, float z) override;
-        void SetVec4(const std::string &name, float x, float y, float z, float w) override;
+        // convenience methods
+        void SetVec2(const std::string &name, float x, float y);
+        void SetVec3(const std::string &name, float x, float y, float z);
+        void SetVec4(const std::string &name, float x, float y, float z, float w);
 
         GLuint GetId() const;
         inline const ShaderUniforms &GetCommonUniforms() const { return _commonUniforms; }

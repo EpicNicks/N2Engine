@@ -11,6 +11,7 @@
 #include <engine/input/InputMapping.hpp>
 
 #include <renderer/opengl/OpenGLRenderer.hpp>
+#include <renderer/common/IShader.hpp>
 #include <GLFW/glfw3.h>
 
 #include <iostream>
@@ -190,7 +191,7 @@ void TestRenderer()
     }
 
     // Create shader program
-    uint32_t shaderProgram = renderer->CreateShaderProgram(vertexShaderSource, fragmentShaderSource);
+    Renderer::Common::IShader *shaderProgram = renderer->CreateShaderProgram(vertexShaderSource, fragmentShaderSource);
     if (shaderProgram == 0)
     {
         std::cerr << "Failed to create shader program" << std::endl;
