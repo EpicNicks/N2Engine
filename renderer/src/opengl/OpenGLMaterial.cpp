@@ -1,3 +1,7 @@
+#include <math/Vector2.hpp>
+#include <math/Vector3.hpp>
+#include <math/Vector4.hpp>
+
 #include "renderer/opengl/OpenGLMaterial.hpp"
 
 using namespace Renderer::OpenGL;
@@ -23,14 +27,29 @@ void OpenGLMaterial::SetVec2(const std::string &name, float x, float y)
     _vec2s[name] = {x, y};
 }
 
+void OpenGLMaterial::SetVec2(const std::string &name, N2Engine::Math::Vector2 &value)
+{
+    _vec2s[name] = {value.x, value.y};
+}
+
 void OpenGLMaterial::SetVec3(const std::string &name, float x, float y, float z)
 {
     _vec3s[name] = {x, y, z};
 }
 
+void OpenGLMaterial::SetVec3(const std::string &name, N2Engine::Math::Vector3 &value)
+{
+    _vec3s[name] = {value.x, value.y, value.z};
+}
+
 void OpenGLMaterial::SetVec4(const std::string &name, float x, float y, float z, float w)
 {
     _vec4s[name] = {x, y, z, w};
+}
+
+void OpenGLMaterial::SetVec4(const std::string &name, N2Engine::Math::Vector4 &value)
+{
+    _vec4s[name] = {value.x, value.y, value.z, value.w};
 }
 
 void Renderer::OpenGL::OpenGLMaterial::SetColor(const std::string &name, float r, float g, float b, float a)

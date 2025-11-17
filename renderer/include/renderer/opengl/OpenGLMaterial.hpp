@@ -23,8 +23,11 @@ namespace Renderer::OpenGL
         void SetFloat(const std::string &name, float value) override;
         void SetInt(const std::string &name, int value) override;
         void SetVec2(const std::string &name, float x, float y) override;
+        void SetVec2(const std::string &name, N2Engine::Math::Vector2 &value) override;
         void SetVec3(const std::string &name, float x, float y, float z) override;
+        void SetVec3(const std::string &name, N2Engine::Math::Vector3 &value) override;
         void SetVec4(const std::string &name, float x, float y, float z, float w) override;
+        void SetVec4(const std::string &name, N2Engine::Math::Vector4 &value) override;
         void SetColor(const std::string &name, float r, float g, float b, float a) override;
 
         bool IsValid() const override { return _shader && _shader->IsValid(); }
