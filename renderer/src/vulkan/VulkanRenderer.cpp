@@ -46,27 +46,27 @@ void Renderer::Vulkan::VulkanRenderer::Present()
 {
 }
 
-uint32_t Renderer::Vulkan::VulkanRenderer::CreateMesh(const Renderer::Common::MeshData &meshData)
+Renderer::Common::IMesh *Renderer::Vulkan::VulkanRenderer::CreateMesh(const Renderer::Common::MeshData &meshData)
 {
-    return 0;
+    return nullptr;
 }
 
-void Renderer::Vulkan::VulkanRenderer::DestroyMesh(uint32_t meshId)
-{
-}
-
-uint32_t Renderer::Vulkan::VulkanRenderer::CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels)
-{
-    return 0;
-}
-
-void Renderer::Vulkan::VulkanRenderer::DestroyTexture(uint32_t textureId)
+void Renderer::Vulkan::VulkanRenderer::DestroyMesh(Renderer::Common::IMesh *mesh)
 {
 }
 
-Renderer::Common::IMaterial *Renderer::Vulkan::VulkanRenderer::CreateMaterial(Renderer::Common::IShader *shader, uint32_t textureId)
+Renderer::Common::ITexture *Renderer::Vulkan::VulkanRenderer::CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels)
 {
-    return 0;
+    return nullptr;
+}
+
+void Renderer::Vulkan::VulkanRenderer::DestroyTexture(Renderer::Common::ITexture *texture)
+{
+}
+
+Renderer::Common::IMaterial *Renderer::Vulkan::VulkanRenderer::CreateMaterial(Renderer::Common::IShader *shader, Renderer::Common::ITexture *texture)
+{
+    return nullptr;
 }
 
 void Renderer::Vulkan::VulkanRenderer::DestroyMaterial(Renderer::Common::IMaterial *material)
@@ -77,7 +77,7 @@ void Renderer::Vulkan::VulkanRenderer::SetViewProjection(const float *view, cons
 {
 }
 
-void Renderer::Vulkan::VulkanRenderer::DrawMesh(uint32_t meshId, const float *modelMatrix, Renderer::Common::IMaterial *material)
+void Renderer::Vulkan::VulkanRenderer::DrawMesh(Renderer::Common::IMesh *mesh, const float *modelMatrix, Renderer::Common::IMaterial *material)
 {
 }
 
@@ -767,7 +767,7 @@ bool VulkanRenderer::DestroyShaderProgram(Renderer::Common::IShader *shader)
     return false;
 }
 
-bool VulkanRenderer::IsValidShader(uint32_t shaderId) const
+bool VulkanRenderer::IsValidShader(Renderer::Common::IShader *shader) const
 {
     return false; // No shaders are valid in stub implementation
 }

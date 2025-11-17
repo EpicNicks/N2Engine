@@ -40,51 +40,7 @@ void QuadRenderer::InitializeRenderResources(Renderer::Common::IRenderer *render
 
 void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
 {
-    // Vertex shader: Pass uniform color through to fragment shader
-    const char *vertexShader = R"(
-        #version 330 core
-        layout (location = 0) in vec3 aPos;
-        layout (location = 1) in vec3 aNormal;
-        layout (location = 2) in vec2 aTexCoord;
-        layout (location = 3) in vec4 aColor;
-        
-        uniform mat4 uModel;
-        uniform mat4 uView;
-        uniform mat4 uProjection;
-        uniform vec4 uColor;
-        
-        out vec4 vertexColor;
-        out vec3 fragNormal;
-        
-        void main() {
-            gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
-            vertexColor = uColor;
-            fragNormal = aNormal;
-        }
-    )";
-
-    // Fragment shader: Use the color passed from vertex shader
-    const char *fragmentShader = R"(
-        #version 330 core
-        
-        in vec4 vertexColor;
-        in vec3 fragNormal;
-        
-        out vec4 FragColor;
-        
-        void main() {
-            // Simple directional lighting
-            vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-            float diff = max(dot(normalize(fragNormal), lightDir), 0.0);
-            vec3 ambient = vec3(0.3);
-            vec3 lighting = ambient + diff * 0.7;
-            
-            // Apply lighting to the uniform color
-            FragColor = vec4(lighting * vertexColor.rgb, vertexColor.a);
-        }
-    )";
-
-    _shader = renderer->CreateShaderProgram(vertexShader, fragmentShader);
+    _shader = renderer->GetStandardUnlitShader();
 
     // Create a simple quad (two triangles forming a square)
     Renderer::Common::MeshData quadData;
@@ -107,7 +63,7 @@ void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
     // Two triangles: (0,1,2) and (0,2,3)
     quadData.indices = {0, 1, 2, 0, 2, 3};
 
-    _meshId = renderer->CreateMesh(quadData);
+    _mesh = renderer->CreateMesh(quadData);
     _material = renderer->CreateMaterial(_shader, 0); // No texture for now
 }
 
@@ -128,7 +84,7 @@ void QuadRenderer::Render(Renderer::Common::IRenderer *renderer)
         }
     }
 
-    if (_meshId == 0)
+    if (_mesh == 0)
     {
         return;
     }
@@ -151,10 +107,10 @@ void QuadRenderer::Render(Renderer::Common::IRenderer *renderer)
     // Combine: finalMatrix = worldMatrix * scaleMatrix
     Positionable::Matrix4 finalMatrix = worldMatrix * scaleMatrix;
 
-    _material->SetColor("uColor", _color.r, _color.g, _color.b, _color.a);
+    _material->SetColor("uAlbedo", _color.r, _color.g, _color.b, _color.a);
 
     // Pass the final matrix to the renderer
-    renderer->DrawMesh(_meshId, finalMatrix.Data(), _material);
+    renderer->DrawMesh(_mesh, finalMatrix.Data(), _material);
 }
 
 void QuadRenderer::CleanupRenderResources(Renderer::Common::IRenderer *renderer)
@@ -162,10 +118,10 @@ void QuadRenderer::CleanupRenderResources(Renderer::Common::IRenderer *renderer)
     if (!_resourcesInitialized || !renderer)
         return;
 
-    if (_meshId != 0)
+    if (_mesh != 0)
     {
-        renderer->DestroyMesh(_meshId);
-        _meshId = 0;
+        renderer->DestroyMesh(_mesh);
+        _mesh = 0;
     }
 
     if (_material != nullptr)

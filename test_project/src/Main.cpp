@@ -12,6 +12,8 @@
 
 #include <renderer/opengl/OpenGLRenderer.hpp>
 #include <renderer/common/IShader.hpp>
+#include <renderer/common/IMesh.hpp>
+#include <renderer/common/IMaterial.hpp>
 #include <GLFW/glfw3.h>
 
 #include <iostream>
@@ -180,7 +182,7 @@ void TestRenderer()
     triangleData.indices = {0, 1, 2};
 
     // Create mesh
-    uint32_t triangleMesh = renderer->CreateMesh(triangleData);
+    Renderer::Common::IMesh *triangleMesh = renderer->CreateMesh(triangleData);
     if (triangleMesh == 0)
     {
         std::cerr << "Failed to create triangle mesh" << std::endl;

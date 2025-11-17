@@ -5,12 +5,16 @@
 #include <unordered_map>
 #include <string>
 #include <array>
+#include <memory>
 
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 
 #include "renderer/common/Renderer.hpp"
 #include "renderer/common/IShader.hpp"
+#include "renderer/common/IMesh.hpp"
+#include "renderer/common/ITexture.hpp"
+#include "renderer/common/IMaterial.hpp"
 
 namespace Renderer
 {
@@ -49,29 +53,6 @@ namespace Renderer
             void *mapped = nullptr;
         };
 
-        struct VulkanTexture
-        {
-            VkImage image = VK_NULL_HANDLE;
-            VkDeviceMemory memory = VK_NULL_HANDLE;
-            VkImageView view = VK_NULL_HANDLE;
-            VkSampler sampler = VK_NULL_HANDLE;
-            uint32_t width = 0;
-            uint32_t height = 0;
-        };
-
-        struct VulkanMesh
-        {
-            VulkanBuffer vertexBuffer;
-            VulkanBuffer indexBuffer;
-            uint32_t indexCount = 0;
-        };
-
-        struct VulkanMaterial
-        {
-            uint32_t textureId;
-            VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-        };
-
         struct GPUInfo
         {
             VkPhysicalDevice device;
@@ -85,6 +66,12 @@ namespace Renderer
             uint32_t apiVersion;
             VkPhysicalDeviceLimits limits;
         };
+
+        // Forward declarations for Vulkan implementations
+        class VulkanMesh;
+        class VulkanTexture;
+        class VulkanMaterial;
+        class VulkanShader;
 
         class VulkanRenderer : public Renderer::Common::IRenderer
         {
@@ -102,21 +89,24 @@ namespace Renderer
             void EndFrame() override;
             void Present() override;
 
-            uint32_t CreateMesh(const Renderer::Common::MeshData &meshData) override;
-            void DestroyMesh(uint32_t meshId) override;
-            uint32_t CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) override;
-            void DestroyTexture(uint32_t textureId) override;
-            Common::IMaterial *CreateMaterial(Common::IShader *shader, uint32_t textureId = 0) override;
-            void DestroyMaterial(Renderer::Common::IMaterial *material) override;
+            // Resource management - updated to use interface pointers
+            Common::IMesh *CreateMesh(const Common::MeshData &meshData) override;
+            void DestroyMesh(Common::IMesh *mesh) override;
+
+            Common::ITexture *CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) override;
+            void DestroyTexture(Common::ITexture *texture) override;
+
+            Common::IMaterial *CreateMaterial(Common::IShader *shader, Common::ITexture *texture = nullptr) override;
+            void DestroyMaterial(Common::IMaterial *material) override;
 
             Common::IShader *CreateShaderProgram(const char *vertexSource, const char *fragmentSource) override;
             void UseShaderProgram(Common::IShader *shader) override;
             bool DestroyShaderProgram(Common::IShader *shader) override;
-            bool IsValidShader(uint32_t shaderId) const override;
+            bool IsValidShader(Common::IShader *shader) const override;
 
             void SetViewProjection(const float *view, const float *projection) override;
-            void DrawMesh(uint32_t meshId, const float *modelMatrix, Common::IMaterial *material) override;
-            void DrawObjects(const std::vector<Renderer::Common::RenderObject> &objects) override;
+            void DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material) override;
+            void DrawObjects(const std::vector<Common::RenderObject> &objects) override;
             void OnResize(int width, int height) override;
 
             void SetWireframe(bool enabled) override;
@@ -126,8 +116,8 @@ namespace Renderer
             bool SelectGPU(VkPhysicalDevice device);
             VkPhysicalDevice GetRecommendedGPU(const std::vector<GPUInfo> &gpus);
 
-            virtual Common::IShader *GetStandardUnlitShader() const override;
-            virtual Common::IShader *GetStandardLitShader() const override;
+            Common::IShader *GetStandardUnlitShader() const override;
+            Common::IShader *GetStandardLitShader() const override;
 
         private:
             // Initialization
@@ -236,13 +226,15 @@ namespace Renderer
             VkDeviceMemory _depthImageMemory = VK_NULL_HANDLE;
             VkImageView _depthImageView = VK_NULL_HANDLE;
 
-            // Resource storage
-            std::unordered_map<uint32_t, VulkanMesh> _meshes;
-            std::unordered_map<uint32_t, VulkanTexture> _textures;
-            std::unordered_map<uint32_t, VulkanMaterial> _materials;
-            uint32_t _nextMeshId = 1;
-            uint32_t _nextTextureId = 1;
-            uint32_t _nextMaterialId = 1;
+            // Resource storage doesn't exist yet
+            // std::unordered_map<Common::IShader *, std::shared_ptr<VulkanShader>> _shaderPrograms;
+            // std::unordered_map<Common::IMesh *, std::unique_ptr<VulkanMesh>> _meshes;
+            // std::unordered_map<Common::ITexture *, std::unique_ptr<VulkanTexture>> _textures;
+            // std::unordered_map<Common::IMaterial *, std::unique_ptr<VulkanMaterial>> _materials;
+
+            // Standard shaders
+            Common::IShader *_standardUnlitShader = nullptr;
+            Common::IShader *_standardLitShader = nullptr;
 
             // Frame state
             uint32_t _currentFrame = 0;

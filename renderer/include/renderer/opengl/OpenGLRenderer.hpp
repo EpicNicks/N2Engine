@@ -3,7 +3,9 @@
 
 #include "renderer/common/Renderer.hpp"
 #include "renderer/opengl/OpenGLShader.hpp"
-#include "renderer/opengl/OpenGLMaterial.hpp" // Add this
+#include "renderer/opengl/OpenGLMaterial.hpp"
+#include "renderer/opengl/OpenGLMesh.hpp"
+#include "renderer/opengl/OpenGLTexture.hpp"
 
 #include <unordered_map>
 #include <string>
@@ -46,7 +48,7 @@ namespace Renderer::OpenGL
         Common::IShader *CreateShaderProgram(const char *vertexSource, const char *fragmentSource) override;
         void UseShaderProgram(Common::IShader *shader) override;
         bool DestroyShaderProgram(Common::IShader *shader) override;
-        bool IsValidShader(uint32_t shaderId) const override;
+        bool IsValidShader(Common::IShader *shader) const override;
 
         // Frame management
         void BeginFrame() override;
@@ -54,18 +56,18 @@ namespace Renderer::OpenGL
         void Present() override;
 
         // Resource management
-        uint32_t CreateMesh(const Common::MeshData &meshData) override;
-        void DestroyMesh(uint32_t meshId) override;
-        uint32_t CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) override;
-        void DestroyTexture(uint32_t textureId) override;
+        Common::IMesh *CreateMesh(const Common::MeshData &meshData) override;
+        void DestroyMesh(Common::IMesh *mesh) override;
+        Common::ITexture *CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) override;
+        void DestroyTexture(Common::ITexture *texture) override;
 
         // Updated material management
-        Common::IMaterial *CreateMaterial(Common::IShader *shader, uint32_t textureId = 0) override;
+        Common::IMaterial *CreateMaterial(Common::IShader *shader, Common::ITexture *texture = nullptr) override;
         void DestroyMaterial(Common::IMaterial *material) override;
 
         // Rendering - updated signature
         void SetViewProjection(const float *view, const float *projection) override;
-        void DrawMesh(uint32_t meshId, const float *modelMatrix, Common::IMaterial *material) override;
+        void DrawMesh(Common::IMesh *meshId, const float *modelMatrix, Common::IMaterial *material) override;
         void DrawObjects(const std::vector<Common::RenderObject> &objects) override;
         void OnResize(int width, int height) override;
 
@@ -84,24 +86,17 @@ namespace Renderer::OpenGL
         Common::IShader *m_standardUnlitShader;
         Common::IShader *m_standardLitShader;
 
-        // Shader storage - use shared_ptr so materials can share
-        std::unordered_map<uint32_t, std::shared_ptr<OpenGLShader>> m_shaderPrograms;
-        uint32_t m_currentShader;
-
         // View/Projection matrices
         float m_viewMatrix[16];
         float m_projectionMatrix[16];
 
-        // Resource containers
-        std::unordered_map<uint32_t, Mesh> m_meshes;
-        std::unordered_map<uint32_t, Texture> m_textures;
+        uint32_t m_currentShader;
 
-        // Materials - store as unique_ptr, return raw pointers
-        std::vector<std::unique_ptr<OpenGLMaterial>> m_materials;
-
-        // Resource ID counters
-        uint32_t m_nextMeshId;
-        uint32_t m_nextTextureId;
+        // resource containers
+        std::unordered_map<Common::IShader *, std::shared_ptr<OpenGLShader>> m_shaderPrograms;
+        std::unordered_map<Common::IMesh *, std::unique_ptr<OpenGLMesh>> m_meshes;
+        std::unordered_map<Common::ITexture *, std::unique_ptr<OpenGLTexture>> m_textures;
+        std::unordered_map<Common::IMaterial *, std::unique_ptr<OpenGLMaterial>> m_materials;
 
         // State
         bool m_wireframeEnabled;

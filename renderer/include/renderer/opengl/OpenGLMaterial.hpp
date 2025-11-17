@@ -7,14 +7,16 @@
 #include <string>
 
 #include "renderer/common/IMaterial.hpp"
+#include "renderer/common/ITexture.hpp"
 #include "renderer/opengl/OpenGLShader.hpp"
+#include "renderer/opengl/OpenGLTexture.hpp"
 
 namespace Renderer::OpenGL
 {
     class OpenGLMaterial : public Common::IMaterial
     {
     public:
-        OpenGLMaterial(std::shared_ptr<OpenGLShader> shader, uint32_t shaderId, uint32_t textureId = 0);
+        OpenGLMaterial(std::shared_ptr<OpenGLShader> shader, Common::ITexture *texture = nullptr);
         ~OpenGLMaterial() override = default;
 
         // IMaterial interface implementation
@@ -24,20 +26,18 @@ namespace Renderer::OpenGL
         void SetVec3(const std::string &name, float x, float y, float z) override;
         void SetVec4(const std::string &name, float x, float y, float z, float w) override;
         void SetColor(const std::string &name, float r, float g, float b, float a) override;
-        void SetTexture(uint32_t textureId) override;
 
-        uint32_t GetShaderId() const override { return _shaderId; }
-        uint32_t GetTextureId() const override { return _textureId; }
         bool IsValid() const override { return _shader && _shader->IsValid(); }
 
         // Internal use by renderer
         void Apply(); // Binds shader and applies all properties
         OpenGLShader *GetShader() const { return _shader.get(); }
+        OpenGLTexture *GetTexture() const { return _texture; }
+        void SetTexture(Common::ITexture *texture) override;
 
     private:
         std::shared_ptr<OpenGLShader> _shader;
-        uint32_t _shaderId; // Store ID for GetShaderId()
-        uint32_t _textureId;
+        OpenGLTexture *_texture;
 
         // Property storage
         std::unordered_map<std::string, float> _floats;

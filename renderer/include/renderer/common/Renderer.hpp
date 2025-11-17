@@ -8,35 +8,16 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+#include "renderer/common/RenderTypes.hpp"
 #include "renderer/common/IMaterial.hpp"
 #include "renderer/common/IShader.hpp"
+#include "renderer/common/IMesh.hpp"
 
 namespace Renderer::Common
 {
-    struct Vertex
-    {
-        float position[3];
-        float normal[3];
-        float texCoord[2];
-        float color[4];
-    };
-
-    struct MeshData
-    {
-        std::vector<Vertex> vertices;
-        std::vector<uint32_t> indices;
-    };
-
-    struct Transform
-    {
-        float model[16];
-        float view[16];
-        float projection[16];
-    };
-
     struct RenderObject
     {
-        uint32_t meshId;
+        IMesh *mesh;
         Transform transform;
         IMaterial *material;
     };
@@ -61,19 +42,19 @@ namespace Renderer::Common
         virtual IShader *CreateShaderProgram(const char *vertexSource, const char *fragmentSource) = 0;
         virtual void UseShaderProgram(IShader *shader) = 0;
         virtual bool DestroyShaderProgram(IShader *shader) = 0;
-        virtual bool IsValidShader(uint32_t shaderId) const = 0;
+        virtual bool IsValidShader(IShader *shader) const = 0;
 
         // Resource management
-        virtual uint32_t CreateMesh(const MeshData &meshData) = 0;
-        virtual void DestroyMesh(uint32_t meshId) = 0;
-        virtual uint32_t CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) = 0;
-        virtual void DestroyTexture(uint32_t textureId) = 0;
-        virtual IMaterial *CreateMaterial(IShader *shader, uint32_t textureId = 0) = 0;
+        virtual IMesh *CreateMesh(const MeshData &meshData) = 0;
+        virtual void DestroyMesh(IMesh *mesh) = 0;
+        virtual ITexture *CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) = 0;
+        virtual void DestroyTexture(ITexture *texture) = 0;
+        virtual IMaterial *CreateMaterial(IShader *shader, ITexture *texture = nullptr) = 0;
         virtual void DestroyMaterial(IMaterial *material) = 0;
 
         // Rendering
         virtual void SetViewProjection(const float *view, const float *projection) = 0;
-        virtual void DrawMesh(uint32_t meshId, const float *modelMatrix, IMaterial *material) = 0;
+        virtual void DrawMesh(IMesh *mesh, const float *modelMatrix, IMaterial *material) = 0;
         virtual void DrawObjects(const std::vector<RenderObject> &objects) = 0;
         virtual void OnResize(int width, int height) = 0;
 

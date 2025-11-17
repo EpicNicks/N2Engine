@@ -7,12 +7,13 @@
 
 #include "renderer/opengl/OpenGLRenderer.hpp"
 #include "renderer/opengl/OpenGLShader.hpp"
+#include "renderer/opengl/OpenGLMesh.hpp"
 
 using namespace Renderer::OpenGL;
 
 OpenGLRenderer::OpenGLRenderer()
     : m_window(nullptr), m_width(0), m_height(0),
-      m_currentShader(0), m_nextMeshId(1), m_nextTextureId(1), m_wireframeEnabled(false)
+      m_currentShader(0), m_wireframeEnabled(false)
 {
     // Initialize matrices to identity
     memset(m_viewMatrix, 0, sizeof(m_viewMatrix));
@@ -76,35 +77,10 @@ bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32
 
 void OpenGLRenderer::Shutdown()
 {
-    // Clean up materials first
-    m_materials.clear();
-
-    // Clean up meshes
-    for (auto &pair : m_meshes)
-    {
-        if (pair.second.isValid)
-        {
-            glDeleteVertexArrays(1, &pair.second.VAO);
-            glDeleteBuffers(1, &pair.second.VBO);
-            glDeleteBuffers(1, &pair.second.EBO);
-        }
-    }
-    m_meshes.clear();
-
-    // Clean up textures
-    for (auto &pair : m_textures)
-    {
-        if (pair.second.isValid)
-        {
-            glDeleteTextures(1, &pair.second.handle);
-        }
-    }
+    m_materials.clear(); // Destroy materials first
+    m_meshes.clear();    // Then meshes
     m_textures.clear();
-
-    // Clean up shader programs
-    m_shaderPrograms.clear(); // shared_ptr handles cleanup
-
-    m_currentShader = 0;
+    m_shaderPrograms.clear();
 }
 
 void OpenGLRenderer::Resize(uint32_t width, uint32_t height)
@@ -116,16 +92,17 @@ void OpenGLRenderer::Resize(uint32_t width, uint32_t height)
 
 Renderer::Common::IShader *OpenGLRenderer::CreateShaderProgram(const char *vertexSource, const char *fragmentSource)
 {
-    auto shader = std::make_shared<OpenGLShader>(); // shared_ptr instead of unique_ptr
+    auto shader = std::make_shared<OpenGLShader>();
 
     if (!shader->LoadFromStrings(vertexSource, fragmentSource))
     {
         std::cerr << "Failed to create shader program" << std::endl;
-        return 0;
+        return nullptr;
     }
 
-    m_shaderPrograms[shader->GetId()] = shader;
-    return shader.get();
+    Common::IShader *ptr = shader.get();
+    m_shaderPrograms[ptr] = shader;
+    return ptr;
 }
 
 void OpenGLRenderer::UseShaderProgram(Common::IShader *shader)
@@ -134,22 +111,19 @@ void OpenGLRenderer::UseShaderProgram(Common::IShader *shader)
     {
         return;
     }
-    if (auto *openglShader = dynamic_cast<OpenGLShader *>(shader))
+
+    auto *openglShader = dynamic_cast<OpenGLShader *>(shader);
+    if (!openglShader)
     {
-        GLuint shaderId = openglShader->GetId();
-        if (m_currentShader != shaderId)
-        {
-            auto it = m_shaderPrograms.find(shaderId);
-            if (it != m_shaderPrograms.end())
-            {
-                it->second->Bind();
-                m_currentShader = shaderId;
-            }
-        }
+        std::cerr << "Error: Non-OpenGL shader with OpenGLRenderer." << std::endl;
+        return;
     }
-    else
+
+    GLuint shaderId = openglShader->GetId();
+    if (m_currentShader != shaderId)
     {
-        std::cerr << "Error: Attempted to use a non-OpenGL shader with OpenGLRenderer." << std::endl;
+        openglShader->Bind();
+        m_currentShader = shaderId;
     }
 }
 
@@ -159,31 +133,27 @@ bool OpenGLRenderer::DestroyShaderProgram(Common::IShader *shader)
     {
         return false;
     }
-    if (auto *openglShader = dynamic_cast<OpenGLShader *>(shader))
+
+    if (auto it = m_shaderPrograms.find(shader); it != m_shaderPrograms.end())
     {
-        GLuint shaderId = openglShader->GetId();
-        auto it = m_shaderPrograms.find(shaderId);
-        if (it != m_shaderPrograms.end())
+        if (it->second->GetId() == m_currentShader)
         {
-            m_shaderPrograms.erase(it); // unique_ptr handles cleanup
-            if (m_currentShader == shaderId)
-            {
-                m_currentShader = 0;
-            }
-            return true;
+            m_currentShader = 0;
         }
-        return false;
+        m_shaderPrograms.erase(it);
+        return true;
     }
-    else
-    {
-        std::cerr << "Error: Attempted to destroy a non-OpenGL shader with OpenGLRenderer." << std::endl;
-        return false;
-    }
+    return false;
 }
 
-bool OpenGLRenderer::IsValidShader(uint32_t shaderId) const
+bool OpenGLRenderer::IsValidShader(Common::IShader *shader) const
 {
-    auto it = m_shaderPrograms.find(shaderId);
+    if (!shader)
+    {
+        return false;
+    }
+
+    auto it = m_shaderPrograms.find(shader);
     return it != m_shaderPrograms.end() && it->second->IsValid();
 }
 
@@ -221,125 +191,54 @@ void OpenGLRenderer::Present()
     glfwSwapBuffers(m_window);
 }
 
-uint32_t OpenGLRenderer::CreateMesh(const Common::MeshData &meshData)
+Renderer::Common::IMesh *OpenGLRenderer::CreateMesh(const Common::MeshData &meshData)
 {
-    if (meshData.vertices.empty())
+    auto mesh = std::make_unique<OpenGLMesh>();
+
+    if (!mesh->Initialize(meshData))
     {
-        return 0;
+        std::cerr << "Failed to create mesh" << std::endl;
+        return nullptr;
     }
 
-    Mesh mesh = {};
-    mesh.indexCount = static_cast<uint32_t>(meshData.indices.size());
-
-    // Generate OpenGL objects
-    glGenVertexArrays(1, &mesh.VAO);
-    glGenBuffers(1, &mesh.VBO);
-    glGenBuffers(1, &mesh.EBO);
-
-    // Bind VAO first
-    glBindVertexArray(mesh.VAO);
-
-    // Upload vertex data
-    glBindBuffer(GL_ARRAY_BUFFER, mesh.VBO);
-    glBufferData(GL_ARRAY_BUFFER,
-                 meshData.vertices.size() * sizeof(Common::Vertex),
-                 meshData.vertices.data(),
-                 GL_STATIC_DRAW);
-
-    // Upload index data
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.EBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 meshData.indices.size() * sizeof(uint32_t),
-                 meshData.indices.data(),
-                 GL_STATIC_DRAW);
-
-    // Set vertex attributes
-    // Position (location 0)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Common::Vertex), (void *)offsetof(Common::Vertex, position));
-    glEnableVertexAttribArray(0);
-
-    // Normal (location 1)
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Common::Vertex), (void *)offsetof(Common::Vertex, normal));
-    glEnableVertexAttribArray(1);
-
-    // Texture coordinates (location 2)
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Common::Vertex), (void *)offsetof(Common::Vertex, texCoord));
-    glEnableVertexAttribArray(2);
-
-    // Color (location 3)
-    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(Common::Vertex), (void *)offsetof(Common::Vertex, color));
-    glEnableVertexAttribArray(3);
-
-    // Unbind VAO
-    glBindVertexArray(0);
-
-    mesh.isValid = true;
-
-    uint32_t meshId = m_nextMeshId++;
-    m_meshes[meshId] = mesh;
-    return meshId;
+    Common::IMesh *ptr = mesh.get();
+    m_meshes[ptr] = std::move(mesh);
+    return ptr;
 }
 
-void OpenGLRenderer::DestroyMesh(uint32_t meshId)
+void OpenGLRenderer::DestroyMesh(Common::IMesh *mesh)
 {
-    auto it = m_meshes.find(meshId);
-    if (it != m_meshes.end() && it->second.isValid)
-    {
-        glDeleteVertexArrays(1, &it->second.VAO);
-        glDeleteBuffers(1, &it->second.VBO);
-        glDeleteBuffers(1, &it->second.EBO);
-        m_meshes.erase(it);
-    }
+    if (!mesh)
+        return;
+
+    m_meshes.erase(mesh);
 }
 
-uint32_t OpenGLRenderer::CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels)
+Renderer::Common::ITexture *OpenGLRenderer::CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels)
 {
-    if (!data || width == 0 || height == 0 || channels == 0)
+    auto texture = std::make_unique<OpenGLTexture>();
+
+    if (!texture->Initialize(data, width, height, channels))
     {
-        return 0;
+        std::cerr << "Failed to create texture" << std::endl;
+        return nullptr;
     }
 
-    Texture texture = {};
-    texture.width = width;
-    texture.height = height;
-    texture.channels = channels;
-
-    glGenTextures(1, &texture.handle);
-    glBindTexture(GL_TEXTURE_2D, texture.handle);
-
-    // Set texture parameters
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // Upload texture data
-    GLenum format = GetOpenGLFormat(channels);
-    GLenum internalFormat = GetOpenGLInternalFormat(channels);
-
-    glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-    glGenerateMipmap(GL_TEXTURE_2D);
-
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    texture.isValid = true;
-
-    uint32_t textureId = m_nextTextureId++;
-    m_textures[textureId] = texture;
-    return textureId;
+    Common::ITexture *ptr = texture.get();
+    m_textures[ptr] = std::move(texture);
+    return ptr;
 }
 
-void OpenGLRenderer::DestroyTexture(uint32_t textureId)
+void OpenGLRenderer::DestroyTexture(Renderer::Common::ITexture *texture)
 {
-    auto it = m_textures.find(textureId);
-    if (it != m_textures.end() && it->second.isValid)
+    if (!texture)
     {
-        glDeleteTextures(1, &it->second.handle);
-        m_textures.erase(it);
+        return;
     }
+    m_textures.erase(texture);
 }
 
-Renderer::Common::IMaterial *OpenGLRenderer::CreateMaterial(Common::IShader *shader, uint32_t textureId)
+Renderer::Common::IMaterial *OpenGLRenderer::CreateMaterial(Renderer::Common::IShader *shader, Renderer::Common::ITexture *texture)
 {
     if (!shader)
     {
@@ -350,44 +249,34 @@ Renderer::Common::IMaterial *OpenGLRenderer::CreateMaterial(Common::IShader *sha
     auto *openglShader = dynamic_cast<OpenGLShader *>(shader);
     if (!openglShader)
     {
-        std::cerr << "Error: Attempted to create material with a non-OpenGL shader." << std::endl;
+        std::cerr << "Error: Non-OpenGL shader in CreateMaterial." << std::endl;
         return nullptr;
     }
 
-    uint32_t shaderId = openglShader->GetId();
-
     // Ensure shader is managed by this renderer
-    auto shaderIt = m_shaderPrograms.find(shaderId);
+    auto shaderIt = m_shaderPrograms.find(shader);
     if (shaderIt == m_shaderPrograms.end())
     {
-        std::cerr << "Shader not managed by this renderer in CreateMaterial: " << shaderId << std::endl;
+        std::cerr << "Shader not managed by this renderer." << std::endl;
         return nullptr;
     }
 
     // Create material with shared shader reference
-    auto material = std::make_unique<OpenGLMaterial>(shaderIt->second, shaderId, textureId);
+    auto material = std::make_unique<OpenGLMaterial>(shaderIt->second, texture);
     Common::IMaterial *ptr = material.get();
-    m_materials.push_back(std::move(material));
+    m_materials[ptr] = std::move(material);
 
     return ptr;
 }
 
-void OpenGLRenderer::DestroyMaterial(Common::IMaterial *material)
+void OpenGLRenderer::DestroyMaterial(Renderer::Common::IMaterial *material)
 {
     if (!material)
-        return;
-
-    // Find and remove the material
-    auto it = std::find_if(m_materials.begin(), m_materials.end(),
-                           [material](const std::unique_ptr<OpenGLMaterial> &mat)
-                           {
-                               return mat.get() == material;
-                           });
-
-    if (it != m_materials.end())
     {
-        m_materials.erase(it);
+        return;
     }
+
+    m_materials.erase(material);
 }
 
 void OpenGLRenderer::SetViewProjection(const float *view, const float *projection)
@@ -402,29 +291,30 @@ void OpenGLRenderer::SetViewProjection(const float *view, const float *projectio
     }
 }
 
-void OpenGLRenderer::DrawMesh(uint32_t meshId, const float *modelMatrix, Common::IMaterial *material)
+void OpenGLRenderer::DrawMesh(Renderer::Common::IMesh *mesh, const float *modelMatrix, Renderer::Common::IMaterial *material)
 {
-    if (!material)
+    if (!mesh || !mesh->IsValid() || !material)
+    {
         return;
+    }
 
-    auto meshIt = m_meshes.find(meshId);
-    if (meshIt == m_meshes.end() || !meshIt->second.isValid)
-        return;
-
-    // Cast to OpenGL-specific material (safe - we created it)
+    // implicitly safe cast to OpenGL-specific types created
+    auto *glMesh = static_cast<OpenGLMesh *>(mesh);
     auto *glMaterial = static_cast<OpenGLMaterial *>(material);
 
-    // Apply material (binds shader and sets all material properties)
+    // Apply material (binds shader and sets material properties)
     glMaterial->Apply();
 
     // Get shader for setting standard uniforms
     OpenGLShader *shader = glMaterial->GetShader();
     if (!shader)
+    {
         return;
+    }
 
     const ShaderUniforms &uniforms = shader->GetCommonUniforms();
 
-    // Set standard transform uniforms
+    // Set transform uniforms
     if (uniforms.modelLoc != -1)
     {
         glUniformMatrix4fv(uniforms.modelLoc, 1, GL_TRUE, modelMatrix);
@@ -441,26 +331,21 @@ void OpenGLRenderer::DrawMesh(uint32_t meshId, const float *modelMatrix, Common:
     }
 
     // Bind texture if material has one
-    uint32_t textureId = glMaterial->GetTextureId();
-    if (textureId != 0)
+    OpenGLTexture *texture = glMaterial->GetTexture();
+    if (texture && texture->IsValid())
     {
-        auto textureIt = m_textures.find(textureId);
-        if (textureIt != m_textures.end() && textureIt->second.isValid)
-        {
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, textureIt->second.handle);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
 
-            if (uniforms.textureLoc != -1)
-            {
-                glUniform1i(uniforms.textureLoc, 0);
-            }
+        if (uniforms.textureLoc != -1)
+        {
+            glUniform1i(uniforms.textureLoc, 0);
         }
     }
 
     // Draw mesh
-    const Mesh &mesh = meshIt->second;
-    glBindVertexArray(mesh.VAO);
-    glDrawElements(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(glMesh->GetVAO());
+    glDrawElements(GL_TRIANGLES, glMesh->GetIndexCount(), GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
 }
 
@@ -468,7 +353,7 @@ void OpenGLRenderer::DrawObjects(const std::vector<Common::RenderObject> &object
 {
     for (const auto &obj : objects)
     {
-        DrawMesh(obj.meshId, obj.transform.model, obj.material);
+        DrawMesh(obj.mesh, obj.transform.model, obj.material);
     }
 }
 

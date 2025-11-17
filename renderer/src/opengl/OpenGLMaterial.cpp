@@ -2,9 +2,10 @@
 
 using namespace Renderer::OpenGL;
 
-OpenGLMaterial::OpenGLMaterial(std::shared_ptr<OpenGLShader> shader, uint32_t shaderId, uint32_t textureId)
-    : _shader(shader), _shaderId(shaderId), _textureId(textureId)
+OpenGLMaterial::OpenGLMaterial(std::shared_ptr<OpenGLShader> shader, Common::ITexture *texture)
+    : _shader(shader), _texture(texture ? static_cast<OpenGLTexture *>(texture) : nullptr)
 {
+    SetColor("uAlbedo", 1, 1, 1, 1);
 }
 
 void OpenGLMaterial::SetFloat(const std::string &name, float value)
@@ -36,9 +37,9 @@ void Renderer::OpenGL::OpenGLMaterial::SetColor(const std::string &name, float r
 {
     SetVec4(name, r, g, b, a);
 }
-void OpenGLMaterial::SetTexture(uint32_t textureId)
+void OpenGLMaterial::SetTexture(Renderer::Common::ITexture *texture)
 {
-    _textureId = textureId;
+    _texture = texture ? static_cast<OpenGLTexture *>(texture) : nullptr;
 }
 
 void OpenGLMaterial::Apply()

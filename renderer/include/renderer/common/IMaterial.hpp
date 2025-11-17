@@ -5,6 +5,9 @@
 
 namespace Renderer::Common
 {
+    class ITexture;
+    class IShader;
+
     class IMaterial
     {
     public:
@@ -16,10 +19,10 @@ namespace Renderer::Common
         virtual void SetVec3(const std::string &name, float x, float y, float z) = 0;
         virtual void SetVec4(const std::string &name, float x, float y, float z, float w) = 0;
         virtual void SetColor(const std::string &name, float x, float y, float z, float w) = 0;
-        virtual void SetTexture(uint32_t textureId) = 0;
+        virtual void SetTexture(ITexture *texture) = 0;
 
-        virtual uint32_t GetShaderId() const = 0;
-        virtual uint32_t GetTextureId() const = 0;
+        virtual IShader *GetShader() const = 0;
+        virtual ITexture *GetTexture() const = 0;
         virtual bool IsValid() const = 0;
     };
 }

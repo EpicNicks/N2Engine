@@ -17,7 +17,7 @@ namespace N2Engine
         class QuadRenderer : public IRenderable
         {
         private:
-            uint32_t _meshId = 0;
+            Renderer::Common::IMesh *_mesh = 0;
             Renderer::Common::IMaterial *_material = nullptr;
             Renderer::Common::IShader *_shader = 0;
             bool _resourcesInitialized = false;
