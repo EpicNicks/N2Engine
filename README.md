@@ -1,5 +1,10 @@
 # N2Engine
-A C++ Game Engine I am building for learning using vulkan
+A C++ Game Engine I am building for learning
+- Software Architecture + Game Engine Architecture
+- Advanced C++
+- Asset management + Serialization + Versioning
+- Graphics backend programming + Graphics Programming
+- Integration and wrapping of Physics Engines
 
 ## Currently Implemented
 - Component System
