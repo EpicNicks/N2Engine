@@ -45,10 +45,10 @@ namespace N2Engine::Physics
     struct Collision;
     struct Trigger;
 
-    class PhysXBackend : public IPhysicsBackend
+    class PhysXBackend final : public IPhysicsBackend
 #ifdef N2ENGINE_PHYSX_ENABLED
-        ,
-                         public physx::PxSimulationEventCallback
+                               ,
+                               public physx::PxSimulationEventCallback
 #endif
     {
     public:
@@ -64,9 +64,9 @@ namespace N2Engine::Physics
         void SyncTransforms() override;
         void ProcessCollisionCallbacks() override;
 
-        PhysicsBodyHandle CreateDynamicBody(const Math::Vector3 &position, const Math::Quaternion &rotation, float mass, Rigidbody *rigidbody = nullptr, bool isKinematic = false) override;
+        PhysicsBodyHandle CreateDynamicBody(const Math::Vector3 &position, const Math::Quaternion &rotation, float mass, Rigidbody *rigidbody, bool isKinematic) override;
 
-        PhysicsBodyHandle CreateStaticBody(const Math::Vector3 &position, const Math::Quaternion &rotation, Rigidbody *rigidbody = nullptr) override;
+        PhysicsBodyHandle CreateStaticBody(const Math::Vector3 &position, const Math::Quaternion &rotation, Rigidbody *rigidbody) override;
 
         void DestroyBody(PhysicsBodyHandle handle) override;
 
@@ -79,21 +79,21 @@ namespace N2Engine::Physics
         void AddSphereCollider(
             PhysicsBodyHandle body,
             float radius,
-            const Math::Vector3 &localOffset = Math::Vector3::Zero(),
-            const PhysicsMaterial &material = PhysicsMaterial::Default()) override;
+            const Math::Vector3 &localOffset,
+            const PhysicsMaterial &material) override;
 
         void AddBoxCollider(
             PhysicsBodyHandle body,
             const Math::Vector3 &halfExtents,
-            const Math::Vector3 &localOffset = Math::Vector3::Zero(),
-            const PhysicsMaterial &material = PhysicsMaterial::Default()) override;
+            const Math::Vector3 &localOffset,
+            const PhysicsMaterial &material) override;
 
         void AddCapsuleCollider(
             PhysicsBodyHandle body,
             float radius,
             float height,
-            const Math::Vector3 &localOffset = Math::Vector3::Zero(),
-            const PhysicsMaterial &material = PhysicsMaterial::Default()) override;
+            const Math::Vector3 &localOffset,
+            const PhysicsMaterial &material) override;
 
         void SetIsTrigger(PhysicsBodyHandle body, bool isTrigger) override;
 
@@ -112,7 +112,7 @@ namespace N2Engine::Physics
         void SetGravityEnabled(PhysicsBodyHandle body, bool enabled) override;
 
         void SetGravity(const Math::Vector3 &gravity) override;
-        Math::Vector3 GetGravity() const override;
+        [[nodiscard]] Math::Vector3 GetGravity() const override;
 
 #ifdef N2ENGINE_PHYSX_ENABLED
         // ========== PxSimulationEventCallback Interface ==========
@@ -153,7 +153,7 @@ namespace N2Engine::Physics
 
         PhysicsBodyHandle AllocateHandle();
         BodyData *GetBodyData(PhysicsBodyHandle handle);
-        const BodyData *GetBodyData(PhysicsBodyHandle handle) const;
+        [[nodiscard]] const BodyData *GetBodyData(PhysicsBodyHandle handle) const;
 
         // ========== Material Caching ==========
         struct MaterialKey

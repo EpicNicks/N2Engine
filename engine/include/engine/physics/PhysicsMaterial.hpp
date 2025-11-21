@@ -2,7 +2,6 @@
 
 namespace N2Engine::Physics
 {
-
     /**
      * Physics material properties
      * Controls friction and bounciness of colliders
@@ -16,28 +15,27 @@ namespace N2Engine::Physics
         // Presets
         static PhysicsMaterial Default()
         {
-            return PhysicsMaterial{0.5f, 0.5f, 0.3f};
+            return {0.5f, 0.5f, 0.3f};
         }
 
         static PhysicsMaterial Ice()
         {
-            return PhysicsMaterial{0.05f, 0.05f, 0.1f};
+            return {0.05f, 0.05f, 0.1f};
         }
 
         static PhysicsMaterial Rubber()
         {
-            return PhysicsMaterial{0.9f, 0.8f, 0.8f};
+            return {0.9f, 0.8f, 0.8f};
         }
 
         static PhysicsMaterial Bouncy()
         {
-            return PhysicsMaterial{0.5f, 0.5f, 0.95f};
+            return {0.5f, 0.5f, 0.95f};
         }
 
         static PhysicsMaterial Metal()
         {
-            return PhysicsMaterial{0.4f, 0.3f, 0.5f};
+            return {0.4f, 0.3f, 0.5f};
         }
     };
-
-} // namespace N2Engine::Physics
+}

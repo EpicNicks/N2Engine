@@ -12,9 +12,10 @@ namespace N2Engine
             Math::UUID _uuid;
 
         public:
+            virtual ~Asset() = default;
             Asset();
-            Asset(Math::UUID uuid);
-            Math::UUID GetUUID() const;
+            explicit Asset(Math::UUID uuid);
+            [[nodiscard]] Math::UUID GetUUID() const;
             void SetUUID(const Math::UUID &uuid);
         };
     }

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory>
 #include <nlohmann/json.hpp>
 #include "engine/base/Asset.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
@@ -25,16 +24,16 @@ namespace N2Engine
         bool _isMarkedForDestruction = false;
         bool _isActive = true;
 
-        Component(GameObject &gameObject);
+        explicit Component(GameObject &gameObject);
 
     public:
         GameObject &GetGameObject();
 
         // Serialization interface
-        virtual nlohmann::json Serialize() const;
+        [[nodiscard]] virtual nlohmann::json Serialize() const;
         virtual void Deserialize(const nlohmann::json &j);
         virtual void Deserialize(const nlohmann::json &j, ReferenceResolver *resolver);
-        virtual std::string GetTypeName() const = 0;
+        [[nodiscard]] virtual std::string GetTypeName() const = 0;
 
         // Lifecycle methods
         virtual void OnAttach() {}

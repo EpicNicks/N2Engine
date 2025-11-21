@@ -40,7 +40,7 @@ namespace N2Engine::Physics
 
     PhysXBackend::~PhysXBackend()
     {
-        Shutdown();
+        PhysXBackend::Shutdown();
     }
 
     bool PhysXBackend::Initialize()
@@ -63,8 +63,7 @@ namespace N2Engine::Physics
         _pvd = PxCreatePvd(*_foundation);
         if (_pvd)
         {
-            PxPvdTransport *transport = PxDefaultPvdSocketTransportCreate("127.0.0.1", 5425, 10);
-            if (transport)
+            if (PxPvdTransport *transport = PxDefaultPvdSocketTransportCreate("127.0.0.1", 5425, 10))
             {
                 _pvd->connect(*transport, PxPvdInstrumentationFlag::eALL);
                 Logger::Info("PhysX Visual Debugger connected");
@@ -113,8 +112,7 @@ namespace N2Engine::Physics
         // Setup PVD scene
         if (_pvd)
         {
-            PxPvdSceneClient *pvdClient = _scene->getScenePvdClient();
-            if (pvdClient)
+            if (PxPvdSceneClient *pvdClient = _scene->getScenePvdClient())
             {
                 pvdClient->setScenePvdFlag(PxPvdSceneFlag::eTRANSMIT_CONSTRAINTS, true);
                 pvdClient->setScenePvdFlag(PxPvdSceneFlag::eTRANSMIT_CONTACTS, true);
@@ -126,10 +124,12 @@ namespace N2Engine::Physics
         return true;
     }
 
-    void PhysXBackend::Update(float deltaTime)
+    void PhysXBackend::Update(const float deltaTime)
     {
         if (!_scene)
+        {
             return;
+        }
 
         _scene->simulate(deltaTime);
         _scene->fetchResults(true);
@@ -158,22 +158,22 @@ namespace N2Engine::Physics
         _freeList.clear();
 
         // Release cached materials
-        for (auto &[key, material] : _materialCache)
+        for (auto& material : _materialCache | std::views::values)
         {
             material->release();
         }
         _materialCache.clear();
 
         // Clean up collision events
-        for (auto &event : _newCollisions)
+        for (auto & [pair, data] : _newCollisions)
         {
-            delete event.data;
+            delete data;
         }
         _newCollisions.clear();
 
-        for (auto &event : _endedCollisions)
+        for (auto & [pair, data] : _endedCollisions)
         {
-            delete event.data;
+            delete data;
         }
         _endedCollisions.clear();
 
@@ -188,10 +188,9 @@ namespace N2Engine::Physics
             _physics->release();
 
 #if N2ENGINE_PHYSX_HAS_PVD
-        if (_pvd)
+        if (_scene && _pvd)
         {
-            PxPvdSceneClient *pvdClient = _scene->getScenePvdClient();
-            if (pvdClient)
+            if (PxPvdSceneClient *pvdClient = _scene->getScenePvdClient())
             {
                 pvdClient->setScenePvdFlag(PxPvdSceneFlag::eTRANSMIT_CONSTRAINTS, false);
                 // ... other PVD cleanup ...
@@ -291,21 +290,21 @@ namespace N2Engine::Physics
 
     PhysicsBodyHandle PhysXBackend::CreateDynamicBody(const Math::Vector3 &position, const Math::Quaternion &rotation, float mass, Rigidbody *rigidbody, bool isKinematic)
     {
-        PxTransform transform(
+        const PxTransform transform(
             PxVec3(position.x, position.y, position.z),
             PxQuat(rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()));
 
         PxRigidDynamic *body = _physics->createRigidDynamic(transform);
-        body->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, isKinematic);
         if (!body)
         {
             Logger::Error("Failed to create dynamic body");
             return INVALID_PHYSICS_HANDLE;
         }
+        body->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, isKinematic);
 
         PxRigidBodyExt::setMassAndUpdateInertia(*body, mass);
 
-        PhysicsBodyHandle handle = AllocateHandle();
+        const PhysicsBodyHandle handle = AllocateHandle();
         BodyData *data = GetBodyData(handle);
         data->actor = body;
         data->rigidbody = rigidbody;
@@ -319,7 +318,7 @@ namespace N2Engine::Physics
 
     PhysicsBodyHandle PhysXBackend::CreateStaticBody(const Math::Vector3 &position, const Math::Quaternion &rotation, Rigidbody *rigidbody)
     {
-        PxTransform transform(PxVec3(position.x, position.y, position.z), PxQuat(rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()));
+        const PxTransform transform(PxVec3(position.x, position.y, position.z), PxQuat(rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()));
         PxRigidStatic *body = _physics->createRigidStatic(transform);
 
         if (!body)
@@ -328,7 +327,7 @@ namespace N2Engine::Physics
             return INVALID_PHYSICS_HANDLE;
         }
 
-        PhysicsBodyHandle handle = AllocateHandle();
+        const PhysicsBodyHandle handle = AllocateHandle();
         BodyData *data = GetBodyData(handle);
         data->actor = body;
         data->rigidbody = rigidbody;
@@ -368,25 +367,21 @@ namespace N2Engine::Physics
 
     void PhysXBackend::RegisterCollider(PhysicsBodyHandle handle, ICollider *collider)
     {
-        BodyData *data = GetBodyData(handle);
-        if (data && collider)
+        if (BodyData *data = GetBodyData(handle); data && collider)
         {
             // Only add if not already registered
-            auto it = std::find(data->colliders.begin(), data->colliders.end(), collider);
-            if (it == data->colliders.end())
+            if (const auto it = std::ranges::find(data->colliders, collider); it == data->colliders.end())
             {
                 data->colliders.push_back(collider);
             }
         }
     }
 
-    void PhysXBackend::UnregisterCollider(PhysicsBodyHandle handle, ICollider *collider)
+    void PhysXBackend::UnregisterCollider(const PhysicsBodyHandle handle, ICollider *collider)
     {
-        BodyData *data = GetBodyData(handle);
-        if (data && collider)
+        if (BodyData *data = GetBodyData(handle); data && collider)
         {
-            auto it = std::find(data->colliders.begin(), data->colliders.end(), collider);
-            if (it != data->colliders.end())
+            if (const auto it = std::ranges::find(data->colliders, collider); it != data->colliders.end())
             {
                 data->colliders.erase(it);
             }
@@ -401,17 +396,21 @@ namespace N2Engine::Physics
     {
         // Validate handle
         if (!handle.IsValid() || handle.index >= _bodies.size())
+        {
             return;
+        }
 
-        BodyData &bodyData = _bodies[handle.index];
+        const BodyData &bodyData = _bodies[handle.index];
         if (!bodyData.active || bodyData.generation != handle.generation)
+        {
             return;
+        }
 
         PxRigidActor *actor = bodyData.actor;
         if (auto *dynamic = actor->is<PxRigidDynamic>())
         {
             // For kinematic bodies, use setKinematicTarget for smooth interpolation
-            PxTransform target(
+            const PxTransform target(
                 PxVec3(position.x, position.y, position.z),
                 PxQuat(rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()));
             dynamic->setKinematicTarget(target);
@@ -419,37 +418,37 @@ namespace N2Engine::Physics
     }
 
     void PhysXBackend::SetStaticBodyTransform(
-        PhysicsBodyHandle handle,
+        const PhysicsBodyHandle handle,
         const Math::Vector3 &position,
         const Math::Quaternion &rotation)
     {
         // Validate handle
         if (!handle.IsValid() || handle.index >= _bodies.size())
+        {
             return;
+        }
 
-        BodyData &bodyData = _bodies[handle.index];
+        const BodyData &bodyData = _bodies[handle.index];
         if (!bodyData.active || bodyData.generation != handle.generation)
+        {
             return;
+        }
 
-        PxRigidActor *actor = bodyData.actor;
-        if (actor->is<PxRigidStatic>())
+        if (PxRigidActor *actor = bodyData.actor; actor->is<PxRigidStatic>())
         {
             // Direct position update for static bodies (expensive - rebuilds broadphase!)
-            PxTransform transform(
+            const PxTransform transform(
                 PxVec3(position.x, position.y, position.z),
                 PxQuat(rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()));
             actor->setGlobalPose(transform);
         }
     }
 
-    // ========== Material Management ==========
-
     PxMaterial *PhysXBackend::GetOrCreateMaterial(const PhysicsMaterial &material)
     {
-        MaterialKey key{material.staticFriction, material.dynamicFriction, material.restitution};
+        const MaterialKey key{material.staticFriction, material.dynamicFriction, material.restitution};
 
-        auto it = _materialCache.find(key);
-        if (it != _materialCache.end())
+        if (const auto it = _materialCache.find(key); it != _materialCache.end())
         {
             return it->second;
         }
@@ -467,24 +466,26 @@ namespace N2Engine::Physics
         return pxMaterial;
     }
 
-    // ========== Shape Attachment ==========
-
     void PhysXBackend::AddSphereCollider(
-        PhysicsBodyHandle body,
-        float radius,
+        const PhysicsBodyHandle body,
+        const float radius,
         const Math::Vector3 &localOffset,
         const PhysicsMaterial &material)
     {
-        BodyData *data = GetBodyData(body);
+        const BodyData *data = GetBodyData(body);
         if (!data || !data->actor)
+        {
             return;
+        }
 
-        PxMaterial *pxMaterial = GetOrCreateMaterial(material);
+        const PxMaterial *pxMaterial = GetOrCreateMaterial(material);
         if (!pxMaterial)
+        {
             pxMaterial = _defaultMaterial;
+        }
 
         PxSphereGeometry sphere(radius);
-        PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
+        const PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
 
         PxShape *shape = _physics->createShape(sphere, *pxMaterial, true);
         shape->setLocalPose(localPose);
@@ -499,16 +500,20 @@ namespace N2Engine::Physics
         const Math::Vector3 &localOffset,
         const PhysicsMaterial &material)
     {
-        BodyData *data = GetBodyData(body);
+        const BodyData *data = GetBodyData(body);
         if (!data || !data->actor)
+        {
             return;
+        }
 
-        PxMaterial *pxMaterial = GetOrCreateMaterial(material);
+        const PxMaterial *pxMaterial = GetOrCreateMaterial(material);
         if (!pxMaterial)
+        {
             pxMaterial = _defaultMaterial;
+        }
 
-        PxBoxGeometry box(halfExtents.x, halfExtents.y, halfExtents.z);
-        PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
+        const PxBoxGeometry box(halfExtents.x, halfExtents.y, halfExtents.z);
+        const PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
 
         PxShape *shape = _physics->createShape(box, *pxMaterial, true);
         shape->setLocalPose(localPose);
@@ -518,19 +523,23 @@ namespace N2Engine::Physics
     }
 
     void PhysXBackend::AddCapsuleCollider(
-        PhysicsBodyHandle body,
-        float radius,
-        float height,
+        const PhysicsBodyHandle body,
+        const float radius,
+        const float height,
         const Math::Vector3 &localOffset,
         const PhysicsMaterial &material)
     {
         BodyData *data = GetBodyData(body);
         if (!data || !data->actor)
+        {
             return;
+        }
 
         PxMaterial *pxMaterial = GetOrCreateMaterial(material);
         if (!pxMaterial)
+        {
             pxMaterial = _defaultMaterial;
+        }
 
         float halfHeight = (height - 2.0f * radius) * 0.5f;
         PxCapsuleGeometry capsule(radius, halfHeight);
@@ -547,14 +556,16 @@ namespace N2Engine::Physics
 
     // ========== Trigger Configuration ==========
 
-    void PhysXBackend::SetIsTrigger(PhysicsBodyHandle body, bool isTrigger)
+    void PhysXBackend::SetIsTrigger(const PhysicsBodyHandle body, const bool isTrigger)
     {
         BodyData *data = GetBodyData(body);
         if (!data || !data->actor)
+        {
             return;
+        }
 
         // Get all shapes attached to this actor
-        PxU32 numShapes = data->actor->getNbShapes();
+        const PxU32 numShapes = data->actor->getNbShapes();
         std::vector<PxShape *> shapes(numShapes);
         data->actor->getShapes(shapes.data(), numShapes);
 
@@ -576,13 +587,15 @@ namespace N2Engine::Physics
 
     // ========== Forces and Motion ==========
 
-    void PhysXBackend::AddForce(PhysicsBodyHandle body, const Math::Vector3 &force)
+    void PhysXBackend::AddForce(const PhysicsBodyHandle body, const Math::Vector3 &force)
     {
-        BodyData *data = GetBodyData(body);
+        const BodyData *data = GetBodyData(body);
         if (!data)
+        {
             return;
+        }
 
-        if (PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
+        if (auto *dynamic = data->actor->is<PxRigidDynamic>())
         {
             dynamic->addForce(PxVec3(force.x, force.y, force.z));
         }
@@ -590,11 +603,13 @@ namespace N2Engine::Physics
 
     void PhysXBackend::AddImpulse(PhysicsBodyHandle body, const Math::Vector3 &impulse)
     {
-        BodyData *data = GetBodyData(body);
+        const BodyData *data = GetBodyData(body);
         if (!data)
+        {
             return;
+        }
 
-        if (PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
+        if (auto *dynamic = data->actor->is<PxRigidDynamic>())
         {
             dynamic->addForce(PxVec3(impulse.x, impulse.y, impulse.z), PxForceMode::eIMPULSE);
         }
@@ -602,11 +617,13 @@ namespace N2Engine::Physics
 
     void PhysXBackend::SetVelocity(PhysicsBodyHandle body, const Math::Vector3 &velocity)
     {
-        BodyData *data = GetBodyData(body);
+        const BodyData *data = GetBodyData(body);
         if (!data)
+        {
             return;
+        }
 
-        if (PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
+        if (auto *dynamic = data->actor->is<PxRigidDynamic>())
         {
             dynamic->setLinearVelocity(PxVec3(velocity.x, velocity.y, velocity.z));
         }
@@ -614,11 +631,13 @@ namespace N2Engine::Physics
 
     void PhysXBackend::SetAngularVelocity(PhysicsBodyHandle body, const Math::Vector3 &velocity)
     {
-        BodyData *data = GetBodyData(body);
+        const BodyData *data = GetBodyData(body);
         if (!data)
+        {
             return;
+        }
 
-        if (PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
+        if (auto *dynamic = data->actor->is<PxRigidDynamic>())
         {
             dynamic->setAngularVelocity(PxVec3(velocity.x, velocity.y, velocity.z));
         }
@@ -630,32 +649,38 @@ namespace N2Engine::Physics
     {
         const BodyData *data = GetBodyData(body);
         if (!data || !data->actor)
+        {
             return Math::Vector3::Zero();
+        }
 
-        PxTransform transform = data->actor->getGlobalPose();
-        return Math::Vector3(transform.p.x, transform.p.y, transform.p.z);
+        const PxTransform transform = data->actor->getGlobalPose();
+        return {transform.p.x, transform.p.y, transform.p.z};
     }
 
     Math::Quaternion PhysXBackend::GetRotation(PhysicsBodyHandle body)
     {
         const BodyData *data = GetBodyData(body);
         if (!data || !data->actor)
+        {
             return Math::Quaternion::Identity();
+        }
 
-        PxTransform transform = data->actor->getGlobalPose();
-        return Math::Quaternion(transform.q.w, transform.q.x, transform.q.y, transform.q.z);
+        const PxTransform transform = data->actor->getGlobalPose();
+        return {transform.q.w, transform.q.x, transform.q.y, transform.q.z};
     }
 
     Math::Vector3 PhysXBackend::GetVelocity(PhysicsBodyHandle body)
     {
         const BodyData *data = GetBodyData(body);
         if (!data)
+        {
             return Math::Vector3::Zero();
+        }
 
         if (const PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
         {
-            PxVec3 vel = dynamic->getLinearVelocity();
-            return Math::Vector3(vel.x, vel.y, vel.z);
+            const PxVec3 vel = dynamic->getLinearVelocity();
+            return {vel.x, vel.y, vel.z};
         }
 
         return Math::Vector3::Zero();
@@ -665,12 +690,14 @@ namespace N2Engine::Physics
     {
         const BodyData *data = GetBodyData(body);
         if (!data)
+        {
             return Math::Vector3::Zero();
+        }
 
         if (const PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
         {
-            PxVec3 vel = dynamic->getAngularVelocity();
-            return Math::Vector3(vel.x, vel.y, vel.z);
+            const PxVec3 vel = dynamic->getAngularVelocity();
+            return {vel.x, vel.y, vel.z};
         }
 
         return Math::Vector3::Zero();
@@ -680,11 +707,13 @@ namespace N2Engine::Physics
 
     void PhysXBackend::SetMass(PhysicsBodyHandle body, float mass)
     {
-        BodyData *data = GetBodyData(body);
+        const BodyData *data = GetBodyData(body);
         if (!data)
+        {
             return;
+        }
 
-        if (PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
+        if (auto *dynamic = data->actor->is<PxRigidDynamic>())
         {
             PxRigidBodyExt::setMassAndUpdateInertia(*dynamic, mass);
         }
@@ -694,7 +723,9 @@ namespace N2Engine::Physics
     {
         const BodyData *data = GetBodyData(body);
         if (!data)
+        {
             return 0.0f;
+        }
 
         if (const PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
         {
@@ -708,9 +739,11 @@ namespace N2Engine::Physics
     {
         BodyData *data = GetBodyData(body);
         if (!data)
+        {
             return;
+        }
 
-        if (PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
+        if (auto *dynamic = data->actor->is<PxRigidDynamic>())
         {
             dynamic->setActorFlag(PxActorFlag::eDISABLE_GRAVITY, !enabled);
         }
@@ -720,18 +753,21 @@ namespace N2Engine::Physics
 
     void PhysXBackend::SyncTransforms()
     {
-        for (auto &bodyData : _bodies)
+        for (const auto &bodyData : _bodies)
         {
             if (!bodyData.active || !bodyData.actor || !bodyData.rigidbody)
+            {
                 continue;
+            }
 
             // Only sync dynamic bodies
-            PxRigidDynamic *dynamic = bodyData.actor->is<PxRigidDynamic>();
-            if (!dynamic)
+            if (const auto *dynamic = bodyData.actor->is<PxRigidDynamic>(); !dynamic)
+            {
                 continue;
+            }
 
             // Get transform from PhysX
-            PxTransform pxTransform = bodyData.actor->getGlobalPose();
+            const PxTransform pxTransform = bodyData.actor->getGlobalPose();
 
             // Convert to engine types
             Math::Vector3 position(pxTransform.p.x, pxTransform.p.y, pxTransform.p.z);
@@ -752,11 +788,13 @@ namespace N2Engine::Physics
         const PxContactPair *pairs,
         PxU32 nbPairs)
     {
-        PhysicsBodyHandle *handleA = static_cast<PhysicsBodyHandle *>(pairHeader.actors[0]->userData);
-        PhysicsBodyHandle *handleB = static_cast<PhysicsBodyHandle *>(pairHeader.actors[1]->userData);
+        auto *handleA = static_cast<PhysicsBodyHandle *>(pairHeader.actors[0]->userData);
+        auto *handleB = static_cast<PhysicsBodyHandle *>(pairHeader.actors[1]->userData);
 
         if (!handleA || !handleB)
+        {
             return;
+        }
 
         for (PxU32 i = 0; i < nbPairs; i++)
         {
@@ -764,7 +802,7 @@ namespace N2Engine::Physics
             CollisionPair pair{*handleA, *handleB};
 
             // Create base collision data
-            Collision *baseCollisionData = new Collision();
+            auto *baseCollisionData = new Collision();
 
             // Extract contact points from PhysX
             PxContactPairPoint contactPoints[64];
@@ -796,8 +834,8 @@ namespace N2Engine::Physics
             baseCollisionData->impulse = totalImpulse;
 
             // Get relative velocity
-            PxRigidDynamic *dynA = pairHeader.actors[0]->is<PxRigidDynamic>();
-            PxRigidDynamic *dynB = pairHeader.actors[1]->is<PxRigidDynamic>();
+            auto *dynA = pairHeader.actors[0]->is<PxRigidDynamic>();
+            auto *dynB = pairHeader.actors[1]->is<PxRigidDynamic>();
 
             PxVec3 velA = dynA ? dynA->getLinearVelocity() : PxVec3(0);
             PxVec3 velB = dynB ? dynB->getLinearVelocity() : PxVec3(0);
@@ -829,8 +867,8 @@ namespace N2Engine::Physics
     {
         for (PxU32 i = 0; i < count; i++)
         {
-            PhysicsBodyHandle *triggerHandle = static_cast<PhysicsBodyHandle *>(pairs[i].triggerActor->userData);
-            PhysicsBodyHandle *otherHandle = static_cast<PhysicsBodyHandle *>(pairs[i].otherActor->userData);
+            auto *triggerHandle = static_cast<PhysicsBodyHandle *>(pairs[i].triggerActor->userData);
+            auto *otherHandle = static_cast<PhysicsBodyHandle *>(pairs[i].otherActor->userData);
 
             if (!triggerHandle || !otherHandle)
                 continue;

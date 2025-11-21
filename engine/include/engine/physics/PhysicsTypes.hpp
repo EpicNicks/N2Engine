@@ -52,13 +52,13 @@ namespace N2Engine::Physics
         }
 
         // Helper to get the first contact point (most common use case)
-        const ContactPoint *GetContact() const
+        [[nodiscard]] const ContactPoint *GetContact() const
         {
             return contacts.empty() ? nullptr : &contacts[0];
         }
 
         // Get average contact point
-        Math::Vector3 GetAverageContactPoint() const
+        [[nodiscard]] Math::Vector3 GetAverageContactPoint() const
         {
             if (contacts.empty())
                 return Math::Vector3::Zero();

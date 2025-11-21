@@ -55,7 +55,7 @@ bool OpenGLShader::LoadFromStrings(const std::string &vertexSource, const std::s
 
     if (success)
     {
-        CacheCommonUniforms(); // Add this line
+        CacheCommonUniforms();
     }
 
     return success;

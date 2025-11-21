@@ -18,11 +18,11 @@ namespace N2Engine
         BoundingBox(const Math::Vector3 &min_, const Math::Vector3 &max_);
 
         // Get center point
-        Math::Vector3 GetCenter() const;
+        [[nodiscard]] Math::Vector3 GetCenter() const;
         // Get extents (half-sizes)
-        Math::Vector3 GetExtents() const;
+        [[nodiscard]] Math::Vector3 GetExtents() const;
         // Get corner point (0-7, where bits represent min/max for each axis)
-        Math::Vector3 GetCorner(int index) const;
+        [[nodiscard]] Math::Vector3 GetCorner(int index) const;
     };
 
     struct Frustum

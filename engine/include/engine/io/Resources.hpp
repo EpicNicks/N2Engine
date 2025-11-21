@@ -1,44 +1,34 @@
 #pragma once
 
-#include <string_view>
-#include <type_traits>
-#include <memory>
-#include <fstream>
-
-#include <renderer/common/IShader.hpp>
-#include <renderer/opengl/OpenGLShader.hpp>
-
-#include "engine/Application.hpp"
+#include <string>
 #include <filesystem>
+
+// Forward declarations
+namespace Renderer::Common
+{
+    class IShader;
+}
 
 namespace N2Engine::IO
 {
-    template <typename T>
-    concept ShaderType = std::is_base_of_v<Renderer::Common::IShader, T>;
-
     class Resources
     {
+    private:
+        static inline std::filesystem::path _resourcePath{};
+
+        static bool ResourcePathIsValid();
+
     public:
-        template <ShaderType T>
-        static std::shared_ptr<T> LoadShader(const std::string &vertexShaderPath, const std::string &fragmentShaderPath)
-        {
-            if (!std::filesystem::exists(vertexShaderPath) || !std::filesystem::exists(fragmentShaderPath))
-            {
-                return nullptr;
-            }
+        static std::filesystem::path GetResourcePath();
 
-            std::ifstream vertexFile{vertexShaderPath.data()};
-            std::ifstream fragmentFile{fragmentShaderPath.data()};
+        /// @brief Set the base resource path for the application
+        /// @note For use from editor for projects or main with a user-defined project structure
+        static void SetResourcePath(const std::filesystem::path &newPath);
 
-            std::string vertexSource{std::istreambuf_iterator<char>(vertexFile), std::istreambuf_iterator<char>()};
-            std::string fragmentSource{std::istreambuf_iterator<char>(fragmentFile), std::istreambuf_iterator<char>()};
-
-            auto shader = std::make_shared<T>();
-            if (!shader->LoadFromStrings(vertexSource, fragmentSource))
-            {
-                return nullptr;
-            }
-            return shader;
-        }
+        /// @brief Load a shader from vertex and fragment shader files
+        /// @param vertexShaderPath Path to vertex shader (relative to resource path if set)
+        /// @param fragmentShaderPath Path to fragment shader (relative to resource path if set)
+        /// @return Pointer to created shader, or nullptr on failure
+        static Renderer::Common::IShader *LoadShader(const std::string &vertexShaderPath, const std::string &fragmentShaderPath);
     };
 }

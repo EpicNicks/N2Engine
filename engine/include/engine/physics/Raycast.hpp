@@ -1,11 +1,8 @@
 #pragma once
 
-namespace N2Engine
+namespace N2Engine::Physics
 {
-    namespace Physics
+    class Raycast
     {
-        class Raycast
-        {
-        };
-    }
+    };
 }

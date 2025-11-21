@@ -1,12 +1,11 @@
 #pragma once
 
+#include <memory>
+
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/Window.hpp"
 #include "engine/Camera.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
-
-#include <string>
-#include <memory>
 
 namespace N2Engine
 {
@@ -21,12 +20,11 @@ namespace N2Engine
 
     private:
         Application() = default;
-        Application(const Application &) = delete;
-        Application &operator=(const Application &) = delete;
-
         void Render();
 
     public:
+        Application(const Application &) = delete;
+        Application &operator=(const Application &) = delete;
         static Application &GetInstance();
 
         void Init();
@@ -41,6 +39,6 @@ namespace N2Engine
 
         void OnWindowResize(int width, int height);
 
-        Physics::IPhysicsBackend *Get3DPhysicsBackend() const;
+        [[nodiscard]] Physics::IPhysicsBackend *Get3DPhysicsBackend() const;
     };
 }

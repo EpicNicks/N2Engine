@@ -1,3 +1,4 @@
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON) # Export compile_commands.json for IDEs
 find_package(OpenGL REQUIRED)
 
 file(GLOB_RECURSE TEST_PROJECT_SOURCES

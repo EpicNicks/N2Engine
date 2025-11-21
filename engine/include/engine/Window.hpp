@@ -63,17 +63,17 @@ namespace N2Engine
         void PollEvents();
         void Shutdown();
         void Clear();
-        Renderer::Common::IRenderer *GetRenderer() const;
-        Input::InputSystem *GetInputSystem() const;
+        [[nodiscard]] Renderer::Common::IRenderer *GetRenderer() const;
+        [[nodiscard]] Input::InputSystem *GetInputSystem() const;
 
-        Vector2i GetWindowDimensions() const;
+        [[nodiscard]] Vector2i GetWindowDimensions() const;
         void SetWindowMode(WindowMode windowMode);
 
-        std::string GetTitle() const { return _title; }
+        [[nodiscard]] std::string GetTitle() const { return _title; }
         void SetTitle(const std::string &title);
 
     private:
-        AppRenderer ReadAppRendererFromConfig() const;
+        [[nodiscard]] AppRenderer ReadAppRendererFromConfig() const;
         void SaveWindowedState();
         GLFWmonitor *GetCurrentMonitor();
     };

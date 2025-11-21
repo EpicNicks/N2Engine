@@ -21,6 +21,9 @@ namespace Renderer::Common
     public:
         virtual ~IShader() = default;
 
+        /// @brief Loads and compiles shader from source strings
+        /// @warning For proper resource management, prefer using
+        ///          IRenderer::CreateShaderProgram() instead of calling this directly
         virtual bool LoadFromStrings(const std::string &vertexSource, const std::string &fragmentSource) = 0;
 
         virtual void Bind() const = 0;

@@ -9,6 +9,7 @@
 #include <engine/input/InputBinding.hpp>
 #include <engine/input/InputSystem.hpp>
 #include <engine/input/InputMapping.hpp>
+#include <engine/io/Resources.hpp>
 
 #include <renderer/opengl/OpenGLRenderer.hpp>
 #include <renderer/common/IShader.hpp>
@@ -309,6 +310,8 @@ void TestEngine()
         {quadObject,
          cameraControlObject,
          standardInputHandler});
+
+    N2Engine::IO::Resources::LoadShader("", "");
 
     auto connectedGamepads = application.GetWindow().GetInputSystem()->GetConnectedGamepads();
     if (connectedGamepads.size() > 0)

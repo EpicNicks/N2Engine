@@ -21,15 +21,14 @@ namespace N2Engine::Physics
     class Rigidbody : public Component
     {
     public:
-        Rigidbody(GameObject &gameObject);
-        ~Rigidbody();
+        explicit Rigidbody(GameObject &gameObject);
 
         void OnAttach() override;
         void OnDestroy() override;
 
         // ========== Body Configuration ==========
         void SetBodyType(BodyType type);
-        BodyType GetBodyType() const { return _bodyType; }
+        [[nodiscard]] BodyType GetBodyType() const { return _bodyType; }
 
         void SetMass(float mass);
         float GetMass() const;
@@ -44,11 +43,11 @@ namespace N2Engine::Physics
         void SetAngularVelocity(const Math::Vector3 &velocity);
 
         // ========== Queries ==========
-        Math::Vector3 GetVelocity() const;
-        Math::Vector3 GetAngularVelocity() const;
+        [[nodiscard]] Math::Vector3 GetVelocity() const;
+        [[nodiscard]] Math::Vector3 GetAngularVelocity() const;
 
         // ========== Handle Access ==========
-        Physics::PhysicsBodyHandle GetHandle() const { return _handle; }
+        [[nodiscard]] PhysicsBodyHandle GetHandle() const { return _handle; }
         bool IsInitialized() const { return _initialized; }
 
         // ========== Collision Callbacks ==========
@@ -65,7 +64,7 @@ namespace N2Engine::Physics
         void OnTransformChanged();
 
     private:
-        Physics::PhysicsBodyHandle _handle;
+        PhysicsBodyHandle _handle;
         BodyType _bodyType = BodyType::Dynamic;
         float _mass = 1.0f;
         bool _gravityEnabled = true;
