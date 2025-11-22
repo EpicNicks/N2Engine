@@ -6,11 +6,11 @@
 namespace N2Engine
 {
     template <typename T>
-    std::shared_ptr<T> Scene::FindObjectByType(bool includeInactive) const
+    std::shared_ptr<T> Scene::FindObjectByType(const bool includeInactive) const
     {
         std::shared_ptr<T> result = nullptr;
 
-        TraverseUntil([&](std::shared_ptr<GameObject> gameObject) -> bool
+        TraverseUntil([&](const std::shared_ptr<GameObject>& gameObject) -> bool
                       {
             bool shouldProcess = includeInactive || gameObject->IsActive();
             
@@ -25,13 +25,13 @@ namespace N2Engine
     }
 
     template <typename T>
-    std::vector<std::shared_ptr<T>> Scene::FindObjectsByType(bool includeInactive) const
+    std::vector<std::shared_ptr<T>> Scene::FindObjectsByType(const bool includeInactive) const
     {
         std::vector<std::shared_ptr<T>> result;
 
         if (includeInactive)
         {
-            TraverseAll([&](std::shared_ptr<GameObject> gameObject)
+            TraverseAll([&](const std::shared_ptr<GameObject>& gameObject)
                         {
                 if (gameObject->template HasComponent<T>())
                 {
@@ -40,7 +40,7 @@ namespace N2Engine
         }
         else
         {
-            TraverseAllActive([&](std::shared_ptr<GameObject> gameObject)
+            TraverseAllActive([&](const std::shared_ptr<GameObject>& gameObject)
                               {
                 if (gameObject->template HasComponent<T>())
                 {

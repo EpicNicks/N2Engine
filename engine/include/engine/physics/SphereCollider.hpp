@@ -9,6 +9,7 @@ namespace N2Engine
         class SphereCollider : public ICollider
         {
         public:
+            SphereCollider();
             float radius{0.5f};
         };
     }

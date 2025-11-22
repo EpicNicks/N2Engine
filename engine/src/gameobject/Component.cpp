@@ -1,30 +1,25 @@
 #include "engine/Component.hpp"
 #include "engine/GameObject.hpp"
 
-#include <cassert>
-
 using namespace N2Engine;
 using json = nlohmann::json;
 
-GameObject &Component::GetGameObject()
+Component::Component(GameObject &gameObject)
+    : _gameObject(gameObject)
+{
+}
+
+GameObject &Component::GetGameObject() const
 {
     return _gameObject;
 }
 
-Component::Component(GameObject &gameObject)
-    : Base::Asset(),
-      _gameObject(gameObject),
-      _isActive{true},
-      _isMarkedForDestruction{false}
-{
-}
-
-bool Component::IsDestroyed()
+bool Component::IsDestroyed() const
 {
     return _isMarkedForDestruction;
 }
 
-bool Component::GetIsActive()
+bool Component::GetIsActive() const
 {
     return _isActive && !_isMarkedForDestruction && _gameObject.IsActiveInHierarchy();
 }

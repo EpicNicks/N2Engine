@@ -34,7 +34,7 @@ namespace N2Engine
 
         static void Quit();
 
-        Camera *GetMainCamera();
+        Camera *GetMainCamera() const;
         Window &GetWindow();
 
         void OnWindowResize(int width, int height);

@@ -20,42 +20,81 @@ namespace N2Engine
         friend class Scene;
 
     protected:
-        GameObject &_gameObject;
+        GameObject& _gameObject;
         bool _isMarkedForDestruction = false;
         bool _isActive = true;
 
-        explicit Component(GameObject &gameObject);
+        explicit Component(GameObject& gameObject);
 
     public:
-        GameObject &GetGameObject();
+        [[nodiscard]] GameObject& GetGameObject() const;
 
         // Serialization interface
         [[nodiscard]] virtual nlohmann::json Serialize() const;
-        virtual void Deserialize(const nlohmann::json &j);
-        virtual void Deserialize(const nlohmann::json &j, ReferenceResolver *resolver);
+        virtual void Deserialize(const nlohmann::json& j);
+        virtual void Deserialize(const nlohmann::json& j, ReferenceResolver* resolver);
         [[nodiscard]] virtual std::string GetTypeName() const = 0;
 
         // Lifecycle methods
-        virtual void OnAttach() {}
-        virtual void OnUpdate() {}
-        virtual void OnFixedUpdate() {}
-        virtual void OnLateUpdate() {}
-        virtual void OnDestroy() {}
-        virtual void OnEnable() {}
-        virtual void OnDisable() {}
-        virtual void OnApplicationQuit() {}
+        virtual void OnAttach()
+        {
+        }
+
+        virtual void OnUpdate()
+        {
+        }
+
+        virtual void OnFixedUpdate()
+        {
+        }
+
+        virtual void OnLateUpdate()
+        {
+        }
+
+        virtual void OnDestroy()
+        {
+        }
+
+        virtual void OnEnable()
+        {
+        }
+
+        virtual void OnDisable()
+        {
+        }
+
+        virtual void OnApplicationQuit()
+        {
+        }
 
         // physics collision events
-        virtual void OnCollisionEnter(Physics::Collision collision) {}
-        virtual void OnCollisionStay(Physics::Collision collision) {}
-        virtual void OnCollisionExit(Physics::Collision collision) {}
+        virtual void OnCollisionEnter(const Physics::Collision& collision)
+        {
+        }
 
-        virtual void OnTriggerEnter(Physics::Trigger trigger) {}
-        virtual void OnTriggerStay(Physics::Trigger trigger) {}
-        virtual void OnTriggerExit(Physics::Trigger trigger) {}
+        virtual void OnCollisionStay(const Physics::Collision& collision)
+        {
+        }
 
-        bool IsDestroyed();
-        bool GetIsActive();
+        virtual void OnCollisionExit(const Physics::Collision& collision)
+        {
+        }
+
+        virtual void OnTriggerEnter(Physics::Trigger trigger)
+        {
+        }
+
+        virtual void OnTriggerStay(Physics::Trigger trigger)
+        {
+        }
+
+        virtual void OnTriggerExit(Physics::Trigger trigger)
+        {
+        }
+
+        [[nodiscard]] bool IsDestroyed() const;
+        [[nodiscard]] bool GetIsActive() const;
 
         static constexpr bool IsSingleton = false;
     };

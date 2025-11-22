@@ -29,7 +29,7 @@ Window &Application::GetWindow()
     return _window;
 }
 
-Camera *Application::GetMainCamera()
+Camera *Application::GetMainCamera() const
 {
     return _mainCamera.get();
 }
@@ -50,7 +50,7 @@ void Application::Init()
     static auto originalStdoutStream = std::make_unique<std::ostream>(originalStdout);
     // static auto originalStderrStream = std::make_unique<std::ostream>(originalStderr);
 
-    Logger::logEvent += [this](std::string_view msg, Logger::LogLevel level)
+    Logger::logEvent += [](const std::string_view msg, const Logger::LogLevel level)
     {
         const char *levelStr;
         switch (level)
@@ -79,7 +79,7 @@ void Application::Init()
     _mainCamera = std::make_unique<Camera>();
 
     const Vector2i windowDimensions = _window.GetWindowDimensions();
-    const float aspect = (float)windowDimensions[0] / (float)windowDimensions[1];
+    const float aspect = static_cast<float>(windowDimensions[0]) / static_cast<float>(windowDimensions[1]);
 
     _mainCamera->SetPerspective(45.0f, aspect, 0.1f, 100.0f);
     // _mainCamera->SetOrthographic(-10.0f, 10.0f, -10.0f, 10.0f, 0.0f, 100.0f);
@@ -108,7 +108,7 @@ void Application::Init(std::unique_ptr<Scene> &&initialScene)
     SceneManager &instance = SceneManager::GetInstance();
     instance._scenes.push_back(std::move(initialScene));
     instance._curSceneIndex = 0;
-    Logger::Info("Initial scene loaded: " + instance.GetCurSceneRef().sceneName);
+    Logger::Info("Initial scene loaded: " + SceneManager::GetCurSceneRef().sceneName);
 }
 
 void Application::Run()

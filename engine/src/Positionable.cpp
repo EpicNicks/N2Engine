@@ -1,6 +1,5 @@
 #include "engine/Positionable.hpp"
 #include "engine/GameObject.hpp"
-#include "engine/GameObject.inl"
 #include "engine/serialization/MathSerialization.hpp"
 
 #include "engine/physics/Rigidbody.hpp"
@@ -151,8 +150,7 @@ void Positionable::NotifyPhysicsComponents() const
     }
     else
     {
-        std::vector<std::shared_ptr<Physics::ICollider>> colliders = _gameObject.GetComponents<Physics::ICollider>();
-        for (const auto &collider : colliders)
+        for (const auto colliders = _gameObject.GetComponents<Physics::ICollider>(); const auto &collider : colliders)
         {
             collider->OnTransformChanged();
         }
@@ -161,12 +159,11 @@ void Positionable::NotifyPhysicsComponents() const
 
 void Positionable::SetPositionAndRotation(const Math::Vector3 &position, const Math::Quaternion &rotation)
 {
-    auto parentPositionable = GetParentPositionable();
-    if (parentPositionable)
+    if (auto parentPositionable = GetParentPositionable())
     {
-        Math::Vector3 localPos = parentPositionable->InverseTransformPoint(position);
-        Math::Quaternion parentRot = parentPositionable->GetRotation();
-        Math::Quaternion localRot = parentRot.Inverse() * rotation;
+        const Vector3 localPos = parentPositionable->InverseTransformPoint(position);
+        const Quaternion parentRot = parentPositionable->GetRotation();
+        const Quaternion localRot = parentRot.Inverse() * rotation;
         SetLocalPositionAndRotation(localPos, localRot);
     }
     else
@@ -230,8 +227,7 @@ void Positionable::UpdateGlobalTransform() const
 
 Transform Positionable::CalculateGlobalTransform() const
 {
-    auto parentPositionable = GetParentPositionable();
-    if (parentPositionable)
+    if (auto parentPositionable = GetParentPositionable())
     {
         // Combine parent's global transform with our local transform
         const Transform &parentGlobal = parentPositionable->GetGlobalTransform();
@@ -244,10 +240,9 @@ Transform Positionable::CalculateGlobalTransform() const
     }
 }
 
-std::shared_ptr<Positionable> Positionable::GetParentPositionable() const
+Positionable* Positionable::GetParentPositionable() const
 {
-    _gameObject;
-    if (auto parent = _gameObject.GetParent())
+    if (const auto parent = _gameObject.GetParent())
     {
         return parent->GetPositionable();
     }
@@ -288,7 +283,7 @@ Vector3 Positionable::InverseTransformDirection(const Math::Vector3 &direction) 
     return global.GetRotation().Inverse() * direction;
 }
 
-void Positionable::OnHierarchyChanged()
+void Positionable::OnHierarchyChanged() const
 {
     MarkGlobalTransformDirty();
 }

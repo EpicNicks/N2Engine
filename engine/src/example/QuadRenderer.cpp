@@ -2,7 +2,6 @@
 #include "engine/GameObject.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/Logger.hpp"
-#include "engine/Time.hpp"
 #include "engine/Application.hpp"
 #include "engine/serialization/MathSerialization.hpp"
 
@@ -12,8 +11,8 @@
 using namespace N2Engine;
 using namespace N2Engine::Example;
 
-QuadRenderer::QuadRenderer(GameObject &gameObject)
-    : IRenderable(gameObject), _color{Common::Color::White()}, _size{Math::Vector3::One()}
+QuadRenderer::QuadRenderer(GameObject& gameObject)
+    : IRenderable(gameObject)
 {
     _gameObject.CreatePositionable();
     RegisterMember(NAMEOF(_color), _color);
@@ -25,7 +24,7 @@ void QuadRenderer::OnDestroy()
     CleanupRenderResources(_cachedRenderer);
 }
 
-void QuadRenderer::InitializeRenderResources(Renderer::Common::IRenderer *renderer)
+void QuadRenderer::InitializeRenderResources(Renderer::Common::IRenderer* renderer)
 {
     if (_resourcesInitialized || !renderer)
     {
@@ -38,7 +37,7 @@ void QuadRenderer::InitializeRenderResources(Renderer::Common::IRenderer *render
     _resourcesInitialized = true;
 }
 
-void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
+void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer* renderer)
 {
     _shader = renderer->GetStandardUnlitShader();
 
@@ -47,7 +46,7 @@ void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
 
     // Vertex data - color values don't matter since we use uniform
     // Using white (1,1,1,1) as a default
-    const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    constexpr float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
     // Quad vertices (centered at origin, 1x1 size)
     quadData.vertices = {
@@ -58,16 +57,17 @@ void QuadRenderer::CreateQuadMesh(Renderer::Common::IRenderer *renderer)
         // Top-right
         {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
         // Top-left
-        {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}}};
+        {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}}
+    };
 
     // Two triangles: (0,1,2) and (0,2,3)
     quadData.indices = {0, 1, 2, 0, 2, 3};
 
     _mesh = renderer->CreateMesh(quadData);
-    _material = renderer->CreateMaterial(_shader, 0); // No texture for now
+    _material = renderer->CreateMaterial(_shader, nullptr); // No texture for now
 }
 
-void QuadRenderer::Render(Renderer::Common::IRenderer *renderer)
+void QuadRenderer::Render(Renderer::Common::IRenderer* renderer)
 {
     if (!renderer)
     {
@@ -84,14 +84,14 @@ void QuadRenderer::Render(Renderer::Common::IRenderer *renderer)
         }
     }
 
-    if (_mesh == 0)
+    if (_mesh == nullptr)
     {
         return;
     }
 
-    const GameObject &gameObject = GetGameObject();
+    const GameObject& gameObject = GetGameObject();
 
-    std::shared_ptr<N2Engine::Positionable> positionable = gameObject.GetPositionable();
+    const Positionable* positionable = gameObject.GetPositionable();
     if (!positionable)
         return;
 
@@ -113,15 +113,15 @@ void QuadRenderer::Render(Renderer::Common::IRenderer *renderer)
     renderer->DrawMesh(_mesh, finalMatrix.Data(), _material);
 }
 
-void QuadRenderer::CleanupRenderResources(Renderer::Common::IRenderer *renderer)
+void QuadRenderer::CleanupRenderResources(Renderer::Common::IRenderer* renderer)
 {
     if (!_resourcesInitialized || !renderer)
         return;
 
-    if (_mesh != 0)
+    if (_mesh != nullptr)
     {
         renderer->DestroyMesh(_mesh);
-        _mesh = 0;
+        _mesh = nullptr;
     }
 
     if (_material != nullptr)
@@ -130,10 +130,10 @@ void QuadRenderer::CleanupRenderResources(Renderer::Common::IRenderer *renderer)
         _material = nullptr;
     }
 
-    if (_shader != 0)
+    if (_shader != nullptr)
     {
         renderer->DestroyShaderProgram(_shader); // Clean up the shader
-        _shader = 0;
+        _shader = nullptr;
     }
 
     _resourcesInitialized = false;

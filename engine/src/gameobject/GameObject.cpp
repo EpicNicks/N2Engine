@@ -7,22 +7,22 @@
 #include "engine/serialization/ReferenceResolver.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 using namespace N2Engine;
 
 GameObject::Ptr GameObject::Create(const std::string &name)
 {
-    return std::shared_ptr<GameObject>(new GameObject(name));
+    return std::make_shared<GameObject>(name);
 }
 
-GameObject::GameObject(const std::string &name) : _name(name)
+// GameObject starts active by default
+GameObject::GameObject(std::string name) :
+    _name(std::move(name)),
+    _positionable{nullptr}
 {
-    // GameObject starts active by default
-    _isActive = true;
-    _activeInHierarchyCached = true;
-    _activeInHierarchyDirty = true;
-    _scene = nullptr;
 }
 
 void GameObject::Purge()
@@ -96,7 +96,7 @@ void GameObject::SetActive(bool active)
     }
 }
 
-void GameObject::NotifyActiveChanged()
+void GameObject::NotifyActiveChanged() const
 {
     // Notify all components
     for (auto &component : _components)
@@ -300,16 +300,16 @@ GameObject::Ptr GameObject::FindChildRecursive(const std::string &name) const
     return nullptr;
 }
 
-std::shared_ptr<Positionable> GameObject::GetPositionable() const
+Positionable* GameObject::GetPositionable() const
 {
-    return _positionable;
+    return _positionable.get();
 }
 
 void GameObject::CreatePositionable()
 {
     if (!_positionable)
     {
-        _positionable = std::make_shared<Positionable>(*this);
+        _positionable = std::make_unique<Positionable>(*this);
     }
 }
 
@@ -318,10 +318,9 @@ bool GameObject::HasPositionable() const
     return _positionable != nullptr;
 }
 
-std::shared_ptr<Component> GameObject::GetComponent(const std::type_index &type) const
+Component* GameObject::GetComponent(const std::type_index &type) const
 {
-    auto it = _componentMap.find(type);
-    if (it != _componentMap.end())
+    if (const auto it = _componentMap.find(type); it != _componentMap.end())
     {
         return it->second;
     }
@@ -330,10 +329,9 @@ std::shared_ptr<Component> GameObject::GetComponent(const std::type_index &type)
 
 bool GameObject::RemoveComponent(const std::type_index &type)
 {
-    auto it = _componentMap.find(type);
-    if (it != _componentMap.end())
+    if (const auto it = _componentMap.find(type); it != _componentMap.end())
     {
-        auto component = it->second;
+        const auto component = it->second;
         // Notify component
         component->OnDestroy();
 
@@ -341,8 +339,10 @@ bool GameObject::RemoveComponent(const std::type_index &type)
         _componentMap.erase(it);
 
         // Remove from vector
-        auto vecIt = std::find(_components.begin(), _components.end(), component);
-        if (vecIt != _components.end())
+        if (const auto vecIt = std::ranges::find_if(_components,
+            [component](const std::unique_ptr<Component>& ptr) {
+                return ptr.get() == component;
+            }); vecIt != _components.end())
         {
             _components.erase(vecIt);
         }
@@ -354,10 +354,7 @@ bool GameObject::RemoveComponent(const std::type_index &type)
 
 void GameObject::RemoveAllComponents()
 {
-    // Make a copy to avoid iterator invalidation
-    auto componentsCopy = _components;
-
-    for (auto &component : componentsCopy)
+    for (auto &component : _components)
     {
         if (component)
         {
@@ -379,11 +376,11 @@ void GameObject::SetScene(Scene *scene)
     _scene = scene;
     for (const auto &component : _components)
     {
-        _scene->AddComponentToAttachQueue(component);
+        _scene->AddComponentToAttachQueue(component.get());
     }
 
     // Recursively set scene for children
-    for (auto &child : _children)
+    for (const auto &child : _children)
     {
         child->SetScene(scene);
     }
@@ -417,7 +414,7 @@ void GameObject::StopAllCoroutines()
 }
 
 // Utility methods
-bool GameObject::IsChildOf(Ptr potentialParent)
+bool GameObject::IsChildOf(const Ptr& potentialParent) const
 {
     if (!potentialParent)
         return false;
@@ -432,7 +429,7 @@ bool GameObject::IsChildOf(Ptr potentialParent)
     return false;
 }
 
-bool GameObject::IsParentOf(Ptr potentialChild)
+bool GameObject::IsParentOf(const Ptr& potentialChild)
 {
     return potentialChild ? potentialChild->IsChildOf(shared_from_this()) : false;
 }
@@ -584,13 +581,13 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
 {
     // Create GameObject with UUID
     Math::UUID uuid(j["uuid"].get<std::string>());
-    auto go = std::shared_ptr<GameObject>(new GameObject(j["name"].get<std::string>()));
+    auto go = std::make_shared<GameObject>(j["name"].get<std::string>());
     go->_uuid = uuid; // Restore original UUID
 
     // Register this GameObject in the resolver
     if (resolver)
     {
-        resolver->RegisterGameObject(uuid, go);
+        resolver->RegisterGameObject(uuid, go.get());
     }
 
     if (j.contains("isActive"))
@@ -616,22 +613,21 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
         for (const auto &compJson : j["components"])
         {
             std::string typeName = compJson["type"];
-            auto component = ComponentRegistry::Instance().Create(typeName, *go);
 
-            if (component)
+            if (auto component = ComponentRegistry::Instance().Create(typeName, *go))
             {
                 // Register component in resolver BEFORE deserializing
                 if (resolver && compJson["data"].contains("uuid"))
                 {
                     Math::UUID compUUID(compJson["data"]["uuid"].get<std::string>());
-                    resolver->RegisterComponent(compUUID, component);
+                    resolver->RegisterComponent(compUUID, component.get());
                 }
 
                 // Deserialize with resolver for reference resolution
                 component->Deserialize(compJson["data"], resolver);
 
-                go->_components.push_back(component);
-                go->_componentMap[std::type_index(typeid(*component))] = component;
+                go->_components.push_back(std::move(component));
+                go->_componentMap[std::type_index(typeid(*component))] = component.get();
             }
         }
     }
@@ -641,7 +637,7 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
     {
         for (const auto &childJson : j["children"])
         {
-            auto child = GameObject::Deserialize(childJson, resolver);
+            const auto child = Deserialize(childJson, resolver);
             go->AddChild(child, false); // Don't keep world position during load
         }
     }

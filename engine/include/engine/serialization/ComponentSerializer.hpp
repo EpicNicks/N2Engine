@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include <vector>
 #include <functional>
 #include <type_traits>
@@ -10,23 +11,21 @@
 
 namespace N2Engine
 {
-    using json = nlohmann::json;
-
     /**
      * Helper for serializing individual member variables
      */
     class MemberSerializer
     {
     public:
-        using SerializeFunc = std::function<void(json &)>;
-        using DeserializeFunc = std::function<void(const json &, ReferenceResolver *)>;
+        using SerializeFunc = std::function<void(nlohmann::json &)>;
+        using DeserializeFunc = std::function<void(const nlohmann::json &, ReferenceResolver *)>;
 
         std::string name;
         SerializeFunc serialize;
         DeserializeFunc deserialize;
 
-        MemberSerializer(const std::string &name, SerializeFunc s, DeserializeFunc d)
-            : name(name), serialize(s), deserialize(d) {}
+        MemberSerializer(std::string name, SerializeFunc s, DeserializeFunc d)
+            : name(std::move(name)), serialize(std::move(s)), deserialize(std::move(d)) {}
     };
 
     /**
@@ -38,7 +37,7 @@ namespace N2Engine
     protected:
         std::vector<MemberSerializer> _members;
 
-        SerializableComponent(GameObject &gameObject) : Component(gameObject) {}
+        explicit SerializableComponent(GameObject &gameObject) : Component(gameObject) {}
 
         /**
          * Register a primitive/value member for automatic serialization
@@ -50,12 +49,12 @@ namespace N2Engine
             _members.emplace_back(
                 name,
                 // Serialize lambda
-                [&member, name](json &j)
+                [&member, name](nlohmann::json &j)
                 {
                     j[name] = member;
                 },
                 // Deserialize lambda
-                [&member, name](const json &j, ReferenceResolver *resolver)
+                [&member, name](const nlohmann::json &j, ReferenceResolver *resolver)
                 {
                     if (j.contains(name))
                     {
@@ -67,7 +66,7 @@ namespace N2Engine
         /**
          * Register a GameObject reference (resolved via UUID after deserialization)
          */
-        void RegisterGameObjectRef(const std::string &name, std::shared_ptr<GameObject> &gameObjectRef);
+        void RegisterGameObjectRef(const std::string &name, GameObject* gameObjectRef);
 
         /**
          * Register a Component reference (resolved via UUID after deserialization)
@@ -76,12 +75,12 @@ namespace N2Engine
         template <typename T>
         void RegisterComponentRef(const std::string &name, std::shared_ptr<T> &componentRef)
         {
-            static_assert(std::is_base_of<Component, T>::value, "T must be a Component type");
+            static_assert(std::is_base_of_v<Component, T>, "T must be a Component type");
 
             _members.emplace_back(
                 name,
                 // Serialize: store UUID
-                [&componentRef, name](json &j)
+                [&componentRef, name](nlohmann::json &j)
                 {
                     if (componentRef)
                     {
@@ -93,7 +92,7 @@ namespace N2Engine
                     }
                 },
                 // Deserialize: schedule for later resolution
-                [&componentRef, name](const json &j, ReferenceResolver *resolver)
+                [&componentRef, name](const nlohmann::json &j, ReferenceResolver *resolver)
                 {
                     if (!j.contains(name) || j[name].is_null())
                     {
@@ -101,7 +100,7 @@ namespace N2Engine
                         return;
                     }
 
-                    std::string uuidStr = j[name].get<std::string>();
+                    auto uuidStr = j[name].get<std::string>();
                     Math::UUID uuid(uuidStr);
 
                     if (resolver)
@@ -118,7 +117,7 @@ namespace N2Engine
         /**
          * Register a vector of GameObject references
          */
-        void RegisterGameObjectRefVector(const std::string &name, std::vector<std::shared_ptr<GameObject>> &gameObjectRefs);
+        void RegisterGameObjectRefVector(const std::string &name, std::vector<GameObject *> &gameObjectRefs);
 
         /**
          * Register a vector of Component references
@@ -126,14 +125,14 @@ namespace N2Engine
         template <typename T>
         void RegisterComponentRefVector(const std::string &name, std::vector<std::shared_ptr<T>> &componentRefs)
         {
-            static_assert(std::is_base_of<Component, T>::value, "T must be a Component type");
+            static_assert(std::is_base_of_v<Component, T>, "T must be a Component type");
 
             _members.emplace_back(
                 name,
                 // Serialize: store array of UUIDs
-                [&componentRefs, name](json &j)
+                [&componentRefs, name](nlohmann::json &j)
                 {
-                    json arr = json::array();
+                    nlohmann::json arr = nlohmann::json::array();
                     for (const auto &comp : componentRefs)
                     {
                         if (comp)
@@ -148,14 +147,14 @@ namespace N2Engine
                     j[name] = arr;
                 },
                 // Deserialize: schedule for later resolution
-                [&componentRefs, name](const json &j, ReferenceResolver *resolver)
+                [&componentRefs, name](const nlohmann::json &j, ReferenceResolver *resolver)
                 {
                     componentRefs.clear();
 
                     if (!j.contains(name))
                         return;
 
-                    const json &arr = j[name];
+                    const nlohmann::json &arr = j[name];
                     if (!arr.is_array())
                         return;
 
@@ -188,9 +187,9 @@ namespace N2Engine
         /**
          * Serialize this component and all registered members
          */
-        json Serialize() const override
+        [[nodiscard]] nlohmann::json Serialize() const override
         {
-            json j = Component::Serialize(); // Serialize base class first
+            nlohmann::json j = Component::Serialize(); // Serialize base class first
 
             // Serialize all registered members
             for (const auto &member : _members)
@@ -204,7 +203,7 @@ namespace N2Engine
         /**
          * Deserialize this component with reference resolution support
          */
-        void Deserialize(const json &j, ReferenceResolver *resolver)
+        void Deserialize(const nlohmann::json &j, ReferenceResolver *resolver) override
         {
             Component::Deserialize(j); // Deserialize base class first
 
@@ -218,7 +217,7 @@ namespace N2Engine
         /**
          * Backwards compatibility - deserialize without resolver
          */
-        void Deserialize(const json &j) override
+        void Deserialize(const nlohmann::json &j) override
         {
             Deserialize(j, nullptr);
         }

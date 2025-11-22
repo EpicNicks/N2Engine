@@ -4,8 +4,6 @@
 #include <math/Vector3.hpp>
 #include <math/Quaternion.hpp>
 
-#include "engine/base/EventHandler.hpp"
-
 namespace N2Engine
 {
     class Transform

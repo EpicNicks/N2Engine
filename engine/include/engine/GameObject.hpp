@@ -5,7 +5,6 @@
 #include <vector>
 #include <unordered_map>
 #include <typeindex>
-#include <type_traits>
 #include <generator>
 #include <optional>
 
@@ -30,11 +29,14 @@ namespace N2Engine
     class Positionable;
     class ReferenceResolver;
 
+    template <typename T>
+    concept DerivedFromComponent = std::is_base_of_v<Component, T>;
+
     /**
      * Container class for Components
      * Unlike Unity, may or may not have a transform/positionable
      */
-    class GameObject : public Base::Asset, public std::enable_shared_from_this<GameObject>
+    class GameObject final : public Base::Asset, public std::enable_shared_from_this<GameObject>
     {
         friend class Scene;
 
@@ -52,11 +54,11 @@ namespace N2Engine
 
         WeakPtr _parent;
         std::vector<Ptr> _children;
-        std::shared_ptr<Positionable> _positionable = nullptr;
+        std::unique_ptr<Positionable> _positionable;
 
         // Component system
-        std::vector<std::shared_ptr<Component>> _components;
-        std::unordered_map<std::type_index, std::shared_ptr<Component>> _componentMap;
+        std::vector<std::unique_ptr<Component>> _components;
+        std::unordered_map<std::type_index, Component*> _componentMap;
 
         // Transform is special - always present for positioned objects
         std::shared_ptr<Transform> _transform;
@@ -65,17 +67,17 @@ namespace N2Engine
 
         // Private methods
         void UpdateActiveInHierarchyCache() const;
-        void NotifyActiveChanged();
+        void NotifyActiveChanged() const;
         void SetScene(Scene *scene);
         void Purge();
 
     public:
         // Construction
         static Ptr Create(const std::string &name = "GameObject");
-        explicit GameObject(const std::string &name);
+        explicit GameObject(std::string name);
 
         // Basic properties
-        const std::string &GetName() const { return _name; }
+        const std::string& GetName() const { return _name; }
         void SetName(const std::string &name) { _name = name; }
 
         // Active state management
@@ -90,7 +92,7 @@ namespace N2Engine
         void AddChild(Ptr child, bool keepWorldPosition = true);
         void RemoveChild(Ptr child, bool keepWorldPosition = true);
 
-        const std::vector<Ptr> &GetChildren() const { return _children; }
+        const std::vector<Ptr>& GetChildren() const { return _children; }
         size_t GetChildCount() const { return _children.size(); }
         Ptr GetChild(size_t index) const;
         Ptr FindChild(const std::string &name) const;
@@ -98,47 +100,47 @@ namespace N2Engine
         std::vector<Ptr> GetChildrenRecursive() const;
 
         // Hierarchy utility methods
-        bool IsChildOf(Ptr potentialParent);
-        bool IsParentOf(Ptr potentialChild);
+        bool IsChildOf(const Ptr &potentialParent) const;
+        bool IsParentOf(const Ptr &potentialChild);
         Ptr GetRoot();
         size_t GetHierarchyDepth() const;
         std::string GetHierarchyPath() const;
 
         // Transform/Positionable management
-        std::shared_ptr<Positionable> GetPositionable() const;
+        Positionable* GetPositionable() const;
         void CreatePositionable();
         bool HasPositionable() const;
 
         // Component system - Template declarations
-        template <typename T>
-        std::shared_ptr<T> AddComponent();
+        template <DerivedFromComponent T>
+        T* AddComponent();
 
-        template <typename T>
-        std::shared_ptr<T> GetComponent() const;
+        template <DerivedFromComponent T>
+        T* GetComponent() const;
 
-        template <typename T>
-        std::vector<std::shared_ptr<T>> GetComponents() const;
+        template <DerivedFromComponent T>
+        std::vector<T*> GetComponents() const;
 
-        template <typename T>
+        template <DerivedFromComponent T>
         bool HasComponent() const;
 
-        template <typename T>
+        template <DerivedFromComponent T>
         bool RemoveComponent();
 
         // Component system - Non-template methods
-        std::shared_ptr<Component> GetComponent(const std::type_index &type) const;
+        Component* GetComponent(const std::type_index &type) const;
         bool RemoveComponent(const std::type_index &type);
         void RemoveAllComponents();
         size_t GetComponentCount() const;
-        const std::vector<std::shared_ptr<Component>> &GetAllComponents() const { return _components; }
+        const std::vector<std::unique_ptr<Component>>& GetAllComponents() const { return _components; }
 
         // Scene management
-        Scene *GetScene() const { return _scene; }
+        Scene* GetScene() const { return _scene; }
 
         void Destroy();
         bool IsDestroyed() const;
 
-        Scheduling::Coroutine *StartCoroutine(std::generator<Scheduling::ICoroutineWait> &&coroutine);
+        Scheduling::Coroutine* StartCoroutine(std::generator<Scheduling::ICoroutineWait> &&coroutine);
         bool StopCoroutine(Scheduling::Coroutine *coroutine);
         void StopAllCoroutines();
 
@@ -151,3 +153,5 @@ namespace N2Engine
         static std::vector<Ptr> FindGameObjectsByTag(const std::string &tag, Scene *scene);
     };
 }
+
+#include "engine/GameObject.inl"

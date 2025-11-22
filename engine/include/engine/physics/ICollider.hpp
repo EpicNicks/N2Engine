@@ -18,44 +18,36 @@ namespace N2Engine::Physics
     class ICollider : public Component
     {
     public:
-        virtual ~ICollider() = default;
+        explicit ICollider(GameObject &gameObject);
 
         void OnAttach() override;
         void OnDestroy() override;
 
         // Configuration
         void SetIsTrigger(bool isTrigger);
-        bool IsTrigger() const { return _isTrigger; }
+        [[nodiscard]] bool IsTrigger() const { return _isTrigger; }
 
         void SetMaterial(const Physics::PhysicsMaterial &material);
-        Physics::PhysicsMaterial GetMaterial() const { return _material; }
+        [[nodiscard]] PhysicsMaterial GetMaterial() const { return _material; }
 
         void SetOffset(const Math::Vector3 &offset) { _offset = offset; }
-        Math::Vector3 GetOffset() const { return _offset; }
+        [[nodiscard]] Math::Vector3 GetOffset() const { return _offset; }
 
-        // Collision callbacks - override in derived classes
-        virtual void OnCollisionEnter(const Physics::Collision &collision) {}
-        virtual void OnCollisionStay(const Physics::Collision &collision) {}
-        virtual void OnCollisionExit(const Physics::Collision &collision) {}
-
-        virtual void OnTriggerEnter(const Physics::Trigger &trigger) {}
-        virtual void OnTriggerExit(const Physics::Trigger &trigger) {}
-
-        void OnTransformChanged();
+        void OnTransformChanged() const;
 
         // Internal
-        Physics::PhysicsBodyHandle GetHandle() const { return _handle; }
+        [[nodiscard]] PhysicsBodyHandle GetHandle() const { return _handle; }
 
     protected:
         // Derived classes implement this to add their specific shape
-        virtual void AttachShape(Physics::IPhysicsBackend *backend) = 0;
+        virtual void AttachShape(IPhysicsBackend *backend) = 0;
 
         bool _isTrigger = false;
-        Physics::PhysicsMaterial _material = Physics::PhysicsMaterial::Default();
+        PhysicsMaterial _material = PhysicsMaterial::Default();
         Math::Vector3 _offset = Math::Vector3::Zero();
 
     private:
-        Physics::PhysicsBodyHandle _handle;
+        PhysicsBodyHandle _handle;
         bool _ownsBody = false; // True if we created the body (no Rigidbody present)
     };
 

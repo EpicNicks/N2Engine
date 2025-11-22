@@ -3,11 +3,11 @@
 
 using namespace N2Engine;
 
-N2Engine::Base::EventHandler<std::string_view, Logger::LogLevel> Logger::logEvent;
+Base::EventHandler<std::string_view, Logger::LogLevel> Logger::logEvent;
 bool Logger::broadcastUnbroadcastLogs = false;
 std::queue<Logger::QueuedLog> Logger::_logQueue;
 
-void Logger::Log(std::string_view log, Logger::LogLevel level)
+void Logger::Log(std::string_view log, LogLevel level)
 {
     if (broadcastUnbroadcastLogs && logEvent.GetSubscriberCount() == 0)
     {
@@ -25,27 +25,27 @@ void Logger::Log(std::string_view log, Logger::LogLevel level)
     }
 }
 
-void Logger::Info(std::string_view log)
+void Logger::Info(const std::string_view log)
 {
     Log(log, LogLevel::Info);
 }
 
-void Logger::Warn(std::string_view log)
+void Logger::Warn(const std::string_view log)
 {
     Log(log, LogLevel::Warn);
 }
 
-void Logger::Error(std::string_view log)
+void Logger::Error(const std::string_view log)
 {
     Log(log, LogLevel::Error);
 }
 
 Logger::StreamRedirector::LoggerStreambuf::LoggerStreambuf(
     std::streambuf *original,
-    Logger::LogLevel level,
-    bool echo) : originalBuf(original), logLevel(level), echoToOriginal(echo) {}
+    const LogLevel level,
+    const bool echo) : originalBuf(original), logLevel(level), echoToOriginal(echo) {}
 
-int Logger::StreamRedirector::LoggerStreambuf::overflow(int c)
+int Logger::StreamRedirector::LoggerStreambuf::overflow(const int c)
 {
     if (c == EOF)
         return EOF;
@@ -114,12 +114,12 @@ Logger::StreamRedirector::~StreamRedirector()
 }
 
 // Convenience Factory Methods
-std::streambuf *Logger::RedirectStdout(LogLevel level, bool echo)
+std::streambuf *Logger::RedirectStdout(const LogLevel level, const bool echo)
 {
     return RedirectStream(std::cout, level, echo);
 }
 
-std::streambuf *Logger::RedirectStderr(LogLevel level, bool echo)
+std::streambuf *Logger::RedirectStderr(const LogLevel level, const bool echo)
 {
     return RedirectStream(std::cerr, level, echo);
 }

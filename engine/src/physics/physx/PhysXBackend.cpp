@@ -2,7 +2,6 @@
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/ICollider.hpp"
 #include "engine/GameObject.hpp"
-#include "engine/GameObject.inl"
 #include "engine/Component.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
@@ -26,17 +25,9 @@ using namespace physx;
 
 namespace N2Engine::Physics
 {
-
 #ifdef N2ENGINE_PHYSX_ENABLED
 
-    PhysXBackend::PhysXBackend()
-        : _foundation(nullptr),
-          _physics(nullptr),
-          _scene(nullptr),
-          _dispatcher(nullptr),
-          _defaultMaterial(nullptr)
-    {
-    }
+    PhysXBackend::PhysXBackend() {}
 
     PhysXBackend::~PhysXBackend()
     {
@@ -147,7 +138,7 @@ namespace N2Engine::Physics
                 // Clean up user data
                 if (bodyData.actor->userData)
                 {
-                    delete static_cast<PhysicsBodyHandle *>(bodyData.actor->userData);
+                    delete static_cast<PhysicsBodyHandle*>(bodyData.actor->userData);
                     bodyData.actor->userData = nullptr;
                 }
 
@@ -158,20 +149,20 @@ namespace N2Engine::Physics
         _freeList.clear();
 
         // Release cached materials
-        for (auto& material : _materialCache | std::views::values)
+        for (auto &material : _materialCache | std::views::values)
         {
             material->release();
         }
         _materialCache.clear();
 
         // Clean up collision events
-        for (auto & [pair, data] : _newCollisions)
+        for (auto &[pair, data] : _newCollisions)
         {
             delete data;
         }
         _newCollisions.clear();
 
-        for (auto & [pair, data] : _endedCollisions)
+        for (auto &[pair, data] : _endedCollisions)
         {
             delete data;
         }
@@ -260,7 +251,7 @@ namespace N2Engine::Physics
         return handle;
     }
 
-    PhysXBackend::BodyData *PhysXBackend::GetBodyData(PhysicsBodyHandle handle)
+    PhysXBackend::BodyData* PhysXBackend::GetBodyData(PhysicsBodyHandle handle)
     {
         if (handle.index >= _bodies.size())
             return nullptr;
@@ -273,7 +264,7 @@ namespace N2Engine::Physics
         return &data;
     }
 
-    const PhysXBackend::BodyData *PhysXBackend::GetBodyData(PhysicsBodyHandle handle) const
+    const PhysXBackend::BodyData* PhysXBackend::GetBodyData(PhysicsBodyHandle handle) const
     {
         if (handle.index >= _bodies.size())
             return nullptr;
@@ -288,7 +279,8 @@ namespace N2Engine::Physics
 
     // ========== Body Creation ==========
 
-    PhysicsBodyHandle PhysXBackend::CreateDynamicBody(const Math::Vector3 &position, const Math::Quaternion &rotation, float mass, Rigidbody *rigidbody, bool isKinematic)
+    PhysicsBodyHandle PhysXBackend::CreateDynamicBody(const Math::Vector3 &position, const Math::Quaternion &rotation,
+                                                      float mass, Rigidbody *rigidbody, bool isKinematic)
     {
         const PxTransform transform(
             PxVec3(position.x, position.y, position.z),
@@ -316,9 +308,11 @@ namespace N2Engine::Physics
         return handle;
     }
 
-    PhysicsBodyHandle PhysXBackend::CreateStaticBody(const Math::Vector3 &position, const Math::Quaternion &rotation, Rigidbody *rigidbody)
+    PhysicsBodyHandle PhysXBackend::CreateStaticBody(const Math::Vector3 &position, const Math::Quaternion &rotation,
+                                                     Rigidbody *rigidbody)
     {
-        const PxTransform transform(PxVec3(position.x, position.y, position.z), PxQuat(rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()));
+        const PxTransform transform(PxVec3(position.x, position.y, position.z),
+                                    PxQuat(rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()));
         PxRigidStatic *body = _physics->createRigidStatic(transform);
 
         if (!body)
@@ -349,7 +343,7 @@ namespace N2Engine::Physics
         {
             if (data->actor->userData)
             {
-                delete static_cast<PhysicsBodyHandle *>(data->actor->userData);
+                delete static_cast<PhysicsBodyHandle*>(data->actor->userData);
                 data->actor->userData = nullptr;
             }
 
@@ -444,7 +438,7 @@ namespace N2Engine::Physics
         }
     }
 
-    PxMaterial *PhysXBackend::GetOrCreateMaterial(const PhysicsMaterial &material)
+    PxMaterial* PhysXBackend::GetOrCreateMaterial(const PhysicsMaterial &material)
     {
         const MaterialKey key{material.staticFriction, material.dynamicFriction, material.restitution};
 
@@ -566,7 +560,7 @@ namespace N2Engine::Physics
 
         // Get all shapes attached to this actor
         const PxU32 numShapes = data->actor->getNbShapes();
-        std::vector<PxShape *> shapes(numShapes);
+        std::vector<PxShape*> shapes(numShapes);
         data->actor->getShapes(shapes.data(), numShapes);
 
         // Set trigger flag on all shapes
@@ -774,13 +768,13 @@ namespace N2Engine::Physics
             Math::Quaternion rotation(pxTransform.q.w, pxTransform.q.x, pxTransform.q.y, pxTransform.q.z);
 
             // Update GameObject transform
-            std::shared_ptr<N2Engine::Positionable> positionable = bodyData.rigidbody->GetGameObject().GetPositionable();
-            if (positionable)
+            if (Positionable *positionable = bodyData.rigidbody->GetGameObject().GetPositionable())
             {
                 positionable->SetPositionAndRotation(position, rotation);
             }
         }
     }
+
     // ========== Collision Detection Callbacks ==========
 
     void PhysXBackend::onContact(
@@ -788,8 +782,8 @@ namespace N2Engine::Physics
         const PxContactPair *pairs,
         PxU32 nbPairs)
     {
-        auto *handleA = static_cast<PhysicsBodyHandle *>(pairHeader.actors[0]->userData);
-        auto *handleB = static_cast<PhysicsBodyHandle *>(pairHeader.actors[1]->userData);
+        auto *handleA = static_cast<PhysicsBodyHandle*>(pairHeader.actors[0]->userData);
+        auto *handleB = static_cast<PhysicsBodyHandle*>(pairHeader.actors[1]->userData);
 
         if (!handleA || !handleB)
         {
@@ -867,8 +861,8 @@ namespace N2Engine::Physics
     {
         for (PxU32 i = 0; i < count; i++)
         {
-            auto *triggerHandle = static_cast<PhysicsBodyHandle *>(pairs[i].triggerActor->userData);
-            auto *otherHandle = static_cast<PhysicsBodyHandle *>(pairs[i].otherActor->userData);
+            auto *triggerHandle = static_cast<PhysicsBodyHandle*>(pairs[i].triggerActor->userData);
+            auto *otherHandle = static_cast<PhysicsBodyHandle*>(pairs[i].otherActor->userData);
 
             if (!triggerHandle || !otherHandle)
                 continue;
@@ -983,7 +977,6 @@ namespace N2Engine::Physics
 
     void PhysXBackend::ProcessCollisionCallbacks()
     {
-        // ===== OnCollisionEnter =====
         for (const auto &event : _newCollisions)
         {
             BodyData *dataA = GetBodyData(event.pair.bodyA);
@@ -992,8 +985,7 @@ namespace N2Engine::Physics
             if (dataA)
             {
                 Collision collisionForA = CreateCollisionData(event.pair, *event.data, true);
-
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnCollisionEnter(collisionForA);
@@ -1002,8 +994,7 @@ namespace N2Engine::Physics
             if (dataB)
             {
                 Collision collisionForB = CreateCollisionData(event.pair, *event.data, false);
-
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnCollisionEnter(collisionForB);
@@ -1027,8 +1018,7 @@ namespace N2Engine::Physics
             if (dataA)
             {
                 Collision collisionForA = CreateCollisionData(pair, baseData, true);
-
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnCollisionStay(collisionForA);
@@ -1038,8 +1028,7 @@ namespace N2Engine::Physics
             if (dataB)
             {
                 Collision collisionForB = CreateCollisionData(pair, baseData, false);
-
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnCollisionStay(collisionForB);
@@ -1056,8 +1045,7 @@ namespace N2Engine::Physics
             if (dataA)
             {
                 Collision collisionForA = CreateCollisionData(event.pair, *event.data, true);
-
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnCollisionExit(collisionForA);
@@ -1068,7 +1056,7 @@ namespace N2Engine::Physics
             {
                 Collision collisionForB = CreateCollisionData(event.pair, *event.data, false);
 
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnCollisionExit(collisionForB);
@@ -1089,7 +1077,7 @@ namespace N2Engine::Physics
             {
                 Trigger triggerForA = CreateTriggerData(event.pair, true);
 
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnTriggerEnter(triggerForA);
@@ -1099,7 +1087,7 @@ namespace N2Engine::Physics
             if (dataB)
             {
                 Trigger triggerForB = CreateTriggerData(event.pair, false);
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnTriggerEnter(triggerForB);
@@ -1117,7 +1105,7 @@ namespace N2Engine::Physics
             if (dataA)
             {
                 Trigger triggerForA = CreateTriggerData(pair, true);
-                std::vector<std::shared_ptr<Component>> components = dataA->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataA->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnTriggerStay(triggerForA);
@@ -1127,7 +1115,7 @@ namespace N2Engine::Physics
             if (dataB)
             {
                 Trigger triggerForB = CreateTriggerData(pair, false);
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnTriggerStay(triggerForB);
@@ -1144,7 +1132,7 @@ namespace N2Engine::Physics
             if (dataA)
             {
                 Trigger triggerForA = CreateTriggerData(event.pair, true);
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnTriggerExit(triggerForA);
@@ -1154,7 +1142,7 @@ namespace N2Engine::Physics
             if (dataB)
             {
                 Trigger triggerForB = CreateTriggerData(event.pair, false);
-                std::vector<std::shared_ptr<Component>> components = dataB->colliders[0]->GetGameObject().GetAllComponents();
+                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
                 for (const auto &comp : components)
                 {
                     comp->OnTriggerExit(triggerForB);
@@ -1168,7 +1156,9 @@ namespace N2Engine::Physics
     void PhysXBackend::onConstraintBreak(PxConstraintInfo *constraints, PxU32 count) {}
     void PhysXBackend::onWake(PxActor **actors, PxU32 count) {}
     void PhysXBackend::onSleep(PxActor **actors, PxU32 count) {}
-    void PhysXBackend::onAdvance(const PxRigidBody *const *bodyBuffer, const PxTransform *poseBuffer, const PxU32 count) {}
+
+    void PhysXBackend::onAdvance(const PxRigidBody *const *bodyBuffer, const PxTransform *poseBuffer,
+                                 const PxU32 count) {}
 
 #else
 
@@ -1182,7 +1172,8 @@ namespace N2Engine::Physics
     void PhysXBackend::SyncTransforms() {}
     void PhysXBackend::ProcessCollisionCallbacks() {}
 
-    PhysicsBodyHandle PhysXBackend::CreateDynamicBody(const Math::Vector3 &, const Math::Quaternion &, float, Rigidbody *)
+    PhysicsBodyHandle PhysXBackend::CreateDynamicBody(const Math::Vector3 &, const Math::Quaternion &, float,
+                                                      Rigidbody *)
     {
         return INVALID_PHYSICS_HANDLE;
     }
@@ -1196,8 +1187,10 @@ namespace N2Engine::Physics
     void PhysXBackend::RegisterCollider(PhysicsBodyHandle, Collider *) {}
     void PhysXBackend::UnregisterCollider(PhysicsBodyHandle, Collider *) {}
     void PhysXBackend::AddSphereCollider(PhysicsBodyHandle, float, const Math::Vector3 &, const PhysicsMaterial &) {}
-    void PhysXBackend::AddBoxCollider(PhysicsBodyHandle, const Math::Vector3 &, const Math::Vector3 &, const PhysicsMaterial &) {}
-    void PhysXBackend::AddCapsuleCollider(PhysicsBodyHandle, float, float, const Math::Vector3 &, const PhysicsMaterial &) {}
+    void PhysXBackend::AddBoxCollider(PhysicsBodyHandle, const Math::Vector3 &, const Math::Vector3 &,
+                                      const PhysicsMaterial &) {}
+    void PhysXBackend::AddCapsuleCollider(PhysicsBodyHandle, float, float, const Math::Vector3 &,
+                                          const PhysicsMaterial &) {}
     void PhysXBackend::SetIsTrigger(PhysicsBodyHandle, bool) {}
     void PhysXBackend::AddForce(PhysicsBodyHandle, const Math::Vector3 &) {}
     void PhysXBackend::AddImpulse(PhysicsBodyHandle, const Math::Vector3 &) {}
@@ -1214,5 +1207,4 @@ namespace N2Engine::Physics
     Math::Vector3 PhysXBackend::GetGravity() const { return Math::Vector3(0.0f, -9.81f, 0.0f); }
 
 #endif
-
 }

@@ -23,11 +23,11 @@ namespace N2Engine
 
     private:
         std::vector<std::shared_ptr<GameObject>> _rootGameObjects;
-        std::vector<std::shared_ptr<Component>> _components;
-        std::queue<std::shared_ptr<Component>> _attachQueue;
+        std::vector<Component*> _components;
+        std::queue<Component*> _attachQueue;
 
         std::queue<std::shared_ptr<GameObject>> _markedForDestructionQueue;
-        Scene(const std::string &name);
+        explicit Scene(const std::string &name);
 
     public:
         std::string sceneName;
@@ -42,17 +42,17 @@ namespace N2Engine
 
         bool DestroyGameObject(std::shared_ptr<GameObject> gameObject);
 
-        const std::vector<std::shared_ptr<GameObject>> &GetRootGameObjects() const { return _rootGameObjects; }
-        size_t GetRootGameObjectCount() const { return _rootGameObjects.size(); }
+        [[nodiscard]] const std::vector<std::shared_ptr<GameObject>> &GetRootGameObjects() const { return _rootGameObjects; }
+        [[nodiscard]] size_t GetRootGameObjectCount() const { return _rootGameObjects.size(); }
 
         void TraverseAll(std::function<void(std::shared_ptr<GameObject>)> callback) const;
         void TraverseAllActive(std::function<void(std::shared_ptr<GameObject>)> callback) const;
         bool TraverseUntil(std::function<bool(std::shared_ptr<GameObject>)> callback) const;
 
-        std::shared_ptr<GameObject> FindGameObject(const std::string &name) const;
-        std::vector<std::shared_ptr<GameObject>> FindGameObjectsByTag(const std::string &tag) const;
+        [[nodiscard]] std::shared_ptr<GameObject> FindGameObject(const std::string &name) const;
+        [[nodiscard]] std::vector<std::shared_ptr<GameObject>> FindGameObjectsByTag(const std::string &tag) const;
 
-        std::vector<std::shared_ptr<GameObject>> GetAllGameObjects() const;
+        [[nodiscard]] std::vector<std::shared_ptr<GameObject>> GetAllGameObjects() const;
 
         template <typename T>
         std::shared_ptr<T> FindObjectByType(bool includeInactive) const;
@@ -60,15 +60,15 @@ namespace N2Engine
         std::vector<std::shared_ptr<T>> FindObjectsByType(bool includeInactive) const;
 
         void ProcessAttachQueue();
-        void Update();
-        void FixedUpdate();
-        void LateUpdate();
+        void Update() const;
+        void FixedUpdate() const;
+        void LateUpdate() const;
         void AdvanceCoroutines();
         void ProcessDestroyed();
-        void OnApplicationQuit();
+        void OnApplicationQuit() const;
         void Clear();
 
-        nlohmann::json Serialize() const;
+        [[nodiscard]] nlohmann::json Serialize() const;
         static std::shared_ptr<Scene> Deserialize(const nlohmann::json &j);
 
     private:
@@ -76,9 +76,9 @@ namespace N2Engine
         void RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Common::IRenderer *renderer);
         void TraverseGameObjectRecursive(std::shared_ptr<GameObject> gameObject, std::function<void(std::shared_ptr<GameObject>)> callback, bool onlyActive = false) const;
         bool TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject, std::function<bool(std::shared_ptr<GameObject>)> callback) const;
-        void AddComponentToAttachQueue(std::shared_ptr<Component> component);
+        void AddComponentToAttachQueue(Component* component);
 
-        void OnAllActiveComponents(std::function<void(std::shared_ptr<Component>)> callback);
+        void OnAllActiveComponents(const std::function<void(Component*)>& callback) const;
 
         void MarkHierarchyForDestruction(std::shared_ptr<GameObject> gameObject, std::vector<std::shared_ptr<GameObject>> &markedObjects);
         void CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject);

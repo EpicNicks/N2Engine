@@ -1,9 +1,9 @@
+#include <algorithm>
+#include <generator>
+
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/scheduling/Coroutine.hpp"
 #include "engine/GameObject.hpp"
-
-#include <algorithm>
-#include <generator>
 
 using namespace N2Engine::Scheduling;
 
@@ -18,8 +18,7 @@ void CoroutineScheduler::Update()
     {
         for (auto &coroutine : coroutineList)
         {
-            bool isComplete = AdvanceCoroutine(coroutine.get());
-            if (isComplete)
+            if (AdvanceCoroutine(coroutine.get()))
             {
                 coroutinesToRemove.emplace_back(gameObject, coroutine.get());
             }
@@ -30,34 +29,30 @@ void CoroutineScheduler::Update()
 
 Coroutine *CoroutineScheduler::StartCoroutine(GameObject *gameObject, std::generator<ICoroutineWait> &&generator)
 {
+    if (!gameObject || !gameObject->IsActiveInHierarchy())
+    {
+        return nullptr;
+    }
     auto routine = std::make_unique<Coroutine>(std::move(generator));
-    Coroutine *rawPtr = routine.get(); // Store raw pointer to return
 
-    auto it = coroutines.find(gameObject);
-    if (it != coroutines.end())
-    {
-        it->second.push_back(std::move(routine));
-    }
-    else
-    {
-        std::vector<std::unique_ptr<Coroutine>> newList;
-        newList.push_back(std::move(routine));
-        coroutines[gameObject] = std::move(newList);
-    }
-    return rawPtr;
+    coroutines[gameObject].push_back(std::move(routine));
+    return coroutines[gameObject].back().get();
 }
 
 bool CoroutineScheduler::StopCoroutine(GameObject *gameObject, Coroutine *coroutine)
 {
-    auto it = coroutines.find(gameObject);
-    if (it != coroutines.end())
+    if (!gameObject || !gameObject->IsActiveInHierarchy())
+    {
+        return false;
+    }
+    if (const auto it = coroutines.find(gameObject); it != coroutines.end())
     {
         auto &coroutineList = it->second;
-        auto coroutineIt = std::find_if(coroutineList.begin(), coroutineList.end(),
-                                        [coroutine](const std::unique_ptr<Coroutine> &ptr)
-                                        {
-                                            return ptr.get() == coroutine;
-                                        });
+        const auto coroutineIt = std::ranges::find_if(coroutineList,
+                                                [coroutine](const std::unique_ptr<Coroutine> &ptr)
+                                                {
+                                                    return ptr.get() == coroutine;
+                                                });
 
         if (coroutineIt != coroutineList.end())
         {
@@ -70,8 +65,7 @@ bool CoroutineScheduler::StopCoroutine(GameObject *gameObject, Coroutine *corout
 
 void CoroutineScheduler::StopAllCoroutines(GameObject *gameObject)
 {
-    auto it = coroutines.find(gameObject);
-    if (it != coroutines.end())
+    if (const auto it = coroutines.find(gameObject); it != coroutines.end())
     {
         it->second.clear();
     }

@@ -16,6 +16,7 @@ namespace N2Engine::Physics
         {
             return index == other.index && generation == other.generation;
         }
+
         bool operator!=(const PhysicsBodyHandle &other) const
         {
             return !(*this == other);

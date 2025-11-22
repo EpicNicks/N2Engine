@@ -22,7 +22,7 @@ namespace N2Engine
             Error
         };
 
-        static N2Engine::Base::EventHandler<std::string_view, LogLevel> logEvent;
+        static Base::EventHandler<std::string_view, LogLevel> logEvent;
         static bool broadcastUnbroadcastLogs;
 
         static void Log(std::string_view log, LogLevel level);
@@ -44,12 +44,12 @@ namespace N2Engine
             {
             private:
                 std::streambuf *originalBuf;
-                Logger::LogLevel logLevel;
+                LogLevel logLevel;
                 std::string lineBuffer;
                 bool echoToOriginal;
 
             public:
-                LoggerStreambuf(std::streambuf *original, Logger::LogLevel level, bool echo = true);
+                LoggerStreambuf(std::streambuf *original, LogLevel level, bool echo = true);
 
             protected:
                 int overflow(int c) override;
@@ -60,7 +60,7 @@ namespace N2Engine
 
         public:
             // Constructor takes any output stream
-            StreamRedirector(std::ostream &stream, LogLevel level = LogLevel::Info, bool echoToOriginal = true);
+            explicit StreamRedirector(std::ostream &stream, LogLevel level = LogLevel::Info, bool echoToOriginal = true);
             ~StreamRedirector();
 
             // Prevent copying and moving for safety

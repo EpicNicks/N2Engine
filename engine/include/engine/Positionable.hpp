@@ -31,7 +31,7 @@ namespace N2Engine
         Transform _localTransform;
         GameObject &_gameObject;
 
-        mutable std::shared_ptr<Physics::Rigidbody> _attachedRigidbody = nullptr;
+        mutable Physics::Rigidbody* _attachedRigidbody = nullptr;
 
         // Cached global transform with dirty tracking
         mutable Transform _cachedGlobalTransform;
@@ -47,7 +47,7 @@ namespace N2Engine
         void MarkChildrenGlobalTransformDirty() const;
         void UpdateGlobalTransform() const;
         Transform CalculateGlobalTransform() const;
-        std::shared_ptr<Positionable> GetParentPositionable() const;
+        Positionable* GetParentPositionable() const;
 
         void NotifyPhysicsComponents() const;
 
@@ -55,9 +55,9 @@ namespace N2Engine
         explicit Positionable(GameObject &gameObject);
 
         // Local transform access (stored directly)
-        const Math::Vector3 GetLocalPosition() const { return _localTransform.GetPosition(); }
-        const Math::Quaternion GetLocalRotation() const { return _localTransform.GetRotation(); }
-        const Math::Vector3 GetLocalScale() const { return _localTransform.GetScale(); }
+        Math::Vector3 GetLocalPosition() const { return _localTransform.GetPosition(); }
+        Math::Quaternion GetLocalRotation() const { return _localTransform.GetRotation(); }
+        Math::Vector3 GetLocalScale() const { return _localTransform.GetScale(); }
 
         void SetLocalPosition(const Math::Vector3 &position);
         void SetLocalRotation(const Math::Quaternion &rotation);
@@ -94,7 +94,7 @@ namespace N2Engine
         void Deserialize(const nlohmann::json &j);
 
         // Hierarchy change notification
-        void OnHierarchyChanged();
+        void OnHierarchyChanged() const;
 
         // Debug/Editor support
         bool IsGlobalTransformDirty() const;

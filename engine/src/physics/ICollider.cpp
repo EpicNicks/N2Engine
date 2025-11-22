@@ -9,6 +9,12 @@
 
 namespace N2Engine::Physics
 {
+    ICollider::ICollider(GameObject &gameObject)
+        : Component(gameObject)
+    {
+    }
+
+
     void ICollider::OnAttach()
     {
         auto *backend = Application::GetInstance().Get3DPhysicsBackend();
@@ -28,9 +34,9 @@ namespace N2Engine::Physics
         }
 
         // Check if GameObject has a Rigidbody
-        std::shared_ptr<Rigidbody> rb = _gameObject.GetComponent<Rigidbody>();
 
-        if (rb && !rb->IsDestroyed() && rb->GetHandle().IsValid())
+        if (const auto *rb = _gameObject.GetComponent<Rigidbody>(); rb && !rb->IsDestroyed() && rb->GetHandle().
+            IsValid())
         {
             // Use Rigidbody's existing body
             _handle = rb->GetHandle();
@@ -41,7 +47,7 @@ namespace N2Engine::Physics
         else
         {
             // No Rigidbody - create our own static body
-            std::shared_ptr<Positionable> positionable = _gameObject.GetPositionable();
+            const Positionable *positionable = _gameObject.GetPositionable();
             if (!positionable)
             {
                 _gameObject.CreatePositionable();
@@ -105,23 +111,23 @@ namespace N2Engine::Physics
         if (!_handle.IsValid())
             return;
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             backend->SetIsTrigger(_handle, isTrigger);
         }
     }
 
-    void ICollider::SetMaterial(const Physics::PhysicsMaterial &material)
+    void ICollider::SetMaterial(const PhysicsMaterial &material)
     {
         _material = material;
         // TODO: Update existing shapes if already created
     }
 
-    void ICollider::OnTransformChanged()
+    void ICollider::OnTransformChanged() const
     {
         if (_ownsBody)
-        { // This is a static collider
+        {
+            // This is a static collider
             static int moveCount = 0;
             if (++moveCount % 10 == 0)
             {
@@ -143,5 +149,4 @@ namespace N2Engine::Physics
             backend->SetStaticBodyTransform(_handle, positionable->GetPosition(), positionable->GetRotation());
         }
     }
-
 }

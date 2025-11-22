@@ -67,8 +67,8 @@ void Time::Init()
 
 void Time::Update()
 {
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    double frameTime = std::chrono::duration<double>(currentTime - lastFrameTime).count();
+    const auto currentTime = std::chrono::high_resolution_clock::now();
+    const double frameTime = std::chrono::duration<double>(currentTime - lastFrameTime).count();
     lastFrameTime = currentTime;
 
     unscaledDeltaTime = frameTime;

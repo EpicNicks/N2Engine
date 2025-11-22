@@ -29,7 +29,7 @@ namespace N2Engine
     {
         Math::Vector4 planes[6]; // left, right, bottom, top, near, far
 
-        bool IsVisible(const BoundingBox &bbox) const;
+        [[nodiscard]] bool IsVisible(const BoundingBox &bbox) const;
     };
 
     class Camera

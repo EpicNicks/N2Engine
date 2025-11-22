@@ -4,12 +4,10 @@
 
 namespace N2Engine
 {
-    template <typename T>
-    inline std::shared_ptr<T> GameObject::AddComponent()
+    template <DerivedFromComponent T>
+    T* GameObject::AddComponent()
     {
-        static_assert(std::is_base_of_v<Component, T>, "T must inherit from Component");
-
-        auto typeIndex = std::type_index(typeid(T));
+        const auto typeIndex = std::type_index(typeid(T));
 
         if constexpr (T::IsSingleton)
         {
@@ -19,64 +17,59 @@ namespace N2Engine
             }
         }
 
-        auto component = std::make_shared<T>(*this);
+        auto component = std::make_unique<T>(*this);
 
-        _components.push_back(component);
-        _componentMap[typeIndex] = component;
+        _componentMap[typeIndex] = component.get();
+        _components.push_back(std::move(component));
 
         // if GO has already been added to scene and this component is new
         if (_scene != nullptr && SceneManager::GetCurSceneIndex() != -1)
         {
-            SceneManager::GetCurSceneRef().AddComponentToAttachQueue(component);
+            SceneManager::GetCurSceneRef().AddComponentToAttachQueue(_componentMap[typeIndex]);
         }
         // otherwise the component will be added once added to the scene
 
-        return component;
+        return static_cast<T*>(_componentMap[typeIndex]);
     }
 
-    template <typename T>
-    inline std::shared_ptr<T> GameObject::GetComponent() const
+    template <DerivedFromComponent T>
+    T* GameObject::GetComponent() const
     {
-        static_assert(std::is_base_of_v<Component, T>, "T must inherit from Component");
-
-        auto typeIndex = std::type_index(typeid(T));
-        auto it = _componentMap.find(typeIndex);
-        if (it != _componentMap.end())
+        const auto typeIndex = std::type_index(typeid(T));
+        if (const auto it = _componentMap.find(typeIndex); it != _componentMap.end())
         {
-            return std::static_pointer_cast<T>(it->second);
+            return static_cast<T*>(it->second);
         }
         return nullptr;
     }
 
-    template <typename T>
-    inline std::vector<std::shared_ptr<T>> GameObject::GetComponents() const
+    template <DerivedFromComponent T>
+    std::vector<T*> GameObject::GetComponents() const
     {
-        static_assert(std::is_base_of_v<Component, T>, "T must inherit from Component");
+        std::vector<T*> result;
+        result.reserve(_components.size()); // Optimize for common case
 
-        std::vector<std::shared_ptr<T>> result;
         for (const auto &component : _components)
         {
-            if (auto casted = std::dynamic_pointer_cast<T>(component))
+            if (T *castedComponent = dynamic_cast<T*>(component.get()))
             {
-                result.push_back(casted);
+                result.push_back(castedComponent);
             }
         }
         return result;
     }
 
-    template <typename T>
-    inline bool GameObject::HasComponent() const
+    template <DerivedFromComponent T>
+    bool GameObject::HasComponent() const
     {
-        static_assert(std::is_base_of_v<Component, T>, "T must inherit from Component");
-
-        auto typeIndex = std::type_index(typeid(T));
-        return _componentMap.find(typeIndex) != _componentMap.end();
+        const auto typeIndex = std::type_index(typeid(T));
+        return _componentMap.contains(typeIndex);
     }
 
-    template <typename T>
-    inline bool GameObject::RemoveComponent()
+    template <DerivedFromComponent T>
+    bool GameObject::RemoveComponent()
     {
-        auto typeIndex = std::type_index(typeid(T));
+        const auto typeIndex = std::type_index(typeid(T));
         return RemoveComponent(typeIndex);
     }
 }

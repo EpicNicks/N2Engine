@@ -5,7 +5,7 @@
 using namespace N2Engine;
 using json = nlohmann::json;
 
-void SerializableComponent::RegisterGameObjectRef(const std::string &name, std::shared_ptr<GameObject> &gameObjectRef)
+void SerializableComponent::RegisterGameObjectRef(const std::string &name, GameObject* gameObjectRef)
 {
     _members.emplace_back(
         name,
@@ -36,13 +36,12 @@ void SerializableComponent::RegisterGameObjectRef(const std::string &name, std::
             if (resolver)
             {
                 // Add pending resolution - will be resolved after all objects loaded
-                resolver->AddPendingReference([&gameObjectRef, uuid, resolver]()
-                                              { gameObjectRef = resolver->FindGameObject(uuid); });
+                resolver->AddPendingReference([&gameObjectRef, uuid, resolver](){ gameObjectRef = resolver->FindGameObject(uuid); });
             }
         });
 }
 
-void SerializableComponent::RegisterGameObjectRefVector(const std::string &name, std::vector<std::shared_ptr<GameObject>> &gameObjectRefs)
+void SerializableComponent::RegisterGameObjectRefVector(const std::string &name, std::vector<GameObject*> &gameObjectRefs)
 {
     _members.emplace_back(
         name,

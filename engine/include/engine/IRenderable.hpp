@@ -15,7 +15,6 @@ namespace N2Engine
         using SerializableComponent::SerializableComponent;
 
     public:
-        virtual ~IRenderable() = default;
         virtual void Render(Renderer::Common::IRenderer *renderer) = 0;
         virtual void InitializeRenderResources(Renderer::Common::IRenderer *renderer) = 0;
         virtual void CleanupRenderResources(Renderer::Common::IRenderer *renderer) = 0;

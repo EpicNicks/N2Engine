@@ -1,16 +1,17 @@
 #pragma once
 
+#include <math/Vector3.hpp>
+
 #include "engine/Component.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
-#include <math/Vector3.hpp>
 
 namespace N2Engine::Physics
 {
     enum class BodyType
     {
-        Static,   // Doesn't move (ground, walls)
-        Dynamic,  // Affected by forces (player, enemies, projectiles)
+        Static, // Doesn't move (ground, walls)
+        Dynamic, // Affected by forces (player, enemies, projectiles)
         Kinematic // Moves via transform, not affected by forces (moving platforms)
     };
 
@@ -26,42 +27,34 @@ namespace N2Engine::Physics
         void OnAttach() override;
         void OnDestroy() override;
 
-        // ========== Body Configuration ==========
         void SetBodyType(BodyType type);
         [[nodiscard]] BodyType GetBodyType() const { return _bodyType; }
 
         void SetMass(float mass);
-        float GetMass() const;
+        [[nodiscard]] float GetMass() const;
 
         void SetGravityEnabled(bool enabled);
-        bool IsGravityEnabled() const { return _gravityEnabled; }
+        [[nodiscard]] bool IsGravityEnabled() const { return _gravityEnabled; }
 
-        // ========== Forces and Motion ==========
-        void AddForce(const Math::Vector3 &force);
-        void AddImpulse(const Math::Vector3 &impulse);
-        void SetVelocity(const Math::Vector3 &velocity);
-        void SetAngularVelocity(const Math::Vector3 &velocity);
+        void AddForce(const Math::Vector3 &force) const;
+        void AddImpulse(const Math::Vector3 &impulse) const;
+        void SetVelocity(const Math::Vector3 &velocity) const;
+        void SetAngularVelocity(const Math::Vector3 &velocity) const;
 
-        // ========== Queries ==========
         [[nodiscard]] Math::Vector3 GetVelocity() const;
         [[nodiscard]] Math::Vector3 GetAngularVelocity() const;
 
-        // ========== Handle Access ==========
         [[nodiscard]] PhysicsBodyHandle GetHandle() const { return _handle; }
-        bool IsInitialized() const { return _initialized; }
+        [[nodiscard]] bool IsInitialized() const { return _initialized; }
 
-        // ========== Collision Callbacks ==========
-        // Override these in derived classes or scripts
-        virtual void OnCollisionEnter(const Physics::Collision &collision) {}
-        virtual void OnCollisionStay(const Physics::Collision &collision) {}
-        virtual void OnCollisionExit(const Physics::Collision &collision) {}
+        void OnCollisionEnter(const Collision &collision) override {}
+        void OnCollisionStay(const Collision &collision) override {}
+        void OnCollisionExit(const Collision &collision) override {}
+        void OnTriggerEnter(Trigger trigger) override {}
+        void OnTriggerStay(Trigger trigger) override {}
+        void OnTriggerExit(Trigger trigger) override {}
 
-        // ========== Trigger Callbacks ==========
-        virtual void OnTriggerEnter(const Physics::Trigger &trigger) {}
-        virtual void OnTriggerExit(const Physics::Trigger &trigger) {}
-
-        // ========== Notify Rigidbody of Transform Changes ==========
-        void OnTransformChanged();
+        void OnTransformChanged() const;
 
     private:
         PhysicsBodyHandle _handle;

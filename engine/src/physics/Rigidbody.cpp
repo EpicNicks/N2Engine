@@ -2,7 +2,6 @@
 #include "engine/physics/ICollider.hpp"
 #include "engine/Application.hpp"
 #include "engine/GameObject.hpp"
-#include "engine/GameObject.inl"
 #include "engine/Positionable.hpp"
 #include "engine/Logger.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
@@ -13,15 +12,7 @@ namespace N2Engine::Physics
 {
     Rigidbody::Rigidbody(GameObject &gameObject)
         : Component(gameObject),
-          _handle(Physics::INVALID_PHYSICS_HANDLE),
-          _bodyType(BodyType::Dynamic),
-          _mass(1.0f),
-          _gravityEnabled(true),
-          _initialized(false)
-    {
-    }
-
-    Rigidbody::~Rigidbody() {}
+          _handle(INVALID_PHYSICS_HANDLE) {}
 
     void Rigidbody::OnAttach()
     {
@@ -35,7 +26,7 @@ namespace N2Engine::Physics
             return;
         }
 
-        std::shared_ptr<Positionable> positionable = GetGameObject().GetPositionable();
+        Positionable *positionable = GetGameObject().GetPositionable();
         if (!positionable)
         {
             GetGameObject().CreatePositionable();
@@ -84,8 +75,8 @@ namespace N2Engine::Physics
 
         _initialized = true;
 
-        std::vector<std::shared_ptr<ICollider>> colliders = GetGameObject().GetComponents<ICollider>();
-        for (const auto &collider : colliders)
+        for (std::vector<ICollider*> colliders = GetGameObject().GetComponents<ICollider>(); const auto &collider :
+             colliders)
         {
             collider->OnAttach();
         }
@@ -96,8 +87,7 @@ namespace N2Engine::Physics
         if (!_handle.IsValid())
             return;
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             backend->DestroyBody(_handle);
             Logger::Info(std::format("Destroyed Rigidbody for GameObject: {}", GetGameObject().GetName()));
@@ -106,8 +96,6 @@ namespace N2Engine::Physics
         _handle = Physics::INVALID_PHYSICS_HANDLE;
         _initialized = false;
     }
-
-    // ========== Body Configuration ==========
 
     void Rigidbody::SetBodyType(BodyType type)
     {
@@ -141,8 +129,7 @@ namespace N2Engine::Physics
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
             return;
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             backend->SetMass(_handle, mass);
         }
@@ -153,8 +140,7 @@ namespace N2Engine::Physics
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
             return _mass;
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             return backend->GetMass(_handle);
         }
@@ -169,16 +155,13 @@ namespace N2Engine::Physics
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
             return;
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             backend->SetGravityEnabled(_handle, enabled);
         }
     }
 
-    // ========== Forces and Motion ==========
-
-    void Rigidbody::AddForce(const Math::Vector3 &force)
+    void Rigidbody::AddForce(const Math::Vector3 &force) const
     {
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
         {
@@ -189,14 +172,13 @@ namespace N2Engine::Physics
             return;
         }
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             backend->AddForce(_handle, force);
         }
     }
 
-    void Rigidbody::AddImpulse(const Math::Vector3 &impulse)
+    void Rigidbody::AddImpulse(const Math::Vector3 &impulse) const
     {
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
         {
@@ -207,14 +189,13 @@ namespace N2Engine::Physics
             return;
         }
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             backend->AddImpulse(_handle, impulse);
         }
     }
 
-    void Rigidbody::SetVelocity(const Math::Vector3 &velocity)
+    void Rigidbody::SetVelocity(const Math::Vector3 &velocity) const
     {
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
         {
@@ -225,14 +206,13 @@ namespace N2Engine::Physics
             return;
         }
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             backend->SetVelocity(_handle, velocity);
         }
     }
 
-    void Rigidbody::SetAngularVelocity(const Math::Vector3 &velocity)
+    void Rigidbody::SetAngularVelocity(const Math::Vector3 &velocity) const
     {
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
         {
@@ -243,22 +223,18 @@ namespace N2Engine::Physics
             return;
         }
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             backend->SetAngularVelocity(_handle, velocity);
         }
     }
-
-    // ========== Queries ==========
 
     Math::Vector3 Rigidbody::GetVelocity() const
     {
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
             return Math::Vector3::Zero();
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             return backend->GetVelocity(_handle);
         }
@@ -271,8 +247,7 @@ namespace N2Engine::Physics
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
             return Math::Vector3::Zero();
 
-        auto *backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             return backend->GetAngularVelocity(_handle);
         }
@@ -280,7 +255,7 @@ namespace N2Engine::Physics
         return Math::Vector3::Zero();
     }
 
-    void Rigidbody::OnTransformChanged()
+    void Rigidbody::OnTransformChanged() const
     {
         if (!_initialized)
             return;

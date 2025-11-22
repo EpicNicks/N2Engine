@@ -2,7 +2,6 @@
 #include "engine/GameObject.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/IRenderable.hpp"
-#include "engine/GameObject.inl"
 #include "engine/serialization/ReferenceResolver.hpp"
 
 #include <algorithm>
@@ -39,8 +38,7 @@ void Scene::RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Co
         return;
     }
 
-    auto renderableComponents = gameObject->GetComponents<IRenderable>();
-    for (auto &renderable : renderableComponents)
+    for (const auto renderableComponents = gameObject->GetComponents<IRenderable>(); const auto renderable : renderableComponents)
     {
         if (renderable && renderable->GetIsActive())
         {
@@ -61,7 +59,7 @@ void Scene::AddRootGameObject(std::shared_ptr<GameObject> gameObject)
         return;
     }
 
-    auto it = std::find(_rootGameObjects.begin(), _rootGameObjects.end(), gameObject);
+    auto it = std::ranges::find(_rootGameObjects, gameObject);
     if (it == _rootGameObjects.end())
     {
         _rootGameObjects.push_back(gameObject);
@@ -217,7 +215,7 @@ bool Scene::TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject,
     return false;
 }
 
-void Scene::OnAllActiveComponents(std::function<void(std::shared_ptr<Component>)> callback)
+void Scene::OnAllActiveComponents(const std::function<void(Component*)>& callback) const
 {
     for (const auto &c : _components)
     {
@@ -228,7 +226,7 @@ void Scene::OnAllActiveComponents(std::function<void(std::shared_ptr<Component>)
     }
 }
 
-void Scene::AddComponentToAttachQueue(std::shared_ptr<Component> component)
+void Scene::AddComponentToAttachQueue(Component* component)
 {
     _attachQueue.push(component);
 }
@@ -237,7 +235,7 @@ void Scene::ProcessAttachQueue()
 {
     while (!_attachQueue.empty())
     {
-        std::shared_ptr<Component> c = _attachQueue.front();
+        Component *c = _attachQueue.front();
         _attachQueue.pop();
         c->OnAttach();
 
@@ -246,21 +244,21 @@ void Scene::ProcessAttachQueue()
     }
 }
 
-void Scene::Update()
+void Scene::Update() const
 {
-    OnAllActiveComponents([](std::shared_ptr<Component> component)
+    OnAllActiveComponents([](Component* component)
                           { component->OnUpdate(); });
 }
 
-void Scene::FixedUpdate()
+void Scene::FixedUpdate() const
 {
-    OnAllActiveComponents([](std::shared_ptr<Component> component)
+    OnAllActiveComponents([](Component* component)
                           { component->OnFixedUpdate(); });
 }
 
-void Scene::LateUpdate()
+void Scene::LateUpdate() const
 {
-    OnAllActiveComponents([](std::shared_ptr<Component> component)
+    OnAllActiveComponents([](Component* component)
                           { component->OnLateUpdate(); });
 }
 
@@ -269,9 +267,9 @@ void Scene::AdvanceCoroutines()
     Scheduling::CoroutineScheduler::Update();
 }
 
-void Scene::OnApplicationQuit()
+void Scene::OnApplicationQuit() const
 {
-    OnAllActiveComponents([](std::shared_ptr<Component> component)
+    OnAllActiveComponents([](Component* component)
                           { component->OnApplicationQuit(); });
 }
 
@@ -354,7 +352,7 @@ void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject)
 void Scene::PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject)
 {
     // Remove from parent or scene root
-    if (auto parent = gameObject->GetParent())
+    if (const auto parent = gameObject->GetParent())
     {
         // Only remove if parent isn't also being destroyed
         if (!parent->_isMarkedForDestruction)
@@ -368,13 +366,11 @@ void Scene::PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject)
     }
 
     // Remove from components list
-    _components.erase(
-        std::remove_if(_components.begin(), _components.end(),
-                       [&gameObject](const std::shared_ptr<Component> &comp)
-                       {
-                           return &comp->GetGameObject() == gameObject.get();
-                       }),
-        _components.end());
+    std::erase_if(_components,
+                  [&gameObject](const Component* comp)
+                  {
+                      return &comp->GetGameObject() == gameObject.get();
+                  });
 
     gameObject->Purge();
 }
