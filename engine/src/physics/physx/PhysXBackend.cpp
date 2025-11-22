@@ -6,6 +6,7 @@
 #include "engine/Positionable.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
 #include "engine/Logger.hpp"
+#include "engine/physics/Raycast.hpp"
 
 #ifdef N2ENGINE_PHYSX_ENABLED
 #include <PxPhysicsAPI.h>
@@ -27,7 +28,7 @@ namespace N2Engine::Physics
 {
 #ifdef N2ENGINE_PHYSX_ENABLED
 
-    PhysXBackend::PhysXBackend() {}
+    PhysXBackend::PhysXBackend() = default;
 
     PhysXBackend::~PhysXBackend()
     {
@@ -130,12 +131,10 @@ namespace N2Engine::Physics
     {
         Logger::Info("Shutting down PhysX...");
 
-        // Release all bodies
-        for (auto &bodyData : _bodies)
+        for (const auto& bodyData : _bodies)
         {
             if (bodyData.active && bodyData.actor)
             {
-                // Clean up user data
                 if (bodyData.actor->userData)
                 {
                     delete static_cast<PhysicsBodyHandle*>(bodyData.actor->userData);
@@ -148,27 +147,26 @@ namespace N2Engine::Physics
         _bodies.clear();
         _freeList.clear();
 
-        // Release cached materials
-        for (auto &material : _materialCache | std::views::values)
+        _colliderShapes.clear();
+
+        for (const auto& material : _materialCache | std::views::values)
         {
             material->release();
         }
         _materialCache.clear();
 
-        // Clean up collision events
-        for (auto &[pair, data] : _newCollisions)
+        for (auto& [pair, data] : _newCollisions)
         {
             delete data;
         }
         _newCollisions.clear();
 
-        for (auto &[pair, data] : _endedCollisions)
+        for (auto& [pair, data] : _endedCollisions)
         {
             delete data;
         }
         _endedCollisions.clear();
 
-        // Release PhysX objects
         if (_scene)
             _scene->release();
         if (_dispatcher)
@@ -179,13 +177,8 @@ namespace N2Engine::Physics
             _physics->release();
 
 #if N2ENGINE_PHYSX_HAS_PVD
-        if (_scene && _pvd)
+        if (_pvd)
         {
-            if (PxPvdSceneClient *pvdClient = _scene->getScenePvdClient())
-            {
-                pvdClient->setScenePvdFlag(PxPvdSceneFlag::eTRANSMIT_CONSTRAINTS, false);
-                // ... other PVD cleanup ...
-            }
             _pvd->release();
             _pvd = nullptr;
         }
@@ -220,7 +213,7 @@ namespace N2Engine::Physics
 
     void PhysXBackend::ApplyPendingChanges()
     {
-        for (auto &[type, action] : _pendingChanges)
+        for (auto &action : _pendingChanges | std::views::values)
         {
             action();
         }
@@ -371,15 +364,17 @@ namespace N2Engine::Physics
         }
     }
 
-    void PhysXBackend::UnregisterCollider(const PhysicsBodyHandle handle, ICollider *collider)
+    void PhysXBackend::UnregisterCollider(PhysicsBodyHandle handle, ICollider* collider)
     {
-        if (BodyData *data = GetBodyData(handle); data && collider)
+        if (BodyData* data = GetBodyData(handle); data && collider)
         {
             if (const auto it = std::ranges::find(data->colliders, collider); it != data->colliders.end())
             {
                 data->colliders.erase(it);
             }
         }
+
+        _colliderShapes.erase(collider);
     }
 
     // ========== Transform Updates (for Transform -> Physics syncing) ==========
@@ -466,8 +461,8 @@ namespace N2Engine::Physics
         const Math::Vector3 &localOffset,
         const PhysicsMaterial &material)
     {
-        const BodyData *data = GetBodyData(body);
-        if (!data || !data->actor)
+        const BodyData *bodyData = GetBodyData(body);
+        if (!bodyData || !bodyData->actor)
         {
             return;
         }
@@ -478,13 +473,19 @@ namespace N2Engine::Physics
             pxMaterial = _defaultMaterial;
         }
 
-        PxSphereGeometry sphere(radius);
+        const PxSphereGeometry sphere(radius);
         const PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
 
         PxShape *shape = _physics->createShape(sphere, *pxMaterial, true);
         shape->setLocalPose(localPose);
 
-        data->actor->attachShape(*shape);
+        bodyData->actor->attachShape(*shape);
+
+        if (!bodyData->colliders.empty())
+        {
+            _colliderShapes[bodyData->colliders.back()].push_back(shape);
+        }
+
         shape->release();
     }
 
@@ -494,25 +495,27 @@ namespace N2Engine::Physics
         const Math::Vector3 &localOffset,
         const PhysicsMaterial &material)
     {
-        const BodyData *data = GetBodyData(body);
-        if (!data || !data->actor)
-        {
+        BodyData *bodyData = GetBodyData(body);
+        if (!bodyData || !bodyData->actor)
             return;
-        }
 
-        const PxMaterial *pxMaterial = GetOrCreateMaterial(material);
+        PxMaterial *pxMaterial = GetOrCreateMaterial(material);
         if (!pxMaterial)
-        {
             pxMaterial = _defaultMaterial;
-        }
 
-        const PxBoxGeometry box(halfExtents.x, halfExtents.y, halfExtents.z);
-        const PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
+        PxBoxGeometry box(halfExtents.x, halfExtents.y, halfExtents.z);
+        PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
 
         PxShape *shape = _physics->createShape(box, *pxMaterial, true);
         shape->setLocalPose(localPose);
 
-        data->actor->attachShape(*shape);
+        bodyData->actor->attachShape(*shape);
+
+        if (!bodyData->colliders.empty())
+        {
+            _colliderShapes[bodyData->colliders.back()].push_back(shape);
+        }
+
         shape->release();
     }
 
@@ -523,32 +526,39 @@ namespace N2Engine::Physics
         const Math::Vector3 &localOffset,
         const PhysicsMaterial &material)
     {
-        BodyData *data = GetBodyData(body);
-        if (!data || !data->actor)
+        const BodyData *bodyData = GetBodyData(body);
+        if (!bodyData || !bodyData->actor)
         {
             return;
         }
 
-        PxMaterial *pxMaterial = GetOrCreateMaterial(material);
+        const PxMaterial *pxMaterial = GetOrCreateMaterial(material);
         if (!pxMaterial)
         {
             pxMaterial = _defaultMaterial;
         }
 
         float halfHeight = (height - 2.0f * radius) * 0.5f;
-        PxCapsuleGeometry capsule(radius, halfHeight);
+        halfHeight = std::max(0.01f, halfHeight);
 
-        PxQuat rotation(PxHalfPi, PxVec3(0, 0, 1));
-        PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z), rotation);
+        const PxCapsuleGeometry capsule(radius, halfHeight);
+
+        const PxQuat rotation(PxHalfPi, PxVec3(0, 0, 1));
+        const PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z), rotation);
 
         PxShape *shape = _physics->createShape(capsule, *pxMaterial, true);
         shape->setLocalPose(localPose);
 
-        data->actor->attachShape(*shape);
+        bodyData->actor->attachShape(*shape);
+
+        if (!bodyData->colliders.empty())
+        {
+            _colliderShapes[bodyData->colliders.back()].push_back(shape);
+        }
+
         shape->release();
     }
 
-    // ========== Trigger Configuration ==========
 
     void PhysXBackend::SetIsTrigger(const PhysicsBodyHandle body, const bool isTrigger)
     {
@@ -857,12 +867,12 @@ namespace N2Engine::Physics
         }
     }
 
-    void PhysXBackend::onTrigger(PxTriggerPair *pairs, PxU32 count)
+    void PhysXBackend::onTrigger(PxTriggerPair *pairs, const PxU32 count)
     {
         for (PxU32 i = 0; i < count; i++)
         {
-            auto *triggerHandle = static_cast<PhysicsBodyHandle*>(pairs[i].triggerActor->userData);
-            auto *otherHandle = static_cast<PhysicsBodyHandle*>(pairs[i].otherActor->userData);
+            const auto *triggerHandle = static_cast<PhysicsBodyHandle*>(pairs[i].triggerActor->userData);
+            const auto *otherHandle = static_cast<PhysicsBodyHandle*>(pairs[i].otherActor->userData);
 
             if (!triggerHandle || !otherHandle)
                 continue;
@@ -1150,6 +1160,308 @@ namespace N2Engine::Physics
             }
         }
         _endedTriggers.clear();
+    }
+
+    void PhysXBackend::RemoveColliderShapes(PhysicsBodyHandle body, ICollider *collider)
+    {
+        if (!collider)
+        {
+            return;
+        }
+
+        BodyData *bodyData = GetBodyData(body);
+        if (!bodyData || !bodyData->actor)
+        {
+            return;
+        }
+
+        const auto it = _colliderShapes.find(collider);
+        if (it == _colliderShapes.end())
+        {
+            return;
+        }
+
+        for (PxShape *shape : it->second)
+        {
+            bodyData->actor->detachShape(*shape);
+            shape->release();
+        }
+
+        it->second.clear();
+    }
+
+    void PhysXBackend::UpdateSphereCollider(
+        PhysicsBodyHandle body,
+        ICollider *collider,
+        float radius,
+        const Math::Vector3 &localOffset,
+        const PhysicsMaterial &material)
+    {
+        if (!collider)
+        {
+            return;
+        }
+
+        const auto it = _colliderShapes.find(collider);
+        if (it == _colliderShapes.end() || it->second.empty())
+        {
+            return;
+        }
+
+        PxMaterial *pxMaterial = GetOrCreateMaterial(material);
+        if (!pxMaterial)
+        {
+            pxMaterial = _defaultMaterial;
+        }
+
+        PxSphereGeometry sphere(radius);
+        const PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
+
+        for (PxShape *shape : it->second)
+        {
+            shape->setGeometry(sphere);
+            shape->setLocalPose(localPose);
+
+            PxMaterial *materials[] = {pxMaterial};
+            shape->setMaterials(materials, 1);
+        }
+    }
+
+    void PhysXBackend::UpdateBoxCollider(
+        PhysicsBodyHandle body,
+        ICollider *collider,
+        const Math::Vector3 &halfExtents,
+        const Math::Vector3 &localOffset,
+        const PhysicsMaterial &material)
+    {
+        if (!collider)
+            return;
+
+        auto it = _colliderShapes.find(collider);
+        if (it == _colliderShapes.end() || it->second.empty())
+            return;
+
+        PxMaterial *pxMaterial = GetOrCreateMaterial(material);
+        if (!pxMaterial)
+            pxMaterial = _defaultMaterial;
+
+        PxBoxGeometry box(halfExtents.x, halfExtents.y, halfExtents.z);
+        PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
+
+        for (PxShape *shape : it->second)
+        {
+            shape->setGeometry(box);
+            shape->setLocalPose(localPose);
+
+            PxMaterial *materials[] = {pxMaterial};
+            shape->setMaterials(materials, 1);
+        }
+    }
+
+    void PhysXBackend::UpdateCapsuleCollider(
+        PhysicsBodyHandle body,
+        ICollider *collider,
+        float radius,
+        float height,
+        const Math::Vector3 &localOffset,
+        const PhysicsMaterial &material)
+    {
+        if (!collider)
+            return;
+
+        auto it = _colliderShapes.find(collider);
+        if (it == _colliderShapes.end() || it->second.empty())
+            return;
+
+        PxMaterial *pxMaterial = GetOrCreateMaterial(material);
+        if (!pxMaterial)
+            pxMaterial = _defaultMaterial;
+
+        float halfHeight = (height - 2.0f * radius) * 0.5f;
+        halfHeight = std::max(0.01f, halfHeight);
+
+        PxCapsuleGeometry capsule(radius, halfHeight);
+
+        PxQuat rotation(PxHalfPi, PxVec3(0, 0, 1));
+        PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z), rotation);
+
+        for (PxShape *shape : it->second)
+        {
+            shape->setGeometry(capsule);
+            shape->setLocalPose(localPose);
+
+            PxMaterial *materials[] = {pxMaterial};
+            shape->setMaterials(materials, 1);
+        }
+    }
+
+    void PhysXBackend::FillRaycastHit(RaycastHit &hit, const PxRaycastHit &pxHit) const
+    {
+        hit.hit = true;
+        hit.point = Math::Vector3(pxHit.position.x, pxHit.position.y, pxHit.position.z);
+        hit.normal = Math::Vector3(pxHit.normal.x, pxHit.normal.y, pxHit.normal.z);
+        hit.distance = pxHit.distance;
+
+        if (pxHit.actor && pxHit.actor->userData)
+        {
+            const auto *handle = static_cast<PhysicsBodyHandle*>(pxHit.actor->userData);
+            hit.bodyHandle = *handle;
+
+            if (const BodyData *bodyData = GetBodyData(*handle))
+            {
+                if (bodyData->rigidbody)
+                {
+                    hit.gameObject = &bodyData->rigidbody->GetGameObject();
+                    hit.rigidbody = bodyData->rigidbody;
+                }
+                else if (!bodyData->colliders.empty())
+                {
+                    hit.gameObject = &bodyData->colliders[0]->GetGameObject();
+                    hit.collider = bodyData->colliders[0];
+                }
+            }
+        }
+    }
+
+    bool PhysXBackend::Raycast(
+        const Math::Vector3 &origin,
+        const Math::Vector3 &direction,
+        RaycastHit &hit,
+        float maxDistance,
+        uint32_t layerMask)
+    {
+        if (!_scene)
+        {
+            hit.hit = false;
+            return false;
+        }
+
+        Math::Vector3 dir = direction.Normalized();
+        PxVec3 pxOrigin(origin.x, origin.y, origin.z);
+        PxVec3 pxDir(dir.x, dir.y, dir.z);
+
+        PxRaycastBuffer hitBuffer;
+        PxQueryFilterData filterData;
+        filterData.data.word0 = layerMask;
+
+        bool status = _scene->raycast(pxOrigin, pxDir, maxDistance, hitBuffer, PxHitFlag::eDEFAULT, filterData);
+
+        if (status && hitBuffer.hasBlock)
+        {
+            FillRaycastHit(hit, hitBuffer.block);
+            return true;
+        }
+
+        hit.hit = false;
+        return false;
+    }
+
+    int PhysXBackend::RaycastAll(
+        const Math::Vector3 &origin,
+        const Math::Vector3 &direction,
+        std::vector<RaycastHit> &hits,
+        float maxDistance,
+        uint32_t layerMask)
+    {
+        hits.clear();
+
+        if (!_scene)
+            return 0;
+
+        Math::Vector3 dir = direction.Normalized();
+        PxVec3 pxOrigin(origin.x, origin.y, origin.z);
+        PxVec3 pxDir(dir.x, dir.y, dir.z);
+
+        constexpr PxU32 maxHits = 256;
+        PxRaycastHit hitBuffer[maxHits];
+        PxQueryFilterData filterData;
+        filterData.data.word0 = layerMask;
+
+        PxRaycastBuffer raycastBuffer(hitBuffer, maxHits);
+
+        if (_scene->raycast(pxOrigin, pxDir, maxDistance, raycastBuffer, PxHitFlag::eDEFAULT, filterData))
+        {
+            for (PxU32 i = 0; i < raycastBuffer.nbTouches; i++)
+            {
+                RaycastHit hit;
+                FillRaycastHit(hit, raycastBuffer.touches[i]);
+                hits.push_back(hit);
+            }
+
+            if (raycastBuffer.hasBlock)
+            {
+                RaycastHit hit;
+                FillRaycastHit(hit, raycastBuffer.block);
+                hits.push_back(hit);
+            }
+        }
+
+        std::ranges::sort(hits, [](const RaycastHit &a, const RaycastHit &b)
+        {
+            return a.distance < b.distance;
+        });
+
+        return static_cast<int>(hits.size());
+    }
+
+    bool PhysXBackend::SphereCast(
+        const Math::Vector3 &origin,
+        const float radius,
+        const Math::Vector3 &direction,
+        RaycastHit &hit,
+        const float maxDistance,
+        const uint32_t layerMask)
+    {
+        if (!_scene)
+        {
+            hit.hit = false;
+            return false;
+        }
+
+        const Math::Vector3 dir = direction.Normalized();
+        const PxVec3 pxOrigin(origin.x, origin.y, origin.z);
+        const PxVec3 pxDir(dir.x, dir.y, dir.z);
+
+        const PxSphereGeometry sphere(radius);
+        const PxTransform pose(pxOrigin);
+
+        PxSweepBuffer hitBuffer;
+        PxQueryFilterData filterData;
+        filterData.data.word0 = layerMask;
+
+        const bool status = _scene->sweep(sphere, pose, pxDir, maxDistance, hitBuffer, PxHitFlag::eDEFAULT, filterData);
+        if (status && hitBuffer.hasBlock)
+        {
+            hit.hit = true;
+            hit.point = Math::Vector3(hitBuffer.block.position.x, hitBuffer.block.position.y,
+                                      hitBuffer.block.position.z);
+            hit.normal = Math::Vector3(hitBuffer.block.normal.x, hitBuffer.block.normal.y, hitBuffer.block.normal.z);
+            hit.distance = hitBuffer.block.distance;
+
+            if (hitBuffer.block.actor && hitBuffer.block.actor->userData)
+            {
+                const auto *handle = static_cast<PhysicsBodyHandle*>(hitBuffer.block.actor->userData);
+                hit.bodyHandle = *handle;
+
+                if (const BodyData *bodyData = GetBodyData(*handle))
+                {
+                    if (bodyData->rigidbody)
+                    {
+                        hit.gameObject = &bodyData->rigidbody->GetGameObject();
+                        hit.rigidbody = bodyData->rigidbody;
+                    }
+                    else if (!bodyData->colliders.empty())
+                    {
+                        hit.gameObject = &bodyData->colliders[0]->GetGameObject();
+                        hit.collider = bodyData->colliders[0];
+                    }
+                }
+            }
+            return true;
+        }
+
+        hit.hit = false;
+        return false;
     }
 
     // Stub implementations for unused callbacks

@@ -22,6 +22,19 @@ namespace N2Engine::Math
         v.w = 0.0f;
     }
 
+    inline void to_json(nlohmann::json &j, const Vector4 &v)
+    {
+        j = nlohmann::json{{"w", v.w}, {"x", v.x}, {"y", v.y}, {"z", v.z}};
+    }
+
+    inline void from_json(const nlohmann::json &j, Vector4 &v)
+    {
+        j.at("w").get_to(v.w);
+        j.at("x").get_to(v.x);
+        j.at("y").get_to(v.y);
+        j.at("z").get_to(v.z);
+    }
+
     inline void to_json(nlohmann::json &j, const Quaternion &q)
     {
         j = nlohmann::json{{"w", q.GetW()}, {"x", q.GetX()}, {"y", q.GetY()}, {"z", q.GetZ()}};

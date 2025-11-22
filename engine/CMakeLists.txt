@@ -4,9 +4,9 @@ file(GLOB_RECURSE ENGINE_SOURCES
     "src/*.cxx"
 )
 
-add_library(engine STATIC ${ENGINE_SOURCES}
-        include/engine/ComponentConcepts.hpp
-        include/engine/GameObjectScene.hpp)
+add_library(engine STATIC
+    ${ENGINE_SOURCES}
+)
 
 target_include_directories(engine 
     PUBLIC 

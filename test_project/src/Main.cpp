@@ -20,6 +20,7 @@
 #include <iostream>
 #include <cmath>
 
+#include "engine/physics/BoxCollider.hpp"
 #include "test_project/Spin.hpp"
 #include "test_project/CameraController.hpp"
 #include "test_project/StandardInputHandler.hpp"
@@ -100,7 +101,7 @@ void errorCallback(int error, const char *description)
 // GLFW framebuffer size callback
 void framebufferSizeCallback(GLFWwindow *window, int width, int height)
 {
-    auto *renderer = static_cast<Renderer::OpenGL::OpenGLRenderer *>(glfwGetWindowUserPointer(window));
+    auto *renderer = static_cast<Renderer::OpenGL::OpenGLRenderer*>(glfwGetWindowUserPointer(window));
     if (renderer)
     {
         renderer->Resize(width, height);
@@ -135,7 +136,7 @@ void TestRenderer()
 
     // Create renderer
     auto renderer = Renderer::OpenGL::CreateOpenGLRenderer();
-    auto *openglRenderer = static_cast<Renderer::OpenGL::OpenGLRenderer *>(renderer.get());
+    auto *openglRenderer = static_cast<Renderer::OpenGL::OpenGLRenderer*>(renderer.get());
 
     // Set window user pointer for callbacks
     glfwSetWindowUserPointer(window, openglRenderer);
@@ -159,25 +160,26 @@ void TestRenderer()
     triangleData.vertices = {
         // Vertex 1 (top, red)
         {
-            {0.0f, 0.5f, 0.0f},      // position
-            {0.0f, 0.0f, 1.0f},      // normal (pointing toward camera)
-            {0.5f, 1.0f},            // texture coordinates
+            {0.0f, 0.5f, 0.0f}, // position
+            {0.0f, 0.0f, 1.0f}, // normal (pointing toward camera)
+            {0.5f, 1.0f}, // texture coordinates
             {1.0f, 0.0f, 0.0f, 1.0f} // color (red)
         },
         // Vertex 2 (bottom-left, green)
         {
-            {-0.5f, -0.5f, 0.0f},    // position
-            {0.0f, 0.0f, 1.0f},      // normal
-            {0.0f, 0.0f},            // texture coordinates
+            {-0.5f, -0.5f, 0.0f}, // position
+            {0.0f, 0.0f, 1.0f}, // normal
+            {0.0f, 0.0f}, // texture coordinates
             {0.0f, 1.0f, 0.0f, 1.0f} // color (green)
         },
         // Vertex 3 (bottom-right, blue)
         {
-            {0.5f, -0.5f, 0.0f},     // position
-            {0.0f, 0.0f, 1.0f},      // normal
-            {1.0f, 0.0f},            // texture coordinates
+            {0.5f, -0.5f, 0.0f}, // position
+            {0.0f, 0.0f, 1.0f}, // normal
+            {1.0f, 0.0f}, // texture coordinates
             {0.0f, 0.0f, 1.0f, 1.0f} // color (blue)
-        }};
+        }
+    };
 
     // Define triangle indices
     triangleData.indices = {0, 1, 2};
@@ -297,6 +299,7 @@ void TestEngine()
 
     auto quadObject = GameObject::Create("TestQuad");
     auto quadRenderer = quadObject->AddComponent<Example::QuadRenderer>();
+    quadObject->AddComponent<Physics::BoxCollider>();
     auto spinComponent = quadObject->AddComponent<Spin>();
     spinComponent->degreesPerSecond = -2.0f;
 
@@ -307,14 +310,14 @@ void TestEngine()
     standardInputHandler->AddComponent<StandardInputHandler>();
 
     SceneManager::GetCurSceneRef().AddRootGameObjects(
-        {quadObject,
-         cameraControlObject,
-         standardInputHandler});
-
-    N2Engine::IO::Resources::LoadShader("", "");
+        {
+            quadObject,
+            cameraControlObject,
+            standardInputHandler
+        });
 
     auto connectedGamepads = application.GetWindow().GetInputSystem()->GetConnectedGamepads();
-    if (connectedGamepads.size() > 0)
+    if (!connectedGamepads.empty())
     {
         std::cout << "Connected Gamepads: {\n";
         for (const auto &gamepadInfo : connectedGamepads)
@@ -338,22 +341,31 @@ void TestEngine()
                         [&](Input::InputAction *inputAction)
                         {
                             inputAction
-                                ->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::W, Input::Key::S, Input::Key::A, Input::Key::D))
-                                .AddBinding(std::make_unique<Input::GamepadStickBinding>(application.GetWindow(), Input::GamepadAxis::LeftX, Input::GamepadAxis::LeftY, 0, 0.25f, false, true));
+                                ->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(
+                                    application.GetWindow(), Input::Key::W, Input::Key::S, Input::Key::A,
+                                    Input::Key::D))
+                                .AddBinding(std::make_unique<Input::GamepadStickBinding>(
+                                    application.GetWindow(), Input::GamepadAxis::LeftX, Input::GamepadAxis::LeftY, 0,
+                                    0.25f, false, true));
                         })
                     .MakeInputAction(
                         "Camera Rotate",
                         [&](Input::InputAction *inputAction)
                         {
                             inputAction
-                                ->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(application.GetWindow(), Input::Key::Up, Input::Key::Down, Input::Key::Left, Input::Key::Right))
-                                .AddBinding(std::make_unique<Input::GamepadStickBinding>(application.GetWindow(), Input::GamepadAxis::RightX, Input::GamepadAxis::RightY, 0, 0.25f));
+                                ->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(
+                                    application.GetWindow(), Input::Key::Up, Input::Key::Down, Input::Key::Left,
+                                    Input::Key::Right))
+                                .AddBinding(std::make_unique<Input::GamepadStickBinding>(
+                                    application.GetWindow(), Input::GamepadAxis::RightX, Input::GamepadAxis::RightY, 0,
+                                    0.25f));
                         })
                     .MakeInputAction(
                         "Quit",
                         [&](Input::InputAction *inputAction)
                         {
-                            inputAction->AddBinding(std::make_unique<Input::ButtonBinding>(application.GetWindow(), Input::Key::Escape));
+                            inputAction->AddBinding(
+                                std::make_unique<Input::ButtonBinding>(application.GetWindow(), Input::Key::Escape));
                         });
             })
         .LoadActionMap("Main Controls");

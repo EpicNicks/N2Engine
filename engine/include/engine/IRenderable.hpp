@@ -1,9 +1,7 @@
 #pragma once
 
 #include <renderer/common/Renderer.hpp>
-#include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
-#include "engine/Component.hpp"
 
 namespace N2Engine
 {

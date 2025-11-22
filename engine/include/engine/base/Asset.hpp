@@ -2,21 +2,18 @@
 
 #include <math/UUID.hpp>
 
-namespace N2Engine
+namespace N2Engine::Base
 {
-    namespace Base
+    class Asset
     {
-        class Asset
-        {
-        protected:
-            Math::UUID _uuid;
+    protected:
+        Math::UUID _uuid;
 
-        public:
-            virtual ~Asset() = default;
-            Asset();
-            explicit Asset(Math::UUID uuid);
-            [[nodiscard]] Math::UUID GetUUID() const;
-            void SetUUID(const Math::UUID &uuid);
-        };
-    }
+    public:
+        virtual ~Asset() = default;
+        Asset();
+        explicit Asset(Math::UUID uuid);
+        [[nodiscard]] Math::UUID GetUUID() const;
+        void SetUUID(const Math::UUID &uuid);
+    };
 }

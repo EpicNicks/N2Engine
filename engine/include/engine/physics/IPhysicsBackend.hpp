@@ -2,6 +2,7 @@
 
 #include <math/Vector3.hpp>
 #include <math/Quaternion.hpp>
+#include <vector>
 
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
@@ -10,10 +11,8 @@ namespace N2Engine::Physics
 {
     class Rigidbody;
     class ICollider;
-    /**
-     * Abstract interface for physics backends
-     * Allows swapping between PhysX, Bullet, Jolt, etc.
-     */
+    struct RaycastHit;
+
     class IPhysicsBackend
     {
     public:
@@ -28,9 +27,12 @@ namespace N2Engine::Physics
         virtual void SyncTransforms() = 0;
         virtual void ProcessCollisionCallbacks() = 0;
 
-        virtual PhysicsBodyHandle CreateDynamicBody(const Math::Vector3& position, const Math::Quaternion& rotation,
-                                                    float mass, Rigidbody* rigidbody,
-                                                    bool isKinematic) = 0;
+        virtual PhysicsBodyHandle CreateDynamicBody(
+            const Math::Vector3& position,
+            const Math::Quaternion& rotation,
+            float mass,
+            Rigidbody* rigidbody,
+            bool isKinematic) = 0;
 
         virtual PhysicsBodyHandle CreateStaticBody(
             const Math::Vector3& position,
@@ -42,15 +44,21 @@ namespace N2Engine::Physics
         virtual void RegisterCollider(PhysicsBodyHandle handle, ICollider* collider) = 0;
         virtual void UnregisterCollider(PhysicsBodyHandle handle, ICollider* collider) = 0;
 
-        virtual void SetBodyTransform(PhysicsBodyHandle handle, const Math::Vector3& position,
-                                      const Math::Quaternion& rotation) = 0;
+        virtual void SetBodyTransform(
+            PhysicsBodyHandle handle,
+            const Math::Vector3& position,
+            const Math::Quaternion& rotation) = 0;
 
-        virtual void SetStaticBodyTransform(PhysicsBodyHandle handle, const Math::Vector3& position,
-                                            const Math::Quaternion& rotation) = 0;
+        virtual void SetStaticBodyTransform(
+            PhysicsBodyHandle handle,
+            const Math::Vector3& position,
+            const Math::Quaternion& rotation) = 0;
 
-        virtual void AddSphereCollider(PhysicsBodyHandle body, float radius,
-                                       const Math::Vector3& localOffset,
-                                       const PhysicsMaterial& material) = 0;
+        virtual void AddSphereCollider(
+            PhysicsBodyHandle body,
+            float radius,
+            const Math::Vector3& localOffset,
+            const PhysicsMaterial& material) = 0;
 
         virtual void AddBoxCollider(
             PhysicsBodyHandle body,
@@ -60,6 +68,30 @@ namespace N2Engine::Physics
 
         virtual void AddCapsuleCollider(
             PhysicsBodyHandle body,
+            float radius,
+            float height,
+            const Math::Vector3& localOffset,
+            const PhysicsMaterial& material) = 0;
+
+        virtual void RemoveColliderShapes(PhysicsBodyHandle body, ICollider* collider) = 0;
+
+        virtual void UpdateSphereCollider(
+            PhysicsBodyHandle body,
+            ICollider* collider,
+            float radius,
+            const Math::Vector3& localOffset,
+            const PhysicsMaterial& material) = 0;
+
+        virtual void UpdateBoxCollider(
+            PhysicsBodyHandle body,
+            ICollider* collider,
+            const Math::Vector3& halfExtents,
+            const Math::Vector3& localOffset,
+            const PhysicsMaterial& material) = 0;
+
+        virtual void UpdateCapsuleCollider(
+            PhysicsBodyHandle body,
+            ICollider* collider,
             float radius,
             float height,
             const Math::Vector3& localOffset,
@@ -82,6 +114,28 @@ namespace N2Engine::Physics
         virtual void SetGravityEnabled(PhysicsBodyHandle body, bool enabled) = 0;
 
         virtual void SetGravity(const Math::Vector3& gravity) = 0;
-        virtual Math::Vector3 GetGravity() const = 0;
+        [[nodiscard]] virtual Math::Vector3 GetGravity() const = 0;
+
+        virtual bool Raycast(
+            const Math::Vector3& origin,
+            const Math::Vector3& direction,
+            RaycastHit& hit,
+            float maxDistance,
+            uint32_t layerMask) = 0;
+
+        virtual int RaycastAll(
+            const Math::Vector3& origin,
+            const Math::Vector3& direction,
+            std::vector<RaycastHit>& hits,
+            float maxDistance,
+            uint32_t layerMask) = 0;
+
+        virtual bool SphereCast(
+            const Math::Vector3& origin,
+            float radius,
+            const Math::Vector3& direction,
+            RaycastHit& hit,
+            float maxDistance,
+            uint32_t layerMask) = 0;
     };
 }
