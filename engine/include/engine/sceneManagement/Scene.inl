@@ -1,11 +1,10 @@
 #pragma once
 
 #include "engine/GameObject.hpp"
-#include "engine/sceneManagement/Scene.hpp"
 
 namespace N2Engine
 {
-    template <typename T>
+    template <DerivedFromComponent T>
     std::shared_ptr<T> Scene::FindObjectByType(const bool includeInactive) const
     {
         std::shared_ptr<T> result = nullptr;
@@ -14,9 +13,9 @@ namespace N2Engine
                       {
             bool shouldProcess = includeInactive || gameObject->IsActive();
             
-            if (shouldProcess && gameObject->template HasComponent<T>())
+            if (shouldProcess && gameObject->HasComponent<T>())
             {
-                result = gameObject->template GetComponent<T>();
+                result = gameObject->GetComponent<T>();
                 return true;
             }
             return false; });
@@ -24,7 +23,7 @@ namespace N2Engine
         return result;
     }
 
-    template <typename T>
+    template <DerivedFromComponent T>
     std::vector<std::shared_ptr<T>> Scene::FindObjectsByType(const bool includeInactive) const
     {
         std::vector<std::shared_ptr<T>> result;
@@ -33,7 +32,7 @@ namespace N2Engine
         {
             TraverseAll([&](const std::shared_ptr<GameObject>& gameObject)
                         {
-                if (gameObject->template HasComponent<T>())
+                if (gameObject->HasComponent<T>())
                 {
                     result.push_back(gameObject->template GetComponent<T>());
                 } });
@@ -42,7 +41,7 @@ namespace N2Engine
         {
             TraverseAllActive([&](const std::shared_ptr<GameObject>& gameObject)
                               {
-                if (gameObject->template HasComponent<T>())
+                if (gameObject->HasComponent<T>())
                 {
                     result.push_back(gameObject->template GetComponent<T>());
                 } });

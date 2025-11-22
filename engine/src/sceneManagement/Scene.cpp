@@ -3,14 +3,16 @@
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/IRenderable.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
+#include "engine/GameObjectScene.hpp"
 
 #include <algorithm>
 #include <memory>
+#include <utility>
 
 using namespace N2Engine;
 
-Scene::Scene(const std::string &name)
-    : sceneName(name), _rootGameObjects()
+Scene::Scene(std::string name)
+    : _rootGameObjects(), sceneName(std::move(name))
 {
 }
 

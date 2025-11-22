@@ -1,7 +1,7 @@
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/ICollider.hpp"
 #include "engine/Application.hpp"
-#include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/Logger.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
@@ -26,7 +26,7 @@ namespace N2Engine::Physics
             return;
         }
 
-        Positionable *positionable = GetGameObject().GetPositionable();
+        const Positionable *positionable = GetGameObject().GetPositionable();
         if (!positionable)
         {
             GetGameObject().CreatePositionable();
@@ -74,9 +74,8 @@ namespace N2Engine::Physics
         }
 
         _initialized = true;
-
-        for (std::vector<ICollider*> colliders = GetGameObject().GetComponents<ICollider>(); const auto &collider :
-             colliders)
+        const auto colliders = GetGameObject().GetComponents<ICollider>();
+        for (const auto &collider : colliders)
         {
             collider->OnAttach();
         }

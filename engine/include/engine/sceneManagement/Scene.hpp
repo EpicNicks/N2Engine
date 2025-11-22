@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <renderer/common/Renderer.hpp>
+#include "engine/ComponentConcepts.hpp"
 
 namespace N2Engine
 {
@@ -27,7 +28,7 @@ namespace N2Engine
         std::queue<Component*> _attachQueue;
 
         std::queue<std::shared_ptr<GameObject>> _markedForDestructionQueue;
-        explicit Scene(const std::string &name);
+        explicit Scene(std::string name);
 
     public:
         std::string sceneName;
@@ -54,9 +55,9 @@ namespace N2Engine
 
         [[nodiscard]] std::vector<std::shared_ptr<GameObject>> GetAllGameObjects() const;
 
-        template <typename T>
+        template <DerivedFromComponent T>
         std::shared_ptr<T> FindObjectByType(bool includeInactive) const;
-        template <typename T>
+        template <DerivedFromComponent T>
         std::vector<std::shared_ptr<T>> FindObjectsByType(bool includeInactive) const;
 
         void ProcessAttachQueue();

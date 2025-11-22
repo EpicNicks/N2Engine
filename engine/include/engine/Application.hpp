@@ -30,14 +30,14 @@ namespace N2Engine
         void Init();
         void Init(std::unique_ptr<Scene> &&initialScene);
         void Run();
-        void PhysicsUpdate(Scene &scene);
+        void PhysicsUpdate(const Scene &scene) const;
 
         static void Quit();
 
         Camera *GetMainCamera() const;
         Window &GetWindow();
 
-        void OnWindowResize(int width, int height);
+        void OnWindowResize(int width, int height) const;
 
         [[nodiscard]] Physics::IPhysicsBackend *Get3DPhysicsBackend() const;
     };

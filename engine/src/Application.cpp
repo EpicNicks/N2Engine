@@ -1,20 +1,19 @@
-#include "engine/Application.hpp"
-#include "engine/Time.hpp"
-#include "engine/Logger.hpp"
-#include "engine/example/QuadRenderer.hpp"
-#include "engine/sceneManagement/Scene.hpp"
-#include "engine/GameObject.hpp"
-#include "engine/scheduling/CoroutineScheduler.hpp"
-#include "engine/physics/physx/PhysXBackend.hpp"
-
-#include <math/MathRegistrar.hpp>
-#include <iostream>
 #include <string>
 #include <memory>
 
 #ifdef N2ENGINE_DEBUG
 #include <string_view>
 #endif
+
+#include <math/MathRegistrar.hpp>
+
+#include "engine/Application.hpp"
+#include "engine/Time.hpp"
+#include "engine/Logger.hpp"
+#include "engine/example/QuadRenderer.hpp"
+#include "engine/sceneManagement/Scene.hpp"
+#include "engine/physics/physx/PhysXBackend.hpp"
+
 
 using namespace N2Engine;
 
@@ -122,8 +121,8 @@ void Application::Run()
         _window.PollEvents();
 
         Time::Update();
-        double now = Time::GetUnscaledTime();
-        double frameTime = now - lastTime;
+        const double now = Time::GetUnscaledTime();
+        const double frameTime = now - lastTime;
         lastTime = now;
 
         fixedTimestepAccumulator += frameTime;
@@ -182,7 +181,7 @@ void Application::Quit()
     std::exit(0);
 }
 
-void Application::OnWindowResize(int width, int height)
+void Application::OnWindowResize(const int width, const int height) const
 {
     if (_mainCamera && width > 0 && height > 0)
     {
@@ -197,7 +196,7 @@ void Application::OnWindowResize(int width, int height)
     }
 }
 
-void Application::PhysicsUpdate(Scene &scene)
+void Application::PhysicsUpdate(const Scene &scene) const
 {
     if (_3DphysicsBackend)
     {

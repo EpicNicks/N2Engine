@@ -2,7 +2,6 @@
 
 #include <math/Vector3.hpp>
 #include <math/Quaternion.hpp>
-#include <memory>
 
 #include <nlohmann/json.hpp>
 

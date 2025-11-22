@@ -4,10 +4,10 @@
 #include <string>
 #include <memory>
 
-#include "engine/sceneManagement/Scene.hpp"
-
 namespace N2Engine
 {
+    class Scene;
+
     class SceneManager
     {
         friend class Application;

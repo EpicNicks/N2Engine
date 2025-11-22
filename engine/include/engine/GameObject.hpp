@@ -15,7 +15,8 @@
 #include "engine/scheduling/CoroutineWait.hpp"
 #include "engine/scheduling/Coroutine.hpp"
 
-// Forward declarations
+#include "engine/ComponentConcepts.hpp"
+
 namespace Math
 {
     class Vector3;
@@ -28,9 +29,6 @@ namespace N2Engine
     class Scene;
     class Positionable;
     class ReferenceResolver;
-
-    template <typename T>
-    concept DerivedFromComponent = std::is_base_of_v<Component, T>;
 
     /**
      * Container class for Components
@@ -153,5 +151,3 @@ namespace N2Engine
         static std::vector<Ptr> FindGameObjectsByTag(const std::string &tag, Scene *scene);
     };
 }
-
-#include "engine/GameObject.inl"

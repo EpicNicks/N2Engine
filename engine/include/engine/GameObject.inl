@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "sceneManagement/Scene.hpp"
 
 namespace N2Engine
 {

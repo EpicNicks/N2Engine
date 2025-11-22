@@ -1,6 +1,8 @@
-#include "engine/sceneManagement/SceneManager.hpp"
-#include "engine/Logger.hpp"
 #include <string>
+
+#include "engine/Logger.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/sceneManagement/Scene.hpp"
 
 using namespace N2Engine;
 
@@ -12,7 +14,7 @@ SceneManager &SceneManager::GetInstance()
 
 Scene &SceneManager::GetCurSceneRef()
 {
-    return GetInstance()[GetInstance().GetCurSceneIndex()];
+    return GetInstance()[GetCurSceneIndex()];
 }
 
 int SceneManager::GetCurSceneIndex()

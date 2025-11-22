@@ -1,5 +1,5 @@
 #include "engine/Positionable.hpp"
-#include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/serialization/MathSerialization.hpp"
 
 #include "engine/physics/Rigidbody.hpp"

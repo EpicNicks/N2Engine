@@ -1,11 +1,9 @@
 #include "engine/physics/ICollider.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/Application.hpp"
-#include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/Logger.hpp"
-
-#include <memory>
 
 namespace N2Engine::Physics
 {
