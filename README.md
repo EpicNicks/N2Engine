@@ -48,6 +48,17 @@ A C++ Game Engine I am building for learning
     - Debian/Ubuntu: ```sudo apt install cmake```
     - Arch: ```sudo pacman -S cmake```
     - Gentoo: ```emerge dev-build/cmake```
+- Building PhysX
+  - CMake should download the binaries this project uses for PhysX
+  - if you wish to build your own binaries you will need:
+    - [Cuda SDK](https://developer.nvidia.com/cuda-toolkit-archive) (version 12.X, 13 was unsupported at last build)
+    - [Nvidia PhysX SDK](https://github.com/NVIDIA-Omniverse/PhysX/releases/tag/107.3-omni-and-physx-5.6.1)
+    - Visual Studio Visual C++ compiler
+  - Install the Cuda SDK
+  - Generate the project files in the Nvidia SDK folder \<root>/physx/generate_projects.bat
+    - select GPU support to enable GPU support in N2Engine, choose Visual Studio project
+    - Build the project with Visual Studio
+    - place the built files (bin and replace include folder headers) in N2Engine project folder external/PhysX/physx
 - G++ -> GCC 11
   - Windows: w64devkit or some other environment which provides a version of G++
   - Linux: Install your distribution's package

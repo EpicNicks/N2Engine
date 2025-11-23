@@ -13,7 +13,48 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-# PhysX Configuration (global, available to all subdirectories)
+# == PhysX Binary Download ==
+set(PHYSX_ROOT "${CMAKE_SOURCE_DIR}/external/PhysX")
+set(PHYSX_BIN_DIR "${PHYSX_ROOT}/physx/bin")
+set(PHYSX_ZIP "${CMAKE_BINARY_DIR}/PhysX_bins.zip")
+set(PHYSX_DOWNLOAD_URL "https://github.com/EpicNicks/N2Engine/releases/download/physx-dependencies/bin.zip")
+
+# Check if PhysX binaries exist
+if(NOT EXISTS "${PHYSX_BIN_DIR}/win.x86_64.vc143.mt/debug/PhysX_64.dll")
+    message(STATUS "========================================")
+    message(STATUS "PhysX binaries not found")
+    message(STATUS "Downloading from GitHub Releases...")
+    message(STATUS "========================================")
+
+    file(DOWNLOAD
+            "${PHYSX_DOWNLOAD_URL}"
+            "${PHYSX_ZIP}"
+            SHOW_PROGRESS
+            STATUS DOWNLOAD_STATUS
+            TIMEOUT 600
+    )
+
+    list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
+    list(GET DOWNLOAD_STATUS 1 STATUS_MESSAGE)
+
+    if(NOT STATUS_CODE EQUAL 0)
+        message(FATAL_ERROR "Failed to download PhysX binaries: ${STATUS_MESSAGE}\nManual download: ${PHYSX_DOWNLOAD_URL}")
+    endif()
+
+    message(STATUS "Extracting PhysX binaries...")
+    file(ARCHIVE_EXTRACT
+            INPUT "${PHYSX_ZIP}"
+            DESTINATION "${PHYSX_ROOT}/physx"
+    )
+
+    file(REMOVE "${PHYSX_ZIP}")
+    message(STATUS "PhysX binaries installed successfully!")
+    message(STATUS "========================================")
+else()
+    message(STATUS "PhysX binaries found at ${PHYSX_BIN_DIR}")
+endif()
+
+# == PhysX Configuration (global, available to all subdirectories) ==
 set(PHYSX_ROOT "${CMAKE_SOURCE_DIR}/external/PhysX")
 set(PHYSX_INCLUDE_DIR ${PHYSX_ROOT}/physx/include)
 
