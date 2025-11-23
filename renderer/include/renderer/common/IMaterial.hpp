@@ -1,14 +1,13 @@
 #pragma once
 
 #include <string>
-#include <cstdint>
 
 namespace N2Engine
 {
     namespace Math
     {
         struct Vector2;
-        struct Vector3;
+        class Vector3;
         struct Vector4;
     }
 }

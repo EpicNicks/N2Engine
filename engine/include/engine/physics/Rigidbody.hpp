@@ -2,9 +2,10 @@
 
 #include <math/Vector3.hpp>
 
-#include "engine/Component.hpp"
+#include "engine/common/ScriptUtils.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
+#include "engine/serialization/ComponentSerializer.hpp"
 
 namespace N2Engine::Physics
 {
@@ -15,14 +16,23 @@ namespace N2Engine::Physics
         Kinematic // Moves via transform, not affected by forces (moving platforms)
     };
 
+    // literals as values because the mapping shouldn't change if one of the BodyType constants has a name change
+    NLOHMANN_JSON_SERIALIZE_ENUM(BodyType, {
+                                 { BodyType::Static, "Static" },
+                                 { BodyType::Dynamic, "Dynamic"},
+                                 { BodyType::Kinematic, "Kinematic"}
+                                 })
+
     /**
      * Rigidbody component - adds physics simulation to a GameObject
      * Automatically creates a physics body when the component starts
      */
-    class Rigidbody : public Component
+    class Rigidbody : public SerializableComponent
     {
     public:
         explicit Rigidbody(GameObject &gameObject);
+
+        std::string GetTypeName() const override;
 
         void OnAttach() override;
         void OnDestroy() override;

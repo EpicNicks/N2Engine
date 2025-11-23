@@ -1,4 +1,5 @@
 #pragma once
+#include "nlohmann/json.hpp"
 
 namespace N2Engine::Physics
 {
@@ -38,4 +39,7 @@ namespace N2Engine::Physics
             return {0.4f, 0.3f, 0.5f};
         }
     };
+
+    void to_json(nlohmann::json &j, const PhysicsMaterial &physicsMaterial);
+    void from_json(const nlohmann::json &j, PhysicsMaterial &physicsMaterial);
 }

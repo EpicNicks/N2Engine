@@ -1,12 +1,13 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
 #include <math/Quaternion.hpp>
 #include "engine/common/Color.hpp"
 
-// Math type serialization
+// serialization methods need to be in the same namespace as their types
 namespace N2Engine::Math
 {
     inline void to_json(nlohmann::json &j, const Vector3 &v)
@@ -16,9 +17,9 @@ namespace N2Engine::Math
 
     inline void from_json(const nlohmann::json &j, Vector3 &v)
     {
-        j.at("x").get_to(v.x);
-        j.at("y").get_to(v.y);
-        j.at("z").get_to(v.z);
+        v.x = j.value("x", 0.0f);
+        v.y = j.value("y", 0.0f);
+        v.z = j.value("z", 0.0f);
         v.w = 0.0f;
     }
 
@@ -29,10 +30,10 @@ namespace N2Engine::Math
 
     inline void from_json(const nlohmann::json &j, Vector4 &v)
     {
-        j.at("w").get_to(v.w);
-        j.at("x").get_to(v.x);
-        j.at("y").get_to(v.y);
-        j.at("z").get_to(v.z);
+        v.w = j.value("w", 0.0f);
+        v.x = j.value("x", 0.0f);
+        v.y = j.value("y", 0.0f);
+        v.z = j.value("z", 0.0f);
     }
 
     inline void to_json(nlohmann::json &j, const Quaternion &q)
@@ -42,7 +43,22 @@ namespace N2Engine::Math
 
     inline void from_json(const nlohmann::json &j, Quaternion &q)
     {
-        q = Quaternion(j["w"], j["x"], j["y"], j["z"]);
+        float w = j.value("w", 0.0f);
+        float x = j.value("x", 0.0f);
+        float y = j.value("y", 0.0f);
+        float z = j.value("z", 0.0f);
+        q = {w, x, y, z};
+        if (!q.IsNormalized())
+        {
+            if (q.LengthSquared() < 1e-6f)
+            {
+                q = Quaternion::Identity();
+            }
+            else
+            {
+                q.Normalize();
+            }
+        }
     }
 }
 
@@ -55,9 +71,9 @@ namespace N2Engine::Common
 
     inline void from_json(const nlohmann::json &j, Color &c)
     {
-        c.r = j["r"];
-        c.g = j["g"];
-        c.b = j["b"];
-        c.a = j["a"];
+        c.r = j.value("r", 1.0f);  // White opaque
+        c.g = j.value("g", 1.0f);
+        c.b = j.value("b", 1.0f);
+        c.a = j.value("a", 1.0f);
     }
 }

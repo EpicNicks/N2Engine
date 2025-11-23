@@ -9,6 +9,8 @@
 #include <engine/input/InputBinding.hpp>
 #include <engine/input/InputSystem.hpp>
 #include <engine/input/InputMapping.hpp>
+#include <engine/physics/BoxCollider.hpp>
+#include <engine/physics/Rigidbody.hpp>
 #include <engine/io/Resources.hpp>
 
 #include <renderer/opengl/OpenGLRenderer.hpp>
@@ -20,7 +22,6 @@
 #include <iostream>
 #include <cmath>
 
-#include "engine/physics/BoxCollider.hpp"
 #include "test_project/Spin.hpp"
 #include "test_project/CameraController.hpp"
 #include "test_project/StandardInputHandler.hpp"
@@ -298,8 +299,11 @@ void TestEngine()
     application.GetWindow().SetWindowMode(WindowMode::Windowed);
 
     auto quadObject = GameObject::Create("TestQuad");
-    auto quadRenderer = quadObject->AddComponent<Example::QuadRenderer>();
-    quadObject->AddComponent<Physics::BoxCollider>();
+    auto *quadRenderer = quadObject->AddComponent<Example::QuadRenderer>();
+    auto *boxCollider = quadObject->AddComponent<Physics::BoxCollider>();
+    auto *rigidbody = quadObject->AddComponent<Physics::Rigidbody>();
+    rigidbody->SetBodyType(Physics::BodyType::Kinematic);
+
     auto spinComponent = quadObject->AddComponent<Spin>();
     spinComponent->degreesPerSecond = -2.0f;
 

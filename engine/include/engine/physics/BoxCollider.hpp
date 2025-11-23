@@ -20,8 +20,6 @@ namespace N2Engine::Physics
         explicit BoxCollider(GameObject& gameObject);
 
         [[nodiscard]] std::string GetTypeName() const override;
-        [[nodiscard]] nlohmann::json Serialize() const override;
-        void Deserialize(const nlohmann::json& j, ReferenceResolver* resolver) override;
 
         void SetSize(const Math::Vector3& size);
         [[nodiscard]] Math::Vector3 GetSize() const;

@@ -5,16 +5,22 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/Logger.hpp"
+#include "engine/serialization/MathSerialization.hpp" // needed for Vector3
 
 #include <format>
+
+#include "engine/common/ScriptUtils.hpp"
 
 namespace N2Engine::Physics
 {
     ICollider::ICollider(GameObject& gameObject)
-        : Component(gameObject)
+        : SerializableComponent(gameObject)
         , _handle(INVALID_PHYSICS_HANDLE)
         , _ownsBody(false)
     {
+        RegisterMember(NAMEOF(_isTrigger), _isTrigger);
+        RegisterMember(NAMEOF(_material), _material);
+        RegisterMember(NAMEOF(_offset), _offset);
     }
 
     void ICollider::OnAttach()
@@ -80,8 +86,7 @@ namespace N2Engine::Physics
         if (!_handle.IsValid())
             return;
 
-        auto* backend = Application::GetInstance().Get3DPhysicsBackend();
-        if (backend)
+        if (auto* backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             backend->UnregisterCollider(_handle, this);
 

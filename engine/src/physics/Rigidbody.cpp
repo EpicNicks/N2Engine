@@ -1,3 +1,5 @@
+#include <format>
+
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/ICollider.hpp"
 #include "engine/Application.hpp"
@@ -6,13 +8,24 @@
 #include "engine/Logger.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 
-#include <format>
+#include "engine/common/ScriptUtils.hpp"
+#include "engine/serialization/ComponentRegistry.hpp"
 
 namespace N2Engine::Physics
 {
     Rigidbody::Rigidbody(GameObject &gameObject)
-        : Component(gameObject),
-          _handle(INVALID_PHYSICS_HANDLE) {}
+        : SerializableComponent(gameObject),
+          _handle(INVALID_PHYSICS_HANDLE)
+    {
+        RegisterMember(NAMEOF(_bodyType), _bodyType);
+        RegisterMember(NAMEOF(_mass), _mass);
+        RegisterMember(NAMEOF(_gravityEnabled), _gravityEnabled);
+    }
+
+    std::string Rigidbody::GetTypeName() const
+    {
+        return NAMEOF(Rigidbody);
+    }
 
     void Rigidbody::OnAttach()
     {

@@ -4,34 +4,21 @@
 #include "engine/common/ScriptUtils.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
+#include "engine/serialization/MathSerialization.hpp"
 
 namespace N2Engine::Physics
 {
+    REGISTER_COMPONENT(BoxCollider)
+
     BoxCollider::BoxCollider(GameObject& gameObject)
         : ICollider(gameObject)
     {
+        RegisterMember(NAMEOF(_halfExtents), _halfExtents);
     }
 
     std::string BoxCollider::GetTypeName() const
     {
         return NAMEOF(BoxCollider);
-    }
-
-    nlohmann::json BoxCollider::Serialize() const
-    {
-        nlohmann::json j = ICollider::Serialize();
-        j["halfExtents"] = {_halfExtents.x, _halfExtents.y, _halfExtents.z};
-        return j;
-    }
-
-    void BoxCollider::Deserialize(const nlohmann::json& j, ReferenceResolver* resolver)
-    {
-        ICollider::Deserialize(j, resolver);
-        if (j.contains("halfExtents"))
-        {
-            const auto& he = j["halfExtents"];
-            _halfExtents = Math::Vector3(he[0], he[1], he[2]);
-        }
     }
 
     void BoxCollider::SetSize(const Math::Vector3& size)
@@ -88,6 +75,4 @@ namespace N2Engine::Physics
             GetMaterial()
         );
     }
-
-    REGISTER_COMPONENT(BoxCollider)
 }

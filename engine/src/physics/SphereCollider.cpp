@@ -6,9 +6,12 @@
 
 namespace N2Engine::Physics
 {
+    REGISTER_COMPONENT(SphereCollider)
+
     SphereCollider::SphereCollider(GameObject& gameObject)
         : ICollider(gameObject)
     {
+        RegisterMember(NAMEOF(_radius), _radius);
     }
 
     std::string SphereCollider::GetTypeName() const
@@ -16,26 +19,12 @@ namespace N2Engine::Physics
         return NAMEOF(SphereCollider);
     }
 
-    nlohmann::json SphereCollider::Serialize() const
-    {
-        nlohmann::json j = ICollider::Serialize();
-        j["radius"] = _radius;
-        return j;
-    }
-
-    void SphereCollider::Deserialize(const nlohmann::json& j, ReferenceResolver* resolver)
-    {
-        ICollider::Deserialize(j, resolver);
-        if (j.contains("radius"))
-        {
-            _radius = j["radius"];
-        }
-    }
-
-    void SphereCollider::SetRadius(float radius)
+    void SphereCollider::SetRadius(const float radius)
     {
         if (_radius == radius)
+        {
             return;
+        }
             
         _radius = radius;
         UpdateShapeGeometry();
@@ -76,6 +65,4 @@ namespace N2Engine::Physics
             GetMaterial()
         );
     }
-
-    REGISTER_COMPONENT(SphereCollider)
 }

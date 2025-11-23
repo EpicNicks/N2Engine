@@ -5,13 +5,15 @@
 #include "engine/physics/PhysicsMaterial.hpp"
 #include <math/Vector3.hpp>
 
+#include "engine/serialization/ComponentSerializer.hpp"
+
 namespace N2Engine::Physics
 {
     class IPhysicsBackend;
     struct Collision;
     struct Trigger;
 
-    class ICollider : public Component
+    class ICollider : public SerializableComponent
     {
     public:
         explicit ICollider(GameObject& gameObject);

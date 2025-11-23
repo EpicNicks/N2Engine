@@ -8,6 +8,8 @@
 #include <numbers>
 #include <iostream>
 
+#include "../../../engine/include/engine/Camera.hpp"
+
 using namespace N2Engine::Math;
 
 // Constructor implementations
@@ -195,19 +197,19 @@ Vector3 Quaternion::ToEulerAngles() const
     return euler;
 }
 
-Quaternion::Matrix4f Quaternion::ToMatrix() const
+Matrix<float, 4, 4> Quaternion::ToMatrix() const
 {
-    float xx = x * x;
-    float yy = y * y;
-    float zz = z * z;
-    float xy = x * y;
-    float xz = x * z;
-    float yz = y * z;
-    float wx = w * x;
-    float wy = w * y;
-    float wz = w * z;
+    const float xx = x * x;
+    const float yy = y * y;
+    const float zz = z * z;
+    const float xy = x * y;
+    const float xz = x * z;
+    const float yz = y * z;
+    const float wx = w * x;
+    const float wy = w * y;
+    const float wz = w * z;
 
-    Matrix4f result;
+    Matrix<float, 4, 4> result;
 
     result(0, 0) = 1.0f - 2.0f * (yy + zz);
     result(0, 1) = 2.0f * (xy - wz);
@@ -232,12 +234,12 @@ Quaternion::Matrix4f Quaternion::ToMatrix() const
     return result;
 }
 
-bool Quaternion::IsNormalized(float tolerance) const
+bool Quaternion::IsNormalized(const float tolerance) const
 {
     return std::abs(LengthSquared() - 1.0f) <= tolerance;
 }
 
-bool Quaternion::IsIdentity(float tolerance) const
+bool Quaternion::IsIdentity(const float tolerance) const
 {
     return std::abs(w - 1.0f) <= tolerance &&
            std::abs(x) <= tolerance &&

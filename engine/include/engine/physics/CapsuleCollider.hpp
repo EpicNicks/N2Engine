@@ -12,14 +12,12 @@ namespace N2Engine::Physics
 {
     class IPhysicsBackend;
 
-    class CapsuleCollider : public ICollider
+    class CapsuleCollider final : public ICollider
     {
     public:
         explicit CapsuleCollider(GameObject& gameObject);
 
         [[nodiscard]] std::string GetTypeName() const override;
-        [[nodiscard]] nlohmann::json Serialize() const override;
-        void Deserialize(const nlohmann::json& j, ReferenceResolver* resolver) override;
 
         void SetRadius(float radius);
         [[nodiscard]] float GetRadius() const;

@@ -6,9 +6,13 @@
 
 namespace N2Engine::Physics
 {
+    REGISTER_COMPONENT(CapsuleCollider)
+
     CapsuleCollider::CapsuleCollider(GameObject& gameObject)
         : ICollider(gameObject)
     {
+        RegisterMember(NAMEOF(_radius), _radius);
+        RegisterMember(NAMEOF(_height), _height);
     }
 
     std::string CapsuleCollider::GetTypeName() const
@@ -16,30 +20,7 @@ namespace N2Engine::Physics
         return NAMEOF(CapsuleCollider);
     }
 
-    nlohmann::json CapsuleCollider::Serialize() const
-    {
-        nlohmann::json j = ICollider::Serialize();
-        j["radius"] = _radius;
-        j["height"] = _height;
-        return j;
-    }
-
-    void CapsuleCollider::Deserialize(const nlohmann::json& j, ReferenceResolver* resolver)
-    {
-        ICollider::Deserialize(j, resolver);
-        
-        if (j.contains("radius"))
-        {
-            _radius = j["radius"];
-        }
-        
-        if (j.contains("height"))
-        {
-            _height = j["height"];
-        }
-    }
-
-    void CapsuleCollider::SetRadius(float radius)
+    void CapsuleCollider::SetRadius(const float radius)
     {
         if (_radius == radius)
             return;
@@ -53,7 +34,7 @@ namespace N2Engine::Physics
         return _radius;
     }
 
-    void CapsuleCollider::SetHeight(float height)
+    void CapsuleCollider::SetHeight(const float height)
     {
         if (_height == height)
             return;
@@ -99,6 +80,4 @@ namespace N2Engine::Physics
             GetMaterial()
         );
     }
-
-    REGISTER_COMPONENT(CapsuleCollider)
 }
