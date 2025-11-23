@@ -42,7 +42,7 @@ A C++ Game Engine I am building for learning
 
 ## Requirements
 - [The Vulkan SDK](https://vulkan.lunarg.com/)
-- CMake
+- [CMake](https://cmake.org/download/)
   - [Windows](https://cmake.org/download/)
   - Linux: Install your distribution's package
     - Debian/Ubuntu: ```sudo apt install cmake```
@@ -59,9 +59,12 @@ A C++ Game Engine I am building for learning
     - select GPU support to enable GPU support in N2Engine, choose Visual Studio project
     - Build the project with Visual Studio
     - place the built files (bin and replace include folder headers) in N2Engine project folder external/PhysX/physx
-- G++ -> GCC 11
-  - Windows: w64devkit or some other environment which provides a version of G++
-  - Linux: Install your distribution's package
-    - Debian/Ubuntu: ```sudo apt install build-essential```
-    - Arch: ```sudo pacman -S base-devel```
-    - Gentoo: you already have it
+- C++23 compiler
+  - Windows
+    - Visual Studio 2022 latest or 2026
+    - Clang **(WILL NEED TO BUILD PHYSX YOURSELF)**
+  - Linux: G++ -> GCC 11 **(WILL NEED TO BUILD PHYSX YOURSELF)**
+    - Install your distribution's package
+      - Debian/Ubuntu: ```sudo apt install build-essential```
+      - Arch: ```sudo pacman -S base-devel```
+      - Gentoo: you already have it
