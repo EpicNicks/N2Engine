@@ -75,6 +75,8 @@ A C++ Game Engine I am building for learning
   - ```CMAKE_GENERATOR```: the compiler to use \[default value: Visual Studio 18 2026]
 - flags
   - ```--release``` for release builds, otherwise a debug build will be generated
+  - ```--clean``` to delete the build folder before running the build
+  - ```--verbose``` to pass the verbose flag to the compiler
 - Run ```./build-vs.bat```
 ### Other
 - Run ```cmake``` with parameters for your compiler and options of choice

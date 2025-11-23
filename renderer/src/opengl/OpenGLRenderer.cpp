@@ -1,7 +1,4 @@
 #include <iostream>
-#include <fstream>
-#include <sstream>
-#include <cstring>
 
 #include <math/Matrix.hpp>
 
@@ -12,8 +9,8 @@
 using namespace Renderer::OpenGL;
 
 OpenGLRenderer::OpenGLRenderer()
-    : m_window(nullptr), m_width(0), m_height(0),
-      m_currentShader(0), m_wireframeEnabled(false)
+    : m_window(nullptr), m_width(0), m_height(0), m_standardUnlitShader(nullptr), m_standardLitShader(nullptr),
+      m_currentShader(0), m_wireframeEnabled(false), m_clearColor{}, m_viewMatrix{}, m_projectionMatrix{}
 {
     // Initialize matrices to identity
     memset(m_viewMatrix, 0, sizeof(m_viewMatrix));
@@ -40,7 +37,7 @@ void OpenGLRenderer::Clear(float r, float g, float b, float a)
     m_clearColor[3] = a;
 }
 
-bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height)
+bool OpenGLRenderer::Initialize(GLFWwindow* windowHandle, uint32_t width, uint32_t height)
 {
     m_window = windowHandle;
     m_width = width;
@@ -78,7 +75,7 @@ bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32
 void OpenGLRenderer::Shutdown()
 {
     m_materials.clear(); // Destroy materials first
-    m_meshes.clear();    // Then meshes
+    m_meshes.clear(); // Then meshes
     m_textures.clear();
     m_shaderPrograms.clear();
 }
@@ -90,7 +87,7 @@ void OpenGLRenderer::Resize(uint32_t width, uint32_t height)
     glViewport(0, 0, width, height);
 }
 
-Renderer::Common::IShader *OpenGLRenderer::CreateShaderProgram(const char *vertexSource, const char *fragmentSource)
+Renderer::Common::IShader* OpenGLRenderer::CreateShaderProgram(const char* vertexSource, const char* fragmentSource)
 {
     auto shader = std::make_shared<OpenGLShader>();
 
@@ -100,19 +97,19 @@ Renderer::Common::IShader *OpenGLRenderer::CreateShaderProgram(const char *verte
         return nullptr;
     }
 
-    Common::IShader *ptr = shader.get();
+    Common::IShader* ptr = shader.get();
     m_shaderPrograms[ptr] = shader;
     return ptr;
 }
 
-void OpenGLRenderer::UseShaderProgram(Common::IShader *shader)
+void OpenGLRenderer::UseShaderProgram(Common::IShader* shader)
 {
     if (!shader)
     {
         return;
     }
 
-    auto *openglShader = dynamic_cast<OpenGLShader *>(shader);
+    auto* openglShader = dynamic_cast<OpenGLShader*>(shader);
     if (!openglShader)
     {
         std::cerr << "Error: Non-OpenGL shader with OpenGLRenderer." << std::endl;
@@ -127,7 +124,7 @@ void OpenGLRenderer::UseShaderProgram(Common::IShader *shader)
     }
 }
 
-bool OpenGLRenderer::DestroyShaderProgram(Common::IShader *shader)
+bool OpenGLRenderer::DestroyShaderProgram(Common::IShader* shader)
 {
     if (!shader)
     {
@@ -146,7 +143,7 @@ bool OpenGLRenderer::DestroyShaderProgram(Common::IShader *shader)
     return false;
 }
 
-bool OpenGLRenderer::IsValidShader(Common::IShader *shader) const
+bool OpenGLRenderer::IsValidShader(Common::IShader* shader) const
 {
     if (!shader)
     {
@@ -191,7 +188,7 @@ void OpenGLRenderer::Present()
     glfwSwapBuffers(m_window);
 }
 
-Renderer::Common::IMesh *OpenGLRenderer::CreateMesh(const Common::MeshData &meshData)
+Renderer::Common::IMesh* OpenGLRenderer::CreateMesh(const Common::MeshData& meshData)
 {
     auto mesh = std::make_unique<OpenGLMesh>();
 
@@ -201,12 +198,12 @@ Renderer::Common::IMesh *OpenGLRenderer::CreateMesh(const Common::MeshData &mesh
         return nullptr;
     }
 
-    Common::IMesh *ptr = mesh.get();
+    Common::IMesh* ptr = mesh.get();
     m_meshes[ptr] = std::move(mesh);
     return ptr;
 }
 
-void OpenGLRenderer::DestroyMesh(Common::IMesh *mesh)
+void OpenGLRenderer::DestroyMesh(Common::IMesh* mesh)
 {
     if (!mesh)
         return;
@@ -214,7 +211,8 @@ void OpenGLRenderer::DestroyMesh(Common::IMesh *mesh)
     m_meshes.erase(mesh);
 }
 
-Renderer::Common::ITexture *OpenGLRenderer::CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels)
+Renderer::Common::ITexture* OpenGLRenderer::CreateTexture(const uint8_t* data, uint32_t width, uint32_t height,
+                                                          uint32_t channels)
 {
     auto texture = std::make_unique<OpenGLTexture>();
 
@@ -224,12 +222,12 @@ Renderer::Common::ITexture *OpenGLRenderer::CreateTexture(const uint8_t *data, u
         return nullptr;
     }
 
-    Common::ITexture *ptr = texture.get();
+    Common::ITexture* ptr = texture.get();
     m_textures[ptr] = std::move(texture);
     return ptr;
 }
 
-void OpenGLRenderer::DestroyTexture(Renderer::Common::ITexture *texture)
+void OpenGLRenderer::DestroyTexture(Renderer::Common::ITexture* texture)
 {
     if (!texture)
     {
@@ -238,7 +236,8 @@ void OpenGLRenderer::DestroyTexture(Renderer::Common::ITexture *texture)
     m_textures.erase(texture);
 }
 
-Renderer::Common::IMaterial *OpenGLRenderer::CreateMaterial(Renderer::Common::IShader *shader, Renderer::Common::ITexture *texture)
+Renderer::Common::IMaterial* OpenGLRenderer::CreateMaterial(Renderer::Common::IShader* shader,
+                                                            Renderer::Common::ITexture* texture)
 {
     if (!shader)
     {
@@ -246,7 +245,7 @@ Renderer::Common::IMaterial *OpenGLRenderer::CreateMaterial(Renderer::Common::IS
         return nullptr;
     }
 
-    auto *openglShader = dynamic_cast<OpenGLShader *>(shader);
+    auto* openglShader = dynamic_cast<OpenGLShader*>(shader);
     if (!openglShader)
     {
         std::cerr << "Error: Non-OpenGL shader in CreateMaterial." << std::endl;
@@ -263,13 +262,13 @@ Renderer::Common::IMaterial *OpenGLRenderer::CreateMaterial(Renderer::Common::IS
 
     // Create material with shared shader reference
     auto material = std::make_unique<OpenGLMaterial>(shaderIt->second, texture);
-    Common::IMaterial *ptr = material.get();
+    Common::IMaterial* ptr = material.get();
     m_materials[ptr] = std::move(material);
 
     return ptr;
 }
 
-void OpenGLRenderer::DestroyMaterial(Renderer::Common::IMaterial *material)
+void OpenGLRenderer::DestroyMaterial(Renderer::Common::IMaterial* material)
 {
     if (!material)
     {
@@ -279,7 +278,7 @@ void OpenGLRenderer::DestroyMaterial(Renderer::Common::IMaterial *material)
     m_materials.erase(material);
 }
 
-void OpenGLRenderer::SetViewProjection(const float *view, const float *projection)
+void OpenGLRenderer::SetViewProjection(const float* view, const float* projection)
 {
     if (view)
     {
@@ -291,7 +290,14 @@ void OpenGLRenderer::SetViewProjection(const float *view, const float *projectio
     }
 }
 
-void OpenGLRenderer::DrawMesh(Renderer::Common::IMesh *mesh, const float *modelMatrix, Renderer::Common::IMaterial *material)
+void OpenGLRenderer::UpdateSceneLighting(const Common::SceneLightingData& lighting,
+                                         const N2Engine::Math::Vector3& cameraPosition)
+{
+}
+
+
+void OpenGLRenderer::DrawMesh(Renderer::Common::IMesh* mesh, const float* modelMatrix,
+                              Renderer::Common::IMaterial* material)
 {
     if (!mesh || !mesh->IsValid() || !material)
     {
@@ -299,20 +305,20 @@ void OpenGLRenderer::DrawMesh(Renderer::Common::IMesh *mesh, const float *modelM
     }
 
     // implicitly safe cast to OpenGL-specific types created
-    auto *glMesh = static_cast<OpenGLMesh *>(mesh);
-    auto *glMaterial = static_cast<OpenGLMaterial *>(material);
+    auto* glMesh = static_cast<OpenGLMesh*>(mesh);
+    auto* glMaterial = static_cast<OpenGLMaterial*>(material);
 
     // Apply material (binds shader and sets material properties)
     glMaterial->Apply();
 
     // Get shader for setting standard uniforms
-    OpenGLShader *shader = glMaterial->GetShader();
+    OpenGLShader* shader = glMaterial->GetShader();
     if (!shader)
     {
         return;
     }
 
-    const ShaderUniforms &uniforms = shader->GetCommonUniforms();
+    const ShaderUniforms& uniforms = shader->GetCommonUniforms();
 
     // Set transform uniforms
     if (uniforms.modelLoc != -1)
@@ -331,7 +337,7 @@ void OpenGLRenderer::DrawMesh(Renderer::Common::IMesh *mesh, const float *modelM
     }
 
     // Bind texture if material has one
-    OpenGLTexture *texture = glMaterial->GetTexture();
+    OpenGLTexture* texture = glMaterial->GetTexture();
     if (texture && texture->IsValid())
     {
         glActiveTexture(GL_TEXTURE0);
@@ -349,9 +355,9 @@ void OpenGLRenderer::DrawMesh(Renderer::Common::IMesh *mesh, const float *modelM
     glBindVertexArray(0);
 }
 
-void OpenGLRenderer::DrawObjects(const std::vector<Common::RenderObject> &objects)
+void OpenGLRenderer::DrawObjects(const std::vector<Common::RenderObject>& objects)
 {
-    for (const auto &obj : objects)
+    for (const auto& obj : objects)
     {
         DrawMesh(obj.mesh, obj.transform.model, obj.material);
     }
@@ -369,17 +375,18 @@ void Renderer::OpenGL::OpenGLRenderer::OnResize(int width, int height)
     m_width = static_cast<uint32_t>(width);
     m_height = static_cast<uint32_t>(height);
 }
+
 void OpenGLRenderer::SetWireframe(bool enabled)
 {
     m_wireframeEnabled = enabled;
 }
 
-const char *OpenGLRenderer::GetRendererName() const
+const char* OpenGLRenderer::GetRendererName() const
 {
     return "OpenGL Renderer";
 }
 
-GLuint OpenGLRenderer::CompileShader(const char *source, GLenum shaderType)
+GLuint OpenGLRenderer::CompileShader(const char* source, GLenum shaderType)
 {
     GLuint shader = glCreateShader(shaderType);
     glShaderSource(shader, 1, &source, nullptr);
@@ -410,7 +417,7 @@ GLuint OpenGLRenderer::LinkProgram(GLuint vertexShader, GLuint fragmentShader)
     return program;
 }
 
-bool OpenGLRenderer::CheckCompileErrors(GLuint shader, const std::string &type)
+bool OpenGLRenderer::CheckCompileErrors(GLuint shader, const std::string& type)
 {
     GLint success;
     GLchar infoLog[1024];
@@ -439,7 +446,7 @@ bool OpenGLRenderer::CheckCompileErrors(GLuint shader, const std::string &type)
     return true;
 }
 
-void OpenGLRenderer::SetMatrix4fv(GLint location, const float *matrix)
+void OpenGLRenderer::SetMatrix4fv(GLint location, const float* matrix)
 {
     if (location != -1)
     {
@@ -485,35 +492,35 @@ GLenum OpenGLRenderer::GetOpenGLInternalFormat(uint32_t channels)
 void OpenGLRenderer::CreateStandardShaders()
 {
     // UNLIT SHADER - No lighting, just colors
-    const char *unlitVert = R"(
+    const char* unlitVert = R"(
         #version 330 core
         layout (location = 0) in vec3 aPos;
         layout (location = 1) in vec3 aNormal;
         layout (location = 2) in vec2 aTexCoord;
         layout (location = 3) in vec4 aColor;
-        
+
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProjection;
-        
+
         out vec2 fragTexCoord;
-        
+
         void main() {
             gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
             fragTexCoord = aTexCoord;
         }
     )";
 
-    const char *unlitFrag = R"(
+    const char* unlitFrag = R"(
         #version 330 core
-        
+
         uniform vec4 uAlbedo;  // Material color
         uniform sampler2D uTexture;
         uniform bool uHasTexture;
-        
+
         in vec2 fragTexCoord;
         out vec4 FragColor;
-        
+
         void main() {
             vec4 color = uAlbedo;
             if (uHasTexture) {
@@ -526,21 +533,21 @@ void OpenGLRenderer::CreateStandardShaders()
     m_standardUnlitShader = CreateShaderProgram(unlitVert, unlitFrag);
 
     // STANDARD LIT SHADER - Simple directional + ambient
-    const char *litVert = R"(
+    const char* litVert = R"(
         #version 330 core
         layout (location = 0) in vec3 aPos;
         layout (location = 1) in vec3 aNormal;
         layout (location = 2) in vec2 aTexCoord;
         layout (location = 3) in vec4 aColor;
-        
+
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProjection;
-        
+
         out vec3 fragNormal;
         out vec3 fragWorldPos;
         out vec2 fragTexCoord;
-        
+
         void main() {
             vec4 worldPos = uModel * vec4(aPos, 1.0);
             fragWorldPos = worldPos.xyz;
@@ -550,42 +557,42 @@ void OpenGLRenderer::CreateStandardShaders()
         }
     )";
 
-    const char *litFrag = R"(
+    const char* litFrag = R"(
         #version 330 core
-        
+
         // Material properties
         uniform vec4 uAlbedo;
         uniform sampler2D uTexture;
         uniform bool uHasTexture;
-        
+
         // Scene lighting (set by renderer each frame)
         uniform vec3 uAmbientLight;
         uniform vec3 uDirectionalLightDir;
         uniform vec3 uDirectionalLightColor;
         uniform float uDirectionalLightIntensity;
-        
+
         in vec3 fragNormal;
         in vec3 fragWorldPos;
         in vec2 fragTexCoord;
-        
+
         out vec4 FragColor;
-        
+
         void main() {
             // Get base color
             vec4 albedo = uAlbedo;
             if (uHasTexture) {
                 albedo *= texture(uTexture, fragTexCoord);
             }
-            
+
             // Ambient
             vec3 ambient = uAmbientLight;
-            
+
             // Directional light
             vec3 N = normalize(fragNormal);
             vec3 L = normalize(-uDirectionalLightDir);
             float NdotL = max(dot(N, L), 0.0);
             vec3 diffuse = uDirectionalLightColor * uDirectionalLightIntensity * NdotL;
-            
+
             // Combine
             vec3 lighting = ambient + diffuse;
             FragColor = vec4(lighting * albedo.rgb, albedo.a);
@@ -595,12 +602,12 @@ void OpenGLRenderer::CreateStandardShaders()
     m_standardLitShader = CreateShaderProgram(litVert, litFrag);
 }
 
-Renderer::Common::IShader *OpenGLRenderer::GetStandardUnlitShader() const
+Renderer::Common::IShader* OpenGLRenderer::GetStandardUnlitShader() const
 {
     return m_standardUnlitShader;
 }
 
-Renderer::Common::IShader *OpenGLRenderer::GetStandardLitShader() const
+Renderer::Common::IShader* OpenGLRenderer::GetStandardLitShader() const
 {
     return m_standardLitShader;
 }

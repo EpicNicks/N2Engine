@@ -50,7 +50,7 @@ namespace Renderer
             VkBuffer buffer = VK_NULL_HANDLE;
             VkDeviceMemory memory = VK_NULL_HANDLE;
             VkDeviceSize size = 0;
-            void *mapped = nullptr;
+            void* mapped = nullptr;
         };
 
         struct GPUInfo
@@ -80,7 +80,7 @@ namespace Renderer
             ~VulkanRenderer() override;
 
             // IRenderer implementation
-            bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) override;
+            bool Initialize(GLFWwindow* windowHandle, uint32_t width, uint32_t height) override;
             void Shutdown() override;
             void Resize(uint32_t width, uint32_t height) override;
             void Clear(float r, float g, float b, float a) override;
@@ -90,40 +90,44 @@ namespace Renderer
             void Present() override;
 
             // Resource management - updated to use interface pointers
-            Common::IMesh *CreateMesh(const Common::MeshData &meshData) override;
-            void DestroyMesh(Common::IMesh *mesh) override;
+            Common::IMesh* CreateMesh(const Common::MeshData& meshData) override;
+            void DestroyMesh(Common::IMesh* mesh) override;
 
-            Common::ITexture *CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels) override;
-            void DestroyTexture(Common::ITexture *texture) override;
+            Common::ITexture*
+            CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels) override;
+            void DestroyTexture(Common::ITexture* texture) override;
 
-            Common::IMaterial *CreateMaterial(Common::IShader *shader, Common::ITexture *texture = nullptr) override;
-            void DestroyMaterial(Common::IMaterial *material) override;
+            Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture = nullptr) override;
+            void DestroyMaterial(Common::IMaterial* material) override;
 
-            Common::IShader *CreateShaderProgram(const char *vertexSource, const char *fragmentSource) override;
-            void UseShaderProgram(Common::IShader *shader) override;
-            bool DestroyShaderProgram(Common::IShader *shader) override;
-            bool IsValidShader(Common::IShader *shader) const override;
+            Common::IShader* CreateShaderProgram(const char* vertexSource, const char* fragmentSource) override;
+            void UseShaderProgram(Common::IShader* shader) override;
+            bool DestroyShaderProgram(Common::IShader* shader) override;
+            bool IsValidShader(Common::IShader* shader) const override;
 
-            void SetViewProjection(const float *view, const float *projection) override;
-            void DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material) override;
-            void DrawObjects(const std::vector<Common::RenderObject> &objects) override;
+            void SetViewProjection(const float* view, const float* projection) override;
+            void UpdateSceneLighting(const Common::SceneLightingData& lighting,
+                                     const N2Engine::Math::Vector3& cameraPosition) override;
+
+            void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material) override;
+            void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
             void OnResize(int width, int height) override;
 
             void SetWireframe(bool enabled) override;
-            const char *GetRendererName() const override { return "Vulkan Renderer"; }
+            [[nodiscard]] const char* GetRendererName() const override { return "Vulkan Renderer"; }
 
             std::vector<GPUInfo> GetCompatibleGPUs();
             bool SelectGPU(VkPhysicalDevice device);
-            VkPhysicalDevice GetRecommendedGPU(const std::vector<GPUInfo> &gpus);
+            VkPhysicalDevice GetRecommendedGPU(const std::vector<GPUInfo>& gpus);
 
-            Common::IShader *GetStandardUnlitShader() const override;
-            Common::IShader *GetStandardLitShader() const override;
+            [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
+            [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
 
         private:
             // Initialization
             bool CreateInstance();
             bool SetupDebugMessenger();
-            bool CreateSurface(GLFWwindow *windowHandle);
+            bool CreateSurface(GLFWwindow* windowHandle);
             bool PickPhysicalDevice();
             uint32_t ScoreDevice(VkPhysicalDevice device);
             bool CreateLogicalDevice();
@@ -143,29 +147,31 @@ namespace Renderer
             // Helper functions
             QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device);
             SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice device);
-            VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR> &availableFormats);
-            VkPresentModeKHR ChooseSwapPresentMode(const std::vector<VkPresentModeKHR> &availablePresentModes);
-            VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR &capabilities);
+            VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
+            VkPresentModeKHR ChooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes);
+            VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
             bool IsDeviceSuitable(VkPhysicalDevice device);
             bool CheckDeviceExtensionSupport(VkPhysicalDevice device);
-            std::vector<const char *> GetRequiredExtensions();
+            std::vector<const char*> GetRequiredExtensions();
             bool CheckValidationLayerSupport();
 
             // Resource management
             bool CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
-                              VkBuffer &buffer, VkDeviceMemory &bufferMemory);
+                              VkBuffer& buffer, VkDeviceMemory& bufferMemory);
             void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
             uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
             // Texture helpers
             bool CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling,
                              VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
-                             VkImage &image, VkDeviceMemory &imageMemory);
+                             VkImage& image, VkDeviceMemory& imageMemory);
             VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
-            void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
+            void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout,
+                                       VkImageLayout newLayout);
             void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
             VkFormat FindDepthFormat();
-            VkFormat FindSupportedFormat(const std::vector<VkFormat> &candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+            VkFormat FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling,
+                                         VkFormatFeatureFlags features);
             bool HasStencilComponent(VkFormat format);
 
             // Command buffer helpers
@@ -180,8 +186,8 @@ namespace Renderer
             static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
                 VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                 VkDebugUtilsMessageTypeFlagsEXT messageType,
-                const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
-                void *pUserData);
+                const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+                void* pUserData);
 
         private:
             // Core Vulkan objects
@@ -233,8 +239,8 @@ namespace Renderer
             // std::unordered_map<Common::IMaterial *, std::unique_ptr<VulkanMaterial>> _materials;
 
             // Standard shaders
-            Common::IShader *_standardUnlitShader = nullptr;
-            Common::IShader *_standardLitShader = nullptr;
+            Common::IShader* _standardUnlitShader = nullptr;
+            Common::IShader* _standardLitShader = nullptr;
 
             // Frame state
             uint32_t _currentFrame = 0;
@@ -250,12 +256,13 @@ namespace Renderer
             static const int MAX_FRAMES_IN_FLIGHT = 2;
             static const bool ENABLE_VALIDATION_LAYERS = true;
 
-            const std::vector<const char *> _validationLayers = {
-                "VK_LAYER_KHRONOS_validation"};
+            const std::vector<const char*> _validationLayers = {
+                "VK_LAYER_KHRONOS_validation"
+            };
 
-            const std::vector<const char *> _deviceExtensions = {
-                VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+            const std::vector<const char*> _deviceExtensions = {
+                VK_KHR_SWAPCHAIN_EXTENSION_NAME
+            };
         };
-
     }
 }

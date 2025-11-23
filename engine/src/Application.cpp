@@ -175,7 +175,7 @@ void Application::Quit()
 {
     if (SceneManager::GetCurSceneIndex() != -1)
     {
-        Scene &curScene = SceneManager::GetCurSceneRef();
+        const Scene &curScene = SceneManager::GetCurSceneRef();
         curScene.OnApplicationQuit();
     }
     std::exit(0);
