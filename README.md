@@ -68,3 +68,13 @@ A C++ Game Engine I am building for learning
       - Debian/Ubuntu: ```sudo apt install build-essential```
       - Arch: ```sudo pacman -S base-devel```
       - Gentoo: you already have it
+
+## Building
+### Visual Studio for x64 build target
+- environment variables
+  - ```CMAKE_GENERATOR```: the compiler to use \[default value: Visual Studio 18 2026]
+- flags
+  - ```--release``` for release builds, otherwise a debug build will be generated
+- Run ```./build-vs.bat```
+### Other
+- Run ```cmake``` with parameters for your compiler and options of choice
