@@ -13,7 +13,7 @@
 #include "engine/example/QuadRenderer.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
-
+#include "engine/scheduling/CoroutineScheduler.hpp"
 
 using namespace N2Engine;
 
@@ -157,14 +157,17 @@ void Application::Render()
     _window.Clear();
     renderer->BeginFrame();
 
-    const Matrix4 &viewMatrix = _mainCamera->GetViewMatrix();
-    const Matrix4 &projectionMatrix = _mainCamera->GetProjectionMatrix();
-
-    renderer->SetViewProjection(viewMatrix.Data(), projectionMatrix.Data());
-
     if (SceneManager::GetCurSceneIndex() != -1)
     {
-        SceneManager::GetCurSceneRef().Render(renderer);
+        auto &curScene = SceneManager::GetCurSceneRef();
+
+        const Matrix4 &viewMatrix = _mainCamera->GetViewMatrix();
+        const Matrix4 &projectionMatrix = _mainCamera->GetProjectionMatrix();
+        renderer->SetViewProjection(viewMatrix.Data(), projectionMatrix.Data());
+        const Renderer::Common::SceneLightingData sceneLightingData = curScene.CollectLighting();
+        renderer->UpdateSceneLighting(sceneLightingData, _mainCamera->GetPosition());
+
+        curScene.Render(renderer);
     }
 
     renderer->EndFrame();

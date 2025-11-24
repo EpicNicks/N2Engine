@@ -22,7 +22,7 @@ int SceneManager::GetCurSceneIndex()
     return GetInstance()._curSceneIndex;
 }
 
-void SceneManager::LoadScene(int sceneIndex)
+void SceneManager::LoadScene(const int sceneIndex)
 {
     SceneManager &instance = GetInstance();
     if (sceneIndex < 0 || sceneIndex >= instance._scenes.size())
@@ -33,7 +33,7 @@ void SceneManager::LoadScene(int sceneIndex)
     instance._sceneChange = SceneChange{true, sceneIndex};
 }
 
-void SceneManager::LoadScene(std::string &sceneName)
+void SceneManager::LoadScene(const std::string &sceneName)
 {
     for (int i = 0; i < GetInstance()._scenes.size(); i++)
     {
@@ -64,12 +64,12 @@ void SceneManager::ProcessAnyPendingSceneChange()
     // TODO populate the scene pointer (the underlying value should be able to be loaded and unloaded)
 }
 
-Scene &SceneManager::operator[](int index)
+Scene &SceneManager::operator[](const int index)
 {
     return *(_scenes[index]);
 }
 
-const Scene &SceneManager::operator[](int index) const
+const Scene &SceneManager::operator[](const int index) const
 {
     return *(_scenes[index]);
 }

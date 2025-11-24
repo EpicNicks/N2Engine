@@ -70,6 +70,7 @@ target_compile_definitions(renderer PRIVATE
     GLFW_INCLUDE_NONE
     GLFW_INCLUDE_VULKAN
     ${VULKAN_PLATFORM_DEFINE}
+    NOMINMAX # remove windows min and max macros from polluting the <algorithm> function
 )
 
 # Link libraries

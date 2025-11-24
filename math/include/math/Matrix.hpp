@@ -150,7 +150,7 @@ namespace N2Engine::Math
             return I;
         }
 
-        std::string toString() const
+        [[nodiscard]] std::string toString() const
         {
             std::string result = "[";
             for (std::size_t row = 0; row < M; ++row)
@@ -255,23 +255,23 @@ namespace N2Engine::Math
             return !(*this == other);
         }
 
-        Matrix transpose() const
+        [[nodiscard]] Matrix transpose() const
         {
             return transpose_func(*this);
         }
 
-        Matrix inverse() const
+        [[nodiscard]] Matrix inverse() const
         {
             return inverse_func(*this);
         }
 
-        float determinant() const
+        [[nodiscard]] float determinant() const
         {
             return determinant_func(*this);
         }
 
         // 4x4-specific methods
-        Vector3 TransformPoint(const Vector3 &point) const
+        [[nodiscard]] Vector3 TransformPoint(const Vector3 &point) const
         {
             return transform_func(*this, point);
         }
@@ -341,7 +341,7 @@ namespace N2Engine::Math
             return result;
         }
 
-        std::string toString() const
+        [[nodiscard]] std::string toString() const
         {
             std::string result = "[";
             for (std::size_t row = 0; row < 4; ++row)
@@ -360,7 +360,7 @@ namespace N2Engine::Math
         }
 
         // Access to raw data
-        const float *Data() const { return data.data(); }
+        [[nodiscard]] const float *Data() const { return data.data(); }
         float *Data() { return data.data(); }
 
         // SIMD initialization - call once at startup
@@ -808,7 +808,7 @@ namespace N2Engine::Math
             return !(*this == other);
         }
 
-        Matrix transpose() const
+        [[nodiscard]] Matrix transpose() const
         {
             return transpose_func(*this);
         }
@@ -864,7 +864,7 @@ namespace N2Engine::Math
             return result;
         }
 
-        std::string toString() const
+        [[nodiscard]] std::string toString() const
         {
             std::string result = "[";
             for (std::size_t row = 0; row < 3; ++row)
@@ -1117,7 +1117,7 @@ namespace N2Engine::Math
             return !(*this == other);
         }
 
-        Matrix transpose() const
+        [[nodiscard]] Matrix transpose() const
         {
             Matrix result;
             result.data[0] = data[0];
@@ -1171,7 +1171,7 @@ namespace N2Engine::Math
             return result;
         }
 
-        constexpr std::string toString() const
+        [[nodiscard]] constexpr std::string toString() const
         {
             std::string result = "[";
             for (std::size_t row = 0; row < 2; ++row)

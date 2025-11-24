@@ -11,7 +11,7 @@ void Vector3::InitializeSIMD()
 
     std::cout << "Vector3 SIMD Initialization:\n";
 
-    CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
+    const CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
 
     std::cout << "SSE2: " << (features.sse2 ? "Yes" : "No") << "\n";
     std::cout << "SSE4.1: " << (features.sse41 ? "Yes" : "No") << "\n";

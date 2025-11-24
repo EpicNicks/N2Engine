@@ -23,7 +23,10 @@ namespace N2Engine::Rendering
     {
     public:
         explicit Light(GameObject& gameObject);
-        std::string GetTypeName() const override;
+        [[nodiscard]] std::string GetTypeName() const override;
+
+        [[nodiscard]] Math::Vector3 GetWorldDirection() const;
+        [[nodiscard]] Math::Vector3 GetWorldPosition() const;
 
     public:
         LightType type = LightType::Directional;

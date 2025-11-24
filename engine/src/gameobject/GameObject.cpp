@@ -11,6 +11,8 @@
 #include <nlohmann/json.hpp>
 #include <utility>
 
+#include "engine/sceneManagement/SceneManager.hpp"
+
 using namespace N2Engine;
 
 GameObject::Ptr GameObject::Create(const std::string &name)
@@ -402,15 +404,15 @@ bool GameObject::IsDestroyed() const
 
 Scheduling::Coroutine *GameObject::StartCoroutine(std::generator<N2Engine::Scheduling::ICoroutineWait> &&coroutine)
 {
-    return Scheduling::CoroutineScheduler::StartCoroutine(this, std::move(coroutine));
+    return SceneManager::GetCurSceneRef().GetCoroutineScheduler()->StartCoroutine(this, std::move(coroutine));
 }
 bool GameObject::StopCoroutine(Scheduling::Coroutine *coroutine)
 {
-    return Scheduling::CoroutineScheduler::StopCoroutine(this, coroutine);
+    return SceneManager::GetCurSceneRef().GetCoroutineScheduler()->StopCoroutine(this, coroutine);
 }
 void GameObject::StopAllCoroutines()
 {
-    return Scheduling::CoroutineScheduler::StopAllCoroutines(this);
+    SceneManager::GetCurSceneRef().GetCoroutineScheduler()->StopAllCoroutines(this);
 }
 
 // Utility methods

@@ -6,6 +6,7 @@
 
 namespace N2Engine
 {
+    class Scene;
     class GameObject;
 
     namespace Scheduling
@@ -13,20 +14,27 @@ namespace N2Engine
         class CoroutineScheduler
         {
         private:
-            static std::unordered_map<GameObject *, std::vector<std::unique_ptr<Coroutine>>> coroutines;
+            std::unordered_map<GameObject*, std::vector<std::unique_ptr<Coroutine>>> _coroutines;
+            Scene *_scene;
 
         public:
-            static void Update();
+            explicit CoroutineScheduler(Scene *scene);
+            void Update();
 
-            static Coroutine *StartCoroutine(GameObject *gameObject, std::generator<ICoroutineWait> &&generator);
-            static bool StopCoroutine(GameObject *gameObject, Coroutine *coroutine);
-            static void StopAllCoroutines(GameObject *gameObject);
-            static bool RemoveGameObject(GameObject *gameObject);
+            Coroutine* StartCoroutine(GameObject *gameObject, std::generator<ICoroutineWait> &&generator);
+            bool StopCoroutine(GameObject *gameObject, Coroutine *coroutine);
+            void StopAllCoroutines(GameObject *gameObject);
+
+            static Coroutine* StartCoroutine(const Scene *curScene, GameObject *gameObject,
+                                             std::generator<ICoroutineWait> &&generator);
+            static bool StopCoroutine(const Scene *curScene, GameObject *gameObject, Coroutine *coroutine);
+            static void StopAllCoroutines(const Scene *curScene, GameObject *gameObject);
+            bool RemoveGameObject(GameObject *gameObject);
 
         private:
             static bool AdvanceCoroutine(Coroutine *coroutine);
-            static void CleanupCompleted(const std::vector<std::pair<GameObject *, Coroutine *>> &coroutinesToRemove);
-            static void CleanupInvalid();
+            void CleanupCompleted(const std::vector<std::pair<GameObject*, Coroutine*>> &coroutinesToRemove);
+            void CleanupInvalid();
         };
     }
 }

@@ -1,52 +1,71 @@
 #pragma once
 
-#include "engine/GameObject.hpp"
+#include "engine/sceneManagement/Scene.hpp"
 
 namespace N2Engine
 {
     template <DerivedFromComponent T>
-    std::shared_ptr<T> Scene::FindObjectByType(const bool includeInactive) const
+    T* Scene::FindObjectByType(const bool includeInactive) const
     {
-        std::shared_ptr<T> result = nullptr;
+        T *result = nullptr;
 
-        TraverseUntil([&](const std::shared_ptr<GameObject>& gameObject) -> bool
-                      {
+        TraverseUntil([&](const std::shared_ptr<GameObject> &gameObject) -> bool
+        {
             bool shouldProcess = includeInactive || gameObject->IsActive();
-            
+
             if (shouldProcess && gameObject->HasComponent<T>())
             {
                 result = gameObject->GetComponent<T>();
                 return true;
             }
-            return false; });
+            return false;
+        });
 
         return result;
     }
 
     template <DerivedFromComponent T>
-    std::vector<std::shared_ptr<T>> Scene::FindObjectsByType(const bool includeInactive) const
+    std::vector<T*> Scene::FindObjectsByType(const bool includeInactive) const
     {
-        std::vector<std::shared_ptr<T>> result;
+        std::vector<T*> result;
 
         if (includeInactive)
         {
-            TraverseAll([&](const std::shared_ptr<GameObject>& gameObject)
-                        {
+            TraverseAll([&](const std::shared_ptr<GameObject> &gameObject)
+            {
                 if (gameObject->HasComponent<T>())
                 {
-                    result.push_back(gameObject->template GetComponent<T>());
-                } });
+                    result.push_back(gameObject->GetComponent<T>());
+                }
+            });
         }
         else
         {
-            TraverseAllActive([&](const std::shared_ptr<GameObject>& gameObject)
-                              {
+            TraverseAllActive([&](const std::shared_ptr<GameObject> &gameObject)
+            {
                 if (gameObject->HasComponent<T>())
                 {
-                    result.push_back(gameObject->template GetComponent<T>());
-                } });
+                    result.push_back(gameObject->GetComponent<T>());
+                }
+            });
         }
 
         return result;
+    }
+
+    template <>
+    inline Rendering::Light* Scene::FindObjectByType<Rendering::Light>(bool includeInactive) const
+    {
+        if (_sceneLights.empty())
+            return nullptr;
+
+        // Return first light (or add logic to check if active)
+        return _sceneLights[0];
+    }
+
+    template <>
+    inline std::vector<Rendering::Light*> Scene::FindObjectsByType<Rendering::Light>(bool includeInactive) const
+    {
+        return _sceneLights;
     }
 }

@@ -69,7 +69,7 @@ namespace Renderer::OpenGL
         void SetViewProjection(const float* view, const float* projection) override;
         void UpdateSceneLighting(const Common::SceneLightingData& lighting,
                                  const N2Engine::Math::Vector3& cameraPosition) override;
-        void DrawMesh(Common::IMesh* meshId, const float* modelMatrix, Common::IMaterial* material) override;
+        void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material) override;
         void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
         void OnResize(int width, int height) override;
 
@@ -92,6 +92,8 @@ namespace Renderer::OpenGL
         float m_viewMatrix[16]{};
         float m_projectionMatrix[16]{};
 
+        Common::SceneLightingData m_currentLighting;
+
         uint32_t m_currentShader;
 
         // resource containers
@@ -108,9 +110,9 @@ namespace Renderer::OpenGL
         GLuint CompileShader(const char* source, GLenum shaderType);
         GLuint LinkProgram(GLuint vertexShader, GLuint fragmentShader);
         bool CheckCompileErrors(GLuint shader, const std::string& type);
-        void SetMatrix4fv(GLint location, const float* matrix);
-        GLenum GetOpenGLFormat(uint32_t channels);
-        GLenum GetOpenGLInternalFormat(uint32_t channels);
+        static void SetMatrix4fv(GLint location, const float* matrix);
+        static GLenum GetOpenGLFormat(uint32_t channels);
+        static GLenum GetOpenGLInternalFormat(uint32_t channels);
 
         void CreateStandardShaders();
     };

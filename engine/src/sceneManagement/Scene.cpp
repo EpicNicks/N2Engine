@@ -1,20 +1,25 @@
+#include <algorithm>
+#include <memory>
+#include <utility>
+#include <format>
+
 #include "engine/sceneManagement/Scene.hpp"
-#include "engine/GameObject.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/IRenderable.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/GameObjectScene.hpp"
-
-#include <algorithm>
-#include <memory>
-#include <utility>
+#include "engine/rendering/Light.hpp"
+#include "engine/Logger.hpp"
+#include "engine/Positionable.hpp"
 
 using namespace N2Engine;
 
 Scene::Scene(std::string name)
-    : _rootGameObjects(), sceneName(std::move(name))
-{
-}
+    : _coroutineScheduler(std::make_unique<Scheduling::CoroutineScheduler>(this)), sceneName(std::move(name)) {}
+
+Scene::~Scene() = default;
+Scene::Scene(Scene &&) noexcept = default;
+Scene& Scene::operator=(Scene &&) noexcept = default;
 
 std::unique_ptr<Scene> Scene::Create(const std::string &name)
 {
@@ -40,7 +45,8 @@ void Scene::RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Co
         return;
     }
 
-    for (const auto renderableComponents = gameObject->GetComponents<IRenderable>(); const auto renderable : renderableComponents)
+    for (const auto renderableComponents = gameObject->GetComponents<IRenderable>(); const auto renderable :
+         renderableComponents)
     {
         if (renderable && renderable->GetIsActive())
         {
@@ -87,8 +93,7 @@ void Scene::AddRootGameObjects(std::initializer_list<std::shared_ptr<GameObject>
 
 bool Scene::RemoveRootGameObject(std::shared_ptr<GameObject> gameObject)
 {
-    auto it = std::find(_rootGameObjects.begin(), _rootGameObjects.end(), gameObject);
-    if (it != _rootGameObjects.end())
+    if (const auto it = std::ranges::find(_rootGameObjects, gameObject); it != _rootGameObjects.end())
     {
         (*it)->SetScene(nullptr);
         _rootGameObjects.erase(it);
@@ -129,7 +134,7 @@ void Scene::TraverseAllActive(std::function<void(std::shared_ptr<GameObject>)> c
 
 void Scene::TraverseGameObjectRecursive(std::shared_ptr<GameObject> gameObject,
                                         std::function<void(std::shared_ptr<GameObject>)> callback,
-                                        bool onlyActive) const
+                                        const bool onlyActive) const
 {
     if (!gameObject || (onlyActive && !gameObject->IsActiveInHierarchy()))
     {
@@ -151,11 +156,12 @@ std::shared_ptr<GameObject> Scene::FindGameObject(const std::string &name) const
     std::shared_ptr<GameObject> result = nullptr;
 
     TraverseAll([&](std::shared_ptr<GameObject> gameObject)
-                {
+    {
         if (!result && gameObject->GetName() == name)
         {
             result = gameObject;
-        } });
+        }
+    });
 
     return result;
 }
@@ -165,13 +171,13 @@ std::vector<std::shared_ptr<GameObject>> Scene::FindGameObjectsByTag(const std::
     std::vector<std::shared_ptr<GameObject>> results;
 
     TraverseAll([&](std::shared_ptr<GameObject> gameObject)
-                {
-                    // Assuming you have a tag system in GameObject
-                    // if (gameObject->GetTag() == tag)
-                    // {
-                    //     results.push_back(gameObject);
-                    // }
-                });
+    {
+        // Assuming you have a tag system in GameObject
+        // if (gameObject->GetTag() == tag)
+        // {
+        //     results.push_back(gameObject);
+        // }
+    });
 
     return results;
 }
@@ -181,7 +187,9 @@ std::vector<std::shared_ptr<GameObject>> Scene::GetAllGameObjects() const
     std::vector<std::shared_ptr<GameObject>> allObjects;
 
     TraverseAll([&](std::shared_ptr<GameObject> gameObject)
-                { allObjects.push_back(gameObject); });
+    {
+        allObjects.push_back(gameObject);
+    });
 
     return allObjects;
 }
@@ -217,7 +225,7 @@ bool Scene::TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject,
     return false;
 }
 
-void Scene::OnAllActiveComponents(const std::function<void(Component*)>& callback) const
+void Scene::OnAllActiveComponents(const std::function<void(Component *)> &callback) const
 {
     for (const auto &c : _components)
     {
@@ -228,7 +236,7 @@ void Scene::OnAllActiveComponents(const std::function<void(Component*)>& callbac
     }
 }
 
-void Scene::AddComponentToAttachQueue(Component* component)
+void Scene::AddComponentToAttachQueue(Component *component)
 {
     _attachQueue.push(component);
 }
@@ -243,36 +251,48 @@ void Scene::ProcessAttachQueue()
 
         // attach has been called, now can be updated
         _components.push_back(c);
+        if (auto *light = dynamic_cast<Rendering::Light*>(c))
+        {
+            _sceneLights.push_back(light);
+        }
     }
 }
 
 void Scene::Update() const
 {
-    OnAllActiveComponents([](Component* component)
-                          { component->OnUpdate(); });
+    OnAllActiveComponents([](Component *component)
+    {
+        component->OnUpdate();
+    });
 }
 
 void Scene::FixedUpdate() const
 {
-    OnAllActiveComponents([](Component* component)
-                          { component->OnFixedUpdate(); });
+    OnAllActiveComponents([](Component *component)
+    {
+        component->OnFixedUpdate();
+    });
 }
 
 void Scene::LateUpdate() const
 {
-    OnAllActiveComponents([](Component* component)
-                          { component->OnLateUpdate(); });
+    OnAllActiveComponents([](Component *component)
+    {
+        component->OnLateUpdate();
+    });
 }
 
-void Scene::AdvanceCoroutines()
+void Scene::AdvanceCoroutines() const
 {
-    Scheduling::CoroutineScheduler::Update();
+    _coroutineScheduler->Update();
 }
 
 void Scene::OnApplicationQuit() const
 {
-    OnAllActiveComponents([](Component* component)
-                          { component->OnApplicationQuit(); });
+    OnAllActiveComponents([](Component *component)
+    {
+        component->OnApplicationQuit();
+    });
 }
 
 void Scene::Clear()
@@ -313,7 +333,8 @@ void Scene::ProcessDestroyed()
     }
 }
 
-void Scene::MarkHierarchyForDestruction(std::shared_ptr<GameObject> gameObject, std::vector<std::shared_ptr<GameObject>> &markedObjects)
+void Scene::MarkHierarchyForDestruction(std::shared_ptr<GameObject> gameObject,
+                                        std::vector<std::shared_ptr<GameObject>> &markedObjects)
 {
     if (!gameObject || gameObject->_isMarkedForDestruction)
         return;
@@ -369,7 +390,7 @@ void Scene::PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject)
 
     // Remove from components list
     std::erase_if(_components,
-                  [&gameObject](const Component* comp)
+                  [&gameObject](const Component *comp)
                   {
                       return &comp->GetGameObject() == gameObject.get();
                   });
@@ -378,6 +399,7 @@ void Scene::PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject)
 }
 
 using json = nlohmann::json;
+
 json Scene::Serialize() const
 {
     json j;
@@ -422,4 +444,92 @@ std::shared_ptr<Scene> Scene::Deserialize(const json &j)
     resolver.ResolveAll();
 
     return scene;
+}
+
+Renderer::Common::SceneLightingData Scene::CollectLighting() const
+{
+    using namespace Renderer::Common;
+
+    SceneLightingData lighting;
+
+    // Iterate through cached scene lights
+    for (auto *light : _sceneLights)
+    {
+        if (!light || !light->GetIsActive())
+        {
+            continue;
+        }
+
+        switch (light->type)
+        {
+        case Rendering::LightType::Directional:
+            {
+                if (lighting.directionalLights.size() < SceneLightingData::MAX_DIRECTIONAL_LIGHTS)
+                {
+                    DirectionalLightData data;
+                    data.direction = light->GetWorldDirection();
+                    data.color = light->color;
+                    data.intensity = light->intensity;
+                    lighting.directionalLights.push_back(data);
+                }
+                break;
+            }
+
+        case Rendering::LightType::Point:
+            {
+                if (lighting.pointLights.size() < SceneLightingData::MAX_POINT_LIGHTS)
+                {
+                    PointLightData data;
+                    data.position = light->GetWorldPosition();
+                    data.color = light->color;
+                    data.intensity = light->intensity;
+                    data.range = light->range;
+                    data.attenuation = light->attenuation;
+                    lighting.pointLights.push_back(data);
+                }
+                break;
+            }
+
+        case Rendering::LightType::Spot:
+            {
+                if (lighting.spotLights.size() < SceneLightingData::MAX_SPOT_LIGHTS)
+                {
+                    SpotLightData data;
+                    data.position = light->GetWorldPosition();
+                    data.direction = light->GetWorldDirection();
+                    data.color = light->color;
+                    data.intensity = light->intensity;
+                    data.range = light->range;
+                    // Convert degrees to radians
+                    data.innerConeAngle = light->innerConeAngle * (3.14159f / 180.0f);
+                    data.outerConeAngle = light->outerConeAngle * (3.14159f / 180.0f);
+                    lighting.spotLights.push_back(data);
+                }
+                break;
+            }
+        }
+    }
+
+    // If no lights in scene, add a default directional light
+    if (lighting.directionalLights.empty() && lighting.pointLights.empty() && lighting.spotLights.empty())
+    {
+        if (!_hasWarnedNoLights)
+        {
+            Logger::Warn(std::format("No lights found in scene '{}'. Using default light.", sceneName));
+            _hasWarnedNoLights = true;
+        }
+
+        DirectionalLightData defaultLight;
+        defaultLight.direction = Math::Vector3{0.5f, -1.0f, 0.3f};
+        defaultLight.color = Math::Vector3{1.0f, 1.0f, 1.0f};
+        defaultLight.intensity = 0.8f;
+        lighting.directionalLights.push_back(defaultLight);
+    }
+
+    return lighting;
+}
+
+Scheduling::CoroutineScheduler* Scene::GetCoroutineScheduler() const
+{
+    return _coroutineScheduler.get();
 }

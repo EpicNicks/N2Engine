@@ -2,19 +2,25 @@
 #include <generator>
 
 #include "engine/scheduling/CoroutineScheduler.hpp"
+
+#include "engine/Application.hpp"
 #include "engine/scheduling/Coroutine.hpp"
-#include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 
 using namespace N2Engine::Scheduling;
 
-std::unordered_map<N2Engine::GameObject *, std::vector<std::unique_ptr<Coroutine>>> CoroutineScheduler::coroutines;
+CoroutineScheduler::CoroutineScheduler(Scene *scene)
+    : _scene(scene)
+{
+}
+
 
 void CoroutineScheduler::Update()
 {
     std::vector<std::pair<GameObject *, Coroutine *>> coroutinesToRemove;
     CleanupInvalid();
 
-    for (auto &[gameObject, coroutineList] : coroutines)
+    for (auto &[gameObject, coroutineList] : _coroutines)
     {
         for (auto &coroutine : coroutineList)
         {
@@ -27,7 +33,7 @@ void CoroutineScheduler::Update()
     CleanupCompleted(coroutinesToRemove);
 }
 
-Coroutine *CoroutineScheduler::StartCoroutine(GameObject *gameObject, std::generator<ICoroutineWait> &&generator)
+Coroutine* CoroutineScheduler::StartCoroutine(GameObject *gameObject, std::generator<ICoroutineWait> &&generator)
 {
     if (!gameObject || !gameObject->IsActiveInHierarchy())
     {
@@ -35,8 +41,8 @@ Coroutine *CoroutineScheduler::StartCoroutine(GameObject *gameObject, std::gener
     }
     auto routine = std::make_unique<Coroutine>(std::move(generator));
 
-    coroutines[gameObject].push_back(std::move(routine));
-    return coroutines[gameObject].back().get();
+    _coroutines[gameObject].push_back(std::move(routine));
+    return _coroutines[gameObject].back().get();
 }
 
 bool CoroutineScheduler::StopCoroutine(GameObject *gameObject, Coroutine *coroutine)
@@ -45,7 +51,7 @@ bool CoroutineScheduler::StopCoroutine(GameObject *gameObject, Coroutine *corout
     {
         return false;
     }
-    if (const auto it = coroutines.find(gameObject); it != coroutines.end())
+    if (const auto it = _coroutines.find(gameObject); it != _coroutines.end())
     {
         auto &coroutineList = it->second;
         const auto coroutineIt = std::ranges::find_if(coroutineList,
@@ -65,15 +71,31 @@ bool CoroutineScheduler::StopCoroutine(GameObject *gameObject, Coroutine *corout
 
 void CoroutineScheduler::StopAllCoroutines(GameObject *gameObject)
 {
-    if (const auto it = coroutines.find(gameObject); it != coroutines.end())
+    if (const auto it = _coroutines.find(gameObject); it != _coroutines.end())
     {
         it->second.clear();
     }
 }
 
+
+Coroutine *CoroutineScheduler::StartCoroutine(const Scene* curScene, GameObject *gameObject, std::generator<ICoroutineWait> &&generator)
+{
+    return curScene->GetCoroutineScheduler()->StartCoroutine(gameObject, std::move(generator));
+}
+
+bool CoroutineScheduler::StopCoroutine(const Scene* curScene, GameObject *gameObject, Coroutine *coroutine)
+{
+    return curScene->GetCoroutineScheduler()->StopCoroutine(gameObject, coroutine);
+}
+
+void CoroutineScheduler::StopAllCoroutines(const Scene* curScene, GameObject *gameObject)
+{
+    curScene->GetCoroutineScheduler()->StopAllCoroutines(gameObject);
+}
+
 bool CoroutineScheduler::RemoveGameObject(GameObject *gameObject)
 {
-    return coroutines.erase(gameObject) > 0;
+    return _coroutines.erase(gameObject) > 0;
 }
 
 bool CoroutineScheduler::AdvanceCoroutine(Coroutine *coroutine)
@@ -85,8 +107,8 @@ void CoroutineScheduler::CleanupCompleted(const std::vector<std::pair<GameObject
 {
     for (const auto &[gameObject, coroutine] : coroutinesToRemove)
     {
-        auto it = coroutines.find(gameObject);
-        if (it != coroutines.end())
+        auto it = _coroutines.find(gameObject);
+        if (it != _coroutines.end())
         {
             auto &coroutineList = it->second;
             auto coroutineIt = std::find_if(coroutineList.begin(), coroutineList.end(),
@@ -102,7 +124,7 @@ void CoroutineScheduler::CleanupCompleted(const std::vector<std::pair<GameObject
                 // Remove GameObject if it has no more coroutines
                 if (coroutineList.empty())
                 {
-                    coroutines.erase(it);
+                    _coroutines.erase(it);
                 }
             }
         }
@@ -111,17 +133,17 @@ void CoroutineScheduler::CleanupCompleted(const std::vector<std::pair<GameObject
 
 void CoroutineScheduler::CleanupInvalid()
 {
-    for (auto it = coroutines.begin(); it != coroutines.end();)
+    for (auto it = _coroutines.begin(); it != _coroutines.end();)
     {
         GameObject *gameObject = it->first;
 
         if (gameObject == nullptr || !gameObject->IsActiveInHierarchy() || gameObject->IsDestroyed())
         {
-            it = coroutines.erase(it);
+            it = _coroutines.erase(it);
         }
         else if (it->second.empty())
         {
-            it = coroutines.erase(it);
+            it = _coroutines.erase(it);
         }
         else
         {

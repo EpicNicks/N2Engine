@@ -3,6 +3,8 @@ setlocal
 
 set BUILD_TYPE=Debug
 set RUN_AFTER_BUILD=0
+set CLEAN_BUILD=0
+set VERBOSE_BUILD=0
 
 set ORIGINAL_ARGS=%*
 
@@ -13,7 +15,7 @@ for %%A in (%ORIGINAL_ARGS%) do (
     if /i "%%A"=="--verbose" set VERBOSE_BUILD=1
 )
 
-if not defined CMAKE_GENERATOR set CMAKE_GENERATOR=Visual Studio 18 2026
+if not defined CMAKE_GENERATOR set CMAKE_GENERATOR=Visual Studio 17 2022
 
 if %CLEAN_BUILD%==1 (
     echo Cleaning build directory...

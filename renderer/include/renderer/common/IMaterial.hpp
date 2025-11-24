@@ -2,14 +2,12 @@
 
 #include <string>
 
-namespace N2Engine
+
+namespace N2Engine::Math
 {
-    namespace Math
-    {
-        struct Vector2;
-        class Vector3;
-        struct Vector4;
-    }
+    struct Vector2;
+    class Vector3;
+    struct Vector4;
 }
 
 namespace Renderer::Common
@@ -33,8 +31,8 @@ namespace Renderer::Common
         virtual void SetColor(const std::string &name, float r, float g, float b, float a) = 0;
         virtual void SetTexture(ITexture *texture) = 0;
 
-        virtual IShader *GetShader() const = 0;
-        virtual ITexture *GetTexture() const = 0;
-        virtual bool IsValid() const = 0;
+        [[nodiscard]] virtual IShader* GetShader() const = 0;
+        [[nodiscard]] virtual ITexture* GetTexture() const = 0;
+        [[nodiscard]] virtual bool IsValid() const = 0;
     };
 }
