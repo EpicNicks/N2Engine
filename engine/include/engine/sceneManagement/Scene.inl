@@ -47,14 +47,9 @@ namespace N2Engine
             return nullptr;
         }
 
-        if (includeInactive)
+        const auto result = std::ranges::find_if(_sceneLights, [includeInactive](const Rendering::Light* light)
         {
-            return _sceneLights[0];
-        }
-
-        const auto result = std::ranges::find_if(_sceneLights, [](const Rendering::Light* light)
-        {
-            return light != nullptr && light->IsActive() && light->GetGameObject().IsActiveInHierarchy() && !light->IsDestroyed();
+            return light != nullptr && !light->IsDestroyed() && (includeInactive || (light->IsActive() && light->GetGameObject().IsActiveInHierarchy()));
         });
 
         if (result == _sceneLights.end())
@@ -74,7 +69,7 @@ namespace N2Engine
 
         auto activeLights = _sceneLights | std::ranges::views::filter([](const Rendering::Light* light)
         {
-            return light != nullptr && light->IsActive() && light->GetGameObject().IsActiveInHierarchy() && !light->IsDestroyed();
+            return light != nullptr && !light->IsDestroyed();
         });
         return {activeLights.begin(), activeLights.end()};
     }
