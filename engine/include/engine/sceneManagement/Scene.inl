@@ -79,15 +79,17 @@ namespace N2Engine
     template <>
     inline std::vector<Rendering::Light*> Scene::FindObjectsByType<Rendering::Light>(const bool includeInactive) const
     {
-        if (includeInactive)
+        if (_sceneLights.empty())
         {
-            return _sceneLights;
+            return {};
         }
 
-        auto activeLights = _sceneLights | std::ranges::views::filter([](const Rendering::Light* light)
+        auto validLights = _sceneLights | std::ranges::views::filter([includeInactive](const Rendering::Light* light)
         {
-            return light != nullptr && !light->IsDestroyed();
+            return light != nullptr
+                && !light->IsDestroyed()
+                && (includeInactive || (light->IsActive() && light->GetGameObject().IsActiveInHierarchy()));
         });
-        return {activeLights.begin(), activeLights.end()};
+        return {validLights.begin(), validLights.end()};
     }
 }
