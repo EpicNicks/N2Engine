@@ -59,7 +59,7 @@ namespace N2Engine
         ~Window();
 
         void InitWindow();
-        bool ShouldClose() const;
+        [[nodiscard]] bool ShouldClose() const;
         void PollEvents();
         void Shutdown();
         void Clear();

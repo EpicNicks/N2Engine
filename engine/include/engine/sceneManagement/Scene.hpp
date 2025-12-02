@@ -37,19 +37,20 @@ namespace N2Engine
         std::unique_ptr<Scheduling::CoroutineScheduler> _coroutineScheduler;
 
         std::queue<std::shared_ptr<GameObject>> _markedForDestructionQueue;
-        explicit Scene(std::string name);
-
         // diagnostics
         mutable bool _hasWarnedNoLights = false;
+
+    private:
+        explicit Scene(std::string name);
 
     public:
         std::string sceneName;
 
+    public:
         ~Scene();
         Scene(Scene &&) noexcept;
         Scene& operator=(Scene &&) noexcept;
 
-        // Prevent copying (or declare+define if needed)
         Scene(const Scene &) = delete;
         Scene& operator=(const Scene &) = delete;
 
@@ -80,9 +81,9 @@ namespace N2Engine
         [[nodiscard]] std::vector<std::shared_ptr<GameObject>> GetAllGameObjects() const;
 
         template <DerivedFromComponent T>
-        T* FindObjectByType(bool includeInactive) const;
+        T* FindObjectByType(bool includeInactive = true) const;
         template <DerivedFromComponent T>
-        std::vector<T*> FindObjectsByType(bool includeInactive) const;
+        std::vector<T*> FindObjectsByType(bool includeInactive = true) const;
 
         [[nodiscard]] Renderer::Common::SceneLightingData CollectLighting() const;
         [[nodiscard]] Scheduling::CoroutineScheduler* GetCoroutineScheduler() const;

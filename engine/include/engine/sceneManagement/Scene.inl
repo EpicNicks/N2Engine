@@ -7,65 +7,75 @@ namespace N2Engine
     template <DerivedFromComponent T>
     T* Scene::FindObjectByType(const bool includeInactive) const
     {
-        T *result = nullptr;
-
-        TraverseUntil([&](const std::shared_ptr<GameObject> &gameObject) -> bool
+        if (_components.empty())
         {
-            bool shouldProcess = includeInactive || gameObject->IsActive();
+            return nullptr;
+        }
 
-            if (shouldProcess && gameObject->HasComponent<T>())
-            {
-                result = gameObject->GetComponent<T>();
-                return true;
-            }
-            return false;
+        const auto firstFoundComponent = std::ranges::find_if(_components, [includeInactive](const auto& component)
+        {
+            return component != nullptr && !component->IsDestroyed() && (includeInactive || (component->IsActive() && component->GetGameObject().IsActiveInHierarchy()));
         });
 
-        return result;
+        if (firstFoundComponent == _components.end())
+        {
+            return nullptr;
+        }
+        return *firstFoundComponent;
     }
 
     template <DerivedFromComponent T>
     std::vector<T*> Scene::FindObjectsByType(const bool includeInactive) const
     {
-        std::vector<T*> result;
+        if (_components.empty())
+        {
+            return nullptr;
+        }
+
+        const auto foundComponents = _components | std::ranges::views::filter([includeInactive](const auto& component)
+        {
+            return component != nullptr && !component->IsDestroyed() && (includeInactive || (component->IsActive() && component->GetGameObject().IsActiveInHierarchy()));
+        });
+        return {foundComponents.begin(), foundComponents.end()};
+    }
+
+    template <>
+    inline Rendering::Light* Scene::FindObjectByType<Rendering::Light>(const bool includeInactive) const
+    {
+        if (_sceneLights.empty())
+        {
+            return nullptr;
+        }
 
         if (includeInactive)
         {
-            TraverseAll([&](const std::shared_ptr<GameObject> &gameObject)
-            {
-                if (gameObject->HasComponent<T>())
-                {
-                    result.push_back(gameObject->GetComponent<T>());
-                }
-            });
+            return _sceneLights[0];
         }
-        else
+
+        const auto result = std::ranges::find_if(_sceneLights, [](const Rendering::Light* light)
         {
-            TraverseAllActive([&](const std::shared_ptr<GameObject> &gameObject)
-            {
-                if (gameObject->HasComponent<T>())
-                {
-                    result.push_back(gameObject->GetComponent<T>());
-                }
-            });
+            return light != nullptr && light->IsActive() && light->GetGameObject().IsActiveInHierarchy() && !light->IsDestroyed();
+        });
+
+        if (result == _sceneLights.end())
+        {
+            return nullptr;
+        }
+        return *result;
+    }
+
+    template <>
+    inline std::vector<Rendering::Light*> Scene::FindObjectsByType<Rendering::Light>(const bool includeInactive) const
+    {
+        if (includeInactive)
+        {
+            return _sceneLights;
         }
 
-        return result;
-    }
-
-    template <>
-    inline Rendering::Light* Scene::FindObjectByType<Rendering::Light>(bool includeInactive) const
-    {
-        if (_sceneLights.empty())
-            return nullptr;
-
-        // Return first light (or add logic to check if active)
-        return _sceneLights[0];
-    }
-
-    template <>
-    inline std::vector<Rendering::Light*> Scene::FindObjectsByType<Rendering::Light>(bool includeInactive) const
-    {
-        return _sceneLights;
+        auto activeLights = _sceneLights | std::ranges::views::filter([](const Rendering::Light* light)
+        {
+            return light != nullptr && light->IsActive() && light->GetGameObject().IsActiveInHierarchy() && !light->IsDestroyed();
+        });
+        return {activeLights.begin(), activeLights.end()};
     }
 }

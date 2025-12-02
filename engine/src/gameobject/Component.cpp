@@ -19,9 +19,14 @@ bool Component::IsDestroyed() const
     return _isMarkedForDestruction;
 }
 
-bool Component::GetIsActive() const
+bool Component::IsActive() const
 {
     return _isActive && !_isMarkedForDestruction && _gameObject.IsActiveInHierarchy();
+}
+
+void Component::SetActive(const bool active)
+{
+    _isActive = active;
 }
 
 json Component::Serialize() const

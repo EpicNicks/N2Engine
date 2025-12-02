@@ -10,14 +10,12 @@
 using namespace N2Engine::Scheduling;
 
 CoroutineScheduler::CoroutineScheduler(Scene *scene)
-    : _scene(scene)
-{
-}
+    : _scene(scene) {}
 
 
 void CoroutineScheduler::Update()
 {
-    std::vector<std::pair<GameObject *, Coroutine *>> coroutinesToRemove;
+    std::vector<std::pair<GameObject*, Coroutine*>> coroutinesToRemove;
     CleanupInvalid();
 
     for (auto &[gameObject, coroutineList] : _coroutines)
@@ -55,10 +53,10 @@ bool CoroutineScheduler::StopCoroutine(GameObject *gameObject, Coroutine *corout
     {
         auto &coroutineList = it->second;
         const auto coroutineIt = std::ranges::find_if(coroutineList,
-                                                [coroutine](const std::unique_ptr<Coroutine> &ptr)
-                                                {
-                                                    return ptr.get() == coroutine;
-                                                });
+                                                      [coroutine](const std::unique_ptr<Coroutine> &ptr)
+                                                      {
+                                                          return ptr.get() == coroutine;
+                                                      });
 
         if (coroutineIt != coroutineList.end())
         {
@@ -78,17 +76,18 @@ void CoroutineScheduler::StopAllCoroutines(GameObject *gameObject)
 }
 
 
-Coroutine *CoroutineScheduler::StartCoroutine(const Scene* curScene, GameObject *gameObject, std::generator<ICoroutineWait> &&generator)
+Coroutine* CoroutineScheduler::StartCoroutine(const Scene *curScene, GameObject *gameObject,
+                                              std::generator<ICoroutineWait> &&generator)
 {
     return curScene->GetCoroutineScheduler()->StartCoroutine(gameObject, std::move(generator));
 }
 
-bool CoroutineScheduler::StopCoroutine(const Scene* curScene, GameObject *gameObject, Coroutine *coroutine)
+bool CoroutineScheduler::StopCoroutine(const Scene *curScene, GameObject *gameObject, Coroutine *coroutine)
 {
     return curScene->GetCoroutineScheduler()->StopCoroutine(gameObject, coroutine);
 }
 
-void CoroutineScheduler::StopAllCoroutines(const Scene* curScene, GameObject *gameObject)
+void CoroutineScheduler::StopAllCoroutines(const Scene *curScene, GameObject *gameObject)
 {
     curScene->GetCoroutineScheduler()->StopAllCoroutines(gameObject);
 }
@@ -103,19 +102,18 @@ bool CoroutineScheduler::AdvanceCoroutine(Coroutine *coroutine)
     return !coroutine->MoveNext(); // Returns true when coroutine is complete
 }
 
-void CoroutineScheduler::CleanupCompleted(const std::vector<std::pair<GameObject *, Coroutine *>> &coroutinesToRemove)
+void CoroutineScheduler::CleanupCompleted(const std::vector<std::pair<GameObject*, Coroutine*>> &coroutinesToRemove)
 {
     for (const auto &[gameObject, coroutine] : coroutinesToRemove)
     {
-        auto it = _coroutines.find(gameObject);
-        if (it != _coroutines.end())
+        if (auto it = _coroutines.find(gameObject); it != _coroutines.end())
         {
             auto &coroutineList = it->second;
-            auto coroutineIt = std::find_if(coroutineList.begin(), coroutineList.end(),
-                                            [coroutine](const std::unique_ptr<Coroutine> &ptr)
-                                            {
-                                                return ptr.get() == coroutine;
-                                            });
+            auto coroutineIt = std::ranges::find_if(coroutineList,
+                                                    [coroutine](const std::unique_ptr<Coroutine> &ptr)
+                                                    {
+                                                        return ptr.get() == coroutine;
+                                                    });
 
             if (coroutineIt != coroutineList.end())
             {
@@ -135,13 +133,11 @@ void CoroutineScheduler::CleanupInvalid()
 {
     for (auto it = _coroutines.begin(); it != _coroutines.end();)
     {
-        GameObject *gameObject = it->first;
+        const GameObject *curGameObject = it->first;
+        const bool curGameObjectIsInvalid = curGameObject == nullptr || curGameObject->IsActiveInHierarchy() ||
+            curGameObject->IsDestroyed();
 
-        if (gameObject == nullptr || !gameObject->IsActiveInHierarchy() || gameObject->IsDestroyed())
-        {
-            it = _coroutines.erase(it);
-        }
-        else if (it->second.empty())
+        if (curGameObjectIsInvalid || it->second.empty())
         {
             it = _coroutines.erase(it);
         }

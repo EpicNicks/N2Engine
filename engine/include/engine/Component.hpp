@@ -94,7 +94,8 @@ namespace N2Engine
         }
 
         [[nodiscard]] bool IsDestroyed() const;
-        [[nodiscard]] bool GetIsActive() const;
+        [[nodiscard]] bool IsActive() const;
+        void SetActive(bool active);
 
         static constexpr bool IsSingleton = false;
     };

@@ -48,7 +48,7 @@ void Scene::RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Co
     for (const auto renderableComponents = gameObject->GetComponents<IRenderable>(); const auto renderable :
          renderableComponents)
     {
-        if (renderable && renderable->GetIsActive())
+        if (renderable && renderable->IsActive())
         {
             renderable->Render(renderer);
         }
@@ -229,7 +229,7 @@ void Scene::OnAllActiveComponents(const std::function<void(Component *)> &callba
 {
     for (const auto &c : _components)
     {
-        if (c->GetGameObject().IsActiveInHierarchy() && c->GetIsActive())
+        if (c->GetGameObject().IsActiveInHierarchy() && c->IsActive())
         {
             callback(c);
         }
@@ -249,11 +249,13 @@ void Scene::ProcessAttachQueue()
         _attachQueue.pop();
         c->OnAttach();
 
-        // attach has been called, now can be updated
-        _components.push_back(c);
         if (auto *light = dynamic_cast<Rendering::Light*>(c))
         {
             _sceneLights.push_back(light);
+        }
+        else
+        {
+            _components.push_back(c);
         }
     }
 }
@@ -455,7 +457,7 @@ Renderer::Common::SceneLightingData Scene::CollectLighting() const
     // Iterate through cached scene lights
     for (auto *light : _sceneLights)
     {
-        if (!light || !light->GetIsActive())
+        if (!light || !light->IsActive())
         {
             continue;
         }
