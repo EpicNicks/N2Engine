@@ -12,16 +12,24 @@ namespace N2Engine
             return nullptr;
         }
 
-        const auto firstFoundComponent = std::ranges::find_if(_components, [includeInactive](const auto& component)
+        for (const auto& component : _components)
         {
-            return component != nullptr && !component->IsDestroyed() && (includeInactive || (component->IsActive() && component->GetGameObject().IsActiveInHierarchy()));
-        });
+            if (component == nullptr || component->IsDestroyed())
+            {
+                continue;
+            }
+            if (!includeInactive && (!component->IsActive() || !component->GetGameObject().IsActiveInHierarchy()))
+            {
+                continue;
+            }
 
-        if (firstFoundComponent == _components.end())
-        {
-            return nullptr;
+            if (T* casted = dynamic_cast<T*>(component))
+            {
+                return casted;
+            }
         }
-        return *firstFoundComponent;
+
+        return nullptr;
     }
 
     template <DerivedFromComponent T>
@@ -29,14 +37,23 @@ namespace N2Engine
     {
         if (_components.empty())
         {
-            return nullptr;
+            return {};
         }
 
-        const auto foundComponents = _components | std::ranges::views::filter([includeInactive](const auto& component)
-        {
-            return component != nullptr && !component->IsDestroyed() && (includeInactive || (component->IsActive() && component->GetGameObject().IsActiveInHierarchy()));
-        });
-        return {foundComponents.begin(), foundComponents.end()};
+        auto validComponents = _components
+            | std::views::filter([includeInactive](const auto& component) {
+                return component != nullptr
+                    && !component->IsDestroyed()
+                    && (includeInactive || (component->IsActive() && component->GetGameObject().IsActiveInHierarchy()));
+            })
+            | std::views::transform([](const auto& component) -> T* {
+                return dynamic_cast<T*>(component);
+            })
+            | std::views::filter([](const T* ptr) {
+                return ptr != nullptr;
+            });
+
+        return {validComponents.begin(), validComponents.end()};
     }
 
     template <>
