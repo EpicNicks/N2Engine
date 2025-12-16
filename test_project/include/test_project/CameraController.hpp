@@ -22,8 +22,7 @@ private:
     std::unique_ptr<Impl> pImpl;
 
 public:
-    CameraController(N2Engine::GameObject &gameObject);
-    ~CameraController();
+    explicit CameraController(N2Engine::GameObject &gameObject);
     void OnAttach() override;
     void OnUpdate() override;
 

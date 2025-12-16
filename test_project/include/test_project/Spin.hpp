@@ -15,7 +15,7 @@ public:
     float degreesPerSecond = 1.0f;
 
 public:
-    Spin(N2Engine::GameObject &gameObject);
+    explicit Spin(N2Engine::GameObject &gameObject);
     void OnAttach() override;
     void OnUpdate() override;
 

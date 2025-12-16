@@ -9,6 +9,13 @@
 #include "engine/Component.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
+template <typename T>
+concept JsonSerializable = requires(nlohmann::json &j, const T &val, T &out)
+{
+    { j = val };
+    { j.get<T>() } -> std::convertible_to<T>;
+};
+
 namespace N2Engine
 {
     /**
@@ -46,6 +53,11 @@ namespace N2Engine
         template <typename T>
         void RegisterMember(const std::string &name, T &member)
         {
+            static_assert(JsonSerializable<T>,
+                          "\n"
+                          "ERROR: Type is not JSON serializable!\n"
+                          "...[detailed help with code examples]...\n"
+            );
             _members.emplace_back(
                 name,
                 // Serialize lambda
@@ -66,7 +78,7 @@ namespace N2Engine
         /**
          * Register a GameObject reference (resolved via UUID after deserialization)
          */
-        void RegisterGameObjectRef(const std::string &name, GameObject* gameObjectRef);
+        void RegisterGameObjectRef(const std::string &name, GameObject *gameObjectRef);
 
         /**
          * Register a Component reference (resolved via UUID after deserialization)
@@ -107,9 +119,10 @@ namespace N2Engine
                     {
                         // Add pending resolution with type casting
                         resolver->AddPendingReference([&componentRef, uuid, resolver]()
-                                                      {
+                        {
                             auto component = resolver->FindComponent(uuid);
-                            componentRef = std::dynamic_pointer_cast<T>(component); });
+                            componentRef = std::dynamic_pointer_cast<T>(component);
+                        });
                     }
                 });
         }
@@ -117,7 +130,7 @@ namespace N2Engine
         /**
          * Register a vector of GameObject references
          */
-        void RegisterGameObjectRefVector(const std::string &name, std::vector<GameObject *> &gameObjectRefs);
+        void RegisterGameObjectRefVector(const std::string &name, std::vector<GameObject*> &gameObjectRefs);
 
         /**
          * Register a vector of Component references
@@ -175,9 +188,10 @@ namespace N2Engine
 
                             // Capture index for resolution
                             resolver->AddPendingReference([&componentRefs, i, uuid, resolver]()
-                                                          {
+                            {
                                 auto component = resolver->FindComponent(uuid);
-                                componentRefs[i] = std::dynamic_pointer_cast<T>(component); });
+                                componentRefs[i] = std::dynamic_pointer_cast<T>(component);
+                            });
                         }
                     }
                 });

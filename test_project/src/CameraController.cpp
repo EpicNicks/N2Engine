@@ -1,23 +1,18 @@
-#include "test_project/CameraController.hpp"
-
-#include <engine/Application.hpp>
-#include <engine/input/Input.hpp>
-
 #include <memory>
 
 #include <math/Vector3.hpp>
 #include <math/Vector2.hpp>
 #include <engine/Time.hpp>
 #include <engine/Logger.hpp>
+#include <math/Constants.hpp>
+
+#include <engine/Application.hpp>
+#include <engine/input/Input.hpp>
+
+#include "test_project/CameraController.hpp"
+
 
 using namespace N2Engine;
-
-CameraController::CameraController(N2Engine::GameObject &gameObject)
-    : Component(gameObject), pImpl(std::make_unique<Impl>())
-{
-}
-
-CameraController::~CameraController() = default;
 
 struct CameraController::Impl
 {
@@ -25,10 +20,14 @@ struct CameraController::Impl
     N2Engine::Math::Vector2 curRotationInput;
 };
 
+CameraController::CameraController(N2Engine::GameObject &gameObject)
+    : Component(gameObject), pImpl(std::make_unique<Impl>()) {}
+
 void CameraController::OnAttach()
 {
     Application &application = Application::GetInstance();
-    if (Input::ActionMap *actionMap = application.GetWindow().GetInputSystem()->LoadActionMap("Main Controls"); actionMap != nullptr)
+    if (Input::ActionMap *actionMap = application.GetWindow().GetInputSystem()->LoadActionMap("Main Controls");
+        actionMap != nullptr)
     {
         (*actionMap)["Camera Move"].GetOnStateChanged() += [&](Input::InputAction &inputAction)
         {
@@ -44,10 +43,16 @@ void CameraController::OnAttach()
 
 void CameraController::OnUpdate()
 {
-    auto &application = Application::GetInstance();
-    auto mainCamera = application.GetMainCamera();
-    float speed = 10.0f;
-    mainCamera->SetPosition(mainCamera->GetPosition() + Time::GetDeltaTime() * speed * Math::Vector3(pImpl->curInput.x, pImpl->curInput.y, 0));
+    const auto &application = Application::GetInstance();
+    const auto mainCamera = application.GetMainCamera();
+    constexpr float speed = 10.0f;
+    mainCamera->SetPosition(
+        mainCamera->GetPosition() + Time::GetDeltaTime() * speed * Math::Vector3(
+            pImpl->curInput.x, pImpl->curInput.y, 0));
+
+    const Math::Vector3 eulerAngles = mainCamera->GetRotation().ToEulerAngles() * Math::Constants::RAD_TO_DEG;
+    const std::string rotationString = "x: " + std::to_string(eulerAngles.x) + ", y: " + std::to_string(eulerAngles.y) + ", z: " + std::to_string(eulerAngles.z);
+    Logger::Info("Camera rotation: " + rotationString);
 
     if (pImpl->curRotationInput.x != 0.0f || pImpl->curRotationInput.y != 0.0f)
     {
@@ -55,8 +60,8 @@ void CameraController::OnUpdate()
         float deltaTime = Time::GetDeltaTime();
 
         float degreesToRadians = std::numbers::pi_v<float> / 180.0f;
-        float yawDelta = pImpl->curRotationInput.x * rotationSpeed * deltaTime * degreesToRadians;
-        float pitchDelta = -pImpl->curRotationInput.y * rotationSpeed * deltaTime * degreesToRadians;
+        float yawDelta = pImpl->curRotationInput.y * rotationSpeed * deltaTime * degreesToRadians;
+        float pitchDelta = -pImpl->curRotationInput.x * rotationSpeed * deltaTime * degreesToRadians;
 
         Math::Quaternion currentRotation = mainCamera->GetRotation();
 

@@ -1,7 +1,8 @@
 #include <engine/Application.hpp>
 #include <engine/GameObject.hpp>
 #include <engine/Positionable.hpp>
-#include <engine/example/QuadRenderer.hpp>
+#include <../../engine/include/engine/example/renderers/QuadRenderer.hpp>
+#include <../../engine/include/engine/example/renderers/CubeRenderer.hpp>
 
 #include <engine/GameObject.inl>
 
@@ -22,12 +23,13 @@
 #include <iostream>
 #include <cmath>
 
+#include "engine/example/renderers/CubeRenderer.hpp"
 #include "test_project/Spin.hpp"
 #include "test_project/CameraController.hpp"
 #include "test_project/StandardInputHandler.hpp"
 
 // Simple vertex shader source
-constexpr const char* vertexShaderSource = R"(
+constexpr const char *vertexShaderSource = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -48,7 +50,7 @@ void main()
 )";
 
 // Simple fragment shader source
-constexpr const char* fragmentShaderSource = R"(
+constexpr const char *fragmentShaderSource = R"(
 #version 330 core
 in vec4 vertexColor;
 out vec4 FragColor;
@@ -64,7 +66,7 @@ constexpr uint32_t WINDOW_WIDTH = 800;
 constexpr uint32_t WINDOW_HEIGHT = 600;
 
 // Create identity matrix
-void createIdentityMatrix(float* matrix)
+void createIdentityMatrix(float *matrix)
 {
     for (int i = 0; i < 16; i++)
     {
@@ -77,7 +79,7 @@ void createIdentityMatrix(float* matrix)
 }
 
 // Create simple orthographic projection matrix
-void createOrthographicMatrix(float* matrix, const float left, const float right, const float bottom, const float top,
+void createOrthographicMatrix(float *matrix, const float left, const float right, const float bottom, const float top,
                               const float nearB, const float farB)
 {
     for (int i = 0; i < 16; i++)
@@ -95,15 +97,15 @@ void createOrthographicMatrix(float* matrix, const float left, const float right
 }
 
 // GLFW error callback
-void errorCallback(int error, const char* description)
+void errorCallback(int error, const char *description)
 {
     std::cerr << "GLFW Error " << error << ": " << description << std::endl;
 }
 
 // GLFW framebuffer size callback
-void framebufferSizeCallback(GLFWwindow* window, int width, int height)
+void framebufferSizeCallback(GLFWwindow *window, int width, int height)
 {
-    if (auto* renderer = static_cast<Renderer::OpenGL::OpenGLRenderer*>(glfwGetWindowUserPointer(window)))
+    if (auto *renderer = static_cast<Renderer::OpenGL::OpenGLRenderer*>(glfwGetWindowUserPointer(window)))
     {
         renderer->Resize(width, height);
     }
@@ -127,7 +129,7 @@ void TestRenderer()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     // Create window
-    GLFWwindow* window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Triangle Test", nullptr, nullptr);
+    GLFWwindow *window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Triangle Test", nullptr, nullptr);
     if (!window)
     {
         std::cerr << "Failed to create GLFW window" << std::endl;
@@ -137,7 +139,7 @@ void TestRenderer()
 
     // Create renderer
     auto renderer = Renderer::OpenGL::CreateOpenGLRenderer();
-    auto* openglRenderer = dynamic_cast<Renderer::OpenGL::OpenGLRenderer*>(renderer.get());
+    auto *openglRenderer = dynamic_cast<Renderer::OpenGL::OpenGLRenderer*>(renderer.get());
 
     // Set window user pointer for callbacks
     glfwSetWindowUserPointer(window, openglRenderer);
@@ -186,7 +188,7 @@ void TestRenderer()
     triangleData.indices = {0, 1, 2};
 
     // Create mesh
-    Renderer::Common::IMesh* triangleMesh = renderer->CreateMesh(triangleData);
+    Renderer::Common::IMesh *triangleMesh = renderer->CreateMesh(triangleData);
     if (triangleMesh == 0)
     {
         std::cerr << "Failed to create triangle mesh" << std::endl;
@@ -197,7 +199,7 @@ void TestRenderer()
     }
 
     // Create shader program
-    Renderer::Common::IShader* shaderProgram = renderer->CreateShaderProgram(vertexShaderSource, fragmentShaderSource);
+    Renderer::Common::IShader *shaderProgram = renderer->CreateShaderProgram(vertexShaderSource, fragmentShaderSource);
     if (shaderProgram == 0)
     {
         std::cerr << "Failed to create shader program" << std::endl;
@@ -209,7 +211,7 @@ void TestRenderer()
     }
 
     // Create material
-    Renderer::Common::IMaterial* material = renderer->CreateMaterial(shaderProgram, 0); // No texture
+    Renderer::Common::IMaterial *material = renderer->CreateMaterial(shaderProgram, 0); // No texture
     if (material == nullptr)
     {
         std::cerr << "Failed to create material" << std::endl;
@@ -289,7 +291,7 @@ void TestEngine()
 {
     using namespace N2Engine;
 
-    Application& application = Application::GetInstance();
+    Application &application = Application::GetInstance();
 
     // TO MOVE TO GUI SCENE EDITOR
     auto testScene = Scene::Create("Test Scene");
@@ -298,14 +300,26 @@ void TestEngine()
 
     application.GetWindow().SetWindowMode(WindowMode::Windowed);
 
-    auto quadObject = GameObject::Create("TestQuad");
-    auto* quadRenderer = quadObject->AddComponent<Example::QuadRenderer>();
-    auto* boxCollider = quadObject->AddComponent<Physics::BoxCollider>();
-    auto* rigidbody = quadObject->AddComponent<Physics::Rigidbody>();
-    rigidbody->SetBodyType(Physics::BodyType::Kinematic);
+    const auto quadObject = GameObject::Create("TestQuad");
+    auto *cubeRenderer = quadObject->AddComponent<Example::CubeRenderer>();
+    cubeRenderer->SetColor(Common::Color::Blue());
+    auto *boxCollider = quadObject->AddComponent<Physics::BoxCollider>();
+    boxCollider->SetSize(N2Engine::Math::Vector3::One());
+    auto *rigidbody = quadObject->AddComponent<Physics::Rigidbody>();
+    rigidbody->SetBodyType(Physics::BodyType::Dynamic);
+    rigidbody->SetGravityEnabled(true);
+    // auto *spinComponent = quadObject->AddComponent<Spin>();
+    // spinComponent->degreesPerSecond = -2.0f;
 
-    auto spinComponent = quadObject->AddComponent<Spin>();
-    spinComponent->degreesPerSecond = -2.0f;
+    const auto floor = GameObject::Create("TestFloor");
+    floor->CreatePositionable();
+    floor->GetPositionable()->SetPosition(
+        floor->GetPositionable()->GetPosition() - N2Engine::Math::Vector3{0.0f, 5.0f, 0.0f});
+    auto *floorQuad = floor->AddComponent<Example::CubeRenderer>();
+    const auto floorSize = N2Engine::Math::Vector3{30.0f, 1.0f, 30.0f};
+    floorQuad->SetSize(floorSize);
+    auto *floorCollider = floor->AddComponent<Physics::BoxCollider>();
+    floorCollider->SetSize(floorSize);
 
     auto cameraControlObject = GameObject::Create("Camera Controller");
     cameraControlObject->AddComponent<CameraController>();
@@ -316,6 +330,7 @@ void TestEngine()
     SceneManager::GetCurSceneRef().AddRootGameObjects(
         {
             quadObject,
+            floor,
             cameraControlObject,
             standardInputHandler
         });
@@ -324,7 +339,7 @@ void TestEngine()
     if (!connectedGamepads.empty())
     {
         std::cout << "Connected Gamepads: {\n";
-        for (const auto& gamepadInfo : connectedGamepads)
+        for (const auto &gamepadInfo : connectedGamepads)
         {
             std::cout << "\tName: " << gamepadInfo.name << ", Id: " << gamepadInfo.gamepadId << "\n";
         }
@@ -337,12 +352,12 @@ void TestEngine()
         .GetInputSystem()
         ->MakeActionMap(
             "Main Controls",
-            [&](Input::ActionMap* actionMap)
+            [&](Input::ActionMap *actionMap)
             {
                 actionMap
                     ->MakeInputAction(
                         "Camera Move",
-                        [&](Input::InputAction* inputAction)
+                        [&](Input::InputAction *inputAction)
                         {
                             inputAction
                                 ->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(
@@ -354,7 +369,7 @@ void TestEngine()
                         })
                     .MakeInputAction(
                         "Camera Rotate",
-                        [&](Input::InputAction* inputAction)
+                        [&](Input::InputAction *inputAction)
                         {
                             inputAction
                                 ->AddBinding(std::make_unique<Input::Vector2CompositeBinding>(
@@ -366,7 +381,7 @@ void TestEngine()
                         })
                     .MakeInputAction(
                         "Quit",
-                        [&](Input::InputAction* inputAction)
+                        [&](Input::InputAction *inputAction)
                         {
                             inputAction->AddBinding(
                                 std::make_unique<Input::ButtonBinding>(application.GetWindow(), Input::Key::Escape));
