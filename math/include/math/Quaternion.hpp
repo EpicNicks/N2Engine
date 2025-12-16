@@ -81,6 +81,11 @@ namespace N2Engine::Math
             return Quaternion(pitch, yaw, roll);
         }
 
+        static Quaternion FromEulerAngles(const Vector3 &eulerAngles)
+        {
+            return FromEulerAngles(eulerAngles.x, eulerAngles.y, eulerAngles.z);
+        }
+
         static Quaternion LookRotation(const Vector3 &forward, const Vector3 &up);
         static Quaternion Slerp(const Quaternion &a, const Quaternion &b, float t);
         static Quaternion Lerp(const Quaternion &a, const Quaternion &b, float t);
