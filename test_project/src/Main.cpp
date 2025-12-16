@@ -24,6 +24,8 @@
 #include <cmath>
 
 #include "engine/example/renderers/CubeRenderer.hpp"
+#include "engine/example/renderers/SphereRenderer.hpp"
+#include "engine/physics/SphereCollider.hpp"
 #include "test_project/Spin.hpp"
 #include "test_project/CameraController.hpp"
 #include "test_project/StandardInputHandler.hpp"
@@ -311,10 +313,22 @@ void TestEngine()
     // auto *spinComponent = quadObject->AddComponent<Spin>();
     // spinComponent->degreesPerSecond = -2.0f;
 
+    const auto sphereObject = GameObject::Create("TestSphere");
+    sphereObject->CreatePositionable();
+    sphereObject->GetPositionable()->SetPosition(N2Engine::Math::Vector3{0.5f, 4.0f, 0.0f});
+    auto *sphereComponent = sphereObject->AddComponent<Example::SphereRenderer>();
+    constexpr float sphereSize = 1.0f;
+    sphereComponent->SetRadius(sphereSize);
+    sphereComponent->SetColor(Common::Color::Red());
+    auto *sphereCollider = sphereObject->AddComponent<Physics::SphereCollider>();
+    sphereCollider->SetRadius(sphereSize);
+    auto *sphereRigidbody = sphereObject->AddComponent<Physics::Rigidbody>();
+    sphereRigidbody->SetGravityEnabled(true);
+    sphereRigidbody->SetBodyType(Physics::BodyType::Dynamic);
+
     const auto floor = GameObject::Create("TestFloor");
     floor->CreatePositionable();
-    floor->GetPositionable()->SetPosition(
-        floor->GetPositionable()->GetPosition() - N2Engine::Math::Vector3{0.0f, 5.0f, 0.0f});
+    floor->GetPositionable()->SetPosition(N2Engine::Math::Vector3{0.0f, -5.0f, 0.0f});
     auto *floorQuad = floor->AddComponent<Example::CubeRenderer>();
     const auto floorSize = N2Engine::Math::Vector3{30.0f, 1.0f, 30.0f};
     floorQuad->SetSize(floorSize);
@@ -330,6 +344,7 @@ void TestEngine()
     SceneManager::GetCurSceneRef().AddRootGameObjects(
         {
             quadObject,
+            sphereObject,
             floor,
             cameraControlObject,
             standardInputHandler

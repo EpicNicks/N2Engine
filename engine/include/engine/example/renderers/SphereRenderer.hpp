@@ -19,6 +19,7 @@ namespace N2Engine::Example
 
     private:
         // Sphere-specific quality settings
+        // Sphere-specific quality settings
         uint32_t _latitudeSegments = 16; // Rings (vertical)
         uint32_t _longitudeSegments = 32; // Slices (horizontal)
 
@@ -120,6 +121,11 @@ namespace N2Engine::Example
         {
             _latitudeSegments = latitude;
             _longitudeSegments = longitude;
+        }
+
+        void SetRadius(const float radius)
+        {
+            _size = Math::Vector3(radius);
         }
 
         [[nodiscard]] uint32_t GetLatitudeSegments() const { return _latitudeSegments; }
