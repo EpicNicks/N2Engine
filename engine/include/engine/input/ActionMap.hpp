@@ -8,6 +8,7 @@
 
 #include "engine/base/EventHandler.hpp"
 #include "engine/input/InputValue.hpp"
+#include "nlohmann/json.hpp"
 
 namespace N2Engine
 {
@@ -48,7 +49,7 @@ namespace N2Engine
             bool _wasDisabledLastFrame{false};
 
         public:
-            InputAction(const std::string name);
+            explicit InputAction(const std::string &name);
             ~InputAction() = default;
 
             InputAction(const InputAction &) = delete;
@@ -81,8 +82,9 @@ namespace N2Engine
             bool WasCancelled() const { return _currentPhase == ActionPhase::Cancelled; }
             bool IsActive() const { return _currentPhase == ActionPhase::Started || _currentPhase == ActionPhase::Performed; }
 
+            nlohmann::json Serialize() const;
         private:
-            InputValue CalculateCombinedValue();
+            InputValue CalculateCombinedValue() const;
             void UpdatePhase();
             void HandleDisabledTransition();
         };
@@ -96,14 +98,16 @@ namespace N2Engine
             const std::string name;
             bool disabled{false};
 
-            ActionMap(std::string mapName) : name(std::move(mapName)) {}
+            explicit ActionMap(std::string mapName) : name(std::move(mapName)) {}
             ActionMap &AddInputAction(std::unique_ptr<InputAction> inputAction);
-            ActionMap &MakeInputAction(const std::string name, std::function<void(InputAction *)> pAction);
-            bool RemoveInputAction(const std::string &name);
+            ActionMap &MakeInputAction(const std::string &actionName, const std::function<void(InputAction *)> &pAction);
+            bool RemoveInputAction(const std::string &actionName);
             void Update();
 
-            InputAction &operator[](std::string mapName);
-            const InputAction &operator[](std::string mapName) const;
+            InputAction &operator[](const std::string &mapName);
+            const InputAction &operator[](const std::string &mapName) const;
+
+            nlohmann::json Serialize() const;
         };
     }
 }

@@ -39,6 +39,7 @@ namespace N2Engine
     class Window
     {
         friend class Input::InputBinding;
+        friend class Input::InputSystem;
 
     private:
         GLFWwindow *_window;

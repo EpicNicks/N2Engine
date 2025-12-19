@@ -5,6 +5,8 @@
 #include <string>
 #include <functional>
 
+#include <nlohmann/json.hpp>
+
 namespace N2Engine
 {
     class Window;
@@ -27,19 +29,22 @@ namespace N2Engine
             std::string _curActionMapName;
 
         public:
-            InputSystem(Window &window) : _window{window} {};
+            explicit InputSystem(Window &window) : _window{window} {};
             ~InputSystem();
 
-            ActionMap *LoadActionMap(std::string name);
+            ActionMap *LoadActionMap(const std::string &name);
             void AddActionMap(std::unique_ptr<ActionMap> &&actionMap);
 
-            InputSystem &MakeActionMap(const std::string name, std::function<void(ActionMap *)> pActionMap);
+            InputSystem &MakeActionMap(const std::string &name, const std::function<void(ActionMap *)> &pActionMap);
 
-            ActionMap *GetCurActionMap();
+            ActionMap *GetCurActionMap() const;
 
-            std::vector<GamepadInfo> GetConnectedGamepads() const;
+            static std::vector<GamepadInfo> GetConnectedGamepads();
 
             void Update();
+
+            nlohmann::json Serialize() const;
+            bool Deserialize(const nlohmann::json& j);
         };
     }
 }

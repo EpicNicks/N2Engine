@@ -8,24 +8,25 @@ using namespace N2Engine;
 using namespace N2Engine::Input;
 using namespace N2Engine::Math;
 
-InputBinding::InputBinding(Window &win)
+InputBinding::InputBinding(const Window &win)
     : window(win._window)
 {
 }
 
-InputValue ButtonBinding::getValue()
+InputValue KeyboardButtonBinding::getValue()
 {
-    int glfwKey = KeyToGLFW.at(boundKey);
-    int state = glfwGetKey(window, glfwKey);
+    const int glfwKey = KeyToGLFW.at(boundKey);
+    const int state = glfwGetKey(window, glfwKey);
     return (state == GLFW_PRESS);
 }
+
 
 InputValue AxisBinding::getValue()
 {
     GLFWgamepadstate state;
     if (glfwGetGamepadState(gamepadId, &state))
     {
-        int glfwAxis = GamepadAxisToGLFW.at(boundAxis);
+        const int glfwAxis = GamepadAxisToGLFW.at(boundAxis);
         return state.axes[glfwAxis]; // Returns float -1.0 to 1.0
     }
     return 0.0f;
@@ -36,15 +37,15 @@ InputValue GamepadStickBinding::getValue()
     GLFWgamepadstate state;
     if (glfwGetGamepadState(gamepadId, &state))
     {
-        int glfwXAxis = GamepadAxisToGLFW.at(xAxis);
-        int glfwYAxis = GamepadAxisToGLFW.at(yAxis);
+        const int glfwXAxis = GamepadAxisToGLFW.at(xAxis);
+        const int glfwYAxis = GamepadAxisToGLFW.at(yAxis);
 
-        float x = (invertXAxis ? -1 : 1) * state.axes[glfwXAxis];
-        float y = (invertYAxis ? -1 : 1) * state.axes[glfwYAxis];
+        const float x = (invertXAxis ? -1 : 1) * state.axes[glfwXAxis];
+        const float y = (invertYAxis ? -1 : 1) * state.axes[glfwYAxis];
 
         // Apply radial deadzone (better than per-axis deadzone)
-        Vector2 stick(x, y);
-        float magnitude = stick.Magnitude();
+        const Vector2 stick(x, y);
+        const float magnitude = stick.Magnitude();
 
         if (magnitude < deadzone)
         {
@@ -81,8 +82,8 @@ InputValue Vector2CompositeBinding::getValue()
 
 InputValue MouseButtonBinding::getValue()
 {
-    int glfwButton = MouseButtonToGLFW.at(boundButton);
-    int state = glfwGetMouseButton(window, glfwButton);
+    const int glfwButton = MouseButtonToGLFW.at(boundButton);
+    const int state = glfwGetMouseButton(window, glfwButton);
     return (state == GLFW_PRESS);
 }
 
@@ -91,8 +92,66 @@ InputValue GamepadButtonBinding::getValue()
     GLFWgamepadstate state;
     if (glfwGetGamepadState(gamepadId, &state))
     {
-        int glfwButton = GamepadButtonToGLFW.at(boundButton);
+        const int glfwButton = GamepadButtonToGLFW.at(boundButton);
         return (state.buttons[glfwButton] == GLFW_PRESS);
     }
     return false;
+}
+
+nlohmann::json KeyboardButtonBinding::Serialize() const
+{
+    return {
+            {"type", GetType()},
+            {"key", boundKey}
+    };
+}
+
+nlohmann::json AxisBinding::Serialize() const
+{
+    return {
+            {"type", GetType()},
+            {"axis", boundAxis},
+            {"gamepadId", gamepadId}
+    };
+}
+
+nlohmann::json GamepadStickBinding::Serialize() const
+{
+    return {
+            {"type", GetType()},
+            {"xAxis", xAxis},
+            {"yAxis", yAxis},
+            {"gamepadId", gamepadId},
+            {"deadzone", deadzone},
+            {"invertX", invertXAxis},
+            {"invertY", invertYAxis}
+    };
+}
+
+nlohmann::json Vector2CompositeBinding::Serialize() const
+{
+    return {
+            {"type", GetType()},
+            {"up", up},
+            {"down", down},
+            {"left", left},
+            {"right", right}
+    };
+}
+
+nlohmann::json MouseButtonBinding::Serialize() const
+{
+    return {
+            {"type", GetType()},
+            {"button", boundButton}
+    };
+}
+
+nlohmann::json GamepadButtonBinding::Serialize() const
+{
+    return {
+            {"type", GetType()},
+            {"button", boundButton},
+            {"gamepadId", gamepadId}
+    };
 }

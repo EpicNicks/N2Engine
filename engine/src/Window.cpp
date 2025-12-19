@@ -53,7 +53,7 @@ void Window::InitWindow()
     const int WIDTH = vidMode->width / 2;
     const int HEIGHT = vidMode->height / 2;
 
-    _window = glfwCreateWindow(WIDTH, HEIGHT, "My Engine", nullptr, nullptr);
+    _window = glfwCreateWindow(WIDTH, HEIGHT, "N2Engine", nullptr, nullptr);
     if (!_window)
     {
         Logger::Log("Failed to create GLFW window", Logger::LogLevel::Error);

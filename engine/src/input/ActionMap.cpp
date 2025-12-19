@@ -8,10 +8,8 @@ using namespace N2Engine::Input;
 
 using Vector2 = N2Engine::Math::Vector2;
 
-InputAction::InputAction(const std::string name)
-    : _inputActionName{name}, _currentValue{false}
-{
-}
+InputAction::InputAction(const std::string &name)
+    : _currentValue{false}, _inputActionName{name} {}
 
 void InputAction::Update()
 {
@@ -28,7 +26,7 @@ void InputAction::Update()
     _previousPhase = _currentPhase;
 
     // Store the previous value to detect changes
-    InputValue previousValue = _currentValue;
+    const InputValue previousValue = _currentValue;
 
     // Read and combine all binding values
     _currentValue = CalculateCombinedValue();
@@ -40,20 +38,18 @@ void InputAction::Update()
     bool valueChanged = false;
 
     // Compare Vector2 values with a small threshold to avoid floating point precision issues
-    Math::Vector2 prevVec = previousValue.asVector2();
-    Math::Vector2 currVec = _currentValue.asVector2();
-    float threshold = 0.001f; // Small threshold for floating point comparison
+    const Math::Vector2 prevVec = previousValue.asVector2();
+    const Math::Vector2 currVec = _currentValue.asVector2();
 
-    if (std::abs(prevVec.x - currVec.x) > threshold ||
+    if (constexpr float threshold = 0.001f; std::abs(prevVec.x - currVec.x) > threshold ||
         std::abs(prevVec.y - currVec.y) > threshold)
     {
         valueChanged = true;
     }
 
     // Fire callback on phase transitions OR when value changes within the same phase
-    bool shouldFireCallback = (_currentPhase != _previousPhase) || valueChanged;
 
-    if (shouldFireCallback)
+    if (bool shouldFireCallback = (_currentPhase != _previousPhase) || valueChanged)
     {
         _onStateChanged(*this);
     }
@@ -81,19 +77,19 @@ void InputAction::HandleDisabledTransition()
     }
 }
 
-void InputAction::SetDisabled(bool disabled)
+void InputAction::SetDisabled(const bool disabled)
 {
     _disabled = disabled;
     // Note: State transition handling is done in Update() via HandleDisabledTransition()
 }
 
-InputAction &InputAction::AddBinding(std::unique_ptr<InputBinding> binding)
+InputAction& InputAction::AddBinding(std::unique_ptr<InputBinding> binding)
 {
     _bindings.push_back(std::move(binding));
     return *this;
 }
 
-InputValue InputAction::CalculateCombinedValue()
+InputValue InputAction::CalculateCombinedValue() const
 {
     if (_bindings.empty())
     {
@@ -119,8 +115,7 @@ InputValue InputAction::CalculateCombinedValue()
         }
 
         // Track float values
-        float floatVal = std::abs(bindingValue.asFloat());
-        if (floatVal > std::abs(maxFloat))
+        if (const float floatVal = std::abs(bindingValue.asFloat()); floatVal > std::abs(maxFloat))
         {
             maxFloat = bindingValue.asFloat();
         }
@@ -152,8 +147,7 @@ InputValue InputAction::CalculateCombinedValue()
 
 inline void InputAction::UpdatePhase()
 {
-    float magnitude = _currentValue.asVector2().Magnitude();
-    bool hasInput = _currentValue.asBool();
+    const bool hasInput = _currentValue.asBool();
 
     // Simple state machine for input phases
     switch (_currentPhase)
@@ -197,7 +191,7 @@ inline void InputAction::UpdatePhase()
     }
 }
 
-const std::string &InputAction::GetName() const
+const std::string& InputAction::GetName() const
 {
     return _inputActionName;
 }
@@ -217,7 +211,7 @@ float InputAction::GetFloatValue() const
     return _currentValue.asFloat();
 }
 
-N2Engine::Base::EventHandler<InputAction &> &InputAction::GetOnStateChanged()
+N2Engine::Base::EventHandler<InputAction&>& InputAction::GetOnStateChanged()
 {
     return _onStateChanged;
 }
@@ -238,23 +232,23 @@ void ActionMap::Update()
     }
 }
 
-ActionMap &ActionMap::AddInputAction(std::unique_ptr<InputAction> inputAction)
+ActionMap& ActionMap::AddInputAction(std::unique_ptr<InputAction> inputAction)
 {
     _inputActions.insert_or_assign(inputAction->GetName(), std::move(inputAction));
     return *this;
 }
 
-ActionMap &ActionMap::MakeInputAction(const std::string name, std::function<void(InputAction *)> pAction)
+ActionMap& ActionMap::MakeInputAction(const std::string &actionName, const std::function<void(InputAction *)> &pAction)
 {
-    auto inputAction = std::make_unique<InputAction>(name);
+    auto inputAction = std::make_unique<InputAction>(actionName);
     pAction(inputAction.get());
     AddInputAction(std::move(inputAction));
     return *this;
 }
 
-bool ActionMap::RemoveInputAction(const std::string &name)
+bool ActionMap::RemoveInputAction(const std::string &actionName)
 {
-    if (auto it = _inputActions.find(name); it != _inputActions.end())
+    if (const auto it = _inputActions.find(actionName); it != _inputActions.end())
     {
         _inputActions.erase(it);
         return true;
@@ -262,12 +256,35 @@ bool ActionMap::RemoveInputAction(const std::string &name)
     return false;
 }
 
-InputAction &ActionMap::operator[](std::string mapName)
+InputAction& ActionMap::operator[](const std::string &mapName)
 {
     return *(_inputActions.at(mapName));
 }
 
-const InputAction &ActionMap::operator[](std::string mapName) const
+const InputAction& ActionMap::operator[](const std::string &mapName) const
 {
     return *(_inputActions.at(mapName));
+}
+
+nlohmann::json InputAction::Serialize() const
+{
+    nlohmann::json bindingsJson = nlohmann::json::array();
+    for (const auto& binding : _bindings)
+    {
+        bindingsJson.push_back(binding->Serialize());
+    }
+    return {{"bindings", bindingsJson}};
+}
+
+nlohmann::json ActionMap::Serialize() const
+{
+    nlohmann::json actionsJson;
+    for (const auto& [actionName, action] : _inputActions)
+    {
+        actionsJson[actionName] = action->Serialize();
+    }
+    return {
+            {"disabled", disabled},
+            {"actions", actionsJson}
+    };
 }
