@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <nlohmann/json.hpp>
 #include "engine/Component.hpp"
+#include "engine/Logger.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
 template <typename T>
@@ -109,10 +110,12 @@ namespace N2Engine
                     if (!j.contains(name) || j[name].is_null())
                     {
                         componentRef = nullptr;
+                        Logger::Info(
+                            "Component deserialize for component with name: " + name + " was not found in the json");
                         return;
                     }
 
-                    auto uuidStr = j[name].get<std::string>();
+                    const auto uuidStr = j[name].get<std::string>();
                     Math::UUID uuid(uuidStr);
 
                     if (resolver)

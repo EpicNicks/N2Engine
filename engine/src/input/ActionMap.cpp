@@ -3,13 +3,17 @@
 #include "engine/input/InputBinding.hpp"
 
 #include <math/Vector2.hpp>
+#include <utility>
+
+#include "engine/Logger.hpp"
+#include "engine/input/InputBindingFactory.hpp"
 
 using namespace N2Engine::Input;
 
 using Vector2 = N2Engine::Math::Vector2;
 
-InputAction::InputAction(const std::string &name)
-    : _currentValue{false}, _inputActionName{name} {}
+InputAction::InputAction(std::string name)
+    : _currentValue{false}, _inputActionName{std::move(name)} {}
 
 void InputAction::Update()
 {
@@ -223,7 +227,7 @@ void ActionMap::Update()
         return;
     }
 
-    for (auto &[actionName, inputAction] : _inputActions)
+    for (auto &inputAction : _inputActions | std::views::values)
     {
         if (inputAction)
         {
@@ -258,33 +262,108 @@ bool ActionMap::RemoveInputAction(const std::string &actionName)
 
 InputAction& ActionMap::operator[](const std::string &mapName)
 {
-    return *(_inputActions.at(mapName));
+    return *_inputActions.at(mapName);
 }
 
 const InputAction& ActionMap::operator[](const std::string &mapName) const
 {
-    return *(_inputActions.at(mapName));
+    return *_inputActions.at(mapName);
 }
 
 nlohmann::json InputAction::Serialize() const
 {
     nlohmann::json bindingsJson = nlohmann::json::array();
-    for (const auto& binding : _bindings)
+    for (const auto &binding : _bindings)
     {
         bindingsJson.push_back(binding->Serialize());
     }
     return {{"bindings", bindingsJson}};
 }
 
+std::expected<std::unique_ptr<InputAction>, ActionParseError> InputAction::Deserialize(
+    const nlohmann::json &j, const std::string &actionName, GLFWwindow *window)
+{
+    if (!j.contains("bindings"))
+    {
+        return std::unexpected(ActionParseError::MissingBindings);
+    }
+
+    if (!j["bindings"].is_array())
+    {
+        return std::unexpected(ActionParseError::InvalidBindingsType);
+    }
+
+    auto action = std::make_unique<InputAction>(actionName);
+
+    for (const auto &bindingJson : j["bindings"])
+    {
+        if (auto result = CreateBindingFromJson(window, bindingJson); result.has_value())
+        {
+            action->AddBinding(std::move(result.value()));
+        }
+        Logger::Warn("Invalid binding found in action: " + actionName);
+    }
+
+    return action;
+}
+
 nlohmann::json ActionMap::Serialize() const
 {
-    nlohmann::json actionsJson;
-    for (const auto& [actionName, action] : _inputActions)
+    nlohmann::json actionsJson = nlohmann::json::object();
+    for (const auto &[actionName, action] : _inputActions)
     {
         actionsJson[actionName] = action->Serialize();
     }
     return {
-            {"disabled", disabled},
-            {"actions", actionsJson}
+        {"disabled", disabled},
+        {"actions", actionsJson}
     };
+}
+
+std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> ActionMap::Deserialize(
+    const nlohmann::json &j, const std::string &mapName, GLFWwindow *window)
+{
+    if (!j.contains("actions"))
+    {
+        return std::unexpected(ActionMapParseError::MissingActions);
+    }
+
+    if (!j["actions"].is_object())
+    {
+        return std::unexpected(ActionMapParseError::InvalidActionsType);
+    }
+
+    auto actionMap = std::make_unique<ActionMap>(mapName);
+    actionMap->disabled = j.value("disabled", false);
+
+    for (const auto &[actionName, actionJson] : j["actions"].items())
+    {
+        if (auto result = InputAction::Deserialize(actionJson, actionName, window); result.has_value())
+        {
+            actionMap->AddInputAction(std::move(result.value()));
+        }
+        Logger::Warn("Invalid binding found in ActionMap: " + mapName);
+    }
+
+    return actionMap;
+}
+
+std::string N2Engine::Input::ActionParseErrorToString(const ActionParseError error)
+{
+    switch (error)
+    {
+    case ActionParseError::MissingBindings: return "missing 'bindings' field";
+    case ActionParseError::InvalidBindingsType: return "'bindings' is not an array";
+    }
+    return "unknown error";
+}
+
+std::string N2Engine::Input::ActionMapParseErrorToString(const ActionMapParseError error)
+{
+    switch (error)
+    {
+    case ActionMapParseError::MissingActions: return "missing 'actions' field";
+    case ActionMapParseError::InvalidActionsType: return "'actions' is not an object";
+    }
+    return "unknown error";
 }

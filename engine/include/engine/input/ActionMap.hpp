@@ -1,5 +1,6 @@
 #pragma once
 
+#include <expected>
 #include <unordered_map>
 #include <string>
 #include <memory>
@@ -10,104 +11,136 @@
 #include "engine/input/InputValue.hpp"
 #include "nlohmann/json.hpp"
 
-namespace N2Engine
+class GLFWwindow;
+
+namespace N2Engine::Math
 {
-    namespace Math
+    struct Vector2;
+}
+
+namespace N2Engine::Input
+{
+    enum class Key;
+    enum class GamepadButton;
+    enum class GamepadAxis;
+    enum class MouseButton;
+    class InputBinding;
+
+
+    enum class ActionPhase
     {
-        class Vector2;
-    }
+        Waiting, // No input
+        Started, // Action began
+        Performed, // Action completed successfully
+        Cancelled // Action interrupted/failed
+    };
 
-    namespace Input
+    enum class ActionParseError
     {
-        enum class Key;
-        enum class GamepadButton;
-        enum class GamepadAxis;
-        enum class MouseButton;
-        class InputBinding;
+        MissingBindings,
+        InvalidBindingsType
+    };
+    std::string ActionParseErrorToString(ActionParseError error);
 
-        enum class ActionPhase
+
+    enum class ActionMapParseError
+    {
+        MissingActions,
+        InvalidActionsType
+    };
+    std::string ActionMapParseErrorToString(ActionMapParseError error);
+
+
+    class InputAction
+    {
+    private:
+        Base::EventHandler<InputAction&> _onStateChanged;
+        std::vector<std::unique_ptr<InputBinding>> _bindings;
+        ActionPhase _currentPhase = ActionPhase::Waiting;
+        ActionPhase _previousPhase = ActionPhase::Waiting;
+        InputValue _currentValue;
+        std::string _inputActionName;
+        bool _disabled{false};
+        bool _wasDisabledLastFrame{false};
+
+    public:
+        explicit InputAction(std::string name);
+        ~InputAction() = default;
+
+        InputAction(const InputAction &) = delete;
+        InputAction& operator=(const InputAction &) = delete;
+
+        InputAction(InputAction &&) = default;
+        InputAction& operator=(InputAction &&) = default;
+
+        void Update();
+
+        // Add bindings
+        InputAction& AddBinding(std::unique_ptr<InputBinding> binding);
+
+        // Disabled property with proper state handling
+        [[nodiscard]] bool GetDisabled() const { return _disabled; }
+        void SetDisabled(bool disabled);
+
+        Base::EventHandler<InputAction&>& GetOnStateChanged();
+
+        // Public API for querying current state
+        [[nodiscard]] ActionPhase GetPhase() const { return _currentPhase; }
+        [[nodiscard]] Math::Vector2 GetVector2Value() const;
+        [[nodiscard]] bool GetBoolValue() const;
+        [[nodiscard]] float GetFloatValue() const;
+        [[nodiscard]] const std::string& GetName() const;
+
+        // Convenience methods for checking phase transitions
+        [[nodiscard]] bool WasStarted() const
         {
-            Waiting,   // No input
-            Started,   // Action began
-            Performed, // Action completed successfully
-            Cancelled  // Action interrupted/failed
-        };
+            return _currentPhase == ActionPhase::Started && _previousPhase == ActionPhase::Waiting;
+        }
 
-        class InputAction
+        [[nodiscard]] bool WasPerformed() const { return _currentPhase == ActionPhase::Performed; }
+        [[nodiscard]] bool WasCancelled() const { return _currentPhase == ActionPhase::Cancelled; }
+
+        [[nodiscard]] bool IsActive() const
         {
-        public:
-            // Single callback that fires on any phase change
+            return _currentPhase == ActionPhase::Started || _currentPhase == ActionPhase::Performed;
+        }
 
-        private:
-            Base::EventHandler<InputAction &> _onStateChanged;
-            std::vector<std::unique_ptr<InputBinding>> _bindings;
-            ActionPhase _currentPhase = ActionPhase::Waiting;
-            ActionPhase _previousPhase = ActionPhase::Waiting;
-            InputValue _currentValue;
-            std::string _inputActionName;
-            bool _disabled{false};
-            bool _wasDisabledLastFrame{false};
+        [[nodiscard]] nlohmann::json Serialize() const;
+        static std::expected<std::unique_ptr<InputAction>, ActionParseError> Deserialize(
+            const nlohmann::json &j,
+            const std::string &actionName,
+            GLFWwindow *window
+        );
 
-        public:
-            explicit InputAction(const std::string &name);
-            ~InputAction() = default;
+    private:
+        [[nodiscard]] InputValue CalculateCombinedValue() const;
+        void UpdatePhase();
+        void HandleDisabledTransition();
+    };
 
-            InputAction(const InputAction &) = delete;
-            InputAction &operator=(const InputAction &) = delete;
+    class ActionMap
+    {
+    private:
+        std::unordered_map<std::string, std::unique_ptr<InputAction>> _inputActions;
 
-            InputAction(InputAction &&) = default;
-            InputAction &operator=(InputAction &&) = default;
+    public:
+        const std::string name;
+        bool disabled{false};
 
-            void Update();
+        explicit ActionMap(std::string mapName) : name(std::move(mapName)) {}
+        ActionMap& AddInputAction(std::unique_ptr<InputAction> inputAction);
+        ActionMap& MakeInputAction(const std::string &actionName, const std::function<void(InputAction *)> &pAction);
+        bool RemoveInputAction(const std::string &actionName);
+        void Update();
 
-            // Add bindings
-            InputAction &AddBinding(std::unique_ptr<InputBinding> binding);
+        InputAction& operator[](const std::string &mapName);
+        const InputAction& operator[](const std::string &mapName) const;
 
-            // Disabled property with proper state handling
-            bool GetDisabled() const { return _disabled; }
-            void SetDisabled(bool disabled);
-
-            Base::EventHandler<InputAction &> &GetOnStateChanged();
-
-            // Public API for querying current state
-            ActionPhase GetPhase() const { return _currentPhase; }
-            Math::Vector2 GetVector2Value() const;
-            bool GetBoolValue() const;
-            float GetFloatValue() const;
-            const std::string &GetName() const;
-
-            // Convenience methods for checking phase transitions
-            bool WasStarted() const { return _currentPhase == ActionPhase::Started && _previousPhase == ActionPhase::Waiting; }
-            bool WasPerformed() const { return _currentPhase == ActionPhase::Performed; }
-            bool WasCancelled() const { return _currentPhase == ActionPhase::Cancelled; }
-            bool IsActive() const { return _currentPhase == ActionPhase::Started || _currentPhase == ActionPhase::Performed; }
-
-            nlohmann::json Serialize() const;
-        private:
-            InputValue CalculateCombinedValue() const;
-            void UpdatePhase();
-            void HandleDisabledTransition();
-        };
-
-        class ActionMap
-        {
-        private:
-            std::unordered_map<std::string, std::unique_ptr<InputAction>> _inputActions;
-
-        public:
-            const std::string name;
-            bool disabled{false};
-
-            explicit ActionMap(std::string mapName) : name(std::move(mapName)) {}
-            ActionMap &AddInputAction(std::unique_ptr<InputAction> inputAction);
-            ActionMap &MakeInputAction(const std::string &actionName, const std::function<void(InputAction *)> &pAction);
-            bool RemoveInputAction(const std::string &actionName);
-            void Update();
-
-            InputAction &operator[](const std::string &mapName);
-            const InputAction &operator[](const std::string &mapName) const;
-
-            nlohmann::json Serialize() const;
-        };
-    }
+        [[nodiscard]] nlohmann::json Serialize() const;
+        static std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> Deserialize(
+            const nlohmann::json &j,
+            const std::string &mapName,
+            GLFWwindow *window
+        );
+    };
 }
