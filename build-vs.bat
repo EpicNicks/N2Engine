@@ -2,10 +2,12 @@
 setlocal enabledelayedexpansion
 
 set BUILD_TYPE=Debug
-set RUN_AFTER_BUILD=0
+set RUN_EDITOR=0
+set RUN_TESTS=0
 set CLEAN_BUILD=0
 set VERBOSE_BUILD=0
 set CMAKE_GENERATOR=Visual Studio 17 2022
+set TEST_FILTER=
 
 set BUILD_TESTS=ON
 set TESTS_EXPLICIT=0
@@ -25,8 +27,20 @@ if /i "%~1"=="--release" (
     goto :parse_args
 )
 
+if /i "%~1"=="--debug" (
+    set BUILD_TYPE=Debug
+    shift
+    goto :parse_args
+)
+
 if /i "%~1"=="--run" (
-    set RUN_AFTER_BUILD=1
+    set RUN_EDITOR=1
+    shift
+    goto :parse_args
+)
+
+if /i "%~1"=="--run-tests" (
+    set RUN_TESTS=1
     shift
     goto :parse_args
 )
@@ -43,6 +57,24 @@ if /i "%~1"=="--verbose" (
     goto :parse_args
 )
 
+REM Parse --filter=value or --filter value
+if /i "%~1"=="--filter" (
+    if not "%~2"=="" (
+        set TEST_FILTER=%~2
+        shift
+        shift
+        goto :parse_args
+    )
+)
+
+echo %~1 | findstr /i /b "^--filter=" >nul
+if not errorlevel 1 (
+    set ARG=%~1
+    set TEST_FILTER=!ARG:--filter=!
+    shift
+    goto :parse_args
+)
+
 REM Parse --generator=value or --generator value
 if /i "%~1"=="--generator" (
     if not "%~2"=="" (
@@ -53,11 +85,10 @@ if /i "%~1"=="--generator" (
     )
 )
 
-REM Handle --generator=value format
 echo %~1 | findstr /i /b "^--generator=" >nul
 if not errorlevel 1 (
     set ARG=%~1
-    set CMAKE_GENERATOR=!ARG:*=!
+    set CMAKE_GENERATOR=!ARG:--generator=!
     shift
     goto :parse_args
 )
@@ -134,17 +165,56 @@ echo ========================================
 echo Editor: build\bin\%BUILD_TYPE%\editor.exe
 
 if "%BUILD_TESTS%"=="ON" (
-    echo Tests:  build\bin\%BUILD_TYPE%\engine_tests.exe
+    echo Tests:  build\bin\%BUILD_TYPE%\*_tests.exe
 )
 
 echo.
 
-if %RUN_AFTER_BUILD%==1 (
+REM Run tests if requested
+if %RUN_TESTS%==1 (
     if "%BUILD_TESTS%"=="ON" (
-        build\bin\%BUILD_TYPE%\engine_tests.exe
+        echo.
+        echo ========================================
+        echo Running tests...
+        echo ========================================
+        echo.
+
+        set CTEST_CMD=ctest --test-dir build --build-config %BUILD_TYPE% --output-on-failure
+
+        if not "%TEST_FILTER%"=="" (
+            echo Filter: %TEST_FILTER%
+            echo.
+            set CTEST_CMD=!CTEST_CMD! -R "%TEST_FILTER%"
+        )
+
+        !CTEST_CMD!
+
+        if errorlevel 1 (
+            echo.
+            echo ========================================
+            echo Tests FAILED!
+            echo ========================================
+            exit /b 1
+        )
+        echo.
+        echo ========================================
+        echo All tests PASSED!
+        echo ========================================
     ) else (
+        echo.
         echo Tests are disabled -- cannot run.
+        echo Use --tests to enable test building.
     )
+)
+
+REM Run editor if requested
+if %RUN_EDITOR%==1 (
+    echo.
+    echo ========================================
+    echo Launching editor...
+    echo ========================================
+    echo.
+    start "" "build\bin\%BUILD_TYPE%\test_project.exe"
 )
 
 endlocal
@@ -161,7 +231,8 @@ echo Options:
 echo   --help, -h, /?        Show this help message
 echo.
 echo Build Configuration:
-echo   --release             Build in Release mode (default: Debug)
+echo   --debug               Build in Debug mode (default)
+echo   --release             Build in Release mode
 echo   --clean               Clean the build directory before building
 echo   --verbose             Enable verbose build output
 echo.
@@ -180,14 +251,23 @@ echo.
 echo Testing:
 echo   --tests               Force enable unit tests (default: ON in Debug)
 echo   --skip-tests          Force disable unit tests (default: OFF in Release)
-echo   --run                 Run tests after successful build
+echo   --run-tests           Run all tests after successful build
+echo   --filter "PATTERN"    Only run tests matching PATTERN (regex)
+echo   --filter="PATTERN"
+echo.
+echo Running:
+echo   --run                 Launch editor after successful build
+echo   --run-tests           Run tests after successful build
 echo.
 echo Examples:
 echo   build.bat
 echo   build.bat --release --clean
 echo   build.bat --generator="Ninja" --verbose
-echo   build.bat --release --tests --run
-echo   build.bat --generator "Unix Makefiles" --skip-tests
+echo   build.bat --release --tests --run-tests
+echo   build.bat --run-tests --filter="Serialization"
+echo   build.bat --run-tests --filter="math_tests"
+echo   build.bat --run                              (launches editor)
+echo   build.bat --run --run-tests                  (runs tests, then launches editor)
 echo.
 echo Notes:
 echo   - Tests are enabled by default in Debug builds

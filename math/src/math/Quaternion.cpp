@@ -26,17 +26,17 @@ Quaternion::Quaternion(const Vector3 &axis, float angle)
 
 Quaternion::Quaternion(float pitch, float yaw, float roll)
 {
-    float cy = std::cos(yaw * 0.5f);
-    float sy = std::sin(yaw * 0.5f);
     float cp = std::cos(pitch * 0.5f);
     float sp = std::sin(pitch * 0.5f);
+    float cy = std::cos(yaw * 0.5f);
+    float sy = std::sin(yaw * 0.5f);
     float cr = std::cos(roll * 0.5f);
     float sr = std::sin(roll * 0.5f);
 
-    w = cr * cp * cy + sr * sp * sy;
-    x = sr * cp * cy - cr * sp * sy;
-    y = cr * sp * cy + sr * cp * sy;
-    z = cr * cp * sy - sr * sp * cy;
+    w = cp * cy * cr + sp * sy * sr;
+    x = sp * cy * cr - cp * sy * sr;
+    y = cp * sy * cr + sp * cy * sr;
+    z = cp * cy * sr - sp * sy * cr;
 }
 
 // Static factory methods
@@ -177,22 +177,22 @@ Vector3 Quaternion::ToEulerAngles() const
 {
     Vector3 euler;
 
-    // Roll (x-axis rotation)
-    float sinr_cosp = 2 * (w * x + y * z);
-    float cosr_cosp = 1 - 2 * (x * x + y * y);
-    euler.x = std::atan2(sinr_cosp, cosr_cosp);
+    // Pitch (x-axis rotation)
+    float sinp = 2.0f * (w * x + y * z);
+    float cosp = 1.0f - 2.0f * (x * x + y * y);
+    euler.x = std::atan2(sinp, cosp);
 
-    // Pitch (y-axis rotation)
-    float sinp = 2 * (w * y - z * x);
-    if (std::abs(sinp) >= 1)
-        euler.y = std::copysign(std::numbers::pi / 2, sinp);
+    // Yaw (y-axis rotation)
+    float siny = 2.0f * (w * y - z * x);
+    if (std::abs(siny) >= 1.0f)
+        euler.y = std::copysign(std::numbers::pi_v<float> / 2.0f, siny);
     else
-        euler.y = std::asin(sinp);
+        euler.y = std::asin(siny);
 
-    // Yaw (z-axis rotation)
-    float siny_cosp = 2 * (w * z + x * y);
-    float cosy_cosp = 1 - 2 * (y * y + z * z);
-    euler.z = std::atan2(siny_cosp, cosy_cosp);
+    // Roll (z-axis rotation)
+    float sinr = 2.0f * (w * z + x * y);
+    float cosr = 1.0f - 2.0f * (y * y + z * z);
+    euler.z = std::atan2(sinr, cosr);
 
     return euler;
 }

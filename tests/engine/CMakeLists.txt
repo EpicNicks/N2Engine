@@ -1,5 +1,7 @@
 file(GLOB_RECURSE ENGINE_TEST_SOURCES
         "*.cpp"
+        "*.cc"
+        "*.cxx"
 )
 
 add_executable(engine_tests ${ENGINE_TEST_SOURCES})

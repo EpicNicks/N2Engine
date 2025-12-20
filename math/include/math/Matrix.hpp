@@ -51,12 +51,12 @@ namespace N2Engine::Math
             std::copy(init.begin(), init.end(), data.begin());
         }
 
-        constexpr T &operator()(std::size_t row, std::size_t col)
+        constexpr T& operator()(std::size_t row, std::size_t col)
         {
             return data[row * N + col];
         }
 
-        constexpr const T &operator()(std::size_t row, std::size_t col) const
+        constexpr const T& operator()(std::size_t row, std::size_t col) const
         {
             return data[row * N + col];
         }
@@ -69,6 +69,16 @@ namespace N2Engine::Math
         constexpr std::span<const T> operator[](std::size_t row) const
         {
             return std::span<const T>(data.data() + row * N, N);
+        }
+
+        constexpr T& operator[](std::size_t row, std::size_t col)
+        {
+            return data(row, col);
+        }
+
+        constexpr const T& operator[](std::size_t row, std::size_t col) const
+        {
+            return data(row, col);
         }
 
         constexpr void fill(const T &value) { data.fill(value); }
@@ -207,12 +217,12 @@ namespace N2Engine::Math
             std::copy(init.begin(), init.end(), data.begin());
         }
 
-        constexpr float &operator()(std::size_t row, std::size_t col)
+        constexpr float& operator()(std::size_t row, std::size_t col)
         {
             return data[row * 4 + col];
         }
 
-        constexpr const float &operator()(std::size_t row, std::size_t col) const
+        constexpr const float& operator()(std::size_t row, std::size_t col) const
         {
             return data[row * 4 + col];
         }
@@ -283,7 +293,8 @@ namespace N2Engine::Math
                 1.0f, 0.0f, 0.0f, 0.0f,
                 0.0f, 1.0f, 0.0f, 0.0f,
                 0.0f, 0.0f, 1.0f, 0.0f,
-                0.0f, 0.0f, 0.0f, 1.0f};
+                0.0f, 0.0f, 0.0f, 1.0f
+            };
             return result;
         }
 
@@ -360,8 +371,8 @@ namespace N2Engine::Math
         }
 
         // Access to raw data
-        [[nodiscard]] const float *Data() const { return data.data(); }
-        float *Data() { return data.data(); }
+        [[nodiscard]] const float* Data() const { return data.data(); }
+        float* Data() { return data.data(); }
 
         // SIMD initialization - call once at startup
         static void InitializeSIMD()
@@ -496,10 +507,11 @@ namespace N2Engine::Math
             float a20 = m.data[8], a21 = m.data[9], a22 = m.data[10], a23 = m.data[11];
             float a30 = m.data[12], a31 = m.data[13], a32 = m.data[14], a33 = m.data[15];
 
-            return a00 * (a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) + a13 * (a21 * a32 - a22 * a31)) -
-                   a01 * (a10 * (a22 * a33 - a23 * a32) - a12 * (a20 * a33 - a23 * a30) + a13 * (a20 * a32 - a22 * a30)) +
-                   a02 * (a10 * (a21 * a33 - a23 * a31) - a11 * (a20 * a33 - a23 * a30) + a13 * (a20 * a31 - a21 * a30)) -
-                   a03 * (a10 * (a21 * a32 - a22 * a31) - a11 * (a20 * a32 - a22 * a30) + a12 * (a20 * a31 - a21 * a30));
+            return a00 * (a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) + a13 * (a21 * a32 - a22 * a31))
+                -
+                a01 * (a10 * (a22 * a33 - a23 * a32) - a12 * (a20 * a33 - a23 * a30) + a13 * (a20 * a32 - a22 * a30)) +
+                a02 * (a10 * (a21 * a33 - a23 * a31) - a11 * (a20 * a33 - a23 * a30) + a13 * (a20 * a31 - a21 * a30)) -
+                a03 * (a10 * (a21 * a32 - a22 * a31) - a11 * (a20 * a32 - a22 * a30) + a12 * (a20 * a31 - a21 * a30));
         }
 
         static Matrix InverseScalar(const Matrix &m)
@@ -512,23 +524,31 @@ namespace N2Engine::Math
             float a30 = m.data[12], a31 = m.data[13], a32 = m.data[14], a33 = m.data[15];
 
             float c00 = a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) + a13 * (a21 * a32 - a22 * a31);
-            float c01 = -(a10 * (a22 * a33 - a23 * a32) - a12 * (a20 * a33 - a23 * a30) + a13 * (a20 * a32 - a22 * a30));
+            float c01 = -(a10 * (a22 * a33 - a23 * a32) - a12 * (a20 * a33 - a23 * a30) + a13 * (a20 * a32 - a22 *
+                a30));
             float c02 = a10 * (a21 * a33 - a23 * a31) - a11 * (a20 * a33 - a23 * a30) + a13 * (a20 * a31 - a21 * a30);
-            float c03 = -(a10 * (a21 * a32 - a22 * a31) - a11 * (a20 * a32 - a22 * a30) + a12 * (a20 * a31 - a21 * a30));
+            float c03 = -(a10 * (a21 * a32 - a22 * a31) - a11 * (a20 * a32 - a22 * a30) + a12 * (a20 * a31 - a21 *
+                a30));
 
-            float c10 = -(a01 * (a22 * a33 - a23 * a32) - a02 * (a21 * a33 - a23 * a31) + a03 * (a21 * a32 - a22 * a31));
+            float c10 = -(a01 * (a22 * a33 - a23 * a32) - a02 * (a21 * a33 - a23 * a31) + a03 * (a21 * a32 - a22 *
+                a31));
             float c11 = a00 * (a22 * a33 - a23 * a32) - a02 * (a20 * a33 - a23 * a30) + a03 * (a20 * a32 - a22 * a30);
-            float c12 = -(a00 * (a21 * a33 - a23 * a31) - a01 * (a20 * a33 - a23 * a30) + a03 * (a20 * a31 - a21 * a30));
+            float c12 = -(a00 * (a21 * a33 - a23 * a31) - a01 * (a20 * a33 - a23 * a30) + a03 * (a20 * a31 - a21 *
+                a30));
             float c13 = a00 * (a21 * a32 - a22 * a31) - a01 * (a20 * a32 - a22 * a30) + a02 * (a20 * a31 - a21 * a30);
 
             float c20 = a01 * (a12 * a33 - a13 * a32) - a02 * (a11 * a33 - a13 * a31) + a03 * (a11 * a32 - a12 * a31);
-            float c21 = -(a00 * (a12 * a33 - a13 * a32) - a02 * (a10 * a33 - a13 * a30) + a03 * (a10 * a32 - a12 * a30));
+            float c21 = -(a00 * (a12 * a33 - a13 * a32) - a02 * (a10 * a33 - a13 * a30) + a03 * (a10 * a32 - a12 *
+                a30));
             float c22 = a00 * (a11 * a33 - a13 * a31) - a01 * (a10 * a33 - a13 * a30) + a03 * (a10 * a31 - a11 * a30);
-            float c23 = -(a00 * (a11 * a32 - a12 * a31) - a01 * (a10 * a32 - a12 * a30) + a02 * (a10 * a31 - a11 * a30));
+            float c23 = -(a00 * (a11 * a32 - a12 * a31) - a01 * (a10 * a32 - a12 * a30) + a02 * (a10 * a31 - a11 *
+                a30));
 
-            float c30 = -(a01 * (a12 * a23 - a13 * a22) - a02 * (a11 * a23 - a13 * a21) + a03 * (a11 * a22 - a12 * a21));
+            float c30 = -(a01 * (a12 * a23 - a13 * a22) - a02 * (a11 * a23 - a13 * a21) + a03 * (a11 * a22 - a12 *
+                a21));
             float c31 = a00 * (a12 * a23 - a13 * a22) - a02 * (a10 * a23 - a13 * a20) + a03 * (a10 * a22 - a12 * a20);
-            float c32 = -(a00 * (a11 * a23 - a13 * a21) - a01 * (a10 * a23 - a13 * a20) + a03 * (a10 * a21 - a11 * a20));
+            float c32 = -(a00 * (a11 * a23 - a13 * a21) - a01 * (a10 * a23 - a13 * a20) + a03 * (a10 * a21 - a11 *
+                a20));
             float c33 = a00 * (a11 * a22 - a12 * a21) - a01 * (a10 * a22 - a12 * a20) + a02 * (a10 * a21 - a11 * a20);
 
             float det = a00 * c00 + a01 * c01 + a02 * c02 + a03 * c03;
@@ -757,12 +777,12 @@ namespace N2Engine::Math
             }
         }
 
-        constexpr float &operator()(std::size_t row, std::size_t col)
+        constexpr float& operator()(std::size_t row, std::size_t col)
         {
             return data[row * 3 + col];
         }
 
-        constexpr const float &operator()(std::size_t row, std::size_t col) const
+        constexpr const float& operator()(std::size_t row, std::size_t col) const
         {
             return data[row * 3 + col];
         }
@@ -1050,12 +1070,12 @@ namespace N2Engine::Math
             std::copy(init.begin(), init.end(), data.begin());
         }
 
-        constexpr float &operator()(std::size_t row, std::size_t col)
+        constexpr float& operator()(std::size_t row, std::size_t col)
         {
             return data[row * 2 + col];
         }
 
-        constexpr const float &operator()(std::size_t row, std::size_t col) const
+        constexpr const float& operator()(std::size_t row, std::size_t col) const
         {
             return data[row * 2 + col];
         }

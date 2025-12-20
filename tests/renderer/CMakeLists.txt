@@ -1,5 +1,7 @@
 file(GLOB_RECURSE RENDERER_TEST_SOURCES
         "*.cpp"
+        "*.cc"
+        "*.cxx"
 )
 
 add_executable(renderer_tests ${RENDERER_TEST_SOURCES})

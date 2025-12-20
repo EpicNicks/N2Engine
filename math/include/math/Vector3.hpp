@@ -32,6 +32,10 @@ namespace N2Engine::Math
     class Vector3
     {
     public:
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4201)
+#endif
         // SIMD-optimized storage - padded to 4 floats for alignment
         union alignas(16)
         {
@@ -45,6 +49,9 @@ namespace N2Engine::Math
 
             __m128 simd_data;
         };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
     private:
         // Function pointer types for SIMD dispatch

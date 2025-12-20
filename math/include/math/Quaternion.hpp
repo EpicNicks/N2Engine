@@ -31,6 +31,10 @@ namespace N2Engine::Math
     {
     private:
         // SIMD-optimized storage
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4201)
+#endif
         union alignas(16)
         {
             struct
@@ -39,6 +43,9 @@ namespace N2Engine::Math
             };
             __m128 simd_data;
         };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
         // Function pointer types for SIMD dispatch
         using AddFunc = Quaternion (*)(const Quaternion &, const Quaternion &);

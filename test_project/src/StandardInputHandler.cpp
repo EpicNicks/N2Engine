@@ -20,7 +20,7 @@ void StandardInputHandler::OnAttach()
     Application &application = Application::GetInstance();
     if (Input::ActionMap *actionMap = application.GetWindow().GetInputSystem()->LoadActionMap("Main Controls"); actionMap != nullptr)
     {
-        (*actionMap)["Quit"].GetOnStateChanged() += [](Input::InputAction &inputAction)
+        (*actionMap)["Quit"].GetOnStateChanged() += [](const Input::InputAction &inputAction)
         {
             if (inputAction.GetPhase() == Input::ActionPhase::Started)
             {
