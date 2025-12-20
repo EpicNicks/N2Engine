@@ -1,39 +1,92 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
 set BUILD_TYPE=Debug
 set RUN_AFTER_BUILD=0
 set CLEAN_BUILD=0
 set VERBOSE_BUILD=0
+set CMAKE_GENERATOR=Visual Studio 17 2022
 
 set BUILD_TESTS=ON
 set TESTS_EXPLICIT=0
 
-set ORIGINAL_ARGS=%*
+REM Check for help flag first
+if /i "%~1"=="--help" goto :show_help
+if /i "%~1"=="-h" goto :show_help
+if /i "%~1"=="/?" goto :show_help
 
-for %%A in (%ORIGINAL_ARGS%) do (
-    if /i "%%A"=="--release" set BUILD_TYPE=Release
-    if /i "%%A"=="--run" set RUN_AFTER_BUILD=1
-    if /i "%%A"=="--clean" set CLEAN_BUILD=1
-    if /i "%%A"=="--verbose" set VERBOSE_BUILD=1
+REM Parse arguments
+:parse_args
+if "%~1"=="" goto :done_parsing
 
-    if /i "%%A"=="--skip-tests" (
-        set BUILD_TESTS=OFF
-        set TESTS_EXPLICIT=1
-    )
+if /i "%~1"=="--release" (
+    set BUILD_TYPE=Release
+    shift
+    goto :parse_args
+)
 
-    if /i "%%A"=="--tests" (
-        set BUILD_TESTS=ON
-        set TESTS_EXPLICIT=1
+if /i "%~1"=="--run" (
+    set RUN_AFTER_BUILD=1
+    shift
+    goto :parse_args
+)
+
+if /i "%~1"=="--clean" (
+    set CLEAN_BUILD=1
+    shift
+    goto :parse_args
+)
+
+if /i "%~1"=="--verbose" (
+    set VERBOSE_BUILD=1
+    shift
+    goto :parse_args
+)
+
+REM Parse --generator=value or --generator value
+if /i "%~1"=="--generator" (
+    if not "%~2"=="" (
+        set CMAKE_GENERATOR=%~2
+        shift
+        shift
+        goto :parse_args
     )
 )
+
+REM Handle --generator=value format
+echo %~1 | findstr /i /b "^--generator=" >nul
+if not errorlevel 1 (
+    set ARG=%~1
+    set CMAKE_GENERATOR=!ARG:*=!
+    shift
+    goto :parse_args
+)
+
+if /i "%~1"=="--skip-tests" (
+    set BUILD_TESTS=OFF
+    set TESTS_EXPLICIT=1
+    shift
+    goto :parse_args
+)
+
+if /i "%~1"=="--tests" (
+    set BUILD_TESTS=ON
+    set TESTS_EXPLICIT=1
+    shift
+    goto :parse_args
+)
+
+REM Unknown argument
+echo Warning: Unknown argument: %~1
+shift
+goto :parse_args
+
+:done_parsing
 
 REM Default policy: Release disables tests unless explicitly overridden
 if "%BUILD_TYPE%"=="Release" if "%TESTS_EXPLICIT%"=="0" (
     set BUILD_TESTS=OFF
 )
-
-if not defined CMAKE_GENERATOR set CMAKE_GENERATOR=Visual Studio 17 2022
 
 if %CLEAN_BUILD%==1 (
     echo Cleaning build directory...
@@ -41,7 +94,8 @@ if %CLEAN_BUILD%==1 (
 )
 
 echo.
-echo Configuring N2Engine with Visual Studio...
+echo Configuring N2Engine...
+echo   Generator:  %CMAKE_GENERATOR%
 echo   Build type: %BUILD_TYPE%
 echo   Unit tests: %BUILD_TESTS%
 echo.
@@ -94,3 +148,51 @@ if %RUN_AFTER_BUILD%==1 (
 )
 
 endlocal
+exit /b 0
+
+:show_help
+echo.
+echo N2Engine Build Script
+echo =====================
+echo.
+echo Usage: build.bat [OPTIONS]
+echo.
+echo Options:
+echo   --help, -h, /?        Show this help message
+echo.
+echo Build Configuration:
+echo   --release             Build in Release mode (default: Debug)
+echo   --clean               Clean the build directory before building
+echo   --verbose             Enable verbose build output
+echo.
+echo Generator:
+echo   --generator "NAME"    Specify CMake generator
+echo   --generator="NAME"    (default: "Visual Studio 17 2022")
+echo.
+echo   Common generators:
+echo     - "Visual Studio 17 2022"
+echo     - "Visual Studio 16 2019"
+echo     - "Ninja"
+echo     - "Ninja Multi-Config"
+echo     - "Unix Makefiles"
+echo     - "MinGW Makefiles"
+echo.
+echo Testing:
+echo   --tests               Force enable unit tests (default: ON in Debug)
+echo   --skip-tests          Force disable unit tests (default: OFF in Release)
+echo   --run                 Run tests after successful build
+echo.
+echo Examples:
+echo   build.bat
+echo   build.bat --release --clean
+echo   build.bat --generator="Ninja" --verbose
+echo   build.bat --release --tests --run
+echo   build.bat --generator "Unix Makefiles" --skip-tests
+echo.
+echo Notes:
+echo   - Tests are enabled by default in Debug builds
+echo   - Tests are disabled by default in Release builds
+echo   - Use --tests or --skip-tests to override the default behavior
+echo.
+endlocal
+exit /b 0

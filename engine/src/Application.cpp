@@ -104,8 +104,8 @@ void Application::Init()
 void Application::Init(std::unique_ptr<Scene> &&initialScene)
 {
     Init();
-    SceneManager &instance = SceneManager::GetInstance();
-    instance.AddScene(std::move(initialScene), true);
+    SceneManager::AddScene(std::move(initialScene), true);
+    SceneManager::ProcessAnyPendingSceneChange();
     Logger::Info("Initial scene loaded: " + SceneManager::GetCurSceneRef().sceneName);
 }
 

@@ -296,7 +296,8 @@ void TestEngine()
     Application &application = Application::GetInstance();
 
     // TO MOVE TO GUI SCENE EDITOR
-    application.Init();
+    auto testScene = Scene::Create("Test Scene");
+    application.Init(std::move(testScene));
     application.GetWindow().clearColor = Common::Color::Magenta();
 
     application.GetWindow().SetWindowMode(WindowMode::Windowed);
@@ -340,8 +341,6 @@ void TestEngine()
     auto standardInputHandler = GameObject::Create("Standard Input Handler");
     standardInputHandler->AddComponent<StandardInputHandler>();
 
-    auto testScene = Scene::Create("Test Scene");
-    SceneManager::AddScene(std::move(testScene));
     SceneManager::GetCurSceneRef().AddRootGameObjects(
         {
             quadObject,
