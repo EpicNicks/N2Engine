@@ -17,7 +17,7 @@
 
 #include "engine/ComponentConcepts.hpp"
 
-namespace Math
+namespace N2Engine::Math
 {
     class Vector3;
     class Quaternion;

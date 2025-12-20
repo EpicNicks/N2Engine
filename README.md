@@ -54,11 +54,14 @@ A C++ Game Engine I am building for learning
     - [Cuda SDK](https://developer.nvidia.com/cuda-toolkit-archive) (version 12.X, 13 was unsupported at last build)
     - [Nvidia PhysX SDK](https://github.com/NVIDIA-Omniverse/PhysX/releases/tag/107.3-omni-and-physx-5.6.1)
     - Visual Studio Visual C++ compiler
-  - Install the Cuda SDK
-  - Generate the project files in the Nvidia SDK folder \<root>/physx/generate_projects.bat
-    - select GPU support to enable GPU support in N2Engine, choose Visual Studio project
-    - Build the project with Visual Studio
-    - place the built files (bin and replace include folder headers) in N2Engine project folder external/PhysX/physx
+  - Steps to build your own PhysX binaries:
+    - Install the Cuda SDK
+    - Generate the project files in the Nvidia SDK folder \<root>/physx/generate_projects.bat
+      - select GPU support to enable GPU support in N2Engine, choose 
+        - Visual Studio project for Windows 
+        - Otherwise, select the version for the compiler you intend to build N2Engine with
+      - Build the project with Visual Studio
+      - place the built files (bin and replace include folder headers) in N2Engine project folder external/PhysX/physx
 - C++23 compiler
   - Windows
     - Visual Studio 2022 latest or 2026

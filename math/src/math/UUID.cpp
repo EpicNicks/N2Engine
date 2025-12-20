@@ -8,29 +8,40 @@ using namespace N2Engine::Math;
 
 UUID::UUID(const std::string &str)
 {
-    // Initialize to zero
-    bytes.fill(0);
-
     if (str.empty())
-    {
         return;
-    }
 
-    // Remove dashes and parse hex
-    std::string cleaned;
-    for (char c : str)
+    constexpr auto hex = [](const char c) -> uint8_t {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return 0;
+    };
+
+    size_t byteIndex = 0;
+    bool highNibble = true;
+    uint8_t current = 0;
+
+    for (const char c : str)
     {
-        if (c != '-')
+        if (c == '-')
+            continue;
+
+        const uint8_t value = hex(c);
+
+        if (highNibble)
         {
-            cleaned += c;
+            current = value << 4;
+            highNibble = false;
         }
-    }
+        else
+        {
+            bytes[byteIndex++] = current | value;
+            highNibble = true;
 
-    // Parse hex string into bytes (2 hex chars = 1 byte)
-    for (size_t i = 0; i < 16 && i * 2 < cleaned.length(); ++i)
-    {
-        std::string byteStr = cleaned.substr(i * 2, 2);
-        bytes[i] = static_cast<uint8_t>(std::stoul(byteStr, nullptr, 16));
+            if (byteIndex >= bytes.size())
+                break;
+        }
     }
 }
 
@@ -40,8 +51,8 @@ UUID::UUID()
     std::mt19937_64 gen(rd());
     std::uniform_int_distribution<uint64_t> dis;
 
-    uint64_t high = dis(gen);
-    uint64_t low = dis(gen);
+    const uint64_t high = dis(gen);
+    const uint64_t low = dis(gen);
 
     // Fill the bytes
     for (int i = 0; i < 8; ++i)

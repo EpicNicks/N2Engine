@@ -5,7 +5,7 @@
 using namespace N2Engine;
 using json = nlohmann::json;
 
-void SerializableComponent::RegisterGameObjectRef(const std::string &name, GameObject* gameObjectRef)
+void SerializableComponent::RegisterGameObjectRef(const std::string &name, GameObject *gameObjectRef)
 {
     _members.emplace_back(
         name,
@@ -36,12 +36,16 @@ void SerializableComponent::RegisterGameObjectRef(const std::string &name, GameO
             if (resolver)
             {
                 // Add pending resolution - will be resolved after all objects loaded
-                resolver->AddPendingReference([&gameObjectRef, uuid, resolver](){ gameObjectRef = resolver->FindGameObject(uuid); });
+                resolver->AddPendingReference([&gameObjectRef, uuid, resolver]()
+                {
+                    gameObjectRef = resolver->FindGameObject(uuid);
+                });
             }
         });
 }
 
-void SerializableComponent::RegisterGameObjectRefVector(const std::string &name, std::vector<GameObject*> &gameObjectRefs)
+void SerializableComponent::RegisterGameObjectRefVector(const std::string &name,
+                                                        std::vector<GameObject*> &gameObjectRefs)
 {
     _members.emplace_back(
         name,
@@ -90,8 +94,10 @@ void SerializableComponent::RegisterGameObjectRefVector(const std::string &name,
                     Math::UUID uuid(uuidStr);
 
                     // Capture index for resolution
-                    resolver->AddPendingReference([&gameObjectRefs, i, uuid, resolver]()
-                                                  { gameObjectRefs[i] = resolver->FindGameObject(uuid); });
+                    resolver->AddPendingReference([&gameObjectRefs, i, uuid, resolver]
+                    {
+                        gameObjectRefs[i] = resolver->FindGameObject(uuid);
+                    });
                 }
             }
         });

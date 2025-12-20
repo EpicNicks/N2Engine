@@ -9,6 +9,22 @@
 
 namespace N2Engine
 {
+    struct ApplicationOptions
+    {
+        enum class PhysicsBackend
+        {
+            PHYSX
+        };
+
+        enum class RenderBackend
+        {
+            OPENGL,
+            VULKAN
+        };
+
+        ApplicationOptions() = default;
+    };
+
     class Application
     {
         friend class SceneManager;
@@ -24,8 +40,8 @@ namespace N2Engine
 
     public:
         Application(const Application &) = delete;
-        Application &operator=(const Application &) = delete;
-        static Application &GetInstance();
+        Application& operator=(const Application &) = delete;
+        static Application& GetInstance();
 
         void Init();
         void Init(std::unique_ptr<Scene> &&initialScene);
@@ -34,11 +50,11 @@ namespace N2Engine
 
         static void Quit();
 
-        Camera *GetMainCamera() const;
-        Window &GetWindow();
+        [[nodiscard]] Camera* GetMainCamera() const;
+        Window& GetWindow();
 
         void OnWindowResize(int width, int height) const;
 
-        [[nodiscard]] Physics::IPhysicsBackend *Get3DPhysicsBackend() const;
+        [[nodiscard]] Physics::IPhysicsBackend* Get3DPhysicsBackend() const;
     };
 }

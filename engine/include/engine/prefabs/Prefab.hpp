@@ -1,5 +1,6 @@
 #pragma once
 
+#include <expected>
 #include <string>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -7,6 +8,16 @@
 namespace N2Engine
 {
     class GameObject;
+    class ReferenceResolver;
+
+    enum class PrefabParseError
+    {
+        MissingName,
+        MissingRootObject,
+        InvalidRootObject
+    };
+
+    std::string PrefabParseErrorToString(PrefabParseError error);
 
     class Prefab
     {
@@ -15,12 +26,15 @@ namespace N2Engine
         std::shared_ptr<GameObject> _rootObject;
 
     public:
-        Prefab(const std::string &name, std::shared_ptr<GameObject> rootObject);
+        Prefab(std::string name, std::shared_ptr<GameObject> rootObject);
 
-        const std::string &GetName() const { return _name; }
-        std::shared_ptr<GameObject> GetRootObject() const { return _rootObject; }
+        [[nodiscard]] const std::string& GetName() const { return _name; }
+        [[nodiscard]] std::shared_ptr<GameObject> GetRootObject() const { return _rootObject; }
 
-        nlohmann::json Serialize() const;
-        void Deserialize(const nlohmann::json &j);
+        [[nodiscard]] nlohmann::json Serialize() const;
+        static std::expected<std::unique_ptr<Prefab>, PrefabParseError> Deserialize(
+            const nlohmann::json &j,
+            ReferenceResolver *resolver = nullptr
+        );
     };
 }

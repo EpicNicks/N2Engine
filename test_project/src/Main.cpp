@@ -191,7 +191,7 @@ void TestRenderer()
 
     // Create mesh
     Renderer::Common::IMesh *triangleMesh = renderer->CreateMesh(triangleData);
-    if (triangleMesh == 0)
+    if (triangleMesh == nullptr)
     {
         std::cerr << "Failed to create triangle mesh" << std::endl;
         renderer->Shutdown();
@@ -202,7 +202,7 @@ void TestRenderer()
 
     // Create shader program
     Renderer::Common::IShader *shaderProgram = renderer->CreateShaderProgram(vertexShaderSource, fragmentShaderSource);
-    if (shaderProgram == 0)
+    if (shaderProgram == nullptr)
     {
         std::cerr << "Failed to create shader program" << std::endl;
         renderer->DestroyMesh(triangleMesh);
@@ -213,7 +213,7 @@ void TestRenderer()
     }
 
     // Create material
-    Renderer::Common::IMaterial *material = renderer->CreateMaterial(shaderProgram, 0); // No texture
+    Renderer::Common::IMaterial *material = renderer->CreateMaterial(shaderProgram, nullptr); // No texture
     if (material == nullptr)
     {
         std::cerr << "Failed to create material" << std::endl;
@@ -296,8 +296,7 @@ void TestEngine()
     Application &application = Application::GetInstance();
 
     // TO MOVE TO GUI SCENE EDITOR
-    auto testScene = Scene::Create("Test Scene");
-    application.Init(std::move(testScene));
+    application.Init();
     application.GetWindow().clearColor = Common::Color::Magenta();
 
     application.GetWindow().SetWindowMode(WindowMode::Windowed);
@@ -341,6 +340,8 @@ void TestEngine()
     auto standardInputHandler = GameObject::Create("Standard Input Handler");
     standardInputHandler->AddComponent<StandardInputHandler>();
 
+    auto testScene = Scene::Create("Test Scene");
+    SceneManager::AddScene(std::move(testScene));
     SceneManager::GetCurSceneRef().AddRootGameObjects(
         {
             quadObject,
@@ -350,13 +351,12 @@ void TestEngine()
             standardInputHandler
         });
 
-    auto connectedGamepads = application.GetWindow().GetInputSystem()->GetConnectedGamepads();
-    if (!connectedGamepads.empty())
+    if (const auto connectedGamepads = Input::InputSystem::GetConnectedGamepads(); !connectedGamepads.empty())
     {
         std::cout << "Connected Gamepads: {\n";
-        for (const auto &gamepadInfo : connectedGamepads)
+        for (const auto &[gamePadName, gamePadId] : connectedGamepads)
         {
-            std::cout << "\tName: " << gamepadInfo.name << ", Id: " << gamepadInfo.gamepadId << "\n";
+            std::cout << "\tName: " << gamePadName << ", Id: " << gamePadId << "\n";
         }
         std::cout << "}\n";
     }
