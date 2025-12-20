@@ -97,7 +97,8 @@ namespace Renderer
             CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels) override;
             void DestroyTexture(Common::ITexture* texture) override;
 
-            Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture = nullptr) override;
+            Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
+            Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture) override;
             void DestroyMaterial(Common::IMaterial* material) override;
 
             Common::IShader* CreateShaderProgram(const char* vertexSource, const char* fragmentSource) override;

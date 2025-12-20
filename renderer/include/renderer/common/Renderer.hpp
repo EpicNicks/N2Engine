@@ -50,7 +50,8 @@ namespace Renderer::Common
         virtual void DestroyMesh(IMesh* mesh) = 0;
         virtual ITexture* CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels) = 0;
         virtual void DestroyTexture(ITexture* texture) = 0;
-        virtual IMaterial* CreateMaterial(IShader* shader, ITexture* texture = nullptr) = 0;
+        virtual IMaterial* CreateMaterial(IShader* shader);
+        virtual IMaterial* CreateMaterial(IShader* shader, ITexture* texture) = 0;
         virtual void DestroyMaterial(IMaterial* material) = 0;
 
         // Rendering

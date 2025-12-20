@@ -46,9 +46,14 @@ void SceneManager::LoadScene(const std::string &sceneName)
     Logger::Error("Scene name not found: " + sceneName);
 }
 
-void SceneManager::AddScene(std::unique_ptr<Scene> &&scene)
+void SceneManager::AddScene(std::unique_ptr<Scene> &&scene, bool loadAdded)
 {
     GetInstance()._scenes.push_back(std::move(scene));
+    if (loadAdded)
+    {
+        const int newSceneIndex = static_cast<int>(GetInstance()._scenes.size()) - 1;
+        LoadScene(newSceneIndex);
+    }
 }
 
 void SceneManager::ProcessAnyPendingSceneChange()

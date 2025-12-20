@@ -11,7 +11,7 @@ using namespace Renderer::OpenGL;
 
 OpenGLRenderer::OpenGLRenderer()
     : m_window(nullptr), m_width(0), m_height(0), m_standardUnlitShader(nullptr), m_standardLitShader(nullptr),
-      m_currentShader(0), m_wireframeEnabled(false), m_clearColor{}, m_viewMatrix{}, m_projectionMatrix{}
+      m_viewMatrix{}, m_projectionMatrix{}, m_currentShader(0), m_wireframeEnabled(false), m_clearColor{}
 {
     // Initialize matrices to identity
     memset(m_viewMatrix, 0, sizeof(m_viewMatrix));
@@ -236,6 +236,11 @@ void OpenGLRenderer::DestroyTexture(Common::ITexture *texture)
     m_textures.erase(texture);
 }
 
+Renderer::Common::IMaterial* OpenGLRenderer::CreateMaterial(Common::IShader* shader)
+{
+    return OpenGLRenderer::CreateMaterial(shader, nullptr);
+}
+
 Renderer::Common::IMaterial* OpenGLRenderer::CreateMaterial(Common::IShader *shader, Common::ITexture *texture)
 {
     if (!shader)
@@ -441,7 +446,7 @@ void OpenGLRenderer::DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Com
 
     // Draw mesh
     glBindVertexArray(glMesh->GetVAO());
-    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(glMesh->GetIndexCount()), GL_UNSIGNED_INT, 0);
+    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(glMesh->GetIndexCount()), GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
 }
 

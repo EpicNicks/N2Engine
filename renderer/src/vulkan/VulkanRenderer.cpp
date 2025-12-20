@@ -65,8 +65,13 @@ void Renderer::Vulkan::VulkanRenderer::DestroyTexture(Renderer::Common::ITexture
 {
 }
 
-Renderer::Common::IMaterial* Renderer::Vulkan::VulkanRenderer::CreateMaterial(
-    Renderer::Common::IShader* shader, Renderer::Common::ITexture* texture)
+Renderer::Common::IMaterial* VulkanRenderer::CreateMaterial(Common::IShader* shader)
+{
+    return VulkanRenderer::CreateMaterial(shader, nullptr);
+}
+
+Renderer::Common::IMaterial* VulkanRenderer::CreateMaterial(
+    Common::IShader* shader, Common::ITexture* texture)
 {
     return nullptr;
 }

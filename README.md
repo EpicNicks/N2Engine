@@ -14,6 +14,7 @@ A C++ Game Engine I am building for learning
 - Advanced Input System
 - Scene Serialization/Deserialization
 - Math types with SIMD
+- Unit testing with GoogleTest
 
 ## Objectives
 - create a functioning game engine in C++
@@ -65,12 +66,19 @@ A C++ Game Engine I am building for learning
 - C++23 compiler
   - Windows
     - Visual Studio 2022 latest or 2026
+    - Clang-Cl should be able to link with MSVC binaries
+    - MinGW/GCC **not compatible with PhysX**
+  - Linux: G++ 
+    - GCC 11 **(WILL NEED TO BUILD PHYSX YOURSELF)**
+      - Install your distribution's package
+        - Debian/Ubuntu: ```sudo apt install build-essential```
+        - Arch: ```sudo pacman -S base-devel```
+        - Gentoo: you already have it
     - Clang **(WILL NEED TO BUILD PHYSX YOURSELF)**
-  - Linux: G++ -> GCC 11 **(WILL NEED TO BUILD PHYSX YOURSELF)**
-    - Install your distribution's package
-      - Debian/Ubuntu: ```sudo apt install build-essential```
-      - Arch: ```sudo pacman -S base-devel```
-      - Gentoo: you already have it
+      - Install your distribution's package
+        - Debian/Ubuntu ```sudo apt install clang```
+        - Arch: ```sudo pacman -Syu clang```
+        - Gentoo: ```emerge --bp clang```
 
 ## Building
 ### Visual Studio for x64 build target

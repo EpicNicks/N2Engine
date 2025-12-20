@@ -33,7 +33,7 @@ namespace N2Engine
         static Scene &GetCurSceneRef();
         static void LoadScene(int sceneIndex);
         static void LoadScene(const std::string &sceneName);
-        static void AddScene(std::unique_ptr<Scene> &&scene);
+        static void AddScene(std::unique_ptr<Scene> &&scene, bool loadAdded = false);
 
         Scene &operator[](int index);
         const Scene &operator[](int index) const;

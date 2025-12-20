@@ -62,7 +62,8 @@ namespace Renderer::OpenGL
         void DestroyTexture(Common::ITexture* texture) override;
 
         // Updated material management
-        Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture = nullptr) override;
+        Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
+        Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture) override;
         void DestroyMaterial(Common::IMaterial* material) override;
 
         // Rendering - updated signature

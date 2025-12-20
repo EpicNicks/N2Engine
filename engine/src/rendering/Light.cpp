@@ -35,19 +35,14 @@ namespace N2Engine::Rendering
     {
         if (type == LightType::Directional)
         {
-            // Directional lights use their direction property directly
             return direction.Normalized();
         }
         if (type == LightType::Spot)
         {
-            // Spot lights use their GameObject's forward direction
-            if (auto positionable = _gameObject.GetPositionable())
+            if (const auto positionable = _gameObject.GetPositionable())
             {
-                // Get forward vector from rotation
-                // Assuming -Z is forward
-                const Math::Vector3 forward(0.0f, 0.0f, -1.0f);
-                // TODO: Transform by GameObject's rotation when quaternion->vector conversion is available
-                return forward.Normalized();
+                const auto rotation = positionable->GetRotation();
+                return (rotation * Math::Vector3::Forward()).Normalized();
             }
         }
         return direction.Normalized();
