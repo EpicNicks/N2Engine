@@ -129,6 +129,7 @@ echo Configuring N2Engine...
 echo   Generator:  %CMAKE_GENERATOR%
 echo   Build type: %BUILD_TYPE%
 echo   Unit tests: %BUILD_TESTS%
+echo   For help and other flags: use flag --help or -h or /?
 echo.
 
 cmake -S . -B build ^
