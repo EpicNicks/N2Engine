@@ -10,10 +10,8 @@
 #include "engine/Application.hpp"
 #include "engine/Time.hpp"
 #include "engine/Logger.hpp"
-#include "../include/engine/example/renderers/QuadRenderer.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
-#include "engine/scheduling/CoroutineScheduler.hpp"
 
 using namespace N2Engine;
 
