@@ -28,9 +28,13 @@ namespace N2Engine
         static void Log(std::string_view log, LogLevel level);
 
         // helpers
+
         static void Info(std::string_view log);
         static void Warn(std::string_view log);
         static void Error(std::string_view log);
+
+        // General color/coded debugging sent to stdout
+        static void InitializeDebugConsoleHelper();
 
         class StreamRedirector
         {

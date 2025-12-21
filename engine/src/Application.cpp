@@ -1,10 +1,6 @@
 #include <string>
 #include <memory>
 
-#ifdef N2ENGINE_DEBUG
-#include <string_view>
-#endif
-
 #include <math/MathRegistrar.hpp>
 
 #include "engine/Application.hpp"
@@ -34,41 +30,8 @@ Camera *Application::GetMainCamera() const
 void Application::Init()
 {
 #ifdef N2ENGINE_DEBUG
-
-#define RED(x) "\033[31m" x "\033[0m"
-#define GREEN(x) "\033[32m" x "\033[0m"
-#define YELLOW(x) "\033[33m" x "\033[0m"
-#define BLUE(x) "\033[34m" x "\033[0m"
-
-    auto originalStdout = Logger::RedirectStdout(Logger::LogLevel::Info, false);
-    // auto originalStderr =
-    Logger::RedirectStderr(Logger::LogLevel::Error, false);
-
-    static auto originalStdoutStream = std::make_unique<std::ostream>(originalStdout);
-    // static auto originalStderrStream = std::make_unique<std::ostream>(originalStderr);
-
-    Logger::logEvent += [](const std::string_view msg, const Logger::LogLevel level)
-    {
-        const char *levelStr;
-        switch (level)
-        {
-        case Logger::LogLevel::Info:
-            levelStr = BLUE("INFO");
-            break;
-        case Logger::LogLevel::Warn:
-            levelStr = YELLOW("WARN");
-            break;
-        case Logger::LogLevel::Error:
-            levelStr = RED("ERROR");
-            break;
-        default:
-            levelStr = BLUE("INFO");
-            break;
-        }
-        *originalStdoutStream << "[" << levelStr << "] " << msg << std::endl;
-    };
+    Logger::InitializeDebugConsoleHelper();
 #endif
-
     Math::InitializeSIMD();
     Time::Init();
     _window.InitWindow();
