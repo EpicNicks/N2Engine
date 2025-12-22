@@ -6,9 +6,13 @@
 #include <functional>
 #include <type_traits>
 #include <nlohmann/json.hpp>
+
 #include "engine/Component.hpp"
 #include "engine/Logger.hpp"
+
 #include "engine/serialization/ReferenceResolver.hpp"
+// ReSharper disable once CppUnusedIncludeDirective
+#include "engine/serialization/MathSerialization.hpp"
 
 template <typename T>
 concept JsonSerializable = requires(nlohmann::json &j, const T &val, T &out)
@@ -115,8 +119,7 @@ namespace N2Engine
                         return;
                     }
 
-                    const auto uuidStr = j[name].get<std::string>();
-                    Math::UUID uuid(uuidStr);
+                    const auto uuid = j[name].get<Math::UUID>();
 
                     if (resolver)
                     {
@@ -186,8 +189,7 @@ namespace N2Engine
                                 continue;
                             }
 
-                            std::string uuidStr = arr[i].get<std::string>();
-                            Math::UUID uuid(uuidStr);
+                            const auto uuid = arr[i].get<Math::UUID>();
 
                             // Capture index for resolution
                             resolver->AddPendingReference([&componentRefs, i, uuid, resolver]()

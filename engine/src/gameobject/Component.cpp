@@ -1,5 +1,7 @@
 #include "engine/Component.hpp"
 #include "engine/GameObject.hpp"
+// ReSharper disable once CppUnusedIncludeDirective
+#include "engine/serialization/MathSerialization.hpp"
 
 using namespace N2Engine;
 using json = nlohmann::json;
@@ -47,7 +49,7 @@ void Component::Deserialize(const json &j)
     // Deserialize Asset base (UUID)
     if (j.contains("uuid"))
     {
-        _uuid = Math::UUID(j["uuid"].get<std::string>());
+        _uuid = j["uuid"].get<Math::UUID>();
     }
 
     if (j.contains("isActive"))

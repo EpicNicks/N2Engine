@@ -1,12 +1,12 @@
+#include <vector>
+#include <memory>
+
 #include "engine/Positionable.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/serialization/MathSerialization.hpp"
 
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/ICollider.hpp"
-
-#include <vector>
-#include <memory>
 
 using namespace N2Engine;
 using namespace N2Engine::Math;

@@ -1,6 +1,7 @@
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
+#include "engine/serialization/MathSerialization.hpp"
 
 using namespace N2Engine;
 using json = nlohmann::json;
@@ -30,8 +31,7 @@ void SerializableComponent::RegisterGameObjectRef(const std::string &name, GameO
                 return;
             }
 
-            std::string uuidStr = j[name].get<std::string>();
-            Math::UUID uuid(uuidStr);
+            auto uuid = j[name].get<Math::UUID>();
 
             if (resolver)
             {
@@ -72,11 +72,15 @@ void SerializableComponent::RegisterGameObjectRefVector(const std::string &name,
             gameObjectRefs.clear();
 
             if (!j.contains(name))
+            {
                 return;
+            }
 
             const json &arr = j[name];
             if (!arr.is_array())
+            {
                 return;
+            }
 
             // Pre-allocate space
             gameObjectRefs.resize(arr.size());
@@ -90,8 +94,7 @@ void SerializableComponent::RegisterGameObjectRefVector(const std::string &name,
                         continue;
                     }
 
-                    std::string uuidStr = arr[i].get<std::string>();
-                    Math::UUID uuid(uuidStr);
+                    auto uuid = arr[i].get<Math::UUID>();
 
                     // Capture index for resolution
                     resolver->AddPendingReference([&gameObjectRefs, i, uuid, resolver]

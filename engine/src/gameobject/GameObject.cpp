@@ -1,17 +1,18 @@
+#include <algorithm>
+#include <memory>
+#include <utility>
+
+#include <nlohmann/json.hpp>
+
 #include "engine/GameObject.hpp"
 #include "engine/Component.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/sceneManagement/Scene.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
-
-#include <algorithm>
-#include <memory>
-#include <nlohmann/json.hpp>
-#include <utility>
-
-#include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/serialization/MathSerialization.hpp"
 
 using namespace N2Engine;
 
@@ -582,7 +583,7 @@ json GameObject::Serialize() const
 GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolver)
 {
     // Create GameObject with UUID
-    Math::UUID uuid(j["uuid"].get<std::string>());
+    Math::UUID uuid = j["uuid"].get<Math::UUID>();
     auto go = std::make_shared<GameObject>(j["name"].get<std::string>());
     go->_uuid = uuid; // Restore original UUID
 
@@ -599,7 +600,7 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
 
     if (j.contains("prefabReference"))
     {
-        go->_prefabReference = Math::UUID(j["prefabReference"].get<std::string>());
+        go->_prefabReference = j["prefabReference"].get<Math::UUID>();
     }
 
     // Deserialize Positionable
@@ -618,18 +619,19 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
 
             if (auto component = ComponentRegistry::Instance().Create(typeName, *go))
             {
-                // Register component in resolver BEFORE deserializing
                 if (resolver && compJson["data"].contains("uuid"))
                 {
-                    Math::UUID compUUID(compJson["data"]["uuid"].get<std::string>());
+                    Math::UUID compUUID = compJson["data"]["uuid"].get<Math::UUID>();
                     resolver->RegisterComponent(compUUID, component.get());
                 }
 
-                // Deserialize with resolver for reference resolution
                 component->Deserialize(compJson["data"], resolver);
 
+                auto* rawPtr = component.get();
+                std::type_index typeIdx(typeid(*rawPtr));
+
                 go->_components.push_back(std::move(component));
-                go->_componentMap[std::type_index(typeid(*component))] = component.get();
+                go->_componentMap[typeIdx] = rawPtr;
             }
         }
     }

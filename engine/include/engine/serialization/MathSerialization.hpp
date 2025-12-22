@@ -5,7 +5,9 @@
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
 #include <math/Quaternion.hpp>
+
 #include "engine/common/Color.hpp"
+#include "engine/Logger.hpp"
 
 // serialization methods need to be in the same namespace as their types
 namespace N2Engine::Math
@@ -58,6 +60,32 @@ namespace N2Engine::Math
             {
                 q.Normalize();
             }
+        }
+    }
+
+    inline void to_json(nlohmann::json &j, const UUID &uuid)
+    {
+        j = uuid.ToString();
+    }
+
+    inline void from_json(const nlohmann::json &j, UUID &uuid)
+    {
+        if (!j.is_string())
+        {
+            uuid = UUID::ZERO;
+            Logger::Error("An invalid UUID was found in the JSON with non-string type " + std::string(j.type_name()));
+            return;
+        }
+
+        std::string uuidStr = j.get<std::string>();
+        if (auto testUuid = UUID::FromString(uuidStr); testUuid.has_value())
+        {
+            uuid = testUuid.value();
+        }
+        else
+        {
+            uuid = UUID::ZERO;
+            Logger::Error("An invalid UUID was found in the JSON with value " + uuidStr);
         }
     }
 }

@@ -14,6 +14,6 @@ void Asset::SetUUID(const UUID &uuid)
     _uuid = uuid;
 }
 
-Asset::Asset() : _uuid{} {}
+Asset::Asset() : _uuid{UUID::Random()} {}
 
 Asset::Asset(UUID uuid) : _uuid{uuid} {}
