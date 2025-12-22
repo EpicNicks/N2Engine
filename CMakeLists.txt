@@ -15,6 +15,7 @@ endif()
 
 option(N2ENGINE_BUILD_TESTS "Build unit tests" ON)
 option(N2ENGINE_USE_PHYSX "Use PhysX physics backend" ON)
+option(N2ENGINE_USE_AUDIO "Build with audio support" ON)
 
 # == PhysX setup ==
 set(N2ENGINE_PHYSX_AVAILABLE OFF)
@@ -100,12 +101,30 @@ endif()
 add_library(dummy_target INTERFACE)
 target_include_directories(dummy_target INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/dummy_include)
 
+# == Audio ==
+if(N2ENGINE_USE_AUDIO)
+    set(ALSOFT_UTILS OFF CACHE BOOL "" FORCE)
+    set(ALSOFT_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(ALSOFT_INSTALL OFF CACHE BOOL "" FORCE)
+    set(ALSOFT_INSTALL_CONFIG OFF CACHE BOOL "" FORCE)
+    set(ALSOFT_INSTALL_HRTF_DATA OFF CACHE BOOL "" FORCE)
+    set(ALSOFT_INSTALL_AMBDEC_PRESETS OFF CACHE BOOL "" FORCE)
+
+    FetchContent_Declare(
+            OpenAL
+            GIT_REPOSITORY https://github.com/kcat/openal-soft.git
+            GIT_TAG 1.24.0
+    )
+    FetchContent_MakeAvailable(OpenAL)
+    message(STATUS "Audio enabled (OpenAL Soft)")
+endif()
+
 # == Tests ==
 if(N2ENGINE_BUILD_TESTS)
     include(FetchContent)
     FetchContent_Declare(
             googletest
-            URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+            URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.zip
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
