@@ -11,6 +11,7 @@
 #include "engine/Logger.hpp"
 
 #include "engine/serialization/ReferenceResolver.hpp"
+#include "engine/io/Resources.hpp"
 // ReSharper disable once CppUnusedIncludeDirective
 #include "engine/serialization/MathSerialization.hpp"
 
@@ -198,6 +199,50 @@ namespace N2Engine
                                 componentRefs[i] = std::dynamic_pointer_cast<T>(component);
                             });
                         }
+                    }
+                });
+        }
+
+        /**
+ * Register an Asset reference (resolved via UUID after deserialization)
+ * Template parameter T should be the specific asset type
+ */
+        template <typename T>
+        void RegisterAssetRef(const std::string &name, std::shared_ptr<T> &assetRef)
+        {
+            static_assert(std::is_base_of_v<Base::Asset, T>, "T must be an Asset type");
+
+            _members.emplace_back(
+                name,
+                // Serialize: store UUID
+                [&assetRef, name](nlohmann::json &j)
+                {
+                    if (assetRef)
+                    {
+                        j[name] = assetRef->GetUUID().ToString();
+                    }
+                    else
+                    {
+                        j[name] = nullptr;
+                    }
+                },
+                // Deserialize: resolve from AssetManager
+                [&assetRef, name](const nlohmann::json &j, ReferenceResolver *)
+                {
+                    if (!j.contains(name) || j[name].is_null())
+                    {
+                        assetRef = nullptr;
+                        return;
+                    }
+
+                    if (const auto uuid = j[name].get<Math::UUID>(); uuid != Math::UUID::ZERO)
+                    {
+                        assetRef = Resources::Instance().GetAsset<T>(uuid);
+                    }
+                    else
+                    {
+                        Logger::Warn(std::format("Invalid UUID for asset '{}': {}", name, uuid.ToString()));
+                        assetRef = nullptr;
                     }
                 });
         }

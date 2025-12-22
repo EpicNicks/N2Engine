@@ -2,35 +2,16 @@
 
 #include <unordered_map>
 #include <functional>
-#include <memory>
 #include <vector>
-#include "math/UUID.hpp"
+
+#include <math/UUID.hpp>
+
+#include "engine/common/UUIDHash.hpp"
 
 namespace N2Engine
 {
     class GameObject;
     class Component;
-
-    /**
-     * Hash function for UUID - use the UUID's raw bytes
-     * Since UUID is already uniformly distributed, just use part of it
-     */
-    struct UUIDHash
-    {
-        size_t operator()(const Math::UUID &uuid) const
-        {
-            // UUID is already a good hash, just interpret first bytes as size_t
-            const auto &bytes = uuid.GetBytes();
-
-            // Use first 8 bytes (or 4 on 32-bit systems)
-            size_t hash = 0;
-            for (size_t i = 0; i < sizeof(size_t) && i < bytes.size(); ++i)
-            {
-                hash |= static_cast<size_t>(bytes[i]) << (i * 8);
-            }
-            return hash;
-        }
-    };
 
     /**
      * Stores pending references that need to be resolved after full deserialization

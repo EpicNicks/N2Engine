@@ -73,12 +73,12 @@ namespace N2Engine::Math
 
         constexpr T& operator[](std::size_t row, std::size_t col)
         {
-            return data(row, col);
+            return (*this)(row, col);
         }
 
         constexpr const T& operator[](std::size_t row, std::size_t col) const
         {
-            return data(row, col);
+            return (*this)(row, col);
         }
 
         constexpr void fill(const T &value) { data.fill(value); }

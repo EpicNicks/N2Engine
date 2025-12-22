@@ -12,6 +12,8 @@ target_include_directories(engine
     PUBLIC 
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/nlohmann/include>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/dr_libs/include>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/stb_vorbis/include>
         $<BUILD_INTERFACE:${PHYSX_INCLUDE_DIR}>
         $<INSTALL_INTERFACE:include>
     PRIVATE
@@ -50,6 +52,7 @@ target_link_libraries(engine
     PRIVATE 
         renderer
         MathCore::math
+        OpenAL::OpenAL
     PUBLIC
         ${PHYSX_LIBS}
 )
