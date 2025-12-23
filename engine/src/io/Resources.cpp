@@ -9,7 +9,7 @@
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
 
-namespace N2Engine
+namespace N2Engine::IO
 {
     bool Resources::ResourcePathIsValid() const
     {
@@ -36,9 +36,8 @@ namespace N2Engine
         return relativePath;
     }
 
-    Renderer::Common::IShader *Resources::LoadShader(
-        const std::string &vertexShaderPath,
-        const std::string &fragmentShaderPath)
+    Renderer::Common::IShader* Resources::LoadShader(const std::string &vertexShaderPath,
+                                                     const std::string &fragmentShaderPath) const
     {
         auto vertexShaderPathLocal = ResolvePath(vertexShaderPath);
         auto fragmentShaderPathLocal = ResolvePath(fragmentShaderPath);
@@ -67,15 +66,14 @@ namespace N2Engine
         };
 
         return Application::GetInstance()
-            .GetWindow()
-            .GetRenderer()
-            ->CreateShaderProgram(vertexSource.c_str(), fragmentSource.c_str());
+               .GetWindow()
+               .GetRenderer()
+               ->CreateShaderProgram(vertexSource.c_str(), fragmentSource.c_str());
     }
 
     void Resources::UnregisterAsset(const Math::UUID &uuid)
     {
-        auto it = _assetsByUUID.find(uuid);
-        if (it != _assetsByUUID.end())
+        if (auto it = _assetsByUUID.find(uuid); it != _assetsByUUID.end())
         {
             // Find and remove from path map
             for (auto pathIt = _assetsByPath.begin(); pathIt != _assetsByPath.end(); ++pathIt)

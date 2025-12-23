@@ -237,7 +237,7 @@ namespace N2Engine
 
                     if (const auto uuid = j[name].get<Math::UUID>(); uuid != Math::UUID::ZERO)
                     {
-                        assetRef = Resources::Instance().GetAsset<T>(uuid);
+                        assetRef = IO::Resources::Instance().GetAsset<T>(uuid);
                     }
                     else
                     {

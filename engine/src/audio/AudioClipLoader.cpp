@@ -56,7 +56,7 @@ namespace N2Engine::Audio
         }
 
         // Auto-register the audio clip loader
-        Resources::LoaderRegistrar g_audioClipLoader{
+        IO::Resources::LoaderRegistrar g_audioClipLoader{
                 {".wav", ".ogg", ".mp3", ".flac"},
                 LoadAudioClipFromFile
             };

@@ -21,7 +21,7 @@ namespace N2Engine::Audio
     class AudioClip;
 }
 
-namespace N2Engine
+namespace N2Engine::IO
 {
     class Resources
     {
@@ -161,7 +161,7 @@ namespace N2Engine
         Renderer::Common::IShader *LoadShader(
             const std::string &vertexShaderPath,
             const std::string &fragmentShaderPath
-        );
+        ) const;
 
         // === Asset Registration ===
 

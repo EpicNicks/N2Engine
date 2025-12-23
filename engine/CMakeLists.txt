@@ -26,7 +26,7 @@ target_link_directories(engine PRIVATE ${PHYSX_LIB_DIR})
 
 set_target_properties(engine PROPERTIES
     CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
+    CXX_STANDARD_REQUIRED ONi
     CXX_EXTENSIONS OFF
 )
 
