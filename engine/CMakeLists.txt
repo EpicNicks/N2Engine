@@ -14,6 +14,8 @@ target_include_directories(engine
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/nlohmann/include>
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/dr_libs/include>
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/stb_vorbis/include>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/lua>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/sol2/include>
         $<BUILD_INTERFACE:${PHYSX_INCLUDE_DIR}>
         $<INSTALL_INTERFACE:include>
     PRIVATE

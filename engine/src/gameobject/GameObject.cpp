@@ -12,6 +12,7 @@
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
+// ReSharper disable once CppUnusedIncludeDirective
 #include "engine/serialization/MathSerialization.hpp"
 
 using namespace N2Engine;

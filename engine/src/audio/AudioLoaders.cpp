@@ -4,7 +4,6 @@
 #include <cstring>
 #include <algorithm>
 
-// Use vendored libraries
 #define DR_WAV_IMPLEMENTATION
 #include <dr_libs/dr_wav.h>
 
@@ -37,7 +36,7 @@ namespace N2Engine::Audio
         }
 
         // Allocate buffer for all samples
-        size_t totalSampleCount = wav.totalPCMFrameCount * wav.channels;
+        std::size_t totalSampleCount = wav.totalPCMFrameCount * wav.channels;
         std::vector<int16_t> samples(totalSampleCount);
 
         // Read all samples as 16-bit PCM
@@ -49,7 +48,7 @@ namespace N2Engine::Audio
         }
 
         // Convert to byte buffer
-        size_t dataSize = framesRead * wav.channels * sizeof(int16_t);
+        std::size_t dataSize = framesRead * wav.channels * sizeof(int16_t);
         result.samples.resize(dataSize);
         std::memcpy(result.samples.data(), samples.data(), dataSize);
 
@@ -91,7 +90,7 @@ namespace N2Engine::Audio
         }
 
         // Convert to byte buffer
-        size_t dataSize = numSamples * channels * sizeof(short);
+        std::size_t dataSize = numSamples * channels * sizeof(short);
         result.samples.resize(dataSize);
         std::memcpy(result.samples.data(), output, dataSize);
 
@@ -133,7 +132,7 @@ namespace N2Engine::Audio
         }
 
         // Convert to byte buffer
-        size_t dataSize = totalFrameCount * config.channels * sizeof(drmp3_int16);
+        std::size_t dataSize = totalFrameCount * config.channels * sizeof(drmp3_int16);
         result.samples.resize(dataSize);
         std::memcpy(result.samples.data(), pSampleData, dataSize);
 
@@ -177,7 +176,7 @@ namespace N2Engine::Audio
         }
 
         // Convert to byte buffer
-        size_t dataSize = totalFrameCount * channels * sizeof(drflac_int16);
+        std::size_t dataSize = totalFrameCount * channels * sizeof(drflac_int16);
         result.samples.resize(dataSize);
         std::memcpy(result.samples.data(), pSampleData, dataSize);
 
