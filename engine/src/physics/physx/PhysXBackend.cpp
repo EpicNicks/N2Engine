@@ -654,7 +654,7 @@ namespace N2Engine::Physics
         const BodyData *data = GetBodyData(body);
         if (!data || !data->actor)
         {
-            return Math::Vector3::Zero();
+            return Math::Vector3::Zero;
         }
 
         const PxTransform transform = data->actor->getGlobalPose();
@@ -666,7 +666,7 @@ namespace N2Engine::Physics
         const BodyData *data = GetBodyData(body);
         if (!data || !data->actor)
         {
-            return Math::Quaternion::Identity();
+            return Math::Quaternion::Identity;
         }
 
         const PxTransform transform = data->actor->getGlobalPose();
@@ -678,7 +678,7 @@ namespace N2Engine::Physics
         const BodyData *data = GetBodyData(body);
         if (!data)
         {
-            return Math::Vector3::Zero();
+            return Math::Vector3::Zero;
         }
 
         if (const PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
@@ -687,7 +687,7 @@ namespace N2Engine::Physics
             return {vel.x, vel.y, vel.z};
         }
 
-        return Math::Vector3::Zero();
+        return Math::Vector3::Zero;
     }
 
     Math::Vector3 PhysXBackend::GetAngularVelocity(PhysicsBodyHandle body)
@@ -695,7 +695,7 @@ namespace N2Engine::Physics
         const BodyData *data = GetBodyData(body);
         if (!data)
         {
-            return Math::Vector3::Zero();
+            return Math::Vector3::Zero;
         }
 
         if (const PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
@@ -704,7 +704,7 @@ namespace N2Engine::Physics
             return {vel.x, vel.y, vel.z};
         }
 
-        return Math::Vector3::Zero();
+        return Math::Vector3::Zero;
     }
 
     // ========== Properties ==========
@@ -830,7 +830,7 @@ namespace N2Engine::Physics
             }
 
             // Calculate total impulse
-            Math::Vector3 totalImpulse = Math::Vector3::Zero();
+            Math::Vector3 totalImpulse = Math::Vector3::Zero;
             for (const auto &contact : baseCollisionData->contacts)
             {
                 totalImpulse = totalImpulse + (contact.normal * contact.normalImpulse);
@@ -1508,10 +1508,10 @@ namespace N2Engine::Physics
     void PhysXBackend::AddImpulse(PhysicsBodyHandle, const Math::Vector3 &) {}
     void PhysXBackend::SetVelocity(PhysicsBodyHandle, const Math::Vector3 &) {}
     void PhysXBackend::SetAngularVelocity(PhysicsBodyHandle, const Math::Vector3 &) {}
-    Math::Vector3 PhysXBackend::GetPosition(PhysicsBodyHandle) { return Math::Vector3::Zero(); }
-    Math::Quaternion PhysXBackend::GetRotation(PhysicsBodyHandle) { return Math::Quaternion::Identity(); }
-    Math::Vector3 PhysXBackend::GetVelocity(PhysicsBodyHandle) { return Math::Vector3::Zero(); }
-    Math::Vector3 PhysXBackend::GetAngularVelocity(PhysicsBodyHandle) { return Math::Vector3::Zero(); }
+    Math::Vector3 PhysXBackend::GetPosition(PhysicsBodyHandle) { return Math::Vector3::Zero; }
+    Math::Quaternion PhysXBackend::GetRotation(PhysicsBodyHandle) { return Math::Quaternion::Identity; }
+    Math::Vector3 PhysXBackend::GetVelocity(PhysicsBodyHandle) { return Math::Vector3::Zero; }
+    Math::Vector3 PhysXBackend::GetAngularVelocity(PhysicsBodyHandle) { return Math::Vector3::Zero; }
     void PhysXBackend::SetMass(PhysicsBodyHandle, float) {}
     float PhysXBackend::GetMass(PhysicsBodyHandle) { return 0.0f; }
     void PhysXBackend::SetGravityEnabled(PhysicsBodyHandle, bool) {}

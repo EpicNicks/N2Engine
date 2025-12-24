@@ -97,14 +97,14 @@ TEST_F(QuaternionTest, AxisAngleConstructor_ZeroAngle)
     Vector3 axis(1.0f, 0.0f, 0.0f);
     Quaternion q(axis, 0.0f);
 
-    EXPECT_TRUE(NearEqual(q, Quaternion::Identity()));
+    EXPECT_TRUE(NearEqual(q, Quaternion::Identity));
 }
 
 TEST_F(QuaternionTest, EulerAnglesConstructor_ZeroAngles)
 {
     Quaternion q(0.0f, 0.0f, 0.0f);
 
-    EXPECT_TRUE(NearEqual(q, Quaternion::Identity()));
+    EXPECT_TRUE(NearEqual(q, Quaternion::Identity));
 }
 
 TEST_F(QuaternionTest, EulerAnglesConstructor_Pitch90)
@@ -134,7 +134,7 @@ TEST_F(QuaternionTest, EulerAnglesConstructor_Roll90)
 // Static Factory Method Tests
 TEST_F(QuaternionTest, Identity_IsIdentity)
 {
-    Quaternion q = Quaternion::Identity();
+    Quaternion q = Quaternion::Identity;
 
     EXPECT_FLOAT_EQ(q.GetW(), 1.0f);
     EXPECT_FLOAT_EQ(q.GetX(), 0.0f);
@@ -261,7 +261,7 @@ TEST_F(QuaternionTest, ScalarDivision)
 TEST_F(QuaternionTest, QuaternionMultiplication_Identity)
 {
     Quaternion q(0.5f, 0.5f, 0.5f, 0.5f);
-    Quaternion identity = Quaternion::Identity();
+    Quaternion identity = Quaternion::Identity;
 
     Quaternion result1 = q * identity;
     Quaternion result2 = identity * q;
@@ -277,7 +277,7 @@ TEST_F(QuaternionTest, QuaternionMultiplication_Inverse)
 
     Quaternion result = q * qInv;
 
-    EXPECT_TRUE(NearEqual(result, Quaternion::Identity()));
+    EXPECT_TRUE(NearEqual(result, Quaternion::Identity));
 }
 
 TEST_F(QuaternionTest, QuaternionMultiplication_NonCommutative)
@@ -378,7 +378,7 @@ TEST_F(QuaternionTest, Equality_NearlyEqual)
 // Length and Normalization Tests
 TEST_F(QuaternionTest, Length_UnitQuaternion)
 {
-    Quaternion q = Quaternion::Identity();
+    Quaternion q = Quaternion::Identity;
 
     EXPECT_TRUE(NearEqual(q.Length(), 1.0f));
 }
@@ -435,7 +435,7 @@ TEST_F(QuaternionTest, Normalized_ZeroQuaternion)
     Quaternion normalized = q.Normalized();
 
     // Should return identity for zero quaternion
-    EXPECT_TRUE(NearEqual(normalized, Quaternion::Identity()));
+    EXPECT_TRUE(NearEqual(normalized, Quaternion::Identity));
 }
 
 TEST_F(QuaternionTest, IsNormalized_True)
@@ -467,7 +467,7 @@ TEST_F(QuaternionTest, Conjugate)
 
 TEST_F(QuaternionTest, Conjugate_Identity)
 {
-    Quaternion identity = Quaternion::Identity();
+    Quaternion identity = Quaternion::Identity;
 
     Quaternion conj = identity.Conjugate();
 
@@ -481,7 +481,7 @@ TEST_F(QuaternionTest, Inverse_UnitQuaternion)
     Quaternion inv = q.Inverse();
     Quaternion result = q * inv;
 
-    EXPECT_TRUE(NearEqual(result, Quaternion::Identity()));
+    EXPECT_TRUE(NearEqual(result, Quaternion::Identity));
 }
 
 TEST_F(QuaternionTest, Inverse_NonUnitQuaternion)
@@ -491,12 +491,12 @@ TEST_F(QuaternionTest, Inverse_NonUnitQuaternion)
     Quaternion inv = q.Inverse();
     Quaternion result = q * inv;
 
-    EXPECT_TRUE(NearEqual(result, Quaternion::Identity()));
+    EXPECT_TRUE(NearEqual(result, Quaternion::Identity));
 }
 
 TEST_F(QuaternionTest, Inverse_Identity)
 {
-    Quaternion identity = Quaternion::Identity();
+    Quaternion identity = Quaternion::Identity;
 
     Quaternion inv = identity.Inverse();
 
@@ -556,7 +556,7 @@ TEST_F(QuaternionTest, Angle_OppositeQuaternions)
 // Rotation Tests
 TEST_F(QuaternionTest, Rotate_Identity)
 {
-    Quaternion identity = Quaternion::Identity();
+    Quaternion identity = Quaternion::Identity;
     Vector3 v(1.0f, 2.0f, 3.0f);
 
     Vector3 result = identity.Rotate(v);
@@ -622,7 +622,7 @@ TEST_F(QuaternionTest, Rotate_VectorMultiplicationOperator)
 // Euler Angles Conversion Tests
 TEST_F(QuaternionTest, ToEulerAngles_Identity)
 {
-    Quaternion identity = Quaternion::Identity();
+    Quaternion identity = Quaternion::Identity;
 
     Vector3 euler = identity.ToEulerAngles();
 
@@ -648,7 +648,7 @@ TEST_F(QuaternionTest, EulerAngles_RoundTrip)
 // Matrix Conversion Tests
 TEST_F(QuaternionTest, ToMatrix_Identity)
 {
-    Quaternion identity = Quaternion::Identity();
+    Quaternion identity = Quaternion::Identity;
 
     auto matrix = identity.ToMatrix();
 
@@ -747,7 +747,7 @@ TEST_F(QuaternionTest, Slerp_ResultIsNormalized)
 TEST_F(QuaternionTest, Slerp_MidpointRotation)
 {
     // Rotate from 0 to 90 degrees around Y
-    Quaternion a = Quaternion::Identity();
+    Quaternion a = Quaternion::Identity;
     Quaternion b = Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), std::numbers::pi_v<float> / 2.0f);
 
     Quaternion mid = Quaternion::Slerp(a, b, 0.5f);
@@ -762,7 +762,7 @@ TEST_F(QuaternionTest, Slerp_MidpointRotation)
 
 TEST_F(QuaternionTest, IsIdentity_True)
 {
-    Quaternion q = Quaternion::Identity();
+    Quaternion q = Quaternion::Identity;
 
     EXPECT_TRUE(q.IsIdentity());
 }
@@ -789,7 +789,7 @@ TEST_F(QuaternionTest, Normalize_VerySmallQuaternion)
     Quaternion normalized = q.Normalized();
 
     // Should return identity for near-zero quaternion
-    EXPECT_TRUE(NearEqual(normalized, Quaternion::Identity()));
+    EXPECT_TRUE(NearEqual(normalized, Quaternion::Identity));
 }
 
 TEST_F(QuaternionTest, Inverse_VerySmallQuaternion)
@@ -799,12 +799,12 @@ TEST_F(QuaternionTest, Inverse_VerySmallQuaternion)
     Quaternion inv = q.Inverse();
 
     // Should return identity for near-zero quaternion
-    EXPECT_TRUE(NearEqual(inv, Quaternion::Identity()));
+    EXPECT_TRUE(NearEqual(inv, Quaternion::Identity));
 }
 
 TEST_F(QuaternionTest, Slerp_NearlyParallelQuaternions)
 {
-    Quaternion a = Quaternion::Identity();
+    Quaternion a = Quaternion::Identity;
     Quaternion b(1.0f - 1e-6f, 1e-7f, 1e-7f, 1e-7f);
     b = b.Normalized();
 

@@ -33,6 +33,7 @@ namespace N2Engine
             ~InputSystem();
 
             ActionMap *LoadActionMap(const std::string &name);
+            ActionMap *GetActionMap(const std::string &name);
             void AddActionMap(std::unique_ptr<ActionMap> &&actionMap);
 
             InputSystem &MakeActionMap(const std::string &name, const std::function<void(ActionMap *)> &pActionMap);

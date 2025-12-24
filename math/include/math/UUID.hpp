@@ -12,27 +12,22 @@ namespace N2Engine::Math
     public:
         UUID() = default;
 
-        static std::optional<UUID> FromString(const std::string &string);
         static UUID Random();
+
+        static std::optional<UUID> FromString(const std::string &string);
         [[nodiscard]] std::string ToString() const;
 
-        bool operator==(const UUID &other) const noexcept
-        {
-            return bytes == other.bytes;
-        }
+        static UUID GenerateNameBased(const UUID& namespaceUUID, const std::string& name);
 
-        bool operator!=(const UUID &other) const noexcept
-        {
-            return !(*this == other);
-        }
+        bool operator==(const UUID& other) const = default;
 
         // Expose bytes for hashing (const access only)
-        [[nodiscard]] const std::array<uint8_t, 16> &GetBytes() const noexcept { return bytes; }
+        [[nodiscard]] const std::array<uint8_t, 16> &GetBytes() const noexcept { return _data; }
 
         static const UUID ZERO;
 
     private:
-        std::array<uint8_t, 16> bytes{};
-        explicit UUID(std::array<uint8_t, 16> bytes) : bytes(bytes) {}
+        std::array<uint8_t, 16> _data{};
+        explicit UUID(std::array<uint8_t, 16> bytes) : _data(bytes) {}
     };
 }

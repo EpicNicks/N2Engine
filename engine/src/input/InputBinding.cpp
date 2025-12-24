@@ -45,7 +45,7 @@ InputValue GamepadStickBinding::getValue()
 
         // Apply radial deadzone (better than per-axis deadzone)
         const Vector2 stick(x, y);
-        const float magnitude = stick.Magnitude();
+        const float magnitude = stick.Length();
 
         if (magnitude < deadzone)
         {

@@ -24,6 +24,8 @@ namespace N2Engine::Audio
         // Create from audio data
         bool CreateFromData(const AudioData &data);
 
+        std::string GetResourceType() const override { return "AudioClip"; }
+
         // Unload the audio buffer
         void Unload();
         bool IsLoaded() const { return _buffer != 0; }

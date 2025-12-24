@@ -5,28 +5,25 @@
 
 #include "engine/scheduling/CoroutineWait.hpp"
 
-namespace N2Engine
+namespace N2Engine::Scheduling
 {
-    namespace Scheduling
+    class Coroutine
     {
-        class Coroutine
-        {
-        private:
-            bool _isComplete{false};
-            std::generator<ICoroutineWait> _gen;
-            std::optional<ICoroutineWait> _currentYield;
+    private:
+        bool _isComplete{false};
+        std::generator<ICoroutineWait> _gen;
+        std::optional<ICoroutineWait> _currentYield;
 
-        public:
-            explicit Coroutine(std::generator<ICoroutineWait> gen) : _gen{std::move(gen)} {};
+    public:
+        explicit Coroutine(std::generator<ICoroutineWait> gen) : _gen{std::move(gen)} {};
 
-            Coroutine(const Coroutine &) = delete;
-            Coroutine &operator=(const Coroutine &) = delete;
-            Coroutine(Coroutine &&) = default;
-            Coroutine &operator=(Coroutine &&) = default;
+        Coroutine(const Coroutine &) = delete;
+        Coroutine &operator=(const Coroutine &) = delete;
+        Coroutine(Coroutine &&) = default;
+        Coroutine &operator=(Coroutine &&) = default;
 
-            bool IsComplete() const;
+        bool IsComplete() const;
 
-            bool MoveNext();
-        };
-    }
+        bool MoveNext();
+    };
 }

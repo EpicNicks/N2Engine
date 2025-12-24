@@ -4,6 +4,15 @@
 
 using namespace N2Engine::Math;
 
+const Vector3 Vector3::Zero{0.f, 0.f, 0.f};
+const Vector3 Vector3::One{1.f, 1.f, 1.f};
+const Vector3 Vector3::Up{0.f, 1.f, 0.f};
+const Vector3 Vector3::Down{0.f, -1.f, 0.f};
+const Vector3 Vector3::Left{-1.f, 0.f, 0.f};
+const Vector3 Vector3::Right{1.f, 0.f, 0.f};
+const Vector3 Vector3::Forward{0.f, 0.f, 1.f};
+const Vector3 Vector3::Back{0.f, 0.f, -1.f};
+
 void Vector3::InitializeSIMD()
 {
     if (initialized)
@@ -60,11 +69,11 @@ void Vector3::InitializeSIMD()
         sub_func = &SubSSE2;
         scalar_mul_func = &ScalarMulSSE2;
         scalar_div_func = &ScalarDivSSE2;
-        dot_func = &DotSSE41;             // SSE4.1 dot product
-        cross_func = &CrossSSE2;          // SSE2 is fine for cross product
-        length_func = &LengthSSE41;       // SSE4.1 length
+        dot_func = &DotSSE41; // SSE4.1 dot product
+        cross_func = &CrossSSE2; // SSE2 is fine for cross product
+        length_func = &LengthSSE41; // SSE4.1 length
         normalize_func = &NormalizeSSE41; // SSE4.1 normalize
-        distance_func = &DistanceSSE41;   // SSE4.1 distance
+        distance_func = &DistanceSSE41; // SSE4.1 distance
     }
     else if (features.sse2)
     {

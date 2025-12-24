@@ -67,6 +67,14 @@ namespace N2Engine
         Math::Quaternion GetRotation() const;
         Math::Vector3 GetScale() const;
 
+        // helpers
+        Math::Vector3 GetForward() const;
+        Math::Vector3 GetBack() const;
+        Math::Vector3 GetLeft() const;
+        Math::Vector3 GetRight() const;
+        Math::Vector3 GetUp() const;
+        Math::Vector3 GetDown() const;
+
         void SetPosition(const Math::Vector3 &position);
         void SetRotation(const Math::Quaternion &rotation);
         void SetScale(const Math::Vector3 &scale);

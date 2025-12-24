@@ -50,12 +50,12 @@ void Spin::OnUpdate()
     }
 
     // yes GetComponent every frame is bad, but this is just a test
-    if (const auto quadComponent = _gameObject.GetComponent<N2Engine::Example::QuadRenderer>())
+    if (const auto quadComponent = _gameObject.GetComponent<Example::QuadRenderer>())
     {
         constexpr float pingPongSpeed = 0.5f;
         const float t = N2Engine::Math::Functions::PingPong(Time::GetTime() * pingPongSpeed, 1.0f);
         const Common::Color lerpColor = Common::Color::Lerp(
-            Common::Color::Red(), Common::Color::Blue(), t);
+            Common::Color::Red, Common::Color::Blue, t);
         quadComponent->SetColor(Common::Color{lerpColor});
     }
 

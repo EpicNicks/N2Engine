@@ -47,6 +47,16 @@ ActionMap *InputSystem::LoadActionMap(const std::string &name)
     return nullptr;
 }
 
+ActionMap* InputSystem::GetActionMap(const std::string &name)
+{
+    if (const auto it = _actionMaps.find(name); it != _actionMaps.end())
+    {
+        _curActionMapName = it->first;
+        return GetCurActionMap();
+    }
+    return nullptr;
+}
+
 ActionMap *InputSystem::GetCurActionMap() const
 {
     if (!_curActionMapName.empty() && _actionMaps.contains(_curActionMapName))

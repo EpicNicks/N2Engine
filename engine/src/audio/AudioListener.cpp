@@ -28,8 +28,8 @@ namespace N2Engine::Audio
 
         Positionable *transform = GetGameObject().GetPositionable();
         auto pos = transform->GetGlobalTransform().GetPosition();
-        auto forward = transform->GetGlobalTransform().GetRotation() * Math::Vector3::Forward();
-        auto up = transform->GetGlobalTransform().GetRotation() * Math::Vector3::Up();
+        auto forward = transform->GetForward();
+        auto up = transform->GetUp();
 
         AudioSystem::Instance().SetListenerPosition(pos.x, pos.y, pos.z);
         AudioSystem::Instance().SetListenerOrientation(

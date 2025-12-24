@@ -82,6 +82,21 @@ else()
     message(STATUS "PhysX disabled - no physics backend active")
 endif()
 
+file(GLOB LUA_SOURCES
+        ${CMAKE_SOURCE_DIR}/external/lua/*.c
+)
+# Remove lua.c and luac.c standalone interpreter/compiler
+list(FILTER LUA_SOURCES EXCLUDE REGEX ".*lua\\.c$")
+list(FILTER LUA_SOURCES EXCLUDE REGEX ".*luac\\.c$")
+
+add_library(lua STATIC ${LUA_SOURCES})
+target_include_directories(lua PUBLIC ${CMAKE_SOURCE_DIR}/external/lua)
+
+if(WIN32)
+    set_target_properties(lua PROPERTIES
+            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+endif()
 
 # == Production targets ==
 add_subdirectory(math)

@@ -126,14 +126,14 @@ InputValue InputAction::CalculateCombinedValue() const
     }
 
     // Normalize combined vector if it exceeds unit length (for stick-like behavior)
-    if (combined.Magnitude() > 1.0f)
+    if (combined.Length() > 1.0f)
     {
         combined = combined.Normalized();
     }
 
     // Return the most appropriate type
     // If we have significant vector movement, return that
-    if (combined.Magnitude() > 0.1f)
+    if (combined.Length() > 0.1f)
     {
         return combined;
     }

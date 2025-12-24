@@ -24,7 +24,7 @@ namespace N2Engine::Physics
         float tangentImpulse[2]; // Friction impulses (tangent directions)
 
         ContactPoint()
-            : point(Math::Vector3::Zero()), normal(Math::Vector3::Zero()), separation(0.0f), normalImpulse(0.0f), tangentImpulse{0.0f, 0.0f}
+            : point(Math::Vector3::Zero), normal(Math::Vector3::Zero), separation(0.0f), normalImpulse(0.0f), tangentImpulse{0.0f, 0.0f}
         {
         }
     };
@@ -47,7 +47,7 @@ namespace N2Engine::Physics
         Math::Vector3 impulse;              // Total impulse applied this frame
 
         Collision()
-            : relativeVelocity(Math::Vector3::Zero()), impulse(Math::Vector3::Zero())
+            : relativeVelocity(Math::Vector3::Zero), impulse(Math::Vector3::Zero)
         {
         }
 
@@ -61,9 +61,9 @@ namespace N2Engine::Physics
         [[nodiscard]] Math::Vector3 GetAverageContactPoint() const
         {
             if (contacts.empty())
-                return Math::Vector3::Zero();
+                return Math::Vector3::Zero;
 
-            Math::Vector3 avg = Math::Vector3::Zero();
+            Math::Vector3 avg = Math::Vector3::Zero;
             for (const auto &contact : contacts)
             {
                 avg = avg + contact.point;

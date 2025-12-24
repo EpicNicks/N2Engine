@@ -1,35 +1,36 @@
 #pragma once
 
-#include <math/VectorN.hpp>
+#include <math/Vector4.hpp>
 #include <cstdint>
 
 namespace N2Engine
 {
     namespace Common
     {
-        class Color : public N2Engine::Math::VectorN<float, 4>
+        class Color : public Math::Vector4
         {
-            using N2Engine::Math::VectorN<float, 4>::VectorN;
+            using Vector4::Vector4;
 
         public:
-            float &r = vector[0];
-            float &g = vector[1];
-            float &b = vector[2];
-            float &a = vector[3];
+            float &r = w;
+            float &g = x;
+            float &b = y;
+            float &a = z;
 
-            Color(const Color &other) : VectorN(other) {}
-            Color(const VectorN<float, 4> &other) : VectorN(other) {}
+            Color(const Color &other) : Vector4(other) {}
+            Color(const Vector4& other) : Vector4(other) {}
             Color &operator=(const Color &other);
 
-            static Color White();
-            static Color Black();
-            static Color Red();
-            static Color Green();
-            static Color Blue();
-            static Color Cyan();
-            static Color Yellow();
-            static Color Magenta();
-            static Color Transparent();
+            static const Color White;
+            static const Color Black;
+            static const Color Red;
+            static const Color Green;
+            static const Color Blue;
+            static const Color Cyan;
+            static const Color Yellow;
+            static const Color Magenta;
+            static const Color Transparent;
+
             static Color FromHex(std::uint32_t hexValue);
             std::uint32_t ToHex() const;
         };

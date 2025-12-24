@@ -143,8 +143,10 @@ namespace N2Engine
         void StopAllCoroutines();
 
         // Serialization
-        nlohmann::json Serialize() const;
+        nlohmann::json Serialize() const override;
         static Ptr Deserialize(const nlohmann::json &j, ReferenceResolver *resolver = nullptr);
+
+        std::string GetResourceType() const override { return "GameObject"; }
 
         // Static utility methods
         static Ptr FindGameObjectByName(const std::string &name, Scene *scene);

@@ -1,6 +1,7 @@
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <TinySHA1/TinySHA1.hpp>
 
 #include "math/UUID.hpp"
 
@@ -60,10 +61,10 @@ std::optional<UUID> UUID::FromString(const std::string &str)
         }
         else
         {
-            uuid.bytes[byteIndex++] = current | value;
+            uuid._data[byteIndex++] = current | value;
             highNibble = true;
 
-            if (byteIndex >= uuid.bytes.size())
+            if (byteIndex >= uuid._data.size())
             {
                 break;
             }
@@ -92,14 +93,14 @@ UUID UUID::Random()
     // Fill the bytes
     for (int i = 0; i < 8; ++i)
     {
-        uuid.bytes[i] = static_cast<uint8_t>((high >> (i * 8)) & 0xFF);
-        uuid.bytes[i + 8] = static_cast<uint8_t>((low >> (i * 8)) & 0xFF);
+        uuid._data[i] = static_cast<uint8_t>((high >> (i * 8)) & 0xFF);
+        uuid._data[i + 8] = static_cast<uint8_t>((low >> (i * 8)) & 0xFF);
     }
 
     // Set version to 4 (UUID v4)
-    uuid.bytes[6] = (uuid.bytes[6] & 0x0F) | 0x40;
+    uuid._data[6] = (uuid._data[6] & 0x0F) | 0x40;
     // Set variant to 10x
-    uuid.bytes[8] = (uuid.bytes[8] & 0x3F) | 0x80;
+    uuid._data[8] = (uuid._data[8] & 0x3F) | 0x80;
 
     return uuid;
 }
@@ -110,9 +111,45 @@ std::string UUID::ToString() const
     oss << std::hex << std::setfill('0');
     for (int i = 0; i < 16; ++i)
     {
-        oss << std::setw(2) << static_cast<int>(bytes[i]);
+        oss << std::setw(2) << static_cast<int>(_data[i]);
         if (i == 3 || i == 5 || i == 7 || i == 9)
             oss << "-";
     }
     return oss.str();
+}
+
+// UUID v5 implementation using TinySHA1
+UUID UUID::GenerateNameBased(const UUID& namespaceUUID, const std::string& name)
+{
+    std::vector<uint8_t> data;
+
+    const auto& nsBytes = namespaceUUID.GetBytes();
+    data.insert(data.end(), nsBytes.begin(), nsBytes.end());
+    data.insert(data.end(), name.begin(), name.end());
+
+    sha1::SHA1 sha;
+    sha.processBytes(data.data(), data.size());
+
+    uint32_t digest[5];          // SHA-1 = 160 bits = 5 × 32-bit words
+    sha.getDigest(digest);
+
+    // Convert digest words to bytes (big-endian)
+    uint8_t hash[20];
+    for (int i = 0; i < 5; ++i)
+    {
+        hash[i * 4 + 0] = static_cast<uint8_t>((digest[i] >> 24) & 0xFF);
+        hash[i * 4 + 1] = static_cast<uint8_t>((digest[i] >> 16) & 0xFF);
+        hash[i * 4 + 2] = static_cast<uint8_t>((digest[i] >> 8) & 0xFF);
+        hash[i * 4 + 3] = static_cast<uint8_t>((digest[i]) & 0xFF);
+    }
+
+    // Create UUID from first 16 bytes of hash
+    UUID result;
+    std::memcpy(result._data.data(), hash, 16);
+
+    // Set version (5) and variant bits (RFC 4122)
+    result._data[6] = (result._data[6] & 0x0F) | 0x50; // Version 5
+    result._data[8] = (result._data[8] & 0x3F) | 0x80; // Variant
+
+    return result;
 }

@@ -15,7 +15,7 @@ class GLFWwindow;
 
 namespace N2Engine::Math
 {
-    struct Vector2;
+    class Vector2;
 }
 
 namespace N2Engine::Input

@@ -114,15 +114,15 @@ namespace N2Engine::Math
             return VectorN<float, 3>{x, y, z};
         }
 
-        // Static factory methods
-        static Vector3 Zero() { return {0.0f, 0.0f, 0.0f}; }
-        static Vector3 One() { return {1.0f, 1.0f, 1.0f}; }
-        static Vector3 Up() { return {0.0f, 1.0f, 0.0f}; }
-        static Vector3 Down() { return {0.0f, -1.0f, 0.0f}; }
-        static Vector3 Left() { return {-1.0f, 0.0f, 0.0f}; }
-        static Vector3 Right() { return {1.0f, 0.0f, 0.0f}; }
-        static Vector3 Forward() { return {0.0f, 0.0f, 1.0f}; }
-        static Vector3 Back() { return {0.0f, 0.0f, -1.0f}; }
+        // Static constant helpers
+        static const Vector3 Zero;
+        static const Vector3 One;
+        static const Vector3 Up;
+        static const Vector3 Down;
+        static const Vector3 Left;
+        static const Vector3 Right;
+        static const Vector3 Forward;
+        static const Vector3 Back;
 
         // SIMD-optimized basic operations
         Vector3 operator+(const Vector3 &other) const
@@ -355,7 +355,7 @@ namespace N2Engine::Math
             const float dot = Dot(onto);
             const float ontoMagSq = onto.Dot(onto);
             if (ontoMagSq == 0.0f)
-                return Zero();
+                return Zero;
             return scalar_mul_func(onto, dot / ontoMagSq);
         }
 
@@ -563,7 +563,7 @@ namespace N2Engine::Math
         {
             if (std::abs(scalar) < Constants::EPSILON)
             {
-                return Zero();
+                return Zero;
             }
             const float inv_scalar = 1.0f / scalar;
             return {v.x * inv_scalar, v.y * inv_scalar, v.z * inv_scalar};
@@ -593,7 +593,7 @@ namespace N2Engine::Math
             const float length = LengthScalar(v);
             if (length < Constants::EPSILON)
             {
-                return Zero();
+                return Zero;
             }
             const float inv_length = 1.0f / length;
             return {v.x * inv_length, v.y * inv_length, v.z * inv_length};
@@ -691,7 +691,7 @@ namespace N2Engine::Math
         {
             if (std::abs(scalar) < Constants::EPSILON)
             {
-                return Zero();
+                return Zero;
             }
             Vector3 result;
             __m128 scalar_vec = _mm_set1_ps(scalar);
@@ -737,7 +737,7 @@ namespace N2Engine::Math
             float length_sq = DotSSE2(v, v);
             if (length_sq < Constants::EPSILON * Constants::EPSILON)
             {
-                return Zero();
+                return Zero;
             }
 
             Vector3 result;
@@ -820,7 +820,7 @@ namespace N2Engine::Math
 
             if (_mm_movemask_ps(mask) != 0)
             {
-                return Zero();
+                return Zero;
             }
 
             Vector3 result;

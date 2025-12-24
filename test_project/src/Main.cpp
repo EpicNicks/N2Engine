@@ -298,15 +298,15 @@ void TestEngine()
     // TO MOVE TO GUI SCENE EDITOR
     auto testScene = Scene::Create("Test Scene");
     application.Init(std::move(testScene));
-    application.GetWindow().clearColor = Common::Color::Magenta();
+    application.GetWindow().clearColor = Common::Color::Magenta;
 
     application.GetWindow().SetWindowMode(WindowMode::Windowed);
 
     const auto quadObject = GameObject::Create("TestQuad");
     auto *cubeRenderer = quadObject->AddComponent<Example::CubeRenderer>();
-    cubeRenderer->SetColor(Common::Color::Blue());
+    cubeRenderer->SetColor(Common::Color::Blue);
     auto *boxCollider = quadObject->AddComponent<Physics::BoxCollider>();
-    boxCollider->SetSize(N2Engine::Math::Vector3::One());
+    boxCollider->SetSize(N2Engine::Math::Vector3::One);
     auto *rigidbody = quadObject->AddComponent<Physics::Rigidbody>();
     rigidbody->SetBodyType(Physics::BodyType::Dynamic);
     rigidbody->SetGravityEnabled(true);
@@ -319,7 +319,7 @@ void TestEngine()
     auto *sphereComponent = sphereObject->AddComponent<Example::SphereRenderer>();
     constexpr float sphereSize = 1.0f;
     sphereComponent->SetRadius(sphereSize);
-    sphereComponent->SetColor(Common::Color::Red());
+    sphereComponent->SetColor(Common::Color::Red);
     auto *sphereCollider = sphereObject->AddComponent<Physics::SphereCollider>();
     sphereCollider->SetRadius(sphereSize);
     auto *sphereRigidbody = sphereObject->AddComponent<Physics::Rigidbody>();

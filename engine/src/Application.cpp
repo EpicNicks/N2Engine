@@ -8,6 +8,7 @@
 #include "engine/Logger.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
+#include "engine/scripting/LuaRuntime.hpp"
 
 using namespace N2Engine;
 
@@ -32,6 +33,7 @@ void Application::Init()
 #ifdef N2ENGINE_DEBUG
     Logger::InitializeDebugConsoleHelper();
 #endif
+    Scripting::LuaRuntime::Instance().Initialize();
     Math::InitializeSIMD();
     Time::Init();
     _window.InitWindow();

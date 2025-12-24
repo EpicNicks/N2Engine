@@ -142,6 +142,36 @@ void Positionable::SetLocalPositionAndRotation(const Math::Vector3 &position, co
     }
 }
 
+Vector3 Positionable::GetForward() const
+{
+    return GetRotation() * Vector3::Forward;
+}
+
+Vector3 Positionable::GetBack() const
+{
+    return GetRotation() * Vector3::Back;
+}
+
+Vector3 Positionable::GetLeft() const
+{
+    return GetRotation() * Vector3::Left;
+}
+
+Vector3 Positionable::GetRight() const
+{
+    return GetRotation() * Vector3::Right;
+}
+
+Vector3 Positionable::GetUp() const
+{
+    return GetRotation() * Vector3::Up;
+}
+
+Vector3 Positionable::GetDown() const
+{
+    return GetRotation() * Vector3::Down;
+}
+
 void Positionable::NotifyPhysicsComponents() const
 {
     if (_attachedRigidbody && !_attachedRigidbody->IsDestroyed() || (_attachedRigidbody = _gameObject.GetComponent<Physics::Rigidbody>()))

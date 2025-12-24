@@ -13,7 +13,7 @@ namespace N2Engine
 
     private:
         Math::Vector3 _position{0.0f, 0.0f, 0.0f};
-        Math::Quaternion _rotation = Math::Quaternion::Identity();
+        Math::Quaternion _rotation = Math::Quaternion::Identity;
         Math::Vector3 _scale{1.0f, 1.0f, 1.0f};
 
         mutable Matrix4 _cachedMatrix;

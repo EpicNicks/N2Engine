@@ -55,8 +55,8 @@ namespace N2Engine::Example
         Renderer::Common::IRenderer *_cachedRenderer = nullptr;
 
         // Rendering properties (common to all polygon renderers)
-        Common::Color _color{Common::Color::White()};
-        Math::Vector3 _size{Math::Vector3::One()};
+        Common::Color _color{Common::Color::White};
+        Math::Vector3 _size{Math::Vector3::One};
 
     public:
         explicit PolygonRenderer(GameObject& gameObject) : IRenderable(gameObject)

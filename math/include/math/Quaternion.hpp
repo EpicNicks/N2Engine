@@ -73,10 +73,7 @@ namespace N2Engine::Math
         float GetZ() const { return z; }
 
         // Static factory methods
-        static Quaternion Identity()
-        {
-            return Quaternion(1.0f, 0.0f, 0.0f, 0.0f);
-        }
+        static const Quaternion Identity;
 
         static Quaternion FromAxisAngle(const Vector3 &axis, float angle)
         {
@@ -242,7 +239,7 @@ namespace N2Engine::Math
             float length = LengthScalar(q);
             if (length < EPSILON)
             {
-                return Identity();
+                return Identity;
             }
             float inv_length = 1.0f / length;
             return Quaternion(q.w * inv_length, q.x * inv_length, q.y * inv_length, q.z * inv_length);
@@ -303,7 +300,7 @@ namespace N2Engine::Math
             float length_sq = DotSSE2(q, q);
             if (length_sq < EPSILON * EPSILON)
             {
-                return Identity();
+                return Identity;
             }
 
             Quaternion result;

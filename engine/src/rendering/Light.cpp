@@ -42,7 +42,7 @@ namespace N2Engine::Rendering
             if (const auto positionable = _gameObject.GetPositionable())
             {
                 const auto rotation = positionable->GetRotation();
-                return (rotation * Math::Vector3::Forward()).Normalized();
+                return (rotation * Math::Vector3::Forward).Normalized();
             }
         }
         return direction.Normalized();

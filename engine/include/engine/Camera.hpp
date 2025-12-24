@@ -49,7 +49,7 @@ namespace N2Engine
         mutable bool _projectionDirty = true;
 
         Math::Vector3 _position{0.0f, 0.0f, 0.0f};
-        Math::Quaternion _rotation = Math::Quaternion::Identity();
+        Math::Quaternion _rotation = Math::Quaternion::Identity;
         float _fov = 45.0f;
         float _aspectRatio = 16.0f / 9.0f;
         float _nearPlane = 0.1f;

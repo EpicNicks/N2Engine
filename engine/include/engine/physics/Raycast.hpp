@@ -18,8 +18,8 @@ namespace N2Engine::Physics
     struct RaycastHit
     {
         bool hit = false;
-        Math::Vector3 point = Math::Vector3::Zero();
-        Math::Vector3 normal = Math::Vector3::Zero();
+        Math::Vector3 point = Math::Vector3::Zero;
+        Math::Vector3 normal = Math::Vector3::Zero;
         float distance = 0.0f;
 
         GameObject* gameObject = nullptr;

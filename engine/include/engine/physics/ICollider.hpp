@@ -48,7 +48,7 @@ namespace N2Engine::Physics
 
         bool _isTrigger = false;
         PhysicsMaterial _material = PhysicsMaterial::Default();
-        Math::Vector3 _offset = Math::Vector3::Zero();
+        Math::Vector3 _offset = Math::Vector3::Zero;
 
     private:
         PhysicsBodyHandle _handle;

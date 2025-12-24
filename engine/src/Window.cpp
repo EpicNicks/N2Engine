@@ -13,7 +13,7 @@ using namespace N2Engine;
 Window::Window()
     : _window(nullptr),
       _renderer(nullptr),
-      clearColor(Common::Color::Black()),
+      clearColor(Common::Color::Black),
       _windowMode(WindowMode::Windowed)
 {
 }

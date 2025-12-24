@@ -54,7 +54,7 @@ namespace N2Engine::Math
         {
             if (q.LengthSquared() < 1e-6f)
             {
-                q = Quaternion::Identity();
+                q = Quaternion::Identity;
             }
             else
             {

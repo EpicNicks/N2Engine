@@ -12,6 +12,8 @@
 
 using namespace N2Engine::Math;
 
+const Quaternion Quaternion::Identity = {1.0f, 0.0f, 0.0f, 0.0f};
+
 // Constructor implementations
 Quaternion::Quaternion(const Vector3 &axis, float angle)
 {
@@ -129,7 +131,7 @@ Quaternion Quaternion::operator/(float scalar) const
     return *this * invScalar;
 }
 
-Quaternion &Quaternion::operator/=(float scalar)
+Quaternion& Quaternion::operator/=(float scalar)
 {
     float invScalar = 1.0f / scalar;
     *this *= invScalar;
@@ -139,9 +141,9 @@ Quaternion &Quaternion::operator/=(float scalar)
 bool Quaternion::operator==(const Quaternion &other) const
 {
     return std::abs(w - other.w) < EPSILON &&
-           std::abs(x - other.x) < EPSILON &&
-           std::abs(y - other.y) < EPSILON &&
-           std::abs(z - other.z) < EPSILON;
+        std::abs(x - other.x) < EPSILON &&
+        std::abs(y - other.y) < EPSILON &&
+        std::abs(z - other.z) < EPSILON;
 }
 
 bool Quaternion::operator!=(const Quaternion &other) const
@@ -153,7 +155,7 @@ Quaternion Quaternion::Inverse() const
 {
     float lengthSq = LengthSquared();
     if (lengthSq < EPSILON)
-        return Identity();
+        return Identity;
     return Conjugate() / lengthSq;
 }
 
@@ -242,9 +244,9 @@ bool Quaternion::IsNormalized(const float tolerance) const
 bool Quaternion::IsIdentity(const float tolerance) const
 {
     return std::abs(w - 1.0f) <= tolerance &&
-           std::abs(x) <= tolerance &&
-           std::abs(y) <= tolerance &&
-           std::abs(z) <= tolerance;
+        std::abs(x) <= tolerance &&
+        std::abs(y) <= tolerance &&
+        std::abs(z) <= tolerance;
 }
 
 // SIMD initialization
@@ -262,8 +264,8 @@ void Quaternion::InitializeSIMD()
         sub_func = &SubSSE2;
         mul_func = &MulSSE2;
         scalar_mul_func = &ScalarMulSSE2;
-        dot_func = &DotSSE41;             // SSE4.1 has better dot product
-        length_func = &LengthSSE41;       // SSE4.1 has better sqrt
+        dot_func = &DotSSE41; // SSE4.1 has better dot product
+        length_func = &LengthSSE41; // SSE4.1 has better sqrt
         normalize_func = &NormalizeSSE41; // SSE4.1 has better normalization
     }
     else if (features.sse2)

@@ -244,27 +244,27 @@ namespace N2Engine::Physics
     Math::Vector3 Rigidbody::GetVelocity() const
     {
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
-            return Math::Vector3::Zero();
+            return Math::Vector3::Zero;
 
         if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             return backend->GetVelocity(_handle);
         }
 
-        return Math::Vector3::Zero();
+        return Math::Vector3::Zero;
     }
 
     Math::Vector3 Rigidbody::GetAngularVelocity() const
     {
         if (!_handle.IsValid() || _bodyType != BodyType::Dynamic)
-            return Math::Vector3::Zero();
+            return Math::Vector3::Zero;
 
         if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             return backend->GetAngularVelocity(_handle);
         }
 
-        return Math::Vector3::Zero();
+        return Math::Vector3::Zero;
     }
 
     void Rigidbody::OnTransformChanged() const
