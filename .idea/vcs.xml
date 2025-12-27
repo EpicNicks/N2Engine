@@ -3,6 +3,8 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/build/_deps/glfw-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build/_deps/openal-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/cmake-build-debug-visual-studio/_deps/glfw-src" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/cmake-build-debug-visual-studio/_deps/openal-src" vcs="Git" />
   </component>
 </project>

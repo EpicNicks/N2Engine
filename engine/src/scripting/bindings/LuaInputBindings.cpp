@@ -5,15 +5,17 @@
 #include "engine/Window.hpp"
 #include "engine/Application.hpp"
 #include "engine/input/InputSystem.hpp"
+#include "engine/input/Mouse.hpp"
 
 namespace N2Engine::Scripting::Bindings
 {
-    void BindInput(LuaRuntime& runtime)
+    void BindInput(LuaRuntime &runtime)
     {
-        auto& lua = runtime.GetState();
+        auto &lua = runtime.GetState();
 
         // ===== ActionPhase Enum =====
-        lua.new_enum("ActionPhase",
+        lua.new_enum(
+            "ActionPhase",
             "Waiting", Input::ActionPhase::Waiting,
             "Started", Input::ActionPhase::Started,
             "Performed", Input::ActionPhase::Performed,
@@ -21,7 +23,8 @@ namespace N2Engine::Scripting::Bindings
         );
 
         // ===== InputValue =====
-        lua.new_usertype<Input::InputValue>("InputValue",
+        lua.new_usertype<Input::InputValue>(
+            "InputValue",
             sol::no_constructor,
 
             "GetBool", &Input::InputValue::asBool,
@@ -29,8 +32,24 @@ namespace N2Engine::Scripting::Bindings
             "GetVector2", &Input::InputValue::asVector2
         );
 
+        lua.new_usertype<Input::Mouse>(
+            "Mouse",
+            sol::no_constructor,
+            "GetScrollDelta", &Input::Mouse::GetScrollDelta,
+            "GetPosition", &Input::Mouse::GetPosition,
+            "GetPositionDelta", &Input::Mouse::GetPositionDelta
+        );
+
+        lua["Mouse"] = lua.create_table_with(
+            "Get", []() -> Input::Mouse*
+            {
+                return Input::Mouse::Get();
+            }
+        );
+
         // ===== InputAction =====
-        lua.new_usertype<Input::InputAction>("InputAction",
+        lua.new_usertype<Input::InputAction>(
+            "InputAction",
             sol::no_constructor,
 
             // Phase queries
@@ -51,44 +70,58 @@ namespace N2Engine::Scripting::Bindings
             "GetName", &Input::InputAction::GetName,
 
             // Event subscription (returns subscription ID for unsubscribe)
-            "Subscribe", [](Input::InputAction& action, sol::function callback) -> size_t {
-                return action.GetOnStateChanged() += [callback](Input::InputAction& act) {
+            "Subscribe", [](Input::InputAction &action, sol::function callback) -> size_t
+            {
+                return action.GetOnStateChanged() += [callback](Input::InputAction &act)
+                {
                     auto result = callback(std::ref(act));
-                    if (!result.valid()) {
+                    if (!result.valid())
+                    {
                         sol::error err = result;
                         Logger::Error(std::format("InputAction callback error: {}", err.what()));
                     }
                 };
             },
 
-            "Unsubscribe", [](Input::InputAction& action, size_t id) {
+            "Unsubscribe", [](Input::InputAction &action, size_t id)
+            {
                 action.GetOnStateChanged() -= id;
             },
 
             // Access to the event handler directly
-            "OnStateChanged", [](Input::InputAction& action) -> Base::EventHandler<Input::InputAction&>& {
+            "OnStateChanged", [](Input::InputAction &action) -> Base::EventHandler<Input::InputAction&>&
+            {
                 return action.GetOnStateChanged();
             }
         );
 
         // ===== ActionMap =====
-        lua.new_usertype<Input::ActionMap>("ActionMap",
+        lua.new_usertype<Input::ActionMap>(
+            "ActionMap",
             sol::no_constructor,
 
             // Access actions
-            "Get", [](Input::ActionMap& map, const std::string& actionName) -> Input::InputAction* {
-                try {
+            "Get", [](Input::ActionMap &map, const std::string &actionName) -> Input::InputAction*
+            {
+                try
+                {
                     return &map[actionName];
-                } catch (...) {
+                }
+                catch (...)
+                {
                     return nullptr;
                 }
             },
 
             // Operator[] support
-            sol::meta_function::index, [](Input::ActionMap& map, const std::string& actionName) -> Input::InputAction* {
-                try {
+            sol::meta_function::index, [](Input::ActionMap &map, const std::string &actionName) -> Input::InputAction*
+            {
+                try
+                {
                     return &map[actionName];
-                } catch (...) {
+                }
+                catch (...)
+                {
                     return nullptr;
                 }
             },
@@ -100,21 +133,23 @@ namespace N2Engine::Scripting::Bindings
 
         // ===== Input Global =====
         lua["Input"] = lua.create_table_with(
-            "GetActionMap", [](const std::string& mapName) -> Input::ActionMap* {
-                auto* app = &Application::GetInstance();
+            "GetActionMap", [](const std::string &mapName) -> Input::ActionMap*
+            {
+                auto *app = &Application::GetInstance();
                 if (!app) return nullptr;
 
-                auto* inputSystem = app->GetWindow().GetInputSystem();
+                auto *inputSystem = app->GetWindow().GetInputSystem();
                 if (!inputSystem) return nullptr;
 
                 return inputSystem->GetActionMap(mapName);
             },
 
-            "LoadActionMap", [](const std::string& mapName) -> Input::ActionMap* {
-                auto* app = &Application::GetInstance();
+            "LoadActionMap", [](const std::string &mapName) -> Input::ActionMap*
+            {
+                auto *app = &Application::GetInstance();
                 if (!app) return nullptr;
 
-                auto* inputSystem = app->GetWindow().GetInputSystem();
+                auto *inputSystem = app->GetWindow().GetInputSystem();
                 if (!inputSystem) return nullptr;
 
                 return inputSystem->LoadActionMap(mapName);

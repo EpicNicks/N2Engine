@@ -7,9 +7,18 @@
 #include "engine/Window.hpp"
 
 #define GLFW_INCLUDE_NONE
-#include <glfw/glfw3.h>
+#include <GLFW/glfw3.h>
+
+#include "engine/input/Mouse.hpp"
 
 using namespace N2Engine::Input;
+
+InputSystem::InputSystem(Window &window)
+    : _window{window}
+{
+    _mouse = std::make_unique<Mouse>(_window._window);
+    glfwSetWindowUserPointer(_window._window, _mouse.get());
+}
 
 InputSystem::~InputSystem() = default;
 
@@ -25,7 +34,7 @@ void InputSystem::AddActionMap(std::unique_ptr<ActionMap> &&actionMap)
     }
 }
 
-InputSystem &InputSystem::MakeActionMap(const std::string &name, const std::function<void(ActionMap *)> &pActionMap)
+InputSystem& InputSystem::MakeActionMap(const std::string &name, const std::function<void(ActionMap *)> &pActionMap)
 {
     auto actionMap = std::make_unique<ActionMap>(name);
     pActionMap(actionMap.get());
@@ -33,7 +42,7 @@ InputSystem &InputSystem::MakeActionMap(const std::string &name, const std::func
     return *this;
 }
 
-ActionMap *InputSystem::LoadActionMap(const std::string &name)
+ActionMap* InputSystem::LoadActionMap(const std::string &name)
 {
     if (_curActionMapName == name)
     {
@@ -57,7 +66,7 @@ ActionMap* InputSystem::GetActionMap(const std::string &name)
     return nullptr;
 }
 
-ActionMap *InputSystem::GetCurActionMap() const
+ActionMap* InputSystem::GetCurActionMap() const
 {
     if (!_curActionMapName.empty() && _actionMaps.contains(_curActionMapName))
     {
@@ -81,7 +90,9 @@ std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
             else
             {
                 const char *name = glfwGetJoystickName(i);
-                result.push_back(name != nullptr ? GamepadInfo{"Unrecognized Gamepad Mapping: " + std::string(name), i} : GamepadInfo{"Namless Unrecognized Gamepad Mapping", i});
+                result.push_back(name != nullptr
+                                     ? GamepadInfo{"Unrecognized Gamepad Mapping: " + std::string(name), i}
+                                     : GamepadInfo{"Namless Unrecognized Gamepad Mapping", i});
             }
         }
     }
@@ -90,6 +101,8 @@ std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
 
 void InputSystem::Update()
 {
+    _mouse->Update();
+
     if (const auto it = _actionMaps.find(_curActionMapName); it != _actionMaps.end())
     {
         it->second->Update();
@@ -99,14 +112,14 @@ void InputSystem::Update()
 nlohmann::json InputSystem::Serialize() const
 {
     nlohmann::json mapsJson;
-    for (const auto& [mapName, actionMap] : _actionMaps)
+    for (const auto &[mapName, actionMap] : _actionMaps)
     {
         mapsJson[mapName] = actionMap->Serialize();
     }
     return {{"actionMaps", mapsJson}};
 }
 
-bool InputSystem::Deserialize(const nlohmann::json& j)
+bool InputSystem::Deserialize(const nlohmann::json &j)
 {
     if (!j.contains("actionMaps") || !j["actionMaps"].is_object())
     {
@@ -116,7 +129,7 @@ bool InputSystem::Deserialize(const nlohmann::json& j)
     // Build new maps first, only commit if successful
     std::unordered_map<std::string, std::unique_ptr<ActionMap>> newMaps;
 
-    for (const auto& [mapName, mapJson] : j["actionMaps"].items())
+    for (const auto &[mapName, mapJson] : j["actionMaps"].items())
     {
         if (!mapJson.contains("actions") || !mapJson["actions"].is_object())
         {
@@ -126,7 +139,7 @@ bool InputSystem::Deserialize(const nlohmann::json& j)
         auto actionMap = std::make_unique<ActionMap>(mapName);
         actionMap->disabled = mapJson.value("disabled", false);
 
-        for (const auto& [actionName, actionJson] : mapJson["actions"].items())
+        for (const auto &[actionName, actionJson] : mapJson["actions"].items())
         {
             if (!actionJson.contains("bindings") || !actionJson["bindings"].is_array())
             {
@@ -136,7 +149,7 @@ bool InputSystem::Deserialize(const nlohmann::json& j)
 
             auto inputAction = std::make_unique<InputAction>(actionName);
 
-            for (const auto& bindingJson : actionJson["bindings"])
+            for (const auto &bindingJson : actionJson["bindings"])
             {
                 if (auto binding = CreateBindingFromJson(_window._window, bindingJson); binding.has_value())
                 {

@@ -2,7 +2,7 @@
 #include <nlohmann/json.hpp>
 #include "engine/input/InputTypes.hpp"
 
-class GLFWwindow;
+struct GLFWwindow;
 
 namespace N2Engine
 {
@@ -113,6 +113,11 @@ namespace N2Engine::Input
         InputValue getValue() override;
         [[nodiscard]] BindingType GetType() const override { return BindingType::MouseButton; }
         [[nodiscard]] nlohmann::json Serialize() const override;
+    };
+
+    class MouseWheelBinding : public InputBinding
+    {
+
     };
 
     class GamepadButtonBinding : public InputBinding

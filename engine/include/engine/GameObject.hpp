@@ -72,6 +72,7 @@ namespace N2Engine
     public:
         // Construction
         static Ptr Create(const std::string &name = "GameObject");
+        GameObject();
         explicit GameObject(std::string name);
 
         // Basic properties

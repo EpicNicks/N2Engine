@@ -7,45 +7,48 @@
 
 #include <nlohmann/json.hpp>
 
+struct GLFWwindow;
+
 namespace N2Engine
 {
     class Window;
+}
 
-    namespace Input
+namespace N2Engine::Input
+{
+    class Mouse;
+    class ActionMap;
+
+    struct GamepadInfo
     {
-        class ActionMap;
+        std::string name;
+        int gamepadId;
+    };
 
-        struct GamepadInfo
-        {
-            std::string name;
-            int gamepadId;
-        };
+    class InputSystem
+    {
+    private:
+        Window &_window;
+        std::unordered_map<std::string, std::unique_ptr<ActionMap>> _actionMaps;
+        std::string _curActionMapName;
+        std::unique_ptr<Mouse> _mouse;
 
-        class InputSystem
-        {
-        private:
-            Window &_window;
-            std::unordered_map<std::string, std::unique_ptr<ActionMap>> _actionMaps;
-            std::string _curActionMapName;
+    public:
+        explicit InputSystem(Window &window);
+        ~InputSystem();
 
-        public:
-            explicit InputSystem(Window &window) : _window{window} {};
-            ~InputSystem();
+        ActionMap* LoadActionMap(const std::string &name);
+        ActionMap* GetActionMap(const std::string &name);
+        void AddActionMap(std::unique_ptr<ActionMap> &&actionMap);
+        InputSystem& MakeActionMap(const std::string &name, const std::function<void(ActionMap *)> &pActionMap);
+        [[nodiscard]] ActionMap* GetCurActionMap() const;
 
-            ActionMap *LoadActionMap(const std::string &name);
-            ActionMap *GetActionMap(const std::string &name);
-            void AddActionMap(std::unique_ptr<ActionMap> &&actionMap);
+        static std::vector<GamepadInfo> GetConnectedGamepads();
+        [[nodiscard]] Mouse* GetMouse() const { return _mouse.get(); }
 
-            InputSystem &MakeActionMap(const std::string &name, const std::function<void(ActionMap *)> &pActionMap);
+        void Update();
 
-            ActionMap *GetCurActionMap() const;
-
-            static std::vector<GamepadInfo> GetConnectedGamepads();
-
-            void Update();
-
-            nlohmann::json Serialize() const;
-            bool Deserialize(const nlohmann::json& j);
-        };
-    }
+        [[nodiscard]] nlohmann::json Serialize() const;
+        bool Deserialize(const nlohmann::json &j);
+    };
 }

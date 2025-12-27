@@ -23,11 +23,13 @@ GameObject::Ptr GameObject::Create(const std::string &name)
 }
 
 // GameObject starts active by default
-GameObject::GameObject(std::string name) :
-    _name(std::move(name)),
-    _positionable{nullptr}
-{
-}
+GameObject::GameObject()
+    : _name{"GameObject"},
+      _positionable{nullptr} {}
+
+GameObject::GameObject(std::string name)
+    : _name(std::move(name)),
+      _positionable{nullptr} {}
 
 void GameObject::Purge()
 {
@@ -344,9 +346,10 @@ bool GameObject::RemoveComponent(const std::type_index &type)
 
         // Remove from vector
         if (const auto vecIt = std::ranges::find_if(_components,
-            [component](const std::unique_ptr<Component>& ptr) {
-                return ptr.get() == component;
-            }); vecIt != _components.end())
+                                                    [component](const std::unique_ptr<Component> &ptr)
+                                                    {
+                                                        return ptr.get() == component;
+                                                    }); vecIt != _components.end())
         {
             _components.erase(vecIt);
         }
@@ -404,21 +407,23 @@ bool GameObject::IsDestroyed() const
     return _isMarkedForDestruction;
 }
 
-Scheduling::Coroutine *GameObject::StartCoroutine(std::generator<N2Engine::Scheduling::ICoroutineWait> &&coroutine)
+Scheduling::Coroutine* GameObject::StartCoroutine(std::generator<N2Engine::Scheduling::ICoroutineWait> &&coroutine)
 {
     return SceneManager::GetCurSceneRef().GetCoroutineScheduler()->StartCoroutine(this, std::move(coroutine));
 }
+
 bool GameObject::StopCoroutine(Scheduling::Coroutine *coroutine)
 {
     return SceneManager::GetCurSceneRef().GetCoroutineScheduler()->StopCoroutine(this, coroutine);
 }
+
 void GameObject::StopAllCoroutines()
 {
     SceneManager::GetCurSceneRef().GetCoroutineScheduler()->StopAllCoroutines(this);
 }
 
 // Utility methods
-bool GameObject::IsChildOf(const Ptr& potentialParent) const
+bool GameObject::IsChildOf(const Ptr &potentialParent) const
 {
     if (!potentialParent)
         return false;
@@ -433,7 +438,7 @@ bool GameObject::IsChildOf(const Ptr& potentialParent) const
     return false;
 }
 
-bool GameObject::IsParentOf(const Ptr& potentialChild)
+bool GameObject::IsParentOf(const Ptr &potentialChild)
 {
     return potentialChild ? potentialChild->IsChildOf(shared_from_this()) : false;
 }
@@ -628,7 +633,7 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
 
                 component->Deserialize(compJson["data"], resolver);
 
-                auto* rawPtr = component.get();
+                auto *rawPtr = component.get();
                 std::type_index typeIdx(typeid(*rawPtr));
 
                 go->_components.push_back(std::move(component));

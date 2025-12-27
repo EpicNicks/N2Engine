@@ -11,7 +11,7 @@
 #include "engine/input/InputValue.hpp"
 #include "nlohmann/json.hpp"
 
-class GLFWwindow;
+struct GLFWwindow;
 
 namespace N2Engine::Math
 {
