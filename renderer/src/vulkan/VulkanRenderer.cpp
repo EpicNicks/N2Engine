@@ -816,3 +816,8 @@ Renderer::Common::IShader* VulkanRenderer::GetStandardLitShader() const
 {
     return nullptr; // Stub implementation
 }
+
+void VulkanRenderer::ReadFramebuffer(std::uint8_t *buffer, int width, int height) const
+{
+    // stub
+}

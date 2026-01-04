@@ -3,6 +3,8 @@
 #include <utility>
 #include <format>
 
+#include <math/UUID.hpp>
+
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/IRenderable.hpp"
@@ -180,6 +182,21 @@ std::vector<std::shared_ptr<GameObject>> Scene::FindGameObjectsByTag(const std::
     });
 
     return results;
+}
+
+std::shared_ptr<GameObject> Scene::FindGameObjectByUUID(const Math::UUID uuid)
+{
+    std::shared_ptr<GameObject> result = nullptr;
+
+    TraverseAll([&](std::shared_ptr<GameObject> gameObject)
+    {
+        if (!result && gameObject->GetUUID() == uuid)
+        {
+            result = gameObject;
+        }
+    });
+
+    return result;
 }
 
 std::vector<std::shared_ptr<GameObject>> Scene::GetAllGameObjects() const

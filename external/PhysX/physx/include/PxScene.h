@@ -38,7 +38,7 @@
 #include "PxClient.h"
 #include "task/PxTask.h"
 #include "PxArticulationFlag.h"
-#include "PxSoftBodyFlag.h" // deprecated
+#include "PxSoftBodyFlag.h"
 #include "PxParticleSystemFlag.h"
 #include "PxParticleSolverType.h"
 #include "PxResidual.h"

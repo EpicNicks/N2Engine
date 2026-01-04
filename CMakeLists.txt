@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(N2Engine VERSION 1.0.0 LANGUAGES CXX C)
+project(. VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -102,8 +102,8 @@ endif()
 add_subdirectory(math)
 add_subdirectory(renderer)
 add_subdirectory(engine)
-add_subdirectory(editor)
 add_subdirectory(test_project)
+add_subdirectory(editor-server)
 
 if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)
     target_include_directories(test_project PRIVATE ${PHYSX_INCLUDE_DIR})

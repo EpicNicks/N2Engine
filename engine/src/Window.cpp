@@ -20,7 +20,7 @@ Window::Window()
 
 Window::~Window() = default;
 
-void Window::InitWindow()
+void Window::InitWindow(const Config::ApplicationOptions &options)
 {
     if (!glfwInit())
     {
@@ -28,11 +28,8 @@ void Window::InitWindow()
         return;
     }
 
-    // Determine which renderer to use BEFORE creating window
-    AppRenderer appRenderer = ReadAppRendererFromConfig();
-
     // Configure GLFW hints based on chosen renderer
-    if (appRenderer == AppRenderer::Vulkan)
+    if (options.renderBackend == Config::ApplicationOptions::RenderBackend::VULKAN)
     {
         // Configure for Vulkan - no OpenGL context needed
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -47,6 +44,11 @@ void Window::InitWindow()
 #ifdef __APPLE__
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
+    }
+
+    if (options.isHeadless)
+    {
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     }
 
     const GLFWvidmode *vidMode = glfwGetVideoMode(glfwGetPrimaryMonitor());
@@ -72,7 +74,7 @@ void Window::InitWindow()
     // Create renderer based on configuration
     _renderer = nullptr;
 
-    if (appRenderer == AppRenderer::Vulkan)
+    if (options.renderBackend == Config::ApplicationOptions::RenderBackend::VULKAN)
     {
         _renderer = std::make_unique<Renderer::Vulkan::VulkanRenderer>();
         Logger::Log("Using Vulkan renderer", Logger::LogLevel::Info);
@@ -152,16 +154,9 @@ void Window::SetTitle(const std::string &title)
     }
 }
 
-AppRenderer Window::ReadAppRendererFromConfig() const
-{
-    // TODO
-    return AppRenderer::OpenGL;
-}
-
 void Window::FramebufferSizeCallback(GLFWwindow *window, int width, int height)
 {
-    Window *windowInstance = static_cast<Window *>(glfwGetWindowUserPointer(window));
-    if (windowInstance)
+    if (Window *windowInstance = static_cast<Window *>(glfwGetWindowUserPointer(window)))
     {
         windowInstance->OnWindowResize(width, height);
     }

@@ -18,6 +18,10 @@ namespace N2Engine
     {
         class CoroutineScheduler;
     }
+    namespace Math
+    {
+        class UUID;
+    }
 
     class Component;
     class GameObject;
@@ -77,6 +81,7 @@ namespace N2Engine
 
         [[nodiscard]] std::shared_ptr<GameObject> FindGameObject(const std::string &name) const;
         [[nodiscard]] std::vector<std::shared_ptr<GameObject>> FindGameObjectsByTag(const std::string &tag) const;
+        std::shared_ptr<GameObject> FindGameObjectByUUID(Math::UUID uuid);
 
         [[nodiscard]] std::vector<std::shared_ptr<GameObject>> GetAllGameObjects() const;
 

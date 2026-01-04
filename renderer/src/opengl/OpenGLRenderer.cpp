@@ -841,6 +841,11 @@ Renderer::Common::IShader* OpenGLRenderer::GetStandardLitShader() const
     return m_standardLitShader;
 }
 
+void OpenGLRenderer::ReadFramebuffer(std::uint8_t *buffer, int width, int height) const
+{
+    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, buffer);
+}
+
 // Factory function
 std::unique_ptr<Renderer::Common::IRenderer> Renderer::OpenGL::CreateOpenGLRenderer()
 {

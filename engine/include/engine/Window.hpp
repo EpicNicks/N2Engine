@@ -6,6 +6,7 @@
 #include <renderer/vulkan/VulkanRenderer.hpp>
 #include <math/VectorN.hpp>
 
+#include "engine/config/ApplicationOptions.hpp"
 #include "engine/common/Color.hpp"
 
 namespace N2Engine
@@ -59,13 +60,13 @@ namespace N2Engine
         Window();
         ~Window();
 
-        void InitWindow();
+        void InitWindow(const Config::ApplicationOptions &options);
         [[nodiscard]] bool ShouldClose() const;
         void PollEvents();
         void Shutdown();
         void Clear();
-        [[nodiscard]] Renderer::Common::IRenderer *GetRenderer() const;
-        [[nodiscard]] Input::InputSystem *GetInputSystem() const;
+        [[nodiscard]] Renderer::Common::IRenderer* GetRenderer() const;
+        [[nodiscard]] Input::InputSystem* GetInputSystem() const;
 
         [[nodiscard]] Vector2i GetWindowDimensions() const;
         void SetWindowMode(WindowMode windowMode);
@@ -74,8 +75,7 @@ namespace N2Engine
         void SetTitle(const std::string &title);
 
     private:
-        [[nodiscard]] AppRenderer ReadAppRendererFromConfig() const;
         void SaveWindowedState();
-        GLFWmonitor *GetCurrentMonitor();
+        GLFWmonitor* GetCurrentMonitor();
     };
 }

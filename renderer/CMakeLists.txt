@@ -57,10 +57,10 @@ endif()
 # Include GLAD in renderer target so headers can find it
 target_include_directories(renderer
     PUBLIC
-        include
+    include
         ${CMAKE_SOURCE_DIR}/external/glad/include
     PRIVATE
-        src
+    src
         ${Vulkan_INCLUDE_DIRS}
         MathCore::math
 )

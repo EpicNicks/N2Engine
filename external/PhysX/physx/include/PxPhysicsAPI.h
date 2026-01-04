@@ -162,7 +162,7 @@ Alternatively, one can instead directly #include a subset of the below files.
 #include "PxDeformableVolume.h"
 #include "PxDeformableVolumeMaterial.h"
 #include "PxDeletionListener.h"
-#include "PxFEMSoftBodyMaterial.h" // deprecated, include PxDeformableVolumeMaterial.h
+#include "PxFEMSoftBodyMaterial.h"
 #include "PxFiltering.h"
 #include "PxForceMode.h"
 #include "PxLockedData.h"
@@ -185,7 +185,7 @@ Alternatively, one can instead directly #include a subset of the below files.
 #include "PxShape.h"
 #include "PxSimulationEventCallback.h"
 #include "PxSimulationStatistics.h"
-#include "PxSoftBody.h" //deprecated, include PxDeformableVolume.h
+#include "PxSoftBody.h"
 #include "PxVisualizationParameter.h"
 #include "PxPruningStructure.h"
 

@@ -1,0 +1,171 @@
+{
+  "version": "1.0.0",
+  "commands": {
+    "RenderFrame": {
+      "id": "0x01",
+      "request": {},
+      "response": {
+        "type": "FrameData",
+        "fields": {
+          "width": "uint32",
+          "height": "uint32",
+          "pixels": "bytes"
+        }
+      }
+    },
+    "SetViewportSize": {
+      "id": "0x02",
+      "request": {
+        "width": "int32",
+        "height": "int32"
+      },
+      "response": { "type": "Ok" }
+    },
+    "SetCameraPosition": {
+      "id": "0x10",
+      "request": {
+        "x": "float32",
+        "y": "float32",
+        "z": "float32"
+      },
+      "response": { "type": "Ok" }
+    },
+    "GetCameraPosition": {
+      "id": "0x12",
+      "request": {},
+      "response": {
+        "type": "CameraPosition",
+        "fields": {
+          "x": "float32",
+          "y": "float32",
+          "z": "float32"
+        }
+      }
+    },
+    "CreateScene": {
+      "id": "0x20",
+      "request": {
+        "name": "string"
+      },
+      "response": {
+        "type": "SceneInfo",
+        "fields": {
+          "name": "string",
+          "path": "string"
+        }
+      }
+    },
+    "LoadScene": {
+      "id": "0x21",
+      "request": {
+        "path": "string"
+      },
+      "response": { "type": "Ok" }
+    },
+    "SaveScene": {
+      "id": "0x22",
+      "request": {
+        "path": "string"
+      },
+      "response": { "type": "Ok" }
+    },
+    "DeleteScene": {
+      "id": "0x23",
+      "request": {
+        "path": "string"
+      },
+      "response": { "type": "Ok" }
+    },
+    "GetCurrentScene": {
+      "id": "0x24",
+      "request": {},
+      "response": {
+        "type": "SceneInfo",
+        "fields": {
+          "name": "string",
+          "path": "string"
+        }
+      }
+    },
+    "CreateEntity": {
+      "id": "0x30",
+      "request": {
+        "name": "string"
+      },
+      "response": {
+        "type": "EntityCreated",
+        "fields": {
+          "entityId": "string"
+        }
+      }
+    },
+    "DestroyEntity": {
+      "id": "0x31",
+      "request": {
+        "entityId": "string"
+      },
+      "response": { "type": "Ok" }
+    },
+    "SetEntityTransform": {
+      "id": "0x32",
+      "request": {
+        "entityId": "string",
+        "position": "vec3",
+        "rotation": "vec3",
+        "scale": "vec3"
+      },
+      "response": { "type": "Ok" }
+    },
+    "GetEntityTransform": {
+      "id": "0x33",
+      "request": {
+        "entityId": "string"
+      },
+      "response": {
+        "type": "EntityTransform",
+        "fields": {
+          "position": "vec3",
+          "rotation": "vec3",
+          "scale": "vec3"
+        }
+      }
+    },
+    "GetAllEntities": {
+      "id": "0x34",
+      "request": {},
+      "response": {
+        "type": "EntityList",
+        "fields": {
+          "count": "uint32",
+          "entities": "EntityInfo[]"
+        }
+      }
+    },
+    "Shutdown": {
+      "id": "0xFF",
+      "request": {},
+      "response": { "type": "Ok" }
+    }
+  },
+  "types": {
+    "vec3": {
+      "x": "float32",
+      "y": "float32",
+      "z": "float32"
+    },
+    "EntityInfo": {
+      "id": "string",
+      "name": "string"
+    }
+  },
+  "responses": {
+    "Ok": "0x00",
+    "Error": "0x01",
+    "FrameData": "0x02",
+    "CameraPosition": "0x03",
+    "EntityTransform": "0x04",
+    "EntityList": "0x05",
+    "EntityCreated": "0x06",
+    "SceneInfo": "0x07"
+  }
+}

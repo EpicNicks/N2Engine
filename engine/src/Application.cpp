@@ -6,29 +6,45 @@
 #include "engine/Application.hpp"
 #include "engine/Time.hpp"
 #include "engine/Logger.hpp"
+#include "engine/common/ScriptUtils.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 
 using namespace N2Engine;
 
-Application &Application::GetInstance()
+Application& Application::GetInstance()
 {
     static Application instance;
     return instance;
 }
 
-Window &Application::GetWindow()
+Window& Application::GetWindow()
 {
     return _window;
 }
 
-Camera *Application::GetMainCamera() const
+Camera* Application::GetMainCamera() const
 {
     return _mainCamera.get();
 }
 
+///
+///@details Inits with default data:
+/// <b>projectPath</b>: "" (unset)
+/// <b>physicsBackend</b>: PhysX
+/// <b>renderBackend</b>: OpenGL
 void Application::Init()
+{
+    Init({
+        .projectPath = "",
+        .physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX,
+        .renderBackend = Config::ApplicationOptions::RenderBackend::OPENGL,
+        .isHeadless = false,
+    });
+}
+
+void Application::Init(const Config::ApplicationOptions &options)
 {
 #ifdef N2ENGINE_DEBUG
     Logger::InitializeDebugConsoleHelper();
@@ -36,7 +52,7 @@ void Application::Init()
     Scripting::LuaRuntime::Instance().Initialize();
     Math::InitializeSIMD();
     Time::Init();
-    _window.InitWindow();
+    _window.InitWindow(options);
 
     _mainCamera = std::make_unique<Camera>();
 
@@ -49,21 +65,30 @@ void Application::Init()
 
     Logger::Info("Camera initialized");
 
-    _3DphysicsBackend = std::make_unique<Physics::PhysXBackend>();
-    if (!_3DphysicsBackend->Initialize())
+    if (options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::PHYSX)
     {
-        Logger::Error("Failed to initialize PhysX backend!");
-        Logger::Warn("Physics will be disabled. Game will continue without physics simulation.");
-        _3DphysicsBackend.reset();
+        _3DphysicsBackend = std::make_unique<Physics::PhysXBackend>();
+        if (!_3DphysicsBackend->Initialize())
+        {
+            Logger::Error("Failed to initialize PhysX backend!");
+            Logger::Warn("Physics will be disabled. Game will continue without physics simulation.");
+            _3DphysicsBackend.reset();
+        }
+        else
+        {
+            Logger::Info("3D Physics backend initialized successfully");
+        }
     }
     else
     {
-        Logger::Info("3D Physics backend initialized successfully");
+        Logger::Error(NAMEOF(options.physicsBackend) + " is not currently supported");
     }
 
     Logger::Info("3D Physics backend initialized");
 }
 
+/// @param initialScene The initial scene to load in SceneManager
+/// @brief For testing only. An application should be configured and then the initial scene should be added later.
 void Application::Init(std::unique_ptr<Scene> &&initialScene)
 {
     Init();
@@ -180,7 +205,14 @@ void Application::PhysicsUpdate(const Scene &scene) const
     }
 }
 
-Physics::IPhysicsBackend *Application::Get3DPhysicsBackend() const
+Physics::IPhysicsBackend* Application::Get3DPhysicsBackend() const
 {
     return _3DphysicsBackend.get();
+}
+
+void Application::RenderEditorFrame()
+{
+    _window.PollEvents();
+    Time::Update();
+    Render();
 }

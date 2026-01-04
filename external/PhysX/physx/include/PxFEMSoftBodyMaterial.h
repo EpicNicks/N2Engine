@@ -30,7 +30,7 @@
 #define PX_FEM_SOFT_BODY_MATERIAL_H
 
 #include "PxDeformableVolumeMaterial.h"
-#include "PxFEMMaterial.h" // deprecated
+#include "PxFEMMaterial.h"
 
 #if !PX_DOXYGEN
 namespace physx

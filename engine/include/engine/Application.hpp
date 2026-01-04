@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "engine/config/ApplicationOptions.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/Window.hpp"
 #include "engine/Camera.hpp"
@@ -9,22 +10,6 @@
 
 namespace N2Engine
 {
-    struct ApplicationOptions
-    {
-        enum class PhysicsBackend
-        {
-            PHYSX
-        };
-
-        enum class RenderBackend
-        {
-            OPENGL,
-            VULKAN
-        };
-
-        ApplicationOptions() = default;
-    };
-
     class Application
     {
         friend class SceneManager;
@@ -37,6 +22,7 @@ namespace N2Engine
     private:
         Application() = default;
         void Render();
+        void PhysicsUpdate(const Scene &scene) const;
 
     public:
         Application(const Application &) = delete;
@@ -44,9 +30,10 @@ namespace N2Engine
         static Application& GetInstance();
 
         void Init();
+        void Init(const Config::ApplicationOptions &options);
         void Init(std::unique_ptr<Scene> &&initialScene);
         void Run();
-        void PhysicsUpdate(const Scene &scene) const;
+        void RenderEditorFrame();
 
         static void Quit();
 

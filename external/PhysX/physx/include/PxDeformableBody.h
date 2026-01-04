@@ -31,7 +31,7 @@
 
 #include "PxActor.h"
 #include "PxDeformableBodyFlag.h"
-#include "PxFEMParameter.h" // deprecated
+#include "PxFEMParameter.h"
 
 #if !PX_DOXYGEN
 namespace physx

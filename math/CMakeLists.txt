@@ -17,7 +17,7 @@ target_include_directories(math
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external/TinySHA1/include>
         $<INSTALL_INTERFACE:include>
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    src
 )
 
 # Set target properties

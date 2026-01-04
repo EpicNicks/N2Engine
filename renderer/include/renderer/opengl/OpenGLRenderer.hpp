@@ -81,6 +81,8 @@ namespace Renderer::OpenGL
         [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
         [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
 
+        void ReadFramebuffer(std::uint8_t *buffer, int width, int height) const override;
+
     private:
         GLFWwindow* m_window;
         uint32_t m_width;
