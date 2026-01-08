@@ -48,31 +48,33 @@
         "name": "string"
       },
       "response": {
-        "type": "SceneInfo",
+        "type": "SceneData",
         "fields": {
-          "name": "string",
-          "path": "string"
+          "sceneJson": "string"
         }
       }
     },
     "LoadScene": {
       "id": "0x21",
       "request": {
-        "path": "string"
+        "sceneJson": "string"
       },
       "response": { "type": "Ok" }
     },
     "SaveScene": {
       "id": "0x22",
-      "request": {
-        "path": "string"
-      },
-      "response": { "type": "Ok" }
+      "request": {},
+      "response": {
+        "type": "SceneData",
+        "fields": {
+          "sceneJson": "string"
+        }
+      }
     },
     "DeleteScene": {
       "id": "0x23",
       "request": {
-        "path": "string"
+        "sceneName": "string"
       },
       "response": { "type": "Ok" }
     },
@@ -80,10 +82,9 @@
       "id": "0x24",
       "request": {},
       "response": {
-        "type": "SceneInfo",
+        "type": "SceneData",
         "fields": {
-          "name": "string",
-          "path": "string"
+          "sceneJson": "string"
         }
       }
     },
@@ -141,6 +142,23 @@
         }
       }
     },
+    "CreateScript": {
+      "id": "0x40",
+      "request": {
+        "name": "string"
+      },
+      "response": {
+        "type": "ScriptData",
+        "fields": {
+          "scriptTemplate": "string"
+        }
+      }
+    },
+    "RescanAssets": {
+      "id": "0x41",
+      "request": {},
+      "response": { "type": "Ok" }
+    },
     "Shutdown": {
       "id": "0xFF",
       "request": {},
@@ -166,6 +184,7 @@
     "EntityTransform": "0x04",
     "EntityList": "0x05",
     "EntityCreated": "0x06",
-    "SceneInfo": "0x07"
+    "SceneData": "0x07",
+    "ScriptData": "0x08"
   }
 }

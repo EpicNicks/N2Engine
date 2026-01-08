@@ -1,15 +1,20 @@
-#include "editor-server/EditorServer.hpp"
-#include "editor-server/Protocol.hpp"
-#include "editor-server/Commands.hpp"
-#include "editor-server/Serialization.hpp"
+#include <format>
 
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/io/ResourceLoader.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
+#include "editor-server/EditorServer.hpp"
+#include "editor-server/Protocol.hpp"
+#include "editor-server/Commands.hpp"
+#include "editor-server/Serialization.hpp"
+
 #ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -153,6 +158,10 @@ namespace N2Engine::Editor
 
     void EditorServer::ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload)
     {
+        if (commandType != 0x1)
+        {
+            Logger::Info("Command Issued: " + std::format("0x{:X}", commandType));
+        }
         auto cmd = static_cast<CommandType>(commandType);
 
         switch (cmd)
@@ -169,11 +178,20 @@ namespace N2Engine::Editor
         case CommandType::GetCameraPosition:
             HandleGetCameraPosition(clientSocket);
             break;
+        case CommandType::CreateScene:
+            HandleCreateScene(clientSocket, payload);
+            break;
         case CommandType::LoadScene:
             HandleLoadScene(clientSocket, payload);
             break;
         case CommandType::SaveScene:
-            HandleSaveScene(clientSocket, payload);
+            HandleSaveScene(clientSocket);
+            break;
+        case CommandType::DeleteScene:
+            HandleDeleteScene(clientSocket, payload);
+            break;
+        case CommandType::GetCurrentScene:
+            HandleGetCurrentScene(clientSocket);
             break;
         case CommandType::CreateEntity:
             HandleCreateEntity(clientSocket, payload);
@@ -189,6 +207,12 @@ namespace N2Engine::Editor
             break;
         case CommandType::GetAllEntities:
             HandleGetAllEntities(clientSocket);
+            break;
+        case CommandType::CreateScript:
+            HandleCreateScript(clientSocket, payload);
+            break;
+        case CommandType::RescanAssets:
+            HandleRescanAssets(clientSocket);
             break;
         default:
             Logger::Warn("Unknown command: " + std::to_string(commandType));
@@ -270,30 +294,141 @@ namespace N2Engine::Editor
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
+    void EditorServer::HandleCreateScene(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        auto cmd = CreateSceneCmd::Deserialize(reader);
+
+        BufferWriter response;
+
+        try
+        {
+            auto newScene = Scene::Create(cmd.name);
+
+            // Serialize it before moving
+            nlohmann::json sceneJson = newScene->Serialize();
+            std::string sceneJsonString = sceneJson.dump();
+
+            SceneManager::AddScene(std::move(newScene), false);
+
+            WriteSceneData(response, sceneJsonString);
+            Logger::Info("Created scene: " + cmd.name);
+        }
+        catch (const std::exception &e)
+        {
+            Logger::Error("Failed to create scene: " + std::string(e.what()));
+            WriteError(response, std::string("Failed to create scene: ") + e.what());
+        }
+
+        SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
     void EditorServer::HandleLoadScene(int clientSocket, const std::vector<uint8_t> &payload)
     {
         BufferReader reader(payload);
-        std::string path = reader.ReadString();
+        std::string sceneJsonString = reader.ReadString();
 
-        // Implement scene loading from path
-        // SceneManager::LoadScene(path);
+        Logger::Info("Loading scene from scene data: " + sceneJsonString);
+
+        nlohmann::json sceneJson = nlohmann::json::parse<std::string>(std::move(sceneJsonString));
+
+        auto scene = Scene::FromJSON(sceneJson, true);
+        if (scene == nullptr)
+        {
+            BufferWriter response;
+            WriteError(response, "The scene passed was invalid or corrupt");
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
+
+        if (int sceneIndex = SceneManager::GetSceneIndex(scene->sceneName); sceneIndex != -1)
+        {
+            SceneManager::UpdateScene(sceneIndex, sceneJson);
+            SceneManager::LoadScene(sceneIndex);
+        }
+        else
+        {
+            SceneManager::AddScene(sceneJson);
+            SceneManager::LoadScene(scene->sceneName);
+        }
+        SceneManager::ProcessAnyPendingSceneChange();
 
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
-    void EditorServer::HandleSaveScene(int clientSocket, const std::vector<uint8_t> &payload)
+    void EditorServer::HandleSaveScene(int clientSocket)
+    {
+        BufferWriter response;
+
+        if (SceneManager::GetCurScene() == nullptr)
+        {
+            Logger::Warn("No scene loaded to save");
+            WriteError(response, "No scene loaded");
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+
+            return;
+        }
+        nlohmann::json sceneJson = SceneManager::GetCurSceneRef().Serialize();
+        SceneManager::UpdateScene(SceneManager::GetCurSceneIndex(), sceneJson);
+
+        WriteSceneData(response, sceneJson);
+        SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    void EditorServer::HandleDeleteScene(int clientSocket, const std::vector<uint8_t> &payload)
     {
         BufferReader reader(payload);
-        std::string path = reader.ReadString();
-
-        // Implement scene saving
-        // SceneManager::SaveScene(path);
+        auto cmd = DeleteSceneCmd::Deserialize(reader);
 
         BufferWriter response;
-        WriteOk(response);
+
+        try
+        {
+            // Delete scene file from disk
+            if (std::filesystem::exists(cmd.path))
+            {
+                std::filesystem::remove(cmd.path);
+                WriteOk(response);
+                Logger::Info("Deleted scene: " + cmd.path);
+            }
+            else
+            {
+                WriteError(response, "Scene file not found: " + cmd.path);
+            }
+        }
+        catch (const std::exception &e)
+        {
+            WriteError(response, std::string("Failed to delete scene: ") + e.what());
+        }
+
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    void EditorServer::HandleGetCurrentScene(int clientSocket)
+    {
+        BufferWriter response;
+
+        if (SceneManager::GetCurScene() == nullptr)
+        {
+            WriteError(response, "No scene loaded");
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
+
+        try {
+            Scene &scene = SceneManager::GetCurSceneRef();
+            nlohmann::json sceneJson = scene.Serialize();
+
+            WriteSceneData(response, sceneJson.dump());
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+        }
+        catch (const std::exception& e) {
+            Logger::Error("Failed to get current scene: " + std::string(e.what()));
+            WriteError(response, "Failed to get current scene: " + std::string(e.what()));
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+        }
     }
 
     void EditorServer::HandleCreateEntity(int clientSocket, const std::vector<uint8_t> &payload)
@@ -301,21 +436,21 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         auto cmd = CreateEntityCmd::Deserialize(reader);
 
+        BufferWriter response;
+
         // Create entity in current scene
-        std::string entityId = "";
         if (SceneManager::GetCurSceneIndex() != -1)
         {
             auto gameObject = GameObject::Create(cmd.name);
             SceneManager::GetCurSceneRef().AddRootGameObject(gameObject);
-            entityId = gameObject->GetUUID().ToString();
+            WriteEntityCreated(response, gameObject->GetUUID().ToString());
         }
         else
         {
             Logger::Warn("No scene present");
+            WriteError(response, "No scene present");
         }
 
-        BufferWriter response;
-        WriteEntityCreated(response, entityId);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
@@ -376,7 +511,7 @@ namespace N2Engine::Editor
     {
         BufferWriter response;
 
-        if (SceneManager::GetCurSceneIndex() == -1)
+        if (SceneManager::GetCurScene() == nullptr)
         {
             // No scene, return empty list
             response.WriteU8(static_cast<uint8_t>(ResponseType::EntityList));
@@ -388,6 +523,7 @@ namespace N2Engine::Editor
 
         Scene &scene = SceneManager::GetCurSceneRef();
         auto gameObjects = scene.GetAllGameObjects();
+        Logger::Info("HandleGetAllEntities: Found " + std::to_string(gameObjects.size()) + " game objects");
 
         // Build payload
         BufferWriter payload;
@@ -455,6 +591,88 @@ namespace N2Engine::Editor
         response.WriteF32(scaleY);
         response.WriteF32(scaleZ);
 
+        SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    void EditorServer::HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        auto cmd = CreateScriptCmd::Deserialize(reader);
+
+        BufferWriter response;
+
+        try
+        {
+            std::string scriptTemplate = GenerateScriptTemplate(cmd.name);
+            WriteScriptData(response, scriptTemplate);
+            Logger::Info("Generated script template for: " + cmd.name);
+        }
+        catch (const std::exception &e)
+        {
+            WriteError(response, std::string("Failed to create script: ") + e.what());
+        }
+
+        SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    std::string EditorServer::GenerateScriptTemplate(const std::string &scriptName)
+    {
+        std::string className = scriptName;
+        if (!className.empty())
+        {
+            className[0] = std::toupper(className[0]);
+        }
+
+        size_t dotPos = className.find('.');
+        if (dotPos != std::string::npos)
+        {
+            className = className.substr(0, dotPos);
+        }
+
+        for (char &c : className)
+        {
+            if (!std::isalnum(c))
+            {
+                c = '_';
+            }
+        }
+
+        std::ostringstream ss;
+        ss << "-- " << className << " Script\n";
+        ss << "-- Auto-generated by N2Engine Editor\n\n";
+        ss << "local " << className << " = {}\n";
+        ss << className << ".__index = " << className << "\n\n";
+        ss << "-- Serializable fields that appear in the inspector\n";
+        ss << className << ".SerializableFields = {\n";
+        ss << "    speed = { type = \"float\", default = 5.0 },\n";
+        ss << "    enabled = { type = \"bool\", default = true },\n";
+        ss << "    -- Reference fields\n";
+        ss << "    -- target = { type = \"GameObject\", default = nil },\n";
+        ss << "    -- rigidBody = { type = \"RigidBodyComponent\", default = nil },\n";
+        ss << "}\n\n";
+        ss << "function " << className << ":OnAttach()\n";
+        ss << "    -- Initialize component here\n";
+        ss << "end\n\n";
+        ss << "function " << className << ":OnUpdate()\n";
+        ss << "    -- Update logic here\n";
+        ss << "end\n\n";
+        ss << "function " << className << ":OnFixedUpdate()\n";
+        ss << "    -- Physics update logic here\n";
+        ss << "end\n\n";
+        ss << "function " << className << ":OnDestroy()\n";
+        ss << "    -- Cleanup here\n";
+        ss << "end\n\n";
+        ss << "return " << className << "\n";
+
+        return ss.str();
+    }
+
+    void EditorServer::HandleRescanAssets(int clientSocket)
+    {
+        IO::ResourceLoader::Instance().RescanAssets();
+
+        BufferWriter response;
+        WriteOk(response);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 

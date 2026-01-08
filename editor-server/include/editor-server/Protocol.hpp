@@ -8,28 +8,21 @@ namespace N2Engine::Editor
     {
         RenderFrame = 0x01,
         SetViewportSize = 0x02,
-
         SetCameraPosition = 0x10,
-        SetCameraRotation = 0x11,
         GetCameraPosition = 0x12,
-
-        // Scene management
         CreateScene = 0x20,
         LoadScene = 0x21,
         SaveScene = 0x22,
         DeleteScene = 0x23,
         GetCurrentScene = 0x24,
-
-        // Entity management
         CreateEntity = 0x30,
         DestroyEntity = 0x31,
         SetEntityTransform = 0x32,
         GetEntityTransform = 0x33,
         GetAllEntities = 0x34,
-
-        StepSimulation = 0x41,
-
-        Shutdown = 0xFF
+        CreateScript = 0x40,
+        RescanAssets = 0x41,
+        Shutdown = 0xff
     };
 
     enum class ResponseType : uint8_t
@@ -41,7 +34,8 @@ namespace N2Engine::Editor
         EntityTransform = 0x04,
         EntityList = 0x05,
         EntityCreated = 0x06,
-        SceneInfo = 0x07
+        SceneData = 0x07,
+        ScriptData = 0x08
     };
 
 #pragma pack(push, 1)

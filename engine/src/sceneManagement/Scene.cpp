@@ -20,6 +20,7 @@ Scene::Scene(std::string name)
     : _coroutineScheduler(std::make_unique<Scheduling::CoroutineScheduler>(this)), sceneName(std::move(name)) {}
 
 Scene::~Scene() = default;
+
 Scene::Scene(Scene &&) noexcept = default;
 Scene& Scene::operator=(Scene &&) noexcept = default;
 
@@ -434,13 +435,11 @@ json Scene::Serialize() const
     return j;
 }
 
-std::shared_ptr<Scene> Scene::Deserialize(const json &j)
+void Scene::Deserialize(const json &j)
 {
-    auto scene = std::shared_ptr<Scene>(new Scene(""));
-
     if (j.contains("name"))
     {
-        scene->sceneName = j["name"];
+        sceneName = j["name"];
     }
 
     // Create reference resolver for this scene
@@ -453,16 +452,35 @@ std::shared_ptr<Scene> Scene::Deserialize(const json &j)
         for (const auto &rootJson : j["rootGameObjects"])
         {
             auto root = GameObject::Deserialize(rootJson, &resolver);
-            scene->_rootGameObjects.push_back(root);
-            root->SetScene(scene.get());
+            _rootGameObjects.push_back(root);
+            root->SetScene(this);
         }
     }
 
     // Phase 2: Resolve all references
     // This fills in all the GameObject and Component references
     resolver.ResolveAll();
+}
 
+std::unique_ptr<Scene> Scene::FromJSON(const nlohmann::json &j, bool validate)
+{
+    if (validate)
+    {
+        if (!j.contains("name") || !j.contains("rootGameObjects") || !j["rootGameObjects"].is_array())
+        {
+            Logger::Error("Invalid scene json provided, missing name or rootGameObjects\n" + j.dump());
+            return nullptr;
+        }
+        // GameObjects being invalid will error if the Component type is not present in the resolver
+    }
+    auto scene = std::unique_ptr<Scene>(new Scene(""));
+    scene->Deserialize(j);
     return scene;
+}
+
+std::string Scene::GetResourceType() const
+{
+    return "Scene";
 }
 
 Renderer::Common::SceneLightingData Scene::CollectLighting() const

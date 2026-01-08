@@ -13,6 +13,10 @@ if(MSVC OR (WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+if(MSVC)
+    add_compile_options(/MP)
+endif()
+
 option(N2ENGINE_BUILD_TESTS "Build unit tests" ON)
 option(N2ENGINE_USE_PHYSX "Use PhysX physics backend" ON)
 

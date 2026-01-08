@@ -19,6 +19,8 @@ namespace N2Engine.Editor.Protocol
         SetEntityTransform = 0x32,
         GetEntityTransform = 0x33,
         GetAllEntities = 0x34,
+        CreateScript = 0x40,
+        RescanAssets = 0x41,
         Shutdown = 0xFF,
     }
 
@@ -31,7 +33,8 @@ namespace N2Engine.Editor.Protocol
         EntityTransform = 0x04,
         EntityList = 0x05,
         EntityCreated = 0x06,
-        SceneInfo = 0x07,
+        SceneData = 0x07,
+        ScriptData = 0x08,
     }
 
     public struct vec3
@@ -67,17 +70,12 @@ namespace N2Engine.Editor.Protocol
 
     public struct LoadSceneRequest
     {
-        public string Path;
-    }
-
-    public struct SaveSceneRequest
-    {
-        public string Path;
+        public string Scenejson;
     }
 
     public struct DeleteSceneRequest
     {
-        public string Path;
+        public string Scenename;
     }
 
     public struct CreateEntityRequest
@@ -103,6 +101,11 @@ namespace N2Engine.Editor.Protocol
         public string Entityid;
     }
 
+    public struct CreateScriptRequest
+    {
+        public string Name;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -117,10 +120,9 @@ namespace N2Engine.Editor.Protocol
         public float Z;
     }
 
-    public struct SceneInfoResponse
+    public struct SceneDataResponse
     {
-        public string Name;
-        public string Path;
+        public string Scenejson;
     }
 
     public struct EntityCreatedResponse
@@ -139,6 +141,11 @@ namespace N2Engine.Editor.Protocol
     {
         public uint Count;
         public EntityInfo[] Entities;
+    }
+
+    public struct ScriptDataResponse
+    {
+        public string Scripttemplate;
     }
 
 }

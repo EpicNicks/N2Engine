@@ -6,6 +6,8 @@
 
 namespace N2Engine::Editor::Protocol
 {
+    // ==================== Command Deserializers ====================
+
     struct SetViewportSizeCmd
     {
         int32_t width;
@@ -27,11 +29,61 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct CreateSceneCmd
+    {
+        std::string name;
+
+        static CreateSceneCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct LoadSceneCmd
+    {
+        std::string path;
+
+        static LoadSceneCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct SaveSceneCmd
+    {
+        std::string path;
+
+        static SaveSceneCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct DeleteSceneCmd
+    {
+        std::string path;
+
+        static DeleteSceneCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
     struct CreateEntityCmd
     {
         std::string name;
 
         static CreateEntityCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct CreateScriptCmd
+    {
+        std::string name;
+
+        static CreateScriptCmd Deserialize(BufferReader &r)
         {
             return {r.ReadString()};
         }
@@ -54,7 +106,8 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
-    // Response builders
+    // ==================== Response Builders ====================
+
     inline void WriteOk(BufferWriter &w)
     {
         w.WriteU8(static_cast<uint8_t>(ResponseType::Ok));
@@ -91,5 +144,25 @@ namespace N2Engine::Editor::Protocol
         w.WriteU32(width);
         w.WriteU32(height);
         w.WriteBytes(pixels);
+    }
+
+    inline void WriteSceneData(BufferWriter &w, const std::string &jsonString)
+    {
+        BufferWriter payload;
+        payload.WriteString(jsonString);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::SceneData));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    inline void WriteScriptData(BufferWriter &w, const std::string &scriptTemplate)
+    {
+        BufferWriter payload;
+        payload.WriteString(scriptTemplate);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::ScriptData));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
     }
 }

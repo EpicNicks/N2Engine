@@ -15,7 +15,7 @@ namespace N2Engine::IO
         std::uint64_t lastModified = 0;
         std::size_t fileSize = 0;
         nlohmann::json customData;
-        
+
         static AssetMetadata FromFile(const std::filesystem::path& metaPath);
         bool SaveToFile(const std::filesystem::path& metaPath) const;
     };

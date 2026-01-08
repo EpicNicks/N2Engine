@@ -24,6 +24,8 @@ enum class CommandType : uint8_t
     SetEntityTransform = 0x32,
     GetEntityTransform = 0x33,
     GetAllEntities = 0x34,
+    CreateScript = 0x40,
+    RescanAssets = 0x41,
     Shutdown = 0xFF,
 };
 
@@ -36,7 +38,8 @@ enum class ResponseType : uint8_t
     EntityTransform = 0x04,
     EntityList = 0x05,
     EntityCreated = 0x06,
-    SceneInfo = 0x07,
+    SceneData = 0x07,
+    ScriptData = 0x08,
 };
 
 // Custom types
@@ -74,17 +77,12 @@ struct CreateSceneCmd
 
 struct LoadSceneCmd
 {
-    std::string path;
-};
-
-struct SaveSceneCmd
-{
-    std::string path;
+    std::string sceneJson;
 };
 
 struct DeleteSceneCmd
 {
-    std::string path;
+    std::string sceneName;
 };
 
 struct CreateEntityCmd
@@ -110,6 +108,11 @@ struct GetEntityTransformCmd
     std::string entityId;
 };
 
+struct CreateScriptCmd
+{
+    std::string name;
+};
+
 // Response structures
 struct FrameDataData
 {
@@ -125,10 +128,9 @@ struct CameraPositionData
     float z;
 };
 
-struct SceneInfoData
+struct SceneDataData
 {
-    std::string name;
-    std::string path;
+    std::string sceneJson;
 };
 
 struct EntityCreatedData
@@ -147,6 +149,11 @@ struct EntityListData
 {
     uint32_t count;
     std::vector<EntityInfo> entities;
+};
+
+struct ScriptDataData
+{
+    std::string scriptTemplate;
 };
 
 } // namespace N2Engine::Editor::Protocol

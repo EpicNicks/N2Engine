@@ -11,6 +11,7 @@
 #include <renderer/common/Renderer.hpp>
 #include "engine/ComponentConcepts.hpp"
 #include "engine/rendering/Light.hpp"
+#include "engine/base/Asset.hpp"
 
 namespace N2Engine
 {
@@ -18,15 +19,11 @@ namespace N2Engine
     {
         class CoroutineScheduler;
     }
-    namespace Math
-    {
-        class UUID;
-    }
 
     class Component;
     class GameObject;
 
-    class Scene
+    class Scene : public Base::Asset
     {
         friend class SceneManager;
         friend class Application;
@@ -51,7 +48,7 @@ namespace N2Engine
         std::string sceneName;
 
     public:
-        ~Scene();
+        ~Scene() override;
         Scene(Scene &&) noexcept;
         Scene& operator=(Scene &&) noexcept;
 
@@ -102,8 +99,12 @@ namespace N2Engine
         void OnApplicationQuit() const;
         void Clear();
 
-        [[nodiscard]] nlohmann::json Serialize() const;
-        static std::shared_ptr<Scene> Deserialize(const nlohmann::json &j);
+        [[nodiscard]] nlohmann::json Serialize() const override;
+        void Deserialize(const nlohmann::json &j) override;
+
+        static std::unique_ptr<Scene> FromJSON(const nlohmann::json &j, bool validate = false);
+
+        std::string GetResourceType() const override;
 
     private:
         void Render(Renderer::Common::IRenderer *renderer);

@@ -9,7 +9,7 @@
 # Build directories
 bin/
 build/
-cmake-build-debug-visual-studio/
+build-cmake/
 out/
 Debug/
 Release/

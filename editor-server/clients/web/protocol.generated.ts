@@ -26,6 +26,8 @@ export const CommandType = {
   SetEntityTransform: 0x32,
   GetEntityTransform: 0x33,
   GetAllEntities: 0x34,
+  CreateScript: 0x40,
+  RescanAssets: 0x41,
   Shutdown: 0xFF,
 } as const;
 
@@ -39,7 +41,8 @@ export const ResponseType = {
   EntityTransform: 0x04,
   EntityList: 0x05,
   EntityCreated: 0x06,
-  SceneInfo: 0x07,
+  SceneData: 0x07,
+  ScriptData: 0x08,
 } as const;
 
 export type ResponseType = typeof ResponseType[keyof typeof ResponseType];
@@ -60,15 +63,11 @@ export interface CreateSceneRequest {
 }
 
 export interface LoadSceneRequest {
-  path: string;
-}
-
-export interface SaveSceneRequest {
-  path: string;
+  sceneJson: string;
 }
 
 export interface DeleteSceneRequest {
-  path: string;
+  sceneName: string;
 }
 
 export interface CreateEntityRequest {
@@ -90,6 +89,10 @@ export interface GetEntityTransformRequest {
   entityId: string;
 }
 
+export interface CreateScriptRequest {
+  name: string;
+}
+
 export interface FrameDataResponse {
   width: number;
   height: number;
@@ -102,9 +105,8 @@ export interface CameraPositionResponse {
   z: number;
 }
 
-export interface SceneInfoResponse {
-  name: string;
-  path: string;
+export interface SceneDataResponse {
+  sceneJson: string;
 }
 
 export interface EntityCreatedResponse {
@@ -120,4 +122,8 @@ export interface EntityTransformResponse {
 export interface EntityListResponse {
   count: number;
   entities: EntityInfo[];
+}
+
+export interface ScriptDataResponse {
+  scriptTemplate: string;
 }

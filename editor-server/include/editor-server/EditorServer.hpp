@@ -4,6 +4,7 @@
 #include <thread>
 #include <vector>
 #include <cstdint>
+#include <string>
 
 namespace N2Engine::Editor
 {
@@ -28,15 +29,25 @@ namespace N2Engine::Editor
         // Command handlers
         void HandleRenderFrame(int clientSocket);
         void HandleSetViewportSize(int clientSocket, const std::vector<uint8_t> &payload);
+
         void HandleSetCameraPosition(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetCameraPosition(int clientSocket);
+
         void HandleLoadScene(int clientSocket, const std::vector<uint8_t> &payload);
-        void HandleSaveScene(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSaveScene(int clientSocket);
+        void HandleCreateScene(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleDeleteScene(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetCurrentScene(int clientSocket);
+
         void HandleCreateEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleDestroyEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetEntityTransform(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetAllEntities(int clientSocket);
         void HandleGetEntityTransform(int clientSocket, const std::vector<uint8_t> &payload);
+
+        void HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload);
+        std::string GenerateScriptTemplate(const std::string& scriptName);
+        void HandleRescanAssets(int clientSocket);
 
         // Network helpers
         bool Send(int socket, const void *data, size_t size);
