@@ -299,7 +299,7 @@ void TestEngine()
     auto testScene = Scene::Create("Test Scene");
     application.Init({
         .physicsBackend = N2Engine::Config::ApplicationOptions::PhysicsBackend::PHYSX,
-        .renderBackend = N2Engine::Config::ApplicationOptions::RenderBackend::OPENGL,
+        .renderBackend = N2Engine::Config::ApplicationOptions::RenderBackend::SOFTWARE,
         .isHeadless = false,
     });
     SceneManager::AddScene(std::move(testScene), true);

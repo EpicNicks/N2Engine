@@ -1,7 +1,10 @@
 #include <cstring>
 #include <cmath>
+#include <cstdint>
 #include <algorithm>
+#include <array>
 #include <cassert>
+#include <vector>
 
 #include "renderer/software/SWMaterial.hpp"
 #include "renderer/software/SWMesh.hpp"
@@ -12,6 +15,485 @@
 using namespace Renderer;
 using namespace Renderer::Common;
 using namespace Renderer::Software;
+
+// ============================================================================
+// NOTE ON THE HEADER
+// SoftwareRenderer::RasterizeTriangle / ShadeUnlit / ShadeLit are no longer
+// defined in this file (the raster pipeline below replaces them with faster
+// file-local machinery). Unreferenced private declarations link fine, so no
+// header change is strictly required — but you can delete those three
+// declarations (and SWFragment, if nothing else uses it) when convenient.
+// SetPixel is kept unchanged in case anything else calls it.
+// ============================================================================
+
+// ============================================================================
+// Tunables
+// ============================================================================
+namespace
+{
+    // Backface culling. GL convention: front faces wind counter-clockwise.
+    // If your meshes suddenly disappear, first try kFrontFaceCCW = false;
+    // if your content has mixed winding, set kCullBackfaces = false.
+    constexpr bool kCullBackfaces = true;
+    constexpr bool kFrontFaceCCW  = true;
+
+    // Geometry is clipped against |x| <= kGuardBand*w and |y| <= kGuardBand*w
+    // in clip space so projected coordinates stay bounded. This keeps the
+    // fixed-point rasterizer overflow-free without ever clipping anything
+    // visible (on-screen geometry satisfies |x| <= w).
+    constexpr float kGuardBand = 8.0f;
+    constexpr float kMinW      = 1e-6f;
+
+    // 28.4 subpixel fixed point.
+    constexpr int     kSubBits = 4;
+    constexpr int32_t kSubStep = 1 << kSubBits;  // 16
+    constexpr int32_t kSubHalf = kSubStep >> 1;  // 8
+}
+
+// ============================================================================
+// Per-draw shading state, resolved ONCE per draw call.
+// The old path did string-keyed uniform lookups and dynamic_casts per PIXEL;
+// that cost dominated the actual shading math.
+// ============================================================================
+namespace
+{
+    inline uint32_t PackRGBA(float r, float g, float b, float a)
+    {
+        auto to8 = [](float x) -> uint32_t
+        {
+            x = std::clamp(x, 0.f, 1.f);
+            return (uint32_t)(x * 255.f + 0.5f);
+        };
+        return (to8(a) << 24) | (to8(b) << 16) | (to8(g) << 8) | to8(r);
+    }
+
+    struct ResolvedMat
+    {
+        float aR = 1.f, aG = 1.f, aB = 1.f, aA = 1.f;
+        float shininess = 130.f;
+        const SWTexture* tex = nullptr;   // null if absent or invalid
+        bool lit = false;
+        uint32_t flatColor = 0xFFFFFFFF;  // unlit + untextured: constant per draw
+    };
+
+    ResolvedMat ResolveMaterial(const SWMaterial* mat)
+    {
+        ResolvedMat r;
+        float smooth = 0.5f;
+        if (mat)
+        {
+            auto alb = mat->GetVec4("uAlbedo", {1, 1, 1, 1});
+            r.aR = alb[0]; r.aG = alb[1]; r.aB = alb[2]; r.aA = alb[3];
+            smooth = mat->GetFloat("uSmoothness", 0.5f);
+
+            if (auto* t = dynamic_cast<const SWTexture*>(mat->GetTexture()); t && t->IsValid())
+                r.tex = t;
+
+            auto* sh = dynamic_cast<const SWShader*>(mat->GetShader());
+            r.lit = sh && sh->GetType() == SWShaderType::Lit;
+        }
+        r.shininess = 4.f + (256.f - 4.f) * smooth;   // matches mix(4, 256, smoothness)
+        r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
+        return r;
+    }
+
+    // Lights pre-normalized / pre-squared ONCE per draw instead of per pixel.
+    struct PrepDirLight   { float x, y, z, r, g, b, intensity; };
+    struct PrepPointLight { float x, y, z, r, g, b, intensity, range2, invRange, atten; };
+
+    struct LitState
+    {
+        float ambR = 0.f, ambG = 0.f, ambB = 0.f;
+        float camX = 0.f, camY = 0.f, camZ = 0.f;
+        std::vector<PrepDirLight>   dirs;
+        std::vector<PrepPointLight> points;
+    };
+
+    void PrepareLighting(const SceneLightingData& L, const N2Engine::Math::Vector3& cam, LitState& out)
+    {
+        out.ambR = L.ambientColor.x;
+        out.ambG = L.ambientColor.y;
+        out.ambB = L.ambientColor.z;
+        out.camX = cam.x; out.camY = cam.y; out.camZ = cam.z;
+
+        out.dirs.clear();
+        out.dirs.reserve(L.directionalLights.size());
+        for (const auto& dl : L.directionalLights)
+        {
+            float lx = -dl.direction.x, ly = -dl.direction.y, lz = -dl.direction.z;
+            float len = std::sqrt(lx*lx + ly*ly + lz*lz);
+            if (len > 1e-6f) { lx /= len; ly /= len; lz /= len; }
+            out.dirs.push_back({lx, ly, lz, dl.color.x, dl.color.y, dl.color.z, dl.intensity});
+        }
+
+        out.points.clear();
+        out.points.reserve(L.pointLights.size());
+        for (const auto& pl : L.pointLights)
+        {
+            if (pl.range <= 0.f) continue;   // old code rejected every pixel anyway
+            out.points.push_back({pl.position.x, pl.position.y, pl.position.z,
+                                  pl.color.x, pl.color.y, pl.color.z,
+                                  pl.intensity, pl.range * pl.range, 1.f / pl.range,
+                                  pl.attenuation});
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Per-pixel shading. Same math as before, but everything variable was
+    // hoisted into ResolvedMat / LitState, and pow() only runs when N·H > 0.
+    // ------------------------------------------------------------------
+    inline uint32_t ShadeUnlitPx(float u, float v, const ResolvedMat& m)
+    {
+        // Caller guarantees m.tex != nullptr (the flat case never reaches here).
+        const uint32_t s = m.tex->Sample(u, v);
+        constexpr float k = 1.f / 255.f;
+        const float r = m.aR * (float)((s >>  0) & 0xFF) * k;
+        const float g = m.aG * (float)((s >>  8) & 0xFF) * k;
+        const float b = m.aB * (float)((s >> 16) & 0xFF) * k;
+        const float a = m.aA * (float)((s >> 24) & 0xFF) * k;
+        return PackRGBA(r, g, b, a);
+    }
+
+    inline uint32_t ShadeLitPx(float wx, float wy, float wz,
+                               float nx, float ny, float nz,
+                               float u, float v,
+                               const ResolvedMat& m, const LitState& L)
+    {
+        const float nlen = std::sqrt(nx*nx + ny*ny + nz*nz);
+        if (nlen > 1e-6f) { const float inv = 1.f / nlen; nx *= inv; ny *= inv; nz *= inv; }
+
+        float r = m.aR, g = m.aG, b = m.aB, a = m.aA;
+        if (m.tex)
+        {
+            const uint32_t s = m.tex->Sample(u, v);
+            constexpr float k = 1.f / 255.f;
+            r *= (float)((s >>  0) & 0xFF) * k;
+            g *= (float)((s >>  8) & 0xFF) * k;
+            b *= (float)((s >> 16) & 0xFF) * k;
+            a *= (float)((s >> 24) & 0xFF) * k;
+        }
+
+        float vx = L.camX - wx, vy = L.camY - wy, vz = L.camZ - wz;
+        const float vlen = std::sqrt(vx*vx + vy*vy + vz*vz);
+        if (vlen > 1e-6f) { const float inv = 1.f / vlen; vx *= inv; vy *= inv; vz *= inv; }
+
+        auto blinn = [&](float lx, float ly, float lz) -> float
+        {
+            const float hx = lx + vx, hy = ly + vy, hz = lz + vz;
+            const float h2 = hx*hx + hy*hy + hz*hz;
+            if (h2 < 1e-12f) return 0.f;
+            float ndoth = nx*hx + ny*hy + nz*hz;
+            if (ndoth <= 0.f) return 0.f;               // skip pow() when it can't contribute
+            ndoth /= std::sqrt(h2);
+            return std::pow(ndoth, m.shininess);
+        };
+
+        float lr = L.ambR, lg = L.ambG, lb = L.ambB;
+
+        for (const auto& d : L.dirs)
+        {
+            const float ndotl = std::max(0.f, nx*d.x + ny*d.y + nz*d.z);
+            // Kept from the original / GL shader: spec is NOT gated on N·L.
+            const float c = ndotl * d.intensity + blinn(d.x, d.y, d.z) * 0.3f;
+            lr += d.r * c; lg += d.g * c; lb += d.b * c;
+        }
+
+        for (const auto& p : L.points)
+        {
+            float lx = p.x - wx, ly = p.y - wy, lz = p.z - wz;
+            const float d2 = lx*lx + ly*ly + lz*lz;
+            if (d2 > p.range2) continue;                 // reject before the sqrt
+            const float dist = std::sqrt(d2);
+            if (dist > 1e-6f) { const float inv = 1.f / dist; lx *= inv; ly *= inv; lz *= inv; }
+
+            const float ndotl = std::max(0.f, nx*lx + ny*ly + nz*lz);
+            const float dr    = dist * p.invRange;
+            const float atten = 1.f / (1.f + p.atten * dr * dr);
+            const float c = (ndotl * p.intensity + blinn(lx, ly, lz) * 0.3f) * atten;
+            lr += p.r * c; lg += p.g * c; lb += p.b * c;
+        }
+
+        return PackRGBA(lr * r, lg * g, lb * b, a);
+    }
+}
+
+// ============================================================================
+// Clipping. Lerping in clip space (before the perspective divide) is exact,
+// so clip-produced vertices need no special treatment. In addition to the
+// near plane we clip against w >= kMinW and a screen-aligned guard band —
+// this bounds projected coordinates (fixed-point safety) and removes the
+// old invW = 0 degenerate fallback.
+// ============================================================================
+namespace
+{
+    struct ClipVertex
+    {
+        float c[4];   // clip-space position
+        float wp[3];  // world-space position
+        float wn[3];  // world-space normal
+        float uv[2];  // texcoord
+        // NOTE: vertex colors are no longer carried through the pipeline —
+        // neither shader ever read them, so interpolating them was pure waste.
+    };
+
+    inline ClipVertex LerpCV(const ClipVertex& a, const ClipVertex& b, float t)
+    {
+        ClipVertex r;
+        for (int i = 0; i < 4; ++i) r.c[i]  = a.c[i]  + t * (b.c[i]  - a.c[i]);
+        for (int i = 0; i < 3; ++i) r.wp[i] = a.wp[i] + t * (b.wp[i] - a.wp[i]);
+        for (int i = 0; i < 3; ++i) r.wn[i] = a.wn[i] + t * (b.wn[i] - a.wn[i]);
+        for (int i = 0; i < 2; ++i) r.uv[i] = a.uv[i] + t * (b.uv[i] - a.uv[i]);
+        return r;
+    }
+
+    enum : uint32_t
+    {
+        OC_W = 1, OC_NEAR = 2, OC_LEFT = 4, OC_RIGHT = 8, OC_BOTTOM = 16, OC_TOP = 32
+    };
+
+    inline uint32_t Outcode(const float c[4])
+    {
+        uint32_t oc = 0;
+        const float w  = c[3];
+        const float gw = kGuardBand * w;
+        if (w < kMinW)      oc |= OC_W;
+        if (c[2] + w < 0.f) oc |= OC_NEAR;
+        if (c[0] < -gw)     oc |= OC_LEFT;
+        if (c[0] >  gw)     oc |= OC_RIGHT;
+        if (c[1] < -gw)     oc |= OC_BOTTOM;
+        if (c[1] >  gw)     oc |= OC_TOP;
+        return oc;
+    }
+
+    template <typename DistFn>
+    int ClipEdge(const ClipVertex* in, int n, ClipVertex* out, DistFn&& dist)
+    {
+        int m = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const ClipVertex& A = in[i];
+            const ClipVertex& B = in[(i + 1) % n];
+            const float da = dist(A), db = dist(B);
+            const bool aIn = da >= 0.f, bIn = db >= 0.f;
+            if (aIn) out[m++] = A;
+            if (aIn != bIn) out[m++] = LerpCV(A, B, da / (da - db));
+        }
+        return m;
+    }
+
+    // Sutherland–Hodgman, but only against the planes some vertex actually
+    // violates (ocUnion). Returns the clipped vertex count (0 if culled).
+    int ClipTriangle(const ClipVertex tri[3], uint32_t ocUnion, ClipVertex* out)
+    {
+        ClipVertex buf[2][12];   // 3 verts + up to 1 per plane * 6 planes = 9 max
+        buf[0][0] = tri[0]; buf[0][1] = tri[1]; buf[0][2] = tri[2];
+        int n = 3, src = 0;
+
+        auto pass = [&](uint32_t bit, auto&& dist)
+        {
+            if ((ocUnion & bit) && n >= 3)
+            {
+                n = ClipEdge(buf[src], n, buf[src ^ 1], dist);
+                src ^= 1;
+            }
+        };
+        pass(OC_W,      [](const ClipVertex& v) { return v.c[3] - kMinW; });
+        pass(OC_NEAR,   [](const ClipVertex& v) { return v.c[2] + v.c[3]; });
+        pass(OC_LEFT,   [](const ClipVertex& v) { return kGuardBand * v.c[3] + v.c[0]; });
+        pass(OC_RIGHT,  [](const ClipVertex& v) { return kGuardBand * v.c[3] - v.c[0]; });
+        pass(OC_BOTTOM, [](const ClipVertex& v) { return kGuardBand * v.c[3] + v.c[1]; });
+        pass(OC_TOP,    [](const ClipVertex& v) { return kGuardBand * v.c[3] - v.c[1]; });
+
+        if (n < 3) return 0;
+        for (int i = 0; i < n; ++i) out[i] = buf[src][i];
+        return n;
+    }
+}
+
+// ============================================================================
+// Rasterization.
+//   * 28.4 fixed-point edge functions, evaluated incrementally (adds per
+//     pixel instead of full barycentric recomputation), with a watertight
+//     fill rule — shared edges own their boundary pixels exactly once.
+//   * Early-Z: only depth is interpolated before the depth test; attributes
+//     and shading run only for surviving pixels.
+//   * Perspective-correct interpolation: A/w and 1/w are interpolated with
+//     screen-space barycentrics and A recovered per pixel. The old affine
+//     path made textures swim on perspective-heavy triangles. (NDC depth is
+//     affine in screen space, so the depth path is unchanged and exact.)
+// ============================================================================
+namespace
+{
+    struct ScreenVert
+    {
+        int32_t fx, fy;            // 28.4 fixed-point window coordinates
+        float z;                   // NDC z, used directly for depth
+        float invW;
+        float uw, vw;              // u/w, v/w
+        float nxw, nyw, nzw;       // world normal / w
+        float wxw, wyw, wzw;       // world position / w
+    };
+
+    inline ScreenVert Project(const ClipVertex& v, float halfW, float halfH)
+    {
+        const float invW = 1.f / v.c[3];   // w >= kMinW is guaranteed after clipping
+        ScreenVert s;
+        s.fx   = (int32_t)std::lround((v.c[0] * invW + 1.f) * halfW * (float)kSubStep);
+        s.fy   = (int32_t)std::lround((v.c[1] * invW + 1.f) * halfH * (float)kSubStep);
+        s.z    = v.c[2] * invW;
+        s.invW = invW;
+        s.uw  = v.uv[0] * invW;  s.vw  = v.uv[1] * invW;
+        s.nxw = v.wn[0] * invW;  s.nyw = v.wn[1] * invW;  s.nzw = v.wn[2] * invW;
+        s.wxw = v.wp[0] * invW;  s.wyw = v.wp[1] * invW;  s.wzw = v.wp[2] * invW;
+        return s;
+    }
+
+    struct RasterTarget
+    {
+        uint32_t* color;
+        float*    depth;
+        int       width, height;
+    };
+
+    inline int64_t Orient(const ScreenVert& a, const ScreenVert& b, const ScreenVert& c)
+    {
+        return (int64_t)(b.fx - a.fx) * (c.fy - a.fy)
+             - (int64_t)(b.fy - a.fy) * (c.fx - a.fx);
+    }
+
+    template <bool LIT>
+    void RasterTri(const ScreenVert& sv0, const ScreenVert& sv1, const ScreenVert& sv2,
+                   const RasterTarget& t, const ResolvedMat& mat,
+                   [[maybe_unused]] const LitState& lit)
+    {
+        const ScreenVert* A = &sv0;
+        const ScreenVert* B = &sv1;
+        const ScreenVert* C = &sv2;
+
+        int64_t area2 = Orient(*A, *B, *C);   // 2x signed area; sign = winding
+        if (area2 == 0) return;
+
+        if constexpr (kCullBackfaces)
+        {
+            const bool front = kFrontFaceCCW ? (area2 > 0) : (area2 < 0);
+            if (!front) return;
+        }
+        if (area2 < 0) { std::swap(B, C); area2 = -area2; }   // canonicalize to CCW
+
+        // Bounding box of covered pixel CENTERS (centers sit at px*16 + 8).
+        const int32_t minFx = std::min({A->fx, B->fx, C->fx});
+        const int32_t maxFx = std::max({A->fx, B->fx, C->fx});
+        const int32_t minFy = std::min({A->fy, B->fy, C->fy});
+        const int32_t maxFy = std::max({A->fy, B->fy, C->fy});
+
+        int px0 = (minFx - kSubHalf + kSubStep - 1) >> kSubBits;   // ceil
+        int px1 = (maxFx - kSubHalf) >> kSubBits;                  // floor
+        int py0 = (minFy - kSubHalf + kSubStep - 1) >> kSubBits;
+        int py1 = (maxFy - kSubHalf) >> kSubBits;
+
+        px0 = std::max(px0, 0);
+        py0 = std::max(py0, 0);
+        px1 = std::min(px1, t.width  - 1);
+        py1 = std::min(py1, t.height - 1);
+        if (px0 > px1 || py0 > py1) return;
+
+        // Edge setup. The fill-rule bias makes a shared edge belong to exactly
+        // one of its two triangles, so adjacent triangles neither double-shade
+        // nor leave cracks along shared edges.
+        auto edgeSetup = [](const ScreenVert& a, const ScreenVert& b,
+                            int64_t& stepX, int64_t& stepY, int64_t& bias)
+        {
+            const int32_t dx = b.fx - a.fx;
+            const int32_t dy = b.fy - a.fy;
+            stepX = -(int64_t)dy * kSubStep;   // per +1 pixel in x
+            stepY =  (int64_t)dx * kSubStep;   // per +1 pixel in y
+            const bool acceptsEq = (dy < 0) || (dy == 0 && dx > 0);
+            bias = acceptsEq ? 0 : 1;
+        };
+        auto edgeAt = [](const ScreenVert& a, const ScreenVert& b, int64_t cx, int64_t cy)
+        {
+            return (int64_t)(b.fx - a.fx) * (cy - a.fy)
+                 - (int64_t)(b.fy - a.fy) * (cx - a.fx);
+        };
+
+        int64_t s0x, s0y, b0, s1x, s1y, b1, s2x, s2y, b2;
+        edgeSetup(*B, *C, s0x, s0y, b0);   // weight of A
+        edgeSetup(*C, *A, s1x, s1y, b1);   // weight of B
+        edgeSetup(*A, *B, s2x, s2y, b2);   // weight of C
+
+        const int64_t cx0 = (int64_t)px0 * kSubStep + kSubHalf;
+        const int64_t cy0 = (int64_t)py0 * kSubStep + kSubHalf;
+
+        // Bias folded in: the inside test collapses to (e0|e1|e2) >= 0.
+        int64_t r0 = edgeAt(*B, *C, cx0, cy0) - b0;
+        int64_t r1 = edgeAt(*C, *A, cx0, cy0) - b1;
+        int64_t r2 = edgeAt(*A, *B, cx0, cy0) - b2;
+
+        const float invArea = 1.f / (float)area2;
+        const float zA = A->z, zB = B->z, zC = C->z;
+
+        for (int py = py0; py <= py1; ++py)
+        {
+            // Y-flip folded into the row base (row 0 = bottom of the screen).
+            const size_t row = (size_t)(t.height - 1 - py) * (size_t)t.width;
+            uint32_t* crow = t.color + row;
+            float*    drow = t.depth + row;
+
+            int64_t e0 = r0, e1 = r1, e2 = r2;
+
+            for (int px = px0; px <= px1; ++px)
+            {
+                if ((e0 | e1 | e2) >= 0)   // sign-bit trick: inside iff none negative
+                {
+                    const float l0 = (float)(e0 + b0) * invArea;
+                    const float l1 = (float)(e1 + b1) * invArea;
+                    const float l2 = (float)(e2 + b2) * invArea;
+
+                    // Early-Z: interpolate depth only; shade only survivors.
+                    const float z = l0 * zA + l1 * zB + l2 * zC;
+                    if (z < drow[px])
+                    {
+                        uint32_t colOut;
+                        if constexpr (LIT)
+                        {
+                            const float iw = l0*A->invW + l1*B->invW + l2*C->invW;
+                            const float rw = 1.f / iw;
+                            const float u  = (l0*A->uw  + l1*B->uw  + l2*C->uw ) * rw;
+                            const float v  = (l0*A->vw  + l1*B->vw  + l2*C->vw ) * rw;
+                            const float nx = (l0*A->nxw + l1*B->nxw + l2*C->nxw) * rw;
+                            const float ny = (l0*A->nyw + l1*B->nyw + l2*C->nyw) * rw;
+                            const float nz = (l0*A->nzw + l1*B->nzw + l2*C->nzw) * rw;
+                            const float wx = (l0*A->wxw + l1*B->wxw + l2*C->wxw) * rw;
+                            const float wy = (l0*A->wyw + l1*B->wyw + l2*C->wyw) * rw;
+                            const float wz = (l0*A->wzw + l1*B->wzw + l2*C->wzw) * rw;
+                            colOut = ShadeLitPx(wx, wy, wz, nx, ny, nz, u, v, mat, lit);
+                        }
+                        else if (mat.tex)
+                        {
+                            const float iw = l0*A->invW + l1*B->invW + l2*C->invW;
+                            const float rw = 1.f / iw;
+                            const float u  = (l0*A->uw + l1*B->uw + l2*C->uw) * rw;
+                            const float v  = (l0*A->vw + l1*B->vw + l2*C->vw) * rw;
+                            colOut = ShadeUnlitPx(u, v, mat);
+                        }
+                        else
+                        {
+                            colOut = mat.flatColor;   // constant per draw — no interpolation at all
+                        }
+                        drow[px] = z;
+                        crow[px] = colOut;
+                    }
+                }
+                e0 += s0x; e1 += s1x; e2 += s2x;
+            }
+            r0 += s0y; r1 += s1y; r2 += s2y;
+        }
+    }
+}
+
+// ============================================================================
+// Renderer
+// ============================================================================
 
 bool SoftwareRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height)
 {
@@ -47,6 +529,10 @@ void SoftwareRenderer::Shutdown()
 
 void SoftwareRenderer::Resize(uint32_t w, uint32_t h)
 {
+    // CAUTION (pre-existing): if a frame is in flight on the render thread,
+    // reallocating these buffers races with it. Safest call sites are before
+    // EndFrame or after Present. A per-frame buffer mutex or a WaitForFrame
+    // here would make this airtight.
     m_width = w;
     m_height = h;
     m_colorBuffer.assign(w * h, 0xFF000000);
@@ -75,26 +561,53 @@ void SoftwareRenderer::BeginFrame()
 
 void SoftwareRenderer::EndFrame()
 {
-    // Capture state needed by render thread
-    auto queue    = m_drawQueue;
-    auto view     = std::vector<float>(m_view, m_view + 16);
-    auto proj     = std::vector<float>(m_proj, m_proj + 16);
+    // Snapshot everything the render thread needs. The queue is MOVED, not
+    // copied (the old code deep-copied it every frame). Camera position and
+    // clear color are now part of the snapshot too — previously specular
+    // highlights could read a different frame's camera.
+    auto queue = std::move(m_drawQueue);
+    m_drawQueue.clear();   // moved-from -> guaranteed empty and reusable
+
+    std::array<float, 16> view{}, proj{};
+    std::memcpy(view.data(), m_view, 64);
+    std::memcpy(proj.data(), m_proj, 64);
     auto lighting = m_lighting;
+    auto camPos   = m_cameraPos;
+    const float cr = m_clearR, cg = m_clearG, cb = m_clearB, ca = m_clearA;
 
     m_renderThread.SubmitFrame({
-        [this, queue = std::move(queue), view = std::move(view),
-         proj = std::move(proj), lighting = std::move(lighting)]() mutable
+        [this, queue = std::move(queue), view, proj,
+         lighting = std::move(lighting), camPos, cr, cg, cb, ca]() mutable
         {
+            m_clearR = cr; m_clearG = cg; m_clearB = cb; m_clearA = ca;
             ClearBuffers();
 
-            memcpy(m_view, view.data(), 64);
-            memcpy(m_proj, proj.data(), 64);
-            m_lighting = lighting;
+            std::memcpy(m_view, view.data(), 64);
+            std::memcpy(m_proj, proj.data(), 64);
+            m_lighting  = std::move(lighting);
+            m_cameraPos = camPos;
+
+            // Sort opaque draws front-to-back so early-Z rejects occluded
+            // pixels before they're shaded — overdraw becomes nearly free.
+            // (No alpha blending exists, so draw order can't change the image.)
+            std::sort(queue.begin(), queue.end(),
+                      [&](const DrawCommand& a, const DrawCommand& b)
+                      {
+                          auto dist2 = [&](const DrawCommand& c)
+                          {
+                              // Row-major model matrix: translation at [3], [7], [11].
+                              const float dx = c.modelMatrix[3]  - camPos.x;
+                              const float dy = c.modelMatrix[7]  - camPos.y;
+                              const float dz = c.modelMatrix[11] - camPos.z;
+                              return dx*dx + dy*dy + dz*dz;
+                          };
+                          return dist2(a) < dist2(b);
+                      });
 
             for (auto& cmd : queue)
                 RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.material);
 
-            // NOTE: GL upload moved to Present() — GL context lives on the main thread.
+            // NOTE: GL upload stays in Present() — GL context lives on the main thread.
         }
     });
 }
@@ -110,7 +623,6 @@ void SoftwareRenderer::Present()
                     (GLsizei)m_width, (GLsizei)m_height,
                     GL_RGBA, GL_UNSIGNED_BYTE, m_colorBuffer.data());
 
-    // Clear the GL backbuffer before blitting (fullscreen quad covers it, but safer)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // Draw fullscreen quad
@@ -123,7 +635,6 @@ void SoftwareRenderer::Present()
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
 
-    // Swap buffers — without this nothing is ever visible
     if (m_window) glfwSwapBuffers(m_window);
 }
 
@@ -259,20 +770,25 @@ void SoftwareRenderer::ReadFramebuffer(uint8_t *buffer, int width, int height) c
 {
     // nearest-neighbour downsample/copy into the caller's buffer (RGBA8)
     for (int y = 0; y < height; ++y)
+    {
+        int sy = (int)((float)y / (float)height * (float)m_height);
+        sy = std::clamp(sy, 0, (int)m_height - 1);
+        const uint32_t* srcRow = m_colorBuffer.data() + (size_t)(m_height - 1 - sy) * m_width; // flip Y
+        uint8_t* dstRow = buffer + (size_t)y * width * 4;
+
         for (int x = 0; x < width; ++x)
         {
             int sx = (int)((float)x / (float)width * (float)m_width);
-            int sy = (int)((float)y / (float)height * (float)m_height);
             sx = std::clamp(sx, 0, (int)m_width - 1);
-            sy = std::clamp(sy, 0, (int)m_height - 1);
 
-            uint32_t packed = m_colorBuffer[(m_height - 1 - sy) * m_width + sx]; // flip Y
-            uint8_t *dst = buffer + (y * width + x) * 4;
+            const uint32_t packed = srcRow[sx];
+            uint8_t *dst = dstRow + (size_t)x * 4;
             dst[0] = (packed >> 0) & 0xFF; // R
             dst[1] = (packed >> 8) & 0xFF; // G
             dst[2] = (packed >> 16) & 0xFF; // B
             dst[3] = (packed >> 24) & 0xFF; // A
         }
+    }
 }
 
 void SoftwareRenderer::ClearBuffers()
@@ -286,6 +802,8 @@ void SoftwareRenderer::ClearBuffers()
     std::fill(m_depthBuffer.begin(), m_depthBuffer.end(), 1.0f);
 }
 
+// Kept for external callers / debug draws. The raster path no longer uses it —
+// the inner loop writes rows directly with the Y flip folded into the row base.
 void SoftwareRenderer::SetPixel(int x, int y, float depth, uint32_t color)
 {
     if (x < 0 || y < 0 || (uint32_t)x >= m_width || (uint32_t)y >= m_height) return;
@@ -298,324 +816,89 @@ void SoftwareRenderer::SetPixel(int x, int y, float depth, uint32_t color)
     }
 }
 
-void SoftwareRenderer::RasterizeTriangle(const SWFragment &f0, const SWFragment &f1,
-                                         const SWFragment &f2, const SWMaterial *mat,
-                                         const float *modelMatrix)
-{
-    auto ndcToScreen = [&](float nx, float ny, float &sx, float &sy)
-    {
-        sx = (nx + 1.f) * 0.5f * (float)m_width;
-        sy = (ny + 1.f) * 0.5f * (float)m_height;
-    };
-
-    float x0, y0, x1, y1, x2, y2;
-    ndcToScreen(f0.x, f0.y, x0, y0);
-    ndcToScreen(f1.x, f1.y, x1, y1);
-    ndcToScreen(f2.x, f2.y, x2, y2);
-
-    int minX = std::max(0, (int)std::floor(std::min({x0, x1, x2})));
-    int maxX = std::min((int)m_width - 1, (int)std::ceil(std::max({x0, x1, x2})));
-    int minY = std::max(0, (int)std::floor(std::min({y0, y1, y2})));
-    int maxY = std::min((int)m_height - 1, (int)std::ceil(std::max({y0, y1, y2})));
-
-    float denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
-    if (std::abs(denom) < 1e-6f) return;
-
-    // Determine shading mode from material's shader type
-    bool useLit = false;
-    if (mat)
-    {
-        auto *sw = dynamic_cast<const SWShader*>(mat->GetShader());
-        useLit = sw && sw->GetType() == SWShaderType::Lit;
-    }
-
-    for (int py = minY; py <= maxY; ++py)
-        for (int px = minX; px <= maxX; ++px)
-        {
-            float fx = (float)px + 0.5f, fy = (float)py + 0.5f;
-
-            float w0 = ((y1 - y2) * (fx - x2) + (x2 - x1) * (fy - y2)) / denom;
-            float w1 = ((y2 - y0) * (fx - x2) + (x0 - x2) * (fy - y2)) / denom;
-            float w2 = 1.f - w0 - w1;
-            if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-
-            // Interpolate
-            SWFragment frag;
-            frag.x  = w0 * f0.x  + w1 * f1.x  + w2 * f2.x;
-            frag.y  = w0 * f0.y  + w1 * f1.y  + w2 * f2.y;
-            frag.z  = w0 * f0.z  + w1 * f1.z  + w2 * f2.z;
-            frag.wx = w0 * f0.wx + w1 * f1.wx + w2 * f2.wx;
-            frag.wy = w0 * f0.wy + w1 * f1.wy + w2 * f2.wy;
-            frag.wz = w0 * f0.wz + w1 * f1.wz + w2 * f2.wz;
-            frag.nx = w0 * f0.nx + w1 * f1.nx + w2 * f2.nx;
-            frag.ny = w0 * f0.ny + w1 * f1.ny + w2 * f2.ny;
-            frag.nz = w0 * f0.nz + w1 * f1.nz + w2 * f2.nz;
-            frag.u  = w0 * f0.u  + w1 * f1.u  + w2 * f2.u;
-            frag.v  = w0 * f0.v  + w1 * f1.v  + w2 * f2.v;
-            frag.r  = w0 * f0.r  + w1 * f1.r  + w2 * f2.r;
-            frag.g  = w0 * f0.g  + w1 * f1.g  + w2 * f2.g;
-            frag.b  = w0 * f0.b  + w1 * f1.b  + w2 * f2.b;
-            frag.a  = w0 * f0.a  + w1 * f1.a  + w2 * f2.a;
-
-            uint32_t color = useLit
-                                 ? ShadeLit(frag, mat, modelMatrix)
-                                 : ShadeUnlit(frag, mat);
-            SetPixel(px, py, frag.z, color);
-        }
-}
-
-namespace
-{
-    // Per-vertex data carried through clipping. Lerping a ClipVertex linearly in
-    // clip space is correct because clip-space lerp = perspective-correct interp.
-    struct ClipVertex
-    {
-        float c[4];   // clip-space position (x, y, z, w)
-        float wp[3];  // world-space position
-        float wn[3];  // world-space normal
-        float uv[2];  // texcoord
-        float col[4]; // vertex color
-    };
-
-    ClipVertex LerpClipVertex(const ClipVertex& a, const ClipVertex& b, float t)
-    {
-        ClipVertex r;
-        for (int i = 0; i < 4; ++i) r.c[i]   = a.c[i]   + t * (b.c[i]   - a.c[i]);
-        for (int i = 0; i < 3; ++i) r.wp[i]  = a.wp[i]  + t * (b.wp[i]  - a.wp[i]);
-        for (int i = 0; i < 3; ++i) r.wn[i]  = a.wn[i]  + t * (b.wn[i]  - a.wn[i]);
-        for (int i = 0; i < 2; ++i) r.uv[i]  = a.uv[i]  + t * (b.uv[i]  - a.uv[i]);
-        for (int i = 0; i < 4; ++i) r.col[i] = a.col[i] + t * (b.col[i] - a.col[i]);
-        return r;
-    }
-}
-
 void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, SWMaterial* material)
 {
     if (!mesh || !mesh->IsValid()) return;
+    if (m_width == 0 || m_height == 0) return;
 
     float mv[16], mvp[16];
     Mul4x4(m_view, modelMatrix, mv);
     Mul4x4(m_proj, mv, mvp);
 
+    // Everything the pixel loop needs, resolved ONCE per draw. The old path
+    // paid string-keyed uniform lookups and dynamic_casts per pixel.
+    const ResolvedMat rm = ResolveMaterial(material);
+
+    LitState lit;
+    if (rm.lit)
+        PrepareLighting(m_lighting, m_cameraPos, lit);   // normalize lights once, not per pixel
+
+    const RasterTarget target{ m_colorBuffer.data(), m_depthBuffer.data(),
+                               (int)m_width, (int)m_height };
+    const float halfW = 0.5f * (float)m_width;
+    const float halfH = 0.5f * (float)m_height;
+
     const auto& verts   = mesh->vertices;
     const auto& indices = mesh->indices;
 
-    auto buildClipVertex = [&](const Vertex& v) -> ClipVertex
+    // Transform each unique vertex ONCE. The old path re-transformed per
+    // index — up to ~6x per vertex on typical meshes. Scratch is reused
+    // across draw calls (single render thread; thread_local for safety).
+    struct XfVert { ClipVertex cv; ScreenVert sv; uint32_t oc; };
+    static thread_local std::vector<XfVert> s_xf;
+    s_xf.resize(verts.size());
+
+    for (size_t i = 0; i < verts.size(); ++i)
     {
-        ClipVertex cv;
-        TransformPoint(mvp, v.position, cv.c);
+        const auto& v = verts[i];
+        XfVert& x = s_xf[i];
+
+        TransformPoint(mvp, v.position, x.cv.c);
 
         float wp4[4];
         TransformPoint(modelMatrix, v.position, wp4);
-        cv.wp[0] = wp4[0]; cv.wp[1] = wp4[1]; cv.wp[2] = wp4[2];
+        x.cv.wp[0] = wp4[0]; x.cv.wp[1] = wp4[1]; x.cv.wp[2] = wp4[2];
 
-        TransformNormal(modelMatrix, v.normal, cv.wn);
+        TransformNormal(modelMatrix, v.normal, x.cv.wn);
 
-        cv.uv[0] = v.texCoord[0]; cv.uv[1] = v.texCoord[1];
-        cv.col[0] = v.color[0]; cv.col[1] = v.color[1];
-        cv.col[2] = v.color[2]; cv.col[3] = v.color[3];
-        return cv;
-    };
+        x.cv.uv[0] = v.texCoord[0];
+        x.cv.uv[1] = v.texCoord[1];
 
-    auto toFragment = [](const ClipVertex& cv) -> SWFragment
+        x.oc = Outcode(x.cv.c);
+        if (x.oc == 0)
+            x.sv = Project(x.cv, halfW, halfH);   // project once; reused by every triangle sharing it
+    }
+
+    auto raster = [&](const ScreenVert& a, const ScreenVert& b, const ScreenVert& c)
     {
-        float invW = (std::abs(cv.c[3]) > 1e-6f) ? 1.f / cv.c[3] : 0.f;
-        SWFragment f;
-        f.x = cv.c[0] * invW;
-        f.y = cv.c[1] * invW;
-        f.z = cv.c[2] * invW;
-        f.wx = cv.wp[0]; f.wy = cv.wp[1]; f.wz = cv.wp[2];
-        f.nx = cv.wn[0]; f.ny = cv.wn[1]; f.nz = cv.wn[2];
-        f.u  = cv.uv[0]; f.v  = cv.uv[1];
-        f.r  = cv.col[0]; f.g = cv.col[1]; f.b = cv.col[2]; f.a = cv.col[3];
-        return f;
+        if (rm.lit) RasterTri<true >(a, b, c, target, rm, lit);
+        else        RasterTri<false>(a, b, c, target, rm, lit);
     };
 
     for (size_t i = 0; i + 2 < indices.size(); i += 3)
     {
-        ClipVertex in[3] = {
-            buildClipVertex(verts[indices[i + 0]]),
-            buildClipVertex(verts[indices[i + 1]]),
-            buildClipVertex(verts[indices[i + 2]])
-        };
+        const XfVert& v0 = s_xf[indices[i + 0]];
+        const XfVert& v1 = s_xf[indices[i + 1]];
+        const XfVert& v2 = s_xf[indices[i + 2]];
 
-        // Near-plane sign distance in clip space: inside iff z + w >= 0
-        float d[3] = { in[0].c[2] + in[0].c[3],
-                       in[1].c[2] + in[1].c[3],
-                       in[2].c[2] + in[2].c[3] };
+        if (v0.oc & v1.oc & v2.oc) continue;            // all outside one plane — trivial reject
 
-        int insideMask = (d[0] >= 0 ? 1 : 0)
-                       | (d[1] >= 0 ? 2 : 0)
-                       | (d[2] >= 0 ? 4 : 0);
-
-        ClipVertex out[4];
-        int outCount = 0;
-
-        if (insideMask == 0b111)
+        const uint32_t ocUnion = v0.oc | v1.oc | v2.oc;
+        if (ocUnion == 0)                               // fully inside — no clipping needed
         {
-            out[0] = in[0]; out[1] = in[1]; out[2] = in[2];
-            outCount = 3;
-        }
-        else if (insideMask == 0)
-        {
-            continue; // entirely behind near plane
-        }
-        else
-        {
-            // Sutherland–Hodgman against the near plane
-            for (int e = 0; e < 3; ++e)
-            {
-                int a = e;
-                int b = (e + 1) % 3;
-                bool aIn = d[a] >= 0;
-                bool bIn = d[b] >= 0;
-
-                if (aIn) out[outCount++] = in[a];
-                if (aIn != bIn)
-                {
-                    float t = d[a] / (d[a] - d[b]);
-                    out[outCount++] = LerpClipVertex(in[a], in[b], t);
-                }
-            }
+            raster(v0.sv, v1.sv, v2.sv);
+            continue;
         }
 
-        // Triangulate the clipped polygon as a fan
-        for (int t = 1; t + 1 < outCount; ++t)
-        {
-            SWFragment f0 = toFragment(out[0]);
-            SWFragment f1 = toFragment(out[t]);
-            SWFragment f2 = toFragment(out[t + 1]);
-            RasterizeTriangle(f0, f1, f2, material, modelMatrix);
-        }
+        const ClipVertex tri[3] = { v0.cv, v1.cv, v2.cv };
+        ClipVertex poly[12];
+        const int n = ClipTriangle(tri, ocUnion, poly);
+
+        ScreenVert sv[12];
+        for (int k = 0; k < n; ++k) sv[k] = Project(poly[k], halfW, halfH);
+        for (int k = 1; k + 1 < n; ++k)                 // fan-triangulate
+            raster(sv[0], sv[k], sv[k + 1]);
     }
-}
-
-uint32_t SoftwareRenderer::ShadeUnlit(const SWFragment &frag, const SWMaterial *mat) const
-{
-    float r = 1.0f, g = 1.0f, b = 1.0f, a = 1.0f;
-
-    if (mat)
-    {
-        auto tint = mat->GetVec4("uAlbedo", {1, 1, 1, 1});
-        r = tint[0];
-        g = tint[1];
-        b = tint[2];
-        a = tint[3];
-
-        auto *tex = dynamic_cast<const SWTexture*>(mat->GetTexture());
-        if (tex && tex->IsValid())
-        {
-            uint32_t s = tex->Sample(frag.u, frag.v);
-            r *= ((s >> 0) & 0xFF) / 255.f;
-            g *= ((s >> 8) & 0xFF) / 255.f;
-            b *= ((s >> 16) & 0xFF) / 255.f;
-            a *= ((s >> 24) & 0xFF) / 255.f;
-        }
-    }
-
-    auto clamp01 = [](float x) { return std::clamp(x, 0.f, 1.f); };
-    return ((uint32_t)(clamp01(a) * 255) << 24) | ((uint32_t)(clamp01(b) * 255) << 16)
-        | ((uint32_t)(clamp01(g) * 255) << 8) | (uint32_t)(clamp01(r) * 255);
-}
-
-uint32_t SoftwareRenderer::ShadeLit(const SWFragment& frag, const SWMaterial* mat,
-                                     const float* /*modelMatrix*/) const
-{
-    // Normalize interpolated normal
-    float nx = frag.nx, ny = frag.ny, nz = frag.nz;
-    float nlen = std::sqrt(nx*nx + ny*ny + nz*nz);
-    if (nlen > 1e-6f) { nx /= nlen; ny /= nlen; nz /= nlen; }
-
-    // Base color
-    float r = 1.f, g = 1.f, b = 1.f, a = 1.f;
-    float smoothness = 0.5f;
-    if (mat)
-    {
-        auto albedo = mat->GetVec4("uAlbedo", {1, 1, 1, 1});
-        r = albedo[0]; g = albedo[1]; b = albedo[2]; a = albedo[3];
-        smoothness = mat->GetFloat("uSmoothness", 0.5f);
-
-        auto* tex = dynamic_cast<const SWTexture*>(mat->GetTexture());
-        if (tex && tex->IsValid())
-        {
-            uint32_t s = tex->Sample(frag.u, frag.v);
-            r *= ((s >>  0) & 0xFF) / 255.f;
-            g *= ((s >>  8) & 0xFF) / 255.f;
-            b *= ((s >> 16) & 0xFF) / 255.f;
-            a *= ((s >> 24) & 0xFF) / 255.f;
-        }
-    }
-
-    // View vector (world space)
-    float vx = m_cameraPos.x - frag.wx;
-    float vy = m_cameraPos.y - frag.wy;
-    float vz = m_cameraPos.z - frag.wz;
-    float vlen = std::sqrt(vx*vx + vy*vy + vz*vz);
-    if (vlen > 1e-6f) { vx /= vlen; vy /= vlen; vz /= vlen; }
-
-    // Shininess from smoothness (matches mix(4, 256, smoothness) in GL)
-    float shininess = 4.f + (256.f - 4.f) * smoothness;
-
-    auto blinnSpec = [&](float lx, float ly, float lz) {
-        float hx = lx + vx, hy = ly + vy, hz = lz + vz;
-        float hlen = std::sqrt(hx*hx + hy*hy + hz*hz);
-        if (hlen < 1e-6f) return 0.f;
-        hx /= hlen; hy /= hlen; hz /= hlen;
-        float ndoth = std::max(0.f, nx*hx + ny*hy + nz*hz);
-        return std::pow(ndoth, shininess);
-    };
-
-    // Ambient
-    float lr = m_lighting.ambientColor.x;
-    float lg = m_lighting.ambientColor.y;
-    float lb = m_lighting.ambientColor.z;
-
-    // Directional lights
-    for (const auto& dl : m_lighting.directionalLights)
-    {
-        float lx = -dl.direction.x, ly = -dl.direction.y, lz = -dl.direction.z;
-        float len = std::sqrt(lx*lx + ly*ly + lz*lz);
-        if (len > 1e-6f) { lx /= len; ly /= len; lz /= len; }
-
-        float ndotl = std::max(0.f, nx*lx + ny*ly + nz*lz);
-        float diff = ndotl * dl.intensity;
-        float spec = blinnSpec(lx, ly, lz) * 0.3f;
-
-        lr += dl.color.x * (diff + spec);
-        lg += dl.color.y * (diff + spec);
-        lb += dl.color.z * (diff + spec);
-    }
-
-    // Point lights
-    for (const auto& pl : m_lighting.pointLights)
-    {
-        float lx = pl.position.x - frag.wx;
-        float ly = pl.position.y - frag.wy;
-        float lz = pl.position.z - frag.wz;
-        float dist = std::sqrt(lx*lx + ly*ly + lz*lz);
-        if (dist > pl.range) continue;
-        if (dist > 1e-6f) { lx /= dist; ly /= dist; lz /= dist; }
-
-        float ndotl = std::max(0.f, nx*lx + ny*ly + nz*lz);
-        // Matches GL: 1 / (1 + attenuation * (d/range)^2)
-        float dr = dist / pl.range;
-        float atten = 1.f / (1.f + pl.attenuation * dr * dr);
-        float diff = ndotl * pl.intensity * atten;
-        float spec = blinnSpec(lx, ly, lz) * 0.3f * atten;
-
-        lr += pl.color.x * (diff + spec);
-        lg += pl.color.y * (diff + spec);
-        lb += pl.color.z * (diff + spec);
-    }
-
-    // Final: lighting * albedo
-    lr *= r; lg *= g; lb *= b;
-
-    auto clamp01 = [](float x){ return std::clamp(x, 0.f, 1.f); };
-    return ((uint32_t)(clamp01(a)  * 255) << 24)
-         | ((uint32_t)(clamp01(lb) * 255) << 16)
-         | ((uint32_t)(clamp01(lg) * 255) <<  8)
-         |  (uint32_t)(clamp01(lr) * 255);
 }
 
 void SoftwareRenderer::Mul4x4(const float *a, const float *b, float *out) const
@@ -680,13 +963,15 @@ bool SoftwareRenderer::SetupBlitResources()
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_width, m_height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
-    const char *vs = R"(#version 330 core
+    const char *vs = R"(
+#version 330 core
 layout(location=0) in vec2 aPos;
 layout(location=1) in vec2 aUV;
 out vec2 vUV;
 void main(){ vUV=aUV; gl_Position=vec4(aPos,0,1); })";
 
-    const char *fs = R"(#version 330 core
+    const char *fs = R"(
+#version 330 core
 in vec2 vUV; out vec4 frag;
 uniform sampler2D uTex;
 void main(){ frag = texture(uTex, vUV); })";
