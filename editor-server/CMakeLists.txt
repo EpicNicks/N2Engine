@@ -37,11 +37,11 @@ target_include_directories(N2EditorServer PUBLIC
 
 target_link_libraries(N2EditorServer
     PUBLIC
-        engine
-        renderer
-        MathCore::math
+    engine
+    renderer
+    MathCore::math
     PRIVATE
-        $<$<PLATFORM_ID:Windows>:ws2_32>
+    $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
 if(TARGET N2ProtocolGenerate)
@@ -51,6 +51,12 @@ endif()
 # Standalone editor host
 add_executable(N2EditorHost src/main.cpp)
 target_link_libraries(N2EditorHost PRIVATE N2EditorServer)
+
+if (WIN32)
+    set_target_properties(N2EditorServer N2EditorHost PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+endif()
 
 # Install
 install(TARGETS N2EditorServer N2EditorHost

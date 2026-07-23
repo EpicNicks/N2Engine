@@ -297,7 +297,13 @@ void TestEngine()
 
     // TO MOVE TO GUI SCENE EDITOR
     auto testScene = Scene::Create("Test Scene");
-    application.Init(std::move(testScene));
+    application.Init({
+        .physicsBackend = N2Engine::Config::ApplicationOptions::PhysicsBackend::PHYSX,
+        .renderBackend = N2Engine::Config::ApplicationOptions::RenderBackend::OPENGL,
+        .isHeadless = false,
+    });
+    SceneManager::AddScene(std::move(testScene), true);
+    SceneManager::ProcessAnyPendingSceneChange();
     application.GetWindow().clearColor = Common::Color::Magenta;
 
     application.GetWindow().SetWindowMode(WindowMode::Windowed);

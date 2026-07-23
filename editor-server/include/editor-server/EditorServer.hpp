@@ -49,6 +49,10 @@ namespace N2Engine::Editor
         std::string GenerateScriptTemplate(const std::string& scriptName);
         void HandleRescanAssets(int clientSocket);
 
+        // Script Generation
+        static std::string FillTemplate(std::string templ, const std::string &className);
+        static std::string GetScriptTemplate();
+
         // Network helpers
         bool Send(int socket, const void *data, size_t size);
         bool Receive(int socket, void *data, size_t size);

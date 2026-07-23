@@ -4,6 +4,7 @@
 
 #include <renderer/opengl/OpenGLRenderer.hpp>
 #include <renderer/vulkan/VulkanRenderer.hpp>
+#include <renderer/software/SoftwareRenderer.hpp>
 #include <math/VectorN.hpp>
 
 #include "engine/config/ApplicationOptions.hpp"

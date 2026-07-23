@@ -13,7 +13,8 @@ namespace N2Engine::Config
         enum class RenderBackend
         {
             OPENGL,
-            VULKAN
+            VULKAN,
+            SOFTWARE
         };
 
         std::string projectPath;

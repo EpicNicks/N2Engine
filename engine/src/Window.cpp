@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include "engine/Window.hpp"
 #include "engine/Logger.hpp"
 #include "engine/Application.hpp"
@@ -5,8 +7,6 @@
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/ActionMap.hpp"
 #include "engine/input/InputBinding.hpp"
-
-#include <algorithm>
 
 using namespace N2Engine;
 
@@ -36,7 +36,7 @@ void Window::InitWindow(const Config::ApplicationOptions &options)
     }
     else
     {
-        // Configure for OpenGL 3.3
+        // Configure for OpenGL 3.3 (software renderer also uses glfw to present the framebuffer to the graphics card)
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -78,6 +78,11 @@ void Window::InitWindow(const Config::ApplicationOptions &options)
     {
         _renderer = std::make_unique<Renderer::Vulkan::VulkanRenderer>();
         Logger::Log("Using Vulkan renderer", Logger::LogLevel::Info);
+    }
+    else if (options.renderBackend == Config::ApplicationOptions::RenderBackend::SOFTWARE)
+    {
+        _renderer = std::make_unique<Renderer::Software::SoftwareRenderer>();
+        Logger::Log("Using Software renderer", Logger::LogLevel::Info);
     }
     else
     {
