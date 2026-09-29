@@ -35,9 +35,26 @@ Camera* Application::GetMainCamera() const
 /// <b>projectPath</b>: "" (unset)
 /// <b>physicsBackend</b>: PhysX
 /// <b>renderBackend</b>: OpenGL
-void Application::Init()
+namespace
 {
-    Init({
+    std::string_view RenderBackendName(Config::ApplicationOptions::RenderBackend backend)
+    {
+        switch (backend)
+        {
+        case Config::ApplicationOptions::RenderBackend::OPENGL:
+            return "OpenGL";
+        case Config::ApplicationOptions::RenderBackend::VULKAN:
+            return "Vulkan";
+        case Config::ApplicationOptions::RenderBackend::SOFTWARE:
+            return "Software";
+        }
+        return "Unknown";
+    }
+}
+
+EngineHealth Application::Init()
+{
+    return Init({
         .projectPath = "",
         .physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX,
         .renderBackend = Config::ApplicationOptions::RenderBackend::OPENGL,
@@ -45,20 +62,59 @@ void Application::Init()
     });
 }
 
-void Application::Init(const Config::ApplicationOptions &options)
+EngineHealth Application::Init(const Config::ApplicationOptions &options)
 {
 #ifdef N2ENGINE_DEBUG
     Logger::InitializeDebugConsoleHelper();
 #endif
-    Scripting::LuaRuntime::Instance().Initialize();
+    _health = {};
+    SubsystemStatus windowStatus{.name = "Window"};
+    SubsystemStatus rendererStatus{.name = "Renderer"};
+    SubsystemStatus physicsStatus{.name = "Physics"};
+    SubsystemStatus audioStatus{.name = "Audio"};
+    SubsystemStatus scriptingStatus{.name = "Scripting"};
+
+    if (Scripting::LuaRuntime::Instance().Initialize())
+    {
+        scriptingStatus.state = SubsystemState::Running;
+    }
+    else
+    {
+        scriptingStatus.state = SubsystemState::Failed;
+        scriptingStatus.detail = "Lua bindings failed to register (see log)";
+    }
+
     Math::InitializeSIMD();
     Time::Init();
-    _window.InitWindow(options);
 
+    const std::string rendererName{RenderBackendName(options.renderBackend)};
+    if (_window.InitWindow(options))
+    {
+        windowStatus.state = SubsystemState::Running;
+        rendererStatus.state = SubsystemState::Running;
+        rendererStatus.detail = rendererName;
+    }
+    else if (_window.RendererFailed())
+    {
+        windowStatus.state = SubsystemState::Failed;
+        windowStatus.detail = "Closed because the renderer failed";
+        rendererStatus.state = SubsystemState::Failed;
+        rendererStatus.detail = rendererName + ": " + _window.GetInitError();
+    }
+    else
+    {
+        windowStatus.state = SubsystemState::Failed;
+        windowStatus.detail = _window.GetInitError();
+        rendererStatus.detail = "Not started because the window failed";
+    }
+
+    // Created even without a window so game code can rely on GetMainCamera()
     _mainCamera = std::make_unique<Camera>();
 
     const Vector2i windowDimensions = _window.GetWindowDimensions();
-    const float aspect = static_cast<float>(windowDimensions[0]) / static_cast<float>(windowDimensions[1]);
+    const float aspect = windowDimensions[0] > 0 && windowDimensions[1] > 0
+                             ? static_cast<float>(windowDimensions[0]) / static_cast<float>(windowDimensions[1])
+                             : 16.0f / 9.0f;
 
     _mainCamera->SetPerspective(45.0f, aspect, 0.1f, 100.0f);
     // _mainCamera->SetOrthographic(-10.0f, 10.0f, -10.0f, 10.0f, 0.0f, 100.0f);
@@ -74,29 +130,51 @@ void Application::Init(const Config::ApplicationOptions &options)
             Logger::Error("Failed to initialize PhysX backend!");
             Logger::Warn("Physics will be disabled. Game will continue without physics simulation.");
             _3DphysicsBackend.reset();
+            physicsStatus.state = SubsystemState::Failed;
+            physicsStatus.detail = "PhysX failed to initialize (see log)";
         }
         else
         {
             Logger::Info("3D Physics backend initialized successfully");
+            physicsStatus.state = SubsystemState::Running;
+            physicsStatus.detail = "PhysX";
         }
     }
     else
     {
         Logger::Error(NAMEOF(options.physicsBackend) + " is not currently supported");
+        physicsStatus.state = SubsystemState::Disabled;
+        physicsStatus.detail = "Selected physics backend is not supported";
     }
-
-    Logger::Info("3D Physics backend initialized");
 
     if (options.isHeadless)
     {
         // Headless audio should be mixed and streamed to the editor client, not played locally
         Logger::Info("Audio disabled in headless mode (streaming not yet implemented)");
+        audioStatus.state = SubsystemState::Disabled;
+        audioStatus.detail = "Headless mode (streaming not yet implemented)";
     }
-    else if (!Audio::AudioSystem::Instance().Initialize())
+    else if (Audio::AudioSystem::Instance().Initialize())
+    {
+        audioStatus.state = SubsystemState::Running;
+    }
+    else
     {
         Logger::Error("Failed to initialize audio!");
         Logger::Warn("Audio will be disabled. Game will continue without sound.");
+        audioStatus.state = SubsystemState::Failed;
+        audioStatus.detail = "Could not open an audio device (see log)";
     }
+
+    _health.subsystems = {windowStatus, rendererStatus, physicsStatus, audioStatus, scriptingStatus};
+    for (const SubsystemStatus &status : _health.subsystems)
+    {
+        if (status.state == SubsystemState::Failed)
+        {
+            Logger::Warn(std::format("Subsystem {} failed: {}", status.name, status.detail));
+        }
+    }
+    return _health;
 }
 
 /// @param initialScene The initial scene to load in SceneManager
@@ -111,6 +189,13 @@ void Application::Init(std::unique_ptr<Scene> &&initialScene)
 
 void Application::Run()
 {
+    if (!_window.IsValid())
+    {
+        Logger::Error("Cannot run: no window or renderer (see GetHealth())");
+        Audio::AudioSystem::Instance().Shutdown();
+        return;
+    }
+
     double fixedTimestepAccumulator = 0.0;
     // Initialize last frame time for accumulator
     double lastTime = Time::GetUnscaledTime();
@@ -156,6 +241,10 @@ void Application::Run()
 void Application::Render()
 {
     auto *renderer = _window.GetRenderer();
+    if (!renderer)
+    {
+        return;
+    }
 
     _window.Clear();
     renderer->BeginFrame();
@@ -229,6 +318,10 @@ Physics::IPhysicsBackend* Application::Get3DPhysicsBackend() const
 
 void Application::RenderEditorFrame()
 {
+    if (!_window.IsValid())
+    {
+        return;
+    }
     _window.PollEvents();
     Time::Update();
     Audio::AudioSystem::Instance().Update();

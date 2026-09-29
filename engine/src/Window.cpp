@@ -20,12 +20,33 @@ Window::Window()
 
 Window::~Window() = default;
 
-void Window::InitWindow(const Config::ApplicationOptions &options)
+bool Window::FailInit(const std::string &error)
 {
+    Logger::Log(error, Logger::LogLevel::Error);
+    _initError = error;
+
+    // Leave nothing half-initialized: callers check IsValid() and every accessor handles null
+    _inputSystem.reset();
+    _renderer.reset();
+    if (_window)
+    {
+        glfwDestroyWindow(_window);
+        _window = nullptr;
+    }
+    glfwTerminate();
+    return false;
+}
+
+bool Window::InitWindow(const Config::ApplicationOptions &options)
+{
+    _initError.clear();
+    _rendererFailed = false;
+
     if (!glfwInit())
     {
-        Logger::Log("Failed to initialize GLFW", Logger::LogLevel::Error);
-        return;
+        _initError = "Failed to initialize GLFW";
+        Logger::Log(_initError, Logger::LogLevel::Error);
+        return false;
     }
 
     // Configure GLFW hints based on chosen renderer
@@ -51,16 +72,18 @@ void Window::InitWindow(const Config::ApplicationOptions &options)
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     }
 
-    const GLFWvidmode *vidMode = glfwGetVideoMode(glfwGetPrimaryMonitor());
-    const int WIDTH = vidMode->width / 2;
-    const int HEIGHT = vidMode->height / 2;
+    // No monitor is attached on some headless machines; fall back to a fixed size
+    constexpr int FallbackWidth = 1280;
+    constexpr int FallbackHeight = 720;
+    GLFWmonitor *primaryMonitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode *vidMode = primaryMonitor ? glfwGetVideoMode(primaryMonitor) : nullptr;
+    const int WIDTH = vidMode ? vidMode->width / 2 : FallbackWidth;
+    const int HEIGHT = vidMode ? vidMode->height / 2 : FallbackHeight;
 
     _window = glfwCreateWindow(WIDTH, HEIGHT, "N2Engine", nullptr, nullptr);
     if (!_window)
     {
-        Logger::Log("Failed to create GLFW window", Logger::LogLevel::Error);
-        glfwTerminate();
-        return;
+        return FailInit("Failed to create GLFW window");
     }
 
     // Initialize windowed state with current window properties
@@ -91,19 +114,22 @@ void Window::InitWindow(const Config::ApplicationOptions &options)
     }
 
     // Initialize the chosen renderer
-    if (!_renderer->Initialize(_window, WIDTH, HEIGHT))
+    if (!_renderer || !_renderer->Initialize(_window, WIDTH, HEIGHT))
     {
-        Logger::Log("Failed to initialize renderer", Logger::LogLevel::Error);
-        glfwDestroyWindow(_window);
-        glfwTerminate();
-        return;
+        _rendererFailed = true;
+        return FailInit("Failed to initialize renderer");
     }
 
     _inputSystem = std::make_unique<Input::InputSystem>(*this);
+    return true;
 }
 
 Vector2i Window::GetWindowDimensions() const
 {
+    if (!_window)
+    {
+        return {0, 0};
+    }
     int width, height;
     glfwGetWindowSize(_window, &width, &height);
     return {width, height};
@@ -111,6 +137,10 @@ Vector2i Window::GetWindowDimensions() const
 
 void Window::Clear()
 {
+    if (!_renderer)
+    {
+        return;
+    }
     _renderer->Clear(clearColor.r, clearColor.g, clearColor.b, clearColor.a);
 }
 
@@ -127,7 +157,10 @@ Input::InputSystem *Window::GetInputSystem() const
 void Window::PollEvents()
 {
     glfwPollEvents();
-    _inputSystem->Update();
+    if (_inputSystem)
+    {
+        _inputSystem->Update();
+    }
 }
 
 void Window::Shutdown()
@@ -147,7 +180,8 @@ void Window::Shutdown()
 
 bool Window::ShouldClose() const
 {
-    return glfwWindowShouldClose(_window);
+    // A window that failed to open (or was shut down) has nothing to keep running for
+    return _window == nullptr || glfwWindowShouldClose(_window);
 }
 
 void Window::SetTitle(const std::string &title)
@@ -180,7 +214,7 @@ void Window::OnWindowResize(int width, int height)
 
 void Window::SetWindowMode(WindowMode windowMode)
 {
-    if (_windowMode == windowMode)
+    if (!_window || _windowMode == windowMode)
     {
         return;
     }
