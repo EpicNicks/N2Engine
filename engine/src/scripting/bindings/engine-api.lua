@@ -697,7 +697,13 @@ function Positionable:GetRight() end
 function Positionable:GetUp() end
 
 ---@class GameObject
+---@overload fun(name?: string): GameObject
 GameObject = {}
+
+---Create a new GameObject (same as calling GameObject(name)). Add it to a scene with Scene:AddRootGameObject.
+---@param name? string Defaults to "GameObject"
+---@return GameObject
+function GameObject.Create(name) end
 
 ---Get the name of this GameObject
 ---@return string
@@ -800,7 +806,7 @@ function Scene:DestroyGameObject(gameObject) end
 SceneManager = {}
 
 ---Get the current scene
----@return Scene
+---@return Scene|nil nil when no scene is loaded
 function SceneManager.GetCurrentScene() end
 
 ---Get the current scene index

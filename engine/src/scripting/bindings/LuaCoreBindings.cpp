@@ -25,11 +25,15 @@ namespace N2Engine::Scripting::Bindings
 
         lua.new_usertype<GameObject>(
             "GameObject",
-            sol::call_constructor,
-            sol::constructors<
-                GameObject(),
-                GameObject(std::string)
-            >(),
+            // Factories (not constructors) so Lua gets a shared_ptr that scenes and parents can hold
+            sol::call_constructor, sol::factories(
+                []() { return GameObject::Create(); },
+                [](const std::string &name) { return GameObject::Create(name); }
+            ),
+            "Create", sol::overload(
+                []() { return GameObject::Create(); },
+                [](const std::string &name) { return GameObject::Create(name); }
+            ),
 
             "GetName", &GameObject::GetName,
             "SetName", &GameObject::SetName,
@@ -77,9 +81,9 @@ namespace N2Engine::Scripting::Bindings
 
         // ===== SceneManager (global) =====
         lua["SceneManager"] = lua.create_table_with(
-            "GetCurrentScene", []() -> Scene&
+            "GetCurrentScene", []() -> Scene*
             {
-                return SceneManager::GetCurSceneRef();
+                return SceneManager::GetCurScene(); // nil when no scene is loaded
             },
             "GetCurrentSceneIndex", &SceneManager::GetCurSceneIndex,
             "LoadScene", sol::overload(
