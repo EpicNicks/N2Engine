@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@v1
@@ -22,7 +22,7 @@ jobs:
           stripdown: true
 
       - name: Cache PhysX binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: external/PhysX/physx/bin
           key: physx-bin-${{ runner.os }}-v1
