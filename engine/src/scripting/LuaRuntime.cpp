@@ -91,6 +91,7 @@ namespace N2Engine::Scripting
         Bindings::BindApplication(*this);
         Bindings::BindWindow(*this);
         Bindings::BindCamera(*this);
+        Bindings::BindComponents(*this);
 
         SetupModuleSystem();
 
@@ -104,6 +105,25 @@ namespace N2Engine::Scripting
                 end
             end
         )");
+    }
+
+    bool LuaRuntime::RunFile(const IO::ResourcePath &path)
+    {
+        const auto script = IO::ResourceLoader::Instance().Load<LuaScript>(path);
+        if (!script)
+        {
+            Logger::Error(std::format("Lua script not found: {}", path.ToString()));
+            return false;
+        }
+
+        const auto result = _lua.safe_script(script->GetSourceCode(), sol::script_pass_on_error, path.ToString());
+        if (!result.valid())
+        {
+            const sol::error err = result;
+            Logger::Error(std::format("Error running {}: {}", path.ToString(), err.what()));
+            return false;
+        }
+        return true;
     }
 
     void LuaRuntime::SetupModuleSystem()

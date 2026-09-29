@@ -6,6 +6,8 @@
 #include "engine/Application.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/Mouse.hpp"
+#include "engine/Logger.hpp"
+#include "engine/scripting/LuaJson.hpp"
 
 namespace N2Engine::Scripting::Bindings
 {
@@ -153,6 +155,23 @@ namespace N2Engine::Scripting::Bindings
                 if (!inputSystem) return nullptr;
 
                 return inputSystem->LoadActionMap(mapName);
+            },
+
+            // Input.CreateActionMap("Main Controls", {
+            //     ["Move"] = { { type = "Vector2Composite", up = "W", down = "S", left = "A", right = "D" } },
+            //     ["Quit"] = { { type = "KeyboardButton", key = "Escape" } },
+            // })
+            // Binding fields and enum names match the action map JSON format. Returns nil without a window.
+            "CreateActionMap", [](const std::string &mapName, const sol::table &actions) -> Input::ActionMap*
+            {
+                auto *inputSystem = Application::GetInstance().GetWindow().GetInputSystem();
+                if (!inputSystem)
+                {
+                    Logger::Warn(std::format("Input.CreateActionMap('{}'): no input system (no window)", mapName));
+                    return nullptr;
+                }
+
+                return inputSystem->CreateActionMapFromJson(mapName, ActionMapJsonFromLua(actions));
             }
         );
     }

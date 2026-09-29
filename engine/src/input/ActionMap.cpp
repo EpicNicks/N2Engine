@@ -301,7 +301,11 @@ std::expected<std::unique_ptr<InputAction>, ActionParseError> InputAction::Deser
         {
             action->AddBinding(std::move(result.value()));
         }
-        Logger::Warn("Invalid binding found in action: " + actionName);
+        else
+        {
+            Logger::Warn(std::format("Invalid binding in action '{}' ({}): {}",
+                                     actionName, BindingParseErrorToString(result.error()), bindingJson.dump()));
+        }
     }
 
     return action;
@@ -342,7 +346,11 @@ std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> ActionMap::Deseri
         {
             actionMap->AddInputAction(std::move(result.value()));
         }
-        Logger::Warn("Invalid binding found in ActionMap: " + mapName);
+        else
+        {
+            Logger::Warn(std::format("Invalid action '{}' in ActionMap '{}': {}",
+                                     actionName, mapName, ActionParseErrorToString(result.error())));
+        }
     }
 
     return actionMap;

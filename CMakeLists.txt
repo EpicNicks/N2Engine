@@ -107,6 +107,7 @@ add_subdirectory(math)
 add_subdirectory(renderer)
 add_subdirectory(engine)
 add_subdirectory(test_project)
+add_subdirectory(lua_project)
 add_subdirectory(editor-server)
 
 if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)

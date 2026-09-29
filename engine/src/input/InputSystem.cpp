@@ -22,6 +22,20 @@ InputSystem::InputSystem(Window &window)
 
 InputSystem::~InputSystem() = default;
 
+ActionMap* InputSystem::CreateActionMapFromJson(const std::string &name, const nlohmann::json &j)
+{
+    auto result = ActionMap::Deserialize(j, name, _window._window);
+    if (!result.has_value())
+    {
+        Logger::Error(std::format("Failed to create action map '{}': {}",
+                                  name, ActionMapParseErrorToString(result.error())));
+        return nullptr;
+    }
+
+    AddActionMap(std::move(result.value()));
+    return GetActionMap(name);
+}
+
 void InputSystem::AddActionMap(std::unique_ptr<ActionMap> &&actionMap)
 {
     const std::string mapName = actionMap->name; // Store name before moving
@@ -157,7 +171,7 @@ bool InputSystem::Deserialize(const nlohmann::json &j)
                 }
                 else
                 {
-                    Logger::Warn("Malformed binding: " + bindingJson["name"].get<std::string>());
+                    Logger::Warn("Malformed binding: " + bindingJson.dump());
                 }
                 // Silently skip invalid bindings
             }
