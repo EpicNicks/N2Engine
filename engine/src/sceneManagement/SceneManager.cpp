@@ -50,11 +50,12 @@ void SceneManager::LoadScene(const std::string &sceneName)
     }
 }
 
-Scene* SceneManager::GetScene(const std::string &sceneName)
+std::unique_ptr<Scene> SceneManager::GetScene(const std::string &sceneName)
 {
     if (int sceneIndex = GetSceneIndex(sceneName); sceneIndex != -1)
     {
-        return Scene::FromJSON(GetInstance()._scenes[sceneIndex]).get();
+        // Returned by value: the old version returned .get() of this temporary, which dangled
+        return Scene::FromJSON(GetInstance()._scenes[sceneIndex]);
     }
     Logger::Error("SceneManager::GetScene - Scene name not found: " + sceneName);
     return nullptr;
@@ -64,12 +65,12 @@ int SceneManager::GetSceneIndex(const std::string &sceneName)
 {
     for (int i = 0; i < GetInstance()._scenes.size(); i++)
     {
-        if (auto sceneJson = GetInstance()._scenes[i]; !sceneJson.is_null())
+        // Compare the stored name rather than deserializing the whole scene (which builds every object
+        // and component) just to read it
+        if (const auto &sceneJson = GetInstance()._scenes[i];
+            sceneJson.is_object() && sceneJson.value("name", std::string{}) == sceneName)
         {
-            if (auto scene = Scene::FromJSON(sceneJson); scene != nullptr && scene->sceneName == sceneName)
-            {
-                return i;
-            }
+            return i;
         }
     }
     Logger::Error("Index of scene with name: " + sceneName + " not found: ");
@@ -97,19 +98,39 @@ void SceneManager::AddScene(nlohmann::json &j)
 
 bool SceneManager::DeleteScene(const std::string &sceneName)
 {
-    if (GetScene(sceneName))
+    const int index = GetSceneIndex(sceneName);
+    if (index == -1)
     {
-        SceneManager &instance = GetInstance();
-        instance._scenes.erase(instance._scenes.begin() + instance._curSceneIndex);
-        return true;
+        return false;
     }
-    return false;
+
+    SceneManager &instance = GetInstance();
+    if (index == instance._curSceneIndex ||
+        (instance._sceneChange._updatingScene && index == instance._sceneChange._pendingSceneIndex))
+    {
+        Logger::Error("SceneManager::DeleteScene - can't delete a loaded or loading scene: " + sceneName);
+        return false;
+    }
+
+    // Erase the named scene (this used to erase the loaded scene's index instead)
+    instance._scenes.erase(instance._scenes.begin() + index);
+
+    // Indices after the erased one shift down by one
+    if (instance._curSceneIndex > index)
+    {
+        --instance._curSceneIndex;
+    }
+    if (instance._sceneChange._updatingScene && instance._sceneChange._pendingSceneIndex > index)
+    {
+        --instance._sceneChange._pendingSceneIndex;
+    }
+    return true;
 }
 
 void SceneManager::UpdateScene(int sceneIndex, nlohmann::json &newSceneData)
 {
     auto &instance = GetInstance();
-    if (sceneIndex > 0 && sceneIndex < static_cast<int>(instance._scenes.size()))
+    if (sceneIndex >= 0 && sceneIndex < static_cast<int>(instance._scenes.size()))
     {
         instance._scenes[sceneIndex] = newSceneData;
     }

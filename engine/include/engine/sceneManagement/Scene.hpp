@@ -31,8 +31,12 @@ namespace N2Engine
 
     private:
         std::vector<std::shared_ptr<GameObject>> _rootGameObjects;
-        std::vector<Component*> _components;
-        std::queue<Component*> _attachQueue;
+        // Raw views of components owned by GameObjects. Every path that removes a component or
+        // object from this scene goes through DetachComponent, so these never hold freed pointers.
+        // mutable: OnAllActiveComponents (const) compacts entries detached while it was iterating
+        mutable std::vector<Component*> _components;
+        mutable int _componentIterationDepth = 0;
+        std::vector<Component*> _attachQueue; // vector, not queue, so pending entries can be removed
         std::vector<Rendering::Light*> _sceneLights;
 
         std::unique_ptr<Scheduling::CoroutineScheduler> _coroutineScheduler;
@@ -115,6 +119,9 @@ namespace N2Engine
         bool TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject,
                                      std::function<bool(std::shared_ptr<GameObject>)> callback) const;
         void AddComponentToAttachQueue(Component *component);
+        /// Forgets a component: drops it from _components, _sceneLights and the attach queue.
+        /// Called before a component is freed or leaves this scene (RemoveComponent, SetScene, Clear).
+        void DetachComponent(Component *component);
 
         void OnAllActiveComponents(const std::function<void(Component *)> &callback) const;
 
