@@ -4,47 +4,58 @@
 
 namespace N2Engine::Scripting::Bindings
 {
+    namespace
+    {
+        // sol::property only works on usertypes: on a plain table, Time.deltaTime would be
+        // the property object rather than a number. Time is a single instance of this type.
+        struct LuaTime {};
+    }
+
     void BindTime(LuaRuntime& runtime)
     {
         auto& lua = runtime.GetState();
-        
+
         // ===== Time Global =====
-        lua["Time"] = lua.create_table_with(
+        lua.new_usertype<LuaTime>("LuaTime",
+            sol::no_constructor,
+
             // Scaled time (affected by timeScale)
-            "deltaTime", sol::property([]() -> float {
+            "deltaTime", sol::property([](const LuaTime&) -> float {
                 return Time::GetDeltaTime();
             }),
-            
-            "time", sol::property([]() -> float {
+
+            "time", sol::property([](const LuaTime&) -> float {
                 return Time::GetTime();
             }),
-            
-            "fixedDeltaTime", sol::property([]() -> float {
+
+            "fixedDeltaTime", sol::property([](const LuaTime&) -> float {
                 return Time::GetFixedDeltaTime();
             }),
-            
+
             // Unscaled time (not affected by timeScale)
-            "unscaledDeltaTime", sol::property([]() -> float {
+            "unscaledDeltaTime", sol::property([](const LuaTime&) -> float {
                 return Time::GetUnscaledDeltaTime();
             }),
-            
-            "unscaledTime", sol::property([]() -> float {
+
+            "unscaledTime", sol::property([](const LuaTime&) -> float {
                 return Time::GetUnscaledTime();
             }),
-            
-            "fixedUnscaledDeltaTime", sol::property([]() -> float {
+
+            "fixedUnscaledDeltaTime", sol::property([](const LuaTime&) -> float {
                 return Time::GetFixedUnscaledDeltaTime();
             }),
-            
+
             // Time scale control
             "timeScale", sol::property(
-                []() -> float { 
-                    return Time::GetTimeScale(); 
+                [](const LuaTime&) -> float {
+                    return Time::GetTimeScale();
                 },
-                [](float scale) { 
-                    Time::SetTimeScale(scale); 
+                [](LuaTime&, float scale) {
+                    Time::SetTimeScale(scale);
                 }
             )
         );
+
+        lua["Time"] = LuaTime{};
     }
 }

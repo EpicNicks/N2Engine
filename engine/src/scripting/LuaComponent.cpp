@@ -472,6 +472,16 @@ namespace N2Engine::Scripting
         }
     }
 
+    // Defined here rather than in the header, so instantiate the field types scripts support
+    template int LuaComponent::GetField<int>(const std::string &, int) const;
+    template float LuaComponent::GetField<float>(const std::string &, float) const;
+    template bool LuaComponent::GetField<bool>(const std::string &, bool) const;
+    template std::string LuaComponent::GetField<std::string>(const std::string &, std::string) const;
+    template void LuaComponent::SetField<int>(const std::string &, const int &);
+    template void LuaComponent::SetField<float>(const std::string &, const float &);
+    template void LuaComponent::SetField<bool>(const std::string &, const bool &);
+    template void LuaComponent::SetField<std::string>(const std::string &, const std::string &);
+
     void LuaComponent::ReloadScript()
     {
         if (!_script)
