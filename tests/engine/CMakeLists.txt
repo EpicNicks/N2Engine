@@ -27,4 +27,9 @@ else()
     target_compile_options(engine_tests PRIVATE -Wall -Wextra)
 endif()
 
+# lua_project/assets/scene.lua is built headless by LuaSceneTests
+target_compile_definitions(engine_tests PRIVATE
+        N2_LUA_PROJECT_DIR="${CMAKE_SOURCE_DIR}/lua_project"
+)
+
 add_test(NAME engine_tests COMMAND engine_tests)

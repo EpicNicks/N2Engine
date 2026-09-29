@@ -754,6 +754,68 @@ function GameObject:FindChildRecursive(name) end
 ---Destroy this GameObject
 function GameObject:Destroy() end
 
+---Add a component by type name and return it.
+---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
+---"SphereRenderer", "AudioSource", "AudioListener", "LuaComponent". Unknown names raise an error.
+---@param typeName string
+---@return Component
+function GameObject:AddComponent(typeName) end
+
+---Get a component by type name (same names as AddComponent)
+---@param typeName string
+---@return Component|nil nil when the object has no component of that type
+function GameObject:GetComponent(typeName) end
+
+---@class CubeRenderer : Component
+CubeRenderer = {}
+
+---@param color Color
+function CubeRenderer:SetColor(color) end
+
+---@return Color
+function CubeRenderer:GetColor() end
+
+---@param size Vector3
+function CubeRenderer:SetSize(size) end
+
+---@return Vector3
+function CubeRenderer:GetSize() end
+
+---@class SphereRenderer : Component
+SphereRenderer = {}
+
+---@param color Color
+function SphereRenderer:SetColor(color) end
+
+---@return Color
+function SphereRenderer:GetColor() end
+
+---@param radius number
+function SphereRenderer:SetRadius(radius) end
+
+---@return number
+function SphereRenderer:GetRadius() end
+
+---@param latitude integer
+---@param longitude integer
+function SphereRenderer:SetSubdivision(latitude, longitude) end
+
+---Runs a behaviour script: a file returning a table whose __index is itself, with optional
+---OnAttach, OnUpdate, OnFixedUpdate, OnLateUpdate, OnDestroy, OnEnable, OnDisable and collision methods.
+---Inside those methods, self.gameObject and self.component are set.
+---@class LuaComponent : Component
+LuaComponent = {}
+
+---@param path string e.g. "res://scripts/CameraController.lua"
+function LuaComponent:SetScript(path) end
+
+---@return string
+function LuaComponent:GetScriptPath() end
+
+---True when the script is missing, failed to load, or didn't return a table
+---@return boolean
+function LuaComponent:HasMissingScript() end
+
 ---@class Component
 ---@field gameObject GameObject The GameObject this component is attached to
 Component = {}
@@ -1238,6 +1300,16 @@ function Input.GetActionMap(mapName) end
 ---@param mapName string
 ---@return ActionMap|nil
 function Input.LoadActionMap(mapName) end
+
+---Create (or replace) an action map. Each action lists bindings; fields and names follow the action map JSON format:
+---  { type = "KeyboardButton", key = "Escape" }
+---  { type = "Vector2Composite", up = "W", down = "S", left = "A", right = "D" }
+---  { type = "GamepadStick", xAxis = "LeftX", yAxis = "LeftY", deadzone = 0.25, invertX = false, invertY = true }
+---  { type = "GamepadButton", button = "South" }, { type = "GamepadAxis", axis = "LeftTrigger" }, { type = "MouseButton", button = "Left" }
+---@param mapName string
+---@param actions table<string, table[]> e.g. { ["Quit"] = { { type = "KeyboardButton", key = "Escape" } } }
+---@return ActionMap|nil nil without a window, or if the map is malformed
+function Input.CreateActionMap(mapName, actions) end
 
 -- ===== EVENTS =====
 
