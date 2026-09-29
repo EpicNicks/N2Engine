@@ -230,6 +230,15 @@ namespace N2Engine::Editor
     {
         auto &app = Application::GetInstance();
 
+        auto *renderer = app.GetWindow().GetRenderer();
+        if (!renderer)
+        {
+            BufferWriter response;
+            WriteError(response, "No renderer available (see GetEngineHealth)");
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
+
         app.RenderEditorFrame();
 
         // Resize frame buffer if needed
@@ -239,7 +248,7 @@ namespace N2Engine::Editor
 
         // Read pixels from renderer
         // You'll need to implement ReadFramebuffer in your renderer
-        app.GetWindow().GetRenderer()->ReadFramebuffer(_frameBuffer.data(), _viewportWidth, _viewportHeight);
+        renderer->ReadFramebuffer(_frameBuffer.data(), _viewportWidth, _viewportHeight);
 
         BufferWriter response;
         WriteFrameData(response,
