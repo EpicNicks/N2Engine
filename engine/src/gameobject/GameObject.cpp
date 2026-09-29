@@ -381,9 +381,13 @@ size_t GameObject::GetComponentCount() const
 void GameObject::SetScene(Scene *scene)
 {
     _scene = scene;
-    for (const auto &component : _components)
+    // Scene::Clear detaches objects with SetScene(nullptr); there's no queue to attach to then
+    if (_scene)
     {
-        _scene->AddComponentToAttachQueue(component.get());
+        for (const auto &component : _components)
+        {
+            _scene->AddComponentToAttachQueue(component.get());
+        }
     }
 
     // Recursively set scene for children
