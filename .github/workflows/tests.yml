@@ -28,7 +28,7 @@ jobs:
           key: physx-bin-${{ runner.os }}-v1
 
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DN2ENGINE_BUILD_TESTS=ON
+        run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON # newest installed Visual Studio
 
       - name: Build
         run: cmake --build build --config Debug --parallel
