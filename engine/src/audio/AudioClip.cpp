@@ -33,6 +33,10 @@ namespace N2Engine::Audio
             return false;
         }
 
+        // Release any previous buffer and clear stale errors so the check below only sees ours
+        Unload();
+        alGetError();
+
         // Create OpenAL buffer
         alGenBuffers(1, &_buffer);
         alBufferData(_buffer, format, data.samples.data(),
