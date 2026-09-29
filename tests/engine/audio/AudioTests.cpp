@@ -263,6 +263,24 @@ private:
 };
 
 // ============================================================================
+// AudioSystem without initialization (headless mode, or no audio device)
+// ============================================================================
+
+TEST(AudioSystemUninitializedTest, CallsAreSafeNoOps)
+{
+    auto &audio = AudioSystem::Instance();
+    audio.Shutdown(); // make sure no earlier test left it running
+
+    audio.Update();
+    audio.Stop(AudioHandle{1});
+    audio.Shutdown(); // double shutdown is fine
+
+    EXPECT_FALSE(audio.IsPlaying(AudioHandle{1}));
+    EXPECT_FALSE(audio.PlayOneShot(std::make_shared<AudioClip>()).IsValid());
+    EXPECT_EQ(audio.CountPlayingInGroup("SFX"), 0u);
+}
+
+// ============================================================================
 // AudioClip
 // ============================================================================
 
