@@ -66,6 +66,16 @@ bool GameObject::IsActiveInHierarchy() const
     return _activeInHierarchyCached;
 }
 
+bool GameObject::IsActiveInHierarchyIgnoringDestruction() const
+{
+    if (!_isActive)
+    {
+        return false;
+    }
+    const auto parent = _parent.lock();
+    return !parent || parent->IsActiveInHierarchyIgnoringDestruction();
+}
+
 void GameObject::UpdateActiveInHierarchyCache() const
 {
     if (auto parent = _parent.lock())
@@ -355,11 +365,7 @@ bool GameObject::RemoveComponent(const std::type_index &type)
     if (const auto it = _componentMap.find(type); it != _componentMap.end())
     {
         const auto component = it->second;
-        if (!component->_isMarkedForDestruction)
-        {
-            component->OnDestroy();
-            component->_isMarkedForDestruction = true;
-        }
+        component->RunDestroyCallbacks(IsActiveInHierarchyIgnoringDestruction());
 
         // The scene keeps raw pointers to attached components; drop them before the component is freed
         if (_scene)
@@ -387,12 +393,12 @@ bool GameObject::RemoveComponent(const std::type_index &type)
 
 void GameObject::RemoveAllComponents()
 {
+    const bool wasActive = IsActiveInHierarchyIgnoringDestruction();
     for (auto &component : _components)
     {
-        if (component && !component->_isMarkedForDestruction)
+        if (component)
         {
-            component->OnDestroy();
-            component->_isMarkedForDestruction = true;
+            component->RunDestroyCallbacks(wasActive);
         }
         if (component && _scene)
         {

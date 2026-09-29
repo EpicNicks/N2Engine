@@ -1265,7 +1265,8 @@ function InputAction:SetDisabled(disabled) end
 ---@return string
 function InputAction:GetName() end
 
----Subscribe to state changes
+---Subscribe to state changes.
+---Subscribed from a LuaComponent script, the callback stops firing once that component is destroyed.
 ---@param callback fun(action: InputAction)
 ---@return integer subscriptionId Use this to unsubscribe later
 function InputAction:Subscribe(callback) end
@@ -1316,7 +1317,8 @@ function Input.CreateActionMap(mapName, actions) end
 ---@class Event
 Event = {}
 
----Subscribe to this event
+---Subscribe to this event.
+---Subscribed from a LuaComponent script, the callback stops firing once that component is destroyed.
 ---@param callback fun()
 ---@return integer subscriptionId Use this to unsubscribe later
 function Event:Subscribe(callback) end
@@ -1335,7 +1337,8 @@ function Event:GetSubscriberCount() end
 ---@class WindowResizeEvent
 WindowResizeEvent = {}
 
----Subscribe to window resize events
+---Subscribe to window resize events.
+---Subscribed from a LuaComponent script, the callback stops firing once that component is destroyed.
 ---@param callback fun(width: integer, height: integer)
 ---@return integer subscriptionId
 function WindowResizeEvent:Subscribe(callback) end
@@ -1347,7 +1350,8 @@ function WindowResizeEvent:Unsubscribe(id) end
 ---@class GameObjectEvent
 GameObjectEvent = {}
 
----Subscribe to GameObject events
+---Subscribe to GameObject events.
+---Subscribed from a LuaComponent script, the callback stops firing once that component is destroyed.
 ---@param callback fun(gameObject: GameObject)
 ---@return integer subscriptionId
 function GameObjectEvent:Subscribe(callback) end
@@ -1359,7 +1363,8 @@ function GameObjectEvent:Unsubscribe(id) end
 ---@class InputActionEvent
 InputActionEvent = {}
 
----Subscribe to input action events
+---Subscribe to input action events.
+---Subscribed from a LuaComponent script, the callback stops firing once that component is destroyed.
 ---@param callback fun(action: InputAction)
 ---@return integer subscriptionId
 function InputActionEvent:Subscribe(callback) end

@@ -221,21 +221,36 @@ namespace N2Engine::Scripting
         _loadedModules.erase(moduleName);
         LoadScriptAsModule(path, script);
 
-        // Notify callbacks
+        // Notify callbacks. Iterate a copy: a callback can register or unregister callbacks
+        // (LuaComponent::ReloadScript may call SetScript), which would invalidate the live vector
         if (auto it = _reloadCallbacks.find(moduleName); it != _reloadCallbacks.end())
         {
-            for (auto &callback : it->second)
+            const auto callbacks = it->second;
+            for (const auto &entry : callbacks)
             {
-                callback();
+                entry.callback();
             }
         }
 
         Logger::Info(std::format("Reloaded module: {}", moduleName));
     }
 
-    void LuaRuntime::RegisterReloadCallback(const std::string &moduleName, std::function<void()> callback)
+    void LuaRuntime::RegisterReloadCallback(const std::string &moduleName, std::function<void()> callback,
+                                            const void *owner)
     {
-        _reloadCallbacks[moduleName].push_back(std::move(callback));
+        _reloadCallbacks[moduleName].push_back({owner, std::move(callback)});
+    }
+
+    void LuaRuntime::UnregisterReloadCallbacks(const void *owner)
+    {
+        if (!owner)
+        {
+            return;
+        }
+        for (auto &callbacks : _reloadCallbacks | std::views::values)
+        {
+            std::erase_if(callbacks, [owner](const ReloadCallback &entry) { return entry.owner == owner; });
+        }
     }
 
     void LuaRuntime::ClearReloadCallbacks(const std::string &moduleName)
