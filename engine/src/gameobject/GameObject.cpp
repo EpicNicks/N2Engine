@@ -6,6 +6,7 @@
 
 #include "engine/GameObject.hpp"
 #include "engine/Component.hpp"
+#include "engine/Logger.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -33,14 +34,7 @@ GameObject::GameObject(std::string name)
 
 void GameObject::Purge()
 {
-    // Clean up components
-    for (auto &component : _components)
-    {
-        if (component)
-        {
-            component->OnDestroy();
-        }
-    }
+    // OnDestroy already ran in Scene::CallOnDestroyForGameObject; this only releases
     _components.clear();
     _componentMap.clear();
 
@@ -87,40 +81,54 @@ void GameObject::UpdateActiveInHierarchyCache() const
 
 void GameObject::SetActive(bool active)
 {
-    if (_isActive != active)
+    if (_isActive == active)
     {
-        _isActive = active;
+        return;
+    }
 
-        // Mark hierarchy as dirty
-        _activeInHierarchyDirty = true;
-        for (auto &child : _children)
-        {
-            child->_activeInHierarchyDirty = true;
-        }
+    const bool wasActiveInHierarchy = IsActiveInHierarchy();
+    _isActive = active;
+    MarkActiveInHierarchyDirty();
+    NotifyIfActiveChanged(wasActiveInHierarchy);
+}
 
-        NotifyActiveChanged();
+void GameObject::MarkActiveInHierarchyDirty() const
+{
+    // Every descendant caches its own answer, so all of them must recompute, not just direct children
+    _activeInHierarchyDirty = true;
+    for (const auto &child : _children)
+    {
+        child->MarkActiveInHierarchyDirty();
     }
 }
 
-void GameObject::NotifyActiveChanged() const
+void GameObject::NotifyIfActiveChanged(const bool wasActiveInHierarchy) const
 {
-    // Notify all components
-    for (auto &component : _components)
+    if (const bool nowActive = IsActiveInHierarchy(); nowActive != wasActiveInHierarchy)
     {
-        if (component->_isActive = IsActiveInHierarchy())
+        NotifyActiveChanged(nowActive);
+    }
+}
+
+void GameObject::NotifyActiveChanged(const bool nowActive) const
+{
+    // A component's own _isActive is its enable flag; hierarchy state is IsActiveInHierarchy().
+    // Only components that are enabled themselves see their effective state change.
+    for (const auto &component : _components)
+    {
+        if (component->_isActive && !component->_isMarkedForDestruction)
         {
-            component->OnEnable();
-        }
-        else
-        {
-            component->OnDisable();
+            nowActive ? component->OnEnable() : component->OnDisable();
         }
     }
 
-    // Recursively notify children
-    for (auto &child : _children)
+    // Children that are inactive themselves stay inactive either way
+    for (const auto &child : _children)
     {
-        child->NotifyActiveChanged();
+        if (child->_isActive)
+        {
+            child->NotifyActiveChanged(nowActive);
+        }
     }
 }
 
@@ -151,7 +159,7 @@ void GameObject::SetParent(Ptr parent, bool keepWorldPosition)
     else
     {
         _parent.reset();
-        _activeInHierarchyDirty = true;
+        MarkActiveInHierarchyDirty();
 
         if (_scene)
         {
@@ -173,6 +181,8 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
         oldParent->RemoveChild(child, keepWorldPosition);
     }
 
+    const bool childWasActive = child->IsActiveInHierarchy();
+
     // Handle transform parenting
     if (keepWorldPosition && child->HasPositionable() && HasPositionable())
     {
@@ -185,7 +195,7 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
         // Set up parent-child relationship first
         child->_parent = weak_from_this();
         _children.push_back(child);
-        child->_activeInHierarchyDirty = true;
+        child->MarkActiveInHierarchyDirty();
 
         // Notify positionable of hierarchy change
         childPositionable->OnHierarchyChanged();
@@ -200,7 +210,7 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
         // Set up parent-child relationship
         child->_parent = weak_from_this();
         _children.push_back(child);
-        child->_activeInHierarchyDirty = true;
+        child->MarkActiveInHierarchyDirty();
 
         // Notify positionable of hierarchy change
         if (child->HasPositionable())
@@ -211,6 +221,9 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
 
     // Update scene reference
     child->SetScene(_scene);
+
+    // Parenting under an inactive object deactivates the child's subtree (and vice versa)
+    child->NotifyIfActiveChanged(childWasActive);
 }
 
 void GameObject::RemoveChild(Ptr child, bool keepWorldPosition)
@@ -223,6 +236,8 @@ void GameObject::RemoveChild(Ptr child, bool keepWorldPosition)
     auto it = std::find(_children.begin(), _children.end(), child);
     if (it != _children.end())
     {
+        const bool childWasActive = child->IsActiveInHierarchy();
+
         // Handle transform deparenting
         if (keepWorldPosition && child->HasPositionable() && HasPositionable())
         {
@@ -234,7 +249,7 @@ void GameObject::RemoveChild(Ptr child, bool keepWorldPosition)
 
             // Remove parent-child relationship
             child->_parent.reset();
-            child->_activeInHierarchyDirty = true;
+            child->MarkActiveInHierarchyDirty();
             _children.erase(it);
 
             // Notify positionable of hierarchy change
@@ -249,7 +264,7 @@ void GameObject::RemoveChild(Ptr child, bool keepWorldPosition)
         {
             // Remove parent-child relationship
             child->_parent.reset();
-            child->_activeInHierarchyDirty = true;
+            child->MarkActiveInHierarchyDirty();
             _children.erase(it);
 
             // Notify positionable of hierarchy change
@@ -258,6 +273,8 @@ void GameObject::RemoveChild(Ptr child, bool keepWorldPosition)
                 child->GetPositionable()->OnHierarchyChanged();
             }
         }
+
+        child->NotifyIfActiveChanged(childWasActive);
     }
 }
 
@@ -338,8 +355,17 @@ bool GameObject::RemoveComponent(const std::type_index &type)
     if (const auto it = _componentMap.find(type); it != _componentMap.end())
     {
         const auto component = it->second;
-        // Notify component
-        component->OnDestroy();
+        if (!component->_isMarkedForDestruction)
+        {
+            component->OnDestroy();
+            component->_isMarkedForDestruction = true;
+        }
+
+        // The scene keeps raw pointers to attached components; drop them before the component is freed
+        if (_scene)
+        {
+            _scene->DetachComponent(component);
+        }
 
         // Remove from map
         _componentMap.erase(it);
@@ -363,9 +389,14 @@ void GameObject::RemoveAllComponents()
 {
     for (auto &component : _components)
     {
-        if (component)
+        if (component && !component->_isMarkedForDestruction)
         {
             component->OnDestroy();
+            component->_isMarkedForDestruction = true;
+        }
+        if (component && _scene)
+        {
+            _scene->DetachComponent(component.get());
         }
     }
 
@@ -380,13 +411,27 @@ size_t GameObject::GetComponentCount() const
 
 void GameObject::SetScene(Scene *scene)
 {
-    _scene = scene;
-    // Scene::Clear detaches objects with SetScene(nullptr); there's no queue to attach to then
-    if (_scene)
+    if (_scene != scene)
     {
-        for (const auto &component : _components)
+        // Leaving a scene: it must forget these components before they're freed or re-homed
+        if (_scene)
         {
-            _scene->AddComponentToAttachQueue(component.get());
+            for (const auto &component : _components)
+            {
+                _scene->DetachComponent(component.get());
+            }
+        }
+
+        _scene = scene;
+
+        // Joining a scene: attach on its next ProcessAttachQueue. An unchanged scene (e.g. reparenting
+        // within it) doesn't re-queue, so components aren't attached twice.
+        if (_scene)
+        {
+            for (const auto &component : _components)
+            {
+                _scene->AddComponentToAttachQueue(component.get());
+            }
         }
     }
 
@@ -399,10 +444,16 @@ void GameObject::SetScene(Scene *scene)
 
 void GameObject::Destroy()
 {
-    _isMarkedForDestruction = true;
     if (_scene != nullptr)
     {
+        // Don't set _isMarkedForDestruction here: ProcessDestroyed treats a marked object as already
+        // handled and skips it, so marking first meant Destroy() never destroyed anything
         _scene->DestroyGameObject(shared_from_this());
+    }
+    else
+    {
+        // Not in a scene, so its components were never attached; just flag it as gone
+        _isMarkedForDestruction = true;
     }
 }
 
@@ -411,19 +462,28 @@ bool GameObject::IsDestroyed() const
     return _isMarkedForDestruction;
 }
 
+// Coroutines run on the object's own scene, which may not be the loaded one (or may not exist)
 Scheduling::Coroutine* GameObject::StartCoroutine(std::generator<N2Engine::Scheduling::ICoroutineWait> &&coroutine)
 {
-    return SceneManager::GetCurSceneRef().GetCoroutineScheduler()->StartCoroutine(this, std::move(coroutine));
+    if (!_scene)
+    {
+        Logger::Warn(std::format("StartCoroutine on '{}', which isn't in a scene", _name));
+        return nullptr;
+    }
+    return _scene->GetCoroutineScheduler()->StartCoroutine(this, std::move(coroutine));
 }
 
 bool GameObject::StopCoroutine(Scheduling::Coroutine *coroutine)
 {
-    return SceneManager::GetCurSceneRef().GetCoroutineScheduler()->StopCoroutine(this, coroutine);
+    return _scene && _scene->GetCoroutineScheduler()->StopCoroutine(this, coroutine);
 }
 
 void GameObject::StopAllCoroutines()
 {
-    SceneManager::GetCurSceneRef().GetCoroutineScheduler()->StopAllCoroutines(this);
+    if (_scene)
+    {
+        _scene->GetCoroutineScheduler()->StopAllCoroutines(this);
+    }
 }
 
 // Utility methods
