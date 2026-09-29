@@ -156,6 +156,10 @@ Input::InputSystem *Window::GetInputSystem() const
 
 void Window::PollEvents()
 {
+    if (!_window)
+    {
+        return; // GLFW is terminated when the window fails to open
+    }
     glfwPollEvents();
     if (_inputSystem)
     {

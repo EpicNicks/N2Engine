@@ -11,6 +11,12 @@ export interface EntityInfo {
   name: string;
 }
 
+export interface SubsystemStatus {
+  name: string;
+  state: string;
+  detail: string;
+}
+
 export const CommandType = {
   RenderFrame: 0x01,
   SetViewportSize: 0x02,
@@ -28,6 +34,7 @@ export const CommandType = {
   GetAllEntities: 0x34,
   CreateScript: 0x40,
   RescanAssets: 0x41,
+  GetEngineHealth: 0x50,
   Shutdown: 0xFF,
 } as const;
 
@@ -43,6 +50,7 @@ export const ResponseType = {
   EntityCreated: 0x06,
   SceneData: 0x07,
   ScriptData: 0x08,
+  EngineHealth: 0x09,
 } as const;
 
 export type ResponseType = typeof ResponseType[keyof typeof ResponseType];
@@ -126,4 +134,10 @@ export interface EntityListResponse {
 
 export interface ScriptDataResponse {
   scriptTemplate: string;
+}
+
+export interface EngineHealthResponse {
+  healthy: boolean;
+  count: number;
+  subsystems: SubsystemStatus[];
 }

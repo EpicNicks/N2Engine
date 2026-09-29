@@ -214,6 +214,9 @@ namespace N2Engine::Editor
         case CommandType::RescanAssets:
             HandleRescanAssets(clientSocket);
             break;
+        case CommandType::GetEngineHealth:
+            HandleGetEngineHealth(clientSocket);
+            break;
         default:
             Logger::Warn("Unknown command: " + std::to_string(commandType));
             BufferWriter response;
@@ -227,6 +230,15 @@ namespace N2Engine::Editor
     {
         auto &app = Application::GetInstance();
 
+        auto *renderer = app.GetWindow().GetRenderer();
+        if (!renderer)
+        {
+            BufferWriter response;
+            WriteError(response, "No renderer available (see GetEngineHealth)");
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
+
         app.RenderEditorFrame();
 
         // Resize frame buffer if needed
@@ -236,7 +248,7 @@ namespace N2Engine::Editor
 
         // Read pixels from renderer
         // You'll need to implement ReadFramebuffer in your renderer
-        app.GetWindow().GetRenderer()->ReadFramebuffer(_frameBuffer.data(), _viewportWidth, _viewportHeight);
+        renderer->ReadFramebuffer(_frameBuffer.data(), _viewportWidth, _viewportHeight);
 
         BufferWriter response;
         WriteFrameData(response,
@@ -541,6 +553,13 @@ namespace N2Engine::Editor
         response.WriteU32(static_cast<uint32_t>(payload.Size()));
         response.WriteBytes(payload.Data());
 
+        SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    void EditorServer::HandleGetEngineHealth(int clientSocket)
+    {
+        BufferWriter response;
+        WriteEngineHealth(response, Application::GetInstance().GetHealth());
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
