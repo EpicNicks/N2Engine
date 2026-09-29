@@ -33,6 +33,7 @@ namespace N2Engine::Audio
 
         bool Initialize();
         void Shutdown();
+        [[nodiscard]] bool IsInitialized() const { return _initialized; }
         void Update();
 
         // Mixer group management

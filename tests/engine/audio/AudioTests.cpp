@@ -270,6 +270,7 @@ TEST(AudioSystemUninitializedTest, CallsAreSafeNoOps)
 {
     auto &audio = AudioSystem::Instance();
     audio.Shutdown(); // make sure no earlier test left it running
+    EXPECT_FALSE(audio.IsInitialized());
 
     audio.Update();
     audio.Stop(AudioHandle{1});
@@ -399,6 +400,19 @@ TEST_F(AudioSystemTest, InitializeIsIdempotent)
 {
     EXPECT_TRUE(AudioSystem::Instance().Initialize());
     EXPECT_TRUE(AudioSystem::Instance().Initialize());
+    EXPECT_TRUE(AudioSystem::Instance().IsInitialized());
+}
+
+TEST_F(AudioSystemTest, IsInitializedTracksShutdown)
+{
+    auto &audio = AudioSystem::Instance();
+    ASSERT_TRUE(audio.IsInitialized());
+
+    audio.Shutdown();
+    EXPECT_FALSE(audio.IsInitialized());
+
+    ASSERT_TRUE(audio.Initialize());
+    EXPECT_TRUE(audio.IsInitialized());
 }
 
 TEST_F(AudioSystemTest, CreatesDefaultMixerGroups)
