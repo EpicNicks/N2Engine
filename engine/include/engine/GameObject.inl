@@ -23,10 +23,10 @@ namespace N2Engine
         _componentMap[typeIndex] = component.get();
         _components.push_back(std::move(component));
 
-        // if GO has already been added to scene and this component is new
-        if (_scene != nullptr && SceneManager::GetCurSceneIndex() != -1)
+        // if GO has already been added to a scene, attach there (its own scene, not the loaded one)
+        if (_scene != nullptr)
         {
-            SceneManager::GetCurSceneRef().AddComponentToAttachQueue(_componentMap[typeIndex]);
+            _scene->AddComponentToAttachQueue(_componentMap[typeIndex]);
         }
         // otherwise the component will be added once added to the scene
 

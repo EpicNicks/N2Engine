@@ -41,12 +41,14 @@ namespace N2Engine
         static void LoadScene(const std::string &sceneName);
 
         static int GetSceneIndex(const std::string &sceneName);
-        static Scene* GetScene(const std::string &sceneName);
+        /// A new Scene built from the stored data (the caller owns it); not the loaded scene. nullptr if not found.
+        static std::unique_ptr<Scene> GetScene(const std::string &sceneName);
 
         static void AddScene(std::unique_ptr<Scene> &&scene, bool loadAdded = false);
         static void AddScene(nlohmann::json &j);
         static void UpdateScene(const std::string &sceneName, nlohmann::json &newSceneData);
         static void UpdateScene(int sceneIndex, nlohmann::json &newSceneData);
+        /// Removes a stored scene by name. Refuses to delete the loaded scene or one pending load.
         static bool DeleteScene(const std::string &sceneName);
 
         static void ProcessAnyPendingSceneChange();
