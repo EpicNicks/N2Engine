@@ -49,8 +49,8 @@ target_link_libraries(engine
     PRIVATE
     renderer
     MathCore::math
-    OpenAL::OpenAL
     PUBLIC
+    OpenAL::OpenAL # public audio headers include <AL/al.h>
     lua
     ${PHYSX_LIBS}
 )
