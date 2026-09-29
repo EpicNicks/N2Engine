@@ -192,7 +192,7 @@ void Application::Run()
     if (!_window.IsValid())
     {
         Logger::Error("Cannot run: no window or renderer (see GetHealth())");
-        Audio::AudioSystem::Instance().Shutdown();
+        Shutdown();
         return;
     }
 
@@ -235,7 +235,17 @@ void Application::Run()
         SceneManager::ProcessAnyPendingSceneChange();
     }
 
+    Shutdown();
+}
+
+void Application::Shutdown()
+{
+    // Reverse of Init. Runs while function-local statics created during Init (e.g. the debug
+    // console's log stream) are still alive; at process exit they're destroyed before this
+    // singleton, so tearing subsystems down from ~Application would use them after destruction.
     Audio::AudioSystem::Instance().Shutdown();
+    _3DphysicsBackend.reset(); // ~PhysXBackend releases the PhysX SDK
+    _window.Shutdown();
 }
 
 void Application::Render()
@@ -273,7 +283,7 @@ void Application::Quit()
         const Scene &curScene = SceneManager::GetCurSceneRef();
         curScene.OnApplicationQuit();
     }
-    Audio::AudioSystem::Instance().Shutdown();
+    GetInstance().Shutdown();
     std::exit(0);
 }
 

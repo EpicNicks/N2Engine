@@ -39,11 +39,9 @@ namespace N2Engine::Physics
     {
         Logger::Info("Initializing PhysX Backend...");
 
-        // 1. Create foundation
-        static PxDefaultAllocator allocator;
-        static PxDefaultErrorCallback errorCallback;
-
-        _foundation = PxCreateFoundation(PX_PHYSICS_VERSION, allocator, errorCallback);
+        // 1. Create foundation. The allocator and error callback are members so they outlive the
+        // foundation: as function-local statics they were destroyed at exit before the backend released it.
+        _foundation = PxCreateFoundation(PX_PHYSICS_VERSION, _allocator, _errorCallback);
         if (!_foundation)
         {
             Logger::Error("PxCreateFoundation failed!");

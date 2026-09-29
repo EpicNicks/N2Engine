@@ -11,7 +11,9 @@
 #include <PxSimulationEventCallback.h>
 #include <foundation/PxSimpleTypes.h>
 
+#include <extensions/PxDefaultAllocator.h>
 #include <extensions/PxDefaultCpuDispatcher.h>
+#include <extensions/PxDefaultErrorCallback.h>
 #include <extensions/PxDefaultSimulationFilterShader.h>
 #include <extensions/PxRigidBodyExt.h>
 
@@ -177,6 +179,8 @@ namespace N2Engine::Physics
         void onAdvance(const physx::PxRigidBody* const* bodyBuffer, const physx::PxTransform* poseBuffer, const physx::PxU32 count) override;
 
     private:
+        physx::PxDefaultAllocator _allocator;
+        physx::PxDefaultErrorCallback _errorCallback;
         physx::PxFoundation* _foundation = nullptr;
         physx::PxPhysics* _physics = nullptr;
         physx::PxScene* _scene = nullptr;

@@ -36,6 +36,10 @@ namespace N2Engine
         EngineHealth Init(const Config::ApplicationOptions &options);
         void Init(std::unique_ptr<Scene> &&initialScene);
         void Run();
+        /// Shuts subsystems down in reverse order of Init. Run() and Quit() call it; hosts that don't use
+        /// Run() (e.g. the editor) should call it before returning from main, so teardown doesn't depend
+        /// on static destruction order. Safe to call more than once, or without Init.
+        void Shutdown();
         void RenderEditorFrame();
 
         static void Quit();
