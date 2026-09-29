@@ -128,6 +128,8 @@ namespace N2Engine::Example
             _size = Math::Vector3(radius);
         }
 
+        [[nodiscard]] float GetRadius() const { return _size.x; }
+
         [[nodiscard]] uint32_t GetLatitudeSegments() const { return _latitudeSegments; }
         [[nodiscard]] uint32_t GetLongitudeSegments() const { return _longitudeSegments; }
     };

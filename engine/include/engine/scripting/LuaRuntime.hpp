@@ -31,6 +31,10 @@ namespace N2Engine::Scripting
         bool Initialize();
         sol::state& GetState() { return _lua; }
 
+        /// Loads a script through ResourceLoader and runs it once (e.g. a scene setup script).
+        /// @returns false if the file couldn't be loaded or the script raised an error; the error is logged
+        bool RunFile(const IO::ResourcePath& path);
+
         // Module management
         sol::table LoadScriptAsModule(const IO::ResourcePath& path, LuaScript* script);
         sol::optional<sol::table> GetModule(const std::string& moduleName);

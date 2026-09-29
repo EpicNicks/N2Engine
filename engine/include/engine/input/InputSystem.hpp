@@ -41,6 +41,9 @@ namespace N2Engine::Input
         ActionMap* GetActionMap(const std::string &name);
         void AddActionMap(std::unique_ptr<ActionMap> &&actionMap);
         InputSystem& MakeActionMap(const std::string &name, const std::function<void(ActionMap *)> &pActionMap);
+        /// Builds a map from the JSON ActionMap::Deserialize accepts ({"actions": {...}}), adding or replacing it.
+        /// @returns the new map, or nullptr if the JSON is malformed
+        ActionMap* CreateActionMapFromJson(const std::string &name, const nlohmann::json &j);
         [[nodiscard]] ActionMap* GetCurActionMap() const;
 
         static std::vector<GamepadInfo> GetConnectedGamepads();

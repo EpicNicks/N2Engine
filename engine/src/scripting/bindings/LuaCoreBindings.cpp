@@ -53,7 +53,9 @@ namespace N2Engine::Scripting::Bindings
             "GetParent", &GameObject::GetParent,
             "FindChild", &GameObject::FindChild,
             "FindChildRecursive", &GameObject::FindChildRecursive,
-            "Destroy", &GameObject::Destroy
+            "Destroy", &GameObject::Destroy,
+            "AddComponent", &AddComponentByName,
+            "GetComponent", &GetComponentByName
         );
 
         lua.new_usertype<Component>(
