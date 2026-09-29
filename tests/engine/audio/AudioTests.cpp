@@ -13,7 +13,7 @@
 
 #include <AL/al.h>
 
-#include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp" // pulls in the AddComponent template definitions
 #include "engine/audio/AudioClip.hpp"
 #include "engine/audio/AudioLoaders.hpp"
 #include "engine/audio/AudioSource.hpp"
