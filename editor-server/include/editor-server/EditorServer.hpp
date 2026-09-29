@@ -43,6 +43,7 @@ namespace N2Engine::Editor
         void HandleDestroyEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetEntityTransform(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetAllEntities(int clientSocket);
+        void HandleGetEngineHealth(int clientSocket);
         void HandleGetEntityTransform(int clientSocket, const std::vector<uint8_t> &payload);
 
         void HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload);

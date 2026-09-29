@@ -22,6 +22,7 @@ namespace N2Engine::Editor
         GetAllEntities = 0x34,
         CreateScript = 0x40,
         RescanAssets = 0x41,
+        GetEngineHealth = 0x50,
         Shutdown = 0xff
     };
 
@@ -35,7 +36,8 @@ namespace N2Engine::Editor
         EntityList = 0x05,
         EntityCreated = 0x06,
         SceneData = 0x07,
-        ScriptData = 0x08
+        ScriptData = 0x08,
+        EngineHealth = 0x09
     };
 
 #pragma pack(push, 1)
