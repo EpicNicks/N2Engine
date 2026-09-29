@@ -48,7 +48,23 @@ namespace N2Engine::Scripting
         );
     }
 
-    void LuaRuntime::Initialize()
+    bool LuaRuntime::Initialize()
+    {
+        try
+        {
+            RegisterBindings();
+        }
+        catch (const std::exception &e)
+        {
+            Logger::Error(std::format("LuaRuntime failed to initialize: {}", e.what()));
+            return false;
+        }
+
+        Logger::Info("LuaRuntime initialized with all bindings");
+        return true;
+    }
+
+    void LuaRuntime::RegisterBindings()
     {
         Bindings::BindMath(*this);
         Bindings::BindCore(*this);
@@ -70,8 +86,6 @@ namespace N2Engine::Scripting
         Bindings::BindCamera(*this);
 
         SetupModuleSystem();
-
-        Logger::Info("LuaRuntime initialized with all bindings");
     }
 
     void LuaRuntime::SetupModuleSystem()

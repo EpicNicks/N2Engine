@@ -50,6 +50,8 @@ namespace N2Engine
         std::string _title{"N2Engine Application"};
         WindowMode _windowMode{WindowMode::Windowed};
         WindowData windowData{};
+        std::string _initError;
+        bool _rendererFailed = false;
 
         static void FramebufferSizeCallback(GLFWwindow *window, int width, int height);
         void OnWindowResize(int width, int height);
@@ -61,7 +63,13 @@ namespace N2Engine
         Window();
         ~Window();
 
-        void InitWindow(const Config::ApplicationOptions &options);
+        /// @returns false if the window or renderer failed to start; see GetInitError()
+        bool InitWindow(const Config::ApplicationOptions &options);
+        /// True once InitWindow has succeeded and until Shutdown
+        [[nodiscard]] bool IsValid() const { return _window != nullptr && _renderer != nullptr; }
+        [[nodiscard]] const std::string& GetInitError() const { return _initError; }
+        /// True when the window opened but the renderer failed (the window is then closed again)
+        [[nodiscard]] bool RendererFailed() const { return _rendererFailed; }
         [[nodiscard]] bool ShouldClose() const;
         void PollEvents();
         void Shutdown();
@@ -76,6 +84,7 @@ namespace N2Engine
         void SetTitle(const std::string &title);
 
     private:
+        bool FailInit(const std::string &error);
         void SaveWindowedState();
         GLFWmonitor* GetCurrentMonitor();
     };

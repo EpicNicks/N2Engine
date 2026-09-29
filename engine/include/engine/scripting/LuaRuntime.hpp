@@ -23,7 +23,8 @@ namespace N2Engine::Scripting
         static LuaRuntime& Instance();
         static void Destroy();
 
-        void Initialize();
+        /// @returns false if a binding failed to register; the error is logged
+        bool Initialize();
         sol::state& GetState() { return _lua; }
 
         // Module management
@@ -39,6 +40,7 @@ namespace N2Engine::Scripting
         std::string PathToModuleName(const IO::ResourcePath& path);
 
     private:
+        void RegisterBindings();
         void SetupModuleSystem();
     };
 }

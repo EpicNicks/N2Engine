@@ -6,6 +6,7 @@
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/Window.hpp"
 #include "engine/Camera.hpp"
+#include "engine/Health.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 
 namespace N2Engine
@@ -18,6 +19,7 @@ namespace N2Engine
         Window _window;
         std::unique_ptr<Camera> _mainCamera;
         std::unique_ptr<Physics::IPhysicsBackend> _3DphysicsBackend = nullptr;
+        EngineHealth _health;
 
     private:
         Application() = default;
@@ -29,8 +31,9 @@ namespace N2Engine
         Application& operator=(const Application &) = delete;
         static Application& GetInstance();
 
-        void Init();
-        void Init(const Config::ApplicationOptions &options);
+        /// @returns the state of each subsystem; the engine keeps running with whatever started
+        EngineHealth Init();
+        EngineHealth Init(const Config::ApplicationOptions &options);
         void Init(std::unique_ptr<Scene> &&initialScene);
         void Run();
         void RenderEditorFrame();
@@ -43,5 +46,8 @@ namespace N2Engine
         void OnWindowResize(int width, int height) const;
 
         [[nodiscard]] Physics::IPhysicsBackend* Get3DPhysicsBackend() const;
+
+        /// Subsystem states as of the end of Init
+        [[nodiscard]] const EngineHealth& GetHealth() const { return _health; }
     };
 }
