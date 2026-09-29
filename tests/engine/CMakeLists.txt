@@ -9,6 +9,7 @@ add_executable(engine_tests ${ENGINE_TEST_SOURCES})
 target_link_libraries(engine_tests
         PRIVATE
         engine
+        renderer # engine's scene headers include renderer headers
         math
         GTest::gtest
         GTest::gtest_main

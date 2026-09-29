@@ -57,6 +57,9 @@ namespace N2Engine::Audio
 
         InitializeDefaultGroups();
 
+        // A new context starts with listener gain 1; restore the master volume
+        alListenerf(AL_GAIN, _masterVolume);
+
         _initialized = true;
         Logger::Info(std::format("AudioSystem initialized with {} pooled sources", _sourcePool.size()));
 
@@ -205,7 +208,8 @@ namespace N2Engine::Audio
             final *= g->settings.volume;
         }
 
-        return final * _masterVolume;
+        // Master volume is applied once, via the listener gain (see SetMasterVolume)
+        return final;
     }
 
     AudioHandle AudioSystem::PlayOneShot(const std::shared_ptr<AudioClip>& clip, const PlaybackParams& params)

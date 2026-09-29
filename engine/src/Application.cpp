@@ -5,6 +5,7 @@
 
 #include "engine/Application.hpp"
 #include "engine/Time.hpp"
+#include "engine/audio/AudioSystem.hpp"
 #include "engine/Logger.hpp"
 #include "engine/common/ScriptUtils.hpp"
 #include "engine/sceneManagement/Scene.hpp"
@@ -85,6 +86,17 @@ void Application::Init(const Config::ApplicationOptions &options)
     }
 
     Logger::Info("3D Physics backend initialized");
+
+    if (options.isHeadless)
+    {
+        // Headless audio should be mixed and streamed to the editor client, not played locally
+        Logger::Info("Audio disabled in headless mode (streaming not yet implemented)");
+    }
+    else if (!Audio::AudioSystem::Instance().Initialize())
+    {
+        Logger::Error("Failed to initialize audio!");
+        Logger::Warn("Audio will be disabled. Game will continue without sound.");
+    }
 }
 
 /// @param initialScene The initial scene to load in SceneManager
@@ -127,6 +139,8 @@ void Application::Run()
             curScene.AdvanceCoroutines();
             curScene.LateUpdate();
         }
+        // After LateUpdate, where listeners and sources push their positions
+        Audio::AudioSystem::Instance().Update();
         Render();
         if (SceneManager::GetCurSceneIndex() != -1)
         {
@@ -135,6 +149,8 @@ void Application::Run()
         }
         SceneManager::ProcessAnyPendingSceneChange();
     }
+
+    Audio::AudioSystem::Instance().Shutdown();
 }
 
 void Application::Render()
@@ -168,6 +184,7 @@ void Application::Quit()
         const Scene &curScene = SceneManager::GetCurSceneRef();
         curScene.OnApplicationQuit();
     }
+    Audio::AudioSystem::Instance().Shutdown();
     std::exit(0);
 }
 
@@ -214,5 +231,6 @@ void Application::RenderEditorFrame()
 {
     _window.PollEvents();
     Time::Update();
+    Audio::AudioSystem::Instance().Update();
     Render();
 }
