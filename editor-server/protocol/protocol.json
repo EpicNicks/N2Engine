@@ -159,6 +159,18 @@
       "request": {},
       "response": { "type": "Ok" }
     },
+    "GetEngineHealth": {
+      "id": "0x50",
+      "request": {},
+      "response": {
+        "type": "EngineHealth",
+        "fields": {
+          "healthy": "bool",
+          "count": "uint32",
+          "subsystems": "SubsystemStatus[]"
+        }
+      }
+    },
     "Shutdown": {
       "id": "0xFF",
       "request": {},
@@ -174,6 +186,11 @@
     "EntityInfo": {
       "id": "string",
       "name": "string"
+    },
+    "SubsystemStatus": {
+      "name": "string",
+      "state": "string",
+      "detail": "string"
     }
   },
   "responses": {
@@ -185,6 +202,7 @@
     "EntityList": "0x05",
     "EntityCreated": "0x06",
     "SceneData": "0x07",
-    "ScriptData": "0x08"
+    "ScriptData": "0x08",
+    "EngineHealth": "0x09"
   }
 }

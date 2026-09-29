@@ -214,6 +214,9 @@ namespace N2Engine::Editor
         case CommandType::RescanAssets:
             HandleRescanAssets(clientSocket);
             break;
+        case CommandType::GetEngineHealth:
+            HandleGetEngineHealth(clientSocket);
+            break;
         default:
             Logger::Warn("Unknown command: " + std::to_string(commandType));
             BufferWriter response;
@@ -541,6 +544,13 @@ namespace N2Engine::Editor
         response.WriteU32(static_cast<uint32_t>(payload.Size()));
         response.WriteBytes(payload.Data());
 
+        SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    void EditorServer::HandleGetEngineHealth(int clientSocket)
+    {
+        BufferWriter response;
+        WriteEngineHealth(response, Application::GetInstance().GetHealth());
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 

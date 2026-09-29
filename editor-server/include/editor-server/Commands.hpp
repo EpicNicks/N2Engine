@@ -3,6 +3,7 @@
 #include "Protocol.hpp"
 #include "Serialization.hpp"
 #include <math/Vector3.hpp>
+#include <engine/Health.hpp>
 
 namespace N2Engine::Editor::Protocol
 {
@@ -152,6 +153,24 @@ namespace N2Engine::Editor::Protocol
         payload.WriteString(jsonString);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::SceneData));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// healthy (bool), count (u32), then per subsystem: name, state ("Running", "Failed", ...), detail
+    inline void WriteEngineHealth(BufferWriter &w, const N2Engine::EngineHealth &health)
+    {
+        BufferWriter payload;
+        payload.WriteBool(health.IsHealthy());
+        payload.WriteU32(static_cast<uint32_t>(health.subsystems.size()));
+        for (const N2Engine::SubsystemStatus &status : health.subsystems)
+        {
+            payload.WriteString(status.name);
+            payload.WriteString(std::string{ToString(status.state)});
+            payload.WriteString(status.detail);
+        }
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EngineHealth));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

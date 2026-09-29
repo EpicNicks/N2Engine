@@ -21,6 +21,7 @@ namespace N2Engine.Editor.Protocol
         GetAllEntities = 0x34,
         CreateScript = 0x40,
         RescanAssets = 0x41,
+        GetEngineHealth = 0x50,
         Shutdown = 0xFF,
     }
 
@@ -35,6 +36,7 @@ namespace N2Engine.Editor.Protocol
         EntityCreated = 0x06,
         SceneData = 0x07,
         ScriptData = 0x08,
+        EngineHealth = 0x09,
     }
 
     public struct vec3
@@ -48,6 +50,13 @@ namespace N2Engine.Editor.Protocol
     {
         public string Id;
         public string Name;
+    }
+
+    public struct SubsystemStatus
+    {
+        public string Name;
+        public string State;
+        public string Detail;
     }
 
     public struct SetViewportSizeRequest
@@ -146,6 +155,13 @@ namespace N2Engine.Editor.Protocol
     public struct ScriptDataResponse
     {
         public string Scripttemplate;
+    }
+
+    public struct EngineHealthResponse
+    {
+        public bool Healthy;
+        public uint Count;
+        public SubsystemStatus[] Subsystems;
     }
 
 }
