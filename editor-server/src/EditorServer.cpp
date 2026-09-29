@@ -149,6 +149,9 @@ namespace N2Engine::Editor
                 BufferWriter response;
                 WriteOk(response);
                 SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+                // Stop serving, so the host's main loop sees !IsRunning() and exits cleanly
+                Logger::Info("Shutdown requested by editor");
+                _running = false;
                 break;
             }
 

@@ -38,3 +38,64 @@ jobs:
         env:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
+
+      # Starts the editor host, talks to it over its TCP protocol, then asks it to shut down.
+      # The runner has no GPU, so the window fails and the host serves without one.
+      # A non-zero exit code catches crashes during shutdown or static destruction.
+      - name: Editor host smoke test
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "build/bin/Debug/N2EditorHost.exe"
+          $proc = Start-Process -FilePath $exe -ArgumentList "--port", "9999" -PassThru `
+            -RedirectStandardOutput host.log -RedirectStandardError host.err
+          $null = $proc.Handle # keeps ExitCode readable after the process exits
+
+          try {
+            $client = $null
+            for ($i = 0; $i -lt 120 -and -not $client; $i++) {
+              try { $client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", 9999) }
+              catch { Start-Sleep -Milliseconds 500 }
+            }
+            if (-not $client) { throw "Editor host never accepted a connection" }
+            $client.ReceiveTimeout = 10000
+            $stream = $client.GetStream()
+
+            # Frames are [command: 1 byte][payload length: uint32 LE][payload]
+            function Send-Command([byte]$type) {
+              $bytes = [byte[]](@($type) + [BitConverter]::GetBytes([uint32]0))
+              $stream.Write($bytes, 0, $bytes.Length)
+            }
+            function Read-Exact([int]$count) {
+              $buffer = New-Object byte[] $count
+              $offset = 0
+              while ($offset -lt $count) {
+                $read = $stream.Read($buffer, $offset, $count - $offset)
+                if ($read -le 0) { throw "Connection closed after $offset of $count bytes" }
+                $offset += $read
+              }
+              return ,$buffer
+            }
+
+            Send-Command 0x50 # GetEngineHealth
+            $header = Read-Exact 5
+            if ($header[0] -ne 0x09) { throw ("Expected EngineHealth response (0x09), got 0x{0:X2}" -f $header[0]) }
+            $payload = Read-Exact ([BitConverter]::ToUInt32($header, 1))
+            Write-Host "GetEngineHealth: $($payload.Length) bytes, healthy=$($payload[0])"
+
+            Send-Command 0xFF # Shutdown
+            $ok = Read-Exact 5
+            if ($ok[0] -ne 0x00) { throw ("Expected Ok response (0x00) to Shutdown, got 0x{0:X2}" -f $ok[0]) }
+            $client.Close()
+
+            if (-not $proc.WaitForExit(30000)) {
+              $proc.Kill()
+              throw "Editor host did not exit within 30s of Shutdown"
+            }
+            if ($proc.ExitCode -ne 0) { throw ("Editor host exited with code 0x{0:X8}" -f $proc.ExitCode) }
+            Write-Host "Editor host exited cleanly"
+          }
+          finally {
+            if (-not $proc.HasExited) { $proc.Kill() }
+            Write-Host "----- host stdout -----"; Get-Content host.log -ErrorAction SilentlyContinue
+            Write-Host "----- host stderr -----"; Get-Content host.err -ErrorAction SilentlyContinue
+          }

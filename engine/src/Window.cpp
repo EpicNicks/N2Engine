@@ -169,6 +169,8 @@ void Window::PollEvents()
 
 void Window::Shutdown()
 {
+    // Before the window: ~Mouse unregisters its scroll callback on it
+    _inputSystem.reset();
     if (_renderer)
     {
         _renderer->Shutdown();
