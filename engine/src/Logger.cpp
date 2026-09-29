@@ -133,7 +133,9 @@ void Logger::InitializeDebugConsoleHelper()
     auto originalStdout = RedirectStdout(LogLevel::Info, false);
     RedirectStderr(LogLevel::Error, false);
 
-    static auto originalStdoutStream = std::make_unique<std::ostream>(originalStdout);
+    // Deliberately never destroyed: it's created after statics such as the Application singleton,
+    // so a unique_ptr here was destroyed first and later log calls during their teardown crashed
+    static auto *originalStdoutStream = new std::ostream(originalStdout);
     static bool useColors = SupportsColor(std::cout);
 
     logEvent += [](const std::string_view msg, const LogLevel level)

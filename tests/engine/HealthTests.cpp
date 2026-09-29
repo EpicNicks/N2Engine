@@ -69,6 +69,18 @@ TEST(EngineHealthTest, ApplicationHasNoHealthBeforeInit)
     EXPECT_TRUE(health.IsHealthy());
 }
 
+TEST(ApplicationShutdownTest, SafeWithoutInitAndWhenRepeated)
+{
+    auto &app = Application::GetInstance();
+
+    // Tests never call Init; Shutdown must cope with nothing started, and with a second call
+    EXPECT_NO_THROW(app.Shutdown());
+    EXPECT_NO_THROW(app.Shutdown());
+
+    EXPECT_EQ(app.Get3DPhysicsBackend(), nullptr);
+    EXPECT_FALSE(app.GetWindow().IsValid());
+}
+
 // ============================================================================
 // Window without a successful InitWindow (the state left behind by any init failure)
 // ============================================================================

@@ -93,6 +93,9 @@ int main(int argc, char *argv[])
 
         server.Stop();
         N2Engine::Logger::Info("Editor server stopped");
+
+        N2Engine::Application::GetInstance().Shutdown();
+        N2Engine::Logger::Info("Engine shut down");
     }
     catch (const std::exception &e)
     {
