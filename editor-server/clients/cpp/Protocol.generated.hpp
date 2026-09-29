@@ -26,6 +26,7 @@ enum class CommandType : uint8_t
     GetAllEntities = 0x34,
     CreateScript = 0x40,
     RescanAssets = 0x41,
+    GetEngineHealth = 0x50,
     Shutdown = 0xFF,
 };
 
@@ -40,6 +41,7 @@ enum class ResponseType : uint8_t
     EntityCreated = 0x06,
     SceneData = 0x07,
     ScriptData = 0x08,
+    EngineHealth = 0x09,
 };
 
 // Custom types
@@ -54,6 +56,13 @@ struct EntityInfo
 {
     std::string id;
     std::string name;
+};
+
+struct SubsystemStatus
+{
+    std::string name;
+    std::string state;
+    std::string detail;
 };
 
 // Command request structures
@@ -154,6 +163,13 @@ struct EntityListData
 struct ScriptDataData
 {
     std::string scriptTemplate;
+};
+
+struct EngineHealthData
+{
+    bool healthy;
+    uint32_t count;
+    std::vector<SubsystemStatus> subsystems;
 };
 
 } // namespace N2Engine::Editor::Protocol

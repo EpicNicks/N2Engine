@@ -75,11 +75,18 @@ int main(int argc, char *argv[])
 
         N2Engine::Logger::Info("Editor server listening on port " + std::to_string(port));
 
+        // Keep serving even without a window, so the editor can still query state such as GetEngineHealth
+        auto &window = N2Engine::Application::GetInstance().GetWindow();
+        if (!window.IsValid())
+        {
+            N2Engine::Logger::Warn("No window or renderer; rendering commands will be unavailable");
+        }
+
         // Main loop - just keep alive and handle OS events
-        while (g_running && server.IsRunning() && !N2Engine::Application::GetInstance().GetWindow().ShouldClose())
+        while (g_running && server.IsRunning() && (!window.IsValid() || !window.ShouldClose()))
         {
             // Poll window events to keep OS happy (even if window is hidden)
-            N2Engine::Application::GetInstance().GetWindow().PollEvents();
+            window.PollEvents();
 
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
         }

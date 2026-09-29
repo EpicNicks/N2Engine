@@ -25,6 +25,8 @@ file(GLOB_RECURSE EDITOR_SERVER_SOURCES
     "src/*.cc"
     "src/*.cxx"
 )
+# Main.cpp belongs to N2EditorHost only; a main() in the library would hijack anything that links it
+list(FILTER EDITOR_SERVER_SOURCES EXCLUDE REGEX "/Main\.cpp$")
 
 add_library(N2EditorServer STATIC
     ${EDITOR_SERVER_SOURCES}
@@ -49,7 +51,7 @@ if(TARGET N2ProtocolGenerate)
 endif()
 
 # Standalone editor host
-add_executable(N2EditorHost src/main.cpp)
+add_executable(N2EditorHost src/Main.cpp)
 target_link_libraries(N2EditorHost PRIVATE N2EditorServer)
 
 if (WIN32)
