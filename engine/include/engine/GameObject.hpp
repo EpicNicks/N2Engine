@@ -65,7 +65,13 @@ namespace N2Engine
 
         // Private methods
         void UpdateActiveInHierarchyCache() const;
-        void NotifyActiveChanged() const;
+        /// Invalidates the cached IsActiveInHierarchy for this object and all descendants
+        void MarkActiveInHierarchyDirty() const;
+        /// Fires OnEnable/OnDisable on this subtree after its effective active state changed.
+        /// Skips components that are disabled themselves, and children that are inactive themselves.
+        void NotifyActiveChanged(bool nowActive) const;
+        /// Call after a hierarchy change that may have flipped IsActiveInHierarchy (reparenting)
+        void NotifyIfActiveChanged(bool wasActiveInHierarchy) const;
         void SetScene(Scene *scene);
         void Purge();
 

@@ -245,33 +245,69 @@ bool Scene::TraverseGameObjectUntil(std::shared_ptr<GameObject> gameObject,
 
 void Scene::OnAllActiveComponents(const std::function<void(Component *)> &callback) const
 {
-    for (const auto &c : _components)
+    // By index: callbacks can add components (appended, picked up this pass) or remove them
+    // (nulled by DetachComponent while iterating), both of which would invalidate iterators
+    ++_componentIterationDepth;
+    for (std::size_t i = 0; i < _components.size(); ++i)
     {
-        if (c->GetGameObject().IsActiveInHierarchy() && c->IsActive())
+        Component *c = _components[i];
+        if (c && c->GetGameObject().IsActiveInHierarchy() && c->IsActive())
         {
             callback(c);
         }
+    }
+    if (--_componentIterationDepth == 0)
+    {
+        std::erase(_components, nullptr);
     }
 }
 
 void Scene::AddComponentToAttachQueue(Component *component)
 {
-    _attachQueue.push(component);
+    if (std::ranges::find(_attachQueue, component) == _attachQueue.end())
+    {
+        _attachQueue.push_back(component);
+    }
+}
+
+void Scene::DetachComponent(Component *component)
+{
+    if (_componentIterationDepth > 0)
+    {
+        // A component's update removed a component: null the entry so the running loop skips it,
+        // and let the loop compact the vector once it finishes
+        std::ranges::replace(_components, component, static_cast<Component *>(nullptr));
+    }
+    else
+    {
+        std::erase(_components, component);
+    }
+    std::erase(_attachQueue, component);
+    std::erase_if(_sceneLights, [component](const Rendering::Light *light)
+    {
+        return static_cast<const Component *>(light) == component;
+    });
 }
 
 void Scene::ProcessAttachQueue()
 {
+    // Take one entry at a time from the live queue: OnAttach can queue more components, or remove
+    // pending ones (DetachComponent erases them from _attachQueue), and neither may leave a stale pointer
     while (!_attachQueue.empty())
     {
         Component *c = _attachQueue.front();
-        _attachQueue.pop();
+        _attachQueue.erase(_attachQueue.begin());
         c->OnAttach();
 
+        // Registration is idempotent: a component re-queued after re-parenting isn't updated twice
         if (auto *light = dynamic_cast<Rendering::Light*>(c))
         {
-            _sceneLights.push_back(light);
+            if (std::ranges::find(_sceneLights, light) == _sceneLights.end())
+            {
+                _sceneLights.push_back(light);
+            }
         }
-        else
+        else if (std::ranges::find(_components, c) == _components.end())
         {
             _components.push_back(c);
         }
@@ -317,12 +353,27 @@ void Scene::OnApplicationQuit() const
 
 void Scene::Clear()
 {
-    // Clear all root objects (this will naturally clear their children too)
-    for (auto &root : _rootGameObjects)
+    // Same teardown as ProcessDestroyed, so leaving a scene releases what its components hold
+    // (physics bodies, audio sources, script state) instead of leaving it pointing at freed objects
+    std::vector<std::shared_ptr<GameObject>> allObjects;
+    for (const auto &root : _rootGameObjects)
     {
-        root->SetScene(nullptr);
+        MarkHierarchyForDestruction(root, allObjects);
+    }
+    for (const auto &obj : allObjects)
+    {
+        CallOnDestroyForGameObject(obj);
+    }
+
+    for (const auto &root : _rootGameObjects)
+    {
+        root->SetScene(nullptr); // detaches every component in the hierarchy
     }
     _rootGameObjects.clear();
+    _components.clear();
+    _attachQueue.clear();
+    _sceneLights.clear();
+    _markedForDestructionQueue = {};
 }
 
 void Scene::ProcessDestroyed()
@@ -377,19 +428,15 @@ void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject)
 {
     for (auto &component : gameObject->GetAllComponents())
     {
-        if (component)
+        // The flag makes OnDestroy run exactly once, whichever teardown path gets here first
+        if (component && !component->_isMarkedForDestruction)
         {
             component->OnDestroy();
-        }
-    }
-    gameObject->StopAllCoroutines();
-    for (auto &component : gameObject->GetAllComponents())
-    {
-        if (component)
-        {
             component->_isMarkedForDestruction = true;
         }
     }
+    // This scene's scheduler, not the loaded scene's: the object may belong to a scene being cleared
+    _coroutineScheduler->StopAllCoroutines(gameObject.get());
 }
 
 void Scene::PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject)
@@ -405,16 +452,12 @@ void Scene::PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject)
     }
     else
     {
-        RemoveRootGameObject(gameObject);
+        std::erase(_rootGameObjects, gameObject);
     }
 
-    // Remove from components list
-    std::erase_if(_components,
-                  [&gameObject](const Component *comp)
-                  {
-                      return &comp->GetGameObject() == gameObject.get();
-                  });
-
+    // Detach from this scene (components out of _components, _sceneLights and the attach queue),
+    // then release the components themselves
+    gameObject->SetScene(nullptr);
     gameObject->Purge();
 }
 
