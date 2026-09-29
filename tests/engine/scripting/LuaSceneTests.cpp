@@ -13,6 +13,7 @@
 #include "engine/example/renderers/CubeRenderer.hpp"
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/input/ActionMap.hpp"
+#include "engine/input/InputBinding.hpp" // ActionMap.hpp only forward-declares it; destroying a map needs the full type
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
