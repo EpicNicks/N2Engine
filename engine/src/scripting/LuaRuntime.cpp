@@ -50,6 +50,11 @@ namespace N2Engine::Scripting
 
     bool LuaRuntime::Initialize()
     {
+        if (_initializeResult.has_value())
+        {
+            return *_initializeResult;
+        }
+
         try
         {
             RegisterBindings();
@@ -57,10 +62,12 @@ namespace N2Engine::Scripting
         catch (const std::exception &e)
         {
             Logger::Error(std::format("LuaRuntime failed to initialize: {}", e.what()));
+            _initializeResult = false;
             return false;
         }
 
         Logger::Info("LuaRuntime initialized with all bindings");
+        _initializeResult = true;
         return true;
     }
 
@@ -86,6 +93,17 @@ namespace N2Engine::Scripting
         Bindings::BindCamera(*this);
 
         SetupModuleSystem();
+
+        // Types bound with sol::call_constructor are constructed as T(...); engine-api.lua also documents
+        // T.new(...), which sol doesn't add on its own, so alias it to the call constructor
+        _lua.script(R"(
+            for _, name in ipairs({ "Vector2", "Vector3", "Vector4", "Quaternion", "Color", "PhysicsMaterial", "BoundingBox" }) do
+                local T = _G[name]
+                if T ~= nil and T.new == nil then
+                    T.new = function(...) return T(...) end
+                end
+            end
+        )");
     }
 
     void LuaRuntime::SetupModuleSystem()
