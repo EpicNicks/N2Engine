@@ -76,6 +76,20 @@ TEST_F(LuaTest, RegistersEngineGlobals)
     }
 }
 
+TEST_F(LuaTest, InitializeTwiceKeepsUsertypesWorking)
+{
+    Run("v_before_reinit = Vector3(1, 2, 3)");
+
+    // Re-registering usertypes in the same state used to strip their metatables
+    EXPECT_TRUE(LuaRuntime::Instance().Initialize());
+
+    EXPECT_FLOAT_EQ(Eval<float>("v_before_reinit.y"), 2.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("Vector3(4, 5, 6):Length()"), Math::Vector3(4, 5, 6).Length());
+    EXPECT_EQ(Eval<std::string>("GameObject.Create('AfterReinit'):GetName()"), "AfterReinit");
+
+    Lua()["v_before_reinit"] = sol::lua_nil;
+}
+
 TEST_F(LuaTest, OpensOnlySafeStandardLibraries)
 {
     EXPECT_EQ(Eval<std::string>("type(math.floor)"), "function");
