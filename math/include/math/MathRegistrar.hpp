@@ -20,8 +20,12 @@ namespace N2Engine
         void InitializeSIMD();
 
         /**
-         * Switches every SIMD-dispatching type to the given tier. Until the first call (or InitializeSIMD) they use
-         * the scalar implementations. Tests use this to run the same math under each tier, restoring Scalar after
+         * Switches every SIMD-dispatching type to the given tier, lowered to what the CPU supports. Until the first
+         * call (or InitializeSIMD) they use the scalar implementations. Tests use this to run the same math under
+         * each tier, restoring Scalar after.
+         *
+         * The math target builds with PUBLIC /arch:AVX (-mavx elsewhere), so the whole binary already requires an
+         * AVX CPU: the lower tiers choose between algorithms, they are not a fallback for older hardware
          */
         void SetSIMDLevel(SIMDLevel level);
     }

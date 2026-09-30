@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <immintrin.h>
+#include "math/CpuInfo.hpp"
 #include "math/Matrix.hpp"
 
 #if defined(__GNUC__) || defined(__clang__)
