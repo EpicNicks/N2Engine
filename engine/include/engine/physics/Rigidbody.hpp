@@ -67,6 +67,9 @@ namespace N2Engine::Physics
         void OnTransformChanged() const;
 
     private:
+        /// Destroys the physics body; colliders sharing it are left with a stale handle
+        void DestroyPhysicsBody();
+
         PhysicsBodyHandle _handle;
         BodyType _bodyType = BodyType::Dynamic;
         float _mass = 1.0f;
