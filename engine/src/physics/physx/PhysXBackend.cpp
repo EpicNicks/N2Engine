@@ -28,6 +28,51 @@ namespace N2Engine::Physics
 {
 #ifdef N2ENGINE_PHYSX_ENABLED
 
+    namespace
+    {
+        // Until the layer system (#4) exists, every shape is on every query layer, so any
+        // non-zero layer mask hits it. Shapes used to have all-zero query data, which PhysX's
+        // fixed-function query filter ((shape & mask) != 0) rejected for every mask.
+        constexpr PxU32 AllQueryLayers = 0xFFFFFFFFu;
+
+        // PxDefaultSimulationFilterShader only asks for touch notifications on trigger pairs, so
+        // onContact never ran for solid contacts and OnCollisionEnter/Stay/Exit never fired
+        PxFilterFlags CollisionEventFilterShader(
+            PxFilterObjectAttributes attributes0, PxFilterData,
+            PxFilterObjectAttributes attributes1, PxFilterData,
+            PxPairFlags &pairFlags, const void *, PxU32)
+        {
+            if (PxFilterObjectIsTrigger(attributes0) || PxFilterObjectIsTrigger(attributes1))
+            {
+                pairFlags = PxPairFlag::eTRIGGER_DEFAULT;
+                return PxFilterFlag::eDEFAULT;
+            }
+
+            pairFlags = PxPairFlag::eCONTACT_DEFAULT
+                        | PxPairFlag::eNOTIFY_TOUCH_FOUND
+                        | PxPairFlag::eNOTIFY_TOUCH_LOST
+                        | PxPairFlag::eNOTIFY_CONTACT_POINTS;
+            return PxFilterFlag::eDEFAULT;
+        }
+
+        // Without a filter callback every raycast hit is blocking, so RaycastAll returned one hit
+        class TouchAllHitsFilter final : public PxQueryFilterCallback
+        {
+        public:
+            PxQueryHitType::Enum preFilter(const PxFilterData &, const PxShape *, const PxRigidActor *,
+                                           PxHitFlags &) override
+            {
+                return PxQueryHitType::eTOUCH;
+            }
+
+            PxQueryHitType::Enum postFilter(const PxFilterData &, const PxQueryHit &, const PxShape *,
+                                            const PxRigidActor *) override
+            {
+                return PxQueryHitType::eTOUCH;
+            }
+        };
+    }
+
     PhysXBackend::PhysXBackend() = default;
 
     PhysXBackend::~PhysXBackend()
@@ -82,7 +127,7 @@ namespace N2Engine::Physics
 
         _dispatcher = PxDefaultCpuDispatcherCreate(4);
         sceneDesc.cpuDispatcher = _dispatcher;
-        sceneDesc.filterShader = PxDefaultSimulationFilterShader;
+        sceneDesc.filterShader = CollisionEventFilterShader;
 
         // Set this backend as the simulation event callback
         sceneDesc.simulationEventCallback = this;
@@ -342,6 +387,13 @@ namespace N2Engine::Physics
             data->actor = nullptr;
         }
 
+        // Releasing the actor released its shapes; forget them so no collider keeps a freed PxShape*
+        for (ICollider *collider : data->colliders)
+        {
+            _colliderShapes.erase(collider);
+        }
+        ForgetPairsWithBody(handle);
+
         data->active = false;
         data->rigidbody = nullptr;
         data->colliders.clear();
@@ -366,12 +418,18 @@ namespace N2Engine::Physics
     {
         if (BodyData* data = GetBodyData(handle); data && collider)
         {
-            if (const auto it = std::ranges::find(data->colliders, collider); it != data->colliders.end())
+            // A removed collider must take its shapes with it; on a shared Rigidbody actor they'd
+            // otherwise stay behind as ghost colliders
+            RemoveColliderShapes(handle, collider);
+            std::erase(data->colliders, collider);
+
+            if (data->actor && data->actor->getNbShapes() == 0)
             {
-                data->colliders.erase(it);
+                ForgetPairsWithBody(handle); // nothing left on the body to be touching anything
             }
         }
 
+        // Also when the body is already gone (its actor released these shapes)
         _colliderShapes.erase(collider);
     }
 
@@ -453,10 +511,11 @@ namespace N2Engine::Physics
         return pxMaterial;
     }
 
-    void PhysXBackend::AddSphereCollider(
+    void PhysXBackend::AttachColliderShape(
         const PhysicsBodyHandle body,
-        const float radius,
-        const Math::Vector3 &localOffset,
+        ICollider *collider,
+        const PxGeometry &geometry,
+        const PxTransform &localPose,
         const PhysicsMaterial &material)
     {
         const BodyData *bodyData = GetBodyData(body);
@@ -471,108 +530,79 @@ namespace N2Engine::Physics
             pxMaterial = _defaultMaterial;
         }
 
-        const PxSphereGeometry sphere(radius);
-        const PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
-
-        PxShape *shape = _physics->createShape(sphere, *pxMaterial, true);
+        PxShape *shape = _physics->createShape(geometry, *pxMaterial, true);
+        if (!shape)
+        {
+            Logger::Error("Failed to create collider shape");
+            return;
+        }
         shape->setLocalPose(localPose);
+        shape->setQueryFilterData(PxFilterData(AllQueryLayers, 0, 0, 0));
 
         bodyData->actor->attachShape(*shape);
 
-        if (!bodyData->colliders.empty())
+        // Recorded under the collider that asked for it (it used to be filed under whichever
+        // collider registered last, so a second collider's shapes were attributed to the wrong one)
+        if (collider)
         {
-            _colliderShapes[bodyData->colliders.back()].push_back(shape);
+            _colliderShapes[collider].push_back(shape);
         }
 
+        // The actor holds the only reference from here; detachShape frees the shape
         shape->release();
     }
 
+    void PhysXBackend::AddSphereCollider(
+        const PhysicsBodyHandle body,
+        ICollider *collider,
+        const float radius,
+        const Math::Vector3 &localOffset,
+        const PhysicsMaterial &material)
+    {
+        AttachColliderShape(body, collider, PxSphereGeometry(radius),
+                            PxTransform(PxVec3(localOffset.x, localOffset.y, localOffset.z)), material);
+    }
+
     void PhysXBackend::AddBoxCollider(
-        PhysicsBodyHandle body,
+        const PhysicsBodyHandle body,
+        ICollider *collider,
         const Math::Vector3 &halfExtents,
         const Math::Vector3 &localOffset,
         const PhysicsMaterial &material)
     {
-        BodyData *bodyData = GetBodyData(body);
-        if (!bodyData || !bodyData->actor)
-            return;
-
-        PxMaterial *pxMaterial = GetOrCreateMaterial(material);
-        if (!pxMaterial)
-            pxMaterial = _defaultMaterial;
-
-        PxBoxGeometry box(halfExtents.x, halfExtents.y, halfExtents.z);
-        PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z));
-
-        PxShape *shape = _physics->createShape(box, *pxMaterial, true);
-        shape->setLocalPose(localPose);
-
-        bodyData->actor->attachShape(*shape);
-
-        if (!bodyData->colliders.empty())
-        {
-            _colliderShapes[bodyData->colliders.back()].push_back(shape);
-        }
-
-        shape->release();
+        AttachColliderShape(body, collider, PxBoxGeometry(halfExtents.x, halfExtents.y, halfExtents.z),
+                            PxTransform(PxVec3(localOffset.x, localOffset.y, localOffset.z)), material);
     }
 
     void PhysXBackend::AddCapsuleCollider(
         const PhysicsBodyHandle body,
+        ICollider *collider,
         const float radius,
         const float height,
         const Math::Vector3 &localOffset,
         const PhysicsMaterial &material)
     {
-        const BodyData *bodyData = GetBodyData(body);
-        if (!bodyData || !bodyData->actor)
-        {
-            return;
-        }
-
-        const PxMaterial *pxMaterial = GetOrCreateMaterial(material);
-        if (!pxMaterial)
-        {
-            pxMaterial = _defaultMaterial;
-        }
-
-        float halfHeight = (height - 2.0f * radius) * 0.5f;
-        halfHeight = std::max(0.01f, halfHeight);
-
-        const PxCapsuleGeometry capsule(radius, halfHeight);
-
-        const PxQuat rotation(PxHalfPi, PxVec3(0, 0, 1));
-        const PxTransform localPose(PxVec3(localOffset.x, localOffset.y, localOffset.z), rotation);
-
-        PxShape *shape = _physics->createShape(capsule, *pxMaterial, true);
-        shape->setLocalPose(localPose);
-
-        bodyData->actor->attachShape(*shape);
-
-        if (!bodyData->colliders.empty())
-        {
-            _colliderShapes[bodyData->colliders.back()].push_back(shape);
-        }
-
-        shape->release();
+        const float halfHeight = std::max(0.01f, (height - 2.0f * radius) * 0.5f);
+        const PxQuat rotation(PxHalfPi, PxVec3(0, 0, 1)); // PhysX capsules lie along X; ours stand on Y
+        AttachColliderShape(body, collider, PxCapsuleGeometry(radius, halfHeight),
+                            PxTransform(PxVec3(localOffset.x, localOffset.y, localOffset.z), rotation), material);
     }
 
-
-    void PhysXBackend::SetIsTrigger(const PhysicsBodyHandle body, const bool isTrigger)
+    void PhysXBackend::SetIsTrigger(const PhysicsBodyHandle body, ICollider *collider, const bool isTrigger)
     {
-        BodyData *data = GetBodyData(body);
-        if (!data || !data->actor)
+        if (!GetBodyData(body))
         {
             return;
         }
 
-        // Get all shapes attached to this actor
-        const PxU32 numShapes = data->actor->getNbShapes();
-        std::vector<PxShape*> shapes(numShapes);
-        data->actor->getShapes(shapes.data(), numShapes);
+        const auto it = _colliderShapes.find(collider);
+        if (it == _colliderShapes.end())
+        {
+            return;
+        }
 
-        // Set trigger flag on all shapes
-        for (PxShape *shape : shapes)
+        // Only this collider's shapes: a trigger sphere must not turn the object's solid box into a trigger
+        for (PxShape *shape : it->second)
         {
             if (isTrigger)
             {
@@ -762,8 +792,10 @@ namespace N2Engine::Physics
                 continue;
             }
 
-            // Only sync dynamic bodies
-            if (const auto *dynamic = bodyData.actor->is<PxRigidDynamic>(); !dynamic)
+            // Only simulated dynamic bodies. Kinematic bodies are driven by their transform; writing the
+            // physics pose back would overwrite a script's move before PhysX consumed it.
+            const auto *dynamic = bodyData.actor->is<PxRigidDynamic>();
+            if (!dynamic || dynamic->getRigidBodyFlags().isSet(PxRigidBodyFlag::eKINEMATIC))
             {
                 continue;
             }
@@ -790,6 +822,12 @@ namespace N2Engine::Physics
         const PxContactPair *pairs,
         PxU32 nbPairs)
     {
+        // A released actor's pointer is invalid here. Its pairs were already dropped in DestroyBody.
+        if (pairHeader.flags & (PxContactPairHeaderFlag::eREMOVED_ACTOR_0 | PxContactPairHeaderFlag::eREMOVED_ACTOR_1))
+        {
+            return;
+        }
+
         auto *handleA = static_cast<PhysicsBodyHandle*>(pairHeader.actors[0]->userData);
         auto *handleB = static_cast<PhysicsBodyHandle*>(pairHeader.actors[1]->userData);
 
@@ -869,6 +907,13 @@ namespace N2Engine::Physics
     {
         for (PxU32 i = 0; i < count; i++)
         {
+            // Removed shapes may belong to released actors (e.g. an object destroyed inside a trigger
+            // volume); their pairs were dropped when the body or collider went away
+            if (pairs[i].flags & (PxTriggerPairFlag::eREMOVED_SHAPE_TRIGGER | PxTriggerPairFlag::eREMOVED_SHAPE_OTHER))
+            {
+                continue;
+            }
+
             const auto *triggerHandle = static_cast<PhysicsBodyHandle*>(pairs[i].triggerActor->userData);
             const auto *otherHandle = static_cast<PhysicsBodyHandle*>(pairs[i].otherActor->userData);
 
@@ -983,181 +1028,146 @@ namespace N2Engine::Physics
         return trigger;
     }
 
+    GameObject *PhysXBackend::GetBodyOwner(const PhysicsBodyHandle handle)
+    {
+        const BodyData *data = GetBodyData(handle);
+        if (!data)
+        {
+            return nullptr;
+        }
+        if (data->rigidbody)
+        {
+            return &data->rigidbody->GetGameObject();
+        }
+        if (!data->colliders.empty())
+        {
+            return &data->colliders.front()->GetGameObject();
+        }
+        return nullptr;
+    }
+
+    void PhysXBackend::DispatchToBody(const PhysicsBodyHandle handle, const std::function<void(Component &)> &fn)
+    {
+        GameObject *owner = GetBodyOwner(handle);
+        if (!owner)
+        {
+            return; // destroyed this frame, or never belonged to a GameObject
+        }
+
+        // Snapshot: a handler can add or remove components, which would invalidate the live vector
+        std::vector<Component *> components;
+        for (const auto &component : owner->GetAllComponents())
+        {
+            components.push_back(component.get());
+        }
+
+        for (Component *component : components)
+        {
+            // A handler may have destroyed this body (e.g. removed its Rigidbody) or other components
+            if (GetBodyOwner(handle) != owner)
+            {
+                return;
+            }
+            const auto &live = owner->GetAllComponents();
+            if (std::ranges::none_of(live, [component](const auto &c) { return c.get() == component; }) ||
+                component->IsDestroyed())
+            {
+                continue;
+            }
+            fn(*component);
+        }
+    }
+
+    void PhysXBackend::ForgetPairsWithBody(const PhysicsBodyHandle handle)
+    {
+        const auto involves = [handle](const CollisionPair &pair)
+        {
+            return pair.bodyA == handle || pair.bodyB == handle;
+        };
+        std::erase_if(_activeCollisions, involves);
+        std::erase_if(_activeTriggers, involves);
+    }
+
     void PhysXBackend::ProcessCollisionCallbacks()
     {
-        for (const auto &event : _newCollisions)
+        // Every event goes to *each* body's own GameObject (A's components get A's view, B's get B's).
+        // This used to send both to B's first collider, which could be null or empty.
+        // Take the event lists first so handlers can't disturb what's being iterated.
+
+        // ===== OnCollisionEnter =====
+        std::vector<CollisionEvent> newCollisions;
+        newCollisions.swap(_newCollisions);
+        for (const auto &event : newCollisions)
         {
-            BodyData *dataA = GetBodyData(event.pair.bodyA);
-            BodyData *dataB = GetBodyData(event.pair.bodyB);
-
-            if (dataA)
-            {
-                Collision collisionForA = CreateCollisionData(event.pair, *event.data, true);
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnCollisionEnter(collisionForA);
-                }
-            }
-            if (dataB)
-            {
-                Collision collisionForB = CreateCollisionData(event.pair, *event.data, false);
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnCollisionEnter(collisionForB);
-                }
-            }
-
-            // Clean up
+            const Collision forA = CreateCollisionData(event.pair, *event.data, true);
+            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnCollisionEnter(forA); });
+            const Collision forB = CreateCollisionData(event.pair, *event.data, false);
+            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnCollisionEnter(forB); });
             delete event.data;
         }
-        _newCollisions.clear();
 
         // ===== OnCollisionStay =====
-        for (const auto &pair : _activeCollisions)
+        const std::vector<CollisionPair> activeCollisions(_activeCollisions.begin(), _activeCollisions.end());
+        for (const auto &pair : activeCollisions)
         {
-            BodyData *dataA = GetBodyData(pair.bodyA);
-            BodyData *dataB = GetBodyData(pair.bodyB);
-
-            // Create minimal collision data for Stay events
-            Collision baseData;
-
-            if (dataA)
+            if (!_activeCollisions.contains(pair))
             {
-                Collision collisionForA = CreateCollisionData(pair, baseData, true);
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnCollisionStay(collisionForA);
-                }
+                continue; // a handler destroyed one of the bodies
             }
-
-            if (dataB)
-            {
-                Collision collisionForB = CreateCollisionData(pair, baseData, false);
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnCollisionStay(collisionForB);
-                }
-            }
+            Collision baseData{};
+            const Collision forA = CreateCollisionData(pair, baseData, true);
+            DispatchToBody(pair.bodyA, [&forA](Component &c) { c.OnCollisionStay(forA); });
+            const Collision forB = CreateCollisionData(pair, baseData, false);
+            DispatchToBody(pair.bodyB, [&forB](Component &c) { c.OnCollisionStay(forB); });
         }
 
         // ===== OnCollisionExit =====
-        for (const auto &event : _endedCollisions)
+        std::vector<CollisionEvent> endedCollisions;
+        endedCollisions.swap(_endedCollisions);
+        for (const auto &event : endedCollisions)
         {
-            BodyData *dataA = GetBodyData(event.pair.bodyA);
-            BodyData *dataB = GetBodyData(event.pair.bodyB);
-
-            if (dataA)
-            {
-                Collision collisionForA = CreateCollisionData(event.pair, *event.data, true);
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnCollisionExit(collisionForA);
-                }
-            }
-
-            if (dataB)
-            {
-                Collision collisionForB = CreateCollisionData(event.pair, *event.data, false);
-
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnCollisionExit(collisionForB);
-                }
-            }
-
+            const Collision forA = CreateCollisionData(event.pair, *event.data, true);
+            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnCollisionExit(forA); });
+            const Collision forB = CreateCollisionData(event.pair, *event.data, false);
+            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnCollisionExit(forB); });
             delete event.data;
         }
-        _endedCollisions.clear();
 
         // ===== OnTriggerEnter =====
-        for (const auto &event : _newTriggers)
+        std::vector<TriggerEvent> newTriggers;
+        newTriggers.swap(_newTriggers);
+        for (const auto &event : newTriggers)
         {
-            BodyData *dataA = GetBodyData(event.pair.bodyA);
-            BodyData *dataB = GetBodyData(event.pair.bodyB);
-
-            if (dataA)
-            {
-                Trigger triggerForA = CreateTriggerData(event.pair, true);
-
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnTriggerEnter(triggerForA);
-                }
-            }
-
-            if (dataB)
-            {
-                Trigger triggerForB = CreateTriggerData(event.pair, false);
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnTriggerEnter(triggerForB);
-                }
-            }
+            const Trigger forA = CreateTriggerData(event.pair, true);
+            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnTriggerEnter(forA); });
+            const Trigger forB = CreateTriggerData(event.pair, false);
+            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnTriggerEnter(forB); });
         }
-        _newTriggers.clear();
 
         // ===== OnTriggerStay =====
-        for (const auto &pair : _activeTriggers)
+        const std::vector<CollisionPair> activeTriggers(_activeTriggers.begin(), _activeTriggers.end());
+        for (const auto &pair : activeTriggers)
         {
-            BodyData *dataA = GetBodyData(pair.bodyA);
-            BodyData *dataB = GetBodyData(pair.bodyB);
-
-            if (dataA)
+            if (!_activeTriggers.contains(pair))
             {
-                Trigger triggerForA = CreateTriggerData(pair, true);
-                const auto &components = dataA->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnTriggerStay(triggerForA);
-                }
+                continue;
             }
-
-            if (dataB)
-            {
-                Trigger triggerForB = CreateTriggerData(pair, false);
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnTriggerStay(triggerForB);
-                }
-            }
+            const Trigger forA = CreateTriggerData(pair, true);
+            DispatchToBody(pair.bodyA, [&forA](Component &c) { c.OnTriggerStay(forA); });
+            const Trigger forB = CreateTriggerData(pair, false);
+            DispatchToBody(pair.bodyB, [&forB](Component &c) { c.OnTriggerStay(forB); });
         }
 
         // ===== OnTriggerExit =====
-        for (const auto &event : _endedTriggers)
+        std::vector<TriggerEvent> endedTriggers;
+        endedTriggers.swap(_endedTriggers);
+        for (const auto &event : endedTriggers)
         {
-            BodyData *dataA = GetBodyData(event.pair.bodyA);
-            BodyData *dataB = GetBodyData(event.pair.bodyB);
-
-            if (dataA)
-            {
-                Trigger triggerForA = CreateTriggerData(event.pair, true);
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnTriggerExit(triggerForA);
-                }
-            }
-
-            if (dataB)
-            {
-                Trigger triggerForB = CreateTriggerData(event.pair, false);
-                const auto &components = dataB->colliders[0]->GetGameObject().GetAllComponents();
-                for (const auto &comp : components)
-                {
-                    comp->OnTriggerExit(triggerForB);
-                }
-            }
+            const Trigger forA = CreateTriggerData(event.pair, true);
+            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnTriggerExit(forA); });
+            const Trigger forB = CreateTriggerData(event.pair, false);
+            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnTriggerExit(forB); });
         }
-        _endedTriggers.clear();
     }
 
     void PhysXBackend::RemoveColliderShapes(PhysicsBodyHandle body, ICollider *collider)
@@ -1179,10 +1189,11 @@ namespace N2Engine::Physics
             return;
         }
 
+        // detachShape drops the actor's reference, which is the only one (AttachColliderShape released
+        // its own), so the shape is freed here. The extra release() that used to follow freed it twice.
         for (PxShape *shape : it->second)
         {
             bodyData->actor->detachShape(*shape);
-            shape->release();
         }
 
         it->second.clear();
@@ -1377,7 +1388,11 @@ namespace N2Engine::Physics
 
         PxRaycastBuffer raycastBuffer(hitBuffer, maxHits);
 
-        if (_scene->raycast(pxOrigin, pxDir, maxDistance, raycastBuffer, PxHitFlag::eDEFAULT, filterData))
+        // Report every hit as touching; otherwise PhysX keeps only the closest blocking one
+        TouchAllHitsFilter touchAll;
+        filterData.flags |= PxQueryFlag::ePREFILTER;
+
+        if (_scene->raycast(pxOrigin, pxDir, maxDistance, raycastBuffer, PxHitFlag::eDEFAULT, filterData, &touchAll))
         {
             for (PxU32 i = 0; i < raycastBuffer.nbTouches; i++)
             {
@@ -1496,12 +1511,13 @@ namespace N2Engine::Physics
     void PhysXBackend::DestroyBody(PhysicsBodyHandle) {}
     void PhysXBackend::RegisterCollider(PhysicsBodyHandle, Collider *) {}
     void PhysXBackend::UnregisterCollider(PhysicsBodyHandle, Collider *) {}
-    void PhysXBackend::AddSphereCollider(PhysicsBodyHandle, float, const Math::Vector3 &, const PhysicsMaterial &) {}
-    void PhysXBackend::AddBoxCollider(PhysicsBodyHandle, const Math::Vector3 &, const Math::Vector3 &,
+    void PhysXBackend::AddSphereCollider(PhysicsBodyHandle, ICollider *, float, const Math::Vector3 &,
+                                         const PhysicsMaterial &) {}
+    void PhysXBackend::AddBoxCollider(PhysicsBodyHandle, ICollider *, const Math::Vector3 &, const Math::Vector3 &,
                                       const PhysicsMaterial &) {}
-    void PhysXBackend::AddCapsuleCollider(PhysicsBodyHandle, float, float, const Math::Vector3 &,
+    void PhysXBackend::AddCapsuleCollider(PhysicsBodyHandle, ICollider *, float, float, const Math::Vector3 &,
                                           const PhysicsMaterial &) {}
-    void PhysXBackend::SetIsTrigger(PhysicsBodyHandle, bool) {}
+    void PhysXBackend::SetIsTrigger(PhysicsBodyHandle, ICollider *, bool) {}
     void PhysXBackend::AddForce(PhysicsBodyHandle, const Math::Vector3 &) {}
     void PhysXBackend::AddImpulse(PhysicsBodyHandle, const Math::Vector3 &) {}
     void PhysXBackend::SetVelocity(PhysicsBodyHandle, const Math::Vector3 &) {}

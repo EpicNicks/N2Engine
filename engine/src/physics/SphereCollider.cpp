@@ -42,6 +42,7 @@ namespace N2Engine::Physics
 
         backend->AddSphereCollider(
             GetHandle(),
+            this,
             _radius,
             GetOffset(),
             GetMaterial()
