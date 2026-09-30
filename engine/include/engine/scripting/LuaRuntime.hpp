@@ -28,7 +28,6 @@ namespace N2Engine::Scripting
 
     public:
         static LuaRuntime& Instance();
-        static void Destroy();
 
         /// Registers all engine bindings. Safe to call more than once: later calls return the first result,
         /// because re-registering a usertype in the same state breaks the metatables of existing values.
@@ -57,6 +56,9 @@ namespace N2Engine::Scripting
         std::string PathToModuleName(const IO::ResourcePath& path);
 
     private:
+        // Not public: destroying the state while components still hold sol::table/sol::function
+        // references into it left them dangling. Nothing calls it; the runtime lives for the process.
+        static void Destroy();
         void RegisterBindings();
         void SetupModuleSystem();
     };

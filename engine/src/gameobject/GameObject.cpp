@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <format>
+#include <typeindex>
+#include <typeinfo>
 #include <memory>
 #include <utility>
 
@@ -196,6 +199,20 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
     if (!child || child.get() == this)
         return;
 
+    // Parenting an ancestor under its own descendant would make a cycle
+    if (IsChildOf(child))
+    {
+        Logger::Warn(std::format("Can't make '{}' a child of its descendant '{}'", child->GetName(), _name));
+        return;
+    }
+
+    // A root object stops being a root: it used to stay in the scene's roots as well, so it was
+    // updated, rendered and serialized twice and survived its parent's destruction
+    if (!child->_parent.lock() && child->_scene)
+    {
+        std::erase(child->_scene->_rootGameObjects, child);
+    }
+
     // Remove from old parent
     if (auto oldParent = child->_parent.lock())
     {
@@ -379,6 +396,7 @@ bool GameObject::RemoveComponent(const std::type_index &type)
     {
         const auto component = it->second;
         component->RunDestroyCallbacks(IsActiveInHierarchyIgnoringDestruction());
+        const std::type_index componentType = typeid(*component);
 
         // The scene keeps raw pointers to attached components; drop them before the component is freed
         if (_scene)
@@ -386,7 +404,7 @@ bool GameObject::RemoveComponent(const std::type_index &type)
             _scene->DetachComponent(component);
         }
 
-        // Remove from map
+        // Remove from map; another component of the same type (if any) becomes the one GetComponent finds
         _componentMap.erase(it);
 
         // Remove from vector
@@ -397,6 +415,15 @@ bool GameObject::RemoveComponent(const std::type_index &type)
                                                     }); vecIt != _components.end())
         {
             _components.erase(vecIt);
+        }
+
+        for (const auto &remaining : _components)
+        {
+            if (std::type_index(typeid(*remaining)) == componentType)
+            {
+                _componentMap.emplace(componentType, remaining.get());
+                break;
+            }
         }
 
         return true;
@@ -724,7 +751,7 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
                 std::type_index typeIdx(typeid(*rawPtr));
 
                 go->_components.push_back(std::move(component));
-                go->_componentMap[typeIdx] = rawPtr;
+                go->_componentMap.emplace(typeIdx, rawPtr); // the first of a type stays the one GetComponent finds
             }
         }
     }

@@ -109,12 +109,18 @@ void Positionable::SetScale(const Math::Vector3 &scale)
     if (parentPositionable)
     {
         // Convert world scale to local space
-        Math::Vector3 parentScale = parentPositionable->GetScale();
-        Math::Vector3 localScale = Math::Vector3{
-            scale.x / parentScale.x,
-            scale.y / parentScale.y,
-            scale.z / parentScale.z};
-        SetLocalScale(localScale);
+        const Math::Vector3 parentScale = parentPositionable->GetScale();
+        const Math::Vector3 currentLocal = GetLocalScale();
+        // A zero parent axis collapses every child scale on it; keep the current local value there
+        // instead of dividing by zero (which produced NaN)
+        const auto toLocal = [](float world, float parent, float current)
+        {
+            return parent != 0.0f ? world / parent : current;
+        };
+        SetLocalScale(Math::Vector3{
+            toLocal(scale.x, parentScale.x, currentLocal.x),
+            toLocal(scale.y, parentScale.y, currentLocal.y),
+            toLocal(scale.z, parentScale.z, currentLocal.z)});
     }
     else
     {

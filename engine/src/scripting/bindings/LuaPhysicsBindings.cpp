@@ -5,6 +5,7 @@
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
+#include "engine/physics/PhysicsTypes.hpp"
 
 namespace N2Engine::Scripting::Bindings
 {
@@ -12,6 +13,45 @@ namespace N2Engine::Scripting::Bindings
     {
         auto& lua = runtime.GetState();
         
+        // ===== Collision event data (the argument of OnCollision*/OnTrigger* in scripts) =====
+        // Without these, `collision.otherGameObject` in a Lua handler was "attempt to index a userdata value"
+        lua.new_usertype<Physics::ContactPoint>("ContactPoint",
+            sol::no_constructor,
+            "point", sol::readonly(&Physics::ContactPoint::point),
+            "normal", sol::readonly(&Physics::ContactPoint::normal),
+            "separation", sol::readonly(&Physics::ContactPoint::separation),
+            "normalImpulse", sol::readonly(&Physics::ContactPoint::normalImpulse)
+        );
+
+        lua.new_usertype<Physics::Collision>("Collision",
+            sol::no_constructor,
+            "gameObject", sol::readonly(&Physics::Collision::gameObject),
+            "otherGameObject", sol::readonly(&Physics::Collision::otherGameObject),
+            "rigidbody", sol::readonly(&Physics::Collision::rigidbody),
+            "otherRigidbody", sol::readonly(&Physics::Collision::otherRigidbody),
+            "relativeVelocity", sol::readonly(&Physics::Collision::relativeVelocity),
+            "impulse", sol::readonly(&Physics::Collision::impulse),
+            "contactCount", sol::property([](const Physics::Collision &c) { return c.contacts.size(); }),
+            "GetContact", [](const Physics::Collision &c, std::size_t index) -> sol::optional<Physics::ContactPoint>
+            {
+                // 1-based, like Lua tables
+                if (index < 1 || index > c.contacts.size())
+                {
+                    return sol::nullopt;
+                }
+                return c.contacts[index - 1];
+            },
+            "GetAverageContactPoint", &Physics::Collision::GetAverageContactPoint
+        );
+
+        lua.new_usertype<Physics::Trigger>("Trigger",
+            sol::no_constructor,
+            "gameObject", sol::readonly(&Physics::Trigger::gameObject),
+            "otherGameObject", sol::readonly(&Physics::Trigger::otherGameObject),
+            "rigidbody", sol::readonly(&Physics::Trigger::rigidbody),
+            "otherRigidbody", sol::readonly(&Physics::Trigger::otherRigidbody)
+        );
+
         // ===== BodyType Enum =====
         lua.new_enum("BodyType",
             "Static", Physics::BodyType::Static,

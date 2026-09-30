@@ -25,15 +25,15 @@ namespace N2Engine::Scripting::Bindings
             "a", &Common::Color::z,
             
             // Static colors
-            "White", sol::var(Common::Color::White),
-            "Black", sol::var(Common::Color::Black),
-            "Red", sol::var(Common::Color::Red),
-            "Green", sol::var(Common::Color::Green),
-            "Blue", sol::var(Common::Color::Blue),
-            "Cyan", sol::var(Common::Color::Cyan),
-            "Yellow", sol::var(Common::Color::Yellow),
-            "Magenta", sol::var(Common::Color::Magenta),
-            "Transparent", sol::var(Common::Color::Transparent),
+            "White", sol::property([]() { return Common::Color::White; }),
+            "Black", sol::property([]() { return Common::Color::Black; }),
+            "Red", sol::property([]() { return Common::Color::Red; }),
+            "Green", sol::property([]() { return Common::Color::Green; }),
+            "Blue", sol::property([]() { return Common::Color::Blue; }),
+            "Cyan", sol::property([]() { return Common::Color::Cyan; }),
+            "Yellow", sol::property([]() { return Common::Color::Yellow; }),
+            "Magenta", sol::property([]() { return Common::Color::Magenta; }),
+            "Transparent", sol::property([]() { return Common::Color::Transparent; }),
             
             "FromHex", &Common::Color::FromHex,
             "ToHex", &Common::Color::ToHex

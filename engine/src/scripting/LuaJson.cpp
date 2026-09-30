@@ -2,11 +2,16 @@
 
 #include <cmath>
 #include <cstdint>
+#include <unordered_set>
 
 namespace N2Engine::Scripting
 {
     namespace
     {
+        // Tables currently being converted: a table that (directly or indirectly) contains itself
+        // becomes null at the point it recurs, instead of recursing until the stack overflows
+        thread_local std::unordered_set<const void *> t_tablesInProgress;
+
         nlohmann::json NumberToJson(const double number)
         {
             // Lua scripts write whole numbers for counts and ids; keep them integral in JSON
@@ -20,6 +25,17 @@ namespace N2Engine::Scripting
 
         nlohmann::json TableToJson(const sol::table &table)
         {
+            const void *identity = table.pointer();
+            if (!t_tablesInProgress.insert(identity).second)
+            {
+                return nullptr; // cycle
+            }
+            struct Leave
+            {
+                const void *id;
+                ~Leave() { t_tablesInProgress.erase(id); }
+            } leave{identity};
+
             std::size_t keyCount = 0;
             bool sequentialKeys = true;
             for (const auto &[key, value] : table)

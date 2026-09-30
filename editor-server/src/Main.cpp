@@ -83,7 +83,9 @@ int main(int argc, char *argv[])
         }
 
         // Main loop - just keep alive and handle OS events
-        while (g_running && server.IsRunning() && (!window.IsValid() || !window.ShouldClose()))
+        auto &app = N2Engine::Application::GetInstance();
+        while (g_running && server.IsRunning() && !app.IsQuitRequested() &&
+               (!window.IsValid() || !window.ShouldClose()))
         {
             // Poll window events to keep OS happy (even if window is hidden)
             window.PollEvents();

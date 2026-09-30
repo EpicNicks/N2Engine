@@ -1,5 +1,6 @@
 #include <string>
 #include <memory>
+#include <algorithm>
 
 #include <math/MathRegistrar.hpp>
 
@@ -68,6 +69,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     Logger::InitializeDebugConsoleHelper();
 #endif
     _health = {};
+    _quitRequested = false;
     SubsystemStatus windowStatus{.name = "Window"};
     SubsystemStatus rendererStatus{.name = "Renderer"};
     SubsystemStatus physicsStatus{.name = "Physics"};
@@ -202,20 +204,19 @@ void Application::Run()
         return;
     }
 
+    // Longest frame the fixed-step loop catches up on; after a long stall (debugger, loading) it would
+    // otherwise queue hundreds of physics steps and fall further behind while running them
+    constexpr double MaxFrameTime = 0.25;
     double fixedTimestepAccumulator = 0.0;
-    // Initialize last frame time for accumulator
-    double lastTime = Time::GetUnscaledTime();
 
-    while (!_window.ShouldClose())
+    while (!_window.ShouldClose() && !_quitRequested)
     {
         _window.PollEvents();
 
         Time::Update();
-        const double now = Time::GetUnscaledTime();
-        const double frameTime = now - lastTime;
-        lastTime = now;
-
-        fixedTimestepAccumulator += frameTime;
+        // The frame delta itself, not a difference of float absolute times (which lost precision: ~1 ms
+        // steps after 3 hours of running, 8 ms after 18)
+        fixedTimestepAccumulator += std::min(static_cast<double>(Time::GetUnscaledDeltaTime()), MaxFrameTime);
         if (SceneManager::GetCurSceneIndex() != -1)
         {
             Scene &curScene = SceneManager::GetCurSceneRef();
@@ -223,7 +224,11 @@ void Application::Run()
 
             while (fixedTimestepAccumulator >= Time::GetFixedUnscaledDeltaTime())
             {
-                PhysicsUpdate(curScene);
+                // Paused (timeScale 0): no fixed steps, as in Unity; stepping PhysX by 0 is an error
+                if (Time::GetFixedDeltaTime() > 0.0f)
+                {
+                    PhysicsUpdate(curScene);
+                }
                 fixedTimestepAccumulator -= Time::GetFixedUnscaledDeltaTime();
             }
             curScene.Update();
@@ -241,6 +246,10 @@ void Application::Run()
         SceneManager::ProcessAnyPendingSceneChange();
     }
 
+    if (_quitRequested && SceneManager::GetCurScene() != nullptr)
+    {
+        SceneManager::GetCurSceneRef().OnApplicationQuit();
+    }
     Shutdown();
 }
 
@@ -284,13 +293,11 @@ void Application::Render()
 
 void Application::Quit()
 {
-    if (SceneManager::GetCurSceneIndex() != -1)
-    {
-        const Scene &curScene = SceneManager::GetCurSceneRef();
-        curScene.OnApplicationQuit();
-    }
-    GetInstance().Shutdown();
-    std::exit(0);
+    // A request, honoured at the end of the current frame: this used to std::exit(0) from wherever it
+    // was called (usually inside a component or Lua callback, with scenes and the Lua stack live).
+    // Run() then calls OnApplicationQuit and shuts down; hosts without Run() check IsQuitRequested().
+    Logger::Info("Quit requested");
+    GetInstance()._quitRequested = true;
 }
 
 void Application::OnWindowResize(const int width, const int height) const

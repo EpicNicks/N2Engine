@@ -28,6 +28,7 @@ namespace N2Engine::Scripting::Bindings
         {
             std::function<sol::object(GameObject &, sol::this_state)> add;
             std::function<sol::object(const GameObject &, sol::this_state)> get;
+            std::function<sol::object(Component &, lua_State *)> asLua; // null object if not this type
         };
 
         template <typename T>
@@ -40,6 +41,14 @@ namespace N2Engine::Scripting::Bindings
                     if (T *component = go.GetComponent<T>())
                     {
                         return sol::make_object(state, component);
+                    }
+                    return sol::lua_nil;
+                },
+                [](Component &component, lua_State *state) -> sol::object
+                {
+                    if (auto *typed = dynamic_cast<T *>(&component))
+                    {
+                        return sol::make_object(state, typed);
                     }
                     return sol::lua_nil;
                 },
@@ -89,6 +98,18 @@ namespace N2Engine::Scripting::Bindings
     sol::object GetComponentByName(const GameObject &gameObject, const std::string &typeName, sol::this_state state)
     {
         return FindAccess(typeName).get(gameObject, state);
+    }
+
+    sol::object ComponentToLua(Component &component, lua_State *state)
+    {
+        for (const auto &access : ComponentTable() | std::views::values)
+        {
+            if (sol::object typed = access.asLua(component, state); typed.valid())
+            {
+                return typed;
+            }
+        }
+        return sol::make_object(state, &component);
     }
 
     std::vector<std::string> GetScriptableComponentNames()

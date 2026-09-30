@@ -20,6 +20,7 @@ namespace N2Engine
         std::unique_ptr<Camera> _mainCamera;
         std::unique_ptr<Physics::IPhysicsBackend> _3DphysicsBackend = nullptr;
         EngineHealth _health;
+        bool _quitRequested = false;
 
     private:
         Application() = default;
@@ -42,7 +43,10 @@ namespace N2Engine
         void Shutdown();
         void RenderEditorFrame();
 
+        /// Requests a quit at the end of the current frame (Run() then calls OnApplicationQuit and
+        /// shuts down). Safe to call from components and Lua.
         static void Quit();
+        [[nodiscard]] bool IsQuitRequested() const { return _quitRequested; }
 
         [[nodiscard]] Camera* GetMainCamera() const;
         Window& GetWindow();
