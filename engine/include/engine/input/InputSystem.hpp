@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <functional>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -32,6 +33,9 @@ namespace N2Engine::Input
         std::unordered_map<std::string, std::unique_ptr<ActionMap>> _actionMaps;
         std::string _curActionMapName;
         std::unique_ptr<Mouse> _mouse;
+        // Maps replaced while callbacks run are freed after the update, not under their own Update
+        bool _updating = false;
+        std::vector<std::unique_ptr<ActionMap>> _retiredMaps;
 
     public:
         explicit InputSystem(Window &window);

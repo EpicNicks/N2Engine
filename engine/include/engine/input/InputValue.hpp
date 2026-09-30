@@ -13,6 +13,10 @@ namespace N2Engine::Input
         template <typename T>
         InputValue(T val) : value(val) {}
 
+        /// The type the binding produced (bool button, float axis, Vector2 stick/composite)
+        template <typename T>
+        [[nodiscard]] bool Is() const { return std::holds_alternative<T>(value); }
+
         // Automatic conversions
         Math::Vector2 asVector2() const
         {

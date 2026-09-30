@@ -11,7 +11,10 @@ namespace N2Engine::Input
     private:
         GLFWwindow *_window;
 
-        // Per-frame state
+        // Per-frame state. Scroll arrives in callbacks during glfwPollEvents, before Update, so it's
+        // gathered in _pendingScroll and published to _scrollDelta by Update (which used to zero it
+        // straight after the events arrived, so GetScrollDelta was always zero)
+        Math::Vector2 _pendingScroll{0.0f, 0.0f};
         Math::Vector2 _scrollDelta{0.0f, 0.0f};
         Math::Vector2 _lastPosition{0.0f, 0.0f};
         Math::Vector2 _positionDelta{0.0f, 0.0f};

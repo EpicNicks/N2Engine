@@ -1,4 +1,8 @@
 #include "engine/input/InputBindingFactory.hpp"
+
+#include <algorithm>
+#include <initializer_list>
+
 #include "engine/input/InputBinding.hpp"
 #include "engine/input/InputMapping.hpp"
 
@@ -14,8 +18,26 @@ namespace N2Engine::Input
         case BindingParseError::MissingButton: return "missing 'button' field";
         case BindingParseError::MissingAxis: return "missing 'axis' field";
         case BindingParseError::MissingCompositeKeys: return "missing composite direction keys";
+        case BindingParseError::InvalidValue: return "unknown key, button or axis name";
         }
         return "unknown error";
+    }
+
+    namespace
+    {
+        // nlohmann's enum mapping turns an unknown string into the enum's first value (so a typo like
+        // "Escpae" silently became Key::Unknown). Accept a name only if it maps back to itself.
+        template <typename E>
+        bool IsKnownName(const nlohmann::json &value)
+        {
+            return value.is_string() && nlohmann::json(value.get<E>()) == value;
+        }
+
+        template <typename E>
+        bool AllKnown(const nlohmann::json &j, std::initializer_list<const char *> fields)
+        {
+            return std::ranges::all_of(fields, [&j](const char *field) { return IsKnownName<E>(j[field]); });
+        }
     }
 
     std::expected<std::unique_ptr<InputBinding>, BindingParseError> CreateBindingFromJson(
@@ -28,6 +50,10 @@ namespace N2Engine::Input
             return std::unexpected(BindingParseError::MissingType);
         }
 
+        if (!IsKnownName<BindingType>(j["type"]))
+        {
+            return std::unexpected(BindingParseError::InvalidType);
+        }
         const BindingType type = j["type"].get<BindingType>();
 
         switch (type)
@@ -36,6 +62,8 @@ namespace N2Engine::Input
             {
                 if (!j.contains("key"))
                     return std::unexpected(BindingParseError::MissingKey);
+                if (!AllKnown<Key>(j, {"key"}))
+                    return std::unexpected(BindingParseError::InvalidValue);
                 return std::make_unique<KeyboardButtonBinding>(
                     window,
                     j["key"].get<Key>()
@@ -46,6 +74,8 @@ namespace N2Engine::Input
             {
                 if (!j.contains("axis"))
                     return std::unexpected(BindingParseError::MissingAxis);
+                if (!AllKnown<GamepadAxis>(j, {"axis"}))
+                    return std::unexpected(BindingParseError::InvalidValue);
                 return std::make_unique<AxisBinding>(
                     window,
                     j["axis"].get<GamepadAxis>(),
@@ -57,6 +87,8 @@ namespace N2Engine::Input
             {
                 if (!j.contains("xAxis") || !j.contains("yAxis"))
                     return std::unexpected(BindingParseError::MissingAxis);
+                if (!AllKnown<GamepadAxis>(j, {"xAxis", "yAxis"}))
+                    return std::unexpected(BindingParseError::InvalidValue);
                 return std::make_unique<GamepadStickBinding>(
                     window,
                     j["xAxis"].get<GamepadAxis>(),
@@ -73,6 +105,8 @@ namespace N2Engine::Input
                 if (!j.contains("up") || !j.contains("down") ||
                     !j.contains("left") || !j.contains("right"))
                     return std::unexpected(BindingParseError::MissingCompositeKeys);
+                if (!AllKnown<Key>(j, {"up", "down", "left", "right"}))
+                    return std::unexpected(BindingParseError::InvalidValue);
                 return std::make_unique<Vector2CompositeBinding>(
                     window,
                     j["up"].get<Key>(),
@@ -86,6 +120,8 @@ namespace N2Engine::Input
             {
                 if (!j.contains("button"))
                     return std::unexpected(BindingParseError::MissingButton);
+                if (!AllKnown<MouseButton>(j, {"button"}))
+                    return std::unexpected(BindingParseError::InvalidValue);
                 return std::make_unique<MouseButtonBinding>(
                     window,
                     j["button"].get<MouseButton>()
@@ -96,6 +132,8 @@ namespace N2Engine::Input
             {
                 if (!j.contains("button"))
                     return std::unexpected(BindingParseError::MissingButton);
+                if (!AllKnown<GamepadButton>(j, {"button"}))
+                    return std::unexpected(BindingParseError::InvalidValue);
                 return std::make_unique<GamepadButtonBinding>(
                     window,
                     j["button"].get<GamepadButton>(),

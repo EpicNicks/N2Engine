@@ -17,7 +17,8 @@ namespace N2Engine::Input
         MissingKey,
         MissingButton,
         MissingAxis,
-        MissingCompositeKeys
+        MissingCompositeKeys,
+        InvalidValue // a key/button/axis name that doesn't exist
     };
 
     std::string BindingParseErrorToString(BindingParseError error);
