@@ -227,6 +227,32 @@ TEST_F(InputSystemHeadlessTest, ReplacingActiveMapFromItsOwnCallbackIsSafe)
     _input.Update(); // the replacement runs normally
 }
 
+TEST_F(InputSystemHeadlessTest, ReloadingBindingsFromACallbackIsSafe)
+{
+    _input.MakeActionMap("Live", [](ActionMap *map)
+    {
+        map->MakeInputAction("Poke", [](InputAction *action)
+        {
+            action->AddBinding(std::make_unique<FakeBinding>(true));
+        });
+    });
+    _input.LoadActionMap("Live");
+
+    bool reloaded = false;
+    (*_input.GetActionMap("Live"))["Poke"].GetOnStateChanged() += [&](InputAction &)
+    {
+        // Deserialize used to free every map immediately, including the one whose Update is running
+        reloaded = _input.Deserialize({{"actionMaps", {{"Live", EmptyMap()}}}});
+    };
+
+    _input.Update();
+
+    EXPECT_TRUE(reloaded);
+    ASSERT_NE(_input.GetActionMap("Live"), nullptr);
+    EXPECT_EQ(_input.GetActionMap("Live")->Serialize()["actions"].size(), 0u);
+    _input.Update();
+}
+
 TEST_F(InputSystemHeadlessTest, RemovingActionsFromACallbackIsSafe)
 {
     _input.MakeActionMap("Edit", [](ActionMap *map)

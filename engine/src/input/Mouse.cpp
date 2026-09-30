@@ -38,7 +38,9 @@ namespace N2Engine::Input
 
     Mouse* Mouse::Get()
     {
-        return Application::GetInstance().GetWindow().GetInputSystem()->GetMouse();
+        // No input system when the window failed to open
+        const auto *input = Application::GetInstance().GetWindow().GetInputSystem();
+        return input ? input->GetMouse() : nullptr;
     }
 
     void Mouse::ScrollCallback(GLFWwindow *window, double xOffset, double yOffset)

@@ -11,6 +11,8 @@
 
 #include "engine/input/Mouse.hpp"
 
+#include <ranges>
+
 using namespace N2Engine::Input;
 
 InputSystem::InputSystem(Window &window)
@@ -125,13 +127,28 @@ void InputSystem::Update()
 {
     _mouse->Update();
 
-    _updating = true;
+    // Cleared even if a handler throws; only the outermost update frees retired maps
+    struct UpdateScope
+    {
+        InputSystem &input;
+        const bool outermost;
+
+        explicit UpdateScope(InputSystem &i) : input(i), outermost(!i._updating) { input._updating = true; }
+
+        ~UpdateScope()
+        {
+            if (outermost)
+            {
+                input._updating = false;
+                input._retiredMaps.clear();
+            }
+        }
+    } scope{*this};
+
     if (const auto it = _actionMaps.find(_curActionMapName); it != _actionMaps.end())
     {
         it->second->Update();
     }
-    _updating = false;
-    _retiredMaps.clear();
 }
 
 nlohmann::json InputSystem::Serialize() const
@@ -193,7 +210,15 @@ bool InputSystem::Deserialize(const nlohmann::json &j)
         newMaps.insert_or_assign(mapName, std::move(actionMap));
     }
 
-    // Commit changes
+    // Commit changes. Reloading from an action's callback must not free the map whose Update is on
+    // the stack, so while updating the old maps are retired instead (freed when the update ends).
+    if (_updating)
+    {
+        for (auto &map : _actionMaps | std::views::values)
+        {
+            _retiredMaps.push_back(std::move(map));
+        }
+    }
     _actionMaps = std::move(newMaps);
 
     // Set first map as current if we had one before or pick any
