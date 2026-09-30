@@ -6,11 +6,14 @@
 namespace N2Engine
 {
     class GameObject;
-    class Rigidbody;
 }
 
 namespace N2Engine::Physics
 {
+    // Declared here, not in N2Engine: a stray N2Engine::Rigidbody made the members below name a
+    // different type depending on what a file had included first, and made 'Rigidbody' ambiguous
+    class Rigidbody;
+
 
     /**
      * Single contact point in a collision
