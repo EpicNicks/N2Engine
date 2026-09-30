@@ -44,10 +44,19 @@ void N2Engine::Math::InitializeSIMD()
     std::cout << "AVX: " << (features.avx ? "Yes" : "No") << "\n";
     std::cout << "AVX2: " << (features.avx2 ? "Yes" : "No") << "\n";
 
-    Vector3::InitializeSIMD();
-    Quaternion::InitializeSIMD();
-    Matrix<float, 4, 4>::InitializeSIMD();
-    Matrix<float, 3, 3>::InitializeSIMD();
+    const SIMDLevel level = DetectSIMDLevel();
+    constexpr const char *levelNames[] = {"Scalar", "SSE2", "SSE4.1", "AVX"};
+    std::cout << "Math SIMD level: " << levelNames[static_cast<int>(level)] << "\n";
+
+    SetSIMDLevel(level);
 
     std::cout << "----------INITIALIZE SIMD END------------" << std::endl;
+}
+
+void N2Engine::Math::SetSIMDLevel(const SIMDLevel level)
+{
+    Vector3::SetSIMDLevel(level);
+    Quaternion::SetSIMDLevel(level);
+    Matrix<float, 4, 4>::SetSIMDLevel(level);
+    Matrix<float, 3, 3>::SetSIMDLevel(level);
 }
