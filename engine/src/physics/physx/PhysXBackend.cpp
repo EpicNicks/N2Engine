@@ -423,9 +423,11 @@ namespace N2Engine::Physics
             RemoveColliderShapes(handle, collider);
             std::erase(data->colliders, collider);
 
-            if (data->actor && data->actor->getNbShapes() == 0)
+            // The detached shape's touch-lost arrives flagged eREMOVED_SHAPE_*, which the callbacks skip,
+            // so end this body's pairs now; shapes that are still touching re-enter on the next step
+            if (data->actor)
             {
-                ForgetPairsWithBody(handle); // nothing left on the body to be touching anything
+                ForgetPairsWithBody(handle);
             }
         }
 
@@ -1084,6 +1086,23 @@ namespace N2Engine::Physics
         {
             return pair.bodyA == handle || pair.bodyB == handle;
         };
+        // The other body still gets its Exit (as in Unity): PhysX's touch-lost for a released actor or
+        // shape is skipped by the callbacks, so nothing else would report it. DispatchToBody skips a
+        // side that no longer exists.
+        for (const CollisionPair &pair : _activeCollisions)
+        {
+            if (involves(pair))
+            {
+                _endedCollisions.push_back({pair, new Collision()});
+            }
+        }
+        for (const CollisionPair &pair : _activeTriggers)
+        {
+            if (involves(pair))
+            {
+                _endedTriggers.push_back({pair});
+            }
+        }
         std::erase_if(_activeCollisions, involves);
         std::erase_if(_activeTriggers, involves);
     }

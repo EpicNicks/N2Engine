@@ -236,6 +236,38 @@ TEST_F(PhysicsTest, DestroyingObjectInsideTriggerIsSafe)
     Step(5); // PhysX reports the lost touch with the released actor; must not be dereferenced
 
     EXPECT_EQ(zoneEvents->triggerStay, stays) << "the destroyed visitor still counts as inside";
+    EXPECT_EQ(zoneEvents->triggerExit, 1) << "the zone never heard that the visitor left";
+}
+
+TEST_F(PhysicsTest, RemovingTheOverlappingShapeEndsTheTrigger)
+{
+    const auto zone = Spawn("Volume", Vector3(0.0f, 0.0f, 0.0f));
+    auto *zoneCollider = zone->AddComponent<BoxCollider>();
+    zoneCollider->SetSize(Vector3(2.0f, 2.0f, 2.0f));
+    zoneCollider->SetIsTrigger(true);
+    auto *zoneEvents = zone->AddComponent<EventRecorder>();
+
+    // Compound body: only the sphere overlaps the zone, the box sits well outside it
+    const auto visitor = Spawn("Visitor", Vector3(0.0f, 0.0f, 0.0f));
+    visitor->AddComponent<SphereCollider>()->SetRadius(0.5f);
+    auto *farBox = visitor->AddComponent<BoxCollider>();
+    farBox->SetSize(Vector3(0.5f, 0.5f, 0.5f));
+    farBox->SetOffset(Vector3(10.0f, 0.0f, 0.0f));
+    auto *visitorBody = visitor->AddComponent<Rigidbody>();
+    visitorBody->SetBodyType(BodyType::Dynamic);
+    visitorBody->SetGravityEnabled(false);
+
+    Step(5);
+    ASSERT_EQ(zoneEvents->triggerEnter, 1);
+
+    ASSERT_TRUE(visitor->RemoveComponent<SphereCollider>());
+    Step(1);
+    const int stays = zoneEvents->triggerStay;
+    Step(5);
+
+    // The shape's touch-lost is flagged as a removed shape and skipped, so the pair used to stay active
+    EXPECT_EQ(zoneEvents->triggerStay, stays) << "the removed sphere still counts as inside";
+    EXPECT_EQ(zoneEvents->triggerExit, 1);
 }
 
 // ============================================================================
