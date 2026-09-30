@@ -1,6 +1,7 @@
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
+#include "engine/scripting/ScriptCallback.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/Logger.hpp"
@@ -11,6 +12,26 @@ namespace N2Engine::Scripting
 {
     LuaComponent::LuaComponent(GameObject &gameObject)
         : SerializableComponent(gameObject) {}
+
+    LuaComponent::~LuaComponent()
+    {
+        // Normally OnDestroy already did this; this covers components freed without it
+        ReleaseScript();
+    }
+
+    void LuaComponent::ReleaseScript()
+    {
+        *_alive = false;
+        LuaRuntime::Instance().UnregisterReloadCallbacks(this);
+
+        // Closures the script registered can outlive this component (they keep `self` alive);
+        // make those fields nil so a stray call errors in Lua instead of touching freed memory
+        if (_scriptInstance.valid())
+        {
+            _scriptInstance["component"] = sol::lua_nil;
+            _scriptInstance["gameObject"] = sol::lua_nil;
+        }
+    }
 
     void LuaComponent::SetScript(const IO::ResourcePath &path)
     {
@@ -36,12 +57,13 @@ namespace N2Engine::Scripting
         InjectFieldsIntoScript();
         CacheLifecycleMethods();
 
-        // Register reload callback
+        // Register reload callback, replacing any from a previous SetScript; removed on destroy
         std::string moduleName = LuaRuntime::Instance().PathToModuleName(path);
+        LuaRuntime::Instance().UnregisterReloadCallbacks(this);
         LuaRuntime::Instance().RegisterReloadCallback(moduleName, [this]()
         {
             ReloadScript();
-        });
+        }, this);
     }
 
     void LuaComponent::InitializeScriptInstance()
@@ -179,6 +201,9 @@ namespace N2Engine::Scripting
         if (_hasMissingScript)
             return; // Silently skip if script is missing
 
+        // Callbacks the script registers during this call (e.g. Subscribe in OnAttach) are tied to this component
+        ScriptLifetimeScope scope(_alive);
+
         sol::protected_function func = _scriptInstance[methodName];
         auto result = func(_scriptInstance, std::forward<Args>(args)...);
 
@@ -238,6 +263,7 @@ namespace N2Engine::Scripting
         {
             CallLuaMethod("OnDestroy");
         }
+        ReleaseScript();
     }
 
     void LuaComponent::OnEnable()

@@ -2,7 +2,9 @@
 
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "engine/Component.hpp"
 #include "engine/GameObjectScene.hpp"
@@ -21,6 +23,7 @@ namespace
         int destroy = 0;
         int enable = 0;
         int disable = 0;
+        std::vector<std::string> teardown; // order of OnDisable/OnDestroy
     };
 
     class Probe : public Component
@@ -39,9 +42,17 @@ namespace
                 onUpdate();
             }
         }
-        void OnDestroy() override { ++counts->destroy; }
+        void OnDestroy() override
+        {
+            ++counts->destroy;
+            counts->teardown.emplace_back("destroy");
+        }
         void OnEnable() override { ++counts->enable; }
-        void OnDisable() override { ++counts->disable; }
+        void OnDisable() override
+        {
+            ++counts->disable;
+            counts->teardown.emplace_back("disable");
+        }
 
         std::shared_ptr<Counts> counts = std::make_shared<Counts>();
         std::function<void()> onUpdate;
@@ -137,6 +148,54 @@ TEST(LifecycleTest, DestroyingParentDestroysChildrenOnce)
     EXPECT_TRUE(scene.FindObjectsByType<Probe>().empty());
 }
 
+TEST(LifecycleTest, DestroyRunsOnDisableThenOnDestroy)
+{
+    Scene &scene = LoadFreshScene("Lifecycle_DisableBeforeDestroy");
+    const auto go = GameObject::Create("Ordered");
+    const auto counts = go->AddComponent<Probe>()->counts;
+    scene.AddRootGameObject(go);
+    Frame(scene);
+
+    go->Destroy();
+    scene.ProcessDestroyed();
+
+    EXPECT_EQ(counts->teardown, (std::vector<std::string>{"disable", "destroy"}));
+}
+
+TEST(LifecycleTest, DestroyOfInactiveOrDisabledSkipsOnDisable)
+{
+    Scene &scene = LoadFreshScene("Lifecycle_NoDisableWhenInactive");
+    const auto inactive = GameObject::Create("InactiveObject");
+    const auto disabled = GameObject::Create("DisabledComponent");
+    const auto inactiveCounts = inactive->AddComponent<Probe>()->counts;
+    auto *disabledProbe = disabled->AddComponent<Probe>();
+    const auto disabledCounts = disabledProbe->counts;
+    scene.AddRootGameObjects({inactive, disabled});
+    Frame(scene);
+
+    inactive->SetActive(false); // OnDisable here, not again on destroy
+    disabledProbe->SetActive(false);
+    inactive->Destroy();
+    disabled->Destroy();
+    scene.ProcessDestroyed();
+
+    EXPECT_EQ(inactiveCounts->teardown, (std::vector<std::string>{"disable", "destroy"}));
+    EXPECT_EQ(disabledCounts->teardown, (std::vector<std::string>{"destroy"}));
+}
+
+TEST(LifecycleTest, RemoveComponentRunsOnDisableThenOnDestroy)
+{
+    Scene &scene = LoadFreshScene("Lifecycle_RemoveOrder");
+    const auto go = GameObject::Create("RemoveOrdered");
+    const auto counts = go->AddComponent<Probe>()->counts;
+    scene.AddRootGameObject(go);
+    Frame(scene);
+
+    go->RemoveComponent<Probe>();
+
+    EXPECT_EQ(counts->teardown, (std::vector<std::string>{"disable", "destroy"}));
+}
+
 TEST(LifecycleTest, DestroyWithoutSceneMarksDestroyed)
 {
     const auto go = GameObject::Create("Sceneless");
@@ -194,6 +253,28 @@ TEST(LifecycleTest, RemoveComponentDuringUpdateSkipsIt)
     EXPECT_EQ(remover->counts->update, 2);
     EXPECT_EQ(removedCounts->update, 0);
     EXPECT_EQ(removedCounts->destroy, 1);
+}
+
+TEST(LifecycleTest, ThrowingComponentDoesNotWedgeIteration)
+{
+    Scene &scene = LoadFreshScene("Lifecycle_Throw");
+    const auto go = GameObject::Create("Thrower");
+    auto *thrower = go->AddComponent<Probe>();
+    const auto otherCounts = go->AddComponent<OtherProbe>()->counts;
+    scene.AddRootGameObject(go);
+    scene.ProcessAttachQueue();
+
+    thrower->onUpdate = [] { throw std::runtime_error("component failure"); };
+    EXPECT_THROW(scene.Update(), std::runtime_error);
+
+    // The iteration scope unwound: removal and later frames behave normally
+    thrower->onUpdate = nullptr;
+    go->RemoveComponent<OtherProbe>();
+    scene.Update();
+
+    EXPECT_EQ(otherCounts->destroy, 1);
+    EXPECT_EQ(thrower->counts->update, 2);
+    EXPECT_TRUE(scene.FindObjectsByType<OtherProbe>().empty());
 }
 
 TEST(LifecycleTest, DestroyingObjectRemovesItsLight)

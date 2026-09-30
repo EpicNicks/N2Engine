@@ -3,6 +3,7 @@
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "nlohmann/json.hpp"
+#include <memory>
 #include <sol/sol.hpp>
 
 namespace N2Engine
@@ -18,6 +19,9 @@ namespace N2Engine::Scripting
         IO::ResourcePath _scriptPath;
         LuaScript* _script = nullptr;
         sol::table _scriptInstance;
+        // True until this component is destroyed. Callbacks its script registers hold it, so they
+        // stop firing afterwards instead of running with freed self.component/self.gameObject.
+        std::shared_ptr<bool> _alive = std::make_shared<bool>(true);
         nlohmann::json _scriptData;
 
         // Track missing lua script and refs
@@ -40,12 +44,16 @@ namespace N2Engine::Scripting
         void ExtractSerializableFields();
         void InjectFieldsIntoScript();
         void CacheLifecycleMethods();
+        /// Cuts the script off from this component: flags its callbacks dead, clears
+        /// self.component/self.gameObject and drops the reload callback. Safe to call twice.
+        void ReleaseScript();
 
         template<typename... Args>
         void CallLuaMethod(const std::string& methodName, Args&&... args);
 
     public:
         explicit LuaComponent(GameObject& gameObject);
+        ~LuaComponent() override;
 
         void SetScript(const IO::ResourcePath& path);
         bool IsComponentType(const std::string &type);

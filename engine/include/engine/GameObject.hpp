@@ -65,6 +65,9 @@ namespace N2Engine
 
         // Private methods
         void UpdateActiveInHierarchyCache() const;
+        /// IsActiveInHierarchy without the destruction check: whether this object was active before
+        /// it was marked for destruction (the destroy pass needs that to decide on OnDisable)
+        [[nodiscard]] bool IsActiveInHierarchyIgnoringDestruction() const;
         /// Invalidates the cached IsActiveInHierarchy for this object and all descendants
         void MarkActiveInHierarchyDirty() const;
         /// Fires OnEnable/OnDisable on this subtree after its effective active state changed.

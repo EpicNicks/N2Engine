@@ -26,6 +26,11 @@ namespace N2Engine
 
         explicit Component(GameObject &gameObject);
 
+    private:
+        /// The one teardown sequence for every destroy path (Destroy, RemoveComponent, scene switch):
+        /// OnDisable if the component was enabled in an active hierarchy, then OnDestroy, exactly once.
+        void RunDestroyCallbacks(bool objectWasActiveInHierarchy);
+
     public:
         [[nodiscard]] GameObject& GetGameObject() const;
 

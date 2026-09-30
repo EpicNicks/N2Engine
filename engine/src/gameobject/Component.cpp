@@ -16,6 +16,21 @@ GameObject &Component::GetGameObject() const
     return _gameObject;
 }
 
+void Component::RunDestroyCallbacks(const bool objectWasActiveInHierarchy)
+{
+    if (_isMarkedForDestruction)
+    {
+        return;
+    }
+    // Mirrors enable: anything that got OnEnable (or started enabled) sees OnDisable before OnDestroy
+    if (_isActive && objectWasActiveInHierarchy)
+    {
+        OnDisable();
+    }
+    OnDestroy();
+    _isMarkedForDestruction = true;
+}
+
 bool Component::IsDestroyed() const
 {
     return _isMarkedForDestruction;

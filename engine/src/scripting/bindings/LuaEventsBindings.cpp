@@ -1,5 +1,6 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/scripting/ScriptCallback.hpp"
 #include "engine/base/EventHandler.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/Logger.hpp"
@@ -22,18 +23,9 @@ namespace N2Engine::Scripting::Bindings
             sol::no_constructor,
 
             "Subscribe",
-            [](Base::EventHandler<> &handler, sol::function callback) -> size_t
+            [](Base::EventHandler<> &handler, sol::protected_function callback) -> size_t
             {
-                return handler += [callback]()
-                {
-                    auto result = callback();
-                    if (!result.valid())
-                    {
-                        sol::error err = result;
-                        Logger::Error(
-                            std::format("Event callback error: {}", err.what()));
-                    }
-                };
+                return handler += MakeScriptCallback<>(std::move(callback), "Event");
             },
 
             "Unsubscribe", [](Base::EventHandler<> &handler, size_t id)
@@ -55,21 +47,9 @@ namespace N2Engine::Scripting::Bindings
             sol::no_constructor,
 
             "Subscribe",
-            [](Base::EventHandler<int, int> &handler,
-               sol::function callback) -> size_t
+            [](Base::EventHandler<int, int> &handler, sol::protected_function callback) -> size_t
             {
-                return handler += [callback](int width, int height)
-                {
-                    auto result = callback(width, height);
-                    if (!result.valid())
-                    {
-                        sol::error err = result;
-                        Logger::Error(
-                            std::format(
-                                "WindowResizeEvent callback error: {}",
-                                err.what()));
-                    }
-                };
+                return handler += MakeScriptCallback<int, int>(std::move(callback), "WindowResizeEvent");
             },
 
             "Unsubscribe",
@@ -85,21 +65,9 @@ namespace N2Engine::Scripting::Bindings
             sol::no_constructor,
 
             "Subscribe",
-            [](Base::EventHandler<GameObject&> &handler,
-               sol::function callback) -> size_t
+            [](Base::EventHandler<GameObject&> &handler, sol::protected_function callback) -> size_t
             {
-                return handler += [callback](GameObject &go)
-                {
-                    auto result = callback(std::ref(go));
-                    if (!result.valid())
-                    {
-                        sol::error err = result;
-                        Logger::Error(
-                            std::format(
-                                "GameObjectEvent callback error: {}",
-                                err.what()));
-                    }
-                };
+                return handler += MakeScriptCallback<GameObject&>(std::move(callback), "GameObjectEvent");
             },
 
             "Unsubscribe",
@@ -114,17 +82,9 @@ namespace N2Engine::Scripting::Bindings
             "InputActionEvent",
             sol::no_constructor,
 
-            "Subscribe", [](Base::EventHandler<Input::InputAction&> &handler, sol::function callback) -> size_t
+            "Subscribe", [](Base::EventHandler<Input::InputAction&> &handler, sol::protected_function callback) -> size_t
             {
-                return handler += [callback](Input::InputAction &action)
-                {
-                    auto result = callback(std::ref(action));
-                    if (!result.valid())
-                    {
-                        sol::error err = result;
-                        Logger::Error(std::format("InputActionEvent callback error: {}", err.what()));
-                    }
-                };
+                return handler += MakeScriptCallback<Input::InputAction&>(std::move(callback), "InputActionEvent");
             },
 
             "Unsubscribe", [](Base::EventHandler<Input::InputAction&> &handler, size_t id)
