@@ -48,8 +48,6 @@ Scene::~Scene()
     }
 }
 
-Scene::Scene(Scene &&) noexcept = default;
-Scene& Scene::operator=(Scene &&) noexcept = default;
 
 std::unique_ptr<Scene> Scene::Create(const std::string &name)
 {

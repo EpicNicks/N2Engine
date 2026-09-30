@@ -35,6 +35,8 @@ namespace N2Engine::Scripting::Bindings
             "OnUnitCircle", &Math::Random::RandomOnUnitCircle
         );
 
+        // Constants such as Vector3.Zero are read-only properties returning a copy: as sol::var they were
+        // one shared object, so `local v = Vector3.Zero; v.y = 1` changed Vector3.Zero for every script
         lua.new_usertype<Math::Vector2>(
             "Vector2",
             sol::call_constructor,
@@ -49,12 +51,12 @@ namespace N2Engine::Scripting::Bindings
             "y", &Math::Vector2::y,
 
             // Static constants
-            "Zero", sol::var(Math::Vector2::Zero),
-            "One", sol::var(Math::Vector2::One),
-            "Up", sol::var(Math::Vector2::Up),
-            "Down", sol::var(Math::Vector2::Down),
-            "Left", sol::var(Math::Vector2::Left),
-            "Right", sol::var(Math::Vector2::Right),
+            "Zero", sol::property([]() { return Math::Vector2::Zero; }),
+            "One", sol::property([]() { return Math::Vector2::One; }),
+            "Up", sol::property([]() { return Math::Vector2::Up; }),
+            "Down", sol::property([]() { return Math::Vector2::Down; }),
+            "Left", sol::property([]() { return Math::Vector2::Left; }),
+            "Right", sol::property([]() { return Math::Vector2::Right; }),
 
             // Member methods
             "Dot", [](const Math::Vector2 &self, const Math::Vector2 &other) { return self.Dot(other); },
@@ -152,14 +154,14 @@ namespace N2Engine::Scripting::Bindings
             "y", &Math::Vector3::y,
             "z", &Math::Vector3::z,
 
-            "Zero", sol::var(Math::Vector3::Zero),
-            "One", sol::var(Math::Vector3::One),
-            "Up", sol::var(Math::Vector3::Up),
-            "Down", sol::var(Math::Vector3::Down),
-            "Left", sol::var(Math::Vector3::Left),
-            "Right", sol::var(Math::Vector3::Right),
-            "Forward", sol::var(Math::Vector3::Forward),
-            "Back", sol::var(Math::Vector3::Back),
+            "Zero", sol::property([]() { return Math::Vector3::Zero; }),
+            "One", sol::property([]() { return Math::Vector3::One; }),
+            "Up", sol::property([]() { return Math::Vector3::Up; }),
+            "Down", sol::property([]() { return Math::Vector3::Down; }),
+            "Left", sol::property([]() { return Math::Vector3::Left; }),
+            "Right", sol::property([]() { return Math::Vector3::Right; }),
+            "Forward", sol::property([]() { return Math::Vector3::Forward; }),
+            "Back", sol::property([]() { return Math::Vector3::Back; }),
 
             "Dot", &Math::Vector3::Dot,
             "Cross", &Math::Vector3::Cross,
@@ -229,8 +231,8 @@ namespace N2Engine::Scripting::Bindings
             "y", &Math::Vector4::y,
             "z", &Math::Vector4::z,
 
-            "Zero", sol::var(Math::Vector4::Zero),
-            "One", sol::var(Math::Vector4::One),
+            "Zero", sol::property([]() { return Math::Vector4::Zero; }),
+            "One", sol::property([]() { return Math::Vector4::One; }),
 
             "Dot", &Math::Vector4::Dot,
             "Length", &Math::Vector4::Length,
@@ -269,7 +271,7 @@ namespace N2Engine::Scripting::Bindings
             "y", sol::property(&Math::Quaternion::GetY),
             "z", sol::property(&Math::Quaternion::GetZ),
 
-            "Identity", sol::var(Math::Quaternion::Identity),
+            "Identity", sol::property([]() { return Math::Quaternion::Identity; }),
 
             "FromAxisAngle", &Math::Quaternion::FromAxisAngle,
             "FromEulerAngles", sol::overload(

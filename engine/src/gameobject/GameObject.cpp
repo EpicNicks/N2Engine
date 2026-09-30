@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <format>
+#include <typeindex>
+#include <typeinfo>
 #include <memory>
 #include <utility>
 
@@ -196,6 +199,22 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
     if (!child || child.get() == this)
         return;
 
+    // Parenting an ancestor under its own descendant would make a cycle
+    if (IsChildOf(child))
+    {
+        Logger::Warn(std::format("Can't make '{}' a child of its descendant '{}'", child->GetName(), _name));
+        return;
+    }
+
+    // A root object stops being a root: it used to stay in the scene's roots as well, so it was
+    // updated, rendered and serialized twice and survived its parent's destruction.
+    // Note: this edits the root list directly (as RemoveRootGameObject does), so reparenting a root from
+    // inside a TraverseAll/TraverseUntil callback isn't supported.
+    if (!child->_parent.lock() && child->_scene)
+    {
+        std::erase(child->_scene->_rootGameObjects, child);
+    }
+
     // Remove from old parent
     if (auto oldParent = child->_parent.lock())
     {
@@ -375,33 +394,54 @@ Component* GameObject::GetComponent(const std::type_index &type) const
 
 bool GameObject::RemoveComponent(const std::type_index &type)
 {
-    if (const auto it = _componentMap.find(type); it != _componentMap.end())
+    const auto it = _componentMap.find(type);
+    return it != _componentMap.end() && RemoveComponent(it->second);
+}
+
+bool GameObject::RemoveComponent(Component *component)
+{
+    const auto vecIt = std::ranges::find_if(_components, [component](const std::unique_ptr<Component> &ptr)
     {
-        const auto component = it->second;
-        component->RunDestroyCallbacks(IsActiveInHierarchyIgnoringDestruction());
-
-        // The scene keeps raw pointers to attached components; drop them before the component is freed
-        if (_scene)
-        {
-            _scene->DetachComponent(component);
-        }
-
-        // Remove from map
-        _componentMap.erase(it);
-
-        // Remove from vector
-        if (const auto vecIt = std::ranges::find_if(_components,
-                                                    [component](const std::unique_ptr<Component> &ptr)
-                                                    {
-                                                        return ptr.get() == component;
-                                                    }); vecIt != _components.end())
-        {
-            _components.erase(vecIt);
-        }
-
-        return true;
+        return ptr.get() == component;
+    });
+    if (!component || vecIt == _components.end())
+    {
+        return false;
     }
-    return false;
+
+    component->RunDestroyCallbacks(IsActiveInHierarchyIgnoringDestruction());
+    const std::type_index componentType = typeid(*component);
+
+    // The scene keeps raw pointers to attached components; drop them before the component is freed
+    if (_scene)
+    {
+        _scene->DetachComponent(component);
+    }
+
+    // The map points at the first of each type; only its removal changes what GetComponent finds
+    const auto mapIt = _componentMap.find(componentType);
+    const bool wasMapped = mapIt != _componentMap.end() && mapIt->second == component;
+    if (wasMapped)
+    {
+        _componentMap.erase(mapIt);
+    }
+
+    // Found again: a destroy callback may have changed the vector
+    std::erase_if(_components, [component](const std::unique_ptr<Component> &ptr) { return ptr.get() == component; });
+
+    if (wasMapped)
+    {
+        for (const auto &remaining : _components)
+        {
+            if (std::type_index(typeid(*remaining)) == componentType)
+            {
+                _componentMap.emplace(componentType, remaining.get());
+                break;
+            }
+        }
+    }
+
+    return true;
 }
 
 void GameObject::RemoveAllComponents()
@@ -724,7 +764,7 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
                 std::type_index typeIdx(typeid(*rawPtr));
 
                 go->_components.push_back(std::move(component));
-                go->_componentMap[typeIdx] = rawPtr;
+                go->_componentMap.emplace(typeIdx, rawPtr); // the first of a type stays the one GetComponent finds
             }
         }
     }

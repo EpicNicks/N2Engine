@@ -196,15 +196,8 @@ namespace N2Engine::Math
         using InverseFunc = Matrix (*)(const Matrix &);
         using DeterminantFunc = float (*)(const Matrix &);
 
-        // Static function pointers - set once at initialization
-        inline static MulFunc multiply_func;
-        inline static AddFunc add_func;
-        inline static SubFunc sub_func;
-        inline static ScalarMulFunc scalar_mul_func;
-        inline static TransformFunc transform_func;
-        inline static TransposeFunc transpose_func;
-        inline static InverseFunc inverse_func;
-        inline static DeterminantFunc determinant_func;
+        // Static function pointers (declared at the end of the class, after the scalar implementations
+        // they default to); InitializeSIMD switches them to SIMD versions
         inline static bool initialized;
 
     public:
@@ -741,6 +734,18 @@ namespace N2Engine::Math
             }
             return Vector3{x_val, y_val, z_val};
         }
+
+    private:
+        // Default to the scalar implementations, so matrix math works before InitializeSIMD runs (these
+        // used to be null until Application::Init, so any earlier inverse() or TransformPoint() crashed)
+        inline static MulFunc multiply_func = &MultiplyScalar;
+        inline static AddFunc add_func = &AddScalar;
+        inline static SubFunc sub_func = &SubScalar;
+        inline static ScalarMulFunc scalar_mul_func = &ScalarMulScalar;
+        inline static TransformFunc transform_func = &TransformPointScalar;
+        inline static TransposeFunc transpose_func = &TransposeScalar;
+        inline static InverseFunc inverse_func = &InverseScalar;
+        inline static DeterminantFunc determinant_func = &DeterminantScalar;
     };
 
     // ===== TEMPLATE SPECIALIZATION - 3x3 float with SIMD =====
@@ -756,11 +761,7 @@ namespace N2Engine::Math
         using ScalarMulFunc = Matrix (*)(const Matrix &, float);
         using TransposeFunc = Matrix (*)(const Matrix &);
 
-        inline static MulFunc multiply_func;
-        inline static AddFunc add_func;
-        inline static SubFunc sub_func;
-        inline static ScalarMulFunc scalar_mul_func;
-        inline static TransposeFunc transpose_func;
+        // Function pointers are declared at the end of the class, defaulting to the scalar implementations
         inline static bool initialized;
 
     public:
@@ -1051,6 +1052,14 @@ namespace N2Engine::Math
             // For 3x3, often scalar is competitive due to memory layout complexity
             return MultiplyScalar(a, b);
         }
+
+    private:
+        // Default to the scalar implementations, so matrix math works before InitializeSIMD runs
+        inline static MulFunc multiply_func = &MultiplyScalar;
+        inline static AddFunc add_func = &AddScalar;
+        inline static SubFunc sub_func = &SubScalar;
+        inline static ScalarMulFunc scalar_mul_func = &ScalarMulScalar;
+        inline static TransposeFunc transpose_func = &TransposeScalar;
     };
 
     // ===== TEMPLATE SPECIALIZATION - 2x2 float =====
