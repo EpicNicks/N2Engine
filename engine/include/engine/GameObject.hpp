@@ -83,6 +83,9 @@ namespace N2Engine
         static Ptr Create(const std::string &name = "GameObject");
         GameObject();
         explicit GameObject(std::string name);
+        /// Detaches from its scene however it was dropped (e.g. RemoveChild then released), so the scene
+        /// and its coroutine scheduler never keep pointers to a freed object
+        ~GameObject() override;
 
         // Basic properties
         const std::string& GetName() const { return _name; }

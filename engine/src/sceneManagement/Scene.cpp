@@ -19,7 +19,34 @@ using namespace N2Engine;
 Scene::Scene(std::string name)
     : _coroutineScheduler(std::make_unique<Scheduling::CoroutineScheduler>(this)), sceneName(std::move(name)) {}
 
-Scene::~Scene() = default;
+Scene::~Scene()
+{
+    // Objects can outlive their scene (held by a script, or removed from the hierarchy without leaving
+    // it). Cut every one loose, so none keeps a pointer to this scene for its destructor to use.
+    // No callbacks run: this only updates the bookkeeping.
+    std::vector<GameObject *> members;
+    for (const auto &root : _rootGameObjects)
+    {
+        members.push_back(root.get());
+    }
+    for (const auto *list : {&_components, &_attachQueue})
+    {
+        for (const Component *component : *list)
+        {
+            if (component)
+            {
+                members.push_back(&component->GetGameObject());
+            }
+        }
+    }
+    for (GameObject *member : members)
+    {
+        if (member->GetScene() == this)
+        {
+            member->SetScene(nullptr);
+        }
+    }
+}
 
 Scene::Scene(Scene &&) noexcept = default;
 Scene& Scene::operator=(Scene &&) noexcept = default;
