@@ -657,8 +657,18 @@ function Color:ToHex() end
 
 -- ===== CORE OBJECTS =====
 
+-- GameObjects, components and Positionables are references a script may keep (in self, a global or a
+-- closure). Once the object is destroyed, calling a method on one raises "attempt to use a destroyed ..."
+-- instead of crashing; check IsValid() when a kept reference may have outlived its object. A reference
+-- doesn't keep its object alive, except one a script created (GameObject.Create) or detached
+-- (RemoveChild, RemoveRootGameObject). Two references to the same object compare equal with ==.
+
 ---@class Positionable
 Positionable = {}
+
+---False once its GameObject is destroyed; the other methods then raise an error
+---@return boolean
+function Positionable:IsValid() end
 
 ---Get world position
 ---@return Vector3
@@ -704,6 +714,11 @@ GameObject = {}
 ---@param name? string Defaults to "GameObject"
 ---@return GameObject
 function GameObject.Create(name) end
+
+---False once this GameObject is destroyed (at the end of the frame Destroy was called in); the other
+---methods then raise an error
+---@return boolean
+function GameObject:IsValid() end
 
 ---Get the name of this GameObject
 ---@return string
@@ -751,7 +766,7 @@ function GameObject:FindChild(name) end
 ---@return GameObject|nil
 function GameObject:FindChildRecursive(name) end
 
----Destroy this GameObject
+---Destroy this GameObject (does nothing if it's already destroyed)
 function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
@@ -817,8 +832,20 @@ function LuaComponent:GetScriptPath() end
 function LuaComponent:HasMissingScript() end
 
 ---@class Component
----@field gameObject GameObject The GameObject this component is attached to
 Component = {}
+
+---False once this component is destroyed (removed, its GameObject destroyed, or the scene unloaded);
+---the other methods then raise an error
+---@return boolean
+function Component:IsValid() end
+
+---True once this component is destroyed (the opposite of IsValid)
+---@return boolean
+function Component:IsDestroyed() end
+
+---The GameObject this component is attached to
+---@return GameObject
+function Component:GetGameObject() end
 
 ---Check if this component is active
 ---@return boolean
@@ -887,6 +914,41 @@ BodyType = {
     Dynamic = 1,
     Kinematic = 2,
 }
+
+---The argument of OnCollisionEnter/Stay/Exit. Safe to keep after the callback: its objects are
+---references like any other (see CORE OBJECTS).
+---@class Collision
+---@field gameObject GameObject The object receiving the callback
+---@field otherGameObject GameObject The other object
+---@field rigidbody Rigidbody|nil The receiver's Rigidbody (nil for a static collider)
+---@field otherRigidbody Rigidbody|nil The other object's Rigidbody (nil for a static collider)
+---@field relativeVelocity Vector3
+---@field impulse Vector3
+---@field contactCount integer
+Collision = {}
+
+---A contact point, 1-based
+---@param index integer
+---@return ContactPoint|nil
+function Collision:GetContact(index) end
+
+---@return Vector3
+function Collision:GetAverageContactPoint() end
+
+---@class ContactPoint
+---@field point Vector3
+---@field normal Vector3
+---@field separation number
+---@field normalImpulse number
+ContactPoint = {}
+
+---The argument of OnTriggerEnter/Stay/Exit; safe to keep, like Collision
+---@class Trigger
+---@field gameObject GameObject
+---@field otherGameObject GameObject
+---@field rigidbody Rigidbody|nil
+---@field otherRigidbody Rigidbody|nil
+Trigger = {}
 
 ---@class PhysicsMaterial
 ---@field staticFriction number Friction when not moving (0-1)

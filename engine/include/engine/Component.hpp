@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <nlohmann/json.hpp>
 #include "engine/base/Asset.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
@@ -27,6 +29,10 @@ namespace N2Engine
         explicit Component(GameObject &gameObject);
 
     private:
+        // Only this component owns it, so it expires when the component is freed. Script handles keep a
+        // weak_ptr to it and report the component as destroyed instead of dangling.
+        std::shared_ptr<const bool> _lifetime = std::make_shared<bool>(true);
+
         /// The one teardown sequence for every destroy path (Destroy, RemoveComponent, scene switch):
         /// OnDisable if the component was enabled in an active hierarchy, then OnDestroy, exactly once.
         void RunDestroyCallbacks(bool objectWasActiveInHierarchy);
@@ -73,6 +79,8 @@ namespace N2Engine
         virtual void OnTriggerExit(Physics::Trigger trigger) {}
 
         [[nodiscard]] bool IsDestroyed() const;
+        /// Expires when this component is freed (for references that must not dangle, e.g. from Lua)
+        [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime; }
         [[nodiscard]] bool IsActive() const;
         void SetActive(bool active);
 

@@ -16,6 +16,7 @@
 #include "engine/scripting/LuaJson.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
+#include "engine/scripting/bindings/LuaBindings.hpp"
 
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
@@ -126,7 +127,8 @@ TEST_F(LuaRobustnessTest, CollisionIsReadableFromLua)
                    collision:GetContact(2) == nil
         end
     )");
-    const sol::protected_function_result result = read(collision);
+    // Scripts get it the way LuaComponent passes it to OnCollisionEnter
+    const sol::protected_function_result result = read(Bindings::CollisionToLua(collision, Lua().lua_state()));
 
     // Collision had no Lua type, so any field access was "attempt to index a userdata value"
     if (!result.valid())

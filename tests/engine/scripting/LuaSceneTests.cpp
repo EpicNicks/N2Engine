@@ -185,7 +185,7 @@ TEST_F(LuaSceneTest, AddComponentReturnsTypedComponent)
         add_test_go:AddComponent("Rigidbody"):SetBodyType(BodyType.Dynamic)
     )");
 
-    const auto go = Lua()["add_test_go"].get<std::shared_ptr<GameObject>>();
+    const auto go = Lua()["add_test_go"].get<GameObjectRef>().Lock();
     ASSERT_NE(go, nullptr);
 
     auto *cube = go->GetComponent<Example::CubeRenderer>();
