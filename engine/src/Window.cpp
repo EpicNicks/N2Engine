@@ -91,7 +91,9 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
     windowData.height = HEIGHT;
     glfwGetWindowPos(_window, &windowData.posX, &windowData.posY);
 
-    glfwSetWindowSizeCallback(_window, FramebufferSizeCallback);
+    // Framebuffer size is in pixels, which is what the renderer needs (window size is in screen
+    // coordinates, which differ on HiDPI displays)
+    glfwSetFramebufferSizeCallback(_window, FramebufferSizeCallback);
     glfwSetWindowUserPointer(_window, this);
 
     // Create renderer based on configuration
@@ -114,7 +116,13 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
     }
 
     // Initialize the chosen renderer
-    if (!_renderer || !_renderer->Initialize(_window, WIDTH, HEIGHT))
+    // The renderer works in pixels; on HiDPI displays the framebuffer is larger than the window size
+    int framebufferWidth = WIDTH;
+    int framebufferHeight = HEIGHT;
+    glfwGetFramebufferSize(_window, &framebufferWidth, &framebufferHeight);
+
+    if (!_renderer || !_renderer->Initialize(_window, static_cast<uint32_t>(framebufferWidth),
+                                             static_cast<uint32_t>(framebufferHeight)))
     {
         _rendererFailed = true;
         return FailInit("Failed to initialize renderer");

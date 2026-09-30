@@ -55,6 +55,12 @@ namespace N2Engine::Input
 
         InputValue getValue() override;
         [[nodiscard]] BindingType GetType() const override { return BindingType::GamepadAxis; }
+
+        static constexpr float Deadzone = 0.1f;
+        /// Maps a raw GLFW axis reading to the binding's value. Triggers rest at -1 in GLFW; they're
+        /// mapped to 0..1 so a released trigger reads 0 (it used to count as held forever). Readings
+        /// within the deadzone become 0, and the rest is rescaled to keep the full range.
+        static float NormalizeAxis(GamepadAxis axis, float raw);
         [[nodiscard]] nlohmann::json Serialize() const override;
     };
 
