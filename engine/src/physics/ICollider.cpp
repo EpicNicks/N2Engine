@@ -29,8 +29,12 @@ namespace N2Engine::Physics
         if (!backend)
             return;
 
+        // Re-attaching (a Rigidbody was added, its body type changed, or the object changed scene):
+        // take this collider's shapes off the old body first. Otherwise they stayed on a shared
+        // Rigidbody actor as duplicates, and the backend kept pointers to shapes the old actor freed.
         if (_handle.IsValid())
         {
+            backend->UnregisterCollider(_handle, this);
             if (_ownsBody)
             {
                 backend->DestroyBody(_handle);
@@ -76,7 +80,7 @@ namespace N2Engine::Physics
 
             if (_isTrigger)
             {
-                backend->SetIsTrigger(_handle, true);
+                backend->SetIsTrigger(_handle, this, true);
             }
         }
     }
@@ -109,7 +113,7 @@ namespace N2Engine::Physics
 
         if (auto* backend = Application::GetInstance().Get3DPhysicsBackend())
         {
-            backend->SetIsTrigger(_handle, isTrigger);
+            backend->SetIsTrigger(_handle, this, isTrigger);
         }
     }
 

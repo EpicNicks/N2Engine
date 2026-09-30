@@ -50,6 +50,9 @@ namespace N2Engine
         void OnWindowResize(int width, int height) const;
 
         [[nodiscard]] Physics::IPhysicsBackend* Get3DPhysicsBackend() const;
+        /// Installs a physics backend without Init, for headless tools and tests (Init needs a window).
+        /// Replaces and destroys any existing backend; pass nullptr to remove it.
+        void Set3DPhysicsBackend(std::unique_ptr<Physics::IPhysicsBackend> backend);
 
         /// Subsystem states as of the end of Init
         [[nodiscard]] const EngineHealth& GetHealth() const { return _health; }

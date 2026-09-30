@@ -8,11 +8,11 @@
 namespace N2Engine
 {
     class GameObject;
-    class Rigidbody;
 }
 
 namespace N2Engine::Physics
 {
+    class Rigidbody;
     class ICollider;
 
     struct RaycastHit

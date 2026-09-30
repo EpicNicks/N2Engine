@@ -10,6 +10,8 @@
 #ifdef N2ENGINE_PHYSX_ENABLED
 #include <PxSimulationEventCallback.h>
 #include <foundation/PxSimpleTypes.h>
+#include <foundation/PxTransform.h>
+#include <geometry/PxGeometry.h>
 
 #include <extensions/PxDefaultAllocator.h>
 #include <extensions/PxDefaultCpuDispatcher.h>
@@ -32,8 +34,8 @@ namespace physx
 
 namespace N2Engine
 {
-    class Rigidbody;
     class GameObject;
+    class Component;
 }
 
 namespace N2Engine::Physics
@@ -88,18 +90,21 @@ namespace N2Engine::Physics
 
         void AddSphereCollider(
             PhysicsBodyHandle body,
+            ICollider* collider,
             float radius,
             const Math::Vector3& localOffset,
             const PhysicsMaterial& material) override;
 
         void AddBoxCollider(
             PhysicsBodyHandle body,
+            ICollider* collider,
             const Math::Vector3& halfExtents,
             const Math::Vector3& localOffset,
             const PhysicsMaterial& material) override;
 
         void AddCapsuleCollider(
             PhysicsBodyHandle body,
+            ICollider* collider,
             float radius,
             float height,
             const Math::Vector3& localOffset,
@@ -129,7 +134,7 @@ namespace N2Engine::Physics
             const Math::Vector3& localOffset,
             const PhysicsMaterial& material) override;
 
-        void SetIsTrigger(PhysicsBodyHandle body, bool isTrigger) override;
+        void SetIsTrigger(PhysicsBodyHandle body, ICollider* collider, bool isTrigger) override;
 
         void AddForce(PhysicsBodyHandle body, const Math::Vector3& force) override;
         void AddImpulse(PhysicsBodyHandle body, const Math::Vector3& impulse) override;
@@ -206,6 +211,19 @@ namespace N2Engine::Physics
         std::unordered_map<ICollider*, std::vector<physx::PxShape*>> _colliderShapes;
 
         PhysicsBodyHandle AllocateHandle();
+
+        /// Creates a shape on the body, owned by (and recorded under) the collider that asked for it
+        void AttachColliderShape(PhysicsBodyHandle body, ICollider* collider, const physx::PxGeometry& geometry,
+                                 const physx::PxTransform& localPose, const PhysicsMaterial& material);
+        /// Drops active collision/trigger pairs involving the body (it was destroyed or lost its shapes);
+        /// PhysX's own "touch lost" for them refers to released actors and is ignored
+        void ForgetPairsWithBody(PhysicsBodyHandle handle);
+        /// The GameObject a body belongs to: its Rigidbody's, else its first collider's
+        [[nodiscard]] GameObject* GetBodyOwner(PhysicsBodyHandle handle);
+        /// Calls fn on each component of the body's GameObject. Uses a snapshot and re-checks ownership,
+        /// so handlers can add or remove components (or destroy the body) safely
+        void DispatchToBody(PhysicsBodyHandle handle, const std::function<void(Component&)>& fn);
+
         BodyData* GetBodyData(PhysicsBodyHandle handle);
         [[nodiscard]] const BodyData* GetBodyData(PhysicsBodyHandle handle) const;
 
@@ -264,7 +282,8 @@ namespace N2Engine::Physics
                             (std::hash<uint32_t>()(pair.bodyA.generation) << 1);
                 const size_t h2 = std::hash<uint32_t>()(pair.bodyB.index) ^
                             (std::hash<uint32_t>()(pair.bodyB.generation) << 1);
-                return h1 ^ (h2 << 1);
+                // Order-independent, like operator==: (A, B) and (B, A) must land in the same bucket
+                return std::min(h1, h2) ^ (std::max(h1, h2) << 1);
             }
         };
 
