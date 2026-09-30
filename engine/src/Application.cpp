@@ -326,6 +326,11 @@ Physics::IPhysicsBackend* Application::Get3DPhysicsBackend() const
     return _3DphysicsBackend.get();
 }
 
+void Application::Set3DPhysicsBackend(std::unique_ptr<Physics::IPhysicsBackend> backend)
+{
+    _3DphysicsBackend = std::move(backend);
+}
+
 void Application::RenderEditorFrame()
 {
     if (!_window.IsValid())

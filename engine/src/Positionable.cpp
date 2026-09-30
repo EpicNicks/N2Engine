@@ -174,9 +174,10 @@ Vector3 Positionable::GetDown() const
 
 void Positionable::NotifyPhysicsComponents() const
 {
-    if (_attachedRigidbody && !_attachedRigidbody->IsDestroyed() || (_attachedRigidbody = _gameObject.GetComponent<Physics::Rigidbody>()))
+    // Looked up each time: a cached pointer dangled once the Rigidbody was removed
+    if (const auto *rigidbody = _gameObject.GetComponent<Physics::Rigidbody>(); rigidbody && !rigidbody->IsDestroyed())
     {
-        _attachedRigidbody->OnTransformChanged();
+        rigidbody->OnTransformChanged();
     }
     else
     {
@@ -229,11 +230,15 @@ void Positionable::MarkGlobalTransformDirty() const
 {
     if (!_globalTransformDirty)
     {
-        NotifyPhysicsComponents();
         _globalTransformDirty = true;
         _hierarchyVersion++;
-        MarkChildrenGlobalTransformDirty();
     }
+
+    // After the flag is set, so physics reads the new pose (it used to read the stale cached one), and on
+    // every change: a second move before anything read the transform used to never reach physics at all.
+    // Children are walked every time for the same reason.
+    NotifyPhysicsComponents();
+    MarkChildrenGlobalTransformDirty();
 }
 
 void Positionable::MarkChildrenGlobalTransformDirty() const
