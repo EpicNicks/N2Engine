@@ -122,6 +122,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
 
     Logger::Info("Camera initialized");
 
+#ifdef N2ENGINE_PHYSX_ENABLED
     if (options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::PHYSX)
     {
         _3DphysicsBackend = std::make_unique<Physics::PhysXBackend>();
@@ -146,6 +147,11 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         physicsStatus.state = SubsystemState::Disabled;
         physicsStatus.detail = "Selected physics backend is not supported";
     }
+#else
+    Logger::Info("Built without PhysX (N2ENGINE_USE_PHYSX=OFF); physics is disabled");
+    physicsStatus.state = SubsystemState::Disabled;
+    physicsStatus.detail = "Built without PhysX";
+#endif
 
     if (options.isHeadless)
     {

@@ -215,8 +215,8 @@ namespace N2Engine::Physics
         /// Creates a shape on the body, owned by (and recorded under) the collider that asked for it
         void AttachColliderShape(PhysicsBodyHandle body, ICollider* collider, const physx::PxGeometry& geometry,
                                  const physx::PxTransform& localPose, const PhysicsMaterial& material);
-        /// Drops active collision/trigger pairs involving the body (it was destroyed or lost its shapes);
-        /// PhysX's own "touch lost" for them refers to released actors and is ignored
+        /// Ends active collision/trigger pairs involving the body (it was destroyed), queueing their Exit
+        /// for the other body; PhysX's own "touch lost" for them refers to released actors and is ignored
         void ForgetPairsWithBody(PhysicsBodyHandle handle);
         /// The GameObject a body belongs to: its Rigidbody's, else its first collider's
         [[nodiscard]] GameObject* GetBodyOwner(PhysicsBodyHandle handle);
@@ -290,20 +290,55 @@ namespace N2Engine::Physics
         struct CollisionEvent
         {
             CollisionPair pair;
-            Collision* data = nullptr;
+            Collision* data = nullptr; // collider/otherCollider are pair.bodyA's and pair.bodyB's
         };
 
         struct TriggerEvent
         {
             CollisionPair pair;
+            ICollider* colliderA = nullptr; // on pair.bodyA
+            ICollider* colliderB = nullptr; // on pair.bodyB
         };
 
+        // Events are per body pair, but PhysX reports touches per shape pair. Each body pair maps to
+        // the shape pairs currently touching (oriented to the key's bodyA/bodyB): Enter fires when the
+        // first starts touching and Exit when the last stops, so a compound body touching through two
+        // shapes no longer exits while one is still in contact.
+        struct ShapePair
+        {
+            const physx::PxShape* onA;
+            const physx::PxShape* onB;
+        };
+        using TouchMap = std::unordered_map<CollisionPair, std::vector<ShapePair>, CollisionPairHash>;
+
         std::vector<CollisionEvent> _newCollisions;
-        std::unordered_set<CollisionPair, CollisionPairHash> _activeCollisions;
+        TouchMap _collisionTouches;
         std::vector<CollisionEvent> _endedCollisions;
         std::vector<TriggerEvent> _newTriggers;
-        std::unordered_set<CollisionPair, CollisionPairHash> _activeTriggers;
+        TouchMap _triggerTouches;
         std::vector<TriggerEvent> _endedTriggers;
+        // Ended by removing a body or collider rather than reported by PhysX; dispatched before the
+        // step's Enter events
+        std::vector<CollisionEvent> _forgottenCollisions;
+        std::vector<TriggerEvent> _forgottenTriggers;
+
+        /// Dispatches and clears a queue of ended pairs (OnCollisionExit / OnTriggerExit to both sides)
+        void DispatchCollisionExits(std::vector<CollisionEvent>& queue);
+        void DispatchTriggerExits(std::vector<TriggerEvent>& queue);
+
+        /// @returns true if this is the body pair's first touching shape pair
+        static bool AddTouch(TouchMap& touches, const CollisionPair& pair,
+                             const physx::PxShape* shapeOnA, const physx::PxShape* shapeOnB);
+        /// @returns true if the body pair has no touching shape pairs left
+        static bool RemoveTouch(TouchMap& touches, const CollisionPair& pair,
+                                const physx::PxShape* shapeOnA, const physx::PxShape* shapeOnB);
+        /// Drops a shape that's being removed from every touch list (PhysX's later "lost" event for it
+        /// refers to a removed shape and is ignored). A body pair left with nothing queues its Exit.
+        void ForgetShape(const physx::PxShape* shape);
+        /// The collider that owns a shape (stored in the shape's userData)
+        static ICollider* ColliderOf(const physx::PxShape* shape);
+        /// The collider if it's still registered on the body, else null (a handler may have removed it)
+        ICollider* LiveCollider(PhysicsBodyHandle body, ICollider* collider);
 
         Collision CreateCollisionData(
             const CollisionPair& pair,
@@ -312,6 +347,8 @@ namespace N2Engine::Physics
 
         Trigger CreateTriggerData(
             const CollisionPair& pair,
+            ICollider* colliderA,
+            ICollider* colliderB,
             bool isForBodyA);
 
         void FillRaycastHit(
