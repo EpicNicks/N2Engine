@@ -51,6 +51,7 @@ GameObject::~GameObject()
 void GameObject::Purge()
 {
     // OnDestroy already ran in Scene::CallOnDestroyForGameObject; this only releases
+    _isTornDown = true;
     _components.clear();
     _componentMap.clear();
 
@@ -515,6 +516,7 @@ void GameObject::Destroy()
     {
         // Not in a scene, so its components were never attached; just flag it as gone
         _isMarkedForDestruction = true;
+        _isTornDown = true;
     }
 }
 

@@ -38,6 +38,10 @@ namespace N2Engine
         void RunDestroyCallbacks(bool objectWasActiveInHierarchy);
 
     public:
+        // Not copyable: a copy would share _lifetime, so it would expire with the original
+        Component(const Component &) = delete;
+        Component &operator=(const Component &) = delete;
+
         [[nodiscard]] GameObject& GetGameObject() const;
 
         // Serialization interface

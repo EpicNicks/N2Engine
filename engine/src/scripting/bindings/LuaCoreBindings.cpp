@@ -4,6 +4,9 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 
+#include <algorithm>
+#include <format>
+#include <stdexcept>
 #include <vector>
 
 namespace N2Engine::Scripting::Bindings
@@ -30,6 +33,15 @@ namespace N2Engine::Scripting::Bindings
                 refs.emplace_back(gameObject);
             }
             return sol::as_table(std::move(refs));
+        }
+
+        GameObjectRef &RequireRef(GameObjectRef *ref, const char *function)
+        {
+            if (!ref)
+            {
+                throw std::runtime_error(std::format("{}: expected a GameObject, got nil", function));
+            }
+            return *ref;
         }
     }
 
@@ -83,16 +95,28 @@ namespace N2Engine::Scripting::Bindings
                 return PositionableRef(*gameObject);
             },
             "HasPositionable", Forward<GameObjectRef, &GameObject::HasPositionable>(),
-            "AddChild", [](const GameObjectRef &go, const GameObjectRef &child)
+            // Handle arguments are pointers so nil arrives as null (a clean error) rather than failing sol's check
+            "AddChild", [](const GameObjectRef &go, GameObjectRef *child)
             {
-                go.Pin()->AddChild(child.Pin());
+                const GameObject::Ptr parent = go.Pin();
+                const GameObject::Ptr added = RequireRef(child, "GameObject:AddChild").Pin();
+                parent->AddChild(added);
+                if (added->GetParent() == parent)
+                {
+                    child->ReleaseOwnership(); // the parent owns it now
+                }
             },
-            "RemoveChild", [](const GameObjectRef &go, GameObjectRef &child)
+            "RemoveChild", [](const GameObjectRef &go, GameObjectRef *child)
             {
-                const GameObject::Ptr detached = child.Pin();
-                // The parent may have been its only owner; the script's handle keeps it alive instead
-                child.TakeOwnership();
-                go.Pin()->RemoveChild(detached);
+                const GameObject::Ptr parent = go.Pin();
+                const GameObject::Ptr detached = RequireRef(child, "GameObject:RemoveChild").Pin();
+                const bool wasChild = detached->GetParent() == parent;
+                parent->RemoveChild(detached);
+                if (wasChild && detached->GetParent() != parent)
+                {
+                    // The parent may have been its only owner; the handle the script passed keeps it alive
+                    child->TakeOwnership();
+                }
             },
             "GetParent", [](const GameObjectRef &go) { return RefOrNil(go.Pin()->GetParent()); },
             "FindChild", [](const GameObjectRef &go, const std::string &name)
@@ -137,24 +161,31 @@ namespace N2Engine::Scripting::Bindings
             },
             "GetAllGameObjects", [](const Scene &scene) { return RefList(scene.GetAllGameObjects()); },
             "GetRootGameObjects", [](const Scene &scene) { return RefList(scene.GetRootGameObjects()); },
-            "AddRootGameObject", [](Scene &scene, const GameObjectRef &gameObject)
+            "AddRootGameObject", [](Scene &scene, GameObjectRef *gameObject)
             {
-                scene.AddRootGameObject(gameObject.Pin());
+                const GameObject::Ptr root = RequireRef(gameObject, "Scene:AddRootGameObject").Pin();
+                scene.AddRootGameObject(root);
+                if (std::ranges::find(scene.GetRootGameObjects(), root) != scene.GetRootGameObjects().end())
+                {
+                    gameObject->ReleaseOwnership(); // the scene owns it now
+                }
             },
-            "RemoveRootGameObject", [](Scene &scene, GameObjectRef &gameObject)
+            "RemoveRootGameObject", [](Scene &scene, GameObjectRef *gameObject)
             {
-                const GameObject::Ptr root = gameObject.Lock();
-                if (!root)
+                const GameObject::Ptr root = gameObject ? gameObject->Lock() : nullptr;
+                if (!root || !scene.RemoveRootGameObject(root))
                 {
                     return false;
                 }
-                // The scene may have been its only owner; the script's handle keeps it alive instead
-                gameObject.TakeOwnership();
-                return scene.RemoveRootGameObject(root);
+                // The scene may have been its only owner; the handle the script passed keeps it alive
+                gameObject->TakeOwnership();
+                return true;
             },
-            "DestroyGameObject", [](Scene &scene, const GameObjectRef &gameObject)
+            "DestroyGameObject", [](Scene &scene, const GameObjectRef *gameObject)
             {
-                return scene.DestroyGameObject(gameObject.Lock()); // false once it's gone
+                // False for nil, or an object that's already destroyed or gone
+                const GameObject::Ptr target = gameObject ? gameObject->Lock() : nullptr;
+                return target && !target->IsDestroyed() && scene.DestroyGameObject(target);
             }
         );
 
