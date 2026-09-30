@@ -55,6 +55,7 @@ namespace N2Engine::Physics
 
         backend->AddCapsuleCollider(
             GetHandle(),
+            this,
             _radius,
             _height,
             GetOffset(),

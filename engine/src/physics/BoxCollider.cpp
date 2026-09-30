@@ -52,6 +52,7 @@ namespace N2Engine::Physics
 
         backend->AddBoxCollider(
             GetHandle(),
+            this,
             _halfExtents,
             GetOffset(),
             GetMaterial()

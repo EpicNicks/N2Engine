@@ -54,20 +54,25 @@ namespace N2Engine::Physics
             const Math::Vector3& position,
             const Math::Quaternion& rotation) = 0;
 
+        // Shapes are recorded per owning collider, so they can be updated, toggled and removed
+        // without touching other colliders on the same body
         virtual void AddSphereCollider(
             PhysicsBodyHandle body,
+            ICollider* collider,
             float radius,
             const Math::Vector3& localOffset,
             const PhysicsMaterial& material) = 0;
 
         virtual void AddBoxCollider(
             PhysicsBodyHandle body,
+            ICollider* collider,
             const Math::Vector3& halfExtents,
             const Math::Vector3& localOffset,
             const PhysicsMaterial& material) = 0;
 
         virtual void AddCapsuleCollider(
             PhysicsBodyHandle body,
+            ICollider* collider,
             float radius,
             float height,
             const Math::Vector3& localOffset,
@@ -97,7 +102,8 @@ namespace N2Engine::Physics
             const Math::Vector3& localOffset,
             const PhysicsMaterial& material) = 0;
 
-        virtual void SetIsTrigger(PhysicsBodyHandle body, bool isTrigger) = 0;
+        /// Only the given collider's shapes; other colliders on the body keep their own setting
+        virtual void SetIsTrigger(PhysicsBodyHandle body, ICollider* collider, bool isTrigger) = 0;
 
         virtual void AddForce(PhysicsBodyHandle body, const Math::Vector3& force) = 0;
         virtual void AddImpulse(PhysicsBodyHandle body, const Math::Vector3& impulse) = 0;

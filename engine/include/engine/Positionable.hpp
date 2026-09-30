@@ -30,8 +30,6 @@ namespace N2Engine
         Transform _localTransform;
         GameObject &_gameObject;
 
-        mutable Physics::Rigidbody* _attachedRigidbody = nullptr;
-
         // Cached global transform with dirty tracking
         mutable Transform _cachedGlobalTransform;
         mutable bool _globalTransformDirty = true;
