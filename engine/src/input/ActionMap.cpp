@@ -236,19 +236,35 @@ void ActionMap::Update()
         }
     }
 
-    _updating = true;
+    // Set for the duration, cleared even if a handler throws; only the outermost update frees retired
+    // actions (a handler may update this map again while the outer loop still holds them)
+    struct UpdateScope
+    {
+        ActionMap &map;
+        const bool outermost;
+
+        explicit UpdateScope(ActionMap &m) : map(m), outermost(!m._updating) { map._updating = true; }
+
+        ~UpdateScope()
+        {
+            if (outermost)
+            {
+                map._updating = false;
+                map._retiredActions.clear();
+            }
+        }
+    } scope{*this};
+
     for (InputAction *action : actions)
     {
-        // Skip actions an earlier callback removed or replaced this frame (they're retired, not live)
-        const bool stillMapped = std::ranges::any_of(_inputActions | std::views::values,
-                                                     [action](const auto &a) { return a.get() == action; });
-        if (stillMapped)
+        // Skip actions an earlier callback removed or replaced this frame. They're retired, not freed,
+        // until the update ends, so reading the name is safe.
+        const auto it = _inputActions.find(action->GetName());
+        if (it != _inputActions.end() && it->second.get() == action)
         {
             action->Update();
         }
     }
-    _updating = false;
-    _retiredActions.clear();
 }
 
 ActionMap& ActionMap::AddInputAction(std::unique_ptr<InputAction> inputAction)
