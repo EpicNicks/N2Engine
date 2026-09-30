@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <type_traits>
 #include <new>
@@ -17,13 +18,17 @@ namespace N2Engine
             static constexpr size_t STORAGE_ALIGN = alignof(std::max_align_t);
 
             alignas(STORAGE_ALIGN) char _storage[STORAGE_SIZE];
-            bool (*_wait_fn)(const void *);
+            // Mutable: waits advance their own frame/second counters each call
+            bool (*_wait_fn)(void *);
             void (*_destroy_fn)(void *);
             void (*_copy_fn)(void *, const void *);
             void (*_move_fn)(void *, void *);
 
         public:
+            // Never for ICoroutineWait itself: a non-const copy would otherwise pick this and try to
+            // store a wait inside a wait
             template <typename T>
+                requires (!std::same_as<std::decay_t<T>, ICoroutineWait>)
             ICoroutineWait(T &&wait_obj)
             {
                 using DecayedT = std::decay_t<T>;
@@ -32,9 +37,11 @@ namespace N2Engine
 
                 new (_storage) DecayedT(std::forward<T>(wait_obj));
 
-                _wait_fn = [](const void *ptr) -> bool
+                // Wait() mutates (counts frames/seconds), so it can't go through a const pointer; with
+                // the old const signature, using WaitForFrames or WaitForSeconds didn't compile
+                _wait_fn = [](void *ptr) -> bool
                 {
-                    return static_cast<const DecayedT *>(ptr)->Wait();
+                    return static_cast<DecayedT *>(ptr)->Wait();
                 };
 
                 _destroy_fn = [](void *ptr)
