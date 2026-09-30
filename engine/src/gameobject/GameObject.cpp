@@ -419,13 +419,15 @@ void GameObject::SetScene(Scene *scene)
 {
     if (_scene != scene)
     {
-        // Leaving a scene: it must forget these components before they're freed or re-homed
+        // Leaving a scene: it must forget these components before they're freed or re-homed, and its
+        // scheduler must drop this object's coroutines (it keys them by GameObject*)
         if (_scene)
         {
             for (const auto &component : _components)
             {
                 _scene->DetachComponent(component.get());
             }
+            _scene->GetCoroutineScheduler()->StopAllCoroutines(this);
         }
 
         _scene = scene;
