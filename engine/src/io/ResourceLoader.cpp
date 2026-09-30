@@ -284,9 +284,9 @@ namespace N2Engine::IO
 
         // Keep the refreshed metadata: discarding it left HasSourceChanged comparing against the old
         // timestamp, so it reported the asset as changed forever
-        AssetMetadata meta = CreateOrUpdateMetadata(sourcePath);
-        _metadata[resourcePath] = meta;
-        _uuidToPath[meta.uuid] = resourcePath;
+        AssetMetadata refreshed = CreateOrUpdateMetadata(sourcePath);
+        _metadata[resourcePath] = refreshed;
+        _uuidToPath[refreshed.uuid] = resourcePath;
 
         Logger::Info(std::format("Reloaded: {}", resourcePath.ToString()));
         return true;
