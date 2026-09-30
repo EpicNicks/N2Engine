@@ -8,6 +8,7 @@
 #include "engine/input/Mouse.hpp"
 #include "engine/Logger.hpp"
 #include "engine/scripting/LuaJson.hpp"
+#include "engine/scripting/ScriptCallback.hpp"
 
 namespace N2Engine::Scripting::Bindings
 {
@@ -72,17 +73,11 @@ namespace N2Engine::Scripting::Bindings
             "GetName", &Input::InputAction::GetName,
 
             // Event subscription (returns subscription ID for unsubscribe)
-            "Subscribe", [](Input::InputAction &action, sol::function callback) -> size_t
+            // A subscription made by a component script stops firing when that component is destroyed
+            "Subscribe", [](Input::InputAction &action, sol::protected_function callback) -> size_t
             {
-                return action.GetOnStateChanged() += [callback](Input::InputAction &act)
-                {
-                    auto result = callback(std::ref(act));
-                    if (!result.valid())
-                    {
-                        sol::error err = result;
-                        Logger::Error(std::format("InputAction callback error: {}", err.what()));
-                    }
-                };
+                return action.GetOnStateChanged() += MakeScriptCallback<Input::InputAction&>(
+                    std::move(callback), "InputAction");
             },
 
             "Unsubscribe", [](Input::InputAction &action, size_t id)

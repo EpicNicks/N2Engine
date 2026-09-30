@@ -16,7 +16,12 @@ namespace N2Engine::Scripting
 
         sol::state _lua;
         std::unordered_map<std::string, sol::table> _loadedModules;
-        std::unordered_map<std::string, std::vector<std::function<void()>>> _reloadCallbacks;
+        struct ReloadCallback
+        {
+            const void *owner; // who registered it, so it can be removed (e.g. a destroyed LuaComponent)
+            std::function<void()> callback;
+        };
+        std::unordered_map<std::string, std::vector<ReloadCallback>> _reloadCallbacks;
         std::optional<bool> _initializeResult;
 
         LuaRuntime();
@@ -41,7 +46,11 @@ namespace N2Engine::Scripting
         void ReloadModule(const IO::ResourcePath& path, LuaScript* script);
 
         // Reload callbacks
-        void RegisterReloadCallback(const std::string& moduleName, std::function<void()> callback);
+        /// @param owner identifies the registrant for UnregisterReloadCallbacks; may be null
+        void RegisterReloadCallback(const std::string& moduleName, std::function<void()> callback,
+                                    const void* owner = nullptr);
+        /// Removes every reload callback the owner registered, for any module
+        void UnregisterReloadCallbacks(const void* owner);
         void ClearReloadCallbacks(const std::string& moduleName);
 
         // Path conversion (public for LuaComponent)

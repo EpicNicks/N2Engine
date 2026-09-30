@@ -247,7 +247,22 @@ void Scene::OnAllActiveComponents(const std::function<void(Component *)> &callba
 {
     // By index: callbacks can add components (appended, picked up this pass) or remove them
     // (nulled by DetachComponent while iterating), both of which would invalidate iterators
-    ++_componentIterationDepth;
+    // Scope guard: the depth must come back down (and nulls be compacted) even if a callback throws
+    struct IterationScope
+    {
+        const Scene &scene;
+        explicit IterationScope(const Scene &s) : scene(s) { ++scene._componentIterationDepth; }
+        ~IterationScope()
+        {
+            if (--scene._componentIterationDepth == 0)
+            {
+                std::erase(scene._components, nullptr);
+            }
+        }
+        IterationScope(const IterationScope &) = delete;
+        IterationScope &operator=(const IterationScope &) = delete;
+    } scope{*this};
+
     for (std::size_t i = 0; i < _components.size(); ++i)
     {
         Component *c = _components[i];
@@ -255,10 +270,6 @@ void Scene::OnAllActiveComponents(const std::function<void(Component *)> &callba
         {
             callback(c);
         }
-    }
-    if (--_componentIterationDepth == 0)
-    {
-        std::erase(_components, nullptr);
     }
 }
 
@@ -426,13 +437,14 @@ void Scene::MarkHierarchyForDestruction(std::shared_ptr<GameObject> gameObject,
 
 void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject)
 {
+    // Objects are already marked for destruction here, so ask whether they were active before that
+    const bool wasActive = gameObject->IsActiveInHierarchyIgnoringDestruction();
     for (auto &component : gameObject->GetAllComponents())
     {
-        // The flag makes OnDestroy run exactly once, whichever teardown path gets here first
-        if (component && !component->_isMarkedForDestruction)
+        // Runs OnDisable/OnDestroy exactly once, whichever teardown path gets here first
+        if (component)
         {
-            component->OnDestroy();
-            component->_isMarkedForDestruction = true;
+            component->RunDestroyCallbacks(wasActive);
         }
     }
     // This scene's scheduler, not the loaded scene's: the object may belong to a scene being cleared
