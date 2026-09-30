@@ -6,7 +6,7 @@
 using namespace N2Engine;
 using json = nlohmann::json;
 
-void SerializableComponent::RegisterGameObjectRef(const std::string &name, GameObject *gameObjectRef)
+void SerializableComponent::RegisterGameObjectRef(const std::string &name, GameObject *&gameObjectRef)
 {
     _members.emplace_back(
         name,

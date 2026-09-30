@@ -7,6 +7,10 @@
 
 namespace N2Engine::Audio
 {
+    /// Loads a .wav/.ogg/.mp3/.flac file into an AudioClip (nullptr on failure). Registered with
+    /// IO::ResourceLoader and IO::Resources for those extensions.
+    std::shared_ptr<Base::Asset> LoadAudioClipFromFile(const std::filesystem::path &path);
+
     // Base audio loader interface
     class IAudioLoader
     {

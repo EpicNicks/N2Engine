@@ -15,6 +15,7 @@
 
 #include "engine/GameObjectScene.hpp" // pulls in the AddComponent template definitions
 #include "engine/audio/AudioClip.hpp"
+#include "engine/audio/AudioListener.hpp"
 #include "engine/audio/AudioLoaders.hpp"
 #include "engine/audio/AudioSource.hpp"
 #include "engine/audio/AudioSystem.hpp"
@@ -846,9 +847,8 @@ TEST_F(AudioSourceTest, RespectsGroupConcurrencyLimitFromOneShots)
     EXPECT_FALSE(_source->IsPlaying());
 }
 
-// Known gap: CountPlayingInGroup only tracks one-shots, so playing AudioSource
-// components never count toward a group's maxConcurrent limit.
-TEST_F(AudioSourceTest, DISABLED_PlayingSourcesCountTowardGroupLimit)
+// CountPlayingInGroup used to track only one-shots, so AudioSource components never counted
+TEST_F(AudioSourceTest, PlayingSourcesCountTowardGroupLimit)
 {
     auto &audio = AudioSystem::Instance();
     audio.SetGroupMaxConcurrent("SFX", 1);
@@ -860,4 +860,80 @@ TEST_F(AudioSourceTest, DISABLED_PlayingSourcesCountTowardGroupLimit)
 
     EXPECT_EQ(audio.CountPlayingInGroup("SFX"), 1u);
     EXPECT_FALSE(PlayOneShot(_clip).IsValid());
+}
+
+namespace
+{
+    float SourceGain(const AudioSource &source)
+    {
+        ALfloat gain = -1.0f;
+        alGetSourcef(source.GetSourceHandle(), AL_GAIN, &gain);
+        return gain;
+    }
+
+    float SourcePitch(const AudioSource &source)
+    {
+        ALfloat pitch = -1.0f;
+        alGetSourcef(source.GetSourceHandle(), AL_PITCH, &pitch);
+        return pitch;
+    }
+}
+
+TEST_F(AudioSourceTest, GroupVolumeReachesPlayingSource)
+{
+    _source->SetSpatial(false);
+    _source->SetVolume(0.8f);
+    _source->SetClip(_clip);
+    _source->Play();
+    ASSERT_TRUE(_source->IsPlaying());
+    ASSERT_NEAR(SourceGain(*_source), 0.8f, 1e-5f);
+
+    // Group changes used to only apply to sounds started afterwards
+    AudioSystem::Instance().SetGroupVolume("SFX", 0.5f);
+    EXPECT_NEAR(SourceGain(*_source), 0.4f, 1e-5f);
+
+    AudioSystem::Instance().SetGroupMuted("SFX", true);
+    EXPECT_NEAR(SourceGain(*_source), 0.0f, 1e-5f);
+
+    AudioSystem::Instance().SetGroupMuted("SFX", false);
+    EXPECT_NEAR(SourceGain(*_source), 0.4f, 1e-5f);
+}
+
+TEST_F(AudioSourceTest, GroupPitchScalesSourcePitch)
+{
+    _source->SetSpatial(false);
+    _source->SetPitch(1.2f);
+    _source->SetClip(_clip);
+    _source->Play();
+    ASSERT_NEAR(SourcePitch(*_source), 1.2f, 1e-5f);
+
+    // Group pitch used to be stored but never applied
+    AudioSystem::Instance().SetGroupPitch("SFX", 1.5f);
+    EXPECT_NEAR(SourcePitch(*_source), 1.8f, 1e-5f);
+
+    _source->SetPitch(1.0f);
+    EXPECT_NEAR(SourcePitch(*_source), 1.5f, 1e-5f);
+}
+
+TEST_F(AudioSourceTest, GroupChangesReachPlayingOneShots)
+{
+    AudioSystem::Instance().SetGroupVolume("UI", 1.0f);
+    const AudioHandle handle = PlayOneShot(_clip, {.volume = 0.5f, .pitch = 1.0f, .loop = true, .mixerGroup = "UI"});
+    ASSERT_TRUE(handle.IsValid());
+
+    AudioSystem::Instance().SetGroupPitch("UI", 2.0f);
+    AudioSystem::Instance().SetGroupVolume("UI", 0.5f);
+
+    EXPECT_TRUE(AudioSystem::Instance().IsPlaying(handle));
+    // Checked via the concurrency count too: the one-shot is still tracked in its group
+    EXPECT_EQ(AudioSystem::Instance().CountPlayingInGroup("UI"), 1u);
+}
+
+TEST(AudioListenerTest, WorksWithoutPositionable)
+{
+    const auto go = GameObject::Create("ListenerWithoutTransform");
+    auto *listener = go->AddComponent<AudioListener>();
+    ASSERT_FALSE(go->HasPositionable());
+
+    EXPECT_NO_FATAL_FAILURE(listener->OnLateUpdate()); // dereferenced a null Positionable
 }

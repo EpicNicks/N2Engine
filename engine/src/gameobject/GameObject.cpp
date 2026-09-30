@@ -673,9 +673,10 @@ json GameObject::Serialize() const
 
 GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolver)
 {
-    // Create GameObject with UUID
-    Math::UUID uuid = j["uuid"].get<Math::UUID>();
-    auto go = std::make_shared<GameObject>(j["name"].get<std::string>());
+    // Create GameObject with UUID. Required keys use at(): const operator[] on a missing key is an
+    // assertion/UB in nlohmann, while at() throws, which Scene::FromJSON turns into a failed load.
+    Math::UUID uuid = j.at("uuid").get<Math::UUID>();
+    auto go = std::make_shared<GameObject>(j.at("name").get<std::string>());
     go->_uuid = uuid; // Restore original UUID
 
     // Register this GameObject in the resolver
@@ -706,17 +707,18 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
     {
         for (const auto &compJson : j["components"])
         {
-            std::string typeName = compJson["type"];
+            const std::string typeName = compJson.at("type").get<std::string>();
+            const json &data = compJson.at("data");
 
             if (auto component = ComponentRegistry::Instance().Create(typeName, *go))
             {
-                if (resolver && compJson["data"].contains("uuid"))
+                if (resolver && data.contains("uuid"))
                 {
-                    Math::UUID compUUID = compJson["data"]["uuid"].get<Math::UUID>();
+                    Math::UUID compUUID = data.at("uuid").get<Math::UUID>();
                     resolver->RegisterComponent(compUUID, component.get());
                 }
 
-                component->Deserialize(compJson["data"], resolver);
+                component->Deserialize(data, resolver);
 
                 auto *rawPtr = component.get();
                 std::type_index typeIdx(typeid(*rawPtr));
