@@ -367,8 +367,9 @@ namespace N2Engine::Math
         float* Data() { return data.data(); }
 
         // Selects the implementation tier the operations dispatch to; see Math::SetSIMDLevel
-        static void SetSIMDLevel(const SIMDLevel level)
+        static void SetSIMDLevel(const SIMDLevel requested)
         {
+            const SIMDLevel level = ClampSIMDLevel(requested);
             if (level == SIMDLevel::Scalar)
             {
                 multiply_func = &MultiplyScalar;
@@ -685,6 +686,7 @@ namespace N2Engine::Math
         }
 
         // ===== SSE4.1 IMPLEMENTATIONS =====
+#ifdef N2_MATH_SSE41
         static Vector3 TransformPointSSE41(const Matrix &m, const Vector3 &point)
         {
             __m128 point_vec = _mm_set_ps(1.0f, point.z, point.y, point.x);
@@ -711,6 +713,12 @@ namespace N2Engine::Math
             }
             return Vector3{x_val, y_val, z_val};
         }
+#else
+        static Vector3 TransformPointSSE41(const Matrix &m, const Vector3 &point)
+        {
+            return TransformPointSSE2(m, point);
+        }
+#endif
 
     private:
         // Default to the scalar implementations, so matrix math works before InitializeSIMD runs (these
@@ -880,9 +888,9 @@ namespace N2Engine::Math
         }
 
         // Selects the implementation tier the operations dispatch to; see Math::SetSIMDLevel
-        static void SetSIMDLevel(const SIMDLevel level)
+        static void SetSIMDLevel(const SIMDLevel requested)
         {
-            if (level != SIMDLevel::Scalar)
+            if (ClampSIMDLevel(requested) != SIMDLevel::Scalar)
             {
                 multiply_func = &MultiplySSE2;
                 add_func = &AddSSE2;

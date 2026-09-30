@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -76,6 +79,18 @@ namespace
                             what + "(" + std::to_string(row) + "," + std::to_string(col) + ")", scale);
     }
 
+    // Bit-exact, for operations with exactly one right answer, including the sign of zero. Any NaN matches any NaN
+    void ExpectIdentical(const Vector3 &actual, const Vector3 &expected, const std::string &what)
+    {
+        for (size_t i = 0; i < 3; ++i)
+        {
+            if (std::isnan(actual[i]) && std::isnan(expected[i]))
+                continue;
+            EXPECT_EQ(std::bit_cast<uint32_t>(actual[i]), std::bit_cast<uint32_t>(expected[i]))
+                << what << "[" << i << "]: " << actual[i] << " vs " << expected[i];
+        }
+    }
+
     template <typename T>
     void ExpectClose(const std::vector<T> &actual, const std::vector<T> &expected, const std::string &what)
     {
@@ -104,6 +119,23 @@ namespace
         for (size_t i = 0; i < vectors.size(); ++i)
             vectors[i].w = 7.0f + static_cast<float>(i);
         return vectors;
+    }
+
+    // Signed zeros, the float just below 0.5, integers past 2^23, huge values, infinities and NaNs
+    std::vector<Vector3> EdgeCaseVectors()
+    {
+        const float inf = std::numeric_limits<float>::infinity();
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        return {
+            {-0.0f, 0.0f, -0.3f},
+            {0.0f, -0.0f, 0.3f},
+            {0.49999997f, -0.49999997f, -0.5f},
+            {8388609.0f, -8388609.0f, 1e10f},
+            {-inf, inf, -1e10f},
+            {nan, 1.0f, -2.5f},
+            {2.5f, nan, -0.0f},
+            {-7.5f, 3.5f, nan},
+        };
     }
 
     // Deliberately not unit length (except the ones built from rotations)
@@ -154,6 +186,7 @@ protected:
     void SetUp() override
     {
         SetSIMDLevel(SIMDLevel::Scalar);
+        // SetSIMDLevel would clamp an unsupported tier, so the test would silently cover a lower one
         if (DetectSIMDLevel() < GetParam())
             GTEST_SKIP() << "CPU does not support " << LevelName(GetParam());
     }
@@ -178,6 +211,14 @@ protected:
         const auto expected = Under(SIMDLevel::Scalar, compute);
         const auto actual = Under(GetParam(), compute);
         ExpectClose(actual, expected, what);
+    }
+
+    template <typename F>
+    void ExpectIdenticalToScalar(F compute, const std::string &what)
+    {
+        const Vector3 expected = Under(SIMDLevel::Scalar, compute);
+        const Vector3 actual = Under(GetParam(), compute);
+        ExpectIdentical(actual, expected, what);
     }
 };
 
@@ -215,10 +256,6 @@ TEST_P(SimdDispatchTest, Vector3Operations)
         ExpectMatchesScalar([&] { return a.Length(); }, "Length" + at);
         ExpectMatchesScalar([&] { return a.LengthSquared(); }, "LengthSquared" + at);
         ExpectMatchesScalar([&] { return a.Normalized(); }, "Normalized" + at);
-        ExpectMatchesScalar([&] { return a.Floor(); }, "Floor" + at);
-        ExpectMatchesScalar([&] { return a.Ceil(); }, "Ceil" + at);
-        ExpectMatchesScalar([&] { return a.Round(); }, "Round" + at);
-        ExpectMatchesScalar([&] { return a.Abs(); }, "Abs" + at);
 
         for (size_t j = 0; j < samples.size(); ++j)
         {
@@ -230,8 +267,33 @@ TEST_P(SimdDispatchTest, Vector3Operations)
             ExpectMatchesScalar([&] { return a.Dot(b); }, "Dot" + ab);
             ExpectMatchesScalar([&] { return a.Cross(b); }, "Cross" + ab);
             ExpectMatchesScalar([&] { return a.Distance(b); }, "Distance" + ab);
-            ExpectMatchesScalar([&] { return Vector3::Min(a, b); }, "Min" + ab);
-            ExpectMatchesScalar([&] { return Vector3::Max(a, b); }, "Max" + ab);
+        }
+    }
+}
+
+TEST_P(SimdDispatchTest, Vector3ExactOperations)
+{
+    std::vector<Vector3> samples = EdgeCaseVectors();
+    for (const Vector3 &v : SampleVectors())
+        samples.push_back(v);
+
+    for (size_t i = 0; i < samples.size(); ++i)
+    {
+        const Vector3 &a = samples[i];
+        const std::string at = " a=" + std::to_string(i);
+
+        ExpectIdenticalToScalar([&] { return a.Floor(); }, "Floor" + at);
+        ExpectIdenticalToScalar([&] { return a.Ceil(); }, "Ceil" + at);
+        ExpectIdenticalToScalar([&] { return a.Round(); }, "Round" + at);
+        ExpectIdenticalToScalar([&] { return a.Abs(); }, "Abs" + at);
+
+        for (size_t j = 0; j < samples.size(); ++j)
+        {
+            const Vector3 &b = samples[j];
+            const std::string ab = at + " b=" + std::to_string(j);
+
+            ExpectIdenticalToScalar([&] { return Vector3::Min(a, b); }, "Min" + ab);
+            ExpectIdenticalToScalar([&] { return Vector3::Max(a, b); }, "Max" + ab);
         }
     }
 }

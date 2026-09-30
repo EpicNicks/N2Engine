@@ -13,8 +13,9 @@ const Vector3 Vector3::Right{1.f, 0.f, 0.f};
 const Vector3 Vector3::Forward{0.f, 0.f, 1.f};
 const Vector3 Vector3::Back{0.f, 0.f, -1.f};
 
-void Vector3::SetSIMDLevel(const SIMDLevel level)
+void Vector3::SetSIMDLevel(const SIMDLevel requested)
 {
+    const SIMDLevel level = ClampSIMDLevel(requested);
     simd_level = level;
 
     // Start from scalar so each tier below only overrides what it accelerates, and switching back down works

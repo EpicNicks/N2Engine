@@ -249,8 +249,9 @@ bool Quaternion::IsIdentity(const float tolerance) const
         std::abs(z) <= tolerance;
 }
 
-void Quaternion::SetSIMDLevel(const SIMDLevel level)
+void Quaternion::SetSIMDLevel(const SIMDLevel requested)
 {
+    const SIMDLevel level = ClampSIMDLevel(requested);
     if (level == SIMDLevel::Scalar)
     {
         add_func = &AddScalar;

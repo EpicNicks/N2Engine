@@ -1,5 +1,11 @@
 #pragma once
 
+// The SSE4.1 implementations are compiled when the build targets SSE4.1. MSVC never defines __SSE4_1__, but
+// /arch:AVX (which the math target builds with) implies it
+#if defined(__SSE4_1__) || defined(__AVX__)
+#define N2_MATH_SSE41
+#endif
+
 #ifdef _WIN32
 #include <intrin.h>
 #include <immintrin.h>
@@ -95,16 +101,27 @@ namespace N2Engine::Math
         AVX
     };
 
-    // The highest tier this CPU (and OS, for AVX) supports
+    // The highest tier this CPU (and OS, for AVX) supports. Detected once, since SetSIMDLevel checks it on every call
     inline SIMDLevel DetectSIMDLevel()
     {
-        const CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
-        if (features.avx && features.sse41)
-            return SIMDLevel::AVX;
-        if (features.sse41)
-            return SIMDLevel::SSE41;
-        if (features.sse2)
-            return SIMDLevel::SSE2;
-        return SIMDLevel::Scalar;
+        static const SIMDLevel level = []
+        {
+            const CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
+            if (features.avx && features.sse41)
+                return SIMDLevel::AVX;
+            if (features.sse41)
+                return SIMDLevel::SSE41;
+            if (features.sse2)
+                return SIMDLevel::SSE2;
+            return SIMDLevel::Scalar;
+        }();
+        return level;
+    }
+
+    // A requested tier, lowered to the highest one this CPU supports
+    inline SIMDLevel ClampSIMDLevel(const SIMDLevel requested)
+    {
+        const SIMDLevel supported = DetectSIMDLevel();
+        return requested < supported ? requested : supported;
     }
 }

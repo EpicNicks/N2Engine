@@ -14,12 +14,6 @@
 #define TARGET_SSE4_1
 #endif
 
-// The SSE4.1 implementations are compiled when the build targets SSE4.1. MSVC never defines __SSE4_1__, but
-// /arch:AVX (which the math target builds with) implies it
-#if defined(__SSE4_1__) || defined(__AVX__)
-#define N2_MATH_SSE41
-#endif
-
 #include <cmath>
 #include <immintrin.h>
 #include <numbers>
@@ -763,16 +757,19 @@ namespace N2Engine::Math
 
         static Vector3 MinSSE2(const Vector3 &a, const Vector3 &b)
         {
+            // minps returns its second operand for NaN or equal (+-0) inputs, so (b, a) matches std::min(a, b),
+            // which is (b < a) ? b : a
             Vector3 result;
-            result.simd_data = _mm_min_ps(a.simd_data, b.simd_data);
+            result.simd_data = _mm_min_ps(b.simd_data, a.simd_data);
             result.w = 0.0f;
             return result;
         }
 
         static Vector3 MaxSSE2(const Vector3 &a, const Vector3 &b)
         {
+            // Operands swapped like MinSSE2, to match std::max(a, b), which is (a < b) ? b : a
             Vector3 result;
-            result.simd_data = _mm_max_ps(a.simd_data, b.simd_data);
+            result.simd_data = _mm_max_ps(b.simd_data, a.simd_data);
             result.w = 0.0f;
             return result;
         }
@@ -859,15 +856,18 @@ namespace N2Engine::Math
             TARGET_SSE4_1 static Vector3 RoundSSE41(const Vector3 &v)
         {
             // std::round rounds halfway cases away from zero, but _MM_FROUND_TO_NEAREST_INT rounds them to even
-            // (2.5 -> 2). So truncate, then step away from zero when the dropped fraction is >= 0.5
+            // (2.5 -> 2). So truncate, then step away from zero when the dropped fraction is >= 0.5. Infinities
+            // give a NaN fraction, which compares false, so they pass through unchanged
             const __m128 sign_mask = _mm_set1_ps(-0.0f);
+            const __m128 sign = _mm_and_ps(v.simd_data, sign_mask);
             const __m128 truncated = _mm_round_ps(v.simd_data, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC);
             const __m128 fraction = _mm_andnot_ps(sign_mask, _mm_sub_ps(v.simd_data, truncated));
-            const __m128 away = _mm_or_ps(_mm_and_ps(v.simd_data, sign_mask), _mm_set1_ps(1.0f));
+            const __m128 away = _mm_or_ps(sign, _mm_set1_ps(1.0f));
             const __m128 step = _mm_and_ps(_mm_cmpge_ps(fraction, _mm_set1_ps(0.5f)), away);
 
+            // Put the input's sign back: -0 + +0 is +0, but std::round(-0.3) is -0
             Vector3 result;
-            result.simd_data = _mm_add_ps(truncated, step);
+            result.simd_data = _mm_or_ps(_mm_add_ps(truncated, step), sign);
             result.w = 0.0f;
             return result;
         }
