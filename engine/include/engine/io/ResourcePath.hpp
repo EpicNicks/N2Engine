@@ -22,6 +22,26 @@ namespace N2Engine::IO
     private:
         PathType _type = PathType::Invalid;
         std::string _path;
+
+        // One spelling per file ("a/./b", "a//b", "a/x/../b" and "a\\b" are all "a/b"), so cache and
+        // metadata lookups agree with Resolve. A leading ".." is kept; Resolve rejects escapes.
+        void Normalize()
+        {
+            std::ranges::replace(_path, '\\', '/');
+            _path = std::filesystem::path(_path).lexically_normal().generic_string();
+            if (_path == ".")
+            {
+                _path.clear();
+            }
+            while (!_path.empty() && _path[0] == '/')
+            {
+                _path.erase(0, 1);
+            }
+            if (_path.ends_with('/'))
+            {
+                _path.pop_back(); // "a/b/" and "a/b" are the same directory
+            }
+        }
         
     public:
         ResourcePath() = default;
@@ -49,21 +69,13 @@ namespace N2Engine::IO
                 _path = pathStr;
             }
             
-            if (!_path.empty() && _path[0] == '/')
-            {
-                _path = _path.substr(1);
-            }
-            std::ranges::replace(_path, '\\', '/');
+            Normalize();
         }
-        
+
         ResourcePath(PathType type, std::string path)
             : _type(type), _path(std::move(path))
         {
-            if (!_path.empty() && _path[0] == '/')
-            {
-                _path = _path.substr(1);
-            }
-            std::ranges::replace(_path, '\\', '/');
+            Normalize();
         }
         
         PathType GetType() const { return _type; }

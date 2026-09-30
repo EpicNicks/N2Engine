@@ -10,8 +10,11 @@ namespace N2Engine::Audio
 {
     AudioSystem& AudioSystem::Instance()
     {
-        static AudioSystem instance;
-        return instance;
+        // Never destroyed: AudioSources unregister in their destructors, which can run during static
+        // destruction (SceneManager's loaded scene). When AudioSystem was first used after SceneManager
+        // was created (headless, where Init skips audio), a function-local static died first.
+        static AudioSystem *instance = new AudioSystem();
+        return *instance;
     }
 
     bool AudioSystem::Initialize()
@@ -91,6 +94,18 @@ namespace N2Engine::Audio
             alDeleteSources(1, &source);
         }
         _sourcePool.clear();
+
+        // Sources held by components die with the context; drop their ids, so after a later Initialize
+        // they don't play through an id that now belongs to someone else
+        for (AudioSource *source : _sources)
+        {
+            if (const ALuint held = source->GetSourceHandle(); held != 0)
+            {
+                alSourceStop(held);
+                alDeleteSources(1, &held);
+                source->ForgetSource();
+            }
+        }
 
         alcMakeContextCurrent(nullptr);
 
@@ -285,6 +300,12 @@ namespace N2Engine::Audio
             ReleaseSource(it->second.source);
             _oneShots.erase(it);
         }
+    }
+
+    ALuint AudioSystem::GetOneShotSource(AudioHandle handle) const
+    {
+        const auto it = _oneShots.find(handle);
+        return it != _oneShots.end() ? it->second.source : 0;
     }
 
     bool AudioSystem::IsPlaying(AudioHandle handle) const

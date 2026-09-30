@@ -927,6 +927,27 @@ TEST_F(AudioSourceTest, GroupChangesReachPlayingOneShots)
     EXPECT_TRUE(AudioSystem::Instance().IsPlaying(handle));
     // Checked via the concurrency count too: the one-shot is still tracked in its group
     EXPECT_EQ(AudioSystem::Instance().CountPlayingInGroup("UI"), 1u);
+
+    const ALuint source = AudioSystem::Instance().GetOneShotSource(handle);
+    ASSERT_NE(source, 0u);
+    ALfloat gain = -1.0f, pitch = -1.0f;
+    alGetSourcef(source, AL_GAIN, &gain);
+    alGetSourcef(source, AL_PITCH, &pitch);
+    EXPECT_NEAR(gain, 0.25f, 1e-5f); // 0.5 own volume x 0.5 group volume
+    EXPECT_NEAR(pitch, 2.0f, 1e-5f);
+}
+
+TEST_F(AudioSourceTest, ShutdownDropsHeldSourceIds)
+{
+    _source->SetClip(_clip);
+    _source->Play();
+    ASSERT_NE(_source->GetSourceHandle(), 0u);
+
+    AudioSystem::Instance().Shutdown();
+
+    // A held id used to survive the context and alias a new pooled source after Initialize
+    EXPECT_EQ(_source->GetSourceHandle(), 0u);
+    ASSERT_TRUE(AudioSystem::Instance().Initialize()); // TearDown expects a live system
 }
 
 TEST(AudioListenerTest, WorksWithoutPositionable)

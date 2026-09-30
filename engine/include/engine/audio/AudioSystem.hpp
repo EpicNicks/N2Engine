@@ -57,6 +57,8 @@ namespace N2Engine::Audio
         AudioHandle PlayOneShot(const std::shared_ptr<AudioClip>& clip, const PlaybackParams& params = {});
         void Stop(AudioHandle handle);
         [[nodiscard]] bool IsPlaying(AudioHandle handle) const;
+        /// The OpenAL source playing a one-shot, or 0 if the handle is unknown
+        [[nodiscard]] ALuint GetOneShotSource(AudioHandle handle) const;
 
         // Listener
         void SetListenerPosition(float x, float y, float z);

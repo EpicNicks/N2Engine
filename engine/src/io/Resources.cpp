@@ -100,19 +100,12 @@ namespace N2Engine::IO
         // Remove assets from UUID map that have no other references
         for (auto it = _assetsByUUID.begin(); it != _assetsByUUID.end();)
         {
-            // References held here: the UUID map, plus the path map if the asset is in it too
-            const bool inPathMap = std::ranges::any_of(_assetsByPath, [&it](const auto &entry) { return entry.second == it->second; });
-            if (it->second.use_count() <= (inPathMap ? 2 : 1))
+            // References held here: the UUID map plus one per path the asset is registered under
+            const auto sameAsset = [&it](const auto &entry) { return entry.second == it->second; };
+            const auto pathRefs = std::ranges::count_if(_assetsByPath, sameAsset);
+            if (it->second.use_count() <= 1 + pathRefs)
             {
-                // Find and remove from path map
-                for (auto pathIt = _assetsByPath.begin(); pathIt != _assetsByPath.end(); ++pathIt)
-                {
-                    if (pathIt->second == it->second)
-                    {
-                        _assetsByPath.erase(pathIt);
-                        break;
-                    }
-                }
+                std::erase_if(_assetsByPath, sameAsset);
                 it = _assetsByUUID.erase(it);
             }
             else
