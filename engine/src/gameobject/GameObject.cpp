@@ -32,6 +32,19 @@ GameObject::GameObject(std::string name)
     : _name(std::move(name)),
       _positionable{nullptr} {}
 
+GameObject::~GameObject()
+{
+    // A scene that's destroyed first clears this pointer (Scene::~Scene), so it's always alive here
+    if (_scene)
+    {
+        for (const auto &component : _components)
+        {
+            _scene->DetachComponent(component.get());
+        }
+        _scene->GetCoroutineScheduler()->StopAllCoroutines(this);
+    }
+}
+
 void GameObject::Purge()
 {
     // OnDestroy already ran in Scene::CallOnDestroyForGameObject; this only releases
@@ -419,13 +432,15 @@ void GameObject::SetScene(Scene *scene)
 {
     if (_scene != scene)
     {
-        // Leaving a scene: it must forget these components before they're freed or re-homed
+        // Leaving a scene: it must forget these components before they're freed or re-homed, and its
+        // scheduler must drop this object's coroutines (it keys them by GameObject*)
         if (_scene)
         {
             for (const auto &component : _components)
             {
                 _scene->DetachComponent(component.get());
             }
+            _scene->GetCoroutineScheduler()->StopAllCoroutines(this);
         }
 
         _scene = scene;
