@@ -6,6 +6,8 @@
 
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
+#include "engine/sceneManagement/Scene.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
 
 #include "editor-server/EditorServer.hpp"
 
@@ -95,6 +97,12 @@ int main(int argc, char *argv[])
 
         server.Stop();
         N2Engine::Logger::Info("Editor server stopped");
+
+        // As Application::Run does, however the loop ended
+        if (N2Engine::SceneManager::GetCurScene() != nullptr)
+        {
+            N2Engine::SceneManager::GetCurSceneRef().OnApplicationQuit();
+        }
 
         N2Engine::Application::GetInstance().Shutdown();
         N2Engine::Logger::Info("Engine shut down");

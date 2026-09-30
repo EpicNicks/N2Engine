@@ -100,6 +100,24 @@ TEST(CoreRobustnessTest, RemovingTheFirstComponentExposesTheNext)
     EXPECT_EQ(go->GetComponent<Marker>(), nullptr);
 }
 
+TEST(CoreRobustnessTest, ASpecificComponentCanBeRemoved)
+{
+    const auto go = MakeObject("Markers");
+    auto *first = go->AddComponent<Marker>();
+    auto *second = go->AddComponent<Marker>();
+    auto *third = go->AddComponent<Marker>();
+
+    // Removing a later instance leaves the first as the one GetComponent finds
+    ASSERT_TRUE(go->RemoveComponent(second));
+    EXPECT_EQ(go->GetComponent<Marker>(), first);
+    EXPECT_EQ(go->GetComponents<Marker>(), (std::vector<Marker *>{first, third}));
+
+    EXPECT_FALSE(go->RemoveComponent(second)) << "already removed";
+
+    ASSERT_TRUE(go->RemoveComponent(first));
+    EXPECT_EQ(go->GetComponent<Marker>(), third);
+}
+
 // ----------------------------------------------------------------------------- transforms
 
 TEST(CoreRobustnessTest, SetScaleUnderAZeroParentAxisStaysFinite)
@@ -158,7 +176,9 @@ TEST(CoreRobustnessTest, LoggerDeliversBacklogOnceWhenASubscriberLogs)
 
 TEST(CoreRobustnessTest, QuitIsARequestNotAnExit)
 {
-    // Used to std::exit(0) on the spot, which would end this test process
+    // Used to std::exit(0) on the spot, which would end this test process.
+    // Note: the flag stays set for the rest of this test binary (only Application::Init clears it), so a
+    // later test that spins Run() or the editor loop would exit at once. Nothing does today.
     Application::Quit();
 
     EXPECT_TRUE(Application::GetInstance().IsQuitRequested());
