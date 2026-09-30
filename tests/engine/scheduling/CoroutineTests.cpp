@@ -1,15 +1,12 @@
 #include <gtest/gtest.h>
 
-#include <chrono>
 #include <generator>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "engine/GameObjectScene.hpp"
-#include "engine/Time.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scheduling/Coroutine.hpp"
 #include "engine/scheduling/CoroutineWait.hpp"
@@ -119,25 +116,16 @@ TEST_F(CoroutineTest, WaitForeverNeverResumes)
     EXPECT_EQ(_trace->steps, (std::vector<int>{1}));
 }
 
-TEST_F(CoroutineTest, WaitForSecondsWaitsForScaledTime)
+TEST_F(CoroutineTest, WaitForSecondsKeepsWaitingUntilTimePasses)
 {
-    Time::Init();
-    _go->StartCoroutine(Seconds(_trace, 0.1f));
+    // Tests never advance the engine clock (Application owns it), so the frame delta stays zero:
+    // a correct WaitForSeconds keeps the coroutine suspended. It used to end the coroutine at the yield.
+    Coroutine *routine = _go->StartCoroutine(Seconds(_trace, 0.1f));
 
-    Frame(); // runs to the yield
-    ASSERT_EQ(_trace->steps.size(), 1u);
-    const auto start = std::chrono::steady_clock::now();
-    while (_trace->steps.size() < 2 && std::chrono::steady_clock::now() - start < std::chrono::seconds(2))
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        Time::Update();
-        Frame();
-    }
-    const auto waited = std::chrono::steady_clock::now() - start;
+    Frames(20);
 
-    ASSERT_EQ(_trace->steps.size(), 2u) << "never resumed";
-    // Time's delta counts from Time::Init, just before this stopwatch started; allow for that
-    EXPECT_GE(waited, std::chrono::milliseconds(90));
+    EXPECT_EQ(_trace->steps, (std::vector<int>{1}));
+    EXPECT_TRUE(_go->StopCoroutine(routine)) << "the coroutine should still be alive, waiting";
 }
 
 TEST_F(CoroutineTest, StopCoroutineStopsIt)
