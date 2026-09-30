@@ -37,6 +37,45 @@ namespace N2Engine::IO
         return relativePath;
     }
 
+    std::optional<ResourcePath> Resources::FindProjectPath(const std::filesystem::path &path) const
+    {
+        const ResourceLoader &loader = ResourceLoader::Instance();
+
+        const std::string spelled = path.string();
+        if (spelled.starts_with("res://") || spelled.starts_with("user://"))
+        {
+            if (ResourcePath resourcePath(spelled); loader.Exists(resourcePath))
+            {
+                return resourcePath;
+            }
+            return std::nullopt;
+        }
+
+        if (loader.GetAssetsRoot().empty())
+        {
+            return std::nullopt; // ResourceLoader isn't initialized, so it tracks no files
+        }
+
+        std::error_code ec;
+        const std::filesystem::path physicalPath = std::filesystem::absolute(ResolvePath(path), ec);
+        if (ec)
+        {
+            return std::nullopt;
+        }
+        try
+        {
+            if (ResourcePath resourcePath = loader.MakeResourcePath(physicalPath); loader.Exists(resourcePath))
+            {
+                return resourcePath;
+            }
+        }
+        catch (const std::filesystem::filesystem_error &)
+        {
+            // Not a path ResourceLoader can express, so not one of its assets
+        }
+        return std::nullopt;
+    }
+
     Renderer::Common::IShader* Resources::LoadShader(const std::string &vertexShaderPath,
                                                      const std::string &fragmentShaderPath) const
     {

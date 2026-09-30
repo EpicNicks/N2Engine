@@ -5,11 +5,15 @@
 #include <filesystem>
 #include <unordered_map>
 #include <functional>
+#include <optional>
+#include <algorithm>
 
 #include <math/UUID.hpp>
 
 #include "engine/base/Asset.hpp"
 #include "engine/common/UUIDHash.hpp"
+#include "engine/io/ResourceLoader.hpp"
+#include "engine/io/ResourcePath.hpp"
 
 namespace Renderer::Common
 {
@@ -23,6 +27,10 @@ namespace N2Engine::Audio
 
 namespace N2Engine::IO
 {
+    /// The one place to look assets up by UUID or path. Files tracked by ResourceLoader (the project's
+    /// assets, with stable .meta UUIDs) are loaded and cached there, and every lookup here sees them;
+    /// this registry itself only holds assets registered at runtime and files outside the project,
+    /// whose UUIDs are random per run.
     class Resources
     {
     public:
@@ -50,7 +58,20 @@ namespace N2Engine::IO
             {
                 return std::dynamic_pointer_cast<T>(it->second);
             }
-            return nullptr;
+            // Project assets are cached in ResourceLoader under their .meta UUIDs
+            return ResourceLoader::Instance().GetCachedByUUID<T>(uuid);
+        }
+
+        /// GetAsset, or else loads the project asset with this .meta UUID. How saved asset references
+        /// are resolved.
+        template <typename T>
+        std::shared_ptr<T> LoadByUUID(const Math::UUID &uuid)
+        {
+            if (auto existing = GetAsset<T>(uuid))
+            {
+                return existing;
+            }
+            return ResourceLoader::Instance().LoadByUUID<T>(uuid);
         }
 
         // === Asset Lookup by Path ===
@@ -62,6 +83,10 @@ namespace N2Engine::IO
             if (auto it = _assetsByPath.find(resolved.string()); it != _assetsByPath.end())
             {
                 return std::dynamic_pointer_cast<T>(it->second);
+            }
+            if (auto projectPath = FindProjectPath(path))
+            {
+                return ResourceLoader::Instance().GetCached<T>(*projectPath);
             }
             return nullptr;
         }
@@ -77,6 +102,13 @@ namespace N2Engine::IO
             if (auto existing = GetAsset<T>(path))
             {
                 return existing;
+            }
+
+            // A project asset loads through ResourceLoader, so it gets its stable .meta UUID and a single
+            // cache entry (loading it here too gave it a second copy under a random UUID)
+            if (auto projectPath = FindProjectPath(path))
+            {
+                return ResourceLoader::Instance().Load<T>(*projectPath);
             }
 
             auto resolved = ResolvePath(path);
@@ -121,9 +153,11 @@ namespace N2Engine::IO
 
         // === Loader Registration (usually called by asset types themselves) ===
 
-        // Register a custom loader function
+        // Register a custom loader function. It's registered with ResourceLoader too, so project files
+        // with this extension are scanned (given .meta UUIDs) and load there.
         void RegisterLoader(const std::string &extension, LoaderFunc loader)
         {
+            ResourceLoader::Instance().RegisterLoader(extension, loader);
             _loaders[extension] = std::move(loader);
         }
 
@@ -133,7 +167,7 @@ namespace N2Engine::IO
         {
             static_assert(std::is_base_of_v<Base::Asset, T>, "T must be an Asset type");
 
-            _loaders[extension] = [](const std::filesystem::path &path) -> std::shared_ptr<Base::Asset>
+            RegisterLoader(extension, [](const std::filesystem::path &path) -> std::shared_ptr<Base::Asset>
             {
                 auto asset = std::make_shared<T>();
                 if (asset->Load(path))
@@ -141,7 +175,7 @@ namespace N2Engine::IO
                     return asset;
                 }
                 return nullptr;
-            };
+            });
         }
 
         // Helper for auto-registration with custom loader function
@@ -179,6 +213,8 @@ namespace N2Engine::IO
             }
         }
 
+        // These cover this registry's own assets; project assets are managed by ResourceLoader
+        // (ClearCache/RemoveUnused there)
         void UnregisterAsset(const Math::UUID &uuid);
         void Clear();
 
@@ -190,6 +226,9 @@ namespace N2Engine::IO
         Resources() = default;
 
         [[nodiscard]] bool ResourcePathIsValid() const;
+        /// The ResourceLoader path of a file it tracks (a res:// or user:// string, or a file path
+        /// under its assets root), or nullopt for anything else
+        [[nodiscard]] std::optional<ResourcePath> FindProjectPath(const std::filesystem::path &path) const;
 
         std::filesystem::path _resourcePath;
         std::unordered_map<Math::UUID, std::shared_ptr<Base::Asset>, UUIDHash> _assetsByUUID;

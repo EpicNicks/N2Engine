@@ -2,7 +2,6 @@
 
 #include "engine/Logger.hpp"
 #include "engine/audio/AudioLoaders.hpp"
-#include "engine/io/ResourceLoader.hpp"
 #include "engine/io/Resources.hpp"
 
 namespace N2Engine::Audio
@@ -10,14 +9,13 @@ namespace N2Engine::Audio
     namespace
     {
         // Lives here because every program that uses audio links this file (AudioClip's own code).
-        // Registers with ResourceLoader too, so res:// paths and the asset scan see audio files.
+        // Resources passes the loader on to ResourceLoader, so res:// paths and the asset scan see audio files.
         struct AudioClipLoaderRegistrar
         {
             AudioClipLoaderRegistrar()
             {
                 for (const char *extension : {".wav", ".ogg", ".mp3", ".flac"})
                 {
-                    IO::ResourceLoader::Instance().RegisterLoader(extension, LoadAudioClipFromFile);
                     IO::Resources::Instance().RegisterLoader(extension, LoadAudioClipFromFile);
                 }
             }
