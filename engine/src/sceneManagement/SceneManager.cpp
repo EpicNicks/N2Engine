@@ -1,3 +1,4 @@
+#include <format>
 #include <string>
 
 #include "engine/Logger.hpp"
@@ -149,13 +150,23 @@ void SceneManager::ProcessAnyPendingSceneChange()
         return;
     }
 
-    if (GetCurSceneIndex() != -1)
+    const int nextIndex = instance._sceneChange._pendingSceneIndex;
+    instance._sceneChange = SceneChange{false, -1};
+
+    // Build the next scene before tearing down the current one: if its data is malformed, the
+    // current scene stays loaded (it used to be cleared first, leaving no scene at all)
+    auto nextScene = Scene::FromJSON(instance._scenes.at(nextIndex));
+    if (!nextScene)
+    {
+        Logger::Error(std::format("Scene {} could not be loaded; keeping the current scene", nextIndex));
+        return;
+    }
+
+    if (GetCurSceneIndex() != -1 && instance._loadedScene)
     {
         GetCurSceneRef().Clear();
     }
 
-    instance._curSceneIndex = instance._sceneChange._pendingSceneIndex;
-    instance._sceneChange = SceneChange{false, -1};
-
-    instance._loadedScene = Scene::FromJSON(instance._scenes.at(instance._curSceneIndex));
+    instance._curSceneIndex = nextIndex;
+    instance._loadedScene = std::move(nextScene);
 }

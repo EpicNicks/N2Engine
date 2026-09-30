@@ -1,5 +1,6 @@
 #include "engine/io/Resources.hpp"
 
+#include <algorithm>
 #include <fstream>
 
 #include <renderer/common/IShader.hpp>
@@ -99,7 +100,9 @@ namespace N2Engine::IO
         // Remove assets from UUID map that have no other references
         for (auto it = _assetsByUUID.begin(); it != _assetsByUUID.end();)
         {
-            if (it->second.use_count() <= 1)
+            // References held here: the UUID map, plus the path map if the asset is in it too
+            const bool inPathMap = std::ranges::any_of(_assetsByPath, [&it](const auto &entry) { return entry.second == it->second; });
+            if (it->second.use_count() <= (inPathMap ? 2 : 1))
             {
                 // Find and remove from path map
                 for (auto pathIt = _assetsByPath.begin(); pathIt != _assetsByPath.end(); ++pathIt)

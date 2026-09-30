@@ -12,6 +12,7 @@
 
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/io/Resources.hpp"
+#include "engine/io/ResourceLoader.hpp"
 // ReSharper disable once CppUnusedIncludeDirective
 #include "engine/serialization/MathSerialization.hpp"
 
@@ -82,16 +83,21 @@ namespace N2Engine
         }
 
         /**
-         * Register a GameObject reference (resolved via UUID after deserialization)
+         * Register a GameObject reference (resolved via UUID after deserialization).
+         * Takes the member by reference: it used to take the pointer by value, so the serializer
+         * captured (and on load, wrote to) a copy that died when this function returned.
          */
-        void RegisterGameObjectRef(const std::string &name, GameObject *gameObjectRef);
+        void RegisterGameObjectRef(const std::string &name, GameObject *&gameObjectRef);
 
         /**
          * Register a Component reference (resolved via UUID after deserialization)
          * Template parameter T should be the specific component type
          */
+        // Components are owned by their GameObject (unique_ptr), so references are raw pointers.
+        // (This used to take shared_ptr<T>&, which couldn't be instantiated: no shared_ptr to a
+        // component exists, and the resolver hands out Component*.)
         template <typename T>
-        void RegisterComponentRef(const std::string &name, std::shared_ptr<T> &componentRef)
+        void RegisterComponentRef(const std::string &name, T *&componentRef)
         {
             static_assert(std::is_base_of_v<Component, T>, "T must be a Component type");
 
@@ -127,8 +133,7 @@ namespace N2Engine
                         // Add pending resolution with type casting
                         resolver->AddPendingReference([&componentRef, uuid, resolver]()
                         {
-                            auto component = resolver->FindComponent(uuid);
-                            componentRef = std::dynamic_pointer_cast<T>(component);
+                            componentRef = dynamic_cast<T *>(resolver->FindComponent(uuid));
                         });
                     }
                 });
@@ -143,7 +148,7 @@ namespace N2Engine
          * Register a vector of Component references
          */
         template <typename T>
-        void RegisterComponentRefVector(const std::string &name, std::vector<std::shared_ptr<T>> &componentRefs)
+        void RegisterComponentRefVector(const std::string &name, std::vector<T *> &componentRefs)
         {
             static_assert(std::is_base_of_v<Component, T>, "T must be a Component type");
 
@@ -195,8 +200,7 @@ namespace N2Engine
                             // Capture index for resolution
                             resolver->AddPendingReference([&componentRefs, i, uuid, resolver]()
                             {
-                                auto component = resolver->FindComponent(uuid);
-                                componentRefs[i] = std::dynamic_pointer_cast<T>(component);
+                                componentRefs[i] = dynamic_cast<T *>(resolver->FindComponent(uuid));
                             });
                         }
                     }
@@ -237,7 +241,18 @@ namespace N2Engine
 
                     if (const auto uuid = j[name].get<Math::UUID>(); uuid != Math::UUID::ZERO)
                     {
-                        assetRef = IO::Resources::Instance().GetAsset<T>(uuid);
+                        // Project assets have stable UUIDs from their .meta files (ResourceLoader);
+                        // IO::Resources hands out random per-process UUIDs, so it only finds assets
+                        // registered in this same run
+                        assetRef = IO::ResourceLoader::Instance().LoadByUUID<T>(uuid);
+                        if (!assetRef)
+                        {
+                            assetRef = IO::Resources::Instance().GetAsset<T>(uuid);
+                        }
+                        if (!assetRef)
+                        {
+                            Logger::Warn(std::format("Asset '{}' not found: {}", name, uuid.ToString()));
+                        }
                     }
                     else
                     {

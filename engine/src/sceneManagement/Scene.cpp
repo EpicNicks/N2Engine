@@ -556,7 +556,16 @@ std::unique_ptr<Scene> Scene::FromJSON(const nlohmann::json &j, bool validate)
         // GameObjects being invalid will error if the Component type is not present in the resolver
     }
     auto scene = std::unique_ptr<Scene>(new Scene(""));
-    scene->Deserialize(j);
+    try
+    {
+        scene->Deserialize(j);
+    }
+    catch (const std::exception &e)
+    {
+        // Malformed data (missing keys, wrong types) fails this load instead of aborting the engine
+        Logger::Error(std::format("Failed to load scene: {}", e.what()));
+        return nullptr;
+    }
     return scene;
 }
 
