@@ -6,6 +6,8 @@
 
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
+#include "engine/sceneManagement/Scene.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
 
 #include "editor-server/EditorServer.hpp"
 
@@ -83,7 +85,9 @@ int main(int argc, char *argv[])
         }
 
         // Main loop - just keep alive and handle OS events
-        while (g_running && server.IsRunning() && (!window.IsValid() || !window.ShouldClose()))
+        auto &app = N2Engine::Application::GetInstance();
+        while (g_running && server.IsRunning() && !app.IsQuitRequested() &&
+               (!window.IsValid() || !window.ShouldClose()))
         {
             // Poll window events to keep OS happy (even if window is hidden)
             window.PollEvents();
@@ -93,6 +97,12 @@ int main(int argc, char *argv[])
 
         server.Stop();
         N2Engine::Logger::Info("Editor server stopped");
+
+        // As Application::Run does, however the loop ended
+        if (N2Engine::SceneManager::GetCurScene() != nullptr)
+        {
+            N2Engine::SceneManager::GetCurSceneRef().OnApplicationQuit();
+        }
 
         N2Engine::Application::GetInstance().Shutdown();
         N2Engine::Logger::Info("Engine shut down");

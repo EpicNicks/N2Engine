@@ -19,18 +19,21 @@ namespace N2Engine
         }
 
         auto component = std::make_unique<T>(*this);
+        T *added = component.get();
 
-        _componentMap[typeIndex] = component.get();
+        // The first component of a type is the one GetComponent returns (Unity's rule). This used to
+        // repoint the map at the newest, leaving earlier ones unreachable by GetComponent/RemoveComponent.
+        _componentMap.emplace(typeIndex, added);
         _components.push_back(std::move(component));
 
         // if GO has already been added to a scene, attach there (its own scene, not the loaded one)
         if (_scene != nullptr)
         {
-            _scene->AddComponentToAttachQueue(_componentMap[typeIndex]);
+            _scene->AddComponentToAttachQueue(added);
         }
         // otherwise the component will be added once added to the scene
 
-        return static_cast<T*>(_componentMap[typeIndex]);
+        return added;
     }
 
     template <DerivedFromComponent T>

@@ -33,11 +33,15 @@ void Logger::Log(std::string_view log, LogLevel level)
     }
     else
     {
-        while (!_logQueue.empty())
+        // Take the backlog first: a subscriber that logs re-enters here, and a nested drain used to
+        // pop the entry the outer loop was still holding a reference to (delivering logs twice)
+        std::queue<QueuedLog> backlog;
+        backlog.swap(_logQueue);
+        while (!backlog.empty())
         {
-            auto &queuedLog = _logQueue.front();
+            const QueuedLog queuedLog = std::move(backlog.front());
+            backlog.pop();
             logEvent(queuedLog.message, queuedLog.level);
-            _logQueue.pop();
         }
         logEvent(log, level);
     }
@@ -130,6 +134,15 @@ static const char* GetColoredLevelString(Logger::LogLevel level, bool useColors)
 
 void Logger::InitializeDebugConsoleHelper()
 {
+    // Once per process: a second Application::Init used to add another console subscriber, printing
+    // every line twice
+    static bool initialized = false;
+    if (initialized)
+    {
+        return;
+    }
+    initialized = true;
+
     auto originalStdout = RedirectStdout(LogLevel::Info, false);
     RedirectStderr(LogLevel::Error, false);
 

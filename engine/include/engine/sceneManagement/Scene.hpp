@@ -53,8 +53,10 @@ namespace N2Engine
 
     public:
         ~Scene() override;
-        Scene(Scene &&) noexcept;
-        Scene& operator=(Scene &&) noexcept;
+        // Not movable: GameObjects and the coroutine scheduler hold pointers to their Scene, which a
+        // move would leave pointing at the moved-from object (scenes live behind unique_ptr instead)
+        Scene(Scene &&) = delete;
+        Scene& operator=(Scene &&) = delete;
 
         Scene(const Scene &) = delete;
         Scene& operator=(const Scene &) = delete;
