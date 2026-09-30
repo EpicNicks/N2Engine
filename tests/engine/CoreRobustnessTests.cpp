@@ -4,8 +4,6 @@
 #include <string>
 #include <vector>
 
-#include <math/MathRegistrar.hpp>
-
 #include "engine/Application.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Logger.hpp"
@@ -34,11 +32,6 @@ namespace
 
     GameObject::Ptr MakeObject(const std::string &name)
     {
-        // Reparenting with keepWorldPosition inverts matrices through function pointers that only
-        // InitializeSIMD sets (Application::Init calls it; tests don't run Init)
-        static const bool mathReady = (Math::InitializeSIMD(), true);
-        (void)mathReady;
-
         auto go = GameObject::Create(name);
         go->CreatePositionable();
         return go;
