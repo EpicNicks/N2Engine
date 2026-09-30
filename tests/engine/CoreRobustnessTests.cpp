@@ -18,7 +18,7 @@ namespace
     class Marker : public Component
     {
     public:
-        using Component::Component;
+        explicit Marker(GameObject &gameObject) : Component(gameObject) {}
         [[nodiscard]] std::string GetTypeName() const override { return "Marker"; }
         int id = 0;
     };
