@@ -2,11 +2,15 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
+#include "engine/scripting/bindings/LuaBindings.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/Logger.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
+
+#include <algorithm>
+#include <cstdint>
 
 namespace N2Engine::Scripting
 {
@@ -120,13 +124,24 @@ namespace N2Engine::Scripting
 
             if (!_scriptData.contains(fieldName))
             {
-                sol::table fieldDef = value.as<sol::table>();
-                sol::object defaultVal = fieldDef["default"];
+                // Either { default = 5, ... } or the shorthand `speed = 5`. Casting the shorthand to a
+                // table used to abort the process (sol has no safety checks enabled here).
+                const sol::object defaultVal = value.is<sol::table>()
+                                                   ? value.as<sol::table>().get<sol::object>("default")
+                                                   : value;
 
-                if (defaultVal.is<float>())
-                    _scriptData[fieldName] = defaultVal.as<float>();
-                else if (defaultVal.is<int>())
-                    _scriptData[fieldName] = defaultVal.as<int>();
+                if (defaultVal.get_type() == sol::type::number)
+                {
+                    // Keep integers integral (they used to be stored as floats: 3 became 3.0)
+                    lua_State *L = defaultVal.lua_state();
+                    defaultVal.push(L);
+                    const bool isInteger = lua_isinteger(L, -1);
+                    lua_pop(L, 1);
+                    if (isInteger)
+                        _scriptData[fieldName] = defaultVal.as<std::int64_t>();
+                    else
+                        _scriptData[fieldName] = defaultVal.as<double>();
+                }
                 else if (defaultVal.is<bool>())
                     _scriptData[fieldName] = defaultVal.as<bool>();
                 else if (defaultVal.is<std::string>())
@@ -157,12 +172,13 @@ namespace N2Engine::Scripting
                 _scriptInstance[key] = value.get<std::string>();
             else if (value.is_object() && value.contains("x"))
             {
-                Math::Vector3 vec{
-                    value["x"].get<float>(),
-                    value["y"].get<float>(),
-                    value["z"].get<float>()
+                // Missing or non-numeric components default to 0 (a partial vector used to throw
+                // out of scene loading)
+                const auto component = [&value](const char *axis)
+                {
+                    return value.contains(axis) && value[axis].is_number() ? value[axis].get<float>() : 0.0f;
                 };
-                _scriptInstance[key] = vec;
+                _scriptInstance[key] = Math::Vector3{component("x"), component("y"), component("z")};
             }
         }
     }
@@ -429,9 +445,11 @@ namespace N2Engine::Scripting
                     continue;
                 }
 
-                // Get field type from Lua
-                sol::table fieldDef = (*fieldsTable)[fieldName];
-                std::string fieldType = fieldDef["type"].get_or<std::string>("");
+                // Get field type from Lua (a shorthand field has no table, so no type)
+                const sol::object fieldDefObject = (*fieldsTable)[fieldName];
+                const std::string fieldType = fieldDefObject.is<sol::table>()
+                                                  ? fieldDefObject.as<sol::table>().get_or<std::string>("type", "")
+                                                  : std::string{};
 
                 // Resolve based on type
                 if (fieldType == "GameObject")
@@ -453,7 +471,8 @@ namespace N2Engine::Scripting
                     Component *comp = resolver->FindComponent(uuid.value());
                     if (comp)
                     {
-                        _scriptInstance[fieldName] = comp;
+                        // As its concrete Lua type (Rigidbody, BoxCollider, ...), not the Component base
+                        _scriptInstance[fieldName] = Bindings::ComponentToLua(*comp, _scriptInstance.lua_state());
                     }
                     else
                     {
@@ -468,7 +487,11 @@ namespace N2Engine::Scripting
 
     bool LuaComponent::IsComponentType(const std::string &type)
     {
-        return type.size() > 9 && type.substr(type.size() - 9) == "Component";
+        // Any type scripts can add by name (Rigidbody, BoxCollider, ...), or a name ending in "Component".
+        // Only the latter used to count, so `type = "Rigidbody"` reference fields were silently skipped.
+        const auto names = Bindings::GetScriptableComponentNames();
+        return std::ranges::find(names, type) != names.end() ||
+               (type.size() > 9 && type.ends_with("Component"));
     }
 
     void LuaComponent::SetScriptData(const nlohmann::json &data)

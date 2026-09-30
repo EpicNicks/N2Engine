@@ -8,6 +8,7 @@
 namespace N2Engine
 {
     class GameObject;
+    class Component;
 }
 
 namespace N2Engine::Scripting
@@ -47,5 +48,7 @@ namespace N2Engine::Scripting
         sol::object GetComponentByName(const GameObject& gameObject, const std::string& typeName, sol::this_state state);
         /// Names accepted by AddComponent/GetComponent
         std::vector<std::string> GetScriptableComponentNames();
+        /// A component as its concrete Lua type when it's one of those, else as Component
+        sol::object ComponentToLua(Component& component, lua_State* state);
     }
 }
