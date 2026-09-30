@@ -15,6 +15,13 @@ CoroutineScheduler::CoroutineScheduler(Scene *scene)
 
 void CoroutineScheduler::Update()
 {
+    if (_updating)
+    {
+        // Re-entered from a coroutine body (something that ticks the scene): the outer update's
+        // snapshot still owns these coroutines, and one of them is executing
+        return;
+    }
+
     // Coroutines stop when their object is deactivated or destroyed. (The predicate used to be
     // inverted, so every coroutine on an *active* object was erased before it first ran.)
     for (auto &[gameObject, coroutineList] : _coroutines)

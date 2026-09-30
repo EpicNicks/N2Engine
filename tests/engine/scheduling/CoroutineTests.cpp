@@ -56,6 +56,16 @@ namespace
         co_yield WaitForSeconds{seconds};
         trace->Mark();
     }
+
+    // Ticks the scene's coroutines from inside a coroutine body
+    std::generator<ICoroutineWait> TicksScene(std::shared_ptr<Trace> trace, Scene *scene)
+    {
+        trace->Mark();
+        scene->AdvanceCoroutines();
+        co_yield WaitForNextFrame{};
+        trace->Mark();
+        scene->AdvanceCoroutines();
+    }
 }
 
 class CoroutineTest : public ::testing::Test
@@ -130,6 +140,45 @@ TEST_F(CoroutineTest, WaitForSecondsKeepsWaitingUntilTimePasses)
 
     EXPECT_EQ(_trace->steps, (std::vector<int>{1}));
     EXPECT_TRUE(_go->StopCoroutine(routine)) << "the coroutine should still be alive, waiting";
+}
+
+TEST_F(CoroutineTest, WaitForSecondsResumesOnceTimeIsUp)
+{
+    // Zero seconds is already up (0 < 0 is false), so it resumes on the next frame
+    _go->StartCoroutine(Seconds(_trace, 0.0f));
+
+    Frames(5);
+
+    EXPECT_EQ(_trace->steps, (std::vector<int>{1, 2}));
+}
+
+TEST_F(CoroutineTest, TickingTheSceneFromACoroutineIsIgnored)
+{
+    const auto other = std::make_shared<Trace>();
+    _go->StartCoroutine(TicksScene(_trace, _scene));
+    _go->StartCoroutine(NextFrameTwice(other));
+
+    Frames(5);
+
+    // The nested update used to clear the updating flag and free coroutines the outer one still held
+    EXPECT_EQ(_trace->steps, (std::vector<int>{1, 2}));
+    EXPECT_EQ(other->steps, (std::vector<int>{1, 2, 3}));
+}
+
+TEST_F(CoroutineTest, ReleasingARemovedChildStopsItsCoroutines)
+{
+    auto child = GameObject::Create("Child");
+    _go->AddChild(child, false);
+    ASSERT_NE(child->StartCoroutine(NextFrameTwice(_trace)), nullptr);
+    Frame();
+
+    // RemoveChild doesn't take it out of the scene; dropping it used to leave the scheduler keyed on
+    // freed memory, which the next update read
+    _go->RemoveChild(child, false);
+    child.reset();
+    Frames(3);
+
+    EXPECT_EQ(_trace->steps, (std::vector<int>{1}));
 }
 
 TEST_F(CoroutineTest, StopCoroutineStopsIt)

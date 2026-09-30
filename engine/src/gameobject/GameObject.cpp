@@ -32,6 +32,19 @@ GameObject::GameObject(std::string name)
     : _name(std::move(name)),
       _positionable{nullptr} {}
 
+GameObject::~GameObject()
+{
+    // A scene that's destroyed first clears this pointer (Scene::~Scene), so it's always alive here
+    if (_scene)
+    {
+        for (const auto &component : _components)
+        {
+            _scene->DetachComponent(component.get());
+        }
+        _scene->GetCoroutineScheduler()->StopAllCoroutines(this);
+    }
+}
+
 void GameObject::Purge()
 {
     // OnDestroy already ran in Scene::CallOnDestroyForGameObject; this only releases
