@@ -6,7 +6,11 @@
 
 #include <math/UUID.hpp>
 
+#include <math/Vector3.hpp>
+
 #include "engine/GameObjectScene.hpp"
+#include "engine/Positionable.hpp"
+#include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
@@ -62,6 +66,44 @@ protected:
             end
 
             return Collector
+        )");
+
+        // Reads its own object, position and a sibling component during teardown, like a script spawning
+        // an effect where it died would
+        WriteAsset("handles/TeardownReader.lua", R"(
+            local Reader = {}
+            Reader.__index = Reader
+
+            local function Read(self)
+                return {
+                    name = self.gameObject:GetName(),
+                    y = self.gameObject:GetPositionable():GetPosition().y,
+                    radius = self.gameObject:GetComponent("SphereRenderer"):GetRadius(),
+                }
+            end
+
+            function Reader:OnDisable()
+                teardown_disable = Read(self)
+            end
+
+            function Reader:OnDestroy()
+                teardown_destroy = Read(self)
+                teardown_go = self.gameObject
+                teardown_component = self.component
+                teardown_renderer = self.gameObject:GetComponent("SphereRenderer")
+            end
+
+            return Reader
+        )");
+
+        // Collects garbage while it loads, i.e. while LuaComponent:SetScript is still running
+        WriteAsset("handles/Collects.lua", R"(
+            collectgarbage()
+            collectgarbage()
+            collects_ran = true
+            local Collects = {}
+            Collects.__index = Collects
+            return Collects
         )");
 
         IO::ResourceUUID::Initialize(Math::UUID::Random());
@@ -133,7 +175,9 @@ protected:
     {
         for (const char *name : {"handle_go", "handle_other_go", "handle_rb", "handle_renderer", "handle_renderer_copy",
                                  "handle_pos", "handle_collision", "handle_trigger", "handle_self_go",
-                                 "handle_self_component", "handle_parent", "handle_detached"})
+                                 "handle_self_component", "handle_parent", "handle_detached", "handle_plain",
+                                 "handle_removed", "teardown_disable", "teardown_destroy", "teardown_go",
+                                 "teardown_component", "teardown_renderer", "collected_component", "collects_ran"})
         {
             Lua()[name] = sol::lua_nil;
         }
@@ -145,6 +189,32 @@ protected:
         const auto go = GameObject::Create(name);
         _scene->AddRootGameObject(go);
         return GameObjectRef(go);
+    }
+
+    /// A scene object at y = 2 with a SphereRenderer (radius 1.5), then TeardownReader. The renderer comes
+    /// first, so it's torn down before the script reads it.
+    GameObject::Ptr SpawnTeardownReader(const std::string &name)
+    {
+        const auto go = GameObject::Create(name);
+        go->CreatePositionable();
+        go->GetPositionable()->SetPosition(Math::Vector3(0.0f, 2.0f, 0.0f));
+        go->AddComponent<Example::SphereRenderer>()->SetRadius(1.5f);
+        auto *script = go->AddComponent<LuaComponent>();
+        script->SetScript(IO::ResourcePath("res://handles/TeardownReader.lua"));
+        EXPECT_FALSE(script->HasMissingScript());
+        _scene->AddRootGameObject(go);
+        return go;
+    }
+
+    /// What TeardownReader read in OnDisable or OnDestroy (teardown_disable / teardown_destroy)
+    static void ExpectTeardownRead(const std::string &global, const std::string &name)
+    {
+        const sol::object read = Lua()[global];
+        ASSERT_TRUE(read.is<sol::table>()) << global << " wasn't set: the script failed to read its handles";
+        const sol::table table = read.as<sol::table>();
+        EXPECT_EQ(table.get<std::string>("name"), name);
+        EXPECT_FLOAT_EQ(table.get<float>("y"), 2.0f);
+        EXPECT_FLOAT_EQ(table.get<float>("radius"), 1.5f);
     }
 };
 
@@ -208,6 +278,11 @@ TEST_F(LuaHandleTest, CachedHandlesErrorAfterDestroy)
     EXPECT_TRUE(Contains(error, "attempt to use a destroyed SphereRenderer")) << error;
     error = RunExpectingError("handle_pos:GetPosition()");
     EXPECT_TRUE(Contains(error, "destroyed GameObject")) << error;
+    // IsActive too: it used to answer false for a destroyed object, now it's an error like any other use
+    error = RunExpectingError("handle_go:IsActive()");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed GameObject")) << error;
+    error = RunExpectingError("handle_renderer:IsActive()");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed SphereRenderer")) << error;
 
     // Destroying it again is harmless
     Run("handle_go:Destroy()");
@@ -330,4 +405,145 @@ TEST_F(LuaHandleTest, DetachedChildStaysUsable)
     // The parent was its only owner; the script's reference keeps it alive, as before
     EXPECT_TRUE(parent->GetChildren().empty());
     EXPECT_EQ(Eval<std::string>("handle_detached:GetName()"), "Child");
+}
+
+// Handles work throughout a teardown (OnDisable/OnDestroy), including to components torn down before the
+// script's own, and fail once it's over. IsDestroyed() is already true during those callbacks, which used
+// to make self.gameObject unusable in OnDestroy.
+TEST_F(LuaHandleTest, HandlesWorkDuringTeardownOfADestroyedObject)
+{
+    const auto go = SpawnTeardownReader("Exploding");
+
+    go->Destroy();
+    _scene->ProcessDestroyed();
+
+    ExpectTeardownRead("teardown_disable", "Exploding");
+    ExpectTeardownRead("teardown_destroy", "Exploding");
+
+    // `go` still keeps the object's memory alive, but its teardown is over
+    EXPECT_FALSE(Eval<bool>("teardown_go:IsValid()"));
+    EXPECT_FALSE(Eval<bool>("teardown_renderer:IsValid()"));
+    EXPECT_FALSE(Eval<bool>("teardown_component:IsValid()"));
+    const std::string error = RunExpectingError("teardown_go:GetName()");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed GameObject")) << error;
+}
+
+TEST_F(LuaHandleTest, HandlesWorkDuringTeardownOnSceneSwitch)
+{
+    const auto go = SpawnTeardownReader("Unloaded");
+
+    SceneManager::AddScene(Scene::Create("LuaHandle_TeardownSwitchTarget"), true);
+    SceneManager::ProcessAnyPendingSceneChange();
+    _scene = nullptr;
+
+    ExpectTeardownRead("teardown_disable", "Unloaded");
+    ExpectTeardownRead("teardown_destroy", "Unloaded");
+
+    EXPECT_FALSE(Eval<bool>("teardown_go:IsValid()"));
+    EXPECT_FALSE(Eval<bool>("teardown_renderer:IsValid()"));
+    const std::string error = RunExpectingError("teardown_renderer:GetRadius()");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed SphereRenderer")) << error;
+}
+
+TEST_F(LuaHandleTest, HandlesWorkDuringTeardownOfARemovedComponent)
+{
+    const auto go = SpawnTeardownReader("Removing");
+
+    ASSERT_TRUE(go->RemoveComponent<LuaComponent>());
+
+    ExpectTeardownRead("teardown_disable", "Removing");
+    ExpectTeardownRead("teardown_destroy", "Removing");
+
+    // Only the removed component is gone
+    EXPECT_FALSE(Eval<bool>("teardown_component:IsValid()"));
+    EXPECT_TRUE(Eval<bool>("teardown_go:IsValid() and teardown_renderer:IsValid()"));
+    const std::string error = RunExpectingError("teardown_component:GetScriptPath()");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed LuaComponent")) << error;
+}
+
+TEST_F(LuaHandleTest, ConcreteAndPlainComponentHandlesAreEqual)
+{
+    const auto go = GameObject::Create("Plain");
+    auto *renderer = go->AddComponent<Example::SphereRenderer>();
+    Lua()["handle_renderer"] = ComponentRef<Example::SphereRenderer>(*renderer);
+    // What ComponentToLua returns for a component type without its own Lua type
+    Lua()["handle_plain"] = ComponentRef<Component>(*renderer);
+
+    EXPECT_TRUE(Eval<bool>("handle_renderer == handle_plain"));
+    EXPECT_TRUE(Eval<bool>("handle_plain == handle_renderer"));
+    EXPECT_EQ(Eval<std::string>("handle_plain:GetGameObject():GetName()"), "Plain");
+}
+
+TEST_F(LuaHandleTest, RemoveRootGameObjectHandsOwnershipToTheHandle)
+{
+    Lua()["handle_go"] = Spawn("Root");
+
+    Run("handle_removed = SceneManager.GetCurrentScene():RemoveRootGameObject(handle_go)");
+    ASSERT_TRUE(Eval<bool>("handle_removed"));
+    // The scene was its only owner
+    EXPECT_EQ(Eval<std::string>("handle_go:GetName()"), "Root");
+
+    // Back in the scene, which owns it again
+    Run("SceneManager.GetCurrentScene():AddRootGameObject(handle_go)");
+    const std::weak_ptr<GameObject> root = _scene->FindGameObject("Root");
+    ASSERT_FALSE(root.expired());
+    Run("handle_go = nil collectgarbage() collectgarbage()");
+    EXPECT_FALSE(root.expired()) << "the scene owns it";
+
+    // Not a root (any more): nothing to remove
+    EXPECT_FALSE(Eval<bool>("SceneManager.GetCurrentScene():RemoveRootGameObject(GameObject.Create('Loose'))"));
+}
+
+TEST_F(LuaHandleTest, LuaOwnedObjectIsFreedWithItsLastHandle)
+{
+    Run("handle_go = GameObject.Create('Temporary')");
+    const std::weak_ptr<GameObject> object = Lua()["handle_go"].get<GameObjectRef>().Lock();
+    ASSERT_FALSE(object.expired());
+
+    Run("handle_go = nil collectgarbage() collectgarbage()");
+
+    EXPECT_TRUE(object.expired());
+}
+
+TEST_F(LuaHandleTest, ComponentCallKeepsItsGameObjectAlive)
+{
+    // Nothing references the new GameObject once AddComponent returns, so the GC inside the script's load
+    // collects its handle. SetScript must keep the object (so the component) alive until it returns.
+    Run(R"(
+        collected_component = GameObject.Create("Collected"):AddComponent("LuaComponent")
+        collected_component:SetScript("res://handles/Collects.lua")
+    )");
+
+    EXPECT_TRUE(Eval<bool>("collects_ran"));
+    // Nothing owns the GameObject any more, so it's freed at the latest by the next collection
+    Run("collectgarbage() collectgarbage()");
+    EXPECT_FALSE(Eval<bool>("collected_component:IsValid()"));
+}
+
+TEST_F(LuaHandleTest, BadArgumentsAreCleanErrors)
+{
+    Lua()["handle_go"] = Spawn("Parent");
+
+    std::string error = RunExpectingError("handle_go:AddChild(nil)");
+    EXPECT_TRUE(Contains(error, "expected a GameObject, got nil")) << error;
+    error = RunExpectingError("SceneManager.GetCurrentScene():AddRootGameObject(nil)");
+    EXPECT_TRUE(Contains(error, "expected a GameObject, got nil")) << error;
+    EXPECT_FALSE(Eval<bool>("SceneManager.GetCurrentScene():RemoveRootGameObject(nil)"));
+    EXPECT_FALSE(Eval<bool>("SceneManager.GetCurrentScene():DestroyGameObject(nil)"));
+
+    // `.` instead of `:`, and a handle of the wrong type, fail sol's argument checks
+    RunExpectingError("handle_go.GetName()");
+    RunExpectingError("handle_go:AddComponent('SphereRenderer').GetRadius(handle_go)");
+}
+
+TEST_F(LuaHandleTest, DestroyGameObjectIsFalseForAnAlreadyDestroyedObject)
+{
+    const auto go = GameObject::Create("Twice");
+    _scene->AddRootGameObject(go);
+    Lua()["handle_go"] = GameObjectRef(go);
+
+    ASSERT_TRUE(Eval<bool>("SceneManager.GetCurrentScene():DestroyGameObject(handle_go)"));
+    _scene->ProcessDestroyed(); // `go` keeps it alive, destroyed
+
+    EXPECT_FALSE(Eval<bool>("SceneManager.GetCurrentScene():DestroyGameObject(handle_go)"));
 }

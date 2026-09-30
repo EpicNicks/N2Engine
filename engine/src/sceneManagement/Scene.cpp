@@ -400,6 +400,11 @@ void Scene::Clear()
     {
         CallOnDestroyForGameObject(obj);
     }
+    // Only now, so each OnDestroy above could still use the other objects being torn down
+    for (const auto &obj : allObjects)
+    {
+        obj->_isTornDown = true;
+    }
 
     for (const auto &root : _rootGameObjects)
     {

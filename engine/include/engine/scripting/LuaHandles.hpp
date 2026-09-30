@@ -20,11 +20,15 @@ namespace N2Engine
 // What Lua holds instead of raw engine pointers. A script can keep any of these (in `self`, a global or a
 // closure) past the object's lifetime: using it afterwards raises a Lua error ("attempt to use a destroyed
 // Rigidbody") instead of touching freed memory, and IsValid() reports whether it's still usable.
+//
+// A handle works until its object's teardown has finished (GameObject::IsTornDown): throughout the
+// OnDisable/OnDestroy callbacks of a destroy, a scene switch or RemoveComponent, handles to the object, its
+// components and its siblings being torn down with it all still work; afterwards they all fail.
 namespace N2Engine::Scripting
 {
-    /// A GameObject in Lua. Doesn't keep the object alive, except for objects a script created or detached,
-    /// which the script may be the only owner of. Invalid once the object is destroyed (for an object in a
-    /// scene, at the end of the frame Destroy was called in) or freed.
+    /// A GameObject in Lua. Doesn't keep the object alive, except for a handle a script created
+    /// (GameObject.Create) or detached (RemoveChild, RemoveRootGameObject) the object with, since the script
+    /// may then be its only owner. Ownership is per handle: other handles to the same object stay weak.
     class GameObjectRef
     {
     public:
@@ -47,24 +51,29 @@ namespace N2Engine::Scripting
             return ref;
         }
 
-        /// Keeps the object alive from now on, e.g. when a script detaches it from its only owner
+        /// Keeps the object alive from now on, e.g. once a script detached it from its only owner.
+        /// Caveat: a Lua-owned object that never joins a scene, and whose own script keeps this handle
+        /// (e.g. in self), is a reference cycle through the Lua registry and is never freed.
         void TakeOwnership() { _owned = _object.lock(); }
+
+        /// Back to a weak reference, e.g. once a scene or parent holds the object
+        void ReleaseOwnership() { _owned.reset(); }
 
         [[nodiscard]] bool IsValid() const
         {
             const GameObject::Ptr object = _object.lock();
-            return object && !object->IsDestroyed();
+            return object && !object->IsTornDown();
         }
 
         /// The object even if it's destroyed, or null once it's freed
         [[nodiscard]] GameObject::Ptr Lock() const { return _object.lock(); }
 
-        /// The live object, held for the duration of a call. Throws when it's destroyed; sol turns that
+        /// The live object, held for the duration of a call. Throws once it's torn down; sol turns that
         /// into a Lua error at the call site.
         [[nodiscard]] GameObject::Ptr Pin() const
         {
             GameObject::Ptr object = _object.lock();
-            if (!object || object->IsDestroyed())
+            if (!object || object->IsTornDown())
             {
                 throw std::runtime_error("attempt to use a destroyed GameObject");
             }
@@ -86,7 +95,7 @@ namespace N2Engine::Scripting
     class ComponentRefBase
     {
     public:
-        [[nodiscard]] bool IsValid() const { return !_lifetime.expired() && !_component->IsDestroyed(); }
+        [[nodiscard]] bool IsValid() const { return static_cast<bool>(LockOwner()); }
 
         [[nodiscard]] bool RefersTo(const ComponentRefBase &other) const
         {
@@ -95,17 +104,27 @@ namespace N2Engine::Scripting
 
     protected:
         explicit ComponentRefBase(const Component &component)
-            : _component(&component), _lifetime(component.GetLifetimeToken())
+            : _owner(component.GetGameObject().weak_from_this()), _lifetime(component.GetLifetimeToken())
         {
         }
 
-        // Only dereferenced while _lifetime hasn't expired
-        const Component *_component;
+        /// The owning GameObject while the component is usable (not freed, owner not torn down), else null
+        [[nodiscard]] GameObject::Ptr LockOwner() const
+        {
+            GameObject::Ptr owner = _owner.lock();
+            if (!owner || _lifetime.expired() || owner->IsTornDown())
+            {
+                return nullptr;
+            }
+            return owner;
+        }
+
+        std::weak_ptr<GameObject> _owner;
         std::weak_ptr<const bool> _lifetime;
     };
 
-    /// A component in Lua, as its concrete type. Invalid once the component is destroyed (removed, its
-    /// GameObject destroyed, or the scene unloaded).
+    /// A component in Lua, as its concrete type. Invalid once it's freed (RemoveComponent) or its GameObject
+    /// is torn down (destroyed, or its scene unloaded).
     template <typename T>
     class ComponentRef : public ComponentRefBase
     {
@@ -118,14 +137,17 @@ namespace N2Engine::Scripting
         {
         }
 
-        /// The live component. Throws when it's destroyed; sol turns that into a Lua error at the call site.
-        [[nodiscard]] T *Pin() const
+        /// The live component. The returned pointer also keeps its GameObject (so the component) alive, e.g.
+        /// through a call that re-enters Lua, where a GC could drop the GameObject's last owner; hold it for
+        /// the whole call. Throws when the component is gone; sol turns that into a Lua error at the call site.
+        [[nodiscard]] std::shared_ptr<T> Pin() const
         {
-            if (!IsValid())
+            GameObject::Ptr owner = LockOwner();
+            if (!owner)
             {
                 throw std::runtime_error(std::format("attempt to use a destroyed {}", s_luaName));
             }
-            return _typed;
+            return std::shared_ptr<T>(std::move(owner), _typed);
         }
 
     private:
@@ -147,7 +169,7 @@ namespace N2Engine::Scripting
         [[nodiscard]] std::shared_ptr<Positionable> Pin() const
         {
             const GameObject::Ptr owner = _owner.Lock();
-            if (!owner || owner->IsDestroyed() || !owner->GetPositionable())
+            if (!owner || owner->IsTornDown() || !owner->GetPositionable())
             {
                 throw std::runtime_error("attempt to use the Positionable of a destroyed GameObject");
             }
@@ -169,6 +191,34 @@ namespace N2Engine::Scripting
 
     namespace Detail
     {
+        template <typename T>
+        struct IsSmartPointer : std::false_type
+        {
+        };
+
+        template <typename T>
+        struct IsSmartPointer<std::shared_ptr<T>> : std::true_type
+        {
+        };
+
+        template <typename T>
+        struct IsSmartPointer<std::weak_ptr<T>> : std::true_type
+        {
+        };
+
+        template <typename T, typename D>
+        struct IsSmartPointer<std::unique_ptr<T, D>> : std::true_type
+        {
+        };
+
+        // Engine objects must reach Lua as handles, never directly (by pointer, smart pointer or reference)
+        template <typename R>
+        constexpr bool IsEngineObjectReturn =
+            std::is_pointer_v<std::remove_cvref_t<R>> || IsSmartPointer<std::remove_cvref_t<R>>::value ||
+            std::is_base_of_v<Component, std::remove_cvref_t<R>> ||
+            std::is_same_v<std::remove_cvref_t<R>, GameObject> ||
+            std::is_same_v<std::remove_cvref_t<R>, Positionable>;
+
         // Scripts get copies of returned values: a reference into the object (e.g. a renderer's color)
         // would dangle once the object is freed
         template <typename R>
@@ -177,9 +227,9 @@ namespace N2Engine::Scripting
         template <typename R, auto Method, typename Handle, typename... Args>
         ForwardedReturn<R> CallPinned(const Handle &handle, Args &&... args)
         {
-            static_assert(!std::is_pointer_v<R>,
-                          "a returned pointer would dangle in Lua; bind this method by hand, returning a handle");
-            const auto pinned = handle.Pin(); // throws if the object is gone
+            static_assert(!IsEngineObjectReturn<R>,
+                          "an engine object returned to Lua would dangle; bind this method by hand, returning a handle");
+            const auto pinned = handle.Pin(); // throws if the object is gone; keeps it alive for the call
             return ((*pinned).*Method)(std::forward<Args>(args)...);
         }
 
