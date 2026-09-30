@@ -27,6 +27,10 @@ namespace N2Engine::Audio
         }
 
         Positionable *transform = GetGameObject().GetPositionable();
+        if (!transform)
+        {
+            return; // no transform to follow (it used to dereference null here)
+        }
         auto pos = transform->GetGlobalTransform().GetPosition();
         auto forward = transform->GetForward();
         auto up = transform->GetUp();

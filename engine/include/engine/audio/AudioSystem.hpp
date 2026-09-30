@@ -2,6 +2,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 
 #include <AL/al.h>
@@ -13,6 +14,7 @@
 namespace N2Engine::Audio
 {
     class AudioClip;
+    class AudioSource;
 
     struct PlaybackParams
     {
@@ -55,14 +57,22 @@ namespace N2Engine::Audio
         AudioHandle PlayOneShot(const std::shared_ptr<AudioClip>& clip, const PlaybackParams& params = {});
         void Stop(AudioHandle handle);
         [[nodiscard]] bool IsPlaying(AudioHandle handle) const;
+        /// The OpenAL source playing a one-shot, or 0 if the handle is unknown
+        [[nodiscard]] ALuint GetOneShotSource(AudioHandle handle) const;
 
         // Listener
         void SetListenerPosition(float x, float y, float z);
         void SetListenerOrientation(float forwardX, float forwardY, float forwardZ,
                                      float upX, float upY, float upZ);
 
-        // Volume computation
+        // Volume/pitch computation (master volume is the listener gain, applied separately)
         [[nodiscard]] float ComputeFinalVolume(float sourceVolume, const std::string& group) const;
+        [[nodiscard]] float ComputeFinalPitch(float sourcePitch, const std::string& group) const;
+
+        /// AudioSources register themselves, so group limits count them and group changes
+        /// (volume, mute, pitch) reach them while they play
+        void RegisterSource(AudioSource* source);
+        void UnregisterSource(AudioSource* source);
 
         // For AudioSource to register/unregister
         [[nodiscard]] ALuint AcquireSource();
@@ -79,13 +89,23 @@ namespace N2Engine::Audio
 
         void InitializeDefaultGroups();
         void CleanupFinishedSources();
+        /// Re-applies a group's current settings to everything playing in it
+        void RefreshGroup(const std::string& group);
 
         ALCdevice* _device = nullptr;
         ALCcontext* _context = nullptr;
 
         std::unordered_map<std::string, AudioMixerGroup> _mixerGroups;
-        std::unordered_map<AudioHandle, ALuint> _activeOneShotSources;
-        std::unordered_map<AudioHandle, std::string> _oneShotGroups;
+        struct OneShot
+        {
+            ALuint source = 0;
+            std::string group;
+            float volume = 1.0f;
+            float pitch = 1.0f;
+            std::shared_ptr<AudioClip> clip; // keeps the buffer alive until playback ends
+        };
+        std::unordered_map<AudioHandle, OneShot> _oneShots;
+        std::unordered_set<AudioSource*> _sources;
 
         std::vector<ALuint> _sourcePool;
         static constexpr std::size_t MaxPooledSources = 32;

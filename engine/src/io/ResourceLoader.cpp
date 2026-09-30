@@ -1,6 +1,8 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/Logger.hpp"
+#include <algorithm>
+#include <cstdlib>
 #include <fstream>
 
 namespace N2Engine::IO
@@ -35,13 +37,10 @@ namespace N2Engine::IO
         }
         return std::filesystem::path(".");
 #else
-        char *home = nullptr;
-        size_t len = 0;
-        if (_dupenv_s(&home, &len, "HOME") == 0 && home != nullptr)
+        // _dupenv_s is MSVC-only
+        if (const char *home = std::getenv("HOME"); home != nullptr)
         {
-            std::filesystem::path path(home);
-            free(home);
-            return path / ".n2engine";
+            return std::filesystem::path(home) / ".n2engine";
         }
         return std::filesystem::path(".");
 #endif
@@ -74,10 +73,16 @@ namespace N2Engine::IO
             if (_loaders.find(ext) == _loaders.end())
                 continue;
 
-            AssetMetadata meta = CreateOrUpdateMetadata(entry.path());
-
-            _metadata[meta.resourcePath] = meta;
-            _uuidToPath[meta.uuid] = meta.resourcePath;
+            try
+            {
+                AssetMetadata meta = CreateOrUpdateMetadata(entry.path());
+                _metadata[meta.resourcePath] = meta;
+                _uuidToPath[meta.uuid] = meta.resourcePath;
+            }
+            catch (const std::exception &e)
+            {
+                Logger::Warn(std::format("Skipping asset {}: {}", entry.path().string(), e.what()));
+            }
         }
     }
 
@@ -97,10 +102,24 @@ namespace N2Engine::IO
 
         AssetMetadata meta;
 
+        bool haveMeta = false;
         if (std::filesystem::exists(metaPath))
         {
-            meta = AssetMetadata::FromFile(metaPath);
+            try
+            {
+                meta = AssetMetadata::FromFile(metaPath);
+                haveMeta = true;
+            }
+            catch (const std::exception &e)
+            {
+                // A corrupt .meta used to throw out of Initialize; regenerate it instead (the UUID is
+                // derived from the path, so references to the asset keep resolving)
+                Logger::Warn(std::format("Corrupt metadata {} ({}); regenerating", metaPath.string(), e.what()));
+            }
+        }
 
+        if (haveMeta)
+        {
             // Verify UUID is deterministic
             Math::UUID expectedUUID = ResourceUUID::FromPath(resourcePath);
             if (meta.uuid != expectedUUID)
@@ -129,7 +148,7 @@ namespace N2Engine::IO
             std::string ext = sourcePath.extension().string();
             if (ext == ".lua")
                 meta.resourceType = "LuaScript";
-            else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3")
+            else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3" || ext == ".flac")
                 meta.resourceType = "AudioClip";
             else if (ext == ".png" || ext == ".jpg")
                 meta.resourceType = "Texture";
@@ -149,14 +168,32 @@ namespace N2Engine::IO
         return _metadataRoot / relative.parent_path() / (relative.filename().string() + ".meta");
     }
 
+    namespace
+    {
+        // Joins a relative resource path onto its root and rejects anything that normalizes to
+        // outside it (e.g. res://../../secrets), which used to resolve to wherever ".." led
+        std::filesystem::path ResolveUnder(const std::filesystem::path &root, const std::string &relative)
+        {
+            const std::filesystem::path normalizedRoot = root.lexically_normal();
+            const std::filesystem::path resolved = (root / relative).lexically_normal();
+            const std::filesystem::path fromRoot = resolved.lexically_relative(normalizedRoot);
+            if (fromRoot.empty() || *fromRoot.begin() == "..")
+            {
+                Logger::Warn(std::format("Resource path escapes its root and was rejected: {}", relative));
+                return {};
+            }
+            return resolved;
+        }
+    }
+
     std::filesystem::path ResourceLoader::Resolve(const ResourcePath &resourcePath) const
     {
         switch (resourcePath.GetType())
         {
         case PathType::Resource:
-            return _assetsRoot / resourcePath.GetPath();
+            return ResolveUnder(_assetsRoot, resourcePath.GetPath());
         case PathType::User:
-            return _userDataRoot / resourcePath.GetPath();
+            return ResolveUnder(_userDataRoot, resourcePath.GetPath());
         case PathType::Absolute:
             return std::filesystem::path(resourcePath.GetPath());
         case PathType::Invalid:
@@ -240,7 +277,16 @@ namespace N2Engine::IO
         }
 
         auto sourcePath = Resolve(resourcePath);
-        CreateOrUpdateMetadata(sourcePath);
+        if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
+        {
+            return false;
+        }
+
+        // Keep the refreshed metadata: discarding it left HasSourceChanged comparing against the old
+        // timestamp, so it reported the asset as changed forever
+        AssetMetadata refreshed = CreateOrUpdateMetadata(sourcePath);
+        _metadata[resourcePath] = refreshed;
+        _uuidToPath[refreshed.uuid] = resourcePath;
 
         Logger::Info(std::format("Reloaded: {}", resourcePath.ToString()));
         return true;
@@ -256,7 +302,11 @@ namespace N2Engine::IO
     {
         for (auto it = _cache.begin(); it != _cache.end();)
         {
-            if (it->second.use_count() <= 1)
+            // Both caches hold a reference, so "unused" means no references beyond those two
+            // (this used to require use_count() <= 1, which never happened)
+            const auto meta = GetMetadata(it->first);
+            const bool inUUIDCache = meta && _cacheByUUID.contains(meta->uuid) && _cacheByUUID.at(meta->uuid) == it->second;
+            if (it->second.use_count() <= (inUUIDCache ? 2 : 1))
             {
                 auto meta = GetMetadata(it->first);
                 if (meta)
