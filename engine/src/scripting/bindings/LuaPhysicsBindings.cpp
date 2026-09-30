@@ -1,5 +1,6 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/GameObject.hpp" // Collision/Trigger expose GameObject* fields
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/SphereCollider.hpp"
