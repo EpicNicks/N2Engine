@@ -45,6 +45,15 @@ namespace N2Engine::Audio
         void SetMixerGroup(const std::string& group);
         [[nodiscard]] const std::string& GetMixerGroup() const { return _mixerGroup; }
 
+        /// Re-applies volume and pitch with the mixer group's current settings (AudioSystem calls this
+        /// when a group changes, so it reaches sounds that are already playing)
+        void ApplyMixing();
+
+        /// The OpenAL source id while it has one (0 otherwise); for diagnostics and tests
+        [[nodiscard]] ALuint GetSourceHandle() const { return _source; }
+        /// AudioSystem calls this on Shutdown: the OpenAL context is going away, so the id is meaningless
+        void ForgetSource() { _source = 0; }
+
         // 3D audio settings
         void SetMinDistance(float distance);
         void SetMaxDistance(float distance);

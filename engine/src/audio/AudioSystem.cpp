@@ -1,13 +1,20 @@
 #include "engine/audio/AudioSystem.hpp"
 #include "engine/audio/AudioClip.hpp"
+#include "engine/audio/AudioSource.hpp"
 #include "engine/Logger.hpp"
+
+#include <limits>
+#include <ranges>
 
 namespace N2Engine::Audio
 {
     AudioSystem& AudioSystem::Instance()
     {
-        static AudioSystem instance;
-        return instance;
+        // Never destroyed: AudioSources unregister in their destructors, which can run during static
+        // destruction (SceneManager's loaded scene). When AudioSystem was first used after SceneManager
+        // was created (headless, where Init skips audio), a function-local static died first.
+        static AudioSystem *instance = new AudioSystem();
+        return *instance;
     }
 
     bool AudioSystem::Initialize()
@@ -74,13 +81,12 @@ namespace N2Engine::Audio
         }
 
         // Stop and delete all one-shot sources
-        for (auto& [handle, source] : _activeOneShotSources)
+        for (auto& [handle, oneShot] : _oneShots)
         {
-            alSourceStop(source);
-            alDeleteSources(1, &source);
+            alSourceStop(oneShot.source);
+            alDeleteSources(1, &oneShot.source);
         }
-        _activeOneShotSources.clear();
-        _oneShotGroups.clear();
+        _oneShots.clear();
 
         // Delete pooled sources
         for (ALuint source : _sourcePool)
@@ -88,6 +94,18 @@ namespace N2Engine::Audio
             alDeleteSources(1, &source);
         }
         _sourcePool.clear();
+
+        // Sources held by components die with the context; drop their ids, so after a later Initialize
+        // they don't play through an id that now belongs to someone else
+        for (AudioSource *source : _sources)
+        {
+            if (const ALuint held = source->GetSourceHandle(); held != 0)
+            {
+                alSourceStop(held);
+                alDeleteSources(1, &held);
+                source->ForgetSource();
+            }
+        }
 
         alcMakeContextCurrent(nullptr);
 
@@ -140,6 +158,7 @@ namespace N2Engine::Audio
         if (auto* g = GetMixerGroup(group))
         {
             g->settings.volume = std::clamp(volume, 0.0f, 1.0f);
+            RefreshGroup(group);
         }
     }
 
@@ -148,6 +167,7 @@ namespace N2Engine::Audio
         if (auto* g = GetMixerGroup(group))
         {
             g->settings.maxSourceVolume = std::clamp(maxVolume, 0.0f, 1.0f);
+            RefreshGroup(group);
         }
     }
 
@@ -156,6 +176,7 @@ namespace N2Engine::Audio
         if (auto* g = GetMixerGroup(group))
         {
             g->settings.pitch = std::clamp(pitch, 0.5f, 2.0f);
+            RefreshGroup(group);
         }
     }
 
@@ -164,6 +185,7 @@ namespace N2Engine::Audio
         if (auto* g = GetMixerGroup(group))
         {
             g->settings.muted = muted;
+            RefreshGroup(group);
         }
     }
 
@@ -240,7 +262,7 @@ namespace N2Engine::Audio
 
         alSourcei(source, AL_BUFFER, static_cast<ALint>(clip->GetBuffer()));
         alSourcef(source, AL_GAIN, ComputeFinalVolume(params.volume, params.mixerGroup));
-        alSourcef(source, AL_PITCH, params.pitch);
+        alSourcef(source, AL_PITCH, ComputeFinalPitch(params.pitch, params.mixerGroup));
         alSourcei(source, AL_LOOPING, params.loop ? AL_TRUE : AL_FALSE);
 
         if (params.spatial)
@@ -258,31 +280,41 @@ namespace N2Engine::Audio
         alSourcePlay(source);
 
         AudioHandle handle{ _nextHandleId++ };
-        _activeOneShotSources[handle] = source;
-        _oneShotGroups[handle] = params.mixerGroup;
+        _oneShots[handle] = OneShot{
+            .source = source,
+            .group = params.mixerGroup,
+            .volume = params.volume,
+            .pitch = params.pitch,
+            .clip = clip,
+        };
 
         return handle;
     }
 
     void AudioSystem::Stop(AudioHandle handle)
     {
-        auto it = _activeOneShotSources.find(handle);
-        if (it != _activeOneShotSources.end())
+        auto it = _oneShots.find(handle);
+        if (it != _oneShots.end())
         {
-            alSourceStop(it->second);
-            ReleaseSource(it->second);
-            _activeOneShotSources.erase(it);
-            _oneShotGroups.erase(handle);
+            alSourceStop(it->second.source);
+            ReleaseSource(it->second.source);
+            _oneShots.erase(it);
         }
+    }
+
+    ALuint AudioSystem::GetOneShotSource(AudioHandle handle) const
+    {
+        const auto it = _oneShots.find(handle);
+        return it != _oneShots.end() ? it->second.source : 0;
     }
 
     bool AudioSystem::IsPlaying(AudioHandle handle) const
     {
-        auto it = _activeOneShotSources.find(handle);
-        if (it != _activeOneShotSources.end())
+        auto it = _oneShots.find(handle);
+        if (it != _oneShots.end())
         {
             ALint state;
-            alGetSourcei(it->second, AL_SOURCE_STATE, &state);
+            alGetSourcei(it->second.source, AL_SOURCE_STATE, &state);
             return state == AL_PLAYING;
         }
         return false;
@@ -302,6 +334,11 @@ namespace N2Engine::Audio
 
     ALuint AudioSystem::AcquireSource()
     {
+        if (!_initialized)
+        {
+            return 0;
+        }
+
         if (!_sourcePool.empty())
         {
             ALuint source = _sourcePool.back();
@@ -309,7 +346,9 @@ namespace N2Engine::Audio
             return source;
         }
 
-        // Pool empty, try to create a new source
+        // Pool empty, try to create a new source. Clear any stale error first, or an unrelated earlier
+        // failure would make this look failed and leak the source it just created.
+        alGetError();
         ALuint source;
         alGenSources(1, &source);
         if (alGetError() != AL_NO_ERROR)
@@ -326,7 +365,14 @@ namespace N2Engine::Audio
             return;
         }
 
-        // Reset source state
+        // After Shutdown the context is gone and the id means nothing; pooling it would hand a stale
+        // id out again (aliasing a fresh source) after the next Initialize
+        if (!_initialized)
+        {
+            return;
+        }
+
+        // Reset source state (everything AudioSource/PlayOneShot may have set)
         alSourceStop(source);
         alSourcei(source, AL_BUFFER, 0);
         alSourcef(source, AL_GAIN, 1.0f);
@@ -335,6 +381,8 @@ namespace N2Engine::Audio
         alSourcei(source, AL_SOURCE_RELATIVE, AL_FALSE);
         alSource3f(source, AL_POSITION, 0.0f, 0.0f, 0.0f);
         alSourcef(source, AL_ROLLOFF_FACTOR, 1.0f);
+        alSourcef(source, AL_REFERENCE_DISTANCE, 1.0f);
+        alSourcef(source, AL_MAX_DISTANCE, std::numeric_limits<float>::max());
 
         if (_sourcePool.size() < MaxPooledSources)
         {
@@ -348,10 +396,18 @@ namespace N2Engine::Audio
 
     std::uint32_t AudioSystem::CountPlayingInGroup(const std::string& group) const
     {
+        // One-shots and AudioSource components both count (sources used to be ignored)
         std::uint32_t count = 0;
-        for (const auto& [handle, groupName] : _oneShotGroups)
+        for (const auto& [handle, oneShot] : _oneShots)
         {
-            if (groupName == group && IsPlaying(handle))
+            if (oneShot.group == group && IsPlaying(handle))
+            {
+                ++count;
+            }
+        }
+        for (const AudioSource* source : _sources)
+        {
+            if (source->GetMixerGroup() == group && source->IsPlaying())
             {
                 ++count;
             }
@@ -363,10 +419,10 @@ namespace N2Engine::Audio
     {
         std::vector<AudioHandle> finished;
 
-        for (const auto& [handle, source] : _activeOneShotSources)
+        for (const auto& [handle, oneShot] : _oneShots)
         {
             ALint state;
-            alGetSourcei(source, AL_SOURCE_STATE, &state);
+            alGetSourcei(oneShot.source, AL_SOURCE_STATE, &state);
             if (state == AL_STOPPED)
             {
                 finished.push_back(handle);
@@ -375,9 +431,48 @@ namespace N2Engine::Audio
 
         for (AudioHandle handle : finished)
         {
-            ReleaseSource(_activeOneShotSources[handle]);
-            _activeOneShotSources.erase(handle);
-            _oneShotGroups.erase(handle);
+            ReleaseSource(_oneShots[handle].source);
+            _oneShots.erase(handle); // releases the clip it kept alive
         }
+    }
+
+    void AudioSystem::RefreshGroup(const std::string& group)
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+        for (const auto& oneShot : _oneShots | std::views::values)
+        {
+            if (oneShot.group == group)
+            {
+                alSourcef(oneShot.source, AL_GAIN, ComputeFinalVolume(oneShot.volume, group));
+                alSourcef(oneShot.source, AL_PITCH, ComputeFinalPitch(oneShot.pitch, group));
+            }
+        }
+        for (AudioSource* source : _sources)
+        {
+            if (source->GetMixerGroup() == group)
+            {
+                source->ApplyMixing();
+            }
+        }
+    }
+
+    float AudioSystem::ComputeFinalPitch(float sourcePitch, const std::string& group) const
+    {
+        // A group's pitch scales every sound in it (it used to be stored but never applied)
+        const auto* g = GetMixerGroup(group);
+        return sourcePitch * (g ? g->settings.pitch : 1.0f);
+    }
+
+    void AudioSystem::RegisterSource(AudioSource* source)
+    {
+        _sources.insert(source);
+    }
+
+    void AudioSystem::UnregisterSource(AudioSource* source)
+    {
+        _sources.erase(source);
     }
 }

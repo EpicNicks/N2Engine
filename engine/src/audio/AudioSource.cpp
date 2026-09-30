@@ -20,10 +20,13 @@ namespace N2Engine::Audio
         RegisterMember(NAMEOF(_rolloffFactor), _rolloffFactor);
         RegisterMember(NAMEOF(_mixerGroup), _mixerGroup);
         RegisterAssetRef(NAMEOF(_clip), _clip);
+
+        AudioSystem::Instance().RegisterSource(this);
     }
 
     AudioSource::~AudioSource()
     {
+        AudioSystem::Instance().UnregisterSource(this);
         if (_source != 0)
         {
             alSourceStop(_source);
@@ -72,8 +75,7 @@ namespace N2Engine::Audio
         }
 
         alSourcei(_source, AL_BUFFER, static_cast<ALint>(_clip->GetBuffer()));
-        UpdateVolume();
-        alSourcef(_source, AL_PITCH, _pitch);
+        ApplyMixing();
         alSourcei(_source, AL_LOOPING, _loop ? AL_TRUE : AL_FALSE);
 
         if (_spatial)
@@ -156,10 +158,7 @@ namespace N2Engine::Audio
     void AudioSource::SetPitch(float pitch)
     {
         _pitch = std::clamp(pitch, 0.5f, 2.0f);
-        if (_source != 0)
-        {
-            alSourcef(_source, AL_PITCH, _pitch);
-        }
+        ApplyMixing();
     }
 
     void AudioSource::SetLoop(bool loop)
@@ -194,7 +193,7 @@ namespace N2Engine::Audio
     void AudioSource::SetMixerGroup(const std::string& group)
     {
         _mixerGroup = group;
-        UpdateVolume();
+        ApplyMixing();
     }
 
     void AudioSource::SetMinDistance(float distance)
@@ -221,6 +220,15 @@ namespace N2Engine::Audio
         if (_source != 0 && _spatial)
         {
             alSourcef(_source, AL_ROLLOFF_FACTOR, _rolloffFactor);
+        }
+    }
+
+    void AudioSource::ApplyMixing()
+    {
+        UpdateVolume();
+        if (_source != 0)
+        {
+            alSourcef(_source, AL_PITCH, AudioSystem::Instance().ComputeFinalPitch(_pitch, _mixerGroup));
         }
     }
 
