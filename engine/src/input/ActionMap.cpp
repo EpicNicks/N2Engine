@@ -3,6 +3,8 @@
 #include "engine/input/InputBinding.hpp"
 
 #include <math/Vector2.hpp>
+#include <algorithm>
+#include <ranges>
 #include <utility>
 
 #include "engine/Logger.hpp"
@@ -100,53 +102,49 @@ InputValue InputAction::CalculateCombinedValue() const
         return false;
     }
 
-    // For Vector2 actions - combine all bindings additively
+    // The action's value type follows its bindings: any 2D binding (stick, WASD composite) makes it a
+    // Vector2 action, else any axis makes it a float, else it's a button. (It used to decide by
+    // magnitude, so a small stick deflection became `true`, which reads as a full (1, 0) vector.)
     Vector2 combined(0, 0);
-    bool anyBoolTrue = false;
-    float maxFloat = 0.0f;
+    bool anyVector = false;
+    bool anyFloat = false;
+    bool anyPressed = false;
+    float strongestFloat = 0.0f;
 
     for (auto &binding : _bindings)
     {
-        InputValue bindingValue = binding->getValue();
+        const InputValue bindingValue = binding->getValue();
 
-        // Combine as Vector2 (covers most cases)
-        combined += bindingValue.asVector2();
-
-        // Track bool values (for button-like actions)
-        if (bindingValue.asBool())
+        if (bindingValue.Is<Vector2>())
         {
-            anyBoolTrue = true;
+            anyVector = true;
+            combined += bindingValue.asVector2();
         }
-
-        // Track float values
-        if (const float floatVal = std::abs(bindingValue.asFloat()); floatVal > std::abs(maxFloat))
+        else if (bindingValue.Is<float>())
         {
-            maxFloat = bindingValue.asFloat();
+            anyFloat = true;
+            if (std::abs(bindingValue.asFloat()) > std::abs(strongestFloat))
+            {
+                strongestFloat = bindingValue.asFloat();
+            }
+        }
+        else if (bindingValue.asBool())
+        {
+            anyPressed = true;
         }
     }
 
-    // Normalize combined vector if it exceeds unit length (for stick-like behavior)
-    if (combined.Length() > 1.0f)
+    if (anyVector)
     {
-        combined = combined.Normalized();
+        // Several 2D bindings add up (e.g. keyboard and stick); keep within a unit circle
+        return combined.Length() > 1.0f ? combined.Normalized() : combined;
     }
-
-    // Return the most appropriate type
-    // If we have significant vector movement, return that
-    if (combined.Length() > 0.1f)
+    if (anyFloat)
     {
-        return combined;
+        // A button bound alongside an axis counts as a full press
+        return anyPressed && strongestFloat == 0.0f ? 1.0f : strongestFloat;
     }
-    // If we have any bool input, return that
-    else if (anyBoolTrue)
-    {
-        return true;
-    }
-    // Otherwise return the float value
-    else
-    {
-        return maxFloat;
-    }
+    return anyPressed;
 }
 
 inline void InputAction::UpdatePhase()
@@ -227,17 +225,54 @@ void ActionMap::Update()
         return;
     }
 
-    for (auto &inputAction : _inputActions | std::views::values)
+    // Snapshot: callbacks fired by an action can add, replace or remove actions, which would
+    // invalidate iteration over the map (and replaced/removed ones are retired, not freed, meanwhile)
+    std::vector<InputAction *> actions;
+    for (const auto &inputAction : _inputActions | std::views::values)
     {
         if (inputAction)
         {
-            inputAction->Update();
+            actions.push_back(inputAction.get());
+        }
+    }
+
+    // Set for the duration, cleared even if a handler throws; only the outermost update frees retired
+    // actions (a handler may update this map again while the outer loop still holds them)
+    struct UpdateScope
+    {
+        ActionMap &map;
+        const bool outermost;
+
+        explicit UpdateScope(ActionMap &m) : map(m), outermost(!m._updating) { map._updating = true; }
+
+        ~UpdateScope()
+        {
+            if (outermost)
+            {
+                map._updating = false;
+                map._retiredActions.clear();
+            }
+        }
+    } scope{*this};
+
+    for (InputAction *action : actions)
+    {
+        // Skip actions an earlier callback removed or replaced this frame. They're retired, not freed,
+        // until the update ends, so reading the name is safe.
+        const auto it = _inputActions.find(action->GetName());
+        if (it != _inputActions.end() && it->second.get() == action)
+        {
+            action->Update();
         }
     }
 }
 
 ActionMap& ActionMap::AddInputAction(std::unique_ptr<InputAction> inputAction)
 {
+    if (const auto it = _inputActions.find(inputAction->GetName()); it != _inputActions.end() && _updating)
+    {
+        _retiredActions.push_back(std::move(it->second));
+    }
     _inputActions.insert_or_assign(inputAction->GetName(), std::move(inputAction));
     return *this;
 }
@@ -254,6 +289,10 @@ bool ActionMap::RemoveInputAction(const std::string &actionName)
 {
     if (const auto it = _inputActions.find(actionName); it != _inputActions.end())
     {
+        if (_updating)
+        {
+            _retiredActions.push_back(std::move(it->second)); // its Update may be on the stack
+        }
         _inputActions.erase(it);
         return true;
     }

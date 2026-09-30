@@ -122,6 +122,9 @@ namespace N2Engine::Input
     {
     private:
         std::unordered_map<std::string, std::unique_ptr<InputAction>> _inputActions;
+        // Actions replaced or removed from a callback during Update are freed after it
+        bool _updating = false;
+        std::vector<std::unique_ptr<InputAction>> _retiredActions;
 
     public:
         const std::string name;

@@ -1,4 +1,8 @@
 #include "engine/input/InputBinding.hpp"
+
+#include <algorithm>
+#include <cmath>
+
 #include "engine/input/InputValue.hpp"
 #include <engine/input/InputMapping.hpp>
 #include <engine/Application.hpp>
@@ -21,13 +25,27 @@ InputValue KeyboardButtonBinding::getValue()
 }
 
 
+float AxisBinding::NormalizeAxis(const GamepadAxis axis, const float raw)
+{
+    const bool isTrigger = axis == GamepadAxis::LeftTrigger || axis == GamepadAxis::RightTrigger;
+    const float value = isTrigger ? (raw + 1.0f) * 0.5f : raw; // triggers: -1..1 -> 0..1
+
+    const float magnitude = std::abs(value);
+    if (magnitude <= Deadzone)
+    {
+        return 0.0f;
+    }
+    const float rescaled = std::min(1.0f, (magnitude - Deadzone) / (1.0f - Deadzone));
+    return value < 0.0f ? -rescaled : rescaled;
+}
+
 InputValue AxisBinding::getValue()
 {
     GLFWgamepadstate state;
     if (glfwGetGamepadState(gamepadId, &state))
     {
         const int glfwAxis = GamepadAxisToGLFW.at(boundAxis);
-        return state.axes[glfwAxis]; // Returns float -1.0 to 1.0
+        return NormalizeAxis(boundAxis, state.axes[glfwAxis]);
     }
     return 0.0f;
 }
