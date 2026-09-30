@@ -16,12 +16,15 @@ using namespace N2Engine::Scheduling;
 
 namespace
 {
+    // The current test frame, shared by every trace (so coroutines started with their own trace
+    // record the same frame numbers)
+    int g_frame = 0;
+
     // Records the frame on which each step of a coroutine ran
     struct Trace
     {
-        int frame = 0;
         std::vector<int> steps;
-        void Mark() { steps.push_back(frame); }
+        void Mark() { steps.push_back(g_frame); }
     };
 
     std::generator<ICoroutineWait> NextFrameTwice(std::shared_ptr<Trace> trace)
@@ -70,12 +73,13 @@ protected:
         _scene = SceneManager::GetCurScene();
         _go = GameObject::Create("Runner");
         _scene->AddRootGameObject(_go);
+        g_frame = 0;
     }
 
     // One frame of coroutine updates (Application::Run calls AdvanceCoroutines once per frame)
     void Frame()
     {
-        ++_trace->frame;
+        ++g_frame;
         _scene->AdvanceCoroutines();
     }
 
