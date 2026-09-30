@@ -1,5 +1,8 @@
 #pragma once
 
+#include <algorithm>
+#include <format>
+
 #include "engine/io/ResourceLoader.hpp"
 #include "ResourceUUID.hpp"
 #include "engine/Logger.hpp"
@@ -101,7 +104,7 @@ namespace N2Engine::IO
     {
         static_assert(std::is_base_of_v<Base::Asset, T>, "T must be an Asset type");
 
-        _loaders[extension] = [](const std::filesystem::path& path) -> std::shared_ptr<Base::Asset>
+        RegisterLoader(extension, [](const std::filesystem::path& path) -> std::shared_ptr<Base::Asset>
         {
             auto asset = std::make_shared<T>();
             if (asset->Load(path))
@@ -109,7 +112,7 @@ namespace N2Engine::IO
                 return asset;
             }
             return nullptr;
-        };
+        });
     }
 
     template <typename T>

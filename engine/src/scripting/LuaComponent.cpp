@@ -583,7 +583,7 @@ namespace N2Engine::Scripting
         {
             LuaScriptLoaderRegistrar()
             {
-                IO::ResourceLoader::Instance().RegisterSimpleLoader<LuaScript>(".lua");
+                IO::Resources::Instance().RegisterSimpleLoader<LuaScript>(".lua");
             }
         } g_luaScriptLoader;
     }

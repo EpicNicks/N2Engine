@@ -326,6 +326,11 @@ TEST(ResourcesTest, AssetRefResolvesAnAssetRegisteredAtRuntime)
 {
     const auto script = std::make_shared<LuaScript>("return {}");
     IO::Resources::Instance().RegisterAsset(script);
+    // Unregistered however the test ends, so no later test sees it
+    const std::shared_ptr<void> unregister(nullptr, [&script](void *)
+    {
+        IO::Resources::Instance().UnregisterAsset(script->GetUUID());
+    });
 
     const auto go = GameObject::Create("RuntimeScriptHolder");
     auto *holder = go->AddComponent<ScriptHolder>();
@@ -337,7 +342,6 @@ TEST(ResourcesTest, AssetRefResolvesAnAssetRegisteredAtRuntime)
     loaded->Deserialize(saved, nullptr);
 
     EXPECT_EQ(loaded->script, script);
-    IO::Resources::Instance().UnregisterAsset(script->GetUUID());
 }
 
 // ============================================================================

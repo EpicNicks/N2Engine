@@ -98,20 +98,21 @@ namespace N2Engine::IO
         {
             static_assert(std::is_base_of_v<Base::Asset, T>, "T must be an Asset type");
 
+            auto resolved = ResolvePath(path);
+
             // Check cache first
-            if (auto existing = GetAsset<T>(path))
+            if (auto it = _assetsByPath.find(resolved.string()); it != _assetsByPath.end())
             {
-                return existing;
+                return std::dynamic_pointer_cast<T>(it->second);
             }
 
-            // A project asset loads through ResourceLoader, so it gets its stable .meta UUID and a single
-            // cache entry (loading it here too gave it a second copy under a random UUID)
+            // A project asset loads through ResourceLoader (which checks its own cache first), so it gets
+            // its stable .meta UUID and a single cache entry (loading it here gave it a second copy
+            // under a random UUID)
             if (auto projectPath = FindProjectPath(path))
             {
                 return ResourceLoader::Instance().Load<T>(*projectPath);
             }
-
-            auto resolved = ResolvePath(path);
 
             if (!std::filesystem::exists(resolved))
             {
@@ -204,6 +205,13 @@ namespace N2Engine::IO
         {
             static_assert(std::is_base_of_v<Base::Asset, T>, "T must be an Asset type");
 
+            // A project asset ResourceLoader already holds is found through it. Caching it here as well
+            // would keep each registry's count above the other's eviction threshold, so neither freed it.
+            if (asset && ResourceLoader::Instance().GetCachedByUUID<Base::Asset>(asset->GetUUID()) == asset)
+            {
+                return;
+            }
+
             _assetsByUUID[asset->GetUUID()] = asset;
 
             if (!path.empty())
@@ -213,8 +221,9 @@ namespace N2Engine::IO
             }
         }
 
-        // These cover this registry's own assets; project assets are managed by ResourceLoader
-        // (ClearCache/RemoveUnused there)
+        // These cover only this registry's own assets (runtime-registered, or loaded from outside the
+        // project). Project assets that GetAsset finds through ResourceLoader are unaffected: use
+        // ResourceLoader's ClearCache/RemoveUnused for those.
         void UnregisterAsset(const Math::UUID &uuid);
         void Clear();
 

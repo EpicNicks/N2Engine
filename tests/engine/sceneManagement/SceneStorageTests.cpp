@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <memory>
-#include <ranges>
 #include <string>
-#include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "engine/GameObjectScene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -35,8 +35,8 @@ namespace
     }
 }
 
-// GetSceneIndex used to deserialize every stored scene (every object and component, with their
-// physics/audio/script state) just to compare names
+// Guard: name lookups must never deserialize a stored scene (every object and component, with their
+// physics/audio/script state), as GetSceneIndex originally did
 TEST(SceneStorageTest, GetSceneIndexDoesNotBuildScenes)
 {
     RegisterConstructionCounter();
@@ -133,4 +133,96 @@ TEST(SceneStorageTest, SupersededAddedSceneIsStillStored)
     ASSERT_NE(SceneManager::GetCurScene(), nullptr);
     EXPECT_EQ(SceneManager::GetCurSceneRef().sceneName, "SceneStorage_Target");
     EXPECT_NE(SceneManager::GetSceneIndex("SceneStorage_Superseded"), -1);
+}
+
+namespace
+{
+    // Adds a scene holding one object and requests its load (not yet processed); returns the object
+    GameObject::Ptr AddPendingSceneWithObject(const std::string &sceneName, const std::string &objectName)
+    {
+        auto scene = Scene::Create(sceneName);
+        const auto go = GameObject::Create(objectName);
+        scene->AddRootGameObject(go);
+        SceneManager::AddScene(std::move(scene), true);
+        return go;
+    }
+
+    nlohmann::json EmptySceneData(const std::string &sceneName)
+    {
+        return {{"name", sceneName}, {"rootGameObjects", nlohmann::json::array()}};
+    }
+}
+
+// New data for a scene whose load is pending replaces the caller's instance: the load builds the new data
+TEST(SceneStorageTest, UpdateSceneDropsAPendingInstance)
+{
+    const auto go = AddPendingSceneWithObject("SceneStorage_PendingUpdate", "FromInstance");
+    nlohmann::json data = EmptySceneData("SceneStorage_PendingUpdate");
+    SceneManager::UpdateScene("SceneStorage_PendingUpdate", data);
+    SceneManager::ProcessAnyPendingSceneChange();
+
+    ASSERT_NE(SceneManager::GetCurScene(), nullptr);
+    EXPECT_EQ(SceneManager::GetCurSceneRef().sceneName, "SceneStorage_PendingUpdate");
+    EXPECT_EQ(SceneManager::GetCurSceneRef().FindGameObject("FromInstance"), nullptr);
+    EXPECT_EQ(go->GetScene(), nullptr) << "the dropped instance let go of its objects";
+}
+
+TEST(SceneStorageTest, AddSceneJsonDropsAPendingInstance)
+{
+    const auto go = AddPendingSceneWithObject("SceneStorage_PendingJson", "FromInstance");
+    nlohmann::json data = EmptySceneData("SceneStorage_PendingJson");
+    SceneManager::AddScene(data);
+    SceneManager::ProcessAnyPendingSceneChange();
+
+    ASSERT_NE(SceneManager::GetCurScene(), nullptr);
+    EXPECT_EQ(SceneManager::GetCurSceneRef().sceneName, "SceneStorage_PendingJson");
+    EXPECT_EQ(SceneManager::GetCurSceneRef().FindGameObject("FromInstance"), nullptr);
+    EXPECT_EQ(go->GetScene(), nullptr);
+}
+
+TEST(SceneStorageTest, LoadingThePendingSceneAgainKeepsTheInstance)
+{
+    const auto go = AddPendingSceneWithObject("SceneStorage_LoadTwice", "Kept");
+    SceneManager::LoadScene("SceneStorage_LoadTwice");
+    SceneManager::LoadScene(SceneManager::GetSceneIndex("SceneStorage_LoadTwice"));
+    SceneManager::ProcessAnyPendingSceneChange();
+
+    ASSERT_NE(SceneManager::GetCurScene(), nullptr);
+    EXPECT_EQ(go->GetScene(), SceneManager::GetCurScene());
+    EXPECT_EQ(SceneManager::GetCurSceneRef().FindGameObject("Kept"), go);
+}
+
+// Re-adding the loaded scene's name without loading replaces only the stored data
+TEST(SceneStorageTest, ReAddingTheLoadedSceneWithoutLoadingLeavesItRunning)
+{
+    const auto go = AddPendingSceneWithObject("SceneStorage_Live2", "Live");
+    SceneManager::ProcessAnyPendingSceneChange();
+    const Scene *live = SceneManager::GetCurScene();
+    ASSERT_NE(live, nullptr);
+
+    SceneManager::AddScene(Scene::Create("SceneStorage_Live2"), false);
+    SceneManager::ProcessAnyPendingSceneChange();
+
+    EXPECT_EQ(SceneManager::GetCurScene(), live);
+    EXPECT_EQ(go->GetScene(), live);
+    const std::unique_ptr<Scene> stored = SceneManager::GetScene("SceneStorage_Live2");
+    ASSERT_NE(stored, nullptr);
+    EXPECT_EQ(stored->FindGameObject("Live"), nullptr) << "the stored data is the re-added (empty) scene";
+}
+
+// Renaming a stored scene to another stored scene's name would make one unreachable by name
+TEST(SceneStorageTest, UpdateSceneRefusesADuplicateName)
+{
+    SceneManager::AddScene(Scene::Create("SceneStorage_NameA"), false);
+    SceneManager::AddScene(Scene::Create("SceneStorage_NameB"), false);
+    const int indexA = SceneManager::GetSceneIndex("SceneStorage_NameA");
+    const int indexB = SceneManager::GetSceneIndex("SceneStorage_NameB");
+
+    nlohmann::json renamed = EmptySceneData("SceneStorage_NameA");
+    SceneManager::UpdateScene(indexB, renamed);
+
+    EXPECT_EQ(SceneManager::GetSceneIndex("SceneStorage_NameA"), indexA);
+    EXPECT_EQ(SceneManager::GetSceneIndex("SceneStorage_NameB"), indexB);
+    EXPECT_TRUE(SceneManager::HasScene("SceneStorage_NameB"));
+    EXPECT_FALSE(SceneManager::HasScene("SceneStorage_NoSuchName"));
 }
