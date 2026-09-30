@@ -207,7 +207,9 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
     }
 
     // A root object stops being a root: it used to stay in the scene's roots as well, so it was
-    // updated, rendered and serialized twice and survived its parent's destruction
+    // updated, rendered and serialized twice and survived its parent's destruction.
+    // Note: this edits the root list directly (as RemoveRootGameObject does), so reparenting a root from
+    // inside a TraverseAll/TraverseUntil callback isn't supported.
     if (!child->_parent.lock() && child->_scene)
     {
         std::erase(child->_scene->_rootGameObjects, child);
@@ -392,31 +394,43 @@ Component* GameObject::GetComponent(const std::type_index &type) const
 
 bool GameObject::RemoveComponent(const std::type_index &type)
 {
-    if (const auto it = _componentMap.find(type); it != _componentMap.end())
+    const auto it = _componentMap.find(type);
+    return it != _componentMap.end() && RemoveComponent(it->second);
+}
+
+bool GameObject::RemoveComponent(Component *component)
+{
+    const auto vecIt = std::ranges::find_if(_components, [component](const std::unique_ptr<Component> &ptr)
     {
-        const auto component = it->second;
-        component->RunDestroyCallbacks(IsActiveInHierarchyIgnoringDestruction());
-        const std::type_index componentType = typeid(*component);
+        return ptr.get() == component;
+    });
+    if (!component || vecIt == _components.end())
+    {
+        return false;
+    }
 
-        // The scene keeps raw pointers to attached components; drop them before the component is freed
-        if (_scene)
-        {
-            _scene->DetachComponent(component);
-        }
+    component->RunDestroyCallbacks(IsActiveInHierarchyIgnoringDestruction());
+    const std::type_index componentType = typeid(*component);
 
-        // Remove from map; another component of the same type (if any) becomes the one GetComponent finds
-        _componentMap.erase(it);
+    // The scene keeps raw pointers to attached components; drop them before the component is freed
+    if (_scene)
+    {
+        _scene->DetachComponent(component);
+    }
 
-        // Remove from vector
-        if (const auto vecIt = std::ranges::find_if(_components,
-                                                    [component](const std::unique_ptr<Component> &ptr)
-                                                    {
-                                                        return ptr.get() == component;
-                                                    }); vecIt != _components.end())
-        {
-            _components.erase(vecIt);
-        }
+    // The map points at the first of each type; only its removal changes what GetComponent finds
+    const auto mapIt = _componentMap.find(componentType);
+    const bool wasMapped = mapIt != _componentMap.end() && mapIt->second == component;
+    if (wasMapped)
+    {
+        _componentMap.erase(mapIt);
+    }
 
+    // Found again: a destroy callback may have changed the vector
+    std::erase_if(_components, [component](const std::unique_ptr<Component> &ptr) { return ptr.get() == component; });
+
+    if (wasMapped)
+    {
         for (const auto &remaining : _components)
         {
             if (std::type_index(typeid(*remaining)) == componentType)
@@ -425,10 +439,9 @@ bool GameObject::RemoveComponent(const std::type_index &type)
                 break;
             }
         }
-
-        return true;
     }
-    return false;
+
+    return true;
 }
 
 void GameObject::RemoveAllComponents()

@@ -246,7 +246,8 @@ void Application::Run()
         SceneManager::ProcessAnyPendingSceneChange();
     }
 
-    if (_quitRequested && SceneManager::GetCurScene() != nullptr)
+    // Window close and Quit() both end the run; components get OnApplicationQuit either way
+    if (SceneManager::GetCurScene() != nullptr)
     {
         SceneManager::GetCurSceneRef().OnApplicationQuit();
     }

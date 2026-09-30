@@ -101,6 +101,8 @@ namespace N2Engine
         Ptr GetParent() const { return _parent.lock(); }
         void SetParent(Ptr parent, bool keepWorldPosition = true);
         void AddChild(Ptr child, bool keepWorldPosition = true);
+        /// Detaches the child but leaves it in the scene without making it a root (destroy paths rely on
+        /// this); use child->SetParent(nullptr) to make it a root object
         void RemoveChild(Ptr child, bool keepWorldPosition = true);
 
         const std::vector<Ptr>& GetChildren() const { return _children; }
@@ -140,7 +142,10 @@ namespace N2Engine
 
         // Component system - Non-template methods
         Component* GetComponent(const std::type_index &type) const;
+        /// Removes the component GetComponent finds for the type (the first of it)
         bool RemoveComponent(const std::type_index &type);
+        /// Removes this specific component (e.g. the second of two of a type)
+        bool RemoveComponent(Component *component);
         void RemoveAllComponents();
         size_t GetComponentCount() const;
         const std::vector<std::unique_ptr<Component>>& GetAllComponents() const { return _components; }
