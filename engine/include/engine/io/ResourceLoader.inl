@@ -86,6 +86,17 @@ namespace N2Engine::IO
     }
 
     template <typename T>
+    std::shared_ptr<T> ResourceLoader::GetCachedByUUID(const Math::UUID& uuid) const
+    {
+        auto it = _cacheByUUID.find(uuid);
+        if (it != _cacheByUUID.end())
+        {
+            return std::dynamic_pointer_cast<T>(it->second);
+        }
+        return nullptr;
+    }
+
+    template <typename T>
     void ResourceLoader::RegisterSimpleLoader(const std::string& extension)
     {
         static_assert(std::is_base_of_v<Base::Asset, T>, "T must be an Asset type");

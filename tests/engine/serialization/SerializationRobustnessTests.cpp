@@ -257,6 +257,90 @@ TEST_F(ResourceLoaderTest, ResourcePathsCannotEscapeTheAssetsRoot)
 }
 
 // ============================================================================
+// One asset registry: IO::Resources sees what IO::ResourceLoader loaded and vice versa
+// ============================================================================
+
+namespace
+{
+    class ScriptHolder final : public SerializableComponent
+    {
+    public:
+        explicit ScriptHolder(GameObject &go) : SerializableComponent(go) { RegisterAssetRef("script", script); }
+        [[nodiscard]] std::string GetTypeName() const override { return "ScriptHolder"; }
+
+        std::shared_ptr<LuaScript> script;
+    };
+}
+
+TEST_F(ResourceLoaderTest, ProjectAssetLoadedThroughResourceLoaderIsFoundThroughResources)
+{
+    const IO::ResourcePath path("res://scripts/thing.lua");
+    const auto script = IO::ResourceLoader::Instance().Load<LuaScript>(path);
+    ASSERT_NE(script, nullptr);
+
+    // The two registries used to be unconnected, so these all missed
+    EXPECT_EQ(IO::Resources::Instance().GetAsset<LuaScript>(script->GetUUID()), script);
+    EXPECT_EQ(IO::Resources::Instance().GetAsset<LuaScript>(fs::path("res://scripts/thing.lua")), script);
+    EXPECT_EQ(IO::Resources::Instance().GetAsset<LuaScript>(Asset("scripts/thing.lua")), script);
+}
+
+TEST_F(ResourceLoaderTest, ProjectAssetLoadedThroughResourcesHasItsMetaUUID)
+{
+    const IO::ResourcePath path("res://scripts/thing.lua");
+    const auto script = IO::Resources::Instance().Load<LuaScript>(Asset("scripts/thing.lua"));
+    ASSERT_NE(script, nullptr);
+
+    // It used to be a second copy under a random UUID that ResourceLoader knew nothing about
+    EXPECT_EQ(script->GetUUID(), IO::ResourceLoader::Instance().GetUUID(path));
+    EXPECT_EQ(IO::ResourceLoader::Instance().GetCached<LuaScript>(path), script);
+    EXPECT_EQ(IO::ResourceLoader::Instance().LoadByUUID<LuaScript>(script->GetUUID()), script);
+}
+
+TEST_F(ResourceLoaderTest, AssetRefToAnAssetLoadedThroughResourcesResolvesInALaterRun)
+{
+    json saved;
+    Math::UUID scriptUUID;
+    {
+        const auto script = IO::Resources::Instance().Load<LuaScript>(Asset("scripts/thing.lua"));
+        ASSERT_NE(script, nullptr);
+        scriptUUID = script->GetUUID();
+
+        const auto go = GameObject::Create("ScriptHolderObject");
+        auto *holder = go->AddComponent<ScriptHolder>();
+        holder->script = script;
+        saved = holder->Serialize();
+    }
+
+    // A later run: nothing is loaded, so the reference must resolve by the stable (meta) UUID
+    IO::ResourceLoader::Instance().ClearCache();
+
+    const auto go = GameObject::Create("ReloadedScriptHolder");
+    auto *holder = go->AddComponent<ScriptHolder>();
+    holder->Deserialize(saved, nullptr);
+
+    ASSERT_NE(holder->script, nullptr);
+    EXPECT_EQ(holder->script->GetUUID(), scriptUUID);
+}
+
+TEST(ResourcesTest, AssetRefResolvesAnAssetRegisteredAtRuntime)
+{
+    const auto script = std::make_shared<LuaScript>("return {}");
+    IO::Resources::Instance().RegisterAsset(script);
+
+    const auto go = GameObject::Create("RuntimeScriptHolder");
+    auto *holder = go->AddComponent<ScriptHolder>();
+    holder->script = script;
+    const json saved = holder->Serialize();
+
+    const auto loadedObject = GameObject::Create("LoadedRuntimeScriptHolder");
+    auto *loaded = loadedObject->AddComponent<ScriptHolder>();
+    loaded->Deserialize(saved, nullptr);
+
+    EXPECT_EQ(loaded->script, script);
+    IO::Resources::Instance().UnregisterAsset(script->GetUUID());
+}
+
+// ============================================================================
 // Audio asset references across runs
 // ============================================================================
 
