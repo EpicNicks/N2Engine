@@ -4,66 +4,121 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 
+#include <vector>
+
 namespace N2Engine::Scripting::Bindings
 {
+    namespace
+    {
+        // GameObjects reach Lua only as GameObjectRef handles, never as pointers a script could keep
+        sol::optional<GameObjectRef> RefOrNil(const GameObject::Ptr &gameObject)
+        {
+            if (!gameObject)
+            {
+                return sol::nullopt;
+            }
+            return GameObjectRef(gameObject);
+        }
+
+        // A plain Lua table (the vector itself would be pushed as a view into the scene's own list)
+        sol::as_table_t<std::vector<GameObjectRef>> RefList(const std::vector<GameObject::Ptr> &gameObjects)
+        {
+            std::vector<GameObjectRef> refs;
+            refs.reserve(gameObjects.size());
+            for (const auto &gameObject : gameObjects)
+            {
+                refs.emplace_back(gameObject);
+            }
+            return sol::as_table(std::move(refs));
+        }
+    }
+
     void BindCore(LuaRuntime &runtime)
     {
         auto &lua = runtime.GetState();
 
-        lua.new_usertype<Positionable>(
+        lua.new_usertype<PositionableRef>(
             "Positionable",
-            "GetPosition", &Positionable::GetPosition,
-            "SetPosition", &Positionable::SetPosition,
-            "GetRotation", &Positionable::GetRotation,
-            "SetRotation", &Positionable::SetRotation,
-            "GetScale", &Positionable::GetScale,
-            "SetScale", &Positionable::SetScale,
-            "GetForward", &Positionable::GetForward,
-            "GetRight", &Positionable::GetRight,
-            "GetUp", &Positionable::GetUp
+            sol::no_constructor,
+            sol::meta_function::equal_to, &SameRef<PositionableRef>,
+
+            "IsValid", [](const PositionableRef &p) { return p.IsValid(); },
+            "GetPosition", Forward<PositionableRef, &Positionable::GetPosition>(),
+            "SetPosition", Forward<PositionableRef, &Positionable::SetPosition>(),
+            "GetRotation", Forward<PositionableRef, &Positionable::GetRotation>(),
+            "SetRotation", Forward<PositionableRef, &Positionable::SetRotation>(),
+            "GetScale", Forward<PositionableRef, &Positionable::GetScale>(),
+            "SetScale", Forward<PositionableRef, &Positionable::SetScale>(),
+            "GetForward", Forward<PositionableRef, &Positionable::GetForward>(),
+            "GetRight", Forward<PositionableRef, &Positionable::GetRight>(),
+            "GetUp", Forward<PositionableRef, &Positionable::GetUp>()
         );
 
-        lua.new_usertype<GameObject>(
+        lua.new_usertype<GameObjectRef>(
             "GameObject",
-            // Factories (not constructors) so Lua gets a shared_ptr that scenes and parents can hold
+            // The script owns an object it creates, so it survives until a scene or parent holds it
             sol::call_constructor, sol::factories(
-                []() { return GameObject::Create(); },
-                [](const std::string &name) { return GameObject::Create(name); }
+                []() { return GameObjectRef::Owning(GameObject::Create()); },
+                [](const std::string &name) { return GameObjectRef::Owning(GameObject::Create(name)); }
             ),
             "Create", sol::overload(
-                []() { return GameObject::Create(); },
-                [](const std::string &name) { return GameObject::Create(name); }
+                []() { return GameObjectRef::Owning(GameObject::Create()); },
+                [](const std::string &name) { return GameObjectRef::Owning(GameObject::Create(name)); }
             ),
+            sol::meta_function::equal_to, &SameRef<GameObjectRef>,
 
-            "GetName", &GameObject::GetName,
-            "SetName", &GameObject::SetName,
-            "IsActive", &GameObject::IsActive,
-            "SetActive", &GameObject::SetActive,
-            "CreatePositionable", &GameObject::CreatePositionable,
-            "GetPositionable", &GameObject::GetPositionable,
-            "HasPositionable", &GameObject::HasPositionable,
-            "AddChild", [](GameObject &go, std::shared_ptr<GameObject> child)
+            "IsValid", [](const GameObjectRef &go) { return go.IsValid(); },
+            "GetName", Forward<GameObjectRef, &GameObject::GetName>(),
+            "SetName", Forward<GameObjectRef, &GameObject::SetName>(),
+            "IsActive", Forward<GameObjectRef, &GameObject::IsActive>(),
+            "SetActive", Forward<GameObjectRef, &GameObject::SetActive>(),
+            "CreatePositionable", Forward<GameObjectRef, &GameObject::CreatePositionable>(),
+            "GetPositionable", [](const GameObjectRef &go) -> sol::optional<PositionableRef>
             {
-                go.AddChild(child);
+                const GameObject::Ptr gameObject = go.Pin();
+                if (!gameObject->HasPositionable())
+                {
+                    return sol::nullopt;
+                }
+                return PositionableRef(*gameObject);
             },
-            "RemoveChild", [](GameObject &go, std::shared_ptr<GameObject> child)
+            "HasPositionable", Forward<GameObjectRef, &GameObject::HasPositionable>(),
+            "AddChild", [](const GameObjectRef &go, const GameObjectRef &child)
             {
-                go.RemoveChild(child);
+                go.Pin()->AddChild(child.Pin());
             },
-            "GetParent", &GameObject::GetParent,
-            "FindChild", &GameObject::FindChild,
-            "FindChildRecursive", &GameObject::FindChildRecursive,
-            "Destroy", &GameObject::Destroy,
-            "AddComponent", &AddComponentByName,
-            "GetComponent", &GetComponentByName
-        );
-
-        lua.new_usertype<Component>(
-            "Component",
-            "GetGameObject", &Component::GetGameObject,
-            "IsActive", &Component::IsActive,
-            "SetActive", &Component::SetActive,
-            "IsDestroyed", &Component::IsDestroyed
+            "RemoveChild", [](const GameObjectRef &go, GameObjectRef &child)
+            {
+                const GameObject::Ptr detached = child.Pin();
+                // The parent may have been its only owner; the script's handle keeps it alive instead
+                child.TakeOwnership();
+                go.Pin()->RemoveChild(detached);
+            },
+            "GetParent", [](const GameObjectRef &go) { return RefOrNil(go.Pin()->GetParent()); },
+            "FindChild", [](const GameObjectRef &go, const std::string &name)
+            {
+                return RefOrNil(go.Pin()->FindChild(name));
+            },
+            "FindChildRecursive", [](const GameObjectRef &go, const std::string &name)
+            {
+                return RefOrNil(go.Pin()->FindChildRecursive(name));
+            },
+            "Destroy", [](const GameObjectRef &go)
+            {
+                // Destroying an already destroyed object is a no-op, not an error
+                if (const GameObject::Ptr gameObject = go.Lock(); gameObject && !gameObject->IsDestroyed())
+                {
+                    gameObject->Destroy();
+                }
+            },
+            "AddComponent", [](const GameObjectRef &go, const std::string &typeName, sol::this_state state)
+            {
+                return AddComponentByName(*go.Pin(), typeName, state);
+            },
+            "GetComponent", [](const GameObjectRef &go, const std::string &typeName, sol::this_state state)
+            {
+                return GetComponentByName(*go.Pin(), typeName, state);
+            }
         );
 
         lua.new_usertype<Scene>(
@@ -72,13 +127,35 @@ namespace N2Engine::Scripting::Bindings
 
             "sceneName", &Scene::sceneName,
 
-            "FindGameObject", &Scene::FindGameObject,
-            "FindGameObjectsByTag", &Scene::FindGameObjectsByTag,
-            "GetAllGameObjects", &Scene::GetAllGameObjects,
-            "GetRootGameObjects", &Scene::GetRootGameObjects,
-            "AddRootGameObject", &Scene::AddRootGameObject,
-            "RemoveRootGameObject", &Scene::RemoveRootGameObject,
-            "DestroyGameObject", &Scene::DestroyGameObject
+            "FindGameObject", [](const Scene &scene, const std::string &name)
+            {
+                return RefOrNil(scene.FindGameObject(name));
+            },
+            "FindGameObjectsByTag", [](const Scene &scene, const std::string &tag)
+            {
+                return RefList(scene.FindGameObjectsByTag(tag));
+            },
+            "GetAllGameObjects", [](const Scene &scene) { return RefList(scene.GetAllGameObjects()); },
+            "GetRootGameObjects", [](const Scene &scene) { return RefList(scene.GetRootGameObjects()); },
+            "AddRootGameObject", [](Scene &scene, const GameObjectRef &gameObject)
+            {
+                scene.AddRootGameObject(gameObject.Pin());
+            },
+            "RemoveRootGameObject", [](Scene &scene, GameObjectRef &gameObject)
+            {
+                const GameObject::Ptr root = gameObject.Lock();
+                if (!root)
+                {
+                    return false;
+                }
+                // The scene may have been its only owner; the script's handle keeps it alive instead
+                gameObject.TakeOwnership();
+                return scene.RemoveRootGameObject(root);
+            },
+            "DestroyGameObject", [](Scene &scene, const GameObjectRef &gameObject)
+            {
+                return scene.DestroyGameObject(gameObject.Lock()); // false once it's gone
+            }
         );
 
         // ===== SceneManager (global) =====

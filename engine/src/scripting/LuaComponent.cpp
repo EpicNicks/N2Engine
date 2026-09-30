@@ -103,8 +103,9 @@ namespace N2Engine::Scripting
         _scriptInstance = lua.create_table();
         _scriptInstance[sol::metatable_key] = scriptClass;
 
-        _scriptInstance["component"] = this;
-        _scriptInstance["gameObject"] = std::ref(_gameObject);
+        // Handles, so anything that copies them out of self can't reach freed objects later
+        _scriptInstance["component"] = ComponentRef<LuaComponent>(*this);
+        _scriptInstance["gameObject"] = GameObjectRef(_gameObject);
 
         _hasMissingScript = false;
     }
@@ -298,11 +299,12 @@ namespace N2Engine::Scripting
         }
     }
 
+    // Scripts get the collision with handles in place of its raw pointers, so keeping it is safe
     void LuaComponent::OnCollisionEnter(const Physics::Collision &collision)
     {
         if (_hasOnCollisionEnter && !_hasMissingScript)
         {
-            CallLuaMethod("OnCollisionEnter", collision);
+            CallLuaMethod("OnCollisionEnter", Bindings::CollisionToLua(collision, _scriptInstance.lua_state()));
         }
     }
 
@@ -310,7 +312,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnCollisionStay && !_hasMissingScript)
         {
-            CallLuaMethod("OnCollisionStay", collision);
+            CallLuaMethod("OnCollisionStay", Bindings::CollisionToLua(collision, _scriptInstance.lua_state()));
         }
     }
 
@@ -318,7 +320,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnCollisionExit && !_hasMissingScript)
         {
-            CallLuaMethod("OnCollisionExit", collision);
+            CallLuaMethod("OnCollisionExit", Bindings::CollisionToLua(collision, _scriptInstance.lua_state()));
         }
     }
 
@@ -326,7 +328,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnTriggerEnter && !_hasMissingScript)
         {
-            CallLuaMethod("OnTriggerEnter", trigger);
+            CallLuaMethod("OnTriggerEnter", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
         }
     }
 
@@ -334,7 +336,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnTriggerStay && !_hasMissingScript)
         {
-            CallLuaMethod("OnTriggerStay", trigger);
+            CallLuaMethod("OnTriggerStay", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
         }
     }
 
@@ -342,7 +344,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnTriggerExit && !_hasMissingScript)
         {
-            CallLuaMethod("OnTriggerExit", trigger);
+            CallLuaMethod("OnTriggerExit", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
         }
     }
 
@@ -457,7 +459,7 @@ namespace N2Engine::Scripting
                     GameObject *go = resolver->FindGameObject(uuid.value());
                     if (go)
                     {
-                        _scriptInstance[fieldName] = go;
+                        _scriptInstance[fieldName] = GameObjectRef(*go);
                     }
                     else
                     {
