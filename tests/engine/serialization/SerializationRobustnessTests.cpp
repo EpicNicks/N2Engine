@@ -18,6 +18,7 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/io/Resources.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
@@ -199,6 +200,34 @@ TEST_F(ResourceLoaderTest, ReloadRefreshesMetadata)
 
     // Reload used to discard the refreshed metadata, so this stayed true forever
     EXPECT_FALSE(IO::ResourceLoader::Instance().HasSourceChanged(path));
+}
+
+TEST(ResourcePathTest, EquivalentSpellingsAreOnePath)
+{
+    const IO::ResourcePath canonical("res://scripts/thing.lua");
+
+    // Resolve accepted these but lookups keyed on the raw spelling reported "Resource not found"
+    EXPECT_EQ(IO::ResourcePath("res://scripts/../scripts/thing.lua"), canonical);
+    EXPECT_EQ(IO::ResourcePath("res://scripts//./thing.lua"), canonical);
+    EXPECT_EQ(IO::ResourcePath("res://scripts\\thing.lua"), canonical);
+    EXPECT_EQ(canonical.GetPath(), "scripts/thing.lua");
+    EXPECT_EQ(IO::ResourcePath("res://../outside.txt").GetPath(), "../outside.txt"); // still rejected by Resolve
+}
+
+TEST(ResourcesTest, AssetRegisteredUnderTwoPathsIsEvicted)
+{
+    auto asset = GameObject::Create("TwoPaths");
+    const std::weak_ptr<GameObject> watcher = asset;
+    IO::Resources::Instance().RegisterAsset(asset, "two_paths_a.asset");
+    IO::Resources::Instance().RegisterAsset(asset, "two_paths_b.asset");
+
+    asset.reset();
+    IO::Resources::Instance().RemoveUnused();
+
+    // Two path entries counted as outside references, so it was never evicted
+    EXPECT_TRUE(watcher.expired());
+    EXPECT_EQ(IO::Resources::Instance().GetAsset<GameObject>(std::filesystem::path("two_paths_a.asset")), nullptr);
+    EXPECT_EQ(IO::Resources::Instance().GetAsset<GameObject>(std::filesystem::path("two_paths_b.asset")), nullptr);
 }
 
 TEST_F(ResourceLoaderTest, RemoveUnusedEvictsOnlyUnreferencedAssets)

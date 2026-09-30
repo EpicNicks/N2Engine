@@ -51,6 +51,8 @@ namespace N2Engine::Audio
 
         /// The OpenAL source id while it has one (0 otherwise); for diagnostics and tests
         [[nodiscard]] ALuint GetSourceHandle() const { return _source; }
+        /// AudioSystem calls this on Shutdown: the OpenAL context is going away, so the id is meaningless
+        void ForgetSource() { _source = 0; }
 
         // 3D audio settings
         void SetMinDistance(float distance);
