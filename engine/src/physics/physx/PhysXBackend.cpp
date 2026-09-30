@@ -210,6 +210,12 @@ namespace N2Engine::Physics
         }
         _endedCollisions.clear();
 
+        for (auto& [pair, data] : _forgottenCollisions)
+        {
+            delete data;
+        }
+        _forgottenCollisions.clear();
+
         if (_scene)
             _scene->release();
         if (_dispatcher)
@@ -1133,13 +1139,48 @@ namespace N2Engine::Physics
 
     void PhysXBackend::ForgetShape(const PxShape *shape)
     {
-        for (TouchMap *touches : {&_collisionTouches, &_triggerTouches})
+        // A body pair whose last touching shape pair goes ends now: PhysX's touch-lost for the removed
+        // shape is skipped, so the other body would otherwise never get Exit, and a re-created shape
+        // would fire a second Enter. Both shapes are still alive here (released after this).
+        const auto involves = [shape](const ShapePair &p) { return p.onA == shape || p.onB == shape; };
+        for (auto it = _collisionTouches.begin(); it != _collisionTouches.end();)
         {
-            for (auto it = touches->begin(); it != touches->end();)
+            const auto removed = std::ranges::find_if(it->second, involves);
+            if (removed == it->second.end())
             {
-                std::erase_if(it->second, [shape](const ShapePair &p) { return p.onA == shape || p.onB == shape; });
-                it = it->second.empty() ? touches->erase(it) : std::next(it);
+                ++it;
+                continue;
             }
+            const ShapePair last = *removed;
+            std::erase_if(it->second, involves);
+            if (!it->second.empty())
+            {
+                ++it;
+                continue;
+            }
+            auto *data = new Collision();
+            data->collider = ColliderOf(last.onA); // LiveCollider nulls the removed one at dispatch
+            data->otherCollider = ColliderOf(last.onB);
+            _forgottenCollisions.push_back({it->first, data});
+            it = _collisionTouches.erase(it);
+        }
+        for (auto it = _triggerTouches.begin(); it != _triggerTouches.end();)
+        {
+            const auto removed = std::ranges::find_if(it->second, involves);
+            if (removed == it->second.end())
+            {
+                ++it;
+                continue;
+            }
+            const ShapePair last = *removed;
+            std::erase_if(it->second, involves);
+            if (!it->second.empty())
+            {
+                ++it;
+                continue;
+            }
+            _forgottenTriggers.push_back({it->first, ColliderOf(last.onA), ColliderOf(last.onB)});
+            it = _triggerTouches.erase(it);
         }
     }
 
@@ -1162,8 +1203,38 @@ namespace N2Engine::Physics
         {
             return pair.bodyA == handle || pair.bodyB == handle;
         };
-        std::erase_if(_collisionTouches, [&involves](const auto &entry) { return involves(entry.first); });
-        std::erase_if(_triggerTouches, [&involves](const auto &entry) { return involves(entry.first); });
+        // The other body still gets its Exit (as in Unity): PhysX's touch-lost for a released actor is
+        // skipped by the callbacks, so nothing else would report it. This body's shapes are already
+        // released, so only the surviving side's collider is looked up; DispatchToBody skips this side.
+        const auto survivor = [handle](const CollisionPair &pair, const ShapePair &shapes, bool sideA)
+        {
+            const bool thisIsA = pair.bodyA == handle;
+            return sideA != thisIsA ? ColliderOf(sideA ? shapes.onA : shapes.onB) : nullptr;
+        };
+        for (auto it = _collisionTouches.begin(); it != _collisionTouches.end();)
+        {
+            if (!involves(it->first) || it->second.empty())
+            {
+                it = involves(it->first) ? _collisionTouches.erase(it) : std::next(it);
+                continue;
+            }
+            auto *data = new Collision();
+            data->collider = survivor(it->first, it->second.front(), true);
+            data->otherCollider = survivor(it->first, it->second.front(), false);
+            _forgottenCollisions.push_back({it->first, data});
+            it = _collisionTouches.erase(it);
+        }
+        for (auto it = _triggerTouches.begin(); it != _triggerTouches.end();)
+        {
+            if (!involves(it->first) || it->second.empty())
+            {
+                it = involves(it->first) ? _triggerTouches.erase(it) : std::next(it);
+                continue;
+            }
+            _forgottenTriggers.push_back({it->first, survivor(it->first, it->second.front(), true),
+                                          survivor(it->first, it->second.front(), false)});
+            it = _triggerTouches.erase(it);
+        }
     }
 
     void PhysXBackend::ProcessCollisionCallbacks()
@@ -1171,6 +1242,11 @@ namespace N2Engine::Physics
         // Every event goes to *each* body's own GameObject (A's components get A's view, B's get B's).
         // This used to send both to B's first collider, which could be null or empty.
         // Take the event lists first so handlers can't disturb what's being iterated.
+
+        // ===== Exits for pairs ended by removing a body or collider =====
+        // First, so a collider re-created in the same step reports Exit(old) before Enter(new)
+        DispatchCollisionExits(_forgottenCollisions);
+        DispatchTriggerExits(_forgottenTriggers);
 
         // ===== OnCollisionEnter =====
         std::vector<CollisionEvent> newCollisions;
@@ -1207,16 +1283,7 @@ namespace N2Engine::Physics
         }
 
         // ===== OnCollisionExit =====
-        std::vector<CollisionEvent> endedCollisions;
-        endedCollisions.swap(_endedCollisions);
-        for (const auto &event : endedCollisions)
-        {
-            const Collision forA = CreateCollisionData(event.pair, *event.data, true);
-            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnCollisionExit(forA); });
-            const Collision forB = CreateCollisionData(event.pair, *event.data, false);
-            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnCollisionExit(forB); });
-            delete event.data;
-        }
+        DispatchCollisionExits(_endedCollisions);
 
         // ===== OnTriggerEnter =====
         std::vector<TriggerEvent> newTriggers;
@@ -1251,9 +1318,28 @@ namespace N2Engine::Physics
         }
 
         // ===== OnTriggerExit =====
-        std::vector<TriggerEvent> endedTriggers;
-        endedTriggers.swap(_endedTriggers);
-        for (const auto &event : endedTriggers)
+        DispatchTriggerExits(_endedTriggers);
+    }
+
+    void PhysXBackend::DispatchCollisionExits(std::vector<CollisionEvent> &queue)
+    {
+        std::vector<CollisionEvent> events;
+        events.swap(queue);
+        for (const auto &event : events)
+        {
+            const Collision forA = CreateCollisionData(event.pair, *event.data, true);
+            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnCollisionExit(forA); });
+            const Collision forB = CreateCollisionData(event.pair, *event.data, false);
+            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnCollisionExit(forB); });
+            delete event.data;
+        }
+    }
+
+    void PhysXBackend::DispatchTriggerExits(std::vector<TriggerEvent> &queue)
+    {
+        std::vector<TriggerEvent> events;
+        events.swap(queue);
+        for (const auto &event : events)
         {
             const Trigger forA = CreateTriggerData(event.pair, event.colliderA, event.colliderB, true);
             DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnTriggerExit(forA); });
