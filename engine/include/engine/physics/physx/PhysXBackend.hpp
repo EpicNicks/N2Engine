@@ -34,7 +34,6 @@ namespace physx
 
 namespace N2Engine
 {
-    class Rigidbody;
     class GameObject;
     class Component;
 }
