@@ -114,7 +114,7 @@ if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)
     target_include_directories(test_project PRIVATE ${PHYSX_INCLUDE_DIR})
     target_link_directories(test_project PRIVATE ${PHYSX_LIB_DIR})
     target_link_libraries(test_project PRIVATE ${PHYSX_LIBS})
-    target_compile_definitions(test_project PRIVATE N2ENGINE_HAS_PHYSX=1)
+    # N2ENGINE_PHYSX_ENABLED comes from the engine target (PUBLIC)
 endif()
 
 add_library(dummy_target INTERFACE)

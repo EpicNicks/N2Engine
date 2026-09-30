@@ -215,8 +215,8 @@ namespace N2Engine::Physics
         /// Creates a shape on the body, owned by (and recorded under) the collider that asked for it
         void AttachColliderShape(PhysicsBodyHandle body, ICollider* collider, const physx::PxGeometry& geometry,
                                  const physx::PxTransform& localPose, const PhysicsMaterial& material);
-        /// Drops active collision/trigger pairs involving the body (it was destroyed or lost its shapes);
-        /// PhysX's own "touch lost" for them refers to released actors and is ignored
+        /// Ends active collision/trigger pairs involving the body (it was destroyed), queueing their Exit
+        /// for the other body; PhysX's own "touch lost" for them refers to released actors and is ignored
         void ForgetPairsWithBody(PhysicsBodyHandle handle);
         /// The GameObject a body belongs to: its Rigidbody's, else its first collider's
         [[nodiscard]] GameObject* GetBodyOwner(PhysicsBodyHandle handle);
@@ -317,6 +317,14 @@ namespace N2Engine::Physics
         std::vector<TriggerEvent> _newTriggers;
         TouchMap _triggerTouches;
         std::vector<TriggerEvent> _endedTriggers;
+        // Ended by removing a body or collider rather than reported by PhysX; dispatched before the
+        // step's Enter events
+        std::vector<CollisionEvent> _forgottenCollisions;
+        std::vector<TriggerEvent> _forgottenTriggers;
+
+        /// Dispatches and clears a queue of ended pairs (OnCollisionExit / OnTriggerExit to both sides)
+        void DispatchCollisionExits(std::vector<CollisionEvent>& queue);
+        void DispatchTriggerExits(std::vector<TriggerEvent>& queue);
 
         /// @returns true if this is the body pair's first touching shape pair
         static bool AddTouch(TouchMap& touches, const CollisionPair& pair,
@@ -325,7 +333,7 @@ namespace N2Engine::Physics
         static bool RemoveTouch(TouchMap& touches, const CollisionPair& pair,
                                 const physx::PxShape* shapeOnA, const physx::PxShape* shapeOnB);
         /// Drops a shape that's being removed from every touch list (PhysX's later "lost" event for it
-        /// refers to a removed shape and is ignored). A body pair left with nothing ends silently.
+        /// refers to a removed shape and is ignored). A body pair left with nothing queues its Exit.
         void ForgetShape(const physx::PxShape* shape);
         /// The collider that owns a shape (stored in the shape's userData)
         static ICollider* ColliderOf(const physx::PxShape* shape);
