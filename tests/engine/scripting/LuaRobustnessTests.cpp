@@ -129,7 +129,11 @@ TEST_F(LuaRobustnessTest, CollisionIsReadableFromLua)
     const sol::protected_function_result result = read(collision);
 
     // Collision had no Lua type, so any field access was "attempt to index a userdata value"
-    ASSERT_TRUE(result.valid()) << sol::error(result).what();
+    if (!result.valid())
+    {
+        const sol::error error = result;
+        FAIL() << error.what();
+    }
     EXPECT_EQ(result.get<std::string>(0), "Other");
     EXPECT_EQ(result.get<int>(1), 1);
     EXPECT_FLOAT_EQ(result.get<float>(2), 2.0f);

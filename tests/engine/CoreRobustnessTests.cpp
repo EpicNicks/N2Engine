@@ -91,11 +91,12 @@ TEST(CoreRobustnessTest, RemovingTheFirstComponentExposesTheNext)
     auto *first = go->AddComponent<Marker>();
     auto *second = go->AddComponent<Marker>();
 
-    ASSERT_TRUE(go->RemoveComponent(first));
+    ASSERT_EQ(go->GetComponent<Marker>(), first);
+    ASSERT_TRUE(go->RemoveComponent<Marker>()); // removes the one GetComponent finds
 
     // The type used to vanish from lookup while a component of it was still attached
     EXPECT_EQ(go->GetComponent<Marker>(), second);
-    ASSERT_TRUE(go->RemoveComponent(second));
+    ASSERT_TRUE(go->RemoveComponent<Marker>());
     EXPECT_EQ(go->GetComponent<Marker>(), nullptr);
 }
 
