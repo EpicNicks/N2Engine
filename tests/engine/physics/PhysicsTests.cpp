@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
@@ -12,6 +14,7 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/physics/BoxCollider.hpp"
+#include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/Raycast.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SphereCollider.hpp"
@@ -561,7 +564,8 @@ namespace
 class PhysicsMassTest : public PhysicsTest
 {
 protected:
-    // Dynamic, weightless (so it stays put), with the given mass set before the body exists
+    // Dynamic and weightless (so it stays put). The body is only created when the attach queue runs
+    // in the next Step, so the mass here is the one it's created with.
     Rigidbody *AddFloatingBody(GameObject &go, const float mass)
     {
         auto *body = go.AddComponent<Rigidbody>();
@@ -578,7 +582,8 @@ TEST_F(PhysicsMassTest, BodyWithoutCollidersKeepsItsMass)
     auto *body = AddFloatingBody(*go, 3.0f);
     Step(1);
 
-    // setMassAndUpdateInertia on the shapeless actor used to reset the mass to 1
+    // Fallback: the configured mass, a centred COM, and inertia that scales with the mass (PhysX's own
+    // shapeless default is (1,1,1) whatever the mass)
     EXPECT_NEAR(body->GetMass(), 3.0f, 1e-4f);
     ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.0f, 0.0f), 1e-4f);
     ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), Vector3(3.0f, 3.0f, 3.0f), 1e-4f);
@@ -632,7 +637,46 @@ TEST_F(PhysicsMassTest, LongBoxHasLessInertiaAboutItsLongAxis)
     const Vector3 cubeInertia = PhysX().GetInertiaTensor(cubeBody->GetHandle());
     EXPECT_LT(rodInertia.x, cubeInertia.x);
     EXPECT_GT(rodInertia.y, cubeInertia.y);
-    EXPECT_LT(rodInertia.x * 10.0f, rodInertia.y) << "a shapeless body's inertia is the same about every axis";
+    EXPECT_LT(rodInertia.x * 10.0f, rodInertia.y) << "inertia isn't following the collider's shape";
+}
+
+TEST_F(PhysicsMassTest, CapsuleHasLeastInertiaAboutItsAxis)
+{
+    // The capsule shape is rotated onto Y, so PhysX may report the principal moments in any order:
+    // compare them sorted. Two are equal (across the axis), the one about the axis is much smaller.
+    const auto go = Spawn("Pill", Vector3(0.0f, 0.0f, 0.0f));
+    auto *capsule = go->AddComponent<CapsuleCollider>();
+    capsule->SetRadius(0.25f);
+    capsule->SetHeight(2.0f);
+    capsule->SetOffset(Vector3(0.0f, 0.5f, 0.0f));
+    auto *body = AddFloatingBody(*go, 1.0f);
+    Step(1);
+
+    const Vector3 inertia = PhysX().GetInertiaTensor(body->GetHandle());
+    std::array<float, 3> moments{inertia.x, inertia.y, inertia.z};
+    std::ranges::sort(moments);
+    EXPECT_GT(moments[0], 0.0f);
+    EXPECT_LT(moments[0] * 4.0f, moments[1]);
+    EXPECT_NEAR(moments[1], moments[2], moments[2] * 1e-3f);
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.5f, 0.0f), 1e-4f);
+}
+
+TEST_F(PhysicsMassTest, InvalidDeserializedMassFallsBackToOne)
+{
+    const auto go = Spawn("Massless", Vector3(0.0f, 0.0f, 0.0f));
+    go->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    auto *body = AddFloatingBody(*go, 2.0f);
+    nlohmann::json data;
+    data["_mass"] = 0.0f;
+    body->Deserialize(data, nullptr); // unlike SetMass, doesn't clamp
+    Step(1);
+
+    EXPECT_NEAR(body->GetMass(), 1.0f, 1e-4f);
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(1.0f, Vector3(1.0f, 1.0f, 1.0f)), 1e-3f);
+
+    body->AddImpulse(Vector3(1.0f, 0.0f, 0.0f));
+    Step(1);
+    EXPECT_NEAR(body->GetVelocity().x, 1.0f, 0.05f) << "a zero mass made the dynamic body immovable";
 }
 
 TEST_F(PhysicsMassTest, OffsetColliderMovesCenterOfMass)
@@ -685,6 +729,9 @@ TEST_F(PhysicsMassTest, ChangingBodyTypeKeepsMassProperties)
     Step(1);
 
     body->SetBodyType(BodyType::Kinematic); // recreates the body
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.5f, 0.0f), 1e-4f);
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(2.0f, Vector3(1.0f, 2.0f, 3.0f)), 1e-3f);
+
     body->SetBodyType(BodyType::Dynamic);
     Step(1);
 

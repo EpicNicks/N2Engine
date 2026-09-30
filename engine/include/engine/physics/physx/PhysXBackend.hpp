@@ -183,9 +183,12 @@ namespace N2Engine::Physics
         void onTrigger(physx::PxTriggerPair* pairs, physx::PxU32 count) override;
         void onAdvance(const physx::PxRigidBody* const* bodyBuffer, const physx::PxTransform* poseBuffer, const physx::PxU32 count) override;
 
-        /// A dynamic body's mass-space (principal) inertia tensor; zero for a static or unknown body
+        /// For diagnostics and tests. A dynamic body's principal moments of inertia in the mass frame
+        /// (PxRigidBody::getMassSpaceInertiaTensor): the axes are those of the mass pose's rotation,
+        /// not necessarily the actor's. Zero for a static or unknown body.
         [[nodiscard]] Math::Vector3 GetInertiaTensor(PhysicsBodyHandle body) const;
-        /// A dynamic body's centre of mass relative to the actor; zero for a static or unknown body
+        /// For diagnostics and tests. A dynamic body's centre of mass relative to the actor (the position
+        /// of the mass pose; its rotation isn't returned). Zero for a static or unknown body.
         [[nodiscard]] Math::Vector3 GetCenterOfMass(PhysicsBodyHandle body) const;
 
     private:

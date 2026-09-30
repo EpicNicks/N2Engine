@@ -18,6 +18,7 @@
 
 #include <format>
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -71,6 +72,19 @@ namespace N2Engine::Physics
                 return PxQueryHitType::eTOUCH;
             }
         };
+
+        // Rigidbody::SetMass clamps, but a deserialized mass reaches the backend unchecked; zero would
+        // make a dynamic body immovable and a negative or non-finite one is invalid in PhysX
+        float SanitizedMass(const float mass)
+        {
+            if (mass > 0.0f && std::isfinite(mass))
+            {
+                return mass;
+            }
+
+            Logger::Warn(std::format("Invalid Rigidbody mass {}, using 1", mass));
+            return 1.0f;
+        }
     }
 
     PhysXBackend::PhysXBackend() = default;
@@ -340,12 +354,12 @@ namespace N2Engine::Physics
         BodyData *data = GetBodyData(handle);
         data->actor = body;
         data->rigidbody = rigidbody;
-        data->mass = mass;
+        data->mass = SanitizedMass(mass);
 
         body->userData = new PhysicsBodyHandle(handle);
 
-        // No shapes yet, so this is the fallback (setMassAndUpdateInertia on a shapeless actor reset the
-        // mass to 1); colliders attaching later recompute it
+        // No shapes yet, so this gives the fallback; colliders attaching later derive the real inertia
+        // and centre of mass
         UpdateMassProperties(handle);
 
         _scene->addActor(*body);
@@ -590,8 +604,9 @@ namespace N2Engine::Physics
             return;
         }
 
-        // Nothing to derive them from (PhysX would fall back to mass 1): keep the configured mass,
-        // centre it on the actor, and give it the inertia of a body with a unit radius of gyration
+        // Nothing to derive them from. PhysX would keep the mass but use inertia (1,1,1) whatever the
+        // mass; instead centre it on the actor and give it the inertia of a unit radius of gyration,
+        // so it scales with the mass like a shaped body's does
         dynamic->setMass(data->mass);
         dynamic->setCMassLocalPose(PxTransform(PxIdentity));
         dynamic->setMassSpaceInertiaTensor(PxVec3(data->mass));
@@ -793,7 +808,7 @@ namespace N2Engine::Physics
             return;
         }
 
-        data->mass = mass;
+        data->mass = SanitizedMass(mass);
         UpdateMassProperties(body);
     }
 
