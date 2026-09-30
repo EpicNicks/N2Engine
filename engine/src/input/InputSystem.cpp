@@ -11,13 +11,17 @@
 
 #include "engine/input/Mouse.hpp"
 
+#include <ranges>
+
 using namespace N2Engine::Input;
 
 InputSystem::InputSystem(Window &window)
     : _window{window}
 {
+    // The window's user pointer stays the Window: its resize callback needs it (this used to overwrite
+    // it with the Mouse, so resizing called Window::OnWindowResize on a Mouse). The Mouse's scroll
+    // callback reaches it through the Window instead.
     _mouse = std::make_unique<Mouse>(_window._window);
-    glfwSetWindowUserPointer(_window._window, _mouse.get());
 }
 
 InputSystem::~InputSystem() = default;
@@ -39,6 +43,12 @@ ActionMap* InputSystem::CreateActionMapFromJson(const std::string &name, const n
 void InputSystem::AddActionMap(std::unique_ptr<ActionMap> &&actionMap)
 {
     const std::string mapName = actionMap->name; // Store name before moving
+    if (const auto it = _actionMaps.find(mapName); it != _actionMaps.end() && _updating)
+    {
+        // Replaced from an input callback: that map's Update may be on the stack, so keep it alive
+        // until this frame's update finishes
+        _retiredMaps.push_back(std::move(it->second));
+    }
     _actionMaps.insert_or_assign(mapName, std::move(actionMap));
 
     // If this is the first map, make it current
@@ -72,10 +82,10 @@ ActionMap* InputSystem::LoadActionMap(const std::string &name)
 
 ActionMap* InputSystem::GetActionMap(const std::string &name)
 {
+    // Only looks up; LoadActionMap is what switches the active map (this used to switch too)
     if (const auto it = _actionMaps.find(name); it != _actionMaps.end())
     {
-        _curActionMapName = it->first;
-        return GetCurActionMap();
+        return it->second.get();
     }
     return nullptr;
 }
@@ -116,6 +126,24 @@ std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
 void InputSystem::Update()
 {
     _mouse->Update();
+
+    // Cleared even if a handler throws; only the outermost update frees retired maps
+    struct UpdateScope
+    {
+        InputSystem &input;
+        const bool outermost;
+
+        explicit UpdateScope(InputSystem &i) : input(i), outermost(!i._updating) { input._updating = true; }
+
+        ~UpdateScope()
+        {
+            if (outermost)
+            {
+                input._updating = false;
+                input._retiredMaps.clear();
+            }
+        }
+    } scope{*this};
 
     if (const auto it = _actionMaps.find(_curActionMapName); it != _actionMaps.end())
     {
@@ -182,7 +210,15 @@ bool InputSystem::Deserialize(const nlohmann::json &j)
         newMaps.insert_or_assign(mapName, std::move(actionMap));
     }
 
-    // Commit changes
+    // Commit changes. Reloading from an action's callback must not free the map whose Update is on
+    // the stack, so while updating the old maps are retired instead (freed when the update ends).
+    if (_updating)
+    {
+        for (auto &map : _actionMaps | std::views::values)
+        {
+            _retiredMaps.push_back(std::move(map));
+        }
+    }
     _actionMaps = std::move(newMaps);
 
     // Set first map as current if we had one before or pick any
