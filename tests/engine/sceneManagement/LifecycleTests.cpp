@@ -430,12 +430,16 @@ TEST(SceneManagerTest, DeleteSceneRemovesTheNamedScene)
     SceneManager::AddScene(Scene::Create("SM_Keep"), false);
     LoadFreshScene("SM_Loaded");
     const int loadedIndex = SceneManager::GetCurSceneIndex();
+    // Re-adding a stored name keeps its index, so on a repeated run SM_DeleteMe (deleted, then
+    // re-added) comes after SM_Loaded and nothing shifts
+    const int deletedIndex = SceneManager::GetSceneIndex("SM_DeleteMe");
+    const int expectedLoadedIndex = deletedIndex < loadedIndex ? loadedIndex - 1 : loadedIndex;
 
     EXPECT_TRUE(SceneManager::DeleteScene("SM_DeleteMe"));
 
     EXPECT_EQ(SceneManager::GetSceneIndex("SM_DeleteMe"), -1);
     EXPECT_NE(SceneManager::GetSceneIndex("SM_Keep"), -1);
-    EXPECT_EQ(SceneManager::GetCurSceneIndex(), loadedIndex - 1) << "indices after the deleted scene shift";
+    EXPECT_EQ(SceneManager::GetCurSceneIndex(), expectedLoadedIndex) << "indices after the deleted scene shift";
     EXPECT_EQ(SceneManager::GetSceneIndex("SM_Loaded"), SceneManager::GetCurSceneIndex());
     EXPECT_EQ(SceneManager::GetCurSceneRef().sceneName, "SM_Loaded");
 }

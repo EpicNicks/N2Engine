@@ -87,48 +87,68 @@ std::unique_ptr<Scene> SceneManager::GetScene(const std::string &sceneName)
     return nullptr;
 }
 
-int SceneManager::GetSceneIndex(const std::string &sceneName)
+int SceneManager::FindSceneIndex(const std::string &sceneName)
 {
-    for (int i = 0; i < GetInstance()._scenes.size(); i++)
+    const auto &scenes = GetInstance()._scenes;
+    for (int i = 0; i < static_cast<int>(scenes.size()); i++)
     {
-        // Compare the name kept beside the data; deserializing the scene (building every object and
-        // component, with their physics/audio/script state) just to read its name was far too costly
-        if (GetInstance()._scenes[i].name == sceneName)
+        // Compare the name kept beside the data, never building the scene to read it
+        if (scenes[i].name == sceneName)
         {
             return i;
         }
     }
-    Logger::Error("Index of scene with name: " + sceneName + " not found: ");
     return -1;
+}
+
+int SceneManager::GetSceneIndex(const std::string &sceneName)
+{
+    const int index = FindSceneIndex(sceneName);
+    if (index == -1)
+    {
+        Logger::Error("Index of scene with name: " + sceneName + " not found: ");
+    }
+    return index;
+}
+
+bool SceneManager::HasScene(const std::string &sceneName)
+{
+    return FindSceneIndex(sceneName) != -1;
 }
 
 int SceneManager::StoreScene(nlohmann::json data)
 {
     SceneManager &instance = GetInstance();
     std::string name = SceneNameOf(data);
-    if (!name.empty())
+    if (const int existing = name.empty() ? -1 : FindSceneIndex(name); existing != -1)
     {
-        for (int i = 0; i < static_cast<int>(instance._scenes.size()); i++)
+        // Same name: replace it, since lookups by name could never reach a second entry
+        Logger::Warn("SceneManager - replacing the stored data of scene: " + name);
+        instance._scenes[existing].data = std::move(data);
+        if (instance._sceneChange._pendingSceneIndex == existing)
         {
-            if (instance._scenes[i].name != name)
-            {
-                continue;
-            }
-            // Same name: replace it, since lookups by name could never reach a second entry
-            instance._scenes[i].data = std::move(data);
-            if (instance._sceneChange._pendingSceneIndex == i)
-            {
-                // A load already pending for this scene builds from the new data, not an older instance
-                instance._sceneChange._pendingScene.reset();
-            }
-            return i;
+            // A load already pending for this scene builds from the new data, not an older instance
+            instance._sceneChange._pendingScene.reset();
         }
+        return existing;
     }
     instance._scenes.push_back(StoredScene{.name = std::move(name), .data = std::move(data)});
     return static_cast<int>(instance._scenes.size()) - 1;
 }
 
-void SceneManager::AddScene(std::unique_ptr<Scene> &&scene, bool loadAdded)
+void SceneManager::UnloadScenes()
+{
+    SceneManager &instance = GetInstance();
+    instance._sceneChange = SceneChange{};
+    if (instance._loadedScene)
+    {
+        instance._loadedScene->Clear();
+        instance._loadedScene.reset();
+    }
+    instance._curSceneIndex = -1;
+}
+
+void SceneManager::AddScene(std::unique_ptr<Scene> scene, bool loadAdded)
 {
     if (!scene)
     {
@@ -192,7 +212,14 @@ void SceneManager::UpdateScene(int sceneIndex, nlohmann::json &newSceneData)
     auto &instance = GetInstance();
     if (sceneIndex >= 0 && sceneIndex < static_cast<int>(instance._scenes.size()))
     {
-        instance._scenes[sceneIndex] = StoredScene{.name = SceneNameOf(newSceneData), .data = newSceneData};
+        std::string newName = SceneNameOf(newSceneData);
+        if (const int other = newName.empty() ? -1 : FindSceneIndex(newName); other != -1 && other != sceneIndex)
+        {
+            // Two entries with one name: lookups by name could only ever reach the first
+            Logger::Error("SceneManager::UpdateScene - another stored scene is already named: " + newName);
+            return;
+        }
+        instance._scenes[sceneIndex] = StoredScene{.name = std::move(newName), .data = newSceneData};
         if (instance._sceneChange._pendingSceneIndex == sceneIndex)
         {
             // A load already pending for this scene builds from the new data, not an older instance

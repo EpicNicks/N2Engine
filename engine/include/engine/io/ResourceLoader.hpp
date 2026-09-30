@@ -53,6 +53,7 @@ namespace N2Engine::IO
         IO::ResourcePath MakeResourcePath(const std::filesystem::path& physicalPath) const;
         
         // === Registration ===
+        /// A new extension registered after Initialize rescans the assets, so its files get metadata
         void RegisterLoader(const std::string& extension, LoaderFunc loader);
         
         template <typename T>
