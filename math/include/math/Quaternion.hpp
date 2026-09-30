@@ -195,8 +195,8 @@ namespace N2Engine::Math
         bool IsNormalized(float tolerance = 1e-6f) const;
         bool IsIdentity(float tolerance = 1e-6f) const;
 
-        // SIMD initialization - call once at startup
-        static void InitializeSIMD();
+        // Selects the implementation tier the operations dispatch to; see Math::SetSIMDLevel
+        static void SetSIMDLevel(SIMDLevel level);
 
     private:
         // ===== SCALAR IMPLEMENTATIONS =====
@@ -253,7 +253,6 @@ namespace N2Engine::Math
         inline static DotFunc dot_func = &DotScalar;
         inline static LengthFunc length_func = &LengthScalar;
         inline static NormalizeFunc normalize_func = &NormalizeScalar;
-        inline static bool initialized = false;
 
         // ===== SSE2 IMPLEMENTATIONS =====
         static Quaternion AddSSE2(const Quaternion &a, const Quaternion &b)
@@ -297,56 +296,56 @@ namespace N2Engine::Math
 
         static Quaternion NormalizeSSE2(const Quaternion &q)
         {
-            float length_sq = DotSSE2(q, q);
-            if (length_sq < EPSILON * EPSILON)
+            // A real sqrt and divide: _mm_rsqrt_ps is only accurate to about 12 bits
+            const float length = LengthSSE2(q);
+            if (length < EPSILON)
             {
                 return Identity;
             }
 
             Quaternion result;
-            __m128 length_sq_vec = _mm_set1_ps(length_sq);
-            __m128 inv_length = _mm_rsqrt_ps(length_sq_vec); // Fast reciprocal sqrt
-            result.simd_data = _mm_mul_ps(q.simd_data, inv_length);
+            result.simd_data = _mm_div_ps(q.simd_data, _mm_set1_ps(length));
             return result;
         }
 
         static Quaternion MulSSE2(const Quaternion &a, const Quaternion &b)
         {
-            // SIMD quaternion multiplication - complex but faster for repeated operations
-            __m128 a_vec = a.simd_data; // [w, x, y, z]
-            __m128 b_vec = b.simd_data; // [w, x, y, z]
+            // Lanes are [w, x, y, z]. Each column of MulScalar's formula is one component of a (broadcast)
+            // times a permutation of b with per-lane signs:
+            //   a.w * [ bw,  bx,  by,  bz]
+            //   a.x * [-bx,  bw, -bz,  by]
+            //   a.y * [-by,  bz,  bw, -bx]
+            //   a.z * [-bz, -by,  bx,  bw]
+            // _MM_SHUFFLE and _mm_set_ps list lanes from 3 down to 0
+            const __m128 a_vec = a.simd_data;
+            const __m128 b_vec = b.simd_data;
 
-            // Create shuffled versions for quaternion multiplication
-            __m128 a_wwww = _mm_shuffle_ps(a_vec, a_vec, _MM_SHUFFLE(0, 0, 0, 0)); // [w, w, w, w]
-            __m128 a_xyzx = _mm_shuffle_ps(a_vec, a_vec, _MM_SHUFFLE(1, 2, 3, 1)); // [x, y, z, x]
-            __m128 a_yzxy = _mm_shuffle_ps(a_vec, a_vec, _MM_SHUFFLE(2, 3, 1, 2)); // [y, z, x, y]
-            __m128 a_zxyz = _mm_shuffle_ps(a_vec, a_vec, _MM_SHUFFLE(3, 1, 2, 3)); // [z, x, y, z]
+            const __m128 a_w = _mm_shuffle_ps(a_vec, a_vec, _MM_SHUFFLE(0, 0, 0, 0));
+            const __m128 a_x = _mm_shuffle_ps(a_vec, a_vec, _MM_SHUFFLE(1, 1, 1, 1));
+            const __m128 a_y = _mm_shuffle_ps(a_vec, a_vec, _MM_SHUFFLE(2, 2, 2, 2));
+            const __m128 a_z = _mm_shuffle_ps(a_vec, a_vec, _MM_SHUFFLE(3, 3, 3, 3));
 
-            __m128 b_wzyx = _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(0, 3, 2, 1)); // [w, z, y, x]
-            __m128 b_zwxy = _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(3, 0, 1, 2)); // [z, w, x, y]
-            __m128 b_yxwz = _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(2, 1, 0, 3)); // [y, x, w, z]
+            const __m128 b_xwzy = _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(2, 3, 0, 1)); // [x, w, z, y]
+            const __m128 b_yzwx = _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(1, 0, 3, 2)); // [y, z, w, x]
+            const __m128 b_zyxw = _mm_shuffle_ps(b_vec, b_vec, _MM_SHUFFLE(0, 1, 2, 3)); // [z, y, x, w]
 
-            // Compute quaternion multiplication components
-            __m128 result1 = _mm_mul_ps(a_wwww, b_vec);  // w*[w,x,y,z]
-            __m128 result2 = _mm_mul_ps(a_xyzx, b_wzyx); // [x,y,z,x]*[w,z,y,x]
-            __m128 result3 = _mm_mul_ps(a_yzxy, b_zwxy); // [y,z,x,y]*[z,w,x,y]
-            __m128 result4 = _mm_mul_ps(a_zxyz, b_yxwz); // [z,x,y,z]*[y,x,w,z]
+            const __m128 signs_x = _mm_set_ps(1.0f, -1.0f, 1.0f, -1.0f);  // [-, +, -, +]
+            const __m128 signs_y = _mm_set_ps(-1.0f, 1.0f, 1.0f, -1.0f);  // [-, +, +, -]
+            const __m128 signs_z = _mm_set_ps(1.0f, 1.0f, -1.0f, -1.0f);  // [-, -, +, +]
 
-            // Apply signs: + - + -
-            __m128 signs = _mm_set_ps(-1.0f, 1.0f, -1.0f, 1.0f); // [-, +, -, +]
-            result2 = _mm_mul_ps(result2, signs);
-            signs = _mm_set_ps(1.0f, -1.0f, 1.0f, -1.0f); // [+, -, +, -]
-            result3 = _mm_mul_ps(result3, signs);
-            signs = _mm_set_ps(-1.0f, 1.0f, -1.0f, 1.0f); // [-, +, -, +]
-            result4 = _mm_mul_ps(result4, signs);
+            const __m128 term_w = _mm_mul_ps(a_w, b_vec);
+            const __m128 term_x = _mm_mul_ps(_mm_mul_ps(a_x, b_xwzy), signs_x);
+            const __m128 term_y = _mm_mul_ps(_mm_mul_ps(a_y, b_yzwx), signs_y);
+            const __m128 term_z = _mm_mul_ps(_mm_mul_ps(a_z, b_zyxw), signs_z);
 
+            // Summed left to right, like MulScalar
             Quaternion result;
-            result.simd_data = _mm_add_ps(_mm_add_ps(result1, result2), _mm_add_ps(result3, result4));
+            result.simd_data = _mm_add_ps(_mm_add_ps(_mm_add_ps(term_w, term_x), term_y), term_z);
             return result;
         }
 
         // ===== SSE4.1 IMPLEMENTATIONS =====
-#ifdef __SSE4_1__
+#ifdef N2_MATH_SSE41
             TARGET_SSE4_1 static float DotSSE41(const Quaternion &a, const Quaternion &b)
         {
             __m128 result = _mm_dp_ps(a.simd_data, b.simd_data, 0xF1);
@@ -362,20 +361,16 @@ namespace N2Engine::Math
 
             TARGET_SSE4_1 static Quaternion NormalizeSSE41(const Quaternion &q)
         {
-            __m128 length_sq = _mm_dp_ps(q.simd_data, q.simd_data, 0xFF);
-
-            // Check for near-zero length
-            __m128 epsilon = _mm_set1_ps(EPSILON * EPSILON);
-            __m128 mask = _mm_cmplt_ps(length_sq, epsilon);
-
-            if (_mm_movemask_ps(mask) != 0)
+            // Mask 0xFF: dot of all four lanes broadcast to all lanes. A real sqrt and divide, since
+            // _mm_rsqrt_ps is only accurate to about 12 bits
+            const __m128 length = _mm_sqrt_ps(_mm_dp_ps(q.simd_data, q.simd_data, 0xFF));
+            if (_mm_cvtss_f32(length) < EPSILON)
             {
-                return Identity();
+                return Identity;
             }
 
             Quaternion result;
-            __m128 inv_length = _mm_rsqrt_ps(length_sq);
-            result.simd_data = _mm_mul_ps(q.simd_data, inv_length);
+            result.simd_data = _mm_div_ps(q.simd_data, length);
             return result;
         }
 #else
