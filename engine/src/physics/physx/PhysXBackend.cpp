@@ -336,14 +336,17 @@ namespace N2Engine::Physics
         }
         body->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, isKinematic);
 
-        PxRigidBodyExt::setMassAndUpdateInertia(*body, mass);
-
         const PhysicsBodyHandle handle = AllocateHandle();
         BodyData *data = GetBodyData(handle);
         data->actor = body;
         data->rigidbody = rigidbody;
+        data->mass = mass;
 
         body->userData = new PhysicsBodyHandle(handle);
+
+        // No shapes yet, so this is the fallback (setMassAndUpdateInertia on a shapeless actor reset the
+        // mass to 1); colliders attaching later recompute it
+        UpdateMassProperties(handle);
 
         _scene->addActor(*body);
 
@@ -553,6 +556,45 @@ namespace N2Engine::Physics
 
         // The actor holds the only reference from here; detachShape frees the shape
         shape->release();
+
+        UpdateMassProperties(body);
+    }
+
+    void PhysXBackend::UpdateMassProperties(const PhysicsBodyHandle body)
+    {
+        const BodyData *data = GetBodyData(body);
+        if (!data || !data->actor)
+        {
+            return;
+        }
+
+        auto *dynamic = data->actor->is<PxRigidDynamic>();
+        if (!dynamic)
+        {
+            return; // static actors have no mass properties
+        }
+
+        // The Rigidbody's mass is authoritative (like Unity); the shapes, at uniform density, only give
+        // the inertia tensor and centre of mass. Trigger shapes have no eSIMULATION_SHAPE flag and are
+        // skipped (includeNonSimShapes = false), so a sensor doesn't make its body heavier or lopsided.
+        bool hasSimulationShape = false;
+        for (PxU32 i = 0, count = dynamic->getNbShapes(); i < count && !hasSimulationShape; ++i)
+        {
+            PxShape *shape = nullptr;
+            dynamic->getShapes(&shape, 1, i);
+            hasSimulationShape = shape && shape->getFlags().isSet(PxShapeFlag::eSIMULATION_SHAPE);
+        }
+
+        if (hasSimulationShape && PxRigidBodyExt::setMassAndUpdateInertia(*dynamic, data->mass, nullptr, false))
+        {
+            return;
+        }
+
+        // Nothing to derive them from (PhysX would fall back to mass 1): keep the configured mass,
+        // centre it on the actor, and give it the inertia of a body with a unit radius of gyration
+        dynamic->setMass(data->mass);
+        dynamic->setCMassLocalPose(PxTransform(PxIdentity));
+        dynamic->setMassSpaceInertiaTensor(PxVec3(data->mass));
     }
 
     void PhysXBackend::AddSphereCollider(
@@ -618,6 +660,9 @@ namespace N2Engine::Physics
                 shape->setFlag(PxShapeFlag::eSIMULATION_SHAPE, true);
             }
         }
+
+        // Triggers don't contribute mass, so toggling one moves the body's centre of mass and inertia
+        UpdateMassProperties(body);
     }
 
     // ========== Forces and Motion ==========
@@ -742,16 +787,14 @@ namespace N2Engine::Physics
 
     void PhysXBackend::SetMass(PhysicsBodyHandle body, float mass)
     {
-        const BodyData *data = GetBodyData(body);
+        BodyData *data = GetBodyData(body);
         if (!data)
         {
             return;
         }
 
-        if (auto *dynamic = data->actor->is<PxRigidDynamic>())
-        {
-            PxRigidBodyExt::setMassAndUpdateInertia(*dynamic, mass);
-        }
+        data->mass = mass;
+        UpdateMassProperties(body);
     }
 
     float PhysXBackend::GetMass(PhysicsBodyHandle body)
@@ -768,6 +811,40 @@ namespace N2Engine::Physics
         }
 
         return 0.0f;
+    }
+
+    Math::Vector3 PhysXBackend::GetInertiaTensor(const PhysicsBodyHandle body) const
+    {
+        const BodyData *data = GetBodyData(body);
+        if (!data || !data->actor)
+        {
+            return Math::Vector3::Zero;
+        }
+
+        if (const PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
+        {
+            const PxVec3 inertia = dynamic->getMassSpaceInertiaTensor();
+            return {inertia.x, inertia.y, inertia.z};
+        }
+
+        return Math::Vector3::Zero;
+    }
+
+    Math::Vector3 PhysXBackend::GetCenterOfMass(const PhysicsBodyHandle body) const
+    {
+        const BodyData *data = GetBodyData(body);
+        if (!data || !data->actor)
+        {
+            return Math::Vector3::Zero;
+        }
+
+        if (const PxRigidDynamic *dynamic = data->actor->is<PxRigidDynamic>())
+        {
+            const PxVec3 center = dynamic->getCMassLocalPose().p;
+            return {center.x, center.y, center.z};
+        }
+
+        return Math::Vector3::Zero;
     }
 
     void PhysXBackend::SetGravityEnabled(PhysicsBodyHandle body, bool enabled)
@@ -1376,6 +1453,7 @@ namespace N2Engine::Physics
         }
 
         it->second.clear();
+        UpdateMassProperties(body);
     }
 
     void PhysXBackend::UpdateSphereCollider(
@@ -1413,6 +1491,8 @@ namespace N2Engine::Physics
             PxMaterial *materials[] = {pxMaterial};
             shape->setMaterials(materials, 1);
         }
+
+        UpdateMassProperties(body); // a new size or offset moves the inertia and centre of mass
     }
 
     void PhysXBackend::UpdateBoxCollider(
@@ -1444,6 +1524,8 @@ namespace N2Engine::Physics
             PxMaterial *materials[] = {pxMaterial};
             shape->setMaterials(materials, 1);
         }
+
+        UpdateMassProperties(body);
     }
 
     void PhysXBackend::UpdateCapsuleCollider(
@@ -1481,6 +1563,8 @@ namespace N2Engine::Physics
             PxMaterial *materials[] = {pxMaterial};
             shape->setMaterials(materials, 1);
         }
+
+        UpdateMassProperties(body);
     }
 
     void PhysXBackend::FillRaycastHit(RaycastHit &hit, const PxRaycastHit &pxHit) const
