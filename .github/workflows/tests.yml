@@ -8,8 +8,14 @@ on:
 
 jobs:
   windows:
+    name: windows (PhysX ${{ matrix.physx }})
     runs-on: windows-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # OFF keeps the no-physics build compiling and running (the engine then has no physics backend)
+        physx: [ON, OFF]
 
     steps:
       - uses: actions/checkout@v7
@@ -22,13 +28,14 @@ jobs:
           stripdown: true
 
       - name: Cache PhysX binaries
+        if: matrix.physx == 'ON'
         uses: actions/cache@v6
         with:
           path: external/PhysX/physx/bin
           key: physx-bin-${{ runner.os }}-v1
 
       - name: Configure
-        run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON # newest installed Visual Studio
+        run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} # newest installed Visual Studio
 
       - name: Build
         run: cmake --build build --config Debug --parallel

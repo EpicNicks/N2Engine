@@ -18,6 +18,9 @@
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
+// These drive a real PhysX scene; a build without PhysX (N2ENGINE_USE_PHYSX=OFF) has nothing to test here
+#ifdef N2ENGINE_PHYSX_ENABLED
+
 using namespace N2Engine;
 using namespace N2Engine::Physics;
 using Math::Vector3;
@@ -36,6 +39,8 @@ namespace
             ++collisionEnter;
             lastCollisionSelf = c.gameObject;
             lastCollisionOther = c.otherGameObject;
+            lastCollisionCollider = c.collider;
+            lastCollisionOtherCollider = c.otherCollider;
             if (onCollisionEnter)
             {
                 onCollisionEnter();
@@ -48,6 +53,11 @@ namespace
             ++triggerEnter;
             lastTriggerSelf = t.gameObject;
             lastTriggerOther = t.otherGameObject;
+            if (!firstTriggerCollider)
+            {
+                firstTriggerCollider = t.collider;
+                firstTriggerOtherCollider = t.otherCollider;
+            }
         }
         void OnTriggerStay(const Trigger) override { ++triggerStay; }
         void OnTriggerExit(const Trigger) override { ++triggerExit; }
@@ -56,6 +66,8 @@ namespace
         int triggerEnter = 0, triggerStay = 0, triggerExit = 0;
         GameObject *lastCollisionSelf = nullptr, *lastCollisionOther = nullptr;
         GameObject *lastTriggerSelf = nullptr, *lastTriggerOther = nullptr;
+        ICollider *lastCollisionCollider = nullptr, *lastCollisionOtherCollider = nullptr;
+        ICollider *firstTriggerCollider = nullptr, *firstTriggerOtherCollider = nullptr;
         std::function<void()> onCollisionEnter;
     };
 }
@@ -378,3 +390,86 @@ TEST_F(PhysicsTest, SceneSwitchReleasesDynamicBodies)
         << "the old scene's body kept simulating";
     EXPECT_FALSE(ball->GetComponent<Rigidbody>()->GetHandle().IsValid());
 }
+
+// ============================================================================
+// Collider identity, compound bodies, removed Rigidbody
+// ============================================================================
+
+TEST_F(PhysicsTest, CollisionReportsCollidersOnEachSide)
+{
+    const auto floor = SpawnFloor();
+    auto *floorEvents = floor->AddComponent<EventRecorder>();
+    const auto ball = SpawnBall("Identified", Vector3(0.0f, 2.0f, 0.0f));
+    auto *ballEvents = ball->AddComponent<EventRecorder>();
+
+    Step(120);
+
+    ASSERT_GE(ballEvents->collisionEnter, 1);
+    EXPECT_EQ(ballEvents->lastCollisionCollider, ball->GetComponent<SphereCollider>());
+    EXPECT_EQ(ballEvents->lastCollisionOtherCollider, floor->GetComponent<BoxCollider>());
+    EXPECT_EQ(floorEvents->lastCollisionCollider, floor->GetComponent<BoxCollider>());
+    EXPECT_EQ(floorEvents->lastCollisionOtherCollider, ball->GetComponent<SphereCollider>());
+}
+
+TEST_F(PhysicsTest, CompoundTriggerExitsOnlyWhenFullyOutside)
+{
+    // Two overlapping trigger boxes on one body: x in [-2.5, 0.5] and [-0.5, 2.5]
+    const auto zone = Spawn("CompoundZone", Vector3(0.0f, 0.0f, 0.0f));
+    auto *left = zone->AddComponent<BoxCollider>();
+    left->SetSize(Vector3(3.0f, 1.0f, 1.0f));
+    left->SetOffset(Vector3(-1.0f, 0.0f, 0.0f));
+    left->SetIsTrigger(true);
+    auto *right = zone->AddComponent<SphereCollider>(); // a different type, since GetComponent finds one per type
+    right->SetRadius(1.25f);
+    right->SetOffset(Vector3(1.25f, 0.0f, 0.0f));        // x in [0, 2.5], overlapping the box
+    right->SetIsTrigger(true);
+    zone->AddComponent<Rigidbody>()->SetBodyType(BodyType::Static);
+    auto *zoneEvents = zone->AddComponent<EventRecorder>();
+
+    // A ball flying along +x through both
+    const auto ball = Spawn("Flyer", Vector3(-5.0f, 0.0f, 0.0f));
+    ball->AddComponent<SphereCollider>()->SetRadius(0.2f);
+    auto *body = ball->AddComponent<Rigidbody>();
+    body->SetBodyType(BodyType::Dynamic);
+    body->SetGravityEnabled(false);
+    Step(1);
+    body->SetVelocity(Vector3(5.0f, 0.0f, 0.0f));
+
+    bool checkedOnlyInSecond = false;
+    for (int i = 0; i < 180 && ball->GetPositionable()->GetPosition().x < 5.0f; ++i)
+    {
+        Step(1);
+        const float x = ball->GetPositionable()->GetPosition().x;
+        if (x > 1.2f && x < 2.0f) // clear of the box, still inside the sphere
+        {
+            EXPECT_EQ(zoneEvents->triggerExit, 0) << "exited while still inside the other shape (x=" << x << ")";
+            checkedOnlyInSecond = true;
+        }
+    }
+
+    ASSERT_TRUE(checkedOnlyInSecond) << "the ball never reached the second shape";
+    EXPECT_EQ(zoneEvents->triggerEnter, 1);
+    EXPECT_EQ(zoneEvents->triggerExit, 1);
+    EXPECT_EQ(zoneEvents->firstTriggerCollider, left) << "the box is entered first";
+    EXPECT_EQ(zoneEvents->firstTriggerOtherCollider, ball->GetComponent<SphereCollider>());
+}
+
+TEST_F(PhysicsTest, RemovingRigidbodyLeavesStaticCollider)
+{
+    // Like Unity: the remaining collider becomes a static collider instead of losing its body
+    const auto go = Spawn("Grounded", Vector3(0.0f, 0.0f, 0.0f));
+    go->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    auto *body = go->AddComponent<Rigidbody>();
+    body->SetBodyType(BodyType::Dynamic);
+    body->SetGravityEnabled(false);
+    Step(1);
+    ASSERT_EQ(ShapesUnder(Vector3(0.0f, 5.0f, 0.0f)), 1);
+
+    go->RemoveComponent<Rigidbody>();
+    Step(1);
+
+    EXPECT_EQ(ShapesUnder(Vector3(0.0f, 5.0f, 0.0f)), 1) << "the collider was left without a body";
+    EXPECT_TRUE(go->GetComponent<BoxCollider>()->GetHandle().IsValid());
+}
+
+#endif // N2ENGINE_PHYSX_ENABLED

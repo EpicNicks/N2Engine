@@ -13,6 +13,7 @@ namespace N2Engine::Physics
     // Declared here, not in N2Engine: a stray N2Engine::Rigidbody made the members below name a
     // different type depending on what a file had included first, and made 'Rigidbody' ambiguous
     class Rigidbody;
+    class ICollider;
 
 
     /**
@@ -43,6 +44,8 @@ namespace N2Engine::Physics
         Rigidbody *rigidbody = nullptr;        // The Rigidbody receiving this callback
         GameObject *otherGameObject = nullptr; // The other GameObject in the collision
         Rigidbody *otherRigidbody = nullptr;   // The other Rigidbody (nullptr if static)
+        ICollider *collider = nullptr;         // This object's collider that made first contact
+        ICollider *otherCollider = nullptr;    // The other object's collider in that contact
 
         // Collision details
         std::vector<ContactPoint> contacts; // All contact points (can be multiple)
@@ -86,6 +89,8 @@ namespace N2Engine::Physics
         Rigidbody *rigidbody = nullptr;        // The Rigidbody receiving this callback
         GameObject *otherGameObject = nullptr; // The other GameObject that entered/exited
         Rigidbody *otherRigidbody = nullptr;   // The other Rigidbody (nullptr if static)
+        ICollider *collider = nullptr;         // This object's collider involved (first one touching)
+        ICollider *otherCollider = nullptr;    // The other object's collider involved
 
         Trigger() = default;
     };

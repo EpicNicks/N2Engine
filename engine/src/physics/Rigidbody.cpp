@@ -94,7 +94,7 @@ namespace N2Engine::Physics
         }
     }
 
-    void Rigidbody::OnDestroy()
+    void Rigidbody::DestroyPhysicsBody()
     {
         if (!_handle.IsValid())
             return;
@@ -109,6 +109,26 @@ namespace N2Engine::Physics
         _initialized = false;
     }
 
+    void Rigidbody::OnDestroy()
+    {
+        const bool hadBody = _handle.IsValid();
+        DestroyPhysicsBody();
+
+        // Like Unity: colliders that remain after the Rigidbody is removed become static colliders
+        // (re-attaching gives each its own static body). Skipped when the whole object is being
+        // destroyed, since its colliders are about to go too.
+        if (!hadBody || GetGameObject().IsDestroyed())
+            return;
+
+        for (auto *collider : GetGameObject().GetComponents<ICollider>())
+        {
+            if (!collider->IsDestroyed())
+            {
+                collider->OnAttach();
+            }
+        }
+    }
+
     void Rigidbody::SetBodyType(BodyType type)
     {
         if (_bodyType == type)
@@ -118,7 +138,9 @@ namespace N2Engine::Physics
         if (_initialized)
         {
             Logger::Warn("Changing body type requires recreating physics body");
-            OnDestroy();
+            // Not OnDestroy: that would move the colliders onto static bodies, only for OnAttach
+            // to move them straight back onto the new body
+            DestroyPhysicsBody();
             _bodyType = type;
             OnAttach();
         }
