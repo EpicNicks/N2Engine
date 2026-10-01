@@ -20,7 +20,7 @@ jobs:
           # OFF keeps the no-physics build compiling and running (the engine then has no physics backend)
           - config: Debug
             physx: "OFF"
-          # Release catches what Debug hides: NDEBUG, optimised SIMD paths, sol2 safety defaults.
+          # Release catches what Debug hides (NDEBUG, optimised SIMD paths) and confirms the forced sol2 safeties still hold in Release.
           # The PhysX release zip ships both debug/ and release/ libraries, so PhysX stays ON here.
           - config: Release
             physx: "ON"

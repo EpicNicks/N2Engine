@@ -48,7 +48,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
   - `warning`: intended but surprising behaviour, or an unsupported pattern.
   - `open-question`: unclear, undecided or inconsistent behaviour. Name the file and function. Never guess; an open question is better than invented behaviour.
   - **Design decisions** are `note` callouts titled `Design decision: …` with an `id="design-…"`. Explain *why* a behaviour was chosen, once, on the page that owns it, and link to it from elsewhere. `index.html#design-decisions` lists them all; add new ones there.
-- **Badges** mark the PR that introduced or changed a behaviour: `<span class="badge">PR #28</span>`. Use them on subsystem pages, not on `index.html`.
+- **Badges** mark the PR that introduced or changed a behaviour: `<span class="badge">PR #28</span>`. Use them on subsystem pages; on `index.html` only the one example in "What these docs cover" that explains them.
 - **Code samples** use `<pre class="lang-cpp"><code>…</code></pre>` (also `lang-lua`, `lang-json`, `lang-text`, `lang-cmake`, `lang-shell`). Escape `<`, `>` and `&`. Keep samples short and correct; prefer patterns from the tests or example projects.
 - **Tables** go inside `<div class="table-wrap">` so they scroll on narrow screens.
 - **Ordered sequences** (frame order, teardown order) use `<ol class="steps">`.

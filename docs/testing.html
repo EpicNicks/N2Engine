@@ -168,7 +168,7 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 <tbody>
 <tr><td>Debug</td><td>ON</td><td>The main leg: everything enabled, assertions on.</td></tr>
 <tr><td>Debug</td><td>OFF</td><td>Keeps the no-physics build compiling and running (the engine then has no physics backend).</td></tr>
-<tr><td>Release</td><td>ON</td><td>Catches problems that only show with optimisation and <code>NDEBUG</code>: compiled-out asserts, optimised SIMD code paths, and library defaults that differ by configuration (sol2 turns its safety checks off in Release unless <code>SOL_ALL_SAFETIES_ON</code> is defined, which <code>engine/CMakeLists.txt</code> now does).</td></tr>
+<tr><td>Release</td><td>ON</td><td>Catches problems that only show with optimisation and <code>NDEBUG</code>: compiled-out asserts, optimised SIMD code paths, and it confirms that the sol2 safety checks, which <code>engine/CMakeLists.txt</code> forces on with a PUBLIC <code>SOL_ALL_SAFETIES_ON=1</code> in every configuration (sol2 would otherwise turn them off in Release), still hold there.</td></tr>
 </tbody>
 </table>
 </div>

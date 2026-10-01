@@ -251,7 +251,7 @@ public:
 <h2 id="teardown">The teardown sequence</h2>
 <p>Every path that ends a component's life in a scene runs the same private function, <code>Component::RunDestroyCallbacks(objectWasActiveInHierarchy)</code>:</p>
 <ol class="steps">
-<li>If the component is already marked destroyed, or its teardown callbacks are already running, return. So it runs at most once, whichever path gets there first, even if its own <code>OnDisable</code>/<code>OnDestroy</code> re-enters teardown (see <a href="#teardown-reentry">below</a>).</li>
+<li>If the component is already marked destroyed, or its teardown callbacks are already running, return. So it runs at most once (unless a callback throws; see the Guarantee below), whichever path gets there first, even if its own <code>OnDisable</code>/<code>OnDestroy</code> re-enters teardown (see <a href="#teardown-reentry">below</a>).</li>
 <li>If the component's own flag is enabled <em>and</em> the object was active in the hierarchy before teardown started, call <code>OnDisable()</code>.</li>
 <li>Call <code>OnDestroy()</code>.</li>
 <li>Mark the component destroyed (<code>IsDestroyed()</code> true).</li>
@@ -273,7 +273,7 @@ public:
 
 <div class="callout guarantee">
 <p class="callout-title">Guarantee</p>
-<p>On <code>Destroy</code>, <code>RemoveComponent</code> and scene switch, a component sees <code>OnDisable</code> then <code>OnDestroy</code> if it was enabled in an active hierarchy, otherwise only <code>OnDestroy</code>; <code>OnDestroy</code> runs once.</p>
+<p>On <code>Destroy</code>, <code>RemoveComponent</code> and scene switch, a component sees <code>OnDisable</code> then <code>OnDestroy</code> if it was enabled in an active hierarchy, otherwise only <code>OnDestroy</code>; <code>OnDestroy</code> runs once unless a callback throws. <code>_isMarkedForDestruction</code> is set only after <code>OnDestroy</code> returns, so a throwing callback leaves the component unmarked and a later teardown path (for example a scene <code>Clear</code> after a failed editor DestroyEntity) runs its callbacks again.</p>
 <p>Tests: <code>DestroyRunsOnDisableThenOnDestroy</code>, <code>DestroyOfInactiveOrDisabledSkipsOnDisable</code>, <code>RemoveComponentRunsOnDisableThenOnDestroy</code>, <code>SceneSwitchRunsOnDestroy</code>, <code>DestroyTwiceRunsOnDestroyOnce</code>.</p>
 </div>
 
