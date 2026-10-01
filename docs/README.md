@@ -24,6 +24,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `input.html` | Input system, action maps, bindings, value combination |
 | `audio.html` | Audio system, sources, one-shots, mixer groups, shutdown |
 | `text.html` | Font backends, SDF atlas, UTF-8 and text layout, the `Font` asset and default font |
+| `ui.html` | Screen-space UI: canvases, `RectTransform` layout, `Image`, the UI pass, UI picking |
 | `resources.html` | Resource paths, `ResourceLoader`, `Resources` |
 | `serialization.html` | Scene/component JSON, references, failure handling |
 | `math.html` | Math types, SIMD tiers, correctness guarantees |
