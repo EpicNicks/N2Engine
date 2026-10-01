@@ -9,6 +9,8 @@
 #include FT_FREETYPE_H
 #include FT_MODULE_H
 
+#include <text/FontBackend.hpp>
+
 namespace
 {
     class FreeTypeLibrary
@@ -59,6 +61,16 @@ TEST(FreeTypeBuildTest, HasTheSdfRendererAndItsSpreadProperty)
     FT_Int readBack = 0;
     EXPECT_EQ(FT_Property_Get(library.Get(), "sdf", "spread", &readBack), 0);
     EXPECT_EQ(readBack, 6);
+}
+
+TEST(FreeTypeBuildTest, TheBackendIsListedButNotTheDefault)
+{
+    using namespace N2Engine::Text;
+    EXPECT_TRUE(IsFontBackendAvailable(FontBackendKind::FreeType));
+    EXPECT_EQ(GetDefaultFontBackendKind(), FontBackendKind::StbTrueType);
+    const auto backend = CreateFontBackend(FontBackendKind::FreeType);
+    ASSERT_NE(backend, nullptr);
+    EXPECT_EQ(backend->GetKind(), FontBackendKind::FreeType);
 }
 
 #endif
