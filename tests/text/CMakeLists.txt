@@ -14,6 +14,12 @@ target_link_libraries(text_tests
         GTest::gtest_main
 )
 
+# With the FreeType backend built, a few tests also call FreeType directly (its version and modules)
+if (N2ENGINE_TEXT_FREETYPE)
+    target_link_libraries(text_tests PRIVATE freetype)
+    target_compile_definitions(text_tests PRIVATE N2ENGINE_TEXT_FREETYPE=1)
+endif()
+
 set_target_properties(text_tests PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
