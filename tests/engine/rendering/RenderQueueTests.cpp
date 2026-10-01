@@ -2,9 +2,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <numbers>
 #include <string>
 #include <vector>
 
+#include <math/Quaternion.hpp>
 #include <math/Vector3.hpp>
 #include <renderer/common/Renderer.hpp>
 #include <renderer/common/RenderState.hpp>
@@ -245,6 +247,43 @@ TEST(RenderQueueTest, DepthIsMeasuredFromTheCamera)
     camera.SetPosition({0, 0, 10});
 
     EXPECT_EQ(RenderIds(*scene, camera), (std::vector<int>{1, 4, 2, 3}));
+}
+
+TEST(RenderQueueTest, DepthFollowsTheCameraRotation)
+{
+    // Turned 180 degrees about Y, the camera looks down +Z: depth is +z, so the object at z = 9 is the
+    // farthest. Ignoring the camera (depth -z) would draw them in the opposite order.
+    {
+        const auto scene = Scene::Create("RenderQueue_CameraTurnedAround");
+        scene->AddRootGameObject(PlacedObject("Near", {0, 0, 2}, 2, Transparent()));
+        scene->AddRootGameObject(PlacedObject("Far", {0, 0, 9}, 9, Transparent()));
+        scene->AddRootGameObject(PlacedObject("Mid", {0, 0, 5}, 5, Transparent()));
+
+        Camera camera;
+        camera.SetRotation(Math::Quaternion::FromAxisAngle({0, 1, 0}, std::numbers::pi_v<float>));
+
+        EXPECT_EQ(RenderIds(*scene, camera), (std::vector<int>{9, 5, 2}));
+    }
+
+    // Turned +90 degrees about Y, the rotation is R = [[0,0,1],[0,1,0],[-1,0,0]] and the camera looks
+    // down -X. Placed at x = 1, its view matrix is R^T * Translation(-1,0,0), whose row 2 is
+    // (1, 0, 0, -1): depth = -(x - 1) = 1 - x, giving Near 2, Mid 5, Far 9, so the order is Far, Mid,
+    // Near. The z offsets don't change that depth. This order fails if:
+    // - the camera is ignored (depth = -z: 9, 0, 3, giving Near, Mid, Far);
+    // - column 2 of the view matrix is used instead of row 2 (it is (-1, 0, 0, 0) here, so depth = x:
+    //   -1, -8, -4, giving Near, Mid, Far as well), since R is not symmetric.
+    {
+        const auto scene = Scene::Create("RenderQueue_CameraTurnedSideways");
+        scene->AddRootGameObject(PlacedObject("Near", {-1, 0, -9}, 1, Transparent()));
+        scene->AddRootGameObject(PlacedObject("Far", {-8, 0, 0}, 2, Transparent()));
+        scene->AddRootGameObject(PlacedObject("Mid", {-4, 0, -3}, 3, Transparent()));
+
+        Camera camera;
+        camera.SetPosition({1, 0, 0});
+        camera.SetRotation(Math::Quaternion::FromAxisAngle({0, 1, 0}, std::numbers::pi_v<float> / 2.0f));
+
+        EXPECT_EQ(RenderIds(*scene, camera), (std::vector<int>{2, 3, 1}));
+    }
 }
 
 TEST(RenderQueueTest, SortKeyTakesPrecedenceOverDepth)
