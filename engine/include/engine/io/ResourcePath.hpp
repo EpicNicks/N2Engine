@@ -33,13 +33,19 @@ namespace N2Engine::IO
             {
                 _path.clear();
             }
-            while (!_path.empty() && _path[0] == '/')
+            // res:// and user:// paths are relative to their root ("res:///a" is "a"). An absolute path
+            // keeps its root: stripping the '/' of a POSIX path ("/home/x") made it relative.
+            if (_type != PathType::Absolute)
             {
-                _path.erase(0, 1);
+                while (!_path.empty() && _path[0] == '/')
+                {
+                    _path.erase(0, 1);
+                }
             }
-            if (_path.ends_with('/'))
+            // "a/b/" and "a/b" are the same directory, but a bare root ("/", "C:/") keeps its separator
+            if (_path.ends_with('/') && std::filesystem::path(_path).has_relative_path())
             {
-                _path.pop_back(); // "a/b/" and "a/b" are the same directory
+                _path.pop_back();
             }
         }
         

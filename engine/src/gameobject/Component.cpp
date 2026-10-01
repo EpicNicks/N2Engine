@@ -55,7 +55,15 @@ bool Component::IsActive() const
 
 void Component::SetActive(const bool active)
 {
+    if (_isActive == active)
+    {
+        return;
+    }
     _isActive = active;
+    if (!_isMarkedForDestruction && !_isRunningDestroyCallbacks)
+    {
+        OnActiveFlagChanged();
+    }
 }
 
 json Component::Serialize() const

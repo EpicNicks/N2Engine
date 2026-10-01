@@ -365,6 +365,12 @@ nlohmann::json ActionMap::Serialize() const
     };
 }
 
+bool ActionMap::HasValidDisabledField(const nlohmann::json &j)
+{
+    // json::value would throw type_error for a 'disabled' that isn't a boolean
+    return !j.contains("disabled") || j["disabled"].is_boolean();
+}
+
 std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> ActionMap::Deserialize(
     const nlohmann::json &j, const std::string &mapName, GLFWwindow *window)
 {
@@ -376,6 +382,11 @@ std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> ActionMap::Deseri
     if (!j["actions"].is_object())
     {
         return std::unexpected(ActionMapParseError::InvalidActionsType);
+    }
+
+    if (!HasValidDisabledField(j))
+    {
+        return std::unexpected(ActionMapParseError::InvalidDisabledType);
     }
 
     auto actionMap = std::make_unique<ActionMap>(mapName);
@@ -413,6 +424,7 @@ std::string N2Engine::Input::ActionMapParseErrorToString(const ActionMapParseErr
     {
     case ActionMapParseError::MissingActions: return "missing 'actions' field";
     case ActionMapParseError::InvalidActionsType: return "'actions' is not an object";
+    case ActionMapParseError::InvalidDisabledType: return "'disabled' is not a boolean";
     }
     return "unknown error";
 }

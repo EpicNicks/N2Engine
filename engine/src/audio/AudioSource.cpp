@@ -55,17 +55,9 @@ namespace N2Engine::Audio
             return;
         }
 
-        // Check concurrent limit
-        auto& audio = AudioSystem::Instance();
-        if (auto* group = audio.GetMixerGroup(_mixerGroup))
+        if (!HasRoomInGroup())
         {
-            if (group->settings.maxConcurrent.has_value())
-            {
-                if (audio.CountPlayingInGroup(_mixerGroup) >= *group->settings.maxConcurrent)
-                {
-                    return;
-                }
-            }
+            return;
         }
 
         EnsureSource();
@@ -74,6 +66,9 @@ namespace N2Engine::Audio
             return;
         }
 
+        // OpenAL only takes a new buffer on a stopped (or new) source; binding to a playing or paused one
+        // failed, and alSourcePlay then just carried on (or resumed). Stopping first makes it a restart.
+        alSourceStop(_source);
         alSourcei(_source, AL_BUFFER, static_cast<ALint>(_clip->GetBuffer()));
         ApplyMixing();
         alSourcei(_source, AL_LOOPING, _loop ? AL_TRUE : AL_FALSE);
@@ -101,6 +96,31 @@ namespace N2Engine::Audio
         if (_source != 0)
         {
             alSourcePause(_source);
+        }
+    }
+
+    bool AudioSource::HasRoomInGroup() const
+    {
+        const auto& audio = AudioSystem::Instance();
+        const auto* group = audio.GetMixerGroup(_mixerGroup);
+        if (!group || !group->settings.maxConcurrent.has_value())
+        {
+            return true;
+        }
+
+        // This source, if it's playing already (a restart), takes no extra slot. It used to count itself,
+        // so a playing source in a full group couldn't be restarted.
+        const std::uint32_t count = audio.CountPlayingInGroup(_mixerGroup);
+        const std::uint32_t others = IsPlaying() && count > 0 ? count - 1 : count;
+        return others < *group->settings.maxConcurrent;
+    }
+
+    void AudioSource::UnPause()
+    {
+        // A paused source isn't counted, so resuming needs a slot like playing does
+        if (IsPaused() && HasRoomInGroup())
+        {
+            alSourcePlay(_source); // on a paused source, play resumes from the paused position
         }
     }
 

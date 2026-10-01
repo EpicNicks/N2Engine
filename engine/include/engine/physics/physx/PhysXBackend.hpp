@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <functional>
 #include <algorithm>
+#include <memory>
 
 #ifdef N2ENGINE_PHYSX_ENABLED
 #include <PxSimulationEventCallback.h>
@@ -18,6 +19,7 @@
 #include <extensions/PxDefaultErrorCallback.h>
 #include <extensions/PxDefaultSimulationFilterShader.h>
 #include <extensions/PxRigidBodyExt.h>
+#include <PxQueryReport.h>
 
 #if __has_include(<pvd/PxPvd.h>)
 #include <pvd/PxPvd.h>
@@ -74,6 +76,7 @@ namespace N2Engine::Physics
             Rigidbody* rigidbody) override;
 
         void DestroyBody(PhysicsBodyHandle handle) override;
+        void SetBodyEnabled(PhysicsBodyHandle handle, bool enabled) override;
 
         void RegisterCollider(PhysicsBodyHandle handle, ICollider* collider) override;
         void UnregisterCollider(PhysicsBodyHandle handle, ICollider* collider) override;
@@ -231,14 +234,19 @@ namespace N2Engine::Physics
         /// (triggers don't count), keeping its configured mass. Called whenever the shapes or the mass
         /// change, since PhysX doesn't derive them itself.
         void UpdateMassProperties(PhysicsBodyHandle body);
-        /// Ends active collision/trigger pairs involving the body (it was destroyed), queueing their Exit
-        /// for the other body; PhysX's own "touch lost" for them refers to released actors and is ignored
-        void ForgetPairsWithBody(PhysicsBodyHandle handle);
+        /// Ends active collision/trigger pairs involving the body (it was destroyed, or taken out of the
+        /// scene), queueing their Exit for both sides; PhysX's own "touch lost" for them is flagged as a
+        /// removed actor and ignored. shapesReleased: the body's shapes are already freed, so only the
+        /// other side's collider can be read.
+        void ForgetPairsWithBody(PhysicsBodyHandle handle, bool shapesReleased);
         /// The GameObject a body belongs to: its Rigidbody's, else its first collider's
-        [[nodiscard]] GameObject* GetBodyOwner(PhysicsBodyHandle handle);
-        /// Calls fn on each component of the body's GameObject. Uses a snapshot and re-checks ownership,
-        /// so handlers can add or remove components (or destroy the body) safely
-        void DispatchToBody(PhysicsBodyHandle handle, const std::function<void(Component&)>& fn);
+        [[nodiscard]] GameObject* GetBodyOwner(PhysicsBodyHandle handle) const;
+        /// Calls fn on each component (enabled or not, as in Unity; none while the object is inactive in the
+        /// hierarchy) of the body's GameObject, or of
+        /// fallbackOwner if the body is gone and that object survives (see PairOwners). Uses a snapshot
+        /// and re-checks ownership, so handlers can add or remove components (or destroy the body) safely
+        void DispatchToBody(PhysicsBodyHandle handle, const std::function<void(Component&)>& fn,
+                            const std::weak_ptr<GameObject>& fallbackOwner = {});
 
         BodyData* GetBodyData(PhysicsBodyHandle handle);
         [[nodiscard]] const BodyData* GetBodyData(PhysicsBodyHandle handle) const;
@@ -303,10 +311,21 @@ namespace N2Engine::Physics
             }
         };
 
+        // The GameObjects that owned each body when a pair was ended by removing a body or collider. A
+        // side whose body is gone by dispatch (destroyed, or re-created by SetBodyType / adding or removing
+        // a Rigidbody) still gets its Exit through its GameObject, unless that is being destroyed. With the
+        // re-created body's later Enter, Enter and Exit stay balanced on both sides.
+        struct PairOwners
+        {
+            std::weak_ptr<GameObject> a;
+            std::weak_ptr<GameObject> b;
+        };
+
         struct CollisionEvent
         {
             CollisionPair pair;
             Collision* data = nullptr; // collider/otherCollider are pair.bodyA's and pair.bodyB's
+            PairOwners owners;         // only for forgotten pairs
         };
 
         struct TriggerEvent
@@ -314,6 +333,7 @@ namespace N2Engine::Physics
             CollisionPair pair;
             ICollider* colliderA = nullptr; // on pair.bodyA
             ICollider* colliderB = nullptr; // on pair.bodyB
+            PairOwners owners;              // only for forgotten pairs
         };
 
         // Events are per body pair, but PhysX reports touches per shape pair. Each body pair maps to
@@ -354,22 +374,33 @@ namespace N2Engine::Physics
         /// The collider that owns a shape (stored in the shape's userData)
         static ICollider* ColliderOf(const physx::PxShape* shape);
         /// The collider if it's still registered on the body, else null (a handler may have removed it)
-        ICollider* LiveCollider(PhysicsBodyHandle body, ICollider* collider);
+        [[nodiscard]] ICollider* LiveCollider(PhysicsBodyHandle body, ICollider* collider) const;
+        /// Records who owns each body of a pair that's being forgotten
+        [[nodiscard]] PairOwners OwnersOf(const CollisionPair& pair) const;
+        /// The GameObject and Rigidbody to report for one side of a pair: the body's, or if the body is gone,
+        /// the recorded owner's (with no Rigidbody)
+        void DescribeSide(PhysicsBodyHandle handle, const std::weak_ptr<GameObject>& fallbackOwner,
+                          GameObject*& gameObject, Rigidbody*& rigidbody) const;
 
         Collision CreateCollisionData(
             const CollisionPair& pair,
             const Collision& baseData,
-            bool isForBodyA);
+            bool isForBodyA,
+            const PairOwners& owners = {});
 
         Trigger CreateTriggerData(
             const CollisionPair& pair,
             ICollider* colliderA,
             ICollider* colliderB,
-            bool isForBodyA);
+            bool isForBodyA,
+            const PairOwners& owners = {});
 
+        /// Fills a query hit from scratch (no field of a reused RaycastHit survives), reporting the collider
+        /// that owns the hit shape. Raycast and sweep hits both carry a location and an actor/shape.
         void FillRaycastHit(
             RaycastHit& hit,
-            const physx::PxRaycastHit& pxHit) const;
+            const physx::PxLocationHit& location,
+            const physx::PxActorShape& actorShape) const;
 #endif
     };
 }

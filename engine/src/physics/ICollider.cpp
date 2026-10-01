@@ -42,6 +42,7 @@ namespace N2Engine::Physics
             _handle = INVALID_PHYSICS_HANDLE;
             _ownsBody = false;
         }
+        _shapesAttached = false; // removed above, or released with a destroyed body
 
         const Rigidbody* rb = _gameObject.GetComponent<Rigidbody>();
         if (rb && !rb->IsDestroyed() && rb->GetHandle().IsValid())
@@ -76,13 +77,50 @@ namespace N2Engine::Physics
         if (_handle.IsValid())
         {
             backend->RegisterCollider(_handle, this);
-            AttachShape(backend);
+            // Attached while disabled or on an inactive object: registered, but no shapes until enabled
+            SetShapesAttached(IsActive());
+        }
+    }
 
+    void ICollider::OnEnable()
+    {
+        SetShapesAttached(IsActive());
+    }
+
+    void ICollider::OnDisable()
+    {
+        // Also the first step of teardown (OnDestroy follows), when IsActive may still be true
+        SetShapesAttached(false);
+    }
+
+    void ICollider::OnActiveFlagChanged()
+    {
+        SetShapesAttached(IsActive());
+    }
+
+    void ICollider::SetShapesAttached(const bool attached)
+    {
+        if (attached == _shapesAttached || !_handle.IsValid())
+            return;
+
+        auto* backend = Application::GetInstance().Get3DPhysicsBackend();
+        if (!backend)
+            return;
+
+        if (attached)
+        {
+            AttachShape(backend);
             if (_isTrigger)
             {
                 backend->SetIsTrigger(_handle, this, true);
             }
         }
+        else
+        {
+            // Pairs through these shapes end with an Exit (the backend's forgotten pairs)
+            backend->RemoveColliderShapes(_handle, this);
+        }
+        _shapesAttached = attached;
     }
 
     void ICollider::OnDestroy()
@@ -102,6 +140,7 @@ namespace N2Engine::Physics
 
         _handle = INVALID_PHYSICS_HANDLE;
         _ownsBody = false;
+        _shapesAttached = false;
     }
 
     void ICollider::SetIsTrigger(bool isTrigger)

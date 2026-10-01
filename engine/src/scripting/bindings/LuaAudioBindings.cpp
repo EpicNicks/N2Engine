@@ -15,6 +15,7 @@ namespace N2Engine::Scripting::Bindings
         BindComponentType<Audio::AudioSource>(lua, "AudioSource",
             "Play", Forward<AudioSourceRef, &Audio::AudioSource::Play>(),
             "Pause", Forward<AudioSourceRef, &Audio::AudioSource::Pause>(),
+            "UnPause", Forward<AudioSourceRef, &Audio::AudioSource::UnPause>(),
             "Stop", Forward<AudioSourceRef, &Audio::AudioSource::Stop>(),
             "IsPlaying", Forward<AudioSourceRef, &Audio::AudioSource::IsPlaying>(),
             "IsPaused", Forward<AudioSourceRef, &Audio::AudioSource::IsPaused>(),

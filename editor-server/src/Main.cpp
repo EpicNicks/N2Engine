@@ -19,7 +19,8 @@ namespace
 
     void SignalHandler(int signal)
     {
-        // Only the flag: on Windows this runs on another thread, and the Logger isn't thread-safe
+        // Only the flag: the Logger is thread-safe (on Windows this runs on another thread), but a POSIX
+        // handler can interrupt a thread that holds the Logger's lock, so logging here isn't signal-safe
         if (signal == SIGINT || signal == SIGTERM)
         {
             g_running = false;

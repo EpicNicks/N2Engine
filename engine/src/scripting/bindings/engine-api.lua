@@ -1168,11 +1168,14 @@ function CapsuleCollider:GetOffset() end
 ---@class AudioSource : Component
 AudioSource = {}
 
----Start playing the audio clip
+---Play the audio clip from the beginning (restarts it if it's already playing or paused)
 function AudioSource:Play() end
 
 ---Pause the audio clip
 function AudioSource:Pause() end
+
+---Resume a paused clip from where it was paused
+function AudioSource:UnPause() end
 
 ---Stop the audio clip
 function AudioSource:Stop() end

@@ -177,6 +177,11 @@ bool InputSystem::Deserialize(const nlohmann::json &j)
         {
             continue; // Skip malformed action maps
         }
+        if (!ActionMap::HasValidDisabledField(mapJson))
+        {
+            Logger::Warn("Malformed action map (\"disabled\" is not a boolean), skipped: " + mapName);
+            continue;
+        }
 
         auto actionMap = std::make_unique<ActionMap>(mapName);
         actionMap->disabled = mapJson.value("disabled", false);

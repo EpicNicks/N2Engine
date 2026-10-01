@@ -28,6 +28,10 @@ namespace N2Engine
 
         explicit Component(GameObject &gameObject);
 
+        /// Runs after SetActive changed this component's own flag. The flag fires no OnEnable/OnDisable
+        /// (unlike the GameObject's), so a component that must react to it (e.g. physics) overrides this.
+        virtual void OnActiveFlagChanged() {}
+
     private:
         // Only this component owns it, so it expires when the component is freed. Script handles keep a
         // weak_ptr to it and report the component as destroyed instead of dangling.

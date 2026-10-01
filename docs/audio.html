@@ -106,12 +106,20 @@
 </tbody>
 </table>
 </div>
-<p>When the system is not initialized, its entry points are safe no-ops: <code>Update</code> and <code>Stop</code> do nothing, <code>IsPlaying</code> is <code>false</code>, <code>PlayOneShot</code> returns an invalid handle, <code>CountPlayingInGroup</code> is 0, <code>AcquireSource</code> returns 0 and <code>ReleaseSource</code> does nothing. An <code>AudioSource</code> then never gets a source, so <code>Play()</code> returns silently and its queries report not playing.</p>
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p>Some calls do not check <code>IsInitialized</code> and issue OpenAL calls with no current context: <code>AudioSystem::SetListenerPosition</code>/<code>SetListenerOrientation</code> (called every <code>LateUpdate</code> by an <code>AudioListener</code>, and from Lua), <code>SetMasterVolume</code>, and <code>AudioClip::CreateFromData</code>/<code>Unload</code> (<code>engine/src/audio/AudioClip.cpp</code>). What these do without a context is left to OpenAL; in particular it is unclear whether audio clips are expected to load at all in headless mode (buffer creation needs a context), and a clip destroyed after <code>Shutdown</code> calls <code>alDeleteBuffers</code> with no context.</p>
+<p>When the system is not initialized, its entry points are safe no-ops: <code>Update</code> and <code>Stop</code> do nothing, <code>IsPlaying</code> is <code>false</code>, <code>PlayOneShot</code> returns an invalid handle, <code>CountPlayingInGroup</code> is 0, <code>AcquireSource</code> returns 0 and <code>ReleaseSource</code> does nothing. An <code>AudioSource</code> then never gets a source, so <code>Play()</code>, <code>UnPause()</code>, <code>Pause()</code> and <code>Stop()</code> do nothing and its queries report not playing.</p>
+<p>No call makes an OpenAL call without a context <span class="badge">PR #37</span>:</p>
+<ul>
+<li><code>SetListenerPosition</code>/<code>SetListenerOrientation</code> (called every <code>LateUpdate</code> by an <code>AudioListener</code>, and from Lua) do nothing; the listener pushes its pose again each frame.</li>
+<li><code>SetMasterVolume</code> clamps and stores the value; <code>Initialize</code> applies it to the new listener.</li>
+<li><code>AudioClip::CreateFromData</code> fails with the warning "Cannot create AudioClip: the AudioSystem is not initialized (no OpenAL context)", so audio files do not load headless: <code>Resources::Load&lt;AudioClip&gt;</code> and <code>ResourceLoader::Load&lt;AudioClip&gt;</code> return <code>nullptr</code>, and an <code>AudioSource</code>'s clip reference in scene data stays unresolved (no clip). Lua has no resource-loading binding, so scripts never see such a clip. See <a href="#clips">AudioClip</a>.</li>
+<li>A clip unloaded or destroyed after <code>Shutdown</code> deletes nothing: its buffer died with the context.</li>
+</ul>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; <code>engine/src/audio/AudioSystem.cpp</code> — <code>SetListenerPosition</code>, <code>SetListenerOrientation</code>, <code>SetMasterVolume</code>; <code>engine/src/audio/AudioClip.cpp</code> — <code>CreateFromData</code>, <code>Unload</code>; <code>.github/workflows/tests.yml</code>; <code>tests/engine/audio/AudioTests.cpp</code> — <code>UseNullAudioBackend</code>; tests: <code>AudioSystemUninitializedTest.CallsAreSafeNoOps</code>, <code>AudioSystemUninitializedTest.ListenerVolumeClipAndSourceCallsNeedNoContext</code></p>
+
+<div class="callout note" id="design-no-headless-clips">
+<p class="callout-title">Design decision: no audio clips without an audio context</p>
+<p>An <code>AudioClip</code> is an OpenAL buffer, and OpenAL buffers only exist inside a context. Keeping the decoded samples around in a context-less "pending" clip would double memory for every clip and still not be playable, and making headless mode create a context would need a device. So a clip fails to load without an initialized <code>AudioSystem</code>, visibly (a warning and a null asset), rather than appearing loaded with an invalid buffer. Code that runs headless (tests, the editor host) must not rely on audio assets; scene data that references them still loads, with the reference unresolved. Each clip also remembers which context made it, so after a <code>Shutdown</code> and a later <code>Initialize</code> a stale clip reports not loaded and never deletes a buffer id that now belongs to another clip.</p>
 </div>
-<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; <code>engine/src/audio/AudioSystem.cpp</code>; <code>.github/workflows/tests.yml</code>; <code>tests/engine/audio/AudioTests.cpp</code> — <code>UseNullAudioBackend</code>; tests: <code>AudioSystemUninitializedTest.CallsAreSafeNoOps</code></p>
 
 <h2 id="frame-timing">Where audio runs in the frame</h2>
 <p>In <code>Application::Run</code>, <code>AudioSystem::Update()</code> runs once per frame <strong>after</strong> the scene's <code>LateUpdate</code> (and coroutines) and before <code>Render</code>. Components push positions in <code>OnLateUpdate</code>: <code>AudioListener</code> sets the listener, and a playing spatial <code>AudioSource</code> sets its source position. So positions are current when the frame's audio work happens. <code>AudioSystem::Update</code> itself only reclaims finished one-shots (see <a href="#one-shots">One-shots</a>). <code>Application::RenderEditorFrame</code> also calls it.</p>
@@ -135,20 +143,25 @@
 <table>
 <thead><tr><th>Call</th><th>Behaviour</th></tr></thead>
 <tbody>
-<tr><td><code>Play()</code></td><td>Does nothing if there is no clip or it is not loaded, if the group's <code>maxConcurrent</code> is already reached (counting one-shots and sources), or if no source can be acquired. Otherwise binds the clip's buffer, applies volume/pitch with the group's settings, looping and the spatial settings, and starts playback.</td></tr>
-<tr><td><code>Pause()</code></td><td><code>alSourcePause</code> if it holds a source.</td></tr>
+<tr><td><code>Play()</code></td><td>Does nothing if there is no clip or it is not loaded, if the group's <code>maxConcurrent</code> is already reached by <em>other</em> sounds (one-shots and sources; this source is not counted against itself when it is already playing), or if no source can be acquired. Otherwise stops the source, binds the clip's buffer, applies volume/pitch with the group's settings, looping and the spatial settings, and starts playback <strong>from the beginning</strong>, also when it was already playing or paused <span class="badge">PR #37</span>.</td></tr>
+<tr><td><code>Pause()</code></td><td><code>alSourcePause</code> if it holds a source. Resume with <code>UnPause()</code>; <code>Play()</code> starts over.</td></tr>
+<tr><td><code>UnPause()</code></td><td>If paused, resumes from the paused position, provided the group has room (a paused source does not count toward the limit). Otherwise does nothing <span class="badge">PR #37</span>.</td></tr>
 <tr><td><code>Stop()</code></td><td><code>alSourceStop</code> if it holds a source. Keeps the source.</td></tr>
 <tr><td><code>IsPlaying()</code> / <code>IsPaused()</code></td><td>Query the OpenAL source state; <code>false</code> without a source.</td></tr>
 <tr><td><code>SetClip(clip)</code></td><td>Stops; if it was playing and the new clip is non-null, plays the new clip. Setting a clip while stopped does not start playback.</td></tr>
 <tr><td><code>SetLoop(b)</code></td><td>Stored, and applied immediately to a held source.</td></tr>
 <tr><td><code>OnEnable</code></td><td>Calls <code>Play()</code> if play-on-awake is set (<code>SetPlayOnAwake</code>, or the scene data) and a clip is set <span class="badge">PR #34</span>.</td></tr>
-<tr><td><code>OnDisable</code></td><td><code>Pause()</code>. Re-enabling does not resume unless play-on-awake restarts it.</td></tr>
+<tr><td><code>OnDisable</code></td><td><code>Pause()</code>. Re-enabling does not resume; with play-on-awake set it restarts from the beginning, otherwise call <code>UnPause()</code>.</td></tr>
 </tbody>
 </table>
 </div>
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><code>AudioSource::Play</code> (<code>engine/src/audio/AudioSource.cpp</code>) re-binds <code>AL_BUFFER</code> on every call, which OpenAL rejects for a playing or paused source, and then calls <code>alSourcePlay</code>. The test <code>PlayPauseStop</code> shows <code>Play()</code> after <code>Pause()</code> plays again, but whether it resumes or restarts, and what <code>Play()</code> on an already playing source should do, is not specified or tested. The concurrency check in <code>Play()</code> also counts the source itself if it is already playing, so restarting a playing source in a full group is refused.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee <span class="badge">PR #37</span></p>
+<p><code>Play()</code> on a playing or paused source raises no OpenAL error and restarts from the beginning; <code>UnPause()</code> continues from the paused position; restarting the only sound of a full group is allowed while a second source in that group is still refused. Before, <code>Play()</code> re-bound the buffer of a playing or paused source (an OpenAL error), so after <code>Pause()</code> it resumed, and a playing source in a full group counted itself and could not restart. Tests: <code>AudioSourceTest.PlayOnAPlayingSourceRestartsIt</code>, <code>PlayAfterPauseRestartsAndUnPauseResumes</code>, <code>RestartingInAFullGroupDoesNotCountItselfTwice</code>.</p>
+</div>
+<div class="callout note" id="design-play-restarts">
+<p class="callout-title">Design decision: Play restarts, UnPause resumes</p>
+<p>These are Unity's semantics, which most scripts are written against, and they give each call one meaning whatever the source's state: <code>Play()</code> always means "this sound, from the start" (a re-triggered footstep or gunshot), and resuming is an explicit choice. Making <code>Play()</code> resume a paused source would make it depend on hidden state, and a script that wants to restart would first have to <code>Stop()</code>. A restart keeps the source's slot in its mixer group, since it is still one sound.</p>
 </div>
 <h3 id="source-mixing">Volume, pitch and group</h3>
 <ul>
@@ -180,7 +193,7 @@ music-&gt;SetLoop(true);
 music-&gt;SetClip(IO::Resources::Instance().Load&lt;Audio::AudioClip&gt;("res://audio/theme.ogg"));
 music-&gt;Play();
 </code></pre>
-<p class="src">Source: <code>engine/include/engine/audio/AudioSource.hpp</code>; <code>engine/src/audio/AudioSource.cpp</code> — <code>AudioSource::AudioSource</code>, <code>~AudioSource</code>, <code>EnsureSource</code>, <code>Play</code>, <code>SetClip</code>, <code>ApplyMixing</code>, <code>UpdatePosition</code>, <code>OnEnable</code>, <code>OnDisable</code>, <code>OnDestroy</code>, <code>OnLateUpdate</code>; tests: <code>AudioSourceTest.HasExpectedDefaults</code>, <code>SettersClampValues</code>, <code>PlayWithoutClipDoesNothing</code>, <code>PlayPauseStop</code>, <code>SpatialPlaybackCreatesPositionable</code>, <code>SetClipWhilePlayingKeepsPlaying</code>, <code>SetClipWhileStoppedDoesNotStartPlayback</code>, <code>RespectsGroupConcurrencyLimitFromOneShots</code>, <code>PlayingSourcesCountTowardGroupLimit</code></p>
+<p class="src">Source: <code>engine/include/engine/audio/AudioSource.hpp</code>; <code>engine/src/audio/AudioSource.cpp</code> — <code>AudioSource::AudioSource</code>, <code>~AudioSource</code>, <code>EnsureSource</code>, <code>Play</code>, <code>SetClip</code>, <code>ApplyMixing</code>, <code>UpdatePosition</code>, <code>OnEnable</code>, <code>OnDisable</code>, <code>OnDestroy</code>, <code>OnLateUpdate</code>; tests: <code>AudioSourceTest.HasExpectedDefaults</code>, <code>SettersClampValues</code>, <code>PlayWithoutClipDoesNothing</code>, <code>PlayPauseStop</code>, <code>SpatialPlaybackCreatesPositionable</code>, <code>SetClipWhilePlayingKeepsPlaying</code>, <code>SetClipWhileStoppedDoesNotStartPlayback</code>, <code>RespectsGroupConcurrencyLimitFromOneShots</code>, <code>PlayingSourcesCountTowardGroupLimit</code>, <code>PlayOnAPlayingSourceRestartsIt</code>, <code>PlayAfterPauseRestartsAndUnPauseResumes</code>, <code>RestartingInAFullGroupDoesNotCountItselfTwice</code></p>
 
 <h2 id="audio-listener">AudioListener component</h2>
 <p><code>AudioListener</code> is a plain <code>Component</code>, at most one per GameObject (<code>IsSingleton = true</code>). In <code>OnLateUpdate</code>, if active, it copies its GameObject's global position, forward and up vectors to the OpenAL listener. A GameObject without a <code>Positionable</code> is skipped silently (it used to dereference null). Nothing arbitrates between several active listeners in a scene: each writes the single global listener, so the last one to run its <code>OnLateUpdate</code> wins. Without any listener, the listener stays wherever it was last set (OpenAL starts it at the origin); Lua can also set it directly.</p>
@@ -241,8 +254,8 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <ul>
 <li><strong>Gain:</strong> <code>ComputeFinalVolume(v, group)</code> = 0 if the group is muted, else <code>min(v, maxSourceVolume) × group volume</code>. Unknown group: <code>v</code>.</li>
 <li><strong>Pitch:</strong> <code>ComputeFinalPitch(p, group)</code> = <code>p × group pitch</code> (1 for an unknown group). Before PR #23 group pitch was stored but never applied.</li>
-<li><strong>Master volume:</strong> <code>SetMasterVolume</code> clamps to 0..1 and sets the OpenAL listener gain. It is applied exactly once, through the listener, not in <code>ComputeFinalVolume</code>.</li>
-<li><strong>Concurrency:</strong> <code>CountPlayingInGroup(group)</code> counts one-shots and registered <code>AudioSource</code>s in that group that are currently <code>AL_PLAYING</code> (paused ones do not count). <code>Play()</code> and <code>PlayOneShot</code> refuse to start when the count is ≥ <code>maxConcurrent</code>. A limit only gates new playback; lowering it does not stop anything.</li>
+<li><strong>Master volume:</strong> <code>SetMasterVolume</code> clamps to 0..1 and sets the OpenAL listener gain (only stored while uninitialized; <code>Initialize</code> applies it). It is applied exactly once, through the listener, not in <code>ComputeFinalVolume</code>.</li>
+<li><strong>Concurrency:</strong> <code>CountPlayingInGroup(group)</code> counts one-shots and registered <code>AudioSource</code>s in that group that are currently <code>AL_PLAYING</code> (paused ones do not count). <code>Play()</code> and <code>PlayOneShot</code> refuse to start when the count is ≥ <code>maxConcurrent</code> (for <code>Play()</code> on a source that is already playing, the count excludes the source itself). A limit only gates new playback; lowering it does not stop anything.</li>
 </ul>
 <h3 id="group-setters">Changing a group</h3>
 <div class="table-wrap">
@@ -299,8 +312,8 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <h2 id="clips">AudioClip and loaders</h2>
 <p><code>AudioClip</code> is a <code>Base::Asset</code> (resource type <code>"AudioClip"</code>) wrapping one OpenAL buffer with fully decoded PCM.</p>
 <ul>
-<li><code>CreateFromData(AudioData)</code>: fails with a logged error for empty samples or a channel count other than 1 or 2. Supports 8- and 16-bit mono/stereo. It unloads any previous buffer, clears stale OpenAL errors, then creates the buffer; an OpenAL error logs "Failed to create OpenAL buffer" and returns <code>false</code>. On success it records sample rate, channels and duration (bytes / (rate × channels × bytes per sample)).</li>
-<li><code>IsLoaded()</code> is true while it holds a buffer. <code>Unload()</code> deletes the buffer and resets metadata; the destructor unloads.</li>
+<li><code>CreateFromData(AudioData)</code>: fails with a logged error for empty samples or a channel count other than 1 or 2, and with a warning when the <code>AudioSystem</code> is not initialized <span class="badge">PR #37</span> (see <a href="#design-no-headless-clips">why</a>). Supports 8- and 16-bit mono/stereo. It unloads any previous buffer, clears stale OpenAL errors, then creates the buffer; an OpenAL error logs "Failed to create OpenAL buffer" and returns <code>false</code>. On success it records sample rate, channels and duration (bytes / (rate × channels × bytes per sample)).</li>
+<li><code>IsLoaded()</code> is true while it holds a buffer made in the current context: it turns false at <code>Shutdown</code> and stays false after a later <code>Initialize</code> <span class="badge">PR #37</span>. <code>Unload()</code> deletes the buffer (only in the context that made it) and resets metadata; the destructor unloads.</li>
 <li>A buffer cannot be deleted while a source still plays it; stop sources (or rely on one-shots retaining their clip) before dropping the last reference.</li>
 </ul>
 <h3 id="loaders">File formats</h3>
@@ -321,7 +334,7 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <p class="callout-title">Guarantee</p>
 <p>WAV mono/stereo and 8-bit files load (8-bit converted to 16-bit) with sample values preserved; missing or invalid files return empty data; clip creation rejects empty data and unsupported channel counts, replaces a previous buffer, and is not failed by a stale OpenAL error.</p>
 </div>
-<p class="src">Source: <code>engine/src/audio/AudioClip.cpp</code> — <code>CreateFromData</code>, <code>Unload</code>, <code>AudioClipLoaderRegistrar</code>; <code>engine/src/audio/AudioClipLoader.cpp</code> — <code>LoadAudioClipFromFile</code>; <code>engine/src/audio/AudioLoaders.cpp</code>; <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::RegisterLoader</code>; tests: <code>WAVLoaderTest.*</code>, <code>AudioClipTest.*</code></p>
+<p class="src">Source: <code>engine/src/audio/AudioClip.cpp</code> — <code>CreateFromData</code>, <code>Unload</code>, <code>AudioClipLoaderRegistrar</code>; <code>engine/src/audio/AudioClipLoader.cpp</code> — <code>LoadAudioClipFromFile</code>; <code>engine/src/audio/AudioLoaders.cpp</code>; <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::RegisterLoader</code>; tests: <code>WAVLoaderTest.*</code>, <code>AudioClipTest.*</code> (including <code>ClipFromAnEarlierContextNeitherPlaysNorDeletesANewBuffer</code>)</p>
 
 <h2 id="lua">Lua API</h2>
 <p>Lua sees <code>AudioSource</code> and <code>AudioListener</code> as component handles <span class="badge">PR #29</span>: every method goes through a checked handle and raises "attempt to use a destroyed …" once the component is torn down; <code>IsValid()</code> checks first. See <a href="scripting-lua.html">Lua scripting</a>.</p>
@@ -329,7 +342,7 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <table>
 <thead><tr><th>Lua</th><th>Maps to</th></tr></thead>
 <tbody>
-<tr><td><code>source:Play()</code>, <code>Pause</code>, <code>Stop</code>, <code>IsPlaying</code>, <code>IsPaused</code></td><td>Same <code>AudioSource</code> methods</td></tr>
+<tr><td><code>source:Play()</code>, <code>Pause</code>, <code>UnPause</code> <span class="badge">PR #37</span>, <code>Stop</code>, <code>IsPlaying</code>, <code>IsPaused</code></td><td>Same <code>AudioSource</code> methods</td></tr>
 <tr><td><code>Set/GetVolume</code>, <code>Set/GetPitch</code>, <code>Set/GetLoop</code>, <code>Set/GetSpatial</code>, <code>Set/GetMixerGroup</code>, <code>SetMinDistance</code>, <code>SetMaxDistance</code>, <code>SetRolloffFactor</code></td><td>Same, with the same clamping</td></tr>
 <tr><td><code>Audio.SetMasterVolume(v)</code>, <code>Audio.GetMasterVolume()</code></td><td><code>AudioSystem</code> master volume</td></tr>
 <tr><td><code>Audio.SetListenerPosition(x, y, z)</code>, <code>Audio.SetListenerOrientation(fx, fy, fz, ux, uy, uz)</code></td><td>Sets the listener directly (an active <code>AudioListener</code> overwrites it in its next <code>OnLateUpdate</code>)</td></tr>

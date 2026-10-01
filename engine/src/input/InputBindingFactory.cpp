@@ -1,7 +1,9 @@
 #include "engine/input/InputBindingFactory.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <initializer_list>
+#include <limits>
 
 #include "engine/input/InputBinding.hpp"
 #include "engine/input/InputMapping.hpp"
@@ -19,6 +21,9 @@ namespace N2Engine::Input
         case BindingParseError::MissingAxis: return "missing 'axis' field";
         case BindingParseError::MissingCompositeKeys: return "missing composite direction keys";
         case BindingParseError::InvalidValue: return "unknown key, button or axis name";
+        case BindingParseError::InvalidOptionalField:
+            return "optional field of the wrong type (gamepadId: non-negative integer, deadzone: number, "
+                   "invertX/invertY: boolean)";
         }
         return "unknown error";
     }
@@ -37,6 +42,34 @@ namespace N2Engine::Input
         bool AllKnown(const nlohmann::json &j, std::initializer_list<const char *> fields)
         {
             return std::ranges::all_of(fields, [&j](const char *field) { return IsKnownName<E>(j[field]); });
+        }
+
+        // Optional fields are read with json::value, which throws nlohmann::json::type_error for a present
+        // field of the wrong type (e.g. "deadzone": "0.2"). Checked first, so a bad one is a parse error.
+        bool IsValidGamepadId(const nlohmann::json &j)
+        {
+            if (!j.contains("gamepadId"))
+            {
+                return true;
+            }
+            // Read as an int: a larger id would wrap
+            constexpr auto MaxId = static_cast<std::int64_t>(std::numeric_limits<int>::max());
+            const auto &id = j["gamepadId"];
+            if (id.is_number_unsigned())
+            {
+                return id.get<std::uint64_t>() <= static_cast<std::uint64_t>(MaxId);
+            }
+            return id.is_number_integer() && id.get<std::int64_t>() >= 0 && id.get<std::int64_t>() <= MaxId;
+        }
+
+        bool IsOptionalNumber(const nlohmann::json &j, const char *field)
+        {
+            return !j.contains(field) || j[field].is_number();
+        }
+
+        bool IsOptionalBool(const nlohmann::json &j, const char *field)
+        {
+            return !j.contains(field) || j[field].is_boolean();
         }
     }
 
@@ -76,6 +109,8 @@ namespace N2Engine::Input
                     return std::unexpected(BindingParseError::MissingAxis);
                 if (!AllKnown<GamepadAxis>(j, {"axis"}))
                     return std::unexpected(BindingParseError::InvalidValue);
+                if (!IsValidGamepadId(j))
+                    return std::unexpected(BindingParseError::InvalidOptionalField);
                 return std::make_unique<AxisBinding>(
                     window,
                     j["axis"].get<GamepadAxis>(),
@@ -89,6 +124,9 @@ namespace N2Engine::Input
                     return std::unexpected(BindingParseError::MissingAxis);
                 if (!AllKnown<GamepadAxis>(j, {"xAxis", "yAxis"}))
                     return std::unexpected(BindingParseError::InvalidValue);
+                if (!IsValidGamepadId(j) || !IsOptionalNumber(j, "deadzone") ||
+                    !IsOptionalBool(j, "invertX") || !IsOptionalBool(j, "invertY"))
+                    return std::unexpected(BindingParseError::InvalidOptionalField);
                 return std::make_unique<GamepadStickBinding>(
                     window,
                     j["xAxis"].get<GamepadAxis>(),
@@ -134,6 +172,8 @@ namespace N2Engine::Input
                     return std::unexpected(BindingParseError::MissingButton);
                 if (!AllKnown<GamepadButton>(j, {"button"}))
                     return std::unexpected(BindingParseError::InvalidValue);
+                if (!IsValidGamepadId(j))
+                    return std::unexpected(BindingParseError::InvalidOptionalField);
                 return std::make_unique<GamepadButtonBinding>(
                     window,
                     j["button"].get<GamepadButton>(),

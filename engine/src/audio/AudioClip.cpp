@@ -2,6 +2,7 @@
 
 #include "engine/Logger.hpp"
 #include "engine/audio/AudioLoaders.hpp"
+#include "engine/audio/AudioSystem.hpp"
 #include "engine/io/Resources.hpp"
 
 namespace N2Engine::Audio
@@ -51,6 +52,14 @@ namespace N2Engine::Audio
             return false;
         }
 
+        // Buffers need a current OpenAL context (none headless, or without an audio device)
+        auto &audio = AudioSystem::Instance();
+        if (!audio.IsInitialized())
+        {
+            Logger::Warn("Cannot create AudioClip: the AudioSystem is not initialized (no OpenAL context)");
+            return false;
+        }
+
         // Release any previous buffer and clear stale errors so the check below only sees ours
         Unload();
         alGetError();
@@ -69,6 +78,7 @@ namespace N2Engine::Audio
         }
 
         // Store metadata
+        _contextGeneration = audio.GetContextGeneration();
         _sampleRate = data.sampleRate;
         _channels = data.channels;
         _duration = static_cast<float>(data.samples.size()) /
@@ -77,11 +87,25 @@ namespace N2Engine::Audio
         return true;
     }
 
+    bool AudioClip::IsLoaded() const
+    {
+        // The id outlives its context: after Shutdown (and a later Initialize) it names nothing, or
+        // another clip's buffer
+        const auto &audio = AudioSystem::Instance();
+        return _buffer != 0 && audio.IsInitialized() && audio.GetContextGeneration() == _contextGeneration;
+    }
+
     void AudioClip::Unload()
     {
         if (_buffer != 0)
         {
-            alDeleteBuffers(1, &_buffer);
+            // Only in the context it was made in: after Shutdown there's no context, and after a
+            // re-Initialize the id may name another clip's buffer. Either way this one is already gone.
+            const auto &audio = AudioSystem::Instance();
+            if (audio.IsInitialized() && audio.GetContextGeneration() == _contextGeneration)
+            {
+                alDeleteBuffers(1, &_buffer);
+            }
             _buffer = 0;
         }
         _duration = 0.0f;

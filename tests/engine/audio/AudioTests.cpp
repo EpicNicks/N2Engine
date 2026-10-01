@@ -282,6 +282,35 @@ TEST(AudioSystemUninitializedTest, CallsAreSafeNoOps)
     EXPECT_EQ(audio.CountPlayingInGroup("SFX"), 0u);
 }
 
+TEST(AudioSystemUninitializedTest, ListenerVolumeClipAndSourceCallsNeedNoContext)
+{
+    // These used to make OpenAL calls with no current context
+    auto &audio = AudioSystem::Instance();
+    audio.Shutdown();
+    ASSERT_FALSE(audio.IsInitialized());
+
+    audio.SetListenerPosition(1.0f, 2.0f, 3.0f);
+    audio.SetListenerOrientation(0.0f, 0.0f, -1.0f, 0.0f, 1.0f, 0.0f);
+    audio.SetMasterVolume(0.25f);
+    EXPECT_FLOAT_EQ(audio.GetMasterVolume(), 0.25f) << "kept for the next Initialize";
+    audio.SetMasterVolume(1.0f);
+
+    // A buffer needs a context: creating a clip fails cleanly, and unloading has nothing to delete
+    AudioClip clip;
+    EXPECT_FALSE(clip.CreateFromData(MakeAudioData(44100, 1, 441)));
+    EXPECT_FALSE(clip.IsLoaded());
+    clip.Unload();
+
+    const auto go = GameObject::Create("SilentSource");
+    auto *source = go->AddComponent<AudioSource>();
+    source->Play();
+    source->Pause();
+    source->UnPause();
+    source->Stop();
+    EXPECT_FALSE(source->IsPlaying());
+    EXPECT_EQ(source->GetSourceHandle(), 0u);
+}
+
 // ============================================================================
 // AudioClip
 // ============================================================================
@@ -369,6 +398,28 @@ TEST_F(AudioClipTest, StaleOpenALErrorDoesNotFailCreation)
 
     AudioClip clip;
     EXPECT_TRUE(clip.CreateFromData(MakeAudioData(44100, 1, 100)));
+}
+
+TEST_F(AudioClipTest, ClipFromAnEarlierContextNeitherPlaysNorDeletesANewBuffer)
+{
+    auto stale = MakeClip(0.1f);
+    ASSERT_NE(stale, nullptr);
+    ASSERT_TRUE(stale->IsLoaded());
+
+    auto &audio = AudioSystem::Instance();
+    audio.Shutdown(); // the buffer dies with the context
+    EXPECT_FALSE(stale->IsLoaded());
+
+    ASSERT_TRUE(audio.Initialize());
+    EXPECT_FALSE(stale->IsLoaded()) << "its id means nothing (or another buffer) in the new context";
+    EXPECT_FALSE(audio.PlayOneShot(stale).IsValid());
+
+    const auto fresh = MakeClip(0.1f);
+    ASSERT_NE(fresh, nullptr);
+    stale.reset(); // the id may now name fresh's buffer: it used to be deleted here
+
+    EXPECT_TRUE(fresh->IsLoaded());
+    EXPECT_EQ(alIsBuffer(fresh->GetBuffer()), AL_TRUE) << "a stale clip deleted the new clip's buffer";
 }
 
 // ============================================================================
@@ -948,6 +999,80 @@ TEST_F(AudioSourceTest, ShutdownDropsHeldSourceIds)
     // A held id used to survive the context and alias a new pooled source after Initialize
     EXPECT_EQ(_source->GetSourceHandle(), 0u);
     ASSERT_TRUE(AudioSystem::Instance().Initialize()); // TearDown expects a live system
+}
+
+namespace
+{
+    float PlaybackOffset(const AudioSource &source)
+    {
+        ALfloat seconds = -1.0f;
+        alGetSourcef(source.GetSourceHandle(), AL_SEC_OFFSET, &seconds);
+        return seconds;
+    }
+}
+
+TEST_F(AudioSourceTest, PlayOnAPlayingSourceRestartsIt)
+{
+    _source->SetSpatial(false);
+    _source->SetClip(_clip); // 5 s
+    _source->Play();
+    ASSERT_TRUE(WaitUntil([this] { return PlaybackOffset(*_source) > 0.2f; })) << "playback never advanced";
+
+    alGetError();
+    _source->Play();
+
+    EXPECT_EQ(alGetError(), AL_NO_ERROR) << "re-binding the buffer of a playing source is an OpenAL error";
+    EXPECT_TRUE(_source->IsPlaying());
+    EXPECT_LT(PlaybackOffset(*_source), 0.2f) << "Play should start over";
+}
+
+TEST_F(AudioSourceTest, PlayAfterPauseRestartsAndUnPauseResumes)
+{
+    _source->SetSpatial(false);
+    _source->SetClip(_clip);
+    _source->Play();
+    ASSERT_TRUE(WaitUntil([this] { return PlaybackOffset(*_source) > 0.2f; }));
+
+    _source->Pause();
+    const float pausedAt = PlaybackOffset(*_source);
+    _source->UnPause();
+    EXPECT_TRUE(_source->IsPlaying());
+    EXPECT_GE(PlaybackOffset(*_source), pausedAt) << "UnPause resumes where it paused";
+
+    _source->Pause();
+    alGetError();
+    _source->Play(); // used to resume (the buffer re-bind failed on the paused source)
+    EXPECT_EQ(alGetError(), AL_NO_ERROR);
+    EXPECT_TRUE(_source->IsPlaying());
+    EXPECT_LT(PlaybackOffset(*_source), pausedAt) << "Play after Pause starts over";
+
+    _source->UnPause(); // not paused: nothing to do
+    EXPECT_TRUE(_source->IsPlaying());
+}
+
+TEST_F(AudioSourceTest, RestartingInAFullGroupDoesNotCountItselfTwice)
+{
+    auto &audio = AudioSystem::Instance();
+    audio.CreateMixerGroup("Solo", {.maxConcurrent = 1u});
+    _source->SetSpatial(false);
+    _source->SetMixerGroup("Solo");
+    _source->SetClip(_clip);
+    _source->Play();
+    ASSERT_TRUE(_source->IsPlaying());
+    ASSERT_TRUE(WaitUntil([this] { return PlaybackOffset(*_source) > 0.2f; }));
+
+    _source->Play(); // the only sound in the group is this one, so the restart is allowed
+
+    EXPECT_LT(PlaybackOffset(*_source), 0.2f) << "the restart was refused as if the group were full";
+    EXPECT_EQ(audio.CountPlayingInGroup("Solo"), 1u);
+
+    // Another source is still refused
+    auto *other = _go->AddComponent<AudioSource>();
+    other->SetSpatial(false);
+    other->SetMixerGroup("Solo");
+    other->SetClip(_clip);
+    other->Play();
+    EXPECT_FALSE(other->IsPlaying());
 }
 
 TEST(AudioListenerTest, WorksWithoutPositionable)

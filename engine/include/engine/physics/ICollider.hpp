@@ -20,6 +20,10 @@ namespace N2Engine::Physics
 
         void OnAttach() override;
         void OnDestroy() override;
+        /// While the collider is disabled or its object inactive, its shapes are taken off the body (no
+        /// contacts, triggers or query hits); enabling it puts them back with its current settings
+        void OnEnable() override;
+        void OnDisable() override;
 
         void SetIsTrigger(bool isTrigger);
         [[nodiscard]] bool IsTrigger() const { return _isTrigger; }
@@ -43,6 +47,8 @@ namespace N2Engine::Physics
         [[nodiscard]] PhysicsBodyHandle GetHandle() const { return _handle; }
 
     protected:
+        void OnActiveFlagChanged() override;
+
         virtual void AttachShape(IPhysicsBackend* backend) = 0;
         virtual void UpdateShapeGeometry() = 0;
 
@@ -51,7 +57,11 @@ namespace N2Engine::Physics
         Math::Vector3 _offset = Math::Vector3::Zero;
 
     private:
+        /// Adds this collider's shapes to its body or removes them (a no-op if they already are, or without a body)
+        void SetShapesAttached(bool attached);
+
         PhysicsBodyHandle _handle;
         bool _ownsBody = false;
+        bool _shapesAttached = false;
     };
 }

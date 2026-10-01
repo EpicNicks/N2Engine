@@ -13,7 +13,7 @@ namespace N2Engine::Physics
         auto* backend = Application::GetInstance().Get3DPhysicsBackend();
         if (!backend)
         {
-            hit.hit = false;
+            hit = RaycastHit{}; // nothing of a previous hit survives a miss
             return false;
         }
 
@@ -48,7 +48,7 @@ namespace N2Engine::Physics
         auto* backend = Application::GetInstance().Get3DPhysicsBackend();
         if (!backend)
         {
-            hit.hit = false;
+            hit = RaycastHit{};
             return false;
         }
 

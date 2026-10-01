@@ -19,9 +19,13 @@ namespace N2Engine::Scripting
         IO::ResourcePath _scriptPath;
         LuaScript* _script = nullptr;
         sol::table _scriptInstance;
-        // True until this component is destroyed. Callbacks its script registers hold it, so they
-        // stop firing afterwards instead of running with freed self.component/self.gameObject.
+        // True until this component is destroyed, or its script instance is replaced (SetScript, reload),
+        // which gives the new instance a new flag. Callbacks the script registers hold it, so they stop
+        // firing afterwards instead of running with freed or stale self.component/self.gameObject.
         std::shared_ptr<bool> _alive = std::make_shared<bool>(true);
+        // Set by the first OnAttach: a script instance replaced after that is torn down, and the new one
+        // attached, as if the component had been removed and re-added
+        bool _attached = false;
         nlohmann::json _scriptData;
 
         // Track missing lua script and refs
@@ -38,9 +42,24 @@ namespace N2Engine::Scripting
         bool _hasOnTriggerEnter = false;
         bool _hasOnTriggerStay = false;
         bool _hasOnTriggerExit = false;
+        bool _hasOnApplicationQuit = false;
 
-
-        void InitializeScriptInstance();
+        /// Runs the script file and returns a new instance bound to this component (invalid, with the error
+        /// logged, if the file fails to load or doesn't return a table)
+        sol::table CreateScriptInstance();
+        /// Swaps in a new instance of the current script. The old one is retired (RetireScriptInstance); the
+        /// new one gets the serialized fields (defaults for fields it adds), keeps the old one's resolved
+        /// $ref fields, and gets OnAttach if the component is attached. keepOldOnFailure: a new version that
+        /// fails to load leaves the old instance running (hot reload) instead of a missing script.
+        /// keepOnlyDeclaredFields (a different script): drop saved fields and references the new script
+        /// doesn't declare in SerializableFields.
+        void LoadScriptInstance(bool keepOldOnFailure, bool keepOnlyDeclaredFields);
+        /// Ends the current instance as if its component were removed: OnDisable (if enabled in an active
+        /// hierarchy) and OnDestroy once the component is attached, then its subscriptions stop firing and
+        /// its self.component/self.gameObject are cleared. Returns it (invalid if there was none).
+        sol::table RetireScriptInstance();
+        /// $ref fields hold resolved handles on the instance, not values in _scriptData
+        void CopyReferenceFields(const sol::table &from);
         void ExtractSerializableFields();
         void InjectFieldsIntoScript();
         void CacheLifecycleMethods();
@@ -55,6 +74,9 @@ namespace N2Engine::Scripting
         explicit LuaComponent(GameObject& gameObject);
         ~LuaComponent() override;
 
+        /// Loads the script into a new instance. Replacing an instance (a second SetScript, or ReloadScript)
+        /// retires the old one first; on an attached component the new one gets OnAttach straight away
+        /// (not OnEnable, as on a first attach).
         void SetScript(const IO::ResourcePath& path);
         bool IsComponentType(const std::string &type);
         void SetScriptData(const nlohmann::json& data);
@@ -70,6 +92,8 @@ namespace N2Engine::Scripting
         template<typename T>
         void SetField(const std::string& fieldName, const T& value);
 
+        /// Re-runs the current script file into a new instance, like SetScript with the same path, except
+        /// that a version that fails to load leaves the running instance in place
         void ReloadScript();
 
         // Component interface
@@ -83,6 +107,7 @@ namespace N2Engine::Scripting
         void OnDestroy() override;
         void OnEnable() override;
         void OnDisable() override;
+        void OnApplicationQuit() override;
 
         // Physics events
         void OnCollisionEnter(const Physics::Collision& collision) override;

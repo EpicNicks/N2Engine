@@ -1,5 +1,6 @@
 #include "engine/Logger.hpp"
 #include <iostream>
+#include <mutex>
 
 // Platform detection for TTY checking
 #ifdef _WIN32
@@ -21,12 +22,50 @@
 
 using namespace N2Engine;
 
-Base::EventHandler<std::string_view, Logger::LogLevel> Logger::logEvent;
-bool Logger::broadcastUnbroadcastLogs = false;
+namespace
+{
+    // Guards the backlog, the subscribers and the stream redirectors' line buffers. Recursive, so a
+    // subscriber that logs (or writes to a redirected stream) re-enters on its own thread. Never destroyed,
+    // so logging during static destruction still finds it.
+    std::recursive_mutex &LogMutex()
+    {
+        static auto *mutex = new std::recursive_mutex();
+        return *mutex;
+    }
+}
+
+Logger::LogEventHandler Logger::logEvent;
+std::atomic<bool> Logger::broadcastUnbroadcastLogs = false;
 std::queue<Logger::QueuedLog> Logger::_logQueue;
+
+size_t Logger::LogEventHandler::operator+=(const std::function<void(std::string_view, LogLevel)> &func)
+{
+    std::lock_guard lock(LogMutex());
+    return _handler += func;
+}
+
+void Logger::LogEventHandler::operator-=(const size_t id)
+{
+    std::lock_guard lock(LogMutex());
+    _handler -= id;
+}
+
+void Logger::LogEventHandler::operator()(const std::string_view message, const LogLevel level)
+{
+    std::lock_guard lock(LogMutex());
+    _handler(message, level);
+}
+
+size_t Logger::LogEventHandler::GetSubscriberCount() const
+{
+    std::lock_guard lock(LogMutex());
+    return _handler.GetSubscriberCount();
+}
 
 void Logger::Log(std::string_view log, LogLevel level)
 {
+    // Held across the backlog check and the delivery: another thread's log waits for this one to finish
+    std::lock_guard lock(LogMutex());
     if (broadcastUnbroadcastLogs && logEvent.GetSubscriberCount() == 0)
     {
         _logQueue.push({std::string(log), level});
@@ -170,6 +209,8 @@ int Logger::StreamRedirector::LoggerStreambuf::overflow(const int c)
         return EOF;
     }
 
+    // Any thread may write to a redirected std::cout; each thread builds its own line
+    std::lock_guard lock(LogMutex());
     int result = EOF;
     if (echoToOriginal && originalBuf)
     {
@@ -182,28 +223,37 @@ int Logger::StreamRedirector::LoggerStreambuf::overflow(const int c)
 
     if (c == '\n')
     {
-        if (!lineBuffer.empty())
-        {
-            logEvent(lineBuffer, logLevel);
-            lineBuffer.clear();
-        }
+        FlushLine();
     }
     else if (c != '\r')
     {
-        lineBuffer += static_cast<char>(c);
+        lineBuffers[std::this_thread::get_id()] += static_cast<char>(c);
     }
 
     return result;
 }
 
+void Logger::StreamRedirector::LoggerStreambuf::FlushLine()
+{
+    const auto it = lineBuffers.find(std::this_thread::get_id());
+    if (it == lineBuffers.end())
+    {
+        return;
+    }
+    // Taken out first: a subscriber that writes to this stream re-enters on this thread
+    const std::string line = std::move(it->second);
+    lineBuffers.erase(it);
+    if (!line.empty())
+    {
+        logEvent(line, logLevel);
+    }
+}
+
 int Logger::StreamRedirector::LoggerStreambuf::sync()
 {
-    // Flush any remaining content
-    if (!lineBuffer.empty())
-    {
-        Logger::logEvent(lineBuffer, logLevel);
-        lineBuffer.clear();
-    }
+    std::lock_guard lock(LogMutex());
+    // Flush the calling thread's remaining content
+    FlushLine();
 
     if (echoToOriginal && originalBuf)
     {

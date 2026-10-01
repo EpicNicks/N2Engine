@@ -158,12 +158,13 @@
 <h2 id="luacomponent">LuaComponent and the script table</h2>
 <p>A behaviour script is a file that returns a table, the script's "class". <code>SetScript(path)</code> does the following:</p>
 <ol class="steps">
-<li>Records the path and drops the component's reference to any previous instance. The old instance is not released: its <code>self.component</code>/<code>self.gameObject</code> are not cleared and the subscriptions it made keep firing, because they share the component's lifetime flag. Calling <code>SetScript</code> repeatedly therefore leaks old instances and their subscriptions.</li>
-<li>Loads the file through <code>ResourceLoader</code>. If it is missing, it logs a warning, sets <code>HasMissingScript()</code> and stops.</li>
-<li>Runs the file. If it raises an error or does not return a table, it logs an error and sets <code>HasMissingScript()</code>.</li>
+<li>Records the path and loads the file through <code>ResourceLoader</code>. If it is missing, it logs a warning, retires any previous instance (see <a href="#replacing">Replacing a script instance</a>), sets <code>HasMissingScript()</code> and stops.</li>
+<li>Runs the file. If it raises an error or does not return a table, it logs an error, retires any previous instance and sets <code>HasMissingScript()</code>.</li>
 <li>Creates a fresh instance table whose metatable is the class table, and sets <code>self.component</code> (this <code>LuaComponent</code>) and <code>self.gameObject</code> (its GameObject) on it. Both are checked handles <span class="badge">PR #29</span>.</li>
-<li>Reads <code>SerializableFields</code> and injects field values into the instance (see <a href="#fields">Serializable fields</a>).</li>
-<li>Caches which per-frame and physics callbacks exist.</li>
+<li>Retires the previous instance, if there was one <span class="badge">PR #37</span>.</li>
+<li>Reads <code>SerializableFields</code> and injects field values into the instance (see <a href="#fields">Serializable fields</a>), and carries resolved <code>$ref</code> fields over from the previous instance.</li>
+<li>Caches which per-frame, physics and quit callbacks exist.</li>
+<li>If the component has already been attached (its first <code>OnAttach</code> ran), calls the new instance's <code>OnAttach</code> straight away <span class="badge">PR #37</span>.</li>
 <li>Registers a reload callback for the module name, replacing any it registered before.</li>
 </ol>
 <p>The instance's metatable is the class table itself, not a table with <code>__index</code> set for you. The class must set <code>Class.__index = Class</code>, or method lookups on <code>self</code> find nothing and the callbacks are never called. No error is reported in that case.</p>
@@ -187,7 +188,7 @@ go:AddComponent("LuaComponent"):SetScript("res://scripts/Mover.lua")
 SceneManager.GetCurrentScene():AddRootGameObject(go)
 </code></pre>
 <p>The <code>LuaComponent</code> Lua type has <code>SetScript(path)</code>, <code>GetScriptPath()</code>, <code>HasMissingScript()</code> and the methods every component handle has (<a href="#handles">below</a>).</p>
-<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::SetScript</code>, <code>LuaComponent::InitializeScriptInstance</code>, <code>LuaComponent::CacheLifecycleMethods</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>BindComponents</code>; tests: <code>LuaScriptTest.ComponentRunsLifecycleMethods</code>, <code>LuaScriptTest.InstancesDoNotShareState</code>, <code>LuaScriptTest.ScriptMustReturnATable</code>, <code>LuaScriptTest.SyntaxErrorIsReportedAsMissing</code>, <code>LuaScriptTest.MissingScriptIsReportedAndSafe</code></p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::SetScript</code>, <code>LuaComponent::CreateScriptInstance</code>, <code>LuaComponent::LoadScriptInstance</code>, <code>LuaComponent::CacheLifecycleMethods</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>BindComponents</code>; tests: <code>LuaScriptTest.ComponentRunsLifecycleMethods</code>, <code>LuaScriptTest.InstancesDoNotShareState</code>, <code>LuaScriptTest.ScriptMustReturnATable</code>, <code>LuaScriptTest.SyntaxErrorIsReportedAsMissing</code>, <code>LuaScriptTest.MissingScriptIsReportedAndSafe</code></p>
 
 <h3 id="releasescript">ReleaseScript</h3>
 <p><code>ReleaseScript()</code> cuts the script off from its component. It runs at the end of <code>OnDestroy</code> and again in <code>~LuaComponent</code> (for components freed without <code>OnDestroy</code>), and is safe to call twice. It:</p>
@@ -212,7 +213,8 @@ SceneManager.GetCurrentScene():AddRootGameObject(go)
 <tr><td><code>OnUpdate</code></td><td></td><td>Once per frame, after the fixed steps</td></tr>
 <tr><td><code>OnLateUpdate</code></td><td></td><td>Once per frame, after <code>OnUpdate</code> and coroutines</td></tr>
 <tr><td><code>OnEnable</code> / <code>OnDisable</code></td><td></td><td>When the GameObject's effective active state changes (<code>GameObject:SetActive</code> on it or an ancestor), only for components whose own enable flag is on</td></tr>
-<tr><td><code>OnDestroy</code></td><td></td><td>For an object in a scene: once, during teardown (destroy, <code>RemoveComponent</code>, scene switch), preceded by <code>OnDisable</code> if the component was enabled in an active hierarchy. Objects outside a scene get neither.</td></tr>
+<tr><td><code>OnDestroy</code></td><td></td><td>For an object in a scene: once, during teardown (destroy, <code>RemoveComponent</code>, scene switch), preceded by <code>OnDisable</code> if the component was enabled in an active hierarchy. Objects outside a scene get neither. An instance replaced by <code>SetScript</code> or a reload gets the same pair once the component is attached (see <a href="#replacing">Replacing a script instance</a>).</td></tr>
+<tr><td><code>OnApplicationQuit</code></td><td></td><td>When the run ends, on active components of the loaded scene (<code>Scene::OnApplicationQuit</code>), before teardown <span class="badge">PR #37</span></td></tr>
 </tbody>
 </table>
 </div>
@@ -223,21 +225,21 @@ SceneManager.GetCurrentScene():AddRootGameObject(go)
 <p>For an object in a scene, <code>OnDestroy</code> runs once, preceded by <code>OnDisable</code> if the component was enabled in an active hierarchy. Objects outside a scene get neither. During both callbacks <code>self.gameObject</code>, its Positionable and sibling components are still usable <span class="badge">PR #29</span>. This holds for all three teardown paths (destroy, scene switch, <code>RemoveComponent</code>).</p>
 <p>Re-entry is guarded <span class="badge">PR #34</span>: while a component's <code>OnDisable</code>/<code>OnDestroy</code> run, a second teardown of the same component does nothing, and C++ <code>RemoveComponent</code> on it returns <code>false</code> (the teardown already running frees it). The guard is cleared even if a callback throws. See <a href="gameobjects-components.html#teardown">The teardown sequence</a>.</p>
 </div>
-<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::OnAttach</code> … <code>LuaComponent::OnTriggerExit</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::ProcessAttachQueue</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::RunDestroyCallbacks</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::NotifyActiveChanged</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code>; tests: <code>LuaLifetimeTest.ScriptSeesOnDisableThenOnDestroy</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfADestroyedObject</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOnSceneSwitch</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfARemovedComponent</code></p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::OnAttach</code> … <code>LuaComponent::OnTriggerExit</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::ProcessAttachQueue</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::RunDestroyCallbacks</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::NotifyActiveChanged</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code>; tests: <code>LuaLifetimeTest.ScriptSeesOnDisableThenOnDestroy</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfADestroyedObject</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOnSceneSwitch</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfARemovedComponent</code>, <code>LuaLifetimeTest.OnApplicationQuitReachesScripts</code></p>
 
 <div class="callout note">
 <p class="callout-title">Note</p>
 <ul>
 <li><strong>No initial OnEnable.</strong> <code>OnEnable</code> is not called when a component first attaches, only on a later inactive-to-active transition.</li>
-<li><strong><code>Component:SetActive</code> fires nothing.</strong> It only flips the component's own flag. <code>OnEnable</code>/<code>OnDisable</code> follow the GameObject's hierarchy state.</li>
-<li><strong>SetScript does not call OnAttach.</strong> If <code>SetScript</code> runs after the component's <code>OnAttach</code> pass, the new script's <code>OnAttach</code> never runs. The shipped <code>scene.lua</code> sets scripts before adding the objects to the scene.</li>
+<li><strong><code>Component:SetActive</code> fires nothing</strong> in scripts. It only flips the component's own flag. <code>OnEnable</code>/<code>OnDisable</code> follow the GameObject's hierarchy state. (Physics components do react to their own flag; see <a href="physics.html#active-state">Physics</a>.)</li>
+<li><strong>SetScript after attach calls OnAttach.</strong> If <code>SetScript</code> runs after the component's first <code>OnAttach</code>, the new instance's <code>OnAttach</code> runs inside <code>SetScript</code> <span class="badge">PR #37</span>. Before, it never ran. Setting the script before the object joins a scene (as the shipped <code>scene.lua</code> does) still gets <code>OnAttach</code> from the attach queue, once.</li>
 <li><strong>File scope runs at SetScript time.</strong> The script's file-scope code runs inside <code>SetScript</code>, before <code>OnAttach</code>, and once per component.</li>
 </ul>
 </div>
 
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><code>OnApplicationQuit</code> is never forwarded to scripts. <code>Scene::OnApplicationQuit</code> calls <code>Component::OnApplicationQuit</code> on active components when the run ends, but <code>LuaComponent</code> (<code>engine/include/engine/scripting/LuaComponent.hpp</code>) does not override it. A script method named <code>OnApplicationQuit</code> is never called. It is not stated whether this is deliberate.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee <span class="badge">PR #37</span></p>
+<p>A script method named <code>OnApplicationQuit</code> is called once when the run ends, like a C++ component's; <code>LuaComponent</code> used not to forward it. Test: <code>LuaLifetimeTest.OnApplicationQuitReachesScripts</code>.</p>
 </div>
 
 <h2 id="errors">Errors and how they are reported</h2>
@@ -248,6 +250,7 @@ SceneManager.GetCurrentScene():AddRootGameObject(go)
 <tbody>
 <tr><td>Script file not found</td><td>Warn "Script file not found or failed to load: ..."; <code>HasMissingScript()</code> true; at <code>OnAttach</code>, Warn "LuaComponent on '&lt;name&gt;' has missing script: ..."; every callback skipped</td></tr>
 <tr><td>Syntax or runtime error while loading the file</td><td>Error "Failed to load script: ..."; <code>HasMissingScript()</code> true</td></tr>
+<tr><td>Same, during a reload of a running script</td><td>Error "Failed to load script: ..." and Warn "Keeping the running version of ..."; the old instance keeps running <span class="badge">PR #37</span></td></tr>
 <tr><td>File does not return a table</td><td>Error "Script must return a table"; <code>HasMissingScript()</code> true</td></tr>
 <tr><td>Error inside a callback</td><td>Error "Lua &lt;Method&gt; error in &lt;script path&gt;: &lt;message&gt;"; no exception</td></tr>
 <tr><td>Error inside a subscribed callback</td><td>Error "&lt;EventName&gt; callback error: &lt;message&gt;", e.g. "InputAction callback error"</td></tr>
@@ -258,7 +261,7 @@ SceneManager.GetCurrentScene():AddRootGameObject(go)
 </table>
 </div>
 <p>A Lua error raised inside a callback ends that callback. Any work after the failing line is skipped for that call.</p>
-<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::CallLuaMethod</code>, <code>LuaComponent::SetScript</code>, <code>LuaComponent::InitializeScriptInstance</code>; <code>engine/include/engine/scripting/ScriptCallback.hpp</code> — <code>MakeScriptCallback</code>; tests: <code>LuaScriptTest.RuntimeErrorIsContained</code>, <code>LuaSceneTest.UnknownComponentNameIsAnError</code>, <code>LuaHandleTest.BadArgumentsAreCleanErrors</code></p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::CallLuaMethod</code>, <code>LuaComponent::SetScript</code>, <code>LuaComponent::CreateScriptInstance</code>, <code>LuaComponent::LoadScriptInstance</code>; <code>engine/include/engine/scripting/ScriptCallback.hpp</code> — <code>MakeScriptCallback</code>; tests: <code>LuaScriptTest.RuntimeErrorIsContained</code>, <code>LuaSceneTest.UnknownComponentNameIsAnError</code>, <code>LuaHandleTest.BadArgumentsAreCleanErrors</code></p>
 
 <h2 id="fields">Serializable fields</h2>
 <p>A script declares editable, saved values in a <code>SerializableFields</code> table on its class. Each entry is either a shorthand value or a table with a <code>default</code> (and optionally a <code>type</code>):</p>
@@ -505,12 +508,12 @@ end
 <p>Scripts subscribe to C++ events through <code>Subscribe(callback)</code> on <code>InputAction</code>, <code>Event</code>, <code>WindowResizeEvent</code> and <code>GameObjectEvent</code>. Each returns an id for <code>Unsubscribe(id)</code>. All four wrap the Lua function with <code>MakeScriptCallback</code>. (<code>InputActionEvent</code> was removed in <span class="badge">PR #31</span>; <code>InputAction:OnStateChanged()</code> now returns the action itself.)</p>
 
 <h3 id="lifetime-scope">ScriptLifetimeScope</h3>
-<p><code>LuaComponent::CallLuaMethod</code> opens a <code>ScriptLifetimeScope</code> around every call into its script. The scope makes the component's lifetime flag "current" (thread-local) and restores the previous one on exit, so nested calls into another component's script are handled. <code>MakeScriptCallback</code> captures <code>ScriptLifetimeScope::Current()</code> when the subscription is made:</p>
+<p><code>LuaComponent::CallLuaMethod</code> opens a <code>ScriptLifetimeScope</code> around every call into its script. The scope makes the component's lifetime flag (one per script instance: a replaced instance's flag is cleared and the new one gets its own <span class="badge">PR #37</span>) "current" (thread-local) and restores the previous one on exit, so nested calls into another component's script are handled. <code>MakeScriptCallback</code> captures <code>ScriptLifetimeScope::Current()</code> when the subscription is made:</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Where <code>Subscribe</code> is called</th><th>Captured owner</th><th>After the component is destroyed</th></tr></thead>
 <tbody>
-<tr><td>Inside a lifecycle callback (<code>OnAttach</code>, <code>OnUpdate</code>, <code>OnCollisionEnter</code>, …)</td><td>That component</td><td>Callback skipped</td></tr>
+<tr><td>Inside a lifecycle callback (<code>OnAttach</code>, <code>OnUpdate</code>, <code>OnCollisionEnter</code>, …)</td><td>That component's current script instance</td><td>Callback skipped (also once that instance is replaced by <code>SetScript</code> or a reload)</td></tr>
 <tr><td>Scene setup script (<code>RunFile</code>), any code outside a component call</td><td>None</td><td>Keeps firing (nothing cancels it)</td></tr>
 <tr><td>File scope of a behaviour script (runs inside <code>SetScript</code>)</td><td>Whatever is current: none, or the component whose callback called <code>SetScript</code></td><td>Not tied to the script's own component</td></tr>
 <tr><td>Inside another subscription's callback (dispatched from C++)</td><td>None</td><td>Keeps firing</td></tr>
@@ -591,18 +594,27 @@ assert(Vector3.Zero.y == 0)   -- the constant is unchanged
 <li><code>UnregisterReloadCallbacks(owner)</code> removes all callbacks of that owner, for any module (a null owner is ignored);</li>
 <li><code>ClearReloadCallbacks(module)</code> removes all callbacks for one module.</li>
 </ul>
-<p><code>LuaComponent::SetScript</code> replaces its own callback, so calling it twice does not duplicate it, and <code>ReleaseScript</code> removes it. The component's callback runs <code>ReloadScript()</code>. If the script was missing, that retries <code>SetScript</code>. Otherwise it re-runs the file into a new instance, restores the saved <code>scriptData</code>, re-injects it and re-caches the callbacks.</p>
+<p><code>LuaComponent::SetScript</code> replaces its own callback, so calling it twice does not duplicate it, and <code>ReleaseScript</code> removes it. The component's callback runs <code>ReloadScript()</code>. If the script was missing, that retries <code>SetScript</code>. Otherwise it re-runs the file into a new instance that replaces the running one, as below; if the new version fails to load, the running instance stays.</p>
 <p class="src">Source: <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>LuaRuntime::ReloadModule</code>, <code>RegisterReloadCallback</code>, <code>UnregisterReloadCallbacks</code>, <code>ClearReloadCallbacks</code>; <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::ReloadScript</code>; tests: <code>LuaLifetimeTest.ReloadCallbacksAreReplacedAndRemoved</code></p>
+
+<h3 id="replacing">Replacing a script instance <span class="badge">PR #37</span></h3>
+<p>A second <code>SetScript</code> (same path or another) and <code>ReloadScript</code> both replace the component's script instance. The new instance is created first; then:</p>
+<ol class="steps">
+<li>The old instance is retired as if its component were removed: once the component has been attached, it gets <code>OnDisable</code> (if the component is enabled in an active hierarchy) and then <code>OnDestroy</code>. Before it is attached, it gets neither.</li>
+<li>Its subscriptions stop firing (its lifetime flag is cleared and the new instance gets a new one), and its <code>self.component</code>/<code>self.gameObject</code> become <code>nil</code>, as after a destroy.</li>
+<li>The new instance gets the saved <code>scriptData</code> values; fields that a new version adds get their defaults. Resolved <code>$ref</code> fields (GameObject and component references) are copied from the old instance, since they are handles on the instance rather than values in <code>scriptData</code>. For a reload or a <code>SetScript</code> of the same path everything is kept, including fields the new version no longer declares. For a <code>SetScript</code> of a <em>different</em> path, only the fields (and references) that the new script declares in <code>SerializableFields</code> are kept; the rest are dropped from <code>scriptData</code>, so unrelated scripts never share values. The first <code>SetScript</code> of a component keeps everything, since <code>Deserialize</code> fills <code>scriptData</code> before it.</li>
+<li>If the component was already attached, the new instance gets <code>OnAttach</code> immediately. It does not get <code>OnEnable</code>, just as a first attach does not, so setup done only in <code>OnEnable</code> is not re-run after a hot reload; put it in <code>OnAttach</code>.</li>
+</ol>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::LoadScriptInstance</code>, <code>RetireScriptInstance</code>, <code>CopyReferenceFields</code>, <code>ExtractSerializableFields</code>; tests: <code>LuaLifetimeTest.ReloadRetiresTheOldInstanceAndAttachesTheNewOne</code>, <code>LuaLifetimeTest.SettingAnotherScriptRetiresTheFirstInstance</code>, <code>LuaLifetimeTest.ReloadKeepsSavedFieldsAndReferencesAndDefaultsNewOnes</code>, <code>LuaLifetimeTest.AnotherScriptKeepsOnlyTheFieldsItDeclares</code></p>
+
+<div class="callout note" id="design-script-replace">
+<p class="callout-title">Design decision: a replaced script instance is retired like a removed component</p>
+<p>Replacing the script must not leave the old code running behind the new one. Before, the old instance kept its subscriptions (they shared the component's lifetime flag) and its <code>self.component</code>, so a reload doubled every input handler, and the new instance never got <code>OnAttach</code>, so it never subscribed or initialised at all. Treating a replacement as remove-then-add reuses rules scripts already follow: <code>OnDestroy</code> undoes what <code>OnAttach</code> set up, and <code>OnAttach</code> sets it up again. The component's data (<code>scriptData</code> and resolved references) is kept, because it belongs to the component and the scene, not to one version of the code. A different script only keeps the fields it declares, since a same-named field of another script is a coincidence, not shared data. The new instance gets <code>OnAttach</code> but not <code>OnEnable</code>: this engine never fires <code>OnEnable</code> on attach, and firing it only on replacement would make a reloaded script run code a freshly attached one never runs. A reload that fails to compile keeps the running version, so a typo during hot reload does not stop the game.</p>
+</div>
 
 <div class="callout open-question">
 <p class="callout-title">Open question</p>
-<p>Nothing in <code>engine/</code>, <code>editor/</code> or <code>editor-server/</code> calls <code>LuaRuntime::ReloadModule</code>; only tests do. Hot reload is therefore not wired to a file watcher. In addition, <code>LuaComponent::ReloadScript</code> leaves these semantics unstated:</p>
-<ul>
-<li>It does not call <code>OnAttach</code> on the new instance.</li>
-<li>It does not release the old instance. Closures the old instance subscribed keep firing, because they share the same lifetime flag.</li>
-<li>It overwrites <code>scriptData</code> with the saved copy after extraction, so fields added by the new version get no default.</li>
-<li>It does not re-resolve <code>$ref</code> reference fields, so they become <code>nil</code>.</li>
-</ul>
+<p>Nothing in <code>engine/</code>, <code>editor/</code> or <code>editor-server/</code> calls <code>LuaRuntime::ReloadModule</code>; only tests do. Hot reload is therefore not wired to a file watcher. (What a reload does to a component is defined above, in <a href="#replacing">Replacing a script instance</a>.)</p>
 </div>
 
 <h2 id="engine-api">The <code>engine-api.lua</code> annotation file</h2>
@@ -750,7 +762,7 @@ return Bouncer
 <tr><td><code>LuaTests.cpp</code></td><td><code>LuaTest</code>, <code>LuaScriptTest</code></td><td>Globals, idempotent <code>Initialize</code>, opened libraries and the sandbox (no <code>package</code>/<code>dofile</code>/<code>loadfile</code>, text-only <code>load</code>, bytecode rejected by <code>RunSource</code>) <span class="badge">PR #34</span>, math, <code>Time</code>, enums, GameObject/Scene basics; LuaComponent lifecycle, per-instance state, fields, missing/broken scripts, <code>require</code></td></tr>
 <tr><td><code>LuaHandleTests.cpp</code> <span class="badge">PR #29</span></td><td><code>LuaHandleTest</code></td><td>Handle validity after <code>RemoveComponent</code>, destroy and scene switch; stored collisions; copies of <code>self</code>; handles during teardown on all three paths; equality; ownership; GC during <code>SetScript</code>; bad-argument errors; scene handles after a switch and during their own unload; <code>RemoveChild</code> ownership <span class="badge">PR #31</span></td></tr>
 <tr><td><code>LuaInputHandleTests.cpp</code> <span class="badge">PR #31</span></td><td><code>LuaInputHandleTest</code></td><td>Map and action handles: live use, <code>[]</code>, <code>disabled</code>, equality; errors after a map is replaced or an action removed/replaced (methods, properties, index, assignment); replacement from the action's own callback; <code>OnStateChanged</code>; subscription released with its action</td></tr>
-<tr><td><code>LuaLifetimeTests.cpp</code></td><td><code>LuaLifetimeTest</code></td><td>Subscriptions stop after destroy and scene switch, keep working outside components; OnDisable then OnDestroy; <code>self</code> references cleared; reload callbacks replaced and removed</td></tr>
+<tr><td><code>LuaLifetimeTests.cpp</code></td><td><code>LuaLifetimeTest</code></td><td>Subscriptions stop after destroy and scene switch, keep working outside components; OnDisable then OnDestroy; <code>self</code> references cleared; reload callbacks replaced and removed; replacing an instance retires the old one, attaches the new one and keeps fields and references; <code>OnApplicationQuit</code> reaches scripts</td></tr>
 <tr><td><code>LuaRobustnessTests.cpp</code></td><td><code>LuaRobustnessTest</code></td><td>Immutable constants, <code>LuaToJson</code> cycles, readable <code>Collision</code>, shorthand/integer fields, partial vectors, reference type names</td></tr>
 <tr><td><code>LuaSceneTests.cpp</code></td><td><code>LuaSceneTest</code>, <code>LuaProjectSceneTest</code></td><td><code>LuaToJson</code>, <code>ActionMapJsonFromLua</code>, <code>CreateActionMap</code> without a window, <code>AddComponent</code>/<code>GetComponent</code> by name; builds <code>lua_project/assets/scene.lua</code> headless</td></tr>
 </tbody>
