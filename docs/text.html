@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Text &amp; fonts · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html" aria-current="page">Text &amp; fonts</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Text &amp; fonts</h1>
+<p class="lead">The <code>text</code> library loads fonts, builds single-channel SDF glyph atlases and lays out UTF-8 text into glyph quads, all on the CPU. The engine wraps it in the <code>Text::Font</code> asset for <code>.ttf</code>/<code>.otf</code> files and ships one embedded default font. Nothing draws text yet: renderers and a <code>TextRenderer</code> come in later phases of <a href="https://github.com/EpicNicks/N2Engine/issues/1">issue #1</a>. This page covers the font backend interface, the atlas, layout rules and the asset.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#module">The text module</a></li>
+<li><a href="#backends">Font backends</a></li>
+<li><a href="#atlas">SDF atlas</a></li>
+<li><a href="#utf8">UTF-8 decoding</a></li>
+<li><a href="#layout">Layout</a></li>
+<li><a href="#missing-glyphs">Missing glyphs</a></li>
+<li><a href="#shaping">The shaper seam</a></li>
+<li><a href="#font-asset">The Font asset</a></li>
+<li><a href="#default-font">The default font</a></li>
+</ol>
+</div>
+
+<h2 id="module">The text module <span class="badge">PR #45</span></h2>
+<p><code>text/</code> is its own static library, like <code>math/</code>. It depends only on <code>math</code> and the vendored <code>external/stb_truetype</code>, never on the engine, the renderer, GLFW or nlohmann, so <code>text_tests</code> runs without any of them. The engine links it publicly. Its public headers are under <code>text/include/text/</code>, and none of them mention a font library's types.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Header</th><th>Contents</th></tr></thead>
+<tbody>
+<tr><td><code>FontBackend.hpp</code></td><td><code>IFontBackend</code>, <code>IFontFace</code>, metrics and SDF structs, backend selection</td></tr>
+<tr><td><code>FontAtlas.hpp</code></td><td><code>AtlasSettings</code>, <code>Charset</code>, <code>AtlasGlyph</code>, <code>FontAtlas</code></td></tr>
+<tr><td><code>SdfFont.hpp</code></td><td><code>SdfFont</code>: a face plus its atlas, what layout takes</td></tr>
+<tr><td><code>TextLayout.hpp</code></td><td><code>LayoutText</code>, <code>LayoutOptions</code>, <code>GlyphQuad</code>, <code>LineInfo</code>, <code>TextLayout</code></td></tr>
+<tr><td><code>Shaper.hpp</code></td><td><code>IShaper</code>, <code>ShapedGlyph</code>, <code>BasicShaper</code></td></tr>
+<tr><td><code>Utf8.hpp</code></td><td><code>DecodeUtf8</code>, <code>DecodeUtf8Next</code>, <code>EncodeUtf8</code></td></tr>
+<tr><td><code>DefaultFont.hpp</code></td><td><code>GetDefaultFontData()</code>: the embedded default font's bytes</td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>text/CMakeLists.txt</code>; <code>text/include/text/</code></p>
+
+<h2 id="backends">Font backends</h2>
+<p>A backend reads font files; a face is one loaded font. <code>IFontBackend::LoadFace(bytes, &amp;error)</code> takes the whole file in memory (TrueType <code>.ttf</code> or CFF-flavoured <code>.otf</code>) and returns an <code>IFontFace</code>, or null with a reason. The face copies the bytes, so the caller's buffer can go. A face answers:</p>
+<ul>
+<li><code>GetMetrics()</code>: ascent, descent, line gap and units per em, in font units, y-up (descent is negative).</li>
+<li><code>FindGlyph(codepoint)</code>: the glyph id, or nullopt when the font has none. It never returns <code>.notdef</code> (glyph 0).</li>
+<li><code>GetGlyphMetrics(glyph)</code> (advance and left side bearing), <code>GetGlyphBounds(glyph)</code> (the outline's box, or nullopt for an empty glyph) and <code>GetKerning(left, right)</code> (pair kerning between two glyphs). Invalid glyph ids give zeros or nullopt.</li>
+<li><code>RenderSdf(glyph, pixelsPerEm, spreadPx)</code>: the glyph's signed distance field, with <code>spreadPx</code> pixels of border. The outline is at 128, inside is higher, and each pixel of distance changes the value by <code>128 / spreadPx</code>. Spaces return an empty bitmap.</li>
+</ul>
+<p><strong>Selecting a backend.</strong> <code>FontBackendKind</code> names the backends (<code>StbTrueType</code>, <code>FreeType</code>). <code>GetAvailableFontBackends()</code> lists the ones compiled in, default first; <code>CreateFontBackend(kind)</code> returns null for one that isn't; <code>CreateDefaultFontBackend()</code> is stb_truetype. This PR builds only stb_truetype. The FreeType backend (P1b) adds itself to that list behind a CMake option, and every font test is parameterised over the list, so the same tests run against both.</p>
+<p><strong>stb_truetype.</strong> Compiled once, in <code>StbTrueTypeBackend.cpp</code>, with <code>STBTT_STATIC</code> so its symbols stay private. stb_truetype is handed a pointer, not a size, and reads tables at fixed offsets without checking their lengths. Before <code>stbtt_InitFont</code> the backend therefore rejects, with an error naming the problem, a font where:</p>
+<ul>
+<li>a table in the directory runs past the end of the data;</li>
+<li><code>head</code> is missing or shorter than 54 bytes, or <code>indexToLocFormat</code> isn't 0 or 1;</li>
+<li><code>maxp</code> is missing or <code>numGlyphs</code> is 0;</li>
+<li><code>hhea</code> is missing or short, or <code>numberOfHMetrics</code> isn't between 1 and <code>numGlyphs</code>, or <code>hmtx</code> is shorter than <code>4&middot;nHM + 2&middot;(numGlyphs &minus; nHM)</code>;</li>
+<li>for TrueType outlines, <code>loca</code> is shorter than <code>(numGlyphs + 1)</code> entries, or an entry is smaller than the one before it or past the end of <code>glyf</code> (CFF fonts have no <code>loca</code>; a font with neither <code>glyf</code> nor <code>CFF </code> is rejected).</li>
+</ul>
+<p>stb's internal asserts are compiled out, so a font it still can't handle fails or renders nothing in Debug and Release alike.</p>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>Font parsing is not hardened against malicious files: the table check stops truncation, not crafted tables. Fonts are trusted project assets; don't load fonts downloaded at run time.</p>
+</div>
+<p class="src">Source: <code>text/include/text/FontBackend.hpp</code>; <code>text/src/text/FontBackendFactory.cpp</code>; <code>text/src/text/StbTrueTypeBackend.cpp</code>; tests: <code>FontBackendRegistryTest.*</code>, <code>Backends/FontBackendTest.*</code></p>
+
+<h2 id="atlas">SDF atlas</h2>
+<p><code>FontAtlas::Build(face, settings)</code> rasterises every glyph the settings ask for into one single-channel bitmap (<code>std::vector&lt;uint8_t&gt;</code>, row 0 first). <code>SdfFont::Create</code> does this when a font loads.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>basePx</code></td><td>48</td><td>Rasterisation size in pixels per em (4 to 256)</td></tr>
+<tr><td><code>spreadPx</code></td><td>8</td><td>SDF distance range each side of the outline, in pixels: 1 to half of <code>basePx</code>, and at most 32 (<code>MaxSpreadPx</code>)</td></tr>
+<tr><td><code>paddingPx</code></td><td>2</td><td>Empty pixels between glyphs and at the atlas edge, so filtering doesn't bleed (0 to 16)</td></tr>
+<tr><td><code>charset</code></td><td><code>Latin1</code></td><td><code>Ascii</code> is U+0020&ndash;U+007E; <code>Latin1</code> adds U+00A0&ndash;U+00FF. Both also contain U+FFFD.</td></tr>
+<tr><td><code>extraChars</code></td><td>empty</td><td>More codepoints; duplicates and control characters are ignored</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li>Every codepoint the face has gets an <code>AtlasGlyph</code>; codepoints it lacks are skipped and lay out as the fallback glyph. Glyph 0 (<code>.notdef</code>) is always included.</li>
+<li>Each <code>AtlasGlyph</code> has its <code>advance</code> and <code>plane</code> rect in ems (the bitmap's quad relative to the pen on the baseline, y-up, including the SDF border), its <code>uv</code> rect (0..1, y-down: <code>uv.minY</code> is the top row) and its <code>pixels</code> rect. Spaces have an advance but no bitmap.</li>
+<li>U+FFFD is always in the charset, whatever <code>charset</code> says: ill-formed UTF-8 decodes to it, and it should draw as the replacement character rather than as a missing glyph.</li>
+<li>Packing is a shelf packer: glyphs sorted by height, then width, then glyph id, placed in rows with <code>paddingPx</code> between them and around the edge. Width and height are powers of two, at most 8192; an atlas that would be larger fails to build.</li>
+<li>Invalid settings fail the build with a reason rather than being clamped. The limits keep a load to seconds: SDF rasterisation costs roughly glyph pixels times outline edges.</li>
+<li>A charset of more than 4096 codepoints (<code>kMaxCodepoints</code>) fails before any glyph is looked up. The packed area is then estimated from the outline boxes (<code>GetGlyphBounds</code>), and an atlas that wouldn't fit fails before any glyph is rasterised.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>The same font bytes, backend and settings always give a byte-identical atlas with the same glyph rects. Glyph rects never overlap, keep the padding between each other and from the edges, and every charset codepoint the font has is present.</p>
+</div>
+<p class="src">Source: <code>text/src/text/FontAtlas.cpp</code> — <code>FontAtlas::Build</code>, <code>ResolveCharset</code>; tests: <code>AtlasCharsetTest.*</code>, <code>Backends/FontAtlasTest.BuildingTwiceGivesIdenticalAtlases</code>, <code>GlyphRectsDontOverlapAndKeepThePadding</code>, <code>EveryCharsetGlyphIsPresent</code></p>
+
+<h2 id="utf8">UTF-8 decoding</h2>
+<p><code>DecodeUtf8</code> never throws. Ill-formed input becomes U+FFFD following Unicode's "maximal subpart" rule: a stray continuation byte, an overlong form (<code>C0</code>/<code>C1</code>, or <code>E0</code>/<code>F0</code> with a too-small second byte), an encoded surrogate, a value above U+10FFFF or a byte <code>F5</code>&ndash;<code>FF</code> gives one U+FFFD per byte, and a sequence cut short gives one U+FFFD for its valid prefix, after which the interrupting byte decodes on its own (<code>"\xE2\x82A"</code> is U+FFFD, <code>A</code>).</p>
+<p class="src">Source: <code>text/src/text/Utf8.cpp</code> — <code>DecodeUtf8Next</code>; tests: <code>Utf8DecodeTest.*</code></p>
+
+<h2 id="layout">Layout</h2>
+<p><code>LayoutText(font, utf8, options)</code> returns a <code>TextLayout</code>: one <code>GlyphQuad</code> per visible glyph, one <code>LineInfo</code> per line, the block's <code>bounds</code>, the <code>lineHeight</code>, and the codepoints the font couldn't draw. Distances are in <em>layout units</em>: <code>fontSize</code> layout units per em, which are world units for world-space text and pixels for UI.</p>
+<ul>
+<li><strong>Quads.</strong> <code>position</code> is y-up and <code>uv</code> is y-down, so a quad's top-left corner is <code>(position.minX, position.maxY)</code> with uv <code>(uv.minX, uv.minY)</code>. Each quad carries its <code>codepoint</code> and <code>cluster</code>, the byte offset of its source text. Spaces and tabs take room but have no quad.</li>
+<li><strong>Advances.</strong> Each glyph advances by its advance plus <code>letterSpacing</code> ems, plus pair kerning with the next glyph only when that glyph is on the same line. Shapers report kerning separately from the advance (<code>ShapedGlyph::kern</code>) for this reason: a line's last glyph is never kerned against the next line's first, so the line's width (and so its centre or right alignment) isn't off by the kerning. A tab moves to the next multiple of <code>tabWidth</code> space widths from the line start; with <code>tabWidth</code> 0 it is as wide as a space.</li>
+<li><strong>Option limits.</strong> <code>fontSize</code>, <code>maxWidth</code>, <code>lineSpacing</code> and <code>tabWidth</code> below 0 (or NaN) are treated as 0: a negative <code>maxWidth</code> means no wrapping, and a negative <code>lineSpacing</code> stacks every line on one baseline. <code>letterSpacing</code> may be negative, to tighten text.</li>
+<li><strong>Line breaks.</strong> <code>\n</code> and <code>\r\n</code> end a line; a lone <code>\r</code> and other control characters are ignored. A trailing <code>\n</code> gives a final empty line; empty text gives no lines and all-zero bounds.</li>
+<li><strong>Wrapping</strong> (when <code>maxWidth &gt; 0</code>). A line breaks after the last space, tab or hyphen (<code>-</code>, U+2010) that fits. A word with no break opportunity that doesn't fit breaks between characters, but every line holds at least one glyph. Spaces never cause a wrap and trailing spaces don't count towards a line's width; they stay on the line they end. No-break space (U+00A0) is not a break opportunity.</li>
+<li><strong>Line height</strong> is <code>(ascent &minus; descent + lineGap) &times; fontSize / unitsPerEm &times; lineSpacing</code>.</li>
+<li><strong>Horizontal alignment</strong> is per line and relative to the origin: <code>Left</code> starts the line at x = 0, <code>Center</code> centres it on x = 0, <code>Right</code> ends it at x = 0. A line's width excludes trailing spaces.</li>
+<li><strong>Vertical alignment</strong> places the block relative to y = 0: <code>Top</code> at the first line's ascent, <code>Middle</code> centred, <code>Bottom</code> at the last line's descent, <code>Baseline</code> at the first line's baseline.</li>
+<li><strong>Bounds</strong> span the widest line horizontally and from the first line's ascent to the last line's descent. Glyph quads can extend past them by the SDF border.</li>
+</ul>
+<p class="src">Source: <code>text/src/text/TextLayout.cpp</code> — <code>LayoutText</code>, <code>LineBuilder</code>; tests: <code>Backends/TextLayoutTest.*</code></p>
+
+<h2 id="missing-glyphs">Missing glyphs</h2>
+<p>A codepoint the atlas doesn't have draws as the font's fallback glyph: <code>.notdef</code> if it has an outline, otherwise <code>?</code>, otherwise nothing (no room taken). The layout's <code>missingCodepoints</code> lists them in order of first appearance. The text library has no logger, so <code>SdfFont::SetMissingGlyphHandler</code> takes a callback, which runs the first time layout meets a missing codepoint and never again for that font. The engine's <code>Font</code> installs one that logs a warning.</p>
+<p class="src">Source: <code>text/src/text/Shaper.cpp</code> — <code>BasicShaper::Shape</code>; <code>text/src/text/SdfFont.cpp</code> — <code>SdfFont::ReportMissingGlyph</code>; tests: <code>Backends/TextLayoutTest.MissingGlyphsUseTheFallbackAndAreListed</code>, <code>MissingGlyphsAreReportedOncePerFont</code></p>
+
+<h2 id="shaping">The shaper seam</h2>
+<p>Layout turns each paragraph into <code>ShapedGlyph</code>s (glyph id, codepoint, cluster, advance and offsets in ems) through an <code>IShaper</code>, then wraps and positions those. The default <code>BasicShaper</code> does no shaping: one glyph per codepoint plus pair kerning. There are no ligatures, combining marks or bidi. <code>LayoutOptions::shaper</code> can point at another implementation, which is where HarfBuzz would plug in without changing callers.</p>
+<p class="src">Source: <code>text/include/text/Shaper.hpp</code>; tests: <code>Backends/TextLayoutTest.ACustomShaperReplacesTheBasicOne</code></p>
+
+<h2 id="font-asset">The Font asset <span class="badge">PR #45</span></h2>
+<p><code>N2Engine::Text::Font</code> (<code>engine/include/engine/text/Font.hpp</code>) is a <code>Base::Asset</code> with resource type <code>"Font"</code>. It owns an <code>SdfFont</code> built with the default backend and holds no GPU objects, so it loads headless; renderers will create their own textures from its atlas.</p>
+<ul>
+<li><code>ResourceLoader::Initialize</code> calls <code>Font::RegisterLoader()</code>, which registers the loader for <code>.ttf</code> and <code>.otf</code> with <code>IO::Resources</code> (and so <code>ResourceLoader</code>). It runs once per process; later calls do nothing. Registering from <code>Initialize</code> matters because the static registrar in <code>Font.cpp</code> only runs if the linker keeps that file, and a program that never names <code>Font</code> wouldn't. A program that loads fonts through <code>Resources</code> without ever initializing <code>ResourceLoader</code> should call <code>Font::RegisterLoader()</code> itself. New metadata for those extensions gets <code>resourceType: "Font"</code>.</li>
+<li>When the file is a project asset, the atlas settings come from its <code>.meta</code> <code>customData</code>. Every key is optional; a missing key keeps the default, and a key with the wrong type or an out-of-range value is ignored with a warning. A <code>spreadPx</code> too large for the <code>basePx</code> is reduced to the largest allowed, with a warning. Fonts outside the project use the defaults.</li>
+<li>A file that can't be read, or isn't a font, logs an error and the load returns null.</li>
+<li><code>Font::Layout(utf8, options)</code> is <code>LayoutText</code> with this font, or an empty layout for a font that never loaded. <code>GetAtlasSettings()</code> returns the defaults for a font that never loaded; <code>GetSdfFont()</code> requires <code>IsLoaded()</code>.</li>
+</ul>
+<pre class="lang-json"><code>{
+  "uuid": "...",
+  "resourcePath": "res://fonts/body.ttf",
+  "resourceType": "Font",
+  "customData": {
+    "font": { "basePx": 48, "spreadPx": 8, "paddingPx": 2, "charset": "latin1", "extraChars": "&#8364;&#8230;" }
+  }
+}</code></pre>
+<p><code>charset</code> is <code>"ascii"</code> or <code>"latin1"</code>; <code>extraChars</code> is UTF-8 text whose characters join the charset. Settings are read when the font loads, so after editing them, reload the asset (for example re-<code>Initialize</code> the <code>ResourceLoader</code>, or <code>ClearCache</code> and load it again).</p>
+<pre class="lang-cpp"><code>auto font = N2Engine::IO::Resources::Instance().Load&lt;N2Engine::Text::Font&gt;("res://fonts/body.ttf");
+
+N2Engine::Text::LayoutOptions options;
+options.fontSize = 0.5f;   // world units per em
+options.maxWidth = 4.0f;   // wrap at 4 units
+options.horizontalAlign = N2Engine::Text::HorizontalAlign::Center;
+const auto layout = font-&gt;Layout("Hello, world", options);
+// layout.quads: one quad per visible glyph, with uvs into font-&gt;GetSdfFont().GetAtlas()
+</code></pre>
+
+<div class="callout note" id="design-cpu-fonts">
+<p class="callout-title">Design decision: fonts are CPU-only assets</p>
+<p>A <code>Font</code> holds its face and atlas in memory and never touches a renderer. It loads without a window or GPU (in tests, in the editor host, before the renderer exists), and one font can serve several renderers, each creating its own texture. This avoids the trap audio clips are in, which can't exist without an OpenAL context (<a href="audio.html#design-no-headless-clips">no audio clips without a context</a>). The atlas is generated at load time from settings in the <code>.meta</code>, so no generated binaries are committed.</p>
+</div>
+<p class="src">Source: <code>engine/src/text/Font.cpp</code> — <code>Font::ParseAtlasSettings</code>, <code>Font::Load</code>, <code>Font::RegisterLoader</code>, <code>LoadFontFromFile</code>; <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::CreateOrUpdateMetadata</code>; tests: <code>FontSettingsTest.*</code>, <code>FontAssetTest.*</code></p>
+
+<h2 id="default-font">The default font</h2>
+<p><code>Font::GetDefault()</code> returns the built-in font with the default atlas settings. It is built on first use and shared after that. It is null only if the embedded font fails to build, which means the build itself is broken: that logs an error, asserts in Debug, and every later call returns null. The font is Noto Sans Regular 2.015 (SIL Open Font License 1.1), subset to printable ASCII, Latin-1 and U+FFFD, about 23 KB. Its pair kerning is stored as a legacy <code>kern</code> table so every backend reads the same pairs. The file, its licence and a README with its source and the subsetting script are in <code>engine/assets/fonts/</code>.</p>
+<p>The <code>text</code> target embeds it at <em>build</em> time: a custom command runs <code>text/cmake/EmbedBinary.cmake</code>, which reads the <code>.ttf</code> and writes a C++ array to the build tree, and <code>GetDefaultFontData()</code> returns it. The generated source is never committed, and programs don't need the font file at run time. The script itself is committed: the repository's <code>.gitignore</code> ignores <code>*.cmake</code>, with an exception for <code>text/cmake/*.cmake</code>.</p>
+<p class="src">Source: <code>engine/src/text/Font.cpp</code> — <code>Font::GetDefault</code>; <code>text/CMakeLists.txt</code>; <code>text/cmake/EmbedBinary.cmake</code>; <code>engine/assets/fonts/README.md</code>; tests: <code>DefaultFontAssetTest.LoadsFromTheEmbeddedBytes</code>, <code>FontBackendRegistryTest.TheEmbeddedDefaultFontIsATrueTypeFile</code></p>
+
+<div class="page-footer">
+<span>Describes master through PR #34.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

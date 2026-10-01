@@ -104,6 +104,7 @@ endif()
 
 # == Production targets ==
 add_subdirectory(math)
+add_subdirectory(text)
 add_subdirectory(renderer)
 add_subdirectory(engine)
 add_subdirectory(test_project)

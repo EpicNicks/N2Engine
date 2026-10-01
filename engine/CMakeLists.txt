@@ -64,4 +64,5 @@ target_link_libraries(engine
     PUBLIC
     OpenAL::OpenAL # public audio headers include <AL/al.h>
     lua
+    N2Engine::text # public: engine/text/Font.hpp exposes the text library's types
 )

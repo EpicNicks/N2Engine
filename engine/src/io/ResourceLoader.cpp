@@ -1,6 +1,7 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/Logger.hpp"
+#include "engine/text/Font.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -9,6 +10,11 @@ namespace N2Engine::IO
 {
     void ResourceLoader::Initialize(const std::filesystem::path& projectRoot)
     {
+        // Font.cpp's own static registrar only runs if the linker keeps that file, which a program that
+        // names no Font type wouldn't; registering here (idempotent) makes .ttf/.otf scan and load anyway.
+        // Done before the roots change, so a first registration doesn't rescan anything.
+        Text::Font::RegisterLoader();
+
         _projectRoot = projectRoot;
         _assetsRoot = projectRoot / "assets";
         _metadataRoot = projectRoot / ".import";
@@ -158,6 +164,8 @@ namespace N2Engine::IO
                 meta.resourceType = "AudioClip";
             else if (ext == ".png" || ext == ".jpg")
                 meta.resourceType = "Texture";
+            else if (ext == ".ttf" || ext == ".otf")
+                meta.resourceType = "Font";
             else
                 meta.resourceType = "Unknown";
 
