@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html" aria-current="page">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Audio</h1>
+<p class="lead">Audio is built on OpenAL (OpenAL Soft). A process-wide <code>AudioSystem</code> owns the device, context, a pool of OpenAL sources and the mixer groups; <code>AudioSource</code> and <code>AudioListener</code> components play and position sound in a scene, and fire-and-forget one-shots play without a component. This page covers lifetimes, the frame timing, mixing rules, the source pool, clip loading and the Lua surface.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#lifetime">AudioSystem lifetime</a></li>
+<li><a href="#no-device">Headless and no-device behaviour</a></li>
+<li><a href="#frame-timing">Where audio runs in the frame</a></li>
+<li><a href="#audio-source">AudioSource component</a></li>
+<li><a href="#audio-listener">AudioListener component</a></li>
+<li><a href="#one-shots">One-shots</a></li>
+<li><a href="#mixer-groups">Mixer groups and master volume</a></li>
+<li><a href="#source-pool">Source pool</a></li>
+<li><a href="#shutdown">Shutdown semantics</a></li>
+<li><a href="#clips">AudioClip and loaders</a></li>
+<li><a href="#lua">Lua API</a></li>
+</ol>
+</div>
+
+<h2 id="lifetime">AudioSystem lifetime</h2>
+<p><code>AudioSystem::Instance()</code> returns a singleton that is deliberately <strong>leaked</strong>: a heap object created on first use and never destroyed. <code>AudioSource</code> unregisters itself from the system in its destructor, and that destructor can run during static destruction (a scene still held by <code>SceneManager</code>'s static). With a function-local static, the system could be destroyed first whenever it was first used after <code>SceneManager</code> (the headless path, where <code>Init</code> skips audio), and the unregister would touch a dead object.</p>
+<p>Creating the instance does not open a device. That is <code>Initialize()</code>:</p>
+<ol class="steps">
+<li>Returns <code>true</code> immediately if already initialized (idempotent).</li>
+<li>Opens the default device, creates a context and makes it current. Any failure is logged with <code>Logger::Error</code>, everything created so far is released, and it returns <code>false</code>.</li>
+<li>Pre-allocates up to 32 pooled sources (a source that fails to generate is just not pooled).</li>
+<li>Creates the default mixer groups, overwriting any existing groups of those names (see <a href="#mixer-groups">mixer groups</a>).</li>
+<li>Sets the listener gain to the stored master volume, so the master volume survives a re-initialize.</li>
+</ol>
+<p><code>Shutdown()</code> is a no-op when not initialized and safe to call twice; see <a href="#shutdown">Shutdown semantics</a>. <code>IsInitialized()</code> reports the state. <code>Application::Init</code> calls <code>Initialize()</code> (unless headless) and <code>Application::Shutdown</code> calls <code>Shutdown()</code>.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p><code>Initialize</code> is idempotent; <code>IsInitialized</code> tracks <code>Shutdown</code> and a later <code>Initialize</code>; the master volume survives a re-initialize; default groups are reset by it.</p>
+</div>
+<p class="src">Source: <code>engine/src/audio/AudioSystem.cpp</code> — <code>AudioSystem::Instance</code>, <code>Initialize</code>, <code>Shutdown</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>, <code>Application::Shutdown</code>; tests: <code>AudioSystemTest.InitializeIsIdempotent</code>, <code>IsInitializedTracksShutdown</code>, <code>MasterVolumeSurvivesReinitialize</code>, <code>ReinitializeResetsMixerGroups</code></p>
+
+<h2 id="no-device">Headless and no-device behaviour</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Situation</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>ApplicationOptions::isHeadless</code></td><td><code>Initialize</code> is never called. Audio subsystem health is <code>Disabled</code> ("Headless mode (streaming not yet implemented)"). The intent is to stream mixed audio to the editor client later.</td></tr>
+<tr><td>No audio device / context failure</td><td><code>Initialize</code> returns <code>false</code>; the engine logs "Failed to initialize audio!" and "Audio will be disabled. Game will continue without sound."; health is <code>Failed</code>. The game keeps running.</td></tr>
+<tr><td>CI and tests</td><td>The Tests workflow sets <code>ALSOFT_DRIVERS=null</code>, and the audio test fixture sets it too before the first ALC call, so OpenAL Soft uses its silent null backend and a real context exists without a sound card.</td></tr>
+</tbody>
+</table>
+</div>
+<p>When the system is not initialized, its entry points are safe no-ops: <code>Update</code> and <code>Stop</code> do nothing, <code>IsPlaying</code> is <code>false</code>, <code>PlayOneShot</code> returns an invalid handle, <code>CountPlayingInGroup</code> is 0, <code>AcquireSource</code> returns 0 and <code>ReleaseSource</code> does nothing. An <code>AudioSource</code> then never gets a source, so <code>Play()</code> returns silently and its queries report not playing.</p>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p>Some calls do not check <code>IsInitialized</code> and issue OpenAL calls with no current context: <code>AudioSystem::SetListenerPosition</code>/<code>SetListenerOrientation</code> (called every <code>LateUpdate</code> by an <code>AudioListener</code>, and from Lua), <code>SetMasterVolume</code>, and <code>AudioClip::CreateFromData</code>/<code>Unload</code> (<code>engine/src/audio/AudioClip.cpp</code>). What these do without a context is left to OpenAL; in particular it is unclear whether audio clips are expected to load at all in headless mode (buffer creation needs a context), and a clip destroyed after <code>Shutdown</code> calls <code>alDeleteBuffers</code> with no context.</p>
+</div>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; <code>engine/src/audio/AudioSystem.cpp</code>; <code>.github/workflows/tests.yml</code>; <code>tests/engine/audio/AudioTests.cpp</code> — <code>UseNullAudioBackend</code>; tests: <code>AudioSystemUninitializedTest.CallsAreSafeNoOps</code></p>
+
+<h2 id="frame-timing">Where audio runs in the frame</h2>
+<p>In <code>Application::Run</code>, <code>AudioSystem::Update()</code> runs once per frame <strong>after</strong> the scene's <code>LateUpdate</code> (and coroutines) and before <code>Render</code>. Components push positions in <code>OnLateUpdate</code>: <code>AudioListener</code> sets the listener, and a playing spatial <code>AudioSource</code> sets its source position. So positions are current when the frame's audio work happens. <code>AudioSystem::Update</code> itself only reclaims finished one-shots (see <a href="#one-shots">One-shots</a>). <code>Application::RenderEditorFrame</code> also calls it.</p>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>RenderEditorFrame</code>; <code>engine/src/audio/AudioSystem.cpp</code> — <code>AudioSystem::Update</code>, <code>CleanupFinishedSources</code></p>
+
+<h2 id="audio-source">AudioSource component</h2>
+<p><code>AudioSource</code> is a <code>SerializableComponent</code> (several per GameObject allowed). Defaults: volume 1, pitch 1, not looping, <strong>spatial</strong>, mixer group <code>"SFX"</code>, min (reference) distance 1, max distance 100, rolloff 1, <code>_playOnAwake</code> false, no clip. <code>AudioSource::Serialize</code> writes all of these and the clip (as an asset reference), but neither <code>AudioSource</code> nor <code>AudioListener</code> is registered with <code>REGISTER_COMPONENT</code>, so nothing can read them back; see <a href="serialization.html">Serialization</a>.</p>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><code>AudioSource</code> and <code>AudioListener</code> have no <code>REGISTER_COMPONENT</code>, so <code>GameObject::Deserialize</code> drops them silently, with no log, on every scene load and every scene switch: each load rebuilds the scene from its stored JSON. The only exception is the scene object you passed to <code>SceneManager::AddScene(scene, true)</code> (what <code>Application::Init</code> does with the initial scene), which is used as is the first time it loads. After any reload, including switching back to that scene, its sources and listeners are gone. Add them from C++ code that runs after the load (for example in another component's <code>OnAttach</code>) until they are registered.</p>
+</div>
+<h3 id="source-registration">Registration and source acquisition</h3>
+<ul>
+<li>The constructor registers the component with <code>AudioSystem</code> (so group limits count it and group changes reach it); the destructor unregisters it, then stops and releases its OpenAL source if it holds one.</li>
+<li>No OpenAL source is held until the first successful <code>Play()</code>: <code>EnsureSource</code> acquires one from the pool on demand. <code>GetSourceHandle()</code> returns the id, or 0 while it has none (for diagnostics and tests).</li>
+<li><code>OnDestroy</code> stops and releases the source back to the pool. A later <code>Play()</code> would acquire a new one.</li>
+<li><code>ForgetSource()</code> zeroes the held id without touching OpenAL; only <code>AudioSystem::Shutdown</code> calls it.</li>
+</ul>
+<h3 id="source-playback">Playback</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>Play()</code></td><td>Does nothing if there is no clip or it is not loaded, if the group's <code>maxConcurrent</code> is already reached (counting one-shots and sources), or if no source can be acquired. Otherwise binds the clip's buffer, applies volume/pitch with the group's settings, looping and the spatial settings, and starts playback.</td></tr>
+<tr><td><code>Pause()</code></td><td><code>alSourcePause</code> if it holds a source.</td></tr>
+<tr><td><code>Stop()</code></td><td><code>alSourceStop</code> if it holds a source. Keeps the source.</td></tr>
+<tr><td><code>IsPlaying()</code> / <code>IsPaused()</code></td><td>Query the OpenAL source state; <code>false</code> without a source.</td></tr>
+<tr><td><code>SetClip(clip)</code></td><td>Stops; if it was playing and the new clip is non-null, plays the new clip. Setting a clip while stopped does not start playback.</td></tr>
+<tr><td><code>SetLoop(b)</code></td><td>Stored, and applied immediately to a held source.</td></tr>
+<tr><td><code>OnEnable</code></td><td>Calls <code>Play()</code> if <code>_playOnAwake</code> and a clip is set (<code>_playOnAwake</code> has no setter, and because <code>AudioSource</code> is not registered for deserialization it is never read back from scene data either, so in practice it is always <code>false</code> and this never plays).</td></tr>
+<tr><td><code>OnDisable</code></td><td><code>Pause()</code>. Re-enabling does not resume unless play-on-awake restarts it.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>AudioSource::Play</code> (<code>engine/src/audio/AudioSource.cpp</code>) re-binds <code>AL_BUFFER</code> on every call, which OpenAL rejects for a playing or paused source, and then calls <code>alSourcePlay</code>. The test <code>PlayPauseStop</code> shows <code>Play()</code> after <code>Pause()</code> plays again, but whether it resumes or restarts, and what <code>Play()</code> on an already playing source should do, is not specified or tested. The concurrency check in <code>Play()</code> also counts the source itself if it is already playing, so restarting a playing source in a full group is refused.</p>
+</div>
+<h3 id="source-mixing">Volume, pitch and group</h3>
+<ul>
+<li><code>SetVolume</code> clamps to 0..1; <code>SetPitch</code> clamps to 0.5..2.</li>
+<li>Applied gain is <code>ComputeFinalVolume(volume, group)</code>; applied pitch is <code>pitch × group pitch</code> (see <a href="#mixer-groups">mixer groups</a>).</li>
+<li><code>SetVolume</code>, <code>SetPitch</code> and <code>SetMixerGroup</code> re-apply to a held source immediately. <code>ApplyMixing()</code> re-applies both and is what the system calls when a group changes.</li>
+<li>A group name that does not exist is accepted: the source's own volume and pitch are used and there is no concurrency limit.</li>
+</ul>
+<h3 id="spatial">Spatial settings</h3>
+<ul>
+<li><strong>Spatial</strong> (default): world-relative source, positioned at the GameObject's global position, with reference distance, max distance and rolloff from the component.</li>
+<li><strong>Non-spatial</strong>: listener-relative at the origin with rolloff 0, so distance has no effect.</li>
+<li><code>SetSpatial</code> switches mode on a held source immediately, but <code>SetSpatial(true)</code> on a held source re-applies only the rolloff and position, not the min/max distance: a source that was played non-spatial keeps the pool's reset values (reference distance 1, max distance <code>FLT_MAX</code>) until the next <code>Play()</code>. <code>SetMinDistance</code> clamps to ≥ 0; <code>SetMaxDistance</code> clamps to ≥ the current min distance; <code>SetRolloffFactor</code> clamps to ≥ 0. Each applies immediately only to a held source in spatial mode; otherwise it takes effect on the next <code>Play()</code>.</li>
+<li><code>OnLateUpdate</code> updates the position while the source is spatial and playing.</li>
+</ul>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>Spatial playback <em>creates</em> a <code>Positionable</code> on the GameObject if it has none (<code>AudioSource::UpdatePosition</code>), unlike <code>AudioListener</code>, which skips. Playing a spatial source on a transform-less object therefore adds a transform at the origin. Use <code>SetSpatial(false)</code> for 2D sounds.</p>
+</div>
+<p>No distance model is set by the engine, so OpenAL's default applies; velocity (Doppler) is not set.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Default values and clamping are as listed; play/pause/stop report the right state; setting a clip while playing keeps playing the new clip, while stopped it does not start; a playing source counts toward its group's limit and is refused by a full group.</p>
+</div>
+<pre class="lang-cpp"><code>auto *music = go-&gt;AddComponent&lt;Audio::AudioSource&gt;();
+music-&gt;SetSpatial(false);
+music-&gt;SetMixerGroup("Music");
+music-&gt;SetLoop(true);
+music-&gt;SetClip(IO::Resources::Instance().Load&lt;Audio::AudioClip&gt;("res://audio/theme.ogg"));
+music-&gt;Play();
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/audio/AudioSource.hpp</code>; <code>engine/src/audio/AudioSource.cpp</code> — <code>AudioSource::AudioSource</code>, <code>~AudioSource</code>, <code>EnsureSource</code>, <code>Play</code>, <code>SetClip</code>, <code>ApplyMixing</code>, <code>UpdatePosition</code>, <code>OnEnable</code>, <code>OnDisable</code>, <code>OnDestroy</code>, <code>OnLateUpdate</code>; tests: <code>AudioSourceTest.HasExpectedDefaults</code>, <code>SettersClampValues</code>, <code>PlayWithoutClipDoesNothing</code>, <code>PlayPauseStop</code>, <code>SpatialPlaybackCreatesPositionable</code>, <code>SetClipWhilePlayingKeepsPlaying</code>, <code>SetClipWhileStoppedDoesNotStartPlayback</code>, <code>RespectsGroupConcurrencyLimitFromOneShots</code>, <code>PlayingSourcesCountTowardGroupLimit</code></p>
+
+<h2 id="audio-listener">AudioListener component</h2>
+<p><code>AudioListener</code> is a plain <code>Component</code>, at most one per GameObject (<code>IsSingleton = true</code>). In <code>OnLateUpdate</code>, if active, it copies its GameObject's global position, forward and up vectors to the OpenAL listener. A GameObject without a <code>Positionable</code> is skipped silently (it used to dereference null). Nothing arbitrates between several active listeners in a scene: each writes the single global listener, so the last one to run its <code>OnLateUpdate</code> wins. Without any listener, the listener stays wherever it was last set (OpenAL starts it at the origin); Lua can also set it directly.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A listener on a GameObject without a <code>Positionable</code> does not crash.</p>
+</div>
+<p class="src">Source: <code>engine/src/audio/AudioListener.cpp</code> — <code>AudioListener::OnLateUpdate</code>; tests: <code>AudioListenerTest.WorksWithoutPositionable</code></p>
+
+<h2 id="one-shots">One-shots</h2>
+<p><code>AudioSystem::PlayOneShot(clip, PlaybackParams)</code> plays a clip without a component. <code>PlaybackParams</code> defaults: volume 1, pitch 1, non-spatial, position (0, 0, 0), not looping, group <code>"SFX"</code>.</p>
+<ol class="steps">
+<li>Returns an invalid <code>AudioHandle</code> (id 0) if the system is not initialized, the clip is null or not loaded, the group's <code>maxConcurrent</code> is reached, or no source can be acquired (the last case logs a warning).</li>
+<li>Otherwise it takes a pooled source, sets buffer, gain (<code>ComputeFinalVolume</code>), pitch (<code>ComputeFinalPitch</code>), looping and either a world position (spatial) or listener-relative origin with rolloff 0, and plays.</li>
+<li>It records the source, group, requested volume and pitch, and a <code>shared_ptr</code> to the clip, under a new handle id (incrementing from 1, unique per process).</li>
+</ol>
+<p>The one-shot holds its clip until it finishes, so dropping your last reference to the clip right after <code>PlayOneShot</code> is safe. <code>AudioSystem::Update</code> finds one-shots whose source state is <code>AL_STOPPED</code>, returns their sources to the pool, and erases the record (which releases the clip). After that, the handle is unknown.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>Stop(handle)</code></td><td>Stops, releases the source and forgets the handle. Unknown or invalid handles are ignored.</td></tr>
+<tr><td><code>IsPlaying(handle)</code></td><td>True only while the source is <code>AL_PLAYING</code>; <code>false</code> for unknown handles.</td></tr>
+<tr><td><code>GetOneShotSource(handle)</code></td><td>The OpenAL source id, or 0 if unknown (diagnostics/tests).</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>A looping one-shot never reaches <code>AL_STOPPED</code>, so it plays (and holds a source and its clip) until you call <code>Stop(handle)</code> or the system shuts down. Keep the handle.</p>
+</div>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Missing or unloaded clips are rejected; handles are unique; <code>Stop</code> ends playback; unknown handles are ignored; a finished one-shot is cleaned up by <code>Update</code>; a looping one keeps playing.</p>
+</div>
+<pre class="lang-cpp"><code>auto &amp;audio = Audio::AudioSystem::Instance();
+Audio::AudioHandle h = audio.PlayOneShot(clip, {.volume = 0.7f, .spatial = true, .x = p.x, .y = p.y, .z = p.z});
+if (!h.IsValid()) { /* not initialized, group full, or no source */ }
+</code></pre>
+<p class="src">Source: <code>engine/src/audio/AudioSystem.cpp</code> — <code>PlayOneShot</code>, <code>Stop</code>, <code>IsPlaying</code>, <code>GetOneShotSource</code>, <code>CleanupFinishedSources</code>; <code>engine/include/engine/audio/AudioHandle.hpp</code>; tests: <code>PlayOneShotRejectsMissingOrUnloadedClip</code>, <code>PlayOneShotStartsPlayback</code>, <code>PlayOneShotReturnsUniqueHandles</code>, <code>StopEndsPlayback</code>, <code>StopAndIsPlayingIgnoreUnknownHandles</code>, <code>FinishedOneShotIsCleanedUpByUpdate</code>, <code>LoopingOneShotKeepsPlaying</code></p>
+
+<h2 id="mixer-groups">Mixer groups and master volume</h2>
+<p>A mixer group (<code>AudioMixerGroup</code>) has <code>AudioMixerGroupSettings</code>: <code>volume</code> (1), <code>maxSourceVolume</code> (1), <code>pitch</code> (1), <code>muted</code> (false) and an optional <code>maxConcurrent</code> (no limit). <code>Initialize</code> (re)creates the defaults:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Group</th><th>Non-default settings</th></tr></thead>
+<tbody>
+<tr><td><code>Master</code></td><td>— (an ordinary group; not the master volume)</td></tr>
+<tr><td><code>Music</code></td><td><code>maxConcurrent = 2</code></td></tr>
+<tr><td><code>SFX</code></td><td>— (default for sources and one-shots)</td></tr>
+<tr><td><code>UI</code></td><td><code>maxSourceVolume = 0.8</code></td></tr>
+<tr><td><code>Voice</code></td><td><code>maxConcurrent = 4</code></td></tr>
+<tr><td><code>Ambient</code></td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="mixing-rules">Mixing rules</h3>
+<ul>
+<li><strong>Gain:</strong> <code>ComputeFinalVolume(v, group)</code> = 0 if the group is muted, else <code>min(v, maxSourceVolume) × group volume</code>. Unknown group: <code>v</code>.</li>
+<li><strong>Pitch:</strong> <code>ComputeFinalPitch(p, group)</code> = <code>p × group pitch</code> (1 for an unknown group). Before PR #23 group pitch was stored but never applied.</li>
+<li><strong>Master volume:</strong> <code>SetMasterVolume</code> clamps to 0..1 and sets the OpenAL listener gain. It is applied exactly once, through the listener, not in <code>ComputeFinalVolume</code>.</li>
+<li><strong>Concurrency:</strong> <code>CountPlayingInGroup(group)</code> counts one-shots and registered <code>AudioSource</code>s in that group that are currently <code>AL_PLAYING</code> (paused ones do not count). <code>Play()</code> and <code>PlayOneShot</code> refuse to start when the count is ≥ <code>maxConcurrent</code>. A limit only gates new playback; lowering it does not stop anything.</li>
+</ul>
+<h3 id="group-setters">Changing a group</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Setter</th><th>Clamp</th><th>Reaches playing sounds</th></tr></thead>
+<tbody>
+<tr><td><code>SetGroupVolume</code></td><td>0..1</td><td>Yes</td></tr>
+<tr><td><code>SetGroupMaxVolume</code></td><td>0..1</td><td>Yes</td></tr>
+<tr><td><code>SetGroupPitch</code></td><td>0.5..2</td><td>Yes</td></tr>
+<tr><td><code>SetGroupMuted</code></td><td>—</td><td>Yes</td></tr>
+<tr><td><code>SetGroupMaxConcurrent</code></td><td>—</td><td>New playback only</td></tr>
+</tbody>
+</table>
+</div>
+<p>The first four call <code>RefreshGroup</code>, which (when initialized) re-applies gain and pitch to every one-shot in the group, from its recorded volume and pitch, and calls <code>ApplyMixing()</code> on every registered <code>AudioSource</code> in the group. All setters ignore unknown group names. <code>CreateMixerGroup(name, settings)</code> creates or overwrites a group (overwriting does not refresh playing sounds).</p>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Group settings live in the singleton and are not cleared by <code>Shutdown</code>; <code>Initialize</code> overwrites only the six default groups, so a custom group survives a shutdown/initialize cycle with its settings while changes to default groups are lost. <code>AudioMixerGroup::currentlyPlaying</code> and <code>activeSources</code> are declared but not used by the engine; use <code>CountPlayingInGroup</code>.</p>
+</div>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Default groups and their settings; setter clamping; unknown groups ignored; muted groups silent; master applied once; group volume, mute and pitch reach a playing source (0.8 × 0.5 = 0.4 gain; pitch 1.2 × 1.5 = 1.8) and a playing one-shot (gain 0.25, pitch 2.0); <code>maxConcurrent</code> limits one-shots and sources together.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/audio/AudioMixerGroup.hpp</code>; <code>engine/src/audio/AudioSystem.cpp</code> — <code>InitializeDefaultGroups</code>, <code>CreateMixerGroup</code>, <code>SetGroup*</code>, <code>ComputeFinalVolume</code>, <code>ComputeFinalPitch</code>, <code>CountPlayingInGroup</code>, <code>RefreshGroup</code>, <code>SetMasterVolume</code>; tests: <code>CreatesDefaultMixerGroups</code>, <code>CreateMixerGroupUsesSettings</code>, <code>GroupSettersClampValues</code>, <code>GroupSettersIgnoreUnknownGroups</code>, <code>MasterVolumeClamps</code>, <code>ComputeFinalVolumeAppliesGroupSettings</code>, <code>MutedGroupIsSilent</code>, <code>MasterVolumeIsAppliedOnce</code>, <code>MaxConcurrentLimitsOneShots</code>, <code>SetGroupMaxConcurrentAppliesToNewPlayback</code>, <code>GroupVolumeReachesPlayingSource</code>, <code>GroupPitchScalesSourcePitch</code>, <code>GroupChangesReachPlayingOneShots</code></p>
+
+<h2 id="source-pool">Source pool</h2>
+<p>Sources are recycled through a LIFO pool of at most 32 ids.</p>
+<ul>
+<li><strong><code>AcquireSource()</code></strong>: returns 0 when not initialized. Otherwise pops a pooled source; if the pool is empty it generates a new one, first clearing any pending OpenAL error so an unrelated earlier failure cannot make the new source look failed (and leak it). Returns 0 if generation fails. The total is not capped at 32; only the pool is.</li>
+<li><strong><code>ReleaseSource(id)</code></strong>: ignores 0, and does nothing when not initialized (pooling an id from a dead context would alias a fresh source after the next <code>Initialize</code>). Otherwise it stops the source and resets everything the engine may have set: buffer 0, gain 1, pitch 1, not looping, not relative, position origin, rolloff 1, reference distance 1, max distance <code>FLT_MAX</code>. It is pooled if the pool has room, else deleted.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A released source comes back from the next acquire with gain 1, pitch 1, no looping and no buffer; acquiring beyond the pool size (40 with a pool of 32) still succeeds.</p>
+</div>
+<p class="src">Source: <code>engine/src/audio/AudioSystem.cpp</code> — <code>AcquireSource</code>, <code>ReleaseSource</code>; tests: <code>ReleasedSourcesAreReset</code>, <code>AcquireSourceGrowsBeyondPool</code></p>
+
+<h2 id="shutdown">Shutdown semantics</h2>
+<p><code>AudioSystem::Shutdown()</code>, when initialized:</p>
+<ol class="steps">
+<li>Stops and deletes every one-shot source and clears the one-shot records (releasing their clips).</li>
+<li>Deletes all pooled sources.</li>
+<li>For every registered <code>AudioSource</code> holding a source: stops and deletes it, then calls <code>ForgetSource()</code> so the component's id is 0.</li>
+<li>Releases the context and closes the device; <code>IsInitialized()</code> becomes false.</li>
+</ol>
+<p>Because held ids are forgotten, a component that survives a shutdown and a later <code>Initialize</code> acquires a fresh source on its next <code>Play()</code> instead of driving an id that now belongs to something else. Components stay registered across the cycle. Calling <code>Shutdown</code> when not initialized does nothing.</p>
+<p>In the application, <code>Application::Shutdown</code> unloads scenes first (<code>SceneManager::UnloadScenes</code>, which runs <code>OnDestroy</code>), so <code>AudioSource</code>s release their sources while the context is alive, then shuts audio down, then physics and the window. <span class="badge">PR #28</span></p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>After <code>Shutdown</code>, a playing <code>AudioSource</code>'s <code>GetSourceHandle()</code> is 0; double shutdown is harmless.</p>
+</div>
+<p class="src">Source: <code>engine/src/audio/AudioSystem.cpp</code> — <code>Shutdown</code>; <code>engine/include/engine/audio/AudioSource.hpp</code> — <code>ForgetSource</code>; <code>engine/src/Application.cpp</code> — <code>Application::Shutdown</code>; tests: <code>AudioSourceTest.ShutdownDropsHeldSourceIds</code>, <code>AudioSystemUninitializedTest.CallsAreSafeNoOps</code></p>
+
+<h2 id="clips">AudioClip and loaders</h2>
+<p><code>AudioClip</code> is a <code>Base::Asset</code> (resource type <code>"AudioClip"</code>) wrapping one OpenAL buffer with fully decoded PCM.</p>
+<ul>
+<li><code>CreateFromData(AudioData)</code>: fails with a logged error for empty samples or a channel count other than 1 or 2. Supports 8- and 16-bit mono/stereo. It unloads any previous buffer, clears stale OpenAL errors, then creates the buffer; an OpenAL error logs "Failed to create OpenAL buffer" and returns <code>false</code>. On success it records sample rate, channels and duration (bytes / (rate × channels × bytes per sample)).</li>
+<li><code>IsLoaded()</code> is true while it holds a buffer. <code>Unload()</code> deletes the buffer and resets metadata; the destructor unloads.</li>
+<li>A buffer cannot be deleted while a source still plays it; stop sources (or rely on one-shots retaining their clip) before dropping the last reference.</li>
+</ul>
+<h3 id="loaders">File formats</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Extension</th><th>Decoder</th></tr></thead>
+<tbody>
+<tr><td><code>.wav</code></td><td>dr_wav, converted to 16-bit</td></tr>
+<tr><td><code>.ogg</code></td><td>stb_vorbis (implementation compiled once in <code>StbVorbis.cpp</code>)</td></tr>
+<tr><td><code>.mp3</code></td><td>dr_mp3, 16-bit</td></tr>
+<tr><td><code>.flac</code></td><td>dr_flac, 16-bit</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>LoadAudioClipFromFile(path)</code> picks the decoder by lower-cased extension, decodes the whole file, and returns the clip or <code>nullptr</code> (unsupported extension, decode failure, or buffer failure, each logged). A missing or invalid WAV yields empty data and so <code>nullptr</code>.</p>
+<p>The loader is registered for the four extensions by a static registrar in <code>AudioClip.cpp</code>, which every program using audio links (it used to live in a file the static-library linker dropped). It registers through <code>IO::Resources::RegisterLoader</code>, which passes it on to <code>IO::ResourceLoader</code>, so <code>res://</code> paths and the project asset scan see audio files <span class="badge">PR #28</span>. See <a href="resources.html">Resources &amp; paths</a>.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>WAV mono/stereo and 8-bit files load (8-bit converted to 16-bit) with sample values preserved; missing or invalid files return empty data; clip creation rejects empty data and unsupported channel counts, replaces a previous buffer, and is not failed by a stale OpenAL error.</p>
+</div>
+<p class="src">Source: <code>engine/src/audio/AudioClip.cpp</code> — <code>CreateFromData</code>, <code>Unload</code>, <code>AudioClipLoaderRegistrar</code>; <code>engine/src/audio/AudioClipLoader.cpp</code> — <code>LoadAudioClipFromFile</code>; <code>engine/src/audio/AudioLoaders.cpp</code>; <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::RegisterLoader</code>; tests: <code>WAVLoaderTest.*</code>, <code>AudioClipTest.*</code></p>
+
+<h2 id="lua">Lua API</h2>
+<p>Lua sees <code>AudioSource</code> and <code>AudioListener</code> as component handles <span class="badge">PR #29</span>: every method goes through a checked handle and raises "attempt to use a destroyed …" once the component is torn down; <code>IsValid()</code> checks first. See <a href="scripting-lua.html">Lua scripting</a>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Lua</th><th>Maps to</th></tr></thead>
+<tbody>
+<tr><td><code>source:Play()</code>, <code>Pause</code>, <code>Stop</code>, <code>IsPlaying</code>, <code>IsPaused</code></td><td>Same <code>AudioSource</code> methods</td></tr>
+<tr><td><code>Set/GetVolume</code>, <code>Set/GetPitch</code>, <code>Set/GetLoop</code>, <code>Set/GetSpatial</code>, <code>Set/GetMixerGroup</code>, <code>SetMinDistance</code>, <code>SetMaxDistance</code>, <code>SetRolloffFactor</code></td><td>Same, with the same clamping</td></tr>
+<tr><td><code>Audio.SetMasterVolume(v)</code>, <code>Audio.GetMasterVolume()</code></td><td><code>AudioSystem</code> master volume</td></tr>
+<tr><td><code>Audio.SetListenerPosition(x, y, z)</code>, <code>Audio.SetListenerOrientation(fx, fy, fz, ux, uy, uz)</code></td><td>Sets the listener directly (an active <code>AudioListener</code> overwrites it in its next <code>OnLateUpdate</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Lua cannot set a clip, play one-shots, or change mixer groups' settings. Clips are set from C++ (<code>SetClip</code>); they do not come from scene files, because <code>AudioSource</code> is dropped on load (see the <a href="#audio-source">warning above</a>).</p>
+<pre class="lang-lua"><code>local source = self.gameObject:GetComponent("AudioSource")
+if source ~= nil and source:IsValid() then
+    source:SetMixerGroup("UI")
+    source:Play()
+end
+</code></pre>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaAudioBindings.cpp</code> — <code>BindAudio</code></p>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

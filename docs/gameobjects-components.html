@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GameObjects &amp; components · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html" aria-current="page">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>GameObjects &amp; components</h1>
+<p class="lead">A <code>GameObject</code> is a named container of components, children and an optional <code>Positionable</code>. This page covers when component callbacks run, how active state propagates, how deferred destruction and the single teardown sequence work, hierarchy edits, component lookup and removal, and what is safe to do from inside a callback.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#frame-order">Callbacks in the frame</a></li>
+<li><a href="#creation">Creating objects</a></li>
+<li><a href="#attach">AddComponent and the attach queue</a></li>
+<li><a href="#callbacks">Component callbacks</a></li>
+<li><a href="#active-state">Active state</a></li>
+<li><a href="#destroy">Destroy</a></li>
+<li><a href="#teardown">The teardown sequence</a></li>
+<li><a href="#hierarchy">Hierarchy: AddChild, RemoveChild, SetParent</a></li>
+<li><a href="#lookup">Finding components</a></li>
+<li><a href="#removal">Removing components</a></li>
+<li><a href="#iteration-safety">Changing components during a callback</a></li>
+<li><a href="#lifetime-token">Lifetime token and copies</a></li>
+<li><a href="#names-tags">Names, tags and search helpers</a></li>
+</ol>
+</div>
+
+<h2 id="frame-order">Callbacks in the frame</h2>
+<p><code>Application::Run</code> drives the loaded scene in this order every frame. Component callbacks are only ever called from these points (plus collision callbacks, dispatched by the physics backend inside the fixed step, and the immediate callbacks described below for <code>SetActive</code>, <code>RemoveComponent</code> and scene switches).</p>
+<ol class="steps">
+<li><code>Scene::ProcessAttachQueue</code>: <code>OnAttach</code> for every queued component.</li>
+<li>Zero or more fixed steps: <code>OnFixedUpdate</code>, physics simulation, transform sync-back, then collision/trigger callbacks. See <a href="physics.html">Physics</a>.</li>
+<li><code>Scene::Update</code>: <code>OnUpdate</code>.</li>
+<li><code>Scene::AdvanceCoroutines</code>: see <a href="coroutines.html">Coroutines</a>.</li>
+<li><code>Scene::LateUpdate</code>: <code>OnLateUpdate</code>.</li>
+<li>Audio update, then render.</li>
+<li><code>Scene::ProcessDestroyed</code>: <code>OnDisable</code>/<code>OnDestroy</code> for objects destroyed this frame, then they are released.</li>
+<li><code>SceneManager::ProcessAnyPendingSceneChange</code>: a scene switch tears the old scene down (see <a href="scenes.html">Scenes</a>).</li>
+</ol>
+<p>When the run ends (window closed or <code>Application::Quit()</code>), <code>OnApplicationQuit</code> is called on the active components of the loaded scene. The full loop is described in <a href="application.html">Application &amp; frame loop</a>.</p>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code>; <code>engine/src/sceneManagement/Scene.cpp</code></p>
+
+<h2 id="creation">Creating objects</h2>
+<p>Create objects with <code>GameObject::Create(name)</code>, which returns a <code>std::shared_ptr&lt;GameObject&gt;</code> (<code>GameObject::Ptr</code>). The default name is <code>"GameObject"</code>. A new object is active, has no parent, no scene, no components and no <code>Positionable</code>. Call <code>CreatePositionable()</code> if it needs a transform (it is a no-op if one exists). See <a href="transforms.html">Transforms</a>.</p>
+<p>Objects must be owned by a <code>shared_ptr</code>: <code>AddChild</code>, <code>SetParent</code>, <code>GetRoot</code>, <code>IsParentOf</code>, <code>GetHierarchyPath</code> and <code>Destroy</code> (in a scene) use <code>shared_from_this()</code>. The public constructors exist, but a stack-allocated object cannot be used with those calls.</p>
+<p>An object joins a scene by being added as a root (<code>Scene::AddRootGameObject</code>) or as a child of an object that is in a scene. Ownership: the scene's root list and each parent's child list hold <code>shared_ptr</code>s; a child holds only a <code>weak_ptr</code> to its parent.</p>
+
+<pre class="lang-cpp"><code>#include "engine/GameObjectScene.hpp"
+
+auto player = N2Engine::GameObject::Create("Player");
+player-&gt;CreatePositionable();
+auto *health = player-&gt;AddComponent&lt;Health&gt;();   // queued; OnAttach runs once the object is in a scene
+scene.AddRootGameObject(player);                    // queues the components on this scene
+</code></pre>
+
+<p>A GameObject is not copyable (it owns <code>unique_ptr</code> members), and <code>Component</code>'s copy operations are deleted <span class="badge">PR #29</span>.</p>
+<p class="src">Source: <code>engine/include/engine/GameObject.hpp</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Create</code>, <code>GameObject::CreatePositionable</code></p>
+
+<h2 id="attach">AddComponent and the attach queue</h2>
+<p><code>AddComponent&lt;T&gt;()</code> constructs <code>T(GameObject&amp;)</code> immediately, appends it to the object's component list and returns a raw pointer that stays valid until the component is removed or the object is released. <code>T</code> must derive from <code>Component</code> (<code>DerivedFromComponent</code> concept).</p>
+<ul>
+<li>If <code>T::IsSingleton</code> is <code>true</code> (for example <code>AudioListener</code>), and <code>GetComponent&lt;T&gt;()</code> already finds one, that existing component is returned and nothing is added. The default for <code>Component</code> is <code>false</code>.</li>
+<li>If the object is in a scene, the component is pushed onto <em>that object's own</em> scene's attach queue (not necessarily the loaded scene). If not, nothing is queued yet: every component is queued when the object joins a scene.</li>
+<li><code>OnAttach</code> runs in the next <code>ProcessAttachQueue</code>, at the start of the next frame. A component added during a frame therefore gets <code>OnAttach</code> at the start of the next frame and its first <code>OnUpdate</code> later that same next frame. Until attached it receives no other callbacks, and scene lookups (<code>FindObjectsByType</code>) do not see it.</li>
+<li>The queue is drained one live entry at a time, so <code>OnAttach</code> can add components (they are attached in the same pass) or remove pending ones (they are dropped from the queue).</li>
+<li><code>OnAttach</code> runs regardless of active state: components on inactive objects and components whose own flag is disabled are still attached.</li>
+<li>After <code>OnAttach</code>, a component is registered for updates. <code>Rendering::Light</code> components (and subclasses) go into the scene's light list instead of the update list. Registration is idempotent.</li>
+</ul>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p><code>OnAttach</code> runs once per scene the object joins. Reparenting within the same scene does not re-queue components, so they are not attached or updated twice. Removing a component before it is attached leaves nothing in the queue.</p>
+<p>Tests: <code>ReparentingWithinSceneDoesNotAttachTwice</code>, <code>RemoveComponentBeforeAttachLeavesNothingQueued</code>, <code>DestroyRemovesObjectAtEndOfFrame</code>.</p>
+</div>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>"Once per scene" means that an object leaving a scene and joining one again (for example <code>RemoveRootGameObject</code> and then <code>AddRootGameObject</code>) gets <code>OnAttach</code> again, with no <code>OnDestroy</code> in between: <code>SetScene</code> detaches and re-queues without running teardown callbacks.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Scene::ProcessAttachQueue</code> puts <code>Rendering::Light</code> components only into <code>_sceneLights</code>, never into <code>_components</code>. As a result a Light (or a subclass) never receives <code>OnUpdate</code>, <code>OnFixedUpdate</code>, <code>OnLateUpdate</code> or <code>OnApplicationQuit</code>, and the generic <code>Scene::FindObjectByType&lt;T&gt;</code> for a base type of Light (e.g. <code>Component</code>) never returns lights. Whether this is intended is not documented.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/GameObject.inl</code> — <code>GameObject::AddComponent</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::AddComponentToAttachQueue</code>, <code>Scene::ProcessAttachQueue</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::SetScene</code>; tests: <code>LifecycleTests</code></p>
+
+<h2 id="callbacks">Component callbacks</h2>
+<p>All callbacks are virtual no-ops on <code>Component</code>; override the ones you need. <code>GetTypeName()</code> is pure virtual and must be implemented (it is the serialization type name).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Callback</th><th>When it runs</th><th>Condition</th></tr></thead>
+<tbody>
+<tr><td><code>OnAttach()</code></td><td><code>ProcessAttachQueue</code>, start of frame</td><td>Once per scene joined; regardless of active state</td></tr>
+<tr><td><code>OnEnable()</code></td><td>Immediately, inside <code>SetActive</code>/<code>AddChild</code>/<code>RemoveChild</code>/<code>SetParent</code></td><td>The object's effective active state went from inactive to active and the component's own flag is enabled. <strong>Not</strong> called on attach.</td></tr>
+<tr><td><code>OnFixedUpdate()</code></td><td>Each fixed step</td><td>Attached, own flag enabled, object active in hierarchy</td></tr>
+<tr><td><code>OnUpdate()</code></td><td><code>Scene::Update</code></td><td>Same</td></tr>
+<tr><td><code>OnLateUpdate()</code></td><td><code>Scene::LateUpdate</code></td><td>Same</td></tr>
+<tr><td><code>OnDisable()</code></td><td>Immediately on deactivation; or first step of teardown</td><td>Effective state went active to inactive with own flag enabled; or see <a href="#teardown">teardown</a></td></tr>
+<tr><td><code>OnDestroy()</code></td><td>Teardown</td><td>Once per component (unless its own teardown callbacks re-enter teardown), see <a href="#teardown">teardown</a>. Can run without a prior <code>OnAttach</code>.</td></tr>
+<tr><td><code>OnApplicationQuit()</code></td><td>After the run loop ends</td><td>Active components of the loaded scene only</td></tr>
+<tr><td><code>OnCollisionEnter/Stay/Exit(const Physics::Collision&amp;)</code></td><td>After a fixed step's simulation</td><td>See <a href="physics.html">Physics</a></td></tr>
+<tr><td><code>OnTriggerEnter/Stay/Exit(Physics::Trigger)</code></td><td>After a fixed step's simulation</td><td>See <a href="physics.html">Physics</a></td></tr>
+</tbody>
+</table>
+</div>
+<p>There is no <code>Awake</code>/<code>Start</code>: use the constructor for state that does not need the scene, and <code>OnAttach</code> for setup that does.</p>
+<p>An exception thrown from <code>OnUpdate</code> (or any callback run by <code>Scene::Update</code>/<code>FixedUpdate</code>/<code>LateUpdate</code>) is not caught by the scene: it propagates out of the call. The iteration bookkeeping is unwound correctly, so later frames behave normally (<code>ThrowingComponentDoesNotWedgeIteration</code>). Contrast coroutines, whose exceptions are caught and logged.</p>
+
+<pre class="lang-cpp"><code>class Health final : public N2Engine::Component
+{
+public:
+    explicit Health(N2Engine::GameObject &amp;go) : Component(go) {}
+    [[nodiscard]] std::string GetTypeName() const override { return "Health"; }
+
+    void OnAttach() override  { /* scene-dependent setup */ }
+    void OnUpdate() override  { /* per frame */ }
+    void OnDisable() override { /* pairs with OnEnable, also runs before OnDestroy */ }
+    void OnDestroy() override { /* release what OnAttach acquired */ }
+};
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/Component.hpp</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::OnAllActiveComponents</code>, <code>Scene::Update</code>, <code>Scene::OnApplicationQuit</code>; tests: <code>ThrowingComponentDoesNotWedgeIteration</code></p>
+
+<h2 id="active-state">Active state</h2>
+<p>There are two independent flags:</p>
+<ul>
+<li><strong>GameObject's own flag</strong>, <code>GameObject::SetActive</code> / <code>IsActive()</code>. <code>IsActiveInHierarchy()</code> is true when the object and every ancestor are active, and the object is not marked for destruction.</li>
+<li><strong>Component's own flag</strong>, <code>Component::SetActive</code>. <code>Component::IsActive()</code> returns own flag <em>and</em> not destroyed <em>and</em> the object's <code>IsActiveInHierarchy()</code>.</li>
+</ul>
+
+<h3 id="gameobject-setactive">GameObject::SetActive</h3>
+<ol class="steps">
+<li>If the flag already has the requested value, nothing happens (no callbacks).</li>
+<li>Otherwise the flag changes and the cached <code>IsActiveInHierarchy</code> of the object <em>and its whole subtree</em> is invalidated.</li>
+<li>If the effective state (<code>IsActiveInHierarchy</code>) changed, <code>OnEnable</code> or <code>OnDisable</code> runs synchronously, before <code>SetActive</code> returns, on: every component of the object whose own flag is enabled and that is not destroyed, then recursively on children whose own flag is active. A child that is inactive itself is skipped with its whole subtree, since its effective state did not change.</li>
+</ol>
+<p>Reparenting (<code>AddChild</code>, <code>RemoveChild</code>, <code>SetParent</code>) compares the child's effective state before and after and fires the same notifications, so parenting under an inactive object disables the child's subtree.</p>
+<p><code>SetActiveRecursive(active)</code> calls <code>SetActive</code> on the object and then on every descendant, so it overwrites the descendants' own flags.</p>
+
+<h3 id="component-setactive">Component::SetActive</h3>
+<p><code>Component::SetActive</code> only sets the flag. It fires <strong>no</strong> <code>OnEnable</code>/<code>OnDisable</code>. A disabled component is skipped by the update loops from the next iteration, and its flag is never overwritten by GameObject toggles.</p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Deactivating an ancestor makes every descendant report inactive (no stale cache), and fires <code>OnDisable</code> once; reactivating fires <code>OnEnable</code> once. A component's own disabled flag survives object toggles and its component receives neither callback. A child that is inactive itself gets nothing when its parent toggles. Setting the same state fires nothing. Reparenting under an inactive parent disables, and back under an active one enables.</p>
+<p>Tests: <code>DeactivatingRootDeactivatesGrandchild</code>, <code>ToggleKeepsComponentsOwnEnabledFlag</code>, <code>InactiveChildStaysInactiveWhenParentToggles</code>, <code>SettingSameStateFiresNothing</code>, <code>ReparentingUnderInactiveParentDisables</code>.</p>
+</div>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p><code>OnEnable</code>/<code>OnDisable</code> track transitions of the <em>object's</em> effective state only. Because <code>OnEnable</code> is not called on attach and <code>Component::SetActive</code> fires nothing, a component that starts enabled gets no <code>OnEnable</code> before its first update, and one disabled through its own flag gets no <code>OnDisable</code> (and none at teardown either, see below). Do initial setup in <code>OnAttach</code>.</p>
+</div>
+<p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::SetActive</code>, <code>MarkActiveInHierarchyDirty</code>, <code>NotifyActiveChanged</code>, <code>NotifyIfActiveChanged</code>, <code>IsActiveInHierarchy</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::IsActive</code>, <code>Component::SetActive</code>; tests: <code>LifecycleTests</code> (<code>ActiveHierarchyTest</code>)</p>
+
+<h2 id="destroy">Destroy</h2>
+<p><code>GameObject::Destroy()</code> is deferred when the object is in a scene:</p>
+<ol class="steps">
+<li><code>Destroy()</code> pushes the object onto its scene's destruction queue (<code>Scene::DestroyGameObject</code>). Nothing else changes: <code>IsDestroyed()</code> is still <code>false</code>, the object still updates for the rest of the frame (<code>LateUpdate</code>, render), and it can still be found.</li>
+<li>At the end of the frame, <code>Scene::ProcessDestroyed</code> drains the queue. For each queued object not already marked, it marks the object and its whole subtree (<code>IsDestroyed()</code> becomes true, <code>IsActiveInHierarchy()</code> becomes false) and collects them, parents before children.</li>
+<li>For every collected object, in that order: each component runs the <a href="#teardown">teardown sequence</a> (<code>OnDisable</code> if applicable, then <code>OnDestroy</code>), then the object's coroutines are stopped.</li>
+<li>Only after every collected object's callbacks have run, each is purged: removed from its parent (unless the parent is also being destroyed) or from the scene's roots, detached from the scene, its components freed, children list cleared, <code>Positionable</code> released, and <code>IsTornDown()</code> set.</li>
+</ol>
+<p>Because callbacks for the whole batch run before any purge, a component's <code>OnDestroy</code> can still use other objects destroyed in the same batch.</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>Situation</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>Destroy()</code> twice (same frame or later)</td><td>Queued twice; the second entry is skipped because the object is already marked. <code>OnDestroy</code> runs once.</td></tr>
+<tr><td>Destroy a parent</td><td>Children are destroyed in the same pass; each component's <code>OnDestroy</code> runs once.</td></tr>
+<tr><td>Destroy an object that is not in a scene</td><td>Immediate: <code>IsDestroyed()</code> and <code>IsTornDown()</code> become true. No callbacks run and the components are not freed; children are not touched. This also applies when the components <em>were</em> attached in a scene the object has since left (<code>RemoveRootGameObject</code>, or parenting under an object with no scene): they never get <code>OnDisable</code>/<code>OnDestroy</code>.</td></tr>
+<tr><td><code>Destroy()</code> called from inside <code>OnDisable</code>/<code>OnDestroy</code> during <code>ProcessDestroyed</code></td><td>The queue was already drained, so the new entry is processed at the next <code>ProcessDestroyed</code> (next frame).</td></tr>
+<tr><td>Destroyed object's inactive state</td><td>If the object was inactive (or a component disabled) before destruction, <code>OnDisable</code> is skipped and only <code>OnDestroy</code> runs.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Destruction happens at the end of the frame. After <code>ProcessDestroyed</code>, the object is gone from the scene (search, serialization, <code>FindObjectsByType</code>) and its components never update again. Destroying twice runs <code>OnDestroy</code> once; destroying a parent destroys its children once each; a light on a destroyed object is removed from the scene's lighting.</p>
+<p>Tests: <code>DestroyRemovesObjectAtEndOfFrame</code>, <code>DestroyTwiceRunsOnDestroyOnce</code>, <code>DestroyingParentDestroysChildrenOnce</code>, <code>DestroyWithoutSceneMarksDestroyed</code>, <code>DestroyingObjectRemovesItsLight</code>, <code>DestroyedObjectsCoroutinesStop</code>.</p>
+</div>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Before PR #17, <code>Destroy()</code> marked the object first, and <code>ProcessDestroyed</code> skipped marked objects, so nothing was ever destroyed. That is why <code>Destroy()</code> deliberately leaves <code>IsDestroyed()</code> false until the end-of-frame pass. If you need "destroy requested" state, track it yourself.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Scene::DestroyGameObject</code> accepts any object and does not check that it belongs to that scene. Purging such an object in <code>Scene::PurgeMarkedGameObject</code> erases it from the <em>calling</em> scene's roots only, so a root of another scene would stay in that scene's root list after being purged. <code>GameObject::Destroy()</code> always uses the object's own scene, so this only matters when calling <code>Scene::DestroyGameObject</code> directly, which is possible from C++ and also from Lua (<code>scene:DestroyGameObject(go)</code>, which only rejects invalid or already destroyed handles).</p>
+</div>
+<p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Destroy</code>, <code>GameObject::Purge</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::DestroyGameObject</code>, <code>ProcessDestroyed</code>, <code>MarkHierarchyForDestruction</code>, <code>CallOnDestroyForGameObject</code>, <code>PurgeMarkedGameObject</code>; tests: <code>LifecycleTests</code>, <code>CoroutineTests</code></p>
+
+<h2 id="teardown">The teardown sequence</h2>
+<p>Every path that ends a component's life in a scene runs the same private function, <code>Component::RunDestroyCallbacks(objectWasActiveInHierarchy)</code>:</p>
+<ol class="steps">
+<li>If the component is already marked destroyed, return (so it runs at most once, whichever path gets there first, unless its own <code>OnDisable</code>/<code>OnDestroy</code> re-enters teardown; see the open question below).</li>
+<li>If the component's own flag is enabled <em>and</em> the object was active in the hierarchy before teardown started, call <code>OnDisable()</code>.</li>
+<li>Call <code>OnDestroy()</code>.</li>
+<li>Mark the component destroyed (<code>IsDestroyed()</code> true).</li>
+</ol>
+<p>"Was active" is computed ignoring the destruction mark (<code>IsActiveInHierarchyIgnoringDestruction</code>), because objects are already marked when the callbacks run.</p>
+<p>It does not check that the component was ever attached. A component added and destroyed in the same frame, or one in a scene that is switched away before its first frame, gets <code>OnDisable</code>/<code>OnDestroy</code> without having had <code>OnAttach</code>, so <code>OnDestroy</code> must cope with setup that never happened.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Path</th><th>Callbacks</th><th>When the memory is freed</th></tr></thead>
+<tbody>
+<tr><td><code>GameObject::Destroy</code> (in a scene)</td><td>Teardown at end of frame, whole subtree</td><td>Purge, right after the batch's callbacks</td></tr>
+<tr><td><code>RemoveComponent</code> (any overload)</td><td>Teardown immediately</td><td>Before the call returns</td></tr>
+<tr><td><code>RemoveAllComponents</code></td><td>Teardown immediately, per component</td><td>Before the call returns</td></tr>
+<tr><td>Scene switch (<code>Scene::Clear</code>)</td><td>Teardown for every object reachable from the roots (not objects detached with <code>RemoveChild</code>)</td><td>When the last <code>shared_ptr</code> to each object goes: normally inside <code>Clear</code>, when it empties the root list</td></tr>
+<tr><td>Object released while still pointing at a scene (e.g. after <code>RemoveChild</code>), or scene destroyed</td><td><strong>None</strong>; bookkeeping only</td><td>With the object (a <code>RemoveChild</code>-detached object released after a scene switch touches the freed scene; see <a href="#purge-and-destructor">below</a>)</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>On <code>Destroy</code>, <code>RemoveComponent</code> and scene switch, a component sees <code>OnDisable</code> then <code>OnDestroy</code> if it was enabled in an active hierarchy, otherwise only <code>OnDestroy</code>; <code>OnDestroy</code> runs once, provided the component's own <code>OnDisable</code>/<code>OnDestroy</code> does not re-enter teardown (see below).</p>
+<p>Tests: <code>DestroyRunsOnDisableThenOnDestroy</code>, <code>DestroyOfInactiveOrDisabledSkipsOnDisable</code>, <code>RemoveComponentRunsOnDisableThenOnDestroy</code>, <code>SceneSwitchRunsOnDestroy</code>, <code>DestroyTwiceRunsOnDestroyOnce</code>.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Component::RunDestroyCallbacks</code> sets the destroyed flag <em>after</em> calling <code>OnDestroy</code>. A component whose <code>OnDisable</code> or <code>OnDestroy</code> removes itself again (e.g. <code>GetGameObject().RemoveComponent(this)</code>) re-enters <code>RunDestroyCallbacks</code> while the flag is still false. That is not just "the callbacks run again": a callback that unconditionally removes itself recurses without bound (stack overflow), and if the inner call completes, it frees the component while the outer <code>OnDisable</code>/<code>OnDestroy</code> is still running on it, a use-after-free. Nothing guards against re-entry, and nothing documents whether it is supported. Do not remove or destroy a component from its own teardown callbacks.</p>
+<p>Separately, several functions iterate an object's live component or child vector with a range-for while callbacks run: <code>Scene::CallOnDestroyForGameObject</code>, <code>GameObject::RemoveAllComponents</code>, and <code>GameObject::NotifyActiveChanged</code>, which fires <code>OnEnable</code>/<code>OnDisable</code> during <code>SetActive</code>, <code>AddChild</code> and <code>RemoveChild</code>. A callback that calls <code>AddComponent</code>/<code>RemoveComponent</code> on the same object, or adds or removes its children, can invalidate that iteration. (<code>RemoveComponent</code> itself re-finds the component after the callbacks, so it tolerates such changes to its own loop.)</p>
+</div>
+
+<h3 id="torn-down">IsDestroyed vs IsTornDown <span class="badge">PR #29</span></h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Moment</th><th><code>IsDestroyed()</code></th><th><code>IsTornDown()</code></th></tr></thead>
+<tbody>
+<tr><td>After <code>Destroy()</code>, before end of frame</td><td>false</td><td>false</td></tr>
+<tr><td>Inside the batch's <code>OnDisable</code>/<code>OnDestroy</code></td><td>true</td><td>false</td></tr>
+<tr><td>After purge (<code>ProcessDestroyed</code>)</td><td>true</td><td>true</td></tr>
+<tr><td>Scene switch: during the <code>OnDestroy</code> pass</td><td>true</td><td>false</td></tr>
+<tr><td>Scene switch: after every object's callbacks</td><td>true</td><td>true</td></tr>
+<tr><td><code>Destroy()</code> outside a scene</td><td>true</td><td>true (immediately)</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>IsTornDown</code> exists so references held elsewhere keep working through the teardown callbacks: Lua handles check it, so a script's <code>self.gameObject</code>, its position and sibling components stay usable inside <code>OnDisable</code>/<code>OnDestroy</code> and fail afterwards. See <a href="scripting-lua.html">Lua scripting</a>.</p>
+
+<h3 id="purge-and-destructor">Purge and ~GameObject</h3>
+<p><code>Purge</code> (private, called by the destroy pass) only releases: no callbacks. <code>~GameObject</code> detaches every component from the scene it still points at and stops its coroutines there, however the object was dropped; it runs no callbacks either. A scene that is destroyed first clears the scene pointer of the objects it can still find (<code>Scene::~Scene</code>): its roots (and, through <code>SetScene</code>, their subtrees) and the owners of entries in its component list and attach queue.</p>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Scene::~Scene</code> cannot find every object that still points at it. An object detached with <code>RemoveChild</code> is not a root, and it only appears in the scene's lists through its components. Two cases leave its <code>_scene</code> pointer dangling: the object has no components, or the scene was <code>Clear</code>ed first. A scene switch does the second: <code>Scene::Clear</code> walks only the roots (so the detached object gets no <code>OnDisable</code>/<code>OnDestroy</code> and is not marked), empties <code>_components</code> and <code>_attachQueue</code>, and only re-scenes the roots, before the scene is destroyed. The object therefore survives the switch with a dangling <code>_scene</code>. A later <code>AddComponent</code>, <code>StartCoroutine</code> or <code>Destroy</code> on it uses the freed scene, and so does its release: <code>~GameObject</code> calls <code>DetachComponent</code> and <code>GetCoroutineScheduler()</code> on it. This path is reachable from Lua <span class="badge">PR #29</span>: <code>parent:RemoveChild(child)</code> gives the script ownership, and the object is released when the handle is collected after a scene switch. A possible fix is for <code>Clear</code> to call <code>SetScene(nullptr)</code> on every object in its lists before emptying them, or for the scene to track its members. Neither is done yet.</p>
+</div>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>A <code>RemoveChild</code>-detached object is still in its scene and survives a scene switch with a dangling scene pointer; re-parent it, <code>AddRootGameObject</code> it or <code>Destroy</code> it before switching.</p>
+<p>Releasing an object that was only removed from its parent (<code>RemoveChild</code>) frees its components without <code>OnDisable</code>/<code>OnDestroy</code>. Anything a component acquired in <code>OnAttach</code> (physics bodies, audio sources) is then released only by the component's own destructor, if it has one. Use <code>Destroy()</code> to end an object's life with callbacks.</p>
+</div>
+<p class="src">Source: <code>engine/src/gameobject/Component.cpp</code> — <code>Component::RunDestroyCallbacks</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::~GameObject</code>, <code>GameObject::Purge</code>, <code>GameObject::RemoveComponent</code>, <code>GameObject::RemoveAllComponents</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::Clear</code>, <code>Scene::~Scene</code>; tests: <code>LifecycleTests</code>, <code>ReleasingARemovedChildStopsItsCoroutines</code></p>
+
+<h2 id="hierarchy">Hierarchy: AddChild, RemoveChild, SetParent</h2>
+<p>All three take <code>keepWorldPosition</code> (default <code>true</code>). It only has an effect when both the child and the parent involved have a <code>Positionable</code>; the child's world position, rotation and scale are then restored after the relationship changes. Details and limits are on <a href="transforms.html#reparenting">Transforms</a>.</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>parent-&gt;AddChild(nullptr)</code> or <code>AddChild(self)</code></td><td>No-op.</td></tr>
+<tr><td><code>parent-&gt;AddChild(ancestorOfParent)</code></td><td>Refused (it would create a cycle); logs a warning (<code>Logger::Warn</code>). Nothing changes.</td></tr>
+<tr><td><code>parent-&gt;AddChild(child)</code>, child already a child of <code>parent</code></td><td>No-op.</td></tr>
+<tr><td><code>parent-&gt;AddChild(child)</code>, child is a scene root</td><td>Removed from its scene's root list, then parented. It stops being updated/rendered/serialized twice.</td></tr>
+<tr><td><code>parent-&gt;AddChild(child)</code>, child has another parent</td><td>Removed from the old parent first (with the same <code>keepWorldPosition</code>).</td></tr>
+<tr><td>After any successful <code>AddChild</code></td><td>The child's subtree moves to the parent's scene (<code>SetScene</code>): if the scene differs, components are detached from the old scene, its coroutines there are stopped, and components are queued on the new scene (<code>OnAttach</code> again). Then <code>OnEnable</code>/<code>OnDisable</code> fire if the child's effective active state changed.</td></tr>
+<tr><td><code>parent-&gt;RemoveChild(child)</code></td><td>Unlinks the child. The child is <strong>not</strong> made a root and <strong>stays in the scene</strong> (no <code>SetScene(nullptr)</code>): its components stay in the scene's <code>_components</code> and keep updating, and its coroutines keep running, but it is not traversed, rendered, found by <code>FindGameObject</code> or serialized. <code>Scene::Clear</code> does not tear it down, so it survives a scene switch with a dangling <code>_scene</code> (see <a href="#purge-and-destructor">Purge and ~GameObject</a>). Not a child: no-op.</td></tr>
+<tr><td><code>child-&gt;SetParent(nullptr)</code></td><td>Removes from the parent, then, if the object is in a scene, adds it as a root. This is the way to "unparent to root". No-op if it has no parent.</td></tr>
+<tr><td><code>child-&gt;SetParent(p)</code></td><td>No-op if <code>p</code> is itself or already the parent. Otherwise <code>oldParent-&gt;RemoveChild</code>, then <code>p-&gt;AddChild</code>.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Parenting a root removes it from the scene's roots. Parenting an ancestor under its own descendant is refused and leaves the hierarchy unchanged.</p>
+<p>Tests: <code>ParentingARootRemovesItFromTheRoots</code>, <code>ParentingAnAncestorUnderItsDescendantIsRefused</code>, <code>ReparentingWithinSceneDoesNotAttachTwice</code>.</p>
+</div>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p><code>RemoveChild</code> deliberately does not re-root: the destroy paths call it on objects being torn down, and re-rooting there would put them back into the scene (PR #24 review). Use <code>child-&gt;SetParent(nullptr)</code> to make an object a root.</p>
+<p>Reparenting a root from inside a <code>Scene::TraverseAll</code>/<code>TraverseUntil</code> callback is not supported: <code>AddChild</code> edits the root list the traversal is iterating (as <code>RemoveRootGameObject</code> does).</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>GameObject::SetParent(p)</code> where <code>p</code> is one of the object's own descendants: <code>SetParent</code> first calls <code>oldParent-&gt;RemoveChild(this)</code>, then <code>p-&gt;AddChild(this)</code> is refused as a cycle. The object ends up with no parent, not a root, but still in the scene (updating, not rendered). If it had no parent to begin with, it simply stays a root.</p>
+<p><code>Scene::AddRootGameObject</code> on an object that is a root of a <em>different</em> scene calls <code>SetScene</code> on it but does not remove it from the other scene's root list.</p>
+</div>
+<p>Other hierarchy helpers: <code>GetParent</code>, <code>GetChildren</code>, <code>GetChild(i)</code> (null if out of range), <code>FindChild(name)</code> (direct children), <code>FindChildRecursive(name)</code> (breadth of direct children first, then depth), <code>GetChildrenRecursive</code> (pre-order), <code>IsChildOf</code> (any ancestor), <code>IsParentOf</code> (any descendant), <code>GetRoot</code>, <code>GetHierarchyDepth</code>, <code>GetHierarchyPath</code> (<code>"Root/Child/Leaf"</code>).</p>
+<p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::AddChild</code>, <code>RemoveChild</code>, <code>SetParent</code>, <code>SetScene</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::AddRootGameObject</code>; tests: <code>CoreRobustnessTests</code>, <code>LifecycleTests</code></p>
+
+<h2 id="lookup">Finding components</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Matching</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>GetComponent&lt;T&gt;()</code></td><td>Exact dynamic type <code>T</code> (keyed by <code>typeid</code>)</td><td>The <em>first</em> component of that type added, or <code>nullptr</code></td></tr>
+<tr><td><code>GetComponent(std::type_index)</code></td><td>Exact type</td><td>Same, as <code>Component*</code></td></tr>
+<tr><td><code>HasComponent&lt;T&gt;()</code></td><td>Exact type</td><td><code>bool</code></td></tr>
+<tr><td><code>GetComponents&lt;T&gt;()</code></td><td><code>dynamic_cast</code>: <code>T</code> and every subclass</td><td>All matches, in the order they were added</td></tr>
+<tr><td><code>GetAllComponents()</code></td><td>—</td><td>The owning vector, by const reference</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><code>GetComponent&lt;Base&gt;()</code> does not find a derived component: the lookup map is keyed by the concrete type. For example <code>GetComponent&lt;Physics::ICollider&gt;()</code> returns <code>nullptr</code> on an object with a <code>BoxCollider</code>. Use <code>GetComponents&lt;Base&gt;()</code> for base-class queries (the engine does so for colliders).</p>
+</div>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p><code>GetComponent</code> returns the first component of a type (Unity's rule). Removing it makes the next one of that type findable. Deserialized objects follow the same rule.</p>
+<p>Tests: <code>GetComponentReturnsTheFirstOfAType</code>, <code>RemovingTheFirstComponentExposesTheNext</code>.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/GameObject.inl</code> — <code>GetComponent</code>, <code>GetComponents</code>, <code>HasComponent</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Deserialize</code>; tests: <code>CoreRobustnessTests</code></p>
+
+<h2 id="removal">Removing components</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Removes</th><th>Returns false when</th></tr></thead>
+<tbody>
+<tr><td><code>RemoveComponent&lt;T&gt;()</code></td><td>The one <code>GetComponent&lt;T&gt;()</code> finds (the first of exact type <code>T</code>)</td><td>No component of exact type <code>T</code></td></tr>
+<tr><td><code>RemoveComponent(std::type_index)</code></td><td>Same, by type index</td><td>Same</td></tr>
+<tr><td><code>RemoveComponent(Component*)</code></td><td>That specific instance</td><td><code>nullptr</code>, or not a component of this object (including already removed)</td></tr>
+<tr><td><code>RemoveAllComponents()</code></td><td>All</td><td>(void)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Removal is immediate: the teardown sequence runs, the component is detached from the scene (update list, light list and attach queue, via <code>Scene::DetachComponent</code>), then freed before the call returns. If the removed instance was the one mapped for its type, the next remaining instance of that type becomes the mapped one.</p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>After removal the scene no longer lists the component and it never updates again; a specific instance can be removed while the first stays mapped; removing twice returns false.</p>
+<p>Tests: <code>RemoveComponentDetachesFromScene</code>, <code>ASpecificComponentCanBeRemoved</code>, <code>RemoveComponentRunsOnDisableThenOnDestroy</code>.</p>
+</div>
+<p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::RemoveComponent</code> (all overloads), <code>RemoveAllComponents</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::DetachComponent</code></p>
+
+<h2 id="iteration-safety">Changing components during a callback</h2>
+<p><code>Scene::Update</code>, <code>FixedUpdate</code>, <code>LateUpdate</code> and <code>OnApplicationQuit</code> all go through <code>Scene::OnAllActiveComponents</code>, which iterates the scene's component list by index:</p>
+<ul>
+<li><strong>Adding</strong> a component during an update does not touch this list (new components are only registered by <code>ProcessAttachQueue</code>), so it first updates next frame, after its <code>OnAttach</code>.</li>
+<li><strong>Removing</strong> a component during an update: while any iteration is running (a depth counter), <code>DetachComponent</code> replaces its entry with <code>nullptr</code> instead of erasing it. The loop skips null entries, and the list is compacted when the outermost iteration finishes.</li>
+<li>Each entry is re-checked for <code>IsActiveInHierarchy()</code> and <code>IsActive()</code> just before its callback, so a component disabled or deactivated earlier in the same loop is skipped.</li>
+<li>The depth counter is restored by a scope guard even if a callback throws.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A component removed by an earlier component's <code>OnUpdate</code> in the same pass is skipped (never called after being freed) and later frames update normally; a throwing component does not leave the scene stuck in "iterating" mode.</p>
+<p>Tests: <code>RemoveComponentDuringUpdateSkipsIt</code>, <code>ThrowingComponentDoesNotWedgeIteration</code>.</p>
+</div>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::OnAllActiveComponents</code>, <code>Scene::DetachComponent</code>; tests: <code>LifecycleTests</code></p>
+
+<h2 id="lifetime-token">Lifetime token and copies <span class="badge">PR #29</span></h2>
+<p>Each component owns a <code>std::shared_ptr&lt;const bool&gt;</code> that nothing else owns. <code>GetLifetimeToken()</code> returns a <code>std::weak_ptr</code> to it, which expires exactly when the component is freed. Code that must keep a reference to a component without dangling (the Lua <code>ComponentRef</code> handles are the in-tree user) stores the token and checks <code>expired()</code> before use.</p>
+<pre class="lang-cpp"><code>std::weak_ptr&lt;const bool&gt; token = rb-&gt;GetLifetimeToken();
+// ... later, possibly after RemoveComponent or a scene switch
+if (!token.expired())
+{
+    rb-&gt;AddForce(push);   // still the same live component
+}
+</code></pre>
+<p>Copy construction and copy assignment of <code>Component</code> are deleted, because a copy would share the token and expire with the original.</p>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>An expired token means the memory is gone. A live token does not mean the component is usable: during and after its teardown callbacks it still exists with <code>IsDestroyed()</code> true until it is freed. Lua handles additionally check the owner's <code>IsTornDown()</code>.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/Component.hpp</code> — <code>Component::GetLifetimeToken</code>; <code>engine/include/engine/scripting/LuaHandles.hpp</code></p>
+
+<h2 id="names-tags">Names, tags and search helpers</h2>
+<ul>
+<li><code>GetName</code>/<code>SetName</code>: free-form, not unique. <code>Scene::FindGameObject(name)</code> returns the first match in a pre-order traversal from the roots; objects detached with <code>RemoveChild</code> are not reachable.</li>
+<li>There is no tag system. <code>GameObject::FindGameObjectsByTag</code> and <code>Scene::FindGameObjectsByTag</code> always return an empty list.</li>
+<li><code>GameObject::FindGameObjectByName(name, scene)</code> is a stub that always returns <code>nullptr</code>; use <code>Scene::FindGameObject</code>.</li>
+<li><code>Scene::FindObjectByType&lt;T&gt;</code>/<code>FindObjectsByType&lt;T&gt;</code> search attached components (not ones still in the attach queue) with <code>dynamic_cast</code>; destroyed ones are skipped, and inactive ones are skipped when <code>includeInactive</code> is false.</li>
+</ul>
+<p>From Lua, GameObjects and components are reached through checked handles; the binding exposes a subset (no <code>SetParent</code> or <code>RemoveComponent</code> on the Lua GameObject type, for example). See <a href="scripting-lua.html">Lua scripting</a>.</p>
+<p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>FindGameObjectByName</code>, <code>FindGameObjectsByTag</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::FindGameObject</code>, <code>Scene::FindGameObjectsByTag</code>; <code>engine/include/engine/sceneManagement/Scene.inl</code>; <code>engine/src/scripting/bindings/LuaCoreBindings.cpp</code></p>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

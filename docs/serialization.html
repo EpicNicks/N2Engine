@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Serialization · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html" aria-current="page">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Serialization</h1>
+<p class="lead">Scenes, GameObjects and components serialize to JSON (nlohmann::json). Loading runs in two phases: first every object and component is created, then cross-references are resolved by UUID. This page covers the JSON shape, how components declare serializable fields, how object, component and asset references survive a round trip, and what happens when the data is malformed.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#scene-json">Scene JSON</a></li>
+<li><a href="#gameobject-json">GameObject JSON</a></li>
+<li><a href="#component-registry">ComponentRegistry: type name to constructor</a></li>
+<li><a href="#serializable-component">SerializableComponent and RegisterMember</a></li>
+<li><a href="#references">GameObject and component references</a></li>
+<li><a href="#asset-references">Asset references (RegisterAssetRef)</a></li>
+<li><a href="#reference-resolver">ReferenceResolver: create, then resolve</a></li>
+<li><a href="#math-serialization">Math and colour types</a></li>
+<li><a href="#failure-handling">Failure handling</a></li>
+<li><a href="#prefabs">Prefabs</a></li>
+<li><a href="#other-formats">Input and Lua data</a></li>
+</ol>
+</div>
+
+<h2 id="scene-json">Scene JSON</h2>
+<p><code>Scene::Serialize()</code> writes the scene name and its root objects, each serialized recursively. That's all: the scene's own UUID, the attach queue, coroutines and anything else at runtime are not saved. <code>SceneManager</code> stores scenes in exactly this form; see <a href="scenes.html#scenemanager">SceneManager storage model</a>.</p>
+<p>A trimmed example, put together from <code>Scene::Serialize</code>, <code>GameObject::Serialize</code>, <code>Positionable::Serialize</code> and <code>Light</code>'s registered members. Some <code>Light</code> fields are left out, and the UUIDs are illustrative:</p>
+<pre class="lang-json"><code>{
+  "name": "Level1",
+  "rootGameObjects": [
+    {
+      "uuid": "6f1c2a8e-0d7b-4c39-9a51-2b7e4f0c9d13",
+      "name": "Lamp",
+      "isActive": true,
+      "positionable": {
+        "localPosition": { "x": 0.0, "y": 3.0, "z": 0.0 },
+        "localRotation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+        "localScale":    { "x": 1.0, "y": 1.0, "z": 1.0 }
+      },
+      "components": [
+        {
+          "type": "Light",
+          "data": {
+            "uuid": "b3e9d1f0-5a62-4f8e-8c07-91d4a6e2f5b8",
+            "isActive": true,
+            "type": "Point",
+            "color": { "x": 1.0, "y": 0.9, "z": 0.8 },
+            "intensity": 1.5,
+            "range": 10.0
+          }
+        }
+      ],
+      "children": []
+    }
+  ]
+}</code></pre>
+<p><code>Scene::FromJSON(j, validate)</code> builds a new scene from this data:</p>
+<ul>
+<li>With <code>validate = true</code>, it first requires <code>"name"</code> and an array <code>"rootGameObjects"</code>. If either is missing it logs an error (with the dumped JSON) and returns <code>nullptr</code>.</li>
+<li>Without validation, a missing <code>"name"</code> leaves the name empty and a missing <code>"rootGameObjects"</code> gives an empty scene.</li>
+<li>Any <code>std::exception</code> thrown while deserializing is caught, logged as <code>"Failed to load scene: ..."</code>, and turned into a <code>nullptr</code> return.</li>
+</ul>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::Serialize</code>, <code>Scene::Deserialize</code>, <code>Scene::FromJSON</code>; tests: <code>SceneLoadingTest.FromJsonReturnsNullForMalformedData</code></p>
+
+<h2 id="gameobject-json">GameObject JSON</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Written</th><th>On load</th></tr></thead>
+<tbody>
+<tr><td><code>uuid</code></td><td>Always, as a string</td><td><strong>Required</strong> (<code>.at()</code>). Restored as the object's UUID. A string that isn't a valid UUID, or a non-string value, logs an error and becomes <code>UUID::ZERO</code>; it does not throw.</td></tr>
+<tr><td><code>name</code></td><td>Always</td><td><strong>Required</strong> (<code>.at()</code>), must be a string.</td></tr>
+<tr><td><code>isActive</code></td><td>Always</td><td>Optional. Defaults to active.</td></tr>
+<tr><td><code>prefabReference</code></td><td>Only if set</td><td>Optional UUID. It round-trips, but nothing else uses it yet.</td></tr>
+<tr><td><code>positionable</code></td><td>Only if the object has a Positionable</td><td>Optional. If present, a Positionable is created and <code>localPosition</code>, <code>localRotation</code> and <code>localScale</code> are each applied if present. See <a href="transforms.html">Transforms</a>.</td></tr>
+<tr><td><code>components</code></td><td>Always (possibly empty). Each entry is <code>{"type": GetTypeName(), "data": Serialize()}</code>.</td><td>Optional. Each entry needs <code>type</code> and <code>data</code> (<code>.at()</code>). The component is created through the <a href="#component-registry">ComponentRegistry</a>; see below for unknown types.</td></tr>
+<tr><td><code>children</code></td><td>Always (possibly empty), recursive</td><td>Optional. Each child is deserialized and attached with <code>AddChild(child, false)</code>, so local transforms are kept as stored.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Component order is preserved. If the data holds two components of the same type, the <em>first</em> one is the one <code>GetComponent&lt;T&gt;</code> finds. A component's <code>data</code> always starts with the base fields from <code>Component::Serialize</code>: <code>uuid</code> and <code>isActive</code>. Both are optional on load.</p>
+<p>Loading creates the objects and components but does not attach them. When the deserialized roots join a scene (<code>SetScene</code>), every component is queued, and <code>OnAttach</code> runs at that scene's next <code>ProcessAttachQueue</code>. See <a href="scenes.html#frame-callbacks">Attach queue</a>.</p>
+<p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Serialize</code>, <code>GameObject::Deserialize</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::Serialize</code>, <code>Component::Deserialize</code>; tests: <code>GameObjectSerializationTest.*</code> (e.g. <code>InvalidUUID_DeserializeUsesZero</code>, <code>ChildUUIDsPreserved_RoundTrip</code>, <code>DeepHierarchy_RoundTrip</code>)</p>
+
+<h2 id="component-registry">ComponentRegistry: type name to constructor</h2>
+<p><code>ComponentRegistry</code> is a singleton map from a type-name string to a factory <code>std::unique_ptr&lt;Component&gt;(GameObject&amp;)</code>. The name a component writes (<code>GetTypeName()</code>) must match the name it is registered under, or it cannot be loaded.</p>
+<ul>
+<li><code>REGISTER_COMPONENT(ClassName)</code> in a <code>.cpp</code> file registers <code>#ClassName</code> (the unqualified token) with a factory that calls <code>std::make_unique&lt;ClassName&gt;(go)</code>. Write it inside the class's namespace, as <code>BoxCollider.cpp</code> does.</li>
+<li><code>Register(name, factory)</code> overwrites any earlier factory with the same name.</li>
+<li><code>Create(name, go)</code> returns <code>nullptr</code> for an unknown name.</li>
+</ul>
+<p>Registered on the integration branch: <code>BoxCollider</code>, <code>SphereCollider</code>, <code>CapsuleCollider</code>, <code>Light</code> (via <code>REGISTER_COMPONENT</code>), and <code>LuaComponent</code> (via a static registrar in <code>LuaComponent.cpp</code>).</p>
+<pre class="lang-cpp"><code>// MyComponent.cpp
+namespace Game
+{
+    REGISTER_COMPONENT(Health)   // registers "Health"
+
+    std::string Health::GetTypeName() const { return "Health"; } // must match
+}
+</code></pre>
+<p>An unknown <code>"type"</code> is <strong>dropped silently</strong>: <code>GameObject::Deserialize</code> skips the entry when <code>ComponentRegistry::Create</code> returns <code>nullptr</code>, and nothing is logged. A comment in <code>Scene::FromJSON</code> says invalid component types "will error", which the code doesn't do.</p>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>Several engine components are <strong>not registered</strong>: <code>Physics::Rigidbody</code> (whose <code>.cpp</code> includes <code>ComponentRegistry.hpp</code> but has no <code>REGISTER_COMPONENT</code>), <code>Audio::AudioSource</code>, <code>Audio::AudioListener</code> and the example renderers. They write themselves into the JSON, but <code>GameObject::Deserialize</code> drops them on <strong>every load, with no log</strong>. There is no other load path: <code>SceneManager</code> rebuilds every scene from its stored JSON on every load and every scene switch, including switching back to a scene you were in. The only scene object not rebuilt is the one you passed to <code>SceneManager::AddScene(scene, true)</code> (the initial scene from <code>Application::Init</code>), and only for that first load; a later switch back to it rebuilds it from JSON and loses them too. After a reload, objects that had a <code>Rigidbody</code> come back with collider-only static bodies, and audio sources and listeners are simply gone. Until these are registered, add them from C++ after each load (see <a href="physics.html">Physics</a> and <a href="audio.html#audio-source">Audio</a>).</p>
+</div>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Registration happens in static initializers. In a static library, the linker drops an object file that nothing references, together with its registrar. This is what happened to <code>AudioClipLoader.cpp</code> before #23. Keep each <code>REGISTER_COMPONENT</code> in a file the program references for other reasons, such as the component's own <code>.cpp</code>.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/serialization/ComponentRegistry.hpp</code> — <code>ComponentRegistry</code>, <code>ComponentRegistrar</code>, <code>REGISTER_COMPONENT</code>; <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponentRegistrar</code></p>
+
+<h2 id="serializable-component">SerializableComponent and RegisterMember</h2>
+<p>Derive from <code>SerializableComponent</code> and register fields in the constructor. <code>Serialize()</code> writes the base fields (<code>uuid</code>, <code>isActive</code>) and then every registered member, in registration order. <code>Deserialize(j, resolver)</code> reads the base fields, then runs each member's deserializer.</p>
+<ul>
+<li><code>RegisterMember(name, member)</code> works for any type nlohmann::json can convert both ways. Otherwise compilation fails on a <code>static_assert</code>. On load, a missing key leaves the member at its constructor default. A key whose value has the wrong type throws <code>nlohmann::json::type_error</code> (see <a href="#failure-handling">failure handling</a>).</li>
+<li>The serializers capture <em>references to the members</em>. A component is never copied or moved after construction (it is owned through <code>unique_ptr</code>), so the references stay valid for its whole life. Do not register locals or temporaries.</li>
+<li>Engine components use <code>NAMEOF(_field)</code> for the key, so the JSON key is the C++ member name, for example <code>"_mass"</code>, <code>"_halfExtents"</code> or <code>"intensity"</code>. Renaming a member therefore changes the file format.</li>
+</ul>
+<pre class="lang-cpp"><code>class Health final : public N2Engine::SerializableComponent
+{
+public:
+    explicit Health(N2Engine::GameObject &amp;go) : SerializableComponent(go)
+    {
+        RegisterMember("maxHp", maxHp);
+        RegisterGameObjectRef("respawnPoint", respawnPoint);
+        RegisterComponentRef("shield", shield);
+        RegisterAssetRef("hurtSound", hurtSound);
+    }
+    [[nodiscard]] std::string GetTypeName() const override { return "Health"; }
+
+    float maxHp = 100.0f;
+    N2Engine::GameObject *respawnPoint = nullptr;
+    Shield *shield = nullptr;                                   // Shield : Component
+    std::shared_ptr&lt;N2Engine::Audio::AudioClip&gt; hurtSound;
+};
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/serialization/ComponentSerializer.hpp</code> — <code>SerializableComponent::RegisterMember</code>, <code>SerializableComponent::Serialize</code>, <code>SerializableComponent::Deserialize</code></p>
+
+<h2 id="references">GameObject and component references</h2>
+<p>References are written as the target's UUID string, or JSON <code>null</code>. On load they are not looked up straight away. Each one adds a pending fix-up to the <a href="#reference-resolver">ReferenceResolver</a>, which runs once every object in the scene exists.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Registration</th><th>Member type</th><th>Resolved with</th></tr></thead>
+<tbody>
+<tr><td><code>RegisterGameObjectRef(name, ref)</code></td><td><code>GameObject*&amp;</code></td><td><code>resolver-&gt;FindGameObject(uuid)</code></td></tr>
+<tr><td><code>RegisterGameObjectRefVector(name, refs)</code></td><td><code>std::vector&lt;GameObject*&gt;&amp;</code></td><td>Same, per index</td></tr>
+<tr><td><code>RegisterComponentRef&lt;T&gt;(name, ref)</code></td><td><code>T*&amp;</code>, <code>T</code> derived from <code>Component</code></td><td><code>dynamic_cast&lt;T*&gt;(resolver-&gt;FindComponent(uuid))</code></td></tr>
+<tr><td><code>RegisterComponentRefVector&lt;T&gt;(name, refs)</code></td><td><code>std::vector&lt;T*&gt;&amp;</code></td><td>Same, per index</td></tr>
+</tbody>
+</table>
+</div>
+<p>Behaviour on load:</p>
+<ul>
+<li>A missing key or <code>null</code> sets a single reference to <code>nullptr</code>. <code>RegisterComponentRef</code> also logs an info line when this happens.</li>
+<li>A vector is cleared, resized to the array length, and filled with <code>nullptr</code>. Each non-null element is then resolved by index, so <code>null</code> elements keep their positions. A missing key or a non-array value leaves the vector empty.</li>
+<li>A UUID that the resolver does not know resolves to <code>nullptr</code>, silently. This covers a target in another scene or one that wasn't saved. A component of the wrong type also resolves to <code>nullptr</code>.</li>
+<li><strong>Without a resolver</strong> (<code>Deserialize(j)</code> or <code>Deserialize(j, nullptr)</code>), a single non-null reference is <em>not touched</em>: the member keeps its current value, and only null and missing references are written. A <strong>vector</strong> reference is still cleared and resized, but nothing fills it, so it becomes all <code>nullptr</code> (one per stored element).</li>
+</ul>
+<p>History: <code>RegisterGameObjectRef</code> used to take the pointer by value, so loading wrote to a dead stack copy. The component variants took <code>shared_ptr&lt;T&gt;&amp;</code> and could not be instantiated. Both were fixed in #23. Components are owned by <code>unique_ptr</code>, so references to them are raw pointers.</p>
+<p class="src">Source: <code>engine/src/serialization/ComponentSerializer.cpp</code> — <code>SerializableComponent::RegisterGameObjectRef</code>, <code>SerializableComponent::RegisterGameObjectRefVector</code>; <code>engine/include/engine/serialization/ComponentSerializer.hpp</code> — <code>RegisterComponentRef</code>, <code>RegisterComponentRefVector</code>; tests: <code>SerializationReferencesTest.ReferencesRoundTripThroughTheResolver</code>, <code>SerializationReferencesTest.NullReferencesStayNull</code></p>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>A reference is a raw pointer that nothing tracks. If the target is destroyed or its scene is switched out, the member dangles, just like any other raw pointer to a component. Serialization only fixes the pointer at load time.</p>
+</div>
+
+<h2 id="asset-references">Asset references (RegisterAssetRef)</h2>
+<p><code>RegisterAssetRef&lt;T&gt;(name, std::shared_ptr&lt;T&gt;&amp; ref)</code> (<code>T</code> derived from <code>Base::Asset</code>) writes the asset's UUID, or <code>null</code>. It resolves <em>immediately</em> during <code>Deserialize</code> and does not use the reference resolver:</p>
+<ol class="steps">
+<li>A missing key or <code>null</code> gives <code>nullptr</code>.</li>
+<li><code>UUID::ZERO</code> (including an unparseable UUID string, which becomes ZERO) gives <code>nullptr</code> and the warning <code>"Invalid UUID for asset ..."</code>.</li>
+<li>Otherwise it calls <code>IO::Resources::Instance().LoadByUUID&lt;T&gt;(uuid)</code> <span class="badge">PR #28</span>. That checks Resources' own runtime assets, then ResourceLoader's cache, then <em>loads</em> the project file whose <code>.meta</code> UUID matches. If none of these finds it, the reference is <code>nullptr</code> and <code>"Asset '...' not found: ..."</code> is logged.</li>
+</ol>
+<p><strong>Cross-run stability.</strong> A project file under <code>assets/</code> gets a deterministic UUID from its <code>res://</code> path (see <a href="resources.html#uuid-stability">UUID stability</a>). A reference saved in one run therefore loads the same file in a later run, even if nothing has loaded it yet. This holds whether the asset was first loaded through <code>ResourceLoader</code> or through <code>Resources</code>, because <code>Resources::Load</code> delegates project files to <code>ResourceLoader</code> <span class="badge">PR #28</span>. An asset registered at runtime (<code>Resources::RegisterAsset</code>) has a random UUID, so a reference to it resolves only within the same run.</p>
+<p class="src">Source: <code>engine/include/engine/serialization/ComponentSerializer.hpp</code> — <code>SerializableComponent::RegisterAssetRef</code>; <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::LoadByUUID</code>; tests: <code>AudioAssetReferenceTest.AudioSourceClipResolvesInALaterRun</code>, <code>ResourceLoaderTest.AssetRefToAnAssetLoadedThroughResourcesResolvesInALaterRun</code>, <code>ResourcesTest.AssetRefResolvesAnAssetRegisteredAtRuntime</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Because asset references load on demand, deserializing a scene can perform file I/O and create backend resources. For example, an <code>AudioClip</code> needs an initialized OpenAL context; without one, the clip fails to load and the reference is null.</p>
+</div>
+
+<h2 id="reference-resolver">ReferenceResolver: create, then resolve</h2>
+<p><code>Scene::Deserialize</code> creates one <code>ReferenceResolver</code> per load and runs two phases:</p>
+<ol class="steps">
+<li><strong>Create</strong>: every root is deserialized recursively. Each GameObject is registered under its UUID as soon as it is created, before its components and children. Each component is registered under <code>data["uuid"]</code> (if present) before its own <code>Deserialize</code> runs. Reference members queue fix-up closures. Each root is appended to the scene and joins it with <code>SetScene</code>.</li>
+<li><strong>Resolve</strong>: <code>ResolveAll()</code> runs every queued closure in the order queued, then clears the queue. Every UUID in the scene is known by then, so forward references (to objects later in the file, or to a parent's sibling) resolve.</li>
+</ol>
+<ul>
+<li>Registration is last-wins per UUID. Two objects with the same UUID (for example several invalid UUIDs, all mapped to ZERO) make references to that UUID resolve to whichever was registered last.</li>
+<li>The closures capture the resolver's address. The resolver must outlive <code>ResolveAll()</code>, which is why it is a local in <code>Scene::Deserialize</code>. If you drive a resolver yourself (as the tests do), keep it alive until you call <code>ResolveAll()</code>.</li>
+<li>Scope is a single load: references never resolve across scenes.</li>
+<li><code>LuaComponent</code> queues its script-field references through the same resolver; see <a href="scripting-lua.html">Lua scripting</a>.</li>
+</ul>
+<pre class="lang-cpp"><code>// Manual two-phase load of a single component (what Scene::Deserialize does for a whole scene)
+N2Engine::ReferenceResolver resolver;
+resolver.RegisterGameObject(target-&gt;GetUUID(), target.get());
+holder-&gt;Deserialize(savedJson, &amp;resolver);   // queues fix-ups
+resolver.ResolveAll();                        // fills holder's reference members
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/serialization/ReferenceResolver.hpp</code> — <code>ReferenceResolver</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::Deserialize</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Deserialize</code>; tests: <code>GameObjectSerializationTest.ReferenceResolver_RegistersGameObject</code>, <code>ReferenceResolver_RegistersNestedChildren</code>, <code>ReferenceResolver_NonExistentUUIDReturnsNull</code></p>
+
+<h2 id="math-serialization">Math and colour types</h2>
+<p><code>MathSerialization.hpp</code> provides the nlohmann <code>to_json</code>/<code>from_json</code> overloads that <code>RegisterMember</code> and <code>Positionable</code> rely on.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Type</th><th>JSON</th><th>Missing fields on load</th><th>Other rules</th></tr></thead>
+<tbody>
+<tr><td><code>Math::Vector3</code></td><td><code>{"x","y","z"}</code></td><td>0</td><td>The SIMD padding lane <code>w</code> is set to 0 and never written.</td></tr>
+<tr><td><code>Math::Vector4</code></td><td><code>{"w","x","y","z"}</code></td><td>0</td><td></td></tr>
+<tr><td><code>Math::Quaternion</code></td><td><code>{"w","x","y","z"}</code></td><td>0</td><td>A non-normalized value is normalized. A near-zero one (squared length &lt; 1e-6, including all fields missing) becomes identity.</td></tr>
+<tr><td><code>Math::UUID</code></td><td>string</td><td></td><td>A non-string or unparseable value logs an error and becomes <code>UUID::ZERO</code>; it never throws.</td></tr>
+<tr><td><code>Common::Color</code></td><td><code>{"r","g","b","a"}</code></td><td>1 (opaque white)</td><td></td></tr>
+</tbody>
+</table>
+</div>
+<p>These use <code>j.value(key, default)</code>, which throws <code>type_error</code> if <code>j</code> is not an object, for example a vector written as an array <code>[1,2,3]</code>.</p>
+<p class="src">Source: <code>engine/include/engine/serialization/MathSerialization.hpp</code>; tests: <code>UUIDSerializationTest.*</code></p>
+
+<h2 id="failure-handling">Failure handling</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Bad input</th><th>What happens</th></tr></thead>
+<tbody>
+<tr><td>GameObject without <code>uuid</code> or <code>name</code>; component entry without <code>type</code> or <code>data</code></td><td><code>.at()</code> throws <code>out_of_range</code>. <code>Scene::FromJSON</code> catches it, logs <code>"Failed to load scene: ..."</code> and returns <code>nullptr</code>. Before #23, <code>const operator[]</code> on a missing key asserted or aborted.</td></tr>
+<tr><td>Value of the wrong JSON type (e.g. a string where a float member is expected, <code>name</code> not a string)</td><td><code>type_error</code>, handled the same way as above.</td></tr>
+<tr><td>Invalid UUID string</td><td>Error logged, ZERO used, load continues.</td></tr>
+<tr><td>Unknown component <code>type</code></td><td>Component skipped silently, load continues. This includes the unregistered engine components <code>Rigidbody</code>, <code>AudioSource</code>, <code>AudioListener</code> and the example renderers (see the <a href="#component-registry">warning</a>).</td></tr>
+<tr><td>Unknown enum string (e.g. <code>Light</code> <code>"type": "Area"</code>)</td><td><code>NLOHMANN_JSON_SERIALIZE_ENUM</code> maps it to the enum's <em>first</em> value (<code>Directional</code>) silently.</td></tr>
+<tr><td>Unresolvable object/component reference</td><td><code>nullptr</code>, silently.</td></tr>
+<tr><td>Unresolvable asset reference</td><td><code>nullptr</code> plus a warning.</td></tr>
+<tr><td>Malformed scene loaded through <code>SceneManager</code></td><td><code>FromJSON</code> returns null, and the current scene stays loaded; see <a href="scenes.html#process-pending">ProcessAnyPendingSceneChange</a>.</td></tr>
+<tr><td>Corrupt <code>.meta</code> file</td><td>Regenerated during the asset scan; see <a href="resources.html#metadata">Resources</a>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The guarantee applies to <code>Scene::FromJSON</code> and to everything that goes through it (<code>SceneManager</code>, the editor's load). Calling <code>GameObject::Deserialize</code> or a component's <code>Deserialize</code> directly does not catch anything: the exception reaches your code.</p>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::FromJSON</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Deserialize</code>; tests: <code>SceneLoadingTest.MalformedSceneFailsWithoutLosingTheCurrentOne</code>, <code>SceneLoadingTest.FromJsonReturnsNullForMalformedData</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Malformed scene JSON (missing required keys, wrong value types) never aborts the process through <code>Scene::FromJSON</code>. It returns <code>nullptr</code> and logs the reason.</p>
+</div>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>A load that fails partway has already run constructors and <code>Deserialize</code> for the components created before the error, including Lua script chunks. The half-built scene is then destroyed without <code>OnDestroy</code>; see the open question on <a href="scenes.html#loading">dropped scenes</a>.</p>
+</div>
+
+<h2 id="prefabs">Prefabs</h2>
+<p><code>Prefab</code> wraps a name and a root GameObject. Its JSON is <code>{"name": ..., "rootObject": &lt;GameObject JSON&gt; | null}</code>.</p>
+<ul>
+<li><code>Prefab::Serialize()</code> writes <code>rootObject: null</code> when the prefab has no root.</li>
+<li><code>Prefab::Deserialize(j, resolver = nullptr)</code> returns <code>std::expected&lt;std::unique_ptr&lt;Prefab&gt;, PrefabParseError&gt;</code>. A missing <code>name</code> gives <code>MissingName</code>, and a missing or null <code>rootObject</code> gives <code>MissingRootObject</code>. UUIDs of the whole hierarchy are preserved. <code>PrefabParseErrorToString</code> has a message for every error.</li>
+<li><code>PrefabManager::InstantiatePrefab(json)</code> is currently just <code>GameObject::Deserialize(json)</code> with no resolver, so it expects <strong>GameObject JSON</strong> (the <code>rootObject</code> value), not the Prefab JSON above: passing a whole <code>{"name", "rootObject"}</code> object fails on the missing <code>uuid</code>. Without a resolver, reference vectors in the instantiated components come back all <code>nullptr</code>. <code>PrefabManager::RegisterPrefab</code> is an empty stub.</li>
+</ul>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Prefab::Deserialize</code> returns <code>InvalidRootObject</code> only when <code>GameObject::Deserialize</code> returns null, which it never does: a malformed root <em>throws</em> (<code>.at()</code>), and the exception escapes <code>Prefab::Deserialize</code> instead of becoming an error value. A non-string <code>name</code> also throws. Separately, <code>PrefabManager::InstantiatePrefab</code> keeps the prefab's stored UUIDs, so instantiating the same prefab twice gives objects with the same UUIDs. It also uses no resolver, so non-null references inside the prefab are never filled in. Files: <code>engine/src/prefabs/Prefab.cpp</code>, <code>engine/src/prefabs/PrefabManager.cpp</code> (which has a TODO saying the design is undecided).</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/prefabs/Prefab.hpp</code>, <code>engine/src/prefabs/Prefab.cpp</code>, <code>engine/src/prefabs/PrefabManager.cpp</code>; tests: <code>PrefabSerializationTest.*</code> (e.g. <code>MissingName_Deserialize</code>, <code>NullRootObject_Deserialize</code>, <code>UUIDsPreserved_RoundTrip</code>), <code>PrefabParseErrorTest.AllErrorsHaveStrings</code></p>
+
+<h2 id="other-formats">Input and Lua data</h2>
+<ul>
+<li><strong>Input bindings</strong>: <code>InputSystem</code> has its own JSON format for action maps and bindings, including how unknown binding names are rejected. See <a href="input.html">Input</a>.</li>
+<li><strong>Lua components</strong>: a <code>LuaComponent</code>'s <code>data</code> holds the base fields plus <code>scriptUUID</code> (the script's <code>.meta</code> UUID, preferred), or <code>scriptPath</code> if the script has no metadata, and <code>scriptData</code> (the script's serializable field values). On load, a <code>scriptUUID</code> that ResourceLoader doesn't know logs a warning and marks the script as missing; one that isn't a valid UUID string is ignored silently (no script, not marked missing). Field types, references from Lua fields, and validation are covered in <a href="scripting-lua.html">Lua scripting</a>.</li>
+<li><strong>Assets</strong>: <code>Base::Asset::Serialize</code> writes <code>uuid</code> and <code>resourcePath</code>. Asset files and <code>.meta</code> metadata are covered in <a href="resources.html">Resources &amp; paths</a>.</li>
+</ul>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::Serialize</code>, <code>LuaComponent::Deserialize</code>; <code>engine/include/engine/base/Asset.hpp</code> — <code>Asset::Serialize</code></p>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

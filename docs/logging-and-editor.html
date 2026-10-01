@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logging, health &amp; editor · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html" aria-current="page">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Logging, health &amp; editor</h1>
+<p class="lead">The <code>Logger</code> is the engine's single log channel: messages go to whoever subscribes, optionally queued until someone does. <code>EngineHealth</code> reports which subsystems started. The editor server (<code>N2EditorHost</code>) is a headless engine process that an external editor drives over a small binary TCP protocol.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#logger">Logger</a></li>
+<li><a href="#console">Debug console and stream redirection</a></li>
+<li><a href="#health">Health</a></li>
+<li><a href="#editor-host">The editor host process</a></li>
+<li><a href="#framing">Wire format</a></li>
+<li><a href="#protocol-json">protocol.json and generated clients</a></li>
+<li><a href="#commands">Commands</a></li>
+<li><a href="#editor-quit">Serving without a window, and quitting</a></li>
+<li><a href="#editor-open">Known gaps in the editor server</a></li>
+</ol>
+</div>
+
+<h2 id="logger">Logger</h2>
+<p><code>Logger</code> is a static class. It does not write anywhere by itself: <code>Logger::Log(message, level)</code> raises <code>Logger::logEvent</code>, an <code>EventHandler&lt;std::string_view, LogLevel&gt;</code>, and subscribers decide what to do (print, show in a GUI, collect in a test).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Level</th><th>Helper</th><th>Used for</th></tr></thead>
+<tbody>
+<tr><td><code>LogLevel::Info</code></td><td><code>Logger::Info</code></td><td>Progress (subsystem started, scene loaded).</td></tr>
+<tr><td><code>LogLevel::Warn</code></td><td><code>Logger::Warn</code></td><td>Degraded but continuing (failed subsystem, replaced scene data).</td></tr>
+<tr><td><code>LogLevel::Error</code></td><td><code>Logger::Error</code></td><td>An operation failed. Many engine APIs report errors only this way and return a null/false value.</td></tr>
+</tbody>
+</table>
+</div>
+<p>There is no level filter; every subscriber receives every level.</p>
+
+<h3 id="backlog">Backlog</h3>
+<p>What <code>Log</code> does depends on <code>Logger::broadcastUnbroadcastLogs</code> (default <code>false</code>) and on whether anyone is subscribed:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>broadcastUnbroadcastLogs</code></th><th>Subscribers</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>false</code></td><td>none</td><td>The message is dropped.</td></tr>
+<tr><td><code>true</code></td><td>none</td><td>The message is queued.</td></tr>
+<tr><td>either</td><td>at least one</td><td>The queued backlog is delivered first, oldest first, then this message.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The backlog is drained from a queue swapped out before delivery. A subscriber that logs while the backlog is being delivered re-enters <code>Log</code>, finds an empty queue, and its message is delivered in place. Before PR #24 the nested call drained the same queue and delivered entries twice.</p>
+<p class="src">Source: <code>engine/include/engine/Logger.hpp</code>, <code>engine/src/Logger.cpp</code> — <code>Logger::Log</code>; tests: <code>CoreRobustnessTest.LoggerDeliversBacklogOnceWhenASubscriberLogs</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Queued messages are delivered exactly once, in order, the first time a message is logged with a subscriber present, even if a subscriber logs during delivery. With two queued messages and a handler that logs "nested" on its first call, the order is <code>first, nested, second, trigger</code>. Test: <code>CoreRobustnessTest.LoggerDeliversBacklogOnceWhenASubscriberLogs</code>.</p>
+</div>
+
+<h3 id="subscribers">Subscribing</h3>
+<p><code>logEvent += handler</code> returns an id; <code>logEvent -= id</code> removes it. Both are safe during dispatch: a handler added during a log is first called on the next message; a handler removed during a log (even itself) is not called again. Subscribing does not flush the backlog; the next <code>Log</code> call does.</p>
+<pre class="lang-cpp"><code>N2Engine::Logger::broadcastUnbroadcastLogs = true; // keep early messages until the UI subscribes
+// ...
+const size_t id = N2Engine::Logger::logEvent += [](std::string_view msg, N2Engine::Logger::LogLevel level)
+{
+    myConsole.Append(level, std::string(msg)); // copy: the view is only valid during the call
+};
+// ...
+N2Engine::Logger::logEvent -= id;
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/base/EventHandler.hpp</code> — <code>EventHandler::operator+=</code>, <code>operator-=</code>, <code>operator()</code>; tests: <code>EventHandlerTest.*</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>The message is passed as a <code>std::string_view</code>. Handlers that keep it must copy it.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Logger::Log</code> and <code>EventHandler</code> have no locking. The editor server logs from its network thread while the main thread can also log (<code>engine/src/Logger.cpp</code> — <code>Logger::Log</code>; <code>editor-server/src/EditorServer.cpp</code>). Whether the Logger is meant to be thread-safe is not stated.</p>
+</div>
+
+<h2 id="console">Debug console and stream redirection</h2>
+<p><code>Logger::InitializeDebugConsoleHelper()</code> is called by <code>Application::Init</code> only when <code>N2ENGINE_DEBUG</code> is defined. The engine target defines <code>N2ENGINE_DEBUG=1</code> (PUBLIC) for the Debug configuration only, so Release builds have no console output unless the program subscribes itself. <code>N2EditorHost</code> does not subscribe, so a Release build of the host prints no logs at all.</p>
+<p>The helper:</p>
+<ol class="steps">
+<li>Runs <strong>once per process</strong>; later calls return immediately. Before PR #24 a second <code>Application::Init</code> added a second console subscriber and every line was printed twice.</li>
+<li>Redirects <code>std::cout</code> to the Logger at <code>Info</code> and <code>std::cerr</code> at <code>Error</code>, without echoing to the original streams.</li>
+<li>Subscribes a handler that writes <code>[LEVEL] message</code> to the original stdout. Levels are coloured (Info blue, Warn yellow, Error red) when stdout is a terminal and, on Windows, virtual-terminal processing can be enabled; on other platforms when <code>TERM</code> is set and not <code>dumb</code>.</li>
+</ol>
+<p>The original-stdout stream is allocated with <code>new</code> and never destroyed, because it is created after the <code>Application</code> singleton and would otherwise be destroyed first, crashing log calls made during later teardown.</p>
+<p>Stream redirection can also be used directly: <code>RedirectStdout</code>, <code>RedirectStderr</code> and <code>RedirectStream(stream, level, echo)</code> install a <code>StreamRedirector</code> that turns each completed line (split on <code>\n</code>, <code>\r</code> dropped, empty lines skipped) into a log event. Redirectors are kept for the life of the process. Note that redirected lines are raised on <code>logEvent</code> directly and bypass the backlog queue.</p>
+<p class="src">Source: <code>engine/src/Logger.cpp</code> — <code>Logger::InitializeDebugConsoleHelper</code>, <code>LoggerStreambuf::overflow</code>, <code>Logger::RedirectStream</code>; <code>engine/CMakeLists.txt</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code></p>
+
+<h2 id="health">Health</h2>
+<p><code>engine/include/engine/Health.hpp</code> defines the health report that <code>Application::Init</code> returns and <code>Application::GetHealth()</code> keeps:</p>
+<pre class="lang-cpp"><code>enum class SubsystemState { NotStarted, Running, Disabled, Failed };
+
+struct SubsystemStatus { std::string name; SubsystemState state; std::string detail; };
+
+struct EngineHealth
+{
+    std::vector&lt;SubsystemStatus&gt; subsystems;
+    bool IsHealthy() const;                                 // no subsystem is Failed
+    const SubsystemStatus* Find(std::string_view name) const; // nullptr if absent
+};
+
+constexpr std::string_view ToString(SubsystemState);        // "NotStarted", "Running", ...
+</code></pre>
+<p>The subsystem names, their order, and what each state means for the engine are documented on the Application page: <a href="application.html#health">Subsystem health</a>.</p>
+<p>Tests pin both sides of the report:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Test</th><th>Pins down</th></tr></thead>
+<tbody>
+<tr><td><code>EngineHealthTest.EmptyIsHealthy</code>, <code>RunningDisabledAndNotStartedAreHealthy</code>, <code>AnyFailureIsUnhealthy</code></td><td>Only <code>Failed</code> makes the report unhealthy.</td></tr>
+<tr><td><code>EngineHealthTest.FindByName</code>, <code>StateNames</code></td><td>Lookup by name; the strings sent over the wire.</td></tr>
+<tr><td><code>EngineHealthTest.ApplicationHasNoHealthBeforeInit</code></td><td>Before Init the report is empty (and healthy).</td></tr>
+<tr><td><code>ApplicationShutdownTest.SafeWithoutInitAndWhenRepeated</code></td><td><code>Shutdown</code> without Init, twice.</td></tr>
+<tr><td><code>WindowHealthTest.*</code></td><td>A window that never initialised is invalid and safe to query.</td></tr>
+<tr><td><code>ScriptingHealthTest.LuaRuntimeInitializeReportsSuccess</code></td><td><code>LuaRuntime::Initialize</code> returns true and <code>require</code> works.</td></tr>
+<tr><td><code>EngineHealthProtocolTest.*</code> (editor-server)</td><td>The <code>GetEngineHealth</code> encoding: ids 0x50/0x09, payload size equals the bytes that follow, <code>healthy</code> matches <code>IsHealthy()</code>, each subsystem's name, state string and detail, no trailing bytes.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>engine/include/engine/Health.hpp</code>; <code>editor-server/include/editor-server/Commands.hpp</code> — <code>WriteEngineHealth</code>; tests: <code>tests/engine/HealthTests.cpp</code>, <code>tests/editor-server/EngineHealthProtocolTests.cpp</code></p>
+
+<h2 id="editor-host">The editor host process</h2>
+<p><code>editor-server/</code> builds two targets: the static library <code>N2EditorServer</code> (everything except <code>Main.cpp</code>, so linking it never pulls in a <code>main</code>) and the executable <code>N2EditorHost</code>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>-p</code>, <code>--port &lt;port&gt;</code></td><td>TCP port to listen on (default 9999). Parsed with <code>std::stoi</code>; a non-number throws before the main <code>try</code> block.</td></tr>
+<tr><td><code>--project &lt;path&gt;</code></td><td>Stored in <code>ApplicationOptions::projectPath</code> (which <code>Application::Init</code> does not currently use).</td></tr>
+<tr><td><code>-h</code>, <code>--help</code></td><td>Print usage and exit 0.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Startup and shutdown sequence:</p>
+<ol class="steps">
+<li>Install SIGINT/SIGTERM handlers that clear a <code>g_running</code> flag.</li>
+<li><code>Application::Init</code> with PhysX, OpenGL and <code>isHeadless = true</code> (hidden window, audio Disabled).</li>
+<li><code>EditorServer::Start(port)</code>: bind to all interfaces (<code>INADDR_ANY</code>, not just loopback; see the <a href="#editor-security">security warning</a>) with <code>SO_REUSEADDR</code>, listen with a backlog of 1, start the server thread. On socket/bind/listen failure it logs and returns with the server not running, so the main loop exits at once.</li>
+<li>Main loop, every ~16 ms: <code>window.PollEvents()</code>, while <code>g_running</code>, the server is running, no quit was requested, and the window (if valid) is not closing.</li>
+<li><code>server.Stop()</code>, then <code>OnApplicationQuit()</code> on the current scene if any, then <code>Application::Shutdown()</code>. <code>Stop()</code> closes only the listening socket and then joins the server thread; if a client is connected but idle, that thread is blocked in <code>recv</code> on the client socket and the join hangs until the client sends something or disconnects (so SIGINT with an idle editor attached does not exit).</li>
+<li>Exit 0; or exit 1 if a <code>std::exception</code> escaped (logged as "Fatal error: ...").</li>
+</ol>
+<p>The server accepts one client at a time: the server thread accepts a connection, serves it until it disconnects or sends <code>Shutdown</code>, closes it, and goes back to <code>accept</code>.</p>
+<p class="src">Source: <code>editor-server/src/Main.cpp</code> — <code>main</code>; <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::Start</code>, <code>Stop</code>, <code>ServerLoop</code>, <code>HandleClient</code>; <code>editor-server/CMakeLists.txt</code></p>
+
+<h2 id="framing">Wire format</h2>
+<p>Requests and responses use the same frame:</p>
+<pre class="lang-text"><code>[type: uint8][length: uint32][payload: length bytes]
+</code></pre>
+<ul>
+<li>Request <code>type</code> is a <code>CommandType</code>, response <code>type</code> a <code>ResponseType</code>; each request gets exactly one response.</li>
+<li>Integers and floats are written with <code>memcpy</code> in host byte order, which is little-endian on the supported (x86-64 Windows) targets. The CI smoke test relies on little-endian.</li>
+<li>A <code>string</code> is <code>[uint32 length][bytes]</code> with no terminator. A <code>bool</code> is one byte (0 or 1). A <code>vec3</code> is three <code>float32</code>.</li>
+<li><code>Error</code> responses are the exception: their payload is the raw message bytes, not a length-prefixed string; the frame length is the message length.</li>
+</ul>
+<p>Response types: <code>Ok</code> 0x00 (empty), <code>Error</code> 0x01, <code>FrameData</code> 0x02, <code>CameraPosition</code> 0x03, <code>EntityTransform</code> 0x04, <code>EntityList</code> 0x05, <code>EntityCreated</code> 0x06, <code>SceneData</code> 0x07, <code>ScriptData</code> 0x08, <code>EngineHealth</code> 0x09.</p>
+<p class="src">Source: <code>editor-server/include/editor-server/Protocol.hpp</code>; <code>editor-server/include/editor-server/Serialization.hpp</code> — <code>BufferWriter</code>, <code>BufferReader</code>; <code>editor-server/include/editor-server/Commands.hpp</code> — <code>Write*</code> builders</p>
+
+<pre class="lang-shell"><code># PowerShell: ask a running host for its health (from .github/workflows/tests.yml)
+$client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", 9999)
+$stream = $client.GetStream()
+$bytes = [byte[]](@(0x50) + [BitConverter]::GetBytes([uint32]0))  # GetEngineHealth, empty payload
+$stream.Write($bytes, 0, $bytes.Length)
+# read 5 header bytes: [0x09][uint32 payload length], then the payload
+</code></pre>
+
+<h2 id="protocol-json">protocol.json and generated clients</h2>
+<p><code>editor-server/protocol/protocol.json</code> describes every command (id, request fields, response type and fields), the shared types (<code>vec3</code>, <code>EntityInfo</code>, <code>SubsystemStatus</code>) and the response ids. Three Python generators in <code>editor-server/protocol/generators/</code> turn it into client-side declarations (enums of command and response ids, request and response structs; no encoding code):</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Generator</th><th>Output (checked in)</th></tr></thead>
+<tbody>
+<tr><td><code>generate_cpp.py</code></td><td><code>editor-server/clients/cpp/Protocol.generated.hpp</code></td></tr>
+<tr><td><code>generate_csharp.py</code></td><td><code>editor-server/clients/csharp/Protocol.generated.cs</code></td></tr>
+<tr><td><code>generate_typescript.py</code></td><td><code>editor-server/clients/web/protocol.generated.ts</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The server does not use the generated files; its own definitions are <code>Protocol.hpp</code> (ids) and <code>Commands.hpp</code> (decoders and response builders). After changing the protocol, update <code>protocol.json</code>, the server headers and the handlers together, then rerun the three generators. <code>protocol.json</code> and the generators are installed to <code>share/n2engine/protocol</code>.</p>
+<p class="src">Source: <code>editor-server/protocol/protocol.json</code>; <code>editor-server/protocol/generators/*.py</code>; <code>editor-server/CMakeLists.txt</code></p>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>editor-server/CMakeLists.txt</code> declares a <code>N2ProtocolGenerate</code> custom command whose OUTPUT is <code>include/editor/protocol/Generated.hpp</code>, but <code>generate_cpp.py</code> writes <code>clients/cpp/Protocol.generated.hpp</code>. The declared output is never produced, so the step is always out of date and reruns on every build, rewriting <code>clients/cpp/Protocol.generated.hpp</code> in the source tree each time. Which file the build is meant to generate is unclear.</p>
+</div>
+
+<h2 id="commands">Commands</h2>
+<p>Commands run on the server thread, one at a time, in the order received. Unknown ids get <code>Error</code> "Unknown command". Every command except <code>RenderFrame</code> and <code>Shutdown</code> is logged as "Command Issued: 0x.."; <code>Shutdown</code> is intercepted in <code>HandleClient</code> before dispatch and logged as "Shutdown requested by editor".</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Id</th><th>Command</th><th>Request</th><th>Behaviour</th><th>Response</th></tr></thead>
+<tbody>
+<tr><td>0x01</td><td>RenderFrame</td><td>—</td><td><code>Application::RenderEditorFrame()</code> (draws without simulating; see <a href="application.html#editor-frame">RenderEditorFrame</a>), then reads back <code>viewportWidth × viewportHeight</code> BGRA pixels. With the OpenGL renderer the rows come in OpenGL order, bottom row first; clients must flip vertically.</td><td><code>FrameData</code> {width, height, pixels}; <code>Error</code> "No renderer available (see GetEngineHealth)" without a renderer.</td></tr>
+<tr><td>0x02</td><td>SetViewportSize</td><td>int32 width, height</td><td>Stores the readback size and updates the main camera's aspect (positive sizes only).</td><td><code>Ok</code></td></tr>
+<tr><td>0x10</td><td>SetCameraPosition</td><td>float32 x, y, z</td><td>Moves the main camera.</td><td><code>Ok</code></td></tr>
+<tr><td>0x12</td><td>GetCameraPosition</td><td>—</td><td>Reads the main camera position.</td><td><code>CameraPosition</code>; <code>Error</code> "No camera" if none.</td></tr>
+<tr><td>0x20</td><td>CreateScene</td><td>string name</td><td>Rejects a name already stored in <code>SceneManager</code> <span class="badge">PR #28</span>; otherwise creates an empty scene and stores it <em>without</em> loading it.</td><td><code>SceneData</code> (scene JSON); <code>Error</code> "Scene already exists: &lt;name&gt;".</td></tr>
+<tr><td>0x21</td><td>LoadScene</td><td>string scene JSON</td><td>Builds the scene to validate it. If a scene with that name is stored, replaces its data and loads it; otherwise stores and loads it. Processes the scene change immediately.</td><td><code>Ok</code>; <code>Error</code> "The scene passed was invalid or corrupt".</td></tr>
+<tr><td>0x22</td><td>SaveScene</td><td>—</td><td>Serialises the current scene and stores it as that scene's snapshot (<code>UpdateScene</code>), so later loads rebuild from it. Building the response then throws an uncaught <code>type_error</code> on the server thread, which terminates the host (see <a href="#editor-open">Known gaps</a>).</td><td>Intended: <code>SceneData</code>; <code>Error</code> "No scene loaded". Currently: no response; the host process dies.</td></tr>
+<tr><td>0x23</td><td>DeleteScene</td><td>string</td><td>Deletes a <em>file</em> at that path on the host's disk (<code>std::filesystem::remove</code>, any path, no checks). Does not touch <code>SceneManager</code>. See the <a href="#editor-security">security warning</a>.</td><td><code>Ok</code>; <code>Error</code> "Scene file not found: ..." / "Failed to delete scene: ...".</td></tr>
+<tr><td>0x24</td><td>GetCurrentScene</td><td>—</td><td>Serialises the current scene.</td><td><code>SceneData</code>; <code>Error</code> "No scene loaded".</td></tr>
+<tr><td>0x30</td><td>CreateEntity</td><td>string name</td><td>Creates a root GameObject in the current scene.</td><td><code>EntityCreated</code> {UUID string}; <code>Error</code> "No scene present".</td></tr>
+<tr><td>0x31</td><td>DestroyEntity</td><td>string UUID</td><td>Finds the object by UUID, detaches the root and drops the server's reference. This is not <code>Destroy()</code>: no <code>OnDisable</code> or <code>OnDestroy</code>.</td><td><code>Ok</code>; <code>Error</code> "No game object found with entity id ..." (also for non-root objects).</td></tr>
+<tr><td>0x32</td><td>SetEntityTransform</td><td>string UUID, vec3 position, vec3 rotation (Euler), vec3 scale</td><td>Sets <em>world-space</em> position and rotation (<code>SetPositionAndRotation</code>) and scale, if the object exists and has a <code>Positionable</code>.</td><td>Always <code>Ok</code>, even if nothing matched.</td></tr>
+<tr><td>0x33</td><td>GetEntityTransform</td><td>string UUID</td><td>Reads the object's <em>world</em> position, rotation (as Euler angles) and scale.</td><td><code>EntityTransform</code>; identity values (0, 0, 1) if nothing matched.</td></tr>
+<tr><td>0x34</td><td>GetAllEntities</td><td>—</td><td>Lists every GameObject in the current scene.</td><td><code>EntityList</code> {count, then UUID and name per object}; count 0 without a scene.</td></tr>
+<tr><td>0x40</td><td>CreateScript</td><td>string name</td><td>Returns a Lua component template. The class name is the input with its first letter upper-cased, cut at the first <code>.</code>, non-alphanumerics replaced by <code>_</code>. Nothing is written to disk.</td><td><code>ScriptData</code></td></tr>
+<tr><td>0x41</td><td>RescanAssets</td><td>—</td><td><code>ResourceLoader::RescanAssets()</code>.</td><td><code>Ok</code></td></tr>
+<tr><td>0x50</td><td>GetEngineHealth</td><td>—</td><td>Encodes <code>Application::GetHealth()</code>.</td><td><code>EngineHealth</code>: bool healthy, uint32 count, then per subsystem name, state string, detail.</td></tr>
+<tr><td>0xFF</td><td>Shutdown</td><td>—</td><td>Replies, then stops the server; the host's main loop sees <code>!IsRunning()</code> and exits through its normal shutdown path.</td><td><code>Ok</code></td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::ProcessCommand</code> and the <code>Handle*</code> methods, <code>EditorServer::HandleClient</code>; tests: <code>EngineHealthProtocolTest.*</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Why <code>CreateScene</code> refuses existing names <span class="badge">PR #28</span>: <code>SceneManager::AddScene</code> now replaces a stored scene with the same name (with a warning) instead of appending an unreachable duplicate. Without the check, creating a scene with an existing name would silently wipe that scene's saved data. See <a href="scenes.html">Scenes</a>.</p>
+</div>
+
+<h2 id="editor-quit">Serving without a window, and quitting</h2>
+<p>The host keeps serving when the window or renderer failed (for example on a machine without a GPU). It logs "No window or renderer; rendering commands will be unavailable" and loops on its other conditions only. Everything except <code>RenderFrame</code> works; clients should call <code>GetEngineHealth</code> to find out what is available. This is exactly the CI configuration (see <a href="testing.html#ci">CI</a>).</p>
+<p>The host's loop ends on any of:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Trigger</th><th>How it is seen</th></tr></thead>
+<tbody>
+<tr><td>SIGINT / SIGTERM</td><td><code>g_running</code> becomes false.</td></tr>
+<tr><td><code>Shutdown</code> command (0xFF)</td><td><code>server.IsRunning()</code> becomes false.</td></tr>
+<tr><td><code>Application::Quit()</code> from game code or Lua</td><td><code>app.IsQuitRequested()</code>.</td></tr>
+<tr><td>Window closed (only when a valid window exists)</td><td><code>window.ShouldClose()</code>.</td></tr>
+<tr><td>Server failed to start</td><td><code>server.IsRunning()</code> was never true.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Whatever the trigger, the host then stops the server, calls <code>OnApplicationQuit()</code> on the current scene (as <code>Application::Run</code> does), and calls <code>Application::Shutdown()</code> before returning from <code>main</code>, so teardown does not rely on static destruction. Quit handling for <code>Run()</code> is described in <a href="application.html#quit">Quitting</a>.</p>
+<p class="src">Source: <code>editor-server/src/Main.cpp</code> — <code>main</code>; <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::HandleClient</code></p>
+
+<h2 id="editor-open">Known gaps in the editor server</h2>
+<p>These come from reading <code>editor-server/src/EditorServer.cpp</code> and its headers; none is covered by a test.</p>
+
+<div class="callout warning" id="editor-security">
+<p class="callout-title">Warning</p>
+<p><strong>Do not run <code>N2EditorHost</code> on a network you do not trust.</strong> The server binds to <code>INADDR_ANY</code> (every interface, not just 127.0.0.1) and has no authentication: anyone who can reach the port can send any command. <code>DeleteScene</code> passes the request string straight to <code>std::filesystem::remove</code>, so a remote client can delete <em>any file the host process can write</em>. Malformed requests can also crash the host (below). Until this is fixed, firewall the port or run the host only on an isolated machine.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><strong>Threading.</strong> All commands run on the server thread, while the main thread keeps calling <code>Window::PollEvents</code> (which runs <code>InputSystem::Update</code>). Commands read and modify the scene, SceneManager and camera, and <code>RenderFrame</code> calls <code>RenderEditorFrame</code> (which also calls <code>PollEvents</code>) from the server thread, although GLFW event polling is main-thread-only and the OpenGL context is made current only on the thread that initialised the renderer. There is no lock. Whether commands should be marshalled to the main thread is not decided.</p>
+</div>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><strong>Malformed requests can crash the host.</strong> Nothing on the server thread catches exceptions, so <em>any</em> exception thrown by a handler reaches the thread boundary and calls <code>std::terminate</code>, killing the host process. Specific cases:</p>
+<ul>
+<li><code>HandleClient</code> allocates <code>std::vector&lt;uint8_t&gt;(payloadLength)</code> straight from the 32-bit header, with no limit, so a single header can request a ~4 GB allocation (<code>bad_alloc</code> or memory exhaustion).</li>
+<li><code>BufferReader</code> (<code>Serialization.hpp</code>) does no bounds checking; <code>ReadString</code> and the fixed-size reads copy past the end of a short payload (undefined behaviour).</li>
+<li><code>SetViewportSize</code> stores the size without any validation (no upper bound; negative values become huge when converted to <code>size_t</code>), and the next <code>RenderFrame</code> resizes the frame buffer to <code>width × height × 4</code> bytes, which can be enormous.</li>
+<li><code>HandleLoadScene</code> calls <code>nlohmann::json::parse</code> outside any <code>try</code>, so invalid JSON terminates the host.</li>
+<li><code>SaveScene</code> always throws (see below).</li>
+</ul>
+<p>How the server should answer a malformed request is not specified.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><strong>No-scene checks.</strong> <code>HandleDestroyEntity</code>, <code>HandleSetEntityTransform</code> and <code>HandleGetEntityTransform</code> call <code>SceneManager::GetCurSceneRef()</code> without checking that a scene is loaded; <code>GetCurSceneRef</code> dereferences a null pointer in that case. The other scene commands check first.</p>
+</div>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><strong>SaveScene terminates the host.</strong> <code>HandleSaveScene</code> passes an <code>nlohmann::json</code> object to <code>WriteSceneData(BufferWriter&amp;, const std::string&amp;)</code>, which goes through nlohmann's implicit conversion to <code>std::string</code>. For an object value that conversion throws <code>type_error</code> instead of serialising; <code>CreateScene</code> and <code>GetCurrentScene</code> call <code>.dump()</code>. The exception is not caught on the server thread, so the host process terminates and the client gets no response. The snapshot update happens before the throw, but it lives only in that process's memory and is lost with it. Do not send <code>SaveScene</code>; use <code>GetCurrentScene</code> to fetch the scene JSON instead.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><strong>Spec drift.</strong> <code>protocol.json</code> names the <code>DeleteScene</code> request field <code>sceneName</code>, but the server treats it as a filesystem path and deletes that file. <code>Protocol.hpp</code> still declares an unused <code>EntityTransformRequest</code> with an <code>int32</code> entity id, while the protocol uses UUID strings. Which side is authoritative for DeleteScene is unclear.</p>
+</div>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

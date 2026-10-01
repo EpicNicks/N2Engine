@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html" aria-current="page">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>N2Engine behaviour reference</h1>
+<p class="lead">N2Engine is a C++23 game engine with a GameObject/Component model, PhysX physics, OpenAL audio, an action-based input system, Lua scripting and a headless editor host. These pages describe how the engine <em>behaves</em>: what is guaranteed, in which order things happen, how long objects live, and what counts as an error.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#scope">What these docs cover</a></li>
+<li><a href="#reading">How to read a page</a></li>
+<li><a href="#modules">Modules</a></li>
+<li><a href="#map">Architecture map</a></li>
+<li><a href="#ownership">Who owns what</a></li>
+<li><a href="#frame">How a frame runs</a></li>
+<li><a href="#cross-cutting">Cross-cutting rules</a></li>
+<li><a href="#extending">Extending these docs</a></li>
+</ol>
+</div>
+
+<h2 id="scope">What these docs cover</h2>
+<p>This is the first version of the documentation. It describes the engine as it is on <code>master</code> <strong>plus four open pull requests</strong>, which are expected to merge:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>PR</th><th>Topic</th><th>Main pages affected</th></tr></thead>
+<tbody>
+<tr><td><span class="badge">PR #26</span></td><td>PhysX mass, inertia and centre of mass derived from colliders</td><td><a href="physics.html">Physics</a></td></tr>
+<tr><td><span class="badge">PR #27</span></td><td>Correct SIMD math results; selectable SIMD tier</td><td><a href="math.html">Math &amp; SIMD</a></td></tr>
+<tr><td><span class="badge">PR #28</span></td><td>SceneManager keeps the caller's scene; one asset lookup across registries; scenes unloaded before subsystems shut down</td><td><a href="scenes.html">Scenes</a>, <a href="resources.html">Resources</a>, <a href="application.html">Application</a></td></tr>
+<tr><td><span class="badge">PR #29</span></td><td>Lua gets checked handles instead of raw engine pointers</td><td><a href="scripting-lua.html">Lua scripting</a>, <a href="gameobjects-components.html">GameObjects</a></td></tr>
+</tbody>
+</table>
+</div>
+<p>Behaviour introduced by one of these PRs carries its badge. Everything else is on <code>master</code>, most of it settled by the fixes for the <a href="https://github.com/EpicNicks/N2Engine/issues/16">engine code review (#16)</a> in PRs #17–#24.</p>
+<p>The pages are written from the source code, cross-checked against those PR descriptions and review threads. Where the code and the prose disagree, the code wins. Where behaviour is unclear or looks inconsistent, the page says so in an <em>Open question</em> callout instead of guessing.</p>
+<p>Out of scope for this version: the renderers (OpenGL, Vulkan, software) beyond where they appear in the frame, the example projects, and full API listings. The headers remain the API reference.</p>
+
+<h2 id="reading">How to read a page</h2>
+<p>Each page starts with a short summary and an "On this page" list, then goes through behavioural contracts one topic at a time. Four kinds of callout are used consistently:</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Something the engine enforces, usually pinned by a named test. Code may rely on it.</p>
+</div>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Rationale, context, or a consequence that is easy to miss.</p>
+</div>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>A footgun: behaviour that is intended but surprising, or a pattern that is not supported.</p>
+</div>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p>Behaviour that is unclear, undecided, or inconsistent in the code. These are candidates for issues.</p>
+</div>
+<p>Source citations look like this:</p>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>; tests: <code>CoreRobustnessTests</code></p>
+<p>Paths are relative to the repository root. Line numbers are left out on purpose, because they drift; search for the function name.</p>
+
+<h2 id="modules">Modules</h2>
+<p>The CMake project (<code>CMakeLists.txt</code>) builds these targets:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Directory</th><th>What it is</th></tr></thead>
+<tbody>
+<tr><td><code>math/</code></td><td>Vectors, matrices, quaternions, UUIDs, random numbers, with SIMD dispatch. No engine dependencies. See <a href="math.html">Math &amp; SIMD</a>.</td></tr>
+<tr><td><code>renderer/</code></td><td>Rendering backends behind <code>Renderer::Common::Renderer</code>: OpenGL (default), Vulkan and a software renderer.</td></tr>
+<tr><td><code>engine/</code></td><td>The engine proper: application loop, GameObjects, scenes, physics, audio, input, resources, serialization, coroutines and Lua scripting.</td></tr>
+<tr><td><code>editor-server/</code></td><td><code>N2EditorHost</code>, a headless engine host that editors talk to over TCP. See <a href="logging-and-editor.html">Logging, health &amp; editor</a>.</td></tr>
+<tr><td><code>test_project/</code>, <code>lua_project/</code></td><td>Example games, in C++ and in Lua.</td></tr>
+<tr><td><code>tests/</code></td><td>GoogleTest suites per module (built when <code>N2ENGINE_BUILD_TESTS=ON</code>). See <a href="testing.html">Testing &amp; CI</a>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Two build options change behaviour: <code>N2ENGINE_USE_PHYSX</code> (default <code>ON</code>; when <code>OFF</code> the engine has no physics backend and reports physics as Disabled) and <code>N2ENGINE_BUILD_TESTS</code>. The math target requires AVX (<code>/arch:AVX</code>, a PUBLIC flag on the <code>math</code> target).</p>
+
+<h2 id="map">Architecture map</h2>
+<div class="map">
+<div class="card"><h3><a href="application.html">Application</a></h3><p>Singleton. Initializes subsystems, reports their health, runs the frame loop, owns the window, camera and physics backend.</p></div>
+<div class="card"><h3><a href="scenes.html">SceneManager &amp; Scene</a></h3><p>SceneManager stores scene snapshots by name and switches scenes at the end of a frame. A Scene owns its root GameObjects and drives their updates.</p></div>
+<div class="card"><h3><a href="gameobjects-components.html">GameObject &amp; Component</a></h3><p>Hierarchy of objects; components get lifecycle callbacks (attach, enable, update, disable, destroy).</p></div>
+<div class="card"><h3><a href="transforms.html">Transforms</a></h3><p><code>Positionable</code>: local and world position, rotation, scale; tells physics when it moves.</p></div>
+<div class="card"><h3><a href="coroutines.html">Coroutines</a></h3><p>Per-scene scheduler for <code>std::generator</code>-based coroutines with Unity-style waits.</p></div>
+<div class="card"><h3><a href="physics.html">Physics</a></h3><p><code>IPhysicsBackend</code> with a PhysX implementation; Rigidbody and collider components; collision and trigger events; raycasts.</p></div>
+<div class="card"><h3><a href="input.html">Input</a></h3><p>Action maps with typed actions and bindings; owned by the window, updated as events are polled.</p></div>
+<div class="card"><h3><a href="audio.html">Audio</a></h3><p>OpenAL-based <code>AudioSystem</code>: sources, one-shots, mixer groups and a listener.</p></div>
+<div class="card"><h3><a href="resources.html">Resources</a></h3><p><code>res://</code> and <code>user://</code> paths, the project asset scan with stable meta UUIDs, and one lookup API.</p></div>
+<div class="card"><h3><a href="serialization.html">Serialization</a></h3><p>Scenes and components to and from JSON, including references between objects and to assets.</p></div>
+<div class="card"><h3><a href="scripting-lua.html">Lua scripting</a></h3><p><code>LuaComponent</code> runs scripts with lifecycle callbacks, serializable fields and checked handles.</p></div>
+<div class="card"><h3><a href="logging-and-editor.html">Logging, health, editor</a></h3><p>Logger with backlog and subscribers; <code>EngineHealth</code>; the TCP editor host.</p></div>
+</div>
+
+<h2 id="ownership">Who owns what</h2>
+<p>Most lifetime rules in the engine follow from this ownership graph:</p>
+<ul>
+<li><strong><code>Application</code></strong> (function-local singleton) owns the <code>Window</code> (which owns the <code>InputSystem</code> and the renderer), the main <code>Camera</code>, and the 3D physics backend.</li>
+<li><strong><code>SceneManager</code></strong> (singleton) owns the stored scene snapshots (<code>StoredScene{name, data}</code> JSON) <span class="badge">PR #28</span>, the loaded <code>Scene</code>, and a pending scene, each behind <code>std::unique_ptr</code>.</li>
+<li><strong><code>Scene</code></strong> owns its root GameObjects (<code>std::shared_ptr&lt;GameObject&gt;</code>) and its coroutine scheduler. It also keeps <em>non-owning</em> lists of components and lights for iteration, which every removal path updates through <code>Scene::DetachComponent</code>. Scenes cannot be moved, because objects point back at them.</li>
+<li><strong><code>GameObject</code></strong> owns its children (<code>shared_ptr</code>) and its components (<code>std::unique_ptr&lt;Component&gt;</code>). Anything else that refers to a component, including Lua, holds a raw pointer or a checked handle.</li>
+<li><strong>Subsystem singletons</strong> (<code>AudioSystem</code>, <code>LuaRuntime</code>, <code>Logger</code>) are process-wide. <code>AudioSystem</code> is deliberately never destroyed, so components can unregister from it during static destruction.</li>
+</ul>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>A GameObject can outlive its scene, for example when C++ code or a Lua handle still holds the <code>shared_ptr</code>. When a scene is destroyed it clears the scene pointer of the objects it can still find, so they are inert rather than dangling. Objects detached with <code>RemoveChild</code> can be missed; see the open question under <a href="gameobjects-components.html#purge-and-destructor">Purge and ~GameObject</a>.</p>
+</div>
+
+<h2 id="frame">How a frame runs</h2>
+<p><code>Application::Run</code> repeats the following until the window closes or <code>Application::Quit()</code> has been requested. The full contract, including edge cases, is on the <a href="application.html">Application</a> page.</p>
+<ol class="steps">
+<li><strong>Input.</strong> <code>Window::PollEvents</code>: GLFW events, then <code>InputSystem::Update</code> (actions fire their callbacks here). See <a href="input.html">Input</a>.</li>
+<li><strong>Time.</strong> <code>Time::Update</code>; the unscaled frame delta, clamped to 0.25 s, is added to the fixed-step accumulator.</li>
+<li><strong>Attach.</strong> <code>Scene::ProcessAttachQueue</code>: components added since the last frame get <code>OnAttach</code>.</li>
+<li><strong>Fixed steps.</strong> While the accumulator holds a full fixed step: apply pending physics changes, <code>FixedUpdate</code>, simulate, sync transforms, dispatch collision and trigger events. No steps run while <code>timeScale</code> is 0. See <a href="physics.html">Physics</a>.</li>
+<li><strong>Update.</strong> <code>Scene::Update</code>, then coroutines (<code>Scene::AdvanceCoroutines</code>), then <code>Scene::LateUpdate</code>. See <a href="coroutines.html">Coroutines</a>.</li>
+<li><strong>Audio.</strong> <code>AudioSystem::Update</code>, after LateUpdate so listener and source positions are current. See <a href="audio.html">Audio</a>.</li>
+<li><strong>Render.</strong> Camera matrices, scene lighting, then each renderable.</li>
+<li><strong>Destroy.</strong> <code>Scene::ProcessDestroyed</code>: objects destroyed this frame get <code>OnDisable</code>/<code>OnDestroy</code> and are removed. See <a href="gameobjects-components.html">GameObjects &amp; components</a>.</li>
+<li><strong>Scene change.</strong> <code>SceneManager::ProcessAnyPendingSceneChange</code>: if a load was requested, the next scene is built, and only then is the current one torn down. See <a href="scenes.html">Scenes</a>.</li>
+</ol>
+<p>When the loop ends, for whatever reason, the current scene gets <code>OnApplicationQuit</code>, then <code>Application::Shutdown</code> unloads scenes and shuts down audio, physics and the window, in that order.</p>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code>, <code>Application::Shutdown</code></p>
+
+<h2 id="cross-cutting">Cross-cutting rules</h2>
+<p>A few rules recur on almost every page:</p>
+<ul>
+<li><strong>Structural changes are deferred.</strong> Destroying an object, switching scenes and quitting take effect at the end of the frame. New components are attached at the start of the next frame.</li>
+<li><strong>One teardown sequence.</strong> Every way a component is <em>destroyed</em> (<code>Destroy</code>, <code>RemoveComponent</code>, scene switch, shutdown) runs <code>OnDisable</code> (if it was enabled in an active hierarchy) and then <code>OnDestroy</code>, once, unless a callback re-enters teardown (the destroyed flag is set only after <code>OnDestroy</code> returns). Detaching and releasing an object (<code>RemoveChild</code>, <code>RemoveRootGameObject</code>, the editor's DestroyEntity), or a scene dropped by SceneManager without being loaded, runs no callbacks. See <a href="gameobjects-components.html">GameObjects &amp; components</a>.</li>
+<li><strong>Safe modification during iteration.</strong> Component updates, event dispatch, input action updates, coroutine updates and physics event dispatch all tolerate handlers that add or remove things while they run. Removals take effect immediately for lookup and are compacted after the loop.</li>
+<li><strong>Errors are logged, not fatal.</strong> Bad scene JSON, corrupt asset metadata, unknown input binding names and throwing scripts or coroutines are reported through the <a href="logging-and-editor.html">Logger</a>, and the engine keeps running with the previous valid state. The exception is the editor server, where an exception in a command handler terminates the host (see <a href="logging-and-editor.html">Logging, health &amp; editor</a>).</li>
+<li><strong>Headless is a first-class mode.</strong> The engine runs without a window, renderer or audio device. Tests and the editor host rely on this, and <code>Application::Init</code> reports what is missing in its <code>EngineHealth</code>.</li>
+</ul>
+
+<h2 id="extending">Extending these docs</h2>
+<p>The site is plain HTML and CSS: no build step, no JavaScript, no external fonts or scripts. It works when opened from the filesystem and on GitHub Pages. <code>docs/README.md</code> explains the conventions in full. In short:</p>
+<ul>
+<li>Start a new page from <code>docs/_template.html</code>. It contains the sidebar, the callout markup and the footer.</li>
+<li>Add the page to the sidebar of <em>every</em> page, since there is no JavaScript to generate it, and mark the current page with <code>aria-current="page"</code>.</li>
+<li>Describe behaviour, not just signatures, and cite the source file, the function and any test that pins the behaviour down.</li>
+<li>Use the callouts as defined above. When something is unclear, write an Open question rather than guessing.</li>
+<li>When a PR changes behaviour, update the affected page in the same PR.</li>
+</ul>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="https://github.com/EpicNicks/N2Engine">Repository</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

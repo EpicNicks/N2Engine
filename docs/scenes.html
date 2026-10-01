@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scenes &amp; SceneManager · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html" aria-current="page">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Scenes &amp; SceneManager</h1>
+<p class="lead">A <code>Scene</code> owns a hierarchy of root GameObjects and drives their components through the frame. <code>SceneManager</code> stores scenes as JSON snapshots, loads one at a time, and switches scenes at the end of a frame. This page covers what each operation guarantees, in what order things happen, and what happens to objects that outlive their scene.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#scene-model">The Scene object</a></li>
+<li><a href="#roots">Root objects: add, remove, destroy</a></li>
+<li><a href="#finding">Finding objects and components</a></li>
+<li><a href="#traversal">Traversal</a></li>
+<li><a href="#frame-callbacks">Attach queue and per-frame callbacks</a></li>
+<li><a href="#destruction">Deferred destruction (ProcessDestroyed)</a></li>
+<li><a href="#detach-component">DetachComponent: the single "forget" hook</a></li>
+<li><a href="#lights">Lights</a></li>
+<li><a href="#clear">Scene::Clear</a></li>
+<li><a href="#scene-lifetime">Scene lifetime and objects that outlive it</a></li>
+<li><a href="#scenemanager">SceneManager storage model</a></li>
+<li><a href="#adding-scenes">Adding scenes</a></li>
+<li><a href="#lookups">Lookups: HasScene, GetSceneIndex, GetScene</a></li>
+<li><a href="#loading">Loading and the pending scene</a></li>
+<li><a href="#updating-deleting">UpdateScene and DeleteScene</a></li>
+<li><a href="#scene-switch">Scene switch teardown, step by step</a></li>
+<li><a href="#unloading">Unloading at shutdown</a></li>
+<li><a href="#editor">Editor create-scene rule</a></li>
+</ol>
+</div>
+
+<h2 id="scene-model">The Scene object</h2>
+<p>A <code>Scene</code> is created only through <code>Scene::Create(name)</code>, which returns a <code>std::unique_ptr&lt;Scene&gt;</code> (the constructor is private). It is also an <code>Asset</code>, so it has a UUID and a <code>GetResourceType()</code> of <code>"Scene"</code>; see <a href="resources.html">Resources</a>.</p>
+<p>What a scene holds:</p>
+<ul>
+<li><strong>Root objects</strong>: <code>std::vector&lt;std::shared_ptr&lt;GameObject&gt;&gt;</code>. The scene co-owns its roots; children are owned by their parents.</li>
+<li><strong>Component views</strong>: raw <code>Component*</code> lists for attached components (<code>_components</code>), components waiting for <code>OnAttach</code> (<code>_attachQueue</code>), and lights (<code>_sceneLights</code>). Components themselves are owned by their GameObject (<code>unique_ptr</code>).</li>
+<li><strong>A coroutine scheduler</strong>, one per scene (see <a href="coroutines.html">Coroutines</a>).</li>
+<li><strong>A destruction queue</strong> of objects passed to <code>DestroyGameObject</code>.</li>
+<li><code>sceneName</code>, a public string. It is what <code>Serialize</code> writes as <code>"name"</code> and what <code>SceneManager</code> keys stored scenes by.</li>
+</ul>
+<p>Copy and move are deleted. GameObjects and the coroutine scheduler keep a <code>Scene*</code>, which a move would leave pointing at the moved-from object, so scenes always live behind <code>unique_ptr</code>. (The move operations used to be defaulted; issue #16 flagged this.)</p>
+<p>Templates such as <code>FindObjectByType&lt;T&gt;</code> are defined in <code>Scene.inl</code>. Include <code>engine/GameObjectScene.hpp</code>, which pulls in <code>GameObject.hpp</code>, <code>Scene.hpp</code> and both <code>.inl</code> files, when you need them.</p>
+<p class="src">Source: <code>engine/include/engine/sceneManagement/Scene.hpp</code>, <code>engine/include/engine/GameObjectScene.hpp</code>, <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::Create</code></p>
+
+<h2 id="roots">Root objects: add, remove, destroy</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Situation</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>AddRootGameObject(go)</code></td><td><code>go</code> is null, or has a parent</td><td>Ignored silently. Only parentless objects can be roots.</td></tr>
+<tr><td><code>AddRootGameObject(go)</code></td><td><code>go</code> is already a root of this scene</td><td>No-op (no duplicate entry).</td></tr>
+<tr><td><code>AddRootGameObject(go)</code></td><td>otherwise</td><td>Appended to the roots, then <code>go-&gt;SetScene(this)</code>. If the scene changed, each component in the subtree is queued for <code>OnAttach</code> at the next <code>ProcessAttachQueue</code>. Children follow recursively.</td></tr>
+<tr><td><code>AddRootGameObjects(...)</code></td><td>vector or initializer list</td><td>Calls <code>AddRootGameObject</code> for each, in order.</td></tr>
+<tr><td><code>RemoveRootGameObject(go)</code></td><td><code>go</code> is a root here</td><td>Returns <code>true</code>. <code>go-&gt;SetScene(nullptr)</code> (components detached and coroutines stopped), then erased from the roots. <strong>No</strong> <code>OnDisable</code>/<code>OnDestroy</code> runs: the object is only taken out of the scene.</td></tr>
+<tr><td><code>RemoveRootGameObject(go)</code></td><td>not a root here (including a child object)</td><td>Returns <code>false</code>, nothing changes.</td></tr>
+<tr><td><code>DestroyGameObject(go)</code></td><td>non-null</td><td>Returns <code>true</code> and queues <code>go</code>. The teardown runs in <a href="#destruction"><code>ProcessDestroyed</code></a> at the end of the frame.</td></tr>
+<tr><td><code>DestroyGameObject(nullptr)</code></td><td></td><td>Returns <code>false</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>GameObject::Destroy()</code> calls its own scene's <code>DestroyGameObject</code>. An object that is in no scene is just flagged as destroyed (and torn down <span class="badge">PR #29</span>), with no <code>OnDisable</code>/<code>OnDestroy</code>. That also holds when its components were attached in a scene the object has since left (for example through <code>RemoveRootGameObject</code>). See <a href="gameobjects-components.html">GameObjects &amp; components</a>.</p>
+<p>Parenting a root under another object (<code>parent-&gt;AddChild(root)</code>) removes it from the scene's root list. Before, it stayed in both places, so it was updated, rendered and serialized twice. <code>AddChild</code> edits the root vector directly, so reparenting a root from inside a <code>TraverseAll</code>/<code>TraverseUntil</code> callback is not supported.</p>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::AddRootGameObject</code>, <code>Scene::RemoveRootGameObject</code>, <code>Scene::DestroyGameObject</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::SetScene</code>, <code>GameObject::Destroy</code>, <code>GameObject::AddChild</code>; tests: <code>LifecycleTest.DestroyRemovesObjectAtEndOfFrame</code>, <code>LifecycleTest.DestroyWithoutSceneMarksDestroyed</code>, <code>LifecycleTest.ReparentingWithinSceneDoesNotAttachTwice</code></p>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Scene::AddRootGameObject</code> does not check whether <code>go</code> is still a root of <em>another</em> scene. <code>SetScene(this)</code> detaches its components from the old scene, but the old scene's <code>_rootGameObjects</code> still holds it. Both scenes then list it as a root, and the old scene would serialize it, render it and tear it down in <code>Clear</code>. It is unclear whether moving roots between live scenes is meant to be supported (call <code>RemoveRootGameObject</code> on the old scene first).</p>
+</div>
+
+<pre class="lang-cpp"><code>#include "engine/GameObjectScene.hpp"
+
+auto scene = N2Engine::Scene::Create("Level1");
+auto player = N2Engine::GameObject::Create("Player");
+scene-&gt;AddRootGameObject(player);   // components attach at the next ProcessAttachQueue
+
+// Later, during a frame:
+player-&gt;Destroy();                  // queued; OnDisable/OnDestroy run in ProcessDestroyed
+</code></pre>
+
+<h2 id="finding">Finding objects and components</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Function</th><th>Searches</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>FindGameObject(name)</code></td><td>Every object reachable from the roots, depth first, roots in order</td><td>Returns the first match, or null. Inactive objects are included.</td></tr>
+<tr><td><code>FindGameObjectByUUID(uuid)</code></td><td>Same traversal</td><td>First match or null. Not <code>const</code>.</td></tr>
+<tr><td><code>GetAllGameObjects()</code></td><td>Same traversal</td><td>Returns a new vector of every object in the hierarchy.</td></tr>
+<tr><td><code>FindGameObjectsByTag(tag)</code></td><td>Same traversal</td><td>Always returns an empty vector, because there is no tag system yet.</td></tr>
+<tr><td><code>FindObjectByType&lt;T&gt;(includeInactive = true)</code></td><td>The attached-component list (<code>_components</code>)</td><td>First component that <code>dynamic_cast</code>s to <code>T</code>. Skips destroyed components. With <code>includeInactive = false</code> it also skips disabled components and components on inactive objects.</td></tr>
+<tr><td><code>FindObjectsByType&lt;T&gt;(includeInactive = true)</code></td><td>Same</td><td>All matches, in attach order.</td></tr>
+<tr><td><code>FindObjectByType&lt;Rendering::Light&gt;</code> / <code>FindObjectsByType&lt;Rendering::Light&gt;</code></td><td>The light list (<code>_sceneLights</code>)</td><td>Explicit specializations, because lights are kept apart from <code>_components</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>The <code>FindObject(s)ByType</code> functions only see components that have been through <code>ProcessAttachQueue</code>. A component added this frame isn't found until the next frame's attach pass. Because lights live in a separate list, the generic template never returns a <code>Light</code>. For example, <code>FindObjectsByType&lt;Component&gt;()</code> skips lights. Hierarchy searches (<code>FindGameObject</code>) walk only the root hierarchy, so they don't find an object detached with <code>RemoveChild</code> (see <a href="#scene-lifetime">objects that outlive a scene</a>).</p>
+</div>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Scene::FindGameObjectsByTag</code> (and <code>GameObject::FindGameObjectsByTag</code>) are placeholders: their bodies are commented out and they always return nothing. It isn't decided whether tags will be added or these will be removed.</p>
+</div>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::FindGameObject</code>, <code>Scene::FindGameObjectsByTag</code>, <code>Scene::FindGameObjectByUUID</code>, <code>Scene::GetAllGameObjects</code>; <code>engine/include/engine/sceneManagement/Scene.inl</code> — <code>FindObjectByType</code>, <code>FindObjectsByType</code>; tests: <code>LifecycleTest.DestroyingObjectRemovesItsLight</code></p>
+
+<h2 id="traversal">Traversal</h2>
+<ul>
+<li><code>TraverseAll(cb)</code>: pre-order, depth-first over every root's subtree. Inactive objects are visited.</li>
+<li><code>TraverseAllActive(cb)</code>: the same walk, but it skips any object that is not <code>IsActiveInHierarchy()</code>, together with its whole subtree.</li>
+<li><code>TraverseUntil(cb)</code>: pre-order. It stops the whole traversal as soon as <code>cb</code> returns <code>true</code>, and returns whether that happened.</li>
+</ul>
+<p>The traversals iterate the live root vector and each object's live children vector. Don't add or remove roots or children from inside the callback.</p>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::TraverseAll</code>, <code>Scene::TraverseAllActive</code>, <code>Scene::TraverseUntil</code>, <code>Scene::TraverseGameObjectRecursive</code></p>
+
+<h2 id="frame-callbacks">Attach queue and per-frame callbacks</h2>
+<p>A component enters a scene's attach queue when its GameObject joins the scene (<code>SetScene</code> with a <em>different</em> scene) or when it is added to an object that is already in a scene. <code>ProcessAttachQueue</code> runs at the start of each frame, in <code>Application::Run</code>. It:</p>
+<ol class="steps">
+<li>Takes the front entry off the live queue, one at a time. <code>OnAttach</code> can queue more components, which are processed in the same call. It can also remove pending ones, which <code>DetachComponent</code> erases from the queue, so no stale pointer is left.</li>
+<li>Calls <code>OnAttach()</code>.</li>
+<li>Registers the component, without duplicates: a <code>Light</code> goes to <code>_sceneLights</code>, anything else to <code>_components</code>. A component re-queued after re-parenting is never registered twice.</li>
+</ol>
+<p><code>Update</code>, <code>FixedUpdate</code>, <code>LateUpdate</code> and <code>OnApplicationQuit</code> each call the matching component callback on every entry of <code>_components</code> that is non-null, whose GameObject is active in the hierarchy, and that is itself active. The rules for iterating:</p>
+<ul>
+<li>The loop runs by index. A component added during the loop (appended) is visited in the same pass.</li>
+<li>A component removed during the loop is nulled out rather than erased, so the loop skips it. The nulls are compacted when the outermost iteration ends.</li>
+<li>Iteration depth is held by a scope guard, so an exception thrown by a callback still brings the depth back down and compacts. The exception itself propagates to the caller.</li>
+</ul>
+<p>Order within one frame of <code>Application::Run</code>: <code>ProcessAttachQueue</code>, then zero or more fixed steps (<code>FixedUpdate</code> inside <code>PhysicsUpdate</code>), then <code>Update</code>, then <code>AdvanceCoroutines</code>, then <code>LateUpdate</code>. Audio update and render follow, then <code>ProcessDestroyed</code>, and finally <code>SceneManager::ProcessAnyPendingSceneChange</code>. See <a href="application.html">Application &amp; frame loop</a> for the full loop.</p>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::ProcessAttachQueue</code>, <code>Scene::OnAllActiveComponents</code>, <code>Scene::Update</code>/<code>FixedUpdate</code>/<code>LateUpdate</code>/<code>OnApplicationQuit</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>; tests: <code>LifecycleTest.RemoveComponentDuringUpdateSkipsIt</code>, <code>LifecycleTest.ThrowingComponentDoesNotWedgeIteration</code>, <code>LifecycleTest.RemoveComponentBeforeAttachLeavesNothingQueued</code>, <code>LifecycleTest.ReparentingWithinSceneDoesNotAttachTwice</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Removing a component (or destroying its object) during <code>Update</code> never leaves the running loop with a dangling pointer, and the removed component is not called again that pass. A component removed before its first <code>ProcessAttachQueue</code> never gets <code>OnAttach</code>. Re-parenting within the same scene does not attach or update a component twice.</p>
+</div>
+
+<h2 id="destruction">Deferred destruction (ProcessDestroyed)</h2>
+<p><code>ProcessDestroyed</code> runs once per frame, after render. It works in three phases, so every <code>OnDestroy</code> can still use the other objects being destroyed in the same batch:</p>
+<ol class="steps">
+<li><strong>Mark</strong>: each queued object is popped. Null entries and objects already marked are skipped, so destroying an object twice, or a parent and its child, tears it down once. Each object's subtree is marked and collected, parent before children.</li>
+<li><strong>Destroy callbacks</strong>: for every collected object, each component runs <code>RunDestroyCallbacks(wasActive)</code>. <code>OnDisable</code> runs first, if the component was enabled and its object was active before marking, then <code>OnDestroy</code>. Each component runs these at most once, whichever teardown path gets to it first, unless its own <code>OnDisable</code>/<code>OnDestroy</code> re-enters teardown (the destroyed flag is set only after <code>OnDestroy</code> returns; see <a href="gameobjects-components.html#teardown">the teardown sequence</a>). <code>RunDestroyCallbacks</code> does not check that the component was ever attached: a component added and destroyed in the same frame, or one in a scene that is switched away before its first frame, gets <code>OnDisable</code>/<code>OnDestroy</code> without ever having had <code>OnAttach</code>. Then the object's coroutines are stopped on <em>this</em> scene's scheduler.</li>
+<li><strong>Purge</strong>: each object is removed from its parent (unless the parent is also being destroyed) or from the root list, <code>SetScene(nullptr)</code> detaches its components, and <code>GameObject::Purge</code> releases its components, children and Positionable (and marks it torn down <span class="badge">PR #29</span>).</li>
+</ol>
+<p>An object destroyed from inside an <code>OnDestroy</code> in this pass is queued again and handled in the next frame's <code>ProcessDestroyed</code>, because the queue was already drained in phase 1.</p>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::ProcessDestroyed</code>, <code>Scene::MarkHierarchyForDestruction</code>, <code>Scene::CallOnDestroyForGameObject</code>, <code>Scene::PurgeMarkedGameObject</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::RunDestroyCallbacks</code>; tests: <code>LifecycleTest.DestroyTwiceRunsOnDestroyOnce</code>, <code>LifecycleTest.DestroyingParentDestroysChildrenOnce</code>, <code>LifecycleTest.DestroyRunsOnDisableThenOnDestroy</code>, <code>LifecycleTest.DestroyOfInactiveOrDisabledSkipsOnDisable</code></p>
+
+<h2 id="detach-component">DetachComponent: the single "forget" hook</h2>
+<p><code>Scene::DetachComponent(c)</code> (private) removes a component from <code>_components</code>, <code>_attachQueue</code> and <code>_sceneLights</code>. Every path where a component or object leaves a scene goes through it: <code>RemoveComponent</code>, <code>RemoveAllComponents</code>, <code>GameObject::SetScene</code> when the scene changes (including <code>RemoveRootGameObject</code> and purging a destroyed object), <code>~GameObject</code> while still in a scene, and <code>Scene::Clear</code> through <code>SetScene(nullptr)</code>. This is why the scene's raw-pointer lists never hold a freed component. Issue #16's main finding was that they used to.</p>
+<p>While <code>_components</code> is being iterated, detaching sets the entry to null instead of erasing it (see above). Outside an iteration it erases.</p>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::DetachComponent</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::SetScene</code>, <code>GameObject::~GameObject</code>; tests: <code>LifecycleTest.RemoveComponentDetachesFromScene</code>, <code>LifecycleTest.DestroyingObjectRemovesItsLight</code></p>
+
+<h2 id="lights">Lights</h2>
+<ul>
+<li>A <code>Rendering::Light</code> is registered in <code>_sceneLights</code>, <strong>not</strong> <code>_components</code>, when it attaches. As a result, lights receive no <code>OnUpdate</code>/<code>OnFixedUpdate</code>/<code>OnLateUpdate</code>/<code>OnApplicationQuit</code> from the scene.</li>
+<li><code>CollectLighting()</code> (called by <code>Application::Render</code>) skips null and inactive lights, and caps each kind at <code>SceneLightingData::MAX_DIRECTIONAL_LIGHTS</code>, <code>MAX_POINT_LIGHTS</code> and <code>MAX_SPOT_LIGHTS</code>, in attach order. Spot cone angles are converted from degrees to radians.</li>
+<li>With no usable light at all, it adds a default directional light (direction (0.5, -1, 0.3), white, intensity 0.8) and logs a warning <em>once per scene</em>.</li>
+<li>Destroying a light's object removes it from <code>_sceneLights</code>, so <code>CollectLighting</code> never reads a freed light.</li>
+</ul>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::ProcessAttachQueue</code>, <code>Scene::CollectLighting</code>; tests: <code>LifecycleTest.DestroyingObjectRemovesItsLight</code></p>
+
+<h2 id="clear">Scene::Clear</h2>
+<p><code>Clear()</code> runs the same teardown as <code>ProcessDestroyed</code>, so leaving a scene releases what its components hold (physics bodies, audio sources, script state):</p>
+<ol class="steps">
+<li>Marks and collects every root's subtree.</li>
+<li>Runs <code>OnDisable</code>/<code>OnDestroy</code> for each collected object's components (once each, with the same re-entry caveat as <a href="#destruction"><code>ProcessDestroyed</code></a>), and stops their coroutines on this scene's scheduler.</li>
+<li>Only then marks every collected object as torn down (<code>_isTornDown</code>), so each <code>OnDestroy</code> above could still use the other objects. Lua handles become invalid at this point; see <a href="scripting-lua.html">Lua scripting</a>. <span class="badge">PR #29</span></li>
+<li><code>SetScene(nullptr)</code> on every root, which detaches every component in the hierarchy.</li>
+<li>Empties the roots, <code>_components</code>, the attach queue, the light list and the destruction queue. Emptying the root vector releases the scene's references, so every root that nothing else holds is freed <em>here</em>, together with its children and components.</li>
+</ol>
+<p>Unlike <code>ProcessDestroyed</code>, <code>Clear</code> does not call <code>Purge</code>. Objects that something else still holds (a script, a <code>GameObject::Ptr</code> in C++) survive as destroyed objects with no scene. Their components have already run <code>OnDestroy</code>.</p>
+<p><code>Clear</code> walks only the roots. An object detached with <code>GameObject::RemoveChild</code> is not reached: it gets no <code>OnDisable</code>/<code>OnDestroy</code>, is not marked, and keeps its <code>_scene</code> pointer. See <a href="#scene-lifetime">objects that outlive a scene</a>.</p>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::Clear</code>; tests: <code>LifecycleTest.SceneSwitchRunsOnDestroy</code>, <code>SceneSwitchTest.LeavingSceneWithComponentsDoesNotCrash</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>After a scene switch, every component that was in the old scene's root hierarchy (children included) has had <code>OnDestroy</code> called once (more only if its own <code>OnDisable</code>/<code>OnDestroy</code> re-enters teardown). Its GameObject reports <code>IsDestroyed()</code> and <code>GetScene() == nullptr</code>.</p>
+</div>
+
+<h2 id="scene-lifetime">Scene lifetime and objects that outlive it</h2>
+<p>A GameObject can outlive its scene, for example when a script or C++ code holds a <code>GameObject::Ptr</code> to it. <code>~Scene</code> therefore walks its roots and the owners of everything still in <code>_components</code> and <code>_attachQueue</code>, and sets <code>_scene = nullptr</code> on each one that still points at this scene. No callbacks run in the destructor; it only updates bookkeeping. Without it, <code>~GameObject</code> (which detaches its components from <code>_scene</code> and stops its coroutines) would use a freed scene.</p>
+<p>Ownership, by how the scene ends:</p>
+<ul>
+<li><strong>Cleared first</strong> (every scene switch, and <code>UnloadScenes</code>): <code>Clear</code> already released the roots, so roots nobody else holds, with their children and components, were freed in <code>Clear</code>. Its lists are empty, so <code>~Scene</code> has nothing left to walk.</li>
+<li><strong>Destroyed without <code>Clear</code></strong> (a scene that is dropped without being loaded, or one you own yourself): roots are released when the root vector is destroyed. A root nobody else holds dies there, and with it all its children and components. <code>~Scene</code> first clears <code>_scene</code> on the objects it finds.</li>
+<li>Either way, an object held elsewhere keeps living, with <code>GetScene() == nullptr</code> (cleared by <code>Clear</code> through <code>SetScene(nullptr)</code>, or by <code>~Scene</code>). Starting a coroutine on it logs a warning and returns null. The exception is an object detached with <code>RemoveChild</code>, below.</li>
+</ul>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::~Scene</code>, <code>Scene::Clear</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::~GameObject</code>, <code>GameObject::StartCoroutine</code>, <code>GameObject::RemoveChild</code></p>
+
+<p><code>GameObject::RemoveChild</code> never calls <code>SetScene(nullptr)</code>, so a detached child stays in the scene. Its components stay in <code>_components</code> and keep getting <code>OnUpdate</code> (and the other update callbacks), and its coroutines keep running. It is no longer in the root hierarchy, so <code>Find*</code>, <code>Serialize</code> and rendering don't see it, and <code>Scene::Clear</code>, which walks only the roots, does not tear it down: no <code>OnDisable</code>/<code>OnDestroy</code>, no mark, and its <code>_scene</code> is left alone. <code>Clear</code> then empties <code>_components</code>, so <code>~Scene</code> can't find it either (an object without components was never in those lists). If something still holds the object, it survives the scene switch with a dangling <code>_scene</code>. A later <code>AddComponent</code>, <code>StartCoroutine</code> or <code>Destroy</code> on it, or its release (<code>~GameObject</code>), uses the freed scene. (<code>child-&gt;SetParent(nullptr)</code> is different: it re-adds the child as a root.)</p>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>A <code>RemoveChild</code>-detached object is still in its scene and survives a scene switch with a dangling scene pointer. Re-parent it, <code>AddRootGameObject</code> it or <code>Destroy</code> it before switching. The same path is reachable from Lua (<code>parent:RemoveChild(child)</code>); see <a href="scripting-lua.html">Lua scripting</a>.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p>Does a detached child belong to the scene, and should <code>RemoveChild</code> make it a root, take it out of the scene, or should <code>Clear</code> tear it down too? Files: <code>engine/src/gameobject/GameObject.cpp</code> (<code>RemoveChild</code>, <code>~GameObject</code>) and <code>engine/src/sceneManagement/Scene.cpp</code> (<code>Clear</code>, <code>~Scene</code>).</p>
+</div>
+
+<h2 id="scenemanager">SceneManager storage model</h2>
+<p><code>SceneManager</code> is a static facade over a function-local singleton. It holds:</p>
+<ul>
+<li><strong>Stored scenes</strong>: a vector of <code>StoredScene{name, data}</code> <span class="badge">PR #28</span>. <code>data</code> is the scene's JSON, the only thing a load rebuilds from. <code>name</code> is copied from <code>data["name"]</code> (empty if that is missing or not a string) and kept alongside, so looking a scene up by name never builds it.</li>
+<li><strong>The loaded scene</strong>: one <code>std::unique_ptr&lt;Scene&gt;</code>, plus <code>_curSceneIndex</code> (-1 when nothing is loaded). The loaded scene is live: it can contain objects that are not in its stored data.</li>
+<li><strong>A pending change</strong>: whether a load is requested, the requested index, and optionally the caller's own <code>Scene</code> instance from <code>AddScene(scene, true)</code> <span class="badge">PR #28</span>.</li>
+</ul>
+<p>Scene indices are positions in the stored vector. They are stable, except that <code>DeleteScene</code> shifts every later index down by one.</p>
+<p class="src">Source: <code>engine/include/engine/sceneManagement/SceneManager.hpp</code>, <code>engine/src/sceneManagement/SceneManager.cpp</code> — <code>SceneNameOf</code>, <code>SceneManager::StoreScene</code></p>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><code>SceneManager::GetCurSceneRef()</code> dereferences the loaded scene without checking. With nothing loaded (before the first load, after <code>UnloadScenes</code>) it is undefined behaviour. Use <code>GetCurScene()</code>, which returns null, or check <code>GetCurSceneIndex() != -1</code> first, as <code>Application::Run</code> does.</p>
+</div>
+
+<h2 id="adding-scenes">Adding scenes</h2>
+<h3 id="add-scene-object">AddScene(std::unique_ptr&lt;Scene&gt; scene, bool loadAdded = false) <span class="badge">PR #28</span></h3>
+<ul>
+<li>Takes the pointer by value, so the scene is always consumed, even when it isn't loaded.</li>
+<li>A null scene logs an error and returns.</li>
+<li>Always stores a snapshot: <code>scene-&gt;Serialize()</code>. Later loads of this scene rebuild from that snapshot.</li>
+<li>If a stored scene already has the same (non-empty) name, its data is <strong>replaced at the same index</strong> and a warning is logged. Before #28, a duplicate was appended that name lookups could never reach. If a load of that index is pending, its caller-supplied instance is dropped, so the load builds from the new data.</li>
+<li><code>loadAdded = true</code>: requests a load of that index, and the <em>caller's own object</em> becomes the pending scene. At the next <code>ProcessAnyPendingSceneChange</code> it becomes the loaded scene as-is, so every <code>GameObject::Ptr</code> the caller kept belongs to the live scene. Before #28, the object was dropped and a copy rebuilt from JSON, which left the caller's pointers in an orphaned scene.</li>
+<li><code>loadAdded = false</code>: only the snapshot is kept, and the <code>Scene</code> object is destroyed when the call returns.</li>
+</ul>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>The snapshot is taken when you call <code>AddScene</code>. Objects added to the live scene afterwards are not part of the stored data, so they are gone the next time the scene is loaded from storage, unless you call <code>UpdateScene</code> with the scene's current <code>Serialize()</code> (the editor's Save does this). Re-adding the name of the currently loaded scene with <code>loadAdded = false</code> replaces only the stored data. The live scene keeps running unchanged.</p>
+</div>
+
+<h3 id="add-scene-json">AddScene(nlohmann::json &amp;j)</h3>
+<ul>
+<li>Validates by building the scene once with <code>Scene::FromJSON(j, true)</code>. That requires <code>"name"</code> and an array <code>"rootGameObjects"</code>, and the full deserialization must not throw. If it fails, the error is logged by <code>FromJSON</code>, nothing is stored, and the caller is not told (the function returns <code>void</code>).</li>
+<li>If it succeeds, the data is <em>moved</em> out of <code>j</code> into storage, so the caller's <code>j</code> is left in a moved-from state. Name replacement works the same as above, including dropping a pending instance for that index.</li>
+<li>The validation build is a real build: component constructors and <code>Deserialize</code> run, including Lua script chunks, and the result is then thrown away.</li>
+</ul>
+<p class="src">Source: <code>engine/src/sceneManagement/SceneManager.cpp</code> — <code>SceneManager::AddScene</code> (both overloads), <code>SceneManager::StoreScene</code>; tests: <code>SceneStorageTest.AddedAndLoadedSceneIsTheCallersObject</code>, <code>SceneStorageTest.LoadingAStoredSceneAgainRebuildsItFromItsSnapshot</code>, <code>SceneStorageTest.ReAddingASceneNameReplacesIt</code>, <code>SceneStorageTest.ReAddingTheLoadedSceneWithoutLoadingLeavesItRunning</code>, <code>SceneStorageTest.AddSceneJsonDropsAPendingInstance</code></p>
+
+<pre class="lang-cpp"><code>auto scene = Scene::Create("Arena");
+auto boss = GameObject::Create("Boss");
+scene-&gt;AddRootGameObject(boss);
+
+SceneManager::AddScene(std::move(scene), /*loadAdded*/ true);
+// Applied at the end of the frame by Application::Run (or call it yourself outside Run):
+SceneManager::ProcessAnyPendingSceneChange();
+
+// boss belongs to the live scene: the caller's Scene object is the loaded one
+assert(boss-&gt;GetScene() == SceneManager::GetCurScene());
+</code></pre>
+
+<h2 id="lookups">Lookups: HasScene, GetSceneIndex, GetScene</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Function</th><th>Found</th><th>Not found</th><th>Builds a scene?</th></tr></thead>
+<tbody>
+<tr><td><code>HasScene(name)</code> <span class="badge">PR #28</span></td><td><code>true</code></td><td><code>false</code>, nothing logged</td><td>No</td></tr>
+<tr><td><code>GetSceneIndex(name)</code></td><td>Index of the first stored scene with that name</td><td><code>-1</code> and an error is logged</td><td>No (it compares the stored names)</td></tr>
+<tr><td><code>GetScene(name)</code></td><td>A <strong>new</strong> <code>std::unique_ptr&lt;Scene&gt;</code> built from the stored data, owned by the caller. It is never the loaded scene.</td><td><code>nullptr</code>, two errors logged</td><td>Yes, every call</td></tr>
+<tr><td><code>GetCurScene()</code> / <code>GetCurSceneRef()</code> / <code>GetCurSceneIndex()</code></td><td>The loaded scene / its index</td><td><code>nullptr</code> / UB / <code>-1</code></td><td>No</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>GetScene</code> used to return <code>.get()</code> of a temporary <code>unique_ptr</code>, so the pointer dangled. It now returns ownership. It returns <code>nullptr</code> if the stored data no longer builds, because <code>FromJSON</code> catches the error.</p>
+<p class="src">Source: <code>engine/src/sceneManagement/SceneManager.cpp</code> — <code>SceneManager::HasScene</code>, <code>SceneManager::GetSceneIndex</code>, <code>SceneManager::FindSceneIndex</code>, <code>SceneManager::GetScene</code>; tests: <code>SceneStorageTest.GetSceneIndexDoesNotBuildScenes</code>, <code>SceneManagerTest.GetSceneReturnsOwnedCopy</code>, <code>SceneStorageTest.UpdateSceneRefusesADuplicateName</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Name lookups (<code>HasScene</code>, <code>GetSceneIndex</code>, and the lookups inside <code>LoadScene(name)</code>, <code>UpdateScene(name)</code> and <code>DeleteScene</code>) never construct a scene's objects or components. Before #17 and #28, every lookup deserialized every stored scene, allocating physics, audio and Lua state just to read a name.</p>
+</div>
+
+<h2 id="loading">Loading and the pending scene</h2>
+<p><code>LoadScene</code> only <em>requests</em> a load. The switch happens in <code>ProcessAnyPendingSceneChange</code>, which <code>Application::Run</code> calls at the very end of each frame, after <code>ProcessDestroyed</code>. A load requested during <code>Update</code> therefore takes effect after this frame's render and destruction pass.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>LoadScene(index)</code>, index out of range</td><td>Error logged, request ignored. A previous pending request stays.</td></tr>
+<tr><td><code>LoadScene(index)</code>, same index as an already pending request</td><td>Request kept. The caller's instance from <code>AddScene(scene, true)</code> is <strong>kept</strong> <span class="badge">PR #28</span>.</td></tr>
+<tr><td><code>LoadScene(index)</code>, different index from a pending request</td><td>The new request supersedes the old one. A pending caller instance is destroyed, but its snapshot stays stored.</td></tr>
+<tr><td><code>LoadScene(name)</code>, unknown name</td><td>Errors logged (by <code>GetSceneIndex</code> and by <code>LoadScene</code>), nothing requested.</td></tr>
+<tr><td><code>LoadScene(GetCurSceneIndex())</code></td><td>Reloads the current scene from its stored snapshot. The live state is discarded through <code>Clear</code>.</td></tr>
+<tr><td>Several requests in one frame</td><td>The last valid one wins.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="process-pending">ProcessAnyPendingSceneChange</h3>
+<ul>
+<li>Returns immediately if no load is pending.</li>
+<li>Consumes the request (it is cleared whether the load succeeds or not).</li>
+<li><strong>Build before clear</strong>: the next scene is built first. That is either the caller's pending instance or <code>Scene::FromJSON(stored data)</code>.</li>
+<li>If the build fails (<code>FromJSON</code> returned null because the data is malformed), it logs <code>"Scene N could not be loaded; keeping the current scene"</code> and returns. The current scene and index are untouched. Before #23, the current scene was cleared first, leaving no scene at all.</li>
+<li>Otherwise it clears the current scene (if one is loaded), sets the index and replaces the loaded scene. The old <code>Scene</code> object is destroyed at that point.</li>
+</ul>
+<p class="src">Source: <code>engine/src/sceneManagement/SceneManager.cpp</code> — <code>SceneManager::LoadScene</code> (both overloads), <code>SceneManager::ProcessAnyPendingSceneChange</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>; tests: <code>SceneStorageTest.SupersededAddedSceneIsStillStored</code>, <code>SceneStorageTest.LoadingThePendingSceneAgainKeepsTheInstance</code>, <code>SceneLoadingTest.MalformedSceneFailsWithoutLosingTheCurrentOne</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A load whose stored data is malformed never leaves the engine without a scene. The current scene stays loaded and keeps its index, and no exception escapes <code>ProcessAnyPendingSceneChange</code>.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p>A Scene that is dropped without being loaded is destroyed without <code>Clear()</code>, so none of its components get <code>OnDisable</code>/<code>OnDestroy</code>. This covers a superseded or replaced pending instance, the validation build in <code>AddScene(json)</code>/<code>FromJSON(j, true)</code>, the throwaway scene from <code>AddScene(scene, false)</code>, and the pending instance dropped by <code>UnloadScenes</code>. These components never ran <code>OnAttach</code>, so physics bodies are not involved. However, constructors and <code>Deserialize</code> did run, and for <code>LuaComponent</code> that includes the script's top-level chunk. It is not documented whether anything a script chunk or component constructor sets up must be released by <code>OnDestroy</code> in this case. Files: <code>engine/src/sceneManagement/SceneManager.cpp</code> (<code>LoadScene</code>, <code>StoreScene</code>, <code>UpdateScene</code>, <code>UnloadScenes</code>).</p>
+</div>
+
+<h2 id="updating-deleting">UpdateScene and DeleteScene</h2>
+<h3 id="update-scene">UpdateScene(index or name, json &amp;data)</h3>
+<ul>
+<li>Replaces the stored data and name of the entry (copied, so the caller's JSON is untouched). The data is <strong>not</strong> validated. Malformed data is stored, and the failure only shows when that scene is loaded, which then keeps the current scene.</li>
+<li>Index out of range: silently ignored. Unknown name: <code>GetSceneIndex</code> logs an error, then it is ignored. Index 0 is accepted (it used to be rejected).</li>
+<li>If the new data renames the entry to the name of <em>another</em> stored scene, the update is refused with an error <span class="badge">PR #28</span>. Two entries with one name would make the second unreachable by name.</li>
+<li>If a load of this index is pending, the caller's pending instance is dropped, so the load builds from the new data <span class="badge">PR #28</span>.</li>
+<li>Updating the data of the loaded scene does not touch the live scene. It keeps running as it is until it is loaded again. The editor's Save uses this to refresh the snapshot: <code>UpdateScene(GetCurSceneIndex(), GetCurSceneRef().Serialize())</code>.</li>
+</ul>
+<h3 id="delete-scene">DeleteScene(name)</h3>
+<ul>
+<li>Unknown name: an error is logged and it returns <code>false</code>.</li>
+<li>Refuses (error, returns <code>false</code>) to delete the loaded scene or a scene with a pending load.</li>
+<li>Otherwise erases the <em>named</em> entry and returns <code>true</code>. The loaded index and a pending index shift down by one if they were after it. Before #17 it erased the loaded scene's index instead (and with nothing loaded, <code>begin() - 1</code>).</li>
+</ul>
+<p class="src">Source: <code>engine/src/sceneManagement/SceneManager.cpp</code> — <code>SceneManager::UpdateScene</code> (both overloads), <code>SceneManager::DeleteScene</code>; <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::HandleSaveScene</code>; tests: <code>SceneStorageTest.UpdateSceneDropsAPendingInstance</code>, <code>SceneStorageTest.UpdateSceneRefusesADuplicateName</code>, <code>SceneManagerTest.DeleteSceneRemovesTheNamedScene</code>, <code>SceneManagerTest.DeleteSceneRefusesLoadedAndUnknown</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Scenes with an empty name (or data whose <code>"name"</code> isn't a string) are never matched for replacement. Each <code>AddScene</code> of one appends a new entry.</p>
+</div>
+
+<h2 id="scene-switch">Scene switch teardown, step by step</h2>
+<p>This is what happens from <code>LoadScene(next)</code> during a frame up to the first frame of the next scene, under <code>Application::Run</code>:</p>
+<ol class="steps">
+<li><code>LoadScene(next)</code> records the request. The current frame continues normally: the rest of <code>Update</code>, coroutines, <code>LateUpdate</code>, audio and render.</li>
+<li>The current scene's <code>ProcessDestroyed</code> runs this frame's queued destroys (their <code>OnDisable</code>/<code>OnDestroy</code>, then purge).</li>
+<li><code>ProcessAnyPendingSceneChange</code> takes the request.</li>
+<li><strong>The next scene is built</strong>, unless it is the caller's pending instance. <code>Scene::FromJSON</code> creates every GameObject and component, deserializes them, and resolves references. Component constructors and <code>Deserialize</code> run now, so a <code>LuaComponent</code>'s script chunk (its file-scope code) executes <em>before</em> the old scene's <code>OnDestroy</code> handlers. This ordering was acknowledged in the #23 review and left as is. If a script comes to depend on the opposite order, the plan is to defer running chunks until after the old scene is cleared.</li>
+<li>If the build failed: log, keep the current scene, stop here.</li>
+<li><strong>The old scene is cleared</strong> (<a href="#clear"><code>Scene::Clear</code></a>). Every component in its root hierarchy runs <code>OnDisable</code> (if it was enabled and active) and <code>OnDestroy</code>. This is where physics bodies, audio sources, input subscriptions and script state are released. Then coroutines are stopped, objects are marked torn down, roots are detached, and all lists are emptied. Emptying the root list releases the roots: roots that nobody else holds are freed here, with their children and components. Objects detached with <code>RemoveChild</code> are not part of this (see the <a href="#scene-lifetime">warning above</a>).</li>
+<li>The index and the loaded scene are replaced, and the old <code>Scene</code> object is destroyed. After <code>Clear</code> it holds nothing, so <code>~Scene</code> has no objects left to free or update.</li>
+<li>The next frame starts. <code>ProcessAttachQueue</code> runs <code>OnAttach</code> for the new scene's components, which creates physics bodies, before any fixed step or <code>Update</code> of the new scene.</li>
+</ol>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>; <code>engine/src/sceneManagement/SceneManager.cpp</code> — <code>SceneManager::ProcessAnyPendingSceneChange</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::Clear</code>, <code>Scene::FromJSON</code>; tests: <code>LifecycleTest.SceneSwitchRunsOnDestroy</code>, <code>SceneSwitchTest.LeavingSceneWithComponentsDoesNotCrash</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Building before clearing is safe for physics. The new scene's bodies are only created in <code>OnAttach</code> on the next frame, and the old scene's bodies are destroyed in its <code>OnDestroy</code> pass. The two sets never coexist in PhysX.</p>
+</div>
+
+<h2 id="unloading">Unloading at shutdown</h2>
+<p><code>SceneManager::UnloadScenes()</code> (private; called by <code>Application::Shutdown</code>) drops any pending change and its instance, runs <code>Clear()</code> on the loaded scene and destroys it, and sets the index to -1. Stored scene data is kept. <code>Application::Shutdown</code> calls it <strong>before</strong> shutting down audio and PhysX, so <code>OnDestroy</code> can still release sources and bodies <span class="badge">PR #28</span>. Before, scenes were only freed during static destruction, after those subsystems were gone.</p>
+<p>When <code>Run</code> ends (window closed or <code>Application::Quit()</code>), the loaded scene first gets <code>OnApplicationQuit</code> on its active components, then <code>Shutdown</code> runs.</p>
+<p class="src">Source: <code>engine/src/sceneManagement/SceneManager.cpp</code> — <code>SceneManager::UnloadScenes</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::Shutdown</code></p>
+
+<h2 id="editor">Editor create-scene rule</h2>
+<p>The editor server's <code>HandleCreateScene</code> rejects a name that is already stored (<code>HasScene</code>) with the error <code>"Scene already exists: &lt;name&gt;"</code> <span class="badge">PR #28</span>. Because <code>AddScene</code> now replaces by name, creating a scene with an existing name would otherwise wipe that scene's stored data. Otherwise it stores the new empty scene with <code>AddScene(scene, false)</code> (not loaded).</p>
+<p>Two related editor paths: <code>HandleLoadScene</code> validates the incoming JSON with <code>FromJSON(json, true)</code>. Then it calls <code>UpdateScene</code> plus <code>LoadScene</code> for a known name, or <code>AddScene(json)</code> plus <code>LoadScene</code> for a new one, and processes the change immediately. <code>HandleSaveScene</code> refreshes the loaded scene's snapshot with <code>UpdateScene</code>. See <a href="logging-and-editor.html">Logging, health &amp; editor</a>.</p>
+<p class="src">Source: <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::HandleCreateScene</code>, <code>EditorServer::HandleLoadScene</code>, <code>EditorServer::HandleSaveScene</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>For a new scene, <code>HandleLoadScene</code> builds the JSON three times: once to validate in the handler, once more inside <code>AddScene(json)</code>, and once for the actual load. For a known scene it builds twice. Each build runs component constructors and Lua chunks. This is a cost, not a correctness problem, but script authors should not rely on a chunk running once per editor load.</p>
+</div>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

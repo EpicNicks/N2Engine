@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testing &amp; CI · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html" aria-current="page">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Testing &amp; CI</h1>
+<p class="lead">N2Engine's tests are GoogleTest executables, one per module, run headless through CTest. CI builds and runs them on Windows with and without PhysX, then starts the editor host and talks to it over TCP. This page covers the layout, how to run the tests, the CI workflow, the conventions headless tests follow, and how to add one.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#layout">How tests are organised</a></li>
+<li><a href="#areas">Test suites by area</a></li>
+<li><a href="#running">Building and running</a></li>
+<li><a href="#ci">CI</a></li>
+<li><a href="#conventions">Conventions for headless tests</a></li>
+<li><a href="#not-headless">What cannot be tested headless</a></li>
+<li><a href="#line-endings">Line endings</a></li>
+<li><a href="#adding">Adding a test</a></li>
+</ol>
+</div>
+
+<h2 id="layout">How tests are organised</h2>
+<p>Tests are only configured when <code>N2ENGINE_BUILD_TESTS</code> is <code>ON</code> (the default). The root <code>CMakeLists.txt</code> then fetches GoogleTest 1.17.0 with <code>FetchContent</code> (with <code>gtest_force_shared_crt</code> on), calls <code>enable_testing()</code> and adds <code>tests/</code>, which has one subdirectory per module:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Directory</th><th>Executable / CTest name</th><th>Links</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>tests/math/</code></td><td><code>math_tests</code></td><td><code>math</code></td><td>No engine dependency.</td></tr>
+<tr><td><code>tests/engine/</code></td><td><code>engine_tests</code></td><td><code>engine</code>, <code>renderer</code>, <code>math</code></td><td>Defines <code>N2_LUA_PROJECT_DIR</code> (the <code>lua_project</code> source folder) so <code>LuaSceneTests</code> can build <code>lua_project/assets/scene.lua</code> headless.</td></tr>
+<tr><td><code>tests/renderer/</code></td><td><code>renderer_tests</code></td><td><code>renderer</code>, <code>engine</code>, <code>math</code></td><td>Only a placeholder source file; the executable contains no tests.</td></tr>
+<tr><td><code>tests/editor-server/</code></td><td><code>editor_server_tests</code></td><td><code>N2EditorServer</code></td><td>Protocol encoding tests; never opens a socket.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Each subdirectory's <code>CMakeLists.txt</code> follows the same pattern:</p>
+<ul>
+<li>Sources are collected with <code>file(GLOB_RECURSE ... "*.cpp" "*.cc" "*.cxx")</code>, so any source file in the directory tree is part of the executable. The glob runs at configure time (no <code>CONFIGURE_DEPENDS</code>): after adding a file, re-run the CMake configure step.</li>
+<li>Linked with <code>GTest::gtest</code> and <code>GTest::gtest_main</code>; no test defines its own <code>main</code>.</li>
+<li>C++23, no extensions, warnings at <code>/W4</code> (MSVC) or <code>-Wall -Wextra</code>.</li>
+<li>Registered with a single <code>add_test(NAME &lt;exe&gt; COMMAND &lt;exe&gt;)</code>. CTest therefore sees four tests, one per executable, not one per GoogleTest case. Use <code>--gtest_filter</code> on the executable to run individual cases.</li>
+</ul>
+<p class="src">Source: <code>CMakeLists.txt</code>; <code>tests/CMakeLists.txt</code>; <code>tests/*/CMakeLists.txt</code></p>
+
+<h2 id="areas">Test suites by area</h2>
+<p>GoogleTest suite names, grouped by the file they live in. Pages in this reference cite these names when a test backs a guarantee.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>File</th><th>Suites</th></tr></thead>
+<tbody>
+<tr><td><code>tests/engine/CoreRobustnessTests.cpp</code></td><td><code>CoreRobustnessTest</code> (hierarchy, first-of-type components, zero parent scale, Logger backlog, Quit as a request)</td></tr>
+<tr><td><code>tests/engine/HealthTests.cpp</code></td><td><code>EngineHealthTest</code>, <code>ApplicationShutdownTest</code>, <code>WindowHealthTest</code>, <code>ScriptingHealthTest</code></td></tr>
+<tr><td><code>tests/engine/audio/AudioTests.cpp</code></td><td><code>WAVLoaderTest</code>, <code>AudioSystemUninitializedTest</code>, <code>AudioClipTest</code>, <code>AudioSystemTest</code>, <code>AudioSourceTest</code>, <code>AudioListenerTest</code></td></tr>
+<tr><td><code>tests/engine/input/InputRobustnessTests.cpp</code></td><td><code>EventHandlerTest</code>, <code>InputActionValueTest</code>, <code>AxisBindingTest</code>, <code>MouseTest</code>, <code>InputSystemHeadlessTest</code>, <code>BindingValidationTest</code></td></tr>
+<tr><td><code>tests/engine/input/InputSystemTests.cpp</code></td><td><code>InputBindingSerializationTest</code>, <code>BindingParseErrorTest</code>, <code>InputActionSerializationTest</code>, <code>ActionMapSerializationTest</code>, <code>FullConfigSerializationTest</code></td></tr>
+<tr><td><code>tests/engine/physics/PhysicsTests.cpp</code></td><td><code>PhysicsTest</code>; <code>PhysicsMassTest</code> <span class="badge">PR #26</span>. Compiled only with PhysX.</td></tr>
+<tr><td><code>tests/engine/prefabs/PrefabTests.cpp</code></td><td><code>UUIDSerializationTest</code>, <code>GameObjectSerializationTest</code>, <code>PrefabSerializationTest</code>, <code>PrefabParseErrorTest</code></td></tr>
+<tr><td><code>tests/engine/sceneManagement/LifecycleTests.cpp</code></td><td><code>LifecycleTest</code>, <code>ActiveHierarchyTest</code>, <code>SceneManagerTest</code></td></tr>
+<tr><td><code>tests/engine/sceneManagement/SceneStorageTests.cpp</code> <span class="badge">PR #28</span></td><td><code>SceneStorageTest</code></td></tr>
+<tr><td><code>tests/engine/sceneManagement/SceneSwitchTests.cpp</code></td><td><code>SceneSwitchTest</code></td></tr>
+<tr><td><code>tests/engine/scheduling/CoroutineTests.cpp</code></td><td><code>CoroutineTest</code></td></tr>
+<tr><td><code>tests/engine/scripting/LuaTests.cpp</code></td><td><code>LuaTest</code>, <code>LuaScriptTest</code></td></tr>
+<tr><td><code>tests/engine/scripting/LuaLifetimeTests.cpp</code></td><td><code>LuaLifetimeTest</code></td></tr>
+<tr><td><code>tests/engine/scripting/LuaRobustnessTests.cpp</code></td><td><code>LuaRobustnessTest</code></td></tr>
+<tr><td><code>tests/engine/scripting/LuaSceneTests.cpp</code></td><td><code>LuaSceneTest</code>, <code>LuaProjectSceneTest</code></td></tr>
+<tr><td><code>tests/engine/scripting/LuaHandleTests.cpp</code> <span class="badge">PR #29</span></td><td><code>LuaHandleTest</code></td></tr>
+<tr><td><code>tests/engine/serialization/SerializationRobustnessTests.cpp</code></td><td><code>SerializationReferencesTest</code>, <code>SceneLoadingTest</code>, <code>ResourceLoaderTest</code>, <code>ResourcePathTest</code>, <code>ResourcesTest</code>, <code>AudioAssetReferenceTest</code></td></tr>
+<tr><td><code>tests/math/math_types/QuaternionTests.cpp</code></td><td><code>QuaternionTest</code></td></tr>
+<tr><td><code>tests/math/math_types/SimdDispatchTests.cpp</code> <span class="badge">PR #27</span></td><td><code>SimdLevels/SimdDispatchTest</code> (each case compares SSE2, SSE4.1 and AVX against scalar)</td></tr>
+<tr><td><code>tests/editor-server/EngineHealthProtocolTests.cpp</code></td><td><code>EngineHealthProtocolTest</code></td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>tests/</code> on the integration branch (master plus PRs #26–#29)</p>
+
+<h2 id="running">Building and running</h2>
+<p>Two CMake options matter for tests:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Option</th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>N2ENGINE_BUILD_TESTS</code></td><td><code>ON</code></td><td>Fetch GoogleTest and build the four test executables.</td></tr>
+<tr><td><code>N2ENGINE_USE_PHYSX</code></td><td><code>ON</code></td><td>Use PhysX. On Windows the binaries are downloaded from the repository's <code>physx-dependencies</code> release into <code>external/PhysX/physx/bin</code> at configure time; if the download fails, PhysX is turned off with a warning. PhysX is also turned off for MinGW/GCC on Windows and on Linux. With PhysX off, <code>N2ENGINE_PHYSX_ENABLED</code> is not defined and <code>PhysicsTests.cpp</code> compiles to nothing.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The same commands CI uses (Visual Studio generator, multi-config):</p>
+<pre class="lang-shell"><code>cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON
+cmake --build build --config Debug --parallel
+ctest --test-dir build --build-config Debug --output-on-failure
+</code></pre>
+<p>Executables land in <code>build/bin/Debug/</code>. To run part of one:</p>
+<pre class="lang-shell"><code>build/bin/Debug/engine_tests.exe --gtest_filter=CoreRobustnessTest.*
+build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repeat=3
+</code></pre>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Debug builds define <code>N2ENGINE_DEBUG</code>, but tests never call <code>Application::Init</code>, so the debug console subscriber is not installed and engine log output is not printed during tests unless a test subscribes to <code>Logger::logEvent</code>.</p>
+</div>
+
+<h2 id="ci">CI</h2>
+<p><code>.github/workflows/tests.yml</code> ("Tests") runs on pushes to <code>master</code>, on every pull request, and on manual dispatch. It has one job, <code>windows (PhysX ON|OFF)</code>, on <code>windows-latest</code> with a 90-minute timeout, as a matrix over <code>physx: [ON, OFF]</code> with <code>fail-fast: false</code>. The OFF leg keeps the no-physics build compiling and running.</p>
+<ol class="steps">
+<li>Check out the repository.</li>
+<li>Install the Vulkan SDK (headers and libraries only; no runtime).</li>
+<li>PhysX ON only: restore the cached <code>external/PhysX/physx/bin</code>.</li>
+<li>Configure: <code>cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=&lt;matrix&gt;</code>.</li>
+<li>Build the <strong>Debug</strong> configuration.</li>
+<li>Test: <code>ctest --test-dir build --build-config Debug --output-on-failure</code> with <code>ALSOFT_DRIVERS=null</code>, which routes OpenAL Soft to its silent null backend because the runner has no sound card.</li>
+<li>Editor host smoke test (below).</li>
+</ol>
+<h3 id="smoke-test">Editor host smoke test</h3>
+<p>A PowerShell step exercises the real <code>N2EditorHost.exe</code> end to end. The runner has no GPU, so the host's window fails and it serves without one; this checks that path too.</p>
+<ol class="steps">
+<li>Start <code>build/bin/Debug/N2EditorHost.exe --port 9999</code>, capturing stdout and stderr.</li>
+<li>Connect to 127.0.0.1:9999, retrying every 500 ms up to 120 times; fail if it never accepts.</li>
+<li>Send <code>GetEngineHealth</code> (0x50, zero-length payload). Expect a 0x09 response, read its payload, print its size and the <code>healthy</code> byte. Unhealthy is not a failure; a wrong response type is.</li>
+<li>Send <code>Shutdown</code> (0xFF). Expect an <code>Ok</code> (0x00) response.</li>
+<li>Wait up to 30 s for the process to exit; fail (and kill it) if it doesn't.</li>
+<li>Fail on a non-zero exit code. This catches crashes during <code>Shutdown</code> and static destruction, which only show up when the process exits.</li>
+<li>Always print the host's stdout and stderr.</li>
+</ol>
+<p>The wire format it uses is described in <a href="logging-and-editor.html#framing">Wire format</a>.</p>
+<p class="src">Source: <code>.github/workflows/tests.yml</code></p>
+
+<h2 id="conventions">Conventions for headless tests</h2>
+<p>All tests run without a window, GPU or sound device. <strong>No test calls <code>Application::Init</code></strong>; instead each test sets up only the parts it needs. <code>Init</code> does not require a window: without one it carries on and reports the window subsystem as <code>Failed</code> in its health result (the editor host relies on this in CI). Tests avoid it because a meaningful <code>Init</code> wants a real window and audio device, starts every subsystem in the shared singleton, and clears the quit flag that other tests may depend on. Every test in one executable shares the same process-wide singletons (<code>Application</code>, <code>SceneManager</code>, <code>LuaRuntime</code>, <code>AudioSystem</code>, <code>Logger</code>, <code>ResourceLoader</code>), so tests must leave them as they found them or tolerate earlier state.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Need</th><th>How tests do it</th><th>Example</th></tr></thead>
+<tbody>
+<tr><td>A physics backend</td><td>Create and <code>Initialize()</code> a <code>PhysXBackend</code>, install it with <code>Application::GetInstance().Set3DPhysicsBackend(...)</code> in <code>SetUpTestSuite</code>; in <code>TearDownTestSuite</code>, load an empty scene first (so no scene holds bodies), then <code>Set3DPhysicsBackend(nullptr)</code>. Fixed steps are driven by hand in the order <code>Application::PhysicsUpdate</code> uses. Wrap the file in <code>#ifdef N2ENGINE_PHYSX_ENABLED</code>.</td><td><code>PhysicsTest</code></td></tr>
+<tr><td>A scene</td><td><code>SceneManager::AddScene(Scene::Create(name), true)</code> then <code>SceneManager::ProcessAnyPendingSceneChange()</code>. Use a name unique to the test (for example from <code>current_test_info()-&gt;name()</code>), since re-adding a name replaces the stored scene <span class="badge">PR #28</span>, and tests must survive <code>--gtest_repeat</code>.</td><td><code>PhysicsTest::SetUp</code>, <code>CoreRobustnessTests</code> <code>MakeScene</code></td></tr>
+<tr><td>Input</td><td>Construct a default <code>Window</code> (never initialised) and an <code>InputSystem</code> on it. Action maps and bindings work; real devices do not. Use fake bindings to drive actions.</td><td><code>InputSystemHeadlessTest</code></td></tr>
+<tr><td>Audio</td><td>Set <code>ALSOFT_DRIVERS=null</code> (<code>_putenv_s</code>/<code>setenv</code>) in <code>SetUpTestSuite</code>, before the first OpenAL call; <code>AudioSystem::Initialize()</code> in <code>SetUp</code>; stop one-shots, release clips and sources, then <code>Shutdown()</code> in <code>TearDown</code>. CI also sets the variable.</td><td><code>AudioContextTest</code> fixture, <code>AudioAssetReferenceTest</code></td></tr>
+<tr><td>Lua</td><td><code>ASSERT_TRUE(LuaRuntime::Instance().Initialize())</code> in <code>SetUpTestSuite</code>. Globals persist across tests, so each test uses distinct global names.</td><td><code>LuaTest</code></td></tr>
+<tr><td>SIMD tier <span class="badge">PR #27</span></td><td><code>SimdDispatchTest</code> calls <code>SetSIMDLevel(SIMDLevel::Scalar)</code> in both <code>SetUp</code> and <code>TearDown</code>, so every test leaves the process on scalar dispatch (the default) and no other test sees SIMD. Tiers the CPU lacks are skipped with <code>GTEST_SKIP</code>, not clamped.</td><td><code>SimdLevels/SimdDispatchTest</code></td></tr>
+<tr><td>Logger subscribers</td><td>Restore what you change: unsubscribe by id and restore <code>broadcastUnbroadcastLogs</code>. Skip if another subscriber already exists.</td><td><code>CoreRobustnessTest.LoggerDeliversBacklogOnceWhenASubscriberLogs</code></td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>tests/engine/physics/PhysicsTests.cpp</code>, <code>tests/engine/input/InputRobustnessTests.cpp</code>, <code>tests/engine/audio/AudioTests.cpp</code>, <code>tests/engine/scripting/LuaTests.cpp</code>, <code>tests/math/math_types/SimdDispatchTests.cpp</code>, <code>tests/engine/CoreRobustnessTests.cpp</code></p>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><strong>The quit flag sticks.</strong> <code>CoreRobustnessTest.QuitIsARequestNotAnExit</code> calls <code>Application::Quit()</code>, and only <code>Application::Init</code> clears the flag, which tests never call. For the rest of <code>engine_tests</code>, <code>IsQuitRequested()</code> may be true (depending on test order), so a test that spins <code>Application::Run()</code> or an editor-style loop would exit immediately. Nothing does today. See <a href="application.html#quit">Quitting</a>.</p>
+</div>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Math types work without <code>Math::InitializeSIMD()</code>: <code>Vector3</code>, <code>Quaternion</code> and the 3×3/4×4 float matrices default to their scalar implementations (PR #24). Tests should not need to initialise SIMD, and should not leave a non-scalar tier selected.</p>
+</div>
+
+<h2 id="not-headless">What cannot be tested headless</h2>
+<ul>
+<li><strong>Application startup and the frame loop.</strong> <code>Application::Init</code> runs headless but only reports <code>Failed</code> health for the window and renderer, so the parts worth testing need a real window and audio device; <code>Run()</code> refuses to start without a valid window. The loop order on the <a href="application.html#frame">Application page</a> is not covered by a test; tests replicate parts of it by hand.</li>
+<li><strong>Windowing.</strong> <code>Window::InitWindow</code>, window modes, resize callbacks. Only the uninitialised-window state is tested (<code>WindowHealthTest</code>).</li>
+<li><strong>Renderers.</strong> OpenGL, Vulkan and software renderers need a context; <code>renderer_tests</code> is a placeholder. <code>RenderEditorFrame</code> and the editor's <code>RenderFrame</code> command are untested.</li>
+<li><strong>Real input devices.</strong> Keyboard, mouse and gamepad state come from GLFW; tests use fake bindings.</li>
+<li><strong>Audible output.</strong> The null OpenAL backend accepts playback but produces nothing to check.</li>
+<li><strong>The editor server's command handlers.</strong> Only the <code>GetEngineHealth</code> encoding has unit tests; the smoke test covers <code>GetEngineHealth</code> and <code>Shutdown</code> over a real socket.</li>
+</ul>
+
+<h2 id="line-endings">Line endings</h2>
+<p>The repository has no <code>.gitattributes</code>, and line endings in the index are mixed. <code>git ls-files --eol</code> on <code>master</code> shows, for example:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Stored with CRLF</th><th>Stored with LF</th></tr></thead>
+<tbody>
+<tr><td><code>tests/CMakeLists.txt</code>, <code>tests/engine/CMakeLists.txt</code>, <code>tests/math/CMakeLists.txt</code>, <code>tests/renderer/CMakeLists.txt</code>, <code>QuaternionTests.cpp</code>, <code>InputSystemTests.cpp</code>, <code>PrefabTests.cpp</code>, most of <code>editor-server/</code></td><td><code>.github/workflows/tests.yml</code>, root <code>CMakeLists.txt</code>, <code>tests/editor-server/*</code>, <code>CoreRobustnessTests.cpp</code>, <code>HealthTests.cpp</code>, <code>AudioTests.cpp</code>, <code>PhysicsTests.cpp</code>, <code>LifecycleTests.cpp</code>, the Lua and coroutine tests, <code>SerializationRobustnessTests.cpp</code>, <code>editor-server/include/editor-server/Commands.hpp</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Across <code>engine/</code>, <code>math/</code>, <code>renderer/</code>, <code>tests/</code>, <code>editor-server/</code> and <code>.github/</code>, roughly two thirds of tracked files are CRLF in the index; files added or largely rewritten recently tend to be LF. In practice: keep a file's existing line endings when you edit it, so diffs show only real changes, and expect new files to be LF. With <code>core.autocrlf=true</code> on Windows the working copy shows CRLF either way, so check the index with <code>git ls-files --eol &lt;path&gt;</code> (the <code>i/</code> column) rather than an editor.</p>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p>No line-ending policy is written down or enforced (no <code>.gitattributes</code>, no CI check). Whether the repository should normalise to LF is undecided.</p>
+</div>
+
+<h2 id="adding">Adding a test</h2>
+<ol class="steps">
+<li>Pick the executable by module: engine behaviour under <code>tests/engine/&lt;area&gt;/</code>, pure math under <code>tests/math/</code>, protocol encoding under <code>tests/editor-server/</code>.</li>
+<li>Create <code>&lt;Area&gt;Tests.cpp</code> (or add to an existing file for the same area). No CMake edit is needed; the directory is globbed. Re-run the CMake configure step so the new file is picked up.</li>
+<li>Name suites <code>&lt;Thing&gt;Test</code> and cases as a sentence describing the behaviour (<code>ParentingARootRemovesItFromTheRoots</code>). Other pages cite these names, so a good name documents the guarantee.</li>
+<li>Do not call <code>Application::Init</code>. Set up only what you need using the <a href="#conventions">fixtures above</a>; guard PhysX-dependent files with <code>#ifdef N2ENGINE_PHYSX_ENABLED</code> so the PhysX OFF leg still builds.</li>
+<li>Leave shared singletons as you found them: unique scene names, distinct Lua globals, restored Logger settings, scalar SIMD, physics backend removed.</li>
+<li>Build and run locally with <code>--gtest_filter</code> and, for anything touching shared state, <code>--gtest_repeat=2</code>. CI then runs it in both PhysX legs.</li>
+</ol>
+<pre class="lang-cpp"><code>#include &lt;gtest/gtest.h&gt;
+
+#include "engine/GameObjectScene.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
+
+using namespace N2Engine;
+
+TEST(MyFeatureTest, AddedRootCanBeFoundByUUID)
+{
+    // A name unique to this test: re-adding a stored name replaces that scene
+    SceneManager::AddScene(Scene::Create("MyFeatureTest_FindByUUID"), true);
+    SceneManager::ProcessAnyPendingSceneChange();
+    Scene &amp;scene = SceneManager::GetCurSceneRef();
+
+    auto go = GameObject::Create("Thing");
+    scene.AddRootGameObject(go);
+
+    EXPECT_EQ(scene.FindGameObjectByUUID(go-&gt;GetUUID()), go);
+}
+</code></pre>
+<p class="src">Source: <code>tests/engine/CMakeLists.txt</code>; conventions from <code>tests/engine/**</code></p>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
