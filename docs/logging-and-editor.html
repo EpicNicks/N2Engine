@@ -376,9 +376,10 @@ $stream.Write($bytes, 0, $bytes.Length)
 <p>Commands run on the main thread for a separate reason: engine state is single-threaded. Scenes, Lua and GLFW/OpenGL (a context is current on one thread, and GLFW event polling must be on the main thread) have no locks; only the Logger is thread-safe (see <a href="#logger-threads">Logging from other threads</a>). Queueing commands for the main loop makes every handler behave like ordinary game code between frames, instead of adding locks across the engine. Lua handles rely on the same assumption (see <a href="scripting-lua.html#design-handles">why Lua handles stay valid</a>).</p>
 </div>
 
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><strong>Spec drift.</strong> <code>Protocol.hpp</code> still declares an unused <code>EntityTransformRequest</code> with an <code>int32</code> entity id, while the protocol uses UUID strings (<code>editor-server/include/editor-server/Protocol.hpp</code>). Whether it should be removed is not decided.</p>
+<div class="callout note">
+<p class="callout-title">Note: server structs match the spec <span class="badge">Minor defects</span></p>
+<p>The server's hand-written request types follow <code>protocol.json</code>: one <code>&lt;Command&gt;Cmd</code> deserializer per command that has a request, with the spec's field names, as in the generated <code>clients/cpp/Protocol.generated.hpp</code>. <code>LoadSceneCmd</code> carries <code>sceneJson</code> (it had an unused <code>path</code>), <code>SetEntityTransformCmd</code> is the former <code>EntityTransformCmd</code>, <code>DestroyEntityCmd</code> and <code>GetEntityTransformCmd</code> are used by their handlers, and the request-less <code>SaveScene</code> has no struct. The unused <code>EntityTransformRequest</code> (with an <code>int32</code> entity id; entity ids are UUID strings) is gone from <code>Protocol.hpp</code>. The wire format did not change, and <code>protocol.json</code> and the three generated clients already agreed with the server, so regenerating them changes nothing. <code>ProtocolSpecTest</code> checks <code>Protocol.hpp</code>'s command and response ids against <code>protocol.json</code>, and the deserializers against the spec's fields. A <code>bytes</code> field (<code>FrameData.pixels</code>) is the rest of the payload, with no length prefix.</p>
+<p class="src">Source: <code>editor-server/include/editor-server/Protocol.hpp</code>, <code>editor-server/include/editor-server/Commands.hpp</code>, <code>editor-server/protocol/protocol.json</code>; tests: <code>ProtocolSpecTest.*</code>, <code>BufferReaderTest.TruncatedCommandFailsToDeserialize</code></p>
 </div>
 
 <div class="page-footer">
