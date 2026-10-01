@@ -43,6 +43,8 @@ namespace N2Engine::Physics
         void OnTriggerExit(Trigger trigger) override {}
 
         void OnTransformChanged() const;
+        /// GameObject::SetLayer calls it: moves this collider's shapes to the object's new layer
+        void OnLayerChanged();
 
         [[nodiscard]] PhysicsBodyHandle GetHandle() const { return _handle; }
 

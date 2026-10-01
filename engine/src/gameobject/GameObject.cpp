@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <cstdint>
 #include <format>
+#include <stdexcept>
 #include <typeindex>
 #include <typeinfo>
 #include <memory>
@@ -9,7 +11,9 @@
 
 #include "engine/GameObject.hpp"
 #include "engine/Component.hpp"
+#include "engine/Layers.hpp"
 #include "engine/Logger.hpp"
+#include "engine/physics/ICollider.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -722,6 +726,35 @@ void GameObject::SetActiveRecursive(bool active)
     }
 }
 
+void GameObject::SetLayer(const int layer)
+{
+    const int clamped = Layers::Clamp(layer, _name);
+    if (clamped == _layer)
+    {
+        return;
+    }
+    _layer = clamped;
+
+    // Each collider moves its own shapes (on its own body, or the object's Rigidbody's)
+    for (const auto &component : _components)
+    {
+        if (auto *collider = dynamic_cast<Physics::ICollider *>(component.get()); collider && !collider->IsDestroyed())
+        {
+            collider->OnLayerChanged();
+        }
+    }
+}
+
+void GameObject::SetLayerRecursive(const int layer)
+{
+    SetLayer(layer);
+
+    for (const auto &child : _children)
+    {
+        child->SetLayerRecursive(layer);
+    }
+}
+
 // Static utility methods
 GameObject::Ptr GameObject::FindGameObjectByName(const std::string &name, Scene *scene)
 {
@@ -755,6 +788,7 @@ json GameObject::Serialize() const
     // GameObject-specific data
     j["name"] = _name;
     j["tag"] = _tag;
+    j["layer"] = _layer;
     j["isActive"] = _isActive;
     if (_prefabReference.has_value())
     {
@@ -807,6 +841,21 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
     if (const auto tag = j.find("tag"); tag != j.end() && !tag->is_null())
     {
         go->_tag = tag->get<std::string>(); // a non-string tag throws, like any malformed field
+    }
+
+    // Optional too (missing means Default). Stored as an index, so renaming a layer doesn't break scenes.
+    if (const auto layer = j.find("layer"); layer != j.end() && !layer->is_null())
+    {
+        // A non-integer layer is malformed like any other field; an integer out of range is clamped
+        if (!layer->is_number_integer())
+        {
+            throw std::invalid_argument(std::format("GameObject '{}': \"layer\" must be an integer", go->_name));
+        }
+        // A huge unsigned value would wrap as int64; anything past the last layer clamps the same way
+        const int64_t value = layer->is_number_unsigned()
+                                  ? static_cast<int64_t>(std::min<uint64_t>(layer->get<uint64_t>(), Layers::Count))
+                                  : layer->get<int64_t>();
+        go->_layer = Layers::Clamp(value, go->_name);
     }
 
     if (j.contains("isActive"))

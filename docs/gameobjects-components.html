@@ -77,6 +77,7 @@
 <li><a href="#iteration-safety">Changing components during a callback</a></li>
 <li><a href="#lifetime-token">Lifetime token and copies</a></li>
 <li><a href="#names-tags">Names, tags and search helpers</a></li>
+<li><a href="#layers">Layer</a></li>
 </ol>
 </div>
 
@@ -455,6 +456,16 @@ if (!token.expired())
 </ul>
 <p>From Lua, GameObjects and components are reached through checked handles; the binding exposes a subset (no <code>SetParent</code> or <code>RemoveComponent</code> on the Lua GameObject type, for example). See <a href="scripting-lua.html">Lua scripting</a>.</p>
 <p class="src">Source: <code>engine/include/engine/GameObject.hpp</code> — <code>GetTag</code>, <code>SetTag</code>, <code>CompareTag</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>FindGameObjectByName</code>, <code>FindGameObjectWithTag</code>, <code>FindGameObjectsWithTag</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::FindGameObject</code>, <code>Scene::FindGameObjectWithTag</code>, <code>Scene::FindGameObjectsWithTag</code>; tests: <code>GameObjectTagTest.*</code>, <code>LuaTagTest.*</code>; <code>engine/include/engine/sceneManagement/Scene.inl</code>; <code>engine/src/scripting/bindings/LuaCoreBindings.cpp</code></p>
+
+<h2 id="layers">Layer <span class="badge">PR #44</span></h2>
+<ul>
+<li>Every GameObject is on one layer, an index 0–31 (see <a href="physics.html#layers">Layers and the collision matrix</a> for the names, masks and matrix). It starts on 0, Default.</li>
+<li><code>GetLayer()</code>/<code>SetLayer(layer)</code>. A value outside 0–31 is clamped into range with a warning. Setting a layer moves the object's attached collider shapes to it straight away: queries see it at once, and contacts and triggers are filtered again in the next physics step.</li>
+<li>Children keep their own layer, as in Unity: a collider uses its own GameObject's layer, never its parent's. <code>SetLayerRecursive(layer)</code> sets the object and all its descendants.</li>
+<li>The layer is saved with the object as the <code>"layer"</code> index (see <a href="serialization.html#gameobject-json">Serialization</a>), so renaming a layer doesn't change which layer objects are on.</li>
+<li>Lua: <code>GameObject:GetLayer()</code>, <code>SetLayer(layer)</code>, <code>SetLayerRecursive(layer)</code>.</li>
+</ul>
+<p class="src">Source: <code>engine/include/engine/GameObject.hpp</code>, <code>engine/src/gameobject/GameObject.cpp</code> — <code>SetLayer</code>, <code>SetLayerRecursive</code>; <code>ICollider::OnLayerChanged</code>; tests: <code>GameObjectLayerTest.*</code>, <code>ChildColliderUsesItsOwnLayer</code>, <code>LuaLayerTest.GameObjectLayerMethods</code></p>
 
 <div class="page-footer">
 <span>Describes master through PR #34.</span>

@@ -138,6 +138,8 @@ namespace N2Engine::Physics
             const PhysicsMaterial& material) override;
 
         void SetIsTrigger(PhysicsBodyHandle body, ICollider* collider, bool isTrigger) override;
+        void SetColliderLayer(PhysicsBodyHandle body, ICollider* collider, int layer) override;
+        void RefreshCollisionMatrix() override;
 
         void AddForce(PhysicsBodyHandle body, const Math::Vector3& force) override;
         void AddImpulse(PhysicsBodyHandle body, const Math::Vector3& impulse) override;
@@ -357,6 +359,41 @@ namespace N2Engine::Physics
         // step's Enter events
         std::vector<CollisionEvent> _forgottenCollisions;
         std::vector<TriggerEvent> _forgottenTriggers;
+
+        // ===== Layer re-filtering =====
+        // resetFiltering makes PhysX report every pair of a re-filtered shape as lost, and the pairs the
+        // filter still allows as found again, in the next step. Reports for those shapes are held back
+        // and settled after the step by each shape pair's last report, so a pair that stays allowed gets
+        // no Exit/Enter and one the matrix now rules out gets its Exit.
+        struct RefilterReport
+        {
+            CollisionPair pair;
+            const physx::PxShape* onA = nullptr; // on pair.bodyA
+            const physx::PxShape* onB = nullptr;
+            bool found = false;                  // else lost
+            bool trigger = false;
+            Collision* data = nullptr;           // contacts only
+        };
+        std::unordered_set<const physx::PxShape*> _pendingRefilter; // reset since the last step
+        std::unordered_set<const physx::PxShape*> _refiltering;     // being re-filtered in this step
+        std::vector<RefilterReport> _refilterReports;
+        // A touch whose last report was "lost" although the new filter data still allows it: PhysX may
+        // only report it found again a step later (e.g. once a sleeping partner wakes). Its Exit waits a
+        // step and is dropped if "found" arrives meanwhile.
+        std::vector<RefilterReport> _deferredLost;
+
+        /// Re-filters these shapes of the actor in the next step (a no-op for an actor outside the scene),
+        /// waking the dynamic bodies they touch so PhysX re-finds those pairs promptly
+        void RefilterShapes(physx::PxRigidActor& actor, const std::vector<physx::PxShape*>& shapes);
+        [[nodiscard]] bool IsRefiltering(const physx::PxShape* a, const physx::PxShape* b) const;
+        /// After a step that re-filtered shapes: applies each held-back shape pair's last report, defers a
+        /// "lost" the filter still allows, then ends any touch of those shapes the filter data now rules
+        /// out (if PhysX didn't report it lost)
+        void ReconcileRefilteredPairs();
+        /// Wakes the shape's actor if it's a sleeping, simulated dynamic body in the scene
+        static void WakeIfAsleep(const physx::PxShape* shape);
+        /// Forgets deferred "lost" reports involving a shape that's going away
+        void DropDeferred(const physx::PxShape* shape);
 
         /// Dispatches and clears a queue of ended pairs (OnCollisionExit / OnTriggerExit to both sides)
         void DispatchCollisionExits(std::vector<CollisionEvent>& queue);

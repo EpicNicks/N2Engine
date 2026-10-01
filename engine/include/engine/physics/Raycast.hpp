@@ -3,6 +3,7 @@
 #include <math/Vector3.hpp>
 #include <vector>
 #include <limits>
+#include "engine/Layers.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 
 namespace N2Engine
@@ -30,6 +31,8 @@ namespace N2Engine::Physics
         RaycastHit() = default;
     };
 
+    /// layerMask picks the layers a query can hit (Layers::MaskOf, Layers::GetMask); 0 hits nothing. The
+    /// default is every layer except Ignore Raycast, as in Unity.
     class Raycast
     {
     public:
@@ -38,14 +41,14 @@ namespace N2Engine::Physics
             const Math::Vector3& direction,
             RaycastHit& hit,
             float maxDistance = std::numeric_limits<float>::infinity(),
-            uint32_t layerMask = 0xFFFFFFFF);
+            uint32_t layerMask = Layers::DefaultRaycastMask);
 
         static int All(
             const Math::Vector3& origin,
             const Math::Vector3& direction,
             std::vector<RaycastHit>& hits,
             float maxDistance = std::numeric_limits<float>::infinity(),
-            uint32_t layerMask = 0xFFFFFFFF);
+            uint32_t layerMask = Layers::DefaultRaycastMask);
 
         static bool SphereCast(
             const Math::Vector3& origin,
@@ -53,12 +56,12 @@ namespace N2Engine::Physics
             const Math::Vector3& direction,
             RaycastHit& hit,
             float maxDistance = std::numeric_limits<float>::infinity(),
-            uint32_t layerMask = 0xFFFFFFFF);
+            uint32_t layerMask = Layers::DefaultRaycastMask);
 
         static bool Any(
             const Math::Vector3& origin,
             const Math::Vector3& direction,
             float maxDistance = std::numeric_limits<float>::infinity(),
-            uint32_t layerMask = 0xFFFFFFFF);
+            uint32_t layerMask = Layers::DefaultRaycastMask);
     };
 }

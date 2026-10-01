@@ -7,6 +7,7 @@
 #include "engine/physics/PhysicsTypes.hpp"
 #include "engine/Logger.hpp"
 #include "engine/physics/Raycast.hpp"
+#include "engine/Layers.hpp"
 
 #ifdef N2ENGINE_PHYSX_ENABLED
 #include <PxPhysicsAPI.h>
@@ -18,8 +19,13 @@
 
 #include <format>
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <functional>
+#include <map>
+#include <set>
 #include <memory>
+#include <utility>
 #include <vector>
 
 using namespace physx;
@@ -31,18 +37,45 @@ namespace N2Engine::Physics
 
     namespace
     {
-        // Until the layer system (#4) exists, every shape is on every query layer, so any
-        // non-zero layer mask hits it. Shapes used to have all-zero query data, which PhysX's
-        // fixed-function query filter ((shape & mask) != 0) rejected for every mask.
-        constexpr PxU32 AllQueryLayers = 0xFFFFFFFFu;
+        // A shape's layer as PhysX filter data. Query word0 is its layer bit, which PhysX's fixed-function
+        // query filter ANDs with a query's layer mask. Simulation word0 is the same bit and word1 the
+        // layers it collides with (its row of the Layers collision matrix).
+        PxFilterData LayerQueryData(const int layer)
+        {
+            return PxFilterData(Layers::MaskOf(layer), 0, 0, 0);
+        }
+
+        PxFilterData LayerSimulationData(const int layer)
+        {
+            return PxFilterData(Layers::MaskOf(layer), Layers::CollisionMaskFor(layer), 0, 0);
+        }
+
+        // Each side has to accept the other's layer
+        bool LayersCollide(const PxFilterData &a, const PxFilterData &b)
+        {
+            return (a.word0 & b.word1) != 0 && (b.word0 & a.word1) != 0;
+        }
+
+        int LayerOf(const ICollider *collider)
+        {
+            return collider ? collider->GetGameObject().GetLayer() : Layers::Default;
+        }
 
         // PxDefaultSimulationFilterShader only asks for touch notifications on trigger pairs, so
-        // onContact never ran for solid contacts and OnCollisionEnter/Stay/Exit never fired
+        // onContact never ran for solid contacts and OnCollisionEnter/Stay/Exit never fired.
+        // Reads nothing but its arguments: PhysX may call it from worker threads.
         PxFilterFlags CollisionEventFilterShader(
-            PxFilterObjectAttributes attributes0, PxFilterData,
-            PxFilterObjectAttributes attributes1, PxFilterData,
+            PxFilterObjectAttributes attributes0, PxFilterData filterData0,
+            PxFilterObjectAttributes attributes1, PxFilterData filterData1,
             PxPairFlags &pairFlags, const void *, PxU32)
         {
+            // Before the trigger branch, so the matrix applies to triggers too (as in Unity). Suppressed
+            // rather than killed: a change of filter data or resetFiltering asks again.
+            if (!LayersCollide(filterData0, filterData1))
+            {
+                return PxFilterFlag::eSUPPRESS;
+            }
+
             if (PxFilterObjectIsTrigger(attributes0) || PxFilterObjectIsTrigger(attributes1))
             {
                 pairFlags = PxPairFlag::eTRIGGER_DEFAULT;
@@ -180,8 +213,24 @@ namespace N2Engine::Physics
             return;
         }
 
+        // Shapes re-filtered since the last step have their reports settled once this step is done
+        _refiltering.swap(_pendingRefilter);
+        _pendingRefilter.clear();
+        // A deferred "lost" is settled by this step's reports for its shapes, so hold those back too
+        for (const RefilterReport &deferred : _deferredLost)
+        {
+            _refiltering.insert(deferred.onA);
+            _refiltering.insert(deferred.onB);
+        }
+
         _scene->simulate(deltaTime);
         _scene->fetchResults(true);
+
+        if (!_refiltering.empty())
+        {
+            ReconcileRefilteredPairs();
+            _refiltering.clear();
+        }
     }
 
     void PhysXBackend::Shutdown()
@@ -229,6 +278,19 @@ namespace N2Engine::Physics
             delete event.data;
         }
         _forgottenCollisions.clear();
+
+        for (const auto& report : _refilterReports)
+        {
+            delete report.data;
+        }
+        _refilterReports.clear();
+        for (const auto& deferred : _deferredLost)
+        {
+            delete deferred.data;
+        }
+        _deferredLost.clear();
+        _pendingRefilter.clear();
+        _refiltering.clear();
 
         if (_scene)
             _scene->release();
@@ -404,6 +466,19 @@ namespace N2Engine::Physics
             {
                 delete static_cast<PhysicsBodyHandle*>(data->actor->userData);
                 data->actor->userData = nullptr;
+            }
+
+            // Its shapes are freed with it; a later shape at the same address mustn't look re-filtered
+            for (ICollider *collider : data->colliders)
+            {
+                if (const auto shapes = _colliderShapes.find(collider); shapes != _colliderShapes.end())
+                {
+                    for (const PxShape *shape : shapes->second)
+                    {
+                        _pendingRefilter.erase(shape);
+                        DropDeferred(shape);
+                    }
+                }
             }
 
             data->actor->release();
@@ -598,7 +673,10 @@ namespace N2Engine::Physics
             return;
         }
         shape->setLocalPose(localPose);
-        shape->setQueryFilterData(PxFilterData(AllQueryLayers, 0, 0, 0));
+        // The layer of the collider's own GameObject, also for a collider on a child object
+        const int layer = LayerOf(collider);
+        shape->setQueryFilterData(LayerQueryData(layer));
+        shape->setSimulationFilterData(LayerSimulationData(layer));
         shape->userData = collider; // lets contact and trigger events report which collider touched
 
         bodyData->actor->attachShape(*shape);
@@ -720,6 +798,272 @@ namespace N2Engine::Physics
 
         // Triggers don't contribute mass, so toggling one moves the body's centre of mass and inertia
         UpdateMassProperties(body);
+    }
+
+    // ========== Layers ==========
+
+    void PhysXBackend::SetColliderLayer(const PhysicsBodyHandle body, ICollider *collider, const int layer)
+    {
+        const BodyData *data = GetBodyData(body);
+        const auto it = _colliderShapes.find(collider);
+        if (!data || !data->actor || it == _colliderShapes.end() || it->second.empty())
+        {
+            return; // no shapes yet (or disabled): they take the object's layer when they're attached
+        }
+
+        for (PxShape *shape : it->second)
+        {
+            shape->setQueryFilterData(LayerQueryData(layer));
+            shape->setSimulationFilterData(LayerSimulationData(layer));
+        }
+        RefilterShapes(*data->actor, it->second);
+    }
+
+    void PhysXBackend::RefreshCollisionMatrix()
+    {
+        // Only shapes whose row actually changed, grouped by actor for resetFiltering
+        std::unordered_map<PxRigidActor *, std::vector<PxShape *>> changed;
+        for (const auto &shapes : _colliderShapes | std::views::values)
+        {
+            for (PxShape *shape : shapes)
+            {
+                PxFilterData filter = shape->getSimulationFilterData();
+                // word0 is the layer's bit, so its index is the layer
+                const uint32_t collidesWith = filter.word0 != 0 ? Layers::CollisionMaskFor(std::countr_zero(filter.word0)) : 0u;
+                if (filter.word1 == collidesWith)
+                {
+                    continue;
+                }
+                filter.word1 = collidesWith;
+                shape->setSimulationFilterData(filter);
+                if (PxRigidActor *actor = shape->getActor())
+                {
+                    changed[actor].push_back(shape);
+                }
+            }
+        }
+
+        for (auto &[actor, shapes] : changed)
+        {
+            RefilterShapes(*actor, shapes);
+        }
+    }
+
+    void PhysXBackend::RefilterShapes(PxRigidActor &actor, const std::vector<PxShape *> &shapes)
+    {
+        // resetFiltering is invalid for an actor outside the scene (a disabled body); it's filtered
+        // afresh, with the new data, when it's added back
+        if (!_scene || actor.getScene() != _scene || shapes.empty())
+        {
+            return;
+        }
+
+        // Existing pairs keep their old filtering until this: PhysX reports them lost, then found again
+        // if the new data still allows them (see ReconcileRefilteredPairs)
+        _scene->resetFiltering(actor, shapes.data(), static_cast<PxU32>(shapes.size()));
+        _pendingRefilter.insert(shapes.begin(), shapes.end());
+
+        // resetFiltering wakes only this actor. A sleeping partner (e.g. a ball resting on a floor whose
+        // layer changed) would let PhysX re-find the pair only once something woke it, so wake it now.
+        const auto isReset = [&shapes](const PxShape *shape) { return std::ranges::find(shapes, shape) != shapes.end(); };
+        for (const TouchMap *touches : {&_collisionTouches, &_triggerTouches})
+        {
+            for (const auto &shapePairs : *touches | std::views::values)
+            {
+                for (const ShapePair &touching : shapePairs)
+                {
+                    if (isReset(touching.onA))
+                    {
+                        WakeIfAsleep(touching.onB);
+                    }
+                    else if (isReset(touching.onB))
+                    {
+                        WakeIfAsleep(touching.onA);
+                    }
+                }
+            }
+        }
+    }
+
+    void PhysXBackend::WakeIfAsleep(const PxShape *shape)
+    {
+        PxRigidActor *actor = shape ? shape->getActor() : nullptr;
+        PxRigidDynamic *dynamic = actor ? actor->is<PxRigidDynamic>() : nullptr;
+        // wakeUp is invalid for kinematic actors and actors outside a scene
+        if (dynamic && dynamic->getScene() && !dynamic->getRigidBodyFlags().isSet(PxRigidBodyFlag::eKINEMATIC) &&
+            dynamic->isSleeping())
+        {
+            dynamic->wakeUp();
+        }
+    }
+
+    void PhysXBackend::DropDeferred(const PxShape *shape)
+    {
+        std::erase_if(_deferredLost, [shape](const RefilterReport &deferred)
+        {
+            if (deferred.onA != shape && deferred.onB != shape)
+            {
+                return false;
+            }
+            delete deferred.data;
+            return true;
+        });
+    }
+
+    bool PhysXBackend::IsRefiltering(const PxShape *a, const PxShape *b) const
+    {
+        return !_refiltering.empty() && (_refiltering.contains(a) || _refiltering.contains(b));
+    }
+
+    void PhysXBackend::ReconcileRefilteredPairs()
+    {
+        std::vector<RefilterReport> reports;
+        reports.swap(_refilterReports);
+
+        // Each shape pair ends up as its last report says: a pair reported lost and found again is
+        // still touching, so it gets neither Exit nor Enter
+        using ShapeKey = std::pair<const PxShape *, const PxShape *>;
+        const auto key = [](const RefilterReport &report) -> ShapeKey
+        {
+            return std::less<>{}(report.onA, report.onB) ? ShapeKey{report.onA, report.onB}
+                                                         : ShapeKey{report.onB, report.onA};
+        };
+        std::map<ShapeKey, size_t> last;
+        for (size_t i = 0; i < reports.size(); ++i)
+        {
+            last[key(reports[i])] = i;
+        }
+
+        // "Lost" reports held over from the last step, waiting for a "found"
+        std::vector<RefilterReport> previouslyDeferred;
+        previouslyDeferred.swap(_deferredLost);
+        std::set<ShapeKey> wasDeferred;
+        for (const RefilterReport &deferred : previouslyDeferred)
+        {
+            wasDeferred.insert(key(deferred));
+        }
+
+        const auto isTouching = [](const TouchMap &touches, const RefilterReport &report)
+        {
+            const auto it = touches.find(report.pair);
+            if (it == touches.end())
+            {
+                return false;
+            }
+            const bool flipped = it->first.bodyA != report.pair.bodyA;
+            const PxShape *onA = flipped ? report.onB : report.onA;
+            const PxShape *onB = flipped ? report.onA : report.onB;
+            return std::ranges::any_of(it->second, [&](const ShapePair &p) { return p.onA == onA && p.onB == onB; });
+        };
+
+        for (size_t i = 0; i < reports.size(); ++i)
+        {
+            RefilterReport &report = reports[i];
+            if (last[key(report)] != i)
+            {
+                delete report.data;
+                continue;
+            }
+
+            TouchMap &touches = report.trigger ? _triggerTouches : _collisionTouches;
+
+            // Lost, but the new filter data still allows the pair: PhysX may report it found again only
+            // in the next step (e.g. a partner that was asleep). Wait a step before calling it an Exit.
+            if (!report.found && !wasDeferred.contains(key(report)) && isTouching(touches, report) &&
+                LayersCollide(report.onA->getSimulationFilterData(), report.onB->getSimulationFilterData()))
+            {
+                WakeIfAsleep(report.onA);
+                WakeIfAsleep(report.onB);
+                _deferredLost.push_back(report); // takes report.data
+                continue;
+            }
+
+            const bool changed = report.found
+                                     ? AddTouch(touches, report.pair, report.onA, report.onB)
+                                     : RemoveTouch(touches, report.pair, report.onA, report.onB);
+            if (!changed)
+            {
+                delete report.data; // no change for the body pair (still touching, or other shapes are)
+                continue;
+            }
+
+            if (report.trigger)
+            {
+                const TriggerEvent event{report.pair, ColliderOf(report.onA), ColliderOf(report.onB)};
+                (report.found ? _newTriggers : _endedTriggers).push_back(event);
+            }
+            else
+            {
+                (report.found ? _newCollisions : _endedCollisions).push_back({report.pair, report.data});
+            }
+        }
+
+        // A deferred "lost" with no report for its pair in a whole further step was a real end: Exit now.
+        // One with a report was settled above ("found": still touching; "lost" again: ended there).
+        for (RefilterReport &deferred : previouslyDeferred)
+        {
+            TouchMap &touches = deferred.trigger ? _triggerTouches : _collisionTouches;
+            if (last.contains(key(deferred)) || !RemoveTouch(touches, deferred.pair, deferred.onA, deferred.onB))
+            {
+                delete deferred.data;
+                continue;
+            }
+            if (deferred.trigger)
+            {
+                _endedTriggers.push_back({deferred.pair, ColliderOf(deferred.onA), ColliderOf(deferred.onB)});
+            }
+            else
+            {
+                _endedCollisions.push_back({deferred.pair, deferred.data});
+            }
+        }
+
+        // In case PhysX didn't report a touch it no longer allows as lost: end it here, so a pair the
+        // matrix now rules out always gets its Exit
+        const auto ruledOut = [this](const ShapePair &shapes)
+        {
+            return (_refiltering.contains(shapes.onA) || _refiltering.contains(shapes.onB)) &&
+                   !LayersCollide(shapes.onA->getSimulationFilterData(), shapes.onB->getSimulationFilterData());
+        };
+        for (auto it = _collisionTouches.begin(); it != _collisionTouches.end();)
+        {
+            const auto removed = std::ranges::find_if(it->second, ruledOut);
+            if (removed == it->second.end())
+            {
+                ++it;
+                continue;
+            }
+            const ShapePair lastPair = *removed;
+            std::erase_if(it->second, ruledOut);
+            if (!it->second.empty())
+            {
+                ++it;
+                continue;
+            }
+            auto *data = new Collision();
+            data->collider = ColliderOf(lastPair.onA);
+            data->otherCollider = ColliderOf(lastPair.onB);
+            _endedCollisions.push_back({it->first, data});
+            it = _collisionTouches.erase(it);
+        }
+        for (auto it = _triggerTouches.begin(); it != _triggerTouches.end();)
+        {
+            const auto removed = std::ranges::find_if(it->second, ruledOut);
+            if (removed == it->second.end())
+            {
+                ++it;
+                continue;
+            }
+            const ShapePair lastPair = *removed;
+            std::erase_if(it->second, ruledOut);
+            if (!it->second.empty())
+            {
+                ++it;
+                continue;
+            }
+            _endedTriggers.push_back({it->first, ColliderOf(lastPair.onA), ColliderOf(lastPair.onB)});
+            it = _triggerTouches.erase(it);
+        }
     }
 
     // ========== Forces and Motion ==========
@@ -1030,6 +1374,13 @@ namespace N2Engine::Physics
             baseCollisionData->collider = ColliderOf(cp.shapes[0]);      // actors[0] is pair.bodyA
             baseCollisionData->otherCollider = ColliderOf(cp.shapes[1]);
 
+            const bool found = cp.events.isSet(PxPairFlag::eNOTIFY_TOUCH_FOUND);
+            if ((found || cp.events.isSet(PxPairFlag::eNOTIFY_TOUCH_LOST)) && IsRefiltering(cp.shapes[0], cp.shapes[1]))
+            {
+                _refilterReports.push_back({pair, cp.shapes[0], cp.shapes[1], found, false, baseCollisionData});
+                continue; // settled after the step
+            }
+
             // Enter on the body pair's first touching shape pair, Exit on its last
             if ((cp.events & PxPairFlag::eNOTIFY_TOUCH_FOUND) &&
                 AddTouch(_collisionTouches, pair, cp.shapes[0], cp.shapes[1]))
@@ -1069,6 +1420,13 @@ namespace N2Engine::Physics
             const PxShape *triggerShape = pairs[i].triggerShape;
             const PxShape *otherShape = pairs[i].otherShape;
             const TriggerEvent event{pair, ColliderOf(triggerShape), ColliderOf(otherShape)};
+
+            if (IsRefiltering(triggerShape, otherShape))
+            {
+                const bool found = static_cast<bool>(pairs[i].status & PxPairFlag::eNOTIFY_TOUCH_FOUND);
+                _refilterReports.push_back({pair, triggerShape, otherShape, found, true, nullptr});
+                continue; // settled after the step
+            }
 
             if ((pairs[i].status & PxPairFlag::eNOTIFY_TOUCH_FOUND) &&
                 AddTouch(_triggerTouches, pair, triggerShape, otherShape))
@@ -1273,6 +1631,8 @@ namespace N2Engine::Physics
         // A body pair whose last touching shape pair goes ends now: PhysX's touch-lost for the removed
         // shape is skipped, so the other body would otherwise never get Exit, and a re-created shape
         // would fire a second Enter. Both shapes are still alive here (released after this).
+        _pendingRefilter.erase(shape);
+        DropDeferred(shape);
         const auto involves = [shape](const ShapePair &p) { return p.onA == shape || p.onB == shape; };
         for (auto it = _collisionTouches.begin(); it != _collisionTouches.end();)
         {
@@ -1653,7 +2013,8 @@ namespace N2Engine::Physics
         uint32_t layerMask)
     {
         hit = RaycastHit{};
-        if (!_scene)
+        // An all-zero query filter turns PhysX's layer test off (it would hit everything); no layers, no hit
+        if (!_scene || layerMask == 0)
         {
             return false;
         }
@@ -1686,7 +2047,7 @@ namespace N2Engine::Physics
     {
         hits.clear();
 
-        if (!_scene)
+        if (!_scene || layerMask == 0) // as in Raycast
             return 0;
 
         Math::Vector3 dir = direction.Normalized();
@@ -1738,7 +2099,7 @@ namespace N2Engine::Physics
         const uint32_t layerMask)
     {
         hit = RaycastHit{};
-        if (!_scene)
+        if (!_scene || layerMask == 0) // as in Raycast
         {
             return false;
         }

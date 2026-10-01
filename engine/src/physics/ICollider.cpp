@@ -156,6 +156,18 @@ namespace N2Engine::Physics
         }
     }
 
+    void ICollider::OnLayerChanged()
+    {
+        // Shapes that aren't attached take the layer when they are (AttachShape reads it)
+        if (!_handle.IsValid() || !_shapesAttached)
+            return;
+
+        if (auto* backend = Application::GetInstance().Get3DPhysicsBackend())
+        {
+            backend->SetColliderLayer(_handle, this, _gameObject.GetLayer());
+        }
+    }
+
     void ICollider::SetMaterial(const PhysicsMaterial& material)
     {
         _material = material;

@@ -110,6 +110,14 @@ namespace N2Engine::Physics
         /// Only the given collider's shapes; other colliders on the body keep their own setting
         virtual void SetIsTrigger(PhysicsBodyHandle body, ICollider* collider, bool isTrigger) = 0;
 
+        /// Moves the collider's shapes to a layer (see Layers): its query layer, and which layers it collides
+        /// with. Existing pairs are filtered again in the next step; one the matrix now rules out ends with an
+        /// Exit, and one it now allows starts with an Enter if the shapes overlap.
+        virtual void SetColliderLayer(PhysicsBodyHandle body, ICollider* collider, int layer) = 0;
+        /// Re-reads Layers' collision matrix into every shape and filters the affected pairs again, as
+        /// SetColliderLayer does. Layers calls it whenever the matrix changes.
+        virtual void RefreshCollisionMatrix() = 0;
+
         virtual void AddForce(PhysicsBodyHandle body, const Math::Vector3& force) = 0;
         virtual void AddImpulse(PhysicsBodyHandle body, const Math::Vector3& impulse) = 0;
         virtual void SetVelocity(PhysicsBodyHandle body, const Math::Vector3& velocity) = 0;
@@ -129,6 +137,8 @@ namespace N2Engine::Physics
         virtual void SetGravity(const Math::Vector3& gravity) = 0;
         [[nodiscard]] virtual Math::Vector3 GetGravity() const = 0;
 
+        // Queries: layerMask selects the layers hit (see Layers); 0 hits nothing. Raycast's wrappers default
+        // it to Layers::DefaultRaycastMask.
         virtual bool Raycast(
             const Math::Vector3& origin,
             const Math::Vector3& direction,
