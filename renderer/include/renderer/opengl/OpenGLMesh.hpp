@@ -1,6 +1,8 @@
 // renderer/opengl/OpenGLMesh.hpp
 #pragma once
 
+#include <cstddef>
+
 #include <glad/glad.h>
 
 #include "renderer/common/IMesh.hpp"
@@ -15,6 +17,10 @@ namespace Renderer::OpenGL
         ~OpenGLMesh() override;
 
         bool Initialize(const Common::MeshData &meshData);
+        /// Replaces the vertex and index data, keeping the same GL objects. Data that fits in the current
+        /// buffers is written into them; larger data reallocates them. False (nothing changed) if the mesh
+        /// isn't initialized or meshData has no vertices.
+        bool Update(const Common::MeshData &meshData);
         void Destroy();
 
         bool IsValid() const override { return m_isValid; }
@@ -32,6 +38,9 @@ namespace Renderer::OpenGL
         GLuint m_EBO = 0;
         uint32_t m_indexCount = 0;
         uint32_t m_vertexCount = 0;
+        // What the buffers can hold without reallocating
+        std::size_t m_vertexCapacity = 0;
+        std::size_t m_indexCapacity = 0;
         bool m_isValid = false;
     };
 }
