@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lua scripting · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html" aria-current="page">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Lua scripting</h1>
+<p class="lead">N2Engine embeds Lua 5.4 through sol2. One process-wide <code>LuaRuntime</code> owns a single Lua state with the engine bindings; <code>LuaComponent</code> runs a behaviour script on a GameObject. This page covers the runtime, the script shape and lifecycle, serializable fields, the checked handles scripts receive instead of raw engine pointers, subscriptions, and the <code>engine-api.lua</code> annotation file.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#runtime">LuaRuntime</a></li>
+<li><a href="#modules">Modules and <code>require</code></a></li>
+<li><a href="#luacomponent">LuaComponent and the script table</a></li>
+<li><a href="#lifecycle">Lifecycle callbacks and their order</a></li>
+<li><a href="#errors">Errors and how they are reported</a></li>
+<li><a href="#fields">Serializable fields</a></li>
+<li><a href="#handles">Checked handles</a></li>
+<li><a href="#ownership">Ownership and garbage collection</a></li>
+<li><a href="#handle-api">Handle-returning APIs and argument rules</a></li>
+<li><a href="#collisions">Collision and Trigger arguments</a></li>
+<li><a href="#subscriptions">Subscriptions and script lifetime</a></li>
+<li><a href="#values">Value types, constants and JSON</a></li>
+<li><a href="#still-raw">What is still raw</a></li>
+<li><a href="#reload">Reloading scripts</a></li>
+<li><a href="#engine-api">The <code>engine-api.lua</code> annotation file</a></li>
+<li><a href="#examples">Example scripts</a></li>
+<li><a href="#tests">Tests</a></li>
+</ol>
+</div>
+
+<h2 id="runtime">LuaRuntime</h2>
+<p><code>LuaRuntime</code> is a lazily created singleton (<code>LuaRuntime::Instance()</code>). Its constructor opens the standard libraries <code>base</code>, <code>package</code>, <code>math</code>, <code>string</code> and <code>table</code> only. <code>io</code>, <code>os</code>, <code>debug</code>, <code>utf8</code> and <code>coroutine</code> are not opened, so <code>coroutine.create</code> is unavailable to scripts (engine coroutines are C++-only; see <a href="coroutines.html">Coroutines</a>).</p>
+<p>All scripts share this one Lua state. Globals written by one script (or by a scene setup script) are visible to every other script.</p>
+
+<h3 id="runtime-initialize">Initialize</h3>
+<p><code>Initialize()</code> registers every binding group in a fixed order (math, core, utility, physics, audio, input, events, time, debug, application, window, camera, components), then installs the module system and finally aliases <code>T.new</code> to the call constructor for <code>Vector2</code>, <code>Vector3</code>, <code>Vector4</code>, <code>Quaternion</code>, <code>Color</code>, <code>PhysicsMaterial</code> and <code>BoundingBox</code>, so both <code>Vector3(1, 2, 3)</code> and <code>Vector3.new(1, 2, 3)</code> work.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Situation</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>First call, all bindings register</td><td>Logs "LuaRuntime initialized with all bindings", returns <code>true</code></td></tr>
+<tr><td>First call, a binding throws</td><td>Logs "LuaRuntime failed to initialize: ...", returns <code>false</code></td></tr>
+<tr><td>Any later call</td><td>Returns the first result without re-registering anything</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>Application::Init</code> calls <code>Initialize()</code> and records the result as the "Scripting" subsystem status (Failed with "Lua bindings failed to register (see log)"). Tests and tools that do not run <code>Application::Init</code> call it themselves.</p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Calling <code>Initialize()</code> again is safe: values created before the second call keep working. Re-registering a usertype in the same state would strip the metatables of existing values, which is why later calls are no-ops.</p>
+</div>
+<p class="src">Source: <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>LuaRuntime::LuaRuntime</code>, <code>LuaRuntime::Initialize</code>, <code>LuaRuntime::RegisterBindings</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; tests: <code>LuaTest.RegistersEngineGlobals</code>, <code>LuaTest.InitializeTwiceKeepsUsertypesWorking</code>, <code>LuaTest.OpensOnlySafeStandardLibraries</code></p>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>LuaTest.OpensOnlySafeStandardLibraries</code> says scripts "can't touch the filesystem", but the <code>base</code> library is opened in full, and it includes <code>dofile</code>, <code>loadfile</code> and <code>load</code>. Nothing in <code>LuaRuntime::LuaRuntime</code> removes them. Whether file access through <code>dofile</code>/<code>loadfile</code> is meant to be allowed is not stated.</p>
+</div>
+
+<h3 id="runtime-runfile">RunFile</h3>
+<p><code>RunFile(path)</code> loads a <code>.lua</code> file through <code>ResourceLoader</code> and runs it once in the shared state, for example a scene setup script. It returns <code>false</code> and logs "Lua script not found: ..." or "Error running &lt;path&gt;: ..." on failure. The chunk is named after the path, so error messages point at the file.</p>
+<p class="src">Source: <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>LuaRuntime::RunFile</code>; <code>lua_project/src/Main.cpp</code>; tests: <code>LuaProjectSceneTest.RunFileReportsMissingScripts</code></p>
+
+<h3 id="runtime-lifetime">Lifetime and Destroy</h3>
+<p>The runtime lives for the whole process. <code>LuaRuntime::Destroy()</code> is private and nothing calls it: destroying the state while components still hold <code>sol::table</code>/<code>sol::function</code> references into it would leave them dangling (made private in PR #24).</p>
+<p class="src">Source: <code>engine/include/engine/scripting/LuaRuntime.hpp</code> — <code>LuaRuntime::Destroy</code></p>
+
+<h3 id="sol-safeties">sol2 safety checks <span class="badge">PR #29</span></h3>
+<p><code>engine/CMakeLists.txt</code> defines <code>SOL_ALL_SAFETIES_ON=1</code> as a PUBLIC compile definition on the <code>engine</code> target. sol therefore type-checks arguments in every build configuration, not only Debug. A wrong argument (nil where a GameObject is expected, a handle of the wrong type, <code>rb.SetMass(5)</code> with <code>.</code> instead of <code>:</code>) becomes a Lua error at the call site rather than undefined behaviour in Release builds.</p>
+<p class="src">Source: <code>engine/CMakeLists.txt</code>; tests: <code>LuaHandleTest.BadArgumentsAreCleanErrors</code></p>
+
+<h2 id="modules">Modules and <code>require</code></h2>
+<p><code>Initialize</code> replaces the global <code>require</code> with an engine version:</p>
+<ol class="steps">
+<li>If the module name is already in the runtime's module cache, the cached table is returned.</li>
+<li>Otherwise dots become slashes and <code>.lua</code> is appended: <code>require("util.helpers")</code> loads <code>res://util/helpers.lua</code> through <code>ResourceLoader</code>.</li>
+<li>If the file cannot be loaded, it logs "Failed to require module: ..." and returns <code>nil</code>.</li>
+<li>Otherwise the file runs (<code>LoadScriptAsModule</code>). If it returns a table, that table is the module; any other return value gives an empty table. The module is cached under its module name.</li>
+<li>If the module raises an error while loading, it logs "Failed to load module ...: ..." and returns a new empty table, which is <em>not</em> cached, so the next <code>require</code> runs the file again.</li>
+</ol>
+<p>The global <code>_loaded_modules()</code> returns the names of the cached modules. <code>LuaRuntime::GetModule(name)</code> reads the cache from C++.</p>
+<p class="src">Source: <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>LuaRuntime::SetupModuleSystem</code>, <code>LuaRuntime::LoadScriptAsModule</code>, <code>LuaRuntime::PathToModuleName</code>; tests: <code>LuaScriptTest.RequireLoadsModulesFromAssets</code>, <code>LuaScriptTest.RequireOfMissingModuleReturnsNil</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Behaviour scripts attached with <code>LuaComponent:SetScript</code> do not go through the module cache. Each <code>SetScript</code> runs the whole file again, so every component gets its own class table and its own file-scope locals. Shared state belongs in a <code>require</code>d module.</p>
+</div>
+
+<h2 id="luacomponent">LuaComponent and the script table</h2>
+<p>A behaviour script is a file that returns a table, the script's "class". <code>SetScript(path)</code> does the following:</p>
+<ol class="steps">
+<li>Records the path and drops any previous instance.</li>
+<li>Loads the file through <code>ResourceLoader</code>. If it is missing, it logs a warning, sets <code>HasMissingScript()</code> and stops.</li>
+<li>Runs the file. If it raises an error or does not return a table, it logs an error and sets <code>HasMissingScript()</code>.</li>
+<li>Creates a fresh instance table whose metatable is the class table, and sets <code>self.component</code> (this <code>LuaComponent</code>) and <code>self.gameObject</code> (its GameObject) on it. Both are checked handles <span class="badge">PR #29</span>.</li>
+<li>Reads <code>SerializableFields</code> and injects field values into the instance (see <a href="#fields">Serializable fields</a>).</li>
+<li>Caches which per-frame and physics callbacks exist.</li>
+<li>Registers a reload callback for the module name, replacing any it registered before.</li>
+</ol>
+<p>The instance's metatable is the class table itself, not a table with <code>__index</code> set for you. The class must set <code>Class.__index = Class</code>, or method lookups on <code>self</code> find nothing and the callbacks are never called. No error is reported in that case.</p>
+
+<pre class="lang-lua"><code>local Mover = {}
+Mover.__index = Mover          -- required: the instance's metatable is this table
+
+function Mover:OnUpdate()
+    local p = self.gameObject:GetPositionable()
+    if p ~= nil then
+        p:SetPosition(p:GetPosition() + Vector3.Up * Time.deltaTime)
+    end
+end
+
+return Mover                   -- anything other than a table: "Script must return a table"
+</code></pre>
+
+<p>From Lua, a component is added and given a script like this. Do it before the object joins the scene, or in the same frame (see <a href="#lifecycle">Lifecycle</a>):</p>
+<pre class="lang-lua"><code>local go = GameObject.Create("Mover")
+go:AddComponent("LuaComponent"):SetScript("res://scripts/Mover.lua")
+SceneManager.GetCurrentScene():AddRootGameObject(go)
+</code></pre>
+<p>The <code>LuaComponent</code> Lua type has <code>SetScript(path)</code>, <code>GetScriptPath()</code>, <code>HasMissingScript()</code> and the methods every component handle has (<a href="#handles">below</a>).</p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::SetScript</code>, <code>LuaComponent::InitializeScriptInstance</code>, <code>LuaComponent::CacheLifecycleMethods</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>BindComponents</code>; tests: <code>LuaScriptTest.ComponentRunsLifecycleMethods</code>, <code>LuaScriptTest.InstancesDoNotShareState</code>, <code>LuaScriptTest.ScriptMustReturnATable</code>, <code>LuaScriptTest.SyntaxErrorIsReportedAsMissing</code>, <code>LuaScriptTest.MissingScriptIsReportedAndSafe</code></p>
+
+<h3 id="releasescript">ReleaseScript</h3>
+<p><code>ReleaseScript()</code> cuts the script off from its component. It runs at the end of <code>OnDestroy</code> and again in <code>~LuaComponent</code> (for components freed without <code>OnDestroy</code>), and is safe to call twice. It:</p>
+<ul>
+<li>sets the component's lifetime flag to false, so subscriptions the script made stop firing (see <a href="#subscriptions">Subscriptions</a>);</li>
+<li>removes the component's reload callbacks;</li>
+<li>sets <code>self.component</code> and <code>self.gameObject</code> to <code>nil</code> on the instance. A closure that kept <code>self</code> then gets an "attempt to index a nil value" error instead of touching freed memory.</li>
+</ul>
+<p>Copies of those handles the script made earlier (<code>local go = self.gameObject</code>) are not cleared, but they are checked handles and fail cleanly (see <a href="#handles">Checked handles</a>).</p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::ReleaseScript</code>, <code>LuaComponent::OnDestroy</code>, <code>LuaComponent::~LuaComponent</code>; tests: <code>LuaLifetimeTest.DestroyedScriptLosesComponentReferences</code>, <code>LuaHandleTest.CopiesOfSelfErrorAfterDestroy</code></p>
+
+<h2 id="lifecycle">Lifecycle callbacks and their order</h2>
+<p><code>LuaComponent</code> forwards these engine callbacks to methods of the same name on the script instance. Every call receives <code>self</code>. Each method is optional.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Script method</th><th>Argument</th><th>When it runs</th></tr></thead>
+<tbody>
+<tr><td><code>OnAttach</code></td><td></td><td>In the first <code>Scene::ProcessAttachQueue</code> after the component joins a scene: at the start of the next frame, before the fixed steps. This happens whether or not the object is active. The component joins the update list only after this. Re-parenting within the same scene does not queue it again.</td></tr>
+<tr><td><code>OnFixedUpdate</code></td><td></td><td>Once per fixed step (0 to n per frame), before the physics step. No fixed steps while <code>timeScale</code> is 0.</td></tr>
+<tr><td><code>OnCollisionEnter/Stay/Exit</code></td><td><code>Collision</code></td><td>After the physics step of each fixed step (see <a href="physics.html">Physics</a>)</td></tr>
+<tr><td><code>OnTriggerEnter/Stay/Exit</code></td><td><code>Trigger</code></td><td>Same as collisions</td></tr>
+<tr><td><code>OnUpdate</code></td><td></td><td>Once per frame, after the fixed steps</td></tr>
+<tr><td><code>OnLateUpdate</code></td><td></td><td>Once per frame, after <code>OnUpdate</code> and coroutines</td></tr>
+<tr><td><code>OnEnable</code> / <code>OnDisable</code></td><td></td><td>When the GameObject's effective active state changes (<code>GameObject:SetActive</code> on it or an ancestor), only for components whose own enable flag is on</td></tr>
+<tr><td><code>OnDestroy</code></td><td></td><td>Once, during teardown (destroy, <code>RemoveComponent</code>, scene switch), preceded by <code>OnDisable</code> if the component was enabled in an active hierarchy</td></tr>
+</tbody>
+</table>
+</div>
+<p>Per-frame callbacks (<code>OnUpdate</code>, <code>OnFixedUpdate</code>, <code>OnLateUpdate</code>) only reach components that are active: enabled, not marked for destruction, and active in the hierarchy. Destroys requested during a frame are processed after rendering, at the end of that frame. See <a href="application.html">Application &amp; frame loop</a> for the full frame order and <a href="gameobjects-components.html">GameObjects &amp; components</a> for the teardown sequence.</p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A script sees <code>OnDisable</code> and then <code>OnDestroy</code>, exactly once each, when its object is destroyed. During both callbacks <code>self.gameObject</code>, its Positionable and sibling components are still usable <span class="badge">PR #29</span>. This holds for all three teardown paths (destroy, scene switch, <code>RemoveComponent</code>).</p>
+</div>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::OnAttach</code> … <code>LuaComponent::OnTriggerExit</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::ProcessAttachQueue</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::RunDestroyCallbacks</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::NotifyActiveChanged</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code>; tests: <code>LuaLifetimeTest.ScriptSeesOnDisableThenOnDestroy</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfADestroyedObject</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOnSceneSwitch</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfARemovedComponent</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<ul>
+<li><strong>No initial OnEnable.</strong> <code>OnEnable</code> is not called when a component first attaches, only on a later inactive-to-active transition.</li>
+<li><strong><code>Component:SetActive</code> fires nothing.</strong> It only flips the component's own flag. <code>OnEnable</code>/<code>OnDisable</code> follow the GameObject's hierarchy state.</li>
+<li><strong>SetScript does not call OnAttach.</strong> If <code>SetScript</code> runs after the component's <code>OnAttach</code> pass, the new script's <code>OnAttach</code> never runs. The shipped <code>scene.lua</code> sets scripts before adding the objects to the scene.</li>
+<li><strong>File scope runs at SetScript time.</strong> The script's file-scope code runs inside <code>SetScript</code>, before <code>OnAttach</code>, and once per component.</li>
+</ul>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>OnApplicationQuit</code> is never forwarded to scripts. <code>Scene::OnApplicationQuit</code> calls <code>Component::OnApplicationQuit</code> on active components when the run ends, but <code>LuaComponent</code> (<code>engine/include/engine/scripting/LuaComponent.hpp</code>) does not override it. A script method named <code>OnApplicationQuit</code> is never called. It is not stated whether this is deliberate.</p>
+</div>
+
+<h2 id="errors">Errors and how they are reported</h2>
+<p>Every call into a script is a protected call. A Lua error is logged and never propagates into the engine loop. The component keeps running, and the same callback is called again next frame.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Situation</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>Script file not found</td><td>Warn "Script file not found or failed to load: ..."; <code>HasMissingScript()</code> true; at <code>OnAttach</code>, Warn "LuaComponent on '&lt;name&gt;' has missing script: ..."; every callback skipped</td></tr>
+<tr><td>Syntax or runtime error while loading the file</td><td>Error "Failed to load script: ..."; <code>HasMissingScript()</code> true</td></tr>
+<tr><td>File does not return a table</td><td>Error "Script must return a table"; <code>HasMissingScript()</code> true</td></tr>
+<tr><td>Error inside a callback</td><td>Error "Lua &lt;Method&gt; error in &lt;script path&gt;: &lt;message&gt;"; no exception</td></tr>
+<tr><td>Error inside a subscribed callback</td><td>Error "&lt;EventName&gt; callback error: &lt;message&gt;", e.g. "InputAction callback error"</td></tr>
+<tr><td>Method called on a destroyed object</td><td>Lua error "attempt to use a destroyed &lt;Type&gt;" at the call site <span class="badge">PR #29</span></td></tr>
+<tr><td><code>AddComponent</code>/<code>GetComponent</code> with an unknown name</td><td>Lua error "Unknown component type 'X'. Known types: ..."</td></tr>
+<tr><td>Wrong argument type, or <code>.</code> instead of <code>:</code></td><td>Lua error from sol's argument check <span class="badge">PR #29</span></td></tr>
+</tbody>
+</table>
+</div>
+<p>A Lua error raised inside a callback ends that callback. Any work after the failing line is skipped for that call.</p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::CallLuaMethod</code>, <code>LuaComponent::SetScript</code>, <code>LuaComponent::InitializeScriptInstance</code>; <code>engine/include/engine/scripting/ScriptCallback.hpp</code> — <code>MakeScriptCallback</code>; tests: <code>LuaScriptTest.RuntimeErrorIsContained</code>, <code>LuaSceneTest.UnknownComponentNameIsAnError</code>, <code>LuaHandleTest.BadArgumentsAreCleanErrors</code></p>
+
+<h2 id="fields">Serializable fields</h2>
+<p>A script declares editable, saved values in a <code>SerializableFields</code> table on its class. Each entry is either a shorthand value or a table with a <code>default</code> (and optionally a <code>type</code>):</p>
+<pre class="lang-lua"><code>local Fields = {}
+Fields.__index = Fields
+Fields.SerializableFields = {
+    count   = 3,                                   -- shorthand, stored as an integer
+    ratio   = 0.5,                                 -- shorthand, stored as a float
+    enabled = true,
+    label   = { type = "string", default = "hi" }, -- full form
+    offset  = { default = Vector3(0, 1, 0) },      -- stored as {"x":0,"y":1,"z":0}
+    target  = { type = "GameObject" },             -- reference field (see below)
+    body    = { type = "Rigidbody" },              -- reference to a component
+}
+
+function Fields:OnAttach()
+    Debug.Log(self.label .. " x" .. self.count)    -- values are fields on self
+end
+return Fields
+</code></pre>
+
+<h3 id="fields-defaults">Defaults and the scriptData store</h3>
+<p>The component keeps field values as JSON in <code>scriptData</code>. On <code>SetScript</code>:</p>
+<ol class="steps">
+<li><strong>Extract:</strong> for each entry of <code>SerializableFields</code> that is not already in <code>scriptData</code>, the default (the shorthand value, or the table's <code>default</code>) is stored. Only numbers, booleans, strings and <code>Vector3</code> defaults are stored. A Lua integer is stored as a JSON integer and a float as a JSON float. A <code>Vector3</code> is stored as <code>{"x", "y", "z"}</code>.</li>
+<li><strong>Inject:</strong> every <code>scriptData</code> entry is written onto the instance table as <code>self.&lt;name&gt;</code>. JSON floats become Lua numbers (via <code>float</code>), integers become Lua integers (via <code>int</code>), booleans and strings unchanged. An object with an <code>"x"</code> key becomes a <code>Vector3</code>. Missing or non-numeric axes become 0, so <code>{"x": 1}</code> gives <code>Vector3(1, 0, 0)</code>.</li>
+</ol>
+<p>Values already in <code>scriptData</code> win over defaults. A scene file's saved values therefore override the script's defaults, because <code>Deserialize</code> reads <code>scriptData</code> before it calls <code>SetScript</code>. <code>SetScriptData(json)</code> replaces the store and re-injects it. <code>SetField&lt;T&gt;</code>/<code>GetField&lt;T&gt;</code> (instantiated for <code>int</code>, <code>float</code>, <code>bool</code>, <code>std::string</code>) write and read the store from C++. <code>SetField</code> also writes the live instance.</p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::ExtractSerializableFields</code>, <code>LuaComponent::InjectFieldsIntoScript</code>, <code>LuaComponent::SetScriptData</code>, <code>LuaComponent::GetField</code>, <code>LuaComponent::SetField</code>; tests: <code>LuaScriptTest.SerializableFieldDefaultsAndOverrides</code>, <code>LuaRobustnessTest.ShorthandFieldDefaultsAreRead</code>, <code>LuaRobustnessTest.PartialVectorFieldDefaultsMissingAxesToZero</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<ul>
+<li><strong>Unsupported defaults:</strong> a default of another type (<code>Vector2</code>, <code>Color</code>, <code>Quaternion</code>, a table) is not stored and not injected. <code>self.&lt;name&gt;</code> is then <code>nil</code> unless the class table defines it.</li>
+<li><strong>Script changes are not saved:</strong> the store is not updated when the script assigns <code>self.speed = 10</code>. <code>Serialize</code> writes <code>scriptData</code>, so runtime changes made in Lua are not saved.</li>
+<li><strong>Precision on injection:</strong> floats go through <code>float</code> (0.1 arrives as 0.100000001…), and integers go through <code>int</code>.</li>
+<li><strong>Extra keys:</strong> every key in <code>scriptData</code> is injected, including keys the script does not declare.</li>
+</ul>
+<p>Before PR #24, a shorthand entry aborted the process (it was cast to a table without checks), integer defaults became floats, and a partial vector threw out of scene loading.</p>
+</div>
+
+<h3 id="fields-serialization">How a LuaComponent serializes</h3>
+<pre class="lang-json"><code>{
+  "uuid": "…", "isActive": true,
+  "scriptUUID": "…",                       // or "scriptPath" when the script has no meta UUID
+  "scriptData": {
+    "count": 3, "ratio": 0.5, "label": "hi",
+    "offset": { "x": 0.0, "y": 1.0, "z": 0.0 },
+    "target": { "$ref": "…uuid…" },         // reference field
+    "body":   { "$ref": null }              // null reference: self.body = nil
+  }
+}</code></pre>
+<p><code>Deserialize</code> resolves <code>scriptUUID</code> through <code>ResourceLoader</code> metadata. An unknown UUID logs "Script UUID not found" and marks the script missing. <code>scriptPath</code> is the fallback for older files. See <a href="serialization.html">Serialization</a>.</p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::Serialize</code>, <code>LuaComponent::Deserialize</code></p>
+
+<h3 id="fields-references">Reference fields</h3>
+<p>A <code>scriptData</code> entry of the form <code>{"$ref": "&lt;uuid&gt;"}</code> is a reference. References are resolved after the whole scene has loaded, through the <code>ReferenceResolver</code>'s pending references (only when <code>Deserialize</code> got a resolver). The field's <code>type</code> in <code>SerializableFields</code> decides what is looked up:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field <code>type</code></th><th>Lookup</th><th>Value on <code>self</code></th></tr></thead>
+<tbody>
+<tr><td><code>"GameObject"</code></td><td><code>FindGameObject(uuid)</code></td><td>A GameObject handle, or <code>nil</code> if not found</td></tr>
+<tr><td>A scriptable component name (<code>"Rigidbody"</code>, <code>"BoxCollider"</code>, <code>"LuaComponent"</code>, …), or any name longer than 9 characters ending in <code>"Component"</code></td><td><code>FindComponent(uuid)</code></td><td>A component handle of its concrete Lua type (e.g. <code>Rigidbody</code>), or <code>Component</code> for types without one; <code>nil</code> if not found</td></tr>
+<tr><td>Anything else, or a shorthand field (no table, no type)</td><td>none</td><td>Not set</td></tr>
+</tbody>
+</table>
+</div>
+<p>A <code>null</code> <code>$ref</code> sets the field to <code>nil</code>. An invalid UUID string logs an error and skips the field. A reference that is not found logs a warning, sets the field to <code>nil</code> and sets <code>HasUnresolvedReferences()</code>. Before PR #24 only names ending in "Component" counted, so <code>type = "Rigidbody"</code> fields were silently skipped.</p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::ResolveReferences</code>, <code>LuaComponent::IsComponentType</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>ComponentToLua</code>; tests: <code>LuaRobustnessTest.ScriptableComponentNamesAreReferenceTypes</code></p>
+
+<h2 id="handles">Checked handles <span class="badge">PR #29</span></h2>
+<p>Lua never receives a raw pointer to a GameObject, component or Positionable. It receives small handle types, defined in <code>engine/include/engine/scripting/LuaHandles.hpp</code>. A script may keep a handle anywhere (in <code>self</code>, a global, a closure, a stored collision). Using it after its object is gone raises a Lua error instead of touching freed memory.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Handle (C++)</th><th>Lua type</th><th>Holds</th></tr></thead>
+<tbody>
+<tr><td><code>GameObjectRef</code></td><td><code>GameObject</code></td><td>A <code>weak_ptr&lt;GameObject&gt;</code>, plus a strong pointer only when Lua owns the object (<a href="#ownership">Ownership</a>)</td></tr>
+<tr><td><code>ComponentRef&lt;T&gt;</code></td><td><code>Rigidbody</code>, <code>BoxCollider</code>, …, or <code>Component</code></td><td>A weak pointer to the owning GameObject, a weak pointer to the component's lifetime token (<code>Component::GetLifetimeToken()</code>) and a typed pointer</td></tr>
+<tr><td><code>PositionableRef</code></td><td><code>Positionable</code></td><td>A <code>GameObjectRef</code> to its owner (a Positionable lives exactly as long as its GameObject)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="handle-validity">When a handle is valid</h3>
+<p>A handle is valid from creation until its object's <strong>teardown has finished</strong> (<code>GameObject::IsTornDown()</code>). <code>IsTornDown</code> becomes true:</p>
+<ul>
+<li>in <code>Scene::ProcessDestroyed</code>, after the OnDisable/OnDestroy pass over everything being destroyed;</li>
+<li>in <code>Scene::Clear</code> (scene switch), after the OnDestroy pass over the whole scene;</li>
+<li>immediately, when <code>Destroy()</code> is called on an object that is in no scene.</li>
+</ul>
+<p>Handles to the object, its components and to other objects torn down in the same pass therefore all keep working inside <code>OnDisable</code>/<code>OnDestroy</code>, and all fail afterwards. A component handle also becomes invalid when that component alone is freed (<code>RemoveComponent</code>), while the GameObject and its other components stay valid.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>After …</th><th>GameObject handle</th><th>Component handle</th></tr></thead>
+<tbody>
+<tr><td><code>go:Destroy()</code>, same frame</td><td>valid (destroy is deferred)</td><td>valid</td></tr>
+<tr><td>end-of-frame <code>ProcessDestroyed</code></td><td>invalid</td><td>invalid</td></tr>
+<tr><td>Scene switch</td><td>invalid</td><td>invalid</td></tr>
+<tr><td><code>RemoveComponent</code> of that component</td><td>valid</td><td>invalid (after its OnDisable/OnDestroy)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="handle-methods">Validity checks and errors</h3>
+<ul>
+<li><code>IsValid()</code> works on any handle, live or dead. Every component type also has <code>IsDestroyed()</code>, which is exactly <code>not IsValid()</code>.</li>
+<li>Every other method raises "attempt to use a destroyed &lt;Type&gt;" once the object is gone, for example "attempt to use a destroyed Rigidbody" or "attempt to use a destroyed GameObject". A Positionable raises "attempt to use the Positionable of a destroyed GameObject". This includes <code>IsActive()</code>, which used to answer <code>false</code>.</li>
+<li><code>GameObject:Destroy()</code> on an object that is already destroyed, or freed, does nothing.</li>
+<li>A dead handle is <strong>not</strong> <code>== nil</code>. Lua does not call <code>__eq</code> when comparing userdata with <code>nil</code>, so <code>if self.target == nil</code> does not detect a destroyed target. Use <code>IsValid()</code>.</li>
+</ul>
+<pre class="lang-lua"><code>-- A cached reference may outlive its object
+if self.target ~= nil and self.target:IsValid() then
+    self.target:GetPositionable():SetPosition(Vector3.Zero)
+end
+</code></pre>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Lua's <code>Component:IsDestroyed()</code> is not the C++ <code>Component::IsDestroyed()</code>. In C++ it is true as soon as the component is marked for destruction, which is before <code>OnDestroy</code> returns. In Lua it is true only once the handle is invalid. Inside <code>OnDestroy</code>, Lua's <code>self.component:IsDestroyed()</code> is <code>false</code> and <code>IsActive()</code> is <code>false</code>.</p>
+</div>
+
+<h3 id="handle-equality">Equality</h3>
+<p>Each push to Lua creates a separate userdata, so <code>==</code> is implemented by <code>__eq</code>. It compares ownership (<code>weak_ptr::owner_before</code>), not addresses. As a result:</p>
+<ul>
+<li>two handles to the same object are equal, for example <code>go:GetComponent("SphereRenderer") == renderer</code> or <code>scene:FindGameObject("A") == a</code>;</li>
+<li>equality still holds after the object is freed, and a reused address never makes two different objects equal;</li>
+<li>component equality works across handle types: a concrete <code>SphereRenderer</code> handle equals a plain <code>Component</code> handle to the same component;</li>
+<li>a GameObject handle never equals a component handle.</li>
+</ul>
+<p class="src">Source: <code>engine/include/engine/scripting/LuaHandles.hpp</code> — <code>GameObjectRef</code>, <code>ComponentRefBase</code>, <code>ComponentRef</code>, <code>PositionableRef</code>, <code>SameRef</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>SameComponent</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::Clear</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Destroy</code>; tests: <code>LuaHandleTest.LiveHandlesKeepWorking</code>, <code>LuaHandleTest.CachedComponentErrorsAfterRemoveComponent</code>, <code>LuaHandleTest.CachedHandlesErrorAfterDestroy</code>, <code>LuaHandleTest.CachedHandlesErrorAfterSceneSwitch</code>, <code>LuaHandleTest.HandlesToTheSameObjectAreEqual</code>, <code>LuaHandleTest.ConcreteAndPlainComponentHandlesAreEqual</code></p>
+
+<h3 id="forward">How bindings use handles: Forward and BindComponentType</h3>
+<p>Bindings expose engine methods on handles with <code>Forward&lt;Handle, &amp;Class::Method&gt;()</code>. The generated function pins the object, calls the method and returns the result:</p>
+<ul>
+<li><strong>Pinning:</strong> <code>Pin()</code> throws (which becomes the Lua error above) if the object is gone. Otherwise it holds a <code>shared_ptr</code> to the owning GameObject for the duration of the call, so a call that re-enters Lua (e.g. <code>SetScript</code>, <code>SetActive</code>) and triggers a GC cannot free the object mid-call.</li>
+<li><strong>Copies:</strong> a method returning an lvalue reference returns a copy to Lua. <code>CubeRenderer:GetColor()</code> or <code>BoxCollider:GetSize()</code> give values that stay valid after the object dies.</li>
+<li><strong>Compile-time check:</strong> a <code>static_assert</code> rejects forwarding any method that returns a raw or smart pointer, a <code>Component</code>, a <code>GameObject</code> or a <code>Positionable</code>. Such methods must be bound by hand and return a handle.</li>
+</ul>
+<p><code>BindComponentType&lt;T&gt;(lua, name, members...)</code> registers a component's Lua type on <code>ComponentRef&lt;T&gt;</code>. It sets the type's name used in error messages, has no constructor, and adds <code>IsValid</code>, <code>IsDestroyed</code>, <code>IsActive</code>, <code>SetActive</code>, <code>GetGameObject</code> and <code>==</code> to the given members. A <code>Component</code> type registered the same way is what <code>ComponentToLua</code> returns for components with no Lua type of their own.</p>
+<pre class="lang-cpp"><code>using RigidbodyRef = ComponentRef&lt;Physics::Rigidbody&gt;;
+BindComponentType&lt;Physics::Rigidbody&gt;(lua, "Rigidbody",
+    "SetMass", Forward&lt;RigidbodyRef, &amp;Physics::Rigidbody::SetMass&gt;(),
+    "GetMass", Forward&lt;RigidbodyRef, &amp;Physics::Rigidbody::GetMass&gt;());
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/scripting/LuaHandles.hpp</code> — <code>Forward</code>, <code>Detail::CallPinned</code>, <code>Detail::IsEngineObjectReturn</code>; <code>engine/include/engine/scripting/bindings/LuaBindings.hpp</code> — <code>BindComponentType</code>; tests: <code>LuaHandleTest.ComponentCallKeepsItsGameObjectAlive</code></p>
+
+<h2 id="ownership">Ownership and garbage collection <span class="badge">PR #29</span></h2>
+<p>A handle does not keep its object alive, with one exception. A handle is <em>owning</em> when the script may be the object's only owner:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Operation</th><th>Effect on the handle</th></tr></thead>
+<tbody>
+<tr><td><code>GameObject.Create(name)</code> / <code>GameObject(name)</code></td><td>The returned handle owns the new object</td></tr>
+<tr><td><code>parent:RemoveChild(child)</code></td><td>If <code>child</code> was a child and is now detached, the <code>child</code> handle takes ownership</td></tr>
+<tr><td><code>scene:RemoveRootGameObject(go)</code></td><td>If it was a root and was removed, the <code>go</code> handle takes ownership</td></tr>
+<tr><td><code>parent:AddChild(child)</code></td><td>If the parent now holds it, the <code>child</code> handle releases ownership</td></tr>
+<tr><td><code>scene:AddRootGameObject(go)</code></td><td>If it is now one of the scene's roots, the <code>go</code> handle releases ownership</td></tr>
+</tbody>
+</table>
+</div>
+<p>Ownership belongs to that handle (that userdata). A Lua variable that aliases it shares it. A separately obtained handle to the same object, for example from another <code>FindChild</code>, stays weak. When the last reference to an owning handle is collected, a Lua-owned object that never joined a scene is freed.</p>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>A Lua-owned object that never joins a scene, and whose own script keeps the owning handle (for example in <code>self</code>), forms a reference cycle through the Lua registry. Lua's GC cannot collect it, so it is never freed. Add created objects to a scene or parent, or drop the owning handle.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/scripting/LuaHandles.hpp</code> — <code>GameObjectRef::Owning</code>, <code>TakeOwnership</code>, <code>ReleaseOwnership</code>; <code>engine/src/scripting/bindings/LuaCoreBindings.cpp</code> — <code>BindCore</code>; tests: <code>LuaHandleTest.DetachedChildStaysUsable</code>, <code>LuaHandleTest.RemoveRootGameObjectHandsOwnershipToTheHandle</code>, <code>LuaHandleTest.LuaOwnedObjectIsFreedWithItsLastHandle</code>, <code>LuaHandleTest.ComponentCallKeepsItsGameObjectAlive</code></p>
+
+<h2 id="handle-api">Handle-returning APIs and argument rules <span class="badge">PR #29</span></h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>go:GetParent()</code>, <code>go:FindChild(name)</code>, <code>go:FindChildRecursive(name)</code>, <code>scene:FindGameObject(name)</code></td><td>A GameObject handle, or <code>nil</code></td></tr>
+<tr><td><code>go:GetPositionable()</code></td><td>A Positionable handle, or <code>nil</code> if the object has none (<code>CreatePositionable()</code> first)</td></tr>
+<tr><td><code>go:GetComponent(name)</code></td><td>A typed handle to the first component of that type, or <code>nil</code></td></tr>
+<tr><td><code>go:AddComponent(name)</code></td><td>A typed handle to the new component</td></tr>
+<tr><td><code>scene:FindGameObjectsByTag(tag)</code>, <code>scene:GetAllGameObjects()</code>, <code>scene:GetRootGameObjects()</code></td><td>A plain Lua array of handles: a snapshot, not a live view of the scene's list</td></tr>
+<tr><td><code>component:GetGameObject()</code></td><td>A GameObject handle (error if the component is gone)</td></tr>
+<tr><td><code>go:AddChild(nil)</code>, <code>go:RemoveChild(nil)</code>, <code>scene:AddRootGameObject(nil)</code></td><td>Lua error "&lt;Function&gt;: expected a GameObject, got nil"</td></tr>
+<tr><td><code>scene:RemoveRootGameObject(nil)</code></td><td><code>false</code>; also <code>false</code> for an object that is not a root</td></tr>
+<tr><td><code>scene:DestroyGameObject(nil)</code></td><td><code>false</code>; also <code>false</code> for an object already destroyed or freed</td></tr>
+</tbody>
+</table>
+</div>
+<p>The names accepted by <code>AddComponent</code>/<code>GetComponent</code> are <code>Rigidbody</code>, <code>BoxCollider</code>, <code>SphereCollider</code>, <code>CapsuleCollider</code>, <code>CubeRenderer</code>, <code>SphereRenderer</code>, <code>AudioSource</code>, <code>AudioListener</code> and <code>LuaComponent</code> (<code>Bindings::GetScriptableComponentNames()</code>).</p>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaCoreBindings.cpp</code> — <code>RefOrNil</code>, <code>RefList</code>, <code>RequireRef</code>, <code>BindCore</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>ComponentTable</code>, <code>AddComponentByName</code>, <code>GetComponentByName</code>; tests: <code>LuaHandleTest.BadArgumentsAreCleanErrors</code>, <code>LuaHandleTest.DestroyGameObjectIsFalseForAnAlreadyDestroyedObject</code>, <code>LuaSceneTest.AddComponentReturnsTypedComponent</code>, <code>LuaSceneTest.GetComponentReturnsSameComponentOrNil</code>, <code>LuaSceneTest.EveryScriptableComponentCanBeAdded</code></p>
+
+<h2 id="collisions">Collision and Trigger arguments</h2>
+<p><code>OnCollision*</code> receives a <code>Collision</code> and <code>OnTrigger*</code> a <code>Trigger</code>. Since PR #24 they are Lua types; before that, any field access failed. Since PR #29 they are copies built by <code>CollisionToLua</code>/<code>TriggerToLua</code> whose object fields are handles <span class="badge">PR #29</span>. A script may keep one past the callback (<code>self.lastHit = collision</code>). Its object fields then follow the <a href="#handle-validity">handle rules</a>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Member</th><th>Collision</th><th>Trigger</th></tr></thead>
+<tbody>
+<tr><td><code>gameObject</code>, <code>otherGameObject</code></td><td>GameObject handle or <code>nil</code></td><td>same</td></tr>
+<tr><td><code>rigidbody</code>, <code>otherRigidbody</code></td><td><code>Rigidbody</code> handle, or <code>nil</code> (e.g. a static collider)</td><td>same</td></tr>
+<tr><td><code>relativeVelocity</code>, <code>impulse</code></td><td><code>Vector3</code></td><td>—</td></tr>
+<tr><td><code>contactCount</code></td><td>number of contacts</td><td>—</td></tr>
+<tr><td><code>GetContact(i)</code></td><td><code>ContactPoint</code> (read-only <code>point</code>, <code>normal</code>, <code>separation</code>, <code>normalImpulse</code>); <strong>1-based</strong>; <code>nil</code> out of range</td><td>—</td></tr>
+<tr><td><code>GetAverageContactPoint()</code></td><td><code>Vector3</code>, computed when the copy is made</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<pre class="lang-lua"><code>function Hazard:OnCollisionEnter(collision)
+    local other = collision.otherGameObject
+    if other == nil then return end
+    for i = 1, collision.contactCount do
+        local c = collision:GetContact(i)
+        Debug.Log(other:GetName() .. " contact at y=" .. c.point.y)
+    end
+end
+</code></pre>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaPhysicsBindings.cpp</code> — <code>LuaCollision</code>, <code>LuaTrigger</code>, <code>CollisionToLua</code>, <code>TriggerToLua</code>, <code>BindPhysics</code>; tests: <code>LuaRobustnessTest.CollisionIsReadableFromLua</code>, <code>LuaHandleTest.StoredCollisionOutlivesItsObjects</code></p>
+
+<h2 id="subscriptions">Subscriptions and script lifetime</h2>
+<p>Scripts subscribe to C++ events through <code>Subscribe(callback)</code> on <code>InputAction</code>, <code>InputActionEvent</code>, <code>Event</code>, <code>WindowResizeEvent</code> and <code>GameObjectEvent</code>. Each returns an id for <code>Unsubscribe(id)</code>. All five wrap the Lua function with <code>MakeScriptCallback</code>.</p>
+
+<h3 id="lifetime-scope">ScriptLifetimeScope</h3>
+<p><code>LuaComponent::CallLuaMethod</code> opens a <code>ScriptLifetimeScope</code> around every call into its script. The scope makes the component's lifetime flag "current" (thread-local) and restores the previous one on exit, so nested calls into another component's script are handled. <code>MakeScriptCallback</code> captures <code>ScriptLifetimeScope::Current()</code> when the subscription is made:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Where <code>Subscribe</code> is called</th><th>Captured owner</th><th>After the component is destroyed</th></tr></thead>
+<tbody>
+<tr><td>Inside a lifecycle callback (<code>OnAttach</code>, <code>OnUpdate</code>, <code>OnCollisionEnter</code>, …)</td><td>That component</td><td>Callback skipped</td></tr>
+<tr><td>Scene setup script (<code>RunFile</code>), any code outside a component call</td><td>None</td><td>Keeps firing (nothing cancels it)</td></tr>
+<tr><td>File scope of a behaviour script (runs inside <code>SetScript</code>)</td><td>Whatever is current: none, or the component whose callback called <code>SetScript</code></td><td>Not tied to the script's own component</td></tr>
+<tr><td>Inside another subscription's callback (dispatched from C++)</td><td>None</td><td>Keeps firing</td></tr>
+</tbody>
+</table>
+</div>
+<p>Subscribe from <code>OnAttach</code> (or another lifecycle method) so the subscription is tied to the component.</p>
+
+<h3 id="subscription-rules">Rules</h3>
+<ul>
+<li><strong>Skipped, not unsubscribed.</strong> A destroyed component's callbacks stay registered and are skipped at dispatch. The event they are registered on may already be gone (for example an action map replaced by <code>Input.CreateActionMap</code>), and unsubscribing from a stale event would be unsafe. A skipped callback stays registered until its event is destroyed, and still counts in <code>Event:GetSubscriberCount()</code>.</li>
+<li><strong>Errors are contained.</strong> A failing callback logs "&lt;EventName&gt; callback error: ..." and the dispatch continues.</li>
+<li><strong>Unsubscribing inside a handler is safe</strong> (PR #22), including a handler removing itself. It is not called again. Subscribing during dispatch is also safe, and the new subscriber first runs on the next dispatch.</li>
+<li><strong>Arguments:</strong> a <code>GameObject&amp;</code> argument (<code>GameObjectEvent</code>) arrives as a GameObject handle <span class="badge">PR #29</span>. Other class-type arguments, such as the <code>InputAction</code>, arrive by reference to the live object, not as a copy.</li>
+</ul>
+<pre class="lang-lua"><code>-- Fire once: unsubscribe from inside the handler
+function Opener:OnAttach()
+    local map = Input.LoadActionMap("Main Controls")
+    if map == nil then return end
+    local action = map:Get("Quit")
+    local id
+    id = action:Subscribe(function(a)
+        if a:GetPhase() == ActionPhase.Started then
+            a:Unsubscribe(id)
+            Debug.Log("first press")
+        end
+    end)
+end
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/scripting/ScriptCallback.hpp</code> — <code>ScriptLifetimeScope</code>, <code>MakeScriptCallback</code>, <code>Detail::ToLuaArg</code>; <code>engine/src/scripting/ScriptCallback.cpp</code>; <code>engine/src/scripting/bindings/LuaEventsBindings.cpp</code>; <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code>; <code>engine/include/engine/base/EventHandler.hpp</code>; tests: <code>LuaLifetimeTest.SubscriptionWorksWhileComponentLives</code>, <code>LuaLifetimeTest.SubscriptionStopsAfterDestroy</code>, <code>LuaLifetimeTest.SubscriptionStopsAfterSceneSwitch</code>, <code>LuaLifetimeTest.SubscriptionsOutsideComponentsKeepWorking</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Only <code>InputAction:OnStateChanged()</code> hands an event object to Lua (an <code>InputActionEvent</code>). No binding returns an <code>Event</code>, <code>WindowResizeEvent</code> or <code>GameObjectEvent</code> to scripts. Those usertypes are only reachable if C++ code puts such an event into the Lua state.</p>
+</div>
+
+<h2 id="values">Value types, constants and JSON</h2>
+<h3 id="constants">Immutable constants</h3>
+<p><code>Vector2</code>, <code>Vector3</code>, <code>Vector4</code> and <code>Quaternion</code> constants (<code>Vector3.Zero</code>, <code>Vector3.Up</code>, <code>Quaternion.Identity</code>, …) and the <code>Color</code> constants (<code>Color.Red</code>, …) are read-only properties that return a new copy on each access. Before PR #24 they were one shared object, so <code>local v = Vector3.Zero; v.y = 5</code> changed <code>Vector3.Zero</code> for every script. Math values are plain values: assigning one copies it. See <a href="math.html">Math &amp; SIMD</a>.</p>
+<pre class="lang-lua"><code>local v = Vector3.Zero
+v.y = 5
+assert(Vector3.Zero.y == 0)   -- the constant is unchanged
+</code></pre>
+<p>The engine's <code>Math</code> table (<code>Math.PI</code>, <code>Math.DEG_TO_RAD</code>, …) is a plain table of numbers. It is separate from Lua's standard <code>math</code> library.</p>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaMathBindings.cpp</code> — <code>BindMath</code>; <code>engine/src/scripting/bindings/LuaUtilityBindings.cpp</code> — <code>BindUtility</code>; tests: <code>LuaRobustnessTest.VectorConstantsCannotBeModified</code>, <code>LuaTest.MathConstants</code></p>
+
+<h3 id="luajson">LuaToJson and ActionMapJsonFromLua</h3>
+<p><code>LuaToJson(value)</code> (<code>engine/include/engine/scripting/LuaJson.hpp</code>) converts a Lua value for C++:</p>
+<ul>
+<li>booleans and strings map directly;</li>
+<li>numbers with an integral value below 2<sup>53</sup> become JSON integers (so <code>3.0</code> becomes <code>3</code>), others become floats;</li>
+<li>a table whose keys are exactly <code>1..n</code> becomes an array; any other table, including an empty one, becomes an object. Non-string keys are converted to their JSON text;</li>
+<li>functions, userdata (including vectors and handles) and <code>nil</code> become <code>null</code>;</li>
+<li>a table that contains itself, directly or indirectly, becomes <code>null</code> at the point it recurs, instead of overflowing the stack (PR #24). A table referenced twice without a cycle is converted twice.</li>
+</ul>
+<p><code>ActionMapJsonFromLua(actions)</code> builds the JSON <code>ActionMap::Deserialize</code> expects from <code>{ ["Action"] = { binding, ... } }</code>. It is what <code>Input.CreateActionMap</code> uses. Bindings keep their written order, and entries with a non-string key or a non-table value are skipped.</p>
+<p class="src">Source: <code>engine/src/scripting/LuaJson.cpp</code> — <code>LuaToJson</code>, <code>TableToJson</code>, <code>NumberToJson</code>, <code>ActionMapJsonFromLua</code>; tests: <code>LuaRobustnessTest.LuaToJsonSurvivesSelfReferencingTables</code>, <code>LuaSceneTest.LuaToJsonScalars</code>, <code>LuaSceneTest.LuaToJsonTables</code>, <code>LuaSceneTest.ActionMapJsonFromLuaKeepsBindingOrder</code>, <code>LuaSceneTest.ActionMapJsonFromLuaParsesAsActionMap</code></p>
+
+<h2 id="still-raw">What is still raw</h2>
+<p>Some objects still reach Lua as raw pointers or references. PR #29 leaves them out of scope, and a follow-up is planned. Do not keep these across a scene switch or past the object's life:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Value</th><th>From</th><th>Risk</th></tr></thead>
+<tbody>
+<tr><td><code>Scene</code></td><td><code>SceneManager.GetCurrentScene()</code> (<code>nil</code> with no scene loaded)</td><td>A stored scene dangles after a scene switch. Fetch it again when needed. A fix needs a lifetime token on <code>Scene</code>.</td></tr>
+<tr><td><code>Camera</code></td><td><code>Camera.Main()</code>, <code>Application.GetCamera()</code> (<code>nil</code> without a camera)</td><td>Lives as long as the application</td></tr>
+<tr><td><code>InputAction</code>, <code>ActionMap</code>, <code>InputActionEvent</code></td><td><code>Input.GetActionMap</code>/<code>LoadActionMap</code>/<code>CreateActionMap</code>, <code>map:Get(name)</code>, subscription arguments</td><td>A map replaced by <code>Input.CreateActionMap</code> with the same name leaves stored actions dangling</td></tr>
+<tr><td><code>Window</code>, <code>Mouse</code></td><td><code>Window.Get()</code>, <code>Mouse.Get()</code></td><td>Application lifetime</td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaCoreBindings.cpp</code> — <code>SceneManager</code> table; <code>engine/src/scripting/bindings/LuaCameraBindings.cpp</code>; <code>engine/src/scripting/bindings/LuaApplicationBindings.cpp</code>; <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code>; <code>engine/src/scripting/bindings/LuaWindowBindings.cpp</code>; tests: <code>LuaTest.MainCameraIsNilWithoutApplicationInit</code>, <code>LuaSceneTest.CreateActionMapWithoutWindowReturnsNil</code></p>
+
+<h2 id="reload">Reloading scripts</h2>
+<p><code>LuaRuntime::ReloadModule(path, script)</code> drops the cached module, reloads it, and then calls every reload callback registered for that module name. It iterates a copy, because a callback may itself call <code>SetScript</code> and so re-register. Reload callbacks are keyed by owner (PR #18):</p>
+<ul>
+<li><code>RegisterReloadCallback(module, fn, owner)</code> adds a callback;</li>
+<li><code>UnregisterReloadCallbacks(owner)</code> removes all callbacks of that owner, for any module (a null owner is ignored);</li>
+<li><code>ClearReloadCallbacks(module)</code> removes all callbacks for one module.</li>
+</ul>
+<p><code>LuaComponent::SetScript</code> replaces its own callback, so calling it twice does not duplicate it, and <code>ReleaseScript</code> removes it. The component's callback runs <code>ReloadScript()</code>. If the script was missing, that retries <code>SetScript</code>. Otherwise it re-runs the file into a new instance, restores the saved <code>scriptData</code>, re-injects it and re-caches the callbacks.</p>
+<p class="src">Source: <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>LuaRuntime::ReloadModule</code>, <code>RegisterReloadCallback</code>, <code>UnregisterReloadCallbacks</code>, <code>ClearReloadCallbacks</code>; <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::ReloadScript</code>; tests: <code>LuaLifetimeTest.ReloadCallbacksAreReplacedAndRemoved</code></p>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p>Nothing in <code>engine/</code>, <code>editor/</code> or <code>editor-server/</code> calls <code>LuaRuntime::ReloadModule</code>; only tests do. Hot reload is therefore not wired to a file watcher. In addition, <code>LuaComponent::ReloadScript</code> leaves these semantics unstated:</p>
+<ul>
+<li>It does not call <code>OnAttach</code> on the new instance.</li>
+<li>It does not release the old instance. Closures the old instance subscribed keep firing, because they share the same lifetime flag.</li>
+<li>It overwrites <code>scriptData</code> with the saved copy after extraction, so fields added by the new version get no default.</li>
+<li>It does not re-resolve <code>$ref</code> reference fields, so they become <code>nil</code>.</li>
+</ul>
+</div>
+
+<h2 id="engine-api">The <code>engine-api.lua</code> annotation file</h2>
+<p><code>engine/src/scripting/bindings/engine-api.lua</code> is a definition file for the Lua Language Server (LuaLS). It starts with <code>---@meta</code> and describes the bound API with <code>---@class</code>, <code>---@field</code>, <code>---@param</code> and <code>---@return</code> annotations over empty function stubs. The engine never loads it. Nothing in the build or runtime references it, and the bindings themselves are registered in C++. It exists only for editor completion, hover documentation and type checking.</p>
+<p>To use it, point LuaLS at the file or its folder as a library. In VS Code with the Lua extension, add the folder to <code>Lua.workspace.library</code> in the workspace settings, or in a <code>.luarc.json</code> at the project root. The repository ships neither.</p>
+<pre class="lang-json"><code>{
+  "workspace.library": ["../engine/src/scripting/bindings"],
+  "runtime.version": "Lua 5.4"
+}</code></pre>
+<p>Its "CORE OBJECTS" header documents the handle rules described above: validity through teardown, the "attempt to use a destroyed ..." error, <code>==</code> identity and ownership <span class="badge">PR #29</span>.</p>
+
+<h3 id="engine-api-globals">Globals it documents</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Global</th><th>Kind</th><th>What it covers</th><th>Binding source</th></tr></thead>
+<tbody>
+<tr><td><code>Math</code>, <code>Random</code></td><td>tables</td><td>Constants (<code>PI</code>, <code>DEG_TO_RAD</code>, <code>EPSILON</code>, …); <code>Random.Float/Range/Int/InUnitCircle/OnUnitCircle</code></td><td><code>LuaMathBindings.cpp</code></td></tr>
+<tr><td><code>Vector2</code>, <code>Vector3</code>, <code>Vector4</code>, <code>Quaternion</code>, <code>Matrix4</code></td><td>value types</td><td>Constructors, operators, methods, copy-returning constants</td><td><code>LuaMathBindings.cpp</code></td></tr>
+<tr><td><code>Color</code></td><td>value type</td><td><code>r g b a</code>, constants, <code>FromHex</code>/<code>ToHex</code></td><td><code>LuaUtilityBindings.cpp</code></td></tr>
+<tr><td><code>GameObject</code>, <code>Positionable</code>, <code>Component</code></td><td>handles</td><td>Create, hierarchy, find, components, validity</td><td><code>LuaCoreBindings.cpp</code>, <code>LuaComponentBindings.cpp</code></td></tr>
+<tr><td><code>CubeRenderer</code>, <code>SphereRenderer</code>, <code>LuaComponent</code></td><td>component handles</td><td>Renderer color/size; <code>SetScript</code></td><td><code>LuaComponentBindings.cpp</code></td></tr>
+<tr><td><code>Scene</code>, <code>SceneManager</code></td><td>raw / table</td><td>Find, roots, destroy; <code>GetCurrentScene</code>, <code>GetCurrentSceneIndex</code>, <code>LoadScene</code></td><td><code>LuaCoreBindings.cpp</code></td></tr>
+<tr><td><code>Rigidbody</code>, <code>BoxCollider</code>, <code>SphereCollider</code>, <code>CapsuleCollider</code>, <code>PhysicsMaterial</code>, <code>BodyType</code>, <code>Collision</code>, <code>Trigger</code>, <code>ContactPoint</code></td><td>handles / values / enum</td><td>Body and collider settings, forces, collision data</td><td><code>LuaPhysicsBindings.cpp</code></td></tr>
+<tr><td><code>AudioSource</code>, <code>AudioListener</code>, <code>Audio</code></td><td>handles / table</td><td>Playback and spatial settings; master volume, listener</td><td><code>LuaAudioBindings.cpp</code></td></tr>
+<tr><td><code>Input</code>, <code>ActionMap</code>, <code>InputAction</code>, <code>InputValue</code>, <code>ActionPhase</code></td><td>table / raw / enum</td><td><code>GetActionMap</code>, <code>LoadActionMap</code>, <code>CreateActionMap</code>; phases, values, <code>Subscribe</code></td><td><code>LuaInputBindings.cpp</code></td></tr>
+<tr><td><code>Event</code>, <code>WindowResizeEvent</code>, <code>GameObjectEvent</code>, <code>InputActionEvent</code></td><td>raw</td><td><code>Subscribe</code>/<code>Unsubscribe</code> (no global "Events" table)</td><td><code>LuaEventsBindings.cpp</code></td></tr>
+<tr><td><code>Time</code></td><td>object with properties</td><td><code>deltaTime</code>, <code>time</code>, <code>fixedDeltaTime</code>, unscaled variants; writable <code>timeScale</code></td><td><code>LuaTimeBindings.cpp</code></td></tr>
+<tr><td><code>Application</code></td><td>table</td><td><code>Quit</code> (a request honoured at end of frame), <code>GetPlatform</code>, <code>GetCamera</code></td><td><code>LuaApplicationBindings.cpp</code></td></tr>
+<tr><td><code>Window</code>, <code>WindowMode</code></td><td>table / enum</td><td><code>Get</code>, <code>GetWidth/Height</code>, <code>SetTitle</code>, <code>SetMode</code>, <code>SetClearColor</code></td><td><code>LuaWindowBindings.cpp</code></td></tr>
+<tr><td><code>Camera</code>, <code>BoundingBox</code>, <code>Frustum</code>, <code>OrthographicResizeMode</code></td><td>raw / values / enum</td><td><code>Camera.Main()</code>, position/rotation, projection, matrices, frustum</td><td><code>LuaCameraBindings.cpp</code></td></tr>
+<tr><td><code>Debug</code></td><td>table</td><td><code>Log</code>, <code>Warn</code>, <code>Error</code> (to the engine <code>Logger</code>); no draw functions</td><td><code>LuaDebugBindings.cpp</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>There is no physics query API in Lua: no <code>Physics</code> table and no <code>Raycast</code>. There is also no <code>Log</code> global (use <code>Debug</code>) and no <code>Events</code> global.</p>
+
+<h3 id="engine-api-gaps">Where the file and the bindings differ</h3>
+<ul>
+<li><code>Mouse.Get()</code> and the <code>Mouse</code> methods (<code>GetScrollDelta</code>, <code>GetPosition</code>, <code>GetPositionDelta</code>) are bound but not documented.</li>
+<li>The engine <code>require</code> and the <code>_loaded_modules()</code> helper are not documented.</li>
+<li><code>SceneManager.LoadScene</code> is documented with an index only. The binding also accepts a scene name.</li>
+<li>The <code>Window</code> instance returned by <code>Window.Get()</code> has <code>GetTitle</code>, <code>SetTitle</code>, <code>GetDimensions</code>, <code>SetWindowMode</code> and a <code>clearColor</code> field. Only the global functions are documented.</li>
+<li><code>Camera.Main()</code> and <code>Application.GetCamera()</code> are annotated as returning <code>Camera</code>, but return <code>nil</code> when there is no camera.</li>
+<li>Script-side conventions are described only in prose on <code>LuaComponent</code>: the lifecycle methods, <code>SerializableFields</code> and the <code>OnCollision*</code>/<code>OnTrigger*</code> argument types have no annotations.</li>
+</ul>
+<p class="src">Source: <code>engine/src/scripting/bindings/engine-api.lua</code>; <code>engine/src/scripting/bindings/*.cpp</code>; <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>RegisterBindings</code> (the <code>T.new</code> aliases match the file's <code>T.new</code> stubs)</p>
+
+<h2 id="examples">Example scripts</h2>
+<h3 id="example-scene">Scene setup script</h3>
+<p><code>lua_project</code> builds its whole scene from <code>assets/scene.lua</code>, run with <code>LuaRuntime::RunFile</code> after a scene is loaded and <code>ResourceLoader</code> is initialized. Trimmed:</p>
+<pre class="lang-lua"><code>local scene = SceneManager.GetCurrentScene()
+if scene == nil then
+    error("scene.lua needs a loaded scene")
+end
+
+-- Created before the behaviour scripts attach, since they subscribe to these actions
+local controls = Input.CreateActionMap("Main Controls", {
+    ["Camera Move"] = {
+        { type = "Vector2Composite", up = "W", down = "S", left = "A", right = "D" },
+    },
+    ["Quit"] = { { type = "KeyboardButton", key = "Escape" } },
+})
+if controls ~= nil then
+    Input.LoadActionMap("Main Controls")
+end
+
+local cube = GameObject.Create("TestCube")            -- owned by this handle for now
+cube:AddComponent("CubeRenderer"):SetColor(Color.Blue)
+cube:AddComponent("BoxCollider"):SetSize(Vector3.One)
+local body = cube:AddComponent("Rigidbody")
+body:SetBodyType(BodyType.Dynamic)
+body:SetGravityEnabled(true)
+
+local quitHandler = GameObject.Create("Quit Handler")
+quitHandler:AddComponent("LuaComponent"):SetScript("res://scripts/QuitHandler.lua")
+
+for _, go in ipairs({ cube, quitHandler }) do
+    scene:AddRootGameObject(go)                       -- the scene owns them from here
+end
+</code></pre>
+<p>Subscriptions made directly in a scene script have no owning component and are never cancelled.</p>
+
+<h3 id="example-behaviour">Behaviour script</h3>
+<p>The shipped <code>assets/scripts/QuitHandler.lua</code>. It subscribes in <code>OnAttach</code>, so the subscription stops when the component is destroyed:</p>
+<pre class="lang-lua"><code>local QuitHandler = {}
+QuitHandler.__index = QuitHandler
+
+function QuitHandler:OnAttach()
+    local controls = Input.LoadActionMap("Main Controls")
+    if controls == nil then
+        Debug.Warn("QuitHandler: 'Main Controls' action map not found")
+        return
+    end
+
+    controls:Get("Quit"):Subscribe(function(action)
+        if action:GetPhase() == ActionPhase.Started then
+            Application.Quit()
+        end
+    end)
+end
+
+return QuitHandler
+</code></pre>
+<p><code>CameraController.lua</code> follows the same pattern. It stores input values from two subscriptions in <code>self</code>, and in <code>OnUpdate</code> moves <code>Camera.Main()</code> by <code>Time.deltaTime</code>, fetching the camera each frame rather than caching it.</p>
+
+<h3 id="example-handles">Fields, cached handles and collisions</h3>
+<p>A script written against the rules on this page:</p>
+<pre class="lang-lua"><code>local Bouncer = {}
+Bouncer.__index = Bouncer
+
+Bouncer.SerializableFields = {
+    jumpImpulse = 5.0,                          -- float
+    maxJumps = 3,                               -- stays an integer
+    label = { type = "string", default = "bouncer" },
+}
+
+function Bouncer:OnAttach()
+    self.jumps = 0
+    self.body = self.gameObject:GetComponent("Rigidbody")   -- handle or nil
+end
+
+function Bouncer:OnCollisionEnter(collision)
+    local other = collision.otherGameObject
+    if other ~= nil and other:IsValid() then
+        Debug.Log(self.label .. " hit " .. other:GetName())
+    end
+
+    -- The cached handle may outlive the Rigidbody (RemoveComponent): check, don't compare to nil
+    if self.body ~= nil and self.body:IsValid() and self.jumps &lt; self.maxJumps then
+        self.body:AddImpulse(Vector3.Up * self.jumpImpulse)
+        self.jumps = self.jumps + 1
+    end
+end
+
+return Bouncer
+</code></pre>
+<p class="src">Source: <code>lua_project/assets/scene.lua</code>, <code>lua_project/assets/scripts/QuitHandler.lua</code>, <code>lua_project/assets/scripts/CameraController.lua</code>, <code>lua_project/src/Main.cpp</code>; tests: <code>LuaProjectSceneTest.BuildsFallingCube</code>, <code>LuaProjectSceneTest.BuildsFallingSphere</code>, <code>LuaProjectSceneTest.BuildsStaticFloor</code>, <code>LuaProjectSceneTest.BehaviourScriptsLoad</code></p>
+
+<h2 id="tests">Tests</h2>
+<p>All scripting tests live in <code>tests/engine/scripting/</code>. They run headless, write their scripts to a temporary project folder and initialize <code>ResourceLoader</code> on it.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>File</th><th>Fixture(s)</th><th>Pins down</th></tr></thead>
+<tbody>
+<tr><td><code>LuaTests.cpp</code></td><td><code>LuaTest</code>, <code>LuaScriptTest</code></td><td>Globals, idempotent <code>Initialize</code>, opened libraries, math, <code>Time</code>, enums, GameObject/Scene basics; LuaComponent lifecycle, per-instance state, fields, missing/broken scripts, <code>require</code></td></tr>
+<tr><td><code>LuaHandleTests.cpp</code> <span class="badge">PR #29</span></td><td><code>LuaHandleTest</code></td><td>Handle validity after <code>RemoveComponent</code>, destroy and scene switch; stored collisions; copies of <code>self</code>; handles during teardown on all three paths; equality; ownership; GC during <code>SetScript</code>; bad-argument errors</td></tr>
+<tr><td><code>LuaLifetimeTests.cpp</code></td><td><code>LuaLifetimeTest</code></td><td>Subscriptions stop after destroy and scene switch, keep working outside components; OnDisable then OnDestroy; <code>self</code> references cleared; reload callbacks replaced and removed</td></tr>
+<tr><td><code>LuaRobustnessTests.cpp</code></td><td><code>LuaRobustnessTest</code></td><td>Immutable constants, <code>LuaToJson</code> cycles, readable <code>Collision</code>, shorthand/integer fields, partial vectors, reference type names</td></tr>
+<tr><td><code>LuaSceneTests.cpp</code></td><td><code>LuaSceneTest</code>, <code>LuaProjectSceneTest</code></td><td><code>LuaToJson</code>, <code>ActionMapJsonFromLua</code>, <code>CreateActionMap</code> without a window, <code>AddComponent</code>/<code>GetComponent</code> by name; builds <code>lua_project/assets/scene.lua</code> headless</td></tr>
+</tbody>
+</table>
+</div>
+<p>See <a href="testing.html">Testing &amp; CI</a> for how the suite is built and run.</p>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
