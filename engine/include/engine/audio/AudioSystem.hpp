@@ -36,6 +36,9 @@ namespace N2Engine::Audio
         bool Initialize();
         void Shutdown();
         [[nodiscard]] bool IsInitialized() const { return _initialized; }
+        /// Changes with every successful Initialize. OpenAL objects made under an earlier context (an
+        /// AudioClip's buffer) died with it, so their ids must not be deleted in the new one.
+        [[nodiscard]] std::uint32_t GetContextGeneration() const { return _contextGeneration; }
         void Update();
 
         // Mixer group management
@@ -113,5 +116,6 @@ namespace N2Engine::Audio
         std::uint32_t _nextHandleId = 1;
         float _masterVolume = 1.0f;
         bool _initialized = false;
+        std::uint32_t _contextGeneration = 0;
     };
 }

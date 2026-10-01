@@ -68,6 +68,7 @@ namespace N2Engine::Audio
         alListenerf(AL_GAIN, _masterVolume);
 
         _initialized = true;
+        ++_contextGeneration;
         Logger::Info(std::format("AudioSystem initialized with {} pooled sources", _sourcePool.size()));
 
         return true;
@@ -212,7 +213,11 @@ namespace N2Engine::Audio
     void AudioSystem::SetMasterVolume(float volume)
     {
         _masterVolume = std::clamp(volume, 0.0f, 1.0f);
-        alListenerf(AL_GAIN, _masterVolume);
+        // Without a context there's no listener; Initialize applies the stored value
+        if (_initialized)
+        {
+            alListenerf(AL_GAIN, _masterVolume);
+        }
     }
 
     float AudioSystem::ComputeFinalVolume(float sourceVolume, const std::string& group) const
@@ -322,12 +327,21 @@ namespace N2Engine::Audio
 
     void AudioSystem::SetListenerPosition(float x, float y, float z)
     {
+        // No context, no listener (an AudioListener pushes its pose again every LateUpdate)
+        if (!_initialized)
+        {
+            return;
+        }
         alListener3f(AL_POSITION, x, y, z);
     }
 
     void AudioSystem::SetListenerOrientation(float forwardX, float forwardY, float forwardZ,
                                               float upX, float upY, float upZ)
     {
+        if (!_initialized)
+        {
+            return;
+        }
         ALfloat orientation[] = { forwardX, forwardY, forwardZ, upX, upY, upZ };
         alListenerfv(AL_ORIENTATION, orientation);
     }

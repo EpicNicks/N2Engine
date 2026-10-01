@@ -19,9 +19,14 @@ namespace N2Engine::Audio
 
         [[nodiscard]] std::string GetTypeName() const override;
 
-        // Playback
+        // Playback (Unity's semantics)
+        /// Plays the clip from the beginning, also when it's already playing or paused (a restart, which
+        /// doesn't count against the group's limit twice). Refused if the group is full of other sounds.
         void Play();
+        /// Pauses where it is; UnPause resumes from there, Play starts over
         void Pause();
+        /// Resumes a paused source from where it was paused (if its group has room); does nothing otherwise
+        void UnPause();
         void Stop();
         [[nodiscard]] bool IsPlaying() const;
         [[nodiscard]] bool IsPaused() const;
@@ -76,6 +81,8 @@ namespace N2Engine::Audio
 
     private:
         void EnsureSource();
+        /// Whether the mixer group's maxConcurrent leaves room for this source to play
+        [[nodiscard]] bool HasRoomInGroup() const;
         void UpdateVolume();
         void UpdatePosition();
 
