@@ -747,6 +747,19 @@ function GameObject:SetTag(tag) end
 ---@return boolean
 function GameObject:CompareTag(tag) end
 
+---The layer of this GameObject, 0..31 (0, Default, unless set; see Layers)
+---@return integer
+function GameObject:GetLayer() end
+
+---Move this GameObject to a layer (saved with the scene). Its colliders change layer straight away;
+---children keep their own layer. Values outside 0..31 are clamped, with a warning.
+---@param layer integer
+function GameObject:SetLayer(layer) end
+
+---Set the layer of this GameObject and all its descendants
+---@param layer integer
+function GameObject:SetLayerRecursive(layer) end
+
 ---Check if this GameObject is active
 ---@return boolean
 function GameObject:IsActive() end
@@ -939,6 +952,53 @@ function SceneManager.GetCurrentSceneIndex() end
 ---Load a scene by index
 ---@param sceneIndex integer
 function SceneManager.LoadScene(sceneIndex) end
+
+-- ===== LAYERS =====
+
+---The project's 32 layers (as in Unity) and which of them collide. A layer mask has bit (1 << layer)
+---set for each layer it includes.
+---@class Layers
+---@field Default integer 0
+---@field TransparentFX integer 1
+---@field IgnoreRaycast integer 2 ("Ignore Raycast"): left out of queries by default
+---@field Water integer 4
+---@field UI integer 5
+---@field DefaultRaycastMask integer Every layer except Ignore Raycast
+Layers = {}
+
+---The layer with this name, or -1
+---@param name string
+---@return integer
+function Layers.NameToLayer(name) end
+
+---The layer's name, or "" for an unnamed or out-of-range layer
+---@param layer integer
+---@return string
+function Layers.LayerToName(layer) end
+
+---Name a user layer (3, 6..31); an empty name clears it. False for a built-in layer, an
+---out-of-range one, or a name another layer already has.
+---@param layer integer
+---@param name string
+---@return boolean
+function Layers.SetName(layer, name) end
+
+---The mask of the named layers; unknown names are skipped
+---@param ... string
+---@return integer
+function Layers.GetMask(...) end
+
+---Whether colliders on layers a and b interact (contacts and triggers). Symmetric. Pairs that are
+---touching when collision is turned off end with an Exit.
+---@param a integer
+---@param b integer
+---@param collide boolean
+function Layers.SetCollision(a, b, collide) end
+
+---@param a integer
+---@param b integer
+---@return boolean
+function Layers.GetCollision(a, b) end
 
 -- ===== PHYSICS =====
 

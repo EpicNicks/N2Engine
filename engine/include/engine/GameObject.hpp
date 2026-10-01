@@ -48,6 +48,7 @@ namespace N2Engine
     private:
         std::string _name;
         std::string _tag{DefaultTag};
+        int _layer = 0; // Layers::Default
         bool _isActive = true;
         std::optional<Math::UUID> _prefabReference;
         bool _isMarkedForDestruction = false;
@@ -111,6 +112,14 @@ namespace N2Engine
         const std::string& GetTag() const { return _tag; }
         void SetTag(const std::string &tag) { _tag = tag; }
         bool CompareTag(const std::string &tag) const { return _tag == tag; }
+
+        // Layer: an index 0..31 (see Layers), 0 (Default) unless set. Serialized. Its colliders' shapes move
+        // to the new layer straight away; children keep their own layer (as in Unity).
+        int GetLayer() const { return _layer; }
+        /// Out-of-range values are clamped to 0..31 with a warning
+        void SetLayer(int layer);
+        /// Sets the layer on this object and all its descendants
+        void SetLayerRecursive(int layer);
 
         // Active state management
         bool IsActive() const { return _isActive; }

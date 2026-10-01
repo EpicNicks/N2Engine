@@ -3,6 +3,7 @@
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/Layers.hpp"
 
 #include <algorithm>
 #include <format>
@@ -85,6 +86,9 @@ namespace N2Engine::Scripting::Bindings
             "GetTag", Forward<GameObjectRef, &GameObject::GetTag>(),
             "SetTag", Forward<GameObjectRef, &GameObject::SetTag>(),
             "CompareTag", Forward<GameObjectRef, &GameObject::CompareTag>(),
+            "GetLayer", Forward<GameObjectRef, &GameObject::GetLayer>(),
+            "SetLayer", Forward<GameObjectRef, &GameObject::SetLayer>(),
+            "SetLayerRecursive", Forward<GameObjectRef, &GameObject::SetLayerRecursive>(),
             "IsActive", Forward<GameObjectRef, &GameObject::IsActive>(),
             "SetActive", Forward<GameObjectRef, &GameObject::SetActive>(),
             "CreatePositionable", Forward<GameObjectRef, &GameObject::CreatePositionable>(),
@@ -231,6 +235,36 @@ namespace N2Engine::Scripting::Bindings
                 static_cast<void(*)(int)>(&SceneManager::LoadScene),
                 static_cast<void(*)(const std::string &)>(&SceneManager::LoadScene)
             )
+        );
+
+        // ===== Layers (global) =====
+        lua["Layers"] = lua.create_table_with(
+            "Default", Layers::Default,
+            "TransparentFX", Layers::TransparentFX,
+            "IgnoreRaycast", Layers::IgnoreRaycast,
+            "Water", Layers::Water,
+            "UI", Layers::UI,
+            "DefaultRaycastMask", Layers::DefaultRaycastMask,
+
+            "NameToLayer", [](const std::string &name) { return Layers::NameToLayer(name); },
+            "LayerToName", [](const int layer) { return Layers::LayerToName(layer); },
+            "SetName", [](const int layer, const std::string &name) { return Layers::SetName(layer, name); },
+            // Layers.GetMask("Player", "Enemy"); unknown names are skipped, as in C++
+            "GetMask", [](sol::variadic_args names)
+            {
+                uint32_t mask = 0;
+                for (const auto name : names)
+                {
+                    if (name.get_type() != sol::type::string)
+                    {
+                        throw std::runtime_error("Layers.GetMask: expected layer names");
+                    }
+                    mask |= Layers::MaskOf(Layers::NameToLayer(name.as<std::string>()));
+                }
+                return mask;
+            },
+            "SetCollision", [](const int a, const int b, const bool collide) { Layers::SetCollision(a, b, collide); },
+            "GetCollision", [](const int a, const int b) { return Layers::GetCollision(a, b); }
         );
     }
 }
