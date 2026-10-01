@@ -13,6 +13,7 @@
 #include <math/Matrix.hpp>
 #include <math/Quaternion.hpp>
 #include <math/Vector3.hpp>
+#include <math/Vector4.hpp>
 
 using namespace N2Engine::Math;
 
@@ -55,6 +56,14 @@ namespace
             ExpectClose(actual[i], expected[i], what + "[" + std::to_string(i) + "]", scale);
     }
 
+    void ExpectClose(const Vector4 &actual, const Vector4 &expected, const std::string &what)
+    {
+        const float scale = std::max({std::abs(expected.w), std::abs(expected.x), std::abs(expected.y),
+                                      std::abs(expected.z)});
+        for (size_t i = 0; i < 4; ++i)
+            ExpectClose(actual[i], expected[i], what + "[" + std::to_string(i) + "]", scale);
+    }
+
     void ExpectClose(const Quaternion &actual, const Quaternion &expected, const std::string &what)
     {
         const float scale = std::max({std::abs(expected.GetW()), std::abs(expected.GetX()),
@@ -80,15 +89,24 @@ namespace
     }
 
     // Bit-exact, for operations with exactly one right answer, including the sign of zero. Any NaN matches any NaN
+    void ExpectIdentical(const float actual, const float expected, const std::string &what)
+    {
+        if (std::isnan(actual) && std::isnan(expected))
+            return;
+        EXPECT_EQ(std::bit_cast<uint32_t>(actual), std::bit_cast<uint32_t>(expected))
+            << what << ": " << actual << " vs " << expected;
+    }
+
     void ExpectIdentical(const Vector3 &actual, const Vector3 &expected, const std::string &what)
     {
         for (size_t i = 0; i < 3; ++i)
-        {
-            if (std::isnan(actual[i]) && std::isnan(expected[i]))
-                continue;
-            EXPECT_EQ(std::bit_cast<uint32_t>(actual[i]), std::bit_cast<uint32_t>(expected[i]))
-                << what << "[" << i << "]: " << actual[i] << " vs " << expected[i];
-        }
+            ExpectIdentical(actual[i], expected[i], what + "[" + std::to_string(i) + "]");
+    }
+
+    void ExpectIdentical(const Vector4 &actual, const Vector4 &expected, const std::string &what)
+    {
+        for (size_t i = 0; i < 4; ++i)
+            ExpectIdentical(actual[i], expected[i], what + "[" + std::to_string(i) + "]");
     }
 
     template <typename T>
@@ -135,6 +153,42 @@ namespace
             {nan, 1.0f, -2.5f},
             {2.5f, nan, -0.0f},
             {-7.5f, 3.5f, nan},
+        };
+    }
+
+    // Like SampleVectors, but every lane is a real component (w is lane 0)
+    std::vector<Vector4> SampleVectors4()
+    {
+        return {
+            {1.0f, 2.0f, 3.0f, 4.0f},
+            {5.0f, 6.0f, 7.0f, 8.0f},
+            {0.0f, 3.0f, 0.0f, 4.0f},
+            {-2.5f, 0.5f, 1.5f, -0.5f},
+            {2.5f, -0.5f, -1.5f, 3.5f},
+            {0.1f, -7.3f, 2.2f, 9.9f},
+            {1e-3f, 2e-3f, -3e-3f, 4e-3f},
+            {-1250.0f, 42.0f, 0.75f, -3.0f},
+            {0.0f, 0.0f, 0.0f, 0.0f},
+            {-0.3f, 0.49f, 7.51f, -7.51f},
+            {0.0f, 0.0f, 0.0f, 10.0f},
+        };
+    }
+
+    // The Vector3 edge values, spread over all four lanes
+    std::vector<Vector4> EdgeCaseVectors4()
+    {
+        const float inf = std::numeric_limits<float>::infinity();
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        return {
+            {-0.0f, 0.0f, -0.3f, 0.3f},
+            {0.0f, -0.0f, 0.3f, -0.3f},
+            {0.49999997f, -0.49999997f, -0.5f, 0.5f},
+            {8388609.0f, -8388609.0f, 1e10f, -1e10f},
+            {-inf, inf, -1e10f, 1.5f},
+            {nan, 1.0f, -2.5f, -0.0f},
+            {2.5f, nan, -0.0f, 0.0f},
+            {-7.5f, 3.5f, nan, -inf},
+            {0.0f, -0.0f, 1.0f, nan},
         };
     }
 
@@ -216,8 +270,8 @@ protected:
     template <typename F>
     void ExpectIdenticalToScalar(F compute, const std::string &what)
     {
-        const Vector3 expected = Under(SIMDLevel::Scalar, compute);
-        const Vector3 actual = Under(GetParam(), compute);
+        const auto expected = Under(SIMDLevel::Scalar, compute);
+        const auto actual = Under(GetParam(), compute);
         ExpectIdentical(actual, expected, what);
     }
 };
@@ -240,6 +294,41 @@ TEST_P(SimdDispatchTest, KnownValues)
     const Quaternion rotation = Quaternion::FromAxisAngle(Vector3(1.0f, 2.0f, 3.0f).Normalized(), 0.7f);
     EXPECT_NEAR((rotation * Vector3(3.0f, -4.0f, 12.0f)).Length(), 13.0f, 1e-4f);
     EXPECT_NEAR(Quaternion(1.0f, 2.0f, 3.0f, 4.0f).Normalized().Length(), 1.0f, 1e-6f);
+}
+
+TEST_P(SimdDispatchTest, Vector4KnownValues)
+{
+    SetSIMDLevel(GetParam());
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+
+    EXPECT_FLOAT_EQ(Vector4(1.0f, 2.0f, 3.0f, 4.0f).Dot(Vector4(5.0f, 6.0f, 7.0f, 8.0f)), 70.0f);
+    EXPECT_FLOAT_EQ(Vector4(1.0f, 2.0f, 2.0f, 4.0f).Length(), 5.0f);
+    EXPECT_FLOAT_EQ(Vector4(1.0f, 2.0f, 2.0f, 4.0f).Distance(Vector4(2.0f, 4.0f, 4.0f, 8.0f)), 5.0f);
+
+    // A real sqrt: rsqrt was only about 12 bits accurate
+    const Vector4 normalized = Vector4(0.0f, 3.0f, 0.0f, 4.0f).Normalized();
+    EXPECT_NEAR(normalized.x, 0.6f, 1e-7f);
+    EXPECT_NEAR(normalized.z, 0.8f, 1e-7f);
+    EXPECT_NEAR(Vector4(1.0f, -2.0f, 3.0f, 0.5f).Normalized().Length(), 1.0f, 1e-6f);
+    ExpectIdentical(Vector4(1e-7f, 0.0f, 0.0f, 0.0f).Normalized(), Vector4::Zero, "Normalized near zero");
+
+    std::vector<Vector4> batch = {{0.0f, 3.0f, 0.0f, 4.0f}, {0.0f, 0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f, 0.0f}};
+    Vector4::NormalizeBatch(batch);
+    ExpectClose(batch[0], Vector4(0.0f, 0.6f, 0.0f, 0.8f), "NormalizeBatch[0]");
+    ExpectIdentical(batch[1], Vector4::Zero, "NormalizeBatch[1]");
+    ExpectClose(batch[2], Vector4::UnitW, "NormalizeBatch[2]");
+
+    // Halves round away from zero like std::round (not to even), and -0.3 keeps its sign
+    ExpectIdentical(Vector4(2.5f, -2.5f, 0.5f, -0.3f).Round(), Vector4(3.0f, -3.0f, 1.0f, -0.0f), "Round");
+
+    // std::min(a, b) is (b < a) ? b : a and std::max(a, b) is (a < b) ? b : a: ties and NaN give a
+    const Vector4 a(-0.0f, 1.0f, nan, 3.0f);
+    const Vector4 b(0.0f, 2.0f, 1.0f, nan);
+    ExpectIdentical(Vector4::Min(a, b), Vector4(-0.0f, 1.0f, nan, 3.0f), "Min");
+    ExpectIdentical(Vector4::Max(a, b), Vector4(-0.0f, 2.0f, nan, 3.0f), "Max");
+
+    // Negation flips the sign of zero
+    ExpectIdentical(-Vector4(0.0f, 1.0f, -2.0f, -0.0f), Vector4(-0.0f, -1.0f, 2.0f, 0.0f), "Negate");
 }
 
 TEST_P(SimdDispatchTest, Vector3Operations)
@@ -333,6 +422,86 @@ TEST_P(SimdDispatchTest, Vector3BatchOperations)
     ExpectMatchesScalar([&] {
         std::vector<Vector3> result = a;
         Vector3::NormalizeBatch(result.data(), result.size());
+        return result;
+    }, "NormalizeBatch");
+}
+
+TEST_P(SimdDispatchTest, Vector4Operations)
+{
+    const std::vector<Vector4> samples = SampleVectors4();
+    for (size_t i = 0; i < samples.size(); ++i)
+    {
+        const Vector4 &a = samples[i];
+        const std::string at = " a=" + std::to_string(i);
+
+        ExpectMatchesScalar([&] { return -a; }, "Negate" + at);
+        ExpectMatchesScalar([&] { return a * 2.5f; }, "ScalarMul" + at);
+        ExpectMatchesScalar([&] { return a / -0.4f; }, "ScalarDiv" + at);
+        ExpectMatchesScalar([&] { return a.Length(); }, "Length" + at);
+        ExpectMatchesScalar([&] { return a.LengthSquared(); }, "LengthSquared" + at);
+        ExpectMatchesScalar([&] { return a.Normalized(); }, "Normalized" + at);
+        ExpectMatchesScalar([&] { return a.ClampMagnitude(2.0f); }, "ClampMagnitude" + at);
+
+        for (size_t j = 0; j < samples.size(); ++j)
+        {
+            const Vector4 &b = samples[j];
+            const std::string ab = at + " b=" + std::to_string(j);
+
+            ExpectMatchesScalar([&] { return a + b; }, "Add" + ab);
+            ExpectMatchesScalar([&] { return a - b; }, "Sub" + ab);
+            ExpectMatchesScalar([&] { return a.Scale(b); }, "Scale" + ab);
+            ExpectMatchesScalar([&] { return a.Dot(b); }, "Dot" + ab);
+            ExpectMatchesScalar([&] { return a.Distance(b); }, "Distance" + ab);
+            ExpectMatchesScalar([&] { return a.DistanceSquared(b); }, "DistanceSquared" + ab);
+            ExpectMatchesScalar([&] { return Vector4::Lerp(a, b, 0.3f); }, "Lerp" + ab);
+        }
+    }
+}
+
+TEST_P(SimdDispatchTest, Vector4ExactOperations)
+{
+    std::vector<Vector4> samples = EdgeCaseVectors4();
+    for (const Vector4 &v : SampleVectors4())
+        samples.push_back(v);
+
+    for (size_t i = 0; i < samples.size(); ++i)
+    {
+        const Vector4 &a = samples[i];
+        const std::string at = " a=" + std::to_string(i);
+
+        ExpectIdenticalToScalar([&] { return a.Floor(); }, "Floor" + at);
+        ExpectIdenticalToScalar([&] { return a.Ceil(); }, "Ceil" + at);
+        ExpectIdenticalToScalar([&] { return a.Round(); }, "Round" + at);
+        ExpectIdenticalToScalar([&] { return a.Abs(); }, "Abs" + at);
+        ExpectIdenticalToScalar([&] { return -a; }, "Negate" + at);
+
+        for (size_t j = 0; j < samples.size(); ++j)
+        {
+            const Vector4 &b = samples[j];
+            const std::string ab = at + " b=" + std::to_string(j);
+
+            ExpectIdenticalToScalar([&] { return Vector4::Min(a, b); }, "Min" + ab);
+            ExpectIdenticalToScalar([&] { return Vector4::Max(a, b); }, "Max" + ab);
+            ExpectIdenticalToScalar([&] { return a.Clamp(b, samples[0]); }, "Clamp" + ab);
+        }
+    }
+}
+
+TEST_P(SimdDispatchTest, Vector4BatchOperations)
+{
+    // An odd count exercises both the AVX pairs and the single-vector tail
+    const std::vector<Vector4> a = SampleVectors4();
+    std::vector<Vector4> b = a;
+    std::rotate(b.begin(), b.begin() + 3, b.end());
+
+    ExpectMatchesScalar([&] { return Vector4::AddBatch(a, b); }, "AddBatch");
+    ExpectMatchesScalar([&] { return Vector4::SubBatch(a, b); }, "SubBatch");
+    ExpectMatchesScalar([&] { return Vector4::ScalarMulBatch(a, -1.75f); }, "ScalarMulBatch");
+    ExpectMatchesScalar([&] { return Vector4::DotBatch(a, b); }, "DotBatch");
+    ExpectMatchesScalar([&] { return Vector4::LengthBatch(a); }, "LengthBatch");
+    ExpectMatchesScalar([&] {
+        std::vector<Vector4> result = a;
+        Vector4::NormalizeBatch(result);
         return result;
     }, "NormalizeBatch");
 }
