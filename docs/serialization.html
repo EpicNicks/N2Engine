@@ -75,7 +75,7 @@
 <li><a href="#failure-handling">Failure handling</a></li>
 <li><a href="#prefabs">Prefabs</a></li>
 <li><a href="#instantiate-prefab">Instantiating and registering prefabs</a></li>
-<li><a href="#other-formats">Input and Lua data</a></li>
+<li><a href="#other-formats">Input, layers and Lua data</a></li>
 </ol>
 </div>
 
@@ -88,6 +88,8 @@
     {
       "uuid": "6f1c2a8e-0d7b-4c39-9a51-2b7e4f0c9d13",
       "name": "Lamp",
+      "tag": "Untagged",
+      "layer": 0,
       "isActive": true,
       "positionable": {
         "localPosition": { "x": 0.0, "y": 3.0, "z": 0.0 },
@@ -127,6 +129,7 @@
 <tr><td><code>uuid</code></td><td>Always, as a string</td><td><strong>Required</strong> (<code>.at()</code>). Restored as the object's UUID. A string that isn't a valid UUID, or a non-string value, logs an error and becomes <code>UUID::ZERO</code>; it does not throw.</td></tr>
 <tr><td><code>name</code></td><td>Always</td><td><strong>Required</strong> (<code>.at()</code>), must be a string.</td></tr>
 <tr><td><code>tag</code> <span class="badge">PR #39</span></td><td>Always (<code>"Untagged"</code> by default)</td><td>Optional; missing or null keeps <code>"Untagged"</code>, so data written before tags existed loads unchanged. Must be a string (anything else fails the load, like other malformed fields). See <a href="gameobjects-components.html#names-tags">tags</a>.</td></tr>
+<tr><td><code>layer</code> <span class="badge">Layers</span></td><td>Always, as an index (<code>0</code>, Default, unless set)</td><td>Optional; missing or null means <code>0</code>, so data written before layers existed loads unchanged. An integer outside 0–31 is clamped into range with a warning. Anything other than an integer (a string, a fraction, a boolean) fails the load, like other malformed fields. See <a href="gameobjects-components.html#layers">Layer</a>.</td></tr>
 <tr><td><code>isActive</code></td><td>Always</td><td>Optional. Defaults to active.</td></tr>
 <tr><td><code>prefabReference</code></td><td>Only if set</td><td>Optional UUID. It round-trips, but nothing else uses it yet.</td></tr>
 <tr><td><code>positionable</code></td><td>Only if the object has a Positionable</td><td>Optional. If present, a Positionable is created and <code>localPosition</code>, <code>localRotation</code> and <code>localScale</code> are each applied if present. See <a href="transforms.html">Transforms</a>.</td></tr>
@@ -137,7 +140,7 @@
 </div>
 <p>Component order is preserved. If the data holds two components of the same type, the <em>first</em> one is the one <code>GetComponent&lt;T&gt;</code> finds. A component's <code>data</code> always starts with the base fields from <code>Component::Serialize</code>: <code>uuid</code> and <code>isActive</code>. Both are optional on load.</p>
 <p>Loading creates the objects and components but does not attach them. When the deserialized roots join a scene (<code>SetScene</code>), every component is queued, and <code>OnAttach</code> runs at that scene's next <code>ProcessAttachQueue</code>. See <a href="scenes.html#frame-callbacks">Attach queue</a>.</p>
-<p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Serialize</code>, <code>GameObject::Deserialize</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::Serialize</code>, <code>Component::Deserialize</code>; tests: <code>GameObjectSerializationTest.*</code> (e.g. <code>InvalidUUID_DeserializeUsesZero</code>, <code>ChildUUIDsPreserved_RoundTrip</code>, <code>DeepHierarchy_RoundTrip</code>)</p>
+<p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Serialize</code>, <code>GameObject::Deserialize</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::Serialize</code>, <code>Component::Deserialize</code>; tests: <code>GameObjectSerializationTest.*</code> (e.g. <code>InvalidUUID_DeserializeUsesZero</code>, <code>ChildUUIDsPreserved_RoundTrip</code>, <code>DeepHierarchy_RoundTrip</code>), <code>GameObjectLayerTest.*</code></p>
 
 <h2 id="component-registry">ComponentRegistry: type name to constructor</h2>
 <p><code>ComponentRegistry</code> is a singleton map from a type-name string to a factory <code>std::unique_ptr&lt;Component&gt;(GameObject&amp;)</code>. The name a component writes (<code>GetTypeName()</code>) must match the name it is registered under, or it cannot be loaded.</p>
@@ -351,13 +354,14 @@ scene.AddRootGameObjects({first, second});
 </div>
 <p class="src">Source: <code>engine/include/engine/prefabs/Prefab.hpp</code>, <code>engine/include/engine/prefabs/PrefabManager.hpp</code>, <code>engine/src/prefabs/Prefab.cpp</code>, <code>engine/src/prefabs/PrefabManager.cpp</code>; tests: <code>PrefabSerializationTest.*</code> (e.g. <code>MissingName_Deserialize</code>, <code>NullRootObject_Deserialize</code>, <code>UUIDsPreserved_RoundTrip</code>), <code>PrefabParseErrorTest.AllErrorsHaveStrings</code>, <code>PrefabInstantiateTest.*</code>, <code>PrefabRegistryTest.*</code>, <code>PrefabDeserializeErrorTest.*</code></p>
 
-<h2 id="other-formats">Input and Lua data</h2>
+<h2 id="other-formats">Input, layers and Lua data</h2>
 <ul>
 <li><strong>Input bindings</strong>: <code>InputSystem</code> has its own JSON format for action maps and bindings, including how unknown binding names are rejected. See <a href="input.html">Input</a>.</li>
 <li><strong>Lua components</strong>: a <code>LuaComponent</code>'s <code>data</code> holds the base fields plus <code>scriptUUID</code> (the script's <code>.meta</code> UUID, preferred), or <code>scriptPath</code> if the script has no metadata, and <code>scriptData</code> (the script's serializable field values). On load, a <code>scriptUUID</code> that ResourceLoader doesn't know logs a warning and marks the script as missing; one that isn't a valid UUID string is ignored silently (no script, not marked missing). Field types, references from Lua fields, and validation are covered in <a href="scripting-lua.html">Lua scripting</a>.</li>
+<li id="layers-block"><strong>Layers</strong> <span class="badge">Layers</span>: <code>Layers::Serialize()</code> writes the layer names and collision matrix as <code>{"layers": [32 names], "collisionMatrix": [32 row masks]}</code> (<code>""</code> for an unnamed layer; row <em>i</em> has bit <em>j</em> set if layers <em>i</em> and <em>j</em> collide). <code>Layers::Deserialize</code> validates the whole block first and never throws: anything malformed (not an object, <code>layers</code> not an array of at most 32 strings, a name used twice, <code>collisionMatrix</code> not exactly 32 integers in 0–0xFFFFFFFF) logs a warning, returns <code>false</code> and changes nothing. A missing key takes the defaults; built-in layer names are kept whatever the block says; an asymmetric matrix is made symmetric, with a warning, by keeping a pair colliding only if both rows say so. Nothing saves the block yet; the project file (#6) will. See <a href="physics.html#layers">Layers and the collision matrix</a>.</li>
 <li><strong>Assets</strong>: <code>Base::Asset::Serialize</code> writes <code>uuid</code> and <code>resourcePath</code>. Asset files and <code>.meta</code> metadata are covered in <a href="resources.html">Resources &amp; paths</a>.</li>
 </ul>
-<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::Serialize</code>, <code>LuaComponent::Deserialize</code>; <code>engine/include/engine/base/Asset.hpp</code> — <code>Asset::Serialize</code></p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::Serialize</code>, <code>LuaComponent::Deserialize</code>; <code>engine/include/engine/base/Asset.hpp</code> — <code>Asset::Serialize</code>; <code>engine/src/Layers.cpp</code> — <code>Layers::Serialize</code>, <code>Layers::Deserialize</code>; tests: <code>LayersRegistryTest.*</code></p>
 
 <div class="page-footer">
 <span>Describes master through PR #34.</span>
