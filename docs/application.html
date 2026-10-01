@@ -69,6 +69,7 @@
 <li><a href="#health">Subsystem health</a></li>
 <li><a href="#headless">Headless mode and a failed window</a></li>
 <li><a href="#frame">The frame loop</a></li>
+<li><a href="#render">Rendering the scene</a></li>
 <li><a href="#fixed-step">Fixed steps and physics</a></li>
 <li><a href="#time">Time</a></li>
 <li><a href="#quit">Quitting</a></li>
@@ -208,7 +209,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <li><em>If a scene is loaded</em>: <code>Scene::AdvanceCoroutines()</code> (see <a href="coroutines.html">Coroutines</a>).</li>
 <li><em>If a scene is loaded</em>: <code>Scene::LateUpdate()</code>.</li>
 <li><code>AudioSystem::Update()</code>, after LateUpdate, where listeners and sources push their positions.</li>
-<li><code>Render()</code>: clear, set the main camera's view/projection, upload scene lighting, render the scene, present. Skipped when there is no renderer.</li>
+<li><code>Render()</code>: clear, set the main camera's view/projection, upload scene lighting, render the scene (opaque, then transparent; see <a href="#render">Rendering the scene</a>), present. Skipped when there is no renderer.</li>
 <li><em>If a scene is loaded</em>: <code>Scene::ProcessDestroyed()</code>: objects and components destroyed during the frame are torn down here.</li>
 <li><code>SceneManager::ProcessAnyPendingSceneChange()</code>: a scene load requested during the frame takes effect now (see <a href="scenes.html">Scenes</a>).</li>
 </ol>
@@ -235,6 +236,50 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p class="callout-title">Note</p>
 <p>Steps 4–8 and 11 are skipped entirely while <code>SceneManager::GetCurSceneIndex()</code> is -1. Input, time, audio and rendering (of an empty frame) still run.</p>
 </div>
+
+<h2 id="render">Rendering the scene <span class="badge">PR #46</span></h2>
+<p><code>Application::Render</code> calls <code>BeginFrame</code>, sets the main camera's view and projection and the scene lighting on the renderer, then calls <code>Scene::Render(renderer, camera)</code>, then <code>EndFrame</code> and <code>Present</code>. <code>Scene::Render</code> is public, so a host or a test can render a scene into any <code>IRenderer</code> with any camera.</p>
+<p>Every <code>IRenderable</code> draws in one of two queues, chosen by <code>GetRenderQueue()</code>, which returns a <code>RenderQueueKey{queue, sortKey}</code>. The default is <code>Opaque</code> with sort key 0. There is no overlay queue: UI draws in its own canvas pass (<a href="https://github.com/EpicNicks/N2Engine/issues/42">#42</a>).</p>
+<ol class="steps">
+<li><strong>Collect.</strong> One traversal of the scene gathers the renderables to draw: active components on objects that are active in the hierarchy, depth first, parents before children, components in the order they were added. This is the order rendering has always used. Each renderable's queue is read once, before anything draws.</li>
+<li><strong>Opaque.</strong> Opaque renderables draw in that traversal order, unchanged from before the render queue, with <code>RenderState::Opaque()</code>. The sort key is ignored here.</li>
+<li><strong>Transparent.</strong> Transparent renderables draw after every opaque one, stable-sorted by sort key (lowest first), then by camera-space depth of their object's world position, back to front. A renderable whose object has no <code>Positionable</code> sorts at depth 0, the camera's own depth. Equal keys and depths keep traversal order. They draw with <code>RenderState::Transparent()</code>: blended, depth-tested, not writing depth.</li>
+</ol>
+<p><code>Scene::Render</code> hands each renderable its queue's state through <code>IRenderable::RenderInQueue(renderer, state)</code>, and the renderable passes it to its draws as <code>DrawMesh(mesh, model, material, state)</code>. The default <code>RenderInQueue</code> calls <code>Render(renderer)</code>, whose draws get the default state (the Opaque one), so renderables written before the render queue draw exactly as before.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>RenderState</code> field</th><th>Default (Opaque)</th><th>Transparent</th></tr></thead>
+<tbody>
+<tr><td><code>depthTest</code></td><td>on</td><td>on</td></tr>
+<tr><td><code>depthWrite</code></td><td>on</td><td>off</td></tr>
+<tr><td><code>cull</code></td><td><code>Back</code></td><td><code>Back</code></td></tr>
+<tr><td><code>blend</code> (<code>SRC_ALPHA</code>, <code>ONE_MINUS_SRC_ALPHA</code>)</td><td>on (OpenGL has always blended every draw)</td><td>on</td></tr>
+</tbody>
+</table>
+</div>
+<p>With <code>depthTest</code> off nothing writes depth, as in OpenGL. A renderable may adjust the state it is given, for example <code>cull = CullMode::None</code> for a two-sided surface.</p>
+
+<div class="callout warning">
+<p class="callout-title">Warning: don't change the scene while rendering</p>
+<p><code>Scene::Render</code> collects raw pointers to every renderable before any of them draws. A <code>Render</code> or <code>RenderInQueue</code> must not add, remove or destroy components or GameObjects immediately, because that could free a renderable that is still waiting to draw. Deferred destruction is fine: <code>Destroy</code> only queues the object, and it is torn down at step 11, after rendering (see <a href="gameobjects-components.html">GameObjects</a>).</p>
+</div>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee: draw order within a frame</p>
+<p>A renderer puts a frame's draws on screen in the order they were submitted, unless the backend documents otherwise (<code>IRenderer</code> in <code>renderer/include/renderer/common/Renderer.hpp</code>). The exceptions:</p>
+<ul>
+<li><strong>Software renderer.</strong> It decides by each draw's state, not by its queue. It reorders depth-writing draws front to back (each run of consecutive draws that both depth-test and write depth), so early-Z rejects hidden pixels before they are shaded. Without blending, this cannot change the image except where fragments have exactly equal depth. Every draw that doesn't both depth-test and write depth (normally the Transparent queue) keeps its submitted position. A Transparent renderable that doesn't override <code>RenderInQueue</code> draws with the default, depth-writing state, so its draws can be reordered too. It has no blending: <code>blend</code> is ignored and transparent draws are drawn opaque, without writing depth. Depth test, depth write and culling are honoured per draw.</li>
+<li><strong>Vulkan renderer.</strong> Accepts the state and draws nothing yet (<a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>).</li>
+</ul>
+<p>Tests: <code>RenderQueueTest.OpaqueDrawsInHierarchyOrder</code>, <code>RenderQueueTest.TransparentDrawsAfterOpaqueBackToFront</code>, <code>RenderQueueTest.SortKeyTakesPrecedenceOverDepth</code>, <code>RenderQueueTest.EachQueuePassesItsRenderState</code>, <code>DrawOrderTest.TransparentDrawsStayAfterOpaqueInSubmissionOrder</code>, <code>DrawOrderTest.NonReorderableDrawsKeepTheirPositions</code>.</p>
+</div>
+
+<div class="callout note" id="design-render-queue">
+<p class="callout-title">Design decision: two render queues, with state passed per draw</p>
+<p>Blended surfaces only look right drawn after the opaque geometry, back to front, without writing depth. Before the render queue, everything drew in hierarchy order with one global state, so a transparent surface could hide whatever was drawn behind it later. Two queues are enough for the world: <code>Opaque</code> keeps hierarchy order exactly, so existing scenes don't change, and <code>Transparent</code> sorts by an explicit key first (for layered effects that depth alone can't order) and depth second. UI isn't a third queue; it gets its own canvas pass (#42).</p>
+<p>Depth test, depth write, culling and blending travel with each draw as a <code>RenderState</code> rather than being set on the renderer. The software renderer records draws and reorders them on its render thread, so a global setter would apply to the wrong draws there. A per-draw state is the only form every backend can honour. OpenGL sends only the fields that change between draws, and resets all of them at <code>BeginFrame</code>. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a> (Q8).</p>
+</div>
+<p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::Render</code>; <code>engine/include/engine/IRenderable.hpp</code>; <code>renderer/include/renderer/common/RenderState.hpp</code>; <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>OpenGLRenderer::ApplyRenderState</code>; <code>renderer/src/software/DrawOrder.cpp</code> — <code>OrderDraws</code>; tests: <code>tests/engine/rendering/RenderQueueTests.cpp</code>, <code>tests/renderer/software/DrawOrderTests.cpp</code></p>
 
 <h2 id="fixed-step">Fixed steps and physics</h2>
 <p>The accumulator is a <code>double</code> local to <code>Run()</code>, starting at 0. Each frame adds the <em>unscaled</em> frame delta, clamped to 0.25 s, then, while a scene is loaded:</p>

@@ -11,6 +11,7 @@
 #include "renderer/software/SWShader.hpp"
 #include "renderer/software/SWTexture.hpp"
 #include "renderer/software/SoftwareRenderer.hpp"
+#include "renderer/software/DrawOrder.hpp"
 
 using namespace Renderer;
 using namespace Renderer::Common;
@@ -31,10 +32,9 @@ using namespace Renderer::Software;
 // ============================================================================
 namespace
 {
-    // Backface culling. GL convention: front faces wind counter-clockwise.
-    // If your meshes suddenly disappear, first try kFrontFaceCCW = false;
-    // if your content has mixed winding, set kCullBackfaces = false.
-    constexpr bool kCullBackfaces = true;
+    // Face culling comes from each draw's RenderState::cull. GL convention:
+    // front faces wind counter-clockwise. If your meshes suddenly disappear,
+    // first try kFrontFaceCCW = false.
     constexpr bool kFrontFaceCCW  = true;
 
     // Geometry is clipped against |x| <= kGuardBand*w and |y| <= kGuardBand*w
@@ -355,6 +355,19 @@ namespace
         int       width, height;
     };
 
+    // The fixed-function part of a draw's RenderState (blend is not supported)
+    struct RasterState
+    {
+        bool     depthTest;
+        bool     depthWrite;   // already false when depthTest is off, as in OpenGL
+        CullMode cull;
+    };
+
+    inline RasterState ToRasterState(const RenderState& s)
+    {
+        return RasterState{ s.depthTest, s.depthTest && s.depthWrite, s.cull };
+    }
+
     inline int64_t Orient(const ScreenVert& a, const ScreenVert& b, const ScreenVert& c)
     {
         return (int64_t)(b.fx - a.fx) * (c.fy - a.fy)
@@ -363,7 +376,7 @@ namespace
 
     template <bool LIT>
     void RasterTri(const ScreenVert& sv0, const ScreenVert& sv1, const ScreenVert& sv2,
-                   const RasterTarget& t, const ResolvedMat& mat,
+                   const RasterTarget& t, const RasterState& rs, const ResolvedMat& mat,
                    [[maybe_unused]] const LitState& lit)
     {
         const ScreenVert* A = &sv0;
@@ -373,10 +386,10 @@ namespace
         int64_t area2 = Orient(*A, *B, *C);   // 2x signed area; sign = winding
         if (area2 == 0) return;
 
-        if constexpr (kCullBackfaces)
+        if (rs.cull != CullMode::None)
         {
             const bool front = kFrontFaceCCW ? (area2 > 0) : (area2 < 0);
-            if (!front) return;
+            if (rs.cull == CullMode::Back ? !front : front) return;
         }
         if (area2 < 0) { std::swap(B, C); area2 = -area2; }   // canonicalize to CCW
 
@@ -451,7 +464,7 @@ namespace
 
                     // Early-Z: interpolate depth only; shade only survivors.
                     const float z = l0 * zA + l1 * zB + l2 * zC;
-                    if (z < drow[px])
+                    if (!rs.depthTest || z < drow[px])
                     {
                         uint32_t colOut;
                         if constexpr (LIT)
@@ -480,7 +493,7 @@ namespace
                         {
                             colOut = mat.flatColor;   // constant per draw — no interpolation at all
                         }
-                        drow[px] = z;
+                        if (rs.depthWrite) drow[px] = z;
                         crow[px] = colOut;
                     }
                 }
@@ -587,25 +600,28 @@ void SoftwareRenderer::EndFrame()
             m_lighting  = std::move(lighting);
             m_cameraPos = camPos;
 
-            // Sort opaque draws front-to-back so early-Z rejects occluded
-            // pixels before they're shaded — overdraw becomes nearly free.
-            // (No alpha blending exists, so draw order can't change the image.)
-            std::sort(queue.begin(), queue.end(),
-                      [&](const DrawCommand& a, const DrawCommand& b)
-                      {
-                          auto dist2 = [&](const DrawCommand& c)
-                          {
-                              // Row-major model matrix: translation at [3], [7], [11].
-                              const float dx = c.modelMatrix[3]  - camPos.x;
-                              const float dy = c.modelMatrix[7]  - camPos.y;
-                              const float dz = c.modelMatrix[11] - camPos.z;
-                              return dx*dx + dy*dy + dz*dz;
-                          };
-                          return dist2(a) < dist2(b);
-                      });
+            // Sort depth-writing draws front-to-back so early-Z rejects
+            // occluded pixels before they're shaded — overdraw becomes nearly
+            // free. Only runs of draws that depth-test and write depth move
+            // (no blending exists, so their order can't change the image);
+            // every other draw, such as the Transparent queue that follows
+            // the opaque draws, keeps its submission position. See OrderDraws.
+            std::vector<DrawOrderKey> keys(queue.size());
+            for (size_t i = 0; i < queue.size(); ++i)
+            {
+                // Row-major model matrix: translation at [3], [7], [11].
+                const DrawCommand& c = queue[i];
+                const float dx = c.modelMatrix[3]  - camPos.x;
+                const float dy = c.modelMatrix[7]  - camPos.y;
+                const float dz = c.modelMatrix[11] - camPos.z;
+                keys[i] = DrawOrderKey{ c.state, dx*dx + dy*dy + dz*dz };
+            }
 
-            for (auto& cmd : queue)
-                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.material);
+            for (const size_t index : OrderDraws(keys))
+            {
+                const DrawCommand& cmd = queue[index];
+                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.material, cmd.state);
+            }
 
             // NOTE: GL upload stays in Present() — GL context lives on the main thread.
         }
@@ -746,7 +762,8 @@ void SoftwareRenderer::UpdateSceneLighting(const SceneLightingData &lighting, co
     m_cameraPos = camPos;
 }
 
-void SoftwareRenderer::DrawMesh(IMesh* mesh, const float* modelMatrix, IMaterial* material)
+void SoftwareRenderer::DrawMesh(IMesh* mesh, const float* modelMatrix, IMaterial* material,
+                                const RenderState& state)
 {
     // Just record — don't rasterize yet
     auto* swMesh = dynamic_cast<SWMesh*>(mesh);
@@ -756,6 +773,7 @@ void SoftwareRenderer::DrawMesh(IMesh* mesh, const float* modelMatrix, IMaterial
     DrawCommand cmd;
     cmd.mesh = swMesh;
     cmd.material = swMat;
+    cmd.state = state;
     memcpy(cmd.modelMatrix, modelMatrix, 64);
     m_drawQueue.push_back(cmd);
 }
@@ -763,7 +781,7 @@ void SoftwareRenderer::DrawMesh(IMesh* mesh, const float* modelMatrix, IMaterial
 void SoftwareRenderer::DrawObjects(const std::vector<RenderObject> &objects)
 {
     for (const auto &obj : objects)
-        DrawMesh(obj.mesh, obj.transform.model, obj.material);
+        DrawMesh(obj.mesh, obj.transform.model, obj.material, obj.state);
 }
 
 void SoftwareRenderer::ReadFramebuffer(uint8_t *buffer, int width, int height) const
@@ -816,7 +834,8 @@ void SoftwareRenderer::SetPixel(int x, int y, float depth, uint32_t color)
     }
 }
 
-void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, SWMaterial* material)
+void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, SWMaterial* material,
+                                     const RenderState& state)
 {
     if (!mesh || !mesh->IsValid()) return;
     if (m_width == 0 || m_height == 0) return;
@@ -835,6 +854,7 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, SWM
 
     const RasterTarget target{ m_colorBuffer.data(), m_depthBuffer.data(),
                                (int)m_width, (int)m_height };
+    const RasterState rs = ToRasterState(state);
     const float halfW = 0.5f * (float)m_width;
     const float halfH = 0.5f * (float)m_height;
 
@@ -871,8 +891,8 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, SWM
 
     auto raster = [&](const ScreenVert& a, const ScreenVert& b, const ScreenVert& c)
     {
-        if (rm.lit) RasterTri<true >(a, b, c, target, rm, lit);
-        else        RasterTri<false>(a, b, c, target, rm, lit);
+        if (rm.lit) RasterTri<true >(a, b, c, target, rs, rm, lit);
+        else        RasterTri<false>(a, b, c, target, rs, rm, lit);
     };
 
     for (size_t i = 0; i + 2 < indices.size(); i += 3)

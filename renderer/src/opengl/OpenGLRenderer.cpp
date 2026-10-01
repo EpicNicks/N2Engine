@@ -157,16 +157,16 @@ bool OpenGLRenderer::IsValidShader(Common::IShader *shader) const
 
 void OpenGLRenderer::BeginFrame()
 {
+    // glClear only clears depth where depth writes are enabled, and the last draw of the previous frame
+    // may have turned them off (a Transparent-queue draw)
+    glDepthMask(GL_TRUE);
     glClearColor(m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    // temporary
-    // glDisable(GL_DEPTH_TEST);
-    // glDisable(GL_CULL_FACE);
-
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
+    // Start every frame from the default state, set in full: GL state may have been changed since the
+    // last draw by code that doesn't go through DrawMesh
+    m_appliedStateValid = false;
+    ApplyRenderState(Common::RenderState{});
 
     // Set wireframe mode
     if (m_wireframeEnabled)
@@ -393,7 +393,57 @@ void OpenGLRenderer::UpdateSceneLighting(
 }
 
 
-void OpenGLRenderer::DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material)
+void OpenGLRenderer::ApplyRenderState(const Common::RenderState &state)
+{
+    // Only what differs from the last draw is sent to GL
+    const bool all = !m_appliedStateValid;
+
+    if (all || state.depthTest != m_appliedState.depthTest)
+    {
+        if (state.depthTest)
+        {
+            glEnable(GL_DEPTH_TEST);
+        }
+        else
+        {
+            glDisable(GL_DEPTH_TEST);
+        }
+    }
+    if (all || state.depthWrite != m_appliedState.depthWrite)
+    {
+        glDepthMask(state.depthWrite ? GL_TRUE : GL_FALSE);
+    }
+    if (all || state.cull != m_appliedState.cull)
+    {
+        if (state.cull == Common::CullMode::None)
+        {
+            glDisable(GL_CULL_FACE);
+        }
+        else
+        {
+            glEnable(GL_CULL_FACE);
+            glCullFace(state.cull == Common::CullMode::Front ? GL_FRONT : GL_BACK);
+        }
+    }
+    if (all || state.blend != m_appliedState.blend)
+    {
+        if (state.blend)
+        {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        }
+        else
+        {
+            glDisable(GL_BLEND);
+        }
+    }
+
+    m_appliedState = state;
+    m_appliedStateValid = true;
+}
+
+void OpenGLRenderer::DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
+                              const Common::RenderState &state)
 {
     if (!mesh || !mesh->IsValid() || !material)
     {
@@ -444,7 +494,8 @@ void OpenGLRenderer::DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Com
         }
     }
 
-    // Draw mesh
+    // Draw mesh, with this draw's depth/cull/blend state
+    ApplyRenderState(state);
     glBindVertexArray(glMesh->GetVAO());
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(glMesh->GetIndexCount()), GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
@@ -454,7 +505,7 @@ void OpenGLRenderer::DrawObjects(const std::vector<Common::RenderObject> &object
 {
     for (const auto &obj : objects)
     {
-        DrawMesh(obj.mesh, obj.transform.model, obj.material);
+        DrawMesh(obj.mesh, obj.transform.model, obj.material, obj.state);
     }
 }
 

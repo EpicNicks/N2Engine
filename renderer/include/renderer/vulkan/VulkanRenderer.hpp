@@ -110,7 +110,10 @@ namespace Renderer
             void UpdateSceneLighting(const Common::SceneLightingData& lighting,
                                      const N2Engine::Math::Vector3& cameraPosition) override;
 
-            void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material) override;
+            using Common::IRenderer::DrawMesh; // the default-state overload
+            // Accepts the per-draw RenderState and ignores it: this backend draws nothing yet (#43)
+            void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
+                          const Common::RenderState& state) override;
             void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
             void OnResize(int width, int height) override;
 

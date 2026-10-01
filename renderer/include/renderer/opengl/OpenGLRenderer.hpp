@@ -70,7 +70,9 @@ namespace Renderer::OpenGL
         void SetViewProjection(const float* view, const float* projection) override;
         void UpdateSceneLighting(const Common::SceneLightingData& lighting,
                                  const N2Engine::Math::Vector3& cameraPosition) override;
-        void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material) override;
+        using Common::IRenderer::DrawMesh; // the default-state overload
+        void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
+                      const Common::RenderState& state) override;
         void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
         void OnResize(int width, int height) override;
 
@@ -106,6 +108,10 @@ namespace Renderer::OpenGL
         std::unordered_map<Common::IMaterial*, std::unique_ptr<OpenGLMaterial>> m_materials;
 
         // State
+        // The fixed-function state last set on the GL context, so a draw only changes what differs.
+        // Invalid until BeginFrame sets every field (anything may have touched GL state in between).
+        Common::RenderState m_appliedState{};
+        bool m_appliedStateValid = false;
         bool m_wireframeEnabled;
         float m_clearColor[4];
 
@@ -118,6 +124,7 @@ namespace Renderer::OpenGL
         static GLenum GetOpenGLInternalFormat(uint32_t channels);
 
         void CreateStandardShaders();
+        void ApplyRenderState(const Common::RenderState& state);
     };
 
     std::unique_ptr<Common::IRenderer> CreateOpenGLRenderer();

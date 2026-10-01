@@ -95,6 +95,13 @@ namespace N2Engine::Example
 
         void Render(Renderer::Common::IRenderer* renderer) override
         {
+            RenderInQueue(renderer, Renderer::Common::RenderState::Opaque());
+        }
+
+        // Draws with the state of its queue, so a subclass that returns the Transparent queue from
+        // GetRenderQueue blends without writing depth
+        void RenderInQueue(Renderer::Common::IRenderer* renderer, const Renderer::Common::RenderState& state) override
+        {
             if (!renderer)
             {
                 return;
@@ -136,7 +143,7 @@ namespace N2Engine::Example
             _material->SetColor("uAlbedo", _color.r, _color.g, _color.b, _color.a);
 
             // Pass the final matrix to the renderer
-            renderer->DrawMesh(_mesh, finalMatrix.Data(), _material);
+            renderer->DrawMesh(_mesh, finalMatrix.Data(), _material, state);
         }
 
         void CleanupRenderResources(Renderer::Common::IRenderer* renderer) override
