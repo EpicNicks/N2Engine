@@ -1,0 +1,30 @@
+# Line-ending policy: text is stored as LF in the repository and checked out in
+# the platform's native endings, so core.autocrlf settings no longer matter.
+* text=auto
+
+# Scripts that need a specific ending regardless of platform
+*.sh   text eol=lf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+*.sln  text eol=crlf
+
+# Binary assets: never converted or diffed as text
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.wav  binary
+*.ogg  binary
+*.mp3  binary
+*.ttf  binary
+*.otf  binary
+*.dll  binary
+*.lib  binary
+*.exe  binary
+*.pdb  binary
+*.zip  binary
+
+# Vendored third-party code: kept exactly as upstream ships it
+external/** -text
