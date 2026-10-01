@@ -179,7 +179,7 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 <p class="src">Source: <code>.github/workflows/tests.yml</code></p>
 
 <h2 id="conventions">Conventions for headless tests</h2>
-<p>All tests run without a window, GPU or sound device. <code>Application::Init</code> opens a window, so <strong>no test calls it</strong>; instead each test sets up only the parts it needs. Every test in one executable shares the same process-wide singletons (<code>Application</code>, <code>SceneManager</code>, <code>LuaRuntime</code>, <code>AudioSystem</code>, <code>Logger</code>, <code>ResourceLoader</code>), so tests must leave them as they found them or tolerate earlier state.</p>
+<p>All tests run without a window, GPU or sound device. <strong>No test calls <code>Application::Init</code></strong>; instead each test sets up only the parts it needs. <code>Init</code> does not require a window: without one it carries on and reports the window subsystem as <code>Failed</code> in its health result (the editor host relies on this in CI). Tests avoid it because a meaningful <code>Init</code> wants a real window and audio device, starts every subsystem in the shared singleton, and clears the quit flag that other tests may depend on. Every test in one executable shares the same process-wide singletons (<code>Application</code>, <code>SceneManager</code>, <code>LuaRuntime</code>, <code>AudioSystem</code>, <code>Logger</code>, <code>ResourceLoader</code>), so tests must leave them as they found them or tolerate earlier state.</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Need</th><th>How tests do it</th><th>Example</th></tr></thead>
@@ -208,7 +208,7 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 
 <h2 id="not-headless">What cannot be tested headless</h2>
 <ul>
-<li><strong>Application startup and the frame loop.</strong> <code>Application::Init</code> needs a window; <code>Run()</code> refuses to start without one. The loop order on the <a href="application.html#frame">Application page</a> is not covered by a test; tests replicate parts of it by hand.</li>
+<li><strong>Application startup and the frame loop.</strong> <code>Application::Init</code> runs headless but only reports <code>Failed</code> health for the window and renderer, so the parts worth testing need a real window and audio device; <code>Run()</code> refuses to start without a valid window. The loop order on the <a href="application.html#frame">Application page</a> is not covered by a test; tests replicate parts of it by hand.</li>
 <li><strong>Windowing.</strong> <code>Window::InitWindow</code>, window modes, resize callbacks. Only the uninitialised-window state is tested (<code>WindowHealthTest</code>).</li>
 <li><strong>Renderers.</strong> OpenGL, Vulkan and software renderers need a context; <code>renderer_tests</code> is a placeholder. <code>RenderEditorFrame</code> and the editor's <code>RenderFrame</code> command are untested.</li>
 <li><strong>Real input devices.</strong> Keyboard, mouse and gamepad state come from GLFW; tests use fake bindings.</li>

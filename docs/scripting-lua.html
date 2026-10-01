@@ -110,7 +110,17 @@
 
 <div class="callout open-question">
 <p class="callout-title">Open question</p>
-<p><code>LuaTest.OpensOnlySafeStandardLibraries</code> says scripts "can't touch the filesystem", but the <code>base</code> library is opened in full, and it includes <code>dofile</code>, <code>loadfile</code> and <code>load</code>. Nothing in <code>LuaRuntime::LuaRuntime</code> removes them. Whether file access through <code>dofile</code>/<code>loadfile</code> is meant to be allowed is not stated.</p>
+<p><code>LuaTest.OpensOnlySafeStandardLibraries</code> says scripts "can't touch the filesystem", but the test only checks that <code>io</code> and <code>os</code> are <code>nil</code>. Whether the following is meant to be allowed is not stated.</p>
+</div>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>The Lua state is not a sandbox. Do not run untrusted scripts.</p>
+<ul>
+<li>The <code>package</code> library is opened in full. <code>package.loadlib</code> can load a native DLL or shared library and call into it, and the C searcher in <code>package.searchers</code> is reachable, so native code can be loaded even though the engine replaces the global <code>require</code>.</li>
+<li>The <code>base</code> library is opened in full, including <code>dofile</code>, <code>loadfile</code> and <code>load</code>. Nothing in <code>LuaRuntime::LuaRuntime</code> removes them, so scripts can read and run files.</li>
+<li><code>load</code> and <code>loadfile</code> accept precompiled binary bytecode by default (mode <code>"bt"</code>). Malformed bytecode can crash the process or corrupt memory.</li>
+</ul>
 </div>
 
 <h3 id="runtime-runfile">RunFile</h3>
@@ -145,7 +155,7 @@
 <h2 id="luacomponent">LuaComponent and the script table</h2>
 <p>A behaviour script is a file that returns a table, the script's "class". <code>SetScript(path)</code> does the following:</p>
 <ol class="steps">
-<li>Records the path and drops any previous instance.</li>
+<li>Records the path and drops the component's reference to any previous instance. The old instance is not released: its <code>self.component</code>/<code>self.gameObject</code> are not cleared and the subscriptions it made keep firing, because they share the component's lifetime flag. Calling <code>SetScript</code> repeatedly therefore leaks old instances and their subscriptions.</li>
 <li>Loads the file through <code>ResourceLoader</code>. If it is missing, it logs a warning, sets <code>HasMissingScript()</code> and stops.</li>
 <li>Runs the file. If it raises an error or does not return a table, it logs an error and sets <code>HasMissingScript()</code>.</li>
 <li>Creates a fresh instance table whose metatable is the class table, and sets <code>self.component</code> (this <code>LuaComponent</code>) and <code>self.gameObject</code> (its GameObject) on it. Both are checked handles <span class="badge">PR #29</span>.</li>
@@ -192,14 +202,14 @@ SceneManager.GetCurrentScene():AddRootGameObject(go)
 <table>
 <thead><tr><th>Script method</th><th>Argument</th><th>When it runs</th></tr></thead>
 <tbody>
-<tr><td><code>OnAttach</code></td><td></td><td>In the first <code>Scene::ProcessAttachQueue</code> after the component joins a scene: at the start of the next frame, before the fixed steps. This happens whether or not the object is active. The component joins the update list only after this. Re-parenting within the same scene does not queue it again.</td></tr>
+<tr><td><code>OnAttach</code></td><td></td><td>In the first <code>Scene::ProcessAttachQueue</code> after the component joins a scene: at the start of the next frame, before the fixed steps. This happens whether or not the object is active. The component joins the update list only after this. Re-parenting within the same scene does not queue it again, but <code>OnAttach</code> runs each time the object joins a scene (<code>GameObject::SetScene</code> re-queues every component), for example after <code>RemoveRootGameObject</code> and a later <code>AddRootGameObject</code>. Subscriptions made in <code>OnAttach</code> are then duplicated.</td></tr>
 <tr><td><code>OnFixedUpdate</code></td><td></td><td>Once per fixed step (0 to n per frame), before the physics step. No fixed steps while <code>timeScale</code> is 0.</td></tr>
 <tr><td><code>OnCollisionEnter/Stay/Exit</code></td><td><code>Collision</code></td><td>After the physics step of each fixed step (see <a href="physics.html">Physics</a>)</td></tr>
 <tr><td><code>OnTriggerEnter/Stay/Exit</code></td><td><code>Trigger</code></td><td>Same as collisions</td></tr>
 <tr><td><code>OnUpdate</code></td><td></td><td>Once per frame, after the fixed steps</td></tr>
 <tr><td><code>OnLateUpdate</code></td><td></td><td>Once per frame, after <code>OnUpdate</code> and coroutines</td></tr>
 <tr><td><code>OnEnable</code> / <code>OnDisable</code></td><td></td><td>When the GameObject's effective active state changes (<code>GameObject:SetActive</code> on it or an ancestor), only for components whose own enable flag is on</td></tr>
-<tr><td><code>OnDestroy</code></td><td></td><td>Once, during teardown (destroy, <code>RemoveComponent</code>, scene switch), preceded by <code>OnDisable</code> if the component was enabled in an active hierarchy</td></tr>
+<tr><td><code>OnDestroy</code></td><td></td><td>For an object in a scene: once, during teardown (destroy, <code>RemoveComponent</code>, scene switch), preceded by <code>OnDisable</code> if the component was enabled in an active hierarchy. Objects outside a scene get neither.</td></tr>
 </tbody>
 </table>
 </div>
@@ -207,7 +217,8 @@ SceneManager.GetCurrentScene():AddRootGameObject(go)
 
 <div class="callout guarantee">
 <p class="callout-title">Guarantee</p>
-<p>A script sees <code>OnDisable</code> and then <code>OnDestroy</code>, exactly once each, when its object is destroyed. During both callbacks <code>self.gameObject</code>, its Positionable and sibling components are still usable <span class="badge">PR #29</span>. This holds for all three teardown paths (destroy, scene switch, <code>RemoveComponent</code>).</p>
+<p>For an object in a scene, <code>OnDestroy</code> runs once, preceded by <code>OnDisable</code> if the component was enabled in an active hierarchy. Objects outside a scene get neither. During both callbacks <code>self.gameObject</code>, its Positionable and sibling components are still usable <span class="badge">PR #29</span>. This holds for all three teardown paths (destroy, scene switch, <code>RemoveComponent</code>).</p>
+<p>Re-entry is not guarded: <code>Component::RunDestroyCallbacks</code> sets the "destroyed" flag only after <code>OnDestroy</code> returns, so a script that triggers teardown of its own component again from <code>OnDisable</code> or <code>OnDestroy</code> (for example by removing that component) runs the callbacks again.</p>
 </div>
 <p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::OnAttach</code> … <code>LuaComponent::OnTriggerExit</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::ProcessAttachQueue</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::RunDestroyCallbacks</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::NotifyActiveChanged</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code>; tests: <code>LuaLifetimeTest.ScriptSeesOnDisableThenOnDestroy</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfADestroyedObject</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOnSceneSwitch</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfARemovedComponent</code></p>
 
@@ -297,7 +308,7 @@ return Fields
     "body":   { "$ref": null }              // null reference: self.body = nil
   }
 }</code></pre>
-<p><code>Deserialize</code> resolves <code>scriptUUID</code> through <code>ResourceLoader</code> metadata. An unknown UUID logs "Script UUID not found" and marks the script missing. <code>scriptPath</code> is the fallback for older files. See <a href="serialization.html">Serialization</a>.</p>
+<p><code>Deserialize</code> resolves <code>scriptUUID</code> through <code>ResourceLoader</code> metadata. An unknown UUID logs "Script UUID not found" and marks the script missing. A <code>scriptUUID</code> string that is not a valid UUID is silently ignored: nothing is logged, the script is not marked missing, no script is loaded, and <code>scriptPath</code> is not tried. <code>scriptPath</code> is the fallback for older files that have no <code>scriptUUID</code> key. See <a href="serialization.html">Serialization</a>.</p>
 <p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::Serialize</code>, <code>LuaComponent::Deserialize</code></p>
 
 <h3 id="fields-references">Reference fields</h3>
@@ -312,7 +323,7 @@ return Fields
 </tbody>
 </table>
 </div>
-<p>A <code>null</code> <code>$ref</code> sets the field to <code>nil</code>. An invalid UUID string logs an error and skips the field. A reference that is not found logs a warning, sets the field to <code>nil</code> and sets <code>HasUnresolvedReferences()</code>. Before PR #24 only names ending in "Component" counted, so <code>type = "Rigidbody"</code> fields were silently skipped.</p>
+<p>A <code>null</code> <code>$ref</code> sets the field to <code>nil</code>. An invalid UUID string logs an error and skips the field. A <code>$ref</code> that is neither <code>null</code> nor a string (a number, say) throws <code>nlohmann::json::type_error</code> from <code>ResolveReferences</code>, which fails the whole scene load. A reference that is not found logs a warning, sets the field to <code>nil</code> and sets <code>HasUnresolvedReferences()</code>. Before PR #24 only names ending in "Component" counted, so <code>type = "Rigidbody"</code> fields were silently skipped.</p>
 <p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::ResolveReferences</code>, <code>LuaComponent::IsComponentType</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>ComponentToLua</code>; tests: <code>LuaRobustnessTest.ScriptableComponentNamesAreReferenceTypes</code></p>
 
 <h2 id="handles">Checked handles <span class="badge">PR #29</span></h2>
@@ -332,7 +343,7 @@ return Fields
 <p>A handle is valid from creation until its object's <strong>teardown has finished</strong> (<code>GameObject::IsTornDown()</code>). <code>IsTornDown</code> becomes true:</p>
 <ul>
 <li>in <code>Scene::ProcessDestroyed</code>, after the OnDisable/OnDestroy pass over everything being destroyed;</li>
-<li>in <code>Scene::Clear</code> (scene switch), after the OnDestroy pass over the whole scene;</li>
+<li>in <code>Scene::Clear</code> (scene switch), after the OnDestroy pass over the scene's roots and their descendants. <code>Scene::Clear</code> walks only the roots, so an object detached with <code>RemoveChild</code> and not re-added is not torn down (see the warning below);</li>
 <li>immediately, when <code>Destroy()</code> is called on an object that is in no scene.</li>
 </ul>
 <p>Handles to the object, its components and to other objects torn down in the same pass therefore all keep working inside <code>OnDisable</code>/<code>OnDestroy</code>, and all fail afterwards. A component handle also becomes invalid when that component alone is freed (<code>RemoveComponent</code>), while the GameObject and its other components stay valid.</p>
@@ -342,10 +353,16 @@ return Fields
 <tbody>
 <tr><td><code>go:Destroy()</code>, same frame</td><td>valid (destroy is deferred)</td><td>valid</td></tr>
 <tr><td>end-of-frame <code>ProcessDestroyed</code></td><td>invalid</td><td>invalid</td></tr>
-<tr><td>Scene switch</td><td>invalid</td><td>invalid</td></tr>
+<tr><td>Scene switch (object reachable from a root)</td><td>invalid</td><td>invalid</td></tr>
+<tr><td>Scene switch (object detached with <code>RemoveChild</code>, not re-added)</td><td>still valid, but the object's scene pointer dangles</td><td>still valid</td></tr>
 <tr><td><code>RemoveComponent</code> of that component</td><td>valid</td><td>invalid (after its OnDisable/OnDestroy)</td></tr>
 </tbody>
 </table>
+</div>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>A <code>RemoveChild</code>-detached object is still in its scene and survives a scene switch with a dangling scene pointer; re-parent, <code>AddRootGameObject</code> or <code>Destroy</code> it before switching. <code>GameObject::RemoveChild</code> never calls <code>SetScene(nullptr)</code>: the detached object's components stay in the scene's component list and keep getting <code>OnUpdate</code>, and <code>Scene::Clear</code>, which walks only the roots, does not tear it down. After the switch its handles stay valid, and a later <code>AddComponent</code> on it, or freeing it (<code>~GameObject</code>), uses the freed scene.</p>
 </div>
 
 <h3 id="handle-methods">Validity checks and errors</h3>
@@ -363,7 +380,7 @@ end
 
 <div class="callout note">
 <p class="callout-title">Note</p>
-<p>Lua's <code>Component:IsDestroyed()</code> is not the C++ <code>Component::IsDestroyed()</code>. In C++ it is true as soon as the component is marked for destruction, which is before <code>OnDestroy</code> returns. In Lua it is true only once the handle is invalid. Inside <code>OnDestroy</code>, Lua's <code>self.component:IsDestroyed()</code> is <code>false</code> and <code>IsActive()</code> is <code>false</code>.</p>
+<p>Lua's <code>Component:IsDestroyed()</code> is not the C++ <code>Component::IsDestroyed()</code>. In C++ it reads the "marked for destruction" flag, which <code>Component::RunDestroyCallbacks</code> sets only after <code>OnDestroy</code> returns, so it stays <code>false</code> during <code>OnDisable</code> and <code>OnDestroy</code>. In Lua it is true only once the handle is invalid. Inside <code>OnDisable</code>/<code>OnDestroy</code>, both report <code>false</code>. Do not use <code>IsActive()</code> to detect teardown either: it can still be <code>true</code> inside <code>OnDestroy</code> on the <code>RemoveComponent</code> path (component enabled, object active in its hierarchy).</p>
 </div>
 
 <h3 id="handle-equality">Equality</h3>
@@ -398,14 +415,14 @@ BindComponentType&lt;Physics::Rigidbody&gt;(lua, "Rigidbody",
 <thead><tr><th>Operation</th><th>Effect on the handle</th></tr></thead>
 <tbody>
 <tr><td><code>GameObject.Create(name)</code> / <code>GameObject(name)</code></td><td>The returned handle owns the new object</td></tr>
-<tr><td><code>parent:RemoveChild(child)</code></td><td>If <code>child</code> was a child and is now detached, the <code>child</code> handle takes ownership</td></tr>
+<tr><td><code>parent:RemoveChild(child)</code></td><td>If <code>child</code> was a child and is now detached from the parent, the <code>child</code> handle takes ownership. The object is <strong>not</strong> removed from the scene: it stays in the scene's component list, keeps updating, and is not torn down by a scene switch (see the <a href="#handle-validity">warning above</a>). Re-parent it, add it as a root or destroy it.</td></tr>
 <tr><td><code>scene:RemoveRootGameObject(go)</code></td><td>If it was a root and was removed, the <code>go</code> handle takes ownership</td></tr>
 <tr><td><code>parent:AddChild(child)</code></td><td>If the parent now holds it, the <code>child</code> handle releases ownership</td></tr>
 <tr><td><code>scene:AddRootGameObject(go)</code></td><td>If it is now one of the scene's roots, the <code>go</code> handle releases ownership</td></tr>
 </tbody>
 </table>
 </div>
-<p>Ownership belongs to that handle (that userdata). A Lua variable that aliases it shares it. A separately obtained handle to the same object, for example from another <code>FindChild</code>, stays weak. When the last reference to an owning handle is collected, a Lua-owned object that never joined a scene is freed.</p>
+<p>Ownership belongs to that handle (that userdata). A Lua variable that aliases it shares it. A separately obtained handle to the same object, for example from another <code>FindChild</code>, stays weak. When the last reference to an owning handle is collected, the Lua-owned object is freed (unless something else, such as a parent, still holds it).</p>
 
 <div class="callout warning">
 <p class="callout-title">Warning</p>
@@ -421,7 +438,7 @@ BindComponentType&lt;Physics::Rigidbody&gt;(lua, "Rigidbody",
 <tr><td><code>go:GetParent()</code>, <code>go:FindChild(name)</code>, <code>go:FindChildRecursive(name)</code>, <code>scene:FindGameObject(name)</code></td><td>A GameObject handle, or <code>nil</code></td></tr>
 <tr><td><code>go:GetPositionable()</code></td><td>A Positionable handle, or <code>nil</code> if the object has none (<code>CreatePositionable()</code> first)</td></tr>
 <tr><td><code>go:GetComponent(name)</code></td><td>A typed handle to the first component of that type, or <code>nil</code></td></tr>
-<tr><td><code>go:AddComponent(name)</code></td><td>A typed handle to the new component</td></tr>
+<tr><td><code>go:AddComponent(name)</code></td><td>A typed handle to the new component. <code>AddComponent("AudioListener")</code> is the exception: <code>AudioListener</code> is a singleton component (<code>IsSingleton</code>), so if the object already has one, no second listener is added and the call returns a handle to the existing one</td></tr>
 <tr><td><code>scene:FindGameObjectsByTag(tag)</code>, <code>scene:GetAllGameObjects()</code>, <code>scene:GetRootGameObjects()</code></td><td>A plain Lua array of handles: a snapshot, not a live view of the scene's list</td></tr>
 <tr><td><code>component:GetGameObject()</code></td><td>A GameObject handle (error if the component is gone)</td></tr>
 <tr><td><code>go:AddChild(nil)</code>, <code>go:RemoveChild(nil)</code>, <code>scene:AddRootGameObject(nil)</code></td><td>Lua error "&lt;Function&gt;: expected a GameObject, got nil"</td></tr>
@@ -475,7 +492,7 @@ end
 </tbody>
 </table>
 </div>
-<p>Subscribe from <code>OnAttach</code> (or another lifecycle method) so the subscription is tied to the component.</p>
+<p>Subscribe from <code>OnAttach</code> (or another lifecycle method) so the subscription is tied to the component. <code>OnAttach</code> runs again each time the object rejoins a scene, so an object that can leave and rejoin should keep the subscription id and unsubscribe before subscribing again.</p>
 
 <h3 id="subscription-rules">Rules</h3>
 <ul>
@@ -528,14 +545,14 @@ assert(Vector3.Zero.y == 0)   -- the constant is unchanged
 <p class="src">Source: <code>engine/src/scripting/LuaJson.cpp</code> — <code>LuaToJson</code>, <code>TableToJson</code>, <code>NumberToJson</code>, <code>ActionMapJsonFromLua</code>; tests: <code>LuaRobustnessTest.LuaToJsonSurvivesSelfReferencingTables</code>, <code>LuaSceneTest.LuaToJsonScalars</code>, <code>LuaSceneTest.LuaToJsonTables</code>, <code>LuaSceneTest.ActionMapJsonFromLuaKeepsBindingOrder</code>, <code>LuaSceneTest.ActionMapJsonFromLuaParsesAsActionMap</code></p>
 
 <h2 id="still-raw">What is still raw</h2>
-<p>Some objects still reach Lua as raw pointers or references. PR #29 leaves them out of scope, and a follow-up is planned. Do not keep these across a scene switch or past the object's life:</p>
+<p>Some objects still reach Lua as raw pointers or references. PR #29 leaves them out of scope. <code>Scene</code>, <code>ActionMap</code> and <code>InputAction</code> are being fixed in the <code>lua-remaining-handles</code> PR, which gives them checked handles and removes the <code>InputActionEvent</code> type; until it lands they behave as below. Do not keep these across a scene switch or past the object's life:</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Value</th><th>From</th><th>Risk</th></tr></thead>
 <tbody>
-<tr><td><code>Scene</code></td><td><code>SceneManager.GetCurrentScene()</code> (<code>nil</code> with no scene loaded)</td><td>A stored scene dangles after a scene switch. Fetch it again when needed. A fix needs a lifetime token on <code>Scene</code>.</td></tr>
+<tr><td><code>Scene</code></td><td><code>SceneManager.GetCurrentScene()</code> (<code>nil</code> with no scene loaded)</td><td>A stored scene dangles after a scene switch. Fetch it again when needed. Being fixed in the <code>lua-remaining-handles</code> PR.</td></tr>
 <tr><td><code>Camera</code></td><td><code>Camera.Main()</code>, <code>Application.GetCamera()</code> (<code>nil</code> without a camera)</td><td>Lives as long as the application</td></tr>
-<tr><td><code>InputAction</code>, <code>ActionMap</code>, <code>InputActionEvent</code></td><td><code>Input.GetActionMap</code>/<code>LoadActionMap</code>/<code>CreateActionMap</code>, <code>map:Get(name)</code>, subscription arguments</td><td>A map replaced by <code>Input.CreateActionMap</code> with the same name leaves stored actions dangling</td></tr>
+<tr><td><code>InputAction</code>, <code>ActionMap</code>, <code>InputActionEvent</code></td><td><code>Input.GetActionMap</code>/<code>LoadActionMap</code>/<code>CreateActionMap</code>, <code>map:Get(name)</code>, subscription arguments</td><td>A map replaced by <code>Input.CreateActionMap</code> with the same name leaves stored actions dangling. Being fixed in the <code>lua-remaining-handles</code> PR (checked handles for <code>ActionMap</code> and <code>InputAction</code>; <code>InputActionEvent</code> removed).</td></tr>
 <tr><td><code>Window</code>, <code>Mouse</code></td><td><code>Window.Get()</code>, <code>Mouse.Get()</code></td><td>Application lifetime</td></tr>
 </tbody>
 </table>

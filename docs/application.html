@@ -87,7 +87,7 @@
 <tbody>
 <tr><td><code>EngineHealth Init()</code></td><td>Calls <code>Init(options)</code> with <code>projectPath = ""</code>, PhysX, OpenGL, <code>isHeadless = false</code>.</td></tr>
 <tr><td><code>EngineHealth Init(const Config::ApplicationOptions &amp;)</code></td><td>Starts every subsystem it can and returns their states. Never throws for a failed subsystem; the engine keeps running with whatever started.</td></tr>
-<tr><td><code>void Init(std::unique_ptr&lt;Scene&gt; &amp;&amp;)</code></td><td>Marked "for testing only". Calls <code>Init()</code>, adds the scene with <code>loadAdded = true</code> and processes the scene change immediately. Discards the health result.</td></tr>
+<tr><td><code>void Init(std::unique_ptr&lt;Scene&gt; &amp;&amp;)</code></td><td>Marked "for testing only". Calls <code>Init()</code>, adds the scene with <code>loadAdded = true</code> and processes the scene change immediately. Discards the health result. Passing a null scene is undefined behaviour (it ends up dereferencing the current scene, which does not exist).</td></tr>
 </tbody>
 </table>
 </div>
@@ -223,7 +223,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <tr><td>Destroy an object</td><td>any callback</td><td>Torn down at step 11 of the same frame, after Render (see <a href="gameobjects-components.html">GameObjects</a> for what a destroyed object still does before then).</td></tr>
 <tr><td>Request a scene load</td><td>any callback</td><td>Switched at step 12; the rest of the current frame runs on the old scene.</td></tr>
 <tr><td>Call <code>Application::Quit()</code></td><td>any callback</td><td>The current frame finishes (all 12 steps), then the loop ends.</td></tr>
-<tr><td>Set <code>Time::SetTimeScale(0)</code></td><td>any</td><td>From the next frame: scaled delta 0, no fixed steps.</td></tr>
+<tr><td>Set <code>Time::SetTimeScale(0)</code></td><td>any</td><td>Fixed steps stop immediately: a call from <code>FixedUpdate</code> skips the rest of this frame's catch-up steps, because the loop re-reads the scaled fixed delta before every step. The frame's scaled delta becomes 0 from the next frame.</td></tr>
 </tbody>
 </table>
 </div>
@@ -296,7 +296,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <ul>
 <li><code>Run()</code> checks the flag at the top of each iteration, so the frame in which <code>Quit()</code> was called runs to completion (including destroy processing and a pending scene change).</li>
 <li><code>IsQuitRequested()</code> exposes the flag to hosts that do not use <code>Run()</code>; the editor host polls it.</li>
-<li>The flag is cleared <strong>only</strong> by <code>Init</code>. It is not cleared by <code>Run()</code> or <code>Shutdown()</code>. A <code>Quit()</code> requested before <code>Run()</code> (for example from a scene script's file-scope code) is honoured: <code>Run()</code> exits before the first frame.</li>
+<li>The flag is cleared <strong>only</strong> by <code>Init</code>. It is not cleared by <code>Run()</code> or <code>Shutdown()</code>. A <code>Quit()</code> requested before <code>Run()</code> is honoured only if it comes <em>after</em> <code>Init</code> (for example from a scene script's file-scope code run while adding the first scene): <code>Run()</code> then exits before the first frame. A <code>Quit()</code> before <code>Init</code> is lost, because <code>Init</code> clears the flag.</li>
 </ul>
 <p>When the loop ends, for <em>either</em> reason (window closed or quit requested), <code>Run()</code> calls <code>OnApplicationQuit()</code> on the current scene, if there is one, then <code>Shutdown()</code>. The editor host does the same after its own loop. <code>Run()</code>'s early return for an invalid window does not call <code>OnApplicationQuit</code>.</p>
 <p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Quit</code>, <code>Application::Run</code>; <code>engine/src/scripting/bindings/LuaApplicationBindings.cpp</code>; <code>editor-server/src/Main.cpp</code>; tests: <code>CoreRobustnessTest.QuitIsARequestNotAnExit</code></p>

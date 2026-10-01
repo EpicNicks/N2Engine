@@ -8,7 +8,7 @@ A C++ Game Engine I am building for learning
 
 ## Documentation
 Behaviour reference for the engine (lifecycles, frame order, guarantees and edge cases): [`docs/`](docs/index.html).
-- Open `docs/index.html` in a browser; no build step is needed. The site can also be served with GitHub Pages from the `docs/` folder.
+- Open `docs/index.html` in a browser; no build step is needed. The site is meant to be served with GitHub Pages from the `/docs` folder of `master` (not enabled yet).
 - Conventions for extending the docs: [`docs/README.md`](docs/README.md)
 
 ## Currently Implemented

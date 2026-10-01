@@ -134,7 +134,7 @@ N2Engine::Logger::logEvent -= id;
 </div>
 
 <h2 id="console">Debug console and stream redirection</h2>
-<p><code>Logger::InitializeDebugConsoleHelper()</code> is called by <code>Application::Init</code> only when <code>N2ENGINE_DEBUG</code> is defined. The engine target defines <code>N2ENGINE_DEBUG=1</code> (PUBLIC) for the Debug configuration only, so Release builds have no console output unless the program subscribes itself.</p>
+<p><code>Logger::InitializeDebugConsoleHelper()</code> is called by <code>Application::Init</code> only when <code>N2ENGINE_DEBUG</code> is defined. The engine target defines <code>N2ENGINE_DEBUG=1</code> (PUBLIC) for the Debug configuration only, so Release builds have no console output unless the program subscribes itself. <code>N2EditorHost</code> does not subscribe, so a Release build of the host prints no logs at all.</p>
 <p>The helper:</p>
 <ol class="steps">
 <li>Runs <strong>once per process</strong>; later calls return immediately. Before PR #24 a second <code>Application::Init</code> added a second console subscriber and every line was printed twice.</li>
@@ -194,9 +194,9 @@ constexpr std::string_view ToString(SubsystemState);        // "NotStarted", "Ru
 <ol class="steps">
 <li>Install SIGINT/SIGTERM handlers that clear a <code>g_running</code> flag.</li>
 <li><code>Application::Init</code> with PhysX, OpenGL and <code>isHeadless = true</code> (hidden window, audio Disabled).</li>
-<li><code>EditorServer::Start(port)</code>: bind to all interfaces (<code>INADDR_ANY</code>) with <code>SO_REUSEADDR</code>, listen with a backlog of 1, start the server thread. On socket/bind/listen failure it logs and returns with the server not running, so the main loop exits at once.</li>
+<li><code>EditorServer::Start(port)</code>: bind to all interfaces (<code>INADDR_ANY</code>, not just loopback; see the <a href="#editor-security">security warning</a>) with <code>SO_REUSEADDR</code>, listen with a backlog of 1, start the server thread. On socket/bind/listen failure it logs and returns with the server not running, so the main loop exits at once.</li>
 <li>Main loop, every ~16 ms: <code>window.PollEvents()</code>, while <code>g_running</code>, the server is running, no quit was requested, and the window (if valid) is not closing.</li>
-<li><code>server.Stop()</code>, then <code>OnApplicationQuit()</code> on the current scene if any, then <code>Application::Shutdown()</code>.</li>
+<li><code>server.Stop()</code>, then <code>OnApplicationQuit()</code> on the current scene if any, then <code>Application::Shutdown()</code>. <code>Stop()</code> closes only the listening socket and then joins the server thread; if a client is connected but idle, that thread is blocked in <code>recv</code> on the client socket and the join hangs until the client sends something or disconnects (so SIGINT with an idle editor attached does not exit).</li>
 <li>Exit 0; or exit 1 if a <code>std::exception</code> escaped (logged as "Fatal error: ...").</li>
 </ol>
 <p>The server accepts one client at a time: the server thread accepts a connection, serves it until it disconnects or sends <code>Shutdown</code>, closes it, and goes back to <code>accept</code>.</p>
@@ -240,27 +240,27 @@ $stream.Write($bytes, 0, $bytes.Length)
 
 <div class="callout open-question">
 <p class="callout-title">Open question</p>
-<p><code>editor-server/CMakeLists.txt</code> declares a <code>N2ProtocolGenerate</code> custom command whose OUTPUT is <code>include/editor/protocol/Generated.hpp</code>, but <code>generate_cpp.py</code> writes <code>clients/cpp/Protocol.generated.hpp</code>. The declared output is never produced, so the build step either reruns every build or is effectively dead. Which file the build is meant to generate is unclear.</p>
+<p><code>editor-server/CMakeLists.txt</code> declares a <code>N2ProtocolGenerate</code> custom command whose OUTPUT is <code>include/editor/protocol/Generated.hpp</code>, but <code>generate_cpp.py</code> writes <code>clients/cpp/Protocol.generated.hpp</code>. The declared output is never produced, so the step is always out of date and reruns on every build, rewriting <code>clients/cpp/Protocol.generated.hpp</code> in the source tree each time. Which file the build is meant to generate is unclear.</p>
 </div>
 
 <h2 id="commands">Commands</h2>
-<p>Commands run on the server thread, one at a time, in the order received. Unknown ids get <code>Error</code> "Unknown command". Every command except <code>RenderFrame</code> is logged as "Command Issued: 0x..".</p>
+<p>Commands run on the server thread, one at a time, in the order received. Unknown ids get <code>Error</code> "Unknown command". Every command except <code>RenderFrame</code> and <code>Shutdown</code> is logged as "Command Issued: 0x.."; <code>Shutdown</code> is intercepted in <code>HandleClient</code> before dispatch and logged as "Shutdown requested by editor".</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Id</th><th>Command</th><th>Request</th><th>Behaviour</th><th>Response</th></tr></thead>
 <tbody>
-<tr><td>0x01</td><td>RenderFrame</td><td>—</td><td><code>Application::RenderEditorFrame()</code> (draws without simulating; see <a href="application.html#editor-frame">RenderEditorFrame</a>), then reads back <code>viewportWidth × viewportHeight</code> BGRA pixels.</td><td><code>FrameData</code> {width, height, pixels}; <code>Error</code> "No renderer available (see GetEngineHealth)" without a renderer.</td></tr>
+<tr><td>0x01</td><td>RenderFrame</td><td>—</td><td><code>Application::RenderEditorFrame()</code> (draws without simulating; see <a href="application.html#editor-frame">RenderEditorFrame</a>), then reads back <code>viewportWidth × viewportHeight</code> BGRA pixels. With the OpenGL renderer the rows come in OpenGL order, bottom row first; clients must flip vertically.</td><td><code>FrameData</code> {width, height, pixels}; <code>Error</code> "No renderer available (see GetEngineHealth)" without a renderer.</td></tr>
 <tr><td>0x02</td><td>SetViewportSize</td><td>int32 width, height</td><td>Stores the readback size and updates the main camera's aspect (positive sizes only).</td><td><code>Ok</code></td></tr>
 <tr><td>0x10</td><td>SetCameraPosition</td><td>float32 x, y, z</td><td>Moves the main camera.</td><td><code>Ok</code></td></tr>
 <tr><td>0x12</td><td>GetCameraPosition</td><td>—</td><td>Reads the main camera position.</td><td><code>CameraPosition</code>; <code>Error</code> "No camera" if none.</td></tr>
 <tr><td>0x20</td><td>CreateScene</td><td>string name</td><td>Rejects a name already stored in <code>SceneManager</code> <span class="badge">PR #28</span>; otherwise creates an empty scene and stores it <em>without</em> loading it.</td><td><code>SceneData</code> (scene JSON); <code>Error</code> "Scene already exists: &lt;name&gt;".</td></tr>
 <tr><td>0x21</td><td>LoadScene</td><td>string scene JSON</td><td>Builds the scene to validate it. If a scene with that name is stored, replaces its data and loads it; otherwise stores and loads it. Processes the scene change immediately.</td><td><code>Ok</code>; <code>Error</code> "The scene passed was invalid or corrupt".</td></tr>
-<tr><td>0x22</td><td>SaveScene</td><td>—</td><td>Serialises the current scene and stores it as that scene's snapshot (<code>UpdateScene</code>), so later loads rebuild from it.</td><td><code>SceneData</code>; <code>Error</code> "No scene loaded".</td></tr>
-<tr><td>0x23</td><td>DeleteScene</td><td>string</td><td>Deletes a <em>file</em> at that path on the host's disk. Does not touch <code>SceneManager</code>.</td><td><code>Ok</code>; <code>Error</code> "Scene file not found: ..." / "Failed to delete scene: ...".</td></tr>
+<tr><td>0x22</td><td>SaveScene</td><td>—</td><td>Serialises the current scene and stores it as that scene's snapshot (<code>UpdateScene</code>), so later loads rebuild from it. Building the response then throws an uncaught <code>type_error</code> on the server thread, which terminates the host (see <a href="#editor-open">Known gaps</a>).</td><td>Intended: <code>SceneData</code>; <code>Error</code> "No scene loaded". Currently: no response; the host process dies.</td></tr>
+<tr><td>0x23</td><td>DeleteScene</td><td>string</td><td>Deletes a <em>file</em> at that path on the host's disk (<code>std::filesystem::remove</code>, any path, no checks). Does not touch <code>SceneManager</code>. See the <a href="#editor-security">security warning</a>.</td><td><code>Ok</code>; <code>Error</code> "Scene file not found: ..." / "Failed to delete scene: ...".</td></tr>
 <tr><td>0x24</td><td>GetCurrentScene</td><td>—</td><td>Serialises the current scene.</td><td><code>SceneData</code>; <code>Error</code> "No scene loaded".</td></tr>
 <tr><td>0x30</td><td>CreateEntity</td><td>string name</td><td>Creates a root GameObject in the current scene.</td><td><code>EntityCreated</code> {UUID string}; <code>Error</code> "No scene present".</td></tr>
-<tr><td>0x31</td><td>DestroyEntity</td><td>string UUID</td><td>Finds the object by UUID and removes it as a <em>root</em> object.</td><td><code>Ok</code>; <code>Error</code> "No game object found with entity id ..." (also for non-root objects).</td></tr>
-<tr><td>0x32</td><td>SetEntityTransform</td><td>string UUID, vec3 position, vec3 rotation (Euler), vec3 scale</td><td>Sets position, rotation and scale if the object exists and has a <code>Positionable</code>.</td><td>Always <code>Ok</code>, even if nothing matched.</td></tr>
+<tr><td>0x31</td><td>DestroyEntity</td><td>string UUID</td><td>Finds the object by UUID, detaches the root and drops the server's reference. This is not <code>Destroy()</code>: no <code>OnDisable</code> or <code>OnDestroy</code>.</td><td><code>Ok</code>; <code>Error</code> "No game object found with entity id ..." (also for non-root objects).</td></tr>
+<tr><td>0x32</td><td>SetEntityTransform</td><td>string UUID, vec3 position, vec3 rotation (Euler), vec3 scale</td><td>Sets <em>world-space</em> position and rotation (<code>SetPositionAndRotation</code>) and scale, if the object exists and has a <code>Positionable</code>.</td><td>Always <code>Ok</code>, even if nothing matched.</td></tr>
 <tr><td>0x33</td><td>GetEntityTransform</td><td>string UUID</td><td>Reads the object's <em>world</em> position, rotation (as Euler angles) and scale.</td><td><code>EntityTransform</code>; identity values (0, 0, 1) if nothing matched.</td></tr>
 <tr><td>0x34</td><td>GetAllEntities</td><td>—</td><td>Lists every GameObject in the current scene.</td><td><code>EntityList</code> {count, then UUID and name per object}; count 0 without a scene.</td></tr>
 <tr><td>0x40</td><td>CreateScript</td><td>string name</td><td>Returns a Lua component template. The class name is the input with its first letter upper-cased, cut at the first <code>.</code>, non-alphanumerics replaced by <code>_</code>. Nothing is written to disk.</td><td><code>ScriptData</code></td></tr>
@@ -298,14 +298,27 @@ $stream.Write($bytes, 0, $bytes.Length)
 <h2 id="editor-open">Known gaps in the editor server</h2>
 <p>These come from reading <code>editor-server/src/EditorServer.cpp</code> and its headers; none is covered by a test.</p>
 
+<div class="callout warning" id="editor-security">
+<p class="callout-title">Warning</p>
+<p><strong>Do not run <code>N2EditorHost</code> on a network you do not trust.</strong> The server binds to <code>INADDR_ANY</code> (every interface, not just 127.0.0.1) and has no authentication: anyone who can reach the port can send any command. <code>DeleteScene</code> passes the request string straight to <code>std::filesystem::remove</code>, so a remote client can delete <em>any file the host process can write</em>. Malformed requests can also crash the host (below). Until this is fixed, firewall the port or run the host only on an isolated machine.</p>
+</div>
+
 <div class="callout open-question">
 <p class="callout-title">Open question</p>
 <p><strong>Threading.</strong> All commands run on the server thread, while the main thread keeps calling <code>Window::PollEvents</code> (which runs <code>InputSystem::Update</code>). Commands read and modify the scene, SceneManager and camera, and <code>RenderFrame</code> calls <code>RenderEditorFrame</code> (which also calls <code>PollEvents</code>) from the server thread, although GLFW event polling is main-thread-only and the OpenGL context is made current only on the thread that initialised the renderer. There is no lock. Whether commands should be marshalled to the main thread is not decided.</p>
 </div>
 
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><strong>Malformed requests.</strong> <code>BufferReader</code> (<code>Serialization.hpp</code>) does no bounds checking, so a payload shorter than the command expects reads past the buffer. <code>HandleLoadScene</code> calls <code>nlohmann::json::parse</code> outside any <code>try</code>, so invalid JSON throws on the server thread, where nothing catches it (<code>std::terminate</code>). How the server should answer a malformed request is not specified.</p>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><strong>Malformed requests can crash the host.</strong> Nothing on the server thread catches exceptions, so <em>any</em> exception thrown by a handler reaches the thread boundary and calls <code>std::terminate</code>, killing the host process. Specific cases:</p>
+<ul>
+<li><code>HandleClient</code> allocates <code>std::vector&lt;uint8_t&gt;(payloadLength)</code> straight from the 32-bit header, with no limit, so a single header can request a ~4 GB allocation (<code>bad_alloc</code> or memory exhaustion).</li>
+<li><code>BufferReader</code> (<code>Serialization.hpp</code>) does no bounds checking; <code>ReadString</code> and the fixed-size reads copy past the end of a short payload (undefined behaviour).</li>
+<li><code>SetViewportSize</code> stores the size without any validation (no upper bound; negative values become huge when converted to <code>size_t</code>), and the next <code>RenderFrame</code> resizes the frame buffer to <code>width × height × 4</code> bytes, which can be enormous.</li>
+<li><code>HandleLoadScene</code> calls <code>nlohmann::json::parse</code> outside any <code>try</code>, so invalid JSON terminates the host.</li>
+<li><code>SaveScene</code> always throws (see below).</li>
+</ul>
+<p>How the server should answer a malformed request is not specified.</p>
 </div>
 
 <div class="callout open-question">
@@ -313,9 +326,9 @@ $stream.Write($bytes, 0, $bytes.Length)
 <p><strong>No-scene checks.</strong> <code>HandleDestroyEntity</code>, <code>HandleSetEntityTransform</code> and <code>HandleGetEntityTransform</code> call <code>SceneManager::GetCurSceneRef()</code> without checking that a scene is loaded; <code>GetCurSceneRef</code> dereferences a null pointer in that case. The other scene commands check first.</p>
 </div>
 
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><strong>SaveScene response.</strong> <code>HandleSaveScene</code> passes an <code>nlohmann::json</code> object to <code>WriteSceneData(BufferWriter&amp;, const std::string&amp;)</code>, which goes through nlohmann's implicit conversion to <code>std::string</code>. For an object value that conversion throws <code>type_error</code> instead of serialising; <code>CreateScene</code> and <code>GetCurrentScene</code> call <code>.dump()</code>. The snapshot update happens before the throw. Intended behaviour is clearly the dumped JSON; whether this path has been exercised is unknown.</p>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><strong>SaveScene terminates the host.</strong> <code>HandleSaveScene</code> passes an <code>nlohmann::json</code> object to <code>WriteSceneData(BufferWriter&amp;, const std::string&amp;)</code>, which goes through nlohmann's implicit conversion to <code>std::string</code>. For an object value that conversion throws <code>type_error</code> instead of serialising; <code>CreateScene</code> and <code>GetCurrentScene</code> call <code>.dump()</code>. The exception is not caught on the server thread, so the host process terminates and the client gets no response. The snapshot update happens before the throw, but it lives only in that process's memory and is lost with it. Do not send <code>SaveScene</code>; use <code>GetCurrentScene</code> to fetch the scene JSON instead.</p>
 </div>
 
 <div class="callout open-question">

@@ -111,6 +111,7 @@ Coroutine *blink = GetGameObject().StartCoroutine(Blink(lamp.get(), 6));
 <tr><td>Object active in hierarchy, in a scene</td><td>Registered; returns the handle.</td></tr>
 <tr><td>Object not in a scene</td><td>Returns <code>nullptr</code> and logs a warning (<code>"StartCoroutine on '&lt;name&gt;', which isn't in a scene"</code>).</td></tr>
 <tr><td>Object inactive in hierarchy (itself or an ancestor), or already marked destroyed by <code>ProcessDestroyed</code></td><td>Returns <code>nullptr</code>, no log. The generator is discarded without running.</td></tr>
+<tr><td>Called from a teardown callback (<code>OnDisable</code>/<code>OnDestroy</code>) of an object that is dying (<code>Destroy</code> pass or scene switch), or from an <code>OnDisable</code> fired by <code>SetActive(false)</code></td><td>Returns <code>nullptr</code>, no log: the object is already marked destroyed, or its flag has already changed, so it is not active in hierarchy when the callback runs.</td></tr>
 </tbody>
 </table>
 </div>
@@ -142,7 +143,7 @@ Coroutine *blink = GetGameObject().StartCoroutine(Blink(lamp.get(), 6));
 <thead><tr><th>Started from</th><th>Body first runs</th></tr></thead>
 <tbody>
 <tr><td><code>OnAttach</code>, <code>OnFixedUpdate</code>, collision callbacks or <code>OnUpdate</code> of frame F</td><td>Frame F, in <code>AdvanceCoroutines</code></td></tr>
-<tr><td><code>OnLateUpdate</code>, teardown callbacks, or anything after <code>AdvanceCoroutines</code> in frame F</td><td>Frame F+1</td></tr>
+<tr><td><code>OnLateUpdate</code>, teardown callbacks of a <code>RemoveComponent</code> on a live object, or anything after <code>AdvanceCoroutines</code> in frame F (on a dying object, starting fails; see <a href="#starting">above</a>)</td><td>Frame F+1</td></tr>
 <tr><td>Another coroutine's body (during frame F's update)</td><td>Frame F+1 (not in the running snapshot)</td></tr>
 </tbody>
 </table>
@@ -227,14 +228,19 @@ std::generator&lt;ICoroutineWait&gt; Land(const CharacterMotor *motor)
 <tr><td>Object destroyed (<code>Destroy</code>)</td><td>In <code>ProcessDestroyed</code> at the end of the frame, right after its components' <code>OnDisable</code>/<code>OnDestroy</code>. Between <code>Destroy()</code> and that point they keep running, since the object is not yet marked.</td></tr>
 <tr><td>Object leaves its scene (<code>Scene::RemoveRootGameObject</code>, parented under an object in another scene or none)</td><td>Immediately, in <code>GameObject::SetScene</code>, on the scene being left.</td></tr>
 <tr><td>Object removed with <code>RemoveChild</code></td><td>Not stopped: the object stays in the scene, so its coroutines keep running while something holds it.</td></tr>
-<tr><td>Object released (last <code>shared_ptr</code> dropped, e.g. after <code>RemoveChild</code>)</td><td>Immediately, in <code>~GameObject</code>.</td></tr>
-<tr><td>Scene switch (<code>Scene::Clear</code>)</td><td>During the teardown pass for each object in the hierarchy.</td></tr>
+<tr><td>Object released (last <code>shared_ptr</code> dropped, e.g. after <code>RemoveChild</code>)</td><td>Immediately, in <code>~GameObject</code>, provided its scene is still alive. A <code>RemoveChild</code>-detached object released after a scene switch reaches the freed scene's scheduler instead (see the warning below).</td></tr>
+<tr><td>Scene switch (<code>Scene::Clear</code>)</td><td>During the teardown pass for each object in the root hierarchy. Objects detached with <code>RemoveChild</code> are not part of that pass.</td></tr>
 <tr><td>Scene destroyed</td><td>Its scheduler is destroyed with it.</td></tr>
 <tr><td>Component that started it removed</td><td><strong>Not stopped</strong>: coroutines belong to the GameObject, not to a component.</td></tr>
 </tbody>
 </table>
 </div>
 <p>Reactivating an object does not restart coroutines that were stopped by deactivation.</p>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>A <code>RemoveChild</code>-detached object is still in its scene and survives a scene switch with a dangling scene pointer: <code>Scene::Clear</code> walks only the roots, and <code>~Scene</code> can no longer find it. Releasing it later, or calling <code>StartCoroutine</code>/<code>StopCoroutine</code> on it, uses the freed scene's scheduler. Re-parent it, <code>AddRootGameObject</code> it or <code>Destroy</code> it before switching. See <a href="scenes.html#scene-lifetime">Scenes</a>.</p>
+</div>
 
 <div class="callout guarantee">
 <p class="callout-title">Guarantee</p>
