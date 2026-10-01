@@ -39,6 +39,10 @@ namespace N2Engine::IO
         template <typename T = Base::Asset>
         std::shared_ptr<T> GetCached(const IO::ResourcePath& resourcePath) const;
         
+        /// A loaded asset by its .meta UUID, without loading anything
+        template <typename T = Base::Asset>
+        std::shared_ptr<T> GetCachedByUUID(const Math::UUID& uuid) const;
+        
         // === Metadata ===
         const AssetMetadata* GetMetadata(const ResourcePath& resourcePath) const;
         const AssetMetadata* GetMetadata(const Math::UUID& uuid) const;
@@ -49,6 +53,7 @@ namespace N2Engine::IO
         IO::ResourcePath MakeResourcePath(const std::filesystem::path& physicalPath) const;
         
         // === Registration ===
+        /// A new extension registered after Initialize rescans the assets, so its files get metadata
         void RegisterLoader(const std::string& extension, LoaderFunc loader);
         
         template <typename T>

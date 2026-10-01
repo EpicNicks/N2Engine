@@ -316,6 +316,14 @@ namespace N2Engine::Editor
 
         BufferWriter response;
 
+        // AddScene replaces a stored scene with the same name, which would wipe that scene's data
+        if (SceneManager::HasScene(cmd.name))
+        {
+            WriteError(response, "Scene already exists: " + cmd.name);
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
+
         try
         {
             auto newScene = Scene::Create(cmd.name);

@@ -37,6 +37,58 @@ namespace N2Engine::IO
         return relativePath;
     }
 
+    std::optional<ResourcePath> Resources::FindProjectPath(const std::filesystem::path &path) const
+    {
+        const ResourceLoader &loader = ResourceLoader::Instance();
+
+        const std::string spelled = path.string();
+        if (spelled.starts_with("res://") || spelled.starts_with("user://"))
+        {
+            if (ResourcePath resourcePath(spelled); loader.Exists(resourcePath))
+            {
+                return resourcePath;
+            }
+            return std::nullopt;
+        }
+
+        if (loader.GetAssetsRoot().empty())
+        {
+            return std::nullopt; // ResourceLoader isn't initialized, so it tracks no files
+        }
+
+        std::error_code pathError;
+        std::error_code rootError;
+        const std::filesystem::path physicalPath = std::filesystem::absolute(ResolvePath(path), pathError);
+        const std::filesystem::path assetsRoot = std::filesystem::absolute(loader.GetAssetsRoot(), rootError);
+        if (pathError || rootError)
+        {
+            return std::nullopt;
+        }
+
+        // Cheap lexical test first, so lookups of files elsewhere don't touch the filesystem. (A file
+        // spelled with a different 8.3 short/long form than the root isn't recognised.)
+        const std::filesystem::path fromRoot =
+            physicalPath.lexically_normal().lexically_relative(assetsRoot.lexically_normal());
+        if (fromRoot.empty() || *fromRoot.begin() == "..")
+        {
+            return std::nullopt;
+        }
+
+        // The key itself comes from MakeResourcePath (canonical paths), the same as the scan's keys
+        try
+        {
+            if (ResourcePath resourcePath = loader.MakeResourcePath(physicalPath); loader.Exists(resourcePath))
+            {
+                return resourcePath;
+            }
+        }
+        catch (const std::filesystem::filesystem_error &)
+        {
+            // Not a path ResourceLoader can express, so not one of its assets
+        }
+        return std::nullopt;
+    }
+
     Renderer::Common::IShader* Resources::LoadShader(const std::string &vertexShaderPath,
                                                      const std::string &fragmentShaderPath) const
     {

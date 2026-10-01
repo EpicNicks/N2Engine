@@ -241,14 +241,9 @@ namespace N2Engine
 
                     if (const auto uuid = j[name].get<Math::UUID>(); uuid != Math::UUID::ZERO)
                     {
-                        // Project assets have stable UUIDs from their .meta files (ResourceLoader);
-                        // IO::Resources hands out random per-process UUIDs, so it only finds assets
-                        // registered in this same run
-                        assetRef = IO::ResourceLoader::Instance().LoadByUUID<T>(uuid);
-                        if (!assetRef)
-                        {
-                            assetRef = IO::Resources::Instance().GetAsset<T>(uuid);
-                        }
+                        // Project assets are found (or loaded) by their stable .meta UUIDs; assets
+                        // registered at runtime have random per-process UUIDs, so only this run finds those
+                        assetRef = IO::Resources::Instance().LoadByUUID<T>(uuid);
                         if (!assetRef)
                         {
                             Logger::Warn(std::format("Asset '{}' not found: {}", name, uuid.ToString()));

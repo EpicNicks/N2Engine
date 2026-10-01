@@ -259,6 +259,9 @@ void Application::Shutdown()
     // Reverse of Init. Runs while function-local statics created during Init (e.g. the debug
     // console's log stream) are still alive; at process exit they're destroyed before this
     // singleton, so tearing subsystems down from ~Application would use them after destruction.
+    // Scenes go first, while the audio sources and physics bodies their components hold can still be
+    // released (left to SceneManager's static, they'd be freed after those subsystems were gone).
+    SceneManager::UnloadScenes();
     Audio::AudioSystem::Instance().Shutdown();
     _3DphysicsBackend.reset(); // ~PhysXBackend releases the PhysX SDK
     _window.Shutdown();
