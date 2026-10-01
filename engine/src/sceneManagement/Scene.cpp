@@ -331,10 +331,8 @@ void Scene::DetachComponent(Component *component)
         std::erase(_components, component);
     }
     std::erase(_attachQueue, component);
-    if (_attachingComponent == component)
-    {
-        _attachingComponent = nullptr; // tells ProcessAttachQueue that OnAttach removed it
-    }
+    // Tells ProcessAttachQueue that OnAttach removed it (or moved its object away)
+    std::ranges::replace(_attaching, component, static_cast<Component *>(nullptr));
     std::erase_if(_sceneLights, [component](const Rendering::Light *light)
     {
         return static_cast<const Component *>(light) == component;
@@ -351,14 +349,19 @@ void Scene::ProcessAttachQueue()
         _attachQueue.erase(_attachQueue.begin());
 
         // OnAttach can remove (free) this component or move its object to another scene; either way
-        // DetachComponent clears _attachingComponent, and c must not be registered or touched again
-        _attachingComponent = c;
+        // DetachComponent nulls its _attaching entry, and c must not be registered or touched again.
+        // A stack, so an OnAttach that processes the queue again doesn't lose track of c.
+        _attaching.push_back(c);
+        struct AttachingScope
+        {
+            std::vector<Component *> &attaching;
+            ~AttachingScope() { attaching.pop_back(); }
+        } scope{_attaching};
         c->OnAttach();
-        if (_attachingComponent != c)
+        if (_attaching.back() != c)
         {
             continue;
         }
-        _attachingComponent = nullptr;
 
         // Registration is idempotent: a component re-queued after re-parenting isn't updated twice
         if (auto *light = dynamic_cast<Rendering::Light*>(c))
@@ -431,10 +434,13 @@ void Scene::Clear()
         root->SetScene(nullptr); // detaches every component in the hierarchy
     }
     // And every torn-down object, under a root or not: one an OnDestroy above unlinked from its parent
-    // would otherwise keep pointing at this scene after it's freed
+    // would otherwise keep pointing at this scene after it's freed. (One it moved to another scene stays.)
     for (const auto &obj : allObjects)
     {
-        obj->SetScene(nullptr);
+        if (obj->GetScene() == this)
+        {
+            obj->SetScene(nullptr);
+        }
     }
     _rootGameObjects.clear();
     _components.clear();
@@ -453,6 +459,12 @@ void Scene::ProcessDestroyed()
         _markedForDestructionQueue.pop();
 
         if (!rootObject || rootObject->_isMarkedForDestruction)
+        {
+            continue;
+        }
+        // Moved to another scene since it was queued: purging it here would detach its components from
+        // that scene while it stayed one of its roots
+        if (rootObject->GetScene() != this)
         {
             continue;
         }

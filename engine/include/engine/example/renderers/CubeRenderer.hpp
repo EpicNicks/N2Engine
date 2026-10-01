@@ -1,7 +1,6 @@
 #pragma once
 
 #include "engine/example/renderers/PolygonRenderer.hpp"
-#include "engine/serialization/ComponentRegistry.hpp"
 
 namespace N2Engine::Example
 {
@@ -93,7 +92,4 @@ namespace N2Engine::Example
             return NAMEOF(CubeRenderer);
         }
     };
-
-    // Header-only, so every file including this registers it (the same entry each time), like Spin.hpp
-    REGISTER_COMPONENT(CubeRenderer)
 }

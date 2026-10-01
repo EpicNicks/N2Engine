@@ -23,9 +23,6 @@ namespace N2Engine
         GameObject &_gameObject;
         bool _isMarkedForDestruction = false;
         bool _isActive = true;
-        // While OnDisable/OnDestroy run (before _isMarkedForDestruction is set): re-entry is a no-op, and
-        // removing the component then is left to the teardown already under way
-        bool _isRunningDestroyCallbacks = false;
 
         explicit Component(GameObject &gameObject);
 
@@ -33,6 +30,9 @@ namespace N2Engine
         /// The one teardown sequence for every destroy path (Destroy, RemoveComponent, scene switch):
         /// OnDisable if the component was enabled in an active hierarchy, then OnDestroy, exactly once.
         void RunDestroyCallbacks(bool objectWasActiveInHierarchy);
+        // While OnDisable/OnDestroy run (before _isMarkedForDestruction is set): re-entry is a no-op, and
+        // removing the component then is left to the teardown already under way
+        bool _isRunningDestroyCallbacks = false;
 
     public:
         [[nodiscard]] GameObject& GetGameObject() const;
