@@ -1,6 +1,7 @@
 #include "engine/Camera.hpp"
 #include <cmath>
 #include <algorithm>
+#include <stdexcept>
 
 using namespace N2Engine;
 
@@ -282,4 +283,58 @@ Frustum Camera::GetViewFrustum() const
     }
 
     return frustum;
+}
+
+Math::Ray Camera::ScreenPointToRay(const Math::Vector2 &screenPosition, const Vector2i &viewportSize,
+                                   float *nearToFar) const
+{
+    // Window coordinates to normalised device coordinates: x right, y up (window y points down)
+    const float width = static_cast<float>(viewportSize[0]);
+    const float height = static_cast<float>(viewportSize[1]);
+    float ndcX = 0.0f;
+    float ndcY = 0.0f;
+    if (width > 0.0f && height > 0.0f)
+    {
+        ndcX = 2.0f * screenPosition.x / width - 1.0f;
+        ndcY = 1.0f - 2.0f * screenPosition.y / height;
+    }
+
+    // Unproject the near (ndc z = -1) and far (z = 1) points through inverse(view * projection), applied as
+    // inverse(projection) then inverse(view). The projection is inverted in closed form from its own entries:
+    // the general 4x4 inverse refuses (as singular) the tiny determinants of ordinary orthographic
+    // projections, such as one a few hundred units wide.
+    const Matrix4 &projection = GetProjectionMatrix();
+    const auto unprojectToView = [&](const float ndcZ) -> Math::Vector3
+    {
+        if (_projectionType == ProjectionType::Perspective)
+        {
+            // inverse(P) * (x, y, z, 1) = (x / P00, y / P11, -1, (z + P22) / P23), then divided by w
+            const float w = (ndcZ + projection(2, 2)) / projection(2, 3);
+            return Math::Vector3{ndcX / projection(0, 0) / w, ndcY / projection(1, 1) / w, -1.0f / w};
+        }
+        return Math::Vector3{(ndcX - projection(0, 3)) / projection(0, 0),
+                             (ndcY - projection(1, 3)) / projection(1, 1),
+                             (ndcZ - projection(2, 3)) / projection(2, 2)};
+    };
+
+    // The view matrix is rigid (determinant 1), so its general inverse is safe. A degenerate rotation (a zero
+    // quaternion) makes it singular; then the camera's own position and rotation are used.
+    Matrix4 inverseView;
+    try
+    {
+        inverseView = GetViewMatrix().inverse();
+    }
+    catch (const std::runtime_error &)
+    {
+        inverseView = Matrix4::Translation(_position) * _rotation.ToMatrix();
+    }
+
+    const Math::Vector3 nearPoint = inverseView.TransformPoint(unprojectToView(-1.0f));
+    const Math::Vector3 farPoint = inverseView.TransformPoint(unprojectToView(1.0f));
+    const Math::Vector3 span = farPoint - nearPoint;
+    if (nearToFar)
+    {
+        *nearToFar = span.Length();
+    }
+    return Math::Ray{nearPoint, span.Normalized()};
 }
