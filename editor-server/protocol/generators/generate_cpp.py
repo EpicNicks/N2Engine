@@ -130,11 +130,10 @@ def generate():
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     # The output is checked in: only rewrite it when the content changes (ignoring line endings, which
-    # git may have converted), else just touch it so the build sees it as up to date
+    # git may have converted). The build tracks a separate stamp file, so it isn't touched otherwise.
     if OUTPUT_PATH.exists():
         existing = OUTPUT_PATH.read_bytes().decode("utf-8").replace("\r\n", "\n")
         if existing == content:
-            OUTPUT_PATH.touch()
             print(f"Up to date: {OUTPUT_PATH}")
             return
 

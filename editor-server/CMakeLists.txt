@@ -4,13 +4,17 @@ cmake_minimum_required(VERSION 3.20)
 find_package(Python3 COMPONENTS Interpreter)
 
 if(Python3_FOUND)
-    # OUTPUT must be the file generate_cpp.py writes; a path it never creates made this rerun every build.
-    # The script only rewrites the file when its content changes (otherwise it just touches it).
+    # The output is a stamp in the build tree: the generated header is checked in, so naming it as the
+    # OUTPUT would let a clean delete it, and an OUTPUT the command never writes reran it every build.
+    # The script only rewrites the header when its content changes.
+    set(N2_PROTOCOL_STAMP ${CMAKE_CURRENT_BINARY_DIR}/N2ProtocolGenerate.stamp)
     add_custom_command(
         OUTPUT
-        ${CMAKE_CURRENT_SOURCE_DIR}/clients/cpp/Protocol.generated.hpp
+        ${N2_PROTOCOL_STAMP}
         COMMAND
         ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/protocol/generators/generate_cpp.py
+        COMMAND
+        ${CMAKE_COMMAND} -E touch ${N2_PROTOCOL_STAMP}
         DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/protocol/protocol.json
         ${CMAKE_CURRENT_SOURCE_DIR}/protocol/generators/generate_cpp.py
@@ -18,7 +22,7 @@ if(Python3_FOUND)
     )
 
     add_custom_target(N2ProtocolGenerate
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/clients/cpp/Protocol.generated.hpp
+        DEPENDS ${N2_PROTOCOL_STAMP}
     )
 endif()
 

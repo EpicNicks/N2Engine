@@ -6,6 +6,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace N2Engine::Editor::Protocol
 {
@@ -32,6 +33,8 @@ namespace N2Engine::Editor::Protocol
         std::span<const uint8_t> Data() const { return _buffer; }
         size_t Size() const { return _buffer.size(); }
         void Clear() { _buffer.clear(); }
+        /// Moves the bytes out (leaving the writer empty), avoiding a copy of large frames
+        std::vector<uint8_t> Release() { return std::exchange(_buffer, {}); }
 
     private:
         std::vector<uint8_t> _buffer;
