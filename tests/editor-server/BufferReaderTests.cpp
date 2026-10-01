@@ -74,5 +74,5 @@ TEST(BufferReaderTest, TruncatedCommandFailsToDeserialize)
     w.WriteF32(1.0f); // the rest of the transform is missing
 
     BufferReader r(w.Data());
-    EXPECT_THROW(EntityTransformCmd::Deserialize(r), std::out_of_range);
+    EXPECT_THROW(SetEntityTransformCmd::Deserialize(r), std::out_of_range);
 }
