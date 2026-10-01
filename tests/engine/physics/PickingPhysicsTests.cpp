@@ -16,6 +16,7 @@
 #include "engine/input/Mouse.hpp"
 #include "engine/input/PointerDispatcher.hpp"
 #include "engine/physics/BoxCollider.hpp"
+#include "engine/physics/Raycast.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -39,10 +40,11 @@ namespace
         [[nodiscard]] std::string GetTypeName() const override { return "ClickCounter"; }
 
         void OnMouseEnter() override { ++enter; }
+        void OnMouseExit() override { ++exits; }
         void OnMouseDown() override { ++down; }
         void OnMouseUpAsButton() override { ++clicks; }
 
-        int enter = 0, down = 0, clicks = 0;
+        int enter = 0, exits = 0, down = 0, clicks = 0;
     };
 
     const Vector2i Viewport{800, 600};
@@ -177,6 +179,16 @@ TEST_F(PickingPhysicsTest, IgnoreRaycastLayerCannotBeClicked)
     EXPECT_EQ(shield->GetComponent<ClickCounter>()->down, 1);
 }
 
+TEST_F(PickingPhysicsTest, PickableBeforeAnyFixedStep)
+{
+    // As while paused (timeScale 0): the collider is attached but no fixed step has run since
+    const auto box = SpawnBox("Unstepped", Vector3(0.0f, 0.0f, 0.0f));
+    _scene->ProcessAttachQueue();
+
+    Frame(Centre, true);
+    EXPECT_EQ(box->GetComponent<ClickCounter>()->down, 1);
+}
+
 TEST_F(PickingPhysicsTest, BeyondTheFarPlaneIsNotPicked)
 {
     const auto distant = SpawnBox("Distant", Vector3(0.0f, 0.0f, -150.0f)); // the far plane is at z = -90
@@ -184,6 +196,33 @@ TEST_F(PickingPhysicsTest, BeyondTheFarPlaneIsNotPicked)
 
     Frame(Centre, true);
     EXPECT_EQ(distant->GetComponent<ClickCounter>()->down, 0);
+}
+
+TEST_F(PickingPhysicsTest, CursorOutsideTheWindowPicksNothing)
+{
+    // Straddles the left edge of the view: a ray through x = 5 px hits it, and so would one through the
+    // off-window x = -10 px (where GLFW reports a cursor left of the window on Windows), if it were cast
+    const auto edge = SpawnBox("Edge", Vector3(-7.9f, 0.0f, 0.0f));
+    Step();
+    auto *counter = edge->GetComponent<ClickCounter>();
+
+    const Vector2 offWindow(-10.0f, 300.0f);
+    const Math::Ray offRay = _camera.ScreenPointToRay(offWindow, Viewport);
+    RaycastHit hit;
+    ASSERT_TRUE(Raycast::Single(offRay.origin, offRay.direction, hit, 100.0f)) << "the setup must put the box there";
+
+    EXPECT_EQ(PointerDispatcher::PickWorld(_camera, offWindow, Viewport, Layers::DefaultRaycastMask), nullptr);
+    EXPECT_EQ(PointerDispatcher::PickWorld(_camera, Vector2(400.0f, 600.0f), Viewport, Layers::AllLayers), nullptr)
+        << "the bottom edge is outside too";
+
+    Frame(Vector2(5.0f, 300.0f), false);
+    ASSERT_EQ(counter->enter, 1);
+    EXPECT_EQ(_dispatcher.GetHovered(), edge.get());
+
+    // Leaving the window is leaving the object
+    Frame(offWindow, false);
+    EXPECT_EQ(counter->exits, 1);
+    EXPECT_EQ(_dispatcher.GetHovered(), nullptr);
 }
 
 TEST_F(PickingPhysicsTest, LuaRaycastReturnsHitTables)
@@ -197,6 +236,9 @@ TEST_F(PickingPhysicsTest, LuaRaycastReturnsHitTables)
     EXPECT_NEAR(Eval<float>("Physics.Raycast(Vector3(0, 0, 10), Vector3(0, 0, -1), 50).distance"), 9.0f, 0.01f);
     EXPECT_NEAR(Eval<float>("Physics.Raycast(Vector3(0, 0, 10), Vector3(0, 0, -1)).point.z"), 1.0f, 0.01f)
         << "the default distance is long enough";
+    EXPECT_TRUE(Eval<bool>("Physics.Raycast(Vector3(0, 0, 10), Vector3(0, 0, -1), math.huge) ~= nil"))
+        << "an infinite distance is clamped, not passed to PhysX";
+    EXPECT_TRUE(Eval<bool>("Physics.Raycast(Vector3(0, 0, 10), Vector3(0, 0, -1), 1e30) ~= nil"));
     EXPECT_NEAR(Eval<float>("Physics.Raycast(Vector3(0, 0, 10), Vector3(0, 0, -1), 50).collider:GetSize().x"), 2.0f,
                 0.01f) << "the collider comes back as its own type";
     EXPECT_TRUE(Eval<bool>("Physics.Raycast(Vector3(0, 0, 10), Vector3(0, 0, -1), 50).rigidbody == nil"));

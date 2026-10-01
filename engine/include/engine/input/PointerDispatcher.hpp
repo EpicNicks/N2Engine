@@ -78,11 +78,13 @@ namespace N2Engine::Input
         /// The object that got OnMouseDown and still has the button, or nullptr (same rule)
         [[nodiscard]] GameObject* GetCaptured() const;
 
-        /// Forgets the hovered and capturing objects without sending them anything
+        /// Forgets the hovered and capturing objects without sending them anything. Safe from a callback or a
+        /// hit provider: the frame being processed then stops sending.
         void Reset();
 
         /// The physics pick: casts camera.ScreenPointToRay(screenPosition, viewport) from the near plane to
-        /// the far plane against the layers in mask and returns the hit collider's GameObject, or nullptr
+        /// the far plane against the layers in mask and returns the hit collider's GameObject, or nullptr.
+        /// A point outside the viewport (0 <= x < width, 0 <= y < height) picks nothing.
         [[nodiscard]] static GameObject* PickWorld(const Camera &camera, const Math::Vector2 &screenPosition,
                                                    const Vector2i &viewport, uint32_t mask);
 
@@ -95,6 +97,8 @@ namespace N2Engine::Input
         bool _pointerOverUI = false;
         // Set while a frame is processed: a callback that calls Process/Update again is ignored
         bool _processing = false;
+        // Counts Reset() calls, so a Process under way can tell it was reset from a callback
+        uint64_t _resetCount = 0;
 
         /// The default world provider: PickWorld with the main camera and the window's size
         [[nodiscard]] GameObject* PickWithMainCamera(const Math::Vector2 &screenPosition) const;

@@ -76,6 +76,11 @@ namespace N2Engine::Input
         }
         ProcessingScope processing{_processing};
 
+        // Reset() from a provider or callback ends this frame's processing: nothing after it may send to, or
+        // re-record, the objects it forgot
+        const uint64_t resetsAtStart = _resetCount;
+        const auto wasReset = [this, resetsAtStart] { return _resetCount != resetsAtStart; };
+
         // Destroyed or deactivated since the last frame: dropped without OnMouseExit/OnMouseUp, as physics
         // drops an inactive object's pairs without telling it
         GameObject::Ptr hovered = Receivable(_hovered);
@@ -89,12 +94,13 @@ namespace N2Engine::Input
             _captured.reset();
         }
 
-        // This frame's target: UI first, then the world
+        // This frame's target: UI first, then the world. The providers are called through copies, so one that
+        // replaces itself (SetWorldHitProvider(nullptr)) doesn't destroy the function that is running.
         GameObject::Ptr target;
         _pointerOverUI = false;
-        if (_uiProvider)
+        if (const HitProvider uiProvider = _uiProvider)
         {
-            if (const GameObject *uiHit = _uiProvider(state.position))
+            if (const GameObject *uiHit = uiProvider(state.position))
             {
                 _pointerOverUI = true;
                 target = Receivable(uiHit);
@@ -102,8 +108,20 @@ namespace N2Engine::Input
         }
         if (!_pointerOverUI)
         {
-            target = Receivable(_worldProvider ? _worldProvider(state.position) : PickWithMainCamera(state.position));
+            const HitProvider worldProvider = _worldProvider;
+            target = Receivable(worldProvider ? worldProvider(state.position) : PickWithMainCamera(state.position));
         }
+        if (wasReset())
+        {
+            return;
+        }
+
+        // Sends one callback; false once a Reset() means the frame must stop
+        const auto send = [&wasReset](GameObject &gameObject, void (Component::*callback)())
+        {
+            Send(gameObject, callback);
+            return !wasReset();
+        };
 
         // The button, in Unity's order: Down (capturing the target), else Up/UpAsButton on release, else Drag
         if (state.pressed)
@@ -112,12 +130,18 @@ namespace N2Engine::Input
             {
                 // Still captured, so a release went unseen (frames without a Process): end it first
                 _captured.reset();
-                Send(*captured, &Component::OnMouseUp);
+                if (!send(*captured, &Component::OnMouseUp))
+                {
+                    return;
+                }
             }
             if (target)
             {
                 _captured = target;
-                Send(*target, &Component::OnMouseDown);
+                if (!send(*target, &Component::OnMouseDown))
+                {
+                    return;
+                }
             }
         }
         else if (!state.held)
@@ -125,42 +149,45 @@ namespace N2Engine::Input
             if (captured)
             {
                 _captured.reset();
-                if (target == captured)
+                if (target == captured && !send(*captured, &Component::OnMouseUpAsButton))
                 {
-                    Send(*captured, &Component::OnMouseUpAsButton);
+                    return;
                 }
-                Send(*captured, &Component::OnMouseUp);
+                if (!send(*captured, &Component::OnMouseUp))
+                {
+                    return;
+                }
             }
         }
         else if (captured)
         {
-            Send(*captured, &Component::OnMouseDrag);
+            if (!send(*captured, &Component::OnMouseDrag))
+            {
+                return;
+            }
         }
 
         // Then hover. A button callback may have destroyed or deactivated either object since they were looked
         // up; such an object is dropped like one that went before the frame.
         hovered = Receivable(hovered.get());
         target = Receivable(target.get());
+        _hovered = target;
         if (target == hovered)
         {
             if (target)
             {
-                Send(*target, &Component::OnMouseOver);
+                send(*target, &Component::OnMouseOver);
             }
+            return;
         }
-        else
+        if (hovered && !send(*hovered, &Component::OnMouseExit))
         {
-            if (hovered)
-            {
-                Send(*hovered, &Component::OnMouseExit);
-            }
-            if (target)
-            {
-                Send(*target, &Component::OnMouseEnter);
-                Send(*target, &Component::OnMouseOver);
-            }
+            return;
         }
-        _hovered = target;
+        if (target && send(*target, &Component::OnMouseEnter))
+        {
+            send(*target, &Component::OnMouseOver);
+        }
     }
 
     GameObject* PointerDispatcher::GetHovered() const
@@ -175,6 +202,7 @@ namespace N2Engine::Input
 
     void PointerDispatcher::Reset()
     {
+        ++_resetCount; // a Process under way stops sending
         _hovered.reset();
         _captured.reset();
         _pointerOverUI = false;
@@ -186,6 +214,13 @@ namespace N2Engine::Input
         if (viewport[0] <= 0 || viewport[1] <= 0)
         {
             return nullptr; // minimised, or no window
+        }
+        // Only inside the viewport, as Unity only picks inside the camera's pixel rect. Outside the window GLFW
+        // still reports the cursor (beyond the edges, even negative), which would cast rays outside the view.
+        if (!(screenPosition.x >= 0.0f && screenPosition.x < static_cast<float>(viewport[0]) &&
+              screenPosition.y >= 0.0f && screenPosition.y < static_cast<float>(viewport[1])))
+        {
+            return nullptr;
         }
 
         // Near plane to far plane, as in Unity: what the camera can't see can't be clicked

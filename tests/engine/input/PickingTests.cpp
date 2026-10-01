@@ -414,6 +414,54 @@ TEST_F(PointerDispatcherTest, MissedReleaseEndsTheOldCaptureBeforeANewDown)
     EXPECT_EQ(_dispatcher.GetCaptured(), b.get());
 }
 
+TEST_F(PointerDispatcherTest, ReentrantProcessIsIgnored)
+{
+    const auto a = Make("A");
+    a->GetComponent<PointerRecorder>()->hook = [this](const std::string &event)
+    {
+        if (event == "Down")
+        {
+            _dispatcher.Process(PointerState{Vector2(10.0f, 10.0f), true, true, false});
+        }
+    };
+
+    EXPECT_EQ(Frame(a, true), (Events{"A.Down", "A.Enter", "A.Over"})) << "the nested Process sent nothing";
+    EXPECT_EQ(Frame(a, true), (Events{"A.Drag", "A.Over"}));
+}
+
+TEST_F(PointerDispatcherTest, ResetFromACallbackStopsTheFrame)
+{
+    const auto a = Make("A");
+    a->GetComponent<PointerRecorder>()->hook = [this](const std::string &event)
+    {
+        if (event == "Down")
+        {
+            _dispatcher.Reset();
+        }
+    };
+
+    EXPECT_EQ(Frame(a, true), (Events{"A.Down"})) << "no hover callbacks after the Reset";
+    EXPECT_EQ(_dispatcher.GetCaptured(), nullptr);
+    EXPECT_EQ(_dispatcher.GetHovered(), nullptr);
+
+    a->GetComponent<PointerRecorder>()->hook = nullptr;
+    EXPECT_EQ(Frame(a, true), (Events{"A.Enter", "A.Over"})) << "forgotten: no Drag, entered afresh";
+}
+
+TEST_F(PointerDispatcherTest, ProviderReplacingItselfIsSafe)
+{
+    const auto a = Make("A");
+    // The provider destroys itself while it runs; the dispatcher calls it through a copy
+    _dispatcher.SetWorldHitProvider([this, target = a.get()](const Vector2 &)
+    {
+        _dispatcher.SetWorldHitProvider([](const Vector2 &) -> GameObject * { return nullptr; });
+        return target;
+    });
+
+    EXPECT_EQ(Frame(a, false), (Events{"A.Enter", "A.Over"}));
+    EXPECT_EQ(Frame(a, false), (Events{"A.Exit"})) << "the replacement is used from the next frame";
+}
+
 TEST_F(PointerDispatcherTest, ResetForgetsWithoutCallbacks)
 {
     const auto a = Make("A");
