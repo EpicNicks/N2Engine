@@ -111,7 +111,7 @@
 </ul>
 <p><strong>Selecting a backend.</strong> <code>FontBackendKind</code> names the backends (<code>StbTrueType</code>, <code>FreeType</code>). <code>GetAvailableFontBackends()</code> lists the ones compiled in, default first; <code>CreateFontBackend(kind)</code> returns null for one that isn't; <code>CreateDefaultFontBackend()</code> is stb_truetype. stb_truetype is always built; FreeType joins the list when the build turns on <a href="#freetype"><code>N2ENGINE_TEXT_FREETYPE</code></a>, and comes second, so the default never changes. Every font test is parameterised over the list, so the same tests run against each backend in the build. The <code>Font</code> asset and the default font always use the default backend.</p>
 
-<h3 id="font-validation">Checks before loading <span class="badge">Text P1b</span></h3>
+<h3 id="font-validation">Checks before loading <span class="badge">PR #47</span></h3>
 <p>Every backend runs the same structural checks on the data before its library sees it (<code>SfntValidation.cpp</code>), so all backends accept and reject the same files. The font start is found the way <code>stbtt_GetFontOffsetForIndex(data, 0)</code> finds it: a single TrueType/OpenType font, or the first font of a <code>.ttc</code> collection. Data shorter than 16 bytes, or that isn't an sfnt font, is rejected. Then the backend rejects, with an error naming the problem, a font where:</p>
 <ul>
 <li>a table in the directory runs past the end of the data;</li>
@@ -130,7 +130,7 @@
 </div>
 <p class="src">Source: <code>text/include/text/FontBackend.hpp</code>; <code>text/src/text/FontBackendFactory.cpp</code>; <code>text/src/text/SfntValidation.cpp</code>; <code>text/src/text/StbTrueTypeBackend.cpp</code>; tests: <code>FontBackendRegistryTest.*</code>, <code>Backends/FontBackendTest.*</code> (including <code>CorruptTablesAreRejected</code>)</p>
 
-<h3 id="freetype">FreeType (optional) <span class="badge">Text P1b</span></h3>
+<h3 id="freetype">FreeType (optional) <span class="badge">PR #47</span></h3>
 <p>An alternative backend built on FreeType 2.13.3. It is off by default; turn it on when configuring:</p>
 <pre class="lang-shell"><code>cmake -S . -B build -DN2ENGINE_TEXT_FREETYPE=ON</code></pre>
 <p>With the option on, CMake fetches the FreeType release tarball (pinned by tag and SHA-256) with <code>FetchContent</code> and builds it as a static library with the repo's static MSVC runtime. Every optional FreeType dependency is disabled (zlib, bzip2, libpng, HarfBuzz, Brotli), so nothing is looked up on the build machine. FreeType is linked privately into <code>text</code>; only <code>FreeTypeBackend.cpp</code> includes its headers, and the public interface doesn't change. <code>FontBackendKind::FreeType</code> then appears in <code>GetAvailableFontBackends()</code>, after stb_truetype. One CI job builds with the option on (see <a href="testing.html#ci">Testing</a>).</p>
