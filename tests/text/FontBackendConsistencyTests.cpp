@@ -174,8 +174,13 @@ TEST_P(FontBackendConsistencyTest, SdfBitmapsHaveTheSamePlacementAndSimilarValue
             long long differenceSum = 0;
             for (std::size_t i = 0; i < a.pixels.size(); ++i)
             {
-                const bool inA = a.pixels[i] >= 128;
-                const bool inB = b.pixels[i] >= 128;
+                // Inside means above 128, not 128 or above. A pixel less than spreadPx / 128 of a pixel from
+                // the outline is exactly 128 in FreeType on either side (it truncates the distance towards
+                // zero), while stb_truetype rounds an outside one down to 127. On an axis-aligned stem that
+                // edge pixel is a whole row or column, so counting 128 as inside would charge FreeType with
+                // dozens of extra inside pixels for a difference of under 1/16 of a pixel.
+                const bool inA = a.pixels[i] > 128;
+                const bool inB = b.pixels[i] > 128;
                 insideA += inA ? 1 : 0;
                 insideB += inB ? 1 : 0;
                 sideMismatches += inA != inB ? 1 : 0;
