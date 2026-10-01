@@ -172,9 +172,10 @@ TEST_F(CoroutineTest, ReleasingARemovedChildStopsItsCoroutines)
     ASSERT_NE(child->StartCoroutine(NextFrameTwice(_trace)), nullptr);
     Frame();
 
-    // RemoveChild doesn't take it out of the scene; dropping it used to leave the scheduler keyed on
-    // freed memory, which the next update read
+    // RemoveChild makes it a root, so take it out of the scene too; dropping it used to leave the scheduler
+    // keyed on freed memory, which the next update read
     _go->RemoveChild(child, false);
+    ASSERT_TRUE(_scene->RemoveRootGameObject(child));
     child.reset();
     Frames(3);
 

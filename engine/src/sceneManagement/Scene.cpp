@@ -95,6 +95,12 @@ void Scene::AddRootGameObject(std::shared_ptr<GameObject> gameObject)
         return;
     }
 
+    // Moving a root here from another scene: it used to stay in that scene's roots as well
+    if (Scene *oldScene = gameObject->GetScene(); oldScene && oldScene != this)
+    {
+        std::erase(oldScene->_rootGameObjects, gameObject);
+    }
+
     auto it = std::ranges::find(_rootGameObjects, gameObject);
     if (it == _rootGameObjects.end())
     {
@@ -134,6 +140,12 @@ bool Scene::DestroyGameObject(std::shared_ptr<GameObject> gameObject)
 {
     if (!gameObject)
     {
+        return false;
+    }
+    // Another scene's object (or none's) would be purged from the wrong root list and scheduler
+    if (gameObject->GetScene() != this)
+    {
+        Logger::Warn(std::format("DestroyGameObject: '{}' isn't in scene '{}'", gameObject->GetName(), sceneName));
         return false;
     }
 
@@ -319,6 +331,10 @@ void Scene::DetachComponent(Component *component)
         std::erase(_components, component);
     }
     std::erase(_attachQueue, component);
+    if (_attachingComponent == component)
+    {
+        _attachingComponent = nullptr; // tells ProcessAttachQueue that OnAttach removed it
+    }
     std::erase_if(_sceneLights, [component](const Rendering::Light *light)
     {
         return static_cast<const Component *>(light) == component;
@@ -333,7 +349,16 @@ void Scene::ProcessAttachQueue()
     {
         Component *c = _attachQueue.front();
         _attachQueue.erase(_attachQueue.begin());
+
+        // OnAttach can remove (free) this component or move its object to another scene; either way
+        // DetachComponent clears _attachingComponent, and c must not be registered or touched again
+        _attachingComponent = c;
         c->OnAttach();
+        if (_attachingComponent != c)
+        {
+            continue;
+        }
+        _attachingComponent = nullptr;
 
         // Registration is idempotent: a component re-queued after re-parenting isn't updated twice
         if (auto *light = dynamic_cast<Rendering::Light*>(c))
@@ -405,6 +430,12 @@ void Scene::Clear()
     {
         root->SetScene(nullptr); // detaches every component in the hierarchy
     }
+    // And every torn-down object, under a root or not: one an OnDestroy above unlinked from its parent
+    // would otherwise keep pointing at this scene after it's freed
+    for (const auto &obj : allObjects)
+    {
+        obj->SetScene(nullptr);
+    }
     _rootGameObjects.clear();
     _components.clear();
     _attachQueue.clear();
@@ -464,10 +495,12 @@ void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject)
 {
     // Objects are already marked for destruction here, so ask whether they were active before that
     const bool wasActive = gameObject->IsActiveInHierarchyIgnoringDestruction();
-    for (auto &component : gameObject->GetAllComponents())
+    // A snapshot: the callbacks can add or remove this object's components, which invalidated the live
+    // iteration; one removed (freed) before its turn is skipped
+    for (Component *component : gameObject->SnapshotComponents())
     {
         // Runs OnDisable/OnDestroy exactly once, whichever teardown path gets here first
-        if (component)
+        if (gameObject->OwnsComponent(component))
         {
             component->RunDestroyCallbacks(wasActive);
         }

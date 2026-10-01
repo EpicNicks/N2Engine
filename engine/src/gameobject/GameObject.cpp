@@ -140,18 +140,21 @@ void GameObject::NotifyActiveChanged(const bool nowActive) const
 {
     // A component's own _isActive is its enable flag; hierarchy state is IsActiveInHierarchy().
     // Only components that are enabled themselves see their effective state change.
-    for (const auto &component : _components)
+    // Snapshots: a callback can add, remove or reparent, which invalidated the live iteration.
+    for (Component *component : SnapshotComponents())
     {
-        if (component->_isActive && !component->_isMarkedForDestruction)
+        if (OwnsComponent(component) && component->_isActive && !component->_isMarkedForDestruction &&
+            !component->_isRunningDestroyCallbacks)
         {
             nowActive ? component->OnEnable() : component->OnDisable();
         }
     }
 
-    // Children that are inactive themselves stay inactive either way
-    for (const auto &child : _children)
+    // Children that are inactive themselves stay inactive either way (skipping any a callback moved away)
+    const std::vector<Ptr> children = _children;
+    for (const auto &child : children)
     {
-        if (child->_isActive)
+        if (child->_isActive && child->_parent.lock().get() == this)
         {
             child->NotifyActiveChanged(nowActive);
         }
@@ -171,10 +174,18 @@ void GameObject::SetParent(Ptr parent, bool keepWorldPosition)
         return;
     }
 
+    // Refused before leaving the old parent: AddChild refuses it too, which used to leave this object
+    // detached from its parent and not a root
+    if (parent && parent->IsChildOf(shared_from_this()))
+    {
+        Logger::Warn(std::format("Can't make '{}' a child of its descendant '{}'", _name, parent->GetName()));
+        return;
+    }
+
     // Remove from old parent
     if (oldParent)
     {
-        oldParent->RemoveChild(shared_from_this(), keepWorldPosition);
+        oldParent->DetachChild(shared_from_this(), keepWorldPosition);
     }
 
     // Add to new parent
@@ -220,7 +231,7 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
     {
         if (oldParent.get() == this)
             return; // Already our child
-        oldParent->RemoveChild(child, keepWorldPosition);
+        oldParent->DetachChild(child, keepWorldPosition);
     }
 
     const bool childWasActive = child->IsActiveInHierarchy();
@@ -269,6 +280,26 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
 }
 
 void GameObject::RemoveChild(Ptr child, bool keepWorldPosition)
+{
+    if (!child || child->_parent.lock().get() != this)
+    {
+        return;
+    }
+
+    // Destroy paths (Purge, Scene's purge) get here too; a destroyed child goes with its hierarchy
+    if (child->_isMarkedForDestruction)
+    {
+        DetachChild(child, keepWorldPosition);
+        return;
+    }
+
+    // Like Unity's SetParent(null). It used to stay in the scene without being under a root, so it kept
+    // updating, Scene::Clear (which walks the roots) never tore it down, and after a scene switch its
+    // scene pointer dangled. Its components stay attached: the scene doesn't change, so no second OnAttach.
+    child->SetParent(nullptr, keepWorldPosition);
+}
+
+void GameObject::DetachChild(Ptr child, bool keepWorldPosition)
 {
     if (!child)
     {
@@ -408,6 +439,12 @@ bool GameObject::RemoveComponent(Component *component)
     {
         return false;
     }
+    // Removed from its own OnDisable/OnDestroy (or one run by a destroy in progress): whoever started that
+    // teardown finishes it once the callbacks return. Freeing it here freed it under that caller.
+    if (component->_isRunningDestroyCallbacks)
+    {
+        return false;
+    }
 
     component->RunDestroyCallbacks(IsActiveInHierarchyIgnoringDestruction());
     const std::type_index componentType = typeid(*component);
@@ -447,25 +484,60 @@ bool GameObject::RemoveComponent(Component *component)
 void GameObject::RemoveAllComponents()
 {
     const bool wasActive = IsActiveInHierarchyIgnoringDestruction();
-    for (auto &component : _components)
+    // A snapshot: the callbacks can add or remove components, which invalidated the live iteration
+    for (Component *component : SnapshotComponents())
     {
-        if (component)
+        if (OwnsComponent(component))
         {
             component->RunDestroyCallbacks(wasActive);
         }
-        if (component && _scene)
-        {
-            _scene->DetachComponent(component.get());
-        }
     }
 
-    _components.clear();
+    // Everything goes, including components a callback added, except any whose own callbacks are still
+    // running (this was called from one of them): their teardown frees them once it returns
+    std::vector<std::unique_ptr<Component>> released;
+    for (auto &component : _components)
+    {
+        if (!component->_isRunningDestroyCallbacks)
+        {
+            if (_scene)
+            {
+                _scene->DetachComponent(component.get());
+            }
+            released.push_back(std::move(component));
+        }
+    }
+    std::erase(_components, nullptr);
+
     _componentMap.clear();
+    for (const auto &remaining : _components)
+    {
+        _componentMap.emplace(std::type_index(typeid(*remaining)), remaining.get());
+    }
 }
 
 size_t GameObject::GetComponentCount() const
 {
     return _components.size();
+}
+
+std::vector<Component *> GameObject::SnapshotComponents() const
+{
+    std::vector<Component *> snapshot;
+    snapshot.reserve(_components.size());
+    for (const auto &component : _components)
+    {
+        snapshot.push_back(component.get());
+    }
+    return snapshot;
+}
+
+bool GameObject::OwnsComponent(const Component *component) const
+{
+    return std::ranges::any_of(_components, [component](const std::unique_ptr<Component> &owned)
+    {
+        return owned.get() == component;
+    });
 }
 
 void GameObject::SetScene(Scene *scene)
