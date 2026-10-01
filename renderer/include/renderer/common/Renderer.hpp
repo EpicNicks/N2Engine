@@ -34,9 +34,12 @@ namespace Renderer::Common
      * applies the right state to each one.
      *
      * Exceptions:
-     * - SoftwareRenderer reorders each run of consecutive draws that both depth-test and write depth
-     *   front to back (early-Z), which cannot change the image apart from exact depth ties. Every other
-     *   draw keeps its submission position. It has no blending: RenderState::blend is ignored there.
+     * - SoftwareRenderer decides by each draw's state, not its queue. It reorders depth-writing draws
+     *   front to back (each run of consecutive draws that both depth-test and write depth; early-Z),
+     *   which cannot change the image apart from exact depth ties. Every draw that doesn't both
+     *   depth-test and write depth (normally the Transparent queue) keeps its submission position. A
+     *   Transparent renderable that doesn't override IRenderable::RenderInQueue draws with the default,
+     *   depth-writing state, so it can be reordered. It has no blending: RenderState::blend is ignored.
      * - VulkanRenderer does not draw yet (#43).
      */
     class IRenderer

@@ -259,11 +259,16 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 </div>
 <p>With <code>depthTest</code> off nothing writes depth, as in OpenGL. A renderable may adjust the state it is given, for example <code>cull = CullMode::None</code> for a two-sided surface.</p>
 
+<div class="callout warning">
+<p class="callout-title">Warning: don't change the scene while rendering</p>
+<p><code>Scene::Render</code> collects raw pointers to every renderable before any of them draws. A <code>Render</code> or <code>RenderInQueue</code> must not add, remove or destroy components or GameObjects immediately, because that could free a renderable that is still waiting to draw. Deferred destruction is fine: <code>Destroy</code> only queues the object, and it is torn down at step 11, after rendering (see <a href="gameobjects-components.html">GameObjects</a>).</p>
+</div>
+
 <div class="callout guarantee">
 <p class="callout-title">Guarantee: draw order within a frame</p>
 <p>A renderer puts a frame's draws on screen in the order they were submitted, unless the backend documents otherwise (<code>IRenderer</code> in <code>renderer/include/renderer/common/Renderer.hpp</code>). The exceptions:</p>
 <ul>
-<li><strong>Software renderer.</strong> It reorders each run of consecutive draws that both depth-test and write depth front to back, so early-Z rejects hidden pixels before they are shaded. Without blending, this cannot change the image except where fragments have exactly equal depth. Every other draw, including the whole Transparent queue, keeps its submitted position. It has no blending: <code>blend</code> is ignored and transparent draws are drawn opaque, without writing depth. Depth test, depth write and culling are honoured per draw.</li>
+<li><strong>Software renderer.</strong> It decides by each draw's state, not by its queue. It reorders depth-writing draws front to back (each run of consecutive draws that both depth-test and write depth), so early-Z rejects hidden pixels before they are shaded. Without blending, this cannot change the image except where fragments have exactly equal depth. Every draw that doesn't both depth-test and write depth (normally the Transparent queue) keeps its submitted position. A Transparent renderable that doesn't override <code>RenderInQueue</code> draws with the default, depth-writing state, so its draws can be reordered too. It has no blending: <code>blend</code> is ignored and transparent draws are drawn opaque, without writing depth. Depth test, depth write and culling are honoured per draw.</li>
 <li><strong>Vulkan renderer.</strong> Accepts the state and draws nothing yet (<a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>).</li>
 </ul>
 <p>Tests: <code>RenderQueueTest.OpaqueDrawsInHierarchyOrder</code>, <code>RenderQueueTest.TransparentDrawsAfterOpaqueBackToFront</code>, <code>RenderQueueTest.SortKeyTakesPrecedenceOverDepth</code>, <code>RenderQueueTest.EachQueuePassesItsRenderState</code>, <code>DrawOrderTest.TransparentDrawsStayAfterOpaqueInSubmissionOrder</code>, <code>DrawOrderTest.NonReorderableDrawsKeepTheirPositions</code>.</p>

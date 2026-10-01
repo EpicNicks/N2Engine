@@ -38,6 +38,12 @@ namespace N2Engine
         using SerializableComponent::SerializableComponent;
 
     public:
+        /**
+         * Draws this component. Scene::Render collects every renderable before drawing any, so Render and
+         * RenderInQueue must not add, remove or destroy components or GameObjects immediately (that could
+         * free a renderable still waiting to draw). Deferred destruction (Destroy) is fine: it takes
+         * effect after rendering.
+         */
         virtual void Render(Renderer::Common::IRenderer *renderer) = 0;
         virtual void InitializeRenderResources(Renderer::Common::IRenderer *renderer) = 0;
         virtual void CleanupRenderResources(Renderer::Common::IRenderer *renderer) = 0;
@@ -53,6 +59,8 @@ namespace N2Engine
          * The default calls Render(renderer), whose draws get the default state, which is the Opaque
          * queue's. A Transparent renderable must override this to pass `state` on; otherwise its draws
          * are sorted as transparent but still write depth.
+         *
+         * The same rule as Render applies: no immediate changes to components or GameObjects.
          */
         virtual void RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state)
         {
