@@ -3,7 +3,6 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
-#include <mutex>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -32,8 +31,8 @@ namespace N2Engine::Editor
         /// Requests declaring a larger payload are refused (and the connection closed) before allocating
         static constexpr uint32_t MaxPayloadBytes = 64u * 1024u * 1024u;
         /// Largest accepted viewport width/height; the frame buffer is width * height * 4 bytes
-        static constexpr int32_t MaxViewportDimension = 8192;
-        /// DeleteScene only removes files with this extension inside the scenes directory
+        static constexpr int32_t MaxViewportDimension = 4096;
+        /// DeleteScene only removes files with this extension (any case) inside the scenes directory
         static constexpr const char *SceneFileExtension = ".json";
 
         EditorServer() = default;
@@ -44,7 +43,8 @@ namespace N2Engine::Editor
 
         /// Main thread. False if the socket couldn't be set up (the server isn't running then).
         bool Start(int port, const std::string &bindAddress = DefaultBindAddress);
-        /// Main thread. Disconnects any client and joins the network thread.
+        /// Main thread. Disconnects any client and joins the network thread (which polls for stop
+        /// between short select() waits, so this returns within ~100 ms).
         void Stop();
         [[nodiscard]] bool IsRunning() const { return _running; }
         /// The port listened on (useful after Start(0)); 0 when not started
@@ -64,9 +64,10 @@ namespace N2Engine::Editor
         [[nodiscard]] static bool IsPayloadLengthAllowed(uint32_t payloadLength) { return payloadLength <= MaxPayloadBytes; }
         [[nodiscard]] static bool IsViewportSizeValid(int32_t width, int32_t height);
 
-        /// The scene file a DeleteScene request names: sceneName relative to scenesDirectory (with
-        /// SceneFileExtension appended if it has no extension). nullopt unless it resolves (following
-        /// symlinks) to a SceneFileExtension path strictly inside scenesDirectory.
+        /// The scene file a DeleteScene request names: sceneName relative to scenesDirectory, with
+        /// SceneFileExtension appended unless it already ends with it (case-insensitively). nullopt unless
+        /// its parent resolves (following symlinks) to scenesDirectory or a directory inside it. The file
+        /// name itself isn't resolved, so a symlinked scene file means the link, not its target.
         [[nodiscard]] static std::optional<std::filesystem::path> ResolveSceneFile(
             const std::filesystem::path &scenesDirectory, const std::string &sceneName);
 
@@ -108,19 +109,18 @@ namespace N2Engine::Editor
         // Network helpers
         bool Send(int socket, const void *data, size_t size);
         bool Receive(int socket, void *data, size_t size);
+        /// Network thread: waits (in short slices) until the socket is readable/writable; false once the
+        /// server is stopping or on error. Keeps every socket call non-blocking, so Stop() can't hang.
+        bool WaitUntilReady(int socket, bool forWrite);
         /// Handlers run on the main thread and don't touch the socket: this records the response frame,
         /// which ExecuteCommand returns for the network thread to send
-        void SendResponse(int clientSocket, const std::vector<uint8_t> &data);
+        void SendResponse(int clientSocket, std::vector<uint8_t> data);
 
         std::atomic<bool> _running{false};
         std::thread _serverThread;
         int _listenSocket{-1};
         int _port{0};
         bool _socketsInitialized{false};
-
-        // The connected client, so Stop() can shut it down to unblock a recv()
-        std::mutex _clientMutex;
-        int _clientSocket{-1};
 
         CommandQueue _commands;
         // Main-thread state below

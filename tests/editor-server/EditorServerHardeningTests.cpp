@@ -288,11 +288,46 @@ TEST_F(DeleteSceneTest, RejectsAbsolutePaths)
 #endif
 }
 
-TEST_F(DeleteSceneTest, RejectsNonSceneFilesAndEmptyInput)
+TEST_F(DeleteSceneTest, OnlyEverNamesSceneFiles)
 {
-    EXPECT_FALSE(Resolve("notes.txt").has_value());
+    // ".json" is appended unless the name already ends with it, so another extension can't be reached
+    const auto notes = Resolve("notes.txt");
+    ASSERT_TRUE(notes.has_value());
+    EXPECT_EQ(notes->filename(), fs::path("notes.txt.json"));
+
+    // Names may contain dots
+    const auto dotted = Resolve("Level.1");
+    ASSERT_TRUE(dotted.has_value());
+    EXPECT_EQ(dotted->filename(), fs::path("Level.1.json"));
+
+    // The extension matches in any case
+    const auto upper = Resolve("Main.JSON");
+    ASSERT_TRUE(upper.has_value());
+    EXPECT_EQ(upper->filename(), fs::path("Main.JSON"));
+}
+
+TEST_F(DeleteSceneTest, RejectsEmptyAndNulInput)
+{
     EXPECT_FALSE(Resolve("").has_value());
+    EXPECT_FALSE(Resolve(std::string("Main\0../../outside", 18)).has_value());
+    EXPECT_FALSE(Resolve("sub/").has_value());
     EXPECT_FALSE(EditorServer::ResolveSceneFile({}, "Main").has_value());
+}
+
+TEST_F(DeleteSceneTest, DeletesASymlinkedSceneAsTheLinkNotItsTarget)
+{
+    std::error_code error;
+    fs::create_symlink(_root / "outside.json", _scenes / "link.json", error);
+    if (error)
+    {
+        GTEST_SKIP() << "can't create symlinks here: " << error.message();
+    }
+
+    EditorServer server;
+    server.SetScenesDirectory(_scenes);
+    EXPECT_EQ(Execute(server, CommandType::DeleteScene, StringPayload("link")).type, OkType);
+    EXPECT_FALSE(fs::is_symlink(fs::symlink_status(_scenes / "link.json")));
+    EXPECT_TRUE(fs::exists(_root / "outside.json"));
 }
 
 TEST_F(DeleteSceneTest, DeleteSceneOnlyDeletesInsideTheScenesDirectory)
@@ -399,11 +434,24 @@ namespace
             return frame;
         }
 
-        /// True once the server has closed the connection
+        /// True once the server has closed (or reset) the connection; a receive timeout doesn't count
         bool IsClosedByServer()
         {
             char byte = 0;
-            return recv(_socket, &byte, 1, 0) <= 0;
+            const int result = recv(_socket, &byte, 1, 0);
+            return result == 0 || (result < 0 && WSAGetLastError() != WSAETIMEDOUT);
+        }
+
+        /// The address the server side of this connection is bound to
+        [[nodiscard]] std::string PeerAddress() const
+        {
+            sockaddr_in peer{};
+            int size = sizeof(peer);
+            if (getpeername(_socket, reinterpret_cast<sockaddr*>(&peer), &size) != 0)
+                return {};
+            char text[INET_ADDRSTRLEN] = {};
+            inet_ntop(AF_INET, &peer.sin_addr, text, sizeof(text));
+            return text;
         }
 
     private:
@@ -454,9 +502,14 @@ TEST(EditorServerSocketTest, ListensOnLoopbackAndRunsCommandsOnTheDrainingThread
 
     TestClient client(server.GetPort());
     ASSERT_TRUE(client.IsConnected());
+    EXPECT_EQ(client.PeerAddress(), "127.0.0.1");
 
     const std::vector<uint8_t> payload = StringPayload("00000000-0000-0000-0000-000000000000");
     ASSERT_TRUE(client.SendRequest(CommandType::DestroyEntity, payload, static_cast<uint32_t>(payload.size())));
+
+    // Nothing answers the request until this thread drains the queue
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    EXPECT_EQ(client.BytesAvailable(), 0u);
 
     // This thread plays the host's main loop: the request is only answered once it drains the queue
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -503,6 +556,45 @@ TEST(EditorServerSocketTest, StopReturnsWithNoClient)
 
     // And it can serve again afterwards
     ASSERT_TRUE(server.Start(0));
+    StopWithin(server, std::chrono::seconds(10));
+}
+
+TEST(EditorServerSocketTest, RestartsOnTheSamePortAfterAClientShutdown)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.Start(0));
+    const int port = server.GetPort();
+
+    {
+        TestClient client(port);
+        ASSERT_TRUE(client.IsConnected());
+        ASSERT_TRUE(client.SendRequest(CommandType::Shutdown, {}, 0));
+
+        // Answered on the network thread, which then stops serving and closes the connection first
+        const auto response = client.ReadResponse();
+        ASSERT_TRUE(response.has_value());
+        EXPECT_EQ(Decode(*response).type, OkType);
+        EXPECT_TRUE(client.IsClosedByServer());
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (server.IsRunning() && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_FALSE(server.IsRunning());
+
+    // Start() without Stop() first: it must join the finished thread rather than terminate. The server
+    // side of the old connection is in TIME_WAIT, which must not block binding the port again.
+    ASSERT_TRUE(server.Start(port));
+    EXPECT_EQ(server.GetPort(), port);
+    {
+        TestClient client(port);
+        EXPECT_TRUE(client.IsConnected());
+    }
+    StopWithin(server, std::chrono::seconds(10));
+
+    ASSERT_TRUE(server.Start(port));
     StopWithin(server, std::chrono::seconds(10));
 }
 
