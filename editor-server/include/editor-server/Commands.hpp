@@ -62,7 +62,8 @@ namespace N2Engine::Editor::Protocol
 
     struct DeleteSceneCmd
     {
-        std::string path;
+        /// Scene file relative to the scenes directory (see EditorServer::ResolveSceneFile), not a path
+        std::string sceneName;
 
         static DeleteSceneCmd Deserialize(BufferReader &r)
         {

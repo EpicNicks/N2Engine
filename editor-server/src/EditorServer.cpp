@@ -1,4 +1,8 @@
+#include <filesystem>
 #include <format>
+#include <future>
+#include <system_error>
+#include <utility>
 
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
@@ -19,12 +23,16 @@
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #define CLOSE_SOCKET closesocket
+#define SHUTDOWN_BOTH SD_BOTH
 #define SOCKET_ERROR_CODE WSAGetLastError()
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
+#include <cerrno>
 #define CLOSE_SOCKET close
+#define SHUTDOWN_BOTH SHUT_RDWR
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR_CODE errno
 #endif
@@ -38,40 +46,54 @@ namespace N2Engine::Editor
         Stop();
     }
 
-    void EditorServer::Start(int port)
+    bool EditorServer::Start(int port, const std::string &bindAddress)
     {
-        if (_running) return;
+        if (_running) return true;
 
 #ifdef _WIN32
-        WSADATA wsaData;
-        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+        if (!_socketsInitialized)
         {
-            Logger::Error("WSAStartup failed");
-            return;
+            WSADATA wsaData;
+            if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+            {
+                Logger::Error("WSAStartup failed");
+                return false;
+            }
         }
 #endif
+        _socketsInitialized = true;
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<uint16_t>(port));
+        if (inet_pton(AF_INET, bindAddress.c_str(), &addr.sin_addr) != 1)
+        {
+            Logger::Error("Invalid bind address (expected an IPv4 address): " + bindAddress);
+            return false;
+        }
 
         _listenSocket = static_cast<int>(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
         if (_listenSocket == INVALID_SOCKET)
         {
             Logger::Error("Failed to create socket");
-            return;
+            _listenSocket = -1;
+            return false;
         }
 
         int opt = 1;
+#ifdef _WIN32
+        // SO_REUSEADDR on Windows would let another process bind the same port and take the editor's connection
+        setsockopt(_listenSocket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&opt), sizeof(opt));
+#else
         setsockopt(_listenSocket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
-
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = INADDR_ANY;
-        addr.sin_port = htons(static_cast<uint16_t>(port));
+#endif
 
         if (bind(_listenSocket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
         {
-            Logger::Error("Failed to bind to port " + std::to_string(port));
+            Logger::Error("Failed to bind to " + bindAddress + ":" + std::to_string(port));
             CLOSE_SOCKET(_listenSocket);
             _listenSocket = -1;
-            return;
+            return false;
         }
 
         if (listen(_listenSocket, 1) < 0)
@@ -79,50 +101,113 @@ namespace N2Engine::Editor
             Logger::Error("Failed to listen");
             CLOSE_SOCKET(_listenSocket);
             _listenSocket = -1;
-            return;
+            return false;
         }
 
+        // The actual port, in case port 0 asked the OS to pick one
+        sockaddr_in boundAddr{};
+        socklen_t boundAddrSize = sizeof(boundAddr);
+        _port = getsockname(_listenSocket, reinterpret_cast<sockaddr*>(&boundAddr), &boundAddrSize) == 0
+                    ? ntohs(boundAddr.sin_port)
+                    : port;
+
+        _commands.Reopen();
         _running = true;
-        _serverThread = std::thread(&EditorServer::ServerLoop, this);
+        _serverThread = std::thread(&EditorServer::ServerLoop, this, _listenSocket);
+        Logger::Info("Editor server listening on " + bindAddress + ":" + std::to_string(_port));
+        return true;
     }
 
     void EditorServer::Stop()
     {
         _running = false;
 
+        // Unblock the network thread wherever it is: accept() (closing the listener), recv()/send()
+        // (shutting the client down) or waiting on a queued command (closing the queue breaks its promise)
         if (_listenSocket != -1)
         {
             CLOSE_SOCKET(_listenSocket);
             _listenSocket = -1;
         }
+        {
+            std::lock_guard lock(_clientMutex);
+            if (_clientSocket != -1)
+            {
+                shutdown(_clientSocket, SHUTDOWN_BOTH);
+            }
+        }
+        _commands.Close();
 
         if (_serverThread.joinable())
             _serverThread.join();
+        _port = 0;
 
 #ifdef _WIN32
-        WSACleanup();
+        if (_socketsInitialized)
+        {
+            WSACleanup();
+        }
 #endif
+        _socketsInitialized = false;
     }
 
-    void EditorServer::ServerLoop()
+    size_t EditorServer::ProcessCommands(std::chrono::milliseconds maxWait)
+    {
+        return _commands.Drain(maxWait);
+    }
+
+    void EditorServer::PostLog(std::string message, bool isWarning)
+    {
+        // Fire and forget: the future is dropped, and the line is lost if the queue is already closed
+        (void)_commands.Enqueue([message = std::move(message), isWarning]
+        {
+            if (isWarning)
+                Logger::Warn(message);
+            else
+                Logger::Info(message);
+            return CommandQueue::Response{};
+        });
+    }
+
+    void EditorServer::ServerLoop(int listenSocket)
     {
         while (_running)
         {
-            Logger::Info("Waiting for editor connection...");
+            PostLog("Waiting for editor connection...");
 
-            int clientSocket = static_cast<int>(accept(_listenSocket, nullptr, nullptr));
+            int clientSocket = static_cast<int>(accept(listenSocket, nullptr, nullptr));
             if (clientSocket == INVALID_SOCKET)
             {
                 if (_running)
-                    Logger::Warn("Accept failed: " + std::to_string(SOCKET_ERROR_CODE));
+                {
+                    PostLog("Accept failed: " + std::to_string(SOCKET_ERROR_CODE), true);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // don't spin on a broken listener
+                }
                 continue;
             }
 
-            Logger::Info("Editor connected");
-            HandleClient(clientSocket);
+            {
+                std::lock_guard lock(_clientMutex);
+                _clientSocket = clientSocket;
+            }
 
+            PostLog("Editor connected");
+            try
+            {
+                HandleClient(clientSocket);
+            }
+            catch (...)
+            {
+                // e.g. bad_alloc; nothing may escape this thread (that would terminate the host)
+                PostLog("Dropping the editor connection after an unexpected error", true);
+            }
+
+            {
+                std::lock_guard lock(_clientMutex);
+                _clientSocket = -1;
+            }
             CLOSE_SOCKET(clientSocket);
-            Logger::Info("Editor disconnected");
+            PostLog("Editor disconnected");
         }
     }
 
@@ -139,6 +224,19 @@ namespace N2Engine::Editor
             if (!Receive(clientSocket, &payloadLength, sizeof(payloadLength)))
                 break;
 
+            // The length is client-supplied, so check it before allocating. The oversized payload is
+            // still in the stream, so the connection can't be resynchronized and is closed.
+            if (!IsPayloadLengthAllowed(payloadLength))
+            {
+                const std::string message = std::format("Payload of {} bytes exceeds the {} byte limit",
+                                                        payloadLength, MaxPayloadBytes);
+                BufferWriter response;
+                WriteError(response, message);
+                Send(clientSocket, response.Data().data(), response.Size());
+                PostLog(message, true);
+                break;
+            }
+
             // Read payload
             std::vector<uint8_t> payload(payloadLength);
             if (payloadLength > 0 && !Receive(clientSocket, payload.data(), payloadLength))
@@ -148,15 +246,113 @@ namespace N2Engine::Editor
             {
                 BufferWriter response;
                 WriteOk(response);
-                SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+                Send(clientSocket, response.Data().data(), response.Size());
                 // Stop serving, so the host's main loop sees !IsRunning() and exits cleanly
-                Logger::Info("Shutdown requested by editor");
+                PostLog("Shutdown requested by editor");
                 _running = false;
                 break;
             }
 
-            ProcessCommand(clientSocket, cmdType, payload);
+            // Everything else touches engine state, so it runs on the main thread (see ProcessCommands)
+            std::future<CommandQueue::Response> pending = _commands.Enqueue(
+                [this, cmdType, payload = std::move(payload)] { return ExecuteCommand(cmdType, payload); });
+
+            CommandQueue::Response response;
+            try
+            {
+                response = pending.get();
+            }
+            catch (const std::future_error &)
+            {
+                break; // the queue was closed: the server is stopping
+            }
+
+            if (!Send(clientSocket, response.data(), response.size()))
+                break;
         }
+    }
+
+    std::vector<uint8_t> EditorServer::ExecuteCommand(uint8_t commandType, const std::vector<uint8_t> &payload)
+    {
+        _response.clear();
+
+        bool failed = false;
+        std::string failure;
+        try
+        {
+            // No socket: handlers only build the response, which SendResponse records in _response
+            ProcessCommand(-1, commandType, payload);
+        }
+        catch (const std::exception &e)
+        {
+            failed = true;
+            failure = e.what();
+        }
+        catch (...)
+        {
+            failed = true;
+            failure = "unknown exception";
+        }
+
+        if (failed || _response.empty())
+        {
+            _response.clear();
+            if (!failed)
+            {
+                failure = "the command produced no response";
+            }
+            Logger::Error(std::format("Command 0x{:X} failed: {}", commandType, failure));
+
+            BufferWriter response;
+            WriteError(response, "Command failed: " + failure);
+            return {response.Data().begin(), response.Data().end()};
+        }
+
+        return std::exchange(_response, {});
+    }
+
+    bool EditorServer::IsViewportSizeValid(int32_t width, int32_t height)
+    {
+        return width > 0 && height > 0 && width <= MaxViewportDimension && height <= MaxViewportDimension;
+    }
+
+    std::optional<std::filesystem::path> EditorServer::ResolveSceneFile(const std::filesystem::path &scenesDirectory,
+                                                                        const std::string &sceneName)
+    {
+        if (scenesDirectory.empty() || sceneName.empty())
+            return std::nullopt;
+
+        std::filesystem::path relative(sceneName);
+        // Rejects "C:\x", "/x", "\x" and "C:x" outright (only a relative path inside the directory is valid)
+        if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory())
+            return std::nullopt;
+        // "dir/", "." and ".." name a directory, not a scene file
+        const std::filesystem::path fileName = relative.filename();
+        if (fileName.empty() || fileName == "." || fileName == "..")
+            return std::nullopt;
+
+        if (!relative.has_extension())
+            relative += SceneFileExtension;
+        if (relative.extension() != SceneFileExtension)
+            return std::nullopt;
+
+        // Canonical (symlinks and ".." resolved) so neither can lead outside the directory
+        std::error_code error;
+        const std::filesystem::path root = std::filesystem::weakly_canonical(scenesDirectory, error);
+        if (error)
+            return std::nullopt;
+        const std::filesystem::path target = std::filesystem::weakly_canonical(root / relative, error);
+        if (error)
+            return std::nullopt;
+
+        const std::filesystem::path fromRoot = target.lexically_relative(root);
+        if (fromRoot.empty() || fromRoot == "." || *fromRoot.begin() == "..")
+            return std::nullopt;
+        // The extension check again, now on what the path actually resolves to
+        if (target.extension() != SceneFileExtension)
+            return std::nullopt;
+
+        return target;
     }
 
     void EditorServer::ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload)
@@ -244,8 +440,8 @@ namespace N2Engine::Editor
 
         app.RenderEditorFrame();
 
-        // Resize frame buffer if needed
-        size_t bufferSize = _viewportWidth * _viewportHeight * 4;
+        // Resize frame buffer if needed (the size was validated by SetViewportSize)
+        size_t bufferSize = static_cast<size_t>(_viewportWidth) * static_cast<size_t>(_viewportHeight) * 4;
         if (_frameBuffer.size() != bufferSize)
             _frameBuffer.resize(bufferSize);
 
@@ -266,6 +462,15 @@ namespace N2Engine::Editor
     {
         BufferReader reader(payload);
         auto cmd = SetViewportSizeCmd::Deserialize(reader);
+
+        if (!IsViewportSizeValid(cmd.width, cmd.height))
+        {
+            BufferWriter response;
+            WriteError(response, std::format("Invalid viewport size {}x{} (each must be 1 to {})",
+                                             cmd.width, cmd.height, MaxViewportDimension));
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
 
         _viewportWidth = cmd.width;
         _viewportHeight = cmd.height;
@@ -345,7 +550,15 @@ namespace N2Engine::Editor
 
         Logger::Info("Loading scene from scene data: " + sceneJsonString);
 
-        nlohmann::json sceneJson = nlohmann::json::parse<std::string>(std::move(sceneJsonString));
+        // Non-throwing parse: the JSON comes from the client
+        nlohmann::json sceneJson = nlohmann::json::parse(sceneJsonString, nullptr, false);
+        if (sceneJson.is_discarded())
+        {
+            BufferWriter response;
+            WriteError(response, "The scene passed is not valid JSON");
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
 
         auto scene = Scene::FromJSON(sceneJson, true);
         if (scene == nullptr)
@@ -388,7 +601,8 @@ namespace N2Engine::Editor
         nlohmann::json sceneJson = SceneManager::GetCurSceneRef().Serialize();
         SceneManager::UpdateScene(SceneManager::GetCurSceneIndex(), sceneJson);
 
-        WriteSceneData(response, sceneJson);
+        // dump(): passing the json itself converted it to a string, which throws for an object
+        WriteSceneData(response, sceneJson.dump());
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
@@ -401,16 +615,26 @@ namespace N2Engine::Editor
 
         try
         {
-            // Delete scene file from disk
-            if (std::filesystem::exists(cmd.path))
+            // The name comes from the client: only ever delete a scene file inside the scenes directory
+            const auto sceneFile = ResolveSceneFile(_scenesDirectory, cmd.sceneName);
+            if (_scenesDirectory.empty())
             {
-                std::filesystem::remove(cmd.path);
+                WriteError(response, "No scenes directory configured (start the host with --project)");
+            }
+            else if (!sceneFile.has_value())
+            {
+                Logger::Warn("Rejected DeleteScene outside the scenes directory: " + cmd.sceneName);
+                WriteError(response, "Not a scene file in the project's scenes directory: " + cmd.sceneName);
+            }
+            else if (std::filesystem::is_regular_file(*sceneFile))
+            {
+                std::filesystem::remove(*sceneFile);
                 WriteOk(response);
-                Logger::Info("Deleted scene: " + cmd.path);
+                Logger::Info("Deleted scene: " + sceneFile->string());
             }
             else
             {
-                WriteError(response, "Scene file not found: " + cmd.path);
+                WriteError(response, "Scene file not found: " + cmd.sceneName);
             }
         }
         catch (const std::exception &e)
@@ -456,7 +680,7 @@ namespace N2Engine::Editor
         BufferWriter response;
 
         // Create entity in current scene
-        if (SceneManager::GetCurSceneIndex() != -1)
+        if (SceneManager::GetCurScene() != nullptr)
         {
             auto gameObject = GameObject::Create(cmd.name);
             SceneManager::GetCurSceneRef().AddRootGameObject(gameObject);
@@ -476,13 +700,25 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         std::string entityId = reader.ReadString();
 
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            BufferWriter response;
+            WriteError(response, "No scene loaded");
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
+
         bool entityDestroyed = false;
         if (const auto uuid = Math::UUID::FromString(entityId); uuid.has_value())
         {
-            if (const auto foundGameObject = SceneManager::GetCurSceneRef().FindGameObjectByUUID(uuid.value()))
+            if (const auto foundGameObject = scene->FindGameObjectByUUID(uuid.value()))
             {
-                if (SceneManager::GetCurSceneRef().RemoveRootGameObject(foundGameObject))
+                // A real destroy (OnDisable/OnDestroy, children, components), not just detaching the root.
+                // The editor host doesn't run game frames, so process it now instead of at end of frame.
+                if (scene->DestroyGameObject(foundGameObject))
                 {
+                    scene->ProcessDestroyed();
                     entityDestroyed = true;
                 }
             }
@@ -505,10 +741,19 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         auto cmd = EntityTransformCmd::Deserialize(reader);
 
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            BufferWriter response;
+            WriteError(response, "No scene loaded");
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
+
         // Apply transform to entity
         if (auto uuid = Math::UUID::FromString(cmd.entityId); uuid.has_value())
         {
-            auto entity = SceneManager::GetCurSceneRef().FindGameObjectByUUID(uuid.value());
+            auto entity = scene->FindGameObjectByUUID(uuid.value());
             if (entity != nullptr && entity->HasPositionable())
             {
                 entity->GetPositionable()->SetPositionAndRotation(
@@ -573,13 +818,21 @@ namespace N2Engine::Editor
 
         BufferWriter response;
 
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            WriteError(response, "No scene loaded");
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
+
         float posX = 0.0f, posY = 0.0f, posZ = 0.0f;
         float rotX = 0.0f, rotY = 0.0f, rotZ = 0.0f;
         float scaleX = 1.0f, scaleY = 1.0f, scaleZ = 1.0f;
 
         if (auto uuid = Math::UUID::FromString(entityId); uuid.has_value())
         {
-            auto entity = SceneManager::GetCurSceneRef().FindGameObjectByUUID(uuid.value());
+            auto entity = scene->FindGameObjectByUUID(uuid.value());
             if (entity && entity->HasPositionable())
             {
                 auto &transform = entity->GetPositionable()->GetGlobalTransform();
@@ -750,8 +1003,9 @@ return {C}
         return true;
     }
 
-    void EditorServer::SendResponse(int clientSocket, const std::vector<uint8_t> &data)
+    void EditorServer::SendResponse(int /*clientSocket*/, const std::vector<uint8_t> &data)
     {
-        Send(clientSocket, data.data(), data.size());
+        // Main thread: recorded for ExecuteCommand to return; the network thread does the sending
+        _response = data;
     }
 }

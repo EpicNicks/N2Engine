@@ -4,6 +4,7 @@
 #include <cstring>
 #include <vector>
 #include <span>
+#include <stdexcept>
 #include <string>
 
 namespace N2Engine::Editor::Protocol
@@ -42,13 +43,19 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    /// Reads client-supplied bytes, so every read is bounds-checked: reading past the end throws
+    /// std::out_of_range (the server turns that into an Error response) instead of reading out of bounds
     class BufferReader
     {
     public:
         explicit BufferReader(std::span<const uint8_t> data)
             : _data(data), _pos(0) {}
 
-        uint8_t ReadU8() { return _data[_pos++]; }
+        uint8_t ReadU8()
+        {
+            Require(1);
+            return _data[_pos++];
+        }
 
         int32_t ReadI32()
         {
@@ -76,6 +83,7 @@ namespace N2Engine::Editor::Protocol
         std::string ReadString()
         {
             uint32_t len = ReadU32();
+            Require(len);
             std::string s(_data.begin() + _pos, _data.begin() + _pos + len);
             _pos += len;
             return s;
@@ -83,6 +91,7 @@ namespace N2Engine::Editor::Protocol
 
         std::span<const uint8_t> ReadBytes(size_t count)
         {
+            Require(count);
             auto span = _data.subspan(_pos, count);
             _pos += count;
             return span;
@@ -95,8 +104,18 @@ namespace N2Engine::Editor::Protocol
         std::span<const uint8_t> _data;
         size_t _pos;
 
+        void Require(size_t size) const
+        {
+            if (size > Remaining())
+            {
+                throw std::out_of_range("Malformed payload: read of " + std::to_string(size) + " bytes with " +
+                                        std::to_string(Remaining()) + " remaining");
+            }
+        }
+
         void Read(void *out, size_t size)
         {
+            Require(size);
             std::memcpy(out, _data.data() + _pos, size);
             _pos += size;
         }
