@@ -69,6 +69,15 @@ TEST(FontSettingsTest, BadValuesAreIgnored)
 
     EXPECT_EQ(Text::Font::ParseAtlasSettings(json{{"font", "not an object"}}).basePx, defaults.basePx);
     EXPECT_EQ(Text::Font::ParseAtlasSettings(json{{"font", {{"basePx", 2}}}}).basePx, defaults.basePx);
+    // Above the cost cap
+    EXPECT_EQ(Text::Font::ParseAtlasSettings(json{{"font", {{"basePx", 512}}}}).basePx, defaults.basePx);
+}
+
+TEST(FontSettingsTest, ASpreadTooLargeForTheBaseSizeIsReduced)
+{
+    const Text::AtlasSettings settings = Text::Font::ParseAtlasSettings(json{{"font", {{"basePx", 16}, {"spreadPx", 20}}}});
+    EXPECT_EQ(settings.basePx, 16.0f);
+    EXPECT_EQ(settings.spreadPx, Text::MaxSpreadPx(16.0f));
 }
 
 // ============================================================================
@@ -98,6 +107,7 @@ TEST(DefaultFontAssetTest, UnreadableDataGivesNoFont)
     const Text::Font unloaded{};
     EXPECT_FALSE(unloaded.IsLoaded());
     EXPECT_TRUE(unloaded.Layout("text").quads.empty());
+    EXPECT_EQ(unloaded.GetAtlasSettings().basePx, Text::AtlasSettings{}.basePx) << "defaults, not a null dereference";
 }
 
 // ============================================================================
@@ -114,9 +124,7 @@ protected:
 
     void SetUp() override
     {
-        // Font.cpp registers the loader at static initialisation; this also keeps it linked in
-        Text::Font::RegisterLoader();
-
+        // No explicit Font::RegisterLoader(): ResourceLoader::Initialize registers the font loader itself
         s_root = fs::temp_directory_path() /
                  (std::string("n2engine_font_") + ::testing::UnitTest::GetInstance()->current_test_info()->name());
         std::error_code ec;

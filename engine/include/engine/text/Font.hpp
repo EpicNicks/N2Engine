@@ -34,7 +34,9 @@ namespace N2Engine::Text
                                                                    std::string_view debugName = "font");
 
         /// The built-in font (Noto Sans Regular, Latin subset) with the default atlas settings. Built on
-        /// first use and shared afterwards; never null in a correct build.
+        /// first use and shared afterwards. The embedded font is part of the build, so this is only null if
+        /// the build itself is broken: that logs an error (and asserts in Debug), and every later call
+        /// returns null too.
         [[nodiscard]] static std::shared_ptr<Font> GetDefault();
 
         /// The atlas settings in a .meta customData object (its "font" member), on top of defaults.
@@ -53,9 +55,10 @@ namespace N2Engine::Text
         [[nodiscard]] std::string GetResourceType() const override { return "Font"; }
 
         [[nodiscard]] bool IsLoaded() const { return _font != nullptr; }
-        /// Requires IsLoaded()
+        /// Requires IsLoaded(): there is no font to return otherwise
         [[nodiscard]] const SdfFont &GetSdfFont() const { return *_font; }
-        [[nodiscard]] const AtlasSettings &GetAtlasSettings() const { return _font->GetAtlas().GetSettings(); }
+        /// The settings the atlas was built with, or the defaults if the font isn't loaded
+        [[nodiscard]] const AtlasSettings &GetAtlasSettings() const;
 
         /// LayoutText with this font; an empty layout if the font isn't loaded
         [[nodiscard]] TextLayout Layout(std::string_view utf8, const LayoutOptions &options = {}) const;

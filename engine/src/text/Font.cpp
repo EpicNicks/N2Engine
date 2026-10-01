@@ -1,5 +1,6 @@
 #include "engine/text/Font.hpp"
 
+#include <cassert>
 #include <cstdint>
 #include <exception>
 #include <format>
@@ -75,7 +76,7 @@ namespace N2Engine::Text
             return {};
         }
 
-        void WarnBadSetting(const std::string_view key, const nlohmann::json &value, const std::string_view expected)
+        void WarnBadSetting(const std::string_view key, const nlohmann::json &value, const std::string &expected)
         {
             Logger::Warn(std::format("Font settings: ignoring \"{}\": {} (expected {})", key, value.dump(), expected));
         }
@@ -102,24 +103,24 @@ namespace N2Engine::Text
 
         if (const auto it = font.find("basePx"); it != font.end())
         {
-            if (it->is_number() && it->get<double>() >= 4.0 && it->get<double>() <= 512.0)
+            if (it->is_number() && it->get<double>() >= FontAtlas::kMinBasePx && it->get<double>() <= FontAtlas::kMaxBasePx)
                 settings.basePx = it->get<float>();
             else
-                WarnBadSetting("basePx", *it, "a number from 4 to 512");
+                WarnBadSetting("basePx", *it, std::format("a number from {} to {}", FontAtlas::kMinBasePx, FontAtlas::kMaxBasePx));
         }
         if (const auto it = font.find("spreadPx"); it != font.end())
         {
-            if (it->is_number_integer() && it->get<long long>() >= 1 && it->get<long long>() <= 64)
+            if (it->is_number_integer() && it->get<long long>() >= 1 && it->get<long long>() <= FontAtlas::kMaxSpreadPx)
                 settings.spreadPx = it->get<int>();
             else
-                WarnBadSetting("spreadPx", *it, "an integer from 1 to 64");
+                WarnBadSetting("spreadPx", *it, std::format("an integer from 1 to {}", FontAtlas::kMaxSpreadPx));
         }
         if (const auto it = font.find("paddingPx"); it != font.end())
         {
-            if (it->is_number_integer() && it->get<long long>() >= 0 && it->get<long long>() <= 64)
+            if (it->is_number_integer() && it->get<long long>() >= 0 && it->get<long long>() <= FontAtlas::kMaxPaddingPx)
                 settings.paddingPx = it->get<int>();
             else
-                WarnBadSetting("paddingPx", *it, "an integer from 0 to 64");
+                WarnBadSetting("paddingPx", *it, std::format("an integer from 0 to {}", FontAtlas::kMaxPaddingPx));
         }
         if (const auto it = font.find("charset"); it != font.end())
         {
@@ -136,6 +137,13 @@ namespace N2Engine::Text
                 settings.extraChars = DecodeUtf8(it->get<std::string>());
             else
                 WarnBadSetting("extraChars", *it, "a string");
+        }
+        // The spread may be at most half the base size; a larger one only blurs and costs time
+        if (settings.spreadPx > MaxSpreadPx(settings.basePx))
+        {
+            Logger::Warn(std::format("Font settings: spreadPx {} is too large for basePx {}; using {}", settings.spreadPx,
+                                     settings.basePx, MaxSpreadPx(settings.basePx)));
+            settings.spreadPx = MaxSpreadPx(settings.basePx);
         }
         return settings;
     }
@@ -166,9 +174,24 @@ namespace N2Engine::Text
     std::shared_ptr<Font> Font::GetDefault()
     {
         // Built once; the atlas takes a moment to rasterise and every caller can share it
-        static const std::shared_ptr<Font> defaultFont =
-            CreateFromMemory(GetDefaultFontData(), AtlasSettings{}, "default font (Noto Sans Regular)");
+        static const std::shared_ptr<Font> defaultFont = []
+        {
+            auto font = CreateFromMemory(GetDefaultFontData(), AtlasSettings{}, "default font (Noto Sans Regular)");
+            if (!font)
+            {
+                Logger::Error("The embedded default font failed to load; this build is broken, and Font::GetDefault() "
+                              "will return null");
+                assert(false && "the embedded default font failed to load");
+            }
+            return font;
+        }();
         return defaultFont;
+    }
+
+    const AtlasSettings &Font::GetAtlasSettings() const
+    {
+        static const AtlasSettings defaults;
+        return _font ? _font->GetAtlas().GetSettings() : defaults;
     }
 
     bool Font::Load(const std::filesystem::path &path)
