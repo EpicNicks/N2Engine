@@ -39,36 +39,41 @@ namespace N2Engine::Scripting
 
     LuaRuntime::LuaRuntime()
     {
+        // No package library: the engine's require (SetupModuleSystem) loads modules through ResourceLoader,
+        // and package only added ways around it (loadlib and the C searchers load native code; searchpath
+        // and the file searcher open arbitrary paths)
         _lua.open_libraries(
             sol::lib::base,
-            sol::lib::package,
             sol::lib::math,
             sol::lib::string,
             sol::lib::table
         );
 
         // Scripts are project content, so they get no way past the asset pipeline: no reading files
-        // (dofile/loadfile, package.path), no native code (package.loadlib, the C searchers), and no
-        // binary chunks, whose crafted bytecode can corrupt the VM. load keeps working for source text.
-        // The engine's own require (SetupModuleSystem) loads modules through ResourceLoader instead.
+        // (dofile/loadfile) and no binary chunks, whose crafted bytecode can corrupt the VM. load keeps
+        // working for source text. (RunSource applies the same rule to the engine's own loading.)
         _lua.script(R"(
             dofile = nil
             loadfile = nil
 
             local rawLoad = load
-            load = function(chunk, chunkname, _, ...)
+            local find = string.find
+            load = function(chunk, chunkname, mode, ...)
+                -- Never "b". A mode without "t" (e.g. "b") allows nothing, as natively it rejects text.
+                local textMode = (mode == nil or find(mode, "t", 1, true)) and "t" or ""
                 -- Pass env on only if given: load treats an explicit nil env as "no globals"
                 if select('#', ...) > 0 then
-                    return rawLoad(chunk, chunkname, "t", ...)
+                    return rawLoad(chunk, chunkname, textMode, ...)
                 end
-                return rawLoad(chunk, chunkname, "t")
+                return rawLoad(chunk, chunkname, textMode)
             end
-
-            package.loadlib = nil
-            package.path = ""
-            package.cpath = ""
-            package.searchers = { package.searchers[1] } -- package.preload only
         )");
+    }
+
+    sol::protected_function_result LuaRuntime::RunSource(const std::string_view source, const std::string &chunkName)
+    {
+        // Text only: a project .lua asset holding precompiled bytecode would otherwise run as-is
+        return _lua.safe_script(source, sol::script_pass_on_error, chunkName, sol::load_mode::text);
     }
 
     bool LuaRuntime::Initialize()
@@ -139,7 +144,7 @@ namespace N2Engine::Scripting
             return false;
         }
 
-        const auto result = _lua.safe_script(script->GetSourceCode(), sol::script_pass_on_error, path.ToString());
+        const auto result = RunSource(script->GetSourceCode(), path.ToString());
         if (!result.valid())
         {
             const sol::error err = result;
@@ -201,7 +206,7 @@ namespace N2Engine::Scripting
     {
         std::string moduleName = PathToModuleName(path);
 
-        auto result = _lua.safe_script(script->GetSourceCode(), sol::script_pass_on_error);
+        auto result = RunSource(script->GetSourceCode(), path.ToString());
 
         if (!result.valid())
         {
