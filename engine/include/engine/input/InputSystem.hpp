@@ -38,6 +38,9 @@ namespace N2Engine::Input
         std::vector<std::unique_ptr<ActionMap>> _retiredMaps;
         // Sets _updating while action callbacks run (Update, or cancelling a map on LoadActionMap)
         struct UpdatingScope;
+        // The map InputSystem::Update is polling. Leaving it from one of its own callbacks defers the cancel
+        // until its loop ends, or the loop would update (and restart) the actions it had not reached yet.
+        ActionMap *_mapBeingUpdated = nullptr;
 
     public:
         explicit InputSystem(Window &window);

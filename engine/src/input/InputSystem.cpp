@@ -98,11 +98,12 @@ ActionMap* InputSystem::LoadActionMap(const std::string &name)
     {
         ActionMap *previous = GetCurActionMap();
         _curActionMapName = it->first;
-        if (previous)
+        // Leaving a map releases what was held in it: it isn't updated any more, so its actions would
+        // otherwise stay Started/Performed with no callback until it was loaded again. Its callbacks may
+        // replace maps, which are then retired until this pass ends rather than freed under it.
+        // Left from one of its own callbacks: Update cancels it once its loop is done.
+        if (previous && previous != _mapBeingUpdated)
         {
-            // Leaving a map releases what was held in it: it isn't updated any more, so its actions would
-            // otherwise stay Started/Performed with no callback until it was loaded again. Its callbacks may
-            // replace maps, which are then retired until this pass ends rather than freed under it.
             UpdatingScope scope{*this};
             previous->CancelActiveActions();
         }
@@ -162,7 +163,29 @@ void InputSystem::Update()
 
     if (const auto it = _actionMaps.find(_curActionMapName); it != _actionMaps.end())
     {
-        it->second->Update();
+        // Kept alive until this update ends even if a callback replaces it (it is retired, not freed)
+        ActionMap *map = it->second.get();
+        const std::string mapName = it->first;
+
+        struct BeingUpdatedScope
+        {
+            ActionMap *&slot;
+            ActionMap *const previous;
+            BeingUpdatedScope(ActionMap *&s, ActionMap *map) : slot(s), previous(s) { slot = map; }
+            ~BeingUpdatedScope() { slot = previous; }
+            BeingUpdatedScope(const BeingUpdatedScope &) = delete;
+            BeingUpdatedScope &operator=(const BeingUpdatedScope &) = delete;
+        };
+        {
+            BeingUpdatedScope beingUpdated{_mapBeingUpdated, map};
+            map->Update();
+        }
+
+        // A callback switched to another map (LoadActionMap deferred this): cancel what is still active here
+        if (_curActionMapName != mapName)
+        {
+            map->CancelActiveActions();
+        }
     }
 }
 

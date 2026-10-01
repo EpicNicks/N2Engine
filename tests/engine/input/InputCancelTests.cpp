@@ -227,6 +227,42 @@ TEST_F(InputMapSwitchCancelTest, CancelCallbackCanReplaceTheMapItLeaves)
     EXPECT_EQ(_input.GetActionMap("Gameplay")->Serialize()["actions"].size(), 0u);
 }
 
+TEST_F(InputMapSwitchCancelTest, SwitchingFromACallbackCancelsWhenTheLoopEnds)
+{
+    bool held = true;
+    _input.MakeActionMap("Gameplay", [&held](ActionMap *map)
+    {
+        map->MakeInputAction("Pause", [&held](InputAction *action) { action->AddBinding(std::make_unique<HeldBinding>(&held)); });
+        map->MakeInputAction("Fire", [&held](InputAction *action) { action->AddBinding(std::make_unique<HeldBinding>(&held)); });
+    });
+    _input.AddActionMap(std::make_unique<ActionMap>("Menu"));
+    _input.LoadActionMap("Gameplay");
+    ActionMap *gameplay = _input.GetActionMap("Gameplay");
+
+    int pauseCalls = 0;
+    (*gameplay)["Pause"].GetOnStateChanged() += [&](InputAction &action)
+    {
+        ++pauseCalls;
+        if (action.GetPhase() == ActionPhase::Started)
+        {
+            _input.LoadActionMap("Menu"); // e.g. a pause button opening a menu
+        }
+    };
+
+    _input.Update();
+
+    ASSERT_NE(_input.GetCurActionMap(), nullptr);
+    EXPECT_EQ(_input.GetCurActionMap()->name, "Menu");
+    // Whichever order the loop reached them in, nothing is left active in the map that was left
+    EXPECT_EQ((*gameplay)["Pause"].GetPhase(), ActionPhase::Cancelled);
+    EXPECT_EQ((*gameplay)["Fire"].GetPhase(), ActionPhase::Cancelled);
+    EXPECT_FALSE((*gameplay)["Fire"].IsActive());
+    EXPECT_EQ(pauseCalls, 2) << "Started, then one cancel";
+
+    _input.Update();
+    EXPECT_EQ(pauseCalls, 2) << "the map left is no longer updated";
+}
+
 // ============================================================================
 // Keyboard and mouse bindings without a window
 // ============================================================================
