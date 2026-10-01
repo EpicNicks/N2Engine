@@ -31,7 +31,7 @@ namespace N2Engine::Text
             }
         } g_fontLoaderRegistrar;
 
-        std::optional<std::vector<std::byte>> ReadFile(const std::filesystem::path &path)
+        std::optional<std::vector<std::byte>> ReadFontFile(const std::filesystem::path &path)
         {
             std::ifstream file(path, std::ios::binary | std::ios::ate);
             if (!file.is_open())
@@ -173,7 +173,7 @@ namespace N2Engine::Text
 
     bool Font::Load(const std::filesystem::path &path)
     {
-        const auto data = ReadFile(path);
+        const auto data = ReadFontFile(path);
         if (!data)
         {
             Logger::Error(std::format("Cannot read font file {}", path.string()));
