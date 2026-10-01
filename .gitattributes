@@ -25,6 +25,15 @@
 *.exe  binary
 *.pdb  binary
 *.zip  binary
+*.bmp  binary
+*.pdf  binary
+*.spv  binary
+*.so   binary
+*.a    binary
+*.dylib binary
+*.glb  binary
+*.fbx  binary
+*.ktx  binary
 
 # Vendored third-party code: kept exactly as upstream ships it
 external/** -text
