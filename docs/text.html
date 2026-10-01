@@ -77,7 +77,7 @@
 </ol>
 </div>
 
-<h2 id="module">The text module <span class="badge">Text P1a</span></h2>
+<h2 id="module">The text module <span class="badge">PR #45</span></h2>
 <p><code>text/</code> is its own static library, like <code>math/</code>. It depends only on <code>math</code> and the vendored <code>external/stb_truetype</code>, never on the engine, the renderer, GLFW or nlohmann, so <code>text_tests</code> runs without any of them. The engine links it publicly. Its public headers are under <code>text/include/text/</code>, and none of them mention a font library's types.</p>
 <div class="table-wrap">
 <table>
@@ -174,7 +174,7 @@
 <p>Layout turns each paragraph into <code>ShapedGlyph</code>s (glyph id, codepoint, cluster, advance and offsets in ems) through an <code>IShaper</code>, then wraps and positions those. The default <code>BasicShaper</code> does no shaping: one glyph per codepoint plus pair kerning. There are no ligatures, combining marks or bidi. <code>LayoutOptions::shaper</code> can point at another implementation, which is where HarfBuzz would plug in without changing callers.</p>
 <p class="src">Source: <code>text/include/text/Shaper.hpp</code>; tests: <code>Backends/TextLayoutTest.ACustomShaperReplacesTheBasicOne</code></p>
 
-<h2 id="font-asset">The Font asset <span class="badge">Text P1a</span></h2>
+<h2 id="font-asset">The Font asset <span class="badge">PR #45</span></h2>
 <p><code>N2Engine::Text::Font</code> (<code>engine/include/engine/text/Font.hpp</code>) is a <code>Base::Asset</code> with resource type <code>"Font"</code>. It owns an <code>SdfFont</code> built with the default backend and holds no GPU objects, so it loads headless; renderers will create their own textures from its atlas.</p>
 <ul>
 <li><code>ResourceLoader::Initialize</code> calls <code>Font::RegisterLoader()</code>, which registers the loader for <code>.ttf</code> and <code>.otf</code> with <code>IO::Resources</code> (and so <code>ResourceLoader</code>). It runs once per process; later calls do nothing. Registering from <code>Initialize</code> matters because the static registrar in <code>Font.cpp</code> only runs if the linker keeps that file, and a program that never names <code>Font</code> wouldn't. A program that loads fonts through <code>Resources</code> without ever initializing <code>ResourceLoader</code> should call <code>Font::RegisterLoader()</code> itself. New metadata for those extensions gets <code>resourceType: "Font"</code>.</li>

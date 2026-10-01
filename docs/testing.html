@@ -83,7 +83,7 @@
 <thead><tr><th>Directory</th><th>Executable / CTest name</th><th>Links</th><th>Notes</th></tr></thead>
 <tbody>
 <tr><td><code>tests/math/</code></td><td><code>math_tests</code></td><td><code>math</code></td><td>No engine dependency.</td></tr>
-<tr><td><code>tests/text/</code> <span class="badge">Text P1a</span></td><td><code>text_tests</code></td><td><code>text</code></td><td>No engine or renderer dependency. Font tests are parameterised over every font backend in the build.</td></tr>
+<tr><td><code>tests/text/</code> <span class="badge">PR #45</span></td><td><code>text_tests</code></td><td><code>text</code></td><td>No engine or renderer dependency. Font tests are parameterised over every font backend in the build.</td></tr>
 <tr><td><code>tests/engine/</code></td><td><code>engine_tests</code></td><td><code>engine</code>, <code>renderer</code>, <code>math</code></td><td>Defines <code>N2_LUA_PROJECT_DIR</code> (the <code>lua_project</code> source folder) so <code>LuaSceneTests</code> can build <code>lua_project/assets/scene.lua</code> headless.</td></tr>
 <tr><td><code>tests/renderer/</code></td><td><code>renderer_tests</code></td><td><code>renderer</code>, <code>engine</code>, <code>math</code></td><td>Only a placeholder source file; the executable contains no tests.</td></tr>
 <tr><td><code>tests/editor-server/</code></td><td><code>editor_server_tests</code></td><td><code>N2EditorServer</code></td><td>Protocol encoding, bounds-checked reads, the main-thread command queue and command handlers. On Windows, <code>EditorServerSocketTest</code> also opens real loopback sockets <span class="badge">PR #33</span>.</td></tr>
@@ -130,11 +130,11 @@
 <tr><td><code>tests/engine/scripting/LuaPrefabRefTests.cpp</code> <span class="badge">PR #39</span></td><td><code>LuaPrefabRefTest</code> (Lua <code>$ref</code> fields in prefab instances)</td></tr>
 <tr><td><code>tests/engine/serialization/ComponentRoundTripTests.cpp</code> <span class="badge">PR #34</span></td><td><code>ComponentRoundTripTest</code> (built-in components survive a scene round trip; unknown types warn)</td></tr>
 <tr><td><code>tests/engine/serialization/SerializationRobustnessTests.cpp</code></td><td><code>SerializationReferencesTest</code>, <code>SceneLoadingTest</code>, <code>ResourceLoaderTest</code>, <code>ResourcePathTest</code>, <code>ResourcesTest</code>, <code>AudioAssetReferenceTest</code></td></tr>
-<tr><td><code>tests/engine/text/FontAssetTests.cpp</code> <span class="badge">Text P1a</span></td><td><code>FontSettingsTest</code>, <code>DefaultFontAssetTest</code>, <code>FontAssetTest</code> (fonts in a temp project, settings from <code>.meta</code>)</td></tr>
-<tr><td><code>tests/text/Utf8Tests.cpp</code> <span class="badge">Text P1a</span></td><td><code>Utf8DecodeTest</code></td></tr>
-<tr><td><code>tests/text/FontBackendTests.cpp</code> <span class="badge">Text P1a</span></td><td><code>FontBackendRegistryTest</code>, <code>Backends/FontBackendTest</code> (one instance per font backend)</td></tr>
-<tr><td><code>tests/text/FontAtlasTests.cpp</code> <span class="badge">Text P1a</span></td><td><code>AtlasCharsetTest</code>, <code>Backends/FontAtlasTest</code></td></tr>
-<tr><td><code>tests/text/TextLayoutTests.cpp</code> <span class="badge">Text P1a</span></td><td><code>Backends/TextLayoutTest</code></td></tr>
+<tr><td><code>tests/engine/text/FontAssetTests.cpp</code> <span class="badge">PR #45</span></td><td><code>FontSettingsTest</code>, <code>DefaultFontAssetTest</code>, <code>FontAssetTest</code> (fonts in a temp project, settings from <code>.meta</code>)</td></tr>
+<tr><td><code>tests/text/Utf8Tests.cpp</code> <span class="badge">PR #45</span></td><td><code>Utf8DecodeTest</code></td></tr>
+<tr><td><code>tests/text/FontBackendTests.cpp</code> <span class="badge">PR #45</span></td><td><code>FontBackendRegistryTest</code>, <code>Backends/FontBackendTest</code> (one instance per font backend)</td></tr>
+<tr><td><code>tests/text/FontAtlasTests.cpp</code> <span class="badge">PR #45</span></td><td><code>AtlasCharsetTest</code>, <code>Backends/FontAtlasTest</code></td></tr>
+<tr><td><code>tests/text/TextLayoutTests.cpp</code> <span class="badge">PR #45</span></td><td><code>Backends/TextLayoutTest</code></td></tr>
 <tr><td><code>tests/math/math_types/FunctionsTests.cpp</code> <span class="badge">PR #34</span></td><td><code>FunctionsTest</code></td></tr>
 <tr><td><code>tests/math/math_types/QuaternionTests.cpp</code></td><td><code>QuaternionTest</code></td></tr>
 <tr><td><code>tests/math/math_types/SimdDispatchTests.cpp</code> <span class="badge">PR #27</span></td><td><code>SimdLevels/SimdDispatchTest</code> (each case compares SSE2, SSE4.1 and AVX against scalar; <code>Vector4</code> cases since <span class="badge">PR #30</span>); <code>Vector2BatchTest</code> <span class="badge">PR #39</span> (Vector2 has no dispatch, so it compares the batch against <code>Normalized</code>)</td></tr>
