@@ -100,6 +100,45 @@ TEST_F(LuaTest, OpensOnlySafeStandardLibraries)
     // io and os aren't opened, so scripts can't touch the filesystem or run processes
     EXPECT_EQ(Eval<std::string>("type(io)"), "nil");
     EXPECT_EQ(Eval<std::string>("type(os)"), "nil");
+
+    // Nor package (loadlib, the C searchers, searchpath); require is the engine's own
+    EXPECT_EQ(Eval<std::string>("type(package)"), "nil");
+    EXPECT_EQ(Eval<std::string>("type(require)"), "function");
+
+    // Base is opened minus what reads files
+    EXPECT_EQ(Eval<std::string>("type(dofile)"), "nil");
+    EXPECT_EQ(Eval<std::string>("type(loadfile)"), "nil");
+
+    // load still takes source text, with or without an environment
+    EXPECT_EQ(Eval<int>("load('return 1 + 2')()"), 3);
+    EXPECT_EQ(Eval<std::string>("load('return type(math)')()"), "table") << "omitted env keeps the globals";
+    EXPECT_EQ(Eval<int>("load('return x', 'withEnv', 't', { x = 7 })()"), 7);
+
+    // but never a binary chunk, whatever mode is asked for
+    EXPECT_TRUE(Eval<bool>("load(string.dump(function() return 1 end)) == nil"));
+    EXPECT_TRUE(Eval<bool>("load(string.dump(function() return 1 end), 'bin', 'b') == nil"));
+    // and mode "b" still refuses text, as natively
+    EXPECT_TRUE(Eval<bool>("load('return 1', 'textAsBinary', 'b') == nil"));
+}
+
+TEST_F(LuaTest, EngineLoadingRejectsBinaryChunks)
+{
+    // What a precompiled .lua asset would contain
+    const std::string bytecode = Eval<std::string>("string.dump(function() return 42 end)");
+    ASSERT_FALSE(bytecode.empty());
+    ASSERT_EQ(bytecode[0], '\x1b') << "not a binary chunk";
+
+    // Valid bytecode: it runs when binary chunks are allowed (sol's default)...
+    const sol::protected_function_result allowed = Lua().safe_script(bytecode, sol::script_pass_on_error);
+    ASSERT_TRUE(allowed.valid());
+
+    // ...but not through RunSource, which RunFile, require and LuaComponent use
+    const sol::protected_function_result result = LuaRuntime::Instance().RunSource(bytecode, "bytecode.lua");
+    ASSERT_FALSE(result.valid());
+    const sol::error err = result;
+    EXPECT_NE(std::string(err.what()).find("binary"), std::string::npos) << err.what();
+
+    EXPECT_TRUE(LuaRuntime::Instance().RunSource("return 1", "text.lua").valid());
 }
 
 // ============================================================================

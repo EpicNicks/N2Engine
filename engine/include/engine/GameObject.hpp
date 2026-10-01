@@ -80,13 +80,22 @@ namespace N2Engine
         void NotifyIfActiveChanged(bool wasActiveInHierarchy) const;
         void SetScene(Scene *scene);
         void Purge();
+        /// Only unlinks the child from this object; the caller decides where it goes (a new parent, the
+        /// scene's roots, or nowhere because it's being destroyed)
+        void DetachChild(Ptr child, bool keepWorldPosition);
+        /// Raw pointers to the current components, for running callbacks that may add or remove some
+        [[nodiscard]] std::vector<Component *> SnapshotComponents() const;
+        /// Whether the component is still one of this object's (a callback may have removed and freed it).
+        /// A linear search, so snapshot loops are O(n^2) (fine for a handful of components). By address: a
+        /// component added by a callback at a freed one's address would pass (a lifetime token would not).
+        [[nodiscard]] bool OwnsComponent(const Component *component) const;
 
     public:
         // Construction
         static Ptr Create(const std::string &name = "GameObject");
         GameObject();
         explicit GameObject(std::string name);
-        /// Detaches from its scene however it was dropped (e.g. RemoveChild then released), so the scene
+        /// Detaches from its scene if it's freed while still in one, so the scene
         /// and its coroutine scheduler never keep pointers to a freed object
         ~GameObject() override;
 
@@ -104,8 +113,10 @@ namespace N2Engine
         Ptr GetParent() const { return _parent.lock(); }
         void SetParent(Ptr parent, bool keepWorldPosition = true);
         void AddChild(Ptr child, bool keepWorldPosition = true);
-        /// Detaches the child but leaves it in the scene without making it a root (destroy paths rely on
-        /// this); use child->SetParent(nullptr) to make it a root object
+        /// Detaches the child, which becomes a root of its scene (the same as child->SetParent(nullptr)).
+        /// A child that's being destroyed is only unlinked: it leaves the scene with its destroyed hierarchy.
+        /// Note: this edits the scene's root list, so it isn't supported inside a TraverseAll/TraverseUntil
+        /// callback (nor is AddChild of a root).
         void RemoveChild(Ptr child, bool keepWorldPosition = true);
 
         const std::vector<Ptr>& GetChildren() const { return _children; }

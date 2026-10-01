@@ -77,7 +77,7 @@ namespace N2Engine::Scripting
 
         auto &lua = LuaRuntime::Instance().GetState();
 
-        auto result = lua.safe_script(_script->GetSourceCode(), sol::script_pass_on_error);
+        auto result = LuaRuntime::Instance().RunSource(_script->GetSourceCode(), _scriptPath.ToString());
 
         if (!result.valid())
         {

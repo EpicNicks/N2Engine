@@ -165,20 +165,24 @@ TEST_F(CoroutineTest, TickingTheSceneFromACoroutineIsIgnored)
     EXPECT_EQ(other->steps, (std::vector<int>{1, 2, 3}));
 }
 
-TEST_F(CoroutineTest, ReleasingARemovedChildStopsItsCoroutines)
+TEST_F(CoroutineTest, RemovedChildKeepsItsCoroutinesUntilItLeavesTheScene)
 {
     auto child = GameObject::Create("Child");
     _go->AddChild(child, false);
     ASSERT_NE(child->StartCoroutine(NextFrameTwice(_trace)), nullptr);
     Frame();
 
-    // RemoveChild doesn't take it out of the scene; dropping it used to leave the scheduler keyed on
-    // freed memory, which the next update read
+    // RemoveChild makes it a root of the same scene, so its coroutine carries on
     _go->RemoveChild(child, false);
+    Frame();
+    ASSERT_EQ(_trace->steps, (std::vector<int>{1, 2}));
+
+    // Leaving the scene stops it; then dropping the object must leave the scheduler nothing to read
+    ASSERT_TRUE(_scene->RemoveRootGameObject(child));
     child.reset();
     Frames(3);
 
-    EXPECT_EQ(_trace->steps, (std::vector<int>{1}));
+    EXPECT_EQ(_trace->steps, (std::vector<int>{1, 2}));
 }
 
 TEST_F(CoroutineTest, StopCoroutineStopsIt)

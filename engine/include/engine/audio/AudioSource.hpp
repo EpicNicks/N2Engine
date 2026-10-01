@@ -45,6 +45,10 @@ namespace N2Engine::Audio
         void SetMixerGroup(const std::string& group);
         [[nodiscard]] const std::string& GetMixerGroup() const { return _mixerGroup; }
 
+        /// Whether it starts playing its clip when enabled
+        void SetPlayOnAwake(bool playOnAwake) { _playOnAwake = playOnAwake; }
+        [[nodiscard]] bool GetPlayOnAwake() const { return _playOnAwake; }
+
         /// Re-applies volume and pitch with the mixer group's current settings (AudioSystem calls this
         /// when a group changes, so it reaches sounds that are already playing)
         void ApplyMixing();
@@ -58,6 +62,9 @@ namespace N2Engine::Audio
         void SetMinDistance(float distance);
         void SetMaxDistance(float distance);
         void SetRolloffFactor(float factor);
+        [[nodiscard]] float GetMinDistance() const { return _minDistance; }
+        [[nodiscard]] float GetMaxDistance() const { return _maxDistance; }
+        [[nodiscard]] float GetRolloffFactor() const { return _rolloffFactor; }
 
         // Lifecycle
         void OnEnable() override;

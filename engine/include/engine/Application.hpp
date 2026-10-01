@@ -21,6 +21,7 @@ namespace N2Engine
         std::unique_ptr<Physics::IPhysicsBackend> _3DphysicsBackend = nullptr;
         EngineHealth _health;
         bool _quitRequested = false;
+        bool _initialized = false; // from Init until Shutdown
 
     private:
         Application() = default;

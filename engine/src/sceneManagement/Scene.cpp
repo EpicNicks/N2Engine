@@ -95,6 +95,12 @@ void Scene::AddRootGameObject(std::shared_ptr<GameObject> gameObject)
         return;
     }
 
+    // Moving a root here from another scene: it used to stay in that scene's roots as well
+    if (Scene *oldScene = gameObject->GetScene(); oldScene && oldScene != this)
+    {
+        std::erase(oldScene->_rootGameObjects, gameObject);
+    }
+
     auto it = std::ranges::find(_rootGameObjects, gameObject);
     if (it == _rootGameObjects.end())
     {
@@ -134,6 +140,12 @@ bool Scene::DestroyGameObject(std::shared_ptr<GameObject> gameObject)
 {
     if (!gameObject)
     {
+        return false;
+    }
+    // Another scene's object (or none's) would be purged from the wrong root list and scheduler
+    if (gameObject->GetScene() != this)
+    {
+        Logger::Warn(std::format("DestroyGameObject: '{}' isn't in scene '{}'", gameObject->GetName(), sceneName));
         return false;
     }
 
@@ -319,6 +331,8 @@ void Scene::DetachComponent(Component *component)
         std::erase(_components, component);
     }
     std::erase(_attachQueue, component);
+    // Tells ProcessAttachQueue that OnAttach removed it (or moved its object away)
+    std::ranges::replace(_attaching, component, static_cast<Component *>(nullptr));
     std::erase_if(_sceneLights, [component](const Rendering::Light *light)
     {
         return static_cast<const Component *>(light) == component;
@@ -333,7 +347,21 @@ void Scene::ProcessAttachQueue()
     {
         Component *c = _attachQueue.front();
         _attachQueue.erase(_attachQueue.begin());
+
+        // OnAttach can remove (free) this component or move its object to another scene; either way
+        // DetachComponent nulls its _attaching entry, and c must not be registered or touched again.
+        // A stack, so an OnAttach that processes the queue again doesn't lose track of c.
+        _attaching.push_back(c);
+        struct AttachingScope
+        {
+            std::vector<Component *> &attaching;
+            ~AttachingScope() { attaching.pop_back(); }
+        } scope{_attaching};
         c->OnAttach();
+        if (_attaching.back() != c)
+        {
+            continue;
+        }
 
         // Registration is idempotent: a component re-queued after re-parenting isn't updated twice
         if (auto *light = dynamic_cast<Rendering::Light*>(c))
@@ -410,6 +438,15 @@ void Scene::Clear()
     {
         root->SetScene(nullptr); // detaches every component in the hierarchy
     }
+    // And every torn-down object, under a root or not: one an OnDestroy above unlinked from its parent
+    // would otherwise keep pointing at this scene after it's freed. (One it moved to another scene stays.)
+    for (const auto &obj : allObjects)
+    {
+        if (obj->GetScene() == this)
+        {
+            obj->SetScene(nullptr);
+        }
+    }
     _rootGameObjects.clear();
     _components.clear();
     _attachQueue.clear();
@@ -427,6 +464,12 @@ void Scene::ProcessDestroyed()
         _markedForDestructionQueue.pop();
 
         if (!rootObject || rootObject->_isMarkedForDestruction)
+        {
+            continue;
+        }
+        // Moved to another scene since it was queued: purging it here would detach its components from
+        // that scene while it stayed one of its roots
+        if (rootObject->GetScene() != this)
         {
             continue;
         }
@@ -469,10 +512,12 @@ void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject)
 {
     // Objects are already marked for destruction here, so ask whether they were active before that
     const bool wasActive = gameObject->IsActiveInHierarchyIgnoringDestruction();
-    for (auto &component : gameObject->GetAllComponents())
+    // A snapshot: the callbacks can add or remove this object's components, which invalidated the live
+    // iteration; one removed (freed) before its turn is skipped
+    for (Component *component : gameObject->SnapshotComponents())
     {
         // Runs OnDisable/OnDestroy exactly once, whichever teardown path gets here first
-        if (component)
+        if (gameObject->OwnsComponent(component))
         {
             component->RunDestroyCallbacks(wasActive);
         }

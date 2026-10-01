@@ -4,11 +4,18 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+#include <ranges>
+#include <vector>
 
 namespace N2Engine
 {
     class Component;
     class GameObject;
+    class ComponentRegistry;
+
+    /// Registers the engine's own component types (BuiltinComponents.cpp). The registry's constructor calls
+    /// it, so using the registry links them in.
+    void RegisterBuiltinComponents(ComponentRegistry &registry);
 
     /**
      * Central registry for component types
@@ -22,7 +29,7 @@ namespace N2Engine
     private:
         std::unordered_map<std::string, CreateFunc> _creators;
 
-        ComponentRegistry() = default;
+        ComponentRegistry() { RegisterBuiltinComponents(*this); }
 
     public:
         /**

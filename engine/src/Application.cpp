@@ -65,6 +65,14 @@ EngineHealth Application::Init()
 
 EngineHealth Application::Init(const Config::ApplicationOptions &options)
 {
+    // A second Init re-created the camera and physics backend under live scenes and opened another window
+    if (_initialized)
+    {
+        Logger::Warn("Application::Init called again; ignored (call Shutdown first to re-initialize)");
+        return _health;
+    }
+    _initialized = true;
+
 #ifdef N2ENGINE_DEBUG
     Logger::InitializeDebugConsoleHelper();
 #endif
@@ -235,6 +243,12 @@ void Application::Run()
             curScene.AdvanceCoroutines();
             curScene.LateUpdate();
         }
+        else
+        {
+            // Nothing to step. It used to keep accumulating, so the first scene to load ran a burst of
+            // catch-up fixed steps.
+            fixedTimestepAccumulator = 0.0;
+        }
         // After LateUpdate, where listeners and sources push their positions
         Audio::AudioSystem::Instance().Update();
         Render();
@@ -265,6 +279,7 @@ void Application::Shutdown()
     Audio::AudioSystem::Instance().Shutdown();
     _3DphysicsBackend.reset(); // ~PhysXBackend releases the PhysX SDK
     _window.Shutdown();
+    _initialized = false;
 }
 
 void Application::Render()
