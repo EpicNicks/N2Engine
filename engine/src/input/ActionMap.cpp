@@ -258,7 +258,27 @@ void ActionMap::Update()
     }
     _wasDisabled = false;
 
-    ForEachAction([](InputAction &action) { action.Update(); });
+    if (!_updating)
+    {
+        _stopUpdating = false; // a request from an earlier update doesn't carry over
+    }
+    ForEachAction([this](InputAction &action)
+    {
+        // Once a callback switched the InputSystem away from this map, the rest of the loop would only
+        // start actions that are cancelled again when it ends
+        if (!_stopUpdating)
+        {
+            action.Update();
+        }
+    });
+}
+
+void ActionMap::StopUpdating()
+{
+    if (_updating)
+    {
+        _stopUpdating = true;
+    }
 }
 
 void ActionMap::CancelActiveActions()

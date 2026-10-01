@@ -143,6 +143,8 @@ namespace N2Engine::Input
         std::vector<std::unique_ptr<InputAction>> _retiredActions;
         // Whether the last Update saw the map disabled (its active actions were cancelled then)
         bool _wasDisabled = false;
+        // Set by StopUpdating: the running Update polls no further actions
+        bool _stopUpdating = false;
         // Expires when this map is freed (replaced or reloaded); script handles check it
         Base::LifetimeToken _lifetime;
 
@@ -166,6 +168,9 @@ namespace N2Engine::Input
         void Update();
         /// CancelIfActive on every action of the map
         void CancelActiveActions();
+        /// Called while this map's Update is running (InputSystem does when a callback switches to another
+        /// map): the actions the loop has not reached yet are not polled this time. No effect otherwise.
+        void StopUpdating();
         /// Expires when this map is freed (for references that must not dangle, e.g. from Lua)
         [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime.Get(); }
 

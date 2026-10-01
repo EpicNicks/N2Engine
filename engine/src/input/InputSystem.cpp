@@ -101,8 +101,13 @@ ActionMap* InputSystem::LoadActionMap(const std::string &name)
         // Leaving a map releases what was held in it: it isn't updated any more, so its actions would
         // otherwise stay Started/Performed with no callback until it was loaded again. Its callbacks may
         // replace maps, which are then retired until this pass ends rather than freed under it.
-        // Left from one of its own callbacks: Update cancels it once its loop is done.
-        if (previous && previous != _mapBeingUpdated)
+        // Left from one of its own callbacks: its loop polls no further actions, and Update cancels what
+        // is still active once the loop is done.
+        if (previous && previous == _mapBeingUpdated)
+        {
+            previous->StopUpdating();
+        }
+        else if (previous)
         {
             UpdatingScope scope{*this};
             previous->CancelActiveActions();

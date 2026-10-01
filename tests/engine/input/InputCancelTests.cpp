@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <math/Vector2.hpp>
 #include <nlohmann/json.hpp>
@@ -229,44 +230,71 @@ TEST_F(InputMapSwitchCancelTest, CancelCallbackCanReplaceTheMapItLeaves)
 
 TEST_F(InputMapSwitchCancelTest, SwitchingFromACallbackCancelsWhenTheLoopEnds)
 {
+    // Every action is held, and whichever one the loop reaches first switches to the menu, so the test does
+    // not depend on the map's (unordered) iteration order
     bool held = true;
-    _input.MakeActionMap("Gameplay", [&held](ActionMap *map)
+    const std::vector<std::string> names = {"Pause", "Fire", "Jump", "Crouch", "Interact", "Reload"};
+    _input.MakeActionMap("Gameplay", [&](ActionMap *map)
     {
-        map->MakeInputAction("Pause", [&held](InputAction *action) { action->AddBinding(std::make_unique<HeldBinding>(&held)); });
-        map->MakeInputAction("Fire", [&held](InputAction *action) { action->AddBinding(std::make_unique<HeldBinding>(&held)); });
+        for (const auto &name : names)
+        {
+            map->MakeInputAction(name, [&held](InputAction *action) { action->AddBinding(std::make_unique<HeldBinding>(&held)); });
+        }
     });
     _input.AddActionMap(std::make_unique<ActionMap>("Menu"));
     _input.LoadActionMap("Gameplay");
     ActionMap *gameplay = _input.GetActionMap("Gameplay");
 
-    int pauseCalls = 0;
-    (*gameplay)["Pause"].GetOnStateChanged() += [&](InputAction &action)
+    int started = 0;
+    int cancelled = 0;
+    int afterSwitch = 0;
+    bool switched = false;
+    for (const auto &name : names)
     {
-        ++pauseCalls;
-        if (action.GetPhase() == ActionPhase::Started)
+        (*gameplay)[name].GetOnStateChanged() += [&](InputAction &action)
         {
-            _input.LoadActionMap("Menu"); // e.g. a pause button opening a menu
-        }
-    };
+            if (action.GetPhase() == ActionPhase::Started)
+            {
+                ++started;
+                if (switched)
+                {
+                    ++afterSwitch;
+                }
+                switched = true;
+                _input.LoadActionMap("Menu"); // e.g. a pause button opening a menu
+            }
+            else if (action.GetPhase() == ActionPhase::Cancelled)
+            {
+                ++cancelled;
+            }
+        };
+    }
 
     _input.Update();
 
     ASSERT_NE(_input.GetCurActionMap(), nullptr);
     EXPECT_EQ(_input.GetCurActionMap()->name, "Menu");
-    // Whichever order the loop reached them in, nothing is left active in the map that was left
-    EXPECT_EQ((*gameplay)["Pause"].GetPhase(), ActionPhase::Cancelled);
-    EXPECT_EQ((*gameplay)["Fire"].GetPhase(), ActionPhase::Cancelled);
-    EXPECT_FALSE((*gameplay)["Fire"].IsActive());
-    EXPECT_EQ(pauseCalls, 2) << "Started, then one cancel";
+    EXPECT_EQ(started, 1) << "the loop went on polling the map it had left";
+    EXPECT_EQ(afterSwitch, 0) << "an action started after the switch";
+    EXPECT_EQ(cancelled, 1) << "the one started action is cancelled once, when the loop ends";
+    for (const auto &name : names)
+    {
+        EXPECT_FALSE((*gameplay)[name].IsActive()) << name << " was left active in the map that was left";
+    }
 
     _input.Update();
-    EXPECT_EQ(pauseCalls, 2) << "the map left is no longer updated";
+    EXPECT_EQ(started, 1) << "the map left is no longer updated";
+    EXPECT_EQ(cancelled, 1);
 }
 
 // ============================================================================
 // Keyboard and mouse bindings without a window
 // ============================================================================
 
+// Note: GLFW is not initialized in the test binary, and an uninitialized GLFW returns early from
+// glfwGetKey/glfwGetMouseButton (in Release, where its null-window assert is compiled out), so these pass
+// with or without the guard there. They pin the result; the guard is what keeps a null window from reaching
+// GLFW once it is initialized. There is no seam to observe "no GLFW call" without GLFW itself.
 TEST(NullWindowBindingTest, KeyboardBindingReadsReleased)
 {
     KeyboardButtonBinding binding(static_cast<GLFWwindow *>(nullptr), Key::Space);
