@@ -182,47 +182,42 @@ namespace N2Engine::Math
 
     void Vector2::NormalizeBatch(Vector2 *vectors, size_t count)
     {
+        // Matches Normalized() (to rounding): near-zero vectors become Zero, NaN stays NaN
 #ifdef __AVX__
         size_t i = 0;
-        const __m256 epsilon_sq = _mm256_set1_ps(Constants::EPSILON * Constants::EPSILON);
+        const __m256 epsilon = _mm256_set1_ps(Constants::EPSILON);
 
-        // Process 4 normalizations at once
+        // Process 4 normalizations at once: x0 y0 x1 y1 | x2 y2 x3 y3
         for (; i + 3 < count; i += 4)
         {
-            __m256 v = _mm256_loadu_ps(reinterpret_cast<const float*>(&vectors[i]));
+            const __m256 v = _mm256_loadu_ps(reinterpret_cast<const float*>(&vectors[i]));
 
-            // Compute length squared
-            __m256 squared = _mm256_mul_ps(v, v);
-            __m256 length_sq = _mm256_hadd_ps(squared, squared);
+            // Each vector's squared length in both of its lanes: add every lane to its pair neighbour
+            // (x0² y0² x1² y1² + y0² x0² y1² x1²), within each 128-bit half, so no cross-half broadcast
+            const __m256 squared = _mm256_mul_ps(v, v);
+            const __m256 swapped = _mm256_permute_ps(squared, _MM_SHUFFLE(2, 3, 0, 1));
+            const __m256 length_sq = _mm256_add_ps(squared, swapped);
 
-            // Check for zero-length vectors (compare with epsilon)
-            __m256 is_valid = _mm256_cmp_ps(length_sq, epsilon_sq, _CMP_GT_OQ);
+            // A real sqrt and divide: _mm256_rsqrt_ps is only accurate to about 12 bits
+            const __m256 length = _mm256_sqrt_ps(length_sq);
+            const __m256 normalized = _mm256_div_ps(v, length);
 
-            // Compute reciprocal square root (inverse length)
-            __m256 inv_length = _mm256_rsqrt_ps(length_sq);
-
-            // Broadcast inv_length to match vector layout
-            // We need to duplicate each pair: [l0, l0, l1, l1, l2, l2, l3, l3]
-            __m256 inv_length_broadcast = _mm256_permute_ps(inv_length, 0b10100000);
-            inv_length_broadcast = _mm256_permute2f128_ps(inv_length_broadcast, inv_length_broadcast, 0b00000000);
-
-            // Multiply vector by inverse length
-            __m256 normalized = _mm256_mul_ps(v, inv_length_broadcast);
-
-            // Blend with zero for invalid vectors
-            __m256 result_vec = _mm256_and_ps(normalized, is_valid);
+            // Ordered compare: false for NaN, so a NaN vector stays NaN (as in Normalized) instead of
+            // becoming Zero; a near-zero one becomes Zero rather than NaN or a huge value
+            const __m256 too_short = _mm256_cmp_ps(length, epsilon, _CMP_LT_OQ);
+            const __m256 result_vec = _mm256_andnot_ps(too_short, normalized);
 
             _mm256_storeu_ps(reinterpret_cast<float*>(&vectors[i]), result_vec);
         }
 
         for (; i < count; ++i)
         {
-            vectors[i].Normalize();
+            vectors[i] = vectors[i].Normalized();
         }
 #else
         for (size_t i = 0; i < count; ++i)
         {
-            vectors[i].Normalize();
+            vectors[i] = vectors[i].Normalized();
         }
 #endif
     }
