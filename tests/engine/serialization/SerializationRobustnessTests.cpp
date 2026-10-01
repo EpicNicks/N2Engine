@@ -214,6 +214,32 @@ TEST(ResourcePathTest, EquivalentSpellingsAreOnePath)
     EXPECT_EQ(IO::ResourcePath("res://../outside.txt").GetPath(), "../outside.txt"); // still rejected by Resolve
 }
 
+TEST(ResourcePathTest, AbsolutePathsKeepTheirRoot)
+{
+    // A POSIX path is only absolute on POSIX, so the type is given explicitly; the normalisation is the same
+    const IO::ResourcePath posix(IO::PathType::Absolute, "/home/user/../user/game//save.json");
+    EXPECT_EQ(posix.GetPath(), "/home/user/game/save.json") << "the leading '/' was stripped, making it relative";
+    EXPECT_EQ(posix.ToString(), "/home/user/game/save.json");
+    EXPECT_EQ(posix.GetParent().GetPath(), "/home/user/game");
+    EXPECT_EQ(IO::ResourcePath(IO::PathType::Absolute, "/home/user/").GetPath(), "/home/user");
+    EXPECT_EQ(IO::ResourcePath(IO::PathType::Absolute, "/").GetPath(), "/") << "a bare root lost its separator";
+
+#ifdef _WIN32
+    // A UNC share keeps both leading separators
+    EXPECT_EQ(IO::ResourcePath(IO::PathType::Absolute, "\\\\server\\share\\file.txt").GetPath(), "//server/share/file.txt");
+#endif
+
+    // res:// and user:// paths still drop leading separators: they are relative to their root
+    EXPECT_EQ(IO::ResourcePath("res:///scripts/thing.lua").GetPath(), "scripts/thing.lua");
+    EXPECT_EQ(IO::ResourcePath("user:////save.json").GetPath(), "save.json");
+
+    // A path that is absolute on this platform goes through the string constructor unchanged in form
+    const std::string native = std::filesystem::absolute("save.json").generic_string();
+    const IO::ResourcePath fromString(native);
+    EXPECT_EQ(fromString.GetType(), IO::PathType::Absolute);
+    EXPECT_EQ(fromString.GetPath(), std::filesystem::path(native).lexically_normal().generic_string());
+}
+
 TEST(ResourcesTest, AssetRegisteredUnderTwoPathsIsEvicted)
 {
     auto asset = GameObject::Create("TwoPaths");
