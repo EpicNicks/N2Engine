@@ -88,6 +88,10 @@ protected:
 
             function Reader:OnDestroy()
                 teardown_destroy = Read(self)
+                -- The scene being unloaded is still usable too (nil when the reader isn't torn down by a switch)
+                if handle_scene ~= nil then
+                    teardown_scene_name = handle_scene.sceneName
+                end
                 teardown_go = self.gameObject
                 teardown_component = self.component
                 teardown_renderer = self.gameObject:GetComponent("SphereRenderer")
@@ -177,7 +181,8 @@ protected:
                                  "handle_pos", "handle_collision", "handle_trigger", "handle_self_go",
                                  "handle_self_component", "handle_parent", "handle_detached", "handle_plain",
                                  "handle_removed", "teardown_disable", "teardown_destroy", "teardown_go",
-                                 "teardown_component", "teardown_renderer", "collected_component", "collects_ran"})
+                                 "teardown_component", "teardown_renderer", "collected_component", "collects_ran",
+                                 "handle_scene", "teardown_scene_name"})
         {
             Lua()[name] = sol::lua_nil;
         }
@@ -546,4 +551,52 @@ TEST_F(LuaHandleTest, DestroyGameObjectIsFalseForAnAlreadyDestroyedObject)
     _scene->ProcessDestroyed(); // `go` keeps it alive, destroyed
 
     EXPECT_FALSE(Eval<bool>("SceneManager.GetCurrentScene():DestroyGameObject(handle_go)"));
+}
+
+TEST_F(LuaHandleTest, SceneHandleErrorsAfterSceneSwitch)
+{
+    Spawn("InOldScene");
+    Run("handle_scene = SceneManager.GetCurrentScene()");
+    ASSERT_TRUE(Eval<bool>("handle_scene:IsValid()"));
+    EXPECT_EQ(Eval<std::string>("handle_scene:FindGameObject('InOldScene'):GetName()"), "InOldScene");
+    EXPECT_TRUE(Eval<bool>("handle_scene == SceneManager.GetCurrentScene()"));
+
+    SceneManager::AddScene(Scene::Create("LuaHandle_SceneSwitchTarget"), true);
+    SceneManager::ProcessAnyPendingSceneChange(); // frees the old scene
+    _scene = nullptr;
+
+    EXPECT_FALSE(Eval<bool>("handle_scene:IsValid()"));
+    // These used to call into the freed Scene
+    std::string error = RunExpectingError("handle_scene:FindGameObject('InOldScene')");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed Scene")) << error;
+    error = RunExpectingError("return handle_scene.sceneName");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed Scene")) << error;
+    error = RunExpectingError("handle_scene:AddRootGameObject(GameObject.Create('Late'))");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed Scene")) << error;
+    error = RunExpectingError("handle_scene:GetRootGameObjects()");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed Scene")) << error;
+
+    // The current scene's handle works, and is a different scene
+    EXPECT_EQ(Eval<std::string>("SceneManager.GetCurrentScene().sceneName"), "LuaHandle_SceneSwitchTarget");
+    EXPECT_FALSE(Eval<bool>("handle_scene == SceneManager.GetCurrentScene()"));
+}
+
+TEST_F(LuaHandleTest, SceneHandleWorksDuringItsUnload)
+{
+    SpawnTeardownReader("UnloadedWithScene");
+    Run("handle_scene = SceneManager.GetCurrentScene()");
+
+    SceneManager::AddScene(Scene::Create("LuaHandle_SceneUnloadTarget"), true);
+    SceneManager::ProcessAnyPendingSceneChange();
+    _scene = nullptr;
+
+    // OnDestroy ran during the switch, while the old scene still existed
+    EXPECT_TRUE(Eval<bool>("teardown_scene_name == 'LuaHandle_SceneHandleWorksDuringItsUnload'"));
+    EXPECT_FALSE(Eval<bool>("handle_scene:IsValid()"));
+}
+
+TEST_F(LuaHandleTest, SceneNameCanBeSetThroughTheHandle)
+{
+    Run("SceneManager.GetCurrentScene().sceneName = 'Renamed'");
+    EXPECT_EQ(_scene->sceneName, "Renamed");
 }

@@ -1,5 +1,7 @@
 #include "engine/scripting/ScriptCallback.hpp"
 
+#include "engine/input/ActionMap.hpp"
+
 namespace N2Engine::Scripting
 {
     namespace
@@ -23,5 +25,10 @@ namespace N2Engine::Scripting
     std::shared_ptr<const bool> ScriptLifetimeScope::Current()
     {
         return t_currentLifetime;
+    }
+
+    InputActionRef Detail::ToLuaArg(Input::InputAction &action)
+    {
+        return InputActionRef(action);
     }
 }

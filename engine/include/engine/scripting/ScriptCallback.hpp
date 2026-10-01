@@ -55,6 +55,9 @@ namespace N2Engine::Scripting
         {
             return GameObjectRef(gameObject);
         }
+
+        // And InputActions (an action's event passes the action): it can be replaced or removed later
+        InputActionRef ToLuaArg(Input::InputAction &action);
     }
 
     /// Wraps a Lua function for storage in a C++ event. If a component script registered it, the

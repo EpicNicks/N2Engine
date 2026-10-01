@@ -8,6 +8,7 @@
 #include <functional>
 
 #include "engine/base/EventHandler.hpp"
+#include "engine/base/LifetimeToken.hpp"
 #include "engine/input/InputValue.hpp"
 #include "nlohmann/json.hpp"
 
@@ -62,6 +63,8 @@ namespace N2Engine::Input
         std::string _inputActionName;
         bool _disabled{false};
         bool _wasDisabledLastFrame{false};
+        // Expires when this action is freed (replaced, removed, or its map freed); script handles check it
+        Base::LifetimeToken _lifetime;
 
     public:
         explicit InputAction(std::string name);
@@ -83,6 +86,8 @@ namespace N2Engine::Input
         void SetDisabled(bool disabled);
 
         Base::EventHandler<InputAction&>& GetOnStateChanged();
+        /// Expires when this action is freed (for references that must not dangle, e.g. from Lua)
+        [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime.Get(); }
 
         // Public API for querying current state
         [[nodiscard]] ActionPhase GetPhase() const { return _currentPhase; }
@@ -125,6 +130,8 @@ namespace N2Engine::Input
         // Actions replaced or removed from a callback during Update are freed after it
         bool _updating = false;
         std::vector<std::unique_ptr<InputAction>> _retiredActions;
+        // Expires when this map is freed (replaced or reloaded); script handles check it
+        Base::LifetimeToken _lifetime;
 
     public:
         const std::string name;
@@ -135,6 +142,8 @@ namespace N2Engine::Input
         ActionMap& MakeInputAction(const std::string &actionName, const std::function<void(InputAction *)> &pAction);
         bool RemoveInputAction(const std::string &actionName);
         void Update();
+        /// Expires when this map is freed (for references that must not dangle, e.g. from Lua)
+        [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime.Get(); }
 
         InputAction& operator[](const std::string &mapName);
         const InputAction& operator[](const std::string &mapName) const;

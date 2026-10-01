@@ -15,6 +15,7 @@
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaComponent.hpp"
+#include "engine/scripting/LuaHandles.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
 
@@ -93,7 +94,7 @@ protected:
 
     void SetUp() override
     {
-        Lua()["lifetime_action"] = &_action;
+        Lua()["lifetime_action"] = InputActionRef(_action);
         Lua()["lifetime_hits"] = 0;
         Lua()["lifetime_events"] = Lua().create_table();
         Lua()["lifetime_self"] = sol::lua_nil;

@@ -664,7 +664,9 @@ function Color:ToHex() end
 -- a kept reference may have outlived its object. Two references to the same object compare equal with ==.
 -- A reference doesn't keep its object alive, except the one a script created it with (GameObject.Create)
 -- or detached it with (RemoveChild, RemoveRootGameObject), until it's added to a parent or scene again.
--- Other references to the same object stay weak.
+-- Other references to the same object stay weak. Don't keep that owning reference in the object's own script
+-- (use self.gameObject there): while the object is in no scene, it would keep itself alive forever.
+-- Scenes, ActionMaps and InputActions are references too, valid until the engine frees them (see each).
 
 ---@class Positionable
 Positionable = {}
@@ -862,6 +864,11 @@ function Component:SetActive(active) end
 ---@field sceneName string The name of this scene
 Scene = {}
 
+---False once this scene is unloaded (after another scene was loaded; it still works in the OnDestroy calls of
+---the unload); the other methods then raise an error
+---@return boolean
+function Scene:IsValid() end
+
 ---Find a GameObject by name
 ---@param name string
 ---@return GameObject|nil
@@ -897,7 +904,7 @@ function Scene:DestroyGameObject(gameObject) end
 ---@class SceneManager
 SceneManager = {}
 
----Get the current scene
+---Get the current scene. A kept reference stops working once another scene is loaded.
 ---@return Scene|nil nil when no scene is loaded
 function SceneManager.GetCurrentScene() end
 
@@ -1286,6 +1293,12 @@ function InputValue:GetVector2() end
 ---@class InputAction
 InputAction = {}
 
+---False once this action is freed: replaced or removed from its map, or its map replaced (e.g. by
+---Input.CreateActionMap with the same name). Replaced from inside an input callback, it's freed when that
+---frame's input update ends. The other methods then raise an error.
+---@return boolean
+function InputAction:IsValid() end
+
 ---Get the current phase
 ---@return ActionPhase
 function InputAction:GetPhase() end
@@ -1340,14 +1353,20 @@ function InputAction:Subscribe(callback) end
 ---@param id integer Subscription ID returned from Subscribe
 function InputAction:Unsubscribe(id) end
 
----Get the event handler for manual subscription
----@return InputActionEvent
+---Get the event for manual subscription: the action itself, which has the event's Subscribe/Unsubscribe
+---(the event lives on the action and goes when it's freed)
+---@return InputAction
 function InputAction:OnStateChanged() end
 
 ---@class ActionMap
 ---@field disabled boolean Whether this action map is disabled
 ---@field name string The name of this action map
 ActionMap = {}
+
+---False once this map is freed (replaced, e.g. by Input.CreateActionMap with its name; replaced from inside
+---an input callback, it's freed when that frame's input update ends). The other methods then raise an error.
+---@return boolean
+function ActionMap:IsValid() end
 
 ---Get an action by name
 ---@param actionName string
@@ -1374,7 +1393,7 @@ function Input.LoadActionMap(mapName) end
 ---  { type = "GamepadButton", button = "South" }, { type = "GamepadAxis", axis = "LeftTrigger" }, { type = "MouseButton", button = "Left" }
 ---@param mapName string
 ---@param actions table<string, table[]> e.g. { ["Quit"] = { { type = "KeyboardButton", key = "Escape" } } }
----@return ActionMap|nil nil without a window, or if the map is malformed
+---@return ActionMap|nil nil without a window, or if the map is malformed. References to a map it replaces stop working.
 function Input.CreateActionMap(mapName, actions) end
 
 -- ===== EVENTS =====
@@ -1546,7 +1565,7 @@ function Frustum:IsVisible(bbox) end
 ---@class Camera
 Camera = {}
 
----Get the main camera
+---Get the main camera (it lives as long as the application, so a kept reference stays valid)
 ---@return Camera
 function Camera.Main() end
 
