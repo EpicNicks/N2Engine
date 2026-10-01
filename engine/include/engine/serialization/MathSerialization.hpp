@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <math/Vector2.hpp>
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
 #include <math/Quaternion.hpp>
@@ -12,6 +13,17 @@
 // serialization methods need to be in the same namespace as their types
 namespace N2Engine::Math
 {
+    inline void to_json(nlohmann::json &j, const Vector2 &v)
+    {
+        j = nlohmann::json{{"x", v.x}, {"y", v.y}};
+    }
+
+    inline void from_json(const nlohmann::json &j, Vector2 &v)
+    {
+        v.x = j.value("x", 0.0f);
+        v.y = j.value("y", 0.0f);
+    }
+
     inline void to_json(nlohmann::json &j, const Vector3 &v)
     {
         j = nlohmann::json{{"x", v.x}, {"y", v.y}, {"z", v.z}};

@@ -14,6 +14,9 @@
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/scripting/LuaComponent.hpp"
+#include "engine/ui/Canvas.hpp"
+#include "engine/ui/Image.hpp"
+#include "engine/ui/RectTransform.hpp"
 
 namespace N2Engine
 {
@@ -47,5 +50,8 @@ namespace N2Engine
         Add<Example::SphereRenderer>(registry, "SphereRenderer");
         Add<Example::QuadRenderer>(registry, "QuadRenderer");
         Add<Scripting::LuaComponent>(registry, "LuaComponent");
+        Add<UI::Canvas>(registry, "Canvas");
+        Add<UI::RectTransform>(registry, "RectTransform");
+        Add<UI::Image>(registry, "Image");
     }
 }
