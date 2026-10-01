@@ -4,9 +4,11 @@ cmake_minimum_required(VERSION 3.20)
 find_package(Python3 COMPONENTS Interpreter)
 
 if(Python3_FOUND)
+    # OUTPUT must be the file generate_cpp.py writes; a path it never creates made this rerun every build.
+    # The script only rewrites the file when its content changes (otherwise it just touches it).
     add_custom_command(
         OUTPUT
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/editor/protocol/Generated.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/clients/cpp/Protocol.generated.hpp
         COMMAND
         ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/protocol/generators/generate_cpp.py
         DEPENDS
@@ -16,7 +18,7 @@ if(Python3_FOUND)
     )
 
     add_custom_target(N2ProtocolGenerate
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/include/editor/protocol/Generated.hpp
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/clients/cpp/Protocol.generated.hpp
     )
 endif()
 
