@@ -158,7 +158,7 @@
 </ul>
 <div class="callout note">
 <p class="callout-title">Note</p>
-<p>A GameObject can outlive its scene, for example when C++ code or a Lua handle still holds the <code>shared_ptr</code>. When a scene is destroyed it clears the scene pointer of every object that still refers to it, so such objects are inert rather than dangling. See <a href="scenes.html">Scenes</a>.</p>
+<p>A GameObject can outlive its scene, for example when C++ code or a Lua handle still holds the <code>shared_ptr</code>. When a scene is destroyed it clears the scene pointer of the objects it can still find, so they are inert rather than dangling. Objects detached with <code>RemoveChild</code> can be missed; see the open question under <a href="gameobjects-components.html#purge-and-destructor">Purge and ~GameObject</a>.</p>
 </div>
 
 <h2 id="frame">How a frame runs</h2>
