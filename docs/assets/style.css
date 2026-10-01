@@ -1,0 +1,367 @@
+/* N2Engine documentation. Plain CSS, no external fonts or scripts. */
+
+:root {
+  --bg: #fbfbfa;
+  --bg-sidebar: #f2f2ef;
+  --bg-code: #eeeeea;
+  --fg: #1d1f21;
+  --fg-muted: #5c6066;
+  --border: #d9d9d3;
+  --link: #1f5fbf;
+  --link-visited: #5a3fa8;
+  --accent: #1f5fbf;
+
+  --guarantee-bg: #e9f5ec;
+  --guarantee-border: #2e8b4f;
+  --note-bg: #eaf1fb;
+  --note-border: #3b73c4;
+  --open-bg: #fdf3e2;
+  --open-border: #c47f12;
+  --warn-bg: #fbeaea;
+  --warn-border: #b83b3b;
+
+  --badge-bg: #e4e0f5;
+  --badge-fg: #47358f;
+
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --sidebar-width: 16rem;
+  --content-width: 52rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17191c;
+    --bg-sidebar: #1e2125;
+    --bg-code: #262a2f;
+    --fg: #e3e5e8;
+    --fg-muted: #a0a6ad;
+    --border: #353a40;
+    --link: #7fb0ff;
+    --link-visited: #b9a2ff;
+    --accent: #7fb0ff;
+
+    --guarantee-bg: #17291e;
+    --guarantee-border: #4fbf78;
+    --note-bg: #182437;
+    --note-border: #6c9ee6;
+    --open-bg: #2e2412;
+    --open-border: #e0a23a;
+    --warn-bg: #321b1b;
+    --warn-border: #e06c6c;
+
+    --badge-bg: #2d2650;
+    --badge-fg: #c9bdff;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+a { color: var(--link); }
+a:visited { color: var(--link-visited); }
+a:hover { text-decoration-thickness: 2px; }
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  background: var(--bg);
+  padding: 0.5rem 1rem;
+  z-index: 10;
+}
+.skip-link:focus { left: 0.5rem; }
+
+/* ---------- Layout ---------- */
+
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  flex: 0 0 var(--sidebar-width);
+  width: var(--sidebar-width);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.25rem 1rem 2rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  font-size: 0.92rem;
+}
+
+.sidebar .brand {
+  display: block;
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: var(--fg);
+  text-decoration: none;
+  margin-bottom: 0.15rem;
+}
+.sidebar .brand-sub {
+  color: var(--fg-muted);
+  font-size: 0.8rem;
+  margin: 0 0 1rem;
+}
+
+.sidebar h2 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 1.1rem 0 0.3rem;
+}
+
+.sidebar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar li a {
+  display: block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  color: var(--fg);
+  text-decoration: none;
+}
+.sidebar li a:hover { background: var(--bg-code); }
+.sidebar li a[aria-current="page"] {
+  background: var(--bg-code);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2rem 2.5rem 4rem;
+}
+
+.content {
+  max-width: var(--content-width);
+}
+
+/* ---------- Typography ---------- */
+
+h1, h2, h3, h4 { line-height: 1.25; }
+h1 { font-size: 2rem; margin: 0 0 0.5rem; }
+h2 {
+  font-size: 1.45rem;
+  margin: 2.5rem 0 0.75rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+h3 { font-size: 1.15rem; margin: 1.75rem 0 0.5rem; }
+h4 { font-size: 1rem; margin: 1.25rem 0 0.4rem; }
+
+h2[id], h3[id], h4[id] { scroll-margin-top: 1rem; }
+
+.lead {
+  font-size: 1.08rem;
+  color: var(--fg-muted);
+  margin-top: 0;
+}
+
+code, pre, kbd {
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+code {
+  background: var(--bg-code);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.8rem 1rem;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+pre code {
+  background: none;
+  padding: 0;
+  overflow-wrap: normal;
+  font-size: 0.85rem;
+}
+
+/* Language label on code blocks: <pre class="lang-cpp"> / <pre class="lang-lua"> */
+pre[class^="lang-"] { position: relative; padding-top: 1.5rem; }
+pre[class^="lang-"]::before {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.6rem;
+  font-family: var(--sans);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+pre.lang-cpp::before { content: "C++"; }
+pre.lang-lua::before { content: "Lua"; }
+pre.lang-json::before { content: "JSON"; }
+pre.lang-text::before { content: "Text"; }
+pre.lang-cmake::before { content: "CMake"; }
+pre.lang-shell::before { content: "Shell"; }
+
+/* ---------- Tables ---------- */
+
+.table-wrap { overflow-x: auto; margin: 1rem 0; }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.93rem;
+}
+th, td {
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: var(--bg-sidebar); font-weight: 600; }
+
+/* ---------- Callouts ---------- */
+
+.callout {
+  border-left: 4px solid var(--note-border);
+  background: var(--note-bg);
+  border-radius: 0 6px 6px 0;
+  padding: 0.6rem 1rem;
+  margin: 1rem 0;
+}
+.callout > :first-child { margin-top: 0; }
+.callout > :last-child { margin-bottom: 0; }
+.callout .callout-title {
+  font-weight: 700;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.25rem;
+}
+.callout.guarantee { border-color: var(--guarantee-border); background: var(--guarantee-bg); }
+.callout.guarantee .callout-title { color: var(--guarantee-border); }
+.callout.note { border-color: var(--note-border); background: var(--note-bg); }
+.callout.note .callout-title { color: var(--note-border); }
+.callout.open-question { border-color: var(--open-border); background: var(--open-bg); }
+.callout.open-question .callout-title { color: var(--open-border); }
+.callout.warning { border-color: var(--warn-border); background: var(--warn-bg); }
+.callout.warning .callout-title { color: var(--warn-border); }
+
+/* ---------- Small elements ---------- */
+
+/* Marks behaviour introduced by a PR: <span class="badge">PR #28</span> */
+.badge {
+  display: inline-block;
+  background: var(--badge-bg);
+  color: var(--badge-fg);
+  border-radius: 999px;
+  padding: 0 0.5em;
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: 0.1em;
+  white-space: nowrap;
+}
+
+/* Source citation: <p class="src">Source: <code>path</code> ...</p> */
+.src {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  margin: 0.25rem 0 1rem;
+}
+.src code { font-size: 0.82rem; }
+
+/* "On this page" box */
+.toc {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 1rem 0.7rem;
+  margin: 1.25rem 0 1.5rem;
+  font-size: 0.92rem;
+}
+.toc .toc-title {
+  font-weight: 700;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  margin: 0 0 0.3rem;
+}
+.toc ol, .toc ul { margin: 0; padding-left: 1.2rem; }
+
+/* Numbered step lists (frame order, teardown order) */
+ol.steps > li { margin: 0.25rem 0; }
+
+/* Architecture map on the index page */
+.map {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0 1.5rem;
+}
+.map .card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg-sidebar);
+}
+.map .card h3 { font-size: 1rem; margin: 0 0 0.25rem; }
+.map .card p { margin: 0; font-size: 0.88rem; color: var(--fg-muted); }
+
+.page-footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 52rem) {
+  .layout { flex-direction: column; }
+  .sidebar {
+    position: static;
+    width: auto;
+    height: auto;
+    flex: none;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 1rem;
+  }
+  .sidebar nav {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    column-gap: 1rem;
+  }
+  .sidebar h2 { margin-top: 0.6rem; }
+  main { padding: 1.25rem 1rem 3rem; }
+  h1 { font-size: 1.6rem; }
+}
+
+@media print {
+  .sidebar, .skip-link { display: none; }
+  main { padding: 0; }
+}
