@@ -189,7 +189,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p><code>isHeadless = true</code> does two things and nothing else:</p>
 <ul>
 <li>The GLFW window is created with <code>GLFW_VISIBLE = false</code>. It is still a real window with a real renderer when the machine can provide one.</li>
-<li>Audio is not initialised and is reported <code>Disabled</code>. Audio calls are then safe no-ops, and audio clips do not load (they need an OpenAL context) <span class="badge">Remaining defects</span>; see <a href="audio.html#no-device">Audio: headless behaviour</a>.</li>
+<li>Audio is not initialised and is reported <code>Disabled</code>. Audio calls are then safe no-ops, and audio clips do not load (they need an OpenAL context) <span class="badge">PR #37</span>; see <a href="audio.html#no-device">Audio: headless behaviour</a>.</li>
 </ul>
 <p>Physics and scripting start as usual. On a machine with no monitor, the window size falls back to 1280×720; on one with no GPU (such as the CI runner), the window or renderer fails and is reported <code>Failed</code>.</p>
 <p>A failed window is not fatal to <code>Init</code>, but <code>Run()</code> checks <code>Window::IsValid()</code> (window <em>and</em> renderer present) first. If invalid, it logs "Cannot run: no window or renderer (see GetHealth())", calls <code>Shutdown()</code> and returns without running a frame and without calling <code>OnApplicationQuit</code>. Hosts that can work without a window, like the editor host, run their own loop instead of <code>Run()</code>.</p>
@@ -375,7 +375,7 @@ static void TearDownTestSuite()
 <tr><td><code>SceneManager</code></td><td>function-local static</td><td>Its loaded scene is unloaded by <code>Shutdown()</code> <span class="badge">PR #28</span>; stored scene data lives until exit.</td></tr>
 <tr><td><code>AudioSystem</code></td><td><code>new</code>, never deleted (leaked on purpose)</td><td><code>AudioSource</code> destructors unregister from it and can run during static destruction (SceneManager's scene). In headless mode Init never touches <code>AudioSystem</code>, so it was first created <em>after</em> SceneManager and, as a function-local static, destroyed before it (raised in the PR #23 review).</td></tr>
 <tr><td>Logger console stream</td><td><code>new</code>, never deleted</td><td>Created after the Application singleton; destroying it first made log calls during later teardown crash.</td></tr>
-<tr><td>Logger lock</td><td><code>new</code>, never deleted <span class="badge">Remaining defects</span></td><td>Every <code>Log</code> takes it (see <a href="logging-and-editor.html#logger-threads">Logging from other threads</a>), including logs from destructors during static destruction.</td></tr>
+<tr><td>Logger lock</td><td><code>new</code>, never deleted <span class="badge">PR #37</span></td><td>Every <code>Log</code> takes it (see <a href="logging-and-editor.html#logger-threads">Logging from other threads</a>), including logs from destructors during static destruction.</td></tr>
 </tbody>
 </table>
 </div>

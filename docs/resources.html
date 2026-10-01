@@ -113,7 +113,7 @@
 <ol class="steps">
 <li>Backslashes become <code>/</code>.</li>
 <li><code>lexically_normal()</code> removes <code>.</code> segments, collapses <code>//</code>, and resolves <code>x/..</code>. A result of <code>"."</code> becomes empty.</li>
-<li>For <code>Resource</code> and <code>User</code> paths, leading slashes are stripped: they are relative to their root, so <code>res:///a</code> is <code>a</code>. An <code>Absolute</code> path keeps its root (<code>/home/me/a.wav</code>, a UNC <code>//server/share/a.wav</code>, <code>C:/a.wav</code>) <span class="badge">Remaining defects</span>.</li>
+<li>For <code>Resource</code> and <code>User</code> paths, leading slashes are stripped: they are relative to their root, so <code>res:///a</code> is <code>a</code>. An <code>Absolute</code> path keeps its root (<code>/home/me/a.wav</code>, a UNC <code>//server/share/a.wav</code>, <code>C:/a.wav</code>) <span class="badge">PR #37</span>.</li>
 <li>One trailing slash is removed, except from a bare root (<code>/</code>, <code>C:/</code>), which would otherwise change meaning.</li>
 <li>A <strong>leading <code>..</code> is kept</strong>: <code>res://../outside.txt</code> stays <code>../outside.txt</code>, so <code>Resolve</code> can see the escape and reject it.</li>
 </ol>
@@ -122,7 +122,7 @@
 <p class="src">Source: <code>engine/include/engine/io/ResourcePath.hpp</code> — <code>ResourcePath::Normalize</code>, <code>ResourcePath::ResourcePath</code>, <code>operator==</code>, <code>ResourcePath::Hash</code>; tests: <code>ResourcePathTest.EquivalentSpellingsAreOnePath</code>, <code>ResourcePathTest.AbsolutePathsKeepTheirRoot</code></p>
 
 <div class="callout guarantee">
-<p class="callout-title">Guarantee <span class="badge">Remaining defects</span></p>
+<p class="callout-title">Guarantee <span class="badge">PR #37</span></p>
 <p>An <code>Absolute</code> path stays absolute: <code>GetPath()</code>, <code>ToString()</code> and <code>Resolve</code> return it with its root. Before, every leading slash was stripped, so on POSIX <code>ResourcePath("/home/me/a.wav")</code> (and the <code>Absolute</code> fallback of <code>ResourceLoader::MakeResourcePath</code> for files outside both roots) became the relative <code>home/me/a.wav</code>. <code>res://</code> and <code>user://</code> paths are unchanged.</p>
 </div>
 

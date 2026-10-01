@@ -107,7 +107,7 @@
 </table>
 </div>
 <p>When the system is not initialized, its entry points are safe no-ops: <code>Update</code> and <code>Stop</code> do nothing, <code>IsPlaying</code> is <code>false</code>, <code>PlayOneShot</code> returns an invalid handle, <code>CountPlayingInGroup</code> is 0, <code>AcquireSource</code> returns 0 and <code>ReleaseSource</code> does nothing. An <code>AudioSource</code> then never gets a source, so <code>Play()</code>, <code>UnPause()</code>, <code>Pause()</code> and <code>Stop()</code> do nothing and its queries report not playing.</p>
-<p>No call makes an OpenAL call without a context <span class="badge">Remaining defects</span>:</p>
+<p>No call makes an OpenAL call without a context <span class="badge">PR #37</span>:</p>
 <ul>
 <li><code>SetListenerPosition</code>/<code>SetListenerOrientation</code> (called every <code>LateUpdate</code> by an <code>AudioListener</code>, and from Lua) do nothing; the listener pushes its pose again each frame.</li>
 <li><code>SetMasterVolume</code> clamps and stores the value; <code>Initialize</code> applies it to the new listener.</li>
@@ -143,9 +143,9 @@
 <table>
 <thead><tr><th>Call</th><th>Behaviour</th></tr></thead>
 <tbody>
-<tr><td><code>Play()</code></td><td>Does nothing if there is no clip or it is not loaded, if the group's <code>maxConcurrent</code> is already reached by <em>other</em> sounds (one-shots and sources; this source is not counted against itself when it is already playing), or if no source can be acquired. Otherwise stops the source, binds the clip's buffer, applies volume/pitch with the group's settings, looping and the spatial settings, and starts playback <strong>from the beginning</strong>, also when it was already playing or paused <span class="badge">Remaining defects</span>.</td></tr>
+<tr><td><code>Play()</code></td><td>Does nothing if there is no clip or it is not loaded, if the group's <code>maxConcurrent</code> is already reached by <em>other</em> sounds (one-shots and sources; this source is not counted against itself when it is already playing), or if no source can be acquired. Otherwise stops the source, binds the clip's buffer, applies volume/pitch with the group's settings, looping and the spatial settings, and starts playback <strong>from the beginning</strong>, also when it was already playing or paused <span class="badge">PR #37</span>.</td></tr>
 <tr><td><code>Pause()</code></td><td><code>alSourcePause</code> if it holds a source. Resume with <code>UnPause()</code>; <code>Play()</code> starts over.</td></tr>
-<tr><td><code>UnPause()</code></td><td>If paused, resumes from the paused position, provided the group has room (a paused source does not count toward the limit). Otherwise does nothing <span class="badge">Remaining defects</span>.</td></tr>
+<tr><td><code>UnPause()</code></td><td>If paused, resumes from the paused position, provided the group has room (a paused source does not count toward the limit). Otherwise does nothing <span class="badge">PR #37</span>.</td></tr>
 <tr><td><code>Stop()</code></td><td><code>alSourceStop</code> if it holds a source. Keeps the source.</td></tr>
 <tr><td><code>IsPlaying()</code> / <code>IsPaused()</code></td><td>Query the OpenAL source state; <code>false</code> without a source.</td></tr>
 <tr><td><code>SetClip(clip)</code></td><td>Stops; if it was playing and the new clip is non-null, plays the new clip. Setting a clip while stopped does not start playback.</td></tr>
@@ -156,7 +156,7 @@
 </table>
 </div>
 <div class="callout guarantee">
-<p class="callout-title">Guarantee <span class="badge">Remaining defects</span></p>
+<p class="callout-title">Guarantee <span class="badge">PR #37</span></p>
 <p><code>Play()</code> on a playing or paused source raises no OpenAL error and restarts from the beginning; <code>UnPause()</code> continues from the paused position; restarting the only sound of a full group is allowed while a second source in that group is still refused. Before, <code>Play()</code> re-bound the buffer of a playing or paused source (an OpenAL error), so after <code>Pause()</code> it resumed, and a playing source in a full group counted itself and could not restart. Tests: <code>AudioSourceTest.PlayOnAPlayingSourceRestartsIt</code>, <code>PlayAfterPauseRestartsAndUnPauseResumes</code>, <code>RestartingInAFullGroupDoesNotCountItselfTwice</code>.</p>
 </div>
 <div class="callout note" id="design-play-restarts">
@@ -312,8 +312,8 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <h2 id="clips">AudioClip and loaders</h2>
 <p><code>AudioClip</code> is a <code>Base::Asset</code> (resource type <code>"AudioClip"</code>) wrapping one OpenAL buffer with fully decoded PCM.</p>
 <ul>
-<li><code>CreateFromData(AudioData)</code>: fails with a logged error for empty samples or a channel count other than 1 or 2, and with a warning when the <code>AudioSystem</code> is not initialized <span class="badge">Remaining defects</span> (see <a href="#design-no-headless-clips">why</a>). Supports 8- and 16-bit mono/stereo. It unloads any previous buffer, clears stale OpenAL errors, then creates the buffer; an OpenAL error logs "Failed to create OpenAL buffer" and returns <code>false</code>. On success it records sample rate, channels and duration (bytes / (rate × channels × bytes per sample)).</li>
-<li><code>IsLoaded()</code> is true while it holds a buffer made in the current context: it turns false at <code>Shutdown</code> and stays false after a later <code>Initialize</code> <span class="badge">Remaining defects</span>. <code>Unload()</code> deletes the buffer (only in the context that made it) and resets metadata; the destructor unloads.</li>
+<li><code>CreateFromData(AudioData)</code>: fails with a logged error for empty samples or a channel count other than 1 or 2, and with a warning when the <code>AudioSystem</code> is not initialized <span class="badge">PR #37</span> (see <a href="#design-no-headless-clips">why</a>). Supports 8- and 16-bit mono/stereo. It unloads any previous buffer, clears stale OpenAL errors, then creates the buffer; an OpenAL error logs "Failed to create OpenAL buffer" and returns <code>false</code>. On success it records sample rate, channels and duration (bytes / (rate × channels × bytes per sample)).</li>
+<li><code>IsLoaded()</code> is true while it holds a buffer made in the current context: it turns false at <code>Shutdown</code> and stays false after a later <code>Initialize</code> <span class="badge">PR #37</span>. <code>Unload()</code> deletes the buffer (only in the context that made it) and resets metadata; the destructor unloads.</li>
 <li>A buffer cannot be deleted while a source still plays it; stop sources (or rely on one-shots retaining their clip) before dropping the last reference.</li>
 </ul>
 <h3 id="loaders">File formats</h3>
@@ -342,7 +342,7 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <table>
 <thead><tr><th>Lua</th><th>Maps to</th></tr></thead>
 <tbody>
-<tr><td><code>source:Play()</code>, <code>Pause</code>, <code>UnPause</code> <span class="badge">Remaining defects</span>, <code>Stop</code>, <code>IsPlaying</code>, <code>IsPaused</code></td><td>Same <code>AudioSource</code> methods</td></tr>
+<tr><td><code>source:Play()</code>, <code>Pause</code>, <code>UnPause</code> <span class="badge">PR #37</span>, <code>Stop</code>, <code>IsPlaying</code>, <code>IsPaused</code></td><td>Same <code>AudioSource</code> methods</td></tr>
 <tr><td><code>Set/GetVolume</code>, <code>Set/GetPitch</code>, <code>Set/GetLoop</code>, <code>Set/GetSpatial</code>, <code>Set/GetMixerGroup</code>, <code>SetMinDistance</code>, <code>SetMaxDistance</code>, <code>SetRolloffFactor</code></td><td>Same, with the same clamping</td></tr>
 <tr><td><code>Audio.SetMasterVolume(v)</code>, <code>Audio.GetMasterVolume()</code></td><td><code>AudioSystem</code> master volume</td></tr>
 <tr><td><code>Audio.SetListenerPosition(x, y, z)</code>, <code>Audio.SetListenerOrientation(fx, fy, fz, ux, uy, uz)</code></td><td>Sets the listener directly (an active <code>AudioListener</code> overwrites it in its next <code>OnLateUpdate</code>)</td></tr>

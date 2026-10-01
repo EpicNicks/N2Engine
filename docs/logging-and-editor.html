@@ -114,7 +114,7 @@
 </div>
 
 <h3 id="subscribers">Subscribing</h3>
-<p><code>logEvent</code> is a <code>Logger::LogEventHandler</code>: the same <code>+=</code>, <code>-=</code>, call and <code>GetSubscriberCount()</code> as an <code>EventHandler</code>, each taken under the Logger's lock <span class="badge">Remaining defects</span>. <code>logEvent += handler</code> returns an id; <code>logEvent -= id</code> removes it. Both are safe during dispatch and from any thread: a handler added during a log is first called on the next message; a handler removed during a log (even itself) is not called again. Subscribing does not flush the backlog; the next <code>Log</code> call does.</p>
+<p><code>logEvent</code> is a <code>Logger::LogEventHandler</code>: the same <code>+=</code>, <code>-=</code>, call and <code>GetSubscriberCount()</code> as an <code>EventHandler</code>, each taken under the Logger's lock <span class="badge">PR #37</span>. <code>logEvent += handler</code> returns an id; <code>logEvent -= id</code> removes it. Both are safe during dispatch and from any thread: a handler added during a log is first called on the next message; a handler removed during a log (even itself) is not called again. Subscribing does not flush the backlog; the next <code>Log</code> call does.</p>
 <pre class="lang-cpp"><code>N2Engine::Logger::broadcastUnbroadcastLogs = true; // keep early messages until the UI subscribes
 // ...
 const size_t id = N2Engine::Logger::logEvent += [](std::string_view msg, N2Engine::Logger::LogLevel level)
@@ -131,7 +131,7 @@ N2Engine::Logger::logEvent -= id;
 <p>The message is passed as a <code>std::string_view</code>. Handlers that keep it must copy it.</p>
 </div>
 
-<h3 id="logger-threads">Logging from other threads <span class="badge">Remaining defects</span></h3>
+<h3 id="logger-threads">Logging from other threads <span class="badge">PR #37</span></h3>
 <p><code>Logger::Log</code> (and <code>Info</code>/<code>Warn</code>/<code>Error</code>), subscribing, unsubscribing and the debug console's redirected streams may be used from any thread. They share one recursive mutex:</p>
 <ul>
 <li><code>Log</code> holds it from the backlog check until the message (and any backlog) has been delivered, so a message reaches every subscriber whole, and messages from different threads are delivered one after another, never interleaved.</li>
