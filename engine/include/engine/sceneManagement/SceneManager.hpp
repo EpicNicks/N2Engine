@@ -51,6 +51,10 @@ namespace N2Engine
         static void UnloadScenes();
 
     public:
+        /// Static destruction at process exit (no Application::Shutdown, e.g. tests): the scenes still held
+        /// are freed without teardown callbacks, since the systems those callbacks use may be gone already
+        ~SceneManager();
+
         static int GetCurSceneIndex();
         static Scene* GetCurScene();
         static Scene& GetCurSceneRef();

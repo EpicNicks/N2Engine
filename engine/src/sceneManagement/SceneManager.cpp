@@ -23,6 +23,21 @@ namespace
     }
 }
 
+SceneManager::~SceneManager()
+{
+    // A dropped scene normally tears down its attached components (Scene::~Scene). Not here: at static
+    // destruction physics, audio and the Lua runtime may already be destroyed. Application::Shutdown
+    // calls UnloadScenes first, so a running game never gets here with a scene loaded.
+    if (_loadedScene)
+    {
+        _loadedScene->_skipDropTeardown = true;
+    }
+    if (_sceneChange._pendingScene)
+    {
+        _sceneChange._pendingScene->_skipDropTeardown = true;
+    }
+}
+
 SceneManager& SceneManager::GetInstance()
 {
     static SceneManager instance;

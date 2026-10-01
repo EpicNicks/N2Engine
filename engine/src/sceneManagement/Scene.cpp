@@ -21,6 +21,28 @@ Scene::Scene(std::string name)
 
 Scene::~Scene()
 {
+    // A scene dropped without being loaded (a superseded pending instance, a GetScene copy, the scene
+    // AddScene(scene, false) snapshots) is normally never attached, so this is a no-op. If its owner did
+    // run ProcessAttachQueue on it, the components that attached get the normal Clear teardown, so what
+    // their OnAttach acquired (physics bodies, audio sources, script subscriptions) is released. Components
+    // that never attached get no OnDisable/OnDestroy, as there is no setup to undo.
+    if (!_skipDropTeardown && HasAttachedComponents())
+    {
+        // A destructor must not throw: a throwing callback ends the teardown here (as it would end Clear)
+        try
+        {
+            ClearImpl(true);
+        }
+        catch (const std::exception &e)
+        {
+            Logger::Error(std::format("Scene '{}': teardown of a dropped scene threw: {}", sceneName, e.what()));
+        }
+        catch (...)
+        {
+            Logger::Error(std::format("Scene '{}': teardown of a dropped scene threw", sceneName));
+        }
+    }
+
     // Objects can outlive their scene (held by a script, or removed from the hierarchy without leaving
     // it). Cut every one loose, so none keeps a pointer to this scene for its destructor to use.
     // No callbacks run: this only updates the bookkeeping.
@@ -206,20 +228,41 @@ std::shared_ptr<GameObject> Scene::FindGameObject(const std::string &name) const
     return result;
 }
 
-std::vector<std::shared_ptr<GameObject>> Scene::FindGameObjectsByTag(const std::string &tag) const
+std::shared_ptr<GameObject> Scene::FindGameObjectWithTag(const std::string &tag) const
+{
+    std::shared_ptr<GameObject> result = nullptr;
+
+    TraverseUntil([&](const std::shared_ptr<GameObject> &gameObject)
+    {
+        if (gameObject->CompareTag(tag))
+        {
+            result = gameObject;
+            return true;
+        }
+        return false;
+    });
+
+    return result;
+}
+
+std::vector<std::shared_ptr<GameObject>> Scene::FindGameObjectsWithTag(const std::string &tag) const
 {
     std::vector<std::shared_ptr<GameObject>> results;
 
-    TraverseAll([&](std::shared_ptr<GameObject> gameObject)
+    TraverseAll([&](const std::shared_ptr<GameObject> &gameObject)
     {
-        // Assuming you have a tag system in GameObject
-        // if (gameObject->GetTag() == tag)
-        // {
-        //     results.push_back(gameObject);
-        // }
+        if (gameObject->CompareTag(tag))
+        {
+            results.push_back(gameObject);
+        }
     });
 
     return results;
+}
+
+std::vector<std::shared_ptr<GameObject>> Scene::FindGameObjectsByTag(const std::string &tag) const
+{
+    return FindGameObjectsWithTag(tag);
 }
 
 std::shared_ptr<GameObject> Scene::FindGameObjectByUUID(const Math::UUID uuid)
@@ -363,17 +406,19 @@ void Scene::ProcessAttachQueue()
             continue;
         }
 
-        // Registration is idempotent: a component re-queued after re-parenting isn't updated twice
+        // Registration is idempotent: a component re-queued after re-parenting isn't updated twice.
+        // Lights get the per-frame callbacks like any component, and are also kept in the light list
+        // that rendering reads.
+        if (std::ranges::find(_components, c) == _components.end())
+        {
+            _components.push_back(c);
+        }
         if (auto *light = dynamic_cast<Rendering::Light*>(c))
         {
             if (std::ranges::find(_sceneLights, light) == _sceneLights.end())
             {
                 _sceneLights.push_back(light);
             }
-        }
-        else if (std::ranges::find(_components, c) == _components.end())
-        {
-            _components.push_back(c);
         }
     }
 }
@@ -417,6 +462,16 @@ void Scene::OnApplicationQuit() const
 
 void Scene::Clear()
 {
+    ClearImpl(false);
+}
+
+bool Scene::HasAttachedComponents() const
+{
+    return std::ranges::any_of(_components, [](const Component *component) { return component != nullptr; });
+}
+
+void Scene::ClearImpl(const bool attachedOnly)
+{
     // Same teardown as ProcessDestroyed, so leaving a scene releases what its components hold
     // (physics bodies, audio sources, script state) instead of leaving it pointing at freed objects
     std::vector<std::shared_ptr<GameObject>> allObjects;
@@ -426,7 +481,7 @@ void Scene::Clear()
     }
     for (const auto &obj : allObjects)
     {
-        CallOnDestroyForGameObject(obj);
+        CallOnDestroyForGameObject(obj, attachedOnly);
     }
     // Only now, so each OnDestroy above could still use the other objects being torn down
     for (const auto &obj : allObjects)
@@ -508,7 +563,7 @@ void Scene::MarkHierarchyForDestruction(std::shared_ptr<GameObject> gameObject,
     }
 }
 
-void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject)
+void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject, const bool attachedOnly)
 {
     // Objects are already marked for destruction here, so ask whether they were active before that
     const bool wasActive = gameObject->IsActiveInHierarchyIgnoringDestruction();
@@ -516,7 +571,12 @@ void Scene::CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject)
     // iteration; one removed (freed) before its turn is skipped
     for (Component *component : gameObject->SnapshotComponents())
     {
-        // Runs OnDisable/OnDestroy exactly once, whichever teardown path gets here first
+        // Runs OnDisable/OnDestroy exactly once, whichever teardown path gets here first.
+        // attachedOnly (a dropped scene): a component that never attached here has nothing to undo
+        if (attachedOnly && std::ranges::find(_components, component) == _components.end())
+        {
+            continue;
+        }
         if (gameObject->OwnsComponent(component))
         {
             component->RunDestroyCallbacks(wasActive);

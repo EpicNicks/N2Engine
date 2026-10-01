@@ -734,6 +734,19 @@ function GameObject:GetName() end
 ---@param name string
 function GameObject:SetName(name) end
 
+---The tag of this GameObject ("Untagged" unless set)
+---@return string
+function GameObject:GetTag() end
+
+---Set the tag of this GameObject (any string; saved with the scene)
+---@param tag string
+function GameObject:SetTag(tag) end
+
+---Whether this GameObject's tag is exactly tag (case-sensitive)
+---@param tag string
+---@return boolean
+function GameObject:CompareTag(tag) end
+
 ---Check if this GameObject is active
 ---@return boolean
 function GameObject:IsActive() end
@@ -875,7 +888,17 @@ function Scene:IsValid() end
 ---@return GameObject|nil
 function Scene:FindGameObject(name) end
 
----Find all GameObjects with a tag
+---Find the first GameObject (active or not) whose tag is exactly tag
+---@param tag string
+---@return GameObject|nil
+function Scene:FindGameObjectWithTag(tag) end
+
+---Find all GameObjects (active or not) whose tag is exactly tag
+---@param tag string
+---@return GameObject[]
+function Scene:FindGameObjectsWithTag(tag) end
+
+---The same as FindGameObjectsWithTag (the older name)
 ---@param tag string
 ---@return GameObject[]
 function Scene:FindGameObjectsByTag(tag) end
