@@ -3,8 +3,9 @@
 //
 // It's held to the same contract as the stb_truetype backend, and gives the same numbers for the same font:
 // - the same structural checks before FreeType sees the data (SfntValidation.hpp);
-// - metrics, advances, bearings, bounds and kerning in font units, read unscaled (FT_LOAD_NO_SCALE,
-//   FT_KERNING_UNSCALED) from the same tables (hhea, hmtx, kern);
+// - metrics, advances, bounds and kerning in font units, read unscaled (FT_LOAD_NO_SCALE,
+//   FT_KERNING_UNSCALED) from the same tables (hhea, hmtx, kern), and left side bearings straight from
+//   hmtx, as stb_truetype reads them (FreeType's horiBearingX is the outline's xMin, 0 for empty glyphs);
 // - SDFs from FreeType's "sdf" renderer, which already uses the contract's convention (128 at the edge,
 //   higher inside, 128 / spread per pixel), copied into the bitmap box stb_truetype would produce, so
 //   both backends give identical sizes and offsets for every glyph.
@@ -12,8 +13,10 @@
 // Known differences from stb_truetype, all outside the bundled default font:
 // - kerning: FreeType reads only the legacy 'kern' table, while stb_truetype prefers GPOS pair kerning
 //   when a font has it;
-// - a TrueType glyph whose hmtx left side bearing differs from its glyf xMin is shifted by the difference,
-//   as the TrueType spec places it (stb_truetype uses the raw coordinates);
+// - a TrueType glyph whose hmtx left side bearing differs from its glyf xMin has its outline (so its
+//   bounds and SDF) shifted by the difference, as the TrueType spec places it (stb_truetype uses the raw
+//   coordinates); the reported bearing is hmtx's in both;
+// - glyphs flagged as having overlapping contours render with the sdf module's overlap mode;
 // - RenderSdf supports spreads from 1 to 32 pixels (FreeType's renderer takes 2 to 32; a spread of 1 is
 //   rendered at 2 and rescaled). Larger spreads render nothing; the atlas never asks for more than 32.
 #include <ft2build.h>
@@ -28,6 +31,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -40,6 +44,11 @@ namespace N2Engine::Text::Detail
         // FreeType's SDF renderer accepts spreads in this range (MIN_SPREAD and MAX_SPREAD in ftsdfcommon.h)
         constexpr int kFreeTypeMinSpread = 2;
         constexpr int kFreeTypeMaxSpread = 32;
+
+        std::uint16_t ReadU16(const unsigned char *p)
+        {
+            return static_cast<std::uint16_t>((p[0] << 8) | p[1]);
+        }
 
         // Glyphs are loaded in font units, without hinting or embedded bitmaps
         constexpr FT_Int32 kLoadFlags = FT_LOAD_NO_SCALE | FT_LOAD_NO_HINTING | FT_LOAD_NO_BITMAP;
@@ -81,6 +90,17 @@ namespace N2Engine::Text::Detail
                 {
                     return false;
                 }
+                // Validated above: both tables exist, and hmtx holds numberOfHMetrics long entries plus a
+                // bearing for every remaining glyph
+                const auto hheaTable = FindSfntTable(_data, *fontStart, "hhea");
+                const auto hmtxTable = FindSfntTable(_data, *fontStart, "hmtx");
+                if (!hheaTable || !hmtxTable)
+                {
+                    error = "the hhea or hmtx table is missing";
+                    return false;
+                }
+                _hmtx = *hmtxTable;
+                _hMetricCount = ReadU16(_data.data() + hheaTable->offset + 34);
 
                 // One library per face: faces are independent and can live on different threads
                 if (const FT_Error result = FT_Init_FreeType(&_library); result != 0)
@@ -171,10 +191,7 @@ namespace N2Engine::Text::Detail
                 {
                     metrics.advance = static_cast<int>(advance);
                 }
-                if (FT_Load_Glyph(_face, glyph, kLoadFlags) == 0)
-                {
-                    metrics.leftSideBearing = static_cast<int>(_face->glyph->metrics.horiBearingX);
-                }
+                metrics.leftSideBearing = ReadLeftSideBearing(glyph);
                 return metrics;
             }
 
@@ -252,7 +269,11 @@ namespace N2Engine::Text::Detail
                 FT_Outline_Transform(&_face->glyph->outline, &matrix);
 
                 const int renderSpread = std::max(spreadPx, kFreeTypeMinSpread);
-                if (!SetSpread(renderSpread) || FT_Render_Glyph(_face->glyph, FT_RENDER_MODE_SDF) != 0)
+                // Glyphs flagged with overlapping contours (common in variable-font instances) need the sdf
+                // module's slower overlap mode, or the distances inside the overlap come out wrong
+                const bool overlaps = (_face->glyph->outline.flags & FT_OUTLINE_OVERLAP) != 0;
+                if (!SetSpread(renderSpread) || !SetOverlaps(overlaps) ||
+                    FT_Render_Glyph(_face->glyph, FT_RENDER_MODE_SDF) != 0)
                 {
                     return {};
                 }
@@ -309,6 +330,19 @@ namespace N2Engine::Text::Detail
                 return glyph < static_cast<GlyphId>(_face->num_glyphs);
             }
 
+            // The hmtx left side bearing, read the way stb_truetype reads it: from the glyph's long entry, or
+            // from the bearing array that follows the long entries for glyphs past numberOfHMetrics
+            [[nodiscard]] int ReadLeftSideBearing(const GlyphId glyph) const
+            {
+                const std::size_t index = glyph;
+                const std::size_t at = index < _hMetricCount ? 4 * index + 2 : 4 * _hMetricCount + 2 * (index - _hMetricCount);
+                if (at + 2 > _hmtx.length)
+                {
+                    return 0;
+                }
+                return static_cast<std::int16_t>(ReadU16(_data.data() + _hmtx.offset + at));
+            }
+
             // Loads the glyph's outline unscaled into the face's slot and returns its control box in font
             // units (y-up), or nullopt for an invalid glyph or one with no outline
             [[nodiscard]] std::optional<FT_BBox> LoadOutlineBox(const GlyphId glyph) const
@@ -332,6 +366,22 @@ namespace N2Engine::Text::Detail
             }
 
             // The sdf module's spread is a library-wide property; it's only set when it changes
+            // Like the spread, the overlaps switch is library-wide and only set when it changes
+            [[nodiscard]] bool SetOverlaps(const bool overlaps) const
+            {
+                if (overlaps == _overlaps)
+                {
+                    return true;
+                }
+                const FT_Bool value = overlaps ? 1 : 0;
+                if (FT_Property_Set(_library, "sdf", "overlaps", &value) != 0)
+                {
+                    return false;
+                }
+                _overlaps = overlaps;
+                return true;
+            }
+
             [[nodiscard]] bool SetSpread(const int spread) const
             {
                 if (spread == _spread)
@@ -348,10 +398,13 @@ namespace N2Engine::Text::Detail
             }
 
             std::vector<unsigned char> _data; // FreeType reads the font in place, so the face owns it
+            SfntTable _hmtx;
+            std::size_t _hMetricCount = 0;
             FT_Library _library = nullptr;
             FT_Face _face = nullptr;
             FontMetrics _metrics;
             mutable int _spread = -1; // the spread last set on the sdf module (-1: FreeType's default)
+            mutable bool _overlaps = false; // the sdf module's overlaps property (off by default)
         };
 
         class FreeTypeBackend final : public IFontBackend

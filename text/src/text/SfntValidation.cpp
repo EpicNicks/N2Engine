@@ -64,27 +64,10 @@ namespace N2Engine::Text::Detail
             return true;
         }
 
-        struct TableSpan
-        {
-            std::size_t offset = 0;
-            std::size_t length = 0;
-        };
-
-        // The first table with this tag, as stb_truetype finds it (the directory must already fit the data)
-        std::optional<TableSpan> FindTable(const std::span<const unsigned char> data, const std::size_t fontStart,
+        std::optional<SfntTable> FindTable(const std::span<const unsigned char> data, const std::size_t fontStart,
                                            const char (&tag)[5])
         {
-            const unsigned char *header = data.data() + fontStart;
-            const std::size_t tableCount = ReadU16(header + 4);
-            for (std::size_t i = 0; i < tableCount; ++i)
-            {
-                const unsigned char *record = header + 12 + i * 16;
-                if (HasTag(record, tag))
-                {
-                    return TableSpan{ReadU32(record + 8), ReadU32(record + 12)};
-                }
-            }
-            return std::nullopt;
+            return FindSfntTable(data, fontStart, tag);
         }
 
         // stb_truetype reads these tables at fixed offsets and indexes loca and hmtx by glyph id without
@@ -147,6 +130,22 @@ namespace N2Engine::Text::Detail
             }
             return true;
         }
+    }
+
+    std::optional<SfntTable> FindSfntTable(const std::span<const unsigned char> data, const std::size_t fontStart,
+                                           const char (&tag)[5])
+    {
+        const unsigned char *header = data.data() + fontStart;
+        const std::size_t tableCount = ReadU16(header + 4);
+        for (std::size_t i = 0; i < tableCount; ++i)
+        {
+            const unsigned char *record = header + 12 + i * 16;
+            if (HasTag(record, tag))
+            {
+                return SfntTable{ReadU32(record + 8), ReadU32(record + 12)};
+            }
+        }
+        return std::nullopt;
     }
 
     std::optional<std::size_t> FindFirstFontOffset(const std::span<const unsigned char> data)

@@ -65,6 +65,8 @@ namespace N2Engine::Text
 
         /// Rasterises the glyph's distance field at pixelsPerEm pixels per em, with spreadPx pixels of
         /// distance (and as much border) around the outline. Empty for glyphs with no outline.
+        /// spreadPx must be 1 to FontAtlas::kMaxSpreadPx (32); outside that range a backend may render
+        /// nothing (FreeType does), so callers stay within it.
         [[nodiscard]] virtual GlyphSdf RenderSdf(GlyphId glyph, float pixelsPerEm, int spreadPx) const = 0;
     };
 
