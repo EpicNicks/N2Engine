@@ -83,7 +83,7 @@
 <thead><tr><th>Directory</th><th>Executable / CTest name</th><th>Links</th><th>Notes</th></tr></thead>
 <tbody>
 <tr><td><code>tests/math/</code></td><td><code>math_tests</code></td><td><code>math</code></td><td>No engine dependency.</td></tr>
-<tr><td><code>tests/text/</code> <span class="badge">PR #45</span></td><td><code>text_tests</code></td><td><code>text</code></td><td>No engine or renderer dependency. Font tests are parameterised over every font backend in the build.</td></tr>
+<tr><td><code>tests/text/</code> <span class="badge">PR #45</span></td><td><code>text_tests</code></td><td><code>text</code></td><td>No engine or renderer dependency. Font tests are parameterised over every font backend in the build (stb_truetype, plus FreeType with <code>N2ENGINE_TEXT_FREETYPE</code> <span class="badge">Text P1b</span>).</td></tr>
 <tr><td><code>tests/engine/</code></td><td><code>engine_tests</code></td><td><code>engine</code>, <code>renderer</code>, <code>math</code></td><td>Defines <code>N2_LUA_PROJECT_DIR</code> (the <code>lua_project</code> source folder) so <code>LuaSceneTests</code> can build <code>lua_project/assets/scene.lua</code> headless.</td></tr>
 <tr><td><code>tests/renderer/</code></td><td><code>renderer_tests</code></td><td><code>renderer</code>, <code>engine</code>, <code>math</code></td><td>Only a placeholder source file; the executable contains no tests.</td></tr>
 <tr><td><code>tests/editor-server/</code></td><td><code>editor_server_tests</code></td><td><code>N2EditorServer</code></td><td>Protocol encoding, bounds-checked reads, the main-thread command queue and command handlers. On Windows, <code>EditorServerSocketTest</code> also opens real loopback sockets <span class="badge">PR #33</span>.</td></tr>
@@ -136,6 +136,8 @@
 <tr><td><code>tests/engine/text/FontAssetTests.cpp</code> <span class="badge">PR #45</span></td><td><code>FontSettingsTest</code>, <code>DefaultFontAssetTest</code>, <code>FontAssetTest</code> (fonts in a temp project, settings from <code>.meta</code>)</td></tr>
 <tr><td><code>tests/text/Utf8Tests.cpp</code> <span class="badge">PR #45</span></td><td><code>Utf8DecodeTest</code></td></tr>
 <tr><td><code>tests/text/FontBackendTests.cpp</code> <span class="badge">PR #45</span></td><td><code>FontBackendRegistryTest</code>, <code>Backends/FontBackendTest</code> (one instance per font backend)</td></tr>
+<tr><td><code>tests/text/FontBackendConsistencyTests.cpp</code> <span class="badge">Text P1b</span></td><td><code>Backends/FontBackendConsistencyTest</code>: every other backend against stb_truetype on the default font (identical metrics, glyphs, kerning and atlas layout; SDFs with the same placement and close values). No instances when stb_truetype is the only backend.</td></tr>
+<tr><td><code>tests/text/FreeTypeBuildTests.cpp</code> <span class="badge">Text P1b</span></td><td><code>FreeTypeBuildTest</code> (the fetched FreeType's version and SDF renderer, the backend's registration). Compiled only with <code>N2ENGINE_TEXT_FREETYPE</code>.</td></tr>
 <tr><td><code>tests/text/FontAtlasTests.cpp</code> <span class="badge">PR #45</span></td><td><code>AtlasCharsetTest</code>, <code>Backends/FontAtlasTest</code></td></tr>
 <tr><td><code>tests/text/TextLayoutTests.cpp</code> <span class="badge">PR #45</span></td><td><code>Backends/TextLayoutTest</code></td></tr>
 <tr><td><code>tests/math/math_types/FunctionsTests.cpp</code> <span class="badge">PR #34</span></td><td><code>FunctionsTest</code></td></tr>
@@ -152,13 +154,14 @@
 <p class="src">Source: <code>tests/</code> on <code>master</code></p>
 
 <h2 id="running">Building and running</h2>
-<p>Two CMake options matter for tests:</p>
+<p>Three CMake options matter for tests:</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Option</th><th>Default</th><th>Effect</th></tr></thead>
 <tbody>
 <tr><td><code>N2ENGINE_BUILD_TESTS</code></td><td><code>ON</code></td><td>Fetch GoogleTest and build the four test executables.</td></tr>
 <tr><td><code>N2ENGINE_USE_PHYSX</code></td><td><code>ON</code></td><td>Use PhysX. On Windows the binaries are downloaded from the repository's <code>physx-dependencies</code> release into <code>external/PhysX/physx/bin</code> at configure time; if the download fails, PhysX is turned off with a warning. PhysX is also turned off for MinGW/GCC on Windows and on Linux. With PhysX off, <code>N2ENGINE_PHYSX_ENABLED</code> is not defined and <code>PhysicsTests.cpp</code> compiles to nothing.</td></tr>
+<tr><td><code>N2ENGINE_TEXT_FREETYPE</code> <span class="badge">Text P1b</span></td><td><code>OFF</code></td><td>Fetch and build FreeType and add the <a href="text.html#freetype">FreeType font backend</a>. Every font test in <code>text_tests</code> then also runs against FreeType, and the cross-backend tests compare it with stb_truetype.</td></tr>
 </tbody>
 </table>
 </div>
@@ -177,14 +180,14 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 </div>
 
 <h2 id="ci">CI</h2>
-<p><code>.github/workflows/tests.yml</code> ("Tests") runs on pushes to <code>master</code>, on every pull request, and on manual dispatch. It has one job on <code>windows-latest</code> with a 90-minute timeout and <code>fail-fast: false</code>, run as three matrix legs named <code>windows (&lt;config&gt;, PhysX &lt;ON|OFF&gt;)</code>:</p>
+<p><code>.github/workflows/tests.yml</code> ("Tests") runs on pushes to <code>master</code>, on every pull request, and on manual dispatch. It has one job on <code>windows-latest</code> with a 90-minute timeout and <code>fail-fast: false</code>, run as three matrix legs named <code>windows (&lt;config&gt;, PhysX &lt;ON|OFF&gt;)</code>, with <code>, FreeType ON</code> added to the name of the leg that builds the FreeType font backend <span class="badge">Text P1b</span>:</p>
 <div class="table-wrap">
 <table>
-<thead><tr><th>Configuration</th><th>PhysX</th><th>Why</th></tr></thead>
+<thead><tr><th>Job name</th><th>Configuration</th><th>PhysX</th><th>FreeType</th><th>Why</th></tr></thead>
 <tbody>
-<tr><td>Debug</td><td>ON</td><td>The main leg: everything enabled, assertions on.</td></tr>
-<tr><td>Debug</td><td>OFF</td><td>Keeps the no-physics build compiling and running (the engine then has no physics backend).</td></tr>
-<tr><td>Release</td><td>ON</td><td>Catches problems that only show with optimisation and <code>NDEBUG</code>: compiled-out asserts, optimised SIMD code paths, and it confirms that the sol2 safety checks, which <code>engine/CMakeLists.txt</code> forces on with a PUBLIC <code>SOL_ALL_SAFETIES_ON=1</code> in every configuration (sol2 would otherwise turn them off in Release), still hold there.</td></tr>
+<tr><td><code>windows (Debug, PhysX ON)</code></td><td>Debug</td><td>ON</td><td>OFF</td><td>The main leg: everything enabled, assertions on.</td></tr>
+<tr><td><code>windows (Debug, PhysX OFF, FreeType ON)</code></td><td>Debug</td><td>OFF</td><td>ON</td><td>Keeps the no-physics build compiling and running (the engine then has no physics backend). It also builds the optional FreeType font backend, so <code>text_tests</code> runs every font test against both backends and compares them, without a fourth full build.</td></tr>
+<tr><td><code>windows (Release, PhysX ON)</code></td><td>Release</td><td>ON</td><td>OFF</td><td>Catches problems that only show with optimisation and <code>NDEBUG</code>: compiled-out asserts, optimised SIMD code paths, and it confirms that the sol2 safety checks, which <code>engine/CMakeLists.txt</code> forces on with a PUBLIC <code>SOL_ALL_SAFETIES_ON=1</code> in every configuration (sol2 would otherwise turn them off in Release), still hold there.</td></tr>
 </tbody>
 </table>
 </div>
@@ -194,7 +197,7 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 <li>Check out the repository.</li>
 <li>Install the Vulkan SDK (headers and libraries only; no runtime).</li>
 <li>PhysX ON only: restore the cached <code>external/PhysX/physx/bin</code>. The cache key is not per configuration, because the one archive holds both configurations.</li>
-<li>Configure: <code>cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=&lt;matrix&gt;</code>.</li>
+<li>Configure: <code>cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=&lt;matrix&gt; -DN2ENGINE_TEXT_FREETYPE=&lt;matrix&gt;</code>. With FreeType on, configuring downloads the pinned FreeType release.</li>
 <li>Build the leg's configuration: <code>cmake --build build --config &lt;Debug|Release&gt; --parallel</code>.</li>
 <li>Test: <code>ctest --test-dir build --build-config &lt;Debug|Release&gt; --output-on-failure</code> with <code>ALSOFT_DRIVERS=null</code>, which routes OpenAL Soft to its silent null backend because the runner has no sound card.</li>
 <li>Editor host smoke test (below), against the leg's build.</li>
