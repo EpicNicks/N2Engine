@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
@@ -12,6 +14,7 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/physics/BoxCollider.hpp"
+#include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/Raycast.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SphereCollider.hpp"
@@ -529,6 +532,212 @@ TEST_F(PhysicsTest, RemovingRigidbodyLeavesStaticCollider)
 
     EXPECT_EQ(ShapesUnder(Vector3(0.0f, 5.0f, 0.0f)), 1) << "the collider was left without a body";
     EXPECT_TRUE(go->GetComponent<BoxCollider>()->GetHandle().IsValid());
+}
+
+// ============================================================================
+// Mass properties (inertia and centre of mass follow the colliders; the mass is the Rigidbody's)
+// ============================================================================
+
+namespace
+{
+    PhysXBackend &PhysX() { return static_cast<PhysXBackend &>(*Application::GetInstance().Get3DPhysicsBackend()); }
+
+    void ExpectVectorNear(const Vector3 &actual, const Vector3 &expected, const float tolerance)
+    {
+        EXPECT_NEAR(actual.x, expected.x, tolerance);
+        EXPECT_NEAR(actual.y, expected.y, tolerance);
+        EXPECT_NEAR(actual.z, expected.z, tolerance);
+    }
+
+    // Solid box of full size s and mass m: I = m/12 * (sy^2 + sz^2, sx^2 + sz^2, sx^2 + sy^2)
+    Vector3 BoxInertia(const float mass, const Vector3 &size)
+    {
+        return Vector3(size.y * size.y + size.z * size.z,
+                       size.x * size.x + size.z * size.z,
+                       size.x * size.x + size.y * size.y) * (mass / 12.0f);
+    }
+
+    // x of the centre of mass of a unit cube at the origin plus a radius-0.5 sphere at x = 2, same density
+    constexpr float CubeAndSphereCenterX = 0.6873f; // 2 * (pi / 6) / (1 + pi / 6)
+}
+
+class PhysicsMassTest : public PhysicsTest
+{
+protected:
+    // Dynamic and weightless (so it stays put). The body is only created when the attach queue runs
+    // in the next Step, so the mass here is the one it's created with.
+    Rigidbody *AddFloatingBody(GameObject &go, const float mass)
+    {
+        auto *body = go.AddComponent<Rigidbody>();
+        body->SetBodyType(BodyType::Dynamic);
+        body->SetGravityEnabled(false);
+        body->SetMass(mass);
+        return body;
+    }
+};
+
+TEST_F(PhysicsMassTest, BodyWithoutCollidersKeepsItsMass)
+{
+    const auto go = Spawn("Shapeless", Vector3(0.0f, 0.0f, 0.0f));
+    auto *body = AddFloatingBody(*go, 3.0f);
+    Step(1);
+
+    // Fallback: the configured mass, a centred COM, and inertia that scales with the mass (PhysX's own
+    // shapeless default is (1,1,1) whatever the mass)
+    EXPECT_NEAR(body->GetMass(), 3.0f, 1e-4f);
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.0f, 0.0f), 1e-4f);
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), Vector3(3.0f, 3.0f, 3.0f), 1e-4f);
+}
+
+TEST_F(PhysicsMassTest, InertiaAndCenterFollowBoxSizeAndOffset)
+{
+    const auto go = Spawn("Plank", Vector3(0.0f, 0.0f, 0.0f));
+    auto *box = go->AddComponent<BoxCollider>();
+    box->SetSize(Vector3(1.0f, 2.0f, 3.0f));
+    auto *body = AddFloatingBody(*go, 2.0f);
+    Step(1);
+
+    EXPECT_NEAR(body->GetMass(), 2.0f, 1e-4f) << "the collider's volume must not override the Rigidbody's mass";
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(2.0f, Vector3(1.0f, 2.0f, 3.0f)), 1e-3f);
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.0f, 0.0f), 1e-4f);
+
+    box->SetOffset(Vector3(0.0f, 1.0f, 0.0f));
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 1.0f, 0.0f), 1e-4f);
+
+    box->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(2.0f, Vector3(1.0f, 1.0f, 1.0f)), 1e-3f);
+    EXPECT_NEAR(body->GetMass(), 2.0f, 1e-4f);
+}
+
+TEST_F(PhysicsMassTest, ChangingMassScalesInertia)
+{
+    const auto go = Spawn("Scaled", Vector3(0.0f, 0.0f, 0.0f));
+    go->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 2.0f, 3.0f));
+    auto *body = AddFloatingBody(*go, 2.0f);
+    Step(1);
+
+    body->SetMass(4.0f);
+
+    EXPECT_NEAR(body->GetMass(), 4.0f, 1e-4f);
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(4.0f, Vector3(1.0f, 2.0f, 3.0f)), 1e-3f);
+}
+
+TEST_F(PhysicsMassTest, LongBoxHasLessInertiaAboutItsLongAxis)
+{
+    // Equal masses: the rod spins most easily about its long axis, the cube the same about every axis
+    const auto rod = Spawn("Rod", Vector3(0.0f, 0.0f, 0.0f));
+    rod->AddComponent<BoxCollider>()->SetSize(Vector3(4.0f, 0.5f, 0.5f));
+    auto *rodBody = AddFloatingBody(*rod, 1.0f);
+    const auto cube = Spawn("Cube", Vector3(0.0f, 5.0f, 0.0f));
+    cube->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    auto *cubeBody = AddFloatingBody(*cube, 1.0f);
+    Step(1);
+
+    const Vector3 rodInertia = PhysX().GetInertiaTensor(rodBody->GetHandle());
+    const Vector3 cubeInertia = PhysX().GetInertiaTensor(cubeBody->GetHandle());
+    EXPECT_LT(rodInertia.x, cubeInertia.x);
+    EXPECT_GT(rodInertia.y, cubeInertia.y);
+    EXPECT_LT(rodInertia.x * 10.0f, rodInertia.y) << "inertia isn't following the collider's shape";
+}
+
+TEST_F(PhysicsMassTest, CapsuleHasLeastInertiaAboutItsAxis)
+{
+    // The capsule shape is rotated onto Y, so PhysX may report the principal moments in any order:
+    // compare them sorted. Two are equal (across the axis), the one about the axis is much smaller.
+    const auto go = Spawn("Pill", Vector3(0.0f, 0.0f, 0.0f));
+    auto *capsule = go->AddComponent<CapsuleCollider>();
+    capsule->SetRadius(0.25f);
+    capsule->SetHeight(2.0f);
+    capsule->SetOffset(Vector3(0.0f, 0.5f, 0.0f));
+    auto *body = AddFloatingBody(*go, 1.0f);
+    Step(1);
+
+    const Vector3 inertia = PhysX().GetInertiaTensor(body->GetHandle());
+    std::array<float, 3> moments{inertia.x, inertia.y, inertia.z};
+    std::ranges::sort(moments);
+    EXPECT_GT(moments[0], 0.0f);
+    EXPECT_LT(moments[0] * 4.0f, moments[1]);
+    EXPECT_NEAR(moments[1], moments[2], moments[2] * 1e-3f);
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.5f, 0.0f), 1e-4f);
+}
+
+TEST_F(PhysicsMassTest, InvalidDeserializedMassFallsBackToOne)
+{
+    const auto go = Spawn("Massless", Vector3(0.0f, 0.0f, 0.0f));
+    go->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    auto *body = AddFloatingBody(*go, 2.0f);
+    nlohmann::json data;
+    data["_mass"] = 0.0f;
+    body->Deserialize(data, nullptr); // unlike SetMass, doesn't clamp
+    Step(1);
+
+    EXPECT_NEAR(body->GetMass(), 1.0f, 1e-4f);
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(1.0f, Vector3(1.0f, 1.0f, 1.0f)), 1e-3f);
+
+    body->AddImpulse(Vector3(1.0f, 0.0f, 0.0f));
+    Step(1);
+    EXPECT_NEAR(body->GetVelocity().x, 1.0f, 0.05f) << "a zero mass made the dynamic body immovable";
+}
+
+TEST_F(PhysicsMassTest, OffsetColliderMovesCenterOfMass)
+{
+    const auto go = Spawn("Compound", Vector3(0.0f, 0.0f, 0.0f));
+    go->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    auto *body = AddFloatingBody(*go, 1.0f);
+    Step(1);
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.0f, 0.0f), 1e-4f);
+
+    auto *sphere = go->AddComponent<SphereCollider>();
+    sphere->SetRadius(0.5f);
+    sphere->SetOffset(Vector3(2.0f, 0.0f, 0.0f));
+    Step(1);
+
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(CubeAndSphereCenterX, 0.0f, 0.0f), 1e-3f);
+    EXPECT_NEAR(body->GetMass(), 1.0f, 1e-4f);
+
+    ASSERT_TRUE(go->RemoveComponent<SphereCollider>());
+    Step(1);
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.0f, 0.0f), 1e-4f);
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(1.0f, Vector3(1.0f, 1.0f, 1.0f)), 1e-3f);
+}
+
+TEST_F(PhysicsMassTest, TriggerColliderDoesNotAffectMassProperties)
+{
+    const auto go = Spawn("Sensored", Vector3(0.0f, 0.0f, 0.0f));
+    go->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    auto *sensor = go->AddComponent<SphereCollider>();
+    sensor->SetRadius(0.5f);
+    sensor->SetOffset(Vector3(2.0f, 0.0f, 0.0f));
+    sensor->SetIsTrigger(true);
+    auto *body = AddFloatingBody(*go, 1.0f);
+    Step(1);
+
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.0f, 0.0f), 1e-4f);
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(1.0f, Vector3(1.0f, 1.0f, 1.0f)), 1e-3f);
+
+    sensor->SetIsTrigger(false); // now solid, so it counts
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(CubeAndSphereCenterX, 0.0f, 0.0f), 1e-3f);
+}
+
+TEST_F(PhysicsMassTest, ChangingBodyTypeKeepsMassProperties)
+{
+    const auto go = Spawn("Retyped", Vector3(0.0f, 0.0f, 0.0f));
+    auto *box = go->AddComponent<BoxCollider>();
+    box->SetSize(Vector3(1.0f, 2.0f, 3.0f));
+    box->SetOffset(Vector3(0.0f, 0.5f, 0.0f));
+    auto *body = AddFloatingBody(*go, 2.0f);
+    Step(1);
+
+    body->SetBodyType(BodyType::Kinematic); // recreates the body
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.5f, 0.0f), 1e-4f);
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(2.0f, Vector3(1.0f, 2.0f, 3.0f)), 1e-3f);
+
+    body->SetBodyType(BodyType::Dynamic);
+    Step(1);
+
+    EXPECT_NEAR(body->GetMass(), 2.0f, 1e-4f);
+    ExpectVectorNear(PhysX().GetCenterOfMass(body->GetHandle()), Vector3(0.0f, 0.5f, 0.0f), 1e-4f);
+    ExpectVectorNear(PhysX().GetInertiaTensor(body->GetHandle()), BoxInertia(2.0f, Vector3(1.0f, 2.0f, 3.0f)), 1e-3f);
 }
 
 #endif // N2ENGINE_PHYSX_ENABLED

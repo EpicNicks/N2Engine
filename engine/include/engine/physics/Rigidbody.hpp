@@ -40,6 +40,8 @@ namespace N2Engine::Physics
         void SetBodyType(BodyType type);
         [[nodiscard]] BodyType GetBodyType() const { return _bodyType; }
 
+        /// The body's total mass. Like Unity, it's authoritative: the inertia tensor and centre of mass
+        /// are derived from the attached non-trigger colliders (at uniform density) and rescaled to it.
         void SetMass(float mass);
         [[nodiscard]] float GetMass() const;
 
