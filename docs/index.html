@@ -129,7 +129,7 @@
 </tbody>
 </table>
 </div>
-<p>Two build options change behaviour: <code>N2ENGINE_USE_PHYSX</code> (default <code>ON</code>; when <code>OFF</code> the engine has no physics backend and reports physics as Disabled) and <code>N2ENGINE_BUILD_TESTS</code>. The math target requires AVX (<code>/arch:AVX</code>) <span class="badge">PR #27</span>.</p>
+<p>Two build options change behaviour: <code>N2ENGINE_USE_PHYSX</code> (default <code>ON</code>; when <code>OFF</code> the engine has no physics backend and reports physics as Disabled) and <code>N2ENGINE_BUILD_TESTS</code>. The math target requires AVX (<code>/arch:AVX</code>, a PUBLIC flag on the <code>math</code> target).</p>
 
 <h2 id="map">Architecture map</h2>
 <div class="map">
@@ -181,9 +181,9 @@
 <p>A few rules recur on almost every page:</p>
 <ul>
 <li><strong>Structural changes are deferred.</strong> Destroying an object, switching scenes and quitting take effect at the end of the frame. New components are attached at the start of the next frame.</li>
-<li><strong>One teardown sequence.</strong> Every way a component can go away (<code>Destroy</code>, <code>RemoveComponent</code>, scene switch, shutdown) runs <code>OnDisable</code> (if it was enabled in an active hierarchy) and then <code>OnDestroy</code>, exactly once.</li>
+<li><strong>One teardown sequence.</strong> Every way a component is <em>destroyed</em> (<code>Destroy</code>, <code>RemoveComponent</code>, scene switch, shutdown) runs <code>OnDisable</code> (if it was enabled in an active hierarchy) and then <code>OnDestroy</code>, once, unless a callback re-enters teardown (the destroyed flag is set only after <code>OnDestroy</code> returns). Detaching and releasing an object (<code>RemoveChild</code>, <code>RemoveRootGameObject</code>, the editor's DestroyEntity), or a scene dropped by SceneManager without being loaded, runs no callbacks. See <a href="gameobjects-components.html">GameObjects &amp; components</a>.</li>
 <li><strong>Safe modification during iteration.</strong> Component updates, event dispatch, input action updates, coroutine updates and physics event dispatch all tolerate handlers that add or remove things while they run. Removals take effect immediately for lookup and are compacted after the loop.</li>
-<li><strong>Errors are logged, not fatal.</strong> Bad scene JSON, corrupt asset metadata, unknown input binding names and throwing scripts or coroutines are reported through the <a href="logging-and-editor.html">Logger</a>, and the engine keeps running with the previous valid state.</li>
+<li><strong>Errors are logged, not fatal.</strong> Bad scene JSON, corrupt asset metadata, unknown input binding names and throwing scripts or coroutines are reported through the <a href="logging-and-editor.html">Logger</a>, and the engine keeps running with the previous valid state. The exception is the editor server, where an exception in a command handler terminates the host (see <a href="logging-and-editor.html">Logging, health &amp; editor</a>).</li>
 <li><strong>Headless is a first-class mode.</strong> The engine runs without a window, renderer or audio device. Tests and the editor host rely on this, and <code>Application::Init</code> reports what is missing in its <code>EngineHealth</code>.</li>
 </ul>
 

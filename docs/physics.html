@@ -94,7 +94,7 @@
 <p class="src">Source: <code>engine/include/engine/physics/PhysicsHandle.hpp</code>; <code>engine/src/physics/physx/PhysXBackend.cpp</code> — <code>AllocateHandle</code>, <code>GetBodyData</code>, <code>DestroyBody</code></p>
 
 <h3 id="physx-optional">PhysX is optional</h3>
-<p>The CMake option <code>N2ENGINE_USE_PHYSX</code> (default <code>ON</code>) requests PhysX. It is forced off with a warning on MinGW/GCC on Windows, on Linux (binaries not configured), and when the Windows binary download fails. Only when the binaries are actually available does the <code>engine</code> target define <code>N2ENGINE_PHYSX_ENABLED=1</code> (PUBLIC), add the PhysX include directory and link the libraries.</p>
+<p>The CMake option <code>N2ENGINE_USE_PHYSX</code> (default <code>ON</code>) requests PhysX. It is forced off with a warning on MinGW/GCC on Windows, on Linux (binaries not configured), and when the Windows binary download fails. On macOS no branch matches, so PhysX is silently absent: no warning, only the generic status line "PhysX disabled - no physics backend active". Only when the binaries are actually available does the <code>engine</code> target define <code>N2ENGINE_PHYSX_ENABLED=1</code> (PUBLIC), add the PhysX include directory and link the libraries.</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Situation</th><th>Backend</th><th>Physics health state</th></tr></thead>
@@ -111,7 +111,7 @@
 
 <div class="callout note">
 <p class="callout-title">Note</p>
-<p>Tests install a backend headlessly with <code>Application::Set3DPhysicsBackend(std::make_unique&lt;PhysXBackend&gt;())</code> after calling <code>Initialize()</code> themselves, because <code>Application::Init</code> needs a window. See <a href="testing.html">Testing &amp; CI</a>.</p>
+<p>Tests install a backend headlessly with <code>Application::Set3DPhysicsBackend(std::make_unique&lt;PhysXBackend&gt;())</code> after calling <code>Initialize()</code> themselves. <code>Application::Init</code> does not require a window (headless it continues and reports Failed health), but it tries to open a real window and audio device and clears the quit flag, which tests avoid. See <a href="testing.html">Testing &amp; CI</a>.</p>
 </div>
 
 <h2 id="fixed-step">The fixed physics step</h2>
@@ -161,6 +161,7 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 <tr><td>Colliders only</td><td>Each collider creates and owns its own static body (<code>CreateStaticBody</code> with a null Rigidbody). Two colliders on one object are two static actors.</td></tr>
 <tr><td>Rigidbody only</td><td>One body with no shapes. A dynamic one still simulates (falls under gravity) and uses the <a href="#mass">fallback mass properties</a>; it collides with nothing.</td></tr>
 <tr><td>Rigidbody and colliders</td><td>One body owned by the Rigidbody. Every collider on the same GameObject attaches its shapes to it, which makes a compound body.</td></tr>
+<tr><td>Two Rigidbodies</td><td>Nothing prevents it. Colliders attach to the first one (<code>GetComponent&lt;Rigidbody&gt;()</code>); the second creates its own body with no shapes, which simulates separately and collides with nothing.</td></tr>
 </tbody>
 </table>
 </div>
@@ -183,6 +184,10 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 
 <h3 id="scene-switch">Scene switches</h3>
 <p>Unloading a scene destroys its components, which releases their bodies. A dynamic body from the previous scene stops simulating and its Rigidbody's handle becomes invalid.</p>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>Every scene load or switch rebuilds the scene from its JSON snapshot (the only exception is the scene object itself passed to <code>SceneManager::AddScene(scene, true)</code>, which is loaded as-is the first time), and <code>Rigidbody</code> is not registered with the component registry, so deserialisation silently drops it (see <a href="#open-questions">Open questions</a> and <a href="serialization.html">Serialization</a>). After a reload a physics object comes back with only its colliders, each on its own static body: it no longer falls, moves or responds to forces, and nothing is logged. Re-add the Rigidbody from code after loading.</p>
+</div>
 <p class="src">Tests: <code>SceneSwitchReleasesDynamicBodies</code>. See <a href="scenes.html">Scenes &amp; SceneManager</a>.</p>
 
 <h2 id="body-types">Body types</h2>
@@ -215,7 +220,7 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 <ul>
 <li><strong>Physics to transform.</strong> <code>SyncTransforms</code> runs after every simulate and visits every active body that has a Rigidbody and is a non-kinematic <code>PxRigidDynamic</code>. It calls <code>Positionable::SetPositionAndRotation</code> with the actor's global pose. Kinematic bodies are skipped, so a script's move is not overwritten before PhysX consumes it; static bodies and collider-only bodies are skipped.</li>
 <li><strong>Transform to physics.</strong> Every change to a <code>Positionable</code> (and to any ancestor, because children are walked on every change) calls <code>NotifyPhysicsComponents</code>. If the object has a live Rigidbody, <code>Rigidbody::OnTransformChanged</code> pushes the world pose to a Kinematic (<code>SetBodyTransform</code>) or Static (<code>SetStaticBodyTransform</code>) body. Otherwise each collider's <code>OnTransformChanged</code> moves the static body it owns.</li>
-<li>The notification fires on every call, so two moves in one frame both reach physics and the last one wins.</li>
+<li>The notification fires on every change, so two moves in one frame both reach physics and the last one wins.</li>
 <li>Moving collider-only static bodies logs "Static collider being moved frequently" on every tenth move. The counter is a single function-local static shared by all colliders.</li>
 </ul>
 <p class="src">Source: <code>PhysXBackend::SyncTransforms</code>, <code>PhysXBackend::SetBodyTransform</code>, <code>PhysXBackend::SetStaticBodyTransform</code>; <code>engine/src/Positionable.cpp</code> — <code>MarkGlobalTransformDirty</code>, <code>NotifyPhysicsComponents</code>; <code>Rigidbody::OnTransformChanged</code>, <code>ICollider::OnTransformChanged</code>; tests: <code>KinematicBodyFollowsLatestTransform</code></p>
@@ -253,6 +258,10 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 
 <h2 id="events">Collision and trigger events</h2>
 <p>Every <code>Component</code> has six virtual callbacks: <code>OnCollisionEnter/Stay/Exit(const Collision&amp;)</code> and <code>OnTriggerEnter/Stay/Exit(Trigger)</code> (the trigger data is passed by value). Events are delivered to <strong>every component</strong> on the GameObject that owns each body, not only to physics components. The owner of a body is its Rigidbody's GameObject, otherwise its first registered collider's.</p>
+<div class="callout warning">
+<p class="callout-title">Warning: inactive and disabled objects still simulate and receive events</p>
+<p><code>Rigidbody</code> and the colliders have no <code>OnDisable</code>/<code>OnEnable</code>, so <code>SetActive(false)</code> on the GameObject (or an ancestor), or disabling the components, leaves the body and its shapes in the PhysX scene: it keeps simulating, colliding and triggering. <code>DispatchToBody</code> checks only <code>IsDestroyed()</code>, so disabled components and components on inactive objects still get <code>OnCollision*</code> and <code>OnTrigger*</code> callbacks. Unity differs: deactivating an object removes its body and colliders from the simulation and stops its callbacks. To take an object out of physics here, remove its Rigidbody and colliders or destroy it.</p>
+</div>
 <p>The filter shader requests touch-found, touch-lost and contact-point notifications for solid pairs and the default trigger notifications for trigger pairs. PhysX's own default shader never reported solid contacts, which is why <code>OnCollision*</code> once never fired.</p>
 
 <h3 id="per-shape-tracking">Per-shape tracking, per-body-pair events</h3>
@@ -281,7 +290,7 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 <tr><td>A dynamic body enters a trigger</td><td><code>OnTriggerEnter</code> once on both sides, then <code>OnTriggerStay</code>; no collision events</td><td><code>TriggerEventsFireOnBothBodies</code></td></tr>
 <tr><td>A body moves through two overlapping trigger shapes of one compound body</td><td>One Enter (first shape), no Exit while inside either shape, one Exit when fully outside</td><td><code>CompoundTriggerExitsOnlyWhenFullyOutside</code></td></tr>
 <tr><td>A solid and a trigger collider on the same Rigidbody</td><td>The other body gets trigger events from the trigger shape and collision events from the solid one</td><td><code>TriggerOnlyAffectsItsOwnCollider</code></td></tr>
-<tr><td>The other GameObject is destroyed while touching</td><td>Survivor gets Exit in the next step; Stay stops; the destroyed side gets nothing</td><td><code>DestroyingObjectInsideTriggerIsSafe</code></td></tr>
+<tr><td>The other GameObject is destroyed while touching</td><td><code>Destroy()</code> is deferred: <code>IsDestroyed()</code> only becomes true, and the body is only released, at the end-of-frame purge. Until then nothing changes: the destroyed object still gets the rest of the current step's events (Stay included) and Enter/Stay in any later fixed steps of the same frame. After the purge the survivor gets Exit in the next step, Stay stops, and the destroyed side gets nothing more</td><td><code>DestroyingObjectInsideTriggerIsSafe</code>; code: <code>Scene::ProcessDestroyed</code></td></tr>
 <tr><td>The last touching collider of a live body is removed</td><td>Both sides get Exit in the next step (the removed collider is reported as <code>nullptr</code>); Stay stops</td><td><code>RemovingTheOverlappingShapeEndsTheTrigger</code></td></tr>
 <tr><td>A collider is removed while another collider of the same body still touches</td><td>No event; the pair continues (Stay)</td><td>Code: <code>ForgetShape</code> only queues Exit when the list empties</td></tr>
 <tr><td>A touching collider is removed and re-added in the same frame</td><td>Exit(old) then Enter(new), in that order in the same step</td><td><code>RecreatingATouchingColliderKeepsEnterAndExitBalanced</code></td></tr>
@@ -289,6 +298,7 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 <tr><td>A handler removes its own Rigidbody during <code>OnCollisionEnter</code></td><td>Safe; that Enter is delivered once; remaining components of that body are skipped</td><td><code>HandlerRemovingRigidbodyDuringDispatchIsSafe</code></td></tr>
 <tr><td>Kinematic against static, or kinematic against kinematic</td><td>No events at all, triggers included: PhysX's default <code>staticKineFilteringMode</code>/<code>kineKineFilteringMode</code> (<code>eSUPPRESS</code>) drops these pairs, and the engine does not change them</td><td>Code: <code>PhysXBackend::Initialize</code>; comment in <code>DestroyingObjectInsideTriggerIsSafe</code></td></tr>
 <tr><td>Static against static (including two collider-only objects)</td><td>No events: PhysX never pairs two static actors</td><td>PhysX behaviour</td></tr>
+<tr><td>Trigger against trigger</td><td>No events: PhysX never pairs two trigger shapes, whatever the body types</td><td>PhysX behaviour</td></tr>
 <tr><td>The scene is switched</td><td>Bodies are released; nothing is dispatched to the unloaded objects</td><td><code>SceneSwitchReleasesDynamicBodies</code></td></tr>
 <tr><td>Game paused (<code>timeScale</code> 0)</td><td>No steps, so no events (not even Stay)</td><td>Code: <code>Application::Run</code></td></tr>
 </tbody>
@@ -315,7 +325,7 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 <p>For each event, body A's GameObject is dispatched first, then body B's. For trigger events body A is the trigger's body. Within a GameObject, components are called in <code>GetAllComponents()</code> order.</p>
 <ul>
 <li><strong>Queues are swapped out</strong> before iterating, and the Stay loops iterate a copy of the active pair keys and re-check each pair, so a handler that ends a pair or destroys a body cannot invalidate the iteration. A pair ended by a handler gets no further Stay this step.</li>
-<li><strong>Component snapshot.</strong> <code>DispatchToBody</code> snapshots the component list. Before each call it re-checks that the body still has the same owner (otherwise the rest of that side is skipped), that the component is still on the object, and that it is not destroyed. Components added by a handler are not called for the current event.</li>
+<li><strong>Component snapshot.</strong> <code>DispatchToBody</code> snapshots the component list. Before each call it re-checks that the body still has the same owner (otherwise the rest of that side is skipped), that the component is still on the object, and that it is not destroyed. It does not check whether the component is enabled or its GameObject active. Components added by a handler are not called for the current event.</li>
 <li><strong>Destroyed bodies are skipped.</strong> A side whose body no longer resolves gets nothing.</li>
 <li><strong>Colliders are re-validated.</strong> <code>collider</code>/<code>otherCollider</code> are checked against the body's live collider list at dispatch (<code>LiveCollider</code>), so a collider removed by an earlier handler is reported as <code>nullptr</code>, never as a dangling pointer.</li>
 </ul>
@@ -329,12 +339,21 @@ public:
 
     void OnTriggerEnter(const Physics::Trigger trigger) override
     {
+        // Destroy() is deferred: until the end-of-frame purge this object still receives
+        // Stay this step and Enter/Stay in later fixed steps of the frame, so guard with a flag
+        if (_collected)
+            return;
+
         // otherRigidbody is null when the other side has no Rigidbody
         if (trigger.otherGameObject != nullptr &amp;&amp; trigger.otherRigidbody != nullptr)
         {
+            _collected = true;
             GetGameObject().Destroy(); // safe: purged at end of frame, the other side then gets Exit
         }
     }
+
+private:
+    bool _collected = false;
 };
 </code></pre>
 
@@ -346,7 +365,7 @@ public:
 <tr><td><code>gameObject</code>, <code>rigidbody</code></td><td>The receiving side. <code>rigidbody</code> is <code>nullptr</code> when the receiving body is a collider-only static body. A Rigidbody with <code>BodyType::Static</code> is reported (non-null).</td></tr>
 <tr><td><code>otherGameObject</code>, <code>otherRigidbody</code></td><td>The other side, with the same rule. The header comment says "nullptr if static", but it is really "nullptr if the other body has no Rigidbody".</td></tr>
 <tr><td><code>collider</code>, <code>otherCollider</code></td><td>This side's and the other side's collider in one touching shape pair: the pair that first touched (Enter), the earliest pair still touching (Stay), the last pair to stop (Exit). <code>nullptr</code> if that collider has since been removed, or for the destroyed side of a destroyed body.</td></tr>
-<tr><td><code>Collision::contacts</code></td><td>Up to 64 <code>ContactPoint</code>s extracted from that shape pair. Filled for Enter, and for an Exit that PhysX reported. Empty for Stay and for Exits caused by removal or destruction.</td></tr>
+<tr><td><code>Collision::contacts</code></td><td>Up to 64 <code>ContactPoint</code>s extracted from that shape pair. Filled for Enter. Normally empty for Exit: an Exit that PhysX reported is only filled if PhysX happened to supply contact points with the lost touch, which it usually does not. Always empty for Stay and for Exits caused by removal or destruction.</td></tr>
 <tr><td><code>ContactPoint::point</code>, <code>normal</code>, <code>separation</code>, <code>normalImpulse</code></td><td>World-space position; normal pointing from the other body towards this one (flipped for body B); separation (negative = penetration); magnitude of the contact impulse.</td></tr>
 <tr><td><code>ContactPoint::tangentImpulse</code></td><td>Never filled; always 0.</td></tr>
 <tr><td><code>Collision::impulse</code></td><td>Sum of <code>normal * normalImpulse</code> over the contacts, computed in body A's frame.</td></tr>
@@ -380,6 +399,7 @@ public:
 <ul>
 <li><strong>Layer masks are currently no-ops.</strong> Until the layer system exists, every shape's query filter <code>word0</code> is <code>0xFFFFFFFF</code>, so any non-zero mask matches every shape, and a mask of 0 disables PhysX's filter test entirely. The default mask is <code>0xFFFFFFFF</code>.</li>
 <li><code>RaycastHit</code> carries <code>hit</code>, <code>point</code>, <code>normal</code>, <code>distance</code>, <code>bodyHandle</code> and <code>gameObject</code> (the body's owner). <code>rigidbody</code> is set when the body has one. <code>collider</code> is only set when the body has <em>no</em> Rigidbody, and then it is the body's first collider, not necessarily the shape that was hit.</li>
+<li><strong>Reusing a <code>RaycastHit</code> keeps stale pointers.</strong> A hit only assigns the fields that apply (<code>gameObject</code>/<code>rigidbody</code> or <code>gameObject</code>/<code>collider</code>), and a miss only sets <code>hit = false</code>, so a variable reused across queries keeps <code>rigidbody</code> or <code>collider</code> from an earlier hit. Use a fresh <code>RaycastHit</code> per query.</li>
 <li>Queries hit trigger shapes as well as solid ones.</li>
 <li>Objects are only hittable once their bodies exist, i.e. after the attach queue has run.</li>
 <li>Raycasts are not bound to Lua.</li>
@@ -425,7 +445,7 @@ box-&gt;SetOffset(Vector3(0.0f, 1.0f, 0.0f)); // centre of mass moves to (0, 1, 
 <h2 id="materials">PhysicsMaterial</h2>
 <p><code>PhysicsMaterial</code> holds <code>staticFriction</code>, <code>dynamicFriction</code> and <code>restitution</code>. Each collider has its own (default <code>PhysicsMaterial::Default()</code>: 0.5, 0.5, 0.3). Presets: <code>Default</code>, <code>Ice</code> (0.05, 0.05, 0.1), <code>Rubber</code> (0.9, 0.8, 0.8), <code>Bouncy</code> (0.5, 0.5, 0.95), <code>Metal</code> (0.4, 0.3, 0.5).</p>
 <ul>
-<li><code>ICollider::SetMaterial</code> updates the collider's live shapes. The backend caches one <code>PxMaterial</code> per exact (static, dynamic, restitution) triple and falls back to its own default material if creation fails.</li>
+<li><code>ICollider::SetMaterial</code> updates the collider's live shapes. The backend caches one <code>PxMaterial</code> per exact (static, dynamic, restitution) triple and falls back to its own default material if creation fails. That fallback is (0.5, 0.5, 0.6), created in <code>PhysXBackend::Initialize</code>, not <code>PhysicsMaterial::Default()</code> (restitution 0.3).</li>
 <li>Friction and restitution combine with the other shape's material using PhysX's default combine modes; the engine does not set them.</li>
 <li>When deserialised, a missing field becomes 0, not the <code>Default()</code> value.</li>
 </ul>
@@ -447,7 +467,7 @@ box-&gt;SetOffset(Vector3(0.0f, 1.0f, 0.0f)); // centre of mass moves to (0, 1, 
 </div>
 <div class="callout open-question">
 <p class="callout-title">Open question: Rigidbody is not registered for deserialisation</p>
-<p><code>BoxCollider</code>, <code>SphereCollider</code> and <code>CapsuleCollider</code> use <code>REGISTER_COMPONENT</code>, but <code>engine/src/physics/Rigidbody.cpp</code> does not, so <code>ComponentRegistry::Create("Rigidbody")</code> returns null. Rigidbody registers its serialisable members (<code>_bodyType</code>, <code>_mass</code>, <code>_gravityEnabled</code>), so it looks intended to be saved. Whether scene loading recreates a Rigidbody by some other path is not established here; see <a href="serialization.html">Serialization</a>.</p>
+<p><code>BoxCollider</code>, <code>SphereCollider</code> and <code>CapsuleCollider</code> use <code>REGISTER_COMPONENT</code>, but <code>engine/src/physics/Rigidbody.cpp</code> does not, so <code>ComponentRegistry::Create("Rigidbody")</code> returns null. Rigidbody registers its serialisable members (<code>_bodyType</code>, <code>_mass</code>, <code>_gravityEnabled</code>), so it looks intended to be saved. There is no other path: <code>GameObject::Deserialize</code> creates components only through the registry and silently skips unknown types, so every scene load or switch drops every Rigidbody. Objects come back with collider-only static bodies and nothing is logged (see <a href="#scene-switch">Scene switches</a> and <a href="serialization.html">Serialization</a>).</p>
 </div>
 <div class="callout open-question">
 <p class="callout-title">Open question: raycast collider identity</p>

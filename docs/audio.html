@@ -118,7 +118,11 @@
 <p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>RenderEditorFrame</code>; <code>engine/src/audio/AudioSystem.cpp</code> — <code>AudioSystem::Update</code>, <code>CleanupFinishedSources</code></p>
 
 <h2 id="audio-source">AudioSource component</h2>
-<p><code>AudioSource</code> is a <code>SerializableComponent</code> (several per GameObject allowed). Defaults: volume 1, pitch 1, not looping, <strong>spatial</strong>, mixer group <code>"SFX"</code>, min (reference) distance 1, max distance 100, rolloff 1, <code>_playOnAwake</code> false, no clip. All of these and the clip (as an asset reference) are serialized; see <a href="serialization.html">Serialization</a>.</p>
+<p><code>AudioSource</code> is a <code>SerializableComponent</code> (several per GameObject allowed). Defaults: volume 1, pitch 1, not looping, <strong>spatial</strong>, mixer group <code>"SFX"</code>, min (reference) distance 1, max distance 100, rolloff 1, <code>_playOnAwake</code> false, no clip. <code>AudioSource::Serialize</code> writes all of these and the clip (as an asset reference), but neither <code>AudioSource</code> nor <code>AudioListener</code> is registered with <code>REGISTER_COMPONENT</code>, so nothing can read them back; see <a href="serialization.html">Serialization</a>.</p>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><code>AudioSource</code> and <code>AudioListener</code> have no <code>REGISTER_COMPONENT</code>, so <code>GameObject::Deserialize</code> drops them silently, with no log, on every scene load and every scene switch: each load rebuilds the scene from its stored JSON. The only exception is the scene object you passed to <code>SceneManager::AddScene(scene, true)</code> (what <code>Application::Init</code> does with the initial scene), which is used as is the first time it loads. After any reload, including switching back to that scene, its sources and listeners are gone. Add them from C++ code that runs after the load (for example in another component's <code>OnAttach</code>) until they are registered.</p>
+</div>
 <h3 id="source-registration">Registration and source acquisition</h3>
 <ul>
 <li>The constructor registers the component with <code>AudioSystem</code> (so group limits count it and group changes reach it); the destructor unregisters it, then stops and releases its OpenAL source if it holds one.</li>
@@ -137,7 +141,7 @@
 <tr><td><code>IsPlaying()</code> / <code>IsPaused()</code></td><td>Query the OpenAL source state; <code>false</code> without a source.</td></tr>
 <tr><td><code>SetClip(clip)</code></td><td>Stops; if it was playing and the new clip is non-null, plays the new clip. Setting a clip while stopped does not start playback.</td></tr>
 <tr><td><code>SetLoop(b)</code></td><td>Stored, and applied immediately to a held source.</td></tr>
-<tr><td><code>OnEnable</code></td><td>Calls <code>Play()</code> if <code>_playOnAwake</code> and a clip is set (<code>_playOnAwake</code> has no setter; it comes from serialized data).</td></tr>
+<tr><td><code>OnEnable</code></td><td>Calls <code>Play()</code> if <code>_playOnAwake</code> and a clip is set (<code>_playOnAwake</code> has no setter, and because <code>AudioSource</code> is not registered for deserialization it is never read back from scene data either, so in practice it is always <code>false</code> and this never plays).</td></tr>
 <tr><td><code>OnDisable</code></td><td><code>Pause()</code>. Re-enabling does not resume unless play-on-awake restarts it.</td></tr>
 </tbody>
 </table>
@@ -157,7 +161,7 @@
 <ul>
 <li><strong>Spatial</strong> (default): world-relative source, positioned at the GameObject's global position, with reference distance, max distance and rolloff from the component.</li>
 <li><strong>Non-spatial</strong>: listener-relative at the origin with rolloff 0, so distance has no effect.</li>
-<li><code>SetSpatial</code> switches mode on a held source immediately. <code>SetMinDistance</code> clamps to ≥ 0; <code>SetMaxDistance</code> clamps to ≥ the current min distance; <code>SetRolloffFactor</code> clamps to ≥ 0. Each applies immediately only to a held source in spatial mode; otherwise it takes effect on the next <code>Play()</code>.</li>
+<li><code>SetSpatial</code> switches mode on a held source immediately, but <code>SetSpatial(true)</code> on a held source re-applies only the rolloff and position, not the min/max distance: a source that was played non-spatial keeps the pool's reset values (reference distance 1, max distance <code>FLT_MAX</code>) until the next <code>Play()</code>. <code>SetMinDistance</code> clamps to ≥ 0; <code>SetMaxDistance</code> clamps to ≥ the current min distance; <code>SetRolloffFactor</code> clamps to ≥ 0. Each applies immediately only to a held source in spatial mode; otherwise it takes effect on the next <code>Play()</code>.</li>
 <li><code>OnLateUpdate</code> updates the position while the source is spatial and playing.</li>
 </ul>
 <div class="callout warning">
@@ -332,7 +336,7 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 </tbody>
 </table>
 </div>
-<p>Lua cannot set a clip, play one-shots, or change mixer groups' settings; clips come from serialized scenes or C++.</p>
+<p>Lua cannot set a clip, play one-shots, or change mixer groups' settings. Clips are set from C++ (<code>SetClip</code>); they do not come from scene files, because <code>AudioSource</code> is dropped on load (see the <a href="#audio-source">warning above</a>).</p>
 <pre class="lang-lua"><code>local source = self.gameObject:GetComponent("AudioSource")
 if source ~= nil and source:IsValid() then
     source:SetMixerGroup("UI")

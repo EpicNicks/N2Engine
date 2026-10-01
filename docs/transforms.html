@@ -175,7 +175,7 @@ weapon-&gt;GetPositionable()-&gt;SetLocalPosition(N2Engine::Math::Vector3{0.0f, 
 
 <div class="callout warning">
 <p class="callout-title">Warning</p>
-<p>With <code>keepWorldPosition</code> and a parent whose world matrix is singular (see <a href="#setting-world">Setting world values</a>), the restore's <code>SetPosition</code> throws inside <code>AddChild</code> after the child has already been linked to the parent, but before its scene is updated and before active-state notifications run. Pass <code>keepWorldPosition = false</code> when parenting under a zero- or tiny-scale object.</p>
+<p>With <code>keepWorldPosition</code> and a parent whose world matrix is singular (see <a href="#setting-world">Setting world values</a>), the restore's <code>SetPosition</code> throws inside <code>AddChild</code> and the object is left half-reparented. By then a root child has already been erased from its scene's root list and removed from any old parent, and it is linked under the new parent, but its <code>SetScene</code> and active-state notifications never ran: <code>_scene</code> still points at the scene it came from (stale if the new parent is in another scene or none), its components were not re-queued, and no <code>OnEnable</code>/<code>OnDisable</code> fired. Catching the exception does not undo any of this. Pass <code>keepWorldPosition = false</code> when parenting under a zero- or tiny-scale object.</p>
 </div>
 
 <div class="callout note">

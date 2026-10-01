@@ -176,7 +176,7 @@ if (input)
 <p><code>InputSystem::Serialize</code> writes <code>{"actionMaps": {name: map, ...}}</code>. <code>InputSystem::Deserialize</code>:</p>
 <ul>
 <li>returns <code>false</code> and changes nothing if <code>actionMaps</code> is missing or not an object;</li>
-<li>builds all new maps first, silently skipping maps without an <code>actions</code> object, logging a warning for actions without a <code>bindings</code> array and for each invalid binding (which is skipped);</li>
+<li>builds all new maps first, silently skipping maps without an <code>actions</code> object, logging a warning for actions without a <code>bindings</code> array and for each invalid binding (which is skipped); a wrongly typed optional field instead throws <code>nlohmann::json::type_error</code> out of <code>Deserialize</code> (see <a href="#json-format">JSON format and validation</a>);</li>
 <li>then replaces <em>all</em> maps at once and returns <code>true</code>;</li>
 <li>keeps the current map name if a map of that name still exists, otherwise picks <code>_actionMaps.begin()</code> (an arbitrary map, since the container is an <code>unordered_map</code>), or clears it if there are no maps.</li>
 </ul>
@@ -405,8 +405,12 @@ if (input)
 </tbody>
 </table>
 </div>
-<p>A name is accepted only if converting it to the enum and back gives the same string. This closes the nlohmann pitfall where an unknown string silently became the enum's first value. Names are case-sensitive. Optional numeric/boolean fields use <code>json::value</code> with the defaults above.</p>
-<p>How errors surface depends on the caller:</p>
+<p>A name is accepted only if converting it to the enum and back gives the same string. This closes the nlohmann pitfall where an unknown string silently became the enum's first value. Names are case-sensitive. Optional numeric/boolean fields use <code>json::value</code> with the defaults above, which is not validated: a missing optional field gets its default, but one of the wrong type throws.</p>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>An optional field of the wrong type (<code>gamepadId</code>, <code>deadzone</code>, <code>invertX</code>, <code>invertY</code> on a binding, or <code>disabled</code> on a map, for example <code>"deadzone": "0.2"</code> or <code>"invertY": 1</code>) is <strong>not</strong> a <code>BindingParseError</code>. <code>json::value</code> throws <code>nlohmann::json::type_error</code>, which propagates uncaught out of <code>CreateBindingFromJson</code>, <code>InputAction::Deserialize</code>, <code>ActionMap::Deserialize</code>, <code>InputSystem::Deserialize</code> (before any map is replaced) and Lua's <code>Input.CreateActionMap</code>. Nothing on this path catches it, so it is not skipped with a warning like other bad bindings. Validate the types yourself or catch the exception around these calls.</p>
+</div>
+<p>How <code>BindingParseError</code>s and the other parse errors surface depends on the caller (a <code>type_error</code> from a wrongly typed optional field is not handled by any of them):</p>
 <ul>
 <li><code>InputAction::Deserialize</code>: an invalid binding is skipped with <code>Logger::Warn</code> naming the action and the <code>BindingParseErrorToString</code> reason; a missing or non-array <code>bindings</code> returns <code>MissingBindings</code> / <code>InvalidBindingsType</code>.</li>
 <li><code>ActionMap::Deserialize</code>: an invalid action is skipped with a warning; a missing or non-object <code>actions</code> returns <code>MissingActions</code> / <code>InvalidActionsType</code>, which <code>CreateActionMapFromJson</code> logs as an error and turns into <code>nullptr</code>.</li>
@@ -414,7 +418,7 @@ if (input)
 </ul>
 <div class="callout guarantee">
 <p class="callout-title">Guarantee</p>
-<p>Unknown type names give <code>InvalidType</code> and unknown key/button/axis names give <code>InvalidValue</code>; every valid key, button and axis round-trips through <code>Serialize</code> and <code>CreateBindingFromJson</code> unchanged; defaults for <code>gamepadId</code>, <code>deadzone</code>, <code>invertX</code>/<code>invertY</code> are as listed.</p>
+<p>Unknown type names give <code>InvalidType</code> and unknown key/button/axis names give <code>InvalidValue</code>; every valid key, button and axis round-trips through <code>Serialize</code> and <code>CreateBindingFromJson</code> unchanged; defaults for a <em>missing</em> <code>gamepadId</code>, <code>deadzone</code>, <code>invertX</code>/<code>invertY</code> are as listed. Not guaranteed: a present optional field of the wrong type is not reported as a <code>BindingParseError</code>; it throws <code>nlohmann::json::type_error</code> (see the warning above).</p>
 </div>
 <p class="src">Source: <code>engine/src/input/InputBindingFactory.cpp</code> — <code>CreateBindingFromJson</code>, <code>IsKnownName</code>; <code>engine/src/input/ActionMap.cpp</code> — <code>InputAction::Deserialize</code>, <code>ActionMap::Deserialize</code>, <code>*::Serialize</code>; tests: <code>BindingValidationTest.UnknownNamesAreRejected</code>, <code>KnownNamesStillWork</code>, <code>InputBindingSerializationTest.*</code>, <code>ActionMapSerializationTest.*</code></p>
 
@@ -455,7 +459,7 @@ end)
 </code></pre>
 <div class="callout warning">
 <p class="callout-title">Warning</p>
-<p><code>ActionMap</code> and <code>InputAction</code> reach Lua as raw pointers; the checked handles of <span class="badge">PR #29</span> explicitly leave them out. A map or action reference kept in a script dangles once the map is replaced (<code>Input.CreateActionMap</code> with the same name, or <code>InputSystem::Deserialize</code>) or the action removed. Look the map up again after replacing it rather than caching it across replacements.</p>
+<p><code>ActionMap</code> and <code>InputAction</code> reach Lua as raw pointers; the checked handles of <span class="badge">PR #29</span> explicitly leave them out. A map or action reference kept in a script dangles once the map is replaced (<code>Input.CreateActionMap</code> with the same name, or <code>InputSystem::Deserialize</code>) or the action removed. Look the map up again after replacing it rather than caching it across replacements. This is being fixed in the <code>lua-remaining-handles</code> PR, which gives <code>ActionMap</code> and <code>InputAction</code> checked handles.</p>
 </div>
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code> — <code>BindInput</code>; <code>engine/src/scripting/LuaJson.cpp</code> — <code>ActionMapJsonFromLua</code>; <code>lua_project/assets/scene.lua</code>, <code>lua_project/assets/scripts/QuitHandler.lua</code></p>
 

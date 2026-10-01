@@ -32,7 +32,7 @@ The first version describes `master` plus open PRs #26 (PhysX mass/inertia), #27
 
 ## Adding or changing a page
 
-1. Copy `_template.html` to `<topic>.html`. It contains the full page skeleton: head, sidebar, "On this page" box, callouts, footer.
+1. Copy `_template.html` to `<topic>.html`. It contains the full page skeleton: head, sidebar, "On this page" box, callouts, footer. Delete its "Authoring template" callout and comment in the copy. The template itself is not linked from the site (and Jekyll is disabled with `.nojekyll`, so GitHub Pages serves it as-is).
 2. Set `<title>` to `<Page title> · N2Engine docs` and add `aria-current="page"` to the page's own sidebar link.
 3. Add the new page to the sidebar of **every** page. There is no JavaScript to generate it, so the sidebar is repeated verbatim in each file. Keep the order and grouping identical everywhere.
 4. Add the page to the table above and, if it is a subsystem, a card on `index.html`.
