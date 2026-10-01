@@ -23,6 +23,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -215,6 +216,12 @@ namespace N2Engine::Physics
         // Shapes re-filtered since the last step have their reports settled once this step is done
         _refiltering.swap(_pendingRefilter);
         _pendingRefilter.clear();
+        // A deferred "lost" is settled by this step's reports for its shapes, so hold those back too
+        for (const RefilterReport &deferred : _deferredLost)
+        {
+            _refiltering.insert(deferred.onA);
+            _refiltering.insert(deferred.onB);
+        }
 
         _scene->simulate(deltaTime);
         _scene->fetchResults(true);
@@ -277,6 +284,11 @@ namespace N2Engine::Physics
             delete report.data;
         }
         _refilterReports.clear();
+        for (const auto& deferred : _deferredLost)
+        {
+            delete deferred.data;
+        }
+        _deferredLost.clear();
         _pendingRefilter.clear();
         _refiltering.clear();
 
@@ -464,6 +476,7 @@ namespace N2Engine::Physics
                     for (const PxShape *shape : shapes->second)
                     {
                         _pendingRefilter.erase(shape);
+                        DropDeferred(shape);
                     }
                 }
             }
@@ -849,6 +862,52 @@ namespace N2Engine::Physics
         // if the new data still allows them (see ReconcileRefilteredPairs)
         _scene->resetFiltering(actor, shapes.data(), static_cast<PxU32>(shapes.size()));
         _pendingRefilter.insert(shapes.begin(), shapes.end());
+
+        // resetFiltering wakes only this actor. A sleeping partner (e.g. a ball resting on a floor whose
+        // layer changed) would let PhysX re-find the pair only once something woke it, so wake it now.
+        const auto isReset = [&shapes](const PxShape *shape) { return std::ranges::find(shapes, shape) != shapes.end(); };
+        for (const TouchMap *touches : {&_collisionTouches, &_triggerTouches})
+        {
+            for (const auto &shapePairs : *touches | std::views::values)
+            {
+                for (const ShapePair &touching : shapePairs)
+                {
+                    if (isReset(touching.onA))
+                    {
+                        WakeIfAsleep(touching.onB);
+                    }
+                    else if (isReset(touching.onB))
+                    {
+                        WakeIfAsleep(touching.onA);
+                    }
+                }
+            }
+        }
+    }
+
+    void PhysXBackend::WakeIfAsleep(const PxShape *shape)
+    {
+        PxRigidActor *actor = shape ? shape->getActor() : nullptr;
+        PxRigidDynamic *dynamic = actor ? actor->is<PxRigidDynamic>() : nullptr;
+        // wakeUp is invalid for kinematic actors and actors outside a scene
+        if (dynamic && dynamic->getScene() && !dynamic->getRigidBodyFlags().isSet(PxRigidBodyFlag::eKINEMATIC) &&
+            dynamic->isSleeping())
+        {
+            dynamic->wakeUp();
+        }
+    }
+
+    void PhysXBackend::DropDeferred(const PxShape *shape)
+    {
+        std::erase_if(_deferredLost, [shape](const RefilterReport &deferred)
+        {
+            if (deferred.onA != shape && deferred.onB != shape)
+            {
+                return false;
+            }
+            delete deferred.data;
+            return true;
+        });
     }
 
     bool PhysXBackend::IsRefiltering(const PxShape *a, const PxShape *b) const
@@ -875,6 +934,28 @@ namespace N2Engine::Physics
             last[key(reports[i])] = i;
         }
 
+        // "Lost" reports held over from the last step, waiting for a "found"
+        std::vector<RefilterReport> previouslyDeferred;
+        previouslyDeferred.swap(_deferredLost);
+        std::set<ShapeKey> wasDeferred;
+        for (const RefilterReport &deferred : previouslyDeferred)
+        {
+            wasDeferred.insert(key(deferred));
+        }
+
+        const auto isTouching = [](const TouchMap &touches, const RefilterReport &report)
+        {
+            const auto it = touches.find(report.pair);
+            if (it == touches.end())
+            {
+                return false;
+            }
+            const bool flipped = it->first.bodyA != report.pair.bodyA;
+            const PxShape *onA = flipped ? report.onB : report.onA;
+            const PxShape *onB = flipped ? report.onA : report.onB;
+            return std::ranges::any_of(it->second, [&](const ShapePair &p) { return p.onA == onA && p.onB == onB; });
+        };
+
         for (size_t i = 0; i < reports.size(); ++i)
         {
             RefilterReport &report = reports[i];
@@ -885,6 +966,18 @@ namespace N2Engine::Physics
             }
 
             TouchMap &touches = report.trigger ? _triggerTouches : _collisionTouches;
+
+            // Lost, but the new filter data still allows the pair: PhysX may report it found again only
+            // in the next step (e.g. a partner that was asleep). Wait a step before calling it an Exit.
+            if (!report.found && !wasDeferred.contains(key(report)) && isTouching(touches, report) &&
+                LayersCollide(report.onA->getSimulationFilterData(), report.onB->getSimulationFilterData()))
+            {
+                WakeIfAsleep(report.onA);
+                WakeIfAsleep(report.onB);
+                _deferredLost.push_back(report); // takes report.data
+                continue;
+            }
+
             const bool changed = report.found
                                      ? AddTouch(touches, report.pair, report.onA, report.onB)
                                      : RemoveTouch(touches, report.pair, report.onA, report.onB);
@@ -902,6 +995,26 @@ namespace N2Engine::Physics
             else
             {
                 (report.found ? _newCollisions : _endedCollisions).push_back({report.pair, report.data});
+            }
+        }
+
+        // A deferred "lost" with no report for its pair in a whole further step was a real end: Exit now.
+        // One with a report was settled above ("found": still touching; "lost" again: ended there).
+        for (RefilterReport &deferred : previouslyDeferred)
+        {
+            TouchMap &touches = deferred.trigger ? _triggerTouches : _collisionTouches;
+            if (last.contains(key(deferred)) || !RemoveTouch(touches, deferred.pair, deferred.onA, deferred.onB))
+            {
+                delete deferred.data;
+                continue;
+            }
+            if (deferred.trigger)
+            {
+                _endedTriggers.push_back({deferred.pair, ColliderOf(deferred.onA), ColliderOf(deferred.onB)});
+            }
+            else
+            {
+                _endedCollisions.push_back({deferred.pair, deferred.data});
             }
         }
 
@@ -1519,6 +1632,7 @@ namespace N2Engine::Physics
         // shape is skipped, so the other body would otherwise never get Exit, and a re-created shape
         // would fire a second Enter. Both shapes are still alive here (released after this).
         _pendingRefilter.erase(shape);
+        DropDeferred(shape);
         const auto involves = [shape](const ShapePair &p) { return p.onA == shape || p.onB == shape; };
         for (auto it = _collisionTouches.begin(); it != _collisionTouches.end();)
         {

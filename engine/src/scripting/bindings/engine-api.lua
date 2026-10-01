@@ -963,8 +963,14 @@ function SceneManager.LoadScene(sceneIndex) end
 ---@field IgnoreRaycast integer 2 ("Ignore Raycast"): left out of queries by default
 ---@field Water integer 4
 ---@field UI integer 5
+---@field AllLayers integer Every layer (0xFFFFFFFF)
 ---@field DefaultRaycastMask integer Every layer except Ignore Raycast
 Layers = {}
+
+---The mask holding just this layer (1 << layer), or 0 for an out-of-range layer
+---@param layer integer
+---@return integer
+function Layers.MaskOf(layer) end
 
 ---The layer with this name, or -1
 ---@param name string

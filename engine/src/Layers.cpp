@@ -3,6 +3,8 @@
 #include "engine/Logger.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <format>
@@ -213,8 +215,13 @@ namespace N2Engine
             for (int layer = 0; layer < Count; ++layer)
             {
                 const auto &row = (*matrix)[layer];
-                // is_number_unsigned: a non-negative integer (a negative one is number_integer)
-                if (!row.is_number_unsigned() || row.get<uint64_t>() > AllLayers)
+                // Parsed text gives non-negative integers as unsigned, but JSON built in C++ from an int is
+                // a signed integer; accept either when it's in 0..0xFFFFFFFF
+                const bool inRange = row.is_number_unsigned()
+                                         ? row.get<uint64_t>() <= AllLayers
+                                         : row.is_number_integer() && row.get<int64_t>() >= 0 &&
+                                           row.get<int64_t>() <= static_cast<int64_t>(AllLayers);
+                if (!inRange)
                 {
                     return reject(std::format("collision row {} isn't a 32-bit mask", layer));
                 }

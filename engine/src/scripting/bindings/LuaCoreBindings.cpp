@@ -244,10 +244,12 @@ namespace N2Engine::Scripting::Bindings
             "IgnoreRaycast", Layers::IgnoreRaycast,
             "Water", Layers::Water,
             "UI", Layers::UI,
+            "AllLayers", Layers::AllLayers,
             "DefaultRaycastMask", Layers::DefaultRaycastMask,
 
             "NameToLayer", [](const std::string &name) { return Layers::NameToLayer(name); },
             "LayerToName", [](const int layer) { return Layers::LayerToName(layer); },
+            "MaskOf", [](const int layer) { return Layers::MaskOf(layer); },
             "SetName", [](const int layer, const std::string &name) { return Layers::SetName(layer, name); },
             // Layers.GetMask("Player", "Enemy"); unknown names are skipped, as in C++
             "GetMask", [](sol::variadic_args names)

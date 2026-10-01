@@ -377,13 +377,23 @@ namespace N2Engine::Physics
         std::unordered_set<const physx::PxShape*> _pendingRefilter; // reset since the last step
         std::unordered_set<const physx::PxShape*> _refiltering;     // being re-filtered in this step
         std::vector<RefilterReport> _refilterReports;
+        // A touch whose last report was "lost" although the new filter data still allows it: PhysX may
+        // only report it found again a step later (e.g. once a sleeping partner wakes). Its Exit waits a
+        // step and is dropped if "found" arrives meanwhile.
+        std::vector<RefilterReport> _deferredLost;
 
-        /// Re-filters these shapes of the actor in the next step (a no-op for an actor outside the scene)
+        /// Re-filters these shapes of the actor in the next step (a no-op for an actor outside the scene),
+        /// waking the dynamic bodies they touch so PhysX re-finds those pairs promptly
         void RefilterShapes(physx::PxRigidActor& actor, const std::vector<physx::PxShape*>& shapes);
         [[nodiscard]] bool IsRefiltering(const physx::PxShape* a, const physx::PxShape* b) const;
-        /// After a step that re-filtered shapes: applies each held-back shape pair's last report, then ends
-        /// any touch of those shapes the filter data now rules out (if PhysX didn't report it lost)
+        /// After a step that re-filtered shapes: applies each held-back shape pair's last report, defers a
+        /// "lost" the filter still allows, then ends any touch of those shapes the filter data now rules
+        /// out (if PhysX didn't report it lost)
         void ReconcileRefilteredPairs();
+        /// Wakes the shape's actor if it's a sleeping, simulated dynamic body in the scene
+        static void WakeIfAsleep(const physx::PxShape* shape);
+        /// Forgets deferred "lost" reports involving a shape that's going away
+        void DropDeferred(const physx::PxShape* shape);
 
         /// Dispatches and clears a queue of ended pairs (OnCollisionExit / OnTriggerExit to both sides)
         void DispatchCollisionExits(std::vector<CollisionEvent>& queue);
