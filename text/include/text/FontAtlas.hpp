@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -19,17 +20,22 @@ namespace N2Engine::Text
     };
 
     /// How a font's SDF atlas is generated. The engine reads these from a font's .meta customData.
+    /// Limits are FontAtlas's kMin/kMax constants; settings outside them fail the build rather than being clamped.
     struct AtlasSettings
     {
-        float basePx = 48.0f; // rasterisation size, in pixels per em
-        int spreadPx = 8;     // distance range of the SDF, in pixels each side of the outline
+        float basePx = 48.0f; // rasterisation size, in pixels per em (4 to 256)
+        int spreadPx = 8;     // SDF distance range in pixels each side of the outline (1 to MaxSpreadPx(basePx))
         int paddingPx = 2;    // empty pixels between glyphs and around the atlas edge (stops filtering bleed)
         Charset charset = Charset::Latin1;
         std::u32string extraChars; // added to the charset; duplicates are ignored
     };
 
-    /// The codepoints the settings ask for, sorted and unique
+    /// The codepoints the settings ask for, sorted and unique. Always includes U+FFFD, which is what
+    /// ill-formed UTF-8 decodes to.
     [[nodiscard]] std::vector<char32_t> ResolveCharset(const AtlasSettings &settings);
+
+    /// The largest spreadPx allowed at this basePx: half of it, and at most FontAtlas::kMaxSpreadPx
+    [[nodiscard]] int MaxSpreadPx(float basePx);
 
     struct AtlasGlyph
     {
@@ -57,11 +63,18 @@ namespace N2Engine::Text
     public:
         /// Rasterises every charset codepoint the face has, plus .notdef. Codepoints the face lacks are
         /// skipped (they lay out as the fallback glyph). nullopt, with the reason in *error, if the
-        /// settings are invalid or the atlas would exceed kMaxSize.
+        /// settings are out of range, the charset has more than kMaxCodepoints codepoints, or the glyphs
+        /// won't fit in kMaxSize x kMaxSize (estimated from the outline boxes before rasterising anything).
         [[nodiscard]] static std::optional<FontAtlas> Build(const IFontFace &face, const AtlasSettings &settings,
                                                             std::string *error = nullptr);
 
         static constexpr int kMaxSize = 8192;
+        static constexpr float kMinBasePx = 4.0f;
+        static constexpr float kMaxBasePx = 256.0f;
+        static constexpr int kMaxSpreadPx = 32;
+        static constexpr int kMaxPaddingPx = 16;
+        /// Charsets larger than this fail before any glyph is looked up or rasterised
+        static constexpr std::size_t kMaxCodepoints = 4096;
 
         [[nodiscard]] int GetWidth() const { return _width; }
         [[nodiscard]] int GetHeight() const { return _height; }

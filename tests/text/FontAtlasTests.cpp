@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <text/FontAtlas.hpp>
+#include <text/Utf8.hpp>
 
 #include "TextTestSupport.hpp"
 
@@ -46,9 +47,9 @@ namespace
 TEST(AtlasCharsetTest, Latin1IsPrintableAsciiPlusTheSupplement)
 {
     const auto charset = ResolveCharset(AtlasSettings{});
-    EXPECT_EQ(charset.size(), 95u + 96u);
+    EXPECT_EQ(charset.size(), 95u + 96u + 1u); // and U+FFFD
     EXPECT_EQ(charset.front(), U' ');
-    EXPECT_EQ(charset.back(), char32_t{0xFF});
+    EXPECT_NE(std::ranges::find(charset, char32_t{0xFF}), charset.end());
     EXPECT_TRUE(std::ranges::is_sorted(charset));
     EXPECT_EQ(std::ranges::find(charset, char32_t{0x7F}), charset.end());
     EXPECT_EQ(std::ranges::find(charset, char32_t{0x9F}), charset.end());
@@ -59,8 +60,21 @@ TEST(AtlasCharsetTest, AsciiStopsAtTilde)
     AtlasSettings settings;
     settings.charset = Charset::Ascii;
     const auto charset = ResolveCharset(settings);
-    EXPECT_EQ(charset.size(), 95u);
-    EXPECT_EQ(charset.back(), U'~');
+    EXPECT_EQ(charset.size(), 95u + 1u);
+    EXPECT_NE(std::ranges::find(charset, U'~'), charset.end());
+    EXPECT_EQ(std::ranges::find(charset, char32_t{0xA0}), charset.end());
+}
+
+TEST(AtlasCharsetTest, TheReplacementCharacterIsAlwaysIncluded)
+{
+    // DecodeUtf8 produces U+FFFD for bad bytes, so every atlas has it
+    for (const Charset charset : {Charset::Ascii, Charset::Latin1})
+    {
+        AtlasSettings settings;
+        settings.charset = charset;
+        const auto codepoints = ResolveCharset(settings);
+        EXPECT_EQ(codepoints.back(), kReplacementCharacter);
+    }
 }
 
 TEST(AtlasCharsetTest, ExtraCharsAreAddedOnceAndControlsAreDropped)
@@ -69,7 +83,7 @@ TEST(AtlasCharsetTest, ExtraCharsAreAddedOnceAndControlsAreDropped)
     settings.charset = Charset::Ascii;
     settings.extraChars = U"\u20AC\u20ACA\n\uFFFD";
     const auto charset = ResolveCharset(settings);
-    EXPECT_EQ(charset.size(), 95u + 2u); // euro and U+FFFD; 'A' was already there; '\n' never draws
+    EXPECT_EQ(charset.size(), 95u + 2u); // euro and U+FFFD (always there); 'A' was already; '\n' never draws
     EXPECT_EQ(charset.back(), char32_t{0xFFFD});
     EXPECT_TRUE(std::ranges::is_sorted(charset));
 }
@@ -89,7 +103,9 @@ TEST_P(FontAtlasTest, EveryCharsetGlyphIsPresent)
         }
     }
     EXPECT_EQ(atlas.FindCodepoint(0x4E2D), nullptr);
-    EXPECT_EQ(atlas.FindCodepoint(0xFFFD), nullptr); // in the font, but not in the default charset
+    const AtlasGlyph *replacement = atlas.FindCodepoint(kReplacementCharacter);
+    ASSERT_NE(replacement, nullptr);
+    EXPECT_TRUE(replacement->HasBitmap());
 }
 
 TEST_P(FontAtlasTest, UsesTheDefaultSettings)
@@ -277,6 +293,34 @@ TEST_P(FontAtlasTest, InvalidSettingsAreRejected)
     settings = SmallSettings();
     settings.paddingPx = -1;
     EXPECT_TRUE(rejects(settings));
+
+    // The cost caps: basePx above kMaxBasePx, and a spread over half the base size
+    settings = SmallSettings();
+    settings.basePx = FontAtlas::kMaxBasePx + 1.0f;
+    EXPECT_TRUE(rejects(settings));
+    settings = SmallSettings(); // 16 px
+    settings.spreadPx = MaxSpreadPx(settings.basePx) + 1;
+    EXPECT_TRUE(rejects(settings));
+    settings.spreadPx = MaxSpreadPx(settings.basePx);
+    EXPECT_FALSE(rejects(settings));
+    EXPECT_EQ(MaxSpreadPx(16.0f), 8);
+    EXPECT_EQ(MaxSpreadPx(FontAtlas::kMaxBasePx), FontAtlas::kMaxSpreadPx);
+}
+
+TEST_P(FontAtlasTest, HugeCharsetsFailBeforeRasterising)
+{
+    const auto backend = CreateFontBackend(GetParam());
+    const auto face = backend->LoadFace(GetDefaultFontData());
+    ASSERT_NE(face, nullptr);
+
+    AtlasSettings settings = SmallSettings();
+    for (char32_t c = 0x4E00; c < 0x4E00 + FontAtlas::kMaxCodepoints; ++c)
+    {
+        settings.extraChars.push_back(c);
+    }
+    std::string error;
+    EXPECT_FALSE(FontAtlas::Build(*face, settings, &error).has_value());
+    EXPECT_NE(error.find("codepoints"), std::string::npos) << error;
 }
 
 INSTANTIATE_TEST_SUITE_P(Backends, FontAtlasTest, ::testing::ValuesIn(Backends()), BackendName);

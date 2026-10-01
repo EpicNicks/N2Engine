@@ -6,6 +6,8 @@
 #include <map>
 #include <utility>
 
+#include "text/Utf8.hpp"
+
 namespace N2Engine::Text
 {
     namespace
@@ -66,9 +68,17 @@ namespace N2Engine::Text
         }
     }
 
+    int MaxSpreadPx(const float basePx)
+    {
+        // A spread beyond half the em only blurs, and costs as much as a bigger basePx
+        return std::clamp(static_cast<int>(basePx / 2.0f), 1, FontAtlas::kMaxSpreadPx);
+    }
+
     std::vector<char32_t> ResolveCharset(const AtlasSettings &settings)
     {
-        std::vector<char32_t> result;
+        // U+FFFD is always there: DecodeUtf8 turns ill-formed bytes into it, and they should draw as the
+        // replacement character, not as a missing glyph
+        std::vector<char32_t> result{kReplacementCharacter};
         for (char32_t c = 0x20; c <= 0x7E; ++c)
         {
             result.push_back(c);
@@ -105,17 +115,20 @@ namespace N2Engine::Text
             return std::nullopt;
         };
 
-        if (!(settings.basePx >= 4.0f && settings.basePx <= 512.0f))
+        // SDF rasterisation costs about (glyph pixels x outline edges); these caps keep a load to seconds
+        if (!(settings.basePx >= kMinBasePx && settings.basePx <= kMaxBasePx))
         {
-            return fail(std::format("basePx must be between 4 and 512 (got {})", settings.basePx));
+            return fail(std::format("basePx must be between {} and {} (got {})", kMinBasePx, kMaxBasePx, settings.basePx));
         }
-        if (settings.spreadPx < 1 || settings.spreadPx > 64)
+        const int maxSpread = MaxSpreadPx(settings.basePx);
+        if (settings.spreadPx < 1 || settings.spreadPx > maxSpread)
         {
-            return fail(std::format("spreadPx must be between 1 and 64 (got {})", settings.spreadPx));
+            return fail(std::format("spreadPx must be between 1 and {} at basePx {} (got {})", maxSpread,
+                                    settings.basePx, settings.spreadPx));
         }
-        if (settings.paddingPx < 0 || settings.paddingPx > 64)
+        if (settings.paddingPx < 0 || settings.paddingPx > kMaxPaddingPx)
         {
-            return fail(std::format("paddingPx must be between 0 and 64 (got {})", settings.paddingPx));
+            return fail(std::format("paddingPx must be between 0 and {} (got {})", kMaxPaddingPx, settings.paddingPx));
         }
 
         const FontMetrics metrics = face.GetMetrics();
@@ -128,7 +141,12 @@ namespace N2Engine::Text
         std::map<GlyphId, char32_t> glyphCodepoints;
         glyphCodepoints.emplace(GlyphId{0}, char32_t{0}); // .notdef, the missing-glyph fallback
         std::unordered_map<char32_t, GlyphId> codepointToGlyph;
-        for (const char32_t c : ResolveCharset(settings))
+        const std::vector<char32_t> charset = ResolveCharset(settings);
+        if (charset.size() > kMaxCodepoints)
+        {
+            return fail(std::format("the charset has {} codepoints; at most {} are allowed", charset.size(), kMaxCodepoints));
+        }
+        for (const char32_t c : charset)
         {
             if (const auto glyph = face.FindGlyph(c))
             {
@@ -137,9 +155,31 @@ namespace N2Engine::Text
             }
         }
 
+        const float unitsPerEm = static_cast<float>(metrics.unitsPerEm);
+
+        // Estimate the packed area from the outline boxes before rasterising anything, so an atlas that
+        // can't fit fails at once rather than after rendering every glyph
+        {
+            const double scale = settings.basePx / unitsPerEm;
+            const double border = 2.0 * settings.spreadPx + 2.0; // spread each side, plus pixel rounding
+            double estimatedArea = 0.0;
+            for (const auto &[glyphId, codepoint] : glyphCodepoints)
+            {
+                if (const auto bounds = face.GetGlyphBounds(glyphId))
+                {
+                    estimatedArea += (bounds->Width() * scale + border + settings.paddingPx) *
+                                     (bounds->Height() * scale + border + settings.paddingPx);
+                }
+            }
+            if (estimatedArea > static_cast<double>(kMaxSize) * kMaxSize)
+            {
+                return fail(std::format("the glyphs need about {:.0f} pixels, more than a {}x{} atlas holds; lower "
+                                        "basePx or the charset", estimatedArea, kMaxSize, kMaxSize));
+            }
+        }
+
         std::vector<PendingGlyph> pending;
         pending.reserve(glyphCodepoints.size());
-        const float unitsPerEm = static_cast<float>(metrics.unitsPerEm);
         for (const auto &[glyphId, codepoint] : glyphCodepoints)
         {
             PendingGlyph entry;
