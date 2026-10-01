@@ -175,6 +175,10 @@ TEST_F(LuaInputHandleTest, HandlesErrorAfterTheMapIsReplaced)
     EXPECT_TRUE(Contains(error, "attempt to use a destroyed ActionMap")) << error;
     error = RunExpectingError("return input_map.name");
     EXPECT_TRUE(Contains(error, "attempt to use a destroyed ActionMap")) << error;
+    error = RunExpectingError("return input_map['Poke']");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed ActionMap")) << error;
+    error = RunExpectingError("input_map.disabled = true");
+    EXPECT_TRUE(Contains(error, "attempt to use a destroyed ActionMap")) << error;
     error = RunExpectingError("input_action:GetPhase()");
     EXPECT_TRUE(Contains(error, "attempt to use a destroyed InputAction")) << error;
     error = RunExpectingError("input_action:Subscribe(function() end)");
