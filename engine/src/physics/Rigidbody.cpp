@@ -13,6 +13,8 @@
 
 namespace N2Engine::Physics
 {
+    REGISTER_COMPONENT(Rigidbody)
+
     Rigidbody::Rigidbody(GameObject &gameObject)
         : SerializableComponent(gameObject),
           _handle(INVALID_PHYSICS_HANDLE)

@@ -3,6 +3,7 @@
 #include <math/Constants.hpp>
 
 #include "engine/example/renderers/PolygonRenderer.hpp"
+#include "engine/serialization/ComponentRegistry.hpp"
 
 namespace N2Engine::Example
 {
@@ -133,4 +134,7 @@ namespace N2Engine::Example
         [[nodiscard]] uint32_t GetLatitudeSegments() const { return _latitudeSegments; }
         [[nodiscard]] uint32_t GetLongitudeSegments() const { return _longitudeSegments; }
     };
+
+    // Header-only, so every file including this registers it (the same entry each time), like Spin.hpp
+    REGISTER_COMPONENT(SphereRenderer)
 }

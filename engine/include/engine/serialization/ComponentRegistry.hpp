@@ -4,6 +4,8 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+#include <ranges>
+#include <vector>
 
 namespace N2Engine
 {

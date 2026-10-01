@@ -4,9 +4,12 @@
 #include "engine/GameObject.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/common/ScriptUtils.hpp"
+#include "engine/serialization/ComponentRegistry.hpp"
 
 namespace N2Engine::Audio
 {
+    REGISTER_COMPONENT(AudioSource)
+
     AudioSource::AudioSource(GameObject& gameObject)
         : SerializableComponent(gameObject)
     {
