@@ -68,7 +68,7 @@ namespace N2Engine::Text
         [[nodiscard]] virtual GlyphSdf RenderSdf(GlyphId glyph, float pixelsPerEm, int spreadPx) const = 0;
     };
 
-    /// The font backends the build can contain. P1b adds FreeType behind a CMake option.
+    /// The font backends the build can contain. FreeType is optional: CMake option N2ENGINE_TEXT_FREETYPE.
     enum class FontBackendKind
     {
         StbTrueType,
