@@ -997,4 +997,5 @@ TEST(PrefabParseErrorTest, AllErrorsHaveStrings)
     EXPECT_FALSE(PrefabParseErrorToString(PrefabParseError::MissingName).empty());
     EXPECT_FALSE(PrefabParseErrorToString(PrefabParseError::MissingRootObject).empty());
     EXPECT_FALSE(PrefabParseErrorToString(PrefabParseError::InvalidRootObject).empty());
+    EXPECT_FALSE(PrefabParseErrorToString(PrefabParseError::InvalidName).empty());
 }
