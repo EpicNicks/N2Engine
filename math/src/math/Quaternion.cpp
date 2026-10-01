@@ -249,42 +249,37 @@ bool Quaternion::IsIdentity(const float tolerance) const
         std::abs(z) <= tolerance;
 }
 
-// SIMD initialization
-void Quaternion::InitializeSIMD()
+void Quaternion::SetSIMDLevel(const SIMDLevel requested)
 {
-    if (initialized)
+    const SIMDLevel level = ClampSIMDLevel(requested);
+    if (level == SIMDLevel::Scalar)
+    {
+        add_func = &AddScalar;
+        sub_func = &SubScalar;
+        mul_func = &MulScalar;
+        scalar_mul_func = &ScalarMulScalar;
+        dot_func = &DotScalar;
+        length_func = &LengthScalar;
+        normalize_func = &NormalizeScalar;
         return;
-
-    CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
-    if (features.sse41)
-    {
-        std::cout << "Using SSE4.1 implementations for Quaternion\n";
-
-        add_func = &AddSSE2;
-        sub_func = &SubSSE2;
-        mul_func = &MulSSE2;
-        scalar_mul_func = &ScalarMulSSE2;
-        dot_func = &DotSSE41; // SSE4.1 has better dot product
-        length_func = &LengthSSE41; // SSE4.1 has better sqrt
-        normalize_func = &NormalizeSSE41; // SSE4.1 has better normalization
     }
-    else if (features.sse2)
-    {
-        std::cout << "Using SSE2 implementations for Quaternion\n";
 
-        add_func = &AddSSE2;
-        sub_func = &SubSSE2;
-        mul_func = &MulSSE2;
-        scalar_mul_func = &ScalarMulSSE2;
+    add_func = &AddSSE2;
+    sub_func = &SubSSE2;
+    mul_func = &MulSSE2;
+    scalar_mul_func = &ScalarMulSSE2;
+
+    // AVX has nothing extra for a single quaternion, so it uses the SSE4.1 versions
+    if (level == SIMDLevel::SSE2)
+    {
         dot_func = &DotSSE2;
         length_func = &LengthSSE2;
         normalize_func = &NormalizeSSE2;
     }
     else
     {
-        // Function pointers already initialized to scalar versions
-        // No need to change anything
+        dot_func = &DotSSE41;
+        length_func = &LengthSSE41;
+        normalize_func = &NormalizeSSE41;
     }
-
-    initialized = true;
 }

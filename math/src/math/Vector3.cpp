@@ -13,91 +13,56 @@ const Vector3 Vector3::Right{1.f, 0.f, 0.f};
 const Vector3 Vector3::Forward{0.f, 0.f, 1.f};
 const Vector3 Vector3::Back{0.f, 0.f, -1.f};
 
-void Vector3::InitializeSIMD()
+void Vector3::SetSIMDLevel(const SIMDLevel requested)
 {
-    if (initialized)
+    const SIMDLevel level = ClampSIMDLevel(requested);
+    simd_level = level;
+
+    // Start from scalar so each tier below only overrides what it accelerates, and switching back down works
+    add_func = &AddScalar;
+    sub_func = &SubScalar;
+    scalar_mul_func = &ScalarMulScalar;
+    scalar_div_func = &ScalarDivScalar;
+    dot_func = &DotScalar;
+    cross_func = &CrossScalar;
+    length_func = &LengthScalar;
+    normalize_func = &NormalizeScalar;
+    distance_func = &DistanceScalar;
+    min_func = &MinScalar;
+    max_func = &MaxScalar;
+    floor_func = &FloorScalar;
+    ceil_func = &CeilScalar;
+    round_func = &RoundScalar;
+    abs_func = &AbsScalar;
+
+    if (level == SIMDLevel::Scalar)
         return;
 
-    std::cout << "Vector3 SIMD Initialization:\n";
+    // Floor/Ceil/Round have no SSE2 versions (they need SSE4.1's round instruction)
+    add_func = &AddSSE2;
+    sub_func = &SubSSE2;
+    scalar_mul_func = &ScalarMulSSE2;
+    scalar_div_func = &ScalarDivSSE2;
+    dot_func = &DotSSE2;
+    cross_func = &CrossSSE2;
+    length_func = &LengthSSE2;
+    normalize_func = &NormalizeSSE2;
+    distance_func = &DistanceSSE2;
+    min_func = &MinSSE2;
+    max_func = &MaxSSE2;
+    abs_func = &AbsSSE2;
 
-    const CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
+    if (level == SIMDLevel::SSE2)
+        return;
 
-    std::cout << "SSE2: " << (features.sse2 ? "Yes" : "No") << "\n";
-    std::cout << "SSE4.1: " << (features.sse41 ? "Yes" : "No") << "\n";
-    std::cout << "AVX: " << (features.avx ? "Yes" : "No") << "\n";
-    std::cout << "AVX2: " << (features.avx2 ? "Yes" : "No") << "\n";
-
-    // Set function pointers based on available features
-    // Prefer highest performance implementations available
-
-    if (features.avx)
-    {
-        std::cout << "Using AVX/SSE4.1 implementations for Vector3\n";
-
-        // Single operations: AVX might not always be faster due to overhead
-        // Use SSE4.1/SSE2 for single operations, AVX for batch operations
-        add_func = &AddSSE2;
-        sub_func = &SubSSE2;
-        scalar_mul_func = &ScalarMulSSE2;
-        scalar_div_func = &ScalarDivSSE2;
-
-        if (features.sse41)
-        {
-            dot_func = &DotSSE41;
-            length_func = &LengthSSE41;
-            normalize_func = &NormalizeSSE41;
-            distance_func = &DistanceSSE41;
-        }
-        else
-        {
-            dot_func = &DotSSE2;
-            length_func = &LengthSSE2;
-            normalize_func = &NormalizeSSE2;
-            distance_func = &DistanceSSE2;
-        }
-
-        cross_func = &CrossSSE2;
-
-        // AVX batch operations will be used automatically in batch functions
-    }
-    else if (features.sse41)
-    {
-        std::cout << "Using SSE4.1 implementations for Vector3\n";
-
-        // Use SSE4.1 where available, SSE2 for others
-        add_func = &AddSSE2;
-        sub_func = &SubSSE2;
-        scalar_mul_func = &ScalarMulSSE2;
-        scalar_div_func = &ScalarDivSSE2;
-        dot_func = &DotSSE41; // SSE4.1 dot product
-        cross_func = &CrossSSE2; // SSE2 is fine for cross product
-        length_func = &LengthSSE41; // SSE4.1 length
-        normalize_func = &NormalizeSSE41; // SSE4.1 normalize
-        distance_func = &DistanceSSE41; // SSE4.1 distance
-    }
-    else if (features.sse2)
-    {
-        std::cout << "Using SSE2 implementations for Vector3\n";
-
-        add_func = &AddSSE2;
-        sub_func = &SubSSE2;
-        scalar_mul_func = &ScalarMulSSE2;
-        scalar_div_func = &ScalarDivSSE2;
-        dot_func = &DotSSE2;
-        cross_func = &CrossSSE2;
-        length_func = &LengthSSE2;
-        normalize_func = &NormalizeSSE2;
-        distance_func = &DistanceSSE2;
-    }
-    else
-    {
-        std::cout << "Using scalar implementations for Vector3 (no SIMD support)\n";
-
-        // Function pointers already default to scalar implementations
-        // No need to change them
-    }
-
-    initialized = true;
+    // SSE4.1 and AVX: single operations stay 128-bit (AVX only pays off in the batch operations)
+    dot_func = &DotSSE41;
+    length_func = &LengthSSE41;
+    normalize_func = &NormalizeSSE41;
+    distance_func = &DistanceSSE41;
+    floor_func = &FloorSSE41;
+    ceil_func = &CeilSSE41;
+    round_func = &RoundSSE41;
 }
 
 // Force template instantiation for common usage patterns
@@ -108,8 +73,7 @@ template class std::vector<Vector3>;
 void Vector3::AddBatch(const Vector3 *a, const Vector3 *b, Vector3 *result, size_t count)
 {
 #ifdef __AVX__
-    CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
-    if (features.avx)
+    if (simd_level == SIMDLevel::AVX)
     {
         AddBatchAVX(a, b, result, count);
         return;
@@ -134,8 +98,7 @@ void Vector3::SubBatch(const Vector3 *a, const Vector3 *b, Vector3 *result, size
 void Vector3::ScalarMulBatch(const Vector3 *input, Vector3 *output, float scalar, size_t count)
 {
 #ifdef __AVX__
-    CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
-    if (features.avx)
+    if (simd_level == SIMDLevel::AVX)
     {
         ProcessVector3ArrayAVX(input, output, count, scalar);
         return;
@@ -150,8 +113,7 @@ void Vector3::ScalarMulBatch(const Vector3 *input, Vector3 *output, float scalar
 void Vector3::DotBatch(const Vector3 *a, const Vector3 *b, float *result, size_t count)
 {
 #ifdef __AVX__
-    CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
-    if (features.avx)
+    if (simd_level == SIMDLevel::AVX)
     {
         DotBatchAVX(a, b, result, count);
         return;
@@ -166,8 +128,7 @@ void Vector3::DotBatch(const Vector3 *a, const Vector3 *b, float *result, size_t
 void Vector3::NormalizeBatch(Vector3 *vectors, size_t count)
 {
 #ifdef __AVX__
-    CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
-    if (features.avx)
+    if (simd_level == SIMDLevel::AVX)
     {
         NormalizeBatchAVX(vectors, count);
         return;
