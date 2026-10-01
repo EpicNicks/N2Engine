@@ -158,6 +158,8 @@ namespace N2Engine::IO
                 meta.resourceType = "AudioClip";
             else if (ext == ".png" || ext == ".jpg")
                 meta.resourceType = "Texture";
+            else if (ext == ".ttf" || ext == ".otf")
+                meta.resourceType = "Font";
             else
                 meta.resourceType = "Unknown";
 
