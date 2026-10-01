@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Input · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html" aria-current="page">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Input</h1>
+<p class="lead">The input system polls GLFW once per frame and turns keyboard, mouse and gamepad state into named <em>actions</em> grouped in <em>action maps</em>. This page covers who owns it, how bindings combine into a value, the action phase machine and its callbacks, what is safe to change from inside a callback, the JSON format and the Lua surface.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#ownership">Ownership and lifetime</a></li>
+<li><a href="#frame-timing">Where input runs in the frame</a></li>
+<li><a href="#model">Action maps and actions</a></li>
+<li><a href="#map-management">Adding, replacing and switching maps</a></li>
+<li><a href="#bindings">Binding types</a></li>
+<li><a href="#value-combination">How bindings combine into a value</a></li>
+<li><a href="#deadzones">Deadzones and axis normalization</a></li>
+<li><a href="#phases">Action phases and callbacks</a></li>
+<li><a href="#disabling">Disabling actions and maps</a></li>
+<li><a href="#mouse">Mouse position and scroll</a></li>
+<li><a href="#callback-safety">Modifying input from callbacks</a></li>
+<li><a href="#json-format">JSON format and validation</a></li>
+<li><a href="#lua">Lua API</a></li>
+<li><a href="#gamepads">Connected gamepads</a></li>
+</ol>
+</div>
+
+<h2 id="ownership">Ownership and lifetime</h2>
+<p>The <code>InputSystem</code> is owned by the <code>Window</code> (<code>std::unique_ptr</code>), not by <code>Application</code>. It is created at the very end of a successful <code>Window::InitWindow</code>, after the GLFW window and the renderer are up, and destroyed in <code>Window::Shutdown</code> before the GLFW window is destroyed (so the <code>Mouse</code> can unregister its scroll callback on a live window).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Situation</th><th><code>Window::GetInputSystem()</code></th></tr></thead>
+<tbody>
+<tr><td><code>InitWindow</code> succeeded (including <code>isHeadless</code>, which only hides the window)</td><td>Valid pointer</td></tr>
+<tr><td><code>glfwInit</code> failed, window creation failed, or the renderer failed (<code>FailInit</code>)</td><td><code>nullptr</code></td></tr>
+<tr><td>After <code>Window::Shutdown</code></td><td><code>nullptr</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Game code reaches it as <code>Application::GetInstance().GetWindow().GetInputSystem()</code> and must handle <code>nullptr</code>. See <a href="application.html">Application &amp; frame loop</a> for subsystem health reporting.</p>
+
+<h3 id="headless-construction">Constructing without a window</h3>
+<p>An <code>InputSystem</code> can be constructed from a <code>Window</code> that was never initialized (its GLFW handle is null). <code>Mouse</code> is null-safe: with no window it registers no scroll callback, and position and position delta stay zero, while scroll accumulation still works. The input tests rely on this: <code>InputSystemHeadlessTest</code> builds <code>Window _window; InputSystem _input{_window};</code> and drives actions through a fake binding.</p>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>KeyboardButtonBinding::getValue</code>, <code>MouseButtonBinding::getValue</code> and <code>Vector2CompositeBinding::getValue</code> (<code>engine/src/input/InputBinding.cpp</code>) pass their stored <code>GLFWwindow*</code> straight to <code>glfwGetKey</code>/<code>glfwGetMouseButton</code> without a null check. Creating such bindings with a null window is fine (the serialization tests do it), but updating an action that holds one, in an <code>InputSystem</code> built on an uninitialized <code>Window</code>, hands GLFW a null window. Whether that is meant to be supported is unclear; only the fake bindings are exercised headless.</p>
+</div>
+<p class="src">Source: <code>engine/src/Window.cpp</code> — <code>Window::InitWindow</code>, <code>Window::FailInit</code>, <code>Window::Shutdown</code>; <code>engine/src/input/Mouse.cpp</code> — <code>Mouse::Mouse</code>, <code>Mouse::~Mouse</code>; tests: <code>InputSystemHeadlessTest.*</code>, <code>MouseTest.ScrollIsVisibleForTheFrameAfterItArrives</code></p>
+
+<h2 id="frame-timing">Where input runs in the frame</h2>
+<p>Input is the first thing in each frame. <code>Application::Run</code> calls <code>Window::PollEvents</code>, which does:</p>
+<ol class="steps">
+<li><code>glfwPollEvents()</code>: GLFW callbacks run, including the scroll callback, which only buffers the offset.</li>
+<li><code>InputSystem::Update()</code>, if there is an input system:
+<ol>
+<li><code>Mouse::Update()</code>: publishes the buffered scroll and samples the cursor position.</li>
+<li>The <em>current</em> action map's <code>ActionMap::Update()</code>: every action polls its bindings, updates its phase and fires <code>OnStateChanged</code> callbacks.</li>
+</ol>
+</li>
+</ol>
+<p>Only then does <code>Run</code> call <code>Time::Update</code>, process the attach queue, run fixed steps, <code>Update</code>, coroutines and <code>LateUpdate</code>. So input callbacks run before any component update in the same frame, and before <code>Time::Update</code> (a callback that reads the delta time sees the previous frame's value). <code>PollEvents</code> does nothing when the window is null. <code>Application::RenderEditorFrame</code> also calls <code>PollEvents</code>, so input is updated in editor frames too.</p>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Only the current map is updated. Actions in other maps are not polled and keep whatever phase and value they had when they last updated (see <a href="#disabling">Disabling actions and maps</a>).</p>
+</div>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::RenderEditorFrame</code>; <code>engine/src/Window.cpp</code> — <code>Window::PollEvents</code>; <code>engine/src/input/InputSystem.cpp</code> — <code>InputSystem::Update</code></p>
+
+<h2 id="model">Action maps and actions</h2>
+<ul>
+<li>An <code>InputSystem</code> holds named <code>ActionMap</code>s (unique by name) and the name of the <em>current</em> map.</li>
+<li>An <code>ActionMap</code> holds named <code>InputAction</code>s (unique by name) and a public <code>disabled</code> flag. Its <code>name</code> is <code>const</code>.</li>
+<li>An <code>InputAction</code> holds an ordered list of <code>InputBinding</code>s, a current <code>ActionPhase</code>, a current <code>InputValue</code> (initially <code>false</code>), a disabled flag, and an <code>OnStateChanged</code> event (<code>Base::EventHandler&lt;InputAction&amp;&gt;</code>).</li>
+<li>An <code>InputBinding</code> reads one physical control (or a key set) and returns an <code>InputValue</code>: a <code>std::variant&lt;bool, float, Vector2&gt;</code>.</li>
+</ul>
+<p><code>ActionMap::operator[](name)</code> uses <code>unordered_map::at</code>, so an unknown action name throws <code>std::out_of_range</code> in C++ (Lua's <code>map:Get</code> returns <code>nil</code> instead). <code>RemoveInputAction</code> returns <code>false</code> for an unknown name. <code>InputAction</code> is move-only.</p>
+<pre class="lang-cpp"><code>auto &amp;window = Application::GetInstance().GetWindow();
+auto *input = window.GetInputSystem();
+if (input)
+{
+    input-&gt;MakeActionMap("Gameplay", [&amp;](Input::ActionMap *map)
+    {
+        map-&gt;MakeInputAction("Jump", [&amp;](Input::InputAction *action)
+        {
+            action-&gt;AddBinding(std::make_unique&lt;Input::KeyboardButtonBinding&gt;(window, Input::Key::Space))
+                   .AddBinding(std::make_unique&lt;Input::GamepadButtonBinding&gt;(window, Input::GamepadButton::South));
+        });
+    }).LoadActionMap("Gameplay");
+
+    (*input-&gt;GetActionMap("Gameplay"))["Jump"].GetOnStateChanged() += [](Input::InputAction &amp;jump)
+    {
+        if (jump.WasStarted()) { /* jump */ }
+    };
+}
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/input/ActionMap.hpp</code>; <code>engine/src/input/ActionMap.cpp</code> — <code>ActionMap::operator[]</code>, <code>ActionMap::RemoveInputAction</code>; <code>test_project/src/Main.cpp</code></p>
+
+<h2 id="map-management">Adding, replacing and switching maps</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>AddActionMap(std::unique_ptr&lt;ActionMap&gt;&amp;&amp;)</code></td><td>Inserts or <strong>replaces</strong> the map with that name. If no map is current yet, this one becomes current.</td></tr>
+<tr><td><code>MakeActionMap(name, fn)</code></td><td>Creates a map, lets <code>fn</code> fill it, then <code>AddActionMap</code>. Returns the <code>InputSystem&amp;</code> for chaining.</td></tr>
+<tr><td><code>CreateActionMapFromJson(name, json)</code></td><td>Parses <code>{"actions": {...}}</code> with <code>ActionMap::Deserialize</code>, then <code>AddActionMap</code>. Returns the new map, or <code>nullptr</code> (and logs an error) when <code>actions</code> is missing or not an object.</td></tr>
+<tr><td><code>LoadActionMap(name)</code></td><td>Makes that map current and returns it. Unknown name: returns <code>nullptr</code> and leaves the current map unchanged.</td></tr>
+<tr><td><code>GetActionMap(name)</code></td><td>Pure lookup: returns the map or <code>nullptr</code>. Never changes the current map.</td></tr>
+<tr><td><code>GetCurActionMap()</code></td><td>The current map, or <code>nullptr</code> if none.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p><code>GetActionMap</code> has no side effect on the active map; only <code>LoadActionMap</code> switches. (Before PR #22 it switched as well.)</p>
+</div>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>Replacing a map by name creates new <code>InputAction</code> objects. Subscriptions made on the old map's actions do not carry over, and pointers to the old map or its actions become dangling once it is freed: immediately when replaced outside an input update, or when the outermost update ends when replaced from a callback. Re-fetch the map and re-subscribe after replacing it. The same holds for <code>InputSystem::Deserialize</code>, which replaces every map.</p>
+</div>
+<h3 id="deserialize">Whole-system serialization</h3>
+<p><code>InputSystem::Serialize</code> writes <code>{"actionMaps": {name: map, ...}}</code>. <code>InputSystem::Deserialize</code>:</p>
+<ul>
+<li>returns <code>false</code> and changes nothing if <code>actionMaps</code> is missing or not an object;</li>
+<li>builds all new maps first, silently skipping maps without an <code>actions</code> object, logging a warning for actions without a <code>bindings</code> array and for each invalid binding (which is skipped);</li>
+<li>then replaces <em>all</em> maps at once and returns <code>true</code>;</li>
+<li>keeps the current map name if a map of that name still exists, otherwise picks <code>_actionMaps.begin()</code> (an arbitrary map, since the container is an <code>unordered_map</code>), or clears it if there are no maps.</li>
+</ul>
+<p class="src">Source: <code>engine/src/input/InputSystem.cpp</code> — <code>AddActionMap</code>, <code>MakeActionMap</code>, <code>CreateActionMapFromJson</code>, <code>LoadActionMap</code>, <code>GetActionMap</code>, <code>Deserialize</code>; tests: <code>GetActionMapDoesNotSwitchTheActiveMap</code>, <code>ReloadingBindingsFromACallbackIsSafe</code></p>
+
+<h2 id="bindings">Binding types</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Class (JSON <code>type</code>)</th><th>Reads</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td><code>KeyboardButtonBinding</code> (<code>KeyboardButton</code>)</td><td>One key via <code>glfwGetKey</code></td><td><code>bool</code>: pressed</td></tr>
+<tr><td><code>MouseButtonBinding</code> (<code>MouseButton</code>)</td><td>One mouse button via <code>glfwGetMouseButton</code></td><td><code>bool</code></td></tr>
+<tr><td><code>GamepadButtonBinding</code> (<code>GamepadButton</code>)</td><td>One button of gamepad <code>gamepadId</code> (default 0)</td><td><code>bool</code>; <code>false</code> if <code>glfwGetGamepadState</code> fails (no pad, or no mapping)</td></tr>
+<tr><td><code>AxisBinding</code> (<code>GamepadAxis</code>)</td><td>One axis of gamepad <code>gamepadId</code></td><td><code>float</code> after <a href="#deadzones"><code>NormalizeAxis</code></a>; <code>0</code> without a pad</td></tr>
+<tr><td><code>GamepadStickBinding</code> (<code>GamepadStick</code>)</td><td>Two axes (<code>xAxis</code>, <code>yAxis</code>), optional per-axis inversion</td><td><code>Vector2</code> with a radial deadzone; zero vector without a pad</td></tr>
+<tr><td><code>Vector2CompositeBinding</code> (<code>Vector2Composite</code>)</td><td>Four keys: <code>up</code>, <code>down</code>, <code>left</code>, <code>right</code></td><td><code>Vector2</code>: right +x, left −x, up +y, down −y; opposite keys cancel. A diagonal is <code>(±1, ±1)</code> at the binding level; the action clamps it (see below).</td></tr>
+</tbody>
+</table>
+</div>
+<p>Key names are the <code>Input::Key</code> enumerators (<code>A</code>…<code>Z</code>, <code>Key0</code>…<code>Key9</code>, <code>Space</code>, <code>Escape</code>, <code>Enter</code>, <code>F1</code>…<code>F12</code>, <code>Kp0</code>…, <code>LeftShift</code>, arrow keys <code>Up</code>/<code>Down</code>/<code>Left</code>/<code>Right</code>, …). Gamepad buttons use positional names (<code>South</code>, <code>East</code>, <code>West</code>, <code>North</code>, <code>LeftBumper</code>, <code>DpadUp</code>, …); axes are <code>LeftX</code>, <code>LeftY</code>, <code>RightX</code>, <code>RightY</code>, <code>LeftTrigger</code>, <code>RightTrigger</code>; mouse buttons are <code>Left</code>, <code>Right</code>, <code>Middle</code>, <code>Button4</code>…<code>Button8</code>.</p>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p><code>MouseWheelBinding</code> is declared in <code>InputBinding.hpp</code> but is an empty, abstract class with no JSON type; there is no scroll-wheel binding. Read scroll from <a href="#mouse"><code>Mouse</code></a>. The key name <code>Unknown</code> passes validation (it is a real enumerator) and maps to <code>GLFW_KEY_UNKNOWN</code>, which never reads as pressed.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/input/InputBinding.hpp</code>; <code>engine/src/input/InputBinding.cpp</code> — <code>*Binding::getValue</code>; <code>engine/include/engine/input/InputTypes.hpp</code>; <code>engine/include/engine/input/InputMapping.hpp</code></p>
+
+<h2 id="value-combination">How bindings combine into a value</h2>
+<p>Each update, <code>InputAction::CalculateCombinedValue</code> reads every binding and decides the action's value <em>type</em> from the types its bindings returned, not from their magnitudes:</p>
+<ol class="steps">
+<li><strong>No bindings:</strong> <code>false</code>.</li>
+<li><strong>Any binding returned a <code>Vector2</code>:</strong> the action is a <code>Vector2</code>. All <code>Vector2</code> values are summed; if the sum is longer than 1 it is normalized (clamped to the unit circle). <code>bool</code> and <code>float</code> bindings on the same action are ignored, even while the 2D input is at rest.</li>
+<li><strong>Else any binding returned a <code>float</code>:</strong> the action is a <code>float</code>: the value with the largest absolute value, sign kept (on a tie the first one wins). If that strongest axis is exactly 0 and some button binding is pressed, the value is <code>1.0</code>.</li>
+<li><strong>Else:</strong> the action is a <code>bool</code>: true if any binding is pressed.</li>
+</ol>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A small stick deflection stays small (it no longer becomes a full-strength <code>(1, 0)</code>); several 2D bindings add up within the unit circle; axis values keep their sign; button-only actions are booleans.</p>
+</div>
+<p>The accessors convert between types:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Stored value</th><th><code>GetBoolValue()</code></th><th><code>GetFloatValue()</code></th><th><code>GetVector2Value()</code></th></tr></thead>
+<tbody>
+<tr><td><code>bool b</code></td><td><code>b</code></td><td><code>1</code> or <code>0</code></td><td><code>(1, 0)</code> or <code>(0, 0)</code></td></tr>
+<tr><td><code>float f</code></td><td><code>|f| &gt; 0</code></td><td><code>f</code></td><td><code>(f, 0)</code></td></tr>
+<tr><td><code>Vector2 v</code></td><td><code>Length(v) &gt; 0</code></td><td><code>Length(v)</code></td><td><code>v</code></td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Because the type follows the bindings, don't mix a 2D binding with 1D or button bindings on one action expecting them to add; split them into separate actions. PR #22 called this out as a behaviour change from the old additive combination.</p>
+</div>
+<p class="src">Source: <code>engine/src/input/ActionMap.cpp</code> — <code>InputAction::CalculateCombinedValue</code>; <code>engine/include/engine/input/InputValue.hpp</code>; tests: <code>InputActionValueTest.SmallStickDeflectionStaysSmall</code>, <code>VectorBindingsAddUpWithinUnitCircle</code>, <code>AxisValueKeepsItsSign</code>, <code>ButtonsAreBooleans</code></p>
+
+<h2 id="deadzones">Deadzones and axis normalization</h2>
+<h3 id="normalize-axis">Single axes: <code>AxisBinding::NormalizeAxis</code></h3>
+<ol class="steps">
+<li><strong>Triggers</strong> (<code>LeftTrigger</code>, <code>RightTrigger</code>): GLFW reports −1 at rest and +1 fully pulled. They are remapped to 0..1 with <code>(raw + 1) / 2</code>, so a released trigger reads 0. Sticks keep −1..1.</li>
+<li><strong>Deadzone:</strong> a fixed <code>AxisBinding::Deadzone = 0.1</code>. Magnitudes ≤ 0.1 become exactly 0.</li>
+<li><strong>Rescale:</strong> the rest is rescaled as <code>min(1, (|v| − 0.1) / 0.9)</code> with the sign restored, so the output still spans the full range.</li>
+</ol>
+<p>The deadzone of an <code>AxisBinding</code> is not configurable. Before PR #22 a trigger at rest counted as held forever.</p>
+<h3 id="stick-deadzone">Sticks: <code>GamepadStickBinding</code></h3>
+<p>The stick applies its own <em>radial</em> deadzone (default <code>0.15</code>, configurable per binding as <code>deadzone</code>) to the 2D vector after inversion: below the deadzone the result is <code>(0, 0)</code>; above it the direction is kept and the magnitude is rescaled to <code>(|v| − deadzone) / (1 − deadzone)</code>, capped at 1. Sticks do not go through <code>NormalizeAxis</code>, so binding a trigger axis into a stick binding gets no trigger remapping.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A released trigger reads 0, a fully pulled one reads 1, a half-pulled one reads more than 0; stick drift within ±0.05 reads 0 and ±1 reads ±1.</p>
+</div>
+<p class="src">Source: <code>engine/src/input/InputBinding.cpp</code> — <code>AxisBinding::NormalizeAxis</code>, <code>GamepadStickBinding::getValue</code>; tests: <code>AxisBindingTest.ReleasedTriggerReadsZero</code>, <code>AxisBindingTest.StickAxisHasDeadzoneAndKeepsRange</code></p>
+
+<h2 id="phases">Action phases and callbacks</h2>
+<p>Each action runs a small state machine on "has input" (<code>GetBoolValue()</code> of the combined value), once per update of its map:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Current phase</th><th>Input this update</th><th>Next phase</th></tr></thead>
+<tbody>
+<tr><td><code>Waiting</code></td><td>yes</td><td><code>Started</code></td></tr>
+<tr><td><code>Waiting</code></td><td>no</td><td><code>Waiting</code></td></tr>
+<tr><td><code>Started</code></td><td>yes</td><td><code>Performed</code></td></tr>
+<tr><td><code>Started</code></td><td>no</td><td><code>Cancelled</code> (released after one update)</td></tr>
+<tr><td><code>Performed</code></td><td>yes</td><td><code>Performed</code></td></tr>
+<tr><td><code>Performed</code></td><td>no</td><td><code>Waiting</code></td></tr>
+<tr><td><code>Cancelled</code></td><td>yes</td><td><code>Started</code></td></tr>
+<tr><td><code>Cancelled</code></td><td>no</td><td><code>Waiting</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>So a key held for several frames goes <code>Started</code> → <code>Performed</code> (held) → <code>Waiting</code> on release. A one-frame tap goes <code>Started</code> → <code>Cancelled</code> → <code>Waiting</code>.</p>
+<h3 id="on-state-changed">When <code>OnStateChanged</code> fires</h3>
+<p><code>InputAction::Update</code> invokes <code>OnStateChanged(action)</code> at most once per update, when either:</p>
+<ul>
+<li>the phase changed, or</li>
+<li>the value changed by more than <code>0.001</code> in either component of <code>GetVector2Value()</code>. For a float action that is the float itself; for a <code>Vector2</code> action, either axis. So analog input fires on every meaningful movement while in <code>Performed</code>.</li>
+</ul>
+<p>Disabling an active action fires one extra callback (see <a href="#disabling">below</a>). Callbacks run synchronously inside <code>InputSystem::Update</code>; handlers query the action they are given.</p>
+<h3 id="phase-queries">Phase helpers</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Method</th><th>True when</th></tr></thead>
+<tbody>
+<tr><td><code>WasStarted()</code></td><td>Phase is <code>Started</code> and the previous phase was <code>Waiting</code>. A restart from <code>Cancelled</code> (tap, then press again on the next frame) does <em>not</em> count.</td></tr>
+<tr><td><code>WasPerformed()</code></td><td>Phase is <code>Performed</code> (every held frame, not just the first).</td></tr>
+<tr><td><code>WasCancelled()</code></td><td>Phase is <code>Cancelled</code>.</td></tr>
+<tr><td><code>IsActive()</code></td><td>Phase is <code>Started</code> or <code>Performed</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>The shipped scripts react to a press with <code>GetPhase() == ActionPhase.Started</code> inside the callback (<code>QuitHandler.lua</code>), which covers both the <code>Waiting</code> and <code>Cancelled</code> entry paths. Release of a held action is the transition to <code>Waiting</code>, not to <code>Cancelled</code>.</p>
+</div>
+<p class="src">Source: <code>engine/src/input/ActionMap.cpp</code> — <code>InputAction::Update</code>, <code>InputAction::UpdatePhase</code>; <code>engine/include/engine/input/ActionMap.hpp</code> — <code>WasStarted</code>, <code>IsActive</code>; tests: <code>ButtonsAreBooleans</code>; <code>lua_project/assets/scripts/QuitHandler.lua</code></p>
+
+<h2 id="disabling">Disabling actions and maps</h2>
+<p><code>InputAction::SetDisabled</code> only stores the flag; the transition is applied on the action's next update:</p>
+<ul>
+<li><strong>Disabled while active</strong> (<code>Started</code>/<code>Performed</code>): the next update sets the phase to <code>Cancelled</code>, resets the value to <code>false</code>, and fires <code>OnStateChanged</code> once. Further updates while disabled do nothing.</li>
+<li><strong>Disabled while not active:</strong> no callback; phase and value stay as they were.</li>
+<li><strong>Re-enabled:</strong> on the next update a <code>Cancelled</code> phase is reset to <code>Waiting</code> silently, then the update proceeds normally in the same call (so a still-held key starts again with <code>Started</code>).</li>
+</ul>
+<p><code>ActionMap::disabled = true</code> makes <code>ActionMap::Update</code> return immediately: no action in it is polled.</p>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>ActionMap::Update</code> (disabled map) and <code>InputSystem::LoadActionMap</code> (switching away) do not cancel the map's active actions, unlike <code>InputAction::SetDisabled</code>. An action held at that moment keeps reporting <code>IsActive()</code> and its last value, and gets no <code>Cancelled</code>/<code>Waiting</code> callback until its map is updated again. It is unclear whether disabling or leaving a map is meant to cancel its actions.</p>
+</div>
+<p class="src">Source: <code>engine/src/input/ActionMap.cpp</code> — <code>InputAction::HandleDisabledTransition</code>, <code>InputAction::SetDisabled</code>, <code>ActionMap::Update</code></p>
+
+<h2 id="mouse">Mouse position and scroll</h2>
+<p><code>InputSystem</code> owns one <code>Mouse</code>. <code>Mouse::Get()</code> reaches it through <code>Application::GetInstance().GetWindow().GetInputSystem()</code> and returns <code>nullptr</code> when there is no input system (the window failed to open, or after shutdown).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Accessor</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>GetPosition()</code></td><td>Cursor position from <code>glfwGetCursorPos</code> (window coordinates), sampled in <code>Mouse::Update</code>.</td></tr>
+<tr><td><code>GetPositionDelta()</code></td><td>Position change since the previous <code>Mouse::Update</code>. The first update measures from the position sampled in the constructor.</td></tr>
+<tr><td><code>GetScrollDelta()</code></td><td>Sum of all scroll offsets (x, y) that arrived since the previous <code>Mouse::Update</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="scroll-timing">Scroll timing</h3>
+<p>Scroll events arrive in GLFW callbacks during <code>glfwPollEvents</code>. The callback finds the mouse through the window's user pointer (which stays the <code>Window</code>, so the resize callback keeps working) and calls <code>AccumulateScroll</code>, which adds to a pending buffer. <code>Mouse::Update</code>, which runs right after the poll, moves the pending sum into the published delta and clears the buffer. So scroll is visible for exactly the frame after it arrives, then reads zero again.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Several scroll events between two updates add up; the delta is visible after the next <code>Update</code> and is zero after the one after it (it used to be zeroed before anyone could read it).</p>
+</div>
+<p>Without a window the mouse registers no callback and position/position delta stay zero; scroll accumulation and publication still work.</p>
+<p class="src">Source: <code>engine/src/input/Mouse.cpp</code> — <code>Mouse::Get</code>, <code>Mouse::ScrollCallback</code>, <code>Mouse::AccumulateScroll</code>, <code>Mouse::Update</code>; <code>engine/src/input/InputSystem.cpp</code> — <code>InputSystem::InputSystem</code>; tests: <code>MouseTest.ScrollIsVisibleForTheFrameAfterItArrives</code></p>
+
+<h2 id="callback-safety">Modifying input from callbacks</h2>
+<p>Callbacks may subscribe, unsubscribe, add/replace/remove actions, replace maps, switch maps and reload the whole configuration while an update is running. The rules:</p>
+<h3 id="eventhandler">EventHandler dispatch</h3>
+<ul>
+<li><code>handler += fn</code> returns a <code>size_t</code> id. A subscriber added during dispatch is first called on the <em>next</em> dispatch (dispatch iterates by index over the subscribers present when it started, and copies each function before calling it, so reallocation is safe).</li>
+<li><code>handler -= id</code> flags the subscriber as removed: it is not called again, including later in the current dispatch. Flagged entries are erased once the outermost dispatch finishes (or immediately if no dispatch is running). An unknown id is ignored.</li>
+<li>A handler can unsubscribe itself (the "fire once" idiom) without skipping the next subscriber.</li>
+<li><code>GetSubscriberCount()</code> counts only subscribers not flagged as removed.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Self-unsubscribe, subscribing another handler, and removing a later handler during dispatch all behave as above.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/base/EventHandler.hpp</code>; tests: <code>EventHandlerTest.HandlerCanUnsubscribeItself</code>, <code>HandlerCanSubscribeAnother</code>, <code>HandlerCanRemoveALaterOne</code></p>
+
+<h3 id="update-snapshot">ActionMap and InputSystem updates</h3>
+<ul>
+<li><code>ActionMap::Update</code> takes a snapshot of its action pointers first, then updates each one only if it is still the action registered under its name. Actions added during the update are not updated until the next frame; actions removed or replaced earlier in the same update are skipped.</li>
+<li>While a map is updating, <code>AddInputAction</code> (replacing a name) and <code>RemoveInputAction</code> move the old action to a <em>retired</em> list instead of freeing it, because its <code>Update</code> may be on the stack.</li>
+<li>While <code>InputSystem::Update</code> runs, <code>AddActionMap</code> replacing an existing map, and <code>Deserialize</code> (all maps), retire the old maps the same way.</li>
+<li>Both updates hold their "updating" flag in an RAII scope: it is cleared even if a handler throws, and only the <em>outermost</em> update frees the retired lists (a handler that re-enters an update does not free what the outer loop still holds).</li>
+<li><code>LoadActionMap</code> from a callback switches the current map; the map that is updating finishes its loop, and the new current map is first updated on the next frame.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Replacing the active map from its own action's callback, reloading all bindings with <code>Deserialize</code> from a callback, and actions removing each other from their callbacks are all safe; the replacement map updates normally on the next frame.</p>
+</div>
+<p class="src">Source: <code>engine/src/input/ActionMap.cpp</code> — <code>ActionMap::Update</code>, <code>AddInputAction</code>, <code>RemoveInputAction</code>; <code>engine/src/input/InputSystem.cpp</code> — <code>InputSystem::Update</code>, <code>AddActionMap</code>, <code>Deserialize</code>; tests: <code>ReplacingActiveMapFromItsOwnCallbackIsSafe</code>, <code>ReloadingBindingsFromACallbackIsSafe</code>, <code>RemovingActionsFromACallbackIsSafe</code></p>
+
+<h2 id="json-format">JSON format and validation</h2>
+<p>An action map is <code>{"disabled": bool, "actions": {name: {"bindings": [binding, ...]}}}</code>. <code>disabled</code> is optional (default <code>false</code>). The whole-system format wraps maps in <code>{"actionMaps": {mapName: map}}</code>. Binding fields:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>type</code></th><th>Required</th><th>Optional (default)</th></tr></thead>
+<tbody>
+<tr><td><code>KeyboardButton</code></td><td><code>key</code></td><td>—</td></tr>
+<tr><td><code>MouseButton</code></td><td><code>button</code></td><td>—</td></tr>
+<tr><td><code>GamepadButton</code></td><td><code>button</code></td><td><code>gamepadId</code> (0)</td></tr>
+<tr><td><code>GamepadAxis</code></td><td><code>axis</code></td><td><code>gamepadId</code> (0)</td></tr>
+<tr><td><code>GamepadStick</code></td><td><code>xAxis</code>, <code>yAxis</code></td><td><code>gamepadId</code> (0), <code>deadzone</code> (0.15), <code>invertX</code> (false), <code>invertY</code> (false)</td></tr>
+<tr><td><code>Vector2Composite</code></td><td><code>up</code>, <code>down</code>, <code>left</code>, <code>right</code></td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<pre class="lang-json"><code>{
+  "actionMaps": {
+    "Gameplay": {
+      "disabled": false,
+      "actions": {
+        "Move": { "bindings": [
+          { "type": "Vector2Composite", "up": "W", "down": "S", "left": "A", "right": "D" },
+          { "type": "GamepadStick", "xAxis": "LeftX", "yAxis": "LeftY", "deadzone": 0.25, "invertY": true }
+        ] },
+        "Jump": { "bindings": [
+          { "type": "KeyboardButton", "key": "Space" },
+          { "type": "GamepadButton", "button": "South" }
+        ] },
+        "Fire": { "bindings": [
+          { "type": "MouseButton", "button": "Left" },
+          { "type": "GamepadAxis", "axis": "RightTrigger" }
+        ] }
+      }
+    }
+  }
+}
+</code></pre>
+<h3 id="binding-validation">Binding validation (<code>CreateBindingFromJson</code>)</h3>
+<p>Returns <code>std::expected&lt;std::unique_ptr&lt;InputBinding&gt;, BindingParseError&gt;</code>. Checks run in this order:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Input</th><th>Error</th></tr></thead>
+<tbody>
+<tr><td><code>type</code> missing or not a string</td><td><code>MissingType</code></td></tr>
+<tr><td><code>type</code> not a known binding type name (e.g. <code>"Keyboard"</code>)</td><td><code>InvalidType</code></td></tr>
+<tr><td>Required field missing (<code>key</code> / <code>button</code> / <code>axis</code> or either stick axis / any composite direction)</td><td><code>MissingKey</code> / <code>MissingButton</code> / <code>MissingAxis</code> / <code>MissingCompositeKeys</code></td></tr>
+<tr><td>A key, button or axis name that is not an enumerator (e.g. <code>"Escpae"</code>), or not a string</td><td><code>InvalidValue</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>A name is accepted only if converting it to the enum and back gives the same string. This closes the nlohmann pitfall where an unknown string silently became the enum's first value. Names are case-sensitive. Optional numeric/boolean fields use <code>json::value</code> with the defaults above.</p>
+<p>How errors surface depends on the caller:</p>
+<ul>
+<li><code>InputAction::Deserialize</code>: an invalid binding is skipped with <code>Logger::Warn</code> naming the action and the <code>BindingParseErrorToString</code> reason; a missing or non-array <code>bindings</code> returns <code>MissingBindings</code> / <code>InvalidBindingsType</code>.</li>
+<li><code>ActionMap::Deserialize</code>: an invalid action is skipped with a warning; a missing or non-object <code>actions</code> returns <code>MissingActions</code> / <code>InvalidActionsType</code>, which <code>CreateActionMapFromJson</code> logs as an error and turns into <code>nullptr</code>.</li>
+<li><code>InputSystem::Deserialize</code>: see <a href="#deserialize">above</a>; invalid bindings are skipped with a "Malformed binding" warning.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Unknown type names give <code>InvalidType</code> and unknown key/button/axis names give <code>InvalidValue</code>; every valid key, button and axis round-trips through <code>Serialize</code> and <code>CreateBindingFromJson</code> unchanged; defaults for <code>gamepadId</code>, <code>deadzone</code>, <code>invertX</code>/<code>invertY</code> are as listed.</p>
+</div>
+<p class="src">Source: <code>engine/src/input/InputBindingFactory.cpp</code> — <code>CreateBindingFromJson</code>, <code>IsKnownName</code>; <code>engine/src/input/ActionMap.cpp</code> — <code>InputAction::Deserialize</code>, <code>ActionMap::Deserialize</code>, <code>*::Serialize</code>; tests: <code>BindingValidationTest.UnknownNamesAreRejected</code>, <code>KnownNamesStillWork</code>, <code>InputBindingSerializationTest.*</code>, <code>ActionMapSerializationTest.*</code></p>
+
+<h2 id="lua">Lua API</h2>
+<p>The Lua surface mirrors the C++ one; see <a href="scripting-lua.html">Lua scripting</a> for callback error handling and script lifetimes.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Lua</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>Input.CreateActionMap(name, actions)</code></td><td>Converts <code>{ ["Action"] = { binding, ... } }</code> to the JSON map format and calls <code>CreateActionMapFromJson</code>. Entries whose key is not a string or whose value is not a table are skipped; bindings are read by index, so their order is kept. Binding tables use the JSON field names. Returns the map, or <code>nil</code> with a warning when there is no input system. Replaces an existing map of the same name. Does not make the map current unless it is the first map.</td></tr>
+<tr><td><code>Input.LoadActionMap(name)</code></td><td>Switches the current map; returns it or <code>nil</code>.</td></tr>
+<tr><td><code>Input.GetActionMap(name)</code></td><td>Pure lookup; returns the map or <code>nil</code>. Does not switch.</td></tr>
+<tr><td><code>map:Get(name)</code> / <code>map[name]</code></td><td>The action, or <code>nil</code> if unknown.</td></tr>
+<tr><td><code>action:Subscribe(fn)</code></td><td>Adds an <code>OnStateChanged</code> handler, called as <code>fn(action)</code>; returns the id. A subscription made from a component script stops firing once that component is destroyed.</td></tr>
+<tr><td><code>action:Unsubscribe(id)</code></td><td>Removes it; safe from inside the handler.</td></tr>
+<tr><td><code>action:GetPhase()</code>, <code>WasStarted</code>, <code>IsActive</code>, <code>GetBoolValue</code>, <code>GetFloatValue</code>, <code>GetVector2Value</code>, <code>SetDisabled</code>, …</td><td>As in C++. Phases are the <code>ActionPhase</code> enum.</td></tr>
+<tr><td><code>Mouse.Get()</code></td><td>The mouse, or <code>nil</code> without an input system; <code>GetScrollDelta</code>, <code>GetPosition</code>, <code>GetPositionDelta</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<pre class="lang-lua"><code>local controls = Input.CreateActionMap("Main Controls", {
+    ["Move"] = {
+        { type = "Vector2Composite", up = "W", down = "S", left = "A", right = "D" },
+        { type = "GamepadStick", xAxis = "LeftX", yAxis = "LeftY", deadzone = 0.25, invertY = true },
+    },
+    ["Quit"] = { { type = "KeyboardButton", key = "Escape" } },
+})
+if controls ~= nil then
+    Input.LoadActionMap("Main Controls")
+end
+
+-- in a component script
+Input.GetActionMap("Main Controls"):Get("Quit"):Subscribe(function(action)
+    if action:GetPhase() == ActionPhase.Started then
+        Application.Quit()
+    end
+end)
+</code></pre>
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><code>ActionMap</code> and <code>InputAction</code> reach Lua as raw pointers; the checked handles of <span class="badge">PR #29</span> explicitly leave them out. A map or action reference kept in a script dangles once the map is replaced (<code>Input.CreateActionMap</code> with the same name, or <code>InputSystem::Deserialize</code>) or the action removed. Look the map up again after replacing it rather than caching it across replacements.</p>
+</div>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code> — <code>BindInput</code>; <code>engine/src/scripting/LuaJson.cpp</code> — <code>ActionMapJsonFromLua</code>; <code>lua_project/assets/scene.lua</code>, <code>lua_project/assets/scripts/QuitHandler.lua</code></p>
+
+<h2 id="gamepads">Connected gamepads</h2>
+<p><code>InputSystem::GetConnectedGamepads()</code> (static) scans GLFW joystick slots 1–16 and returns <code>{name, gamepadId}</code> for each present device. Devices with a gamepad mapping report the mapping name ("Nameless Gamepad" if none); joysticks without a mapping are listed with an "Unrecognized Gamepad Mapping" prefix. Gamepad bindings only read devices with a mapping, because they use <code>glfwGetGamepadState</code>. The <code>gamepadId</code> in bindings is the GLFW joystick id (0 is the first slot).</p>
+<p class="src">Source: <code>engine/src/input/InputSystem.cpp</code> — <code>InputSystem::GetConnectedGamepads</code>; <code>engine/src/input/InputBinding.cpp</code></p>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

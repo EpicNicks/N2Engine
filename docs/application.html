@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Application &amp; frame loop · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html" aria-current="page">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Application &amp; frame loop</h1>
+<p class="lead"><code>Application</code> is the engine singleton. It starts the subsystems and reports which ones came up, runs the frame loop, turns a quit request into an orderly exit, and shuts the subsystems down in a fixed order. This page also covers <code>Time</code>, which the loop drives.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#init">Init and ApplicationOptions</a></li>
+<li><a href="#health">Subsystem health</a></li>
+<li><a href="#headless">Headless mode and a failed window</a></li>
+<li><a href="#frame">The frame loop</a></li>
+<li><a href="#fixed-step">Fixed steps and physics</a></li>
+<li><a href="#time">Time</a></li>
+<li><a href="#quit">Quitting</a></li>
+<li><a href="#shutdown">Shutdown order</a></li>
+<li><a href="#editor-frame">RenderEditorFrame</a></li>
+<li><a href="#tests">Using Application in tests and tools</a></li>
+<li><a href="#singletons">Singletons and static destruction</a></li>
+</ol>
+</div>
+
+<h2 id="init">Init and ApplicationOptions</h2>
+<p><code>Application::GetInstance()</code> returns a function-local static; the class cannot be copied or constructed elsewhere. Nothing is started until one of the <code>Init</code> overloads runs.</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>Overload</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>EngineHealth Init()</code></td><td>Calls <code>Init(options)</code> with <code>projectPath = ""</code>, PhysX, OpenGL, <code>isHeadless = false</code>.</td></tr>
+<tr><td><code>EngineHealth Init(const Config::ApplicationOptions &amp;)</code></td><td>Starts every subsystem it can and returns their states. Never throws for a failed subsystem; the engine keeps running with whatever started.</td></tr>
+<tr><td><code>void Init(std::unique_ptr&lt;Scene&gt; &amp;&amp;)</code></td><td>Marked "for testing only". Calls <code>Init()</code>, adds the scene with <code>loadAdded = true</code> and processes the scene change immediately. Discards the health result.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><code>Config::ApplicationOptions</code> has four fields:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Effect in Init</th></tr></thead>
+<tbody>
+<tr><td><code>projectPath</code></td><td>Not read by <code>Application::Init</code>. The editor host fills it from <code>--project</code>; projects initialise <code>ResourceLoader</code> themselves (see <a href="resources.html">Resources</a>).</td></tr>
+<tr><td><code>physicsBackend</code></td><td>Only <code>PHYSX</code> exists. Used only when the build has PhysX (<code>N2ENGINE_PHYSX_ENABLED</code>).</td></tr>
+<tr><td><code>renderBackend</code></td><td><code>OPENGL</code>, <code>VULKAN</code> or <code>SOFTWARE</code>; chooses the GLFW context hints and the renderer the window creates.</td></tr>
+<tr><td><code>isHeadless</code></td><td>Creates the window invisible and skips audio. See <a href="#headless">Headless mode</a>.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><code>Init(options)</code> runs these steps in order:</p>
+<ol class="steps">
+<li>In Debug builds (<code>N2ENGINE_DEBUG</code>), install the console log subscriber, once per process (see <a href="logging-and-editor.html#logger">Logger</a>).</li>
+<li>Reset the health report and clear the quit flag (<code>_quitRequested = false</code>).</li>
+<li><strong>Scripting</strong>: <code>LuaRuntime::Instance().Initialize()</code>. The result is cached by <code>LuaRuntime</code>, so a second <code>Init</code> reports the first outcome again.</li>
+<li><code>Math::InitializeSIMD()</code>, then <code>Time::Init()</code> (resets all clocks and <code>timeScale</code> to 1).</li>
+<li><strong>Window and renderer</strong>: <code>Window::InitWindow(options)</code>.</li>
+<li>Create the main camera, <em>even without a window</em>, so <code>GetMainCamera()</code> is never null after Init. Perspective 45°, near 0.1, far 100, at (0, 0, 10). Aspect is the window's, or 16:9 when the window has no size.</li>
+<li><strong>Physics</strong>: construct and initialise <code>PhysXBackend</code>; on failure the backend is destroyed and left null.</li>
+<li><strong>Audio</strong>: skipped when headless, else <code>AudioSystem::Instance().Initialize()</code>.</li>
+<li>Store the health report, log a warning for every failed subsystem, return a copy.</li>
+</ol>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; <code>engine/include/engine/config/ApplicationOptions.hpp</code>; <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>LuaRuntime::Initialize</code></p>
+
+<pre class="lang-cpp"><code>auto &amp;app = N2Engine::Application::GetInstance();
+const N2Engine::EngineHealth health = app.Init({
+    .projectPath = "",
+    .physicsBackend = N2Engine::Config::ApplicationOptions::PhysicsBackend::PHYSX,
+    .renderBackend = N2Engine::Config::ApplicationOptions::RenderBackend::OPENGL,
+    .isHeadless = false,
+});
+if (!app.GetWindow().IsValid())
+{
+    // Run() would refuse to start; see GetHealth() for why
+    return 1;
+}
+N2Engine::SceneManager::AddScene(N2Engine::Scene::Create("Main"), true);
+app.Run(); // returns after OnApplicationQuit and Shutdown
+</code></pre>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p><code>physicsBackend</code> and <code>renderBackend</code> have no default member initialisers. Designated or brace initialisation (<code>ApplicationOptions{}</code>, or the form above with fields omitted) value-initialises them to the first enumerator (<code>PHYSX</code>, <code>OPENGL</code>). A default-initialised local (<code>ApplicationOptions opts;</code>) leaves them indeterminate.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Application::Init</code> does not guard against being called twice without <code>Shutdown</code> in between. A second call runs <code>Window::InitWindow</code> again over a live GLFW window and replaces the physics backend while scenes may still hold bodies from the old one. Whether re-Init is supported (and what it should do with the old window) is not stated.</p>
+</div>
+
+<h2 id="health">Subsystem health</h2>
+<p><code>Init</code> returns an <code>EngineHealth</code>: a list of <code>SubsystemStatus{name, state, detail}</code> in the fixed order <strong>Window, Renderer, Physics, Audio, Scripting</strong>. <code>GetHealth()</code> returns the same report later (as of the end of the last Init). Before any Init the list is empty, which counts as healthy.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>State</th><th>Meaning</th><th>Counts as failure?</th></tr></thead>
+<tbody>
+<tr><td><code>NotStarted</code></td><td>Init never reached this subsystem.</td><td>No</td></tr>
+<tr><td><code>Running</code></td><td>Started.</td><td>No</td></tr>
+<tr><td><code>Disabled</code></td><td>Deliberately not started (headless audio, build without PhysX).</td><td>No</td></tr>
+<tr><td><code>Failed</code></td><td>Tried and failed; <code>detail</code> says why.</td><td>Yes: <code>IsHealthy()</code> is false</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>What each outcome means for the running engine:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Subsystem</th><th>Outcome</th><th>Detail text</th><th>Consequence</th></tr></thead>
+<tbody>
+<tr><td>Window</td><td>Failed (GLFW init or window creation)</td><td>the window's init error</td><td>Renderer stays <code>NotStarted</code> ("Not started because the window failed"). <code>Run()</code> refuses to start. Input has no <code>InputSystem</code>.</td></tr>
+<tr><td>Window + Renderer</td><td>Both Failed (window opened, renderer did not)</td><td>"Closed because the renderer failed" / "&lt;backend&gt;: Failed to initialize renderer"</td><td>The window is destroyed again and GLFW terminated. Same as above.</td></tr>
+<tr><td>Renderer</td><td>Running</td><td><code>OpenGL</code>, <code>Vulkan</code> or <code>Software</code></td><td>Normal.</td></tr>
+<tr><td>Physics</td><td>Failed</td><td>"PhysX failed to initialize (see log)"</td><td>No backend: <code>Get3DPhysicsBackend()</code> is null, fixed steps still run <code>FixedUpdate</code>, physics components cope with a null backend.</td></tr>
+<tr><td>Physics</td><td>Disabled</td><td>"Built without PhysX"</td><td>As above; the build has <code>N2ENGINE_USE_PHYSX=OFF</code> or the PhysX binaries could not be downloaded.</td></tr>
+<tr><td>Audio</td><td>Disabled</td><td>"Headless mode (streaming not yet implemented)"</td><td><code>AudioSystem</code> stays uninitialised; its <code>Update</code> is a no-op.</td></tr>
+<tr><td>Audio</td><td>Failed</td><td>"Could not open an audio device (see log)"</td><td>Game continues without sound.</td></tr>
+<tr><td>Scripting</td><td>Failed</td><td>"Lua bindings failed to register (see log)"</td><td>Lua components and scripts cannot be relied on.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>engine/include/engine/Health.hpp</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; <code>engine/src/Window.cpp</code> — <code>Window::InitWindow</code>, <code>Window::FailInit</code>; tests: <code>EngineHealthTest.*</code>, <code>WindowHealthTest.*</code>, <code>ScriptingHealthTest.LuaRuntimeInitializeReportsSuccess</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p><code>IsHealthy()</code> is false only when some subsystem is <code>Failed</code>; <code>Disabled</code> and <code>NotStarted</code> are healthy. <code>Find(name)</code> returns null for an unknown name. A <code>Window</code> that never initialised successfully is invalid, reports no renderer or input system, and its accessors are safe to call (<code>ShouldClose()</code> is true). Tests: <code>EngineHealthTest.RunningDisabledAndNotStartedAreHealthy</code>, <code>EngineHealthTest.AnyFailureIsUnhealthy</code>, <code>WindowHealthTest.UninitializedWindowAccessorsAreSafe</code>.</p>
+</div>
+<p>The editor host serves the same report over TCP; see <a href="logging-and-editor.html#health">Health</a>.</p>
+
+<h2 id="headless">Headless mode and a failed window</h2>
+<p><code>isHeadless = true</code> does two things and nothing else:</p>
+<ul>
+<li>The GLFW window is created with <code>GLFW_VISIBLE = false</code>. It is still a real window with a real renderer when the machine can provide one.</li>
+<li>Audio is not initialised and is reported <code>Disabled</code>.</li>
+</ul>
+<p>Physics and scripting start as usual. On a machine with no monitor, the window size falls back to 1280×720; on one with no GPU (such as the CI runner), the window or renderer fails and is reported <code>Failed</code>.</p>
+<p>A failed window is not fatal to <code>Init</code>, but <code>Run()</code> checks <code>Window::IsValid()</code> (window <em>and</em> renderer present) first. If invalid, it logs "Cannot run: no window or renderer (see GetHealth())", calls <code>Shutdown()</code> and returns without running a frame and without calling <code>OnApplicationQuit</code>. Hosts that can work without a window, like the editor host, run their own loop instead of <code>Run()</code>.</p>
+<p class="src">Source: <code>engine/src/Window.cpp</code> — <code>Window::InitWindow</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>, <code>Application::Run</code>; <code>editor-server/src/Main.cpp</code></p>
+
+<h2 id="frame">The frame loop</h2>
+<p><code>Run()</code> loops while the window is not closing and no quit was requested. Each iteration does the following, in this order:</p>
+<ol class="steps">
+<li><code>Window::PollEvents()</code>: GLFW events, then <code>InputSystem::Update()</code> (actions fire here; see <a href="input.html">Input</a>).</li>
+<li><code>Time::Update()</code>: measure the frame delta and advance the clocks.</li>
+<li>Add <code>min(unscaled delta, 0.25 s)</code> to the fixed-step accumulator.</li>
+<li><em>If a scene is loaded</em>: <code>Scene::ProcessAttachQueue()</code>, so components added since the last frame get attached before anything updates.</li>
+<li><em>If a scene is loaded</em>: zero or more fixed steps (<a href="#fixed-step">below</a>).</li>
+<li><em>If a scene is loaded</em>: <code>Scene::Update()</code>.</li>
+<li><em>If a scene is loaded</em>: <code>Scene::AdvanceCoroutines()</code> (see <a href="coroutines.html">Coroutines</a>).</li>
+<li><em>If a scene is loaded</em>: <code>Scene::LateUpdate()</code>.</li>
+<li><code>AudioSystem::Update()</code>, after LateUpdate, where listeners and sources push their positions.</li>
+<li><code>Render()</code>: clear, set the main camera's view/projection, upload scene lighting, render the scene, present. Skipped when there is no renderer.</li>
+<li><em>If a scene is loaded</em>: <code>Scene::ProcessDestroyed()</code>: objects and components destroyed during the frame are torn down here.</li>
+<li><code>SceneManager::ProcessAnyPendingSceneChange()</code>: a scene load requested during the frame takes effect now (see <a href="scenes.html">Scenes</a>).</li>
+</ol>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::Render</code>; <code>engine/src/Window.cpp</code> — <code>Window::PollEvents</code></p>
+
+<p>What happens when, from the point of view of game code:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>You do this…</th><th>…during</th><th>Effect is visible</th></tr></thead>
+<tbody>
+<tr><td>Add a GameObject (with components) to the scene</td><td>any callback</td><td>The object is in the scene at once; its components are queued and attached at step 4 of the <em>next</em> frame (see <a href="gameobjects-components.html">GameObjects</a>).</td></tr>
+<tr><td>Read <code>Time::GetDeltaTime()</code></td><td>Update / LateUpdate / coroutines</td><td>This frame's scaled delta (step 2).</td></tr>
+<tr><td>Read <code>Time::GetFixedDeltaTime()</code></td><td>FixedUpdate</td><td><code>fixedUnscaledDeltaTime × timeScale</code>.</td></tr>
+<tr><td>Change a body or transform that physics tracks</td><td>Update</td><td>Applied to the backend at the start of the next fixed step (<code>ApplyPendingChanges</code>); see <a href="physics.html">Physics</a>.</td></tr>
+<tr><td>Destroy an object</td><td>any callback</td><td>Torn down at step 11 of the same frame, after Render (see <a href="gameobjects-components.html">GameObjects</a> for what a destroyed object still does before then).</td></tr>
+<tr><td>Request a scene load</td><td>any callback</td><td>Switched at step 12; the rest of the current frame runs on the old scene.</td></tr>
+<tr><td>Call <code>Application::Quit()</code></td><td>any callback</td><td>The current frame finishes (all 12 steps), then the loop ends.</td></tr>
+<tr><td>Set <code>Time::SetTimeScale(0)</code></td><td>any</td><td>From the next frame: scaled delta 0, no fixed steps.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Steps 4–8 and 11 are skipped entirely while <code>SceneManager::GetCurSceneIndex()</code> is -1. Input, time, audio and rendering (of an empty frame) still run.</p>
+</div>
+
+<h2 id="fixed-step">Fixed steps and physics</h2>
+<p>The accumulator is a <code>double</code> local to <code>Run()</code>, starting at 0. Each frame adds the <em>unscaled</em> frame delta, clamped to 0.25 s, then, while a scene is loaded:</p>
+<pre class="lang-cpp"><code>while (accumulator &gt;= Time::GetFixedUnscaledDeltaTime())   // 0.02 s
+{
+    if (Time::GetFixedDeltaTime() &gt; 0.0f)                    // scaled; 0 when paused
+        PhysicsUpdate(curScene);
+    accumulator -= Time::GetFixedUnscaledDeltaTime();
+}
+</code></pre>
+<ul>
+<li><strong>Cadence is real time.</strong> Steps happen every 0.02 s of unscaled time regardless of <code>timeScale</code>; each step passes the scaled <code>fixedDeltaTime</code> to physics. Slow motion means the same number of smaller steps.</li>
+<li><strong>Clamp.</strong> A stall (debugger, loading) contributes at most 0.25 s, so at most 12 steps catch up in one frame instead of hundreds. The delta is used directly rather than a difference of float absolute times, which lost precision after hours of running (code review #16, fixed in PR #24).</li>
+<li><strong>Paused.</strong> With <code>timeScale</code> 0 the accumulator still drains at the same rate but no step runs: neither physics nor <code>FixedUpdate</code>. Stepping PhysX by 0 is an error, and this matches Unity. Unpausing does not replay the paused time.</li>
+</ul>
+<p><code>PhysicsUpdate(scene)</code> does, per step:</p>
+<ol class="steps">
+<li><code>backend-&gt;ApplyPendingChanges()</code>: transform and body changes made by game code since the last step.</li>
+<li><code>scene.FixedUpdate()</code>: component <code>FixedUpdate</code> callbacks.</li>
+<li><code>backend-&gt;Update(Time::GetFixedDeltaTime())</code>: simulate.</li>
+<li><code>backend-&gt;SyncTransforms()</code>: write simulated poses back to GameObjects.</li>
+<li><code>backend-&gt;ProcessCollisionCallbacks()</code>: dispatch collision and trigger events.</li>
+</ol>
+<p>Without a backend (PhysX failed, disabled, or not built), a step is just <code>scene.FixedUpdate()</code>. See <a href="physics.html">Physics</a> for the backend side.</p>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code></p>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Application::Run</code> adds to the accumulator every frame but drains it only while a scene is loaded. If <code>Run()</code> spends frames with no scene (the 0.25 s clamp applies per frame, not to the total), the first frame with a scene runs all the accumulated steps at once. Whether the accumulator should be reset or capped when no scene is loaded is not decided.</p>
+</div>
+
+<h2 id="time">Time</h2>
+<p><code>Time</code> is a static class. <code>Init</code> and <code>Update</code> are private and called only by <code>Application</code>. All getters return <code>float</code>; the state is kept in <code>double</code>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Getter</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td><code>GetUnscaledDeltaTime()</code></td><td>Wall-clock seconds between the last two <code>Time::Update</code> calls (<code>high_resolution_clock</code>). Not clamped.</td></tr>
+<tr><td><code>GetDeltaTime()</code></td><td>Unscaled delta × <code>timeScale</code>.</td></tr>
+<tr><td><code>GetUnscaledTime()</code> / <code>GetTime()</code></td><td>Sums of the unscaled / scaled deltas since <code>Init</code>.</td></tr>
+<tr><td><code>GetFixedUnscaledDeltaTime()</code></td><td>0.02 s (50 Hz). There is no setter.</td></tr>
+<tr><td><code>GetFixedDeltaTime()</code></td><td>0.02 × <code>timeScale</code>, recomputed by <code>SetTimeScale</code>.</td></tr>
+<tr><td><code>GetTimeScale()</code> / <code>SetTimeScale(s)</code></td><td>Default 1. Takes effect from the next <code>Time::Update</code> for the frame delta, immediately for the fixed delta.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Lua sees the same values through the <code>Time</code> global (<code>Time.deltaTime</code>, <code>Time.timeScale</code> read/write, etc.; see <a href="scripting-lua.html">Lua scripting</a>).</p>
+<p class="src">Source: <code>engine/include/engine/Time.hpp</code>, <code>engine/src/Time.cpp</code>; <code>engine/src/scripting/bindings/LuaTimeBindings.cpp</code> — <code>BindTime</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p><code>Time::Init</code> (run by every <code>Application::Init</code>) resets <code>timeScale</code> to 1 and restarts the clocks; a time scale set before <code>Init</code> is lost. The first frame's delta covers everything between <code>Init</code> and that frame (scene setup, script loading); the accumulator clamps it, but <code>GetDeltaTime()</code> does not.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Time::SetTimeScale</code> accepts any value. A negative scale makes <code>GetDeltaTime()</code> negative and <code>GetFixedDeltaTime()</code> negative, which <code>Run()</code> treats like a pause (no fixed steps). Whether negative or non-finite scales should be rejected or clamped is not specified.</p>
+</div>
+
+<h2 id="quit">Quitting</h2>
+<p><code>Application::Quit()</code> (static; also <code>Application.Quit()</code> in Lua) is a <strong>request</strong>: it logs "Quit requested" and sets a flag. It returns normally, so the calling component or Lua callback finishes. Before PR #24 it called <code>std::exit(0)</code> from inside callbacks with the scene and the Lua stack still live.</p>
+<ul>
+<li><code>Run()</code> checks the flag at the top of each iteration, so the frame in which <code>Quit()</code> was called runs to completion (including destroy processing and a pending scene change).</li>
+<li><code>IsQuitRequested()</code> exposes the flag to hosts that do not use <code>Run()</code>; the editor host polls it.</li>
+<li>The flag is cleared <strong>only</strong> by <code>Init</code>. It is not cleared by <code>Run()</code> or <code>Shutdown()</code>. A <code>Quit()</code> requested before <code>Run()</code> (for example from a scene script's file-scope code) is honoured: <code>Run()</code> exits before the first frame.</li>
+</ul>
+<p>When the loop ends, for <em>either</em> reason (window closed or quit requested), <code>Run()</code> calls <code>OnApplicationQuit()</code> on the current scene, if there is one, then <code>Shutdown()</code>. The editor host does the same after its own loop. <code>Run()</code>'s early return for an invalid window does not call <code>OnApplicationQuit</code>.</p>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Quit</code>, <code>Application::Run</code>; <code>engine/src/scripting/bindings/LuaApplicationBindings.cpp</code>; <code>editor-server/src/Main.cpp</code>; tests: <code>CoreRobustnessTest.QuitIsARequestNotAnExit</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p><code>Application::Quit()</code> does not terminate the process; afterwards <code>IsQuitRequested()</code> is true. Test: <code>CoreRobustnessTest.QuitIsARequestNotAnExit</code>.</p>
+</div>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>Because only <code>Init</code> clears the flag, a test binary that calls <code>Quit()</code> leaves it set for every later test. A later test that spins <code>Run()</code> or the editor loop would exit at once. See <a href="testing.html#conventions">Testing conventions</a>.</p>
+</div>
+
+<h2 id="shutdown">Shutdown order</h2>
+<p><code>Shutdown()</code> tears subsystems down in reverse order of Init:</p>
+<ol class="steps">
+<li><code>SceneManager::UnloadScenes()</code> <span class="badge">PR #28</span>: drops any pending scene change, runs <code>Clear()</code> on the loaded scene (so components get <code>OnDestroy</code>) and frees it. Stored scene data is kept.</li>
+<li><code>AudioSystem::Instance().Shutdown()</code>: stops and deletes one-shot and pooled sources, deletes sources still held by <code>AudioSource</code> components (and makes them forget the ids), destroys the OpenAL context.</li>
+<li>Destroy the physics backend (<code>~PhysXBackend</code> releases the PhysX SDK).</li>
+<li><code>Window::Shutdown()</code>: input system, renderer, GLFW window, <code>glfwTerminate</code>.</li>
+</ol>
+<p>Scenes go first so the audio sources and physics bodies their components hold are released while those subsystems still exist. Before PR #28 the loaded scene was only freed during static destruction, after audio and PhysX were gone.</p>
+<p><code>Shutdown</code> is safe without <code>Init</code> and safe to call more than once. <code>Run()</code> calls it; hosts that do not use <code>Run()</code> must call it themselves before returning from <code>main</code>, so teardown does not depend on static destruction order.</p>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Shutdown</code>; <code>engine/src/sceneManagement/SceneManager.cpp</code> — <code>SceneManager::UnloadScenes</code>; <code>engine/src/audio/AudioSystem.cpp</code> — <code>AudioSystem::Shutdown</code>; tests: <code>ApplicationShutdownTest.SafeWithoutInitAndWhenRepeated</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p><code>Shutdown</code> does not tear down the Lua runtime, the main camera, <code>ResourceLoader</code>/<code>Resources</code> caches or stored scene data; those live until static destruction. The health report also keeps its last values.</p>
+</div>
+
+<h2 id="editor-frame">RenderEditorFrame</h2>
+<p><code>RenderEditorFrame()</code> renders one frame for a host that drives the engine itself (the editor server's <code>RenderFrame</code> command). It returns immediately if the window is invalid; otherwise it runs <code>PollEvents</code>, <code>Time::Update</code>, <code>AudioSystem::Update</code> and <code>Render</code>.</p>
+<p>It does <strong>not</strong> run the attach queue, fixed steps, <code>Update</code>, coroutines, <code>LateUpdate</code>, destroy processing or pending scene changes: the scene is drawn, not simulated.</p>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::RenderEditorFrame</code>; <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::HandleRenderFrame</code></p>
+
+<h2 id="tests">Using Application in tests and tools</h2>
+<p><code>Init</code> needs a window, so tests never call it. The pieces a test needs are installed directly:</p>
+<ul>
+<li><code>Set3DPhysicsBackend(std::unique_ptr&lt;IPhysicsBackend&gt;)</code> installs a backend without Init. It replaces and destroys any existing backend; <code>nullptr</code> removes it. Unload or replace scenes holding bodies first, because the old backend is destroyed immediately.</li>
+<li>Fixed steps are driven by hand the way <code>PhysicsUpdate</code> does (<code>PhysicsUpdate</code> itself is private).</li>
+<li><code>GetHealth()</code> is empty and healthy; <code>Shutdown()</code> is a safe no-op.</li>
+</ul>
+<pre class="lang-cpp"><code>static void SetUpTestSuite()
+{
+    auto backend = std::make_unique&lt;N2Engine::Physics::PhysXBackend&gt;();
+    ASSERT_TRUE(backend-&gt;Initialize());
+    N2Engine::Application::GetInstance().Set3DPhysicsBackend(std::move(backend));
+}
+
+static void TearDownTestSuite()
+{
+    // Leave no loaded scene holding bodies of the backend that's about to go away
+    N2Engine::SceneManager::AddScene(N2Engine::Scene::Create("Teardown"), true);
+    N2Engine::SceneManager::ProcessAnyPendingSceneChange();
+    N2Engine::Application::GetInstance().Set3DPhysicsBackend(nullptr);
+}
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/Application.hpp</code> — <code>Application::Set3DPhysicsBackend</code>; tests: <code>PhysicsTest</code> fixture in <code>tests/engine/physics/PhysicsTests.cpp</code>, <code>EngineHealthTest.ApplicationHasNoHealthBeforeInit</code></p>
+<p>More on headless fixtures in <a href="testing.html#conventions">Testing &amp; CI</a>.</p>
+
+<h2 id="singletons">Singletons and static destruction</h2>
+<p>The engine relies on several process-wide singletons. Function-local statics are destroyed in reverse order of construction at exit, which is why teardown is done explicitly in <code>Shutdown()</code> and why some instances are deliberately never destroyed.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Singleton</th><th>Storage</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><code>Application</code></td><td>function-local static</td><td>Teardown is in <code>Shutdown()</code>, not the destructor: statics created during Init (such as the debug console stream) would already be gone by the time <code>~Application</code> runs.</td></tr>
+<tr><td><code>SceneManager</code></td><td>function-local static</td><td>Its loaded scene is unloaded by <code>Shutdown()</code> <span class="badge">PR #28</span>; stored scene data lives until exit.</td></tr>
+<tr><td><code>AudioSystem</code></td><td><code>new</code>, never deleted (leaked on purpose)</td><td><code>AudioSource</code> destructors unregister from it and can run during static destruction (SceneManager's scene). In headless mode Init never touches <code>AudioSystem</code>, so it was first created <em>after</em> SceneManager and, as a function-local static, destroyed before it (raised in the PR #23 review).</td></tr>
+<tr><td>Logger console stream</td><td><code>new</code>, never deleted</td><td>Created after the Application singleton; destroying it first made log calls during later teardown crash.</td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::GetInstance</code>, <code>Application::Shutdown</code>; <code>engine/src/audio/AudioSystem.cpp</code> — <code>AudioSystem::Instance</code>; <code>engine/src/Logger.cpp</code> — <code>Logger::InitializeDebugConsoleHelper</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>The CI editor-host smoke test exits the host through its normal path and fails on a non-zero exit code, which catches crashes during shutdown or static destruction. See <a href="testing.html#ci">CI</a>.</p>
+</div>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
