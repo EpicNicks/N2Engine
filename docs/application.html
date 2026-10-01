@@ -204,7 +204,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <li>Add <code>min(unscaled delta, 0.25 s)</code> to the fixed-step accumulator. With no scene loaded the accumulator is reset to 0 instead of being drained <span class="badge">PR #34</span>.</li>
 <li><em>If a scene is loaded</em>: <code>Scene::ProcessAttachQueue()</code>, so components added since the last frame get attached before anything updates.</li>
 <li><em>If a scene is loaded</em>: zero or more fixed steps (<a href="#fixed-step">below</a>).</li>
-<li><em>If a scene is loaded</em>: <code>PointerDispatcher::Update()</code>: the <code>OnMouse*</code> callbacks for the object under the cursor, where Unity sends them (see <a href="input.html#picking">Picking</a>) <span class="badge">Picking</span>.</li>
+<li><em>If a scene is loaded</em>: <code>PointerDispatcher::Update()</code>: the <code>OnMouse*</code> callbacks for the object under the cursor, where Unity sends them (see <a href="input.html#picking">Picking</a>) <span class="badge">PR #48</span>.</li>
 <li><em>If a scene is loaded</em>: <code>Scene::Update()</code>.</li>
 <li><em>If a scene is loaded</em>: <code>Scene::AdvanceCoroutines()</code> (see <a href="coroutines.html">Coroutines</a>).</li>
 <li><em>If a scene is loaded</em>: <code>Scene::LateUpdate()</code>.</li>
