@@ -569,7 +569,8 @@ assert(Vector3.Zero.y == 0)   -- the constant is unchanged
 <thead><tr><th>Member</th><th>Result</th></tr></thead>
 <tbody>
 <tr><td><code>Layers.Default</code>, <code>TransparentFX</code>, <code>IgnoreRaycast</code>, <code>Water</code>, <code>UI</code></td><td>The built-in indices 0, 1, 2, 4 and 5</td></tr>
-<tr><td><code>Layers.DefaultRaycastMask</code></td><td>Every layer but Ignore Raycast (<code>4294967291</code>)</td></tr>
+<tr><td><code>Layers.DefaultRaycastMask</code>, <code>Layers.AllLayers</code></td><td>Every layer but Ignore Raycast (<code>4294967291</code>); every layer (<code>4294967295</code>)</td></tr>
+<tr><td><code>Layers.MaskOf(layer)</code></td><td>The mask of one layer (<code>1 &lt;&lt; layer</code>), or 0 for an out-of-range layer</td></tr>
 <tr><td><code>Layers.NameToLayer(name)</code>, <code>Layers.LayerToName(layer)</code></td><td>The index, or <code>-1</code>; the name, or <code>""</code></td></tr>
 <tr><td><code>Layers.SetName(layer, name)</code></td><td><code>true</code>, or <code>false</code> (with a warning) for a built-in or out-of-range layer or a name already in use</td></tr>
 <tr><td><code>Layers.GetMask(name, ...)</code></td><td>The mask of the named layers as an integer; unknown names are skipped. A non-string argument is a Lua error</td></tr>

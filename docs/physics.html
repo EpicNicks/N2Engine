@@ -311,7 +311,8 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 <ul>
 <li><code>GameObject::SetLayer</code> rewrites the query and simulation filter data of every attached shape of the object's colliders (<code>ICollider::OnLayerChanged</code> → <code>IPhysicsBackend::SetColliderLayer</code>). Queries see the new layer straight away. Disabled colliders, and colliders not attached yet, take the layer when their shapes are created.</li>
 <li><code>Layers::SetCollision</code>, <code>Deserialize</code> and <code>ResetToDefaults</code> call <code>IPhysicsBackend::RefreshCollisionMatrix</code> when the matrix changed; it rewrites <code>word1</code> on every shape whose row changed.</li>
-<li>Both then call <code>PxScene::resetFiltering</code> for the changed shapes (only for actors in the scene; an inactive body is filtered afresh when it is added back). Existing pairs are filtered again in the next step.</li>
+<li>Both then call <code>PxScene::resetFiltering</code> for the changed shapes (only for actors in the scene; an inactive body is filtered afresh when it is added back, with the filter data it has by then). Existing pairs are filtered again in the next step.</li>
+<li><code>resetFiltering</code> wakes the actor it is called on; the backend also wakes every sleeping dynamic body touching the re-filtered shapes, so PhysX re-finds those pairs promptly. A matrix change therefore wakes the bodies on the affected layers (and what they touch): it is meant for setup and occasional changes, not for every frame.</li>
 </ul>
 <p>After <code>resetFiltering</code>, PhysX reports every pair of those shapes as lost, and the pairs the new data still allows as found again. The backend holds back the reports for re-filtered shapes during that step and settles each shape pair by its <em>last</em> report once the step is done (<code>ReconcileRefilteredPairs</code>), through the same per-shape touch lists as everything else:</p>
 <div class="table-wrap">
@@ -319,11 +320,12 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 <thead><tr><th>Change while two shapes touch</th><th>Events</th><th>Backed by</th></tr></thead>
 <tbody>
 <tr><td>The pair is ruled out (matrix turned off, or an object moved to a layer the other doesn't collide with)</td><td>Exit on both sides in the next step (if no other shape pair of the two bodies still touches); Stay stops</td><td><code>TurningCollisionOffMidContactEndsThePair</code>, <code>MatrixChangesEndAndRestartOverlappingTriggers</code>, <code>ChangingAnObjectsLayerAtRuntimeRefilters</code></td></tr>
-<tr><td>The pair stays allowed (an object moved to another layer that still collides)</td><td>Nothing: lost-then-found nets out, Stay continues</td><td><code>ChangingAnObjectsLayerAtRuntimeRefilters</code></td></tr>
+<tr><td>The pair stays allowed (an object moved to another layer that still collides, or a matrix change that doesn't affect this pair)</td><td>Nothing: lost-then-found nets out, Stay continues, also when one side was asleep</td><td><code>ChangingAnObjectsLayerAtRuntimeRefilters</code>, <code>LayerPhysicsRestingTest.*</code></td></tr>
 <tr><td>A suppressed pair that still overlaps is allowed again</td><td>Enter on both sides in the next step</td><td><code>MatrixChangesEndAndRestartOverlappingTriggers</code></td></tr>
 </tbody>
 </table>
 </div>
+<p>PhysX may report a pair lost in one step and found again only in the next. So when a shape pair's last report is "lost" but the new filter data still allows the pair, its Exit is deferred by one step. The pair stays touching (Stay continues) and both bodies are woken. If "found" arrives in that step, nothing is reported. If no report arrives, the Exit is delivered then, one step late. The same one-step delay applies to a real separation of an allowed pair that happens in the step its shapes are re-filtered.</p>
 <p>As a fallback, after that step any touch of a re-filtered shape that the new filter data rules out is ended with an Exit even if PhysX never reported it lost, so a ruled-out pair always gets its Exit and Enter/Exit stay balanced.</p>
 <p class="src">Source: <code>engine/src/Layers.cpp</code>; <code>GameObject::SetLayer</code>, <code>ICollider::OnLayerChanged</code>; <code>PhysXBackend.cpp</code> — <code>CollisionEventFilterShader</code>, <code>AttachColliderShape</code>, <code>SetColliderLayer</code>, <code>RefreshCollisionMatrix</code>, <code>RefilterShapes</code>, <code>ReconcileRefilteredPairs</code>; tests: <code>LayersTests.cpp</code>, <code>LayerPhysicsTests.cpp</code> (<code>NonCollidingLayersPassThroughEachOther</code>, <code>TriggersObeyTheMatrix</code>, <code>ChildColliderUsesItsOwnLayer</code>, <code>CollidersAttachedAfterAMatrixChangeUseTheNewMatrix</code>)</p>
 
