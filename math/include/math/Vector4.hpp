@@ -408,7 +408,9 @@ namespace N2Engine::Math
 
         // ===== BATCH OPERATIONS =====
 
-        // Raw pointer interface (zero overhead, maximum flexibility)
+        // Raw pointer interface (zero overhead, maximum flexibility). The pointers must address contiguous Vector4s:
+        // a derived type such as Common::Color (48 bytes, with its reference members) converts implicitly but would
+        // be walked with the wrong stride
         static void AddBatch(const Vector4 *a, const Vector4 *b, Vector4 *result, size_t count);
         static void SubBatch(const Vector4 *a, const Vector4 *b, Vector4 *result, size_t count);
         static void ScalarMulBatch(const Vector4 *input, Vector4 *output, float scalar, size_t count);
