@@ -15,6 +15,28 @@
 
 using namespace N2Engine::Input;
 
+// Set for the duration, cleared even if a handler throws; only the outermost scope frees retired maps
+// (a handler may replace a map whose Update or cancel pass is still on the stack)
+struct InputSystem::UpdatingScope
+{
+    InputSystem &input;
+    const bool outermost;
+
+    explicit UpdatingScope(InputSystem &i) : input(i), outermost(!i._updating) { input._updating = true; }
+
+    ~UpdatingScope()
+    {
+        if (outermost)
+        {
+            input._updating = false;
+            input._retiredMaps.clear();
+        }
+    }
+
+    UpdatingScope(const UpdatingScope &) = delete;
+    UpdatingScope &operator=(const UpdatingScope &) = delete;
+};
+
 InputSystem::InputSystem(Window &window)
     : _window{window}
 {
@@ -74,7 +96,16 @@ ActionMap* InputSystem::LoadActionMap(const std::string &name)
     }
     if (const auto it = _actionMaps.find(name); it != _actionMaps.end())
     {
+        ActionMap *previous = GetCurActionMap();
         _curActionMapName = it->first;
+        if (previous)
+        {
+            // Leaving a map releases what was held in it: it isn't updated any more, so its actions would
+            // otherwise stay Started/Performed with no callback until it was loaded again. Its callbacks may
+            // replace maps, which are then retired until this pass ends rather than freed under it.
+            UpdatingScope scope{*this};
+            previous->CancelActiveActions();
+        }
         return GetCurActionMap();
     }
     return nullptr;
@@ -127,23 +158,7 @@ void InputSystem::Update()
 {
     _mouse->Update();
 
-    // Cleared even if a handler throws; only the outermost update frees retired maps
-    struct UpdateScope
-    {
-        InputSystem &input;
-        const bool outermost;
-
-        explicit UpdateScope(InputSystem &i) : input(i), outermost(!i._updating) { input._updating = true; }
-
-        ~UpdateScope()
-        {
-            if (outermost)
-            {
-                input._updating = false;
-                input._retiredMaps.clear();
-            }
-        }
-    } scope{*this};
+    UpdatingScope scope{*this};
 
     if (const auto it = _actionMaps.find(_curActionMapName); it != _actionMaps.end())
     {
