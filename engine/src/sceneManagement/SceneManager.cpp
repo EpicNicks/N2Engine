@@ -1,5 +1,6 @@
 #include <format>
 #include <string>
+#include <utility>
 
 #include "engine/Logger.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -67,16 +68,31 @@ void SceneManager::LoadScene(const int sceneIndex)
         Logger::Error("Scene index: " + std::to_string(sceneIndex) + " out of range");
         return;
     }
+    // A superseded pending scene is freed at the end of this statement, after the request is recorded:
+    // its teardown may call LoadScene itself (that later request then wins, as the last request does)
+    (void)RequestLoad(sceneIndex);
+}
+
+std::unique_ptr<Scene> SceneManager::RequestLoad(const int sceneIndex)
+{
+    SceneManager &instance = GetInstance();
     // A repeated request for the scene already pending keeps the caller's instance from AddScene;
-    // a request for another scene supersedes it (that instance is destroyed, its snapshot stays stored)
+    // a request for another scene supersedes it (that instance is returned to be destroyed, its snapshot
+    // stays stored)
     std::unique_ptr<Scene> pendingScene;
+    std::unique_ptr<Scene> superseded;
     if (instance._sceneChange._updatingScene && instance._sceneChange._pendingSceneIndex == sceneIndex)
     {
         pendingScene = std::move(instance._sceneChange._pendingScene);
     }
+    else
+    {
+        superseded = std::move(instance._sceneChange._pendingScene);
+    }
     instance._sceneChange = SceneChange{
         ._updatingScene = true, ._pendingSceneIndex = sceneIndex, ._pendingScene = std::move(pendingScene)
     };
+    return superseded;
 }
 
 void SceneManager::LoadScene(const std::string &sceneName)
@@ -131,7 +147,7 @@ bool SceneManager::HasScene(const std::string &sceneName)
     return FindSceneIndex(sceneName) != -1;
 }
 
-int SceneManager::StoreScene(nlohmann::json data)
+int SceneManager::StoreScene(nlohmann::json data, std::unique_ptr<Scene> &dropped)
 {
     SceneManager &instance = GetInstance();
     std::string name = SceneNameOf(data);
@@ -142,8 +158,9 @@ int SceneManager::StoreScene(nlohmann::json data)
         instance._scenes[existing].data = std::move(data);
         if (instance._sceneChange._pendingSceneIndex == existing)
         {
-            // A load already pending for this scene builds from the new data, not an older instance
-            instance._sceneChange._pendingScene.reset();
+            // A load already pending for this scene builds from the new data, not an older instance.
+            // Handed to the caller to free once its changes are done.
+            dropped = std::move(instance._sceneChange._pendingScene);
         }
         return existing;
     }
@@ -154,6 +171,8 @@ int SceneManager::StoreScene(nlohmann::json data)
 void SceneManager::UnloadScenes()
 {
     SceneManager &instance = GetInstance();
+    // Freed last, once the unload is complete (freeing it can run component callbacks)
+    std::unique_ptr<Scene> pending = std::move(instance._sceneChange._pendingScene);
     instance._sceneChange = SceneChange{};
     if (instance._loadedScene)
     {
@@ -161,6 +180,7 @@ void SceneManager::UnloadScenes()
         instance._loadedScene.reset();
     }
     instance._curSceneIndex = -1;
+    pending.reset();
 }
 
 void SceneManager::AddScene(std::unique_ptr<Scene> scene, bool loadAdded)
@@ -171,15 +191,30 @@ void SceneManager::AddScene(std::unique_ptr<Scene> scene, bool loadAdded)
         return;
     }
 
+    // Scenes this call drops (a replaced or superseded pending instance, and the caller's scene when it
+    // isn't loaded) are freed at the end, after SceneManager's state is final: freeing one can run
+    // component callbacks that call LoadScene or AddScene themselves
+    std::unique_ptr<Scene> droppedByStore;
+    std::unique_ptr<Scene> droppedByLoad;
+    std::unique_ptr<Scene> replacedPending;
+
     // The snapshot is what later loads of this scene rebuild from
-    const int index = StoreScene(scene->Serialize());
+    const int index = StoreScene(scene->Serialize(), droppedByStore);
     if (loadAdded)
     {
         // Load the caller's object itself (it used to be dropped and rebuilt from the snapshot, leaving
         // every GameObject::Ptr the caller kept in an orphaned scene)
-        LoadScene(index);
-        GetInstance()._sceneChange._pendingScene = std::move(scene);
+        droppedByLoad = RequestLoad(index);
+        replacedPending = std::exchange(GetInstance()._sceneChange._pendingScene, std::move(scene));
     }
+    else
+    {
+        // Only the snapshot is kept
+        replacedPending = std::move(scene);
+    }
+    replacedPending.reset();
+    droppedByLoad.reset();
+    droppedByStore.reset();
 }
 
 void SceneManager::AddScene(nlohmann::json &j)
@@ -187,7 +222,9 @@ void SceneManager::AddScene(nlohmann::json &j)
     // verify the scene is correct json
     if (Scene::FromJSON(j, true))
     {
-        StoreScene(std::move(j));
+        std::unique_ptr<Scene> dropped;
+        StoreScene(std::move(j), dropped);
+        dropped.reset(); // after the data is stored
     }
 }
 
@@ -237,8 +274,10 @@ void SceneManager::UpdateScene(int sceneIndex, nlohmann::json &newSceneData)
         instance._scenes[sceneIndex] = StoredScene{.name = std::move(newName), .data = newSceneData};
         if (instance._sceneChange._pendingSceneIndex == sceneIndex)
         {
-            // A load already pending for this scene builds from the new data, not an older instance
-            instance._sceneChange._pendingScene.reset();
+            // A load already pending for this scene builds from the new data, not an older instance.
+            // Freed after the update (freeing it can run component callbacks).
+            std::unique_ptr<Scene> dropped = std::move(instance._sceneChange._pendingScene);
+            dropped.reset();
         }
     }
 }

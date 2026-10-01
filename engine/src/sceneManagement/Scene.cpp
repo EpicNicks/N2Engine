@@ -35,11 +35,20 @@ Scene::~Scene()
         }
         catch (const std::exception &e)
         {
-            Logger::Error(std::format("Scene '{}': teardown of a dropped scene threw: {}", sceneName, e.what()));
+            // Logging must not throw out of the destructor either (that would terminate)
+            try
+            {
+                Logger::Error(std::format("Scene '{}': teardown of a dropped scene threw: {}", sceneName, e.what()));
+            }
+            catch (...) {}
         }
         catch (...)
         {
-            Logger::Error(std::format("Scene '{}': teardown of a dropped scene threw", sceneName));
+            try
+            {
+                Logger::Error(std::format("Scene '{}': teardown of a dropped scene threw", sceneName));
+            }
+            catch (...) {}
         }
     }
 
@@ -474,6 +483,24 @@ void Scene::ClearImpl(const bool attachedOnly)
 {
     // Same teardown as ProcessDestroyed, so leaving a scene releases what its components hold
     // (physics bodies, audio sources, script state) instead of leaving it pointing at freed objects
+    // attachedOnly: only objects with a component that attached here are torn down; the others are just
+    // released from the scene, as they would be if nothing in the scene had attached
+    std::vector<const GameObject *> attachedOwners;
+    if (attachedOnly)
+    {
+        for (const Component *component : _components)
+        {
+            if (component)
+            {
+                attachedOwners.push_back(&component->GetGameObject());
+            }
+        }
+    }
+    const auto isTornDownHere = [&](const std::shared_ptr<GameObject> &obj)
+    {
+        return !attachedOnly || std::ranges::find(attachedOwners, obj.get()) != attachedOwners.end();
+    };
+
     std::vector<std::shared_ptr<GameObject>> allObjects;
     for (const auto &root : _rootGameObjects)
     {
@@ -486,7 +513,15 @@ void Scene::ClearImpl(const bool attachedOnly)
     // Only now, so each OnDestroy above could still use the other objects being torn down
     for (const auto &obj : allObjects)
     {
-        obj->_isTornDown = true;
+        if (isTornDownHere(obj))
+        {
+            obj->_isTornDown = true;
+        }
+        else
+        {
+            obj->_isMarkedForDestruction = false;
+            obj->MarkActiveInHierarchyDirty();
+        }
     }
 
     for (const auto &root : _rootGameObjects)

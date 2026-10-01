@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -33,9 +34,17 @@ namespace
 
         void OnAttach() override { ++counts->attach; }
         void OnDisable() override { ++counts->disable; }
-        void OnDestroy() override { ++counts->destroy; }
+        void OnDestroy() override
+        {
+            ++counts->destroy;
+            if (onDestroy)
+            {
+                onDestroy();
+            }
+        }
 
         std::shared_ptr<DropCounts> counts = std::make_shared<DropCounts>();
+        std::function<void()> onDestroy;
     };
 
     // A Light that records the per-frame callbacks it gets
@@ -75,6 +84,8 @@ namespace
         std::unique_ptr<Scene> scene;
         std::shared_ptr<DropCounts> attached;
         std::shared_ptr<DropCounts> queued;
+        GameObject::Ptr attachedObject;
+        GameObject::Ptr queuedObject;
     };
 
     HalfAttachedScene MakeHalfAttachedScene(const std::string &name)
@@ -90,6 +101,8 @@ namespace
         const auto second = GameObject::Create("Queued");
         result.queued = second->AddComponent<DropProbe>()->counts;
         result.scene->AddRootGameObject(second);
+        result.attachedObject = first;
+        result.queuedObject = second;
         return result;
     }
 }
@@ -125,6 +138,15 @@ TEST(DroppedSceneTeardownTest, AttachedComponentsAreTornDownOnDrop)
     EXPECT_EQ(dropped.attached->destroy, 1) << "an attached component of a dropped scene was not torn down";
     EXPECT_EQ(dropped.queued->destroy, 0) << "OnDestroy without OnAttach";
     EXPECT_EQ(dropped.queued->disable, 0);
+
+    // Only the object whose component attached is torn down; the other is released as in a scene where
+    // nothing attached (it does not depend on its siblings)
+    EXPECT_TRUE(dropped.attachedObject->IsDestroyed());
+    EXPECT_TRUE(dropped.attachedObject->IsTornDown());
+    EXPECT_FALSE(dropped.queuedObject->IsDestroyed());
+    EXPECT_FALSE(dropped.queuedObject->IsTornDown());
+    EXPECT_TRUE(dropped.queuedObject->IsActiveInHierarchy());
+    EXPECT_EQ(dropped.queuedObject->GetScene(), nullptr);
 }
 
 TEST(DroppedSceneTeardownTest, ClearedSceneIsNotTornDownTwice)
@@ -168,6 +190,56 @@ TEST(DroppedSceneTeardownTest, SupersededPendingSceneTearsDownAttachedComponents
     SceneManager::ProcessAnyPendingSceneChange();
     EXPECT_EQ(SceneManager::GetCurSceneRef().sceneName, "DroppedScene_Next");
     EXPECT_EQ(attached->destroy, 1);
+}
+
+// A dropped scene's OnDestroy that calls LoadScene runs after SceneManager's own change is complete, so it
+// is just a later request (the last one wins) and never corrupts the pending state
+TEST(DroppedSceneTeardownTest, LoadSceneFromADroppedPendingScenesOnDestroyIsALaterRequest)
+{
+    LoadFreshDropScene("DropReentry_Current");
+    SceneManager::AddScene(Scene::Create("DropReentry_Other"), false);
+
+    auto pending = Scene::Create("DropReentry_Pending");
+    const auto go = GameObject::Create("Reentrant");
+    auto *probe = go->AddComponent<DropProbe>();
+    const auto counts = probe->counts;
+    probe->onDestroy = [] { SceneManager::LoadScene("DropReentry_Other"); };
+    pending->AddRootGameObject(go);
+    pending->ProcessAttachQueue();
+    SceneManager::AddScene(std::move(pending), true);
+
+    // Supersedes the pending scene, whose teardown then requests another load
+    SceneManager::AddScene(Scene::Create("DropReentry_S"), true);
+    EXPECT_EQ(counts->destroy, 1);
+
+    SceneManager::ProcessAnyPendingSceneChange();
+    ASSERT_NE(SceneManager::GetCurScene(), nullptr);
+    EXPECT_EQ(SceneManager::GetCurScene()->sceneName, "DropReentry_Other");
+    EXPECT_EQ(SceneManager::GetCurSceneIndex(), SceneManager::GetSceneIndex("DropReentry_Other"));
+    EXPECT_TRUE(SceneManager::HasScene("DropReentry_S"));
+}
+
+TEST(DroppedSceneTeardownTest, ReentrantLoadOfTheNewSceneKeepsTheCallersInstance)
+{
+    LoadFreshDropScene("DropReentry2_Current");
+
+    auto pending = Scene::Create("DropReentry2_Pending");
+    const auto go = GameObject::Create("Reentrant");
+    auto *probe = go->AddComponent<DropProbe>();
+    probe->onDestroy = [] { SceneManager::LoadScene("DropReentry2_S"); };
+    pending->AddRootGameObject(go);
+    pending->ProcessAttachQueue();
+    SceneManager::AddScene(std::move(pending), true);
+
+    auto next = Scene::Create("DropReentry2_S");
+    const auto kept = GameObject::Create("Kept");
+    next->AddRootGameObject(kept);
+    SceneManager::AddScene(std::move(next), true);
+
+    SceneManager::ProcessAnyPendingSceneChange();
+    ASSERT_NE(SceneManager::GetCurScene(), nullptr);
+    EXPECT_EQ(SceneManager::GetCurScene()->sceneName, "DropReentry2_S");
+    EXPECT_EQ(kept->GetScene(), SceneManager::GetCurScene()) << "the caller's own S object is the loaded scene";
 }
 
 TEST(DroppedSceneTeardownTest, GetSceneCopyAttachedByCallerIsTornDownOnDrop)
