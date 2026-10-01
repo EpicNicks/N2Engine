@@ -20,6 +20,7 @@
 #include <functional>
 #include "math/VectorN.hpp" // For VectorN compatibility
 #include "math/Constants.hpp"
+#include "math/CpuInfo.hpp"
 
 #ifdef _WIN32
 #include <intrin.h>
@@ -527,8 +528,8 @@ namespace N2Engine::Math
             }
         }
 
-        // SIMD initialization - call once at startup
-        static void InitializeSIMD();
+        // Selects the implementation tier the operations dispatch to; see Math::SetSIMDLevel
+        static void SetSIMDLevel(SIMDLevel level);
 
         // AVX-optimized batch operations for arrays of Vector3s
         static void AddBatch(const Vector3 *a, const Vector3 *b, Vector3 *result, size_t count);
@@ -659,7 +660,8 @@ namespace N2Engine::Math
         inline static CeilFunc ceil_func = &CeilScalar;
         inline static RoundFunc round_func = &RoundScalar;
         inline static AbsFunc abs_func = &AbsScalar;
-        inline static bool initialized = false;
+        // The batch operations use their AVX versions only at the AVX tier
+        inline static SIMDLevel simd_level = SIMDLevel::Scalar;
 
         // ===== SSE2 IMPLEMENTATIONS =====
         static Vector3 AddSSE2(const Vector3 &a, const Vector3 &b)
@@ -702,12 +704,12 @@ namespace N2Engine::Math
 
         static float DotSSE2(const Vector3 &a, const Vector3 &b)
         {
+            // Sum only x, y and z: lane 3 is padding and must not leak into the result
             __m128 mul = _mm_mul_ps(a.simd_data, b.simd_data);
-            __m128 shuf = _mm_shuffle_ps(mul, mul, _MM_SHUFFLE(1, 0, 3, 2));
-            __m128 sums = _mm_add_ps(mul, shuf);
-            shuf = _mm_movehl_ps(shuf, sums);
-            sums = _mm_add_ss(sums, shuf);
-            return _mm_cvtss_f32(sums);
+            __m128 y = _mm_shuffle_ps(mul, mul, _MM_SHUFFLE(1, 1, 1, 1));
+            __m128 z = _mm_movehl_ps(mul, mul);
+            __m128 sum = _mm_add_ss(_mm_add_ss(mul, y), z);
+            return _mm_cvtss_f32(sum);
         }
 
         static Vector3 CrossSSE2(const Vector3 &a, const Vector3 &b)
@@ -734,16 +736,15 @@ namespace N2Engine::Math
 
         static Vector3 NormalizeSSE2(const Vector3 &v)
         {
-            float length_sq = DotSSE2(v, v);
-            if (length_sq < Constants::EPSILON * Constants::EPSILON)
+            // A real sqrt and divide: _mm_rsqrt_ps is only accurate to about 12 bits
+            const float length = LengthSSE2(v);
+            if (length < Constants::EPSILON)
             {
                 return Zero;
             }
 
             Vector3 result;
-            __m128 length_sq_vec = _mm_set1_ps(length_sq);
-            __m128 inv_length = _mm_rsqrt_ps(length_sq_vec);
-            result.simd_data = _mm_mul_ps(v.simd_data, inv_length);
+            result.simd_data = _mm_div_ps(v.simd_data, _mm_set1_ps(length));
             result.w = 0.0f;
             return result;
         }
@@ -756,16 +757,19 @@ namespace N2Engine::Math
 
         static Vector3 MinSSE2(const Vector3 &a, const Vector3 &b)
         {
+            // minps returns its second operand for NaN or equal (+-0) inputs, so (b, a) matches std::min(a, b),
+            // which is (b < a) ? b : a
             Vector3 result;
-            result.simd_data = _mm_min_ps(a.simd_data, b.simd_data);
+            result.simd_data = _mm_min_ps(b.simd_data, a.simd_data);
             result.w = 0.0f;
             return result;
         }
 
         static Vector3 MaxSSE2(const Vector3 &a, const Vector3 &b)
         {
+            // Operands swapped like MinSSE2, to match std::max(a, b), which is (a < b) ? b : a
             Vector3 result;
-            result.simd_data = _mm_max_ps(a.simd_data, b.simd_data);
+            result.simd_data = _mm_max_ps(b.simd_data, a.simd_data);
             result.w = 0.0f;
             return result;
         }
@@ -797,7 +801,7 @@ namespace N2Engine::Math
         }
 
         // ===== SSE4.1 IMPLEMENTATIONS =====
-#ifdef __SSE4_1__
+#ifdef N2_MATH_SSE41
             TARGET_SSE4_1 static float DotSSE41(const Vector3 &a, const Vector3 &b)
         {
             __m128 result = _mm_dp_ps(a.simd_data, b.simd_data, 0x71);
@@ -813,19 +817,16 @@ namespace N2Engine::Math
 
             TARGET_SSE4_1 static Vector3 NormalizeSSE41(const Vector3 &v)
         {
-            __m128 length_sq = _mm_dp_ps(v.simd_data, v.simd_data, 0x7F);
-
-            __m128 epsilon = _mm_set1_ps(Constants::EPSILON * Constants::EPSILON);
-            __m128 mask = _mm_cmplt_ps(length_sq, epsilon);
-
-            if (_mm_movemask_ps(mask) != 0)
+            // Mask 0x7F: dot of x, y, z broadcast to all lanes. A real sqrt and divide, since _mm_rsqrt_ps is
+            // only accurate to about 12 bits
+            const __m128 length = _mm_sqrt_ps(_mm_dp_ps(v.simd_data, v.simd_data, 0x7F));
+            if (_mm_cvtss_f32(length) < Constants::EPSILON)
             {
                 return Zero;
             }
 
             Vector3 result;
-            __m128 inv_length = _mm_rsqrt_ps(length_sq);
-            result.simd_data = _mm_mul_ps(v.simd_data, inv_length);
+            result.simd_data = _mm_div_ps(v.simd_data, length);
             result.w = 0.0f;
             return result;
         }
@@ -854,8 +855,19 @@ namespace N2Engine::Math
 
             TARGET_SSE4_1 static Vector3 RoundSSE41(const Vector3 &v)
         {
+            // std::round rounds halfway cases away from zero, but _MM_FROUND_TO_NEAREST_INT rounds them to even
+            // (2.5 -> 2). So truncate, then step away from zero when the dropped fraction is >= 0.5. Infinities
+            // give a NaN fraction, which compares false, so they pass through unchanged
+            const __m128 sign_mask = _mm_set1_ps(-0.0f);
+            const __m128 sign = _mm_and_ps(v.simd_data, sign_mask);
+            const __m128 truncated = _mm_round_ps(v.simd_data, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC);
+            const __m128 fraction = _mm_andnot_ps(sign_mask, _mm_sub_ps(v.simd_data, truncated));
+            const __m128 away = _mm_or_ps(sign, _mm_set1_ps(1.0f));
+            const __m128 step = _mm_and_ps(_mm_cmpge_ps(fraction, _mm_set1_ps(0.5f)), away);
+
+            // Put the input's sign back: -0 + +0 is +0, but std::round(-0.3) is -0
             Vector3 result;
-            result.simd_data = _mm_round_ps(v.simd_data, _MM_FROUND_TO_NEAREST_INT);
+            result.simd_data = _mm_or_ps(_mm_add_ps(truncated, step), sign);
             result.w = 0.0f;
             return result;
         }
@@ -980,17 +992,20 @@ namespace N2Engine::Math
                 shuf = _mm256_shuffle_ps(sums, sums, _MM_SHUFFLE(1, 0, 3, 2));
                 sums = _mm256_add_ps(sums, shuf);
 
-                __m256 rsqrt = _mm256_rsqrt_ps(sums);
-                __m256 rsqrt_broadcast = _mm256_shuffle_ps(rsqrt, rsqrt, _MM_SHUFFLE(0, 0, 0, 0));
-                rsqrt_broadcast = _mm256_permute2f128_ps(rsqrt_broadcast, rsqrt_broadcast, 0x00);
-
-                __m256 normalized = _mm256_mul_ps(v_batch, rsqrt_broadcast);
+                // sums holds each vector's squared length in every lane of its own 128-bit half, so it divides
+                // both vectors as is (no cross-half broadcast). A real sqrt, since _mm256_rsqrt_ps is only
+                // accurate to about 12 bits
+                __m256 lengths = _mm256_sqrt_ps(sums);
+                __m256 normalized = _mm256_div_ps(v_batch, lengths);
 
                 alignas(32) float temp[8];
+                alignas(32) float length_temp[8];
                 _mm256_store_ps(temp, normalized);
+                _mm256_store_ps(length_temp, lengths);
 
-                vectors[i] = Vector3(temp[0], temp[1], temp[2]);
-                vectors[i + 1] = Vector3(temp[4], temp[5], temp[6]);
+                // Like NormalizeScalar, near-zero vectors become Zero rather than NaN
+                vectors[i] = length_temp[0] < Constants::EPSILON ? Zero : Vector3(temp[0], temp[1], temp[2]);
+                vectors[i + 1] = length_temp[4] < Constants::EPSILON ? Zero : Vector3(temp[4], temp[5], temp[6]);
             }
 
             for (; i < count; ++i)

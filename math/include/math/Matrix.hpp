@@ -196,9 +196,8 @@ namespace N2Engine::Math
         using InverseFunc = Matrix (*)(const Matrix &);
         using DeterminantFunc = float (*)(const Matrix &);
 
-        // Static function pointers (declared at the end of the class, after the scalar implementations
-        // they default to); InitializeSIMD switches them to SIMD versions
-        inline static bool initialized;
+        // Static function pointers are declared at the end of the class, after the scalar implementations
+        // they default to; SetSIMDLevel switches them to SIMD versions
 
     public:
         constexpr Matrix() = default;
@@ -367,41 +366,11 @@ namespace N2Engine::Math
         [[nodiscard]] const float* Data() const { return data.data(); }
         float* Data() { return data.data(); }
 
-        // SIMD initialization - call once at startup
-        static void InitializeSIMD()
+        // Selects the implementation tier the operations dispatch to; see Math::SetSIMDLevel
+        static void SetSIMDLevel(const SIMDLevel requested)
         {
-            if (initialized)
-                return;
-
-            static CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
-
-            if (features.sse41)
-            {
-                std::cout << "Using SSE4.1 implementations for Matrix\n";
-
-                multiply_func = &MultiplySSE2;
-                add_func = &AddSSE2;
-                sub_func = &SubSSE2;
-                scalar_mul_func = &ScalarMulSSE2;
-                transform_func = &TransformPointSSE41;
-                transpose_func = &TransposeSSE2;
-                inverse_func = &InverseSSE2;
-                determinant_func = &DeterminantSSE2;
-            }
-            else if (features.sse2)
-            {
-                std::cout << "Using SSE2 implementations for Matrix\n";
-
-                multiply_func = &MultiplySSE2;
-                add_func = &AddSSE2;
-                sub_func = &SubSSE2;
-                scalar_mul_func = &ScalarMulSSE2;
-                transform_func = &TransformPointSSE2;
-                transpose_func = &TransposeSSE2;
-                inverse_func = &InverseSSE2;
-                determinant_func = &DeterminantSSE2;
-            }
-            else
+            const SIMDLevel level = ClampSIMDLevel(requested);
+            if (level == SIMDLevel::Scalar)
             {
                 multiply_func = &MultiplyScalar;
                 add_func = &AddScalar;
@@ -411,9 +380,18 @@ namespace N2Engine::Math
                 transpose_func = &TransposeScalar;
                 inverse_func = &InverseScalar;
                 determinant_func = &DeterminantScalar;
+                return;
             }
 
-            initialized = true;
+            // AVX has nothing extra for a single matrix, so it uses the SSE4.1 versions
+            multiply_func = &MultiplySSE2;
+            add_func = &AddSSE2;
+            sub_func = &SubSSE2;
+            scalar_mul_func = &ScalarMulSSE2;
+            transform_func = level == SIMDLevel::SSE2 ? &TransformPointSSE2 : &TransformPointSSE41;
+            transpose_func = &TransposeSSE2;
+            inverse_func = &InverseSSE2;
+            determinant_func = &DeterminantSSE2;
         }
 
     private:
@@ -708,6 +686,7 @@ namespace N2Engine::Math
         }
 
         // ===== SSE4.1 IMPLEMENTATIONS =====
+#ifdef N2_MATH_SSE41
         static Vector3 TransformPointSSE41(const Matrix &m, const Vector3 &point)
         {
             __m128 point_vec = _mm_set_ps(1.0f, point.z, point.y, point.x);
@@ -734,6 +713,12 @@ namespace N2Engine::Math
             }
             return Vector3{x_val, y_val, z_val};
         }
+#else
+        static Vector3 TransformPointSSE41(const Matrix &m, const Vector3 &point)
+        {
+            return TransformPointSSE2(m, point);
+        }
+#endif
 
     private:
         // Default to the scalar implementations, so matrix math works before InitializeSIMD runs (these
@@ -762,7 +747,6 @@ namespace N2Engine::Math
         using TransposeFunc = Matrix (*)(const Matrix &);
 
         // Function pointers are declared at the end of the class, defaulting to the scalar implementations
-        inline static bool initialized;
 
     public:
         constexpr Matrix() = default;
@@ -903,14 +887,10 @@ namespace N2Engine::Math
             return result;
         }
 
-        static void InitializeSIMD()
+        // Selects the implementation tier the operations dispatch to; see Math::SetSIMDLevel
+        static void SetSIMDLevel(const SIMDLevel requested)
         {
-            if (initialized)
-                return;
-
-            CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
-
-            if (features.sse2)
+            if (ClampSIMDLevel(requested) != SIMDLevel::Scalar)
             {
                 multiply_func = &MultiplySSE2;
                 add_func = &AddSSE2;
@@ -926,8 +906,6 @@ namespace N2Engine::Math
                 scalar_mul_func = &ScalarMulScalar;
                 transpose_func = &TransposeScalar;
             }
-
-            initialized = true;
         }
 
     private:
