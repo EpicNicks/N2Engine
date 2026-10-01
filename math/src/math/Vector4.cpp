@@ -64,7 +64,8 @@ namespace N2Engine::Math
 
     // ===== RAW POINTER BATCH OPERATIONS (CORE IMPLEMENTATIONS) =====
     // Each processes two Vector4s per 256-bit register only at the AVX tier, and otherwise loops over the
-    // dispatched single-vector operations
+    // dispatched single-vector operations. The AVX versions load two adjacent Vector4s as eight floats
+    static_assert(sizeof(Vector4) == 4 * sizeof(float));
 
     void Vector4::AddBatch(const Vector4 *a, const Vector4 *b, Vector4 *result, size_t count)
     {

@@ -110,6 +110,14 @@ namespace
     }
 
     template <typename T>
+    void ExpectIdentical(const std::vector<T> &actual, const std::vector<T> &expected, const std::string &what)
+    {
+        ASSERT_EQ(actual.size(), expected.size()) << what;
+        for (size_t i = 0; i < actual.size(); ++i)
+            ExpectIdentical(actual[i], expected[i], what + "[" + std::to_string(i) + "]");
+    }
+
+    template <typename T>
     void ExpectClose(const std::vector<T> &actual, const std::vector<T> &expected, const std::string &what)
     {
         ASSERT_EQ(actual.size(), expected.size()) << what;
@@ -504,6 +512,20 @@ TEST_P(SimdDispatchTest, Vector4BatchOperations)
         Vector4::NormalizeBatch(result);
         return result;
     }, "NormalizeBatch");
+
+    // Edge values (an odd count: AVX pairs plus a tail). Every tier sums the dot in the same order, so the results
+    // match scalar bit for bit, and NaN or inf inputs must give NaN where scalar does (not zero)
+    const std::vector<Vector4> edges = EdgeCaseVectors4();
+    std::vector<Vector4> rotated = edges;
+    std::rotate(rotated.begin(), rotated.begin() + 2, rotated.end());
+
+    ExpectIdenticalToScalar([&] { return Vector4::DotBatch(edges, rotated); }, "DotBatch edges");
+    ExpectIdenticalToScalar([&] { return Vector4::LengthBatch(edges); }, "LengthBatch edges");
+    ExpectIdenticalToScalar([&] {
+        std::vector<Vector4> result = edges;
+        Vector4::NormalizeBatch(result);
+        return result;
+    }, "NormalizeBatch edges");
 }
 
 TEST_P(SimdDispatchTest, QuaternionOperations)
