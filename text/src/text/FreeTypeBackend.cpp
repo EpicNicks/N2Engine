@@ -16,7 +16,8 @@
 // - a TrueType glyph whose hmtx left side bearing differs from its glyf xMin has its outline (so its
 //   bounds and SDF) shifted by the difference, as the TrueType spec places it (stb_truetype uses the raw
 //   coordinates); the reported bearing is hmtx's in both;
-// - glyphs flagged as having overlapping contours render with the sdf module's overlap mode;
+// - composite glyphs and glyphs flagged as having overlapping contours render with the sdf module's
+//   overlap mode (simple glyphs use its default mode, which handles nested contours better);
 // - RenderSdf supports spreads from 1 to 32 pixels (FreeType's renderer takes 2 to 32; a spread of 1 is
 //   rendered at 2 and rescaled). Larger spreads render nothing; the atlas never asks for more than 32.
 #include <ft2build.h>
@@ -226,6 +227,8 @@ namespace N2Engine::Text::Detail
                 {
                     return {};
                 }
+                // Checked first: it loads the glyph's unexpanded form into the slot
+                const bool composite = IsComposite(glyph);
                 // Loads the glyph into the slot, unscaled
                 const auto box = LoadOutlineBox(glyph);
                 if (!box)
@@ -269,9 +272,14 @@ namespace N2Engine::Text::Detail
                 FT_Outline_Transform(&_face->glyph->outline, &matrix);
 
                 const int renderSpread = std::max(spreadPx, kFreeTypeMinSpread);
-                // Glyphs flagged with overlapping contours (common in variable-font instances) need the sdf
-                // module's slower overlap mode, or the distances inside the overlap come out wrong
-                const bool overlaps = (_face->glyph->outline.flags & FT_OUTLINE_OVERLAP) != 0;
+                // The sdf module's default mode takes the inside/outside sign from the nearest edge, which goes
+                // wrong where contours overlap: stb_truetype (non-zero winding) fills the overlap, FreeType's
+                // default mode gave Noto's U+00C7 and U+00E7 (C plus a cedilla component that overlaps it) pixels
+                // 1.5 px outside where stb has them 1.5 px inside. Its overlap mode handles that, but gets
+                // nested simple contours such as U+00A9 and U+00AE wrong, so it's used only where overlaps are
+                // possible: composite glyphs (components may overlap) and glyphs flagged FT_OUTLINE_OVERLAP
+                // (common in variable-font instances).
+                const bool overlaps = composite || (_face->glyph->outline.flags & FT_OUTLINE_OVERLAP) != 0;
                 if (!SetSpread(renderSpread) || !SetOverlaps(overlaps) ||
                     FT_Render_Glyph(_face->glyph, FT_RENDER_MODE_SDF) != 0)
                 {
@@ -328,6 +336,14 @@ namespace N2Engine::Text::Detail
             [[nodiscard]] bool IsValid(const GlyphId glyph) const
             {
                 return glyph < static_cast<GlyphId>(_face->num_glyphs);
+            }
+
+            // True for a TrueType composite glyph (one built from other glyphs). Leaves the slot holding the
+            // unexpanded glyph, so load the outline afterwards.
+            [[nodiscard]] bool IsComposite(const GlyphId glyph) const
+            {
+                return IsValid(glyph) && FT_Load_Glyph(_face, glyph, kLoadFlags | FT_LOAD_NO_RECURSE) == 0 &&
+                       _face->glyph->format == FT_GLYPH_FORMAT_COMPOSITE;
             }
 
             // The hmtx left side bearing, read the way stb_truetype reads it: from the glyph's long entry, or

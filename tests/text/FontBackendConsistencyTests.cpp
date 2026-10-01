@@ -169,27 +169,38 @@ TEST_P(FontBackendConsistencyTest, SdfBitmapsHaveTheSamePlacementAndSimilarValue
                 continue;
             }
 
-            long long insideA = 0;
-            long long insideB = 0;
+            // Which side of the outline a pixel is on can only be compared away from the outline. A pixel
+            // centre a hair inside an edge is 128 in one library and 129 in the other (FreeType truncates
+            // distances towards zero; stb_truetype computes them in float and truncates the sum), and on a
+            // straight stem or bar that one edge pixel is a whole row or column. Comparing inside-pixel counts
+            // therefore failed on thin, small glyphs: at 16 px, '=' had 14 inside pixels under stb_truetype
+            // and 21 under FreeType (one 7-pixel row of a bar about 1/32 px inside the edge: 128 vs 129), 'J'
+            // 18 vs 29, 'u' 29 vs 38, with nothing misplaced. So a pixel is only compared when both backends
+            // put it at least one pixel of distance (128 / spreadPx levels) from the outline; there the
+            // backends must agree exactly. Edge pixels are still covered by the mean-difference check here
+            // and by the overall opposite-side ratio below. This check is what caught FreeType's sign error
+            // in overlapping contours (U+00C7 and U+00E7 at 48 px had pixels at 152 under stb_truetype and 104
+            // under FreeType), which its backend now renders in the sdf module's overlap mode.
+            const int band = 128 / size.spreadPx;
+            long long clearMismatches = 0;
             long long differenceSum = 0;
             for (std::size_t i = 0; i < a.pixels.size(); ++i)
             {
-                // Inside means above 128, not 128 or above. A pixel less than spreadPx / 128 of a pixel from
-                // the outline is exactly 128 in FreeType on either side (it truncates the distance towards
-                // zero), while stb_truetype rounds an outside one down to 127. On an axis-aligned stem that
-                // edge pixel is a whole row or column, so counting 128 as inside would charge FreeType with
-                // dozens of extra inside pixels for a difference of under 1/16 of a pixel.
-                const bool inA = a.pixels[i] > 128;
-                const bool inB = b.pixels[i] > 128;
-                insideA += inA ? 1 : 0;
-                insideB += inB ? 1 : 0;
+                const int va = a.pixels[i];
+                const int vb = b.pixels[i];
+                const bool inA = va > 128;
+                const bool inB = vb > 128;
                 sideMismatches += inA != inB ? 1 : 0;
-                differenceSum += std::abs(static_cast<int>(a.pixels[i]) - static_cast<int>(b.pixels[i]));
+                if (std::abs(va - 128) >= band && std::abs(vb - 128) >= band && inA != inB)
+                {
+                    ++clearMismatches;
+                }
+                differenceSum += std::abs(va - vb);
             }
             totalPixels += static_cast<long long>(a.pixels.size());
 
-            // The same coverage, give or take a pixel along the edge here and there
-            EXPECT_LE(std::llabs(insideA - insideB), 4 + insideA / 20) << what << ": " << insideA << " vs " << insideB;
+            // Away from the edge, both backends agree on inside and outside
+            EXPECT_EQ(clearMismatches, 0) << what;
             // Close distance values: a few levels on average (one pixel of distance is 128 / spreadPx levels,
             // and the libraries round and resolve corners differently)
             const double meanDifference = static_cast<double>(differenceSum) / static_cast<double>(a.pixels.size());
