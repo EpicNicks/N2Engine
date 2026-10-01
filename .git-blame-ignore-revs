@@ -1,0 +1,6 @@
+# Commits that only reformat or normalize files; skip them in git blame with
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub applies this file automatically.)
+
+# Normalize line endings to LF in the repository
+615d073e14f8baf2397f2c3f76881c600d8ac331
