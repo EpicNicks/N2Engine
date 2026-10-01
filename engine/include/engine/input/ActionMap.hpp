@@ -159,6 +159,8 @@ namespace N2Engine::Input
         const InputAction& operator[](const std::string &mapName) const;
 
         [[nodiscard]] nlohmann::json Serialize() const;
+        /// Whether a map's JSON has no 'disabled' or a boolean one (json::value would throw otherwise)
+        [[nodiscard]] static bool HasValidDisabledField(const nlohmann::json &j);
         static std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> Deserialize(
             const nlohmann::json &j,
             const std::string &mapName,

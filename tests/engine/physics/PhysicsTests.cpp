@@ -476,18 +476,32 @@ TEST_F(PhysicsTest, DisablingAColliderEndsItsPairsAndEnablingRestoresThem)
     EXPECT_TRUE(zoneCollider->IsTrigger()) << "re-enabled shapes lost the trigger setting";
 }
 
-TEST_F(PhysicsTest, DisabledComponentGetsNoPhysicsCallbacks)
+TEST_F(PhysicsTest, DisabledScriptComponentStillGetsPhysicsCallbacks)
 {
-    SpawnFloor();
-    const auto ball = SpawnBall("Muted", Vector3(0.0f, 2.0f, 0.0f));
-    auto *muted = ball->AddComponent<EventRecorder>();
-    auto *listening = ball->AddComponent<EventRecorder>();
-    muted->SetActive(false);
+    // As in Unity, disabling a (non-physics) component does not stop its physics messages, so a script
+    // that disables itself while inside a zone still hears that it left
+    const auto zone = Spawn("Volume", Vector3(0.0f, 0.0f, 0.0f));
+    auto *zoneCollider = zone->AddComponent<BoxCollider>();
+    zoneCollider->SetSize(Vector3(2.0f, 2.0f, 2.0f));
+    zoneCollider->SetIsTrigger(true);
 
-    Step(120);
+    const auto visitor = Spawn("Visitor", Vector3(0.0f, 0.0f, 0.0f));
+    visitor->AddComponent<SphereCollider>()->SetRadius(0.5f);
+    auto *visitorBody = visitor->AddComponent<Rigidbody>();
+    visitorBody->SetBodyType(BodyType::Dynamic);
+    visitorBody->SetGravityEnabled(false);
+    auto *events = visitor->AddComponent<EventRecorder>();
 
-    EXPECT_GE(listening->collisionEnter, 1);
-    EXPECT_EQ(muted->Total(), 0);
+    Step(5);
+    ASSERT_EQ(events->triggerEnter, 1);
+
+    events->SetActive(false);
+    visitorBody->SetVelocity(Vector3(20.0f, 0.0f, 0.0f));
+    Step(30); // well clear of the zone
+    events->SetActive(true);
+
+    EXPECT_EQ(events->triggerExit, 1) << "the disabled component missed the Exit";
+    EXPECT_EQ(events->triggerEnter, events->triggerExit);
 }
 
 TEST_F(PhysicsTest, RecreatingABodyKeepsEnterAndExitBalancedOnBothSides)

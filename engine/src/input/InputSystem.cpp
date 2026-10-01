@@ -177,9 +177,8 @@ bool InputSystem::Deserialize(const nlohmann::json &j)
         {
             continue; // Skip malformed action maps
         }
-        if (mapJson.contains("disabled") && !mapJson["disabled"].is_boolean())
+        if (!ActionMap::HasValidDisabledField(mapJson))
         {
-            // json::value would throw type_error out of Deserialize
             Logger::Warn("Malformed action map (\"disabled\" is not a boolean), skipped: " + mapName);
             continue;
         }

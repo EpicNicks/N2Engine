@@ -8,6 +8,8 @@
 #include <queue>
 #include <atomic>
 #include <functional>
+#include <thread>
+#include <unordered_map>
 
 #include "engine/base/EventHandler.hpp"
 
@@ -70,8 +72,13 @@ namespace N2Engine
             private:
                 std::streambuf *originalBuf;
                 LogLevel logLevel;
-                std::string lineBuffer;
+                // One partial line per writing thread (under the Logger's lock), so lines written by two
+                // threads at once each reach the log whole instead of mixed character by character
+                std::unordered_map<std::thread::id, std::string> lineBuffers;
                 bool echoToOriginal;
+
+                /// Logs and clears the calling thread's partial line, if any
+                void FlushLine();
 
             public:
                 LoggerStreambuf(std::streambuf *original, LogLevel level, bool echo = true);

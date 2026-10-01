@@ -209,7 +209,7 @@ int Logger::StreamRedirector::LoggerStreambuf::overflow(const int c)
         return EOF;
     }
 
-    // Any thread may write to a redirected std::cout; its line buffer is shared
+    // Any thread may write to a redirected std::cout; each thread builds its own line
     std::lock_guard lock(LogMutex());
     int result = EOF;
     if (echoToOriginal && originalBuf)
@@ -223,29 +223,37 @@ int Logger::StreamRedirector::LoggerStreambuf::overflow(const int c)
 
     if (c == '\n')
     {
-        if (!lineBuffer.empty())
-        {
-            logEvent(lineBuffer, logLevel);
-            lineBuffer.clear();
-        }
+        FlushLine();
     }
     else if (c != '\r')
     {
-        lineBuffer += static_cast<char>(c);
+        lineBuffers[std::this_thread::get_id()] += static_cast<char>(c);
     }
 
     return result;
 }
 
+void Logger::StreamRedirector::LoggerStreambuf::FlushLine()
+{
+    const auto it = lineBuffers.find(std::this_thread::get_id());
+    if (it == lineBuffers.end())
+    {
+        return;
+    }
+    // Taken out first: a subscriber that writes to this stream re-enters on this thread
+    const std::string line = std::move(it->second);
+    lineBuffers.erase(it);
+    if (!line.empty())
+    {
+        logEvent(line, logLevel);
+    }
+}
+
 int Logger::StreamRedirector::LoggerStreambuf::sync()
 {
     std::lock_guard lock(LogMutex());
-    // Flush any remaining content
-    if (!lineBuffer.empty())
-    {
-        Logger::logEvent(lineBuffer, logLevel);
-        lineBuffer.clear();
-    }
+    // Flush the calling thread's remaining content
+    FlushLine();
 
     if (echoToOriginal && originalBuf)
     {

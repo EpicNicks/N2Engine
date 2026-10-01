@@ -51,7 +51,9 @@ namespace N2Engine::Scripting
         /// new one gets the serialized fields (defaults for fields it adds), keeps the old one's resolved
         /// $ref fields, and gets OnAttach if the component is attached. keepOldOnFailure: a new version that
         /// fails to load leaves the old instance running (hot reload) instead of a missing script.
-        void LoadScriptInstance(bool keepOldOnFailure);
+        /// keepOnlyDeclaredFields (a different script): drop saved fields and references the new script
+        /// doesn't declare in SerializableFields.
+        void LoadScriptInstance(bool keepOldOnFailure, bool keepOnlyDeclaredFields);
         /// Ends the current instance as if its component were removed: OnDisable (if enabled in an active
         /// hierarchy) and OnDestroy once the component is attached, then its subscriptions stop firing and
         /// its self.component/self.gameObject are cleared. Returns it (invalid if there was none).

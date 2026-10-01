@@ -110,7 +110,8 @@ namespace N2Engine::Audio
 
         // This source, if it's playing already (a restart), takes no extra slot. It used to count itself,
         // so a playing source in a full group couldn't be restarted.
-        const std::uint32_t others = audio.CountPlayingInGroup(_mixerGroup) - (IsPlaying() ? 1u : 0u);
+        const std::uint32_t count = audio.CountPlayingInGroup(_mixerGroup);
+        const std::uint32_t others = IsPlaying() && count > 0 ? count - 1 : count;
         return others < *group->settings.maxConcurrent;
     }
 

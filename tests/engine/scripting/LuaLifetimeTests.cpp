@@ -127,16 +127,18 @@ protected:
 
     void SetUp() override
     {
+        // Switch first: unloading the previous test's scene runs its scripts' OnDisable/OnDestroy, which
+        // would otherwise write into this test's fresh globals
+        SceneManager::AddScene(Scene::Create("LuaLifetime_" + std::string(
+                                   ::testing::UnitTest::GetInstance()->current_test_info()->name())), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+        _scene = SceneManager::GetCurScene();
+
         Lua()["lifetime_action"] = InputActionRef(_action);
         Lua()["lifetime_hits"] = 0;
         Lua()["lifetime_attaches"] = 0;
         Lua()["lifetime_events"] = Lua().create_table();
         Lua()["lifetime_self"] = sol::lua_nil;
-
-        SceneManager::AddScene(Scene::Create("LuaLifetime_" + std::string(
-                                   ::testing::UnitTest::GetInstance()->current_test_info()->name())), true);
-        SceneManager::ProcessAnyPendingSceneChange();
-        _scene = SceneManager::GetCurScene();
     }
 
     void TearDown() override
@@ -328,6 +330,24 @@ TEST_F(LuaLifetimeTest, ReloadKeepsSavedFieldsAndReferencesAndDefaultsNewOnes)
     EXPECT_EQ(Lua()["fields_added"].get<int>(), 7) << "the added field got no default";
     EXPECT_TRUE(Lua()["fields_target_valid"].get<bool>()) << "the $ref field became nil";
     EXPECT_EQ(component->GetScriptData().value("added", 0), 7);
+}
+
+TEST_F(LuaLifetimeTest, AnotherScriptKeepsOnlyTheFieldsItDeclares)
+{
+    const auto go = GameObject::Create("Switched");
+    auto *component = go->AddComponent<LuaComponent>();
+    component->SetScriptData({{"speed", 5}, {"leftover", 3}});
+    component->SetScript(IO::ResourcePath("res://lifetime/Fields.lua"));
+    ASSERT_EQ(component->GetScriptData().value("speed", 0), 5) << "the first SetScript keeps saved data";
+
+    // Counted declares no fields: nothing of Fields' data or references carries over
+    component->SetScript(IO::ResourcePath("res://lifetime/Counted.lua"));
+    EXPECT_TRUE(component->GetScriptData().empty());
+
+    // Back to Fields: its own defaults, not the old values
+    component->SetScript(IO::ResourcePath("res://lifetime/Fields.lua"));
+    EXPECT_EQ(component->GetScriptData().value("speed", 0), 1);
+    EXPECT_FALSE(component->GetScriptData().contains("leftover"));
 }
 
 TEST_F(LuaLifetimeTest, OnApplicationQuitReachesScripts)

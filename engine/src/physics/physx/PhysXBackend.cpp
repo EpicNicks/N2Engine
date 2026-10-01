@@ -212,21 +212,21 @@ namespace N2Engine::Physics
         }
         _materialCache.clear();
 
-        for (auto& [pair, data] : _newCollisions)
+        for (const auto& event : _newCollisions)
         {
-            delete data;
+            delete event.data;
         }
         _newCollisions.clear();
 
-        for (auto& [pair, data] : _endedCollisions)
+        for (const auto& event : _endedCollisions)
         {
-            delete data;
+            delete event.data;
         }
         _endedCollisions.clear();
 
-        for (auto& [pair, data] : _forgottenCollisions)
+        for (const auto& event : _forgottenCollisions)
         {
-            delete data;
+            delete event.data;
         }
         _forgottenCollisions.clear();
 
@@ -1219,9 +1219,10 @@ namespace N2Engine::Physics
             {
                 continue;
             }
-            // Like Unity, only enabled components on active objects get physics callbacks (IsActive is
-            // also false once the component is destroyed)
-            if (!component->IsActive())
+            // Like Unity: an inactive object gets nothing (its body has left the simulation, and it got
+            // OnDisable instead), but a disabled component on an active object still does, so a script
+            // that disables itself keeps a balanced Enter/Exit count
+            if (component->IsDestroyed() || !owner->IsActiveInHierarchy())
             {
                 continue;
             }

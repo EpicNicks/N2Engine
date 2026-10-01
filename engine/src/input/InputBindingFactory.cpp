@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 
 #include "engine/input/InputBinding.hpp"
 #include "engine/input/InputMapping.hpp"
@@ -51,8 +52,14 @@ namespace N2Engine::Input
             {
                 return true;
             }
+            // Read as an int: a larger id would wrap
+            constexpr auto MaxId = static_cast<std::int64_t>(std::numeric_limits<int>::max());
             const auto &id = j["gamepadId"];
-            return id.is_number_unsigned() || (id.is_number_integer() && id.get<std::int64_t>() >= 0);
+            if (id.is_number_unsigned())
+            {
+                return id.get<std::uint64_t>() <= static_cast<std::uint64_t>(MaxId);
+            }
+            return id.is_number_integer() && id.get<std::int64_t>() >= 0 && id.get<std::int64_t>() <= MaxId;
         }
 
         bool IsOptionalNumber(const nlohmann::json &j, const char *field)

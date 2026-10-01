@@ -62,6 +62,9 @@ namespace N2Engine::Scripting
 
     void LuaComponent::SetScript(const IO::ResourcePath &path)
     {
+        // A different script keeps only the fields it declares itself (not on the first SetScript, which
+        // may follow Deserialize filling _scriptData)
+        const bool otherScript = _scriptPath.IsValid() && _scriptPath != path;
         _scriptPath = path;
         _script = nullptr;
 
@@ -78,7 +81,7 @@ namespace N2Engine::Scripting
         }
 
         _script = scriptAsset.get();
-        LoadScriptInstance(false);
+        LoadScriptInstance(false, otherScript);
 
         // Register reload callback, replacing any from a previous SetScript; removed on destroy
         std::string moduleName = LuaRuntime::Instance().PathToModuleName(path);
@@ -127,7 +130,7 @@ namespace N2Engine::Scripting
         return instance;
     }
 
-    void LuaComponent::LoadScriptInstance(const bool keepOldOnFailure)
+    void LuaComponent::LoadScriptInstance(const bool keepOldOnFailure, const bool keepOnlyDeclaredFields)
     {
         sol::table instance = CreateScriptInstance();
         if (!instance.valid() && keepOldOnFailure && _scriptInstance.valid() && !_hasMissingScript)
@@ -146,6 +149,24 @@ namespace N2Engine::Scripting
 
         _scriptInstance = instance;
         _hasMissingScript = false;
+        if (keepOnlyDeclaredFields)
+        {
+            // An unrelated script must not inherit another's values or references under the same name
+            // unless it declares that field (and then, as a field of the component, it keeps the value)
+            const sol::optional<sol::table> declared = _scriptInstance["SerializableFields"];
+            nlohmann::json kept = nlohmann::json::object();
+            if (declared && _scriptData.is_object())
+            {
+                for (auto &[fieldName, value] : _scriptData.items())
+                {
+                    if (declared->get<sol::object>(fieldName).valid())
+                    {
+                        kept[fieldName] = value;
+                    }
+                }
+            }
+            _scriptData = std::move(kept);
+        }
         // Fields the script declares but _scriptData lacks get their defaults; saved values are kept
         ExtractSerializableFields();
         InjectFieldsIntoScript();
@@ -627,7 +648,7 @@ namespace N2Engine::Scripting
 
         // Saved fields (and resolved references) carry over, fields the new version adds get their
         // defaults, and the old instance is retired properly: see LoadScriptInstance
-        LoadScriptInstance(true);
+        LoadScriptInstance(true, false);
 
         Logger::Info(std::format("Reloaded script: {}", _scriptPath.ToString()));
     }

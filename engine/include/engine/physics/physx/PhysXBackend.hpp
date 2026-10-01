@@ -241,7 +241,8 @@ namespace N2Engine::Physics
         void ForgetPairsWithBody(PhysicsBodyHandle handle, bool shapesReleased);
         /// The GameObject a body belongs to: its Rigidbody's, else its first collider's
         [[nodiscard]] GameObject* GetBodyOwner(PhysicsBodyHandle handle) const;
-        /// Calls fn on each enabled component (in an active hierarchy) of the body's GameObject, or of
+        /// Calls fn on each component (enabled or not, as in Unity; none while the object is inactive in the
+        /// hierarchy) of the body's GameObject, or of
         /// fallbackOwner if the body is gone and that object survives (see PairOwners). Uses a snapshot
         /// and re-checks ownership, so handlers can add or remove components (or destroy the body) safely
         void DispatchToBody(PhysicsBodyHandle handle, const std::function<void(Component&)>& fn,

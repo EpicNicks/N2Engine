@@ -325,6 +325,7 @@ TEST(BindingValidationTest, WrongTypedOptionalFieldIsAParseErrorNotAnException)
         {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"gamepadId", true}},
         {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"gamepadId", 1.5}},
         {{"type", "GamepadButton"}, {"button", "South"}, {"gamepadId", -1}},
+        {{"type", "GamepadButton"}, {"button", "South"}, {"gamepadId", 3000000000u}}, // above INT_MAX
     };
     for (const auto &binding : bad)
     {
@@ -343,7 +344,8 @@ TEST(BindingValidationTest, WrongTypedOptionalFieldIsAParseErrorNotAnException)
                     .has_value());
 }
 
-TEST(ActionMapSerializationTest, WrongTypedOptionalFieldsDoNotThrow)
+// Not ActionMapSerializationTest: that suite is a fixture (TEST_F) in InputSystemTests.cpp
+TEST(ActionMapValidationTest, WrongTypedOptionalFieldsDoNotThrow)
 {
     const json badBinding = {{"type", "GamepadStick"}, {"xAxis", "LeftX"}, {"yAxis", "LeftY"}, {"invertY", 1}};
     const json goodBinding = {{"type", "KeyboardButton"}, {"key", "W"}};
