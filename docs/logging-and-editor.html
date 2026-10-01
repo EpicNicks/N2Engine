@@ -138,10 +138,10 @@ N2Engine::Logger::logEvent -= id;
 <li>Subscribers run <strong>on the thread that logged</strong>, while it holds the lock. A UI subscriber that must touch main-thread-only state should copy the message and queue it.</li>
 <li>Being recursive, the lock lets a subscriber log (or write to a redirected <code>std::cout</code>) on its own thread: that message is delivered in place, as described above.</li>
 <li>A subscriber must not wait for another thread that logs: that thread blocks on the lock, a deadlock.</li>
-<li>The redirected streams take the same lock per character, so their line buffers are safe, but characters written by two threads at once can still mix within a line. Use <code>Logger</code> directly from worker threads.</li>
+<li>The redirected streams take the same lock per character and keep one partial line per writing thread, so lines written to <code>std::cout</code> by two threads at once each reach the log whole. (The echo to the original stream, when enabled, is still per character.)</li>
 <li>The mutex is never destroyed, so logging during static destruction still works. It is not async-signal-safe: a POSIX signal handler must not log (the editor host's handler only sets a flag).</li>
 </ul>
-<p class="src">Source: <code>engine/src/Logger.cpp</code> — <code>LogMutex</code>, <code>Logger::Log</code>, <code>Logger::LogEventHandler</code>, <code>LoggerStreambuf::overflow</code>, <code>sync</code>; <code>editor-server/src/Main.cpp</code> — <code>SignalHandler</code>; tests: <code>CoreRobustnessTest.LoggerIsSafeToUseFromManyThreads</code>, <code>CoreRobustnessTest.LoggerDeliversBacklogOnceWhenASubscriberLogs</code></p>
+<p class="src">Source: <code>engine/src/Logger.cpp</code> — <code>LogMutex</code>, <code>Logger::Log</code>, <code>Logger::LogEventHandler</code>, <code>LoggerStreambuf::overflow</code>, <code>FlushLine</code>, <code>sync</code>; <code>editor-server/src/Main.cpp</code> — <code>SignalHandler</code>; tests: <code>CoreRobustnessTest.LoggerIsSafeToUseFromManyThreads</code>, <code>CoreRobustnessTest.LoggerDeliversBacklogOnceWhenASubscriberLogs</code></p>
 
 <div class="callout note" id="design-logger-lock">
 <p class="callout-title">Design decision: deliver on the logging thread, under one lock</p>

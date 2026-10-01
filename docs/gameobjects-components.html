@@ -154,8 +154,8 @@ scene.AddRootGameObject(player);                    // queues the components on 
 <tr><td><code>OnDisable()</code></td><td>Immediately on deactivation; or first step of teardown</td><td>Effective state went active to inactive with own flag enabled; or see <a href="#teardown">teardown</a></td></tr>
 <tr><td><code>OnDestroy()</code></td><td>Teardown</td><td>Once per component, see <a href="#teardown">teardown</a>. Can run without a prior <code>OnAttach</code>.</td></tr>
 <tr><td><code>OnApplicationQuit()</code></td><td>After the run loop ends</td><td>Active components of the loaded scene only</td></tr>
-<tr><td><code>OnCollisionEnter/Stay/Exit(const Physics::Collision&amp;)</code></td><td>After a fixed step's simulation</td><td>Only while <code>IsActive()</code> <span class="badge">Remaining defects</span>; see <a href="physics.html#dispatch">Physics</a></td></tr>
-<tr><td><code>OnTriggerEnter/Stay/Exit(Physics::Trigger)</code></td><td>After a fixed step's simulation</td><td>Only while <code>IsActive()</code> <span class="badge">Remaining defects</span>; see <a href="physics.html#dispatch">Physics</a></td></tr>
+<tr><td><code>OnCollisionEnter/Stay/Exit(const Physics::Collision&amp;)</code></td><td>After a fixed step's simulation</td><td>Only while the object is active in the hierarchy <span class="badge">Remaining defects</span> (a disabled component still gets them, as in Unity); see <a href="physics.html#dispatch">Physics</a></td></tr>
+<tr><td><code>OnTriggerEnter/Stay/Exit(Physics::Trigger)</code></td><td>After a fixed step's simulation</td><td>Same as collisions; see <a href="physics.html#dispatch">Physics</a></td></tr>
 </tbody>
 </table>
 </div>
