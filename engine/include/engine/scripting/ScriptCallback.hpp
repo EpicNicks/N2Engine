@@ -10,6 +10,7 @@
 #include <sol/sol.hpp>
 
 #include "engine/Logger.hpp"
+#include "engine/scripting/LuaHandles.hpp"
 
 namespace N2Engine::Scripting
 {
@@ -47,6 +48,12 @@ namespace N2Engine::Scripting
             {
                 return value;
             }
+        }
+
+        // Except GameObjects: a handle, since the script may keep it after the event
+        inline GameObjectRef ToLuaArg(GameObject &gameObject)
+        {
+            return GameObjectRef(gameObject);
         }
     }
 

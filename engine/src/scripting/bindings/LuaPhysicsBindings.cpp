@@ -1,6 +1,6 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
-#include "engine/GameObject.hpp" // Collision/Trigger expose GameObject* fields
+#include "engine/GameObject.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/SphereCollider.hpp"
@@ -8,8 +8,80 @@
 #include "engine/physics/PhysicsMaterial.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
 
+#include <vector>
+
 namespace N2Engine::Scripting::Bindings
 {
+    using RigidbodyRef = ComponentRef<Physics::Rigidbody>;
+
+    // What OnCollision*/OnTrigger* receive instead of Physics::Collision/Trigger, whose raw pointers would
+    // dangle in a collision a script keeps past the callback (e.g. self.lastHit = collision)
+    struct LuaCollision
+    {
+        sol::optional<GameObjectRef> gameObject;
+        sol::optional<GameObjectRef> otherGameObject;
+        sol::optional<RigidbodyRef> rigidbody;
+        sol::optional<RigidbodyRef> otherRigidbody;
+        std::vector<Physics::ContactPoint> contacts;
+        Math::Vector3 relativeVelocity;
+        Math::Vector3 impulse;
+        Math::Vector3 averageContactPoint;
+    };
+
+    struct LuaTrigger
+    {
+        sol::optional<GameObjectRef> gameObject;
+        sol::optional<GameObjectRef> otherGameObject;
+        sol::optional<RigidbodyRef> rigidbody;
+        sol::optional<RigidbodyRef> otherRigidbody;
+    };
+
+    namespace
+    {
+        // nil for a null pointer (e.g. no Rigidbody on a static collider)
+        sol::optional<GameObjectRef> RefOrNil(const GameObject *gameObject)
+        {
+            if (!gameObject)
+            {
+                return sol::nullopt;
+            }
+            return GameObjectRef(*gameObject);
+        }
+
+        sol::optional<RigidbodyRef> RefOrNil(Physics::Rigidbody *rigidbody)
+        {
+            if (!rigidbody)
+            {
+                return sol::nullopt;
+            }
+            return RigidbodyRef(*rigidbody);
+        }
+    }
+
+    sol::object CollisionToLua(const Physics::Collision &collision, lua_State *state)
+    {
+        return sol::make_object(state, LuaCollision{
+                                    RefOrNil(collision.gameObject),
+                                    RefOrNil(collision.otherGameObject),
+                                    RefOrNil(collision.rigidbody),
+                                    RefOrNil(collision.otherRigidbody),
+                                    collision.contacts,
+                                    collision.relativeVelocity,
+                                    collision.impulse,
+                                    collision.GetAverageContactPoint(),
+                                });
+    }
+
+    sol::object TriggerToLua(const Physics::Trigger &trigger, lua_State *state)
+    {
+        return sol::make_object(state, LuaTrigger{
+                                    RefOrNil(trigger.gameObject),
+                                    RefOrNil(trigger.otherGameObject),
+                                    RefOrNil(trigger.rigidbody),
+                                    RefOrNil(trigger.otherRigidbody),
+                                });
+    }
+
     void BindPhysics(LuaRuntime& runtime)
     {
         auto& lua = runtime.GetState();
@@ -24,16 +96,17 @@ namespace N2Engine::Scripting::Bindings
             "normalImpulse", sol::readonly(&Physics::ContactPoint::normalImpulse)
         );
 
-        lua.new_usertype<Physics::Collision>("Collision",
+        // Object fields are nil when absent (e.g. otherRigidbody for a static collider)
+        lua.new_usertype<LuaCollision>("Collision",
             sol::no_constructor,
-            "gameObject", sol::readonly(&Physics::Collision::gameObject),
-            "otherGameObject", sol::readonly(&Physics::Collision::otherGameObject),
-            "rigidbody", sol::readonly(&Physics::Collision::rigidbody),
-            "otherRigidbody", sol::readonly(&Physics::Collision::otherRigidbody),
-            "relativeVelocity", sol::readonly(&Physics::Collision::relativeVelocity),
-            "impulse", sol::readonly(&Physics::Collision::impulse),
-            "contactCount", sol::property([](const Physics::Collision &c) { return c.contacts.size(); }),
-            "GetContact", [](const Physics::Collision &c, std::size_t index) -> sol::optional<Physics::ContactPoint>
+            "gameObject", sol::property([](const LuaCollision &c) { return c.gameObject; }),
+            "otherGameObject", sol::property([](const LuaCollision &c) { return c.otherGameObject; }),
+            "rigidbody", sol::property([](const LuaCollision &c) { return c.rigidbody; }),
+            "otherRigidbody", sol::property([](const LuaCollision &c) { return c.otherRigidbody; }),
+            "relativeVelocity", sol::property([](const LuaCollision &c) { return c.relativeVelocity; }),
+            "impulse", sol::property([](const LuaCollision &c) { return c.impulse; }),
+            "contactCount", sol::property([](const LuaCollision &c) { return c.contacts.size(); }),
+            "GetContact", [](const LuaCollision &c, std::size_t index) -> sol::optional<Physics::ContactPoint>
             {
                 // 1-based, like Lua tables
                 if (index < 1 || index > c.contacts.size())
@@ -42,15 +115,15 @@ namespace N2Engine::Scripting::Bindings
                 }
                 return c.contacts[index - 1];
             },
-            "GetAverageContactPoint", &Physics::Collision::GetAverageContactPoint
+            "GetAverageContactPoint", [](const LuaCollision &c) { return c.averageContactPoint; }
         );
 
-        lua.new_usertype<Physics::Trigger>("Trigger",
+        lua.new_usertype<LuaTrigger>("Trigger",
             sol::no_constructor,
-            "gameObject", sol::readonly(&Physics::Trigger::gameObject),
-            "otherGameObject", sol::readonly(&Physics::Trigger::otherGameObject),
-            "rigidbody", sol::readonly(&Physics::Trigger::rigidbody),
-            "otherRigidbody", sol::readonly(&Physics::Trigger::otherRigidbody)
+            "gameObject", sol::property([](const LuaTrigger &t) { return t.gameObject; }),
+            "otherGameObject", sol::property([](const LuaTrigger &t) { return t.otherGameObject; }),
+            "rigidbody", sol::property([](const LuaTrigger &t) { return t.rigidbody; }),
+            "otherRigidbody", sol::property([](const LuaTrigger &t) { return t.otherRigidbody; })
         );
 
         // ===== BodyType Enum =====
@@ -77,74 +150,65 @@ namespace N2Engine::Scripting::Bindings
         );
         
         // ===== Rigidbody =====
-        lua.new_usertype<Physics::Rigidbody>("Rigidbody",
-            sol::no_constructor,
-            sol::base_classes, sol::bases<Component>(),
-            
-            "SetBodyType", &Physics::Rigidbody::SetBodyType,
-            "GetBodyType", &Physics::Rigidbody::GetBodyType,
-            
-            "SetMass", &Physics::Rigidbody::SetMass,
-            "GetMass", &Physics::Rigidbody::GetMass,
-            
-            "SetGravityEnabled", &Physics::Rigidbody::SetGravityEnabled,
-            "IsGravityEnabled", &Physics::Rigidbody::IsGravityEnabled,
-            
-            "AddForce", &Physics::Rigidbody::AddForce,
-            "AddImpulse", &Physics::Rigidbody::AddImpulse,
-            "SetVelocity", &Physics::Rigidbody::SetVelocity,
-            "SetAngularVelocity", &Physics::Rigidbody::SetAngularVelocity,
-            "GetVelocity", &Physics::Rigidbody::GetVelocity,
-            "GetAngularVelocity", &Physics::Rigidbody::GetAngularVelocity
+        BindComponentType<Physics::Rigidbody>(lua, "Rigidbody",
+            "SetBodyType", Forward<RigidbodyRef, &Physics::Rigidbody::SetBodyType>(),
+            "GetBodyType", Forward<RigidbodyRef, &Physics::Rigidbody::GetBodyType>(),
+
+            "SetMass", Forward<RigidbodyRef, &Physics::Rigidbody::SetMass>(),
+            "GetMass", Forward<RigidbodyRef, &Physics::Rigidbody::GetMass>(),
+
+            "SetGravityEnabled", Forward<RigidbodyRef, &Physics::Rigidbody::SetGravityEnabled>(),
+            "IsGravityEnabled", Forward<RigidbodyRef, &Physics::Rigidbody::IsGravityEnabled>(),
+
+            "AddForce", Forward<RigidbodyRef, &Physics::Rigidbody::AddForce>(),
+            "AddImpulse", Forward<RigidbodyRef, &Physics::Rigidbody::AddImpulse>(),
+            "SetVelocity", Forward<RigidbodyRef, &Physics::Rigidbody::SetVelocity>(),
+            "SetAngularVelocity", Forward<RigidbodyRef, &Physics::Rigidbody::SetAngularVelocity>(),
+            "GetVelocity", Forward<RigidbodyRef, &Physics::Rigidbody::GetVelocity>(),
+            "GetAngularVelocity", Forward<RigidbodyRef, &Physics::Rigidbody::GetAngularVelocity>()
         );
         
         // ===== BoxCollider =====
-        lua.new_usertype<Physics::BoxCollider>("BoxCollider",
-            sol::no_constructor,
-            sol::base_classes, sol::bases<Physics::ICollider, Component>(),
-            
-            "SetSize", &Physics::BoxCollider::SetSize,
-            "GetSize", &Physics::BoxCollider::GetSize,
-            "SetHalfExtents", &Physics::BoxCollider::SetHalfExtents,
-            "GetHalfExtents", &Physics::BoxCollider::GetHalfExtents,
-            "SetIsTrigger", &Physics::BoxCollider::SetIsTrigger,
-            "IsTrigger", &Physics::BoxCollider::IsTrigger,
-            "SetMaterial", &Physics::BoxCollider::SetMaterial,
-            "GetMaterial", &Physics::BoxCollider::GetMaterial,
-            "SetOffset", &Physics::BoxCollider::SetOffset,
-            "GetOffset", &Physics::BoxCollider::GetOffset
+        using BoxColliderRef = ComponentRef<Physics::BoxCollider>;
+        BindComponentType<Physics::BoxCollider>(lua, "BoxCollider",
+            "SetSize", Forward<BoxColliderRef, &Physics::BoxCollider::SetSize>(),
+            "GetSize", Forward<BoxColliderRef, &Physics::BoxCollider::GetSize>(),
+            "SetHalfExtents", Forward<BoxColliderRef, &Physics::BoxCollider::SetHalfExtents>(),
+            "GetHalfExtents", Forward<BoxColliderRef, &Physics::BoxCollider::GetHalfExtents>(),
+            "SetIsTrigger", Forward<BoxColliderRef, &Physics::BoxCollider::SetIsTrigger>(),
+            "IsTrigger", Forward<BoxColliderRef, &Physics::BoxCollider::IsTrigger>(),
+            "SetMaterial", Forward<BoxColliderRef, &Physics::BoxCollider::SetMaterial>(),
+            "GetMaterial", Forward<BoxColliderRef, &Physics::BoxCollider::GetMaterial>(),
+            "SetOffset", Forward<BoxColliderRef, &Physics::BoxCollider::SetOffset>(),
+            "GetOffset", Forward<BoxColliderRef, &Physics::BoxCollider::GetOffset>()
         );
-        
+
         // ===== SphereCollider =====
-        lua.new_usertype<Physics::SphereCollider>("SphereCollider",
-            sol::no_constructor,
-            sol::base_classes, sol::bases<Physics::ICollider, Component>(),
-            
-            "SetRadius", &Physics::SphereCollider::SetRadius,
-            "GetRadius", &Physics::SphereCollider::GetRadius,
-            "SetIsTrigger", &Physics::SphereCollider::SetIsTrigger,
-            "IsTrigger", &Physics::SphereCollider::IsTrigger,
-            "SetMaterial", &Physics::SphereCollider::SetMaterial,
-            "GetMaterial", &Physics::SphereCollider::GetMaterial,
-            "SetOffset", &Physics::SphereCollider::SetOffset,
-            "GetOffset", &Physics::SphereCollider::GetOffset
+        using SphereColliderRef = ComponentRef<Physics::SphereCollider>;
+        BindComponentType<Physics::SphereCollider>(lua, "SphereCollider",
+            "SetRadius", Forward<SphereColliderRef, &Physics::SphereCollider::SetRadius>(),
+            "GetRadius", Forward<SphereColliderRef, &Physics::SphereCollider::GetRadius>(),
+            "SetIsTrigger", Forward<SphereColliderRef, &Physics::SphereCollider::SetIsTrigger>(),
+            "IsTrigger", Forward<SphereColliderRef, &Physics::SphereCollider::IsTrigger>(),
+            "SetMaterial", Forward<SphereColliderRef, &Physics::SphereCollider::SetMaterial>(),
+            "GetMaterial", Forward<SphereColliderRef, &Physics::SphereCollider::GetMaterial>(),
+            "SetOffset", Forward<SphereColliderRef, &Physics::SphereCollider::SetOffset>(),
+            "GetOffset", Forward<SphereColliderRef, &Physics::SphereCollider::GetOffset>()
         );
-        
+
         // ===== CapsuleCollider =====
-        lua.new_usertype<Physics::CapsuleCollider>("CapsuleCollider",
-            sol::no_constructor,
-            sol::base_classes, sol::bases<Physics::ICollider, Component>(),
-            
-            "SetRadius", &Physics::CapsuleCollider::SetRadius,
-            "GetRadius", &Physics::CapsuleCollider::GetRadius,
-            "SetHeight", &Physics::CapsuleCollider::SetHeight,
-            "GetHeight", &Physics::CapsuleCollider::GetHeight,
-            "SetIsTrigger", &Physics::CapsuleCollider::SetIsTrigger,
-            "IsTrigger", &Physics::CapsuleCollider::IsTrigger,
-            "SetMaterial", &Physics::CapsuleCollider::SetMaterial,
-            "GetMaterial", &Physics::CapsuleCollider::GetMaterial,
-            "SetOffset", &Physics::CapsuleCollider::SetOffset,
-            "GetOffset", &Physics::CapsuleCollider::GetOffset
+        using CapsuleColliderRef = ComponentRef<Physics::CapsuleCollider>;
+        BindComponentType<Physics::CapsuleCollider>(lua, "CapsuleCollider",
+            "SetRadius", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::SetRadius>(),
+            "GetRadius", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::GetRadius>(),
+            "SetHeight", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::SetHeight>(),
+            "GetHeight", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::GetHeight>(),
+            "SetIsTrigger", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::SetIsTrigger>(),
+            "IsTrigger", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::IsTrigger>(),
+            "SetMaterial", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::SetMaterial>(),
+            "GetMaterial", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::GetMaterial>(),
+            "SetOffset", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::SetOffset>(),
+            "GetOffset", Forward<CapsuleColliderRef, &Physics::CapsuleCollider::GetOffset>()
         );
     }
 }

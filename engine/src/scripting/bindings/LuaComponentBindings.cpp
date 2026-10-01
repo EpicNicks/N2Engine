@@ -3,6 +3,7 @@
 #include <format>
 #include <functional>
 #include <map>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 
@@ -24,23 +25,28 @@ namespace N2Engine::Scripting::Bindings
 {
     namespace
     {
+        // Components reach Lua only as ComponentRef<T> handles, never as raw pointers a script could keep
         struct ComponentAccess
         {
             std::function<sol::object(GameObject &, sol::this_state)> add;
             std::function<sol::object(const GameObject &, sol::this_state)> get;
             std::function<sol::object(Component &, lua_State *)> asLua; // null object if not this type
+            std::function<std::optional<ComponentRefBase>(const sol::object &)> asRef; // nullopt if not this type
         };
 
         template <typename T>
         ComponentAccess MakeAccess()
         {
             return {
-                [](GameObject &go, sol::this_state state) { return sol::make_object(state, go.AddComponent<T>()); },
+                [](GameObject &go, sol::this_state state)
+                {
+                    return sol::make_object(state, ComponentRef<T>(*go.AddComponent<T>()));
+                },
                 [](const GameObject &go, sol::this_state state) -> sol::object
                 {
                     if (T *component = go.GetComponent<T>())
                     {
-                        return sol::make_object(state, component);
+                        return sol::make_object(state, ComponentRef<T>(*component));
                     }
                     return sol::lua_nil;
                 },
@@ -48,9 +54,17 @@ namespace N2Engine::Scripting::Bindings
                 {
                     if (auto *typed = dynamic_cast<T *>(&component))
                     {
-                        return sol::make_object(state, typed);
+                        return sol::make_object(state, ComponentRef<T>(*typed));
                     }
                     return sol::lua_nil;
+                },
+                [](const sol::object &object) -> std::optional<ComponentRefBase>
+                {
+                    if (object.is<ComponentRef<T>>())
+                    {
+                        return ComponentRefBase(object.as<ComponentRef<T>>());
+                    }
+                    return std::nullopt;
                 },
             };
         }
@@ -109,7 +123,30 @@ namespace N2Engine::Scripting::Bindings
                 return typed;
             }
         }
-        return sol::make_object(state, &component);
+        return sol::make_object(state, ComponentRef<Component>(component));
+    }
+
+    bool SameComponent(const sol::object &a, const sol::object &b)
+    {
+        const auto asRef = [](const sol::object &object) -> std::optional<ComponentRefBase>
+        {
+            for (const auto &access : ComponentTable() | std::views::values)
+            {
+                if (auto ref = access.asRef(object))
+                {
+                    return ref;
+                }
+            }
+            if (object.is<ComponentRef<Component>>())
+            {
+                return ComponentRefBase(object.as<ComponentRef<Component>>());
+            }
+            return std::nullopt;
+        };
+
+        const auto refA = asRef(a);
+        const auto refB = asRef(b);
+        return refA && refB && refA->RefersTo(*refB);
     }
 
     std::vector<std::string> GetScriptableComponentNames()
@@ -126,40 +163,38 @@ namespace N2Engine::Scripting::Bindings
     {
         auto &lua = runtime.GetState();
 
-        // The setters live on the PolygonRenderer<T> template base, which isn't a Lua type,
-        // so bind through lambdas on the concrete renderer
-        lua.new_usertype<Example::CubeRenderer>(
-            "CubeRenderer",
-            sol::no_constructor,
-            sol::base_classes, sol::bases<Component>(),
+        // Returned by ComponentToLua for components with no Lua type of their own
+        BindComponentType<Component>(lua, "Component");
 
-            "SetColor", [](Example::CubeRenderer &r, const Common::Color &color) { r.SetColor(color); },
-            "GetColor", [](const Example::CubeRenderer &r) { return r.GetColor(); },
-            "SetSize", [](Example::CubeRenderer &r, const Math::Vector3 &size) { r.SetSize(size); },
-            "GetSize", [](const Example::CubeRenderer &r) { return r.GetSize(); }
+        using CubeRendererRef = ComponentRef<Example::CubeRenderer>;
+        BindComponentType<Example::CubeRenderer>(
+            lua, "CubeRenderer",
+            "SetColor", Forward<CubeRendererRef, &Example::CubeRenderer::SetColor>(),
+            "GetColor", Forward<CubeRendererRef, &Example::CubeRenderer::GetColor>(),
+            "SetSize", Forward<CubeRendererRef, &Example::CubeRenderer::SetSize>(),
+            "GetSize", Forward<CubeRendererRef, &Example::CubeRenderer::GetSize>()
         );
 
-        lua.new_usertype<Example::SphereRenderer>(
-            "SphereRenderer",
-            sol::no_constructor,
-            sol::base_classes, sol::bases<Component>(),
-
-            "SetColor", [](Example::SphereRenderer &r, const Common::Color &color) { r.SetColor(color); },
-            "GetColor", [](const Example::SphereRenderer &r) { return r.GetColor(); },
-            "SetRadius", &Example::SphereRenderer::SetRadius,
-            "GetRadius", &Example::SphereRenderer::GetRadius,
-            "SetSubdivision", &Example::SphereRenderer::SetSubdivision
+        using SphereRendererRef = ComponentRef<Example::SphereRenderer>;
+        BindComponentType<Example::SphereRenderer>(
+            lua, "SphereRenderer",
+            "SetColor", Forward<SphereRendererRef, &Example::SphereRenderer::SetColor>(),
+            "GetColor", Forward<SphereRendererRef, &Example::SphereRenderer::GetColor>(),
+            "SetRadius", Forward<SphereRendererRef, &Example::SphereRenderer::SetRadius>(),
+            "GetRadius", Forward<SphereRendererRef, &Example::SphereRenderer::GetRadius>(),
+            "SetSubdivision", Forward<SphereRendererRef, &Example::SphereRenderer::SetSubdivision>()
         );
 
-        lua.new_usertype<LuaComponent>(
-            "LuaComponent",
-            sol::no_constructor,
-            sol::base_classes, sol::bases<Component>(),
-
+        using LuaComponentRef = ComponentRef<LuaComponent>;
+        BindComponentType<LuaComponent>(
+            lua, "LuaComponent",
             // Path to a script under the project's assets, e.g. "res://scripts/CameraController.lua"
-            "SetScript", [](LuaComponent &c, const std::string &path) { c.SetScript(IO::ResourcePath(path)); },
-            "GetScriptPath", [](const LuaComponent &c) { return c.GetScriptPath().ToString(); },
-            "HasMissingScript", &LuaComponent::HasMissingScript
+            "SetScript", [](const LuaComponentRef &c, const std::string &path)
+            {
+                c.Pin()->SetScript(IO::ResourcePath(path));
+            },
+            "GetScriptPath", [](const LuaComponentRef &c) { return c.Pin()->GetScriptPath().ToString(); },
+            "HasMissingScript", Forward<LuaComponentRef, &LuaComponent::HasMissingScript>()
         );
     }
 }

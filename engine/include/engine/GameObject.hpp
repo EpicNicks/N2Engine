@@ -47,6 +47,9 @@ namespace N2Engine
         bool _isActive = true;
         std::optional<Math::UUID> _prefabReference;
         bool _isMarkedForDestruction = false;
+        // Set once destruction has finished (see IsTornDown); later than _isMarkedForDestruction, which is
+        // set before OnDisable/OnDestroy run
+        bool _isTornDown = false;
         mutable bool _activeInHierarchyCached = true;
         mutable bool _activeInHierarchyDirty = true;
 
@@ -155,6 +158,10 @@ namespace N2Engine
 
         void Destroy();
         bool IsDestroyed() const;
+        /// True once destruction has finished: its components' OnDisable/OnDestroy have run, or Destroy was
+        /// called outside a scene. IsDestroyed is already true during those callbacks and this isn't, so
+        /// references held elsewhere (e.g. by Lua scripts) keep working until the teardown is over.
+        bool IsTornDown() const { return _isTornDown; }
 
         Scheduling::Coroutine* StartCoroutine(std::generator<Scheduling::ICoroutineWait> &&coroutine);
         bool StopCoroutine(Scheduling::Coroutine *coroutine);

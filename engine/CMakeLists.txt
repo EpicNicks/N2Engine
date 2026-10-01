@@ -32,6 +32,11 @@ target_compile_definitions(engine PUBLIC
     $<$<CONFIG:Debug>:N2ENGINE_DEBUG=1>
 )
 
+# sol2 only type-checks Lua arguments in debug builds by default; without this, a wrong argument from a
+# script (nil, a different usertype, `.` instead of `:`) is an unchecked cast in Release. PUBLIC so every
+# target that includes sol through the engine agrees on sol's layout (a mismatch would be an ODR violation).
+target_compile_definitions(engine PUBLIC SOL_ALL_SAFETIES_ON=1)
+
 # PhysX is optional (N2ENGINE_USE_PHYSX, or the binaries failed to download). Without it the engine
 # runs with no physics backend: components cope with a null backend and health reports it Disabled.
 if (N2ENGINE_PHYSX_AVAILABLE)

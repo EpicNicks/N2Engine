@@ -16,6 +16,7 @@
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaComponent.hpp"
+#include "engine/scripting/LuaHandles.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 
 using namespace N2Engine;
@@ -212,7 +213,7 @@ TEST_F(LuaTest, GameObjectIsSharedWithCpp)
 {
     Run("go_shared = GameObject.Create('Shared')");
 
-    const auto go = Lua()["go_shared"].get<std::shared_ptr<GameObject>>();
+    const auto go = Lua()["go_shared"].get<GameObjectRef>().Lock();
     ASSERT_NE(go, nullptr);
     EXPECT_EQ(go->GetName(), "Shared");
 
@@ -230,7 +231,7 @@ TEST_F(LuaTest, GameObjectPositionFromLua)
         go_positioned:GetPositionable():SetPosition(Vector3(1, 2, 3))
     )");
 
-    const auto go = Lua()["go_positioned"].get<std::shared_ptr<GameObject>>();
+    const auto go = Lua()["go_positioned"].get<GameObjectRef>().Lock();
     ASSERT_TRUE(go->HasPositionable());
     const Math::Vector3 pos = go->GetPositionable()->GetPosition();
     EXPECT_FLOAT_EQ(pos.x, 1.0f);
@@ -250,7 +251,7 @@ TEST_F(LuaTest, GameObjectHierarchyFromLua)
 
     EXPECT_EQ(Eval<std::string>("go_parent:FindChild('Child'):GetParent():GetName()"), "Parent");
 
-    const auto parent = Lua()["go_parent"].get<std::shared_ptr<GameObject>>();
+    const auto parent = Lua()["go_parent"].get<GameObjectRef>().Lock();
     ASSERT_EQ(parent->GetChildren().size(), 1u);
     EXPECT_EQ(parent->GetChildren()[0]->GetName(), "Child");
 
