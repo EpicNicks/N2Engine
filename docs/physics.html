@@ -500,7 +500,7 @@ private:
 <li>Inactive objects and disabled colliders are not hit (their bodies or shapes are out of the scene).</li>
 <li>Queries hit trigger shapes as well as solid ones.</li>
 <li>Objects are only hittable once their bodies exist, i.e. after the attach queue has run.</li>
-<li>Raycasts are not bound to Lua.</li>
+<li>Picking (<code>OnMouse*</code>) is built on <code>Raycast::Single</code>; see <a href="input.html#picking">Input</a> <span class="badge">Picking</span>.</li>
 </ul>
 <pre class="lang-cpp"><code>Physics::RaycastHit hit;
 if (Physics::Raycast::Single(origin, Vector3(0.0f, -1.0f, 0.0f), hit, 100.0f))
@@ -512,6 +512,32 @@ std::vector&lt;Physics::RaycastHit&gt; hits;
 const int count = Physics::Raycast::All(origin, direction, hits, 50.0f); // nearest first
 </code></pre>
 <p class="src">Source: <code>engine/src/physics/Raycast.cpp</code>; <code>PhysXBackend::Raycast</code>, <code>RaycastAll</code>, <code>SphereCast</code>, <code>FillRaycastHit</code>, <code>AttachColliderShape</code>; tests: <code>RaycastHitsWithDefaultLayerMask</code>, <code>RaycastAllReturnsEveryHit</code>, <code>QueriesReportTheColliderThatWasHit</code>, <code>QueryMaskIncludesAndExcludesLayers</code>, <code>IgnoreRaycastIsSkippedByDefault</code>, <code>MaskZeroHitsNothing</code>, <code>ChangingAnObjectsLayerMovesItsQueryLayerAtOnce</code></p>
+
+<h3 id="lua-raycasts">Raycasts from Lua <span class="badge">Picking</span></h3>
+<p>The global <code>Physics</code> table wraps <code>Raycast::Single</code> and <code>Raycast::All</code>:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Lua</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>Physics.Raycast(origin, direction, maxDistance?, layerMask?)</code></td><td>The closest hit as a table, or <code>nil</code></td></tr>
+<tr><td><code>Physics.RaycastAll(origin, direction, maxDistance?, layerMask?)</code></td><td>An array of hit tables, nearest first; empty for no hits</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li>A hit table has <code>point</code>, <code>normal</code>, <code>distance</code>, and, when set, <code>gameObject</code> (the body's owner, as in C++), <code>collider</code> (as its own type, e.g. <code>BoxCollider</code>) and <code>rigidbody</code>. The objects are <a href="scripting-lua.html#handles">checked handles</a>, so a script may keep a hit.</li>
+<li><code>maxDistance</code> defaults to 1e9, and <code>math.huge</code> also becomes 1e9, because PhysX takes a finite distance (see the open question below). A negative or NaN distance, or a zero or non-finite direction, hits nothing: <code>nil</code>, or an empty table.</li>
+<li><code>layerMask</code> defaults to <code>Layers.DefaultRaycastMask</code>. It is cut to 32 bits, so <code>-1</code> works like <code>Layers.AllLayers</code>. Build masks with <code>Layers.MaskOf</code> and <code>Layers.GetMask</code>: <code>Physics.Raycast(o, d, 50, Layers.MaskOf(8) | Layers.MaskOf(9))</code>.</li>
+<li>Without a backend nothing is hit, as in C++.</li>
+</ul>
+<pre class="lang-lua"><code>local mouse = Input.GetMousePosition()
+local ray = Camera.Main():ScreenPointToRay(mouse.x, mouse.y)
+local hit = Physics.Raycast(ray.origin, ray.direction, 100)
+if hit ~= nil and hit.gameObject ~= nil then
+    Debug.Log("Pointing at " .. hit.gameObject:GetName())
+end
+</code></pre>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaPhysicsBindings.cpp</code> — <code>RaycastHitToLua</code>, <code>ReadRayQuery</code>, <code>BindPhysics</code>; tests: <code>PickingPhysicsTest.LuaRaycastReturnsHitTables</code>, <code>PickingPhysicsTest.LuaRayFromTheCameraHitsTheBox</code>, <code>LuaPickingTest.RaycastBindingsHandleBadInput</code></p>
 
 <div class="callout open-question">
 <p class="callout-title">Open question</p>

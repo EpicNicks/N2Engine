@@ -87,6 +87,7 @@
 <ol class="steps">
 <li><code>Scene::ProcessAttachQueue</code>: <code>OnAttach</code> for every queued component.</li>
 <li>Zero or more fixed steps: <code>OnFixedUpdate</code>, physics simulation, transform sync-back, then collision/trigger callbacks. See <a href="physics.html">Physics</a>.</li>
+<li>The pointer dispatcher: <code>OnMouse*</code> callbacks on the object under the cursor. See <a href="input.html#picking">Picking</a> <span class="badge">Picking</span>.</li>
 <li><code>Scene::Update</code>: <code>OnUpdate</code>.</li>
 <li><code>Scene::AdvanceCoroutines</code>: see <a href="coroutines.html">Coroutines</a>.</li>
 <li><code>Scene::LateUpdate</code>: <code>OnLateUpdate</code>.</li>
@@ -159,6 +160,7 @@ scene.AddRootGameObject(player);                    // queues the components on 
 <tr><td><code>OnApplicationQuit()</code></td><td>After the run loop ends</td><td>Active components of the loaded scene only</td></tr>
 <tr><td><code>OnCollisionEnter/Stay/Exit(const Physics::Collision&amp;)</code></td><td>After a fixed step's simulation</td><td>Only while the object is active in the hierarchy <span class="badge">PR #37</span> (a disabled component still gets them, as in Unity); see <a href="physics.html#dispatch">Physics</a></td></tr>
 <tr><td><code>OnTriggerEnter/Stay/Exit(Physics::Trigger)</code></td><td>After a fixed step's simulation</td><td>Same as collisions; see <a href="physics.html#dispatch">Physics</a></td></tr>
+<tr><td><code>OnMouseEnter/Over/Exit()</code>, <code>OnMouseDown/Drag/Up/UpAsButton()</code> <span class="badge">Picking</span></td><td>Once per frame, after the fixed steps and before <code>OnUpdate</code></td><td>The object is under the cursor (it has a collider the main camera's ray hits) or captured the left button. Same rule as collisions: only while the object is active in the hierarchy, disabled components included. See <a href="input.html#picking">Picking</a></td></tr>
 </tbody>
 </table>
 </div>

@@ -130,7 +130,7 @@
 <div class="card"><h3><a href="transforms.html">Transforms</a></h3><p><code>Positionable</code>: local and world position, rotation, scale; tells physics when it moves.</p></div>
 <div class="card"><h3><a href="coroutines.html">Coroutines</a></h3><p>Per-scene scheduler for <code>std::generator</code>-based coroutines with Unity-style waits.</p></div>
 <div class="card"><h3><a href="physics.html">Physics</a></h3><p><code>IPhysicsBackend</code> with a PhysX implementation; Rigidbody and collider components; collision and trigger events; raycasts.</p></div>
-<div class="card"><h3><a href="input.html">Input</a></h3><p>Action maps with typed actions and bindings; owned by the window, updated as events are polled.</p></div>
+<div class="card"><h3><a href="input.html">Input</a></h3><p>Action maps with typed actions and bindings; owned by the window, updated as events are polled. Mouse picking and the <code>OnMouse*</code> callbacks.</p></div>
 <div class="card"><h3><a href="audio.html">Audio</a></h3><p>OpenAL-based <code>AudioSystem</code>: sources, one-shots, mixer groups and a listener.</p></div>
 <div class="card"><h3><a href="text.html">Text &amp; fonts</a></h3><p>Font assets with SDF atlases built at load time, and UTF-8 layout with kerning, wrapping and alignment. CPU-only; nothing draws text yet.</p></div>
 <div class="card"><h3><a href="resources.html">Resources</a></h3><p><code>res://</code> and <code>user://</code> paths, the project asset scan with stable meta UUIDs, and one lookup API.</p></div>
@@ -160,6 +160,7 @@
 <li><strong>Time.</strong> <code>Time::Update</code>; the unscaled frame delta, clamped to 0.25 s, is added to the fixed-step accumulator.</li>
 <li><strong>Attach.</strong> <code>Scene::ProcessAttachQueue</code>: components added since the last frame get <code>OnAttach</code>.</li>
 <li><strong>Fixed steps.</strong> While the accumulator holds a full fixed step: apply pending physics changes, <code>FixedUpdate</code>, simulate, sync transforms, dispatch collision and trigger events. No steps run while <code>timeScale</code> is 0. See <a href="physics.html">Physics</a>.</li>
+<li><strong>Pointer.</strong> <code>OnMouse*</code> callbacks on the object under the cursor (<code>PointerDispatcher</code>). See <a href="input.html#picking">Input</a>.</li>
 <li><strong>Update.</strong> <code>Scene::Update</code>, then coroutines (<code>Scene::AdvanceCoroutines</code>), then <code>Scene::LateUpdate</code>. See <a href="coroutines.html">Coroutines</a>.</li>
 <li><strong>Audio.</strong> <code>AudioSystem::Update</code>, after LateUpdate so listener and source positions are current. See <a href="audio.html">Audio</a>.</li>
 <li><strong>Render.</strong> Camera matrices, scene lighting, then each renderable.</li>
@@ -194,6 +195,7 @@
 <tr><td><a href="physics.html#design-inactive-physics">Inactive objects leave physics</a></td><td>A disabled Rigidbody or collider, or an inactive object, is taken out of the simulation and queries; its pairs end with an Exit for the other side, while its own components get <code>OnDisable</code> instead. Re-enabling restores it, with Enter for what still overlaps.</td></tr>
 <tr><td><a href="physics.html#design-recreated-exit">A re-created body's object gets its Exit</a></td><td>When a body is re-created while touching, both sides get Exit for the old body before Enter for the new one, so Enter/Exit stay balanced.</td></tr>
 <tr><td><a href="physics.html#design-layers">Layers are Unity's, carried in filter data</a></td><td>32 layers at Unity's indices, saved on each GameObject as an index; the collision matrix is copied into each shape's PhysX filter data, and a change re-filters existing pairs so a ruled-out pair still ends with an Exit.</td></tr>
+<tr><td><a href="input.html#design-picking">Clicks are Unity's OnMouse* callbacks</a></td><td>The object under the cursor gets <code>OnMouse*</code> before <code>Update</code>, picked by a physics ray from the main camera; the object that got Down captures Drag and Up. Delivery follows the physics rule, and a destroyed or deactivated target is dropped without Exit.</td></tr>
 <tr><td><a href="physics.html#design-own-perspective">Collision data is from the receiver's side</a></td><td>Colliders, normals, impulse and relative velocity are all given from the receiving body's point of view; the two sides see opposite vectors.</td></tr>
 <tr><td><a href="logging-and-editor.html#design-logger-lock">Logs are delivered on the logging thread</a></td><td>Any thread may log; one recursive lock delivers each message whole and in order, on the thread that logged it.</td></tr>
 <tr><td><a href="scripting-lua.html#design-script-replace">A replaced script instance is retired</a></td><td><code>SetScript</code> or a reload tears the old instance down like a removed component and attaches the new one, keeping the component's field data and references.</td></tr>
