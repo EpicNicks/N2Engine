@@ -526,7 +526,7 @@ const int count = Physics::Raycast::All(origin, direction, hits, 50.0f); // near
 </div>
 <ul>
 <li>A hit table has <code>point</code>, <code>normal</code>, <code>distance</code>, and, when set, <code>gameObject</code> (the body's owner, as in C++), <code>collider</code> (as its own type, e.g. <code>BoxCollider</code>) and <code>rigidbody</code>. The objects are <a href="scripting-lua.html#handles">checked handles</a>, so a script may keep a hit.</li>
-<li><code>maxDistance</code> defaults to 1e9, and <code>math.huge</code> also becomes 1e9, because PhysX takes a finite distance (see the open question below). A negative or NaN distance, or a zero or non-finite direction, hits nothing: <code>nil</code>, or an empty table.</li>
+<li><code>maxDistance</code> defaults to 1e9, and a longer one (<code>math.huge</code> included) is clamped to 1e9, because PhysX takes a finite distance (see the open question below). A negative or NaN distance, or a zero or non-finite direction, hits nothing: <code>nil</code>, or an empty table.</li>
 <li><code>layerMask</code> defaults to <code>Layers.DefaultRaycastMask</code>. It is cut to 32 bits, so <code>-1</code> works like <code>Layers.AllLayers</code>. Build masks with <code>Layers.MaskOf</code> and <code>Layers.GetMask</code>: <code>Physics.Raycast(o, d, 50, Layers.MaskOf(8) | Layers.MaskOf(9))</code>.</li>
 <li>Without a backend nothing is hit, as in C++.</li>
 </ul>
