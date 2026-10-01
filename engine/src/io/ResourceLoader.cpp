@@ -19,6 +19,12 @@ namespace N2Engine::IO
 
         Logger::Info(std::format("ResourceLoader initialized: {}", projectRoot.string()));
 
+        // Everything here is keyed by res:// paths, which don't include the root: entries from a
+        // previous root would otherwise pass for this one's files
+        _metadata.clear();
+        _uuidToPath.clear();
+        ClearCache();
+
         RescanAssets();
 
         Logger::Info(std::format("Found {} assets", _metadata.size()));
@@ -352,6 +358,14 @@ namespace N2Engine::IO
 
     void ResourceLoader::RegisterLoader(const std::string &extension, LoaderFunc loader)
     {
+        const bool newExtension = !_loaders.contains(extension);
         _loaders[extension] = std::move(loader);
+
+        // The scan skips extensions without a loader, so files of one registered after Initialize would
+        // never get metadata (and would fall back to random UUIDs); index them now
+        if (newExtension && !_assetsRoot.empty())
+        {
+            RescanAssets();
+        }
     }
 }
