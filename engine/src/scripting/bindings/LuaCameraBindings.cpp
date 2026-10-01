@@ -79,6 +79,8 @@ namespace N2Engine::Scripting::Bindings
         );
         
         // ===== Camera Global Access =====
+        // A plain pointer, unlike scenes and input maps: the main camera is created once at startup and lives
+        // as long as the Application
         lua["Camera"] = lua.create_table_with(
             "Main", []() -> Camera* {
                 return Application::GetInstance().GetMainCamera();

@@ -145,35 +145,44 @@ namespace N2Engine::Scripting::Bindings
             }
         );
 
-        lua.new_usertype<Scene>(
+        // A handle too: the scene is freed on a scene switch, and a script may keep it past that
+        SceneRef::s_luaName = "Scene";
+        lua.new_usertype<SceneRef>(
             "Scene",
             sol::no_constructor,
+            sol::meta_function::equal_to, &SameRef<SceneRef>,
 
-            "sceneName", &Scene::sceneName,
+            "IsValid", [](const SceneRef &scene) { return scene.IsValid(); },
+            "sceneName", sol::property(
+                [](const SceneRef &scene) { return scene.Pin()->sceneName; },
+                [](const SceneRef &scene, const std::string &name) { scene.Pin()->sceneName = name; }
+            ),
 
-            "FindGameObject", [](const Scene &scene, const std::string &name)
+            "FindGameObject", [](const SceneRef &scene, const std::string &name)
             {
-                return RefOrNil(scene.FindGameObject(name));
+                return RefOrNil(scene.Pin()->FindGameObject(name));
             },
-            "FindGameObjectsByTag", [](const Scene &scene, const std::string &tag)
+            "FindGameObjectsByTag", [](const SceneRef &scene, const std::string &tag)
             {
-                return RefList(scene.FindGameObjectsByTag(tag));
+                return RefList(scene.Pin()->FindGameObjectsByTag(tag));
             },
-            "GetAllGameObjects", [](const Scene &scene) { return RefList(scene.GetAllGameObjects()); },
-            "GetRootGameObjects", [](const Scene &scene) { return RefList(scene.GetRootGameObjects()); },
-            "AddRootGameObject", [](Scene &scene, GameObjectRef *gameObject)
+            "GetAllGameObjects", [](const SceneRef &scene) { return RefList(scene.Pin()->GetAllGameObjects()); },
+            "GetRootGameObjects", [](const SceneRef &scene) { return RefList(scene.Pin()->GetRootGameObjects()); },
+            "AddRootGameObject", [](const SceneRef &sceneRef, GameObjectRef *gameObject)
             {
+                Scene *scene = sceneRef.Pin();
                 const GameObject::Ptr root = RequireRef(gameObject, "Scene:AddRootGameObject").Pin();
-                scene.AddRootGameObject(root);
-                if (std::ranges::find(scene.GetRootGameObjects(), root) != scene.GetRootGameObjects().end())
+                scene->AddRootGameObject(root);
+                if (std::ranges::find(scene->GetRootGameObjects(), root) != scene->GetRootGameObjects().end())
                 {
                     gameObject->ReleaseOwnership(); // the scene owns it now
                 }
             },
-            "RemoveRootGameObject", [](Scene &scene, GameObjectRef *gameObject)
+            "RemoveRootGameObject", [](const SceneRef &sceneRef, GameObjectRef *gameObject)
             {
+                Scene *scene = sceneRef.Pin();
                 const GameObject::Ptr root = gameObject ? gameObject->Lock() : nullptr;
-                if (!root || !scene.RemoveRootGameObject(root))
+                if (!root || !scene->RemoveRootGameObject(root))
                 {
                     return false;
                 }
@@ -181,19 +190,25 @@ namespace N2Engine::Scripting::Bindings
                 gameObject->TakeOwnership();
                 return true;
             },
-            "DestroyGameObject", [](Scene &scene, const GameObjectRef *gameObject)
+            "DestroyGameObject", [](const SceneRef &sceneRef, const GameObjectRef *gameObject)
             {
+                Scene *scene = sceneRef.Pin();
                 // False for nil, or an object that's already destroyed or gone
                 const GameObject::Ptr target = gameObject ? gameObject->Lock() : nullptr;
-                return target && !target->IsDestroyed() && scene.DestroyGameObject(target);
+                return target && !target->IsDestroyed() && scene->DestroyGameObject(target);
             }
         );
 
         // ===== SceneManager (global) =====
         lua["SceneManager"] = lua.create_table_with(
-            "GetCurrentScene", []() -> Scene*
+            "GetCurrentScene", []() -> sol::optional<SceneRef>
             {
-                return SceneManager::GetCurScene(); // nil when no scene is loaded
+                Scene *scene = SceneManager::GetCurScene();
+                if (!scene)
+                {
+                    return sol::nullopt; // no scene is loaded
+                }
+                return SceneRef(*scene);
             },
             "GetCurrentSceneIndex", &SceneManager::GetCurSceneIndex,
             "LoadScene", sol::overload(
