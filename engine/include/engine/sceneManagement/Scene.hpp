@@ -50,6 +50,10 @@ namespace N2Engine
         // Expires when this scene is freed (e.g. on a scene switch); script handles to the scene check it
         Base::LifetimeToken _lifetime;
 
+        // Set by SceneManager's own destructor (static destruction at process exit): the scenes it still
+        // holds are then freed without the drop teardown, as the systems OnDestroy uses may already be gone
+        bool _skipDropTeardown = false;
+
     private:
         explicit Scene(std::string name);
 
@@ -88,6 +92,11 @@ namespace N2Engine
         bool TraverseUntil(std::function<bool(std::shared_ptr<GameObject>)> callback) const;
 
         [[nodiscard]] std::shared_ptr<GameObject> FindGameObject(const std::string &name) const;
+        /// The first GameObject (in traversal order) whose tag is exactly this, or nullptr
+        [[nodiscard]] std::shared_ptr<GameObject> FindGameObjectWithTag(const std::string &tag) const;
+        /// Every GameObject in the scene (active or not) whose tag is exactly this, in traversal order
+        [[nodiscard]] std::vector<std::shared_ptr<GameObject>> FindGameObjectsWithTag(const std::string &tag) const;
+        /// The same as FindGameObjectsWithTag (the older name)
         [[nodiscard]] std::vector<std::shared_ptr<GameObject>> FindGameObjectsByTag(const std::string &tag) const;
         std::shared_ptr<GameObject> FindGameObjectByUUID(Math::UUID uuid);
 
@@ -134,9 +143,15 @@ namespace N2Engine
 
         void OnAllActiveComponents(const std::function<void(Component *)> &callback) const;
 
+        /// Clear(); attachedOnly: only components that attached to this scene (are in _components) get
+        /// OnDisable/OnDestroy, the rest are released without callbacks (a scene dropped unloaded)
+        void ClearImpl(bool attachedOnly);
+        /// Whether any component has attached to this scene (got OnAttach here) and is still registered
+        [[nodiscard]] bool HasAttachedComponents() const;
+
         void MarkHierarchyForDestruction(std::shared_ptr<GameObject> gameObject,
                                          std::vector<std::shared_ptr<GameObject>> &markedObjects);
-        void CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject);
+        void CallOnDestroyForGameObject(std::shared_ptr<GameObject> gameObject, bool attachedOnly = false);
         void PurgeMarkedGameObject(std::shared_ptr<GameObject> gameObject);
     };
 }

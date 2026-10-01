@@ -195,6 +195,8 @@
 <tr><td><a href="scripting-lua.html#design-script-replace">A replaced script instance is retired</a></td><td><code>SetScript</code> or a reload tears the old instance down like a removed component and attaches the new one, keeping the component's field data and references.</td></tr>
 <tr><td><a href="audio.html#design-play-restarts">Play restarts, UnPause resumes</a></td><td><code>AudioSource::Play</code> always starts from the beginning; resuming a paused source is <code>UnPause</code>.</td></tr>
 <tr><td><a href="audio.html#design-no-headless-clips">No audio clips without a context</a></td><td>Clips are OpenAL buffers, so they fail to load (with a warning) while the <code>AudioSystem</code> is not initialized, and a clip from an earlier context is never treated as loaded.</td></tr>
+<tr><td><a href="scenes.html#design-dropped-scenes">A dropped scene undoes only what attached</a></td><td>A scene destroyed without being loaded tears down the components that attached to it, and gives no callbacks to those that never did.</td></tr>
+<tr><td><a href="serialization.html#design-prefab-uuids">A prefab instance is a new object tree</a></td><td>Instantiating resolves references inside the prefab to the new objects, then gives every object and component a fresh UUID; references leaving the prefab become null.</td></tr>
 <tr><td><a href="math.html#design-simd-tiers">SIMD tiers are an algorithm choice</a></td><td>The build already requires AVX; tiers select which implementation runs so each can be tested against scalar, under a written per-operation contract.</td></tr>
 </tbody>
 </table>

@@ -19,6 +19,12 @@ InputBinding::InputBinding(const Window &win)
 
 InputValue KeyboardButtonBinding::getValue()
 {
+    // No window (e.g. an InputSystem on a Window that never opened): nothing is pressed, and GLFW is
+    // never handed a null window
+    if (window == nullptr)
+    {
+        return false;
+    }
     const int glfwKey = KeyToGLFW.at(boundKey);
     const int state = glfwGetKey(window, glfwKey);
     return (state == GLFW_PRESS);
@@ -86,6 +92,12 @@ InputValue Vector2CompositeBinding::getValue()
 {
     float x = 0.0f, y = 0.0f;
 
+    // No window: no key is pressed (GLFW is never handed a null window)
+    if (window == nullptr)
+    {
+        return Vector2(x, y);
+    }
+
     if (glfwGetKey(window, KeyToGLFW.at(right)) == GLFW_PRESS)
         x += 1.0f;
     if (glfwGetKey(window, KeyToGLFW.at(left)) == GLFW_PRESS)
@@ -100,6 +112,11 @@ InputValue Vector2CompositeBinding::getValue()
 
 InputValue MouseButtonBinding::getValue()
 {
+    // No window: no button is pressed (GLFW is never handed a null window)
+    if (window == nullptr)
+    {
+        return false;
+    }
     const int glfwButton = MouseButtonToGLFW.at(boundButton);
     const int state = glfwGetMouseButton(window, glfwButton);
     return (state == GLFW_PRESS);

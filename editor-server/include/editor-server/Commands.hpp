@@ -8,6 +8,8 @@
 namespace N2Engine::Editor::Protocol
 {
     // ==================== Command Deserializers ====================
+    // One per command with a request in protocol.json, named <Command>Cmd with its fields, like the
+    // generated clients/cpp/Protocol.generated.hpp (which only declares the structs)
 
     struct SetViewportSizeCmd
     {
@@ -42,19 +44,10 @@ namespace N2Engine::Editor::Protocol
 
     struct LoadSceneCmd
     {
-        std::string path;
+        /// The scene's JSON text (not a path)
+        std::string sceneJson;
 
         static LoadSceneCmd Deserialize(BufferReader &r)
-        {
-            return {r.ReadString()};
-        }
-    };
-
-    struct SaveSceneCmd
-    {
-        std::string path;
-
-        static SaveSceneCmd Deserialize(BufferReader &r)
         {
             return {r.ReadString()};
         }
@@ -81,6 +74,28 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct DestroyEntityCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+
+        static DestroyEntityCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct GetEntityTransformCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+
+        static GetEntityTransformCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
     struct CreateScriptCmd
     {
         std::string name;
@@ -91,14 +106,15 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
-    struct EntityTransformCmd
+    struct SetEntityTransformCmd
     {
+        /// The GameObject's UUID string
         std::string entityId;
         Math::Vector3 position;
-        Math::Vector3 rotation;
+        Math::Vector3 rotation; // Euler angles
         Math::Vector3 scale;
 
-        static EntityTransformCmd Deserialize(BufferReader &r)
+        static SetEntityTransformCmd Deserialize(BufferReader &r)
         {
             std::string id = r.ReadString();
             Math::Vector3 pos{r.ReadF32(), r.ReadF32(), r.ReadF32()};

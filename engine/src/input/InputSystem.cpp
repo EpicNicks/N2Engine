@@ -15,6 +15,28 @@
 
 using namespace N2Engine::Input;
 
+// Set for the duration, cleared even if a handler throws; only the outermost scope frees retired maps
+// (a handler may replace a map whose Update or cancel pass is still on the stack)
+struct InputSystem::UpdatingScope
+{
+    InputSystem &input;
+    const bool outermost;
+
+    explicit UpdatingScope(InputSystem &i) : input(i), outermost(!i._updating) { input._updating = true; }
+
+    ~UpdatingScope()
+    {
+        if (outermost)
+        {
+            input._updating = false;
+            input._retiredMaps.clear();
+        }
+    }
+
+    UpdatingScope(const UpdatingScope &) = delete;
+    UpdatingScope &operator=(const UpdatingScope &) = delete;
+};
+
 InputSystem::InputSystem(Window &window)
     : _window{window}
 {
@@ -74,7 +96,22 @@ ActionMap* InputSystem::LoadActionMap(const std::string &name)
     }
     if (const auto it = _actionMaps.find(name); it != _actionMaps.end())
     {
+        ActionMap *previous = GetCurActionMap();
         _curActionMapName = it->first;
+        // Leaving a map releases what was held in it: it isn't updated any more, so its actions would
+        // otherwise stay Started/Performed with no callback until it was loaded again. Its callbacks may
+        // replace maps, which are then retired until this pass ends rather than freed under it.
+        // Left from one of its own callbacks: its loop polls no further actions, and Update cancels what
+        // is still active once the loop is done.
+        if (previous && previous == _mapBeingUpdated)
+        {
+            previous->StopUpdating();
+        }
+        else if (previous)
+        {
+            UpdatingScope scope{*this};
+            previous->CancelActiveActions();
+        }
         return GetCurActionMap();
     }
     return nullptr;
@@ -127,27 +164,33 @@ void InputSystem::Update()
 {
     _mouse->Update();
 
-    // Cleared even if a handler throws; only the outermost update frees retired maps
-    struct UpdateScope
-    {
-        InputSystem &input;
-        const bool outermost;
-
-        explicit UpdateScope(InputSystem &i) : input(i), outermost(!i._updating) { input._updating = true; }
-
-        ~UpdateScope()
-        {
-            if (outermost)
-            {
-                input._updating = false;
-                input._retiredMaps.clear();
-            }
-        }
-    } scope{*this};
+    UpdatingScope scope{*this};
 
     if (const auto it = _actionMaps.find(_curActionMapName); it != _actionMaps.end())
     {
-        it->second->Update();
+        // Kept alive until this update ends even if a callback replaces it (it is retired, not freed)
+        ActionMap *map = it->second.get();
+        const std::string mapName = it->first;
+
+        struct BeingUpdatedScope
+        {
+            ActionMap *&slot;
+            ActionMap *const previous;
+            BeingUpdatedScope(ActionMap *&s, ActionMap *map) : slot(s), previous(s) { slot = map; }
+            ~BeingUpdatedScope() { slot = previous; }
+            BeingUpdatedScope(const BeingUpdatedScope &) = delete;
+            BeingUpdatedScope &operator=(const BeingUpdatedScope &) = delete;
+        };
+        {
+            BeingUpdatedScope beingUpdated{_mapBeingUpdated, map};
+            map->Update();
+        }
+
+        // A callback switched to another map (LoadActionMap deferred this): cancel what is still active here
+        if (_curActionMapName != mapName)
+        {
+            map->CancelActiveActions();
+        }
     }
 }
 

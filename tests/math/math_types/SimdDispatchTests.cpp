@@ -12,6 +12,7 @@
 #include <math/MathRegistrar.hpp>
 #include <math/Matrix.hpp>
 #include <math/Quaternion.hpp>
+#include <math/Vector2.hpp>
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
 
@@ -616,3 +617,67 @@ TEST_P(SimdDispatchTest, Matrix3Operations)
 INSTANTIATE_TEST_SUITE_P(SimdLevels, SimdDispatchTest,
                          ::testing::Values(SIMDLevel::SSE2, SIMDLevel::SSE41, SIMDLevel::AVX),
                          [](const ::testing::TestParamInfo<SIMDLevel> &info) { return LevelName(info.param); });
+
+// ============================================================================
+// Vector2 batch normalization (compile-time AVX, no runtime dispatch)
+// ============================================================================
+
+TEST(Vector2BatchTest, NormalizeBatchMatchesNormalized)
+{
+    // 11 vectors: two full AVX batches of four plus a scalar tail of three
+    const std::vector<Vector2> samples = {
+        {3.0f, 4.0f}, {-1.0f, 0.0f}, {0.1f, -0.7f}, {1234.5f, -6789.25f},
+        {1e-3f, 2e-3f}, {-5.5f, -5.5f}, {0.0f, 2.0f}, {7.0f, 1e-4f},
+        {2.0f, -3.0f}, {-0.25f, 0.5f}, {100.0f, 0.0f},
+    };
+    std::vector<Vector2> batch = samples;
+    Vector2::NormalizeBatch(batch.data(), batch.size());
+
+    for (size_t i = 0; i < samples.size(); ++i)
+    {
+        const Vector2 expected = samples[i].Normalized();
+        const std::string at = "vector " + std::to_string(i);
+        // Full precision: the 12-bit rsqrt approximation this replaced was off by ~1e-4
+        EXPECT_NEAR(batch[i].x, expected.x, 1e-6f) << at;
+        EXPECT_NEAR(batch[i].y, expected.y, 1e-6f) << at;
+        EXPECT_NEAR(batch[i].Length(), 1.0f, 1e-6f) << at;
+    }
+}
+
+TEST(Vector2BatchTest, NormalizeBatchZeroAndNaN)
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    // Each special value in an AVX batch (first four) and in the scalar tail (last two)
+    std::vector<Vector2> batch = {
+        {0.0f, 0.0f}, {1e-9f, -1e-9f}, {nan, 1.0f}, {0.0f, -3.0f},
+        {0.0f, 0.0f}, {nan, nan},
+    };
+    Vector2::NormalizeBatch(batch.data(), batch.size());
+
+    for (const size_t i : {size_t{0}, size_t{1}, size_t{4}})
+    {
+        EXPECT_EQ(batch[i].x, 0.0f) << "near-zero vector " << i << " becomes Zero";
+        EXPECT_EQ(batch[i].y, 0.0f) << "near-zero vector " << i << " becomes Zero";
+    }
+    for (const size_t i : {size_t{2}, size_t{5}})
+    {
+        EXPECT_TRUE(std::isnan(batch[i].x)) << "NaN vector " << i << " stays NaN, as Normalized() keeps it";
+        EXPECT_TRUE(std::isnan(Vector2(batch[i]).Normalized().x));
+    }
+    EXPECT_NEAR(batch[3].x, 0.0f, 1e-6f);
+    EXPECT_NEAR(batch[3].y, -1.0f, 1e-6f);
+}
+
+TEST(Vector2BatchTest, NormalizeBatchHandlesShortCounts)
+{
+    for (size_t count = 0; count <= 9; ++count)
+    {
+        std::vector<Vector2> batch(count, Vector2{6.0f, -8.0f});
+        Vector2::NormalizeBatch(batch.data(), count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            EXPECT_NEAR(batch[i].x, 0.6f, 1e-6f) << "count " << count << " index " << i;
+            EXPECT_NEAR(batch[i].y, -0.8f, 1e-6f) << "count " << count << " index " << i;
+        }
+    }
+}

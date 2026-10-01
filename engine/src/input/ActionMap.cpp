@@ -31,6 +31,17 @@ void InputAction::Update()
     }
 
     _wasDisabledLastFrame = false;
+
+    // Cancelled by its map (disabled or switched away): reset quietly, as re-enabling an action does
+    if (_resetCancelOnNextUpdate)
+    {
+        _resetCancelOnNextUpdate = false;
+        if (_currentPhase == ActionPhase::Cancelled)
+        {
+            _currentPhase = ActionPhase::Waiting;
+        }
+    }
+
     _previousPhase = _currentPhase;
 
     // Store the previous value to detect changes
@@ -83,6 +94,19 @@ void InputAction::HandleDisabledTransition()
 
         // No callback needed for this transition - it's just cleanup
     }
+}
+
+void InputAction::CancelIfActive()
+{
+    if (!IsActive())
+    {
+        return;
+    }
+    _previousPhase = _currentPhase;
+    _currentPhase = ActionPhase::Cancelled;
+    _currentValue = false;
+    _resetCancelOnNextUpdate = true;
+    _onStateChanged(*this);
 }
 
 void InputAction::SetDisabled(const bool disabled)
@@ -224,9 +248,46 @@ void ActionMap::Update()
 {
     if (disabled)
     {
+        // Disabling stops polling, so what was held would stay active with no release callback
+        if (!_wasDisabled)
+        {
+            _wasDisabled = true;
+            CancelActiveActions();
+        }
         return;
     }
+    _wasDisabled = false;
 
+    if (!_updating)
+    {
+        _stopUpdating = false; // a request from an earlier update doesn't carry over
+    }
+    ForEachAction([this](InputAction &action)
+    {
+        // Once a callback switched the InputSystem away from this map, the rest of the loop would only
+        // start actions that are cancelled again when it ends
+        if (!_stopUpdating)
+        {
+            action.Update();
+        }
+    });
+}
+
+void ActionMap::StopUpdating()
+{
+    if (_updating)
+    {
+        _stopUpdating = true;
+    }
+}
+
+void ActionMap::CancelActiveActions()
+{
+    ForEachAction([](InputAction &action) { action.CancelIfActive(); });
+}
+
+void ActionMap::ForEachAction(const std::function<void(InputAction &)> &fn)
+{
     // Snapshot: callbacks fired by an action can add, replace or remove actions, which would
     // invalidate iteration over the map (and replaced/removed ones are retired, not freed, meanwhile)
     std::vector<InputAction *> actions;
@@ -264,7 +325,7 @@ void ActionMap::Update()
         const auto it = _inputActions.find(action->GetName());
         if (it != _inputActions.end() && it->second.get() == action)
         {
-            action->Update();
+            fn(*action);
         }
     }
 }

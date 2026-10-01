@@ -74,6 +74,7 @@
 <li><a href="#math-serialization">Math and colour types</a></li>
 <li><a href="#failure-handling">Failure handling</a></li>
 <li><a href="#prefabs">Prefabs</a></li>
+<li><a href="#instantiate-prefab">Instantiating and registering prefabs</a></li>
 <li><a href="#other-formats">Input and Lua data</a></li>
 </ol>
 </div>
@@ -125,6 +126,7 @@
 <tbody>
 <tr><td><code>uuid</code></td><td>Always, as a string</td><td><strong>Required</strong> (<code>.at()</code>). Restored as the object's UUID. A string that isn't a valid UUID, or a non-string value, logs an error and becomes <code>UUID::ZERO</code>; it does not throw.</td></tr>
 <tr><td><code>name</code></td><td>Always</td><td><strong>Required</strong> (<code>.at()</code>), must be a string.</td></tr>
+<tr><td><code>tag</code> <span class="badge">PR #39</span></td><td>Always (<code>"Untagged"</code> by default)</td><td>Optional; missing or null keeps <code>"Untagged"</code>, so data written before tags existed loads unchanged. Must be a string (anything else fails the load, like other malformed fields). See <a href="gameobjects-components.html#names-tags">tags</a>.</td></tr>
 <tr><td><code>isActive</code></td><td>Always</td><td>Optional. Defaults to active.</td></tr>
 <tr><td><code>prefabReference</code></td><td>Only if set</td><td>Optional UUID. It round-trips, but nothing else uses it yet.</td></tr>
 <tr><td><code>positionable</code></td><td>Only if the object has a Positionable</td><td>Optional. If present, a Positionable is created and <code>localPosition</code>, <code>localRotation</code> and <code>localScale</code> are each applied if present. See <a href="transforms.html">Transforms</a>.</td></tr>
@@ -317,13 +319,37 @@ resolver.ResolveAll();                        // fills holder's reference member
 <ul>
 <li><code>Prefab::Serialize()</code> writes <code>rootObject: null</code> when the prefab has no root.</li>
 <li><code>Prefab::Deserialize(j, resolver = nullptr)</code> returns <code>std::expected&lt;std::unique_ptr&lt;Prefab&gt;, PrefabParseError&gt;</code>. A missing <code>name</code> gives <code>MissingName</code>, and a missing or null <code>rootObject</code> gives <code>MissingRootObject</code>. UUIDs of the whole hierarchy are preserved. <code>PrefabParseErrorToString</code> has a message for every error.</li>
-<li><code>PrefabManager::InstantiatePrefab(json)</code> is currently just <code>GameObject::Deserialize(json)</code> with no resolver, so it expects <strong>GameObject JSON</strong> (the <code>rootObject</code> value), not the Prefab JSON above: passing a whole <code>{"name", "rootObject"}</code> object fails on the missing <code>uuid</code>. Without a resolver, reference vectors in the instantiated components come back all <code>nullptr</code>. <code>PrefabManager::RegisterPrefab</code> is an empty stub.</li>
+<li><code>Prefab::Deserialize</code> never throws <span class="badge">PR #39</span>: a root whose GameObject data is malformed (missing <code>uuid</code> or <code>name</code>, wrong types) gives <code>InvalidRootObject</code> (the cause is logged), and a <code>name</code> that is not a string gives the new <code>InvalidName</code>. Data that is not an object at all gives <code>MissingName</code>. With a caller's resolver, the caller runs <code>ResolveAll</code>; after an <code>InvalidRootObject</code> that resolver may hold entries for the partly built (already freed) objects, so discard it.</li>
 </ul>
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><code>Prefab::Deserialize</code> returns <code>InvalidRootObject</code> only when <code>GameObject::Deserialize</code> returns null, which it never does: a malformed root <em>throws</em> (<code>.at()</code>), and the exception escapes <code>Prefab::Deserialize</code> instead of becoming an error value. A non-string <code>name</code> also throws. Separately, <code>PrefabManager::InstantiatePrefab</code> keeps the prefab's stored UUIDs, so instantiating the same prefab twice gives objects with the same UUIDs. It also uses no resolver, so non-null references inside the prefab are never filled in. Files: <code>engine/src/prefabs/Prefab.cpp</code>, <code>engine/src/prefabs/PrefabManager.cpp</code> (which has a TODO saying the design is undecided).</p>
+
+<h3 id="instantiate-prefab">Instantiating and registering prefabs <span class="badge">PR #39</span></h3>
+<p><code>PrefabManager::InstantiatePrefab(json)</code> builds a new, independent object tree from prefab data:</p>
+<ol class="steps">
+<li>It accepts <strong>Prefab JSON</strong> (<code>{"name", "rootObject"}</code>, what <code>Prefab::Serialize</code> writes) or the bare <strong>GameObject JSON</strong> of the root (the <code>rootObject</code> value), which is what it used to require. An object with a <code>rootObject</code> key is treated as Prefab JSON.</li>
+<li><strong>Renumber the data first.</strong> Every GameObject and component id in the prefab's JSON (<code>"uuid"</code> of each object and of each component's <code>data</code>) is mapped to a new random UUID. Then every string anywhere in that JSON that is one of those ids (compared as UUIDs, so case does not matter) is replaced by its new id: the ids themselves, <code>RegisterGameObjectRef</code>/<code>RegisterComponentRef</code> members and their vectors, and Lua <code>{"$ref": ...}</code> fields in a <code>LuaComponent</code>'s <code>scriptData</code>. A Lua <code>$ref</code> to anything that is not an id of the prefab is set to <code>null</code>. Other UUID strings (assets, script UUIDs) are left alone.</li>
+<li>The renumbered root is deserialized with a fresh <a href="#reference-resolver"><code>ReferenceResolver</code></a> and <code>ResolveAll</code> runs. References inside the prefab therefore point at the objects of <em>this</em> instance, both as pointers and in the saved form (serializing the instance writes the new UUIDs, so a save and reload keeps the links). Pointer references to anything outside the prefab are not found and come back <code>nullptr</code>, and external Lua <code>$ref</code>s are already <code>null</code>, so nothing re-links to the prefab's source objects after a reload.</li>
+<li>An object or component the data gave no valid id gets a random one instead of <code>UUID::ZERO</code>.</li>
+<li>The instance is in no scene. Add it with <code>AddRootGameObject</code> or <code>AddChild</code>; its components attach at that scene's next <code>ProcessAttachQueue</code>.</li>
+<li>Malformed data (a null <code>rootObject</code>, missing keys, wrong types) logs an error and returns <code>nullptr</code>; no exception escapes.</li>
+</ol>
+<p>A registry keeps prefabs by name: <code>RegisterPrefab(name, root)</code> stores a <em>snapshot</em> of <code>root</code> (its Prefab JSON, as serialized at that moment; later edits to <code>root</code> do not change the prefab). Registering a name again replaces it with a warning; an empty name or a null root is refused (<code>false</code>, logged). <code>HasPrefab(name)</code>, <code>UnregisterPrefab(name)</code> and <code>InstantiateRegisteredPrefab(name)</code> (which is <code>InstantiatePrefab</code> on the stored data, or <code>nullptr</code> with an error for an unknown name) complete it. The registry lives in memory only; nothing is written to disk.</p>
+<pre class="lang-cpp"><code>#include "engine/prefabs/PrefabManager.hpp"
+
+PrefabManager::RegisterPrefab("Turret", turretTemplate);           // snapshot
+auto first = PrefabManager::InstantiateRegisteredPrefab("Turret");  // fresh UUIDs
+auto second = PrefabManager::InstantiateRegisteredPrefab("Turret"); // different fresh UUIDs
+scene.AddRootGameObjects({first, second});
+</code></pre>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee <span class="badge">PR #39</span></p>
+<p>Two instances of one prefab never share a UUID with each other or with the prefab, and each instance's internal references point at its own objects. Malformed prefab data is an error value (<code>Prefab::Deserialize</code>) or <code>nullptr</code> (<code>InstantiatePrefab</code>), never an exception. Before, instantiating kept the stored UUIDs (so two instances had the same ones), resolved no references, required bare GameObject JSON, and <code>RegisterPrefab</code> was an empty stub.</p>
+<p>Tests: <code>PrefabInstantiateTest.EveryObjectAndComponentGetsAFreshUUID</code>, <code>PrefabInstantiateTest.InternalReferencesPointIntoTheNewInstance</code>, <code>PrefabInstantiateTest.TwoInstancesReferenceTheirOwnObjects</code>, <code>PrefabInstantiateTest.ReferencesOutsideThePrefabAreNull</code>, <code>PrefabInstantiateTest.MalformedDataReturnsNullWithoutThrowing</code>, <code>PrefabRegistryTest.*</code>, <code>PrefabDeserializeErrorTest.*</code>, <code>LuaPrefabRefTest.RefFieldPointsAtTheInstancesOwnChild</code>, <code>LuaPrefabRefTest.TwoInstancesGetDifferentRefs</code>, <code>LuaPrefabRefTest.RefOutsideThePrefabBecomesNull</code>.</p>
 </div>
-<p class="src">Source: <code>engine/include/engine/prefabs/Prefab.hpp</code>, <code>engine/src/prefabs/Prefab.cpp</code>, <code>engine/src/prefabs/PrefabManager.cpp</code>; tests: <code>PrefabSerializationTest.*</code> (e.g. <code>MissingName_Deserialize</code>, <code>NullRootObject_Deserialize</code>, <code>UUIDsPreserved_RoundTrip</code>), <code>PrefabParseErrorTest.AllErrorsHaveStrings</code></p>
+<div class="callout note" id="design-prefab-uuids">
+<p class="callout-title">Design decision: a prefab instance is a new object tree</p>
+<p>A UUID identifies one object: it keys reference resolution, the editor's entity ids and <code>FindGameObjectByUUID</code>. An instance that kept the prefab's UUIDs would collide with every other instance in the same scene. References are stored as UUID strings, some of them (Lua <code>$ref</code> fields) never become pointers, so the instance is renumbered in its data, before it is built: then the live objects, their pointer references and their saved form all agree. References leaving the prefab cannot be kept: the prefab is a template that may be instantiated into any scene, and the objects it pointed at need not exist there. Prefab links (<code>prefabReference</code>, overrides, nested prefabs) are not implemented; <code>prefabReference</code> still only round-trips.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/prefabs/Prefab.hpp</code>, <code>engine/include/engine/prefabs/PrefabManager.hpp</code>, <code>engine/src/prefabs/Prefab.cpp</code>, <code>engine/src/prefabs/PrefabManager.cpp</code>; tests: <code>PrefabSerializationTest.*</code> (e.g. <code>MissingName_Deserialize</code>, <code>NullRootObject_Deserialize</code>, <code>UUIDsPreserved_RoundTrip</code>), <code>PrefabParseErrorTest.AllErrorsHaveStrings</code>, <code>PrefabInstantiateTest.*</code>, <code>PrefabRegistryTest.*</code>, <code>PrefabDeserializeErrorTest.*</code></p>
 
 <h2 id="other-formats">Input and Lua data</h2>
 <ul>

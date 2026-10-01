@@ -58,14 +58,6 @@ namespace N2Engine::Editor
         float x, y, z;
     };
 
-    struct EntityTransformRequest
-    {
-        int32_t entityId;
-        Vec3 position;
-        Vec3 rotation;
-        Vec3 scale;
-    };
-
     struct FrameDataHeader
     {
         uint32_t width;

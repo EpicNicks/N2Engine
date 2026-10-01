@@ -64,6 +64,8 @@ namespace N2Engine::Input
         std::string _inputActionName;
         bool _disabled{false};
         bool _wasDisabledLastFrame{false};
+        // Set by CancelIfActive: the next update resets Cancelled to Waiting silently, as re-enabling does
+        bool _resetCancelOnNextUpdate{false};
         // Expires when this action is freed (replaced, removed, or its map freed); script handles check it
         Base::LifetimeToken _lifetime;
 
@@ -87,6 +89,12 @@ namespace N2Engine::Input
         // Disabled property with proper state handling
         [[nodiscard]] bool GetDisabled() const { return _disabled; }
         void SetDisabled(bool disabled);
+
+        /// If the action is active (Started/Performed): phase Cancelled, value reset to false, and
+        /// OnStateChanged fires once, now. Its next update then resets Cancelled to Waiting silently and
+        /// proceeds normally (a still-held input starts again). No-op for an inactive action.
+        /// Used when its map is disabled or switched away from (it then stops being updated).
+        void CancelIfActive();
 
         Base::EventHandler<InputAction&>& GetOnStateChanged();
         /// Expires when this action is freed (for references that must not dangle, e.g. from Lua)
@@ -133,6 +141,10 @@ namespace N2Engine::Input
         // Actions replaced or removed from a callback during Update are freed after it
         bool _updating = false;
         std::vector<std::unique_ptr<InputAction>> _retiredActions;
+        // Whether the last Update saw the map disabled (its active actions were cancelled then)
+        bool _wasDisabled = false;
+        // Set by StopUpdating: the running Update polls no further actions
+        bool _stopUpdating = false;
         // Expires when this map is freed (replaced or reloaded); script handles check it
         Base::LifetimeToken _lifetime;
 
@@ -151,7 +163,14 @@ namespace N2Engine::Input
         ActionMap& AddInputAction(std::unique_ptr<InputAction> inputAction);
         ActionMap& MakeInputAction(const std::string &actionName, const std::function<void(InputAction *)> &pAction);
         bool RemoveInputAction(const std::string &actionName);
+        /// Updates every action. While `disabled`, polls nothing; the first update after the map was disabled
+        /// cancels its active actions (CancelActiveActions), as InputAction::SetDisabled does for one action.
         void Update();
+        /// CancelIfActive on every action of the map
+        void CancelActiveActions();
+        /// Called while this map's Update is running (InputSystem does when a callback switches to another
+        /// map): the actions the loop has not reached yet are not polled this time. No effect otherwise.
+        void StopUpdating();
         /// Expires when this map is freed (for references that must not dangle, e.g. from Lua)
         [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime.Get(); }
 
@@ -166,5 +185,10 @@ namespace N2Engine::Input
             const std::string &mapName,
             GLFWwindow *window
         );
+
+    private:
+        /// Runs fn on every action, on a snapshot: callbacks can add, replace or remove actions, and the
+        /// replaced/removed ones are retired (not freed) until the outermost pass ends
+        void ForEachAction(const std::function<void(InputAction &)> &fn);
     };
 }

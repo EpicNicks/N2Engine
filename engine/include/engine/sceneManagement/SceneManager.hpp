@@ -45,12 +45,21 @@ namespace N2Engine
         /// Index of the stored scene with this name, or -1 (without logging)
         static int FindSceneIndex(const std::string &sceneName);
         /// Stores data under the scene name it contains, replacing a stored scene with that name. Returns its index.
-        static int StoreScene(nlohmann::json data);
+        /// A pending instance of the replaced scene is moved into `dropped`: the caller frees it once its own
+        /// changes are complete, since freeing a scene can run component callbacks that call back in here.
+        static int StoreScene(nlohmann::json data, std::unique_ptr<Scene> &dropped);
+        /// Records a load request (LoadScene without the range check). Returns the pending instance it
+        /// supersedes, for the caller to free last, after SceneManager's state is final.
+        [[nodiscard]] static std::unique_ptr<Scene> RequestLoad(int sceneIndex);
         /// Tears down the loaded scene and drops a pending one (stored data is kept). Called by
         /// Application::Shutdown while physics/audio are still up, not left to static destruction.
         static void UnloadScenes();
 
     public:
+        /// Static destruction at process exit (no Application::Shutdown, e.g. tests): the scenes still held
+        /// are freed without teardown callbacks, since the systems those callbacks use may be gone already
+        ~SceneManager();
+
         static int GetCurSceneIndex();
         static Scene* GetCurScene();
         static Scene& GetCurSceneRef();

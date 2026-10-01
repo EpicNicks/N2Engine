@@ -42,8 +42,12 @@ namespace N2Engine
         using Ptr = std::shared_ptr<GameObject>;
         using WeakPtr = std::weak_ptr<GameObject>;
 
+        /// The tag every GameObject starts with (as in Unity)
+        static constexpr const char *DefaultTag = "Untagged";
+
     private:
         std::string _name;
+        std::string _tag{DefaultTag};
         bool _isActive = true;
         std::optional<Math::UUID> _prefabReference;
         bool _isMarkedForDestruction = false;
@@ -102,6 +106,11 @@ namespace N2Engine
         // Basic properties
         const std::string& GetName() const { return _name; }
         void SetName(const std::string &name) { _name = name; }
+
+        // Tag: one free-form string per object, compared exactly (case-sensitive). Serialized.
+        const std::string& GetTag() const { return _tag; }
+        void SetTag(const std::string &tag) { _tag = tag; }
+        bool CompareTag(const std::string &tag) const { return _tag == tag; }
 
         // Active state management
         bool IsActive() const { return _isActive; }
@@ -185,7 +194,13 @@ namespace N2Engine
         std::string GetResourceType() const override { return "GameObject"; }
 
         // Static utility methods
+        /// Scene::FindGameObject on the given scene (nullptr for a null scene)
         static Ptr FindGameObjectByName(const std::string &name, Scene *scene);
+        /// Scene::FindGameObjectWithTag on the given scene (nullptr for a null scene)
+        static Ptr FindGameObjectWithTag(const std::string &tag, Scene *scene);
+        /// Scene::FindGameObjectsWithTag on the given scene (empty for a null scene)
+        static std::vector<Ptr> FindGameObjectsWithTag(const std::string &tag, Scene *scene);
+        /// The same as FindGameObjectsWithTag (the older name)
         static std::vector<Ptr> FindGameObjectsByTag(const std::string &tag, Scene *scene);
     };
 }

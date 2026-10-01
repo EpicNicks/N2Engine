@@ -36,11 +36,18 @@ namespace N2Engine::Input
         // Maps replaced while callbacks run are freed after the update, not under their own Update
         bool _updating = false;
         std::vector<std::unique_ptr<ActionMap>> _retiredMaps;
+        // Sets _updating while action callbacks run (Update, or cancelling a map on LoadActionMap)
+        struct UpdatingScope;
+        // The map InputSystem::Update is polling. Leaving it from one of its own callbacks defers the cancel
+        // until its loop ends, or the loop would update (and restart) the actions it had not reached yet.
+        ActionMap *_mapBeingUpdated = nullptr;
 
     public:
         explicit InputSystem(Window &window);
         ~InputSystem();
 
+        /// Makes the named map current. Switching to another map cancels the previous map's active actions
+        /// (ActionMap::CancelActiveActions), so their subscribers see the release.
         ActionMap* LoadActionMap(const std::string &name);
         ActionMap* GetActionMap(const std::string &name);
         void AddActionMap(std::unique_ptr<ActionMap> &&actionMap);

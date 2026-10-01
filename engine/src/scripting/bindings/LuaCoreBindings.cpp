@@ -82,6 +82,9 @@ namespace N2Engine::Scripting::Bindings
             "IsValid", [](const GameObjectRef &go) { return go.IsValid(); },
             "GetName", Forward<GameObjectRef, &GameObject::GetName>(),
             "SetName", Forward<GameObjectRef, &GameObject::SetName>(),
+            "GetTag", Forward<GameObjectRef, &GameObject::GetTag>(),
+            "SetTag", Forward<GameObjectRef, &GameObject::SetTag>(),
+            "CompareTag", Forward<GameObjectRef, &GameObject::CompareTag>(),
             "IsActive", Forward<GameObjectRef, &GameObject::IsActive>(),
             "SetActive", Forward<GameObjectRef, &GameObject::SetActive>(),
             "CreatePositionable", Forward<GameObjectRef, &GameObject::CreatePositionable>(),
@@ -167,9 +170,17 @@ namespace N2Engine::Scripting::Bindings
             {
                 return RefOrNil(scene.Pin()->FindGameObject(name));
             },
+            "FindGameObjectWithTag", [](const SceneRef &scene, const std::string &tag)
+            {
+                return RefOrNil(scene.Pin()->FindGameObjectWithTag(tag));
+            },
+            "FindGameObjectsWithTag", [](const SceneRef &scene, const std::string &tag)
+            {
+                return RefList(scene.Pin()->FindGameObjectsWithTag(tag));
+            },
             "FindGameObjectsByTag", [](const SceneRef &scene, const std::string &tag)
             {
-                return RefList(scene.Pin()->FindGameObjectsByTag(tag));
+                return RefList(scene.Pin()->FindGameObjectsWithTag(tag));
             },
             "GetAllGameObjects", [](const SceneRef &scene) { return RefList(scene.Pin()->GetAllGameObjects()); },
             "GetRootGameObjects", [](const SceneRef &scene) { return RefList(scene.Pin()->GetRootGameObjects()); },

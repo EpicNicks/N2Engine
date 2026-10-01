@@ -725,19 +725,22 @@ void GameObject::SetActiveRecursive(bool active)
 // Static utility methods
 GameObject::Ptr GameObject::FindGameObjectByName(const std::string &name, Scene *scene)
 {
-    if (!scene)
-        return nullptr;
+    return scene ? scene->FindGameObject(name) : nullptr;
+}
 
-    // This would require Scene to have a method to get all GameObjects
-    // Implementation depends on Scene's internal structure
-    return nullptr;
+GameObject::Ptr GameObject::FindGameObjectWithTag(const std::string &tag, Scene *scene)
+{
+    return scene ? scene->FindGameObjectWithTag(tag) : nullptr;
+}
+
+std::vector<GameObject::Ptr> GameObject::FindGameObjectsWithTag(const std::string &tag, Scene *scene)
+{
+    return scene ? scene->FindGameObjectsWithTag(tag) : std::vector<Ptr>{};
 }
 
 std::vector<GameObject::Ptr> GameObject::FindGameObjectsByTag(const std::string &tag, Scene *scene)
 {
-    // This would require a tag system to be implemented
-    // For now, return empty vector
-    return {};
+    return FindGameObjectsWithTag(tag, scene);
 }
 
 using json = nlohmann::json;
@@ -751,6 +754,7 @@ json GameObject::Serialize() const
 
     // GameObject-specific data
     j["name"] = _name;
+    j["tag"] = _tag;
     j["isActive"] = _isActive;
     if (_prefabReference.has_value())
     {
@@ -797,6 +801,12 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
     if (resolver)
     {
         resolver->RegisterGameObject(uuid, go.get());
+    }
+
+    // Optional (data written before tags existed has none): such objects keep the default tag
+    if (const auto tag = j.find("tag"); tag != j.end() && !tag->is_null())
+    {
+        go->_tag = tag->get<std::string>(); // a non-string tag throws, like any malformed field
     }
 
     if (j.contains("isActive"))

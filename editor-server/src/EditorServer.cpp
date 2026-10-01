@@ -563,7 +563,7 @@ namespace N2Engine::Editor
     void EditorServer::HandleLoadScene(int clientSocket, const std::vector<uint8_t> &payload)
     {
         BufferReader reader(payload);
-        std::string sceneJsonString = reader.ReadString();
+        const std::string sceneJsonString = LoadSceneCmd::Deserialize(reader).sceneJson;
 
         Logger::Info("Loading scene from scene data: " + sceneJsonString.substr(0, 200));
 
@@ -727,7 +727,7 @@ namespace N2Engine::Editor
     void EditorServer::HandleDestroyEntity(int clientSocket, const std::vector<uint8_t> &payload)
     {
         BufferReader reader(payload);
-        std::string entityId = reader.ReadString();
+        const std::string entityId = DestroyEntityCmd::Deserialize(reader).entityId;
 
         Scene *scene = SceneManager::GetCurScene();
         if (scene == nullptr)
@@ -771,7 +771,7 @@ namespace N2Engine::Editor
     void EditorServer::HandleSetEntityTransform(int clientSocket, const std::vector<uint8_t> &payload)
     {
         BufferReader reader(payload);
-        auto cmd = EntityTransformCmd::Deserialize(reader);
+        auto cmd = SetEntityTransformCmd::Deserialize(reader);
 
         Scene *scene = SceneManager::GetCurScene();
         if (scene == nullptr)
@@ -851,7 +851,7 @@ namespace N2Engine::Editor
     void EditorServer::HandleGetEntityTransform(int clientSocket, const std::vector<uint8_t> &payload)
     {
         BufferReader reader(payload);
-        std::string entityId = reader.ReadString();
+        const std::string entityId = GetEntityTransformCmd::Deserialize(reader).entityId;
 
         BufferWriter response;
 
