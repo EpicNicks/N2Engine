@@ -12,8 +12,15 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/ui/UISystem.hpp"
 
 using namespace N2Engine;
+
+Application::Application()
+{
+    // UI first: an element under the pointer takes it, and the world pick doesn't run
+    _pointerDispatcher.SetUIHitProvider(UI::UISystem::MakeApplicationHitProvider());
+}
 
 Application& Application::GetInstance()
 {
@@ -307,6 +314,8 @@ void Application::Render()
         renderer->UpdateSceneLighting(sceneLightingData, _mainCamera->GetPosition());
 
         curScene.Render(renderer, *_mainCamera);
+        // The UI pass, over the scene: canvases in sort order, in window coordinates (the cursor's space)
+        UI::UISystem::Render(curScene, renderer, _window.GetWindowDimensions());
     }
 
     renderer->EndFrame();

@@ -26,7 +26,8 @@ namespace N2Engine
         bool _initialized = false; // from Init until Shutdown
 
     private:
-        Application() = default;
+        /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
+        Application();
         void Render();
         void PhysicsUpdate(const Scene &scene) const;
 
@@ -53,7 +54,8 @@ namespace N2Engine
 
         [[nodiscard]] Camera* GetMainCamera() const;
         Window& GetWindow();
-        /// Sends OnMouse* to the object under the pointer; Run updates it each frame before Scene::Update
+        /// Sends OnMouse* to the object under the pointer; Run updates it each frame before Scene::Update. Its UI
+        /// hit provider is UI::UISystem's, so UI elements under the pointer get the callbacks before the world.
         Input::PointerDispatcher& GetPointerDispatcher() { return _pointerDispatcher; }
 
         void OnWindowResize(int width, int height) const;
