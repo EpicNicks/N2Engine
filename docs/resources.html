@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resources &amp; paths · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html" aria-current="page">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Resources &amp; paths</h1>
+<p class="lead">How the engine names files (<code>res://</code>, <code>user://</code>), indexes a project's assets with stable UUIDs in <code>.meta</code> files, loads and caches them, and looks them up through one API. <code>IO::ResourceLoader</code> is the authority for project files. <code>IO::Resources</code> is the single lookup API, and it also holds assets registered at runtime.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#two-registries">Two registries, one lookup API</a></li>
+<li><a href="#resource-paths">ResourcePath: schemes and normalization</a></li>
+<li><a href="#resolve">Resolving to the filesystem</a></li>
+<li><a href="#user-data-path">User data path</a></li>
+<li><a href="#initialization">Initializing ResourceLoader</a></li>
+<li><a href="#metadata">.meta files</a></li>
+<li><a href="#uuid-stability">UUID stability across runs</a></li>
+<li><a href="#loading">Loading through ResourceLoader</a></li>
+<li><a href="#hot-reload">Change detection and Reload</a></li>
+<li><a href="#loaders">Loaders</a></li>
+<li><a href="#resources-api">IO::Resources: the lookup API</a></li>
+<li><a href="#cache-eviction">Clearing and eviction</a></li>
+<li><a href="#asset-base">The Asset base class</a></li>
+</ol>
+</div>
+
+<h2 id="two-registries">Two registries, one lookup API</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th></th><th><code>IO::ResourceLoader</code></th><th><code>IO::Resources</code></th></tr></thead>
+<tbody>
+<tr><td>Holds</td><td>Files under <code>&lt;project&gt;/assets</code> that have a registered loader</td><td>Assets registered at runtime, and files loaded from outside the project</td></tr>
+<tr><td>UUIDs</td><td>Deterministic, from the <code>res://</code> path, recorded in <code>.meta</code> files</td><td>Random per process (the <code>Asset</code> default)</td></tr>
+<tr><td>Keys</td><td><code>ResourcePath</code> and UUID</td><td>Resolved filesystem path string and UUID</td></tr>
+<tr><td>Role</td><td>Authority for project files: scans, metadata, loads, caches</td><td>The one place to look anything up <span class="badge">PR #28</span>. Lookups fall through to ResourceLoader.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Before #28, the two registries were not connected. An asset loaded through one couldn't be found through the other, and <code>Resources::Load</code> on a project file created a second copy with a random UUID. Now <code>Resources</code> delegates project files to <code>ResourceLoader</code> and checks its cache on every lookup. Each project asset has exactly one cache entry, under its <code>.meta</code> UUID.</p>
+<p class="src">Source: <code>engine/include/engine/io/Resources.hpp</code>, <code>engine/include/engine/io/ResourceLoader.hpp</code>; tests: <code>ResourceLoaderTest.ProjectAssetLoadedThroughResourceLoaderIsFoundThroughResources</code>, <code>ResourceLoaderTest.ProjectAssetLoadedThroughResourcesHasItsMetaUUID</code></p>
+
+<h2 id="resource-paths">ResourcePath: schemes and normalization</h2>
+<p><code>IO::ResourcePath</code> is a value type made of a <code>PathType</code> and a relative (or absolute) path string. Parsing the string constructor:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Input</th><th>Type</th><th>Stored path</th></tr></thead>
+<tbody>
+<tr><td><code>"res://scripts/a.lua"</code></td><td><code>Resource</code></td><td><code>scripts/a.lua</code></td></tr>
+<tr><td><code>"user://saves/1.json"</code></td><td><code>User</code></td><td><code>saves/1.json</code></td></tr>
+<tr><td>an absolute filesystem path</td><td><code>Absolute</code></td><td>the path, normalized (see the open question below)</td></tr>
+<tr><td>any other string, e.g. <code>"scripts/a.lua"</code></td><td><code>Resource</code></td><td>the string, normalized</td></tr>
+<tr><td>default constructor</td><td><code>Invalid</code></td><td>empty</td></tr>
+</tbody>
+</table>
+</div>
+<p>Both constructors call <code>Normalize()</code>, which gives each file exactly one spelling:</p>
+<ol class="steps">
+<li>Backslashes become <code>/</code>.</li>
+<li><code>lexically_normal()</code> removes <code>.</code> segments, collapses <code>//</code>, and resolves <code>x/..</code>. A result of <code>"."</code> becomes empty.</li>
+<li>Leading slashes are stripped, and one trailing slash is removed.</li>
+<li>A <strong>leading <code>..</code> is kept</strong>: <code>res://../outside.txt</code> stays <code>../outside.txt</code>, so <code>Resolve</code> can see the escape and reject it.</li>
+</ol>
+<p>Equality, ordering and hashing compare the type and the normalized string. So <code>res://scripts/../scripts/thing.lua</code>, <code>res://scripts//./thing.lua</code> and <code>res://scripts\thing.lua</code> are all equal to <code>res://scripts/thing.lua</code>, and they hit the same cache and metadata entries. Before this, <code>Resolve</code> accepted those spellings, but <code>Load</code> reported "Resource not found". The comparison is <strong>case-sensitive</strong>: on a case-insensitive filesystem, <code>res://Scripts/a.lua</code> and <code>res://scripts/a.lua</code> name the same file but are different keys, and only the spelling the scan produced has metadata.</p>
+<p><code>IsValid()</code> is true when the type isn't <code>Invalid</code> and the path is non-empty, so <code>ResourcePath("res://")</code> is not valid. <code>ToString()</code> puts the scheme back on. JSON serialization uses <code>ToString()</code>, and deserialization uses the string constructor.</p>
+<p class="src">Source: <code>engine/include/engine/io/ResourcePath.hpp</code> — <code>ResourcePath::Normalize</code>, <code>ResourcePath::ResourcePath</code>, <code>operator==</code>, <code>ResourcePath::Hash</code>; tests: <code>ResourcePathTest.EquivalentSpellingsAreOnePath</code></p>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Normalize()</code> strips leading slashes for every path type, including <code>Absolute</code>. On POSIX, <code>ResourcePath("/home/me/a.wav")</code> is classified <code>Absolute</code> but stored as <code>home/me/a.wav</code>, so <code>Resolve</code> and <code>ToString</code> return a <em>relative</em> path. On Windows a drive-letter path such as <code>C:/x/a.wav</code> is unaffected. The same applies to <code>ResourceLoader::MakeResourcePath</code>, which falls back to <code>Absolute</code> for files outside both roots. Was the strip meant only for <code>res://</code>/<code>user://</code>? File: <code>engine/include/engine/io/ResourcePath.hpp</code> (<code>Normalize</code>).</p>
+</div>
+
+<h2 id="resolve">Resolving to the filesystem</h2>
+<p><code>ResourceLoader::Resolve(path)</code> turns a <code>ResourcePath</code> into a filesystem path:</p>
+<ul>
+<li><code>Resource</code>: joined under <code>&lt;project&gt;/assets</code>.</li>
+<li><code>User</code>: joined under the <a href="#user-data-path">user data path</a>.</li>
+<li><code>Absolute</code>: returned as stored, with no containment check.</li>
+<li><code>Invalid</code>: an empty path.</li>
+</ul>
+<p>For <code>res://</code> and <code>user://</code>, the joined path is lexically normalized and must still lie under its root. Otherwise <code>Resolve</code> logs <code>"Resource path escapes its root and was rejected"</code> and returns an empty path. This rejects <code>..</code> escapes (<code>res://../../x</code>, <code>res://scripts/../../x</code>). It also rejects absolute paths smuggled in after the scheme: a Windows <code>res://C:/x</code> joins to <code>C:/x</code>, which is outside the root, and on POSIX <code>res:///etc/x</code> has its leading slash stripped and resolves under the root. Paths that leave the root and come back (<code>res://scripts/../scripts/thing.lua</code>) are accepted.</p>
+<p class="src">Source: <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::Resolve</code>, <code>ResolveUnder</code>; tests: <code>ResourceLoaderTest.ResourcePathsCannotEscapeTheAssetsRoot</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>No <code>res://</code> or <code>user://</code> path resolves to a file outside its root. Callers get an empty path instead and should treat it as "not found". <code>Load</code> does so: it reports the source file as missing.</p>
+</div>
+
+<h2 id="user-data-path">User data path</h2>
+<p>The root that <code>user://</code> resolves under is set by <code>ResourceLoader::Initialize</code>:</p>
+<ul>
+<li>Windows: <code>%APPDATA%\N2Engine</code> (read with <code>_dupenv_s</code>).</li>
+<li>Other platforms: <code>$HOME/.n2engine</code> (read with <code>std::getenv</code>; it used the MSVC-only <code>_dupenv_s</code> before #23).</li>
+<li>If the variable is unset: <code>"."</code>, the current directory.</li>
+</ul>
+<p><code>Initialize</code> creates the directory. The name is the same for every project. <code>GetUserDataPath</code> is private.</p>
+<p class="src">Source: <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::GetUserDataPath</code>, <code>ResourceLoader::Initialize</code></p>
+
+<h2 id="initialization">Initializing ResourceLoader</h2>
+<p>A host initializes two things, in this order (from <code>lua_project/src/Main.cpp</code>):</p>
+<pre class="lang-cpp"><code>// 1. The namespace that project UUIDs are derived from
+IO::ResourceUUID::Initialize(Math::UUID::GenerateNameBased(Math::UUID::ZERO, projectDir.string()));
+// 2. Scan &lt;projectDir&gt;/assets and load/create metadata
+IO::ResourceLoader::Instance().Initialize(projectDir);
+
+auto script = IO::ResourceLoader::Instance().Load&lt;LuaScript&gt;(IO::ResourcePath("res://scripts/CameraController.lua"));
+</code></pre>
+<p><code>ResourceLoader::Initialize(projectRoot)</code>:</p>
+<ol class="steps">
+<li>Sets the roots: assets in <code>&lt;projectRoot&gt;/assets</code>, metadata in <code>&lt;projectRoot&gt;/.import</code>, and user data as above. It creates the metadata and user-data directories.</li>
+<li>Clears all metadata, the UUID-to-path map, and both caches <span class="badge">PR #28</span>. Everything is keyed by root-relative <code>res://</code> paths, so entries left over from a previous root, even a deleted one, would otherwise answer lookups for the new one. Registered loaders are kept.</li>
+<li>Scans the assets directory (<code>RescanAssets</code>). If it doesn't exist, a warning is logged and nothing is indexed.</li>
+</ol>
+<p>The scan walks <code>assets/</code> recursively. It skips non-regular files, <code>.meta</code> files, and any file whose lower-cased extension has no registered loader. For each remaining file it creates or updates the metadata inside its own <code>try</code>, so one bad asset logs <code>"Skipping asset ..."</code> and the scan continues. <code>RescanAssets()</code> can be called again later, for example by the editor's rescan command. It adds and updates entries but does not remove the entries of deleted files. Only <code>Initialize</code> starts from scratch.</p>
+<p class="src">Source: <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::Initialize</code>, <code>ResourceLoader::RescanAssets</code>, <code>ResourceLoader::ScanDirectory</code>; <code>lua_project/src/Main.cpp</code></p>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>Call <code>ResourceUUID::Initialize</code> before <code>ResourceLoader::Initialize</code>. Without it, <code>ResourceUUID::FromPath</code> logs <code>"ResourceUUID not initialized!"</code> for each asset and returns <code>UUID::ZERO</code>. Every asset then gets the same UUID, and existing <code>.meta</code> files are rewritten with it.</p>
+</div>
+
+<h2 id="metadata">.meta files</h2>
+<p>Metadata for <code>assets/&lt;dir&gt;/&lt;file&gt;</code> is stored at <code>.import/&lt;dir&gt;/&lt;file&gt;.meta</code> under the project root, in a parallel tree rather than next to the asset. The JSON written by <code>AssetMetadata::SaveToFile</code>:</p>
+<pre class="lang-json"><code>{
+  "uuid": "2c8d6e0a-4f1b-5a3c-9e7d-1b0f2a6c4d81",
+  "resourcePath": "res://scripts/CameraController.lua",
+  "resourceType": "LuaScript",
+  "lastModified": 1767700800,
+  "fileSize": 2048
+}</code></pre>
+<p><code>lastModified</code> is the file's write time in Unix seconds. An optional <code>customData</code> object is written only when it is non-empty. For a new file, <code>resourceType</code> is chosen from the extension: <code>.lua</code> gives <code>LuaScript</code>; <code>.wav</code>, <code>.ogg</code>, <code>.mp3</code> and <code>.flac</code> give <code>AudioClip</code>; <code>.png</code> and <code>.jpg</code> give <code>Texture</code>; anything else gives <code>Unknown</code>.</p>
+<p>For each scanned file:</p>
+<ul>
+<li><strong>No <code>.meta</code></strong>: one is created with the deterministic UUID, then <code>"New asset: ..."</code> is logged.</li>
+<li><strong>Existing <code>.meta</code></strong>: its UUID is checked against the deterministic one. On a mismatch it logs <code>"UUID mismatch ... Regenerating."</code>, rewrites the UUID and saves. If the timestamp or size changed, both are updated, saved, and <code>"Asset modified"</code> is logged.</li>
+<li><strong>Corrupt <code>.meta</code></strong> (unparseable, missing keys, wrong types): logs <code>"Corrupt metadata ...; regenerating"</code> and recreates it as if it were new. Before #23 this threw out of <code>Initialize</code>. Because the UUID comes from the path, references to the asset still resolve.</li>
+</ul>
+<p class="src">Source: <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::CreateOrUpdateMetadata</code>, <code>ResourceLoader::GetMetadataPath</code>; <code>engine/src/io/AssetMetadata.cpp</code> — <code>AssetMetadata::FromFile</code>, <code>AssetMetadata::SaveToFile</code>; tests: <code>ResourceLoaderTest.CorruptMetadataIsRegenerated</code></p>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>engine/include/engine/io/meta-file-structure.json</code> describes a different format, with <code>uuid</code>, <code>version</code>, <code>assetType</code>, <code>created</code>, <code>modified</code> and <code>importSettings</code>. That doesn't match what <code>AssetMetadata</code> reads and writes (<code>uuid</code>, <code>resourcePath</code>, <code>resourceType</code>, <code>lastModified</code>, <code>fileSize</code>, <code>customData</code>), and nothing in the code reads the file. Is it a planned format, or stale?</p>
+</div>
+
+<h2 id="uuid-stability">UUID stability across runs</h2>
+<p>A project asset's UUID is <code>UUID::GenerateNameBased(projectNamespace, "res://&lt;path&gt;")</code>. The <code>.meta</code> file records it, but the path decides it: a stored UUID that differs is overwritten. As a result:</p>
+<ul>
+<li>The same file under the same project namespace gets the same UUID in every run, on every machine, even with the <code>.import</code> folder deleted. This is what lets saved asset references (<a href="serialization.html#asset-references"><code>RegisterAssetRef</code></a>) and <code>LuaComponent</code>'s <code>scriptUUID</code> resolve in a later run.</li>
+<li><strong>Moving or renaming an asset changes its UUID</strong>, and references saved against the old UUID stop resolving. The <code>.meta</code> file doesn't carry a UUID across a move.</li>
+<li>The namespace is whatever the host passes to <code>ResourceUUID::Initialize</code>. <code>lua_project</code> derives it from the project directory string, so running the same project from a different directory (or with a different spelling of its path) gives every asset a different UUID.</li>
+</ul>
+<p class="src">Source: <code>engine/src/io/ResourceUUID.cpp</code> — <code>ResourceUUID::FromPath</code>; <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::CreateOrUpdateMetadata</code>; <code>lua_project/src/Main.cpp</code>; tests: <code>AudioAssetReferenceTest.AudioSourceClipResolvesInALaterRun</code></p>
+
+<h2 id="loading">Loading through ResourceLoader</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>Load&lt;T&gt;(path)</code></td><td>Returns the cached asset if there is one. Otherwise: no metadata for <code>path</code> gives an error (<code>"Resource not found"</code>) and null. A source file that is missing or rejected by <code>Resolve</code> gives an error and null. No loader for the extension gives an error and null. A loader that returns null gives null without a log. On success the asset's UUID is set to the meta UUID, its <code>ResourcePath</code> is set, it is cached by path and by UUID, and it is returned as <code>T</code>.</td></tr>
+<tr><td><code>LoadByUUID&lt;T&gt;(uuid)</code></td><td>Returns the cached asset by UUID. Otherwise looks up the path for that UUID and calls <code>Load&lt;T&gt;</code>. An unknown UUID gives null, silently.</td></tr>
+<tr><td><code>GetCached&lt;T&gt;(path)</code> / <code>GetCachedByUUID&lt;T&gt;(uuid)</code></td><td>The cache only. Never loads.</td></tr>
+<tr><td><code>GetMetadata(path or uuid)</code>, <code>GetUUID(path)</code>, <code>Exists(path)</code></td><td>Metadata lookups: <code>nullptr</code>, <code>UUID::ZERO</code> or <code>false</code> for unknown paths. <code>Exists</code> means "has metadata", not "is on disk".</td></tr>
+<tr><td><code>GetAllAssets()</code>, <code>GetAssetsByType(type)</code></td><td>Copies of the metadata, in unspecified order.</td></tr>
+<tr><td><code>RegisterAsset(asset, path)</code></td><td>Puts an existing asset into both caches. It doesn't create metadata, so <code>Exists(path)</code> stays false.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>The type is checked with <code>dynamic_pointer_cast</code> <em>after</em> loading and caching. <code>Load&lt;AudioClip&gt;</code> on a <code>.lua</code> file loads and caches the <code>LuaScript</code>, then returns null without logging. A later <code>Load&lt;LuaScript&gt;</code> returns the cached script.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/io/ResourceLoader.inl</code> — <code>ResourceLoader::Load</code>, <code>LoadByUUID</code>, <code>GetCached</code>, <code>GetCachedByUUID</code>, <code>RegisterAsset</code>; <code>engine/src/io/ResourceLoader.cpp</code> — <code>GetMetadata</code>, <code>GetUUID</code>, <code>Exists</code></p>
+
+<h2 id="hot-reload">Change detection and Reload</h2>
+<ul>
+<li><code>HasSourceChanged(path)</code> returns <code>true</code> when the file's current write time (Unix seconds) differs from the recorded <code>lastModified</code>. It returns <code>false</code> for unknown paths and for missing files. Size is not compared.</li>
+<li><code>Reload(path)</code> evicts the cached asset (by path and by UUID), then re-reads the file's timestamp and size and <em>stores</em> the refreshed metadata. Before #23 the metadata was discarded, so <code>HasSourceChanged</code> stayed true forever. It returns <code>false</code> if the file is missing or rejected by <code>Resolve</code>, in which case the cache entry has still been evicted.</li>
+<li><code>Reload</code> does not load anything. The next <code>Load</code> reads the file again and creates a <em>new</em> asset object. Code that still holds the old <code>shared_ptr</code> keeps the old object. Script reloading is covered in <a href="scripting-lua.html">Lua scripting</a>.</li>
+</ul>
+<p class="src">Source: <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::HasSourceChanged</code>, <code>ResourceLoader::Reload</code>; tests: <code>ResourceLoaderTest.ReloadRefreshesMetadata</code></p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Write times are converted from the filesystem clock to the system clock by subtracting the two clocks' <code>now()</code> values, and then truncated to whole seconds. The conversion is approximate, so a timestamp that lands right on a second boundary could compare differently between two reads.</p>
+</div>
+
+<h2 id="loaders">Loaders</h2>
+<p>A loader is a function <code>std::shared_ptr&lt;Base::Asset&gt;(const std::filesystem::path&amp;)</code> registered for a file extension. Register it through <code>IO::Resources</code> (<code>RegisterLoader</code>, <code>RegisterSimpleLoader&lt;T&gt;</code>, or the <code>Resources::LoaderRegistrar</code> helper). This also registers it with <code>ResourceLoader</code> <span class="badge">PR #28</span>, so the scan indexes project files with that extension and they load there with their meta UUIDs.</p>
+<ul>
+<li><code>RegisterSimpleLoader&lt;T&gt;(ext)</code> creates a <code>T</code> with its default constructor and calls <code>T::Load(path)</code>. It returns null if that returns <code>false</code>.</li>
+<li><code>ResourceLoader::RegisterLoader</code> <strong>rescans the project</strong> if the extension is new and <code>Initialize</code> has already run <span class="badge">PR #28</span>. Without the rescan, files of that type would have no metadata and would fall back to random UUIDs. Static registrars run before <code>main</code>, before any root is set, so they don't trigger a scan.</li>
+<li>Registering an extension again replaces its loader (no rescan).</li>
+<li>Extensions are matched against the file's <strong>lower-cased</strong> extension, but the registered key is used as given. Register extensions in lower case, with the dot (<code>".wav"</code>).</li>
+</ul>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Extensions</th><th>Asset type</th><th>Registered by</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>.wav</code>, <code>.ogg</code>, <code>.mp3</code>, <code>.flac</code></td><td><code>Audio::AudioClip</code></td><td>A static registrar in <code>AudioClip.cpp</code>, calling <code>LoadAudioClipFromFile</code></td><td>Uses dr_wav, stb_vorbis, dr_mp3 and dr_flac. Creates an OpenAL buffer, so the <code>AudioSystem</code> must be initialized first. Before #23 the registrar lived in a file the linker dropped. See <a href="audio.html">Audio</a>.</td></tr>
+<tr><td><code>.lua</code></td><td><code>LuaScript</code></td><td>A static registrar in <code>LuaComponent.cpp</code> (<code>RegisterSimpleLoader&lt;LuaScript&gt;</code>)</td><td><code>LuaScript::Load</code> reads the whole file and fails on an <strong>empty</strong> file, so an empty <code>.lua</code> doesn't load. See <a href="scripting-lua.html">Lua scripting</a>.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>.png</code> and <code>.jpg</code> get a <code>Texture</code> resource type in new metadata, but no loader is registered for them, so the scan skips them.</p>
+<p class="src">Source: <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::RegisterLoader</code>, <code>RegisterSimpleLoader</code>, <code>LoaderRegistrar</code>; <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::RegisterLoader</code>; <code>engine/src/audio/AudioClip.cpp</code>, <code>engine/src/audio/AudioClipLoader.cpp</code> — <code>LoadAudioClipFromFile</code>; <code>engine/src/scripting/LuaComponent.cpp</code>; <code>engine/include/engine/scripting/LuaScript.hpp</code>; tests: <code>AudioAssetReferenceTest.AudioFilesLoadByExtension</code></p>
+
+<h2 id="resources-api">IO::Resources: the lookup API <span class="badge">PR #28</span></h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Order of lookup</th><th>Loads?</th></tr></thead>
+<tbody>
+<tr><td><code>GetAsset&lt;T&gt;(uuid)</code></td><td>Resources' own UUID map, then <code>ResourceLoader::GetCachedByUUID</code></td><td>No</td></tr>
+<tr><td><code>LoadByUUID&lt;T&gt;(uuid)</code></td><td><code>GetAsset&lt;T&gt;(uuid)</code>, then <code>ResourceLoader::LoadByUUID</code> (loads the project file with that meta UUID)</td><td>Yes, project files only</td></tr>
+<tr><td><code>GetAsset&lt;T&gt;(path)</code></td><td>Resources' own path map (key: <code>ResolvePath(path)</code>), then, if the path is a project file, <code>ResourceLoader::GetCached</code></td><td>No</td></tr>
+<tr><td><code>Load&lt;T&gt;(path)</code></td><td>Resources' own path map, then for a project file <code>ResourceLoader::Load</code>, otherwise its own loaders</td><td>Yes</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>What counts as a project file</strong> (<code>FindProjectPath</code>): a <code>res://</code> or <code>user://</code> string that <code>ResourceLoader</code> has metadata for, or a filesystem path under ResourceLoader's assets root that maps to a tracked <code>res://</code> path. A cheap lexical check against the assets root runs first, so lookups of files elsewhere never touch the filesystem. A file spelled with a different 8.3 short or long form from the root isn't recognised. If ResourceLoader hasn't been initialized, nothing is a project file.</p>
+<p><strong><code>Load&lt;T&gt;</code> for a non-project file</strong>: the path is resolved (relative paths are joined to <code>SetResourcePath</code>'s directory if that is an existing directory, otherwise used as-is). It returns null, without logging, if the file doesn't exist, has no extension, or has no loader. The asset keeps its random UUID and is registered here under that UUID and the resolved path. If the loaded asset isn't a <code>T</code>, it is discarded and null is returned.</p>
+<p><strong><code>RegisterAsset(asset, path = {})</code></strong> registers under the asset's UUID and, if a path is given, under <code>ResolvePath(path)</code>. It does nothing for an asset that ResourceLoader already holds under its UUID: caching it in both registries would keep each one's reference count above the other's eviction threshold.</p>
+<p class="src">Source: <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::GetAsset</code>, <code>LoadByUUID</code>, <code>Load</code>, <code>RegisterAsset</code>; <code>engine/src/io/Resources.cpp</code> — <code>Resources::FindProjectPath</code>, <code>Resources::ResolvePath</code>; tests: <code>ResourceLoaderTest.ProjectAssetLoadedThroughResourceLoaderIsFoundThroughResources</code>, <code>ResourceLoaderTest.ProjectAssetLoadedThroughResourcesHasItsMetaUUID</code>, <code>ResourcesTest.AssetRefResolvesAnAssetRegisteredAtRuntime</code></p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A project asset loaded through either registry is the same object when looked up through the other, by UUID, by <code>res://</code> path or by absolute path. It always carries its <code>.meta</code> UUID.</p>
+</div>
+
+<pre class="lang-cpp"><code>auto &amp;res = N2Engine::IO::Resources::Instance();
+
+// Project file: delegated to ResourceLoader, gets its stable meta UUID
+auto clip = res.Load&lt;N2Engine::Audio::AudioClip&gt;("res://sfx/beep.wav");
+
+// Same object, found again by UUID (e.g. when resolving a saved reference)
+auto same = res.GetAsset&lt;N2Engine::Audio::AudioClip&gt;(clip-&gt;GetUUID());
+
+// Runtime asset: random UUID, valid for this run only
+auto generated = std::make_shared&lt;N2Engine::LuaScript&gt;("return {}");
+res.RegisterAsset(generated);
+</code></pre>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><code>Resources::RegisterAsset(nullptr)</code> dereferences the null pointer: the "already in ResourceLoader" check is guarded, but the next line isn't. Path keys in Resources' own map are not normalized (<code>ResolvePath(path).string()</code>), so <code>a/./b.x</code> and <code>a/b.x</code> are different entries there. Project files are unaffected, because they go through <code>ResourcePath</code>.</p>
+</div>
+
+<h2 id="cache-eviction">Clearing and eviction</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Covers</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td><code>ResourceLoader::ClearCache()</code></td><td>Project assets</td><td>Drops both caches. Metadata is kept, so assets can be loaded again.</td></tr>
+<tr><td><code>ResourceLoader::RemoveUnused()</code></td><td>Project assets</td><td>Evicts every asset with no references beyond the cache's own: one for the path cache, plus one if the UUID cache holds the same object. Before #23 the threshold was <code>use_count() &lt;= 1</code>, which could never be met because both caches hold a reference.</td></tr>
+<tr><td><code>Resources::UnregisterAsset(uuid)</code></td><td>Resources' own assets only</td><td>Removes the UUID entry and the <em>first</em> path entry that points at it.</td></tr>
+<tr><td><code>Resources::Clear()</code></td><td>Resources' own assets only</td><td>Drops both of Resources' maps.</td></tr>
+<tr><td><code>Resources::RemoveUnused()</code></td><td>Resources' own assets only</td><td>Evicts an asset when <code>use_count() &lt;= 1 + (number of path entries pointing at it)</code>, and erases all those path entries. An asset registered under two paths is evicted correctly.</td></tr>
+</tbody>
+</table>
+</div>
+<p>None of the <code>Resources</code> calls affect project assets that <code>GetAsset</code> finds through ResourceLoader. Use ResourceLoader's <code>ClearCache</code>/<code>RemoveUnused</code> for those. Evicting an asset only drops the registry's reference: objects still holding the <code>shared_ptr</code> keep it alive, and a later load creates a new object.</p>
+<p class="src">Source: <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::ClearCache</code>, <code>ResourceLoader::RemoveUnused</code>; <code>engine/src/io/Resources.cpp</code> — <code>Resources::UnregisterAsset</code>, <code>Resources::Clear</code>, <code>Resources::RemoveUnused</code>; tests: <code>ResourceLoaderTest.RemoveUnusedEvictsOnlyUnreferencedAssets</code>, <code>ResourcesTest.AssetRegisteredUnderTwoPathsIsEvicted</code></p>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Resources::UnregisterAsset</code> still removes only the first path entry for the asset (it <code>break</code>s after one match). <code>RemoveUnused</code> was fixed in #23 to erase all of them. Unregistering an asset that was registered under two paths leaves the second path entry, which keeps the asset alive and findable by that path. File: <code>engine/src/io/Resources.cpp</code> (<code>Resources::UnregisterAsset</code>).</p>
+</div>
+
+<h2 id="asset-base">The Asset base class</h2>
+<p><code>Base::Asset</code> is the base of every loadable or identifiable thing: <code>AudioClip</code>, <code>LuaScript</code>, and also <code>Scene</code>, <code>GameObject</code> and <code>Component</code>.</p>
+<ul>
+<li>The default constructor assigns <code>UUID::Random()</code>, which is different on every run. <code>Asset(uuid)</code> takes an explicit UUID.</li>
+<li><code>ResourceLoader::Load</code> overwrites the UUID with the meta UUID and sets the <code>ResourcePath</code> after the loader returns. Assets created at runtime or loaded by <code>Resources</code> from outside the project keep their random UUID and an <code>Invalid</code> resource path.</li>
+<li><code>Serialize()</code> writes <code>uuid</code> and <code>resourcePath</code>. <code>Deserialize()</code> restores whichever of them is present. Subclasses extend both (for example, <code>LuaScript</code> adds <code>sourceCode</code>).</li>
+<li><code>Load(path)</code> returns <code>false</code> by default. <code>RegisterSimpleLoader&lt;T&gt;</code> relies on <code>T</code> overriding it.</li>
+<li><code>GetResourceType()</code> is pure virtual (for example <code>"LuaScript"</code> or <code>"Scene"</code>).</li>
+</ul>
+<p class="src">Source: <code>engine/include/engine/base/Asset.hpp</code>, <code>engine/src/base/Asset.cpp</code> — <code>Asset::Asset</code>, <code>Asset::SetUUID</code>; <code>engine/include/engine/scripting/LuaScript.hpp</code></p>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
