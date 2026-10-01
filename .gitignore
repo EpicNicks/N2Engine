@@ -23,6 +23,8 @@ cmake_install.cmake
 Makefile
 *.cmake
 !CMakeLists.txt
+# Checked-in CMake scripts (generated *.cmake files stay ignored)
+!text/cmake/*.cmake
 
 # Compiled files
 *.o
