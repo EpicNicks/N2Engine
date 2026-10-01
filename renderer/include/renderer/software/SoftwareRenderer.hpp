@@ -68,6 +68,10 @@ namespace Renderer::Software
             float modelMatrix[16];
             SWMaterial* material;
             Common::RenderState state;
+            // The view and projection set when the draw was submitted, so a SetViewProjection later in the
+            // frame (the UI pass) only affects the draws after it, as in OpenGL
+            float view[16];
+            float proj[16];
         };
 
         std::vector<DrawCommand> m_drawQueue;
@@ -84,7 +88,7 @@ namespace Renderer::Software
         unsigned int m_blitTex = 0, m_blitVAO = 0, m_blitVBO = 0, m_blitProg = 0;
         bool SetupBlitResources();
 
-        // Matrices (row-major, matching OpenGLRenderer convention)
+        // Matrices (row-major, matching OpenGLRenderer convention). Main thread only: each draw copies them.
         float m_view[16]{}, m_proj[16]{};
 
         // Lighting state
@@ -118,8 +122,8 @@ namespace Renderer::Software
 
         void RasterizeTriangle(const SWFragment &f0, const SWFragment &f1, const SWFragment &f2, const SWMaterial *mat,
                                const float *modelMatrix);
-        void RasterizeMesh(SWMesh* mesh, const float* modelMatrix, SWMaterial* material,
-                           const Common::RenderState& state);
+        void RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
+                           SWMaterial* material, const Common::RenderState& state);
 
         uint32_t ShadeLit(const SWFragment &frag, const SWMaterial *mat, const float *modelMatrix) const;
         uint32_t ShadeUnlit(const SWFragment &frag, const SWMaterial *mat) const;
