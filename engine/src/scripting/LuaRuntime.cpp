@@ -120,6 +120,7 @@ namespace N2Engine::Scripting
         Bindings::BindWindow(*this);
         Bindings::BindCamera(*this);
         Bindings::BindComponents(*this);
+        Bindings::BindUI(*this);
 
         SetupModuleSystem();
 

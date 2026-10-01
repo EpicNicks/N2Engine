@@ -803,7 +803,8 @@ function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
----"SphereRenderer", "AudioSource", "AudioListener", "LuaComponent". Unknown names raise an error.
+---"SphereRenderer", "AudioSource", "AudioListener", "LuaComponent", "RectTransform", "Canvas", "Image".
+---Unknown names raise an error.
 ---@param typeName string
 ---@return Component
 function GameObject:AddComponent(typeName) end
@@ -888,6 +889,101 @@ function Component:IsActive() end
 ---Set whether this component is active
 ---@param active boolean
 function Component:SetActive(active) end
+
+-- ===== UI =====
+
+-- Screen-space overlay UI (docs/ui.html). Canvas space is pixels in window units with the origin at the
+-- bottom-left and y up (as in Unity), unlike Input.GetMousePosition, which is top-left and y down.
+
+---A rectangle in canvas space: (x, y) is its bottom-left corner
+---@class Rect
+---@field x number
+---@field y number
+---@field width number
+---@field height number
+Rect = {}
+
+---Whether the point (canvas space) is inside, edges included; false for a rect with no area
+---@param point Vector2
+---@return boolean
+function Rect:Contains(point) end
+
+---Where a UI element sits in its parent's rect (Unity's RectTransform). One per object.
+---@class RectTransform : Component
+RectTransform = {}
+
+---@return Vector2
+function RectTransform:GetAnchorMin() end
+---@param value Vector2 fractions of the parent rect, (0, 0) its bottom-left
+function RectTransform:SetAnchorMin(value) end
+---@return Vector2
+function RectTransform:GetAnchorMax() end
+---@param value Vector2 fractions of the parent rect, (1, 1) its top-right
+function RectTransform:SetAnchorMax(value) end
+---@return Vector2
+function RectTransform:GetPivot() end
+---@param value Vector2 fractions of the element's own size
+function RectTransform:SetPivot(value) end
+---@return Vector2
+function RectTransform:GetAnchoredPosition() end
+---@param value Vector2 the pivot's offset from the reference point inside the anchor box, in pixels
+function RectTransform:SetAnchoredPosition(value) end
+---@return Vector2
+function RectTransform:GetSizeDelta() end
+---@param value Vector2 the size minus the anchor box's size (with equal anchors, the size)
+function RectTransform:SetSizeDelta(value) end
+---@return Vector2
+function RectTransform:GetOffsetMin() end
+---Moves the bottom-left corner, keeping the top-right
+---@param value Vector2
+function RectTransform:SetOffsetMin(value) end
+---@return Vector2
+function RectTransform:GetOffsetMax() end
+---Moves the top-right corner, keeping the bottom-left
+---@param value Vector2
+function RectTransform:SetOffsetMax(value) end
+---Anchors (0, 0)-(1, 1) with zero offsets: covers the parent exactly
+function RectTransform:StretchToParent() end
+---The rect the last layout resolved (each UI pass and each pointer update); zeros before any
+---@return Rect
+function RectTransform:GetRect() end
+
+---The root of a UI tree, drawn over the scene. Higher sort orders draw on top and are hit first.
+---@class Canvas : Component
+Canvas = {}
+
+---@return integer
+function Canvas:GetSortOrder() end
+---@param sortOrder integer
+function Canvas:SetSortOrder(sortOrder) end
+
+---A coloured rectangle over its object's rect. A raycast target (the default) takes the pointer: its
+---object gets the OnMouse* callbacks and Input.IsPointerOverUI() is true.
+---@class Image : Component
+Image = {}
+
+---@return Color
+function Image:GetColor() end
+---@param color Color
+function Image:SetColor(color) end
+---@return boolean
+function Image:GetRaycastTarget() end
+---@param raycastTarget boolean false lets the pointer through to what is underneath
+function Image:SetRaycastTarget(raycastTarget) end
+
+---@class UI
+UI = {}
+
+---A new root GameObject on the UI layer with a Canvas (add it to the scene with AddRootGameObject)
+---@param name? string defaults to "Canvas"
+---@return GameObject
+function UI.CreateCanvas(name) end
+
+---A new GameObject on the UI layer with a RectTransform (a 100x100 box at its parent's centre);
+---parent it under a canvas or another element
+---@param name? string defaults to "UIElement"
+---@return GameObject
+function UI.CreateElement(name) end
 
 ---@class Scene
 ---@field sceneName string The name of this scene
@@ -1554,7 +1650,7 @@ function Input.GetMouseButtonDown(button) end
 ---@return boolean
 function Input.GetMouseButtonUp(button) end
 
----Whether the pointer is over UI; false until UI exists
+---Whether the pointer was over a UI element (a raycast-target graphic under a canvas) in the last pointer update
 ---@return boolean
 function Input.IsPointerOverUI() end
 

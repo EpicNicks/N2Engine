@@ -222,7 +222,7 @@ namespace N2Engine::Scripting::Bindings
                 const auto *mouse = Input::Mouse::Get();
                 return mouse != nullptr && mouse->GetButtonUp(button);
             },
-            // Whether the pointer is over UI (PointerDispatcher::IsPointerOverUI); false until UI exists
+            // Whether the pointer is over a UI element (PointerDispatcher::IsPointerOverUI)
             "IsPointerOverUI", []()
             {
                 return Application::GetInstance().GetPointerDispatcher().IsPointerOverUI();
