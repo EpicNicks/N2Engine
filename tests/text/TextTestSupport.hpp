@@ -12,8 +12,8 @@
 #include <text/FontBackend.hpp>
 #include <text/SdfFont.hpp>
 
-// Every test that needs a font runs once per font backend in the build (stb_truetype now; FreeType too
-// when P1b builds it), so all backends are held to the same behaviour.
+// Every test that needs a font runs once per font backend in the build (stb_truetype, plus FreeType
+// when N2ENGINE_TEXT_FREETYPE is ON), so all backends are held to the same behaviour.
 namespace TextTestSupport
 {
     using namespace N2Engine::Text;

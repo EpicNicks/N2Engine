@@ -4,15 +4,21 @@
 #include <array>
 
 #include "StbTrueTypeBackend.hpp"
+#ifdef N2ENGINE_TEXT_FREETYPE
+#include "FreeTypeBackend.hpp"
+#endif
 
 namespace N2Engine::Text
 {
     namespace
     {
-        // Every backend this build contains, default first. The FreeType backend (P1b) adds itself here
-        // under its CMake option; tests iterate this list, so they run against each one.
+        // Every backend this build contains, default first. FreeType is here when the build has the CMake
+        // option N2ENGINE_TEXT_FREETYPE; tests iterate this list, so they run against each one.
         constexpr std::array kAvailableBackends{
             FontBackendKind::StbTrueType,
+#ifdef N2ENGINE_TEXT_FREETYPE
+            FontBackendKind::FreeType,
+#endif
         };
     }
 
@@ -45,7 +51,11 @@ namespace N2Engine::Text
         case FontBackendKind::StbTrueType:
             return Detail::CreateStbTrueTypeBackend();
         case FontBackendKind::FreeType:
-            return nullptr; // not built yet
+#ifdef N2ENGINE_TEXT_FREETYPE
+            return Detail::CreateFreeTypeBackend();
+#else
+            return nullptr; // not in this build
+#endif
         }
         return nullptr;
     }

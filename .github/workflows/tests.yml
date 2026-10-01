@@ -8,7 +8,8 @@ on:
 
 jobs:
   windows:
-    name: windows (${{ matrix.config }}, PhysX ${{ matrix.physx }})
+    # Legs with the FreeType font backend say so in their name; the rest use stb_truetype only
+    name: windows (${{ matrix.config }}, PhysX ${{ matrix.physx }}${{ matrix.freetype == 'ON' && ', FreeType ON' || '' }})
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
@@ -17,13 +18,18 @@ jobs:
         include:
           - config: Debug
             physx: "ON"
-          # OFF keeps the no-physics build compiling and running (the engine then has no physics backend)
+            freetype: "OFF"
+          # OFF keeps the no-physics build compiling and running (the engine then has no physics backend).
+          # This leg also builds the optional FreeType font backend, so the text tests run against both
+          # stb_truetype and FreeType (and compare them) without a fourth full build.
           - config: Debug
             physx: "OFF"
+            freetype: "ON"
           # Release catches what Debug hides (NDEBUG, optimised SIMD paths) and confirms the forced sol2 safeties still hold in Release.
           # The PhysX release zip ships both debug/ and release/ libraries, so PhysX stays ON here.
           - config: Release
             physx: "ON"
+            freetype: "OFF"
 
     steps:
       - uses: actions/checkout@v7
@@ -44,7 +50,7 @@ jobs:
           key: physx-bin-${{ runner.os }}-v1
 
       - name: Configure
-        run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} # newest installed Visual Studio
+        run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} # newest installed Visual Studio
 
       - name: Build
         run: cmake --build build --config ${{ matrix.config }} --parallel

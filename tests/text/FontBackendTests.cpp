@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -197,6 +198,29 @@ TEST_P(FontBackendTest, SdfHasTheEdgeAtMidValueAndTheSpreadAsBorder)
     // The bitmap sits above the baseline, offset by the spread
     EXPECT_LT(sdf.yOffset, 0);
     EXPECT_LE(sdf.yOffset + sdf.height, spread + 1);
+}
+
+TEST_P(FontBackendTest, TheSmallestAndLargestSpreadsKeepTheContract)
+{
+    // FreeType's SDF renderer takes spreads of 2 to 32; its backend renders a spread of 1 at 2 and rescales
+    const auto bounds = _face->GetGlyphBounds(Glyph(U'I'));
+    ASSERT_TRUE(bounds.has_value());
+    for (const int spread : {1, 32})
+    {
+        const float pixelsPerEm = 64.0f;
+        const GlyphSdf sdf = _face->RenderSdf(Glyph(U'I'), pixelsPerEm, spread);
+        ASSERT_GT(sdf.width, 2 * spread) << spread;
+        ASSERT_EQ(sdf.pixels.size(), static_cast<std::size_t>(sdf.width) * sdf.height) << spread;
+
+        // The outline's pixel box plus the spread on each side
+        const float scale = pixelsPerEm / static_cast<float>(_face->GetMetrics().unitsPerEm);
+        EXPECT_EQ(sdf.xOffset, static_cast<int>(std::floor(bounds->minX * scale)) - spread) << spread;
+        EXPECT_EQ(sdf.yOffset, static_cast<int>(std::floor(-bounds->maxY * scale)) - spread) << spread;
+
+        const auto at = [&sdf](const int x, const int y) { return sdf.pixels[static_cast<std::size_t>(y) * sdf.width + x]; };
+        EXPECT_EQ(at(0, 0), 0) << spread;
+        EXPECT_GT(at(sdf.width / 2, sdf.height / 2), 128) << spread;
+    }
 }
 
 TEST_P(FontBackendTest, SpacesHaveNoSdf)
