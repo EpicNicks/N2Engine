@@ -162,7 +162,7 @@
 <li><strong>Fixed steps.</strong> While the accumulator holds a full fixed step: apply pending physics changes, <code>FixedUpdate</code>, simulate, sync transforms, dispatch collision and trigger events. No steps run while <code>timeScale</code> is 0. See <a href="physics.html">Physics</a>.</li>
 <li><strong>Update.</strong> <code>Scene::Update</code>, then coroutines (<code>Scene::AdvanceCoroutines</code>), then <code>Scene::LateUpdate</code>. See <a href="coroutines.html">Coroutines</a>.</li>
 <li><strong>Audio.</strong> <code>AudioSystem::Update</code>, after LateUpdate so listener and source positions are current. See <a href="audio.html">Audio</a>.</li>
-<li><strong>Render.</strong> Camera matrices, scene lighting, then each renderable.</li>
+<li><strong>Render.</strong> Camera matrices, scene lighting, then each renderable: opaque in hierarchy order, then transparent back to front (<a href="application.html#render">render queues</a>).</li>
 <li><strong>Destroy.</strong> <code>Scene::ProcessDestroyed</code>: objects destroyed this frame get <code>OnDisable</code>/<code>OnDestroy</code> and are removed. See <a href="gameobjects-components.html">GameObjects &amp; components</a>.</li>
 <li><strong>Scene change.</strong> <code>SceneManager::ProcessAnyPendingSceneChange</code>: if a load was requested, the next scene is built, and only then is the current one torn down. See <a href="scenes.html">Scenes</a>.</li>
 </ol>
@@ -188,6 +188,7 @@
 <tr><td><a href="gameobjects-components.html#design-removechild">RemoveChild works like Unity</a></td><td>Removing a child inside a scene makes it a root of that scene, the same as <code>SetParent(nullptr)</code>; it never leaves a child in a scene but unreachable from its roots. Outside a scene it just detaches.</td></tr>
 <tr><td><a href="gameobjects-components.html#design-getcomponent">GetComponent returns the first of a type</a></td><td>The first component of the exact type added; stable as more are added and across save/load, and an O(1) lookup.</td></tr>
 <tr><td><a href="application.html#design-quit">Quit is a request</a></td><td><code>Application::Quit()</code> sets a flag; the frame finishes and teardown runs in its usual order.</td></tr>
+<tr><td><a href="application.html#design-render-queue">Two render queues, state per draw</a></td><td>Opaque renderables draw in hierarchy order, then Transparent ones by sort key and back to front without writing depth; depth, cull and blend state travel with each draw, because the software renderer reorders draws.</td></tr>
 <tr><td><a href="scripting-lua.html#design-handles">Lua handles are valid until teardown</a></td><td>Scripts get checked handles that stay valid until teardown (or until freed, for scenes, action maps and actions); using a freed object is a Lua error, never a crash.</td></tr>
 <tr><td><a href="logging-and-editor.html#design-loopback">The editor server is loopback-only</a></td><td>The protocol has no authentication, so it listens on 127.0.0.1 unless <code>--bind</code> says otherwise, and runs every command on the main thread.</td></tr>
 <tr><td><a href="physics.html#design-mass">Rigidbody mass is authoritative</a></td><td>The mass you set is the body's mass; inertia and centre of mass come from the collider shapes.</td></tr>
