@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <functional>
 #include <optional>
+#include <string>
+#include <string_view>
 #include "engine/io/ResourcePath.hpp"
 #include "engine/scripting/LuaScript.hpp"
 
@@ -38,6 +40,9 @@ namespace N2Engine::Scripting
         /// Loads a script through ResourceLoader and runs it once (e.g. a scene setup script).
         /// @returns false if the file couldn't be loaded or the script raised an error; the error is logged
         bool RunFile(const IO::ResourcePath& path);
+        /// Runs Lua source text in the global environment. The one way the engine runs script assets
+        /// (RunFile, require, LuaComponent): binary (precompiled) chunks are rejected.
+        sol::protected_function_result RunSource(std::string_view source, const std::string& chunkName);
 
         // Module management
         sol::table LoadScriptAsModule(const IO::ResourcePath& path, LuaScript* script);
