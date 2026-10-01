@@ -38,8 +38,8 @@ namespace N2Engine::Text
             out.push_back(shaped);
         }
 
-        // Pair kerning goes on the left glyph's advance, as OpenType shapers apply it. Tabs (whose width
-        // layout decides) and fallback glyphs aren't kerned.
+        // Pair kerning is recorded on the left glyph. Tabs (whose width layout decides) and fallback glyphs
+        // aren't kerned.
         for (std::size_t i = first; i + 1 < out.size(); ++i)
         {
             const ShapedGlyph &left = out[i];
@@ -48,7 +48,7 @@ namespace N2Engine::Text
             {
                 continue;
             }
-            out[i].xAdvance += static_cast<float>(face.GetKerning(left.glyph, right.glyph)) / unitsPerEm;
+            out[i].kern = static_cast<float>(face.GetKerning(left.glyph, right.glyph)) / unitsPerEm;
         }
     }
 

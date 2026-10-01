@@ -141,6 +141,43 @@ TEST_P(TextLayoutTest, KerningPullsPairsTogether)
     EXPECT_NEAR(Width("ll"), 2.0f * Advance(U'l'), kEpsilon);
 }
 
+TEST_P(TextLayoutTest, KerningIsNotAppliedAcrossAWrap)
+{
+    // Room for 'A' only: "AV" wraps between the kerned pair, so line 0 is exactly A's advance (not A's
+    // advance minus the A/V kerning), and centring uses that width
+    LayoutOptions options;
+    options.maxWidth = Advance(U'A') * 1.01f;
+    options.horizontalAlign = HorizontalAlign::Center;
+    const TextLayout layout = Layout("AV", options);
+    ASSERT_EQ(layout.lines.size(), 2u);
+    EXPECT_NEAR(layout.lines[0].width, Advance(U'A'), kEpsilon);
+    EXPECT_NEAR(layout.lines[0].x, -Advance(U'A') / 2.0f, kEpsilon);
+    EXPECT_NEAR(layout.lines[1].width, Advance(U'V'), kEpsilon);
+
+    // The same pair on one line is still kerned
+    EXPECT_LT(Width("AV"), Advance(U'A') + Advance(U'V') - kEpsilon);
+}
+
+TEST_P(TextLayoutTest, NegativeSizesAndSpacingsCountAsZero)
+{
+    LayoutOptions options;
+    options.lineSpacing = -2.0f;
+    TextLayout layout = Layout("a\nb", options);
+    EXPECT_EQ(layout.lineHeight, 0.0f);
+    ASSERT_EQ(layout.lines.size(), 2u);
+    EXPECT_EQ(layout.lines[0].baseline, layout.lines[1].baseline);
+
+    options = LayoutOptions{};
+    options.fontSize = -1.0f;
+    layout = Layout("abc", options);
+    EXPECT_EQ(layout.bounds.Width(), 0.0f);
+    EXPECT_EQ(layout.bounds.Height(), 0.0f);
+
+    options = LayoutOptions{};
+    options.maxWidth = -5.0f; // no wrapping, as for 0
+    EXPECT_EQ(Layout("aaa bbb ccc", options).lines.size(), 1u);
+}
+
 TEST_P(TextLayoutTest, LetterSpacingIsAddedBetweenGlyphs)
 {
     LayoutOptions spaced;
@@ -448,6 +485,12 @@ TEST_P(TextLayoutTest, InvalidUtf8LaysOutAsReplacementCharacters)
     EXPECT_EQ(layout.quads[1].codepoint, kReplacementCharacter);
     EXPECT_EQ(layout.quads[3].codepoint, kReplacementCharacter);
     EXPECT_EQ(layout.quads[3].cluster, 3u);
+
+    // U+FFFD is in every atlas, so bad bytes draw as the replacement character, not as a missing glyph
+    const AtlasGlyph *replacement = DefaultFont().GetAtlas().FindCodepoint(kReplacementCharacter);
+    ASSERT_NE(replacement, nullptr);
+    EXPECT_EQ(layout.quads[1].uv, replacement->uv);
+    EXPECT_TRUE(layout.missingCodepoints.empty());
 }
 
 TEST_P(TextLayoutTest, MultiByteCharactersKeepTheirByteOffsets)

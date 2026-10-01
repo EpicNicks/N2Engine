@@ -31,6 +31,8 @@ namespace N2Engine::Text
         Baseline,
     };
 
+    /// fontSize, maxWidth, lineSpacing and tabWidth below 0 (or NaN) are treated as 0. letterSpacing may be
+    /// negative, to tighten text; a non-finite one is treated as 0.
     struct LayoutOptions
     {
         /// Layout units per em (world units for world-space text, pixels for UI)

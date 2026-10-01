@@ -19,8 +19,11 @@ namespace N2Engine::Text
         char32_t codepoint = 0;
         /// Byte offset of the cluster in the UTF-8 text
         std::uint32_t cluster = 0;
-        /// Pen advance after this glyph, including any kerning with the next one
+        /// Pen advance after this glyph, without kerning
         float xAdvance = 0.0f;
+        /// Pair kerning with the next glyph. Kept apart from xAdvance because layout applies it only when
+        /// the next glyph is on the same line: a line's last glyph isn't kerned against the next line.
+        float kern = 0.0f;
         float xOffset = 0.0f;
         float yOffset = 0.0f;
         /// The font (or its atlas) has no glyph for the codepoint; glyph is the fallback

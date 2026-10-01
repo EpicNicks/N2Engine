@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <unordered_set>
 
 #include "text/SdfFont.hpp"
 #include "text/Shaper.hpp"
@@ -74,7 +75,8 @@ namespace N2Engine::Text
                                 end = lastBreak > start ? lastBreak : i;
                                 break;
                             }
-                            pen = Advance(glyph, pen);
+                            // Kerned against the next glyph, which is on this line unless it breaks it
+                            pen = Advance(glyph, pen) + glyph.kern * _options.fontSize;
                             if (space || IsHyphen(glyph.codepoint))
                             {
                                 lastBreak = i + 1;
@@ -141,6 +143,10 @@ namespace N2Engine::Text
                         visibleEnd = pen + glyph.xAdvance * size;
                     }
                     pen = Advance(glyph, pen);
+                    if (i + 1 < end)
+                    {
+                        pen += glyph.kern * size; // never against the next line's first glyph
+                    }
                 }
 
                 line.quadCount = _layout.quads.size() - line.firstQuad;
@@ -164,8 +170,21 @@ namespace N2Engine::Text
             return layout;
         }
 
-        const IShaper &shaper = options.shaper != nullptr ? *options.shaper : GetBasicShaper();
-        LineBuilder builder(font, options, layout);
+        // Negative (or NaN) sizes and spacings would flip or fold the layout; they're treated as 0
+        const auto nonNegative = [](const float value) { return value > 0.0f ? value : 0.0f; };
+        LayoutOptions sanitized = options;
+        sanitized.fontSize = nonNegative(options.fontSize);
+        sanitized.lineSpacing = nonNegative(options.lineSpacing);
+        sanitized.tabWidth = nonNegative(options.tabWidth);
+        sanitized.maxWidth = nonNegative(options.maxWidth);
+        if (!std::isfinite(sanitized.letterSpacing))
+        {
+            sanitized.letterSpacing = 0.0f;
+        }
+
+        const IShaper &shaper = sanitized.shaper != nullptr ? *sanitized.shaper : GetBasicShaper();
+        LineBuilder builder(font, sanitized, layout);
+        std::unordered_set<char32_t> seenMissing;
 
         // Split into paragraphs at line breaks, shape each, and wrap it into lines
         std::u32string run;
@@ -178,7 +197,7 @@ namespace N2Engine::Text
             shaper.Shape(font, run, clusters, paragraph.glyphs);
             for (const ShapedGlyph &glyph : paragraph.glyphs)
             {
-                if (glyph.missing && std::ranges::find(layout.missingCodepoints, glyph.codepoint) == layout.missingCodepoints.end())
+                if (glyph.missing && seenMissing.insert(glyph.codepoint).second)
                 {
                     layout.missingCodepoints.push_back(glyph.codepoint);
                 }
@@ -216,14 +235,14 @@ namespace N2Engine::Text
 
         // Vertical placement: font metrics scaled to layout units
         const FontMetrics &metrics = font.GetMetrics();
-        const float scale = options.fontSize / static_cast<float>(std::max(1, metrics.unitsPerEm));
+        const float scale = sanitized.fontSize / static_cast<float>(std::max(1, metrics.unitsPerEm));
         const float ascent = static_cast<float>(metrics.ascent) * scale;
         const float descent = static_cast<float>(metrics.descent) * scale;
-        layout.lineHeight = static_cast<float>(metrics.ascent - metrics.descent + metrics.lineGap) * scale * options.lineSpacing;
+        layout.lineHeight = static_cast<float>(metrics.ascent - metrics.descent + metrics.lineGap) * scale * sanitized.lineSpacing;
 
         const float blockHeight = (ascent - descent) + static_cast<float>(layout.lines.size() - 1) * layout.lineHeight;
         float top = 0.0f;
-        switch (options.verticalAlign)
+        switch (sanitized.verticalAlign)
         {
         case VerticalAlign::Top:
             top = 0.0f;
@@ -244,7 +263,7 @@ namespace N2Engine::Text
         for (std::size_t i = 0; i < layout.lines.size(); ++i)
         {
             LineInfo &line = layout.lines[i];
-            switch (options.horizontalAlign)
+            switch (sanitized.horizontalAlign)
             {
             case HorizontalAlign::Left:
                 line.x = 0.0f;
