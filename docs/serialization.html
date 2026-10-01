@@ -126,7 +126,7 @@
 <tbody>
 <tr><td><code>uuid</code></td><td>Always, as a string</td><td><strong>Required</strong> (<code>.at()</code>). Restored as the object's UUID. A string that isn't a valid UUID, or a non-string value, logs an error and becomes <code>UUID::ZERO</code>; it does not throw.</td></tr>
 <tr><td><code>name</code></td><td>Always</td><td><strong>Required</strong> (<code>.at()</code>), must be a string.</td></tr>
-<tr><td><code>tag</code> <span class="badge">Minor defects</span></td><td>Always (<code>"Untagged"</code> by default)</td><td>Optional; missing or null keeps <code>"Untagged"</code>, so data written before tags existed loads unchanged. Must be a string (anything else fails the load, like other malformed fields). See <a href="gameobjects-components.html#names-tags">tags</a>.</td></tr>
+<tr><td><code>tag</code> <span class="badge">PR #39</span></td><td>Always (<code>"Untagged"</code> by default)</td><td>Optional; missing or null keeps <code>"Untagged"</code>, so data written before tags existed loads unchanged. Must be a string (anything else fails the load, like other malformed fields). See <a href="gameobjects-components.html#names-tags">tags</a>.</td></tr>
 <tr><td><code>isActive</code></td><td>Always</td><td>Optional. Defaults to active.</td></tr>
 <tr><td><code>prefabReference</code></td><td>Only if set</td><td>Optional UUID. It round-trips, but nothing else uses it yet.</td></tr>
 <tr><td><code>positionable</code></td><td>Only if the object has a Positionable</td><td>Optional. If present, a Positionable is created and <code>localPosition</code>, <code>localRotation</code> and <code>localScale</code> are each applied if present. See <a href="transforms.html">Transforms</a>.</td></tr>
@@ -319,10 +319,10 @@ resolver.ResolveAll();                        // fills holder's reference member
 <ul>
 <li><code>Prefab::Serialize()</code> writes <code>rootObject: null</code> when the prefab has no root.</li>
 <li><code>Prefab::Deserialize(j, resolver = nullptr)</code> returns <code>std::expected&lt;std::unique_ptr&lt;Prefab&gt;, PrefabParseError&gt;</code>. A missing <code>name</code> gives <code>MissingName</code>, and a missing or null <code>rootObject</code> gives <code>MissingRootObject</code>. UUIDs of the whole hierarchy are preserved. <code>PrefabParseErrorToString</code> has a message for every error.</li>
-<li><code>Prefab::Deserialize</code> never throws <span class="badge">Minor defects</span>: a root whose GameObject data is malformed (missing <code>uuid</code> or <code>name</code>, wrong types) gives <code>InvalidRootObject</code> (the cause is logged), and a <code>name</code> that is not a string gives the new <code>InvalidName</code>. Data that is not an object at all gives <code>MissingName</code>. With a caller's resolver, the caller runs <code>ResolveAll</code>; after an <code>InvalidRootObject</code> that resolver may hold entries for the partly built (already freed) objects, so discard it.</li>
+<li><code>Prefab::Deserialize</code> never throws <span class="badge">PR #39</span>: a root whose GameObject data is malformed (missing <code>uuid</code> or <code>name</code>, wrong types) gives <code>InvalidRootObject</code> (the cause is logged), and a <code>name</code> that is not a string gives the new <code>InvalidName</code>. Data that is not an object at all gives <code>MissingName</code>. With a caller's resolver, the caller runs <code>ResolveAll</code>; after an <code>InvalidRootObject</code> that resolver may hold entries for the partly built (already freed) objects, so discard it.</li>
 </ul>
 
-<h3 id="instantiate-prefab">Instantiating and registering prefabs <span class="badge">Minor defects</span></h3>
+<h3 id="instantiate-prefab">Instantiating and registering prefabs <span class="badge">PR #39</span></h3>
 <p><code>PrefabManager::InstantiatePrefab(json)</code> builds a new, independent object tree from prefab data:</p>
 <ol class="steps">
 <li>It accepts <strong>Prefab JSON</strong> (<code>{"name", "rootObject"}</code>, what <code>Prefab::Serialize</code> writes) or the bare <strong>GameObject JSON</strong> of the root (the <code>rootObject</code> value), which is what it used to require. An object with a <code>rootObject</code> key is treated as Prefab JSON.</li>
@@ -341,7 +341,7 @@ auto second = PrefabManager::InstantiateRegisteredPrefab("Turret"); // different
 scene.AddRootGameObjects({first, second});
 </code></pre>
 <div class="callout guarantee">
-<p class="callout-title">Guarantee <span class="badge">Minor defects</span></p>
+<p class="callout-title">Guarantee <span class="badge">PR #39</span></p>
 <p>Two instances of one prefab never share a UUID with each other or with the prefab, and each instance's internal references point at its own objects. Malformed prefab data is an error value (<code>Prefab::Deserialize</code>) or <code>nullptr</code> (<code>InstantiatePrefab</code>), never an exception. Before, instantiating kept the stored UUIDs (so two instances had the same ones), resolved no references, required bare GameObject JSON, and <code>RegisterPrefab</code> was an empty stub.</p>
 <p>Tests: <code>PrefabInstantiateTest.EveryObjectAndComponentGetsAFreshUUID</code>, <code>PrefabInstantiateTest.InternalReferencesPointIntoTheNewInstance</code>, <code>PrefabInstantiateTest.TwoInstancesReferenceTheirOwnObjects</code>, <code>PrefabInstantiateTest.ReferencesOutsideThePrefabAreNull</code>, <code>PrefabInstantiateTest.MalformedDataReturnsNullWithoutThrowing</code>, <code>PrefabRegistryTest.*</code>, <code>PrefabDeserializeErrorTest.*</code>, <code>LuaPrefabRefTest.RefFieldPointsAtTheInstancesOwnChild</code>, <code>LuaPrefabRefTest.TwoInstancesGetDifferentRefs</code>, <code>LuaPrefabRefTest.RefOutsideThePrefabBecomesNull</code>.</p>
 </div>

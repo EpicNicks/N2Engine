@@ -98,7 +98,7 @@
 <h3 id="headless-construction">Constructing without a window</h3>
 <p>An <code>InputSystem</code> can be constructed from a <code>Window</code> that was never initialized (its GLFW handle is null). <code>Mouse</code> is null-safe: with no window it registers no scroll callback, and position and position delta stay zero, while scroll accumulation still works. The input tests rely on this: <code>InputSystemHeadlessTest</code> builds <code>Window _window; InputSystem _input{_window};</code> and drives actions through a fake binding.</p>
 <div class="callout guarantee">
-<p class="callout-title">Guarantee <span class="badge">Minor defects</span></p>
+<p class="callout-title">Guarantee <span class="badge">PR #39</span></p>
 <p>Keyboard, mouse-button and composite (WASD) bindings never hand GLFW a null window. Created with a null <code>GLFWwindow*</code> (for example by an <code>InputSystem</code> on a <code>Window</code> that never opened), <code>getValue</code> returns released: <code>false</code>, or <code>(0, 0)</code> for a composite, without calling GLFW. So a headless <code>InputSystem</code> can update actions built from JSON. Before, the null pointer went straight to <code>glfwGetKey</code>/<code>glfwGetMouseButton</code>. Gamepad bindings poll by joystick id and need no window.</p>
 <p>Tests: <code>NullWindowBindingTest.KeyboardBindingReadsReleased</code>, <code>NullWindowBindingTest.MouseBindingReadsReleased</code>, <code>NullWindowBindingTest.CompositeBindingReadsZero</code>, <code>InputMapSwitchCancelTest.HeadlessSystemUpdatesKeyboardAndMouseActions</code>.</p>
 </div>
@@ -159,7 +159,7 @@ if (input)
 <tr><td><code>AddActionMap(std::unique_ptr&lt;ActionMap&gt;&amp;&amp;)</code></td><td>Inserts or <strong>replaces</strong> the map with that name. If no map is current yet, this one becomes current.</td></tr>
 <tr><td><code>MakeActionMap(name, fn)</code></td><td>Creates a map, lets <code>fn</code> fill it, then <code>AddActionMap</code>. Returns the <code>InputSystem&amp;</code> for chaining.</td></tr>
 <tr><td><code>CreateActionMapFromJson(name, json)</code></td><td>Parses <code>{"actions": {...}}</code> with <code>ActionMap::Deserialize</code>, then <code>AddActionMap</code>. Returns the new map, or <code>nullptr</code> (and logs an error) when <code>actions</code> is missing or not an object.</td></tr>
-<tr><td><code>LoadActionMap(name)</code></td><td>Makes that map current and returns it, and cancels the active actions of the map it switches away from <span class="badge">Minor defects</span> (see <a href="#disabling">Disabling actions and maps</a>). Unknown name: returns <code>nullptr</code> and leaves the current map unchanged.</td></tr>
+<tr><td><code>LoadActionMap(name)</code></td><td>Makes that map current and returns it, and cancels the active actions of the map it switches away from <span class="badge">PR #39</span> (see <a href="#disabling">Disabling actions and maps</a>). Unknown name: returns <code>nullptr</code> and leaves the current map unchanged.</td></tr>
 <tr><td><code>GetActionMap(name)</code></td><td>Pure lookup: returns the map or <code>nullptr</code>. Never changes the current map.</td></tr>
 <tr><td><code>GetCurActionMap()</code></td><td>The current map, or <code>nullptr</code> if none.</td></tr>
 </tbody>
@@ -299,7 +299,7 @@ if (input)
 <li><strong>Disabled while not active:</strong> no callback; phase and value stay as they were.</li>
 <li><strong>Re-enabled:</strong> on the next update a <code>Cancelled</code> phase is reset to <code>Waiting</code> silently, then the update proceeds normally in the same call (so a still-held key starts again with <code>Started</code>).</li>
 </ul>
-<p>A whole map stops being polled when it is disabled (<code>ActionMap::disabled = true</code>) or when <code>InputSystem::LoadActionMap</code> switches to another map. Its active actions are cancelled the same way a single disabled action is <span class="badge">Minor defects</span>, so subscribers always see the release:</p>
+<p>A whole map stops being polled when it is disabled (<code>ActionMap::disabled = true</code>) or when <code>InputSystem::LoadActionMap</code> switches to another map. Its active actions are cancelled the same way a single disabled action is <span class="badge">PR #39</span>, so subscribers always see the release:</p>
 <ul>
 <li><strong>Map disabled:</strong> the first <code>ActionMap::Update</code> that sees <code>disabled</code> cancels the map's active actions, then polls nothing. Later updates while disabled do nothing.</li>
 <li><strong>Map switched away from:</strong> <code>LoadActionMap(other)</code> cancels the previous map's active actions immediately, inside the call. Called from a callback of the map that <code>InputSystem::Update</code> is polling, that map's loop polls no further actions (<code>ActionMap::StopUpdating</code>), and the cancel runs when the loop ends. So nothing in the map that was left starts after the switch; only actions polled before it can still be active, and they are cancelled then. Loading the map that is already current cancels nothing.</li>
@@ -308,7 +308,7 @@ if (input)
 </ul>
 <p>Callbacks fired by a cancel may add, replace or remove actions or maps: the cancel pass works on a snapshot, and a map replaced during it is retired until the pass ends, as during <code>InputSystem::Update</code>.</p>
 <div class="callout guarantee">
-<p class="callout-title">Guarantee <span class="badge">Minor defects</span></p>
+<p class="callout-title">Guarantee <span class="badge">PR #39</span></p>
 <p>An action never stays <code>Started</code>/<code>Performed</code> in a map that is no longer polled: disabling its map or switching to another map cancels it and fires <code>OnStateChanged</code> exactly once. Before, it kept reporting <code>IsActive()</code> and its last value, with no callback, until its map was updated again.</p>
 <p>Tests: <code>ActionMapCancelTest.DisablingAMapCancelsAHeldAction</code>, <code>ActionMapCancelTest.ReenabledMapStartsAStillHeldActionAgain</code>, <code>ActionMapCancelTest.ReenabledMapWithInputReleasedStaysQuiet</code>, <code>ActionMapCancelTest.DisablingAMapWithNothingActiveFiresNothing</code>, <code>InputMapSwitchCancelTest.LoadingAnotherMapCancelsTheOldMapsActions</code>, <code>InputMapSwitchCancelTest.ReloadingTheCurrentMapCancelsNothing</code>, <code>InputMapSwitchCancelTest.CancelCallbackCanReplaceTheMapItLeaves</code>, <code>InputMapSwitchCancelTest.SwitchingFromACallbackCancelsWhenTheLoopEnds</code>.</p>
 </div>
@@ -356,7 +356,7 @@ if (input)
 <li>While a map is updating, <code>AddInputAction</code> (replacing a name) and <code>RemoveInputAction</code> move the old action to a <em>retired</em> list instead of freeing it, because its <code>Update</code> may be on the stack.</li>
 <li>While <code>InputSystem::Update</code> runs, <code>AddActionMap</code> replacing an existing map, and <code>Deserialize</code> (all maps), retire the old maps the same way.</li>
 <li>Both updates hold their "updating" flag in an RAII scope: it is cleared even if a handler throws, and only the <em>outermost</em> update frees the retired lists (a handler that re-enters an update does not free what the outer loop still holds).</li>
-<li><code>LoadActionMap</code> from a callback switches the current map; the map that is updating finishes its loop, and the new current map is first updated on the next frame. The loop of the map that was left stops polling at that point, and its active actions are cancelled once the loop ends <span class="badge">Minor defects</span>.</li>
+<li><code>LoadActionMap</code> from a callback switches the current map; the map that is updating finishes its loop, and the new current map is first updated on the next frame. The loop of the map that was left stops polling at that point, and its active actions are cancelled once the loop ends <span class="badge">PR #39</span>.</li>
 </ul>
 <div class="callout guarantee">
 <p class="callout-title">Guarantee</p>

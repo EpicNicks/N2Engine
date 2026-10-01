@@ -146,8 +146,8 @@ player-&gt;Destroy();                  // queued; OnDisable/OnDestroy run in Pro
 <tr><td><code>FindGameObject(name)</code></td><td>Every object reachable from the roots, depth first, roots in order</td><td>Returns the first match, or null. Inactive objects are included.</td></tr>
 <tr><td><code>FindGameObjectByUUID(uuid)</code></td><td>Same traversal</td><td>First match or null. Not <code>const</code>.</td></tr>
 <tr><td><code>GetAllGameObjects()</code></td><td>Same traversal</td><td>Returns a new vector of every object in the hierarchy.</td></tr>
-<tr><td><code>FindGameObjectWithTag(tag)</code> <span class="badge">Minor defects</span></td><td>Same traversal</td><td>First object whose tag is exactly <code>tag</code> (<code>CompareTag</code>), or null. Inactive objects are included.</td></tr>
-<tr><td><code>FindGameObjectsWithTag(tag)</code> <span class="badge">Minor defects</span></td><td>Same traversal</td><td>Every object with that tag, in traversal order. <code>FindGameObjectsByTag(tag)</code> is the older name and does the same.</td></tr>
+<tr><td><code>FindGameObjectWithTag(tag)</code> <span class="badge">PR #39</span></td><td>Same traversal</td><td>First object whose tag is exactly <code>tag</code> (<code>CompareTag</code>), or null. Inactive objects are included.</td></tr>
+<tr><td><code>FindGameObjectsWithTag(tag)</code> <span class="badge">PR #39</span></td><td>Same traversal</td><td>Every object with that tag, in traversal order. <code>FindGameObjectsByTag(tag)</code> is the older name and does the same.</td></tr>
 <tr><td><code>FindObjectByType&lt;T&gt;(includeInactive = true)</code></td><td>The attached-component list (<code>_components</code>)</td><td>First component that <code>dynamic_cast</code>s to <code>T</code>. Skips destroyed components. With <code>includeInactive = false</code> it also skips disabled components and components on inactive objects.</td></tr>
 <tr><td><code>FindObjectsByType&lt;T&gt;(includeInactive = true)</code></td><td>Same</td><td>All matches, in attach order.</td></tr>
 <tr><td><code>FindObjectByType&lt;Rendering::Light&gt;</code> / <code>FindObjectsByType&lt;Rendering::Light&gt;</code></td><td>The light list (<code>_sceneLights</code>)</td><td>Explicit specializations. They find the same lights the generic template would, since lights are now in <code>_components</code> too.</td></tr>
@@ -156,10 +156,10 @@ player-&gt;Destroy();                  // queued; OnDisable/OnDestroy run in Pro
 </div>
 <div class="callout note">
 <p class="callout-title">Note</p>
-<p>The <code>FindObject(s)ByType</code> functions only see components that have been through <code>ProcessAttachQueue</code>. A component added this frame isn't found until the next frame's attach pass. Lights are in <code>_components</code> like any component <span class="badge">Minor defects</span>, so <code>FindObjectsByType&lt;Component&gt;()</code> includes them (it used to skip them). Hierarchy searches (<code>FindGameObject</code>) walk the root hierarchy, which includes every object in the scene: a child removed with <code>RemoveChild</code> becomes a root <span class="badge">PR #34</span>.</p>
+<p>The <code>FindObject(s)ByType</code> functions only see components that have been through <code>ProcessAttachQueue</code>. A component added this frame isn't found until the next frame's attach pass. Lights are in <code>_components</code> like any component <span class="badge">PR #39</span>, so <code>FindObjectsByType&lt;Component&gt;()</code> includes them (it used to skip them). Hierarchy searches (<code>FindGameObject</code>) walk the root hierarchy, which includes every object in the scene: a child removed with <code>RemoveChild</code> becomes a root <span class="badge">PR #34</span>.</p>
 </div>
 <div class="callout guarantee">
-<p class="callout-title">Guarantee <span class="badge">Minor defects</span></p>
+<p class="callout-title">Guarantee <span class="badge">PR #39</span></p>
 <p>Tags are implemented: every GameObject has a string tag (default <code>"Untagged"</code>), saved with the scene, and the tag searches return every matching object in the scene, active or not. Before, <code>FindGameObjectsByTag</code> was a placeholder that always returned nothing. See <a href="gameobjects-components.html#names-tags">Names, tags and search helpers</a>.</p>
 <p>Tests: <code>GameObjectTagTest.SceneFindsTaggedObjectsAnywhereInTheHierarchy</code>, <code>GameObjectTagTest.TaggedSceneRoundTrips</code>, <code>LuaTagTest.SceneTagLookups</code>.</p>
 </div>
@@ -179,7 +179,7 @@ player-&gt;Destroy();                  // queued; OnDisable/OnDestroy run in Pro
 <ol class="steps">
 <li>Takes the front entry off the live queue, one at a time. <code>OnAttach</code> can queue more components, which are processed in the same call. It can also remove pending ones, which <code>DetachComponent</code> erases from the queue, so no stale pointer is left.</li>
 <li>Calls <code>OnAttach()</code>. While it runs, the component is on a stack of components being attached. If <code>OnAttach</code> removes the component or moves its object to another scene, <code>DetachComponent</code> clears its stack entry and the component is skipped from here on, never registered or touched again. A stack, not a single slot, so an <code>OnAttach</code> that drains the queue again (nested attach) does not lose track of the outer component <span class="badge">PR #34</span>.</li>
-<li>Registers the component in <code>_components</code>, without duplicates; a <code>Light</code> is also added to <code>_sceneLights</code> <span class="badge">Minor defects</span>. A component re-queued after re-parenting is never registered twice.</li>
+<li>Registers the component in <code>_components</code>, without duplicates; a <code>Light</code> is also added to <code>_sceneLights</code> <span class="badge">PR #39</span>. A component re-queued after re-parenting is never registered twice.</li>
 </ol>
 <p><code>Update</code>, <code>FixedUpdate</code>, <code>LateUpdate</code> and <code>OnApplicationQuit</code> each call the matching component callback on every entry of <code>_components</code> that is non-null, whose GameObject is active in the hierarchy, and that is itself active. The rules for iterating:</p>
 <ul>
@@ -213,7 +213,7 @@ player-&gt;Destroy();                  // queued; OnDisable/OnDestroy run in Pro
 
 <h2 id="lights">Lights</h2>
 <ul>
-<li>A <code>Rendering::Light</code> is registered in both <code>_components</code> and <code>_sceneLights</code> when it attaches <span class="badge">Minor defects</span>. It gets <code>OnUpdate</code>/<code>OnFixedUpdate</code>/<code>OnLateUpdate</code>/<code>OnApplicationQuit</code> like any component (before, it was kept out of <code>_components</code> and got none of them); rendering reads the light list.</li>
+<li>A <code>Rendering::Light</code> is registered in both <code>_components</code> and <code>_sceneLights</code> when it attaches <span class="badge">PR #39</span>. It gets <code>OnUpdate</code>/<code>OnFixedUpdate</code>/<code>OnLateUpdate</code>/<code>OnApplicationQuit</code> like any component (before, it was kept out of <code>_components</code> and got none of them); rendering reads the light list.</li>
 <li><code>CollectLighting()</code> (called by <code>Application::Render</code>) skips null and inactive lights, and caps each kind at <code>SceneLightingData::MAX_DIRECTIONAL_LIGHTS</code>, <code>MAX_POINT_LIGHTS</code> and <code>MAX_SPOT_LIGHTS</code>, in attach order. Spot cone angles are converted from degrees to radians.</li>
 <li>With no usable light at all, it adds a default directional light (direction (0.5, -1, 0.3), white, intensity 0.8) and logs a warning <em>once per scene</em>.</li>
 <li>Destroying a light's object removes it from <code>_sceneLights</code>, so <code>CollectLighting</code> never reads a freed light.</li>
@@ -243,7 +243,7 @@ player-&gt;Destroy();                  // queued; OnDisable/OnDestroy run in Pro
 <p>Ownership, by how the scene ends:</p>
 <ul>
 <li><strong>Cleared first</strong> (every scene switch, and <code>UnloadScenes</code>): <code>Clear</code> already released the roots, so roots nobody else holds, with their children and components, were freed in <code>Clear</code>. Its lists are empty, so <code>~Scene</code> has nothing left to walk.</li>
-<li><strong>Destroyed without <code>Clear</code></strong> (a scene that is dropped without being loaded, or one you own yourself): if any component attached to it, <code>~Scene</code> first runs the <code>Clear</code> teardown for the attached components <span class="badge">Minor defects</span>. Roots are released when the root vector is destroyed. A root nobody else holds dies there, and with it all its children and components. <code>~Scene</code> first clears <code>_scene</code> on the objects it finds.</li>
+<li><strong>Destroyed without <code>Clear</code></strong> (a scene that is dropped without being loaded, or one you own yourself): if any component attached to it, <code>~Scene</code> first runs the <code>Clear</code> teardown for the attached components <span class="badge">PR #39</span>. Roots are released when the root vector is destroyed. A root nobody else holds dies there, and with it all its children and components. <code>~Scene</code> first clears <code>_scene</code> on the objects it finds.</li>
 <li>Either way, an object held elsewhere keeps living, with <code>GetScene() == nullptr</code> (cleared by <code>Clear</code> through <code>SetScene(nullptr)</code>, or by <code>~Scene</code>). Starting a coroutine on it logs a warning and returns null.</li>
 </ul>
 <p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::~Scene</code>, <code>Scene::Clear</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::~GameObject</code>, <code>GameObject::StartCoroutine</code>, <code>GameObject::RemoveChild</code></p>
@@ -355,7 +355,7 @@ assert(boss-&gt;GetScene() == SceneManager::GetCurScene());
 <p>A load whose stored data is malformed never leaves the engine without a scene. The current scene stays loaded and keeps its index, and no exception escapes <code>ProcessAnyPendingSceneChange</code>.</p>
 </div>
 
-<h3 id="dropped-scenes">Scenes dropped without being loaded <span class="badge">Minor defects</span></h3>
+<h3 id="dropped-scenes">Scenes dropped without being loaded <span class="badge">PR #39</span></h3>
 <p>Several paths destroy a <code>Scene</code> that was never the loaded scene, without calling <code>Clear()</code>: a pending instance superseded by another <code>LoadScene</code> or replaced by <code>StoreScene</code>/<code>UpdateScene</code>, the validation build in <code>AddScene(json)</code>/<code>FromJSON(j, true)</code>, the scene given to <code>AddScene(scene, false)</code>, the pending instance dropped by <code>UnloadScenes</code>, a <code>GetScene</code> copy the caller releases, and the editor's <code>HandleLoadScene</code> validation build. The rule for all of them is in <code>~Scene</code>:</p>
 <ul>
 <li><strong>Components that never attached get no callbacks.</strong> They never had <code>OnAttach</code>, so they have no scene setup to undo; they are freed (with their constructor and <code>Deserialize</code> state, including a <code>LuaComponent</code>'s file-scope chunk) by their destructors only. This is the normal case: nothing attaches a scene before it is loaded.</li>
@@ -366,7 +366,7 @@ assert(boss-&gt;GetScene() == SceneManager::GetCurScene());
 <li><strong>Limit:</strong> that exit guard only covers scenes <code>SceneManager</code> owns. A scene held elsewhere in static storage (a global <code>std::unique_ptr&lt;Scene&gt;</code>, say) and attached is torn down by its destructor whenever that static is destroyed, possibly after the engine's subsystems. Free such scenes before shutdown.</li>
 </ul>
 <div class="callout guarantee">
-<p class="callout-title">Guarantee <span class="badge">Minor defects</span></p>
+<p class="callout-title">Guarantee <span class="badge">PR #39</span></p>
 <p>No dropped scene leaves an attached component without <code>OnDestroy</code>, and dropping a scene never gives <code>OnDestroy</code> to a component that did not get <code>OnAttach</code>. A loaded scene's <code>Clear</code> on a switch is unchanged: it still tears down components waiting in the attach queue (see <a href="gameobjects-components.html#teardown">the teardown sequence</a>).</p>
 <p>Tests: <code>DroppedSceneTeardownTest.NeverAttachedSceneGetsNoCallbacks</code>, <code>AttachedComponentsAreTornDownOnDrop</code>, <code>AddSceneWithoutLoadTearsDownAttachedComponents</code>, <code>SupersededPendingSceneTearsDownAttachedComponents</code>, <code>GetSceneCopyAttachedByCallerIsTornDownOnDrop</code>, <code>ClearedSceneIsNotTornDownTwice</code>, <code>LoadedSceneSwitchStillTearsDownQueuedComponents</code>, <code>LoadSceneFromADroppedPendingScenesOnDestroyIsALaterRequest</code>, <code>ReentrantLoadOfTheNewSceneKeepsTheCallersInstance</code>.</p>
 </div>

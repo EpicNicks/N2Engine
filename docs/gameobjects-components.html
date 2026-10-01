@@ -120,7 +120,7 @@ scene.AddRootGameObject(player);                    // queues the components on 
 <li>The queue is drained one live entry at a time, so <code>OnAttach</code> can add components (they are attached in the same pass) or remove pending ones (they are dropped from the queue).</li>
 <li>A component whose <code>OnAttach</code> removes it, or moves its object to another scene, is not registered or touched afterwards. The scene tracks the components currently in <code>OnAttach</code> on a stack, and <code>DetachComponent</code> clears their entries, so this also holds for an <code>OnAttach</code> that drains the queue again (nested attach) <span class="badge">PR #34</span>. Test: <code>ComponentRemovingItselfFromOnAttach</code>.</li>
 <li><code>OnAttach</code> runs regardless of active state: components on inactive objects and components whose own flag is disabled are still attached.</li>
-<li>After <code>OnAttach</code>, a component is registered for updates. <code>Rendering::Light</code> components (and subclasses) are registered for updates like any other component and are also added to the scene's light list, which rendering reads <span class="badge">Minor defects</span>. Registration is idempotent.</li>
+<li>After <code>OnAttach</code>, a component is registered for updates. <code>Rendering::Light</code> components (and subclasses) are registered for updates like any other component and are also added to the scene's light list, which rendering reads <span class="badge">PR #39</span>. Registration is idempotent.</li>
 </ul>
 
 <div class="callout guarantee">
@@ -135,7 +135,7 @@ scene.AddRootGameObject(player);                    // queues the components on 
 </div>
 
 <div class="callout guarantee">
-<p class="callout-title">Guarantee <span class="badge">Minor defects</span></p>
+<p class="callout-title">Guarantee <span class="badge">PR #39</span></p>
 <p>A Light (or a subclass) gets <code>OnUpdate</code>, <code>OnFixedUpdate</code>, <code>OnLateUpdate</code> and <code>OnApplicationQuit</code> on the same terms as any other component, once per frame, and the generic <code>Scene::FindObjectByType&lt;T&gt;</code> for a base type of Light (e.g. <code>Component</code>) returns lights too. It is still in the light list that <code>CollectLighting</code> reads, and <code>FindObjectByType&lt;Rendering::Light&gt;</code> still searches that list. Before, <code>ProcessAttachQueue</code> put lights only in the light list, so a Light subclass never got the per-frame callbacks.</p>
 <p>Tests: <code>LightCallbacksTest.LightReceivesFrameCallbacks</code>, <code>LightCallbacksTest.LightStaysInTheLightListAndTypeLookups</code>, <code>LightCallbacksTest.DestroyedLightStopsUpdating</code>.</p>
 </div>
@@ -260,7 +260,7 @@ public:
 </ol>
 <p>"Was active" is computed ignoring the destruction mark (<code>IsActiveInHierarchyIgnoringDestruction</code>), because objects are already marked when the callbacks run.</p>
 <p>It does not check that the component was ever attached. A component added and destroyed in the same frame, or one in a scene that is switched away before its first frame, gets <code>OnDisable</code>/<code>OnDestroy</code> without having had <code>OnAttach</code>, so <code>OnDestroy</code> must cope with setup that never happened.</p>
-<p>The one path that does check is a scene dropped without being loaded <span class="badge">Minor defects</span>: its destructor tears down only the components that attached to it, and frees the rest with no callbacks (see <a href="scenes.html#dropped-scenes">Scenes</a>).</p>
+<p>The one path that does check is a scene dropped without being loaded <span class="badge">PR #39</span>: its destructor tears down only the components that attached to it, and frees the rest with no callbacks (see <a href="scenes.html#dropped-scenes">Scenes</a>).</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Path</th><th>Callbacks</th><th>When the memory is freed</th></tr></thead>
@@ -269,7 +269,7 @@ public:
 <tr><td><code>RemoveComponent</code> (any overload)</td><td>Teardown immediately</td><td>Before the call returns</td></tr>
 <tr><td><code>RemoveAllComponents</code></td><td>Teardown immediately, per component</td><td>Before the call returns</td></tr>
 <tr><td>Scene switch (<code>Scene::Clear</code>)</td><td>Teardown for every object reachable from the roots (a child removed with <code>RemoveChild</code> is a root, so it is included)</td><td>When the last <code>shared_ptr</code> to each object goes: normally inside <code>Clear</code>, when it empties the root list</td></tr>
-<tr><td>A scene destroyed without <code>Clear</code> (dropped without being loaded; see <a href="scenes.html#dropped-scenes">Scenes</a>) <span class="badge">Minor defects</span></td><td>Teardown, as in <code>Clear</code>, for the components that attached to that scene; <strong>none</strong> for components that never attached</td><td>With the scene</td></tr>
+<tr><td>A scene destroyed without <code>Clear</code> (dropped without being loaded; see <a href="scenes.html#dropped-scenes">Scenes</a>) <span class="badge">PR #39</span></td><td>Teardown, as in <code>Clear</code>, for the components that attached to that scene; <strong>none</strong> for components that never attached</td><td>With the scene</td></tr>
 <tr><td>Object released after leaving its scene (<code>RemoveRootGameObject</code>)</td><td><strong>None</strong>; bookkeeping only</td><td>With the object</td></tr>
 </tbody>
 </table>
@@ -448,9 +448,9 @@ if (!token.expired())
 <h2 id="names-tags">Names, tags and search helpers</h2>
 <ul>
 <li><code>GetName</code>/<code>SetName</code>: free-form, not unique. <code>Scene::FindGameObject(name)</code> returns the first match in a pre-order traversal from the roots.</li>
-<li><strong>Tags</strong> <span class="badge">Minor defects</span>: every GameObject has one string tag, <code>"Untagged"</code> by default (<code>GameObject::DefaultTag</code>, as in Unity). <code>GetTag</code>/<code>SetTag</code> take any string; there is no list of allowed tags. <code>CompareTag(tag)</code> is an exact, case-sensitive comparison. The tag is saved with the object (the <code>"tag"</code> field, see <a href="serialization.html#gameobject-json">Serialization</a>).</li>
+<li><strong>Tags</strong> <span class="badge">PR #39</span>: every GameObject has one string tag, <code>"Untagged"</code> by default (<code>GameObject::DefaultTag</code>, as in Unity). <code>GetTag</code>/<code>SetTag</code> take any string; there is no list of allowed tags. <code>CompareTag(tag)</code> is an exact, case-sensitive comparison. The tag is saved with the object (the <code>"tag"</code> field, see <a href="serialization.html#gameobject-json">Serialization</a>).</li>
 <li><code>Scene::FindGameObjectWithTag(tag)</code> returns the first object with that tag in the same pre-order traversal, or <code>nullptr</code>; <code>Scene::FindGameObjectsWithTag(tag)</code> returns all of them in traversal order. Both include inactive objects. <code>FindGameObjectsByTag</code> is the older name for <code>FindGameObjectsWithTag</code> and does the same.</li>
-<li>The static helpers <code>GameObject::FindGameObjectByName(name, scene)</code>, <code>FindGameObjectWithTag(tag, scene)</code>, <code>FindGameObjectsWithTag(tag, scene)</code> and <code>FindGameObjectsByTag(tag, scene)</code> call the same search on the given scene, and return nothing for a null scene <span class="badge">Minor defects</span>. Before, they were stubs that always returned nothing.</li>
+<li>The static helpers <code>GameObject::FindGameObjectByName(name, scene)</code>, <code>FindGameObjectWithTag(tag, scene)</code>, <code>FindGameObjectsWithTag(tag, scene)</code> and <code>FindGameObjectsByTag(tag, scene)</code> call the same search on the given scene, and return nothing for a null scene <span class="badge">PR #39</span>. Before, they were stubs that always returned nothing.</li>
 <li><code>Scene::FindObjectByType&lt;T&gt;</code>/<code>FindObjectsByType&lt;T&gt;</code> search attached components (not ones still in the attach queue) with <code>dynamic_cast</code>; destroyed ones are skipped, and inactive ones are skipped when <code>includeInactive</code> is false.</li>
 </ul>
 <p>From Lua, GameObjects and components are reached through checked handles; the binding exposes a subset (no <code>SetParent</code> or <code>RemoveComponent</code> on the Lua GameObject type, for example). See <a href="scripting-lua.html">Lua scripting</a>.</p>

@@ -107,14 +107,14 @@
 <tr><td><code>tests/engine/HealthTests.cpp</code></td><td><code>EngineHealthTest</code>, <code>ApplicationShutdownTest</code>, <code>WindowHealthTest</code>, <code>ScriptingHealthTest</code></td></tr>
 <tr><td><code>tests/engine/audio/AudioTests.cpp</code></td><td><code>WAVLoaderTest</code>, <code>AudioSystemUninitializedTest</code>, <code>AudioClipTest</code>, <code>AudioSystemTest</code>, <code>AudioSourceTest</code>, <code>AudioListenerTest</code></td></tr>
 <tr><td><code>tests/engine/input/InputRobustnessTests.cpp</code></td><td><code>EventHandlerTest</code>, <code>InputActionValueTest</code>, <code>AxisBindingTest</code>, <code>MouseTest</code>, <code>InputSystemHeadlessTest</code>, <code>BindingValidationTest</code></td></tr>
-<tr><td><code>tests/engine/input/InputCancelTests.cpp</code> <span class="badge">Minor defects</span></td><td><code>ActionMapCancelTest</code>, <code>InputMapSwitchCancelTest</code>, <code>NullWindowBindingTest</code></td></tr>
+<tr><td><code>tests/engine/input/InputCancelTests.cpp</code> <span class="badge">PR #39</span></td><td><code>ActionMapCancelTest</code>, <code>InputMapSwitchCancelTest</code>, <code>NullWindowBindingTest</code></td></tr>
 <tr><td><code>tests/engine/input/InputSystemTests.cpp</code></td><td><code>InputBindingSerializationTest</code>, <code>BindingParseErrorTest</code>, <code>InputActionSerializationTest</code>, <code>ActionMapSerializationTest</code>, <code>FullConfigSerializationTest</code></td></tr>
 <tr><td><code>tests/engine/physics/PhysicsTests.cpp</code></td><td><code>PhysicsTest</code>; <code>PhysicsMassTest</code> <span class="badge">PR #26</span>. Compiled only with PhysX.</td></tr>
-<tr><td><code>tests/engine/prefabs/PrefabInstantiationTests.cpp</code> <span class="badge">Minor defects</span></td><td><code>PrefabInstantiateTest</code>, <code>PrefabRegistryTest</code>, <code>PrefabDeserializeErrorTest</code></td></tr>
+<tr><td><code>tests/engine/prefabs/PrefabInstantiationTests.cpp</code> <span class="badge">PR #39</span></td><td><code>PrefabInstantiateTest</code>, <code>PrefabRegistryTest</code>, <code>PrefabDeserializeErrorTest</code></td></tr>
 <tr><td><code>tests/engine/prefabs/PrefabTests.cpp</code></td><td><code>UUIDSerializationTest</code>, <code>GameObjectSerializationTest</code>, <code>PrefabSerializationTest</code>, <code>PrefabParseErrorTest</code></td></tr>
 <tr><td><code>tests/engine/sceneManagement/HierarchyLifetimeTests.cpp</code> <span class="badge">PR #34</span></td><td><code>HierarchyLifetimeTest</code> (RemoveChild re-rooting, objects moving between scenes, SetParent to a descendant, components removing themselves from teardown callbacks)</td></tr>
 <tr><td><code>tests/engine/sceneManagement/LifecycleTests.cpp</code></td><td><code>LifecycleTest</code>, <code>ActiveHierarchyTest</code>, <code>SceneManagerTest</code></td></tr>
-<tr><td><code>tests/engine/sceneManagement/SceneDropTagLightTests.cpp</code> <span class="badge">Minor defects</span></td><td><code>DroppedSceneTeardownTest</code>, <code>LightCallbacksTest</code>, <code>GameObjectTagTest</code></td></tr>
+<tr><td><code>tests/engine/sceneManagement/SceneDropTagLightTests.cpp</code> <span class="badge">PR #39</span></td><td><code>DroppedSceneTeardownTest</code>, <code>LightCallbacksTest</code>, <code>GameObjectTagTest</code></td></tr>
 <tr><td><code>tests/engine/sceneManagement/SceneStorageTests.cpp</code> <span class="badge">PR #28</span></td><td><code>SceneStorageTest</code></td></tr>
 <tr><td><code>tests/engine/sceneManagement/SceneSwitchTests.cpp</code></td><td><code>SceneSwitchTest</code></td></tr>
 <tr><td><code>tests/engine/scheduling/CoroutineTests.cpp</code></td><td><code>CoroutineTest</code></td></tr>
@@ -124,17 +124,17 @@
 <tr><td><code>tests/engine/scripting/LuaSceneTests.cpp</code></td><td><code>LuaSceneTest</code>, <code>LuaProjectSceneTest</code></td></tr>
 <tr><td><code>tests/engine/scripting/LuaHandleTests.cpp</code> <span class="badge">PR #29</span></td><td><code>LuaHandleTest</code></td></tr>
 <tr><td><code>tests/engine/scripting/LuaInputHandleTests.cpp</code> <span class="badge">PR #31</span></td><td><code>LuaInputHandleTest</code> (ActionMap and InputAction handles)</td></tr>
-<tr><td><code>tests/engine/scripting/LuaTagTests.cpp</code> <span class="badge">Minor defects</span></td><td><code>LuaTagTest</code></td></tr>
-<tr><td><code>tests/engine/scripting/LuaPrefabRefTests.cpp</code> <span class="badge">Minor defects</span></td><td><code>LuaPrefabRefTest</code> (Lua <code>$ref</code> fields in prefab instances)</td></tr>
+<tr><td><code>tests/engine/scripting/LuaTagTests.cpp</code> <span class="badge">PR #39</span></td><td><code>LuaTagTest</code></td></tr>
+<tr><td><code>tests/engine/scripting/LuaPrefabRefTests.cpp</code> <span class="badge">PR #39</span></td><td><code>LuaPrefabRefTest</code> (Lua <code>$ref</code> fields in prefab instances)</td></tr>
 <tr><td><code>tests/engine/serialization/ComponentRoundTripTests.cpp</code> <span class="badge">PR #34</span></td><td><code>ComponentRoundTripTest</code> (built-in components survive a scene round trip; unknown types warn)</td></tr>
 <tr><td><code>tests/engine/serialization/SerializationRobustnessTests.cpp</code></td><td><code>SerializationReferencesTest</code>, <code>SceneLoadingTest</code>, <code>ResourceLoaderTest</code>, <code>ResourcePathTest</code>, <code>ResourcesTest</code>, <code>AudioAssetReferenceTest</code></td></tr>
 <tr><td><code>tests/math/math_types/FunctionsTests.cpp</code> <span class="badge">PR #34</span></td><td><code>FunctionsTest</code></td></tr>
 <tr><td><code>tests/math/math_types/QuaternionTests.cpp</code></td><td><code>QuaternionTest</code></td></tr>
-<tr><td><code>tests/math/math_types/SimdDispatchTests.cpp</code> <span class="badge">PR #27</span></td><td><code>SimdLevels/SimdDispatchTest</code> (each case compares SSE2, SSE4.1 and AVX against scalar; <code>Vector4</code> cases since <span class="badge">PR #30</span>); <code>Vector2BatchTest</code> <span class="badge">Minor defects</span> (Vector2 has no dispatch, so it compares the batch against <code>Normalized</code>)</td></tr>
+<tr><td><code>tests/math/math_types/SimdDispatchTests.cpp</code> <span class="badge">PR #27</span></td><td><code>SimdLevels/SimdDispatchTest</code> (each case compares SSE2, SSE4.1 and AVX against scalar; <code>Vector4</code> cases since <span class="badge">PR #30</span>); <code>Vector2BatchTest</code> <span class="badge">PR #39</span> (Vector2 has no dispatch, so it compares the batch against <code>Normalized</code>)</td></tr>
 <tr><td><code>tests/editor-server/EngineHealthProtocolTests.cpp</code></td><td><code>EngineHealthProtocolTest</code></td></tr>
 <tr><td><code>tests/editor-server/BufferReaderTests.cpp</code> <span class="badge">PR #33</span></td><td><code>BufferReaderTest</code></td></tr>
 <tr><td><code>tests/editor-server/CommandQueueTests.cpp</code> <span class="badge">PR #33</span></td><td><code>CommandQueueTest</code></td></tr>
-<tr><td><code>tests/editor-server/ProtocolSpecTests.cpp</code> <span class="badge">Minor defects</span></td><td><code>ProtocolSpecTest</code> (<code>Protocol.hpp</code> against <code>protocol.json</code>)</td></tr>
+<tr><td><code>tests/editor-server/ProtocolSpecTests.cpp</code> <span class="badge">PR #39</span></td><td><code>ProtocolSpecTest</code> (<code>Protocol.hpp</code> against <code>protocol.json</code>)</td></tr>
 <tr><td><code>tests/editor-server/EditorServerHardeningTests.cpp</code> <span class="badge">PR #33</span></td><td><code>EditorServerLimitsTest</code>, <code>EditorServerErrorsTest</code>, <code>EditorServerNoSceneTest</code>, <code>DeleteSceneTest</code>, <code>EditorServerSocketTest</code> (Windows only)</td></tr>
 </tbody>
 </table>
