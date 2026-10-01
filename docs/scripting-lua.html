@@ -465,7 +465,7 @@ BindComponentType&lt;Physics::Rigidbody&gt;(lua, "Rigidbody",
 <tbody>
 <tr><td><code>go:GetParent()</code>, <code>go:FindChild(name)</code>, <code>go:FindChildRecursive(name)</code>, <code>scene:FindGameObject(name)</code>, <code>scene:FindGameObjectWithTag(tag)</code> <span class="badge">PR #39</span></td><td>A GameObject handle, or <code>nil</code></td></tr>
 <tr><td><code>go:GetTag()</code>, <code>go:SetTag(tag)</code>, <code>go:CompareTag(tag)</code> <span class="badge">PR #39</span></td><td>The object's tag string (<code>"Untagged"</code> by default); set any string; exact, case-sensitive comparison. See <a href="gameobjects-components.html#names-tags">tags</a>.</td></tr>
-<tr><td><code>go:GetLayer()</code>, <code>go:SetLayer(layer)</code>, <code>go:SetLayerRecursive(layer)</code> <span class="badge">Layers</span></td><td>The object's layer index, 0–31 (0 by default); setting one outside that range clamps it, with a warning. See <a href="#layers">Layers</a> and <a href="gameobjects-components.html#layers">Layer</a>.</td></tr>
+<tr><td><code>go:GetLayer()</code>, <code>go:SetLayer(layer)</code>, <code>go:SetLayerRecursive(layer)</code> <span class="badge">PR #44</span></td><td>The object's layer index, 0–31 (0 by default); setting one outside that range clamps it, with a warning. See <a href="#layers">Layers</a> and <a href="gameobjects-components.html#layers">Layer</a>.</td></tr>
 <tr><td><code>go:GetPositionable()</code></td><td>A Positionable handle, or <code>nil</code> if the object has none (<code>CreatePositionable()</code> first)</td></tr>
 <tr><td><code>go:GetComponent(name)</code></td><td>A typed handle to the first component of that type, or <code>nil</code></td></tr>
 <tr><td><code>go:AddComponent(name)</code></td><td>A typed handle to the new component. <code>AddComponent("AudioListener")</code> is the exception: <code>AudioListener</code> is a singleton component (<code>IsSingleton</code>), so if the object already has one, no second listener is added and the call returns a handle to the existing one</td></tr>
@@ -562,7 +562,7 @@ assert(Vector3.Zero.y == 0)   -- the constant is unchanged
 <p>The engine's <code>Math</code> table (<code>Math.PI</code>, <code>Math.DEG_TO_RAD</code>, …) is a plain table of numbers. It is separate from Lua's standard <code>math</code> library.</p>
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaMathBindings.cpp</code> — <code>BindMath</code>; <code>engine/src/scripting/bindings/LuaUtilityBindings.cpp</code> — <code>BindUtility</code>; tests: <code>LuaRobustnessTest.VectorConstantsCannotBeModified</code>, <code>LuaTest.MathConstants</code></p>
 
-<h3 id="layers">Layers <span class="badge">Layers</span></h3>
+<h3 id="layers">Layers <span class="badge">PR #44</span></h3>
 <p>The global <code>Layers</code> table is a plain table over the engine's <a href="physics.html#layers">layer registry</a>:</p>
 <div class="table-wrap">
 <table>
@@ -790,7 +790,7 @@ return Bouncer
 <tr><td><code>LuaInputHandleTests.cpp</code> <span class="badge">PR #31</span></td><td><code>LuaInputHandleTest</code></td><td>Map and action handles: live use, <code>[]</code>, <code>disabled</code>, equality; errors after a map is replaced or an action removed/replaced (methods, properties, index, assignment); replacement from the action's own callback; <code>OnStateChanged</code>; subscription released with its action</td></tr>
 <tr><td><code>LuaLifetimeTests.cpp</code></td><td><code>LuaLifetimeTest</code></td><td>Subscriptions stop after destroy and scene switch, keep working outside components; OnDisable then OnDestroy; <code>self</code> references cleared; reload callbacks replaced and removed; replacing an instance retires the old one, attaches the new one and keeps fields and references; <code>OnApplicationQuit</code> reaches scripts</td></tr>
 <tr><td><code>LuaRobustnessTests.cpp</code></td><td><code>LuaRobustnessTest</code></td><td>Immutable constants, <code>LuaToJson</code> cycles, readable <code>Collision</code>, shorthand/integer fields, partial vectors, reference type names</td></tr>
-<tr><td><code>LuaLayerTests.cpp</code> <span class="badge">Layers</span></td><td><code>LuaLayerTest</code></td><td><code>GameObject:GetLayer/SetLayer/SetLayerRecursive</code> (clamping, seen from C++), the <code>Layers</code> table: names, masks, the collision matrix, <code>GetMask</code> argument errors</td></tr>
+<tr><td><code>LuaLayerTests.cpp</code> <span class="badge">PR #44</span></td><td><code>LuaLayerTest</code></td><td><code>GameObject:GetLayer/SetLayer/SetLayerRecursive</code> (clamping, seen from C++), the <code>Layers</code> table: names, masks, the collision matrix, <code>GetMask</code> argument errors</td></tr>
 <tr><td><code>LuaSceneTests.cpp</code></td><td><code>LuaSceneTest</code>, <code>LuaProjectSceneTest</code></td><td><code>LuaToJson</code>, <code>ActionMapJsonFromLua</code>, <code>CreateActionMap</code> without a window, <code>AddComponent</code>/<code>GetComponent</code> by name; builds <code>lua_project/assets/scene.lua</code> headless</td></tr>
 </tbody>
 </table>
