@@ -8,14 +8,22 @@ on:
 
 jobs:
   windows:
-    name: windows (PhysX ${{ matrix.physx }})
+    name: windows (${{ matrix.config }}, PhysX ${{ matrix.physx }})
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        # OFF keeps the no-physics build compiling and running (the engine then has no physics backend)
-        physx: [ON, OFF]
+        include:
+          - config: Debug
+            physx: "ON"
+          # OFF keeps the no-physics build compiling and running (the engine then has no physics backend)
+          - config: Debug
+            physx: "OFF"
+          # Release catches what Debug hides: NDEBUG, optimised SIMD paths, sol2 safety defaults.
+          # The PhysX release zip ships both debug/ and release/ libraries, so PhysX stays ON here.
+          - config: Release
+            physx: "ON"
 
     steps:
       - uses: actions/checkout@v7
@@ -32,16 +40,17 @@ jobs:
         uses: actions/cache@v6
         with:
           path: external/PhysX/physx/bin
+          # Not keyed per config: the downloaded zip holds the debug/ and release/ folders together
           key: physx-bin-${{ runner.os }}-v1
 
       - name: Configure
         run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} # newest installed Visual Studio
 
       - name: Build
-        run: cmake --build build --config Debug --parallel
+        run: cmake --build build --config ${{ matrix.config }} --parallel
 
       - name: Test
-        run: ctest --test-dir build --build-config Debug --output-on-failure
+        run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure
         env:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
@@ -52,7 +61,7 @@ jobs:
       - name: Editor host smoke test
         shell: pwsh
         run: |
-          $exe = Resolve-Path "build/bin/Debug/N2EditorHost.exe"
+          $exe = Resolve-Path "build/bin/${{ matrix.config }}/N2EditorHost.exe"
           $proc = Start-Process -FilePath $exe -ArgumentList "--port", "9999" -PassThru `
             -RedirectStandardOutput host.log -RedirectStandardError host.err
           $null = $proc.Handle # keeps ExitCode readable after the process exits
