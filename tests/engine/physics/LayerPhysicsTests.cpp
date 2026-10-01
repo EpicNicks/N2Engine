@@ -378,6 +378,94 @@ TEST_F(LayerPhysicsTest, ChangingAnObjectsLayerAtRuntimeRefilters)
     EXPECT_GT(zoneEvents->triggerStay, stays);
 }
 
+// A change that keeps a touching contact pair allowed must be invisible to scripts, also when the ball
+// has gone to sleep on the floor (resetFiltering wakes only the actor it's called on)
+class LayerPhysicsRestingTest : public LayerPhysicsTest
+{
+protected:
+    GameObject::Ptr _floor, _ball;
+    LayerEventCounter *_floorEvents = nullptr, *_ballEvents = nullptr;
+
+    void LandAndSleep()
+    {
+        _floor = SpawnFloor(LayerA);
+        _floorEvents = _floor->AddComponent<LayerEventCounter>();
+        _ball = SpawnBall("Sleeper", Vector3(0.0f, 2.0f, 0.0f), LayerB);
+        _ballEvents = _ball->AddComponent<LayerEventCounter>();
+        Step(240); // four seconds: it lands, settles and falls asleep
+        ASSERT_GT(_ballEvents->collisionEnter, _ballEvents->collisionExit) << "the ball should be resting on the floor";
+    }
+
+    void ExpectPairUndisturbed(const int steps)
+    {
+        const int ballEnter = _ballEvents->collisionEnter, ballExit = _ballEvents->collisionExit;
+        const int floorEnter = _floorEvents->collisionEnter, floorExit = _floorEvents->collisionExit;
+        const int stays = _ballEvents->collisionStay;
+
+        for (int i = 1; i <= steps; ++i)
+        {
+            Step(1);
+            EXPECT_EQ(_ballEvents->collisionExit, ballExit) << "spurious Exit after step " << i;
+            EXPECT_EQ(_ballEvents->collisionEnter, ballEnter) << "spurious Enter after step " << i;
+            EXPECT_EQ(_floorEvents->collisionExit, floorExit) << "spurious Exit after step " << i;
+            EXPECT_EQ(_floorEvents->collisionEnter, floorEnter) << "spurious Enter after step " << i;
+            EXPECT_EQ(_ballEvents->collisionStay, stays + i) << "Stay stopped after step " << i;
+        }
+        EXPECT_GT(_ball->GetPositionable()->GetPosition().y, 0.5f) << "the ball fell through the floor";
+    }
+};
+
+TEST_F(LayerPhysicsRestingTest, FloorMovedToAnotherCollidingLayer)
+{
+    LandAndSleep();
+    _floor->SetLayer(LayerC);
+    ExpectPairUndisturbed(3);
+}
+
+TEST_F(LayerPhysicsRestingTest, BallMovedToAnotherCollidingLayer)
+{
+    LandAndSleep();
+    _ball->SetLayer(LayerC);
+    ExpectPairUndisturbed(3);
+}
+
+TEST_F(LayerPhysicsRestingTest, MatrixChangeThatKeepsThePairAllowed)
+{
+    LandAndSleep();
+    Layers::SetCollision(LayerA, LayerC, false); // rewrites the floor's row; A and B still collide
+    ExpectPairUndisturbed(3);
+}
+
+TEST_F(LayerPhysicsTest, LayerSetWhileTheBodyIsDisabledAppliesWhenItIsEnabled)
+{
+    Layers::SetCollision(LayerA, LayerB, false);
+    const auto zone = SpawnZone(LayerA);
+    auto *zoneEvents = zone->AddComponent<LayerEventCounter>();
+    const auto visitor = SpawnVisitor(LayerC);
+    auto *body = visitor->GetComponent<Rigidbody>();
+
+    Step(5);
+    ASSERT_EQ(zoneEvents->triggerEnter, 1);
+
+    body->SetActive(false); // the body leaves the scene; its shapes stay on it
+    Step(2);
+    ASSERT_EQ(zoneEvents->triggerExit, 1);
+
+    visitor->SetLayer(LayerB);
+    body->SetActive(true);
+    Step(5);
+    EXPECT_EQ(zoneEvents->triggerEnter, 1) << "the re-enabled body kept its old filter data";
+    EXPECT_FALSE(Raycast::Any(Vector3(0.0f, 5.0f, 0.0f), Downward, 100.0f, Layers::MaskOf(LayerC)));
+
+    // And the same through the object: its collider's shapes are re-created on the new layer
+    visitor->SetActive(false);
+    Step(1);
+    visitor->SetLayer(LayerC);
+    visitor->SetActive(true);
+    Step(5);
+    EXPECT_EQ(zoneEvents->triggerEnter, 2);
+}
+
 TEST_F(LayerPhysicsTest, CollidersAttachedAfterAMatrixChangeUseTheNewMatrix)
 {
     const auto floor = SpawnFloor(LayerA);

@@ -171,6 +171,27 @@ TEST_F(LayersRegistryTest, AsymmetricMatrixCollidesOnlyWhereBothRowsAgree)
     EXPECT_TRUE(Layers::GetCollision(3, 8));
 }
 
+TEST_F(LayersRegistryTest, MatrixBuiltFromSignedIntsLoads)
+{
+    // nlohmann types these as signed integers, unlike non-negative numbers parsed from text
+    json matrix = json::array();
+    for (int layer = 0; layer < Layers::Count; ++layer)
+    {
+        matrix.push_back(layer == 3 ? 0x7FFFFDFF : 0x7FFFFFFF); // row 3 leaves out layer 9; 31 is left out by all
+    }
+    ASSERT_TRUE(matrix[0].is_number_integer() && !matrix[0].is_number_unsigned());
+
+    ASSERT_TRUE(Layers::Deserialize(json{{"collisionMatrix", matrix}}));
+    EXPECT_FALSE(Layers::GetCollision(3, 9));
+    EXPECT_TRUE(Layers::GetCollision(3, 8));
+    EXPECT_FALSE(Layers::GetCollision(0, 31));
+    EXPECT_TRUE(Layers::GetCollision(0, 30));
+
+    // Still rejected: a negative row
+    matrix[5] = -1;
+    EXPECT_FALSE(Layers::Deserialize(json{{"collisionMatrix", matrix}}));
+}
+
 TEST_F(LayersRegistryTest, MalformedJsonChangesNothingAndNeverThrows)
 {
     ASSERT_TRUE(Layers::SetName(8, "Player"));

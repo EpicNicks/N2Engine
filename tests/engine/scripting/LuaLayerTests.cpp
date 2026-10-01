@@ -86,6 +86,9 @@ TEST_F(LuaLayerTest, NamesAndMasks)
     EXPECT_EQ(Eval<std::string>("Layers.LayerToName(2)"), "Ignore Raycast");
     EXPECT_EQ(Eval<int>("Layers.IgnoreRaycast"), Layers::IgnoreRaycast);
     EXPECT_TRUE(Eval<bool>("Layers.DefaultRaycastMask == 4294967291"));
+    EXPECT_TRUE(Eval<bool>("Layers.AllLayers == 4294967295"));
+    EXPECT_TRUE(Eval<bool>("Layers.MaskOf(8) == 256"));
+    EXPECT_TRUE(Eval<bool>("Layers.MaskOf(40) == 0"));
 
     EXPECT_TRUE(Eval<bool>("Layers.SetName(8, 'Enemy')"));
     EXPECT_EQ(Layers::NameToLayer("Enemy"), 8);
