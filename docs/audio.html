@@ -118,10 +118,10 @@
 <p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>RenderEditorFrame</code>; <code>engine/src/audio/AudioSystem.cpp</code> — <code>AudioSystem::Update</code>, <code>CleanupFinishedSources</code></p>
 
 <h2 id="audio-source">AudioSource component</h2>
-<p><code>AudioSource</code> is a <code>SerializableComponent</code> (several per GameObject allowed). Defaults: volume 1, pitch 1, not looping, <strong>spatial</strong>, mixer group <code>"SFX"</code>, min (reference) distance 1, max distance 100, rolloff 1, <code>_playOnAwake</code> false, no clip. <code>AudioSource::Serialize</code> writes all of these and the clip (as an asset reference), but neither <code>AudioSource</code> nor <code>AudioListener</code> is registered with <code>REGISTER_COMPONENT</code>, so nothing can read them back; see <a href="serialization.html">Serialization</a>.</p>
-<div class="callout warning">
-<p class="callout-title">Warning</p>
-<p><code>AudioSource</code> and <code>AudioListener</code> have no <code>REGISTER_COMPONENT</code>, so <code>GameObject::Deserialize</code> drops them silently, with no log, on every scene load and every scene switch: each load rebuilds the scene from its stored JSON. The only exception is the scene object you passed to <code>SceneManager::AddScene(scene, true)</code> (what <code>Application::Init</code> does with the initial scene), which is used as is the first time it loads. After any reload, including switching back to that scene, its sources and listeners are gone. Add them from C++ code that runs after the load (for example in another component's <code>OnAttach</code>) until they are registered.</p>
+<p><code>AudioSource</code> is a <code>SerializableComponent</code> (several per GameObject allowed). Defaults: volume 1, pitch 1, not looping, <strong>spatial</strong>, mixer group <code>"SFX"</code>, min (reference) distance 1, max distance 100, rolloff 1, <code>_playOnAwake</code> false, no clip. <code>AudioSource::Serialize</code> writes all of these and the clip (as an asset reference). Each setting has a getter, including <code>GetPlayOnAwake</code>, <code>GetMinDistance</code>, <code>GetMaxDistance</code> and <code>GetRolloffFactor</code>, and play-on-awake has a setter, <code>SetPlayOnAwake</code> <span class="badge">PR #34</span>.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee: sources and listeners survive scene loads <span class="badge">PR #34</span></p>
+<p><code>AudioSource</code> and <code>AudioListener</code> are registered as built-in components, so every scene load and switch (each one rebuilds the scene from its stored JSON) brings them back. An <code>AudioSource</code> keeps its clip, volume, pitch, loop, spatial flag, play-on-awake, min/max distance, rolloff and mixer group. Before PR #34 neither was registered and both were dropped silently on every load. Tests: <code>AudioSourceAndItsSettingsSurviveASceneLoad</code>, <code>AudioListenerSurvivesASceneLoad</code>; see <a href="serialization.html#component-registry">Serialization</a>.</p>
 </div>
 <h3 id="source-registration">Registration and source acquisition</h3>
 <ul>
@@ -141,7 +141,7 @@
 <tr><td><code>IsPlaying()</code> / <code>IsPaused()</code></td><td>Query the OpenAL source state; <code>false</code> without a source.</td></tr>
 <tr><td><code>SetClip(clip)</code></td><td>Stops; if it was playing and the new clip is non-null, plays the new clip. Setting a clip while stopped does not start playback.</td></tr>
 <tr><td><code>SetLoop(b)</code></td><td>Stored, and applied immediately to a held source.</td></tr>
-<tr><td><code>OnEnable</code></td><td>Calls <code>Play()</code> if <code>_playOnAwake</code> and a clip is set (<code>_playOnAwake</code> has no setter, and because <code>AudioSource</code> is not registered for deserialization it is never read back from scene data either, so in practice it is always <code>false</code> and this never plays).</td></tr>
+<tr><td><code>OnEnable</code></td><td>Calls <code>Play()</code> if play-on-awake is set (<code>SetPlayOnAwake</code>, or the scene data) and a clip is set <span class="badge">PR #34</span>.</td></tr>
 <tr><td><code>OnDisable</code></td><td><code>Pause()</code>. Re-enabling does not resume unless play-on-awake restarts it.</td></tr>
 </tbody>
 </table>
@@ -336,7 +336,7 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 </tbody>
 </table>
 </div>
-<p>Lua cannot set a clip, play one-shots, or change mixer groups' settings. Clips are set from C++ (<code>SetClip</code>); they do not come from scene files, because <code>AudioSource</code> is dropped on load (see the <a href="#audio-source">warning above</a>).</p>
+<p>Lua cannot set a clip, play one-shots, change mixer groups' settings, or read the distance, rolloff and play-on-awake settings. Clips come from C++ (<code>SetClip</code>) or from scene data, where the clip is saved as an asset reference <span class="badge">PR #34</span>.</p>
 <pre class="lang-lua"><code>local source = self.gameObject:GetComponent("AudioSource")
 if source ~= nil and source:IsValid() then
     source:SetMixerGroup("UI")
@@ -346,7 +346,7 @@ end
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaAudioBindings.cpp</code> — <code>BindAudio</code></p>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
