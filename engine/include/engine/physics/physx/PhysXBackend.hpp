@@ -183,6 +183,14 @@ namespace N2Engine::Physics
         void onTrigger(physx::PxTriggerPair* pairs, physx::PxU32 count) override;
         void onAdvance(const physx::PxRigidBody* const* bodyBuffer, const physx::PxTransform* poseBuffer, const physx::PxU32 count) override;
 
+        /// For diagnostics and tests. A dynamic body's principal moments of inertia in the mass frame
+        /// (PxRigidBody::getMassSpaceInertiaTensor): the axes are those of the mass pose's rotation,
+        /// not necessarily the actor's. Zero for a static or unknown body.
+        [[nodiscard]] Math::Vector3 GetInertiaTensor(PhysicsBodyHandle body) const;
+        /// For diagnostics and tests. A dynamic body's centre of mass relative to the actor (the position
+        /// of the mass pose; its rotation isn't returned). Zero for a static or unknown body.
+        [[nodiscard]] Math::Vector3 GetCenterOfMass(PhysicsBodyHandle body) const;
+
     private:
         physx::PxDefaultAllocator _allocator;
         physx::PxDefaultErrorCallback _errorCallback;
@@ -204,6 +212,10 @@ namespace N2Engine::Physics
 
             Rigidbody* rigidbody = nullptr;
             std::vector<ICollider*> colliders;
+
+            // The Rigidbody's configured mass; a dynamic actor's inertia and centre of mass are
+            // derived from its shapes and rescaled to this (see UpdateMassProperties)
+            float mass = 1.0f;
         };
 
         std::vector<BodyData> _bodies;
@@ -215,6 +227,10 @@ namespace N2Engine::Physics
         /// Creates a shape on the body, owned by (and recorded under) the collider that asked for it
         void AttachColliderShape(PhysicsBodyHandle body, ICollider* collider, const physx::PxGeometry& geometry,
                                  const physx::PxTransform& localPose, const PhysicsMaterial& material);
+        /// Recomputes a dynamic body's inertia tensor and centre of mass from its simulation shapes
+        /// (triggers don't count), keeping its configured mass. Called whenever the shapes or the mass
+        /// change, since PhysX doesn't derive them itself.
+        void UpdateMassProperties(PhysicsBodyHandle body);
         /// Ends active collision/trigger pairs involving the body (it was destroyed), queueing their Exit
         /// for the other body; PhysX's own "touch lost" for them refers to released actors and is ignored
         void ForgetPairsWithBody(PhysicsBodyHandle handle);

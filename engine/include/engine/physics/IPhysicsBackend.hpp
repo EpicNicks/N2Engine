@@ -115,6 +115,8 @@ namespace N2Engine::Physics
         virtual Math::Vector3 GetVelocity(PhysicsBodyHandle body) = 0;
         virtual Math::Vector3 GetAngularVelocity(PhysicsBodyHandle body) = 0;
 
+        /// Total mass; the backend keeps the inertia and centre of mass in step with the body's
+        /// non-trigger shapes as they're added, changed or removed
         virtual void SetMass(PhysicsBodyHandle body, float mass) = 0;
         virtual float GetMass(PhysicsBodyHandle body) = 0;
         virtual void SetGravityEnabled(PhysicsBodyHandle body, bool enabled) = 0;
