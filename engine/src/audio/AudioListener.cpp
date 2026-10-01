@@ -6,9 +6,13 @@
 #include "engine/Positionable.hpp"
 #include "engine/audio/AudioSystem.hpp"
 #include "engine/common/ScriptUtils.hpp"
+#include "engine/serialization/ComponentRegistry.hpp"
 
 namespace N2Engine::Audio
 {
+    // Nothing of its own to save, but it must be recreated when a scene loads
+    REGISTER_COMPONENT(AudioListener)
+
     AudioListener::AudioListener(GameObject& gameObject)
         : Component(gameObject)
     {

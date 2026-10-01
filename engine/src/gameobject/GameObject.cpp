@@ -766,6 +766,11 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
                 go->_components.push_back(std::move(component));
                 go->_componentMap.emplace(typeIdx, rawPtr); // the first of a type stays the one GetComponent finds
             }
+            else
+            {
+                // Was skipped silently, so a component missing REGISTER_COMPONENT vanished on every load
+                Logger::Warn(std::format("Unknown component type '{}' on '{}' was not loaded", typeName, go->_name));
+            }
         }
     }
 
