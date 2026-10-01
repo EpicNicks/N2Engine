@@ -126,8 +126,18 @@ def generate():
 
     lines.append("} // namespace N2Engine::Editor::Protocol")
 
+    content = "\n".join(lines)
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text("\n".join(lines))
+
+    # The output is checked in: only rewrite it when the content changes (ignoring line endings, which
+    # git may have converted). The build tracks a separate stamp file, so it isn't touched otherwise.
+    if OUTPUT_PATH.exists():
+        existing = OUTPUT_PATH.read_bytes().decode("utf-8").replace("\r\n", "\n")
+        if existing == content:
+            print(f"Up to date: {OUTPUT_PATH}")
+            return
+
+    OUTPUT_PATH.write_text(content)
     print(f"Generated {OUTPUT_PATH}")
 
 if __name__ == "__main__":

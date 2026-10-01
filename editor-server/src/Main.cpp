@@ -1,7 +1,9 @@
 #include <iostream>
 #include <csignal>
 #include <atomic>
-#include <thread>
+#include <chrono>
+#include <charconv>
+#include <filesystem>
 #include <print>
 
 #include "engine/Application.hpp"
@@ -17,17 +19,30 @@ namespace
 
     void SignalHandler(int signal)
     {
+        // Only the flag: on Windows this runs on another thread, and the Logger isn't thread-safe
         if (signal == SIGINT || signal == SIGTERM)
         {
-            N2Engine::Logger::Info("Shutdown signal received");
             g_running = false;
         }
+    }
+
+    bool ParsePort(const std::string &text, int &port)
+    {
+        int value = 0;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (error != std::errc{} || end != text.data() + text.size() || value < 1 || value > 65535)
+        {
+            return false;
+        }
+        port = value;
+        return true;
     }
 }
 
 int main(int argc, char *argv[])
 {
     int port = 9999;
+    std::string bindAddress = N2Engine::Editor::EditorServer::DefaultBindAddress;
     std::string projectPath;
 
     // Basic arg parsing
@@ -36,7 +51,15 @@ int main(int argc, char *argv[])
         std::string arg = argv[i];
         if ((arg == "-p" || arg == "--port") && i + 1 < argc)
         {
-            port = std::stoi(argv[++i]);
+            if (!ParsePort(argv[++i], port))
+            {
+                std::println(stderr, "Invalid port: {}", argv[i]);
+                return 1;
+            }
+        }
+        else if (arg == "--bind" && i + 1 < argc)
+        {
+            bindAddress = argv[++i];
         }
         else if ((arg == "--project") && i + 1 < argc)
         {
@@ -49,7 +72,11 @@ int main(int argc, char *argv[])
                         Usage: N2EditorHost [options]
                             Options:
                             -p, --port <port>      Server port (default: 9999)
-                            --project <path>       Project path
+                            --bind <ipv4 address>  Address to listen on (default: 127.0.0.1)
+                                                   WARNING: the protocol has no authentication; any other
+                                                   address lets whoever can reach it control this host,
+                                                   including deleting scene files
+                            --project <path>       Project path (DeleteScene works in <path>/scenes)
                             -h, --help             Show this help
                         )");
             return 0;
@@ -73,9 +100,20 @@ int main(int argc, char *argv[])
 
         // Start editor server
         N2Engine::Editor::EditorServer server;
-        server.Start(port);
-
-        N2Engine::Logger::Info("Editor server listening on port " + std::to_string(port));
+        if (!projectPath.empty())
+        {
+            server.SetScenesDirectory(std::filesystem::path(projectPath) / "scenes");
+        }
+        if (bindAddress != N2Engine::Editor::EditorServer::DefaultBindAddress)
+        {
+            N2Engine::Logger::Warn("Editor server bound to " + bindAddress +
+                                   ": it has no authentication, so anything that can reach it can control this host");
+        }
+        const bool serverStarted = server.Start(port, bindAddress);
+        if (!serverStarted)
+        {
+            N2Engine::Logger::Error("Editor server failed to start");
+        }
 
         // Keep serving even without a window, so the editor can still query state such as GetEngineHealth
         auto &window = N2Engine::Application::GetInstance().GetWindow();
@@ -84,7 +122,8 @@ int main(int argc, char *argv[])
             N2Engine::Logger::Warn("No window or renderer; rendering commands will be unavailable");
         }
 
-        // Main loop - just keep alive and handle OS events
+        // Main loop: handle OS events and run the editor's requests. Requests touch engine state, so they
+        // run here on the main thread (see EditorServer); waiting for them doubles as the idle sleep.
         auto &app = N2Engine::Application::GetInstance();
         while (g_running && server.IsRunning() && !app.IsQuitRequested() &&
                (!window.IsValid() || !window.ShouldClose()))
@@ -92,9 +131,14 @@ int main(int argc, char *argv[])
             // Poll window events to keep OS happy (even if window is hidden)
             window.PollEvents();
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            server.ProcessCommands(std::chrono::milliseconds(16));
         }
 
+        if (!g_running)
+        {
+            N2Engine::Logger::Info("Shutdown signal received");
+        }
+        server.ProcessCommands(); // flushes log lines the network thread has posted
         server.Stop();
         N2Engine::Logger::Info("Editor server stopped");
 
@@ -106,6 +150,11 @@ int main(int argc, char *argv[])
 
         N2Engine::Application::GetInstance().Shutdown();
         N2Engine::Logger::Info("Engine shut down");
+
+        if (!serverStarted)
+        {
+            return 1;
+        }
     }
     catch (const std::exception &e)
     {
