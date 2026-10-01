@@ -8,7 +8,7 @@ This folder is a static HTML site that documents how the engine **behaves**: gua
 
 ## Current baseline
 
-The first version describes `master` plus open PRs #26 (PhysX mass/inertia), #27 (SIMD math), #28 (SceneManager and asset registries) and #29 (Lua checked handles). Behaviour that comes from those PRs is marked with a `PR #nn` badge. Once they merge, the badges can stay as history or be removed. Update the footer line "Describes master plus PRs #26–#29." on every page when the baseline changes.
+The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badges stay as history, pointing readers at the PR that introduced or changed a behaviour. Every page's footer says "Describes master through PR #34."; update it on every page (and in `_template.html`) when a later PR brings the pages up to date.
 
 ## Pages
 
@@ -47,7 +47,8 @@ The first version describes `master` plus open PRs #26 (PhysX mass/inertia), #27
   - `note`: rationale, context, or a consequence worth knowing.
   - `warning`: intended but surprising behaviour, or an unsupported pattern.
   - `open-question`: unclear, undecided or inconsistent behaviour. Name the file and function. Never guess; an open question is better than invented behaviour.
-- **Badges** mark where behaviour came from a not-yet-merged PR: `<span class="badge">PR #28</span>`.
+  - **Design decisions** are `note` callouts titled `Design decision: …` with an `id="design-…"`. Explain *why* a behaviour was chosen, once, on the page that owns it, and link to it from elsewhere. `index.html#design-decisions` lists them all; add new ones there.
+- **Badges** mark the PR that introduced or changed a behaviour: `<span class="badge">PR #28</span>`. Use them on subsystem pages; on `index.html` only the one example in "What these docs cover" that explains them.
 - **Code samples** use `<pre class="lang-cpp"><code>…</code></pre>` (also `lang-lua`, `lang-json`, `lang-text`, `lang-cmake`, `lang-shell`). Escape `<`, `>` and `&`. Keep samples short and correct; prefer patterns from the tests or example projects.
 - **Tables** go inside `<div class="table-wrap">` so they scroll on narrow screens.
 - **Ordered sequences** (frame order, teardown order) use `<ol class="steps">`.

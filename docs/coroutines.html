@@ -227,9 +227,9 @@ std::generator&lt;ICoroutineWait&gt; Land(const CharacterMotor *motor)
 <tr><td>Object (or an ancestor) deactivated</td><td>At the start of the next scheduler update. Not immediately: see the note below.</td></tr>
 <tr><td>Object destroyed (<code>Destroy</code>)</td><td>In <code>ProcessDestroyed</code> at the end of the frame, right after its components' <code>OnDisable</code>/<code>OnDestroy</code>. Between <code>Destroy()</code> and that point they keep running, since the object is not yet marked.</td></tr>
 <tr><td>Object leaves its scene (<code>Scene::RemoveRootGameObject</code>, parented under an object in another scene or none)</td><td>Immediately, in <code>GameObject::SetScene</code>, on the scene being left.</td></tr>
-<tr><td>Object removed with <code>RemoveChild</code></td><td>Not stopped: the object stays in the scene, so its coroutines keep running while something holds it.</td></tr>
-<tr><td>Object released (last <code>shared_ptr</code> dropped, e.g. after <code>RemoveChild</code>)</td><td>Immediately, in <code>~GameObject</code>, provided its scene is still alive. A <code>RemoveChild</code>-detached object released after a scene switch reaches the freed scene's scheduler instead (see the warning below).</td></tr>
-<tr><td>Scene switch (<code>Scene::Clear</code>)</td><td>During the teardown pass for each object in the root hierarchy. Objects detached with <code>RemoveChild</code> are not part of that pass.</td></tr>
+<tr><td>Object removed with <code>RemoveChild</code></td><td>Not stopped: the object becomes a root of the same scene <span class="badge">PR #34</span>, so its coroutines keep running. They stop when it leaves the scene, is destroyed, or the scene is switched.</td></tr>
+<tr><td>Object released (last <code>shared_ptr</code> dropped) while still pointing at a scene</td><td>Immediately, in <code>~GameObject</code>. The scene is always alive at that point: a scene clears the scene pointer of its objects when it is cleared or destroyed.</td></tr>
+<tr><td>Scene switch (<code>Scene::Clear</code>)</td><td>During the teardown pass for each object in the root hierarchy, which includes children removed with <code>RemoveChild</code>.</td></tr>
 <tr><td>Scene destroyed</td><td>Its scheduler is destroyed with it.</td></tr>
 <tr><td>Component that started it removed</td><td><strong>Not stopped</strong>: coroutines belong to the GameObject, not to a component.</td></tr>
 </tbody>
@@ -237,15 +237,10 @@ std::generator&lt;ICoroutineWait&gt; Land(const CharacterMotor *motor)
 </div>
 <p>Reactivating an object does not restart coroutines that were stopped by deactivation.</p>
 
-<div class="callout warning">
-<p class="callout-title">Warning</p>
-<p>A <code>RemoveChild</code>-detached object is still in its scene and survives a scene switch with a dangling scene pointer: <code>Scene::Clear</code> walks only the roots, and <code>~Scene</code> can no longer find it. Releasing it later, or calling <code>StartCoroutine</code>/<code>StopCoroutine</code> on it, uses the freed scene's scheduler. Re-parent it, <code>AddRootGameObject</code> it or <code>Destroy</code> it before switching. See <a href="scenes.html#scene-lifetime">Scenes</a>.</p>
-</div>
-
 <div class="callout guarantee">
 <p class="callout-title">Guarantee</p>
-<p>Deactivating, destroying, removing from the scene, or releasing a removed child stops the object's coroutines, and reactivation does not resume them.</p>
-<p>Tests: <code>DeactivatingObjectStopsItsCoroutines</code>, <code>DestroyedObjectsCoroutinesStop</code>, <code>ObjectLeavingSceneStopsItsCoroutines</code>, <code>ReleasingARemovedChildStopsItsCoroutines</code>.</p>
+<p>Deactivating, destroying or removing an object from the scene stops its coroutines, and reactivation does not resume them. A child removed with <code>RemoveChild</code> stays in the scene as a root, so its coroutines keep running until it leaves the scene; after that, releasing it leaves the scheduler nothing to read <span class="badge">PR #34</span>. No object outlives its scene with a pointer to the freed scheduler (see <a href="scenes.html#scene-lifetime">Scenes</a>).</p>
+<p>Tests: <code>DeactivatingObjectStopsItsCoroutines</code>, <code>DestroyedObjectsCoroutinesStop</code>, <code>ObjectLeavingSceneStopsItsCoroutines</code>, <code>RemovedChildKeepsItsCoroutinesUntilItLeavesTheScene</code>.</p>
 </div>
 
 <div class="callout note">
@@ -314,11 +309,11 @@ std::generator&lt;ICoroutineWait&gt; Land(const CharacterMotor *motor)
 <p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>RemoveComponent</code>, <code>SetScene</code>, <code>~GameObject</code>; <code>engine/include/engine/scheduling/CoroutineScheduler.hpp</code></p>
 
 <h2 id="lua">Lua</h2>
-<p>Coroutines are C++ only. No scheduler or wait type is bound to Lua, and the Lua runtime opens only the <code>base</code>, <code>package</code>, <code>math</code>, <code>string</code> and <code>table</code> libraries, so Lua's own <code>coroutine</code> library is not available to scripts either. Lua scripts that need timed behaviour have to count time in <code>OnUpdate</code>. See <a href="scripting-lua.html">Lua scripting</a>.</p>
+<p>Coroutines are C++ only. No scheduler or wait type is bound to Lua, and the Lua runtime opens only the <code>base</code>, <code>math</code>, <code>string</code> and <code>table</code> libraries (<code>package</code> is no longer opened <span class="badge">PR #34</span>), so Lua's own <code>coroutine</code> library is not available to scripts either. Lua scripts that need timed behaviour have to count time in <code>OnUpdate</code>. See <a href="scripting-lua.html">Lua scripting</a>.</p>
 <p class="src">Source: <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>open_libraries</code>; <code>engine/src/scripting/bindings/</code> (no coroutine bindings)</p>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 

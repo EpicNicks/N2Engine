@@ -90,7 +90,7 @@
 <tr><td><code>Quaternion</code></td><td><code>w, x, y, z</code> (in that lane order), 16-byte aligned</td><td>Runtime-dispatched</td></tr>
 <tr><td><code>Matrix&lt;float, 4, 4&gt;</code>, <code>Matrix&lt;float, 3, 3&gt;</code></td><td>Row-major <code>std::array</code>, 16-byte aligned (3&times;3 padded to 12 floats)</td><td>Runtime-dispatched</td></tr>
 <tr><td><code>Matrix&lt;T, M, N&gt;</code>, <code>Matrix&lt;float, 2, 2&gt;</code></td><td>Row-major <code>std::array</code></td><td>None</td></tr>
-<tr><td><code>Vector4</code></td><td><code>w, x, y, z</code>, 16-byte aligned <code>__m128</code> union</td><td>Always SIMD, chosen at compile time; not dispatched (runtime-dispatched from PR #30 <span class="badge">PR #30</span>)</td></tr>
+<tr><td><code>Vector4</code></td><td><code>w, x, y, z</code>, 16-byte aligned <code>__m128</code> union</td><td>Runtime-dispatched (Scalar/SSE2/SSE4.1/AVX) <span class="badge">PR #30</span></td></tr>
 <tr><td><code>Vector2</code></td><td><code>x, y</code></td><td>Scalar single operations; batch operations use AVX when compiled with it</td></tr>
 <tr><td><code>VectorN&lt;T, N&gt;</code></td><td><code>std::array&lt;T, N&gt;</code> (arithmetic <code>T</code>, <code>N &gt; 0</code>, checked by <code>static_assert</code>)</td><td>None</td></tr>
 <tr><td><code>Constants.hpp</code>, <code>Functions.hpp</code>, <code>Utils.hpp</code></td><td>Free functions and constants</td><td>&mdash;</td></tr>
@@ -103,16 +103,20 @@
 
 <h2 id="build">Build requirement: AVX <span class="badge">PR #27</span></h2>
 <p><code>math/CMakeLists.txt</code> compiles the library with <strong>PUBLIC</strong> <code>/arch:AVX</code> on MSVC and <code>-msse2 -msse4.1 -mavx</code> elsewhere. Because the option is PUBLIC, every target linking <code>math</code> (the engine, games, tests) is compiled for AVX, so the whole binary requires an AVX-capable CPU. The lower SIMD tiers select between algorithms; they are not a fallback for older hardware.</p>
+<div class="callout note" id="design-simd-tiers">
+<p class="callout-title">Design decision: SIMD tiers are an algorithm choice, not a compatibility fallback</p>
+<p>The build targets AVX once, for every target, instead of producing per-CPU binaries or per-function target attributes. The compiler may then use AVX encodings anywhere, so the binary needs an AVX CPU whatever tier is selected. The runtime tiers exist so that each implementation (scalar, SSE2, SSE4.1, AVX) can be selected, tested against scalar in the same process, and benchmarked. That is why the default is scalar, why <code>SetSIMDLevel</code> can switch in either direction, and why every tier has a written contract: bit-exact for the rounding, sign and min/max operations, within a relative 1e-5 for the rest (see <a href="#correctness">Correctness relative to scalar</a>). Supporting pre-AVX CPUs would mean dropping the PUBLIC flag and isolating the AVX code, not selecting a lower tier.</p>
+</div>
 <p>MSVC never defines <code>__SSE4_1__</code>, even with <code>/arch:AVX</code>. <code>CpuInfo.hpp</code> therefore defines <code>N2_MATH_SSE41</code> when either <code>__SSE4_1__</code> or <code>__AVX__</code> is defined, and the dispatched types compile their SSE4.1 implementations under that macro. Before PR #27 the SSE4.1 code was dead on MSVC.</p>
 <p class="src">Source: <code>math/CMakeLists.txt</code>; <code>math/include/math/CpuInfo.hpp</code>; <code>math/include/math/MathRegistrar.hpp</code> (doc comment on <code>SetSIMDLevel</code>)</p>
 
 <h2 id="simd-dispatch">SIMD dispatch tiers <span class="badge">PR #27</span></h2>
-<p><code>Vector3</code>, <code>Quaternion</code>, <code>Matrix&lt;float,4,4&gt;</code> and <code>Matrix&lt;float,3,3&gt;</code> route their operations through static function pointers. The tier is a process-wide setting:</p>
+<p><code>Vector3</code>, <code>Vector4</code> <span class="badge">PR #30</span>, <code>Quaternion</code>, <code>Matrix&lt;float,4,4&gt;</code> and <code>Matrix&lt;float,3,3&gt;</code> route their operations through static function pointers. The tier is a process-wide setting:</p>
 <pre class="lang-cpp"><code>enum class SIMDLevel { Scalar, SSE2, SSE41, AVX }; // lowest to highest
 
 SIMDLevel DetectSIMDLevel();               // highest tier this CPU and OS support
 SIMDLevel ClampSIMDLevel(SIMDLevel level); // min(level, DetectSIMDLevel())
-void SetSIMDLevel(SIMDLevel level);        // switch all four types (clamped)
+void SetSIMDLevel(SIMDLevel level);        // switch all five types (clamped)
 void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), with a report on stdout
 </code></pre>
 <ul>
@@ -129,7 +133,7 @@ void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), w
 <li>AVX requires the CPUID AVX bit <strong>and</strong> OSXSAVE <strong>and</strong> an XGETBV check that the OS saves the YMM state (<code>XCR0 &amp; 0x6 == 0x6</code>). XGETBV is only executed when OSXSAVE is reported, since it is undefined otherwise. AVX2 additionally requires AVX.</li>
 <li>The tier is AVX if AVX and SSE4.1 are available, else SSE4.1, else SSE2, else Scalar.</li>
 </ul>
-<p class="src">Source: <code>math/include/math/CpuInfo.hpp</code> — <code>DetectCPUFeatures</code>, <code>OSSavesAVXState</code>, <code>DetectSIMDLevel</code>, <code>ClampSIMDLevel</code>; <code>math/src/math/MathRegistrar.cpp</code> — <code>InitializeSIMD</code>, <code>SetSIMDLevel</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; tests: <code>SimdDispatchTest</code> fixture</p>
+<p class="src">Source: <code>math/include/math/CpuInfo.hpp</code> — <code>DetectCPUFeatures</code>, <code>OSSavesAVXState</code>, <code>DetectSIMDLevel</code>, <code>ClampSIMDLevel</code>; <code>math/src/math/MathRegistrar.cpp</code> — <code>InitializeSIMD</code>, <code>SetSIMDLevel</code> (forwards to <code>Vector3</code>, <code>Vector4</code>, <code>Quaternion</code> and both float matrices); <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; tests: <code>SimdDispatchTest</code> fixture</p>
 
 <h3 id="tier-table">What each tier switches on</h3>
 <div class="table-wrap">
@@ -137,13 +141,14 @@ void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), w
 <thead><tr><th>Type</th><th>SSE2</th><th>SSE4.1</th><th>AVX</th></tr></thead>
 <tbody>
 <tr><td><code>Vector3</code></td><td>Add, Sub, scalar Mul/Div, Dot, Cross, Length, Normalize, Distance, Min, Max, Abs (Floor/Ceil/Round stay scalar: they need SSE4.1)</td><td>Also Dot, Length, Normalize, Distance via <code>dpps</code>; Floor, Ceil, Round</td><td>Same single operations as SSE4.1; batch operations use their AVX versions</td></tr>
+<tr><td><code>Vector4</code> <span class="badge">PR #30</span></td><td>Add, Sub, scalar Mul/Div, Scale, Dot, Length, Normalize, Min, Max, Abs (Floor/Ceil/Round stay scalar)</td><td>Also Dot, Length, Normalize via <code>dpps</code>; Floor, Ceil, Round</td><td>Same single operations as SSE4.1; <code>AddBatch</code>, <code>SubBatch</code>, <code>ScalarMulBatch</code>, <code>DotBatch</code>, <code>LengthBatch</code> and <code>NormalizeBatch</code> use AVX (<code>TransformBatch</code> always loops)</td></tr>
 <tr><td><code>Quaternion</code></td><td>Add, Sub, Mul, scalar Mul, Dot, Length, Normalize</td><td>Dot, Length, Normalize via <code>dpps</code></td><td>Same as SSE4.1</td></tr>
 <tr><td><code>Matrix&lt;float,4,4&gt;</code></td><td>Multiply, Add, Sub, scalar Mul, Transpose, TransformPoint; Inverse and Determinant call the scalar code</td><td>TransformPoint via <code>dpps</code></td><td>Same as SSE4.1</td></tr>
 <tr><td><code>Matrix&lt;float,3,3&gt;</code></td><td>Add, Sub, scalar Mul (Multiply and Transpose call the scalar code)</td><td>Same as SSE2</td><td>Same as SSE2</td></tr>
 </tbody>
 </table>
 </div>
-<p class="src">Source: <code>Vector3::SetSIMDLevel</code> (<code>math/src/math/Vector3.cpp</code>), <code>Quaternion::SetSIMDLevel</code> (<code>Quaternion.cpp</code>), <code>Matrix&lt;float,4,4&gt;::SetSIMDLevel</code> and <code>Matrix&lt;float,3,3&gt;::SetSIMDLevel</code> (<code>Matrix.hpp</code>)</p>
+<p class="src">Source: <code>Vector3::SetSIMDLevel</code> (<code>math/src/math/Vector3.cpp</code>), <code>Vector4::SetSIMDLevel</code> (<code>math/src/math/Vector4.cpp</code>), <code>Quaternion::SetSIMDLevel</code> (<code>Quaternion.cpp</code>), <code>Matrix&lt;float,4,4&gt;::SetSIMDLevel</code> and <code>Matrix&lt;float,3,3&gt;::SetSIMDLevel</code> (<code>Matrix.hpp</code>)</p>
 
 <h2 id="correctness">Correctness relative to scalar <span class="badge">PR #27</span></h2>
 <p>Before PR #27, the SIMD paths a running game used gave wrong results (for example <code>(1,2,3)&middot;(4,5,6)</code> returned 44), while CI ran only scalar code. <code>tests/math/math_types/SimdDispatchTests.cpp</code> now runs every dispatched operation under SSE2, SSE41 and AVX and compares it with the scalar result, resetting to Scalar around every test.</p>
@@ -154,20 +159,24 @@ void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), w
 <tr><td><code>Vector3</code> Floor, Ceil, Round, Abs, Min, Max</td><td><strong>Bit-exact</strong>, including the sign of zero, &plusmn;0.49999997, -0.5, 2<sup>23</sup>+1, &plusmn;1e10, &plusmn;inf and NaN in each lane (any NaN matches any NaN)</td><td><code>Vector3ExactOperations</code></td></tr>
 <tr><td><code>Vector3</code> Add, Sub, Negate, scalar Mul/Div, Dot, Cross, Length, LengthSquared, Normalized, Distance</td><td>Within a relative tolerance of 1e-5 (SIMD may sum in a different order or divide instead of multiplying by a reciprocal). Garbage in the padding lane does not leak into results.</td><td><code>Vector3Operations</code></td></tr>
 <tr><td><code>Vector3</code> batch operations (including the scalar tail)</td><td>Within tolerance</td><td><code>Vector3BatchOperations</code></td></tr>
+<tr><td><code>Vector4</code> Floor, Ceil, Round, Abs, Negate, Min, Max, Clamp <span class="badge">PR #30</span></td><td><strong>Bit-exact</strong> on the same kind of edge values, with NaN in each lane</td><td><code>Vector4ExactOperations</code></td></tr>
+<tr><td><code>Vector4</code> Add, Sub, Scale, Negate, scalar Mul/Div, Dot, Length, Normalized, Distance, Lerp, ClampMagnitude <span class="badge">PR #30</span></td><td>Within tolerance</td><td><code>Vector4Operations</code></td></tr>
+<tr><td><code>Vector4</code> batch operations <span class="badge">PR #30</span></td><td>Within tolerance on samples; <code>DotBatch</code>, <code>LengthBatch</code> and <code>NormalizeBatch</code> bit-exact on edge values (NaN and inf inputs give NaN where scalar does)</td><td><code>Vector4BatchOperations</code></td></tr>
 <tr><td><code>Quaternion</code> Add, Sub, Mul, scalar Mul, Dot, Length, Normalized, Inverse, Rotate, Slerp</td><td>Within tolerance, on non-unit and zero inputs</td><td><code>QuaternionOperations</code></td></tr>
 <tr><td><code>Matrix&lt;float,4,4&gt;</code> and <code>Matrix&lt;float,3,3&gt;</code> operations</td><td>Within tolerance, including near-singular and projective 4&times;4 matrices</td><td><code>Matrix4Operations</code>, <code>Matrix3Operations</code></td></tr>
 <tr><td>Known values: Length(3,4,0) = 5, Dot = 32, quaternion product, rotation preserves length</td><td>Exact or near-exact at every tier</td><td><code>KnownValues</code></td></tr>
+<tr><td>Vector4 known values: Dot = 70, Length = 5, Distance = 5, normalize within 1e-7, near-zero vectors, Round of halves and -0.3, Min/Max with &plusmn;0 and NaN, negating +0 <span class="badge">PR #30</span></td><td>Exact or near-exact at every tier</td><td><code>Vector4KnownValues</code></td></tr>
 </tbody>
 </table>
 </div>
 <ul>
 <li><strong>Round</strong> follows <code>std::round</code> at every tier: halfway cases round away from zero (2.5 &rarr; 3, -2.5 &rarr; -3), the input's sign is kept (<code>Round(-0.3)</code> is -0), and NaN and &plusmn;inf pass through. The SSE4.1 version truncates and then steps away from zero, because the hardware's round-to-nearest mode rounds halves to even.</li>
 <li><strong>Min/Max</strong> match <code>std::min(a, b)</code> = <code>(b &lt; a) ? b : a</code> and <code>std::max(a, b)</code> = <code>(a &lt; b) ? b : a</code>, including which operand wins for NaN and for &plusmn;0.</li>
-<li><strong>Normalize</strong> uses a real square root and divide at every tier (no 12-bit <code>rsqrt</code> approximation), with the same near-zero rule as scalar: a vector shorter than <code>Constants::EPSILON</code> (1e-5) normalises to <code>Vector3::Zero</code>; a quaternion shorter than 1e-6 normalises to <code>Identity</code>.</li>
+<li><strong>Normalize</strong> uses a real square root and divide at every tier (no 12-bit <code>rsqrt</code> approximation), with the same near-zero rule as scalar: a <code>Vector3</code> or <code>Vector4</code> shorter than <code>Constants::EPSILON</code> (1e-5) normalises to <code>Zero</code>; a quaternion shorter than 1e-6 normalises to <code>Identity</code>.</li>
 </ul>
 <div class="callout guarantee">
 <p class="callout-title">Guarantee <span class="badge">PR #27</span></p>
-<p>Switching the SIMD tier never changes the result of <code>Vector3</code> Floor, Ceil, Round, Abs, Min or Max by even one bit, and changes every other dispatched <code>Vector3</code>, <code>Quaternion</code> and float matrix operation by at most a relative 1e-5 (<code>SimdDispatchTest</code>, all tiers the CPU supports).</p>
+<p>Switching the SIMD tier never changes the result of <code>Vector3</code> Floor, Ceil, Round, Abs, Min or Max, or of <code>Vector4</code> Floor, Ceil, Round, Abs, Negate, Min, Max or Clamp <span class="badge">PR #30</span>, by even one bit, and changes every other dispatched <code>Vector3</code>, <code>Vector4</code>, <code>Quaternion</code> and float matrix operation by at most a relative 1e-5 (<code>SimdDispatchTest</code>, all tiers the CPU supports).</p>
 </div>
 <p class="src">Source: <code>math/include/math/Vector3.hpp</code> — <code>RoundSSE41</code>, <code>MinSSE2</code>, <code>MaxSSE2</code>, <code>NormalizeSSE2</code>, <code>NormalizeSSE41</code>, <code>DotSSE2</code>; <code>math/include/math/Quaternion.hpp</code> — <code>MulSSE2</code>, <code>NormalizeSSE41</code>; tests: <code>SimdDispatchTests.cpp</code></p>
 
@@ -198,11 +207,30 @@ Vector3::DotBatch(a.data(), b.data(), dots.data(), a.size()); // caller sizes th
 <p><code>Vector4(float w, float x, float y, float z)</code> takes <code>w</code> first, stores it in lane 0, and converts to <code>VectorN&lt;float, 4&gt;</code> as <code>{w, x, y, z}</code>. <code>Vector4(1, 2, 3, 4)</code> has <code>x == 2</code>.</p>
 </div>
 <ul>
-<li><strong>Vector4 is not dispatched.</strong> It always uses intrinsics selected at compile time and ignores <code>SetSIMDLevel</code>. Fixed in PR #30, which gives it scalar defaults and SSE2/SSE4.1/AVX tiers switched by <code>SetSIMDLevel</code> <span class="badge">PR #30</span>.</li>
+<li><strong>Vector4 is dispatched like Vector3</strong> <span class="badge">PR #30</span>. It has private scalar, SSE2 and SSE4.1 implementations behind static function pointers that default to scalar, so it runs scalar code until <code>InitializeSIMD</code> or <code>Math::SetSIMDLevel</code> is called (before PR #30 it always used SIMD chosen at compile time). <code>Vector4::SetSIMDLevel</code> clamps the tier like the other types. Batch operations use AVX only at the AVX tier. See the <a href="#tier-table">tier table</a>.</li>
 <li><strong>Vector2</strong> is plain scalar code for single operations. Its batch operations use AVX whenever the build defines <code>__AVX__</code> (which it always does), independent of the selected tier.</li>
 <li><strong>VectorN</strong> is a generic fixed-size vector. Initialiser-list or iterator-range construction with the wrong number of elements throws <code>std::invalid_argument</code>. <code>Normalized()</code> of an exactly zero vector returns zero. <code>operator==</code> is exact, unlike <code>Vector2/3/4</code>, which compare within 1e-5.</li>
 </ul>
-<p class="src">Source: <code>math/include/math/Vector4.hpp</code>, <code>math/src/math/Vector4.cpp</code>, <code>math/include/math/Vector2.hpp</code>, <code>math/src/math/Vector2.cpp</code>, <code>math/include/math/VectorN.hpp</code>. Known Vector4 flaws are listed <a href="#known-flaws">below</a>.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee: Vector4 agrees with scalar at every tier <span class="badge">PR #30</span></p>
+<ul>
+<li><strong>Dot order.</strong> The scalar dot product sums <code>(w+x)+(y+z)</code>, the same order as <code>dpps</code>, the SSE2 reduction and the AVX horizontal add, so <code>Dot</code>, <code>Length</code>, <code>Normalize</code> and the dot-based batch results are bit-identical across tiers.</li>
+<li><strong>Normalize</strong> is a full-precision sqrt and divide (it used <code>_mm_rsqrt_ps</code>, about 12 bits). A vector shorter than 1e-5 becomes <code>Zero</code>. The AVX <code>NormalizeBatch</code> masks only lanes where <code>length &lt; EPSILON</code> (an ordered compare), so a NaN input stays NaN, as in scalar code; it used to become zero.</li>
+<li><strong>Round</strong> matches <code>std::round</code> (halves away from zero, sign of zero kept, NaN and &plusmn;inf pass through); it used to round halves to even under SSE4.1.</li>
+<li><strong>Min/Max</strong> match <code>std::min</code>/<code>std::max</code> for NaN and &plusmn;0 (operands passed as <code>(b, a)</code>). <strong>Unary minus</strong> multiplies by -1, so <code>-(+0)</code> is -0.</li>
+<li><strong>Same code on every compiler.</strong> The SSE4.1 and AVX paths are guarded by <code>N2_MATH_SSE41</code> and <code>__AVX__</code>, like the other types. They used <code>__SSE4_1__</code>, which MSVC never defines, so MSVC and GCC/Clang builds took different paths.</li>
+</ul>
+<p>Tests: <code>Vector4KnownValues</code>, <code>Vector4Operations</code>, <code>Vector4ExactOperations</code>, <code>Vector4BatchOperations</code>.</p>
+</div>
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Every <code>Vector4</code> operation is now an indirect call that cannot be inlined. Today's callers are Lua, <code>Camera</code> and serialization; this only matters if <code>Vector4</code> moves into hot loops. The public API is unchanged: <code>Dot</code>, <code>Length</code> and <code>Normalize</code> stay single non-static members, because the Lua bindings take their addresses.</p>
+</div>
+<div class="callout warning">
+<p class="callout-title">Warning: raw-pointer batch APIs and Color</p>
+<p>The raw-pointer <code>Vector4</code> batch functions (<code>AddBatch(const Vector4*, ...)</code> and the others) accept a <code>Common::Color*</code> implicitly, because <code>Color</code> derives from <code>Vector4</code>. <code>sizeof(Color)</code> is 48 bytes (it has reference members), so the batch would walk it with the wrong stride. Pass only contiguous <code>Vector4</code> arrays. Nothing outside the math library calls these today.</p>
+</div>
+<p class="src">Source: <code>math/include/math/Vector4.hpp</code> — <code>DotSSE2</code>, <code>NormalizeSSE2</code>, <code>NormalizeSSE41</code>, <code>RoundSSE41</code>, <code>MinSSE2</code>, <code>MaxSSE2</code>, the batch declarations; <code>math/src/math/Vector4.cpp</code> — <code>Vector4::SetSIMDLevel</code>, <code>NormalizeBatch</code>; <code>math/include/math/Vector2.hpp</code>, <code>math/src/math/Vector2.cpp</code>, <code>math/include/math/VectorN.hpp</code>; tests: <code>SimdDispatchTests.cpp</code></p>
 
 <h2 id="quaternion">Quaternion conventions</h2>
 <ul>
@@ -265,12 +293,12 @@ const Vector3 world = model.TransformPoint(localPoint); // scale, then rotate, t
 </tbody>
 </table>
 </div>
-<p><code>Functions</code> also has <code>Clamp</code>, <code>Clamp01</code>, <code>Lerp</code> (clamped <code>t</code>), <code>LerpUnclamped</code>, <code>DeltaAngle</code> and <code>LerpAngle</code> (degrees), and <code>MoveTowards</code>. <code>Utils</code> has <code>Smoothstep</code> and <code>Smootherstep</code>. The engine itself includes neither header today, but <code>test_project/src/Spin.cpp</code> includes <code>Functions.hpp</code> and uses <code>Functions::PingPong</code>.</p>
-<div class="callout warning">
-<p class="callout-title">Warning</p>
-<p><code>Math::Functions::MoveTowards</code> has no <code>return</code> statement; its conditional expression is evaluated and discarded. Calling it is undefined behaviour. Use <code>Vector3::MoveTowards</code> or write the scalar version inline.</p>
+<p><code>Functions</code> also has <code>Clamp</code>, <code>Clamp01</code>, <code>Lerp</code> (clamped <code>t</code>), <code>LerpUnclamped</code>, <code>DeltaAngle</code> and <code>LerpAngle</code> (degrees), and <code>MoveTowards</code>, which steps <code>current</code> towards <code>target</code> by at most <code>maxDelta</code> and returns <code>target</code> once it is within reach. <code>Utils</code> has <code>Smoothstep</code> and <code>Smootherstep</code>. The engine itself includes neither header today, but <code>test_project/src/Spin.cpp</code> includes <code>Functions.hpp</code> and uses <code>Functions::PingPong</code>.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee <span class="badge">PR #34</span></p>
+<p><code>Math::Functions::MoveTowards</code> returns its result. It used to have no <code>return</code> statement, so callers got an undefined value (<code>MoveTowardsStepsByMaxDelta</code>, <code>MoveTowardsStopsAtTheTarget</code>).</p>
 </div>
-<p class="src">Source: <code>math/include/math/Constants.hpp</code>, <code>math/include/math/Functions.hpp</code>, <code>math/include/math/Utils.hpp</code></p>
+<p class="src">Source: <code>math/include/math/Constants.hpp</code>, <code>math/include/math/Functions.hpp</code>, <code>math/include/math/Utils.hpp</code>; tests: <code>tests/math/math_types/FunctionsTests.cpp</code></p>
 
 <h2 id="random">Random</h2>
 <ul>
@@ -298,10 +326,6 @@ assert(parsed &amp;&amp; *parsed == id);
 
 <h2 id="known-flaws">Known flaws and open questions</h2>
 <div class="callout open-question">
-<p class="callout-title">Open question: Vector4 SIMD is unfixed and compiler-dependent <span class="badge">PR #30</span></p>
-<p><strong>Fixed in PR #30</strong> (stacked on PR #27): Vector4 joins the selectable dispatch with scalar defaults, uses a real <code>sqrt</code>, matches <code>std::round</code>/<code>std::min</code>/<code>std::max</code>, and gates its SSE4.1 code on <code>N2_MATH_SSE41</code>; every tier is tested against scalar. Until PR #30 merges, the following applies. PR #27 explicitly leaves <code>Vector4</code> for a follow-up. In <code>math/include/math/Vector4.hpp</code>, <code>Normalized()</code> uses <code>_mm_rsqrt_ps</code> (about 12 bits of precision) in both branches, and <code>Round()</code> uses <code>_MM_FROUND_TO_NEAREST_INT</code> (halves to even, unlike <code>std::round</code>) under <code>#ifdef __SSE4_1__</code>. Because MSVC never defines <code>__SSE4_1__</code>, an MSVC build takes the scalar <code>std::round</code> branch while GCC/Clang take the half-to-even one; <code>Dot</code>, <code>Length</code>, <code>Floor</code>, <code>Ceil</code> and some of the AVX batch paths in <code>Vector4.cpp</code> (<code>DotBatch</code>, <code>LengthBatch</code> and <code>NormalizeBatch</code>, gated on <code>__AVX__ &amp;&amp; __SSE4_1__</code>; the others are gated on <code>__AVX__</code> alone) likewise differ by compiler. <code>Min</code>/<code>Max</code> use <code>minps</code>/<code>maxps</code> directly, so their NaN and &plusmn;0 behaviour does not match <code>std::min</code>/<code>std::max</code>. None of this is tested.</p>
-</div>
-<div class="callout open-question">
 <p class="callout-title">Open question: Vector2 NormalizeBatch precision</p>
 <p><code>Vector2::NormalizeBatch</code> (<code>math/src/math/Vector2.cpp</code>) uses <code>_mm256_rsqrt_ps</code> in its AVX path, the same 12-bit approximation PR #27 removed from <code>Vector3</code>. Single-vector <code>Vector2::Normalized</code> uses a full-precision <code>std::sqrt</code>, so the batch and single results can differ.</p>
 </div>
@@ -311,7 +335,7 @@ assert(parsed &amp;&amp; *parsed == id);
 </div>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 

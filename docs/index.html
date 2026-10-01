@@ -71,25 +71,14 @@
 <li><a href="#ownership">Who owns what</a></li>
 <li><a href="#frame">How a frame runs</a></li>
 <li><a href="#cross-cutting">Cross-cutting rules</a></li>
+<li><a href="#design-decisions">Design decisions</a></li>
 <li><a href="#extending">Extending these docs</a></li>
 </ol>
 </div>
 
 <h2 id="scope">What these docs cover</h2>
-<p>This is the first version of the documentation. It describes the engine as it is on <code>master</code> <strong>plus four open pull requests</strong>, which are expected to merge:</p>
-<div class="table-wrap">
-<table>
-<thead><tr><th>PR</th><th>Topic</th><th>Main pages affected</th></tr></thead>
-<tbody>
-<tr><td><span class="badge">PR #26</span></td><td>PhysX mass, inertia and centre of mass derived from colliders</td><td><a href="physics.html">Physics</a></td></tr>
-<tr><td><span class="badge">PR #27</span></td><td>Correct SIMD math results; selectable SIMD tier</td><td><a href="math.html">Math &amp; SIMD</a></td></tr>
-<tr><td><span class="badge">PR #28</span></td><td>SceneManager keeps the caller's scene; one asset lookup across registries; scenes unloaded before subsystems shut down</td><td><a href="scenes.html">Scenes</a>, <a href="resources.html">Resources</a>, <a href="application.html">Application</a></td></tr>
-<tr><td><span class="badge">PR #29</span></td><td>Lua gets checked handles instead of raw engine pointers</td><td><a href="scripting-lua.html">Lua scripting</a>, <a href="gameobjects-components.html">GameObjects</a></td></tr>
-</tbody>
-</table>
-</div>
-<p>Behaviour introduced by one of these PRs carries its badge. Everything else is on <code>master</code>, most of it settled by the fixes for the <a href="https://github.com/EpicNicks/N2Engine/issues/16">engine code review (#16)</a> in PRs #17–#24.</p>
-<p>The pages are written from the source code, cross-checked against those PR descriptions and review threads. Where the code and the prose disagree, the code wins. Where behaviour is unclear or looks inconsistent, the page says so in an <em>Open question</em> callout instead of guessing.</p>
+<p>These pages describe the engine as it is on <code>master</code>. Behaviour that a specific pull request introduced or changed carries a badge such as <span class="badge">PR #34</span>, so you can find the PR description and review thread that explain it. Much of the baseline was settled by the fixes for the <a href="https://github.com/EpicNicks/N2Engine/issues/16">engine code review (#16)</a> in PRs #17–#24; later work added PhysX mass properties (#26), SIMD correctness and dispatch (#27, #30), scene storage and asset registries (#28), Lua checked handles (#29, #31), editor-server hardening (#33) and core lifetime fixes (#34).</p>
+<p>The pages are written from the source code, cross-checked against the PR descriptions and review threads. Where the code and the prose disagree, the code wins. Where behaviour is unclear or looks inconsistent, the page says so in an <em>Open question</em> callout instead of guessing.</p>
 <p>Out of scope for this version: the renderers (OpenGL, Vulkan, software) beyond where they appear in the frame, the example projects, and full API listings. The headers remain the API reference.</p>
 
 <h2 id="reading">How to read a page</h2>
@@ -129,7 +118,7 @@
 </tbody>
 </table>
 </div>
-<p>Two build options change behaviour: <code>N2ENGINE_USE_PHYSX</code> (default <code>ON</code>; when <code>OFF</code> the engine has no physics backend and reports physics as Disabled) and <code>N2ENGINE_BUILD_TESTS</code>. The math target requires AVX (<code>/arch:AVX</code>, a PUBLIC flag on the <code>math</code> target).</p>
+<p>Two build options change behaviour: <code>N2ENGINE_USE_PHYSX</code> (default <code>ON</code>; when <code>OFF</code> the engine has no physics backend and reports physics as Disabled) and <code>N2ENGINE_BUILD_TESTS</code>. The math target requires AVX (<code>/arch:AVX</code>, a PUBLIC flag on the <code>math</code> target); see <a href="math.html#design-simd-tiers">why SIMD tiers still exist</a>.</p>
 
 <h2 id="map">Architecture map</h2>
 <div class="map">
@@ -151,14 +140,14 @@
 <p>Most lifetime rules in the engine follow from this ownership graph:</p>
 <ul>
 <li><strong><code>Application</code></strong> (function-local singleton) owns the <code>Window</code> (which owns the <code>InputSystem</code> and the renderer), the main <code>Camera</code>, and the 3D physics backend.</li>
-<li><strong><code>SceneManager</code></strong> (singleton) owns the stored scene snapshots (<code>StoredScene{name, data}</code> JSON) <span class="badge">PR #28</span>, the loaded <code>Scene</code>, and a pending scene, each behind <code>std::unique_ptr</code>.</li>
+<li><strong><code>SceneManager</code></strong> (singleton) owns the stored scene snapshots (<code>StoredScene{name, data}</code> JSON), the loaded <code>Scene</code>, and a pending scene, each behind <code>std::unique_ptr</code>.</li>
 <li><strong><code>Scene</code></strong> owns its root GameObjects (<code>std::shared_ptr&lt;GameObject&gt;</code>) and its coroutine scheduler. It also keeps <em>non-owning</em> lists of components and lights for iteration, which every removal path updates through <code>Scene::DetachComponent</code>. Scenes cannot be moved, because objects point back at them.</li>
 <li><strong><code>GameObject</code></strong> owns its children (<code>shared_ptr</code>) and its components (<code>std::unique_ptr&lt;Component&gt;</code>). Anything else that refers to a component, including Lua, holds a raw pointer or a checked handle.</li>
 <li><strong>Subsystem singletons</strong> (<code>AudioSystem</code>, <code>LuaRuntime</code>, <code>Logger</code>) are process-wide. <code>AudioSystem</code> is deliberately never destroyed, so components can unregister from it during static destruction.</li>
 </ul>
 <div class="callout note">
 <p class="callout-title">Note</p>
-<p>A GameObject can outlive its scene, for example when C++ code or a Lua handle still holds the <code>shared_ptr</code>. When a scene is destroyed it clears the scene pointer of the objects it can still find, so they are inert rather than dangling. Objects detached with <code>RemoveChild</code> can be missed; see the open question under <a href="gameobjects-components.html#purge-and-destructor">Purge and ~GameObject</a>.</p>
+<p>A GameObject can outlive its scene, for example when C++ code or a Lua handle still holds the <code>shared_ptr</code>. When a scene is torn down it clears the scene pointer of every torn-down object that still belongs to it, so they are inert rather than dangling. <code>RemoveChild</code> no longer leaves objects behind: a child removed inside a scene becomes a root of that scene; see <a href="gameobjects-components.html#hierarchy">Hierarchy</a>.</p>
 </div>
 
 <h2 id="frame">How a frame runs</h2>
@@ -181,11 +170,28 @@
 <p>A few rules recur on almost every page:</p>
 <ul>
 <li><strong>Structural changes are deferred.</strong> Destroying an object, switching scenes and quitting take effect at the end of the frame. New components are attached at the start of the next frame.</li>
-<li><strong>One teardown sequence.</strong> Every way a component is <em>destroyed</em> (<code>Destroy</code>, <code>RemoveComponent</code>, scene switch, shutdown) runs <code>OnDisable</code> (if it was enabled in an active hierarchy) and then <code>OnDestroy</code>, once, unless a callback re-enters teardown (the destroyed flag is set only after <code>OnDestroy</code> returns). Detaching and releasing an object (<code>RemoveChild</code>, <code>RemoveRootGameObject</code>, the editor's DestroyEntity), or a scene dropped by SceneManager without being loaded, runs no callbacks. See <a href="gameobjects-components.html">GameObjects &amp; components</a>.</li>
+<li><strong>One teardown sequence.</strong> Every way a component is <em>destroyed</em> (<code>Destroy</code>, <code>RemoveComponent</code>, scene switch, shutdown) runs <code>OnDisable</code> (if it was enabled in an active hierarchy) and then <code>OnDestroy</code>, exactly once unless a callback throws (the component is marked destroyed only after <code>OnDestroy</code> returns, so a later teardown path runs its callbacks again); a component that removes or destroys itself from those callbacks does not re-enter teardown. The editor's DestroyEntity runs the same sequence. Releasing an object with <code>RemoveRootGameObject</code>, or a scene dropped by SceneManager without being loaded, runs no callbacks. <code>RemoveChild</code> is not a release: inside a scene the child becomes a root and keeps running. See <a href="gameobjects-components.html">GameObjects &amp; components</a>.</li>
 <li><strong>Safe modification during iteration.</strong> Component updates, event dispatch, input action updates, coroutine updates and physics event dispatch all tolerate handlers that add or remove things while they run. Removals take effect immediately for lookup and are compacted after the loop.</li>
-<li><strong>Errors are logged, not fatal.</strong> Bad scene JSON, corrupt asset metadata, unknown input binding names and throwing scripts or coroutines are reported through the <a href="logging-and-editor.html">Logger</a>, and the engine keeps running with the previous valid state. The exception is the editor server, where an exception in a command handler terminates the host (see <a href="logging-and-editor.html">Logging, health &amp; editor</a>).</li>
+<li><strong>Errors are logged, not fatal.</strong> Bad scene JSON, corrupt asset metadata, unknown input binding names and throwing scripts or coroutines are reported through the <a href="logging-and-editor.html">Logger</a>, and the engine keeps running with the previous valid state. The editor server follows the same rule for its clients: a failing command is logged and answered with an <code>Error</code> response instead of terminating the host (see <a href="logging-and-editor.html">Logging, health &amp; editor</a>).</li>
 <li><strong>Headless is a first-class mode.</strong> The engine runs without a window, renderer or audio device. Tests and the editor host rely on this, and <code>Application::Init</code> reports what is missing in its <code>EngineHealth</code>.</li>
 </ul>
+
+<h2 id="design-decisions">Design decisions</h2>
+<p>Some behaviour is a deliberate choice rather than an accident of the code. Each decision is explained once, on the page it belongs to:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Decision</th><th>In short</th></tr></thead>
+<tbody>
+<tr><td><a href="gameobjects-components.html#design-removechild">RemoveChild works like Unity</a></td><td>Removing a child inside a scene makes it a root of that scene, the same as <code>SetParent(nullptr)</code>; it never leaves a child in a scene but unreachable from its roots. Outside a scene it just detaches.</td></tr>
+<tr><td><a href="gameobjects-components.html#design-getcomponent">GetComponent returns the first of a type</a></td><td>The first component of the exact type added; stable as more are added and across save/load, and an O(1) lookup.</td></tr>
+<tr><td><a href="application.html#design-quit">Quit is a request</a></td><td><code>Application::Quit()</code> sets a flag; the frame finishes and teardown runs in its usual order.</td></tr>
+<tr><td><a href="scripting-lua.html#design-handles">Lua handles are valid until teardown</a></td><td>Scripts get checked handles that stay valid until teardown (or until freed, for scenes, action maps and actions); using a freed object is a Lua error, never a crash.</td></tr>
+<tr><td><a href="logging-and-editor.html#design-loopback">The editor server is loopback-only</a></td><td>The protocol has no authentication, so it listens on 127.0.0.1 unless <code>--bind</code> says otherwise, and runs every command on the main thread.</td></tr>
+<tr><td><a href="physics.html#design-mass">Rigidbody mass is authoritative</a></td><td>The mass you set is the body's mass; inertia and centre of mass come from the collider shapes.</td></tr>
+<tr><td><a href="math.html#design-simd-tiers">SIMD tiers are an algorithm choice</a></td><td>The build already requires AVX; tiers select which implementation runs so each can be tested against scalar, under a written per-operation contract.</td></tr>
+</tbody>
+</table>
+</div>
 
 <h2 id="extending">Extending these docs</h2>
 <p>The site is plain HTML and CSS: no build step, no JavaScript, no external fonts or scripts. It works when opened from the filesystem and on GitHub Pages. <code>docs/README.md</code> explains the conventions in full. In short:</p>
@@ -198,7 +204,7 @@
 </ul>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="https://github.com/EpicNicks/N2Engine">Repository</a>
 </div>
 

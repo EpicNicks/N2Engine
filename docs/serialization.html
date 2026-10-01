@@ -140,11 +140,18 @@
 <h2 id="component-registry">ComponentRegistry: type name to constructor</h2>
 <p><code>ComponentRegistry</code> is a singleton map from a type-name string to a factory <code>std::unique_ptr&lt;Component&gt;(GameObject&amp;)</code>. The name a component writes (<code>GetTypeName()</code>) must match the name it is registered under, or it cannot be loaded.</p>
 <ul>
-<li><code>REGISTER_COMPONENT(ClassName)</code> in a <code>.cpp</code> file registers <code>#ClassName</code> (the unqualified token) with a factory that calls <code>std::make_unique&lt;ClassName&gt;(go)</code>. Write it inside the class's namespace, as <code>BoxCollider.cpp</code> does.</li>
+<li><strong>Engine components</strong> are registered by <code>RegisterBuiltinComponents</code> (<code>engine/src/serialization/BuiltinComponents.cpp</code>), which the registry's constructor calls <span class="badge">PR #34</span>. Anything that creates components by name therefore links that file and every built-in type with it, whatever headers the program includes.</li>
+<li><strong>Game components</strong> use <code>REGISTER_COMPONENT(ClassName)</code>, which registers <code>#ClassName</code> (the unqualified token) with a factory that calls <code>std::make_unique&lt;ClassName&gt;(go)</code>, through a static <code>ComponentRegistrar</code>. <code>test_project</code>'s <code>Spin</code> does this.</li>
 <li><code>Register(name, factory)</code> overwrites any earlier factory with the same name.</li>
 <li><code>Create(name, go)</code> returns <code>nullptr</code> for an unknown name.</li>
 </ul>
-<p>Registered on the integration branch: <code>BoxCollider</code>, <code>SphereCollider</code>, <code>CapsuleCollider</code>, <code>Light</code> (via <code>REGISTER_COMPONENT</code>), and <code>LuaComponent</code> (via a static registrar in <code>LuaComponent.cpp</code>).</p>
+<p>Built-in types <span class="badge">PR #34</span>: <code>Rigidbody</code>, <code>BoxCollider</code>, <code>SphereCollider</code>, <code>CapsuleCollider</code>, <code>Light</code>, <code>AudioSource</code>, <code>AudioListener</code>, <code>CubeRenderer</code>, <code>SphereRenderer</code>, <code>QuadRenderer</code> and <code>LuaComponent</code>. (<code>LuaComponent.cpp</code> also keeps its own static registrar for the same name; registering twice just overwrites the factory.) Their already-declared fields now round-trip:</p>
+<ul>
+<li><strong>Rigidbody</strong>: body type, mass and gravity flag. See <a href="physics.html#scene-switch">Physics</a>.</li>
+<li><strong>AudioSource</strong>: its clip (as an <a href="#asset-references">asset reference</a>), volume, pitch, loop, spatial, play-on-awake, min/max distance, rolloff and mixer group. See <a href="audio.html#audio-source">Audio</a>.</li>
+<li><strong>AudioListener</strong>: the component itself (it has no fields beyond the base ones).</li>
+<li><strong>Renderers</strong>: colour and size, plus the sphere's latitude and longitude segment counts.</li>
+</ul>
 <pre class="lang-cpp"><code>// MyComponent.cpp
 namespace Game
 {
@@ -153,16 +160,20 @@ namespace Game
     std::string Health::GetTypeName() const { return "Health"; } // must match
 }
 </code></pre>
-<p>An unknown <code>"type"</code> is <strong>dropped silently</strong>: <code>GameObject::Deserialize</code> skips the entry when <code>ComponentRegistry::Create</code> returns <code>nullptr</code>, and nothing is logged. A comment in <code>Scene::FromJSON</code> says invalid component types "will error", which the code doesn't do.</p>
-<div class="callout warning">
-<p class="callout-title">Warning</p>
-<p>Several engine components are <strong>not registered</strong>: <code>Physics::Rigidbody</code> (whose <code>.cpp</code> includes <code>ComponentRegistry.hpp</code> but has no <code>REGISTER_COMPONENT</code>), <code>Audio::AudioSource</code>, <code>Audio::AudioListener</code> and the example renderers. They write themselves into the JSON, but <code>GameObject::Deserialize</code> drops them on <strong>every load, with no log</strong>. There is no other load path: <code>SceneManager</code> rebuilds every scene from its stored JSON on every load and every scene switch, including switching back to a scene you were in. The only scene object not rebuilt is the one you passed to <code>SceneManager::AddScene(scene, true)</code> (the initial scene from <code>Application::Init</code>), and only for that first load; a later switch back to it rebuilds it from JSON and loses them too. After a reload, objects that had a <code>Rigidbody</code> come back with collider-only static bodies, and audio sources and listeners are simply gone. Until these are registered, add them from C++ after each load (see <a href="physics.html">Physics</a> and <a href="audio.html#audio-source">Audio</a>).</p>
+<p>An unknown <code>"type"</code> is skipped with a <strong>warning</strong> <span class="badge">PR #34</span>: <code>GameObject::Deserialize</code> logs <code>"Unknown component type '...' on '...' was not loaded"</code> and the load continues without that component. Before PR #34 it was skipped silently.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee <span class="badge">PR #34</span></p>
+<p>Every engine component survives a scene load with its serialized fields, whether or not the program includes the component's header, and a component type the registry does not know is reported in the log rather than vanishing silently (<code>ComponentRoundTripTest</code>: <code>RigidbodyAndItsSettingsSurviveASceneLoad</code>, <code>AudioSourceAndItsSettingsSurviveASceneLoad</code>, <code>AudioListenerSurvivesASceneLoad</code>, <code>ExampleRenderersAndTheirSettingsSurviveASceneLoad</code>, <code>BuiltinTypesAreRegisteredWithoutIncludingTheirHeaders</code>, <code>UnknownComponentTypeIsReportedNotSkippedSilently</code>).</p>
 </div>
 <div class="callout note">
 <p class="callout-title">Note</p>
-<p>Registration happens in static initializers. In a static library, the linker drops an object file that nothing references, together with its registrar. This is what happened to <code>AudioClipLoader.cpp</code> before #23. Keep each <code>REGISTER_COMPONENT</code> in a file the program references for other reasons, such as the component's own <code>.cpp</code>.</p>
+<p>This matters because <code>SceneManager</code> rebuilds every scene from its stored JSON on every load and every scene switch; the only scene object not rebuilt is the one passed to <code>SceneManager::AddScene(scene, true)</code>, for its first load. Before PR #34, <code>Rigidbody</code>, <code>AudioSource</code>, <code>AudioListener</code> and the renderers were not registered, so they were dropped on every load.</p>
 </div>
-<p class="src">Source: <code>engine/include/engine/serialization/ComponentRegistry.hpp</code> — <code>ComponentRegistry</code>, <code>ComponentRegistrar</code>, <code>REGISTER_COMPONENT</code>; <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponentRegistrar</code></p>
+<div class="callout warning">
+<p class="callout-title">Warning: REGISTER_COMPONENT and static libraries</p>
+<p><code>REGISTER_COMPONENT</code> registers from a static initializer. In a static library, the linker drops an object file that nothing references, together with its registrar; this is what happened to <code>AudioClipLoader.cpp</code> before #23, and why the engine's own components moved to <code>BuiltinComponents.cpp</code>. Put a game component's <code>REGISTER_COMPONENT</code> in a file the program references for other reasons, such as the component's own <code>.cpp</code>, or in its header.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/serialization/ComponentRegistry.hpp</code> — <code>ComponentRegistry</code>, <code>ComponentRegistrar</code>, <code>REGISTER_COMPONENT</code>; <code>engine/src/serialization/BuiltinComponents.cpp</code> — <code>RegisterBuiltinComponents</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::Deserialize</code>; tests: <code>tests/engine/serialization/ComponentRoundTripTests.cpp</code></p>
 
 <h2 id="serializable-component">SerializableComponent and RegisterMember</h2>
 <p>Derive from <code>SerializableComponent</code> and register fields in the constructor. <code>Serialize()</code> writes the base fields (<code>uuid</code>, <code>isActive</code>) and then every registered member, in registration order. <code>Deserialize(j, resolver)</code> reads the base fields, then runs each member's deserializer.</p>
@@ -279,7 +290,7 @@ resolver.ResolveAll();                        // fills holder's reference member
 <tr><td>GameObject without <code>uuid</code> or <code>name</code>; component entry without <code>type</code> or <code>data</code></td><td><code>.at()</code> throws <code>out_of_range</code>. <code>Scene::FromJSON</code> catches it, logs <code>"Failed to load scene: ..."</code> and returns <code>nullptr</code>. Before #23, <code>const operator[]</code> on a missing key asserted or aborted.</td></tr>
 <tr><td>Value of the wrong JSON type (e.g. a string where a float member is expected, <code>name</code> not a string)</td><td><code>type_error</code>, handled the same way as above.</td></tr>
 <tr><td>Invalid UUID string</td><td>Error logged, ZERO used, load continues.</td></tr>
-<tr><td>Unknown component <code>type</code></td><td>Component skipped silently, load continues. This includes the unregistered engine components <code>Rigidbody</code>, <code>AudioSource</code>, <code>AudioListener</code> and the example renderers (see the <a href="#component-registry">warning</a>).</td></tr>
+<tr><td>Unknown component <code>type</code></td><td>Component skipped with a warning, load continues <span class="badge">PR #34</span>. Every engine component is registered (see <a href="#component-registry">ComponentRegistry</a>).</td></tr>
 <tr><td>Unknown enum string (e.g. <code>Light</code> <code>"type": "Area"</code>)</td><td><code>NLOHMANN_JSON_SERIALIZE_ENUM</code> maps it to the enum's <em>first</em> value (<code>Directional</code>) silently.</td></tr>
 <tr><td>Unresolvable object/component reference</td><td><code>nullptr</code>, silently.</td></tr>
 <tr><td>Unresolvable asset reference</td><td><code>nullptr</code> plus a warning.</td></tr>
@@ -323,7 +334,7 @@ resolver.ResolveAll();                        // fills holder's reference member
 <p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::Serialize</code>, <code>LuaComponent::Deserialize</code>; <code>engine/include/engine/base/Asset.hpp</code> — <code>Asset::Serialize</code></p>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 

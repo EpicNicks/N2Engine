@@ -252,7 +252,7 @@ auto script = IO::ResourceLoader::Instance().Load&lt;LuaScript&gt;(IO::ResourceP
 <thead><tr><th>Extensions</th><th>Asset type</th><th>Registered by</th><th>Notes</th></tr></thead>
 <tbody>
 <tr><td><code>.wav</code>, <code>.ogg</code>, <code>.mp3</code>, <code>.flac</code></td><td><code>Audio::AudioClip</code></td><td>A static registrar in <code>AudioClip.cpp</code>, calling <code>LoadAudioClipFromFile</code></td><td>Uses dr_wav, stb_vorbis, dr_mp3 and dr_flac. Creates an OpenAL buffer, so the <code>AudioSystem</code> must be initialized first. Before #23 the registrar lived in a file the linker dropped. See <a href="audio.html">Audio</a>.</td></tr>
-<tr><td><code>.lua</code></td><td><code>LuaScript</code></td><td>A static registrar in <code>LuaComponent.cpp</code> (<code>RegisterSimpleLoader&lt;LuaScript&gt;</code>)</td><td><code>LuaScript::Load</code> reads the whole file and fails on an <strong>empty</strong> file, so an empty <code>.lua</code> doesn't load. See <a href="scripting-lua.html">Lua scripting</a>.</td></tr>
+<tr><td><code>.lua</code></td><td><code>LuaScript</code></td><td>A static registrar in <code>LuaComponent.cpp</code> (<code>RegisterSimpleLoader&lt;LuaScript&gt;</code>)</td><td><code>LuaScript::Load</code> reads the whole file and fails on an <strong>empty</strong> file, so an empty <code>.lua</code> doesn't load. The engine runs scripts as text only, so a <code>.lua</code> file containing precompiled bytecode loads as an asset but is rejected when it runs <span class="badge">PR #34</span> (<code>EngineLoadingRejectsBinaryChunks</code>). See <a href="scripting-lua.html">Lua scripting</a>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -333,7 +333,7 @@ res.RegisterAsset(generated);
 <p class="src">Source: <code>engine/include/engine/base/Asset.hpp</code>, <code>engine/src/base/Asset.cpp</code> — <code>Asset::Asset</code>, <code>Asset::SetUUID</code>; <code>engine/include/engine/scripting/LuaScript.hpp</code></p>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
