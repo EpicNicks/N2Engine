@@ -60,6 +60,91 @@ namespace N2Engine::Text::Detail
             return true;
         }
 
+        struct TableSpan
+        {
+            std::size_t offset = 0;
+            std::size_t length = 0;
+        };
+
+        // The first table with this tag, as stb_truetype finds it (the directory must already fit the data)
+        std::optional<TableSpan> FindTable(const std::vector<unsigned char> &data, const std::size_t fontStart,
+                                           const char (&tag)[5])
+        {
+            const unsigned char *header = data.data() + fontStart;
+            const std::size_t tableCount = ReadU16(header + 4);
+            for (std::size_t i = 0; i < tableCount; ++i)
+            {
+                const unsigned char *record = header + 12 + i * 16;
+                if (std::memcmp(record, tag, 4) == 0)
+                {
+                    return TableSpan{ReadU32(record + 8), ReadU32(record + 12)};
+                }
+            }
+            return std::nullopt;
+        }
+
+        // stb_truetype reads these tables at fixed offsets and indexes loca and hmtx by glyph id without
+        // checking their lengths. Checking the sizes and the loca offsets up front turns a corrupt or cut-down
+        // table into a load error instead of a read past the table (or the buffer). Runs before
+        // stbtt_InitFont, which already reads head and maxp.
+        bool TablesAreConsistent(const std::vector<unsigned char> &data, const std::size_t fontStart, std::string &error)
+        {
+            const auto fail = [&error](std::string reason)
+            {
+                error = std::move(reason);
+                return false;
+            };
+            const unsigned char *bytes = data.data();
+
+            const auto head = FindTable(data, fontStart, "head");
+            if (!head || head->length < 54)
+                return fail("the head table is missing or shorter than 54 bytes");
+            const auto indexToLocFormat = static_cast<std::int16_t>(ReadU16(bytes + head->offset + 50));
+            if (indexToLocFormat != 0 && indexToLocFormat != 1)
+                return fail(std::format("head.indexToLocFormat is {} (must be 0 or 1)", indexToLocFormat));
+
+            const auto maxp = FindTable(data, fontStart, "maxp");
+            if (!maxp || maxp->length < 6)
+                return fail("the maxp table is missing or too short");
+            const std::size_t glyphCount = ReadU16(bytes + maxp->offset + 4);
+            if (glyphCount < 1)
+                return fail("the font has no glyphs (maxp.numGlyphs is 0)");
+
+            const auto hhea = FindTable(data, fontStart, "hhea");
+            if (!hhea || hhea->length < 36)
+                return fail("the hhea table is missing or shorter than 36 bytes");
+            const std::size_t hMetricCount = ReadU16(bytes + hhea->offset + 34);
+            if (hMetricCount < 1 || hMetricCount > glyphCount)
+                return fail(std::format("hhea.numberOfHMetrics is {} (must be 1 to {})", hMetricCount, glyphCount));
+
+            const auto hmtx = FindTable(data, fontStart, "hmtx");
+            if (!hmtx || hmtx->length < 4 * hMetricCount + 2 * (glyphCount - hMetricCount))
+                return fail("the hmtx table is missing or too short for the glyph count");
+
+            const auto glyf = FindTable(data, fontStart, "glyf");
+            if (!glyf)
+            {
+                if (!FindTable(data, fontStart, "CFF "))
+                    return fail("the font has no glyf or CFF outlines");
+                return true; // CFF outlines have no loca table
+            }
+
+            const auto loca = FindTable(data, fontStart, "loca");
+            const std::size_t entrySize = indexToLocFormat == 0 ? 2 : 4;
+            if (!loca || loca->length < (glyphCount + 1) * entrySize)
+                return fail("the loca table is missing or too short for the glyph count");
+            std::size_t previous = 0;
+            for (std::size_t i = 0; i <= glyphCount; ++i)
+            {
+                const unsigned char *entry = bytes + loca->offset + i * entrySize;
+                const std::size_t offset = entrySize == 2 ? std::size_t{ReadU16(entry)} * 2 : std::size_t{ReadU32(entry)};
+                if (offset < previous || offset > glyf->length)
+                    return fail(std::format("loca entry {} is out of order or past the end of glyf", i));
+                previous = offset;
+            }
+            return true;
+        }
+
         class StbTrueTypeFace final : public IFontFace
         {
         public:
@@ -78,7 +163,8 @@ namespace N2Engine::Text::Detail
                     error = "not a TrueType or OpenType font";
                     return false;
                 }
-                if (!TableDirectoryFits(_data, static_cast<std::size_t>(fontStart), error))
+                if (!TableDirectoryFits(_data, static_cast<std::size_t>(fontStart), error) ||
+                    !TablesAreConsistent(_data, static_cast<std::size_t>(fontStart), error))
                 {
                     return false;
                 }
@@ -127,6 +213,20 @@ namespace N2Engine::Text::Detail
                     stbtt_GetGlyphHMetrics(&_info, static_cast<int>(glyph), &metrics.advance, &metrics.leftSideBearing);
                 }
                 return metrics;
+            }
+
+            [[nodiscard]] std::optional<Rect> GetGlyphBounds(const GlyphId glyph) const override
+            {
+                int x0 = 0;
+                int y0 = 0;
+                int x1 = 0;
+                int y1 = 0;
+                if (!IsValid(glyph) || stbtt_GetGlyphBox(&_info, static_cast<int>(glyph), &x0, &y0, &x1, &y1) == 0 ||
+                    x1 <= x0 || y1 <= y0)
+                {
+                    return std::nullopt;
+                }
+                return Rect{static_cast<float>(x0), static_cast<float>(y0), static_cast<float>(x1), static_cast<float>(y1)};
             }
 
             [[nodiscard]] int GetKerning(const GlyphId left, const GlyphId right) const override

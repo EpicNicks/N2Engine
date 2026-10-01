@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@ namespace
     class FontBackendTest : public TextBackendTest
     {
     protected:
+        // Only a face: these tests don't need the shared default font's atlas
         void SetUp() override
         {
             const auto backend = CreateFontBackend(GetParam());
@@ -32,6 +34,63 @@ namespace
         }
 
         std::unique_ptr<IFontFace> _face;
+    };
+
+    // A copy of the default font with a table directory to find and patch tables by tag
+    class FontBytes
+    {
+    public:
+        FontBytes()
+        {
+            const auto font = GetDefaultFontData();
+            _bytes.assign(font.begin(), font.end());
+        }
+
+        struct Table
+        {
+            std::size_t record = 0; // offset of the directory record
+            std::size_t offset = 0;
+            std::size_t length = 0;
+        };
+
+        Table Find(const char (&tag)[5]) const
+        {
+            const std::size_t count = U16(4);
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                const std::size_t record = 12 + i * 16;
+                if (std::memcmp(_bytes.data() + record, tag, 4) == 0)
+                {
+                    return {record, U32(record + 8), U32(record + 12)};
+                }
+            }
+            ADD_FAILURE() << "no " << tag << " table";
+            return {};
+        }
+
+        std::size_t U16(const std::size_t at) const
+        {
+            return (std::to_integer<std::size_t>(_bytes[at]) << 8) | std::to_integer<std::size_t>(_bytes[at + 1]);
+        }
+        std::size_t U32(const std::size_t at) const { return (U16(at) << 16) | U16(at + 2); }
+
+        void SetU16(const std::size_t at, const std::size_t value)
+        {
+            _bytes[at] = static_cast<std::byte>((value >> 8) & 0xFF);
+            _bytes[at + 1] = static_cast<std::byte>(value & 0xFF);
+        }
+        void SetU32(const std::size_t at, const std::size_t value)
+        {
+            SetU16(at, (value >> 16) & 0xFFFF);
+            SetU16(at + 2, value & 0xFFFF);
+        }
+        /// Makes the directory say the table is this long (it still lies inside the file)
+        void SetLength(const char (&tag)[5], const std::size_t length) { SetU32(Find(tag).record + 12, length); }
+
+        [[nodiscard]] const std::vector<std::byte> &Bytes() const { return _bytes; }
+
+    private:
+        std::vector<std::byte> _bytes;
     };
 }
 
@@ -175,6 +234,85 @@ TEST_P(FontBackendTest, RejectsDataThatIsNotAFont)
     EXPECT_FALSE(error.empty());
 
     EXPECT_EQ(backend->LoadFace(truncated), nullptr); // no error out-parameter is fine too
+}
+
+TEST_P(FontBackendTest, CorruptTablesAreRejected)
+{
+    const auto backend = CreateFontBackend(GetParam());
+    const auto rejects = [&backend](const FontBytes &font, const char *what)
+    {
+        std::string error;
+        const bool rejected = backend->LoadFace(font.Bytes(), &error) == nullptr;
+        EXPECT_TRUE(rejected) << what;
+        EXPECT_FALSE(error.empty()) << what;
+    };
+
+    // The unmodified copy loads, so each failure below is the patch's doing
+    ASSERT_NE(backend->LoadFace(FontBytes().Bytes()), nullptr);
+
+    const FontBytes original;
+    const std::size_t glyphCount = original.U16(original.Find("maxp").offset + 4);
+    const std::size_t locaFormat = original.U16(original.Find("head").offset + 50);
+    const std::size_t locaEntry = locaFormat == 0 ? 2 : 4;
+
+    FontBytes font;
+    font.SetLength("head", 20);
+    rejects(font, "head shorter than 54 bytes");
+
+    font = FontBytes();
+    font.SetU16(font.Find("head").offset + 50, 2);
+    rejects(font, "indexToLocFormat 2");
+
+    font = FontBytes();
+    font.SetU16(font.Find("maxp").offset + 4, 0);
+    rejects(font, "no glyphs");
+
+    font = FontBytes();
+    font.SetU16(font.Find("hhea").offset + 34, 0);
+    rejects(font, "numberOfHMetrics 0");
+
+    font = FontBytes();
+    font.SetU16(font.Find("hhea").offset + 34, glyphCount + 1);
+    rejects(font, "numberOfHMetrics above numGlyphs");
+
+    font = FontBytes();
+    font.SetLength("hmtx", 4);
+    rejects(font, "hmtx too short");
+
+    font = FontBytes();
+    font.SetLength("loca", locaEntry * glyphCount); // one entry short
+    rejects(font, "loca too short");
+
+    // The last loca entry pointing past the end of glyf
+    font = FontBytes();
+    const auto loca = font.Find("loca");
+    const std::size_t last = loca.offset + glyphCount * locaEntry;
+    if (locaEntry == 2)
+        font.SetU16(last, 0xFFFF);
+    else
+        font.SetU32(last, 0xFFFFFFFF);
+    rejects(font, "loca past glyf");
+
+    // An entry larger than the next one: glyph 1 claims to start at the end of glyf
+    font = FontBytes();
+    const std::size_t glyfLength = font.Find("glyf").length;
+    if (locaEntry == 2)
+        font.SetU16(loca.offset + 2, glyfLength / 2);
+    else
+        font.SetU32(loca.offset + 4, glyfLength);
+    rejects(font, "loca out of order");
+}
+
+TEST_P(FontBackendTest, GlyphBoundsCoverTheOutline)
+{
+    const auto bounds = _face->GetGlyphBounds(Glyph(U'I'));
+    ASSERT_TRUE(bounds.has_value());
+    EXPECT_FALSE(bounds->IsEmpty());
+    EXPECT_GE(bounds->minY, 0.0f); // 'I' sits on the baseline
+    EXPECT_LE(bounds->maxX, static_cast<float>(_face->GetGlyphMetrics(Glyph(U'I')).advance));
+
+    EXPECT_FALSE(_face->GetGlyphBounds(Glyph(U' ')).has_value());
+    EXPECT_FALSE(_face->GetGlyphBounds(_face->GetGlyphCount() + 1).has_value());
 }
 
 TEST_P(FontBackendTest, TheFaceOwnsItsCopyOfTheData)

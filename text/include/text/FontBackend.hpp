@@ -57,6 +57,9 @@ namespace N2Engine::Text
         /// The glyph the font maps the codepoint to, or nullopt if it has none (never .notdef)
         [[nodiscard]] virtual std::optional<GlyphId> FindGlyph(char32_t codepoint) const = 0;
         [[nodiscard]] virtual GlyphMetrics GetGlyphMetrics(GlyphId glyph) const = 0;
+        /// The outline's bounding box in font units (y-up), or nullopt for a glyph with no outline. Cheap:
+        /// the atlas uses it to estimate its size before rasterising anything.
+        [[nodiscard]] virtual std::optional<Rect> GetGlyphBounds(GlyphId glyph) const = 0;
         /// Pair kerning in font units, added to the left glyph's advance (0 for no adjustment)
         [[nodiscard]] virtual int GetKerning(GlyphId left, GlyphId right) const = 0;
 
