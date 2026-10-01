@@ -37,29 +37,48 @@ namespace N2Engine::Scripting
         }
     }
 
+    template <typename... Args>
+    void LuaComponent::CallLuaMethod(const std::string &methodName, Args &&... args)
+    {
+        if (_hasMissingScript)
+            return; // Silently skip if script is missing
+
+        // Callbacks the script registers during this call (e.g. Subscribe in OnAttach) are tied to this
+        // component (and to this script instance: see RetireScriptInstance)
+        ScriptLifetimeScope scope(_alive);
+
+        sol::protected_function func = _scriptInstance[methodName];
+        auto result = func(_scriptInstance, std::forward<Args>(args)...);
+
+        if (!result.valid())
+        {
+            sol::error err = result;
+            Logger::Error(std::format("Lua {} error in {}: {}",
+                                      methodName,
+                                      _scriptPath.ToString(),
+                                      err.what()));
+        }
+    }
+
     void LuaComponent::SetScript(const IO::ResourcePath &path)
     {
         _scriptPath = path;
         _script = nullptr;
-        _scriptInstance = sol::nil;
 
         // Use ResourceLoader and gracefully handle missing files
         auto scriptAsset = IO::ResourceLoader::Instance().Load<LuaScript>(path);
         if (!scriptAsset)
         {
             Logger::Warn(std::format("Script file not found or failed to load: {}", path.ToString()));
+            // The previous script used to stay referenced, and its subscriptions kept firing
+            RetireScriptInstance();
             _hasMissingScript = true;
+            CacheLifecycleMethods();
             return;
         }
 
         _script = scriptAsset.get();
-        _hasMissingScript = false;
-
-        // Rest of initialization...
-        InitializeScriptInstance();
-        ExtractSerializableFields();
-        InjectFieldsIntoScript();
-        CacheLifecycleMethods();
+        LoadScriptInstance(false);
 
         // Register reload callback, replacing any from a previous SetScript; removed on destroy
         std::string moduleName = LuaRuntime::Instance().PathToModuleName(path);
@@ -70,10 +89,10 @@ namespace N2Engine::Scripting
         }, this);
     }
 
-    void LuaComponent::InitializeScriptInstance()
+    sol::table LuaComponent::CreateScriptInstance()
     {
         if (!_script)
-            return;
+            return sol::table{};
 
         auto &lua = LuaRuntime::Instance().GetState();
 
@@ -83,8 +102,7 @@ namespace N2Engine::Scripting
         {
             sol::error err = result;
             Logger::Error(std::format("Failed to load script: {}", err.what()));
-            _hasMissingScript = true;
-            return;
+            return sol::table{};
         }
 
         sol::table scriptClass;
@@ -96,18 +114,93 @@ namespace N2Engine::Scripting
         else
         {
             Logger::Error("Script must return a table");
-            _hasMissingScript = true;
+            return sol::table{};
+        }
+
+        sol::table instance = lua.create_table();
+        instance[sol::metatable_key] = scriptClass;
+
+        // Handles, so anything that copies them out of self can't reach freed objects later
+        instance["component"] = ComponentRef<LuaComponent>(*this);
+        instance["gameObject"] = GameObjectRef(_gameObject);
+
+        return instance;
+    }
+
+    void LuaComponent::LoadScriptInstance(const bool keepOldOnFailure)
+    {
+        sol::table instance = CreateScriptInstance();
+        if (!instance.valid() && keepOldOnFailure && _scriptInstance.valid() && !_hasMissingScript)
+        {
+            Logger::Warn(std::format("Keeping the running version of {}", _scriptPath.ToString()));
             return;
         }
 
-        _scriptInstance = lua.create_table();
-        _scriptInstance[sol::metatable_key] = scriptClass;
+        const sol::table previous = RetireScriptInstance();
+        if (!instance.valid())
+        {
+            _hasMissingScript = true;
+            CacheLifecycleMethods();
+            return;
+        }
 
-        // Handles, so anything that copies them out of self can't reach freed objects later
-        _scriptInstance["component"] = ComponentRef<LuaComponent>(*this);
-        _scriptInstance["gameObject"] = GameObjectRef(_gameObject);
-
+        _scriptInstance = instance;
         _hasMissingScript = false;
+        // Fields the script declares but _scriptData lacks get their defaults; saved values are kept
+        ExtractSerializableFields();
+        InjectFieldsIntoScript();
+        CopyReferenceFields(previous);
+        CacheLifecycleMethods();
+
+        // Already attached: the first OnAttach won't come again, so the new instance gets its own
+        if (_attached && _scriptInstance["OnAttach"].valid())
+        {
+            CallLuaMethod("OnAttach");
+        }
+    }
+
+    sol::table LuaComponent::RetireScriptInstance()
+    {
+        sol::table previous = _scriptInstance;
+        if (!previous.valid())
+        {
+            return previous;
+        }
+
+        // The same teardown a removed component's script gets, so it can undo what OnAttach set up
+        if (_attached && !_hasMissingScript)
+        {
+            if (IsActive() && previous["OnDisable"].valid())
+            {
+                CallLuaMethod("OnDisable");
+            }
+            if (previous["OnDestroy"].valid())
+            {
+                CallLuaMethod("OnDestroy");
+            }
+        }
+
+        // Its subscriptions stop firing; the next instance's get a flag of their own
+        *_alive = false;
+        _alive = std::make_shared<bool>(true);
+        previous["component"] = sol::lua_nil;
+        previous["gameObject"] = sol::lua_nil;
+        _scriptInstance = sol::lua_nil;
+        return previous;
+    }
+
+    void LuaComponent::CopyReferenceFields(const sol::table &from)
+    {
+        if (!from.valid() || !_scriptInstance.valid())
+            return;
+
+        for (auto &[fieldName, value] : _scriptData.items())
+        {
+            if (value.is_object() && value.contains("$ref"))
+            {
+                _scriptInstance[fieldName] = from.get<sol::object>(fieldName);
+            }
+        }
     }
 
     void LuaComponent::ExtractSerializableFields()
@@ -198,6 +291,7 @@ namespace N2Engine::Scripting
             _hasOnTriggerEnter = false;
             _hasOnTriggerStay = false;
             _hasOnTriggerExit = false;
+            _hasOnApplicationQuit = false;
             return;
         }
 
@@ -210,32 +304,13 @@ namespace N2Engine::Scripting
         _hasOnTriggerEnter = _scriptInstance["OnTriggerEnter"].valid();
         _hasOnTriggerStay = _scriptInstance["OnTriggerStay"].valid();
         _hasOnTriggerExit = _scriptInstance["OnTriggerExit"].valid();
-    }
-
-    template <typename... Args>
-    void LuaComponent::CallLuaMethod(const std::string &methodName, Args &&... args)
-    {
-        if (_hasMissingScript)
-            return; // Silently skip if script is missing
-
-        // Callbacks the script registers during this call (e.g. Subscribe in OnAttach) are tied to this component
-        ScriptLifetimeScope scope(_alive);
-
-        sol::protected_function func = _scriptInstance[methodName];
-        auto result = func(_scriptInstance, std::forward<Args>(args)...);
-
-        if (!result.valid())
-        {
-            sol::error err = result;
-            Logger::Error(std::format("Lua {} error in {}: {}",
-                                      methodName,
-                                      _scriptPath.ToString(),
-                                      err.what()));
-        }
+        _hasOnApplicationQuit = _scriptInstance["OnApplicationQuit"].valid();
     }
 
     void LuaComponent::OnAttach()
     {
+        _attached = true; // from now on a replaced script instance is torn down and the new one attached
+
         if (_hasMissingScript)
         {
             Logger::Warn(std::format("LuaComponent on '{}' has missing script: {}",
@@ -296,6 +371,14 @@ namespace N2Engine::Scripting
         if (_scriptInstance.valid() && _scriptInstance["OnDisable"].valid() && !_hasMissingScript)
         {
             CallLuaMethod("OnDisable");
+        }
+    }
+
+    void LuaComponent::OnApplicationQuit()
+    {
+        if (_hasOnApplicationQuit && !_hasMissingScript)
+        {
+            CallLuaMethod("OnApplicationQuit");
         }
     }
 
@@ -542,14 +625,9 @@ namespace N2Engine::Scripting
             return;
         }
 
-        auto savedData = _scriptData;
-
-        InitializeScriptInstance();
-        ExtractSerializableFields();
-
-        _scriptData = savedData;
-        InjectFieldsIntoScript();
-        CacheLifecycleMethods();
+        // Saved fields (and resolved references) carry over, fields the new version adds get their
+        // defaults, and the old instance is retired properly: see LoadScriptInstance
+        LoadScriptInstance(true);
 
         Logger::Info(std::format("Reloaded script: {}", _scriptPath.ToString()));
     }

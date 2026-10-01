@@ -18,6 +18,7 @@
 #include "engine/scripting/LuaHandles.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
+#include "engine/serialization/ReferenceResolver.hpp"
 
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
@@ -37,6 +38,26 @@ protected:
         std::ofstream(path) << source;
     }
 
+    // Reports its fields when updated; the second version adds a field
+    static std::string FieldsSource(const bool withAddedField)
+    {
+        return std::string(R"(
+            local Fields = {}
+            Fields.__index = Fields
+            Fields.SerializableFields = {
+                speed = { default = 1 },
+                target = { type = "GameObject" },
+            )") + (withAddedField ? "added = { default = 7 }," : "") + R"(
+            }
+            function Fields:OnUpdate()
+                fields_speed = self.speed
+                fields_added = self.added
+                fields_target_valid = self.target ~= nil and self.target:IsValid()
+            end
+            return Fields
+        )";
+    }
+
     static void SetUpTestSuite()
     {
         ASSERT_TRUE(LuaRuntime::Instance().Initialize());
@@ -51,6 +72,7 @@ protected:
             Subscriber.__index = Subscriber
 
             function Subscriber:OnAttach()
+                lifetime_attaches = lifetime_attaches + 1
                 lifetime_action:Subscribe(function(action)
                     lifetime_hits = lifetime_hits + 1
                     self.gameObject:SetName("hit")
@@ -77,6 +99,17 @@ protected:
             return Counted
         )");
 
+        WriteAsset("lifetime/Fields.lua", FieldsSource(false));
+
+        WriteAsset("lifetime/Quitter.lua", R"(
+            local Quitter = {}
+            Quitter.__index = Quitter
+            function Quitter:OnApplicationQuit()
+                quit_calls = quit_calls + 1
+            end
+            return Quitter
+        )");
+
         IO::ResourceUUID::Initialize(Math::UUID::Random());
         IO::ResourceLoader::Instance().Initialize(s_projectRoot);
     }
@@ -96,6 +129,7 @@ protected:
     {
         Lua()["lifetime_action"] = InputActionRef(_action);
         Lua()["lifetime_hits"] = 0;
+        Lua()["lifetime_attaches"] = 0;
         Lua()["lifetime_events"] = Lua().create_table();
         Lua()["lifetime_self"] = sol::lua_nil;
 
@@ -226,4 +260,85 @@ TEST_F(LuaLifetimeTest, ReloadCallbacksAreReplacedAndRemoved)
     go->RemoveComponent<LuaComponent>();
     LuaRuntime::Instance().ReloadModule(path, script.get());
     EXPECT_EQ(Lua()["reload_loads"].get<int>(), 5);
+}
+
+TEST_F(LuaLifetimeTest, ReloadRetiresTheOldInstanceAndAttachesTheNewOne)
+{
+    const IO::ResourcePath path("res://lifetime/Subscriber.lua");
+    const auto script = IO::ResourceLoader::Instance().Load<LuaScript>(path);
+    ASSERT_NE(script, nullptr);
+    SpawnSubscriber();
+    Fire();
+    ASSERT_EQ(Hits(), 1);
+
+    LuaRuntime::Instance().ReloadModule(path, script.get());
+
+    // The old instance is torn down like a removed component's script, and cut off
+    const sol::table events = Lua()["lifetime_events"];
+    ASSERT_EQ(events.size(), 2u) << "the old instance got no teardown";
+    EXPECT_EQ(events.get<std::string>(1), "disable");
+    EXPECT_EQ(events.get<std::string>(2), "destroy");
+    const sol::table oldSelf = Lua()["lifetime_self"];
+    ASSERT_TRUE(oldSelf.valid());
+    EXPECT_FALSE(oldSelf["component"].valid());
+
+    // The new instance is attached (and subscribes); the old subscription no longer fires
+    EXPECT_EQ(Lua()["lifetime_attaches"].get<int>(), 2) << "the reloaded instance never got OnAttach";
+    Fire();
+    EXPECT_EQ(Hits(), 2) << "one hit per Fire: only the new instance's subscription";
+}
+
+TEST_F(LuaLifetimeTest, SettingAnotherScriptRetiresTheFirstInstance)
+{
+    const auto go = SpawnSubscriber();
+
+    go->GetComponent<LuaComponent>()->SetScript(IO::ResourcePath("res://lifetime/Counted.lua"));
+    Fire();
+
+    EXPECT_EQ(Hits(), 0) << "the replaced script's subscription kept firing";
+    const sol::table events = Lua()["lifetime_events"];
+    EXPECT_EQ(events.size(), 2u) << "the replaced script got no OnDisable/OnDestroy";
+}
+
+TEST_F(LuaLifetimeTest, ReloadKeepsSavedFieldsAndReferencesAndDefaultsNewOnes)
+{
+    const IO::ResourcePath path("res://lifetime/Fields.lua");
+    const auto script = IO::ResourceLoader::Instance().Load<LuaScript>(path);
+    ASSERT_NE(script, nullptr);
+
+    const auto target = GameObject::Create("Target");
+    const auto go = GameObject::Create("Fielded");
+    auto *component = go->AddComponent<LuaComponent>();
+    component->SetScriptData({{"speed", 5}, {"target", {{"$ref", target->GetUUID().ToString()}}}});
+    component->SetScript(path);
+    ReferenceResolver resolver;
+    resolver.RegisterGameObject(target->GetUUID(), target.get());
+    component->ResolveReferences(nlohmann::json::object(), &resolver);
+
+    script->SetSourceCode(FieldsSource(true)); // the new version adds a field
+    LuaRuntime::Instance().ReloadModule(path, script.get());
+    script->SetSourceCode(FieldsSource(false));
+
+    Lua()["fields_speed"] = sol::lua_nil;
+    Lua()["fields_added"] = sol::lua_nil;
+    Lua()["fields_target_valid"] = false;
+    component->OnUpdate();
+
+    EXPECT_EQ(Lua()["fields_speed"].get<int>(), 5) << "the saved value was lost";
+    EXPECT_EQ(Lua()["fields_added"].get<int>(), 7) << "the added field got no default";
+    EXPECT_TRUE(Lua()["fields_target_valid"].get<bool>()) << "the $ref field became nil";
+    EXPECT_EQ(component->GetScriptData().value("added", 0), 7);
+}
+
+TEST_F(LuaLifetimeTest, OnApplicationQuitReachesScripts)
+{
+    Lua()["quit_calls"] = 0;
+    const auto go = GameObject::Create("Quitter");
+    go->AddComponent<LuaComponent>()->SetScript(IO::ResourcePath("res://lifetime/Quitter.lua"));
+    _scene->AddRootGameObject(go);
+    _scene->ProcessAttachQueue();
+
+    _scene->OnApplicationQuit();
+
+    EXPECT_EQ(Lua()["quit_calls"].get<int>(), 1);
 }
