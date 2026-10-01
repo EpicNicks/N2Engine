@@ -112,7 +112,12 @@ namespace N2Engine::Scripting::Bindings
                 const GameObject::Ptr detached = RequireRef(child, "GameObject:RemoveChild").Pin();
                 const bool wasChild = detached->GetParent() == parent;
                 parent->RemoveChild(detached);
-                if (wasChild && detached->GetParent() != parent)
+                // If RemoveChild made it a root of its scene, the scene owns it: an owning handle too would
+                // keep it alive past Destroy or a scene switch
+                const Scene *scene = detached->GetScene();
+                const bool nowSceneRoot = scene && std::ranges::find(scene->GetRootGameObjects(), detached) !=
+                                                   scene->GetRootGameObjects().end();
+                if (wasChild && detached->GetParent() != parent && !nowSceneRoot)
                 {
                     // The parent may have been its only owner; the handle the script passed keeps it alive
                     child->TakeOwnership();
