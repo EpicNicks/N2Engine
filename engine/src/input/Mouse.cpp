@@ -21,6 +21,11 @@ namespace N2Engine::Input
         // Register scroll callback
         glfwSetScrollCallback(_window, ScrollCallback);
 
+        // Sticky buttons: a press released again before Update samples still reads as pressed once, so a click
+        // shorter than a frame becomes Down in one Update and Up in the next instead of being lost. Update reads
+        // the buttons first in the frame (before action maps poll their mouse bindings).
+        glfwSetInputMode(_window, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
+
         // Initialize current mouse position
         double mouseX, mouseY;
         glfwGetCursorPos(_window, &mouseX, &mouseY);
@@ -34,6 +39,7 @@ namespace N2Engine::Input
         if (_window)
         {
             glfwSetScrollCallback(_window, nullptr);
+            glfwSetInputMode(_window, GLFW_STICKY_MOUSE_BUTTONS, GLFW_FALSE);
         }
     }
 
