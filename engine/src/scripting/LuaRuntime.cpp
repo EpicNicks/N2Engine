@@ -46,6 +46,29 @@ namespace N2Engine::Scripting
             sol::lib::string,
             sol::lib::table
         );
+
+        // Scripts are project content, so they get no way past the asset pipeline: no reading files
+        // (dofile/loadfile, package.path), no native code (package.loadlib, the C searchers), and no
+        // binary chunks, whose crafted bytecode can corrupt the VM. load keeps working for source text.
+        // The engine's own require (SetupModuleSystem) loads modules through ResourceLoader instead.
+        _lua.script(R"(
+            dofile = nil
+            loadfile = nil
+
+            local rawLoad = load
+            load = function(chunk, chunkname, _, ...)
+                -- Pass env on only if given: load treats an explicit nil env as "no globals"
+                if select('#', ...) > 0 then
+                    return rawLoad(chunk, chunkname, "t", ...)
+                end
+                return rawLoad(chunk, chunkname, "t")
+            end
+
+            package.loadlib = nil
+            package.path = ""
+            package.cpath = ""
+            package.searchers = { package.searchers[1] } -- package.preload only
+        )");
     }
 
     bool LuaRuntime::Initialize()

@@ -99,6 +99,23 @@ TEST_F(LuaTest, OpensOnlySafeStandardLibraries)
     // io and os aren't opened, so scripts can't touch the filesystem or run processes
     EXPECT_EQ(Eval<std::string>("type(io)"), "nil");
     EXPECT_EQ(Eval<std::string>("type(os)"), "nil");
+
+    // Base and package are opened, minus what reads files or loads native code
+    EXPECT_EQ(Eval<std::string>("type(dofile)"), "nil");
+    EXPECT_EQ(Eval<std::string>("type(loadfile)"), "nil");
+    EXPECT_EQ(Eval<std::string>("type(package.loadlib)"), "nil");
+    EXPECT_EQ(Eval<std::string>("package.path"), "");
+    EXPECT_EQ(Eval<std::string>("package.cpath"), "");
+    EXPECT_EQ(Eval<int>("#package.searchers"), 1) << "only the preload searcher";
+
+    // load still takes source text, with or without an environment
+    EXPECT_EQ(Eval<int>("load('return 1 + 2')()"), 3);
+    EXPECT_EQ(Eval<std::string>("load('return type(math)')()"), "table") << "omitted env keeps the globals";
+    EXPECT_EQ(Eval<int>("load('return x', 'withEnv', 't', { x = 7 })()"), 7);
+
+    // but never a binary chunk, whatever mode is asked for
+    EXPECT_TRUE(Eval<bool>("load(string.dump(function() return 1 end)) == nil"));
+    EXPECT_TRUE(Eval<bool>("load(string.dump(function() return 1 end), 'bin', 'b') == nil"));
 }
 
 // ============================================================================
