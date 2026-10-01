@@ -848,7 +848,9 @@ function SphereRenderer:GetRadius() end
 function SphereRenderer:SetSubdivision(latitude, longitude) end
 
 ---Runs a behaviour script: a file returning a table whose __index is itself, with optional
----OnAttach, OnUpdate, OnFixedUpdate, OnLateUpdate, OnDestroy, OnEnable, OnDisable and collision methods.
+---OnAttach, OnUpdate, OnFixedUpdate, OnLateUpdate, OnDestroy, OnEnable, OnDisable, collision methods and
+---the pointer methods OnMouseEnter, OnMouseOver, OnMouseExit, OnMouseDown, OnMouseDrag, OnMouseUp and
+---OnMouseUpAsButton (no arguments; sent before OnUpdate to the object under the cursor, left button only).
 ---Inside those methods, self.gameObject and self.component are set.
 ---@class LuaComponent : Component
 LuaComponent = {}
@@ -1049,6 +1051,36 @@ ContactPoint = {}
 ---@field rigidbody Rigidbody|nil
 ---@field otherRigidbody Rigidbody|nil
 Trigger = {}
+
+---A raycast hit. Safe to keep: its objects are references like any other (see CORE OBJECTS).
+---@class RaycastHit
+---@field point Vector3
+---@field normal Vector3
+---@field distance number
+---@field gameObject GameObject|nil The hit body's object (its Rigidbody's object for a compound body)
+---@field collider Component|nil The collider that was hit, as its own type (BoxCollider, ...)
+---@field rigidbody Rigidbody|nil nil for a static collider
+RaycastHit = {}
+
+---@class Physics
+Physics = {}
+
+---The closest hit along a ray, or nil. Without physics (no backend, or built without PhysX) nothing is hit.
+---A zero direction or a negative distance hits nothing.
+---@param origin Vector3
+---@param direction Vector3 normalised internally
+---@param maxDistance number|nil default (and for math.huge): 1e9
+---@param layerMask integer|nil default: Layers.DefaultRaycastMask (every layer except Ignore Raycast); Layers.AllLayers or -1 for every layer
+---@return RaycastHit|nil
+function Physics.Raycast(origin, direction, maxDistance, layerMask) end
+
+---Every hit along a ray, nearest first (an empty table for none). Arguments as Physics.Raycast.
+---@param origin Vector3
+---@param direction Vector3
+---@param maxDistance number|nil
+---@param layerMask integer|nil
+---@return RaycastHit[]
+function Physics.RaycastAll(origin, direction, maxDistance, layerMask) end
 
 ---@class PhysicsMaterial
 ---@field staticFriction number Friction when not moving (0-1)
@@ -1467,8 +1499,64 @@ function ActionMap:IsValid() end
 ---@return InputAction|nil
 function ActionMap:Get(actionName) end
 
+---The cursor and mouse buttons, sampled once at the start of each frame. Buttons are 0..7: 0 left, 1 right,
+---2 middle (out-of-range buttons read false).
+---@class Mouse
+Mouse = {}
+
+---The mouse, or nil without a window
+---@return Mouse|nil
+function Mouse.Get() end
+
+---Cursor position in window coordinates: origin at the top-left, y down
+---@return Vector2
+function Mouse:GetPosition() end
+
+---@return Vector2
+function Mouse:GetPositionDelta() end
+
+---@return Vector2
+function Mouse:GetScrollDelta() end
+
+---@param button integer
+---@return boolean
+function Mouse:GetButton(button) end
+
+---True only in the frame the button went down
+---@param button integer
+---@return boolean
+function Mouse:GetButtonDown(button) end
+
+---True only in the frame the button was released
+---@param button integer
+---@return boolean
+function Mouse:GetButtonUp(button) end
+
 ---@class Input
 Input = {}
+
+---Cursor position in window coordinates (top-left origin, y down); (0, 0) without a window
+---@return Vector2
+function Input.GetMousePosition() end
+
+---Whether a mouse button is held (0 left, 1 right, 2 middle); false without a window
+---@param button integer
+---@return boolean
+function Input.GetMouseButton(button) end
+
+---True only in the frame the button went down
+---@param button integer
+---@return boolean
+function Input.GetMouseButtonDown(button) end
+
+---True only in the frame the button was released
+---@param button integer
+---@return boolean
+function Input.GetMouseButtonUp(button) end
+
+---Whether the pointer is over UI; false until UI exists
+---@return boolean
+function Input.IsPointerOverUI() end
 
 ---Get an action map by name
 ---@param mapName string
@@ -1643,6 +1731,21 @@ Frustum = {}
 ---@return boolean
 function Frustum:IsVisible(bbox) end
 
+---@class Ray
+---@field origin Vector3
+---@field direction Vector3
+Ray = {}
+
+---@param origin Vector3|nil
+---@param direction Vector3|nil
+---@return Ray
+function Ray.new(origin, direction) end
+
+---The point distance units along the ray
+---@param distance number
+---@return Vector3
+function Ray:GetPoint(distance) end
+
 ---@class Camera
 Camera = {}
 
@@ -1726,6 +1829,18 @@ function Camera:GetFarPlane() end
 ---Get the field of view
 ---@return number
 function Camera:GetFOV() end
+
+---The ray through a screen point, from the near plane away from the camera (unit direction). Takes window
+---coordinates (top-left origin, y down), as Input.GetMousePosition returns. The viewport defaults to the
+---window's size; pass width and height to use another.
+---  local ray = Camera.Main():ScreenPointToRay(Input.GetMousePosition().x, Input.GetMousePosition().y)
+---  local hit = Physics.Raycast(ray.origin, ray.direction, 100)
+---@param x number
+---@param y number
+---@param width integer|nil
+---@param height integer|nil
+---@return Ray
+function Camera:ScreenPointToRay(x, y, width, height) end
 
 -- ===== DEBUG =====
 

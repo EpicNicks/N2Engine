@@ -2,6 +2,9 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/Camera.hpp"
+#include "engine/Window.hpp"
+
+#include <math/Ray.hpp>
 
 namespace N2Engine::Scripting::Bindings
 {
@@ -39,6 +42,19 @@ namespace N2Engine::Scripting::Bindings
             "IsVisible", &Frustum::IsVisible
         );
         
+        // ===== Ray =====
+        lua.new_usertype<Math::Ray>("Ray",
+            sol::call_constructor,
+            sol::constructors<
+                Math::Ray(),
+                Math::Ray(const Math::Vector3&, const Math::Vector3&)
+            >(),
+
+            "origin", &Math::Ray::origin,
+            "direction", &Math::Ray::direction,
+            "GetPoint", &Math::Ray::GetPoint
+        );
+
         // ===== Camera =====
         lua.new_usertype<Camera>("Camera",
             sol::no_constructor,
@@ -75,7 +91,20 @@ namespace N2Engine::Scripting::Bindings
             // Properties
             "GetNearPlane", &Camera::GetNearPlane,
             "GetFarPlane", &Camera::GetFarPlane,
-            "GetFOV", &Camera::GetFOV
+            "GetFOV", &Camera::GetFOV,
+
+            // Camera:ScreenPointToRay(x, y[, width, height]): the ray through a point in window coordinates
+            // (top-left origin, y down, as Input.GetMousePosition). The viewport defaults to the window's size.
+            "ScreenPointToRay", [](const Camera& cam, const float x, const float y,
+                                   const sol::optional<int> width, const sol::optional<int> height)
+            {
+                Vector2i viewport = Application::GetInstance().GetWindow().GetWindowDimensions();
+                if (width && height)
+                {
+                    viewport = Vector2i{*width, *height};
+                }
+                return cam.ScreenPointToRay(Math::Vector2(x, y), viewport);
+            }
         );
         
         // ===== Camera Global Access =====

@@ -43,6 +43,13 @@ namespace N2Engine::Scripting
         bool _hasOnTriggerStay = false;
         bool _hasOnTriggerExit = false;
         bool _hasOnApplicationQuit = false;
+        bool _hasOnMouseEnter = false;
+        bool _hasOnMouseOver = false;
+        bool _hasOnMouseExit = false;
+        bool _hasOnMouseDown = false;
+        bool _hasOnMouseDrag = false;
+        bool _hasOnMouseUp = false;
+        bool _hasOnMouseUpAsButton = false;
 
         /// Runs the script file and returns a new instance bound to this component (invalid, with the error
         /// logged, if the file fails to load or doesn't return a table)
@@ -116,6 +123,15 @@ namespace N2Engine::Scripting
         void OnTriggerEnter(Physics::Trigger trigger) override;
         void OnTriggerStay(Physics::Trigger trigger) override;
         void OnTriggerExit(Physics::Trigger trigger) override;
+
+        // Pointer events (PointerDispatcher)
+        void OnMouseEnter() override;
+        void OnMouseOver() override;
+        void OnMouseExit() override;
+        void OnMouseDown() override;
+        void OnMouseDrag() override;
+        void OnMouseUp() override;
+        void OnMouseUpAsButton() override;
 
         // Serialization
         [[nodiscard]] nlohmann::json Serialize() const override;

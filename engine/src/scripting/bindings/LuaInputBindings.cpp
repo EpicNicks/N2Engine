@@ -70,7 +70,11 @@ namespace N2Engine::Scripting::Bindings
             sol::no_constructor,
             "GetScrollDelta", &Input::Mouse::GetScrollDelta,
             "GetPosition", &Input::Mouse::GetPosition,
-            "GetPositionDelta", &Input::Mouse::GetPositionDelta
+            "GetPositionDelta", &Input::Mouse::GetPositionDelta,
+            // Buttons 0..7 (0 left, 1 right, 2 middle), as sampled at the start of the frame
+            "GetButton", [](const Input::Mouse &mouse, const int button) { return mouse.GetButton(button); },
+            "GetButtonDown", [](const Input::Mouse &mouse, const int button) { return mouse.GetButtonDown(button); },
+            "GetButtonUp", [](const Input::Mouse &mouse, const int button) { return mouse.GetButtonUp(button); }
         );
 
         lua["Mouse"] = lua.create_table_with(
@@ -194,6 +198,34 @@ namespace N2Engine::Scripting::Bindings
                 }
 
                 return MapRefOrNil(inputSystem->CreateActionMapFromJson(mapName, ActionMapJsonFromLua(actions)));
+            },
+
+            // Unity's Input.mousePosition/GetMouseButton*: window coordinates (top-left origin, y down) and
+            // buttons 0..7; (0, 0) and false without a mouse (no window)
+            "GetMousePosition", []() -> Math::Vector2
+            {
+                const auto *mouse = Input::Mouse::Get();
+                return mouse ? mouse->GetPosition() : Math::Vector2(0.0f, 0.0f);
+            },
+            "GetMouseButton", [](const int button)
+            {
+                const auto *mouse = Input::Mouse::Get();
+                return mouse != nullptr && mouse->GetButton(button);
+            },
+            "GetMouseButtonDown", [](const int button)
+            {
+                const auto *mouse = Input::Mouse::Get();
+                return mouse != nullptr && mouse->GetButtonDown(button);
+            },
+            "GetMouseButtonUp", [](const int button)
+            {
+                const auto *mouse = Input::Mouse::Get();
+                return mouse != nullptr && mouse->GetButtonUp(button);
+            },
+            // Whether the pointer is over UI (PointerDispatcher::IsPointerOverUI); false until UI exists
+            "IsPointerOverUI", []()
+            {
+                return Application::GetInstance().GetPointerDispatcher().IsPointerOverUI();
             }
         );
     }
