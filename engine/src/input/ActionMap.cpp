@@ -17,6 +17,8 @@ using Vector2 = N2Engine::Math::Vector2;
 InputAction::InputAction(std::string name)
     : _currentValue{false}, _inputActionName{std::move(name)} {}
 
+InputAction::~InputAction() = default;
+
 void InputAction::Update()
 {
     // Handle disabled state transition first

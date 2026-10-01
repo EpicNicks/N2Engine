@@ -4,13 +4,6 @@
 #include "engine/base/EventHandler.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/Logger.hpp"
-#include "engine/input/ActionMap.hpp"
-#include "engine/input/InputBinding.hpp"
-
-namespace N2Engine::Input
-{
-    class InputAction;
-}
 
 namespace N2Engine::Scripting::Bindings
 {
@@ -77,20 +70,7 @@ namespace N2Engine::Scripting::Bindings
             }
         );
 
-        // ===== EventHandler<InputAction&> - Input action events =====
-        lua.new_usertype<Base::EventHandler<Input::InputAction&>>(
-            "InputActionEvent",
-            sol::no_constructor,
-
-            "Subscribe", [](Base::EventHandler<Input::InputAction&> &handler, sol::protected_function callback) -> size_t
-            {
-                return handler += MakeScriptCallback<Input::InputAction&>(std::move(callback), "InputActionEvent");
-            },
-
-            "Unsubscribe", [](Base::EventHandler<Input::InputAction&> &handler, size_t id)
-            {
-                handler -= id;
-            }
-        );
+        // An InputAction's event isn't bound: it lives inside the action, so scripts subscribe through the
+        // action's handle (InputAction:Subscribe, or OnStateChanged(), which returns the action)
     }
 }

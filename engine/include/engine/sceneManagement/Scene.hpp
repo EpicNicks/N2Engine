@@ -12,6 +12,7 @@
 #include "engine/ComponentConcepts.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/base/Asset.hpp"
+#include "engine/base/LifetimeToken.hpp"
 
 namespace N2Engine
 {
@@ -44,6 +45,9 @@ namespace N2Engine
         std::queue<std::shared_ptr<GameObject>> _markedForDestructionQueue;
         // diagnostics
         mutable bool _hasWarnedNoLights = false;
+
+        // Expires when this scene is freed (e.g. on a scene switch); script handles to the scene check it
+        Base::LifetimeToken _lifetime;
 
     private:
         explicit Scene(std::string name);
@@ -95,6 +99,8 @@ namespace N2Engine
 
         [[nodiscard]] Renderer::Common::SceneLightingData CollectLighting() const;
         [[nodiscard]] Scheduling::CoroutineScheduler* GetCoroutineScheduler() const;
+        /// Expires when this scene is freed (for references that must not dangle, e.g. from Lua)
+        [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime.Get(); }
 
         void ProcessAttachQueue();
         void Update() const;

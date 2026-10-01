@@ -15,6 +15,13 @@
 namespace N2Engine
 {
     class Positionable;
+    class Scene;
+}
+
+namespace N2Engine::Input
+{
+    class ActionMap;
+    class InputAction;
 }
 
 // What Lua holds instead of raw engine pointers. A script can keep any of these (in `self`, a global or a
@@ -23,12 +30,14 @@ namespace N2Engine
 //
 // A handle works until its object's teardown has finished (GameObject::IsTornDown): throughout the
 // OnDisable/OnDestroy callbacks of a destroy, a scene switch or RemoveComponent, handles to the object, its
-// components and its siblings being torn down with it all still work; afterwards they all fail.
+// components and its siblings being torn down with it all still work; afterwards they all fail. Scenes and
+// input objects (LifetimeRef) work until they're freed.
 namespace N2Engine::Scripting
 {
     /// A GameObject in Lua. Doesn't keep the object alive, except for a handle a script created
     /// (GameObject.Create) or detached (RemoveChild, RemoveRootGameObject) the object with, since the script
-    /// may then be its only owner. Ownership is per handle: other handles to the same object stay weak.
+    /// may then be its only owner. A detached object that a scene's root list owns (RemoveChild re-rooting it)
+    /// isn't taken over. Ownership is per handle: other handles to the same object stay weak.
     class GameObjectRef
     {
     public:
@@ -53,7 +62,9 @@ namespace N2Engine::Scripting
 
         /// Keeps the object alive from now on, e.g. once a script detached it from its only owner.
         /// Caveat: a Lua-owned object that never joins a scene, and whose own script keeps this handle
-        /// (e.g. in self), is a reference cycle through the Lua registry and is never freed.
+        /// (e.g. in self), is a reference cycle through the Lua registry and is never freed. (The LuaComponent
+        /// holds its script table by registry reference, which Lua's GC treats as a root, so it can't see the
+        /// cycle; scripts should use the non-owning self.gameObject instead.)
         void TakeOwnership() { _owned = _object.lock(); }
 
         /// Back to a weak reference, e.g. once a scene or parent holds the object
@@ -182,6 +193,53 @@ namespace N2Engine::Scripting
         GameObjectRef _owner;
     };
 
+    /// An engine object that isn't part of a GameObject, and that its owner frees whenever it likes: a Scene
+    /// (freed on a scene switch), an ActionMap (replaced or reloaded) or an InputAction (replaced, removed, or
+    /// its map freed). Valid until the object is freed, tracked by the lifetime token it owns
+    /// (GetLifetimeToken). One replaced from an input callback is freed when that input update ends.
+    template <typename T>
+    class LifetimeRef
+    {
+    public:
+        /// The type's Lua name, for errors; set when the type is bound
+        static inline std::string_view s_luaName = "object";
+
+        explicit LifetimeRef(T &object)
+            : _object(&object), _lifetime(object.GetLifetimeToken())
+        {
+        }
+
+        [[nodiscard]] bool IsValid() const { return !_lifetime.expired(); }
+
+        /// The live object. A plain pointer is enough: none of these can be freed during a call on it from
+        /// Lua (scene switches, and the end of an input update, never run inside a script call). That assumes
+        /// scripts and those frees run on the same thread; another thread freeing the object (e.g. a scene
+        /// change processed off the main thread) is a race this check can't catch. Throws once it's freed;
+        /// sol turns that into a Lua error at the call site.
+        [[nodiscard]] T *Pin() const
+        {
+            if (_lifetime.expired())
+            {
+                throw std::runtime_error(std::format("attempt to use a destroyed {}", s_luaName));
+            }
+            return _object;
+        }
+
+        /// Same object, also after it's freed (compares tokens, not addresses, which can be reused)
+        [[nodiscard]] bool RefersTo(const LifetimeRef &other) const
+        {
+            return !_lifetime.owner_before(other._lifetime) && !other._lifetime.owner_before(_lifetime);
+        }
+
+    private:
+        T *_object;
+        std::weak_ptr<const bool> _lifetime;
+    };
+
+    using SceneRef = LifetimeRef<Scene>;
+    using ActionMapRef = LifetimeRef<Input::ActionMap>;
+    using InputActionRef = LifetimeRef<Input::InputAction>;
+
     /// Lua __eq for a handle type: true for two handles to the same object
     template <typename Handle>
     bool SameRef(const sol::object &a, const sol::object &b)
@@ -217,7 +275,10 @@ namespace N2Engine::Scripting
             std::is_pointer_v<std::remove_cvref_t<R>> || IsSmartPointer<std::remove_cvref_t<R>>::value ||
             std::is_base_of_v<Component, std::remove_cvref_t<R>> ||
             std::is_same_v<std::remove_cvref_t<R>, GameObject> ||
-            std::is_same_v<std::remove_cvref_t<R>, Positionable>;
+            std::is_same_v<std::remove_cvref_t<R>, Positionable> ||
+            std::is_same_v<std::remove_cvref_t<R>, Scene> ||
+            std::is_same_v<std::remove_cvref_t<R>, Input::ActionMap> ||
+            std::is_same_v<std::remove_cvref_t<R>, Input::InputAction>;
 
         // Scripts get copies of returned values: a reference into the object (e.g. a renderer's color)
         // would dangle once the object is freed

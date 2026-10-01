@@ -8,6 +8,7 @@
 #include <functional>
 
 #include "engine/base/EventHandler.hpp"
+#include "engine/base/LifetimeToken.hpp"
 #include "engine/input/InputValue.hpp"
 #include "nlohmann/json.hpp"
 
@@ -62,16 +63,20 @@ namespace N2Engine::Input
         std::string _inputActionName;
         bool _disabled{false};
         bool _wasDisabledLastFrame{false};
+        // Expires when this action is freed (replaced, removed, or its map freed); script handles check it
+        Base::LifetimeToken _lifetime;
 
     public:
         explicit InputAction(std::string name);
-        ~InputAction() = default;
+        // Out of line: destroying _bindings needs InputBinding, which this header only forward-declares
+        ~InputAction();
 
+        // Not copyable or movable: a script handle to an action must keep seeing that action, not contents
+        // moved into or out of it (actions live behind unique_ptr instead)
         InputAction(const InputAction &) = delete;
         InputAction& operator=(const InputAction &) = delete;
-
-        InputAction(InputAction &&) = default;
-        InputAction& operator=(InputAction &&) = default;
+        InputAction(InputAction &&) = delete;
+        InputAction& operator=(InputAction &&) = delete;
 
         void Update();
 
@@ -83,6 +88,8 @@ namespace N2Engine::Input
         void SetDisabled(bool disabled);
 
         Base::EventHandler<InputAction&>& GetOnStateChanged();
+        /// Expires when this action is freed (for references that must not dangle, e.g. from Lua)
+        [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime.Get(); }
 
         // Public API for querying current state
         [[nodiscard]] ActionPhase GetPhase() const { return _currentPhase; }
@@ -125,16 +132,27 @@ namespace N2Engine::Input
         // Actions replaced or removed from a callback during Update are freed after it
         bool _updating = false;
         std::vector<std::unique_ptr<InputAction>> _retiredActions;
+        // Expires when this map is freed (replaced or reloaded); script handles check it
+        Base::LifetimeToken _lifetime;
 
     public:
         const std::string name;
         bool disabled{false};
 
         explicit ActionMap(std::string mapName) : name(std::move(mapName)) {}
+
+        // Not copyable or movable, for the same reason as InputAction (maps live behind unique_ptr)
+        ActionMap(const ActionMap &) = delete;
+        ActionMap& operator=(const ActionMap &) = delete;
+        ActionMap(ActionMap &&) = delete;
+        ActionMap& operator=(ActionMap &&) = delete;
+
         ActionMap& AddInputAction(std::unique_ptr<InputAction> inputAction);
         ActionMap& MakeInputAction(const std::string &actionName, const std::function<void(InputAction *)> &pAction);
         bool RemoveInputAction(const std::string &actionName);
         void Update();
+        /// Expires when this map is freed (for references that must not dangle, e.g. from Lua)
+        [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime.Get(); }
 
         InputAction& operator[](const std::string &mapName);
         const InputAction& operator[](const std::string &mapName) const;
