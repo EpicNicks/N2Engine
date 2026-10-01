@@ -21,8 +21,10 @@ namespace N2Engine
         class CoroutineScheduler;
     }
 
+    class Camera;
     class Component;
     class GameObject;
+    class IRenderable;
 
     class Scene : public Base::Asset
     {
@@ -108,6 +110,20 @@ namespace N2Engine
         std::vector<T*> FindObjectsByType(bool includeInactive = true) const;
 
         [[nodiscard]] Renderer::Common::SceneLightingData CollectLighting() const;
+
+        /**
+         * Draws the scene's renderables through `renderer` (Application::Render calls it each frame, after
+         * setting the camera's view/projection and the lighting on the renderer).
+         *
+         * One traversal collects the active renderables (active components on objects active in the
+         * hierarchy, depth first, parents before children, in component order). Then:
+         * 1. Opaque renderables draw in that traversal order, with RenderState::Opaque().
+         * 2. Transparent renderables draw after all of them, stable-sorted by sortKey (ascending), then by
+         *    camera-space depth of their world position, back to front, with RenderState::Transparent().
+         *    A renderable whose object has no Positionable sorts at depth 0 (at the camera).
+         * Each renderable's queue is read once, before anything draws.
+         */
+        void Render(Renderer::Common::IRenderer *renderer, const Camera &camera);
         [[nodiscard]] Scheduling::CoroutineScheduler* GetCoroutineScheduler() const;
         /// Expires when this scene is freed (for references that must not dangle, e.g. from Lua)
         [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime.Get(); }
@@ -129,8 +145,8 @@ namespace N2Engine
         std::string GetResourceType() const override;
 
     private:
-        void Render(Renderer::Common::IRenderer *renderer);
-        void RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Common::IRenderer *renderer);
+        static void CollectRenderablesRecursive(const std::shared_ptr<GameObject> &gameObject,
+                                                std::vector<IRenderable *> &out);
         void TraverseGameObjectRecursive(std::shared_ptr<GameObject> gameObject,
                                          std::function<void(std::shared_ptr<GameObject>)> callback,
                                          bool onlyActive = false) const;

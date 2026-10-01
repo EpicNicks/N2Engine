@@ -303,7 +303,7 @@ void Application::Render()
         const Renderer::Common::SceneLightingData sceneLightingData = curScene.CollectLighting();
         renderer->UpdateSceneLighting(sceneLightingData, _mainCamera->GetPosition());
 
-        curScene.Render(renderer);
+        curScene.Render(renderer, *_mainCamera);
     }
 
     renderer->EndFrame();

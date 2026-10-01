@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <utility>
 #include <format>
@@ -7,6 +8,7 @@
 
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
+#include "engine/Camera.hpp"
 #include "engine/IRenderable.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/GameObjectScene.hpp"
@@ -85,19 +87,75 @@ std::unique_ptr<Scene> Scene::Create(const std::string &name)
     return std::unique_ptr<Scene>(new Scene{name});
 }
 
-void Scene::Render(Renderer::Common::IRenderer *renderer)
+void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera)
 {
-    // Render all root GameObjects (which will recursively render their children)
+    if (!renderer)
+    {
+        return;
+    }
+
+    // One traversal, in the order rendering has always used
+    std::vector<IRenderable *> renderables;
     for (const auto &rootObject : _rootGameObjects)
     {
-        if (rootObject->IsActiveInHierarchy())
+        CollectRenderablesRecursive(rootObject, renderables);
+    }
+
+    struct TransparentEntry
+    {
+        IRenderable *renderable;
+        int sortKey;
+        float depth; // distance in front of the camera, along its view direction
+    };
+
+    // Split by queue before anything draws. Opaque keeps the traversal order exactly.
+    std::vector<IRenderable *> opaque;
+    std::vector<TransparentEntry> transparent;
+    opaque.reserve(renderables.size());
+    const Matrix4 &view = camera.GetViewMatrix();
+    for (IRenderable *renderable : renderables)
+    {
+        const RenderQueueKey key = renderable->GetRenderQueue();
+        if (key.queue != RenderQueue::Transparent)
         {
-            RenderRecursive(rootObject, renderer);
+            opaque.push_back(renderable);
+            continue;
         }
+
+        float depth = 0.0f;
+        if (const Positionable *positionable = renderable->GetGameObject().GetPositionable())
+        {
+            // The camera looks down its -Z axis, so view-space z is minus the depth
+            const Math::Vector3 p = positionable->GetPosition();
+            depth = -(view(2, 0) * p.x + view(2, 1) * p.y + view(2, 2) * p.z + view(2, 3));
+            if (!std::isfinite(depth))
+            {
+                depth = 0.0f; // keeps the sort's ordering strict
+            }
+        }
+        transparent.push_back(TransparentEntry{renderable, key.sortKey, depth});
+    }
+
+    // Lower sort keys first; within a key, back to front
+    std::ranges::stable_sort(transparent, [](const TransparentEntry &a, const TransparentEntry &b) {
+        if (a.sortKey != b.sortKey)
+        {
+            return a.sortKey < b.sortKey;
+        }
+        return a.depth > b.depth;
+    });
+
+    for (IRenderable *renderable : opaque)
+    {
+        renderable->RenderInQueue(renderer, Renderer::Common::RenderState::Opaque());
+    }
+    for (const TransparentEntry &entry : transparent)
+    {
+        entry.renderable->RenderInQueue(renderer, Renderer::Common::RenderState::Transparent());
     }
 }
 
-void Scene::RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Common::IRenderer *renderer)
+void Scene::CollectRenderablesRecursive(const std::shared_ptr<GameObject> &gameObject, std::vector<IRenderable *> &out)
 {
     if (gameObject == nullptr || !gameObject->IsActiveInHierarchy())
     {
@@ -109,13 +167,13 @@ void Scene::RenderRecursive(std::shared_ptr<GameObject> gameObject, Renderer::Co
     {
         if (renderable && renderable->IsActive())
         {
-            renderable->Render(renderer);
+            out.push_back(renderable);
         }
     }
 
     for (const auto &child : gameObject->GetChildren())
     {
-        RenderRecursive(child, renderer);
+        CollectRenderablesRecursive(child, out);
     }
 }
 
