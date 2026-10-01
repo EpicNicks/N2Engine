@@ -1,5 +1,10 @@
 #include "engine/Time.hpp"
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <format>
+
+#include "engine/Logger.hpp"
 
 using namespace N2Engine;
 
@@ -44,6 +49,13 @@ float Time::GetUnscaledTime()
 
 void Time::SetTimeScale(float scale)
 {
+    // NaN or infinity would poison every scaled time; a negative scale ran time (and physics) backwards
+    if (!std::isfinite(scale))
+    {
+        Logger::Warn(std::format("Time::SetTimeScale: ignored non-finite scale {}", scale));
+        return;
+    }
+    scale = std::max(scale, 0.0f);
     timeScale = scale;
     fixedDeltaTime = fixedUnscaledDeltaTime * scale;
 }

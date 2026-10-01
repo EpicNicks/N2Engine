@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -8,6 +9,7 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Logger.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/Time.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
 using namespace N2Engine;
@@ -182,4 +184,25 @@ TEST(CoreRobustnessTest, QuitIsARequestNotAnExit)
     Application::Quit();
 
     EXPECT_TRUE(Application::GetInstance().IsQuitRequested());
+}
+
+// ----------------------------------------------------------------------------- time
+
+TEST(CoreRobustnessTest, TimeScaleRejectsNegativeAndNonFiniteValues)
+{
+    const float original = Time::GetTimeScale();
+
+    Time::SetTimeScale(0.5f);
+    Time::SetTimeScale(-2.0f); // would run time backwards
+    EXPECT_FLOAT_EQ(Time::GetTimeScale(), 0.0f);
+    EXPECT_FLOAT_EQ(Time::GetFixedDeltaTime(), 0.0f);
+
+    Time::SetTimeScale(0.5f);
+    Time::SetTimeScale(std::numeric_limits<float>::quiet_NaN());
+    EXPECT_FLOAT_EQ(Time::GetTimeScale(), 0.5f) << "a non-finite scale is ignored";
+    Time::SetTimeScale(std::numeric_limits<float>::infinity());
+    EXPECT_FLOAT_EQ(Time::GetTimeScale(), 0.5f);
+    EXPECT_TRUE(std::isfinite(Time::GetFixedDeltaTime()));
+
+    Time::SetTimeScale(original);
 }
