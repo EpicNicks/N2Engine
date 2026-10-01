@@ -8,8 +8,6 @@
 
 namespace N2Engine::Rendering
 {
-    REGISTER_COMPONENT(Light)
-
     Light::Light(GameObject &gameObject)
         : SerializableComponent(gameObject)
     {

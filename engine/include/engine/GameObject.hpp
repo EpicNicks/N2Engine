@@ -82,7 +82,9 @@ namespace N2Engine
         void DetachChild(Ptr child, bool keepWorldPosition);
         /// Raw pointers to the current components, for running callbacks that may add or remove some
         [[nodiscard]] std::vector<Component *> SnapshotComponents() const;
-        /// Whether the component is still one of this object's (a callback may have removed and freed it)
+        /// Whether the component is still one of this object's (a callback may have removed and freed it).
+        /// A linear search, so snapshot loops are O(n^2) (fine for a handful of components). By address: a
+        /// component added by a callback at a freed one's address would pass (a lifetime token would not).
         [[nodiscard]] bool OwnsComponent(const Component *component) const;
 
     public:
@@ -110,6 +112,8 @@ namespace N2Engine
         void AddChild(Ptr child, bool keepWorldPosition = true);
         /// Detaches the child, which becomes a root of its scene (the same as child->SetParent(nullptr)).
         /// A child that's being destroyed is only unlinked: it leaves the scene with its destroyed hierarchy.
+        /// Note: this edits the scene's root list, so it isn't supported inside a TraverseAll/TraverseUntil
+        /// callback (nor is AddChild of a root).
         void RemoveChild(Ptr child, bool keepWorldPosition = true);
 
         const std::vector<Ptr>& GetChildren() const { return _children; }

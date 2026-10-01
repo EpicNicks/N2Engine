@@ -37,7 +37,7 @@ namespace N2Engine
         mutable std::vector<Component*> _components;
         mutable int _componentIterationDepth = 0;
         std::vector<Component*> _attachQueue; // vector, not queue, so pending entries can be removed
-        Component *_attachingComponent = nullptr; // the one in OnAttach; DetachComponent clears it
+        std::vector<Component*> _attaching; // components in OnAttach, innermost last; DetachComponent nulls them
         std::vector<Rendering::Light*> _sceneLights;
 
         std::unique_ptr<Scheduling::CoroutineScheduler> _coroutineScheduler;

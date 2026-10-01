@@ -6,8 +6,6 @@
 
 namespace N2Engine::Physics
 {
-    REGISTER_COMPONENT(SphereCollider)
-
     SphereCollider::SphereCollider(GameObject& gameObject)
         : ICollider(gameObject)
     {

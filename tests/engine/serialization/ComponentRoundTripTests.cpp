@@ -20,6 +20,7 @@
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/physics/Rigidbody.hpp"
+#include "engine/serialization/ComponentRegistry.hpp"
 
 using namespace N2Engine;
 using json = nlohmann::json;
@@ -177,4 +178,15 @@ TEST(ComponentRoundTripTest, UnknownComponentTypeIsReportedNotSkippedSilently)
         return warning.find("NoSuchComponent") != std::string::npos;
     });
     EXPECT_TRUE(reported) << "the unknown type was dropped without a word";
+}
+
+TEST(ComponentRoundTripTest, BuiltinTypesAreRegisteredWithoutIncludingTheirHeaders)
+{
+    // This file never includes QuadRenderer.hpp or the collider headers. Registration used to depend on
+    // that (header statics) or on the linker keeping an unreferenced .cpp of the static engine library.
+    for (const char *typeName : {"QuadRenderer", "BoxCollider", "SphereCollider", "CapsuleCollider", "Light",
+                                 "LuaComponent"})
+    {
+        EXPECT_TRUE(ComponentRegistry::Instance().IsRegistered(typeName)) << typeName;
+    }
 }

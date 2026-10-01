@@ -24,14 +24,22 @@ void Component::RunDestroyCallbacks(const bool objectWasActiveInHierarchy)
     {
         return;
     }
-    _isRunningDestroyCallbacks = true;
+    // Cleared however the callbacks end: left set by a throwing one, the component could never be removed
+    struct RunningScope
+    {
+        bool &running;
+        explicit RunningScope(bool &flag) : running(flag) { running = true; }
+        ~RunningScope() { running = false; }
+        RunningScope(const RunningScope &) = delete;
+        RunningScope &operator=(const RunningScope &) = delete;
+    } scope{_isRunningDestroyCallbacks};
+
     // Mirrors enable: anything that got OnEnable (or started enabled) sees OnDisable before OnDestroy
     if (_isActive && objectWasActiveInHierarchy)
     {
         OnDisable();
     }
     OnDestroy();
-    _isRunningDestroyCallbacks = false;
     _isMarkedForDestruction = true;
 }
 

@@ -8,8 +8,6 @@
 
 namespace N2Engine::Physics
 {
-    REGISTER_COMPONENT(BoxCollider)
-
     BoxCollider::BoxCollider(GameObject& gameObject)
         : ICollider(gameObject)
     {
