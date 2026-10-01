@@ -45,7 +45,12 @@ namespace Renderer::Software
         void SetViewProjection(const float *view, const float *projection) override;
         void UpdateSceneLighting(const Common::SceneLightingData &lighting,
                                  const N2Engine::Math::Vector3 &cameraPosition) override;
-        void DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material) override;
+        using Common::IRenderer::DrawMesh; // the default-state overload
+        /// Records the draw; EndFrame rasterizes the frame's draws in the order OrderDraws gives
+        /// (DrawOrder.hpp). depthTest, depthWrite and cull are honoured per draw; blend is ignored, as
+        /// this renderer has no blending (a Transparent-queue draw is drawn opaque, without writing depth).
+        void DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
+                      const Common::RenderState &state) override;
         void DrawObjects(const std::vector<Common::RenderObject> &objects) override;
         void OnResize(int width, int height) override;
 
@@ -62,6 +67,7 @@ namespace Renderer::Software
             SWMesh* mesh;
             float modelMatrix[16];
             SWMaterial* material;
+            Common::RenderState state;
         };
 
         std::vector<DrawCommand> m_drawQueue;
@@ -112,7 +118,8 @@ namespace Renderer::Software
 
         void RasterizeTriangle(const SWFragment &f0, const SWFragment &f1, const SWFragment &f2, const SWMaterial *mat,
                                const float *modelMatrix);
-        void RasterizeMesh(SWMesh* mesh, const float* modelMatrix, SWMaterial* material);
+        void RasterizeMesh(SWMesh* mesh, const float* modelMatrix, SWMaterial* material,
+                           const Common::RenderState& state);
 
         uint32_t ShadeLit(const SWFragment &frag, const SWMaterial *mat, const float *modelMatrix) const;
         uint32_t ShadeUnlit(const SWFragment &frag, const SWMaterial *mat) const;

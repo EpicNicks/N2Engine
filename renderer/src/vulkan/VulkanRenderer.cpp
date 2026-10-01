@@ -91,8 +91,10 @@ void VulkanRenderer::UpdateSceneLighting(const Common::SceneLightingData& lighti
 
 
 void Renderer::Vulkan::VulkanRenderer::DrawMesh(Renderer::Common::IMesh* mesh, const float* modelMatrix,
-                                                Renderer::Common::IMaterial* material)
+                                                Renderer::Common::IMaterial* material,
+                                                const Renderer::Common::RenderState& state)
 {
+    // Nothing is drawn yet (#43). When it is, `state` selects the pipeline's depth/cull/blend settings.
 }
 
 void Renderer::Vulkan::VulkanRenderer::DrawObjects(const std::vector<Renderer::Common::RenderObject>& objects)
