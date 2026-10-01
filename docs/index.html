@@ -35,6 +35,7 @@
 <li><a href="physics.html">Physics</a></li>
 <li><a href="input.html">Input</a></li>
 <li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
 <li><a href="resources.html">Resources &amp; paths</a></li>
 <li><a href="serialization.html">Serialization</a></li>
 <li><a href="math.html">Math &amp; SIMD</a></li>
@@ -110,6 +111,7 @@
 <thead><tr><th>Directory</th><th>What it is</th></tr></thead>
 <tbody>
 <tr><td><code>math/</code></td><td>Vectors, matrices, quaternions, UUIDs, random numbers, with SIMD dispatch. No engine dependencies. See <a href="math.html">Math &amp; SIMD</a>.</td></tr>
+<tr><td><code>text/</code></td><td>Font backends (stb_truetype), SDF glyph atlases, UTF-8 decoding and text layout, CPU-only. Depends only on <code>math</code>. See <a href="text.html">Text &amp; fonts</a>.</td></tr>
 <tr><td><code>renderer/</code></td><td>Rendering backends behind <code>Renderer::Common::Renderer</code>: OpenGL (default), Vulkan and a software renderer.</td></tr>
 <tr><td><code>engine/</code></td><td>The engine proper: application loop, GameObjects, scenes, physics, audio, input, resources, serialization, coroutines and Lua scripting.</td></tr>
 <tr><td><code>editor-server/</code></td><td><code>N2EditorHost</code>, a headless engine host that editors talk to over TCP. See <a href="logging-and-editor.html">Logging, health &amp; editor</a>.</td></tr>
@@ -130,6 +132,7 @@
 <div class="card"><h3><a href="physics.html">Physics</a></h3><p><code>IPhysicsBackend</code> with a PhysX implementation; Rigidbody and collider components; collision and trigger events; raycasts.</p></div>
 <div class="card"><h3><a href="input.html">Input</a></h3><p>Action maps with typed actions and bindings; owned by the window, updated as events are polled.</p></div>
 <div class="card"><h3><a href="audio.html">Audio</a></h3><p>OpenAL-based <code>AudioSystem</code>: sources, one-shots, mixer groups and a listener.</p></div>
+<div class="card"><h3><a href="text.html">Text &amp; fonts</a></h3><p>Font assets with SDF atlases built at load time, and UTF-8 layout with kerning, wrapping and alignment. CPU-only; nothing draws text yet.</p></div>
 <div class="card"><h3><a href="resources.html">Resources</a></h3><p><code>res://</code> and <code>user://</code> paths, the project asset scan with stable meta UUIDs, and one lookup API.</p></div>
 <div class="card"><h3><a href="serialization.html">Serialization</a></h3><p>Scenes and components to and from JSON, including references between objects and to assets.</p></div>
 <div class="card"><h3><a href="scripting-lua.html">Lua scripting</a></h3><p><code>LuaComponent</code> runs scripts with lifecycle callbacks, serializable fields and checked handles.</p></div>
@@ -194,6 +197,7 @@
 <tr><td><a href="logging-and-editor.html#design-logger-lock">Logs are delivered on the logging thread</a></td><td>Any thread may log; one recursive lock delivers each message whole and in order, on the thread that logged it.</td></tr>
 <tr><td><a href="scripting-lua.html#design-script-replace">A replaced script instance is retired</a></td><td><code>SetScript</code> or a reload tears the old instance down like a removed component and attaches the new one, keeping the component's field data and references.</td></tr>
 <tr><td><a href="audio.html#design-play-restarts">Play restarts, UnPause resumes</a></td><td><code>AudioSource::Play</code> always starts from the beginning; resuming a paused source is <code>UnPause</code>.</td></tr>
+<tr><td><a href="text.html#design-cpu-fonts">Fonts are CPU-only assets</a></td><td>A <code>Font</code> holds its face and SDF atlas in memory and never touches a renderer, so it loads headless; renderers make their own textures from it.</td></tr>
 <tr><td><a href="audio.html#design-no-headless-clips">No audio clips without a context</a></td><td>Clips are OpenAL buffers, so they fail to load (with a warning) while the <code>AudioSystem</code> is not initialized, and a clip from an earlier context is never treated as loaded.</td></tr>
 <tr><td><a href="scenes.html#design-dropped-scenes">A dropped scene undoes only what attached</a></td><td>A scene destroyed without being loaded tears down the components that attached to it, and gives no callbacks to those that never did.</td></tr>
 <tr><td><a href="serialization.html#design-prefab-uuids">A prefab instance is a new object tree</a></td><td>Instantiating resolves references inside the prefab to the new objects, then gives every object and component a fresh UUID; references leaving the prefab become null.</td></tr>
