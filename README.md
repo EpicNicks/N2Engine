@@ -6,6 +6,11 @@ A C++ Game Engine I am building for learning
 - Graphics backend programming + Graphics Programming
 - Integration and wrapping of Physics Engines
 
+## Documentation
+Behaviour reference for the engine (lifecycles, frame order, guarantees and edge cases): [`docs/`](docs/index.html).
+- Open `docs/index.html` in a browser; no build step is needed. The site can also be served with GitHub Pages from the `docs/` folder.
+- Conventions for extending the docs: [`docs/README.md`](docs/README.md)
+
 ## Currently Implemented
 - Component System
 - Main Loop Scheduling
