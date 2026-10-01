@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "engine/Application.hpp"
@@ -172,6 +173,58 @@ TEST(CoreRobustnessTest, LoggerDeliversBacklogOnceWhenASubscriberLogs)
     // Each exactly once; the nested drain used to deliver "first" twice
     const std::vector<std::string> expected{"first", "nested", "second", "trigger"};
     EXPECT_EQ(received, expected);
+}
+
+TEST(CoreRobustnessTest, LoggerIsSafeToUseFromManyThreads)
+{
+    constexpr int threadCount = 8;
+    constexpr int logsPerThread = 500;
+    const std::string prefix = "threaded log ";
+
+    // The queue and the subscriber list used to be touched by every logging thread at once
+    int delivered = 0; // subscribers run under the Logger's lock, so a plain counter is enough
+    int nestedLogs = 0;
+    const size_t id = Logger::logEvent += [&](const std::string_view message, Logger::LogLevel)
+    {
+        if (!message.starts_with(prefix))
+        {
+            return;
+        }
+        ++delivered;
+        if (message.ends_with(" 0"))
+        {
+            ++nestedLogs;
+            Logger::Info("nested log from a subscriber"); // re-enters on this thread: must not deadlock
+        }
+    };
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < threadCount; ++t)
+    {
+        threads.emplace_back([&prefix, t]
+        {
+            for (int i = 0; i < logsPerThread; ++i)
+            {
+                Logger::Log(prefix + std::to_string(t) + " " + std::to_string(i), Logger::LogLevel::Info);
+            }
+        });
+    }
+
+    // Subscribing and unsubscribing while they log
+    for (int i = 0; i < 200; ++i)
+    {
+        const size_t extra = Logger::logEvent += [](std::string_view, Logger::LogLevel) {};
+        Logger::logEvent -= extra;
+    }
+
+    for (auto &thread : threads)
+    {
+        thread.join();
+    }
+    Logger::logEvent -= id;
+
+    EXPECT_EQ(delivered, threadCount * logsPerThread);
+    EXPECT_EQ(nestedLogs, threadCount);
 }
 
 // ----------------------------------------------------------------------------- application

@@ -1,5 +1,6 @@
 #include "engine/Logger.hpp"
 #include <iostream>
+#include <mutex>
 
 // Platform detection for TTY checking
 #ifdef _WIN32
@@ -21,12 +22,50 @@
 
 using namespace N2Engine;
 
-Base::EventHandler<std::string_view, Logger::LogLevel> Logger::logEvent;
-bool Logger::broadcastUnbroadcastLogs = false;
+namespace
+{
+    // Guards the backlog, the subscribers and the stream redirectors' line buffers. Recursive, so a
+    // subscriber that logs (or writes to a redirected stream) re-enters on its own thread. Never destroyed,
+    // so logging during static destruction still finds it.
+    std::recursive_mutex &LogMutex()
+    {
+        static auto *mutex = new std::recursive_mutex();
+        return *mutex;
+    }
+}
+
+Logger::LogEventHandler Logger::logEvent;
+std::atomic<bool> Logger::broadcastUnbroadcastLogs = false;
 std::queue<Logger::QueuedLog> Logger::_logQueue;
+
+size_t Logger::LogEventHandler::operator+=(const std::function<void(std::string_view, LogLevel)> &func)
+{
+    std::lock_guard lock(LogMutex());
+    return _handler += func;
+}
+
+void Logger::LogEventHandler::operator-=(const size_t id)
+{
+    std::lock_guard lock(LogMutex());
+    _handler -= id;
+}
+
+void Logger::LogEventHandler::operator()(const std::string_view message, const LogLevel level)
+{
+    std::lock_guard lock(LogMutex());
+    _handler(message, level);
+}
+
+size_t Logger::LogEventHandler::GetSubscriberCount() const
+{
+    std::lock_guard lock(LogMutex());
+    return _handler.GetSubscriberCount();
+}
 
 void Logger::Log(std::string_view log, LogLevel level)
 {
+    // Held across the backlog check and the delivery: another thread's log waits for this one to finish
+    std::lock_guard lock(LogMutex());
     if (broadcastUnbroadcastLogs && logEvent.GetSubscriberCount() == 0)
     {
         _logQueue.push({std::string(log), level});
@@ -170,6 +209,8 @@ int Logger::StreamRedirector::LoggerStreambuf::overflow(const int c)
         return EOF;
     }
 
+    // Any thread may write to a redirected std::cout; its line buffer is shared
+    std::lock_guard lock(LogMutex());
     int result = EOF;
     if (echoToOriginal && originalBuf)
     {
@@ -198,6 +239,7 @@ int Logger::StreamRedirector::LoggerStreambuf::overflow(const int c)
 
 int Logger::StreamRedirector::LoggerStreambuf::sync()
 {
+    std::lock_guard lock(LogMutex());
     // Flush any remaining content
     if (!lineBuffer.empty())
     {

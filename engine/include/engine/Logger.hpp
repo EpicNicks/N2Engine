@@ -6,12 +6,20 @@
 #include <memory>
 #include <string_view>
 #include <queue>
+#include <atomic>
+#include <functional>
 
 #include "engine/base/EventHandler.hpp"
 
 namespace N2Engine
 {
     // meant to be received by any GUI or shell and otherwise not used elsewhere directly in the engine
+    //
+    // Thread-safe: Log, subscribing and unsubscribing may happen on any thread. They share one recursive
+    // lock, held while the backlog and the subscribers run, so a log is delivered whole (never interleaved
+    // with another thread's) and on the logging thread. Being recursive, a subscriber that logs re-enters
+    // on its own thread as before. Subscribers must not wait on another thread that logs (that thread
+    // blocks on the lock: a deadlock). Not async-signal-safe: don't log from a POSIX signal handler.
     class Logger
     {
     public:
@@ -22,8 +30,21 @@ namespace N2Engine
             Error
         };
 
-        static Base::EventHandler<std::string_view, LogLevel> logEvent;
-        static bool broadcastUnbroadcastLogs;
+        /// An EventHandler whose subscribe, unsubscribe and dispatch hold the Logger's lock
+        class LogEventHandler
+        {
+        public:
+            size_t operator+=(const std::function<void(std::string_view, LogLevel)> &func);
+            void operator-=(size_t id);
+            void operator()(std::string_view message, LogLevel level);
+            [[nodiscard]] size_t GetSubscriberCount() const;
+
+        private:
+            Base::EventHandler<std::string_view, LogLevel> _handler;
+        };
+
+        static LogEventHandler logEvent;
+        static std::atomic<bool> broadcastUnbroadcastLogs;
 
         static void Log(std::string_view log, LogLevel level);
 
