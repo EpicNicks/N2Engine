@@ -60,7 +60,7 @@
 <div class="content">
 
 <h1>Input</h1>
-<p class="lead">The input system polls GLFW once per frame and turns keyboard, mouse and gamepad state into named <em>actions</em> grouped in <em>action maps</em>. This page covers who owns it, how bindings combine into a value, the action phase machine and its callbacks, what is safe to change from inside a callback, the JSON format and the Lua surface.</p>
+<p class="lead">The input system polls GLFW once per frame and turns keyboard, mouse and gamepad state into named <em>actions</em> grouped in <em>action maps</em>. This page covers who owns it, how bindings combine into a value, the action phase machine and its callbacks, what is safe to change from inside a callback, mouse picking and the <code>OnMouse*</code> callbacks, the JSON format and the Lua surface.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -74,7 +74,8 @@
 <li><a href="#deadzones">Deadzones and axis normalization</a></li>
 <li><a href="#phases">Action phases and callbacks</a></li>
 <li><a href="#disabling">Disabling actions and maps</a></li>
-<li><a href="#mouse">Mouse position and scroll</a></li>
+<li><a href="#mouse">Mouse position, buttons and scroll</a></li>
+<li><a href="#picking">Picking and <code>OnMouse*</code> callbacks</a></li>
 <li><a href="#callback-safety">Modifying input from callbacks</a></li>
 <li><a href="#json-format">JSON format and validation</a></li>
 <li><a href="#lua">Lua API</a></li>
@@ -97,7 +98,7 @@
 <p>Game code reaches it as <code>Application::GetInstance().GetWindow().GetInputSystem()</code> and must handle <code>nullptr</code>. See <a href="application.html">Application &amp; frame loop</a> for subsystem health reporting.</p>
 
 <h3 id="headless-construction">Constructing without a window</h3>
-<p>An <code>InputSystem</code> can be constructed from a <code>Window</code> that was never initialized (its GLFW handle is null). <code>Mouse</code> is null-safe: with no window it registers no scroll callback, and position and position delta stay zero, while scroll accumulation still works. The input tests rely on this: <code>InputSystemHeadlessTest</code> builds <code>Window _window; InputSystem _input{_window};</code> and drives actions through a fake binding.</p>
+<p>An <code>InputSystem</code> can be constructed from a <code>Window</code> that was never initialized (its GLFW handle is null). <code>Mouse</code> is null-safe: with no window it registers no scroll callback, and position, position delta and buttons stay as they are (zero and up, unless a test injects a pointer state with <code>InjectPointer</code> <span class="badge">PR #48</span>), while scroll accumulation still works. The input tests rely on this: <code>InputSystemHeadlessTest</code> builds <code>Window _window; InputSystem _input{_window};</code> and drives actions through a fake binding.</p>
 <div class="callout guarantee">
 <p class="callout-title">Guarantee <span class="badge">PR #39</span></p>
 <p>Keyboard, mouse-button and composite (WASD) bindings never hand GLFW a null window. Created with a null <code>GLFWwindow*</code> (for example by an <code>InputSystem</code> on a <code>Window</code> that never opened), <code>getValue</code> returns released: <code>false</code>, or <code>(0, 0)</code> for a composite, without calling GLFW. So a headless <code>InputSystem</code> can update actions built from JSON. Before, the null pointer went straight to <code>glfwGetKey</code>/<code>glfwGetMouseButton</code>. Gamepad bindings poll by joystick id and need no window.</p>
@@ -111,12 +112,12 @@
 <li><code>glfwPollEvents()</code>: GLFW callbacks run, including the scroll callback, which only buffers the offset.</li>
 <li><code>InputSystem::Update()</code>, if there is an input system:
 <ol>
-<li><code>Mouse::Update()</code>: publishes the buffered scroll and samples the cursor position.</li>
+<li><code>Mouse::Update()</code>: publishes the buffered scroll and samples the cursor position and the eight mouse buttons <span class="badge">PR #48</span>.</li>
 <li>The <em>current</em> action map's <code>ActionMap::Update()</code>: every action polls its bindings, updates its phase and fires <code>OnStateChanged</code> callbacks.</li>
 </ol>
 </li>
 </ol>
-<p>Only then does <code>Run</code> call <code>Time::Update</code>, process the attach queue, run fixed steps, <code>Update</code>, coroutines and <code>LateUpdate</code>. So input callbacks run before any component update in the same frame, and before <code>Time::Update</code> (a callback that reads the delta time sees the previous frame's value). <code>PollEvents</code> does nothing when the window is null. <code>Application::RenderEditorFrame</code> also calls <code>PollEvents</code>, so input is updated in editor frames too.</p>
+<p>Only then does <code>Run</code> call <code>Time::Update</code>, process the attach queue, run fixed steps, send the <a href="#picking">pointer callbacks</a> <span class="badge">PR #48</span>, then <code>Update</code>, coroutines and <code>LateUpdate</code>. So input callbacks run before any component update in the same frame, and before <code>Time::Update</code> (a callback that reads the delta time sees the previous frame's value). <code>PollEvents</code> does nothing when the window is null. <code>Application::RenderEditorFrame</code> also calls <code>PollEvents</code>, so input is updated in editor frames too.</p>
 <div class="callout note">
 <p class="callout-title">Note</p>
 <p>Only the current map is updated. Actions in other maps are not polled and keep whatever phase and value they had when they last updated (see <a href="#disabling">Disabling actions and maps</a>).</p>
@@ -315,7 +316,7 @@ if (input)
 </div>
 <p class="src">Source: <code>engine/src/input/ActionMap.cpp</code> — <code>InputAction::HandleDisabledTransition</code>, <code>InputAction::SetDisabled</code>, <code>InputAction::CancelIfActive</code>, <code>ActionMap::Update</code>, <code>ActionMap::CancelActiveActions</code>; <code>engine/src/input/InputSystem.cpp</code> — <code>InputSystem::LoadActionMap</code></p>
 
-<h2 id="mouse">Mouse position and scroll</h2>
+<h2 id="mouse">Mouse position, buttons and scroll</h2>
 <p><code>InputSystem</code> owns one <code>Mouse</code>. <code>Mouse::Get()</code> reaches it through <code>Application::GetInstance().GetWindow().GetInputSystem()</code> and returns <code>nullptr</code> when there is no input system (the window failed to open, or after shutdown).</p>
 <div class="table-wrap">
 <table>
@@ -324,6 +325,8 @@ if (input)
 <tr><td><code>GetPosition()</code></td><td>Cursor position from <code>glfwGetCursorPos</code> (window coordinates), sampled in <code>Mouse::Update</code>.</td></tr>
 <tr><td><code>GetPositionDelta()</code></td><td>Position change since the previous <code>Mouse::Update</code>. The first update measures from the position sampled in the constructor.</td></tr>
 <tr><td><code>GetScrollDelta()</code></td><td>Sum of all scroll offsets (x, y) that arrived since the previous <code>Mouse::Update</code>.</td></tr>
+<tr><td><code>GetButton(b)</code> <span class="badge">PR #48</span></td><td>Whether button <code>b</code> is held, as sampled by the last <code>Mouse::Update</code> (<code>glfwGetMouseButton</code>). Buttons are 0..7 as in Unity: 0 left, 1 right, 2 middle; there are also <code>MouseButton</code> overloads. An out-of-range button reads <code>false</code>.</td></tr>
+<tr><td><code>GetButtonDown(b)</code>, <code>GetButtonUp(b)</code> <span class="badge">PR #48</span></td><td>True for exactly one <code>Update</code>: the one in which the button went down (held now, not in the previous <code>Update</code>), or was released.</td></tr>
 </tbody>
 </table>
 </div>
@@ -334,7 +337,85 @@ if (input)
 <p>Several scroll events between two updates add up; the delta is visible after the next <code>Update</code> and is zero after the one after it (it used to be zeroed before anyone could read it).</p>
 </div>
 <p>Without a window the mouse registers no callback and position/position delta stay zero; scroll accumulation and publication still work.</p>
-<p class="src">Source: <code>engine/src/input/Mouse.cpp</code> — <code>Mouse::Get</code>, <code>Mouse::ScrollCallback</code>, <code>Mouse::AccumulateScroll</code>, <code>Mouse::Update</code>; <code>engine/src/input/InputSystem.cpp</code> — <code>InputSystem::InputSystem</code>; tests: <code>MouseTest.ScrollIsVisibleForTheFrameAfterItArrives</code></p>
+<h3 id="mouse-buttons">Buttons and the pointer test seam <span class="badge">PR #48</span></h3>
+<p>Buttons are sampled in <code>Mouse::Update</code>, in the same place as the cursor, so every reader in a frame sees the same state and the same edges. The window has GLFW's sticky mouse buttons on (<code>GLFW_STICKY_MOUSE_BUTTONS</code>), so a click shorter than a frame is not lost: a button pressed and released between two updates reads as held in the next <code>Update</code> (<code>GetButtonDown</code>) and as released in the one after (<code>GetButtonUp</code>). Several clicks between two updates still count as one. <code>Mouse::Update</code> reads the buttons first in the frame, before action maps poll their bindings, so the bindings see the same states as before. Picking and <code>Input.GetMouseButton*</code> read this state; mouse-button <em>bindings</em> in action maps poll GLFW themselves and are unaffected.</p>
+<p><code>InjectPointer(position, buttons)</code> is a test seam like <code>AccumulateScroll</code>: the next <code>Update</code> takes that position and button mask (<code>Mouse::ButtonBit(n)</code> per button) instead of reading the device. It covers one <code>Update</code>; after that the device is sampled again, or, without a window, the injected state is kept. So a headless test injects a press, calls <code>Update</code> (<code>GetButtonDown</code> is true), calls <code>Update</code> again (held, no edge), then injects the release.</p>
+<p class="src">Source: <code>engine/src/input/Mouse.cpp</code> — <code>Mouse::Get</code>, <code>Mouse::ScrollCallback</code>, <code>Mouse::AccumulateScroll</code>, <code>Mouse::InjectPointer</code>, <code>Mouse::Update</code>; <code>engine/src/input/InputSystem.cpp</code> — <code>InputSystem::InputSystem</code>; tests: <code>MouseTest.ScrollIsVisibleForTheFrameAfterItArrives</code>, <code>MouseButtonTest.*</code></p>
+
+<h2 id="picking">Picking and <code>OnMouse*</code> callbacks <span class="badge">PR #48</span></h2>
+<p>Clicking objects works as in Unity: a component overrides <code>OnMouseDown</code> (or another <code>OnMouse*</code> callback) and is called when the left button is pressed over its object. <code>Application</code> owns an <code>Input::PointerDispatcher</code> (<code>Application::GetPointerDispatcher()</code>), and <code>Run</code> calls its <code>Update</code> once per frame, after the fixed steps and before <code>Scene::Update</code>, which is where Unity sends these messages (see <a href="application.html#frame">the frame loop</a>). Nothing is sent while no scene is loaded, in <code>RenderEditorFrame</code>, or without a window (no <code>Mouse</code>).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Callback</th><th>When it is sent</th></tr></thead>
+<tbody>
+<tr><td><code>OnMouseEnter()</code></td><td>The pointer moved onto the object</td></tr>
+<tr><td><code>OnMouseOver()</code></td><td>Every frame the pointer is over the object, starting with the frame it entered</td></tr>
+<tr><td><code>OnMouseExit()</code></td><td>The pointer moved off the object</td></tr>
+<tr><td><code>OnMouseDown()</code></td><td>The left button was pressed over the object. The object <em>captures</em> the pointer.</td></tr>
+<tr><td><code>OnMouseDrag()</code></td><td>Every frame the button stays held after a Down on the object, wherever the pointer is. Not in the Down frame itself.</td></tr>
+<tr><td><code>OnMouseUp()</code></td><td>The button was released after a Down on the object, wherever the pointer is</td></tr>
+<tr><td><code>OnMouseUpAsButton()</code></td><td>The button was released over the object that got the Down (a click). Sent just before its <code>OnMouseUp</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Each frame the dispatcher:</p>
+<ol class="steps">
+<li>Drops the hovered and capturing objects if they were destroyed or deactivated since the last frame. They get no <code>OnMouseExit</code> or <code>OnMouseUp</code>.</li>
+<li>Finds the <strong>target</strong> under the cursor (<code>Mouse::GetPosition</code>). It asks the UI hit provider first; there is none until UI exists (#42). Otherwise the world hit provider decides. The default one casts the main camera's <code>Camera::ScreenPointToRay</code>, with the window size as the viewport, using <code>Raycast::Single</code> from the near plane to the far plane with the pick mask (<code>SetPickMask</code>; <code>Layers::DefaultRaycastMask</code> to start with, so objects on the Ignore Raycast layer can't be clicked). The target is the hit <em>collider's</em> GameObject: for a collider on a child object, that is the child, not the body's owner. A cursor outside the viewport (anything but <code>0 &lt;= x &lt; width</code> and <code>0 &lt;= y &lt; height</code>; GLFW keeps reporting it, even negative, while it is outside the window) picks nothing, as Unity only picks inside the camera's pixel rect, so leaving the window sends <code>OnMouseExit</code>. An object that is inactive or destroyed is never a target. Without a physics backend (including a build without PhysX) nothing is hit, and the dispatcher still runs.</li>
+<li>Handles the left button, in Unity's order: if it went down this frame, <code>OnMouseDown</code> to the target, which captures the pointer; otherwise, if it is up and something has the capture, <code>OnMouseUpAsButton</code> (only if the target is that object) and then <code>OnMouseUp</code> to it, ending the capture; otherwise, if it is held and something has the capture, <code>OnMouseDrag</code> to it.</li>
+<li>Handles hover: if the target is the hovered object, <code>OnMouseOver</code>; if it changed, <code>OnMouseExit</code> to the old object, then <code>OnMouseEnter</code> and <code>OnMouseOver</code> to the new one.</li>
+</ol>
+<p>Delivery follows the <a href="physics.html#design-inactive-physics">physics event rule</a>: each callback goes to every component of the object, a disabled component included, as long as the object is active in the hierarchy and not destroyed. The component list is snapshotted and each component's lifetime token is checked before its call, so callbacks may add, remove or destroy components and objects. Once a callback destroys or deactivates the object, its remaining components get nothing more that frame. "Destroyed" means marked for destruction, as for physics: inside a scene, <code>Destroy()</code> takes effect when the destroy queue runs at the end of the frame.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Situation</th><th>What happens</th><th>Test</th></tr></thead>
+<tbody>
+<tr><td>The hovered object is destroyed or deactivated</td><td>Dropped: no <code>OnMouseExit</code>. Reactivated under the pointer, it gets <code>OnMouseEnter</code> again</td><td><code>DeactivatedWhileHoveredGetsNoExitAndReentersWhenActive</code></td></tr>
+<tr><td>The capturing object is destroyed mid-drag</td><td>Dropped: no more <code>OnMouseDrag</code>, and no <code>OnMouseUp</code> on release</td><td><code>DestroyedMidDragIsDroppedWithoutExitOrUp</code></td></tr>
+<tr><td>Pressed over nothing, then moved onto an object</td><td>No capture: the object gets Enter and Over, but no Down, Drag or Up</td><td><code>PressOverNothingCapturesNothing</code></td></tr>
+<tr><td>Pressed over A, dragged off, released over B</td><td>A gets Drag every frame and then <code>OnMouseUp</code>, with no <code>OnMouseUpAsButton</code>; B only gets hover callbacks</td><td><code>DownCapturesAndDragFollowsOffTheObject</code></td></tr>
+<tr><td>Pressed over A, dragged off and back, released over A</td><td>A click: <code>OnMouseUpAsButton</code>, then <code>OnMouseUp</code></td><td><code>UpAsButtonOnlyWhenReleasedOverTheSameObject</code></td></tr>
+<tr><td>A press arrives while an object still has the capture (frames went unprocessed, e.g. while no scene was loaded)</td><td>The old object gets <code>OnMouseUp</code> first, so Down and Up stay paired</td><td><code>MissedReleaseEndsTheOldCaptureBeforeANewDown</code></td></tr>
+<tr><td>The cursor leaves the window</td><td>Nothing is under it: the hovered object gets <code>OnMouseExit</code>; a captured one keeps getting Drag</td><td><code>PickingPhysicsTest.CursorOutsideTheWindowPicksNothing</code></td></tr>
+<tr><td>A callback calls <code>Update</code> or <code>Process</code> again</td><td>Ignored</td><td><code>ReentrantProcessIsIgnored</code></td></tr>
+<tr><td>A callback or hit provider calls <code>Reset()</code></td><td>The rest of that frame sends nothing, and the forgotten objects stay forgotten (a held button becomes no capture)</td><td><code>ResetFromACallbackStopsTheFrame</code></td></tr>
+<tr><td>A hit provider replaces itself (<code>SetWorldHitProvider</code>)</td><td>Safe: providers are called through a copy; the new one is used from the next frame</td><td><code>ProviderReplacingItselfIsSafe</code></td></tr>
+<tr><td>An object under an inactive parent</td><td>Gets nothing</td><td><code>InactiveObjectGetsNothing</code></td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>Left button only</strong>, as in Unity. The other buttons are read with <code>Mouse::GetButton</code>.</li>
+<li><strong>Action maps are independent.</strong> Picking reads <code>Mouse</code> directly, so a gameplay action bound to the left button still fires whatever the pointer is over. <code>PointerDispatcher::IsPointerOverUI()</code> (Lua <code>Input.IsPointerOverUI()</code>) lets a game ignore clicks that land on UI; it is <code>false</code> until UI exists.</li>
+<li><strong>Timing.</strong> Picking queries the PhysX scene as it is when the dispatcher runs. A dynamic body is where the last fixed step left it, so a fast one can be picked up to one step behind what is drawn. Bodies and colliders attached this frame are already in the scene (<code>PickableBeforeAnyFixedStep</code>), and static colliders follow their transforms at once.</li>
+<li><strong>While paused</strong> (<code>timeScale</code> 0, so no fixed steps): picking still runs. New and static colliders are picked where they are; dynamic bodies stay where they stopped; a kinematic body moved while paused is picked at its old pose, because its move is a kinematic target that PhysX applies in the next simulate. (<code>ApplyPendingChanges</code>, which only runs in a fixed step, holds nothing picking depends on: only gravity changes are deferred.)</li>
+<li><strong>One camera.</strong> The default pick uses the main camera and the window size, in window coordinates (the cursor's space, not the framebuffer's, which differs on high-DPI displays). A host with its own viewport, or a game with another camera, installs its own world provider: <code>SetWorldHitProvider([&amp;](const Vector2 &amp;p) { return PointerDispatcher::PickWorld(camera, p, viewport, mask); })</code>. Passing <code>nullptr</code> restores the default.</li>
+<li><strong>Queries.</strong> <code>GetHovered()</code> and <code>GetCaptured()</code> return the current objects (or <code>nullptr</code>). <code>Reset()</code> forgets both without sending anything; it is safe from a callback (see the table).</li>
+</ul>
+<div class="callout note" id="design-picking">
+<p class="callout-title">Design decision: Unity's <code>OnMouse*</code> callbacks, delivered like physics events</p>
+<p>The click API is Unity's <code>OnMouse*</code> set as <code>Component</code> virtuals. It fits the existing callback model and <code>LuaComponent</code> forwarding, needs no scene setup, and ports directly from Unity. Hit providers sit behind the dispatcher, so UI (#42) can claim the pointer before the world, and an interface-based event system with bubbling and other buttons could be added later without breaking these callbacks. Callbacks run before <code>Update</code>, where Unity sends them, so a click is seen by the same frame's update code. Delivery reuses the physics rule rather than adding a new one: callbacks reach the components of active objects only (a disabled script still gets them, so its own Enter/Exit stay balanced), and an object that is destroyed or deactivated while hovered or captured is dropped silently, as physics drops its pairs. It gets <code>OnDisable</code> instead, which is where per-hover state belongs. The ray runs from the near plane to the far plane, so what the camera can't see can't be clicked, and it uses the default raycast mask so the Ignore Raycast layer stays unclickable.</p>
+</div>
+
+<h3 id="screen-point-to-ray"><code>Camera::ScreenPointToRay</code> <span class="badge">PR #48</span></h3>
+<p><code>ScreenPointToRay(screenPosition, viewportSize, nearToFar = nullptr)</code> returns a <code>Math::Ray</code> (<code>origin</code>, unit <code>direction</code>, <code>GetPoint(d)</code>; <code>math/Ray.hpp</code>) that starts on the near plane and points away from the camera, as in Unity.</p>
+<ul>
+<li>Screen positions are window coordinates, like <code>Mouse::GetPosition</code>: origin at the top-left, y down. The function flips y, so the window's top edge is the top of the view.</li>
+<li>The viewport is passed in rather than read from the window, so a host whose viewport is not the window (the editor) can use it. A zero or negative size gives the ray through the centre of the view.</li>
+<li>The near and far points are unprojected through the inverse of view × projection. That works for perspective and orthographic cameras alike: orthographic rays are parallel, with origins spread across the near plane. The projection is inverted in closed form, because the general 4×4 inverse rejects the tiny determinant of a wide orthographic projection (a pixel-sized 2D camera) as singular.</li>
+<li><code>nearToFar</code>, if given, receives the length of the ray from the near plane to the far plane. The default pick uses it as the raycast distance.</li>
+</ul>
+<pre class="lang-cpp"><code>class Clickable final : public Component
+{
+public:
+    explicit Clickable(GameObject &amp;go) : Component(go) {}
+    [[nodiscard]] std::string GetTypeName() const override { return "Clickable"; }
+
+    void OnMouseUpAsButton() override { Logger::Info(GetGameObject().GetName() + " clicked"); }
+};
+// The object also needs a collider: picking uses physics raycasts
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/input/PointerDispatcher.hpp</code>, <code>engine/src/input/PointerDispatcher.cpp</code> — <code>PointerDispatcher::Process</code>, <code>PickWorld</code>, <code>Send</code>; <code>engine/src/Camera.cpp</code> — <code>Camera::ScreenPointToRay</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>; tests: <code>ScreenPointToRayTest.*</code>, <code>PointerDispatcherTest.*</code> (<code>tests/engine/input/PickingTests.cpp</code>), <code>PickingPhysicsTest.*</code> (with PhysX)</p>
 
 <h2 id="callback-safety">Modifying input from callbacks</h2>
 <p>Callbacks may subscribe, unsubscribe, add/replace/remove actions, replace maps, switch maps and reload the whole configuration while an update is running. The rules:</p>
@@ -446,7 +527,10 @@ if (input)
 <tr><td><code>action:Unsubscribe(id)</code></td><td>Removes it; safe from inside the handler.</td></tr>
 <tr><td><code>action:OnStateChanged()</code></td><td>Returns the action itself, which has <code>Subscribe</code>/<code>Unsubscribe</code>. It used to return a reference to the event inside the action, which dangled once the action was freed; the <code>InputActionEvent</code> Lua type is gone <span class="badge">PR #31</span>.</td></tr>
 <tr><td><code>action:GetPhase()</code>, <code>WasStarted</code>, <code>IsActive</code>, <code>GetBoolValue</code>, <code>GetFloatValue</code>, <code>GetVector2Value</code>, <code>SetDisabled</code>, …</td><td>As in C++. Phases are the <code>ActionPhase</code> enum.</td></tr>
-<tr><td><code>Mouse.Get()</code></td><td>The mouse, or <code>nil</code> without an input system; <code>GetScrollDelta</code>, <code>GetPosition</code>, <code>GetPositionDelta</code>.</td></tr>
+<tr><td><code>Mouse.Get()</code></td><td>The mouse, or <code>nil</code> without an input system; <code>GetScrollDelta</code>, <code>GetPosition</code>, <code>GetPositionDelta</code>, and <code>GetButton(b)</code>, <code>GetButtonDown(b)</code>, <code>GetButtonUp(b)</code> <span class="badge">PR #48</span>.</td></tr>
+<tr><td><code>Input.GetMousePosition()</code> <span class="badge">PR #48</span></td><td>The cursor as a <code>Vector2</code> in window coordinates (top-left origin, y down); <code>(0, 0)</code> without a window.</td></tr>
+<tr><td><code>Input.GetMouseButton(b)</code>, <code>GetMouseButtonDown(b)</code>, <code>GetMouseButtonUp(b)</code> <span class="badge">PR #48</span></td><td>As <code>Mouse::GetButton*</code> (0 left, 1 right, 2 middle); <code>false</code> without a window.</td></tr>
+<tr><td><code>Input.IsPointerOverUI()</code> <span class="badge">PR #48</span></td><td><code>PointerDispatcher::IsPointerOverUI()</code>; <code>false</code> until UI exists.</td></tr>
 </tbody>
 </table>
 </div>
@@ -473,6 +557,7 @@ end)
 <p>A map or action handle kept in a script never dangles. It is valid until its object is freed: the map replaced (<code>Input.CreateActionMap</code> with the same name, <code>InputSystem::Deserialize</code>), the action removed or replaced, or its map freed. After that, every method, property read (<code>map.name</code>), index (<code>map["X"]</code>) and assignment (<code>map.disabled = true</code>) raises "attempt to use a destroyed ActionMap" or "attempt to use a destroyed InputAction". A map or action replaced from inside an input callback is retired until the outermost input update ends (see <a href="#update-snapshot">ActionMap and InputSystem updates</a>), so its handles keep working for the rest of that callback. A dead handle is not <code>== nil</code>; check <code>IsValid()</code>. Re-fetch the map after replacing it. Why handles work this way: <a href="scripting-lua.html#design-handles">design decision</a>.</p>
 </div>
 <p><code>Mouse.Get()</code> still returns a plain pointer: the mouse lives as long as the window's input system, which outlives every script call.</p>
+<p>Scripts get the <code>OnMouse*</code> callbacks by defining methods of the same names (see <a href="scripting-lua.html#lifecycle">Lua lifecycle callbacks</a>), and build rays with <code>Camera:ScreenPointToRay(x, y[, width, height])</code> (the window's size by default; only one of width and height is a Lua error) and <a href="physics.html#lua-raycasts"><code>Physics.Raycast</code></a> <span class="badge">PR #48</span>.</p>
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaInputBindings.cpp</code> — <code>BindInput</code>, <code>FindAction</code>; <code>engine/include/engine/scripting/LuaHandles.hpp</code> — <code>LifetimeRef</code>; <code>engine/src/scripting/LuaJson.cpp</code> — <code>ActionMapJsonFromLua</code>; <code>lua_project/assets/scene.lua</code>, <code>lua_project/assets/scripts/QuitHandler.lua</code>; tests: <code>LuaInputHandleTest.LiveHandlesKeepWorking</code>, <code>LuaInputHandleTest.HandlesToTheSameObjectAreEqual</code>, <code>LuaInputHandleTest.HandlesErrorAfterTheMapIsReplaced</code>, <code>LuaInputHandleTest.ActionHandlesErrorAfterRemoveOrReplace</code>, <code>LuaInputHandleTest.ReplacedFromItsOwnCallbackErrorsOnceTheUpdateEnds</code>, <code>LuaInputHandleTest.OnStateChangedIsTheActionItself</code>, <code>LuaInputHandleTest.SubscriptionIsReleasedWithItsAction</code></p>
 
 <h2 id="gamepads">Connected gamepads</h2>

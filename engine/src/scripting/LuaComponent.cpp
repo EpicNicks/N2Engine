@@ -313,6 +313,13 @@ namespace N2Engine::Scripting
             _hasOnTriggerStay = false;
             _hasOnTriggerExit = false;
             _hasOnApplicationQuit = false;
+            _hasOnMouseEnter = false;
+            _hasOnMouseOver = false;
+            _hasOnMouseExit = false;
+            _hasOnMouseDown = false;
+            _hasOnMouseDrag = false;
+            _hasOnMouseUp = false;
+            _hasOnMouseUpAsButton = false;
             return;
         }
 
@@ -326,6 +333,13 @@ namespace N2Engine::Scripting
         _hasOnTriggerStay = _scriptInstance["OnTriggerStay"].valid();
         _hasOnTriggerExit = _scriptInstance["OnTriggerExit"].valid();
         _hasOnApplicationQuit = _scriptInstance["OnApplicationQuit"].valid();
+        _hasOnMouseEnter = _scriptInstance["OnMouseEnter"].valid();
+        _hasOnMouseOver = _scriptInstance["OnMouseOver"].valid();
+        _hasOnMouseExit = _scriptInstance["OnMouseExit"].valid();
+        _hasOnMouseDown = _scriptInstance["OnMouseDown"].valid();
+        _hasOnMouseDrag = _scriptInstance["OnMouseDrag"].valid();
+        _hasOnMouseUp = _scriptInstance["OnMouseUp"].valid();
+        _hasOnMouseUpAsButton = _scriptInstance["OnMouseUpAsButton"].valid();
     }
 
     void LuaComponent::OnAttach()
@@ -449,6 +463,63 @@ namespace N2Engine::Scripting
         if (_hasOnTriggerExit && !_hasMissingScript)
         {
             CallLuaMethod("OnTriggerExit", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
+        }
+    }
+
+    // Pointer events carry no argument; scripts read Input.GetMousePosition if they need the cursor
+    void LuaComponent::OnMouseEnter()
+    {
+        if (_hasOnMouseEnter && !_hasMissingScript)
+        {
+            CallLuaMethod("OnMouseEnter");
+        }
+    }
+
+    void LuaComponent::OnMouseOver()
+    {
+        if (_hasOnMouseOver && !_hasMissingScript)
+        {
+            CallLuaMethod("OnMouseOver");
+        }
+    }
+
+    void LuaComponent::OnMouseExit()
+    {
+        if (_hasOnMouseExit && !_hasMissingScript)
+        {
+            CallLuaMethod("OnMouseExit");
+        }
+    }
+
+    void LuaComponent::OnMouseDown()
+    {
+        if (_hasOnMouseDown && !_hasMissingScript)
+        {
+            CallLuaMethod("OnMouseDown");
+        }
+    }
+
+    void LuaComponent::OnMouseDrag()
+    {
+        if (_hasOnMouseDrag && !_hasMissingScript)
+        {
+            CallLuaMethod("OnMouseDrag");
+        }
+    }
+
+    void LuaComponent::OnMouseUp()
+    {
+        if (_hasOnMouseUp && !_hasMissingScript)
+        {
+            CallLuaMethod("OnMouseUp");
+        }
+    }
+
+    void LuaComponent::OnMouseUpAsButton()
+    {
+        if (_hasOnMouseUpAsButton && !_hasMissingScript)
+        {
+            CallLuaMethod("OnMouseUpAsButton");
         }
     }
 

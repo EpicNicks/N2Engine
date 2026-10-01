@@ -1,13 +1,17 @@
 #pragma once
 
 #include <math/Matrix.hpp>
+#include <math/Ray.hpp>
+#include <math/Vector2.hpp>
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
+#include <math/VectorN.hpp>
 #include <math/Quaternion.hpp>
 
 namespace N2Engine
 {
     using Matrix4 = Math::Matrix<float, 4, 4>;
+    using Vector2i = Math::VectorN<int, 2>; // as in Window.hpp
 
     struct BoundingBox
     {
@@ -94,6 +98,17 @@ namespace N2Engine
 
         // For frustum culling
         Frustum GetViewFrustum() const;
+
+        /**
+         * The world-space ray through a screen point, as in Unity: it starts on the near plane and points
+         * away from the camera (a unit direction). Works for perspective and orthographic projections.
+         * Screen space is window coordinates, the space of Mouse::GetPosition: origin at the top-left, y down,
+         * so y is flipped here. The viewport is passed in rather than read from the window, so a host with its
+         * own viewport (the editor) can use it too; a zero or negative size gives the centre ray.
+         * @param nearToFar if set, receives the distance along the ray from the near plane to the far plane
+         */
+        [[nodiscard]] Math::Ray ScreenPointToRay(const Math::Vector2 &screenPosition, const Vector2i &viewportSize,
+                                                 float *nearToFar = nullptr) const;
 
         // Camera properties
         float GetNearPlane() const

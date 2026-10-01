@@ -126,7 +126,7 @@ namespace N2Engine::Scripting
         // Types bound with sol::call_constructor are constructed as T(...); engine-api.lua also documents
         // T.new(...), which sol doesn't add on its own, so alias it to the call constructor
         _lua.script(R"(
-            for _, name in ipairs({ "Vector2", "Vector3", "Vector4", "Quaternion", "Color", "PhysicsMaterial", "BoundingBox" }) do
+            for _, name in ipairs({ "Vector2", "Vector3", "Vector4", "Quaternion", "Color", "PhysicsMaterial", "BoundingBox", "Ray" }) do
                 local T = _G[name]
                 if T ~= nil and T.new == nil then
                     T.new = function(...) return T(...) end

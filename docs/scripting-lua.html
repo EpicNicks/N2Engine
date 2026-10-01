@@ -211,6 +211,7 @@ SceneManager.GetCurrentScene():AddRootGameObject(go)
 <tr><td><code>OnFixedUpdate</code></td><td></td><td>Once per fixed step (0 to n per frame), before the physics step. No fixed steps while <code>timeScale</code> is 0.</td></tr>
 <tr><td><code>OnCollisionEnter/Stay/Exit</code></td><td><code>Collision</code></td><td>After the physics step of each fixed step (see <a href="physics.html">Physics</a>)</td></tr>
 <tr><td><code>OnTriggerEnter/Stay/Exit</code></td><td><code>Trigger</code></td><td>Same as collisions</td></tr>
+<tr><td><code>OnMouseEnter</code>, <code>OnMouseOver</code>, <code>OnMouseExit</code>, <code>OnMouseDown</code>, <code>OnMouseDrag</code>, <code>OnMouseUp</code>, <code>OnMouseUpAsButton</code> <span class="badge">PR #48</span></td><td></td><td>Once per frame, after the fixed steps and before <code>OnUpdate</code>, on the object under the cursor or the one holding the left button. The object needs a collider. Disabled components still get them; inactive objects don't. See <a href="input.html#picking">Picking</a>. Use <code>Input.GetMousePosition()</code> for the cursor.</td></tr>
 <tr><td><code>OnUpdate</code></td><td></td><td>Once per frame, after the fixed steps</td></tr>
 <tr><td><code>OnLateUpdate</code></td><td></td><td>Once per frame, after <code>OnUpdate</code> and coroutines</td></tr>
 <tr><td><code>OnEnable</code> / <code>OnDisable</code></td><td></td><td>When the GameObject's effective active state changes (<code>GameObject:SetActive</code> on it or an ancestor), only for components whose own enable flag is on</td></tr>
@@ -226,7 +227,7 @@ SceneManager.GetCurrentScene():AddRootGameObject(go)
 <p>For an object in a scene, <code>OnDestroy</code> runs once, preceded by <code>OnDisable</code> if the component was enabled in an active hierarchy. Objects outside a scene get neither. During both callbacks <code>self.gameObject</code>, its Positionable and sibling components are still usable <span class="badge">PR #29</span>. This holds for all three teardown paths (destroy, scene switch, <code>RemoveComponent</code>).</p>
 <p>Re-entry is guarded <span class="badge">PR #34</span>: while a component's <code>OnDisable</code>/<code>OnDestroy</code> run, a second teardown of the same component does nothing, and C++ <code>RemoveComponent</code> on it returns <code>false</code> (the teardown already running frees it). The guard is cleared even if a callback throws. See <a href="gameobjects-components.html#teardown">The teardown sequence</a>.</p>
 </div>
-<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::OnAttach</code> … <code>LuaComponent::OnTriggerExit</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::ProcessAttachQueue</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::RunDestroyCallbacks</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::NotifyActiveChanged</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code>; tests: <code>LuaLifetimeTest.ScriptSeesOnDisableThenOnDestroy</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfADestroyedObject</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOnSceneSwitch</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfARemovedComponent</code>, <code>LuaLifetimeTest.OnApplicationQuitReachesScripts</code></p>
+<p class="src">Source: <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::OnAttach</code> … <code>LuaComponent::OnMouseUpAsButton</code>; <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::ProcessAttachQueue</code>; <code>engine/src/gameobject/Component.cpp</code> — <code>Component::RunDestroyCallbacks</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::NotifyActiveChanged</code>; <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code>; tests: <code>LuaLifetimeTest.ScriptSeesOnDisableThenOnDestroy</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfADestroyedObject</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOnSceneSwitch</code>, <code>LuaHandleTest.HandlesWorkDuringTeardownOfARemovedComponent</code>, <code>LuaLifetimeTest.OnApplicationQuitReachesScripts</code>, <code>LuaPickingTest.LuaComponentReceivesPointerEvents</code>, <code>LuaPickingTest.MissingMethodsAreSkipped</code></p>
 
 <div class="callout note">
 <p class="callout-title">Note</p>
@@ -584,7 +585,7 @@ Layers.SetName(9, "Pickup")
 Layers.SetCollision(Layers.NameToLayer("Pickup"), Layers.NameToLayer("Pickup"), false)
 self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 </code></pre>
-<p>Raycasts are not bound to Lua yet, so masks are only useful to C++ code for now.</p>
+<p>Masks are what <a href="physics.html#lua-raycasts"><code>Physics.Raycast</code> and <code>Physics.RaycastAll</code></a> take <span class="badge">PR #48</span>: <code>Layers.AllLayers</code> includes Ignore Raycast, and masks combine with <code>|</code>, e.g. <code>Layers.MaskOf(8) | Layers.GetMask("Pickup")</code>.</p>
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaCoreBindings.cpp</code> — <code>BindCore</code>; tests: <code>LuaLayerTest.*</code></p>
 
 <h3 id="luajson">LuaToJson and ActionMapJsonFromLua</h3>
@@ -608,6 +609,7 @@ self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 <tr><td><code>Camera</code></td><td><code>Camera.Main()</code>, <code>Application.GetCamera()</code> (<code>nil</code> without a camera)</td><td>Created once at startup; lives as long as the <code>Application</code></td></tr>
 <tr><td><code>Window</code></td><td><code>Window.Get()</code></td><td>Owned by the <code>Application</code>; application lifetime</td></tr>
 <tr><td><code>Mouse</code></td><td><code>Mouse.Get()</code> (<code>nil</code> without an input system)</td><td>Lives as long as the window's input system, i.e. until shutdown</td></tr>
+<tr><td><code>Ray</code>, raycast hit tables</td><td><code>Ray(origin, direction)</code>, <code>Camera:ScreenPointToRay</code>; <code>Physics.Raycast</code>/<code>RaycastAll</code> <span class="badge">PR #48</span></td><td>Values. A hit table's objects are checked handles</td></tr>
 <tr><td><code>Event</code>, <code>WindowResizeEvent</code>, <code>GameObjectEvent</code></td><td>Only if C++ code pushes one into the Lua state; no binding returns them</td><td>Whatever the C++ owner decides</td></tr>
 </tbody>
 </table>
@@ -666,26 +668,27 @@ self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 <tr><td><code>Scene</code>, <code>SceneManager</code></td><td>handle / table</td><td>Find, roots, destroy; <code>GetCurrentScene</code>, <code>GetCurrentSceneIndex</code>, <code>LoadScene</code></td><td><code>LuaCoreBindings.cpp</code></td></tr>
 <tr><td><code>Rigidbody</code>, <code>BoxCollider</code>, <code>SphereCollider</code>, <code>CapsuleCollider</code>, <code>PhysicsMaterial</code>, <code>BodyType</code>, <code>Collision</code>, <code>Trigger</code>, <code>ContactPoint</code></td><td>handles / values / enum</td><td>Body and collider settings, forces, collision data</td><td><code>LuaPhysicsBindings.cpp</code></td></tr>
 <tr><td><code>AudioSource</code>, <code>AudioListener</code>, <code>Audio</code></td><td>handles / table</td><td>Playback and spatial settings; master volume, listener</td><td><code>LuaAudioBindings.cpp</code></td></tr>
-<tr><td><code>Input</code>, <code>ActionMap</code>, <code>InputAction</code>, <code>InputValue</code>, <code>ActionPhase</code></td><td>table / handles / value / enum</td><td><code>GetActionMap</code>, <code>LoadActionMap</code>, <code>CreateActionMap</code>; phases, values, <code>Subscribe</code></td><td><code>LuaInputBindings.cpp</code></td></tr>
+<tr><td><code>Input</code>, <code>ActionMap</code>, <code>InputAction</code>, <code>InputValue</code>, <code>ActionPhase</code></td><td>table / handles / value / enum</td><td><code>GetActionMap</code>, <code>LoadActionMap</code>, <code>CreateActionMap</code>; phases, values, <code>Subscribe</code>; <code>GetMousePosition</code>, <code>GetMouseButton/Down/Up</code>, <code>IsPointerOverUI</code> <span class="badge">PR #48</span></td><td><code>LuaInputBindings.cpp</code></td></tr>
+<tr><td><code>Mouse</code> <span class="badge">PR #48</span></td><td>raw</td><td><code>Mouse.Get()</code>; position, deltas, <code>GetButton/Down/Up</code></td><td><code>LuaInputBindings.cpp</code></td></tr>
+<tr><td><code>Physics</code>, <code>RaycastHit</code> <span class="badge">PR #48</span></td><td>table / table shape</td><td><code>Raycast</code>, <code>RaycastAll</code>; the fields of a hit</td><td><code>LuaPhysicsBindings.cpp</code></td></tr>
 <tr><td><code>Event</code>, <code>WindowResizeEvent</code>, <code>GameObjectEvent</code></td><td>raw</td><td><code>Subscribe</code>/<code>Unsubscribe</code> (no global "Events" table)</td><td><code>LuaEventsBindings.cpp</code></td></tr>
 <tr><td><code>Time</code></td><td>object with properties</td><td><code>deltaTime</code>, <code>time</code>, <code>fixedDeltaTime</code>, unscaled variants; writable <code>timeScale</code></td><td><code>LuaTimeBindings.cpp</code></td></tr>
 <tr><td><code>Application</code></td><td>table</td><td><code>Quit</code> (a request honoured at end of frame), <code>GetPlatform</code>, <code>GetCamera</code></td><td><code>LuaApplicationBindings.cpp</code></td></tr>
 <tr><td><code>Window</code>, <code>WindowMode</code></td><td>table / enum</td><td><code>Get</code>, <code>GetWidth/Height</code>, <code>SetTitle</code>, <code>SetMode</code>, <code>SetClearColor</code></td><td><code>LuaWindowBindings.cpp</code></td></tr>
-<tr><td><code>Camera</code>, <code>BoundingBox</code>, <code>Frustum</code>, <code>OrthographicResizeMode</code></td><td>raw / values / enum</td><td><code>Camera.Main()</code>, position/rotation, projection, matrices, frustum</td><td><code>LuaCameraBindings.cpp</code></td></tr>
+<tr><td><code>Camera</code>, <code>BoundingBox</code>, <code>Frustum</code>, <code>Ray</code>, <code>OrthographicResizeMode</code></td><td>raw / values / enum</td><td><code>Camera.Main()</code>, position/rotation, projection, matrices, frustum, <code>ScreenPointToRay</code> <span class="badge">PR #48</span></td><td><code>LuaCameraBindings.cpp</code></td></tr>
 <tr><td><code>Debug</code></td><td>table</td><td><code>Log</code>, <code>Warn</code>, <code>Error</code> (to the engine <code>Logger</code>); no draw functions</td><td><code>LuaDebugBindings.cpp</code></td></tr>
 </tbody>
 </table>
 </div>
-<p>There is no physics query API in Lua: no <code>Physics</code> table and no <code>Raycast</code>. There is also no <code>Log</code> global (use <code>Debug</code>) and no <code>Events</code> global.</p>
+<p>There is no <code>Log</code> global (use <code>Debug</code>) and no <code>Events</code> global.</p>
 
 <h3 id="engine-api-gaps">Where the file and the bindings differ</h3>
 <ul>
-<li><code>Mouse.Get()</code> and the <code>Mouse</code> methods (<code>GetScrollDelta</code>, <code>GetPosition</code>, <code>GetPositionDelta</code>) are bound but not documented.</li>
 <li>The engine <code>require</code> and the <code>_loaded_modules()</code> helper are not documented.</li>
 <li><code>SceneManager.LoadScene</code> is documented with an index only. The binding also accepts a scene name.</li>
 <li>The <code>Window</code> instance returned by <code>Window.Get()</code> has <code>GetTitle</code>, <code>SetTitle</code>, <code>GetDimensions</code>, <code>SetWindowMode</code> and a <code>clearColor</code> field. Only the global functions are documented.</li>
 <li><code>Camera.Main()</code> and <code>Application.GetCamera()</code> are annotated as returning <code>Camera</code>, but return <code>nil</code> when there is no camera.</li>
-<li>Script-side conventions are described only in prose on <code>LuaComponent</code>: the lifecycle methods, <code>SerializableFields</code> and the <code>OnCollision*</code>/<code>OnTrigger*</code> argument types have no annotations.</li>
+<li>Script-side conventions are described only in prose on <code>LuaComponent</code>: the lifecycle methods (including <code>OnMouse*</code>), <code>SerializableFields</code> and the <code>OnCollision*</code>/<code>OnTrigger*</code> argument types have no annotations.</li>
 </ul>
 <p class="src">Source: <code>engine/src/scripting/bindings/engine-api.lua</code>; <code>engine/src/scripting/bindings/*.cpp</code>; <code>engine/src/scripting/LuaRuntime.cpp</code> — <code>RegisterBindings</code> (the <code>T.new</code> aliases match the file's <code>T.new</code> stubs)</p>
 
@@ -792,6 +795,7 @@ return Bouncer
 <tr><td><code>LuaLifetimeTests.cpp</code></td><td><code>LuaLifetimeTest</code></td><td>Subscriptions stop after destroy and scene switch, keep working outside components; OnDisable then OnDestroy; <code>self</code> references cleared; reload callbacks replaced and removed; replacing an instance retires the old one, attaches the new one and keeps fields and references; <code>OnApplicationQuit</code> reaches scripts</td></tr>
 <tr><td><code>LuaRobustnessTests.cpp</code></td><td><code>LuaRobustnessTest</code></td><td>Immutable constants, <code>LuaToJson</code> cycles, readable <code>Collision</code>, shorthand/integer fields, partial vectors, reference type names</td></tr>
 <tr><td><code>LuaLayerTests.cpp</code> <span class="badge">PR #44</span></td><td><code>LuaLayerTest</code></td><td><code>GameObject:GetLayer/SetLayer/SetLayerRecursive</code> (clamping, seen from C++), the <code>Layers</code> table: names, masks, the collision matrix, <code>GetMask</code> argument errors</td></tr>
+<tr><td><code>LuaPickingTests.cpp</code> <span class="badge">PR #48</span></td><td><code>LuaPickingTest</code></td><td><code>OnMouse*</code> methods reached through the pointer dispatcher, missing methods skipped; <code>Input.GetMousePosition/GetMouseButton*</code> and <code>Mouse:GetButton*</code>; <code>Ray</code> and <code>Camera:ScreenPointToRay</code>; <code>Physics.Raycast</code> argument checks (the PhysX hits are in <code>PickingPhysicsTest</code>)</td></tr>
 <tr><td><code>LuaSceneTests.cpp</code></td><td><code>LuaSceneTest</code>, <code>LuaProjectSceneTest</code></td><td><code>LuaToJson</code>, <code>ActionMapJsonFromLua</code>, <code>CreateActionMap</code> without a window, <code>AddComponent</code>/<code>GetComponent</code> by name; builds <code>lua_project/assets/scene.lua</code> headless</td></tr>
 </tbody>
 </table>

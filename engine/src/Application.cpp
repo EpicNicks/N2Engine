@@ -239,6 +239,9 @@ void Application::Run()
                 }
                 fixedTimestepAccumulator -= Time::GetFixedUnscaledDeltaTime();
             }
+            // OnMouse*: after the fixed steps (so it picks against this frame's physics) and before Update,
+            // where Unity sends them
+            _pointerDispatcher.Update();
             curScene.Update();
             curScene.AdvanceCoroutines();
             curScene.LateUpdate();

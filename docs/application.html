@@ -205,6 +205,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <li>Add <code>min(unscaled delta, 0.25 s)</code> to the fixed-step accumulator. With no scene loaded the accumulator is reset to 0 instead of being drained <span class="badge">PR #34</span>.</li>
 <li><em>If a scene is loaded</em>: <code>Scene::ProcessAttachQueue()</code>, so components added since the last frame get attached before anything updates.</li>
 <li><em>If a scene is loaded</em>: zero or more fixed steps (<a href="#fixed-step">below</a>).</li>
+<li><em>If a scene is loaded</em>: <code>PointerDispatcher::Update()</code>: the <code>OnMouse*</code> callbacks for the object under the cursor, where Unity sends them (see <a href="input.html#picking">Picking</a>) <span class="badge">PR #48</span>.</li>
 <li><em>If a scene is loaded</em>: <code>Scene::Update()</code>.</li>
 <li><em>If a scene is loaded</em>: <code>Scene::AdvanceCoroutines()</code> (see <a href="coroutines.html">Coroutines</a>).</li>
 <li><em>If a scene is loaded</em>: <code>Scene::LateUpdate()</code>.</li>
@@ -213,7 +214,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <li><em>If a scene is loaded</em>: <code>Scene::ProcessDestroyed()</code>: objects and components destroyed during the frame are torn down here.</li>
 <li><code>SceneManager::ProcessAnyPendingSceneChange()</code>: a scene load requested during the frame takes effect now (see <a href="scenes.html">Scenes</a>).</li>
 </ol>
-<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::Render</code>; <code>engine/src/Window.cpp</code> — <code>Window::PollEvents</code></p>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::Render</code>; <code>engine/src/Window.cpp</code> — <code>Window::PollEvents</code>; <code>engine/src/input/PointerDispatcher.cpp</code> — <code>PointerDispatcher::Update</code></p>
 
 <p>What happens when, from the point of view of game code:</p>
 <div class="table-wrap">
@@ -224,9 +225,9 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <tr><td>Read <code>Time::GetDeltaTime()</code></td><td>Update / LateUpdate / coroutines</td><td>This frame's scaled delta (step 2).</td></tr>
 <tr><td>Read <code>Time::GetFixedDeltaTime()</code></td><td>FixedUpdate</td><td><code>fixedUnscaledDeltaTime × timeScale</code>.</td></tr>
 <tr><td>Change a body or transform that physics tracks</td><td>Update</td><td>Applied to the backend at the start of the next fixed step (<code>ApplyPendingChanges</code>); see <a href="physics.html">Physics</a>.</td></tr>
-<tr><td>Destroy an object</td><td>any callback</td><td>Torn down at step 11 of the same frame, after Render (see <a href="gameobjects-components.html">GameObjects</a> for what a destroyed object still does before then).</td></tr>
-<tr><td>Request a scene load</td><td>any callback</td><td>Switched at step 12; the rest of the current frame runs on the old scene.</td></tr>
-<tr><td>Call <code>Application::Quit()</code></td><td>any callback</td><td>The current frame finishes (all 12 steps), then the loop ends.</td></tr>
+<tr><td>Destroy an object</td><td>any callback</td><td>Torn down at step 12 of the same frame, after Render (see <a href="gameobjects-components.html">GameObjects</a> for what a destroyed object still does before then).</td></tr>
+<tr><td>Request a scene load</td><td>any callback</td><td>Switched at step 13; the rest of the current frame runs on the old scene.</td></tr>
+<tr><td>Call <code>Application::Quit()</code></td><td>any callback</td><td>The current frame finishes (all 13 steps), then the loop ends.</td></tr>
 <tr><td>Set <code>Time::SetTimeScale(0)</code></td><td>any</td><td>Fixed steps stop immediately: a call from <code>FixedUpdate</code> skips the rest of this frame's catch-up steps, because the loop re-reads the scaled fixed delta before every step. The frame's scaled delta becomes 0 from the next frame.</td></tr>
 </tbody>
 </table>
@@ -234,7 +235,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 
 <div class="callout note">
 <p class="callout-title">Note</p>
-<p>Steps 4–8 and 11 are skipped entirely while <code>SceneManager::GetCurSceneIndex()</code> is -1. Input, time, audio and rendering (of an empty frame) still run.</p>
+<p>Steps 4–9 and 12 are skipped entirely while <code>SceneManager::GetCurSceneIndex()</code> is -1. Input, time, audio and rendering (of an empty frame) still run.</p>
 </div>
 
 <h2 id="render">Rendering the scene <span class="badge">PR #46</span></h2>
