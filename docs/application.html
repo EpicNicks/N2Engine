@@ -69,7 +69,11 @@
 <li><a href="#health">Subsystem health</a></li>
 <li><a href="#headless">Headless mode and a failed window</a></li>
 <li><a href="#frame">The frame loop</a></li>
-<li><a href="#render">Rendering the scene</a></li>
+<li><a href="#render">Rendering the scene</a>
+<ol>
+<li><a href="#text-resources">Texture options, mesh updates and the text shader</a></li>
+</ol>
+</li>
 <li><a href="#fixed-step">Fixed steps and physics</a></li>
 <li><a href="#time">Time</a></li>
 <li><a href="#quit">Quitting</a></li>
@@ -281,6 +285,15 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p>Depth test, depth write, culling and blending travel with each draw as a <code>RenderState</code> rather than being set on the renderer. The software renderer records draws and reorders them on its render thread, so a global setter would apply to the wrong draws there. A per-draw state is the only form every backend can honour. OpenGL sends only the fields that change between draws, and resets all of them at <code>BeginFrame</code>. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a> (Q8).</p>
 </div>
 <p class="src">Source: <code>engine/src/sceneManagement/Scene.cpp</code> — <code>Scene::Render</code>; <code>engine/include/engine/IRenderable.hpp</code>; <code>renderer/include/renderer/common/RenderState.hpp</code>; <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>OpenGLRenderer::ApplyRenderState</code>; <code>renderer/src/software/DrawOrder.cpp</code> — <code>OrderDraws</code>; tests: <code>tests/engine/rendering/RenderQueueTests.cpp</code>, <code>tests/renderer/software/DrawOrderTests.cpp</code></p>
+
+<h3 id="text-resources">Texture options, mesh updates and the text shader <span class="badge">Text P2</span></h3>
+<p>Three <code>IRenderer</code> calls were added for <a href="text.html#text-renderer"><code>TextRenderer</code></a>. Each has a default body in <code>IRenderer</code>, so renderers and test fakes written before them still compile and behave as before.</p>
+<ul>
+<li><strong><code>CreateTexture(data, width, height, channels, options)</code></strong> takes a <code>TextureOptions</code> (<code>renderer/include/renderer/common/TextureOptions.hpp</code>): <code>filter</code> (<code>Linear</code> or <code>Nearest</code>), <code>wrap</code> (<code>Repeat</code> or <code>ClampToEdge</code>) and <code>mipmaps</code>. The pixel format still follows the channel count: 1 channel is a single-channel <code>R8</code> texture, then <code>RG8</code>, <code>RGB8</code>, <code>RGBA8</code>. The defaults (linear, repeat, mipmaps) are what every texture had before, and the overload without options uses them. <code>TextureOptions::SdfAtlas()</code> is linear, clamped and without mipmaps. On OpenGL, rows are uploaded tightly packed (unpack alignment 1), so 1- to 3-channel textures of any width load correctly. The software renderer stores the options on its texture and honours <code>wrap</code>; it always samples the nearest texel, so <code>filter</code> and <code>mipmaps</code> make no difference there. It also returns null for null data or a zero size. Vulkan accepts the options and, as for every texture, creates nothing (#43). The default body ignores the options and calls the overload without them.</li>
+<li><strong><code>UpdateMesh(mesh, meshData)</code></strong> replaces a mesh's vertices and indices, keeping the same <code>IMesh*</code>. It returns false, changing nothing, for a null mesh, one this renderer doesn't own, or data with no vertices. OpenGL writes into the existing buffers when the data fits and reallocates them (as dynamic buffers) when it doesn't. The software renderer first waits for any frame still rasterizing on its render thread, which reads meshes. Vulkan, and the default body, return false.</li>
+<li><strong><code>GetStandardTextShader()</code></strong> returns the built-in SDF text shader (<a href="text.html#text-shader">described on the text page</a>) on OpenGL, and null on the software renderer (until #1 P3), on Vulkan, and in the default body.</li>
+</ul>
+<p class="src">Source: <code>renderer/include/renderer/common/Renderer.hpp</code>; <code>renderer/src/opengl/OpenGLTexture.cpp</code> — <code>OpenGLTexture::Initialize</code>; <code>renderer/src/opengl/OpenGLMesh.cpp</code> — <code>OpenGLMesh::Update</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>SoftwareRenderer::UpdateMesh</code>, <code>SoftwareRenderer::CreateTexture</code>; tests: <code>TextureOptionsTest.*</code>, <code>UpdateMeshTest.*</code>, <code>TextShaderTest.*</code> (<code>tests/renderer/software/SoftwareRendererResourceTests.cpp</code>)</p>
 
 <h2 id="fixed-step">Fixed steps and physics</h2>
 <p>The accumulator is a <code>double</code> local to <code>Run()</code>, starting at 0. Each frame adds the <em>unscaled</em> frame delta, clamped to 0.25 s, then, while a scene is loaded:</p>
