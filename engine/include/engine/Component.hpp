@@ -23,6 +23,9 @@ namespace N2Engine
         GameObject &_gameObject;
         bool _isMarkedForDestruction = false;
         bool _isActive = true;
+        // While OnDisable/OnDestroy run (before _isMarkedForDestruction is set): re-entry is a no-op, and
+        // removing the component then is left to the teardown already under way
+        bool _isRunningDestroyCallbacks = false;
 
         explicit Component(GameObject &gameObject);
 

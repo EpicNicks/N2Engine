@@ -18,16 +18,20 @@ GameObject &Component::GetGameObject() const
 
 void Component::RunDestroyCallbacks(const bool objectWasActiveInHierarchy)
 {
-    if (_isMarkedForDestruction)
+    // Also a no-op while they run: a component that removed itself from OnDisable/OnDestroy used to start
+    // the sequence again (recursing without bound) and be freed under the outer call
+    if (_isMarkedForDestruction || _isRunningDestroyCallbacks)
     {
         return;
     }
+    _isRunningDestroyCallbacks = true;
     // Mirrors enable: anything that got OnEnable (or started enabled) sees OnDisable before OnDestroy
     if (_isActive && objectWasActiveInHierarchy)
     {
         OnDisable();
     }
     OnDestroy();
+    _isRunningDestroyCallbacks = false;
     _isMarkedForDestruction = true;
 }
 
