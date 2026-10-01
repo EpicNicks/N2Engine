@@ -27,7 +27,7 @@ endif()
 
 # ProtocolSpecTests checks the hand-written Protocol.hpp against the spec
 target_compile_definitions(editor_server_tests PRIVATE
-        N2_PROTOCOL_JSON="${CMAKE_SOURCE_DIR}/editor-server/protocol/protocol.json"
+        N2_PROTOCOL_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../../editor-server/protocol/protocol.json"
 )
 
 add_test(NAME editor_server_tests COMMAND editor_server_tests)

@@ -328,7 +328,7 @@ assert(parsed &amp;&amp; *parsed == id);
 <div class="callout guarantee">
 <p class="callout-title">Guarantee: Vector2 NormalizeBatch precision <span class="badge">Minor defects</span></p>
 <p><code>Vector2::NormalizeBatch</code> (<code>math/src/math/Vector2.cpp</code>) matches <code>Vector2::Normalized</code> to rounding, like the <code>Vector3</code>/<code>Vector4</code> batches. Its AVX path (four vectors per iteration, compiled in when <code>__AVX__</code> is defined; <code>Vector2</code> has no runtime dispatch) adds each x² and y² within its own 128-bit half, divides by a real <code>_mm256_sqrt_ps</code>, and zeroes vectors whose length is below <code>EPSILON</code> with an ordered compare, so a NaN vector stays NaN as it does in <code>Normalized</code>. The scalar tail and the non-AVX build call <code>Normalized</code>.</p>
-<p>Before, the AVX path used the 12-bit <code>_mm256_rsqrt_ps</code> approximation and broadcast each length to the wrong lanes (every vector in a four-vector block was scaled by the first vector's length of its 128-bit half), and the tail used <code>Normalize</code>, which turns NaN into zero.</p>
+<p>Before, the AVX path used the 12-bit <code>_mm256_rsqrt_ps</code> approximation and broadcast the lengths to the wrong lanes: all four vectors of a block were scaled by vector 0's length, and the near-zero mask was in the wrong lanes too. The tail used <code>Normalize</code>, which turns NaN into zero.</p>
 <p>Tests: <code>Vector2BatchTest.NormalizeBatchMatchesNormalized</code>, <code>Vector2BatchTest.NormalizeBatchZeroAndNaN</code>, <code>Vector2BatchTest.NormalizeBatchHandlesShortCounts</code>.</p>
 </div>
 <div class="callout note">
