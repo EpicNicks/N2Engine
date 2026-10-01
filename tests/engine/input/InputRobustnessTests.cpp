@@ -34,12 +34,13 @@ namespace
         InputValue value;
     };
 
-    InputAction ActionWith(std::vector<InputValue> values)
+    // Heap-held, as everywhere else: actions can't be moved (script handles stay tied to one object)
+    std::unique_ptr<InputAction> ActionWith(std::vector<InputValue> values)
     {
-        InputAction action("Test");
+        auto action = std::make_unique<InputAction>("Test");
         for (const auto &v : values)
         {
-            action.AddBinding(std::make_unique<FakeBinding>(v));
+            action->AddBinding(std::make_unique<FakeBinding>(v));
         }
         return action;
     }
@@ -98,44 +99,44 @@ TEST(EventHandlerTest, HandlerCanRemoveALaterOne)
 
 TEST(InputActionValueTest, SmallStickDeflectionStaysSmall)
 {
-    InputAction action = ActionWith({Vector2(0.05f, 0.0f)});
-    action.Update();
+    const auto action = ActionWith({Vector2(0.05f, 0.0f)});
+    action->Update();
 
     // Used to become `true`, which reads as a full-strength (1, 0)
-    EXPECT_NEAR(action.GetVector2Value().x, 0.05f, 1e-6f);
-    EXPECT_NEAR(action.GetVector2Value().y, 0.0f, 1e-6f);
-    EXPECT_TRUE(action.GetBoolValue());
+    EXPECT_NEAR(action->GetVector2Value().x, 0.05f, 1e-6f);
+    EXPECT_NEAR(action->GetVector2Value().y, 0.0f, 1e-6f);
+    EXPECT_TRUE(action->GetBoolValue());
 }
 
 TEST(InputActionValueTest, VectorBindingsAddUpWithinUnitCircle)
 {
-    InputAction action = ActionWith({Vector2(0.3f, 0.0f), Vector2(0.0f, 0.4f)});
-    action.Update();
-    EXPECT_NEAR(action.GetVector2Value().x, 0.3f, 1e-6f);
-    EXPECT_NEAR(action.GetVector2Value().y, 0.4f, 1e-6f);
+    const auto action = ActionWith({Vector2(0.3f, 0.0f), Vector2(0.0f, 0.4f)});
+    action->Update();
+    EXPECT_NEAR(action->GetVector2Value().x, 0.3f, 1e-6f);
+    EXPECT_NEAR(action->GetVector2Value().y, 0.4f, 1e-6f);
 
-    InputAction saturated = ActionWith({Vector2(1.0f, 0.0f), Vector2(1.0f, 0.0f)});
-    saturated.Update();
-    EXPECT_NEAR(saturated.GetVector2Value().Length(), 1.0f, 1e-5f);
+    const auto saturated = ActionWith({Vector2(1.0f, 0.0f), Vector2(1.0f, 0.0f)});
+    saturated->Update();
+    EXPECT_NEAR(saturated->GetVector2Value().Length(), 1.0f, 1e-5f);
 }
 
 TEST(InputActionValueTest, AxisValueKeepsItsSign)
 {
-    InputAction action = ActionWith({0.2f, -0.6f});
-    action.Update();
-    EXPECT_FLOAT_EQ(action.GetFloatValue(), -0.6f);
+    const auto action = ActionWith({0.2f, -0.6f});
+    action->Update();
+    EXPECT_FLOAT_EQ(action->GetFloatValue(), -0.6f);
 }
 
 TEST(InputActionValueTest, ButtonsAreBooleans)
 {
-    InputAction released = ActionWith({false, false});
-    released.Update();
-    EXPECT_FALSE(released.GetBoolValue());
+    const auto released = ActionWith({false, false});
+    released->Update();
+    EXPECT_FALSE(released->GetBoolValue());
 
-    InputAction pressed = ActionWith({false, true});
-    pressed.Update();
-    EXPECT_TRUE(pressed.GetBoolValue());
-    EXPECT_EQ(pressed.GetPhase(), ActionPhase::Started);
+    const auto pressed = ActionWith({false, true});
+    pressed->Update();
+    EXPECT_TRUE(pressed->GetBoolValue());
+    EXPECT_EQ(pressed->GetPhase(), ActionPhase::Started);
 }
 
 // ============================================================================

@@ -68,13 +68,15 @@ namespace N2Engine::Input
 
     public:
         explicit InputAction(std::string name);
-        ~InputAction() = default;
+        // Out of line: destroying _bindings needs InputBinding, which this header only forward-declares
+        ~InputAction();
 
+        // Not copyable or movable: a script handle to an action must keep seeing that action, not contents
+        // moved into or out of it (actions live behind unique_ptr instead)
         InputAction(const InputAction &) = delete;
         InputAction& operator=(const InputAction &) = delete;
-
-        InputAction(InputAction &&) = default;
-        InputAction& operator=(InputAction &&) = default;
+        InputAction(InputAction &&) = delete;
+        InputAction& operator=(InputAction &&) = delete;
 
         void Update();
 
@@ -138,6 +140,13 @@ namespace N2Engine::Input
         bool disabled{false};
 
         explicit ActionMap(std::string mapName) : name(std::move(mapName)) {}
+
+        // Not copyable or movable, for the same reason as InputAction (maps live behind unique_ptr)
+        ActionMap(const ActionMap &) = delete;
+        ActionMap& operator=(const ActionMap &) = delete;
+        ActionMap(ActionMap &&) = delete;
+        ActionMap& operator=(ActionMap &&) = delete;
+
         ActionMap& AddInputAction(std::unique_ptr<InputAction> inputAction);
         ActionMap& MakeInputAction(const std::string &actionName, const std::function<void(InputAction *)> &pAction);
         bool RemoveInputAction(const std::string &actionName);

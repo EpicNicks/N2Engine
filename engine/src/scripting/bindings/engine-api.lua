@@ -1368,7 +1368,8 @@ ActionMap = {}
 ---@return boolean
 function ActionMap:IsValid() end
 
----Get an action by name
+---Get an action by name. map["Jump"] works too, except for actions named like an ActionMap member
+---(IsValid, Get, name, disabled), which only Get reaches.
 ---@param actionName string
 ---@return InputAction|nil
 function ActionMap:Get(actionName) end
@@ -1443,19 +1444,6 @@ function GameObjectEvent:Subscribe(callback) end
 ---Unsubscribe from GameObject events
 ---@param id integer
 function GameObjectEvent:Unsubscribe(id) end
-
----@class InputActionEvent
-InputActionEvent = {}
-
----Subscribe to input action events.
----Subscribed from a LuaComponent script, the callback stops firing once that component is destroyed.
----@param callback fun(action: InputAction)
----@return integer subscriptionId
-function InputActionEvent:Subscribe(callback) end
-
----Unsubscribe from input action events
----@param id integer
-function InputActionEvent:Unsubscribe(id) end
 
 -- ===== TIME =====
 

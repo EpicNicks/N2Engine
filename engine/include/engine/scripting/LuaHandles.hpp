@@ -211,8 +211,10 @@ namespace N2Engine::Scripting
         [[nodiscard]] bool IsValid() const { return !_lifetime.expired(); }
 
         /// The live object. A plain pointer is enough: none of these can be freed during a call on it from
-        /// Lua (scene switches, and the end of an input update, never run inside a script call). Throws once
-        /// it's freed; sol turns that into a Lua error at the call site.
+        /// Lua (scene switches, and the end of an input update, never run inside a script call). That assumes
+        /// scripts and those frees run on the same thread; another thread freeing the object (e.g. a scene
+        /// change processed off the main thread) is a race this check can't catch. Throws once it's freed;
+        /// sol turns that into a Lua error at the call site.
         [[nodiscard]] T *Pin() const
         {
             if (_lifetime.expired())
