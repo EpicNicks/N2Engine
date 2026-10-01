@@ -378,6 +378,12 @@ std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> ActionMap::Deseri
         return std::unexpected(ActionMapParseError::InvalidActionsType);
     }
 
+    // json::value would throw type_error for it
+    if (j.contains("disabled") && !j["disabled"].is_boolean())
+    {
+        return std::unexpected(ActionMapParseError::InvalidDisabledType);
+    }
+
     auto actionMap = std::make_unique<ActionMap>(mapName);
     actionMap->disabled = j.value("disabled", false);
 
@@ -413,6 +419,7 @@ std::string N2Engine::Input::ActionMapParseErrorToString(const ActionMapParseErr
     {
     case ActionMapParseError::MissingActions: return "missing 'actions' field";
     case ActionMapParseError::InvalidActionsType: return "'actions' is not an object";
+    case ActionMapParseError::InvalidDisabledType: return "'disabled' is not a boolean";
     }
     return "unknown error";
 }

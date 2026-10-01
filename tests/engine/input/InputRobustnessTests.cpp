@@ -309,3 +309,78 @@ TEST(BindingValidationTest, KnownNamesStillWork)
     EXPECT_TRUE(CreateBindingFromJson(nullptr, {{"type", "GamepadAxis"}, {"axis", "LeftTrigger"}}).has_value());
     EXPECT_TRUE(CreateBindingFromJson(nullptr, {{"type", "MouseButton"}, {"button", "Left"}}).has_value());
 }
+
+// ============================================================================
+// Optional fields of the wrong type
+// ============================================================================
+
+TEST(BindingValidationTest, WrongTypedOptionalFieldIsAParseErrorNotAnException)
+{
+    // json::value used to throw nlohmann::json::type_error for these, out of every parser on the path
+    const std::vector<json> bad = {
+        {{"type", "GamepadStick"}, {"xAxis", "LeftX"}, {"yAxis", "LeftY"}, {"deadzone", "0.2"}},
+        {{"type", "GamepadStick"}, {"xAxis", "LeftX"}, {"yAxis", "LeftY"}, {"invertY", 1}},
+        {{"type", "GamepadStick"}, {"xAxis", "LeftX"}, {"yAxis", "LeftY"}, {"invertX", nullptr}},
+        {{"type", "GamepadStick"}, {"xAxis", "LeftX"}, {"yAxis", "LeftY"}, {"gamepadId", "0"}},
+        {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"gamepadId", true}},
+        {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"gamepadId", 1.5}},
+        {{"type", "GamepadButton"}, {"button", "South"}, {"gamepadId", -1}},
+    };
+    for (const auto &binding : bad)
+    {
+        std::expected<std::unique_ptr<InputBinding>, BindingParseError> result;
+        EXPECT_NO_THROW(result = CreateBindingFromJson(nullptr, binding)) << binding.dump();
+        ASSERT_FALSE(result.has_value()) << binding.dump();
+        EXPECT_EQ(result.error(), BindingParseError::InvalidOptionalField) << binding.dump();
+    }
+    EXPECT_FALSE(BindingParseErrorToString(BindingParseError::InvalidOptionalField).empty());
+
+    // Right types (whole numbers for numbers included) still parse
+    EXPECT_TRUE(CreateBindingFromJson(nullptr, {{"type", "GamepadStick"}, {"xAxis", "LeftX"}, {"yAxis", "LeftY"},
+                                                {"gamepadId", 1}, {"deadzone", 0}, {"invertX", true}})
+                    .has_value());
+    EXPECT_TRUE(CreateBindingFromJson(nullptr, {{"type", "GamepadButton"}, {"button", "South"}, {"gamepadId", 2u}})
+                    .has_value());
+}
+
+TEST(ActionMapSerializationTest, WrongTypedOptionalFieldsDoNotThrow)
+{
+    const json badBinding = {{"type", "GamepadStick"}, {"xAxis", "LeftX"}, {"yAxis", "LeftY"}, {"invertY", 1}};
+    const json goodBinding = {{"type", "KeyboardButton"}, {"key", "W"}};
+    const json map = {{"actions", {{"Move", {{"bindings", json::array({badBinding, goodBinding})}}}}}};
+
+    // The bad binding is skipped like any other invalid one; the rest of the action survives
+    std::expected<std::unique_ptr<ActionMap>, ActionMapParseError> parsed;
+    EXPECT_NO_THROW(parsed = ActionMap::Deserialize(map, "Gameplay", nullptr));
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ((*parsed.value())["Move"].Serialize()["bindings"].size(), 1u);
+
+    json badDisabled = map;
+    badDisabled["disabled"] = "yes";
+    EXPECT_NO_THROW(parsed = ActionMap::Deserialize(badDisabled, "Gameplay", nullptr));
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(), ActionMapParseError::InvalidDisabledType);
+}
+
+TEST_F(InputSystemHeadlessTest, WrongTypedOptionalFieldsDoNotThrow)
+{
+    const json badBinding = {{"type", "GamepadAxis"}, {"axis", "LeftX"}, {"gamepadId", "first"}};
+    const json map = {{"actions", {{"Fire", {{"bindings", json::array({badBinding})}}}}}};
+
+    ActionMap *created = nullptr;
+    EXPECT_NO_THROW(created = _input.CreateActionMapFromJson("Gameplay", map)); // also Lua's Input.CreateActionMap
+    ASSERT_NE(created, nullptr);
+    EXPECT_EQ((*created)["Fire"].Serialize()["bindings"].size(), 0u);
+
+    json badDisabled = map;
+    badDisabled["disabled"] = 0;
+    EXPECT_NO_THROW(created = _input.CreateActionMapFromJson("Menu", badDisabled));
+    EXPECT_EQ(created, nullptr);
+
+    // A whole-system load skips the bad map and keeps the good one
+    bool loaded = false;
+    EXPECT_NO_THROW(loaded = _input.Deserialize({{"actionMaps", {{"Gameplay", map}, {"Menu", badDisabled}}}}));
+    EXPECT_TRUE(loaded);
+    EXPECT_NE(_input.GetActionMap("Gameplay"), nullptr);
+    EXPECT_EQ(_input.GetActionMap("Menu"), nullptr);
+}

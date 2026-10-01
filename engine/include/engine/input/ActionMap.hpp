@@ -47,7 +47,8 @@ namespace N2Engine::Input
     enum class ActionMapParseError
     {
         MissingActions,
-        InvalidActionsType
+        InvalidActionsType,
+        InvalidDisabledType // 'disabled' present but not a boolean
     };
     std::string ActionMapParseErrorToString(ActionMapParseError error);
 

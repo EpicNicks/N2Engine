@@ -18,7 +18,8 @@ namespace N2Engine::Input
         MissingButton,
         MissingAxis,
         MissingCompositeKeys,
-        InvalidValue // a key/button/axis name that doesn't exist
+        InvalidValue, // a key/button/axis name that doesn't exist
+        InvalidOptionalField // gamepadId, deadzone, invertX or invertY present with the wrong type
     };
 
     std::string BindingParseErrorToString(BindingParseError error);
