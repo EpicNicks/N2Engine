@@ -1,5 +1,6 @@
 #include <exception>
 #include <format>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -23,18 +24,130 @@ namespace
         return prefabs;
     }
 
-    // Runs after references are resolved: they point at the new objects themselves, so changing the
-    // UUIDs keeps every internal reference, and serializing the instance writes the new UUIDs
-    void AssignFreshUUIDs(GameObject &gameObject)
+    using UUIDMap = std::unordered_map<std::string, std::string>;
+
+    // The canonical text of a UUID string (FromString accepts either case), or nullopt if it isn't one
+    std::optional<std::string> CanonicalUUID(const nlohmann::json &value)
     {
-        gameObject.SetUUID(Math::UUID::Random());
+        if (!value.is_string())
+        {
+            return std::nullopt;
+        }
+        const auto &text = value.get_ref<const std::string &>();
+        if (text.size() != 36)
+        {
+            return std::nullopt;
+        }
+        if (const auto uuid = Math::UUID::FromString(text))
+        {
+            return uuid->ToString();
+        }
+        return std::nullopt;
+    }
+
+    // Gives every GameObject and component id in the prefab's GameObject JSON a fresh UUID (old -> new)
+    void CollectIds(const nlohmann::json &gameObject, UUIDMap &ids)
+    {
+        if (!gameObject.is_object())
+        {
+            return;
+        }
+        auto addId = [&ids](const nlohmann::json &owner)
+        {
+            if (!owner.is_object())
+            {
+                return;
+            }
+            if (const auto it = owner.find("uuid"); it != owner.end())
+            {
+                if (auto old = CanonicalUUID(*it); old && *old != Math::UUID::ZERO.ToString())
+                {
+                    ids.try_emplace(std::move(*old), Math::UUID::Random().ToString());
+                }
+            }
+        };
+        addId(gameObject);
+        if (const auto components = gameObject.find("components"); components != gameObject.end() && components->is_array())
+        {
+            for (const auto &component : *components)
+            {
+                if (component.is_object())
+                {
+                    if (const auto data = component.find("data"); data != component.end())
+                    {
+                        addId(*data);
+                    }
+                }
+            }
+        }
+        if (const auto children = gameObject.find("children"); children != gameObject.end() && children->is_array())
+        {
+            for (const auto &child : *children)
+            {
+                CollectIds(child, ids);
+            }
+        }
+    }
+
+    // Rewrites the prefab data in place: every string that is one of the prefab's ids (the ids themselves,
+    // GameObject/component reference members, Lua "$ref" fields) becomes the new id. A Lua "$ref" to
+    // anything outside the prefab becomes null: the template may be instantiated where that object isn't.
+    // Other UUID strings (assets, scripts) are not ids of the prefab and are left alone.
+    void Renumber(nlohmann::json &value, const UUIDMap &ids)
+    {
+        if (value.is_string())
+        {
+            if (const auto canonical = CanonicalUUID(value))
+            {
+                if (const auto it = ids.find(*canonical); it != ids.end())
+                {
+                    value = it->second;
+                }
+            }
+            return;
+        }
+        if (value.is_object())
+        {
+            if (const auto ref = value.find("$ref"); ref != value.end() && ref->is_string())
+            {
+                const auto canonical = CanonicalUUID(*ref);
+                if (!canonical || !ids.contains(*canonical))
+                {
+                    *ref = nullptr;
+                }
+            }
+            for (auto &item : value.items())
+            {
+                Renumber(item.value(), ids);
+            }
+            return;
+        }
+        if (value.is_array())
+        {
+            for (auto &item : value)
+            {
+                Renumber(item, ids);
+            }
+        }
+    }
+
+    // Objects or components the data gave no usable id (missing or invalid) would all share UUID::ZERO
+    void ReplaceZeroUUIDs(GameObject &gameObject)
+    {
+        if (gameObject.GetUUID() == Math::UUID::ZERO)
+        {
+            gameObject.SetUUID(Math::UUID::Random());
+        }
         for (const auto &component : gameObject.GetAllComponents())
         {
-            component->SetUUID(Math::UUID::Random());
+            if (component->GetUUID() == Math::UUID::ZERO)
+            {
+                component->SetUUID(Math::UUID::Random());
+            }
         }
         for (const auto &child : gameObject.GetChildren())
         {
-            AssignFreshUUIDs(*child);
+            ReplaceZeroUUIDs(*child);
         }
     }
 }
@@ -56,13 +169,18 @@ std::shared_ptr<GameObject> PrefabManager::InstantiatePrefab(const nlohmann::jso
         }
     }
 
-    // The prefab's own UUIDs only key this resolver: references inside the prefab resolve to the objects
-    // built here, never to another instance that was built from the same data
+    // Renumber in the data, before anything is built: every id, every reference to one (pointer members
+    // and Lua "$ref" fields alike) and so the saved form of the instance all use the new UUIDs. The
+    // resolver then links references to the objects built here, never to the prefab's source objects.
     ReferenceResolver resolver;
     std::shared_ptr<GameObject> root;
     try
     {
-        root = GameObject::Deserialize(*rootJson, &resolver);
+        nlohmann::json data = *rootJson;
+        UUIDMap ids;
+        CollectIds(data, ids);
+        Renumber(data, ids);
+        root = GameObject::Deserialize(data, &resolver);
         resolver.ResolveAll();
     }
     catch (const std::exception &e)
@@ -76,7 +194,7 @@ std::shared_ptr<GameObject> PrefabManager::InstantiatePrefab(const nlohmann::jso
         return nullptr;
     }
 
-    AssignFreshUUIDs(*root);
+    ReplaceZeroUUIDs(*root);
     return root;
 }
 
