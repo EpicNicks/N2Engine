@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -599,4 +600,29 @@ TEST_F(LuaHandleTest, SceneNameCanBeSetThroughTheHandle)
 {
     Run("SceneManager.GetCurrentScene().sceneName = 'Renamed'");
     EXPECT_EQ(_scene->sceneName, "Renamed");
+}
+
+TEST_F(LuaHandleTest, RemoveChildInASceneTakesOwnershipOnlyWhenNoSceneRootOwnsIt)
+{
+    const auto parent = GameObject::Create("SceneParent");
+    parent->AddChild(GameObject::Create("SceneChild"));
+    _scene->AddRootGameObject(parent);
+    Lua()["handle_parent"] = GameObjectRef(parent);
+
+    Run(R"(
+        handle_detached = handle_parent:FindChild("SceneChild")
+        handle_parent:RemoveChild(handle_detached)
+    )");
+    const std::weak_ptr<GameObject> child = Lua()["handle_detached"].get<GameObjectRef>().Lock();
+    ASSERT_FALSE(child.expired());
+
+    // Here RemoveChild leaves the child in the scene but not as a root, so the parent was its only owner and
+    // the handle takes over. Once RemoveChild re-roots the child (as SetParent(nullptr) does), the scene's root
+    // list owns it instead and the handle stays weak: this root check and the final expiry flip then.
+    EXPECT_TRUE(std::ranges::find(_scene->GetRootGameObjects(), child.lock()) == _scene->GetRootGameObjects().end());
+    Run("collectgarbage() collectgarbage()");
+    EXPECT_FALSE(child.expired()) << "the handle owns it";
+
+    Run("handle_detached = nil collectgarbage() collectgarbage()");
+    EXPECT_TRUE(child.expired());
 }

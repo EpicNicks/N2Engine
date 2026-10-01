@@ -36,7 +36,8 @@ namespace N2Engine::Scripting
 {
     /// A GameObject in Lua. Doesn't keep the object alive, except for a handle a script created
     /// (GameObject.Create) or detached (RemoveChild, RemoveRootGameObject) the object with, since the script
-    /// may then be its only owner. Ownership is per handle: other handles to the same object stay weak.
+    /// may then be its only owner. A detached object that a scene's root list owns (RemoveChild re-rooting it)
+    /// isn't taken over. Ownership is per handle: other handles to the same object stay weak.
     class GameObjectRef
     {
     public:

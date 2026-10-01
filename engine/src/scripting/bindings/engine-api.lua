@@ -664,6 +664,7 @@ function Color:ToHex() end
 -- a kept reference may have outlived its object. Two references to the same object compare equal with ==.
 -- A reference doesn't keep its object alive, except the one a script created it with (GameObject.Create)
 -- or detached it with (RemoveChild, RemoveRootGameObject), until it's added to a parent or scene again.
+-- RemoveChild only takes ownership when the detached object isn't then a root of its scene (the scene owns it).
 -- Other references to the same object stay weak. Don't keep that owning reference in the object's own script
 -- (use self.gameObject there): while the object is in no scene, it would keep itself alive forever.
 -- Scenes, ActionMaps and InputActions are references too, valid until the engine frees them (see each).
