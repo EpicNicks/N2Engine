@@ -36,6 +36,10 @@ namespace N2Engine::Physics
 
         void OnAttach() override;
         void OnDestroy() override;
+        /// Like deactivating a Unity object: while the Rigidbody is disabled or its object inactive, the
+        /// whole body (with its colliders) is out of the simulation and scene queries
+        void OnEnable() override;
+        void OnDisable() override;
 
         void SetBodyType(BodyType type);
         [[nodiscard]] BodyType GetBodyType() const { return _bodyType; }
@@ -68,9 +72,14 @@ namespace N2Engine::Physics
 
         void OnTransformChanged() const;
 
+    protected:
+        void OnActiveFlagChanged() override;
+
     private:
         /// Destroys the physics body; colliders sharing it are left with a stale handle
         void DestroyPhysicsBody();
+        /// Puts the body in or takes it out of the simulation (a no-op without a body)
+        void SetBodyEnabled(bool enabled) const;
 
         PhysicsBodyHandle _handle;
         BodyType _bodyType = BodyType::Dynamic;

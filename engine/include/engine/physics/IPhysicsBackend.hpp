@@ -41,6 +41,11 @@ namespace N2Engine::Physics
 
         virtual void DestroyBody(PhysicsBodyHandle handle) = 0;
 
+        /// Takes the body out of the simulation and scene queries (false) or puts it back (true), for a
+        /// deactivated Rigidbody or GameObject. Its pairs end with an Exit; when it comes back it's moved to
+        /// its GameObject's current pose, and pairs that still overlap start again with an Enter.
+        virtual void SetBodyEnabled(PhysicsBodyHandle handle, bool enabled) = 0;
+
         virtual void RegisterCollider(PhysicsBodyHandle handle, ICollider* collider) = 0;
         virtual void UnregisterCollider(PhysicsBodyHandle handle, ICollider* collider) = 0;
 

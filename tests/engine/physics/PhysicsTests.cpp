@@ -39,6 +39,11 @@ namespace
 
         void OnCollisionEnter(const Collision &c) override
         {
+            if (collisionEnter == 0)
+            {
+                firstEnterImpulse = c.impulse;
+                firstEnterRelativeVelocity = c.relativeVelocity;
+            }
             ++collisionEnter;
             lastCollisionSelf = c.gameObject;
             lastCollisionOther = c.otherGameObject;
@@ -63,7 +68,16 @@ namespace
             }
         }
         void OnTriggerStay(const Trigger) override { ++triggerStay; }
-        void OnTriggerExit(const Trigger) override { ++triggerExit; }
+        void OnTriggerExit(const Trigger t) override
+        {
+            ++triggerExit;
+            lastTriggerExitSelf = t.gameObject;
+        }
+
+        [[nodiscard]] int Total() const
+        {
+            return collisionEnter + collisionStay + collisionExit + triggerEnter + triggerStay + triggerExit;
+        }
 
         int collisionEnter = 0, collisionStay = 0, collisionExit = 0;
         int triggerEnter = 0, triggerStay = 0, triggerExit = 0;
@@ -71,8 +85,23 @@ namespace
         GameObject *lastTriggerSelf = nullptr, *lastTriggerOther = nullptr;
         ICollider *lastCollisionCollider = nullptr, *lastCollisionOtherCollider = nullptr;
         ICollider *firstTriggerCollider = nullptr, *firstTriggerOtherCollider = nullptr;
+        GameObject *lastTriggerExitSelf = nullptr;
+        Vector3 firstEnterImpulse = Vector3::Zero, firstEnterRelativeVelocity = Vector3::Zero;
         std::function<void()> onCollisionEnter;
     };
+
+    int ShapesUnder(const Vector3 &above)
+    {
+        std::vector<RaycastHit> hits;
+        return Raycast::All(above, Vector3(0.0f, -1.0f, 0.0f), hits, 100.0f);
+    }
+
+    void ExpectNear(const Vector3 &actual, const Vector3 &expected, const float tolerance = 1e-4f)
+    {
+        EXPECT_NEAR(actual.x, expected.x, tolerance);
+        EXPECT_NEAR(actual.y, expected.y, tolerance);
+        EXPECT_NEAR(actual.z, expected.z, tolerance);
+    }
 }
 
 // Runs a real PhysX scene headless. Application::Init needs a window, so the backend is installed
@@ -312,6 +341,190 @@ TEST_F(PhysicsTest, RemovingTheOverlappingShapeEndsTheTrigger)
     EXPECT_EQ(zoneEvents->triggerExit, 1);
 }
 
+TEST_F(PhysicsTest, EachSideSeesImpulseAndRelativeVelocityFromItsOwnPerspective)
+{
+    const auto floor = SpawnFloor();
+    auto *floorEvents = floor->AddComponent<EventRecorder>();
+    const auto ball = SpawnBall("Lander", Vector3(0.0f, 2.0f, 0.0f));
+    auto *ballEvents = ball->AddComponent<EventRecorder>();
+
+    Step(120);
+
+    ASSERT_GE(ballEvents->collisionEnter, 1);
+    ASSERT_GE(floorEvents->collisionEnter, 1);
+    const Vector3 ballImpulse = ballEvents->firstEnterImpulse;
+    const Vector3 floorImpulse = floorEvents->firstEnterImpulse;
+    const Vector3 ballVelocity = ballEvents->firstEnterRelativeVelocity;
+    const Vector3 floorVelocity = floorEvents->firstEnterRelativeVelocity;
+    ASSERT_GT(ballImpulse.Length() + ballVelocity.Length(), 1e-3f) << "nothing to compare";
+
+    // Like the contact normals: B's values used to be A's, not negated
+    ExpectNear(ballImpulse, floorImpulse * -1.0f);
+    ExpectNear(ballVelocity, floorVelocity * -1.0f);
+    EXPECT_GE(ballImpulse.y, -1e-4f) << "the floor pushes the ball up";
+    EXPECT_LE(floorImpulse.y, 1e-4f);
+}
+
+// ============================================================================
+// Inactive objects, disabled components, re-created bodies
+// ============================================================================
+
+TEST_F(PhysicsTest, DeactivatingAnObjectTakesItOutOfPhysicsUntilReactivated)
+{
+    const auto zone = Spawn("Volume", Vector3(0.0f, 0.0f, 0.0f));
+    auto *zoneCollider = zone->AddComponent<BoxCollider>();
+    zoneCollider->SetSize(Vector3(4.0f, 4.0f, 4.0f));
+    zoneCollider->SetIsTrigger(true);
+    auto *zoneEvents = zone->AddComponent<EventRecorder>();
+
+    const auto visitor = Spawn("Visitor", Vector3(0.0f, 0.0f, 0.0f));
+    visitor->AddComponent<SphereCollider>()->SetRadius(0.5f);
+    auto *visitorBody = visitor->AddComponent<Rigidbody>();
+    visitorBody->SetBodyType(BodyType::Dynamic);
+    visitorBody->SetGravityEnabled(false);
+    auto *visitorEvents = visitor->AddComponent<EventRecorder>();
+
+    Step(5);
+    ASSERT_EQ(zoneEvents->triggerEnter, 1);
+    ASSERT_EQ(visitorEvents->triggerEnter, 1);
+
+    visitor->SetActive(false);
+    Step(1);
+    const int zoneStays = zoneEvents->triggerStay;
+    const int visitorCallbacks = visitorEvents->Total();
+    Step(5);
+
+    EXPECT_EQ(zoneEvents->triggerExit, 1) << "the zone never heard that the visitor left";
+    EXPECT_EQ(zoneEvents->triggerStay, zoneStays) << "the inactive visitor still counts as inside";
+    EXPECT_EQ(visitorEvents->Total(), visitorCallbacks) << "an inactive object got physics callbacks";
+    EXPECT_EQ(ShapesUnder(Vector3(0.0f, 5.0f, 0.0f)), 1) << "only the zone may be hit, not the inactive visitor";
+
+    visitor->SetActive(true);
+    Step(5);
+
+    EXPECT_EQ(zoneEvents->triggerEnter, 2) << "still overlapping, so re-enabling enters again";
+    EXPECT_EQ(visitorEvents->triggerEnter, 2);
+    EXPECT_GT(zoneEvents->triggerStay, zoneStays);
+}
+
+TEST_F(PhysicsTest, InactiveBodyDoesNotSimulateAndResumesAtItsObjectsPose)
+{
+    const auto ball = SpawnBall("Sleeper", Vector3(0.0f, 10.0f, 0.0f));
+    Step(1);
+    ball->SetActive(false);
+    const float heightWhenDeactivated = ball->GetPositionable()->GetPosition().y;
+
+    Step(30);
+    EXPECT_FLOAT_EQ(ball->GetPositionable()->GetPosition().y, heightWhenDeactivated) << "an inactive body kept falling";
+
+    // Moved while out of the simulation: it carries on from there, not from where it was taken out
+    ball->GetPositionable()->SetPosition(Vector3(3.0f, 20.0f, 0.0f));
+    ball->SetActive(true);
+    Step(1);
+
+    const Vector3 resumed = ball->GetPositionable()->GetPosition();
+    EXPECT_NEAR(resumed.x, 3.0f, 1e-3f);
+    EXPECT_GT(resumed.y, 19.0f);
+    EXPECT_LT(resumed.y, 20.0f) << "it should be falling again";
+}
+
+TEST_F(PhysicsTest, ObjectAttachedWhileInactiveStaysOutOfPhysics)
+{
+    const auto go = Spawn("BornInactive", Vector3(0.0f, 0.0f, 0.0f));
+    go->AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    go->SetActive(false);
+    Step(1); // attaches while inactive
+
+    EXPECT_EQ(ShapesUnder(Vector3(0.0f, 5.0f, 0.0f)), 0);
+
+    go->SetActive(true);
+    Step(1);
+    EXPECT_EQ(ShapesUnder(Vector3(0.0f, 5.0f, 0.0f)), 1);
+}
+
+TEST_F(PhysicsTest, DisablingAColliderEndsItsPairsAndEnablingRestoresThem)
+{
+    const auto zone = Spawn("Volume", Vector3(0.0f, 0.0f, 0.0f));
+    auto *zoneCollider = zone->AddComponent<BoxCollider>();
+    zoneCollider->SetSize(Vector3(4.0f, 4.0f, 4.0f));
+    zoneCollider->SetIsTrigger(true);
+    auto *zoneEvents = zone->AddComponent<EventRecorder>();
+
+    const auto visitor = Spawn("Visitor", Vector3(0.0f, 0.0f, 0.0f));
+    visitor->AddComponent<SphereCollider>()->SetRadius(0.5f);
+    auto *visitorBody = visitor->AddComponent<Rigidbody>();
+    visitorBody->SetBodyType(BodyType::Dynamic);
+    visitorBody->SetGravityEnabled(false);
+    auto *visitorEvents = visitor->AddComponent<EventRecorder>();
+
+    Step(5);
+    ASSERT_EQ(visitorEvents->triggerEnter, 1);
+
+    zoneCollider->SetActive(false);
+    Step(5);
+
+    // The zone object is still active, so both sides hear the pair end
+    EXPECT_EQ(visitorEvents->triggerExit, 1);
+    EXPECT_EQ(zoneEvents->triggerExit, 1);
+    EXPECT_EQ(ShapesUnder(Vector3(1.5f, 5.0f, 0.0f)), 0) << "a disabled collider is still hit by queries";
+
+    zoneCollider->SetActive(true);
+    Step(5);
+
+    EXPECT_EQ(visitorEvents->triggerEnter, 2);
+    EXPECT_EQ(zoneEvents->triggerEnter, 2);
+    EXPECT_TRUE(zoneCollider->IsTrigger()) << "re-enabled shapes lost the trigger setting";
+}
+
+TEST_F(PhysicsTest, DisabledComponentGetsNoPhysicsCallbacks)
+{
+    SpawnFloor();
+    const auto ball = SpawnBall("Muted", Vector3(0.0f, 2.0f, 0.0f));
+    auto *muted = ball->AddComponent<EventRecorder>();
+    auto *listening = ball->AddComponent<EventRecorder>();
+    muted->SetActive(false);
+
+    Step(120);
+
+    EXPECT_GE(listening->collisionEnter, 1);
+    EXPECT_EQ(muted->Total(), 0);
+}
+
+TEST_F(PhysicsTest, RecreatingABodyKeepsEnterAndExitBalancedOnBothSides)
+{
+    // A weightless dynamic zone, so the visitor still pairs with it once it's kinematic (PhysX doesn't
+    // pair kinematic with static by default)
+    const auto zone = Spawn("Volume", Vector3(0.0f, 0.0f, 0.0f));
+    auto *zoneCollider = zone->AddComponent<BoxCollider>();
+    zoneCollider->SetSize(Vector3(4.0f, 4.0f, 4.0f));
+    zoneCollider->SetIsTrigger(true);
+    auto *zoneBody = zone->AddComponent<Rigidbody>();
+    zoneBody->SetBodyType(BodyType::Dynamic);
+    zoneBody->SetGravityEnabled(false);
+    auto *zoneEvents = zone->AddComponent<EventRecorder>();
+
+    const auto visitor = Spawn("Visitor", Vector3(0.0f, 0.0f, 0.0f));
+    visitor->AddComponent<SphereCollider>()->SetRadius(0.5f);
+    auto *visitorBody = visitor->AddComponent<Rigidbody>();
+    visitorBody->SetBodyType(BodyType::Dynamic);
+    visitorBody->SetGravityEnabled(false);
+    auto *visitorEvents = visitor->AddComponent<EventRecorder>();
+
+    Step(5);
+    ASSERT_EQ(visitorEvents->triggerEnter, 1);
+    ASSERT_EQ(zoneEvents->triggerEnter, 1);
+
+    visitorBody->SetBodyType(BodyType::Kinematic); // destroys the body and creates a new one in place
+    Step(5);
+
+    // The visitor's own components used to get Enter again with no Exit for the old body
+    EXPECT_EQ(visitorEvents->triggerExit, 1);
+    EXPECT_EQ(visitorEvents->triggerEnter, 2);
+    EXPECT_EQ(visitorEvents->lastTriggerExitSelf, visitor.get()) << "the Exit must name the object it went to";
+    EXPECT_EQ(zoneEvents->triggerExit, 1);
+    EXPECT_EQ(zoneEvents->triggerEnter, 2);
+}
+
 // ============================================================================
 // Scene queries
 // ============================================================================
@@ -345,18 +558,48 @@ TEST_F(PhysicsTest, RaycastAllReturnsEveryHit)
     EXPECT_EQ(hits[1].gameObject, far.get());
 }
 
+TEST_F(PhysicsTest, QueriesReportTheColliderThatWasHit)
+{
+    // One body, two colliders: a box at the origin and a sphere off to the side
+    const auto compound = Spawn("Compound", Vector3(0.0f, 0.0f, 0.0f));
+    auto *box = compound->AddComponent<BoxCollider>();
+    box->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    auto *sphere = compound->AddComponent<SphereCollider>();
+    sphere->SetRadius(0.5f);
+    sphere->SetOffset(Vector3(5.0f, 0.0f, 0.0f));
+    auto *body = compound->AddComponent<Rigidbody>();
+    body->SetBodyType(BodyType::Kinematic);
+    const auto wall = Spawn("Wall", Vector3(-5.0f, 0.0f, 0.0f));
+    auto *wallBox = wall->AddComponent<BoxCollider>();
+    wallBox->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+    Step(1);
+
+    RaycastHit hit;
+    ASSERT_TRUE(Raycast::Single(Vector3(5.0f, 5.0f, 0.0f), Vector3(0.0f, -1.0f, 0.0f), hit, 100.0f));
+    EXPECT_EQ(hit.collider, sphere) << "with a Rigidbody the collider used to be null";
+    EXPECT_EQ(hit.rigidbody, body);
+    EXPECT_EQ(hit.gameObject, compound.get());
+
+    ASSERT_TRUE(Raycast::SphereCast(Vector3(0.0f, 5.0f, 0.0f), 0.1f, Vector3(0.0f, -1.0f, 0.0f), hit, 100.0f));
+    EXPECT_EQ(hit.collider, box);
+    EXPECT_EQ(hit.rigidbody, body);
+
+    // A reused hit keeps nothing from the previous one
+    ASSERT_TRUE(Raycast::Single(Vector3(-5.0f, 5.0f, 0.0f), Vector3(0.0f, -1.0f, 0.0f), hit, 100.0f));
+    EXPECT_EQ(hit.collider, wallBox);
+    EXPECT_EQ(hit.rigidbody, nullptr) << "the previous hit's Rigidbody leaked into this one";
+    EXPECT_EQ(hit.gameObject, wall.get());
+
+    EXPECT_FALSE(Raycast::Single(Vector3(20.0f, 5.0f, 0.0f), Vector3(0.0f, -1.0f, 0.0f), hit, 100.0f));
+    EXPECT_FALSE(hit.hit);
+    EXPECT_EQ(hit.collider, nullptr);
+    EXPECT_EQ(hit.gameObject, nullptr);
+    EXPECT_FALSE(hit.bodyHandle.IsValid());
+}
+
 // ============================================================================
 // Collider shapes
 // ============================================================================
-
-namespace
-{
-    int ShapesUnder(const Vector3 &above)
-    {
-        std::vector<RaycastHit> hits;
-        return Raycast::All(above, Vector3(0.0f, -1.0f, 0.0f), hits, 100.0f);
-    }
-}
 
 TEST_F(PhysicsTest, ColliderThenRigidbodyGivesOneShape)
 {

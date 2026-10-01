@@ -415,12 +415,49 @@ namespace N2Engine::Physics
         {
             _colliderShapes.erase(collider);
         }
-        ForgetPairsWithBody(handle);
+        ForgetPairsWithBody(handle, true);
 
         data->active = false;
         data->rigidbody = nullptr;
         data->colliders.clear();
         _freeList.push_back(handle.index);
+    }
+
+    void PhysXBackend::SetBodyEnabled(const PhysicsBodyHandle handle, const bool enabled)
+    {
+        const BodyData *data = GetBodyData(handle);
+        if (!data || !data->actor || !_scene)
+        {
+            return;
+        }
+
+        if (const bool inScene = data->actor->getScene() != nullptr; inScene == enabled)
+        {
+            return;
+        }
+
+        if (!enabled)
+        {
+            // Out of the scene it neither simulates nor shows up in queries. PhysX reports its lost
+            // touches as removed-actor pairs, which the callbacks skip, so end them here.
+            ForgetPairsWithBody(handle, false);
+            _scene->removeActor(*data->actor);
+            return;
+        }
+
+        // Back where its GameObject is now: it may have been moved while it was out
+        if (const GameObject *owner = GetBodyOwner(handle))
+        {
+            if (const Positionable *positionable = owner->GetPositionable())
+            {
+                const Math::Vector3 position = positionable->GetPosition();
+                const Math::Quaternion rotation = positionable->GetRotation();
+                data->actor->setGlobalPose(PxTransform(
+                    PxVec3(position.x, position.y, position.z),
+                    PxQuat(rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW())));
+            }
+        }
+        _scene->addActor(*data->actor);
     }
 
     // ========== Component Registration ==========
@@ -471,6 +508,11 @@ namespace N2Engine::Physics
         }
 
         PxRigidActor *actor = bodyData.actor;
+        // A kinematic target needs a scene; a disabled body takes its pose when it's re-enabled
+        if (!actor || !actor->getScene())
+        {
+            return;
+        }
         if (auto *dynamic = actor->is<PxRigidDynamic>())
         {
             // For kinematic bodies, use setKinematicTarget for smooth interpolation
@@ -685,7 +727,7 @@ namespace N2Engine::Physics
     void PhysXBackend::AddForce(const PhysicsBodyHandle body, const Math::Vector3 &force)
     {
         const BodyData *data = GetBodyData(body);
-        if (!data)
+        if (!data || !data->actor->getScene()) // PhysX rejects forces on a body outside a scene (disabled)
         {
             return;
         }
@@ -699,7 +741,7 @@ namespace N2Engine::Physics
     void PhysXBackend::AddImpulse(PhysicsBodyHandle body, const Math::Vector3 &impulse)
     {
         const BodyData *data = GetBodyData(body);
-        if (!data)
+        if (!data || !data->actor->getScene())
         {
             return;
         }
@@ -882,7 +924,8 @@ namespace N2Engine::Physics
     {
         for (const auto &bodyData : _bodies)
         {
-            if (!bodyData.active || !bodyData.actor || !bodyData.rigidbody)
+            // A disabled body (out of the scene) didn't move; its object may be moved by script meanwhile
+            if (!bodyData.active || !bodyData.actor || !bodyData.rigidbody || !bodyData.actor->getScene())
             {
                 continue;
             }
@@ -1040,52 +1083,49 @@ namespace N2Engine::Physics
         }
     }
 
+    void PhysXBackend::DescribeSide(const PhysicsBodyHandle handle, const std::weak_ptr<GameObject> &fallbackOwner,
+                                    GameObject *&gameObject, Rigidbody *&rigidbody) const
+    {
+        if (const BodyData *data = GetBodyData(handle))
+        {
+            if (data->rigidbody)
+            {
+                gameObject = &data->rigidbody->GetGameObject();
+                rigidbody = data->rigidbody;
+            }
+            else if (!data->colliders.empty())
+            {
+                gameObject = &data->colliders[0]->GetGameObject();
+                rigidbody = nullptr;
+            }
+            return;
+        }
+
+        // The body is gone (destroyed or re-created); the object it belonged to may still be around
+        const auto owner = fallbackOwner.lock();
+        gameObject = owner && !owner->IsDestroyed() ? owner.get() : nullptr;
+        rigidbody = nullptr;
+    }
+
     // Helper to create collision data with resolved object references
     Collision PhysXBackend::CreateCollisionData(
         const CollisionPair &pair,
         const Collision &baseData,
-        bool isForBodyA)
+        bool isForBodyA,
+        const PairOwners &owners)
     {
         Collision collision = baseData;
 
-        BodyData *thisData = isForBodyA ? GetBodyData(pair.bodyA) : GetBodyData(pair.bodyB);
-        BodyData *otherData = isForBodyA ? GetBodyData(pair.bodyB) : GetBodyData(pair.bodyA);
-
-        // Set this object's references
-        if (thisData)
-        {
-            if (thisData->rigidbody)
-            {
-                collision.gameObject = &thisData->rigidbody->GetGameObject();
-                collision.rigidbody = thisData->rigidbody;
-            }
-            else if (!thisData->colliders.empty())
-            {
-                collision.gameObject = &thisData->colliders[0]->GetGameObject();
-                collision.rigidbody = nullptr;
-            }
-        }
-
-        // Set other object's references
-        if (otherData)
-        {
-            if (otherData->rigidbody)
-            {
-                collision.otherGameObject = &otherData->rigidbody->GetGameObject();
-                collision.otherRigidbody = otherData->rigidbody;
-            }
-            else if (!otherData->colliders.empty())
-            {
-                collision.otherGameObject = &otherData->colliders[0]->GetGameObject();
-                collision.otherRigidbody = nullptr;
-            }
-        }
+        DescribeSide(isForBodyA ? pair.bodyA : pair.bodyB, isForBodyA ? owners.a : owners.b,
+                     collision.gameObject, collision.rigidbody);
+        DescribeSide(isForBodyA ? pair.bodyB : pair.bodyA, isForBodyA ? owners.b : owners.a,
+                     collision.otherGameObject, collision.otherRigidbody);
 
         // baseData's colliders are A's and B's; validate them, then swap for B's view
         collision.collider = LiveCollider(pair.bodyA, baseData.collider);
         collision.otherCollider = LiveCollider(pair.bodyB, baseData.otherCollider);
 
-        // Flip normals for body B
+        // Everything directional is from A's point of view; B sees it the other way round
         if (!isForBodyA)
         {
             std::swap(collision.collider, collision.otherCollider);
@@ -1093,55 +1133,39 @@ namespace N2Engine::Physics
             {
                 contact.normal = contact.normal * -1.0f;
             }
+            collision.impulse = collision.impulse * -1.0f;
+            collision.relativeVelocity = collision.relativeVelocity * -1.0f;
         }
 
         return collision;
     }
 
     Trigger PhysXBackend::CreateTriggerData(const CollisionPair &pair, ICollider *colliderA, ICollider *colliderB,
-                                            bool isForBodyA)
+                                            bool isForBodyA, const PairOwners &owners)
     {
         Trigger trigger;
         trigger.collider = LiveCollider(isForBodyA ? pair.bodyA : pair.bodyB, isForBodyA ? colliderA : colliderB);
         trigger.otherCollider = LiveCollider(isForBodyA ? pair.bodyB : pair.bodyA, isForBodyA ? colliderB : colliderA);
 
-        BodyData *thisData = isForBodyA ? GetBodyData(pair.bodyA) : GetBodyData(pair.bodyB);
-        BodyData *otherData = isForBodyA ? GetBodyData(pair.bodyB) : GetBodyData(pair.bodyA);
-
-        // Set this object's references
-        if (thisData)
-        {
-            if (thisData->rigidbody)
-            {
-                trigger.gameObject = &thisData->rigidbody->GetGameObject();
-                trigger.rigidbody = thisData->rigidbody;
-            }
-            else if (!thisData->colliders.empty())
-            {
-                trigger.gameObject = &thisData->colliders[0]->GetGameObject();
-                trigger.rigidbody = nullptr;
-            }
-        }
-
-        // Set other object's references
-        if (otherData)
-        {
-            if (otherData->rigidbody)
-            {
-                trigger.otherGameObject = &otherData->rigidbody->GetGameObject();
-                trigger.otherRigidbody = otherData->rigidbody;
-            }
-            else if (!otherData->colliders.empty())
-            {
-                trigger.otherGameObject = &otherData->colliders[0]->GetGameObject();
-                trigger.otherRigidbody = nullptr;
-            }
-        }
+        DescribeSide(isForBodyA ? pair.bodyA : pair.bodyB, isForBodyA ? owners.a : owners.b,
+                     trigger.gameObject, trigger.rigidbody);
+        DescribeSide(isForBodyA ? pair.bodyB : pair.bodyA, isForBodyA ? owners.b : owners.a,
+                     trigger.otherGameObject, trigger.otherRigidbody);
 
         return trigger;
     }
 
-    GameObject *PhysXBackend::GetBodyOwner(const PhysicsBodyHandle handle)
+    PhysXBackend::PairOwners PhysXBackend::OwnersOf(const CollisionPair &pair) const
+    {
+        const auto ownerOf = [this](const PhysicsBodyHandle handle) -> std::weak_ptr<GameObject>
+        {
+            GameObject *owner = GetBodyOwner(handle);
+            return owner ? owner->weak_from_this() : std::weak_ptr<GameObject>{};
+        };
+        return {ownerOf(pair.bodyA), ownerOf(pair.bodyB)};
+    }
+
+    GameObject *PhysXBackend::GetBodyOwner(const PhysicsBodyHandle handle) const
     {
         const BodyData *data = GetBodyData(handle);
         if (!data)
@@ -1159,12 +1183,21 @@ namespace N2Engine::Physics
         return nullptr;
     }
 
-    void PhysXBackend::DispatchToBody(const PhysicsBodyHandle handle, const std::function<void(Component &)> &fn)
+    void PhysXBackend::DispatchToBody(const PhysicsBodyHandle handle, const std::function<void(Component &)> &fn,
+                                      const std::weak_ptr<GameObject> &fallbackOwner)
     {
         GameObject *owner = GetBodyOwner(handle);
-        if (!owner)
+        const bool viaBody = owner != nullptr;
+        std::shared_ptr<GameObject> keepAlive;
+        if (!viaBody)
         {
-            return; // destroyed this frame, or never belonged to a GameObject
+            // The body is gone. Its GameObject still hears about a forgotten pair unless it's being destroyed.
+            keepAlive = fallbackOwner.lock();
+            if (!keepAlive || keepAlive->IsDestroyed())
+            {
+                return; // destroyed this frame, or never belonged to a GameObject
+            }
+            owner = keepAlive.get();
         }
 
         // Snapshot: a handler can add or remove components, which would invalidate the live vector
@@ -1177,13 +1210,18 @@ namespace N2Engine::Physics
         for (Component *component : components)
         {
             // A handler may have destroyed this body (e.g. removed its Rigidbody) or other components
-            if (GetBodyOwner(handle) != owner)
+            if (viaBody ? GetBodyOwner(handle) != owner : owner->IsDestroyed())
             {
                 return;
             }
             const auto &live = owner->GetAllComponents();
-            if (std::ranges::none_of(live, [component](const auto &c) { return c.get() == component; }) ||
-                component->IsDestroyed())
+            if (std::ranges::none_of(live, [component](const auto &c) { return c.get() == component; }))
+            {
+                continue;
+            }
+            // Like Unity, only enabled components on active objects get physics callbacks (IsActive is
+            // also false once the component is destroyed)
+            if (!component->IsActive())
             {
                 continue;
             }
@@ -1253,7 +1291,8 @@ namespace N2Engine::Physics
             auto *data = new Collision();
             data->collider = ColliderOf(last.onA); // LiveCollider nulls the removed one at dispatch
             data->otherCollider = ColliderOf(last.onB);
-            _forgottenCollisions.push_back({it->first, data});
+            // Owners too: a collider-only object's body is destroyed right after its shapes are removed
+            _forgottenCollisions.push_back({it->first, data, OwnersOf(it->first)});
             it = _collisionTouches.erase(it);
         }
         for (auto it = _triggerTouches.begin(); it != _triggerTouches.end();)
@@ -1271,7 +1310,8 @@ namespace N2Engine::Physics
                 ++it;
                 continue;
             }
-            _forgottenTriggers.push_back({it->first, ColliderOf(last.onA), ColliderOf(last.onB)});
+            _forgottenTriggers.push_back({it->first, ColliderOf(last.onA), ColliderOf(last.onB),
+                                          OwnersOf(it->first)});
             it = _triggerTouches.erase(it);
         }
     }
@@ -1281,7 +1321,7 @@ namespace N2Engine::Physics
         return shape ? static_cast<ICollider *>(shape->userData) : nullptr;
     }
 
-    ICollider *PhysXBackend::LiveCollider(const PhysicsBodyHandle body, ICollider *collider)
+    ICollider *PhysXBackend::LiveCollider(const PhysicsBodyHandle body, ICollider *collider) const
     {
         const BodyData *data = GetBodyData(body);
         return data && collider && std::ranges::find(data->colliders, collider) != data->colliders.end()
@@ -1289,19 +1329,21 @@ namespace N2Engine::Physics
                    : nullptr;
     }
 
-    void PhysXBackend::ForgetPairsWithBody(const PhysicsBodyHandle handle)
+    void PhysXBackend::ForgetPairsWithBody(const PhysicsBodyHandle handle, const bool shapesReleased)
     {
         const auto involves = [handle](const CollisionPair &pair)
         {
             return pair.bodyA == handle || pair.bodyB == handle;
         };
-        // The other body still gets its Exit (as in Unity): PhysX's touch-lost for a released actor is
-        // skipped by the callbacks, so nothing else would report it. This body's shapes are already
-        // released, so only the surviving side's collider is looked up; DispatchToBody skips this side.
-        const auto survivor = [handle](const CollisionPair &pair, const ShapePair &shapes, bool sideA)
+        // Both sides get their Exit: PhysX's touch-lost for a released or removed actor is skipped by the
+        // callbacks, so nothing else would report it. If this body is being destroyed, its side is reached
+        // through its recorded GameObject (when that survives, e.g. the body is being re-created), and its
+        // shapes are already released, so only the other side's collider is looked up.
+        const auto colliderOn = [handle, shapesReleased](const CollisionPair &pair, const ShapePair &shapes,
+                                                         const bool sideA)
         {
             const bool thisIsA = pair.bodyA == handle;
-            return sideA != thisIsA ? ColliderOf(sideA ? shapes.onA : shapes.onB) : nullptr;
+            return !shapesReleased || sideA != thisIsA ? ColliderOf(sideA ? shapes.onA : shapes.onB) : nullptr;
         };
         for (auto it = _collisionTouches.begin(); it != _collisionTouches.end();)
         {
@@ -1311,9 +1353,9 @@ namespace N2Engine::Physics
                 continue;
             }
             auto *data = new Collision();
-            data->collider = survivor(it->first, it->second.front(), true);
-            data->otherCollider = survivor(it->first, it->second.front(), false);
-            _forgottenCollisions.push_back({it->first, data});
+            data->collider = colliderOn(it->first, it->second.front(), true);
+            data->otherCollider = colliderOn(it->first, it->second.front(), false);
+            _forgottenCollisions.push_back({it->first, data, OwnersOf(it->first)});
             it = _collisionTouches.erase(it);
         }
         for (auto it = _triggerTouches.begin(); it != _triggerTouches.end();)
@@ -1323,8 +1365,9 @@ namespace N2Engine::Physics
                 it = involves(it->first) ? _triggerTouches.erase(it) : std::next(it);
                 continue;
             }
-            _forgottenTriggers.push_back({it->first, survivor(it->first, it->second.front(), true),
-                                          survivor(it->first, it->second.front(), false)});
+            _forgottenTriggers.push_back({it->first, colliderOn(it->first, it->second.front(), true),
+                                          colliderOn(it->first, it->second.front(), false),
+                                          OwnersOf(it->first)});
             it = _triggerTouches.erase(it);
         }
     }
@@ -1419,10 +1462,10 @@ namespace N2Engine::Physics
         events.swap(queue);
         for (const auto &event : events)
         {
-            const Collision forA = CreateCollisionData(event.pair, *event.data, true);
-            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnCollisionExit(forA); });
-            const Collision forB = CreateCollisionData(event.pair, *event.data, false);
-            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnCollisionExit(forB); });
+            const Collision forA = CreateCollisionData(event.pair, *event.data, true, event.owners);
+            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnCollisionExit(forA); }, event.owners.a);
+            const Collision forB = CreateCollisionData(event.pair, *event.data, false, event.owners);
+            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnCollisionExit(forB); }, event.owners.b);
             delete event.data;
         }
     }
@@ -1433,10 +1476,10 @@ namespace N2Engine::Physics
         events.swap(queue);
         for (const auto &event : events)
         {
-            const Trigger forA = CreateTriggerData(event.pair, event.colliderA, event.colliderB, true);
-            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnTriggerExit(forA); });
-            const Trigger forB = CreateTriggerData(event.pair, event.colliderA, event.colliderB, false);
-            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnTriggerExit(forB); });
+            const Trigger forA = CreateTriggerData(event.pair, event.colliderA, event.colliderB, true, event.owners);
+            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnTriggerExit(forA); }, event.owners.a);
+            const Trigger forB = CreateTriggerData(event.pair, event.colliderA, event.colliderB, false, event.owners);
+            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnTriggerExit(forB); }, event.owners.b);
         }
     }
 
@@ -1582,31 +1625,22 @@ namespace N2Engine::Physics
         UpdateMassProperties(body);
     }
 
-    void PhysXBackend::FillRaycastHit(RaycastHit &hit, const PxRaycastHit &pxHit) const
+    void PhysXBackend::FillRaycastHit(RaycastHit &hit, const PxLocationHit &location,
+                                      const PxActorShape &actorShape) const
     {
+        hit = RaycastHit{}; // a reused hit must not keep the previous hit's body, rigidbody or collider
         hit.hit = true;
-        hit.point = Math::Vector3(pxHit.position.x, pxHit.position.y, pxHit.position.z);
-        hit.normal = Math::Vector3(pxHit.normal.x, pxHit.normal.y, pxHit.normal.z);
-        hit.distance = pxHit.distance;
+        hit.point = Math::Vector3(location.position.x, location.position.y, location.position.z);
+        hit.normal = Math::Vector3(location.normal.x, location.normal.y, location.normal.z);
+        hit.distance = location.distance;
 
-        if (pxHit.actor && pxHit.actor->userData)
+        if (actorShape.actor && actorShape.actor->userData)
         {
-            const auto *handle = static_cast<PhysicsBodyHandle*>(pxHit.actor->userData);
+            const auto *handle = static_cast<PhysicsBodyHandle*>(actorShape.actor->userData);
             hit.bodyHandle = *handle;
-
-            if (const BodyData *bodyData = GetBodyData(*handle))
-            {
-                if (bodyData->rigidbody)
-                {
-                    hit.gameObject = &bodyData->rigidbody->GetGameObject();
-                    hit.rigidbody = bodyData->rigidbody;
-                }
-                else if (!bodyData->colliders.empty())
-                {
-                    hit.gameObject = &bodyData->colliders[0]->GetGameObject();
-                    hit.collider = bodyData->colliders[0];
-                }
-            }
+            DescribeSide(*handle, {}, hit.gameObject, hit.rigidbody);
+            // The collider whose shape was hit (not just the body's first), as the contact events report it
+            hit.collider = LiveCollider(*handle, ColliderOf(actorShape.shape));
         }
     }
 
@@ -1617,9 +1651,9 @@ namespace N2Engine::Physics
         float maxDistance,
         uint32_t layerMask)
     {
+        hit = RaycastHit{};
         if (!_scene)
         {
-            hit.hit = false;
             return false;
         }
 
@@ -1635,11 +1669,10 @@ namespace N2Engine::Physics
 
         if (status && hitBuffer.hasBlock)
         {
-            FillRaycastHit(hit, hitBuffer.block);
+            FillRaycastHit(hit, hitBuffer.block, hitBuffer.block);
             return true;
         }
 
-        hit.hit = false;
         return false;
     }
 
@@ -1675,14 +1708,14 @@ namespace N2Engine::Physics
             for (PxU32 i = 0; i < raycastBuffer.nbTouches; i++)
             {
                 RaycastHit hit;
-                FillRaycastHit(hit, raycastBuffer.touches[i]);
+                FillRaycastHit(hit, raycastBuffer.touches[i], raycastBuffer.touches[i]);
                 hits.push_back(hit);
             }
 
             if (raycastBuffer.hasBlock)
             {
                 RaycastHit hit;
-                FillRaycastHit(hit, raycastBuffer.block);
+                FillRaycastHit(hit, raycastBuffer.block, raycastBuffer.block);
                 hits.push_back(hit);
             }
         }
@@ -1703,9 +1736,9 @@ namespace N2Engine::Physics
         const float maxDistance,
         const uint32_t layerMask)
     {
+        hit = RaycastHit{};
         if (!_scene)
         {
-            hit.hit = false;
             return false;
         }
 
@@ -1723,35 +1756,10 @@ namespace N2Engine::Physics
         const bool status = _scene->sweep(sphere, pose, pxDir, maxDistance, hitBuffer, PxHitFlag::eDEFAULT, filterData);
         if (status && hitBuffer.hasBlock)
         {
-            hit.hit = true;
-            hit.point = Math::Vector3(hitBuffer.block.position.x, hitBuffer.block.position.y,
-                                      hitBuffer.block.position.z);
-            hit.normal = Math::Vector3(hitBuffer.block.normal.x, hitBuffer.block.normal.y, hitBuffer.block.normal.z);
-            hit.distance = hitBuffer.block.distance;
-
-            if (hitBuffer.block.actor && hitBuffer.block.actor->userData)
-            {
-                const auto *handle = static_cast<PhysicsBodyHandle*>(hitBuffer.block.actor->userData);
-                hit.bodyHandle = *handle;
-
-                if (const BodyData *bodyData = GetBodyData(*handle))
-                {
-                    if (bodyData->rigidbody)
-                    {
-                        hit.gameObject = &bodyData->rigidbody->GetGameObject();
-                        hit.rigidbody = bodyData->rigidbody;
-                    }
-                    else if (!bodyData->colliders.empty())
-                    {
-                        hit.gameObject = &bodyData->colliders[0]->GetGameObject();
-                        hit.collider = bodyData->colliders[0];
-                    }
-                }
-            }
+            FillRaycastHit(hit, hitBuffer.block, hitBuffer.block);
             return true;
         }
 
-        hit.hit = false;
         return false;
     }
 

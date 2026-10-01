@@ -86,6 +86,12 @@ namespace N2Engine::Physics
             backend->SetGravityEnabled(_handle, _gravityEnabled);
         }
 
+        // Attached while disabled or on an inactive object: the body waits out of the scene until enabled
+        if (!IsActive())
+        {
+            backend->SetBodyEnabled(_handle, false);
+        }
+
         _initialized = true;
         const auto colliders = GetGameObject().GetComponents<ICollider>();
         for (const auto &collider : colliders)
@@ -126,6 +132,33 @@ namespace N2Engine::Physics
             {
                 collider->OnAttach();
             }
+        }
+    }
+
+    void Rigidbody::OnEnable()
+    {
+        SetBodyEnabled(IsActive());
+    }
+
+    void Rigidbody::OnDisable()
+    {
+        // Also the first step of teardown (OnDestroy follows), when IsActive may still be true
+        SetBodyEnabled(false);
+    }
+
+    void Rigidbody::OnActiveFlagChanged()
+    {
+        SetBodyEnabled(IsActive());
+    }
+
+    void Rigidbody::SetBodyEnabled(const bool enabled) const
+    {
+        if (!_handle.IsValid())
+            return;
+
+        if (auto *backend = Application::GetInstance().Get3DPhysicsBackend())
+        {
+            backend->SetBodyEnabled(_handle, enabled);
         }
     }
 
