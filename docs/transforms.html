@@ -164,7 +164,7 @@
 <li><strong>Otherwise:</strong> the local values are kept and only <code>OnHierarchyChanged</code> runs, so the world pose changes to local-under-the-new-parent.</li>
 </ul>
 <p>When the parent has no Positionable, both choices give the same world pose (the child's world equals its local value).</p>
-<p><code>SetParent(newParent)</code> is <code>oldParent-&gt;RemoveChild(this, keep)</code> followed by <code>newParent-&gt;AddChild(this, keep)</code>, so with <code>keep</code> the world pose is restored twice (first as a parentless object, then under the new parent). Scene deserialization uses <code>AddChild(child, false)</code>: stored local values are kept as-is.</p>
+<p><code>SetParent(newParent)</code> unlinks the object from its old parent (the private <code>DetachChild(this, keep)</code>, which <code>RemoveChild</code> also uses) and then calls <code>newParent-&gt;AddChild(this, keep)</code>, so with <code>keep</code> the world pose is restored twice (first as a parentless object, then under the new parent). Scene deserialization uses <code>AddChild(child, false)</code>: stored local values are kept as-is.</p>
 
 <pre class="lang-cpp"><code>// Attach a weapon to a hand bone without moving it in the world
 hand-&gt;AddChild(weapon);                 // keepWorldPosition = true
@@ -222,7 +222,7 @@ weapon-&gt;GetPositionable()-&gt;SetLocalPosition(N2Engine::Math::Vector3{0.0f, 
 <p class="src">Source: <code>math/include/math/Matrix.hpp</code> — static <code>*_func</code> defaults, <code>InverseScalar</code>, <code>InverseSSE2</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code></p>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 

@@ -86,7 +86,7 @@
 <thead><tr><th>Overload</th><th>What it does</th></tr></thead>
 <tbody>
 <tr><td><code>EngineHealth Init()</code></td><td>Calls <code>Init(options)</code> with <code>projectPath = ""</code>, PhysX, OpenGL, <code>isHeadless = false</code>.</td></tr>
-<tr><td><code>EngineHealth Init(const Config::ApplicationOptions &amp;)</code></td><td>Starts every subsystem it can and returns their states. Never throws for a failed subsystem; the engine keeps running with whatever started.</td></tr>
+<tr><td><code>EngineHealth Init(const Config::ApplicationOptions &amp;)</code></td><td>Starts every subsystem it can and returns their states. Never throws for a failed subsystem; the engine keeps running with whatever started. A repeated call before <code>Shutdown</code> is ignored <span class="badge">PR #34</span> (see <a href="#init-once">below</a>).</td></tr>
 <tr><td><code>void Init(std::unique_ptr&lt;Scene&gt; &amp;&amp;)</code></td><td>Marked "for testing only". Calls <code>Init()</code>, adds the scene with <code>loadAdded = true</code> and processes the scene change immediately. Discards the health result. Passing a null scene is undefined behaviour (it ends up dereferencing the current scene, which does not exist).</td></tr>
 </tbody>
 </table>
@@ -107,9 +107,10 @@
 
 <p><code>Init(options)</code> runs these steps in order:</p>
 <ol class="steps">
+<li>If the application is already initialised (an <code>Init</code> with no <code>Shutdown</code> since), log the warning "Application::Init called again; ignored (call Shutdown first to re-initialize)" and return the stored health report. Nothing below runs <span class="badge">PR #34</span>.</li>
 <li>In Debug builds (<code>N2ENGINE_DEBUG</code>), install the console log subscriber, once per process (see <a href="logging-and-editor.html#logger">Logger</a>).</li>
 <li>Reset the health report and clear the quit flag (<code>_quitRequested = false</code>).</li>
-<li><strong>Scripting</strong>: <code>LuaRuntime::Instance().Initialize()</code>. The result is cached by <code>LuaRuntime</code>, so a second <code>Init</code> reports the first outcome again.</li>
+<li><strong>Scripting</strong>: <code>LuaRuntime::Instance().Initialize()</code>. The result is cached by <code>LuaRuntime</code>, so an <code>Init</code> after <code>Shutdown</code> reports the first outcome again.</li>
 <li><code>Math::InitializeSIMD()</code>, then <code>Time::Init()</code> (resets all clocks and <code>timeScale</code> to 1).</li>
 <li><strong>Window and renderer</strong>: <code>Window::InitWindow(options)</code>.</li>
 <li>Create the main camera, <em>even without a window</em>, so <code>GetMainCamera()</code> is never null after Init. Perspective 45°, near 0.1, far 100, at (0, 0, 10). Aspect is the window's, or 16:9 when the window has no size.</li>
@@ -140,10 +141,11 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p><code>physicsBackend</code> and <code>renderBackend</code> have no default member initialisers. Designated or brace initialisation (<code>ApplicationOptions{}</code>, or the form above with fields omitted) value-initialises them to the first enumerator (<code>PHYSX</code>, <code>OPENGL</code>). A default-initialised local (<code>ApplicationOptions opts;</code>) leaves them indeterminate.</p>
 </div>
 
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><code>Application::Init</code> does not guard against being called twice without <code>Shutdown</code> in between. A second call runs <code>Window::InitWindow</code> again over a live GLFW window and replaces the physics backend while scenes may still hold bodies from the old one. Whether re-Init is supported (and what it should do with the old window) is not stated.</p>
+<div class="callout guarantee" id="init-once">
+<p class="callout-title">Guarantee <span class="badge">PR #34</span></p>
+<p><code>Init</code> runs once per <code>Shutdown</code>. A second call while initialised logs a warning and returns the current health report without touching the window, camera, physics backend or quit flag. Before PR #34 it opened another window and replaced the physics backend under live scenes. To re-initialise, call <code>Shutdown()</code> first; <code>Shutdown</code> clears the initialised flag. Not covered by a test, because <code>Init</code> needs a window.</p>
 </div>
+<p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Init</code>, <code>Application::Shutdown</code> (<code>_initialized</code>)</p>
 
 <h2 id="health">Subsystem health</h2>
 <p><code>Init</code> returns an <code>EngineHealth</code>: a list of <code>SubsystemStatus{name, state, detail}</code> in the fixed order <strong>Window, Renderer, Physics, Audio, Scripting</strong>. <code>GetHealth()</code> returns the same report later (as of the end of the last Init). Before any Init the list is empty, which counts as healthy.</p>
@@ -198,7 +200,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <ol class="steps">
 <li><code>Window::PollEvents()</code>: GLFW events, then <code>InputSystem::Update()</code> (actions fire here; see <a href="input.html">Input</a>).</li>
 <li><code>Time::Update()</code>: measure the frame delta and advance the clocks.</li>
-<li>Add <code>min(unscaled delta, 0.25 s)</code> to the fixed-step accumulator.</li>
+<li>Add <code>min(unscaled delta, 0.25 s)</code> to the fixed-step accumulator. With no scene loaded the accumulator is reset to 0 instead of being drained <span class="badge">PR #34</span>.</li>
 <li><em>If a scene is loaded</em>: <code>Scene::ProcessAttachQueue()</code>, so components added since the last frame get attached before anything updates.</li>
 <li><em>If a scene is loaded</em>: zero or more fixed steps (<a href="#fixed-step">below</a>).</li>
 <li><em>If a scene is loaded</em>: <code>Scene::Update()</code>.</li>
@@ -258,9 +260,9 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p>Without a backend (PhysX failed, disabled, or not built), a step is just <code>scene.FixedUpdate()</code>. See <a href="physics.html">Physics</a> for the backend side.</p>
 <p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>Application::PhysicsUpdate</code></p>
 
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><code>Application::Run</code> adds to the accumulator every frame but drains it only while a scene is loaded. If <code>Run()</code> spends frames with no scene (the 0.25 s clamp applies per frame, not to the total), the first frame with a scene runs all the accumulated steps at once. Whether the accumulator should be reset or capped when no scene is loaded is not decided.</p>
+<div class="callout note">
+<p class="callout-title">Note <span class="badge">PR #34</span></p>
+<p>The accumulator only builds up while a scene is loaded. In a frame with no scene (<code>GetCurSceneIndex() == -1</code>) it is reset to 0, so the first scene to load starts with at most one frame's worth of steps instead of a burst of catch-up steps for the time spent without a scene. Before PR #34 it kept accumulating, and the per-frame 0.25 s clamp did not limit the total.</p>
 </div>
 
 <h2 id="time">Time</h2>
@@ -274,7 +276,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <tr><td><code>GetUnscaledTime()</code> / <code>GetTime()</code></td><td>Sums of the unscaled / scaled deltas since <code>Init</code>.</td></tr>
 <tr><td><code>GetFixedUnscaledDeltaTime()</code></td><td>0.02 s (50 Hz). There is no setter.</td></tr>
 <tr><td><code>GetFixedDeltaTime()</code></td><td>0.02 × <code>timeScale</code>, recomputed by <code>SetTimeScale</code>.</td></tr>
-<tr><td><code>GetTimeScale()</code> / <code>SetTimeScale(s)</code></td><td>Default 1. Takes effect from the next <code>Time::Update</code> for the frame delta, immediately for the fixed delta.</td></tr>
+<tr><td><code>GetTimeScale()</code> / <code>SetTimeScale(s)</code></td><td>Default 1. Takes effect from the next <code>Time::Update</code> for the frame delta, immediately for the fixed delta. Negative values are clamped to 0; NaN and infinity are ignored with a warning <span class="badge">PR #34</span>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -286,9 +288,9 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p><code>Time::Init</code> (run by every <code>Application::Init</code>) resets <code>timeScale</code> to 1 and restarts the clocks; a time scale set before <code>Init</code> is lost. The first frame's delta covers everything between <code>Init</code> and that frame (scene setup, script loading); the accumulator clamps it, but <code>GetDeltaTime()</code> does not.</p>
 </div>
 
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><code>Time::SetTimeScale</code> accepts any value. A negative scale makes <code>GetDeltaTime()</code> negative and <code>GetFixedDeltaTime()</code> negative, which <code>Run()</code> treats like a pause (no fixed steps). Whether negative or non-finite scales should be rejected or clamped is not specified.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee <span class="badge">PR #34</span></p>
+<p><code>Time::SetTimeScale</code> never makes time run backwards or become non-finite. A negative scale is clamped to 0 (a pause), and the fixed delta becomes 0 with it. A NaN or infinite scale is ignored: it logs a warning and keeps the previous scale. Lua's <code>Time.timeScale</code> setter goes through the same function. Test: <code>CoreRobustnessTest.TimeScaleRejectsNegativeAndNonFiniteValues</code>.</p>
 </div>
 
 <h2 id="quit">Quitting</h2>
@@ -296,7 +298,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <ul>
 <li><code>Run()</code> checks the flag at the top of each iteration, so the frame in which <code>Quit()</code> was called runs to completion (including destroy processing and a pending scene change).</li>
 <li><code>IsQuitRequested()</code> exposes the flag to hosts that do not use <code>Run()</code>; the editor host polls it.</li>
-<li>The flag is cleared <strong>only</strong> by <code>Init</code>. It is not cleared by <code>Run()</code> or <code>Shutdown()</code>. A <code>Quit()</code> requested before <code>Run()</code> is honoured only if it comes <em>after</em> <code>Init</code> (for example from a scene script's file-scope code run while adding the first scene): <code>Run()</code> then exits before the first frame. A <code>Quit()</code> before <code>Init</code> is lost, because <code>Init</code> clears the flag.</li>
+<li>The flag is cleared <strong>only</strong> by <code>Init</code> (one that actually runs, so the first <code>Init</code> or one after <code>Shutdown</code>). It is not cleared by <code>Run()</code> or <code>Shutdown()</code>. A <code>Quit()</code> requested before <code>Run()</code> is honoured only if it comes <em>after</em> <code>Init</code> (for example from a scene script's file-scope code run while adding the first scene): <code>Run()</code> then exits before the first frame. A <code>Quit()</code> before <code>Init</code> is lost, because <code>Init</code> clears the flag.</li>
 </ul>
 <p>When the loop ends, for <em>either</em> reason (window closed or quit requested), <code>Run()</code> calls <code>OnApplicationQuit()</code> on the current scene, if there is one, then <code>Shutdown()</code>. The editor host does the same after its own loop. <code>Run()</code>'s early return for an invalid window does not call <code>OnApplicationQuit</code>.</p>
 <p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Quit</code>, <code>Application::Run</code>; <code>engine/src/scripting/bindings/LuaApplicationBindings.cpp</code>; <code>editor-server/src/Main.cpp</code>; tests: <code>CoreRobustnessTest.QuitIsARequestNotAnExit</code></p>
@@ -304,6 +306,11 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <div class="callout guarantee">
 <p class="callout-title">Guarantee</p>
 <p><code>Application::Quit()</code> does not terminate the process; afterwards <code>IsQuitRequested()</code> is true. Test: <code>CoreRobustnessTest.QuitIsARequestNotAnExit</code>.</p>
+</div>
+
+<div class="callout note" id="design-quit">
+<p class="callout-title">Design decision: Quit is a request</p>
+<p><code>Quit()</code> is almost always called from inside a component callback or a Lua function, with the scene, the component and the Lua stack live on the call stack. Exiting there (the old <code>std::exit(0)</code>) ran static destructors under that code and skipped <code>OnApplicationQuit</code> and <code>Shutdown</code>. Setting a flag instead gives one exit path for every reason the loop can end: the frame finishes with the usual end-of-frame work (<a href="gameobjects-components.html#destroy">destroy processing</a>, a pending scene change), then <code>OnApplicationQuit</code>, then <a href="#shutdown">Shutdown</a> in a fixed order. Teardown is the same whether the window closed or a script quit, and <code>Quit()</code> is safe to call from any callback. Hosts with their own loop, like the <a href="logging-and-editor.html#editor-quit">editor host</a>, poll <code>IsQuitRequested()</code> and follow the same order. This is the same deferral the engine uses for destroy and scene switches.</p>
 </div>
 
 <div class="callout warning">
@@ -379,7 +386,7 @@ static void TearDownTestSuite()
 </div>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 

@@ -59,7 +59,7 @@
 <div class="content">
 
 <h1>Testing &amp; CI</h1>
-<p class="lead">N2Engine's tests are GoogleTest executables, one per module, run headless through CTest. CI builds and runs them on Windows with and without PhysX, then starts the editor host and talks to it over TCP. This page covers the layout, how to run the tests, the CI workflow, the conventions headless tests follow, and how to add one.</p>
+<p class="lead">N2Engine's tests are GoogleTest executables, one per module, run headless through CTest. CI builds and runs them on Windows in Debug with and without PhysX and in Release with PhysX, then starts the editor host and talks to it over TCP. This page covers the layout, how to run the tests, the CI workflow, the conventions headless tests follow, and how to add one.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -84,7 +84,7 @@
 <tr><td><code>tests/math/</code></td><td><code>math_tests</code></td><td><code>math</code></td><td>No engine dependency.</td></tr>
 <tr><td><code>tests/engine/</code></td><td><code>engine_tests</code></td><td><code>engine</code>, <code>renderer</code>, <code>math</code></td><td>Defines <code>N2_LUA_PROJECT_DIR</code> (the <code>lua_project</code> source folder) so <code>LuaSceneTests</code> can build <code>lua_project/assets/scene.lua</code> headless.</td></tr>
 <tr><td><code>tests/renderer/</code></td><td><code>renderer_tests</code></td><td><code>renderer</code>, <code>engine</code>, <code>math</code></td><td>Only a placeholder source file; the executable contains no tests.</td></tr>
-<tr><td><code>tests/editor-server/</code></td><td><code>editor_server_tests</code></td><td><code>N2EditorServer</code></td><td>Protocol encoding tests; never opens a socket.</td></tr>
+<tr><td><code>tests/editor-server/</code></td><td><code>editor_server_tests</code></td><td><code>N2EditorServer</code></td><td>Protocol encoding, bounds-checked reads, the main-thread command queue and command handlers. On Windows, <code>EditorServerSocketTest</code> also opens real loopback sockets <span class="badge">PR #33</span>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -110,6 +110,7 @@
 <tr><td><code>tests/engine/input/InputSystemTests.cpp</code></td><td><code>InputBindingSerializationTest</code>, <code>BindingParseErrorTest</code>, <code>InputActionSerializationTest</code>, <code>ActionMapSerializationTest</code>, <code>FullConfigSerializationTest</code></td></tr>
 <tr><td><code>tests/engine/physics/PhysicsTests.cpp</code></td><td><code>PhysicsTest</code>; <code>PhysicsMassTest</code> <span class="badge">PR #26</span>. Compiled only with PhysX.</td></tr>
 <tr><td><code>tests/engine/prefabs/PrefabTests.cpp</code></td><td><code>UUIDSerializationTest</code>, <code>GameObjectSerializationTest</code>, <code>PrefabSerializationTest</code>, <code>PrefabParseErrorTest</code></td></tr>
+<tr><td><code>tests/engine/sceneManagement/HierarchyLifetimeTests.cpp</code> <span class="badge">PR #34</span></td><td><code>HierarchyLifetimeTest</code> (RemoveChild re-rooting, objects moving between scenes, SetParent to a descendant, components removing themselves from teardown callbacks)</td></tr>
 <tr><td><code>tests/engine/sceneManagement/LifecycleTests.cpp</code></td><td><code>LifecycleTest</code>, <code>ActiveHierarchyTest</code>, <code>SceneManagerTest</code></td></tr>
 <tr><td><code>tests/engine/sceneManagement/SceneStorageTests.cpp</code> <span class="badge">PR #28</span></td><td><code>SceneStorageTest</code></td></tr>
 <tr><td><code>tests/engine/sceneManagement/SceneSwitchTests.cpp</code></td><td><code>SceneSwitchTest</code></td></tr>
@@ -119,14 +120,20 @@
 <tr><td><code>tests/engine/scripting/LuaRobustnessTests.cpp</code></td><td><code>LuaRobustnessTest</code></td></tr>
 <tr><td><code>tests/engine/scripting/LuaSceneTests.cpp</code></td><td><code>LuaSceneTest</code>, <code>LuaProjectSceneTest</code></td></tr>
 <tr><td><code>tests/engine/scripting/LuaHandleTests.cpp</code> <span class="badge">PR #29</span></td><td><code>LuaHandleTest</code></td></tr>
+<tr><td><code>tests/engine/scripting/LuaInputHandleTests.cpp</code> <span class="badge">PR #31</span></td><td><code>LuaInputHandleTest</code> (ActionMap and InputAction handles)</td></tr>
+<tr><td><code>tests/engine/serialization/ComponentRoundTripTests.cpp</code> <span class="badge">PR #34</span></td><td><code>ComponentRoundTripTest</code> (built-in components survive a scene round trip; unknown types warn)</td></tr>
 <tr><td><code>tests/engine/serialization/SerializationRobustnessTests.cpp</code></td><td><code>SerializationReferencesTest</code>, <code>SceneLoadingTest</code>, <code>ResourceLoaderTest</code>, <code>ResourcePathTest</code>, <code>ResourcesTest</code>, <code>AudioAssetReferenceTest</code></td></tr>
+<tr><td><code>tests/math/math_types/FunctionsTests.cpp</code> <span class="badge">PR #34</span></td><td><code>FunctionsTest</code></td></tr>
 <tr><td><code>tests/math/math_types/QuaternionTests.cpp</code></td><td><code>QuaternionTest</code></td></tr>
-<tr><td><code>tests/math/math_types/SimdDispatchTests.cpp</code> <span class="badge">PR #27</span></td><td><code>SimdLevels/SimdDispatchTest</code> (each case compares SSE2, SSE4.1 and AVX against scalar)</td></tr>
+<tr><td><code>tests/math/math_types/SimdDispatchTests.cpp</code> <span class="badge">PR #27</span></td><td><code>SimdLevels/SimdDispatchTest</code> (each case compares SSE2, SSE4.1 and AVX against scalar; <code>Vector4</code> cases since <span class="badge">PR #30</span>)</td></tr>
 <tr><td><code>tests/editor-server/EngineHealthProtocolTests.cpp</code></td><td><code>EngineHealthProtocolTest</code></td></tr>
+<tr><td><code>tests/editor-server/BufferReaderTests.cpp</code> <span class="badge">PR #33</span></td><td><code>BufferReaderTest</code></td></tr>
+<tr><td><code>tests/editor-server/CommandQueueTests.cpp</code> <span class="badge">PR #33</span></td><td><code>CommandQueueTest</code></td></tr>
+<tr><td><code>tests/editor-server/EditorServerHardeningTests.cpp</code> <span class="badge">PR #33</span></td><td><code>EditorServerLimitsTest</code>, <code>EditorServerErrorsTest</code>, <code>EditorServerNoSceneTest</code>, <code>DeleteSceneTest</code>, <code>EditorServerSocketTest</code> (Windows only)</td></tr>
 </tbody>
 </table>
 </div>
-<p class="src">Source: <code>tests/</code> on the integration branch (master plus PRs #26–#29)</p>
+<p class="src">Source: <code>tests/</code> on <code>master</code></p>
 
 <h2 id="running">Building and running</h2>
 <p>Two CMake options matter for tests:</p>
@@ -144,30 +151,42 @@
 cmake --build build --config Debug --parallel
 ctest --test-dir build --build-config Debug --output-on-failure
 </code></pre>
-<p>Executables land in <code>build/bin/Debug/</code>. To run part of one:</p>
+<p>Executables land in <code>build/bin/&lt;Config&gt;/</code> (<code>build/bin/Debug/</code> here). For a Release build, pass <code>--config Release</code> to the build and <code>--build-config Release</code> to CTest; the test executables, the editor host and the copied PhysX DLLs are then in <code>build/bin/Release/</code>. To run part of one:</p>
 <pre class="lang-shell"><code>build/bin/Debug/engine_tests.exe --gtest_filter=CoreRobustnessTest.*
 build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repeat=3
 </code></pre>
 <div class="callout note">
 <p class="callout-title">Note</p>
-<p>Debug builds define <code>N2ENGINE_DEBUG</code>, but tests never call <code>Application::Init</code>, so the debug console subscriber is not installed and engine log output is not printed during tests unless a test subscribes to <code>Logger::logEvent</code>.</p>
+<p>Debug builds define <code>N2ENGINE_DEBUG</code> (Release builds do not, and define <code>NDEBUG</code>, so <code>assert</code> is compiled out). Tests never call <code>Application::Init</code>, so the debug console subscriber is not installed and engine log output is not printed during tests unless a test subscribes to <code>Logger::logEvent</code>.</p>
 </div>
 
 <h2 id="ci">CI</h2>
-<p><code>.github/workflows/tests.yml</code> ("Tests") runs on pushes to <code>master</code>, on every pull request, and on manual dispatch. It has one job, <code>windows (PhysX ON|OFF)</code>, on <code>windows-latest</code> with a 90-minute timeout, as a matrix over <code>physx: [ON, OFF]</code> with <code>fail-fast: false</code>. The OFF leg keeps the no-physics build compiling and running.</p>
+<p><code>.github/workflows/tests.yml</code> ("Tests") runs on pushes to <code>master</code>, on every pull request, and on manual dispatch. It has one job on <code>windows-latest</code> with a 90-minute timeout and <code>fail-fast: false</code>, run as three matrix legs named <code>windows (&lt;config&gt;, PhysX &lt;ON|OFF&gt;)</code>:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Configuration</th><th>PhysX</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Debug</td><td>ON</td><td>The main leg: everything enabled, assertions on.</td></tr>
+<tr><td>Debug</td><td>OFF</td><td>Keeps the no-physics build compiling and running (the engine then has no physics backend).</td></tr>
+<tr><td>Release</td><td>ON</td><td>Catches problems that only show with optimisation and <code>NDEBUG</code>: compiled-out asserts, optimised SIMD code paths, and library defaults that differ by configuration (sol2 turns its safety checks off in Release unless <code>SOL_ALL_SAFETIES_ON</code> is defined, which <code>engine/CMakeLists.txt</code> now does).</td></tr>
+</tbody>
+</table>
+</div>
+<p>Release runs with PhysX because the <code>physx-dependencies</code> archive contains both <code>debug/</code> and <code>release/</code> folders under <code>win.x86_64.vc143.mt/</code>; the root <code>CMakeLists.txt</code> picks the folder from the configuration (<code>PHYSX_LIB_DIR</code>, <code>$&lt;LOWER_CASE:$&lt;CONFIG&gt;&gt;</code>), and the engine links from <code>debug</code> or <code>release</code>. Release × PhysX OFF is not run: the OFF leg only checks that the code compiles and runs without a backend, which does not depend on the configuration. Only Debug and Release are supported with PhysX; <code>RelWithDebInfo</code> and <code>MinSizeRel</code> would look for DLLs in folders the archive does not have.</p>
+<p>Each leg runs these steps:</p>
 <ol class="steps">
 <li>Check out the repository.</li>
 <li>Install the Vulkan SDK (headers and libraries only; no runtime).</li>
-<li>PhysX ON only: restore the cached <code>external/PhysX/physx/bin</code>.</li>
+<li>PhysX ON only: restore the cached <code>external/PhysX/physx/bin</code>. The cache key is not per configuration, because the one archive holds both configurations.</li>
 <li>Configure: <code>cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=&lt;matrix&gt;</code>.</li>
-<li>Build the <strong>Debug</strong> configuration.</li>
-<li>Test: <code>ctest --test-dir build --build-config Debug --output-on-failure</code> with <code>ALSOFT_DRIVERS=null</code>, which routes OpenAL Soft to its silent null backend because the runner has no sound card.</li>
-<li>Editor host smoke test (below).</li>
+<li>Build the leg's configuration: <code>cmake --build build --config &lt;Debug|Release&gt; --parallel</code>.</li>
+<li>Test: <code>ctest --test-dir build --build-config &lt;Debug|Release&gt; --output-on-failure</code> with <code>ALSOFT_DRIVERS=null</code>, which routes OpenAL Soft to its silent null backend because the runner has no sound card.</li>
+<li>Editor host smoke test (below), against the leg's build.</li>
 </ol>
 <h3 id="smoke-test">Editor host smoke test</h3>
 <p>A PowerShell step exercises the real <code>N2EditorHost.exe</code> end to end. The runner has no GPU, so the host's window fails and it serves without one; this checks that path too.</p>
 <ol class="steps">
-<li>Start <code>build/bin/Debug/N2EditorHost.exe --port 9999</code>, capturing stdout and stderr.</li>
+<li>Start <code>build/bin/&lt;Debug|Release&gt;/N2EditorHost.exe --port 9999</code>, capturing stdout and stderr. The host binds to 127.0.0.1 by default <span class="badge">PR #33</span>, which is where the test connects.</li>
 <li>Connect to 127.0.0.1:9999, retrying every 500 ms up to 120 times; fail if it never accepts.</li>
 <li>Send <code>GetEngineHealth</code> (0x50, zero-length payload). Expect a 0x09 response, read its payload, print its size and the <code>healthy</code> byte. Unhealthy is not a failure; a wrong response type is.</li>
 <li>Send <code>Shutdown</code> (0xFF). Expect an <code>Ok</code> (0x00) response.</li>
@@ -203,7 +222,7 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 
 <div class="callout note">
 <p class="callout-title">Note</p>
-<p>Math types work without <code>Math::InitializeSIMD()</code>: <code>Vector3</code>, <code>Quaternion</code> and the 3×3/4×4 float matrices default to their scalar implementations (PR #24). Tests should not need to initialise SIMD, and should not leave a non-scalar tier selected.</p>
+<p>Math types work without <code>Math::InitializeSIMD()</code>: <code>Vector3</code>, <code>Quaternion</code> and the 3×3/4×4 float matrices default to their scalar implementations (PR #24), and so does <code>Vector4</code> <span class="badge">PR #30</span>. Tests should not need to initialise SIMD, and should not leave a non-scalar tier selected.</p>
 </div>
 
 <h2 id="not-headless">What cannot be tested headless</h2>
@@ -213,7 +232,7 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 <li><strong>Renderers.</strong> OpenGL, Vulkan and software renderers need a context; <code>renderer_tests</code> is a placeholder. <code>RenderEditorFrame</code> and the editor's <code>RenderFrame</code> command are untested.</li>
 <li><strong>Real input devices.</strong> Keyboard, mouse and gamepad state come from GLFW; tests use fake bindings.</li>
 <li><strong>Audible output.</strong> The null OpenAL backend accepts playback but produces nothing to check.</li>
-<li><strong>The editor server's command handlers.</strong> Only the <code>GetEngineHealth</code> encoding has unit tests; the smoke test covers <code>GetEngineHealth</code> and <code>Shutdown</code> over a real socket.</li>
+<li><strong>The editor server's rendering commands.</strong> Command handlers, payload and viewport limits, <code>DeleteScene</code> path checks and the command queue have unit tests, and on Windows <code>EditorServerSocketTest</code> drives a real loopback socket <span class="badge">PR #33</span>. <code>RenderFrame</code> needs a GL context and is untested. The CI smoke test covers <code>GetEngineHealth</code> and <code>Shutdown</code> against the real executable.</li>
 </ul>
 
 <h2 id="line-endings">Line endings</h2>
@@ -239,7 +258,7 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 <li>Name suites <code>&lt;Thing&gt;Test</code> and cases as a sentence describing the behaviour (<code>ParentingARootRemovesItFromTheRoots</code>). Other pages cite these names, so a good name documents the guarantee.</li>
 <li>Do not call <code>Application::Init</code>. Set up only what you need using the <a href="#conventions">fixtures above</a>; guard PhysX-dependent files with <code>#ifdef N2ENGINE_PHYSX_ENABLED</code> so the PhysX OFF leg still builds.</li>
 <li>Leave shared singletons as you found them: unique scene names, distinct Lua globals, restored Logger settings, scalar SIMD, physics backend removed.</li>
-<li>Build and run locally with <code>--gtest_filter</code> and, for anything touching shared state, <code>--gtest_repeat=2</code>. CI then runs it in both PhysX legs.</li>
+<li>Build and run locally with <code>--gtest_filter</code> and, for anything touching shared state, <code>--gtest_repeat=2</code>. CI then runs it in all three legs (Debug with and without PhysX, Release with PhysX), so do not rely on <code>assert</code> for checks the test needs.</li>
 </ol>
 <pre class="lang-cpp"><code>#include &lt;gtest/gtest.h&gt;
 
@@ -264,7 +283,7 @@ TEST(MyFeatureTest, AddedRootCanBeFoundByUUID)
 <p class="src">Source: <code>tests/engine/CMakeLists.txt</code>; conventions from <code>tests/engine/**</code></p>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 

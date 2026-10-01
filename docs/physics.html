@@ -184,11 +184,11 @@ body-&gt;AddImpulse(Vector3::Up); // no effect: there is no body yet
 
 <h3 id="scene-switch">Scene switches</h3>
 <p>Unloading a scene destroys its components, which releases their bodies. A dynamic body from the previous scene stops simulating and its Rigidbody's handle becomes invalid.</p>
-<div class="callout warning">
-<p class="callout-title">Warning</p>
-<p>Every scene load or switch rebuilds the scene from its JSON snapshot (the only exception is the scene object itself passed to <code>SceneManager::AddScene(scene, true)</code>, which is loaded as-is the first time), and <code>Rigidbody</code> is not registered with the component registry, so deserialisation silently drops it (see <a href="#open-questions">Open questions</a> and <a href="serialization.html">Serialization</a>). After a reload a physics object comes back with only its colliders, each on its own static body: it no longer falls, moves or responds to forces, and nothing is logged. Re-add the Rigidbody from code after loading.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee: Rigidbody survives scene loads <span class="badge">PR #34</span></p>
+<p>Every scene load or switch rebuilds the scene from its JSON snapshot (the only exception is the scene object itself passed to <code>SceneManager::AddScene(scene, true)</code>, which is loaded as-is the first time). <code>Rigidbody</code> and the three colliders are registered with the component registry as built-in components, so a reloaded physics object gets its Rigidbody back with its body type, mass and gravity flag, and a new body is created at the next attach. Before PR #34 the Rigidbody was not registered and was silently dropped, leaving collider-only static bodies.</p>
 </div>
-<p class="src">Tests: <code>SceneSwitchReleasesDynamicBodies</code>. See <a href="scenes.html">Scenes &amp; SceneManager</a>.</p>
+<p class="src">Source: <code>engine/src/serialization/BuiltinComponents.cpp</code> — <code>RegisterBuiltinComponents</code>; tests: <code>SceneSwitchReleasesDynamicBodies</code>, <code>RigidbodyAndItsSettingsSurviveASceneLoad</code>. See <a href="scenes.html">Scenes &amp; SceneManager</a> and <a href="serialization.html#component-registry">Serialization</a>.</p>
 
 <h2 id="body-types">Body types</h2>
 <p><code>BodyType</code> is <code>Dynamic</code> (the default), <code>Kinematic</code> or <code>Static</code>. It serialises as the strings <code>"Static"</code>, <code>"Dynamic"</code>, <code>"Kinematic"</code>.</p>
@@ -421,7 +421,7 @@ const int count = Physics::Raycast::All(origin, direction, hits, 50.0f); // near
 </div>
 
 <h2 id="mass">Mass, inertia and centre of mass <span class="badge">PR #26</span></h2>
-<p>The Rigidbody's mass is authoritative, as in Unity. The backend stores it per body. Inertia tensor and centre of mass come from the body's <strong>simulation</strong> shapes at uniform density, rescaled to that mass, via <code>PxRigidBodyExt::setMassAndUpdateInertia(actor, mass, nullptr, false)</code>. Trigger shapes are excluded (<code>includeNonSimShapes = false</code>), so a sensor does not make its body heavier or lopsided.</p>
+<p>The Rigidbody's mass is authoritative, as in Unity (see the <a href="#design-mass">design decision</a> below). The backend stores it per body. Inertia tensor and centre of mass come from the body's <strong>simulation</strong> shapes at uniform density, rescaled to that mass, via <code>PxRigidBodyExt::setMassAndUpdateInertia(actor, mass, nullptr, false)</code>. Trigger shapes are excluded (<code>includeNonSimShapes = false</code>), so a sensor does not make its body heavier or lopsided.</p>
 <ul>
 <li><strong>Fallback.</strong> With no simulation shapes (or if PhysX's call fails), the body keeps its mass, its centre of mass is the actor origin, and its inertia is <code>PxVec3(mass)</code> (a unit radius of gyration, so it scales with mass; PhysX's own default would be (1, 1, 1) whatever the mass).</li>
 <li><strong>Invalid mass.</strong> <code>Rigidbody::SetMass</code> clamps values &lt;= 0 to 0.001 with a warning. A value that bypasses it (deserialised <code>_mass</code>, or NaN, which fails the <code>&lt;= 0</code> test) is sanitised in the backend: a zero, negative or non-finite mass becomes 1, with the warning "Invalid Rigidbody mass {m}, using 1".</li>
@@ -436,6 +436,11 @@ body-&gt;SetMass(2.0f);
 box-&gt;SetOffset(Vector3(0.0f, 1.0f, 0.0f)); // centre of mass moves to (0, 1, 0); mass stays 2
 </code></pre>
 <p class="src">Source: <code>PhysXBackend::UpdateMassProperties</code>, <code>SanitizedMass</code>, <code>SetMass</code>, <code>GetInertiaTensor</code>, <code>GetCenterOfMass</code>; <code>Rigidbody::SetMass</code>, <code>Rigidbody::GetMass</code>; tests (<code>PhysicsMassTest</code>): <code>BodyWithoutCollidersKeepsItsMass</code>, <code>InertiaAndCenterFollowBoxSizeAndOffset</code>, <code>ChangingMassScalesInertia</code>, <code>LongBoxHasLessInertiaAboutItsLongAxis</code>, <code>CapsuleHasLeastInertiaAboutItsAxis</code>, <code>InvalidDeserializedMassFallsBackToOne</code>, <code>OffsetColliderMovesCenterOfMass</code>, <code>TriggerColliderDoesNotAffectMassProperties</code>, <code>ChangingBodyTypeKeepsMassProperties</code></p>
+
+<div class="callout note" id="design-mass">
+<p class="callout-title">Design decision: mass is authoritative, inertia comes from the shapes</p>
+<p>The mass is the number a user sets and tunes on the Rigidbody, so the engine never replaces it with a value derived from collider volume and density: resizing a collider must not make an object heavier and change how it reacts to forces and impulses. Inertia and centre of mass, on the other hand, are hard to author by hand and depend on shape, so they are derived from the simulation shapes and rescaled to the chosen mass. A long box then spins more easily about its long axis and an offset collider moves the centre of mass, as in Unity's default behaviour. Trigger shapes are left out because they are sensors, not matter.</p>
+</div>
 
 <div class="callout guarantee">
 <p class="callout-title">Guarantee <span class="badge">PR #26</span></p>
@@ -466,16 +471,12 @@ box-&gt;SetOffset(Vector3(0.0f, 1.0f, 0.0f)); // centre of mass moves to (0, 1, 
 <p><code>PhysXBackend::ForgetPairsWithBody</code> queues an Exit for every pair of a destroyed body, but <code>DispatchToBody</code> skips the destroyed side because its handle no longer resolves. That is correct when the GameObject is destroyed. When the GameObject survives and only its body is re-created (<code>Rigidbody::SetBodyType</code>, adding a Rigidbody to a collider-only object, removing a Rigidbody), its components get no Exit for the old body, then a new Enter once PhysX reports the new body's touch. Enter/Exit counters on that object become unbalanced. The tests cover only the other side.</p>
 </div>
 <div class="callout open-question">
-<p class="callout-title">Open question: Rigidbody is not registered for deserialisation</p>
-<p><code>BoxCollider</code>, <code>SphereCollider</code> and <code>CapsuleCollider</code> use <code>REGISTER_COMPONENT</code>, but <code>engine/src/physics/Rigidbody.cpp</code> does not, so <code>ComponentRegistry::Create("Rigidbody")</code> returns null. Rigidbody registers its serialisable members (<code>_bodyType</code>, <code>_mass</code>, <code>_gravityEnabled</code>), so it looks intended to be saved. There is no other path: <code>GameObject::Deserialize</code> creates components only through the registry and silently skips unknown types, so every scene load or switch drops every Rigidbody. Objects come back with collider-only static bodies and nothing is logged (see <a href="#scene-switch">Scene switches</a> and <a href="serialization.html">Serialization</a>).</p>
-</div>
-<div class="callout open-question">
 <p class="callout-title">Open question: raycast collider identity</p>
 <p><code>PhysXBackend::FillRaycastHit</code> (and the same logic in <code>SphereCast</code>) leaves <code>RaycastHit::collider</code> null for bodies with a Rigidbody and reports the body's first collider otherwise, even though the hit shape's <code>userData</code> names the exact collider (as the event code uses). It is unclear whether this is deliberate.</p>
 </div>
 
 <div class="page-footer">
-<span>Describes master plus PRs #26–#29.</span>
+<span>Describes master through PR #34.</span>
 <a href="index.html">Back to overview</a>
 </div>
 
