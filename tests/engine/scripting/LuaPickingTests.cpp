@@ -194,6 +194,10 @@ TEST_F(LuaPickingTest, RayAndScreenPointToRay)
     EXPECT_NEAR(Eval<float>("picking_camera:ScreenPointToRay(400, 300, 800, 600).direction.z"), -1.0f, 1e-3f);
     // Without a window the viewport is empty: the centre ray
     EXPECT_NEAR(Eval<float>("picking_camera:ScreenPointToRay(0, 0).origin.x"), 0.0f, 1e-3f);
+    // A lone width (or height) is a mistake, not a request for the window's size
+    EXPECT_FALSE(Lua().safe_script("return picking_camera:ScreenPointToRay(0, 0, 800)", sol::script_pass_on_error).valid());
+    EXPECT_FALSE(
+        Lua().safe_script("return picking_camera:ScreenPointToRay(0, 0, nil, 600)", sol::script_pass_on_error).valid());
     Lua()["picking_camera"] = sol::lua_nil;
 }
 

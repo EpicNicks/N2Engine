@@ -1069,7 +1069,7 @@ Physics = {}
 ---A zero direction or a negative distance hits nothing.
 ---@param origin Vector3
 ---@param direction Vector3 normalised internally
----@param maxDistance number|nil default (and for math.huge): 1e9
+---@param maxDistance number|nil default and maximum (longer ones, math.huge included, are clamped): 1e9
 ---@param layerMask integer|nil default: Layers.DefaultRaycastMask (every layer except Ignore Raycast); Layers.AllLayers or -1 for every layer
 ---@return RaycastHit|nil
 function Physics.Raycast(origin, direction, maxDistance, layerMask) end
@@ -1832,8 +1832,9 @@ function Camera:GetFOV() end
 
 ---The ray through a screen point, from the near plane away from the camera (unit direction). Takes window
 ---coordinates (top-left origin, y down), as Input.GetMousePosition returns. The viewport defaults to the
----window's size; pass width and height to use another.
----  local ray = Camera.Main():ScreenPointToRay(Input.GetMousePosition().x, Input.GetMousePosition().y)
+---window's size; pass both width and height to use another (only one of them is an error).
+---  local mouse = Input.GetMousePosition()
+---  local ray = Camera.Main():ScreenPointToRay(mouse.x, mouse.y)
 ---  local hit = Physics.Raycast(ray.origin, ray.direction, 100)
 ---@param x number
 ---@param y number

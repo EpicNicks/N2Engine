@@ -6,6 +6,8 @@
 
 #include <math/Ray.hpp>
 
+#include <stdexcept>
+
 namespace N2Engine::Scripting::Bindings
 {
     void BindCamera(LuaRuntime& runtime)
@@ -94,10 +96,15 @@ namespace N2Engine::Scripting::Bindings
             "GetFOV", &Camera::GetFOV,
 
             // Camera:ScreenPointToRay(x, y[, width, height]): the ray through a point in window coordinates
-            // (top-left origin, y down, as Input.GetMousePosition). The viewport defaults to the window's size.
+            // (top-left origin, y down, as Input.GetMousePosition). The viewport defaults to the window's size;
+            // giving only one of width and height is an error.
             "ScreenPointToRay", [](const Camera& cam, const float x, const float y,
                                    const sol::optional<int> width, const sol::optional<int> height)
             {
+                if (width.has_value() != height.has_value())
+                {
+                    throw std::runtime_error("Camera:ScreenPointToRay: pass both width and height, or neither");
+                }
                 Vector2i viewport = Application::GetInstance().GetWindow().GetWindowDimensions();
                 if (width && height)
                 {

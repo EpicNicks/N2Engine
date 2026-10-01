@@ -11,6 +11,7 @@
 #include "engine/physics/Raycast.hpp"
 #include "engine/Layers.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -92,13 +93,13 @@ namespace N2Engine::Scripting::Bindings
             uint32_t layerMask;
         };
 
-        // What an omitted or infinite distance becomes: PhysX takes a finite distance ([0, inf)), and one far
-        // beyond any scene keeps its internal arithmetic clear of overflow
-        constexpr float DefaultLuaRayDistance = 1.0e9f;
+        // The default and the longest distance: PhysX takes a finite distance ([0, inf)), and one far beyond
+        // any scene but well below the float limit keeps its internal arithmetic clear of overflow
+        constexpr float MaxLuaRayDistance = 1.0e9f;
 
         // The optional arguments of Physics.Raycast/RaycastAll, or nothing for a query that can't hit: a zero
-        // or non-finite direction, or a negative or NaN distance. The mask is cut to 32 bits, so -1 means
-        // every layer.
+        // or non-finite direction, or a negative or NaN distance. Longer distances (math.huge included) are
+        // clamped to MaxLuaRayDistance. The mask is cut to 32 bits, so -1 means every layer.
         std::optional<LuaRayQuery> ReadRayQuery(const Math::Vector3 &direction, const sol::optional<float> maxDistance,
                                                 const sol::optional<int64_t> layerMask)
         {
@@ -107,17 +108,14 @@ namespace N2Engine::Scripting::Bindings
             {
                 return std::nullopt;
             }
-            float distance = maxDistance.value_or(DefaultLuaRayDistance);
+            const float distance = maxDistance.value_or(MaxLuaRayDistance);
             if (!(distance >= 0.0f))
             {
                 return std::nullopt;
             }
-            if (std::isinf(distance))
-            {
-                distance = DefaultLuaRayDistance;
-            }
             const int64_t mask = layerMask.value_or(static_cast<int64_t>(Layers::DefaultRaycastMask));
-            return LuaRayQuery{distance, static_cast<uint32_t>(static_cast<uint64_t>(mask) & 0xFFFFFFFFu)};
+            return LuaRayQuery{(std::min)(distance, MaxLuaRayDistance),
+                               static_cast<uint32_t>(static_cast<uint64_t>(mask) & 0xFFFFFFFFu)};
         }
     }
 
