@@ -1,6 +1,7 @@
 #include "math/MathRegistrar.hpp"
 
 #include "math/Vector3.hpp"
+#include "math/Vector4.hpp"
 #include "math/Quaternion.hpp"
 #include "math/Matrix.hpp"
 #include "math/CpuInfo.hpp"
@@ -56,6 +57,7 @@ void N2Engine::Math::InitializeSIMD()
 void N2Engine::Math::SetSIMDLevel(const SIMDLevel level)
 {
     Vector3::SetSIMDLevel(level);
+    Vector4::SetSIMDLevel(level);
     Quaternion::SetSIMDLevel(level);
     Matrix<float, 4, 4>::SetSIMDLevel(level);
     Matrix<float, 3, 3>::SetSIMDLevel(level);
