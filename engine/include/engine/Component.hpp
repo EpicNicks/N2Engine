@@ -89,6 +89,29 @@ namespace N2Engine
 
         virtual void OnTriggerExit(Physics::Trigger trigger) {}
 
+        // Pointer events (Unity's OnMouse* messages), sent by Input::PointerDispatcher before Update to every
+        // component of the object under the pointer (left button only); see docs/input.html#picking
+        /// The pointer moved onto this object
+        virtual void OnMouseEnter() {}
+
+        /// Every frame the pointer is over this object (also the frame it entered)
+        virtual void OnMouseOver() {}
+
+        /// The pointer moved off this object
+        virtual void OnMouseExit() {}
+
+        /// The left button was pressed over this object
+        virtual void OnMouseDown() {}
+
+        /// Every frame the left button stays held after a Down on this object, wherever the pointer is
+        virtual void OnMouseDrag() {}
+
+        /// The left button was released after a Down on this object, wherever the pointer is
+        virtual void OnMouseUp() {}
+
+        /// The left button was released over this object after a Down on it (a click); comes before OnMouseUp
+        virtual void OnMouseUpAsButton() {}
+
         [[nodiscard]] bool IsDestroyed() const;
         /// Expires when this component is freed (for references that must not dangle, e.g. from Lua)
         [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime; }

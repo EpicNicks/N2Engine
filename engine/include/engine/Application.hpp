@@ -8,6 +8,7 @@
 #include "engine/Camera.hpp"
 #include "engine/Health.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
+#include "engine/input/PointerDispatcher.hpp"
 
 namespace N2Engine
 {
@@ -19,6 +20,7 @@ namespace N2Engine
         Window _window;
         std::unique_ptr<Camera> _mainCamera;
         std::unique_ptr<Physics::IPhysicsBackend> _3DphysicsBackend = nullptr;
+        Input::PointerDispatcher _pointerDispatcher;
         EngineHealth _health;
         bool _quitRequested = false;
         bool _initialized = false; // from Init until Shutdown
@@ -51,6 +53,8 @@ namespace N2Engine
 
         [[nodiscard]] Camera* GetMainCamera() const;
         Window& GetWindow();
+        /// Sends OnMouse* to the object under the pointer; Run updates it each frame before Scene::Update
+        Input::PointerDispatcher& GetPointerDispatcher() { return _pointerDispatcher; }
 
         void OnWindowResize(int width, int height) const;
 
