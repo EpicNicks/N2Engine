@@ -39,7 +39,8 @@ namespace N2Engine::Math::Functions
 
     inline float MoveTowards(float current, float target, float maxDelta)
     {
-        std::abs(target - current) <= maxDelta
+        // The result used to be discarded (no return), so callers got an undefined value
+        return std::abs(target - current) <= maxDelta
             ? target
             : current + ((target > current) ? maxDelta : -maxDelta);
     }
