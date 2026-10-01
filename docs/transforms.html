@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transforms · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html" aria-current="page">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Transforms</h1>
+<p class="lead">A GameObject's spatial state lives in an optional <code>Positionable</code>, which stores the local transform and computes the world transform lazily from its parent. This page covers local vs world access, how world values are derived, dirty tracking, reparenting with <code>keepWorldPosition</code>, edge cases with zero or tiny scale, and how transform changes reach physics.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#positionable">Positionable and Transform</a></li>
+<li><a href="#local-world">Local and world values</a></li>
+<li><a href="#world-computation">How the world transform is computed</a></li>
+<li><a href="#setting-world">Setting world values</a></li>
+<li><a href="#dirty-tracking">Dirty tracking</a></li>
+<li><a href="#reparenting">Reparenting and keepWorldPosition</a></li>
+<li><a href="#physics-sync">Transform and physics</a></li>
+<li><a href="#matrix-math">Matrix math before InitializeSIMD</a></li>
+</ol>
+</div>
+
+<h2 id="positionable">Positionable and Transform</h2>
+<p>Unlike Unity, a GameObject has no transform by default. <code>GameObject::CreatePositionable()</code> creates one (no-op if present); <code>GetPositionable()</code> returns <code>nullptr</code> until then, and <code>HasPositionable()</code> tells which. Some components create one on demand: <code>Rigidbody::OnAttach</code> and <code>ICollider::OnAttach</code> call <code>CreatePositionable()</code> if the object has none. A Positionable starts at the identity (position 0, identity rotation, scale 1).</p>
+<p><code>Transform</code> is a value type holding position, rotation (<code>Math::Quaternion</code>), scale and a cached TRS matrix. Its setters and <code>GetMatrix()</code> are private (only <code>Positionable</code> uses them). Outside code can read a Transform and obtain one from <code>Transform::Identity()</code>, <code>Transform::Combine</code>, or <code>Positionable::GetLocalTransform()</code>/<code>GetGlobalTransform()</code>, but cannot build an arbitrary one; <code>Positionable::SetLocalTransform</code> is therefore mainly useful to copy one object's local transform to another.</p>
+<p class="src">Source: <code>engine/include/engine/Positionable.hpp</code>; <code>engine/include/engine/Transform.hpp</code>; <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::CreatePositionable</code></p>
+
+<h2 id="local-world">Local and world values</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Space</th><th>Getters</th><th>Setters</th></tr></thead>
+<tbody>
+<tr><td>Local (relative to the parent's Positionable)</td><td><code>GetLocalPosition</code>, <code>GetLocalRotation</code>, <code>GetLocalScale</code>, <code>GetLocalTransform</code></td><td><code>SetLocalPosition</code>, <code>SetLocalRotation</code>, <code>SetLocalScale</code>, <code>SetLocalPositionAndRotation</code>, <code>SetLocalTransform</code></td></tr>
+<tr><td>World</td><td><code>GetPosition</code>, <code>GetRotation</code>, <code>GetScale</code>, <code>GetGlobalTransform</code>, <code>GetLocalToWorldMatrix</code>, <code>GetWorldToLocalMatrix</code></td><td><code>SetPosition</code>, <code>SetRotation</code>, <code>SetScale</code>, <code>SetPositionAndRotation</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Direction helpers (<code>GetForward</code>, <code>GetBack</code>, <code>GetLeft</code>, <code>GetRight</code>, <code>GetUp</code>, <code>GetDown</code>) rotate the corresponding <code>Vector3</code> constant by the world rotation. <code>TransformPoint</code>/<code>InverseTransformPoint</code> use the full local-to-world matrix (and its inverse); <code>TransformDirection</code>/<code>InverseTransformDirection</code> use the world rotation only, ignoring scale.</p>
+<p>Local setters only do work if the new value differs (exact <code>!=</code> comparison); setting the same value does not dirty anything or notify physics. Only the local transform is serialized (<code>localPosition</code>, <code>localRotation</code>, <code>localScale</code>).</p>
+<p>From Lua, the <code>Positionable</code> handle exposes the world getters and setters (<code>GetPosition</code>/<code>SetPosition</code>, rotation, scale) and <code>GetForward</code>/<code>GetRight</code>/<code>GetUp</code>, but no local-space accessors; see <a href="scripting-lua.html">Lua scripting</a>.</p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>"Parent" here means the parent GameObject's Positionable. If the direct parent has no Positionable, the object is treated as a root for transform purposes (world = local), even if a grandparent has one: the lookup does not skip levels.</p>
+</div>
+<p class="src">Source: <code>engine/src/Positionable.cpp</code> — <code>GetParentPositionable</code>, <code>SetLocalPosition</code>, <code>TransformPoint</code>, <code>TransformDirection</code>, <code>Serialize</code>; <code>engine/src/scripting/bindings/LuaCoreBindings.cpp</code> — <code>BindCore</code></p>
+
+<h2 id="world-computation">How the world transform is computed</h2>
+<p><code>Transform::Combine(parentWorld, childLocal)</code>:</p>
+<ul>
+<li>position = parentPos + parentRot × (parentScale ⊙ childPos)</li>
+<li>rotation = parentRot × childRot</li>
+<li>scale = parentScale ⊙ childScale (component-wise)</li>
+</ul>
+<p>The position and rotation match the TRS matrix (<code>GetLocalToWorldMatrix</code>). The world scale is a component-wise product, so under a rotated parent with non-uniform scale it is an approximation (the true matrix has shear, which a Transform cannot represent), similar to Unity's <code>lossyScale</code>.</p>
+<p>The world transform is computed on demand and cached: a world getter recomputes only if the cache is dirty, recursively asking the parent for its (possibly recomputed) world transform.</p>
+<p class="src">Source: <code>engine/src/Transform.cpp</code> — <code>Transform::Combine</code>, <code>Transform::BuildMatrix</code>; <code>engine/src/Positionable.cpp</code> — <code>CalculateGlobalTransform</code>, <code>UpdateGlobalTransform</code></p>
+
+<h2 id="setting-world">Setting world values</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Setter</th><th>Converts to local by</th></tr></thead>
+<tbody>
+<tr><td><code>SetPosition(p)</code></td><td><code>parent-&gt;InverseTransformPoint(p)</code> (inverse of the parent's world matrix)</td></tr>
+<tr><td><code>SetRotation(r)</code></td><td><code>parentWorldRot.Inverse() * r</code></td></tr>
+<tr><td><code>SetScale(s)</code></td><td><code>s / parentWorldScale</code> per axis; on an axis where the parent's world scale is exactly 0, the current local value is kept</td></tr>
+<tr><td><code>SetPositionAndRotation(p, r)</code></td><td>Both of the above, applied as one change (one dirty/notify)</td></tr>
+</tbody>
+</table>
+</div>
+<p>With no parent Positionable, world setters write the local values directly.</p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p><code>SetScale</code> under a parent with a zero scale axis leaves the child's local scale on that axis unchanged (finite) and converts the other axes normally. Before PR #24 this divided by zero and produced NaN.</p>
+<p>Test: <code>SetScaleUnderAZeroParentAxisStaysFinite</code>.</p>
+</div>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p><code>SetPosition</code>, <code>SetPositionAndRotation</code> and <code>InverseTransformPoint</code> invert the parent's world matrix. The scalar inverse throws <code>std::runtime_error("Matrix is singular and cannot be inverted")</code> when <code>|det| &lt; 1e-7</code>. For a TRS matrix the determinant is the product of the three scale components, so this throws not only for a zero scale axis but also for a small uniform scale (below about 0.0046 per axis). <code>SetScale</code>'s zero-axis guard does not protect these calls.</p>
+</div>
+<p class="src">Source: <code>engine/src/Positionable.cpp</code> — <code>SetPosition</code>, <code>SetRotation</code>, <code>SetScale</code>, <code>SetPositionAndRotation</code>, <code>GetWorldToLocalMatrix</code>; <code>math/include/math/Matrix.hpp</code> — <code>InverseScalar</code>; tests: <code>CoreRobustnessTests</code></p>
+
+<h2 id="dirty-tracking">Dirty tracking</h2>
+<p>Each Positionable keeps a cached world transform and a dirty flag. Every effective local change calls <code>MarkGlobalTransformDirty</code>, which runs in this order:</p>
+<ol class="steps">
+<li>If the cache was clean, set the dirty flag and increment the hierarchy version counter.</li>
+<li>Notify physics on this object (<a href="#physics-sync">see below</a>). This happens <em>after</em> the flag is set, so a consumer that reads the world transform gets the new pose.</li>
+<li>Recurse into every child that has a Positionable.</li>
+</ol>
+<p>Steps 2 and 3 run on <em>every</em> change, even when the object was already dirty. <code>OnHierarchyChanged()</code> (called by <code>AddChild</code>/<code>RemoveChild</code>) does the same.</p>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>Always notifying was a deliberate decision in the PR #19 review. Before, physics was notified before the flag was set (so it read the stale pose), and a second move before any read took an early-out and never reached physics. The reviewer proposed restoring the early-out in the new order; it was kept as always-notify because the early-out relies on every notified consumer reading (and so cleaning) the transform, and <code>Rigidbody::OnTransformChanged</code> returns early for dynamic bodies without reading. A dynamic body would stay dirty, and if it were then switched to kinematic, its next move would be swallowed. The cost is that each change walks the whole subtree and scans each descendant's components, and <code>SyncTransforms</code> triggers this for every dynamic body each fixed step.</p>
+</div>
+
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p><code>Positionable</code> writes <code>_hierarchyVersion</code>, <code>_cachedHierarchyVersion</code> and <code>_globalTransformValid</code>, but nothing reads them and there is no accessor. They look like leftovers of a planned change-detection API; only <code>IsGlobalTransformDirty()</code> is public.</p>
+</div>
+<p class="src">Source: <code>engine/src/Positionable.cpp</code> — <code>MarkGlobalTransformDirty</code>, <code>MarkChildrenGlobalTransformDirty</code>, <code>OnHierarchyChanged</code>, <code>UpdateGlobalTransform</code>; PR #19 review thread</p>
+
+<h2 id="reparenting">Reparenting and keepWorldPosition</h2>
+<p><code>AddChild</code>, <code>RemoveChild</code> and <code>SetParent</code> take <code>keepWorldPosition</code> (default <code>true</code>). Hierarchy semantics are on <a href="gameobjects-components.html#hierarchy">GameObjects &amp; components</a>.</p>
+<ul>
+<li><strong><code>keepWorldPosition == true</code> and both child and parent have a Positionable:</strong> the child's world position, rotation and scale are read, the link is changed, <code>OnHierarchyChanged</code> dirties the child, then <code>SetPosition</code>, <code>SetRotation</code> and <code>SetScale</code> restore the world values (computing new local values).</li>
+<li><strong>Otherwise:</strong> the local values are kept and only <code>OnHierarchyChanged</code> runs, so the world pose changes to local-under-the-new-parent.</li>
+</ul>
+<p>When the parent has no Positionable, both choices give the same world pose (the child's world equals its local value).</p>
+<p><code>SetParent(newParent)</code> is <code>oldParent-&gt;RemoveChild(this, keep)</code> followed by <code>newParent-&gt;AddChild(this, keep)</code>, so with <code>keep</code> the world pose is restored twice (first as a parentless object, then under the new parent). Scene deserialization uses <code>AddChild(child, false)</code>: stored local values are kept as-is.</p>
+
+<pre class="lang-cpp"><code>// Attach a weapon to a hand bone without moving it in the world
+hand-&gt;AddChild(weapon);                 // keepWorldPosition = true
+
+// Snap it to the hand's local origin instead
+weapon-&gt;GetPositionable()-&gt;SetLocalPosition(N2Engine::Math::Vector3{0.0f, 0.0f, 0.0f});
+</code></pre>
+
+<div class="callout warning">
+<p class="callout-title">Warning</p>
+<p>With <code>keepWorldPosition</code> and a parent whose world matrix is singular (see <a href="#setting-world">Setting world values</a>), the restore's <code>SetPosition</code> throws inside <code>AddChild</code> after the child has already been linked to the parent, but before its scene is updated and before active-state notifications run. Pass <code>keepWorldPosition = false</code> when parenting under a zero- or tiny-scale object.</p>
+</div>
+
+<div class="callout note">
+<p class="callout-title">Note</p>
+<p>The restore is exact for position and rotation; scale goes through the component-wise conversion, so under rotated non-uniformly scaled parents the restored world scale follows the same approximation as <a href="#world-computation">Combine</a>.</p>
+</div>
+<p class="src">Source: <code>engine/src/gameobject/GameObject.cpp</code> — <code>GameObject::AddChild</code>, <code>RemoveChild</code>, <code>SetParent</code>, <code>Deserialize</code></p>
+
+<h2 id="physics-sync">Transform and physics</h2>
+<p>On every <code>MarkGlobalTransformDirty</code>, the Positionable notifies its own object's physics components (<code>NotifyPhysicsComponents</code>):</p>
+<ul>
+<li>If <code>GetComponent&lt;Physics::Rigidbody&gt;()</code> finds a Rigidbody that is not destroyed, only <code>Rigidbody::OnTransformChanged</code> is called.</li>
+<li>Otherwise every collider (<code>GetComponents&lt;Physics::ICollider&gt;()</code>) gets <code>ICollider::OnTransformChanged</code>.</li>
+</ul>
+<p>The Rigidbody is looked up on every notification, not cached: a cached pointer dangled after <code>RemoveComponent&lt;Rigidbody&gt;</code> (fixed in PR #19).</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>Component</th><th>On transform change</th></tr></thead>
+<tbody>
+<tr><td>Rigidbody, not yet initialized (no body created, e.g. no backend)</td><td>Nothing.</td></tr>
+<tr><td>Rigidbody, <strong>Dynamic</strong></td><td>Ignored. Physics owns the pose; a script's <code>SetPosition</code> on a dynamic body does not move the body and is overwritten by the next fixed step's <code>SyncTransforms</code>.</td></tr>
+<tr><td>Rigidbody, <strong>Kinematic</strong></td><td><code>backend-&gt;SetBodyTransform</code> with the new world position and rotation: the body follows the transform.</td></tr>
+<tr><td>Rigidbody, <strong>Static</strong></td><td><code>backend-&gt;SetStaticBodyTransform</code>; in debug builds also logs a warning on every move.</td></tr>
+<tr><td>Collider with no Rigidbody (it owns its own static body)</td><td><code>SetStaticBodyTransform</code> with the world pose. Every 10th such move (counted across all colliders) logs a warning recommending a kinematic Rigidbody.</td></tr>
+<tr><td>Collider attached to a Rigidbody's body</td><td>Not notified (the Rigidbody is).</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>In the other direction, after each simulation step <code>PhysXBackend::SyncTransforms</code> writes the PhysX pose back with <code>Positionable::SetPositionAndRotation</code>, for <strong>simulated dynamic bodies only</strong>. Kinematic bodies are skipped, so the physics pose never overwrites a script's move that PhysX has not consumed yet. That write-back itself goes through <code>MarkGlobalTransformDirty</code>: the dynamic body ignores it, while kinematic or static children of the moved object follow.</p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A kinematic body follows the latest transform even when it is moved twice before anything reads the transform, and the script's position is not overwritten by the physics pose.</p>
+<p>Test: <code>KinematicBodyFollowsLatestTransform</code> (requires the PhysX backend).</p>
+</div>
+<p>Notification happens for children too, because <code>MarkGlobalTransformDirty</code> recurses: moving a parent moves its kinematic children's bodies. See <a href="physics.html">Physics</a> for body types and the fixed step.</p>
+<p class="src">Source: <code>engine/src/Positionable.cpp</code> — <code>NotifyPhysicsComponents</code>; <code>engine/src/physics/Rigidbody.cpp</code> — <code>Rigidbody::OnTransformChanged</code>; <code>engine/src/physics/ICollider.cpp</code> — <code>ICollider::OnTransformChanged</code>; <code>engine/src/physics/physx/PhysXBackend.cpp</code> — <code>PhysXBackend::SyncTransforms</code>; tests: <code>PhysicsTests</code></p>
+
+<h2 id="matrix-math">Matrix math before InitializeSIMD</h2>
+<p>Transform math uses <code>Math::Matrix&lt;float,4,4&gt;</code> (and 3×3), whose operations dispatch through static function pointers chosen by <code>Math::InitializeSIMD()</code>. Only <code>Application::Init</code> calls that. The pointers default to the scalar implementations, so <code>inverse()</code>, <code>TransformPoint</code> and the rest work before initialization (in tests, tools, or code that runs before <code>Init</code>). Previously they were null until <code>InitializeSIMD</code>, and any matrix call before it, including <code>AddChild</code> with <code>keepWorldPosition</code>, crashed (fixed in PR #24).</p>
+<p>The 4×4 SSE2 path's <code>inverse()</code> also uses the scalar implementation, so the singular-matrix exception above applies on every tier. SIMD tier selection and the SIMD correctness fixes are covered on <a href="math.html">Math &amp; SIMD</a> <span class="badge">PR #27</span>.</p>
+<p class="src">Source: <code>math/include/math/Matrix.hpp</code> — static <code>*_func</code> defaults, <code>InverseScalar</code>, <code>InverseSSE2</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code></p>
+
+<div class="page-footer">
+<span>Describes master plus PRs #26–#29.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
