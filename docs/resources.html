@@ -103,7 +103,7 @@
 <tbody>
 <tr><td><code>"res://scripts/a.lua"</code></td><td><code>Resource</code></td><td><code>scripts/a.lua</code></td></tr>
 <tr><td><code>"user://saves/1.json"</code></td><td><code>User</code></td><td><code>saves/1.json</code></td></tr>
-<tr><td>an absolute filesystem path</td><td><code>Absolute</code></td><td>the path, normalized (see the open question below)</td></tr>
+<tr><td>an absolute filesystem path</td><td><code>Absolute</code></td><td>the path, normalized, keeping its root</td></tr>
 <tr><td>any other string, e.g. <code>"scripts/a.lua"</code></td><td><code>Resource</code></td><td>the string, normalized</td></tr>
 <tr><td>default constructor</td><td><code>Invalid</code></td><td>empty</td></tr>
 </tbody>
@@ -113,16 +113,17 @@
 <ol class="steps">
 <li>Backslashes become <code>/</code>.</li>
 <li><code>lexically_normal()</code> removes <code>.</code> segments, collapses <code>//</code>, and resolves <code>x/..</code>. A result of <code>"."</code> becomes empty.</li>
-<li>Leading slashes are stripped, and one trailing slash is removed.</li>
+<li>For <code>Resource</code> and <code>User</code> paths, leading slashes are stripped: they are relative to their root, so <code>res:///a</code> is <code>a</code>. An <code>Absolute</code> path keeps its root (<code>/home/me/a.wav</code>, a UNC <code>//server/share/a.wav</code>, <code>C:/a.wav</code>) <span class="badge">Remaining defects</span>.</li>
+<li>One trailing slash is removed, except from a bare root (<code>/</code>, <code>C:/</code>), which would otherwise change meaning.</li>
 <li>A <strong>leading <code>..</code> is kept</strong>: <code>res://../outside.txt</code> stays <code>../outside.txt</code>, so <code>Resolve</code> can see the escape and reject it.</li>
 </ol>
 <p>Equality, ordering and hashing compare the type and the normalized string. So <code>res://scripts/../scripts/thing.lua</code>, <code>res://scripts//./thing.lua</code> and <code>res://scripts\thing.lua</code> are all equal to <code>res://scripts/thing.lua</code>, and they hit the same cache and metadata entries. Before this, <code>Resolve</code> accepted those spellings, but <code>Load</code> reported "Resource not found". The comparison is <strong>case-sensitive</strong>: on a case-insensitive filesystem, <code>res://Scripts/a.lua</code> and <code>res://scripts/a.lua</code> name the same file but are different keys, and only the spelling the scan produced has metadata.</p>
 <p><code>IsValid()</code> is true when the type isn't <code>Invalid</code> and the path is non-empty, so <code>ResourcePath("res://")</code> is not valid. <code>ToString()</code> puts the scheme back on. JSON serialization uses <code>ToString()</code>, and deserialization uses the string constructor.</p>
-<p class="src">Source: <code>engine/include/engine/io/ResourcePath.hpp</code> — <code>ResourcePath::Normalize</code>, <code>ResourcePath::ResourcePath</code>, <code>operator==</code>, <code>ResourcePath::Hash</code>; tests: <code>ResourcePathTest.EquivalentSpellingsAreOnePath</code></p>
+<p class="src">Source: <code>engine/include/engine/io/ResourcePath.hpp</code> — <code>ResourcePath::Normalize</code>, <code>ResourcePath::ResourcePath</code>, <code>operator==</code>, <code>ResourcePath::Hash</code>; tests: <code>ResourcePathTest.EquivalentSpellingsAreOnePath</code>, <code>ResourcePathTest.AbsolutePathsKeepTheirRoot</code></p>
 
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><code>Normalize()</code> strips leading slashes for every path type, including <code>Absolute</code>. On POSIX, <code>ResourcePath("/home/me/a.wav")</code> is classified <code>Absolute</code> but stored as <code>home/me/a.wav</code>, so <code>Resolve</code> and <code>ToString</code> return a <em>relative</em> path. On Windows a drive-letter path such as <code>C:/x/a.wav</code> is unaffected. The same applies to <code>ResourceLoader::MakeResourcePath</code>, which falls back to <code>Absolute</code> for files outside both roots. Was the strip meant only for <code>res://</code>/<code>user://</code>? File: <code>engine/include/engine/io/ResourcePath.hpp</code> (<code>Normalize</code>).</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee <span class="badge">Remaining defects</span></p>
+<p>An <code>Absolute</code> path stays absolute: <code>GetPath()</code>, <code>ToString()</code> and <code>Resolve</code> return it with its root. Before, every leading slash was stripped, so on POSIX <code>ResourcePath("/home/me/a.wav")</code> (and the <code>Absolute</code> fallback of <code>ResourceLoader::MakeResourcePath</code> for files outside both roots) became the relative <code>home/me/a.wav</code>. <code>res://</code> and <code>user://</code> paths are unchanged.</p>
 </div>
 
 <h2 id="resolve">Resolving to the filesystem</h2>

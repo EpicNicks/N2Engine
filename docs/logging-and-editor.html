@@ -65,6 +65,7 @@
 <p class="toc-title">On this page</p>
 <ol>
 <li><a href="#logger">Logger</a></li>
+<li><a href="#logger-threads">Logging from other threads</a></li>
 <li><a href="#console">Debug console and stream redirection</a></li>
 <li><a href="#health">Health</a></li>
 <li><a href="#editor-host">The editor host process</a></li>
@@ -113,7 +114,7 @@
 </div>
 
 <h3 id="subscribers">Subscribing</h3>
-<p><code>logEvent += handler</code> returns an id; <code>logEvent -= id</code> removes it. Both are safe during dispatch: a handler added during a log is first called on the next message; a handler removed during a log (even itself) is not called again. Subscribing does not flush the backlog; the next <code>Log</code> call does.</p>
+<p><code>logEvent</code> is a <code>Logger::LogEventHandler</code>: the same <code>+=</code>, <code>-=</code>, call and <code>GetSubscriberCount()</code> as an <code>EventHandler</code>, each taken under the Logger's lock <span class="badge">Remaining defects</span>. <code>logEvent += handler</code> returns an id; <code>logEvent -= id</code> removes it. Both are safe during dispatch and from any thread: a handler added during a log is first called on the next message; a handler removed during a log (even itself) is not called again. Subscribing does not flush the backlog; the next <code>Log</code> call does.</p>
 <pre class="lang-cpp"><code>N2Engine::Logger::broadcastUnbroadcastLogs = true; // keep early messages until the UI subscribes
 // ...
 const size_t id = N2Engine::Logger::logEvent += [](std::string_view msg, N2Engine::Logger::LogLevel level)
@@ -123,16 +124,28 @@ const size_t id = N2Engine::Logger::logEvent += [](std::string_view msg, N2Engin
 // ...
 N2Engine::Logger::logEvent -= id;
 </code></pre>
-<p class="src">Source: <code>engine/include/engine/base/EventHandler.hpp</code> — <code>EventHandler::operator+=</code>, <code>operator-=</code>, <code>operator()</code>; tests: <code>EventHandlerTest.*</code></p>
+<p class="src">Source: <code>engine/include/engine/Logger.hpp</code> — <code>Logger::LogEventHandler</code>; <code>engine/include/engine/base/EventHandler.hpp</code> — <code>EventHandler::operator+=</code>, <code>operator-=</code>, <code>operator()</code>; tests: <code>EventHandlerTest.*</code></p>
 
 <div class="callout note">
 <p class="callout-title">Note</p>
 <p>The message is passed as a <code>std::string_view</code>. Handlers that keep it must copy it.</p>
 </div>
 
-<div class="callout open-question">
-<p class="callout-title">Open question</p>
-<p><code>Logger::Log</code> and <code>EventHandler</code> have no locking (<code>engine/src/Logger.cpp</code> — <code>Logger::Log</code>; <code>engine/include/engine/base/EventHandler.hpp</code>). Whether the Logger is meant to be thread-safe is not stated. The editor server no longer logs from two threads: since PR #33 its network thread posts its log lines to the main thread (<code>EditorServer::PostLog</code>), and the host's signal handler only sets a flag. Any code that logs from another thread, including a <code>std::cout</code> write while the debug console redirects it, still races with the main thread.</p>
+<h3 id="logger-threads">Logging from other threads <span class="badge">Remaining defects</span></h3>
+<p><code>Logger::Log</code> (and <code>Info</code>/<code>Warn</code>/<code>Error</code>), subscribing, unsubscribing and the debug console's redirected streams may be used from any thread. They share one recursive mutex:</p>
+<ul>
+<li><code>Log</code> holds it from the backlog check until the message (and any backlog) has been delivered, so a message reaches every subscriber whole, and messages from different threads are delivered one after another, never interleaved.</li>
+<li>Subscribers run <strong>on the thread that logged</strong>, while it holds the lock. A UI subscriber that must touch main-thread-only state should copy the message and queue it.</li>
+<li>Being recursive, the lock lets a subscriber log (or write to a redirected <code>std::cout</code>) on its own thread: that message is delivered in place, as described above.</li>
+<li>A subscriber must not wait for another thread that logs: that thread blocks on the lock, a deadlock.</li>
+<li>The redirected streams take the same lock per character, so their line buffers are safe, but characters written by two threads at once can still mix within a line. Use <code>Logger</code> directly from worker threads.</li>
+<li>The mutex is never destroyed, so logging during static destruction still works. It is not async-signal-safe: a POSIX signal handler must not log (the editor host's handler only sets a flag).</li>
+</ul>
+<p class="src">Source: <code>engine/src/Logger.cpp</code> — <code>LogMutex</code>, <code>Logger::Log</code>, <code>Logger::LogEventHandler</code>, <code>LoggerStreambuf::overflow</code>, <code>sync</code>; <code>editor-server/src/Main.cpp</code> — <code>SignalHandler</code>; tests: <code>CoreRobustnessTest.LoggerIsSafeToUseFromManyThreads</code>, <code>CoreRobustnessTest.LoggerDeliversBacklogOnceWhenASubscriberLogs</code></p>
+
+<div class="callout note" id="design-logger-lock">
+<p class="callout-title">Design decision: deliver on the logging thread, under one lock</p>
+<p>The alternative, queueing other threads' messages for the main thread to deliver, would keep subscribers single-threaded but lose messages logged just before a crash or during shutdown (when the main loop no longer drains), and would reorder them against main-thread messages. Logging is a diagnostic channel, so delivering immediately and in order matters more. One recursive lock keeps the existing re-entrancy rule (a subscriber may log) and makes subscription changes safe while another thread logs. The cost is that subscribers can be called on any thread, which is documented above; the engine's own console subscriber only writes to a stream.</p>
 </div>
 
 <h2 id="console">Debug console and stream redirection</h2>
@@ -195,7 +208,7 @@ constexpr std::string_view ToString(SubsystemState);        // "NotStarted", "Ru
 </div>
 <p>Startup and shutdown sequence:</p>
 <ol class="steps">
-<li>Install SIGINT/SIGTERM handlers that only clear a <code>g_running</code> flag (on Windows they run on another thread, and the Logger is not thread-safe).</li>
+<li>Install SIGINT/SIGTERM handlers that only clear a <code>g_running</code> flag (the Logger is thread-safe, but logging is not async-signal-safe; see <a href="#logger-threads">Logging from other threads</a>).</li>
 <li><code>Application::Init</code> with PhysX, OpenGL and <code>isHeadless = true</code> (hidden window, audio Disabled).</li>
 <li><code>EditorServer::Start(port, bindAddress)</code>: bind to the bind address (loopback by default) <span class="badge">PR #33</span>, listen with a backlog of 1, start the network thread. <code>SO_REUSEADDR</code> is set on POSIX only, so a restarted host can rebind while the last connection is in <code>TIME_WAIT</code>; on Windows it is left off (there it would allow another process to take over the port, and the default already rebinds). On an invalid address or a socket/bind/listen failure, <code>Start</code> logs and returns false, and the host skips the loop and exits with code 1 <span class="badge">PR #33</span>.</li>
 <li>Main loop, while <code>g_running</code>, the server is running, no quit was requested, and the window (if valid) is not closing: <code>window.PollEvents()</code>, then <code>server.ProcessCommands(16 ms)</code>, which runs the queued editor requests and waits up to 16 ms for one to arrive (this replaces the old fixed 16 ms sleep). See <a href="#editor-threading">Threading</a>.</li>
@@ -360,7 +373,7 @@ $stream.Write($bytes, 0, $bytes.Length)
 <div class="callout note" id="design-loopback">
 <p class="callout-title">Design decision: a loopback-only editor server</p>
 <p><code>N2EditorHost</code> is a development tool that an editor on the same machine drives. The protocol carries no credentials, so the only safe default is to be unreachable from other machines: the server binds to <code>127.0.0.1</code>, and listening anywhere else takes an explicit <code>--bind</code> that logs a warning. Authentication was left out rather than bolted on, because it would change the wire format for every client. For the same reason the server limits what a command can do: <code>DeleteScene</code> only ever deletes <code>.json</code> files inside the project's scenes directory, and malformed input gets an <code>Error</code> instead of crashing the host.</p>
-<p>Commands run on the main thread for a separate reason: engine state is single-threaded. Scenes, Lua, the Logger and GLFW/OpenGL (a context is current on one thread, and GLFW event polling must be on the main thread) have no locks. Queueing commands for the main loop makes every handler behave like ordinary game code between frames, instead of adding locks across the engine. Lua handles rely on the same assumption (see <a href="scripting-lua.html#design-handles">why Lua handles stay valid</a>).</p>
+<p>Commands run on the main thread for a separate reason: engine state is single-threaded. Scenes, Lua and GLFW/OpenGL (a context is current on one thread, and GLFW event polling must be on the main thread) have no locks; only the Logger is thread-safe (see <a href="#logger-threads">Logging from other threads</a>). Queueing commands for the main loop makes every handler behave like ordinary game code between frames, instead of adding locks across the engine. Lua handles rely on the same assumption (see <a href="scripting-lua.html#design-handles">why Lua handles stay valid</a>).</p>
 </div>
 
 <div class="callout open-question">
