@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -587,6 +588,43 @@ TEST(UIPassTest, ImageCreatesItsQuadOnceAndReleasesItOnDestroy)
     panel->GetComponent<Image>()->OnDestroy();
     EXPECT_EQ(renderer.destroyedMeshes, 1);
     EXPECT_EQ(renderer.destroyedMaterials, 1);
+}
+
+TEST(UIPassTest, ImageMovesToANewRendererAndReleasesOnTheOldOne)
+{
+    RecordingUIRenderer first;
+    RecordingUIRenderer second;
+    const auto scene = Scene::Create("UIPass_NewRenderer");
+    const auto canvas = AddCanvas(*scene, "Canvas");
+    AddPanel(canvas, "Panel", Rect{0.0f, 0.0f, 10.0f, 10.0f});
+
+    UISystem::Render(*scene, &first, Viewport);
+    UISystem::Render(*scene, &second, Viewport);
+    EXPECT_EQ(first.destroyedMeshes, 1); // the old renderer still exists, so it is told
+    EXPECT_EQ(first.destroyedMaterials, 1);
+    EXPECT_EQ(second.meshes.size(), 1u);
+    EXPECT_EQ(second.draws.size(), 1u);
+}
+
+TEST(UIPassTest, ImageOnARendererRecreatedAtTheSameAddressMakesNewResources)
+{
+    // The window re-creates its renderer, and the new one can land where the old one was
+    std::optional<RecordingUIRenderer> renderer;
+    renderer.emplace();
+    const auto scene = Scene::Create("UIPass_Recreated");
+    const auto canvas = AddCanvas(*scene, "Canvas");
+    AddPanel(canvas, "Panel", Rect{0.0f, 0.0f, 10.0f, 10.0f});
+
+    UISystem::Render(*scene, &*renderer, Viewport);
+    renderer.reset();
+    renderer.emplace(); // same storage, so the same address
+
+    UISystem::Render(*scene, &*renderer, Viewport);
+    EXPECT_EQ(renderer->meshes.size(), 1u); // a new quad, not the old renderer's
+    EXPECT_EQ(renderer->materials.size(), 1u);
+    EXPECT_EQ(renderer->destroyedMeshes, 0); // nothing of the old renderer's is destroyed here
+    ASSERT_EQ(renderer->draws.size(), 1u);
+    EXPECT_EQ(renderer->draws[0].mesh, renderer->meshes[0].get());
 }
 
 // ============================================================================

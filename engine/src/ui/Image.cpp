@@ -26,6 +26,7 @@ namespace N2Engine::UI
             return true;
         }
         _renderer = renderer;
+        _rendererLifetime = renderer->GetLifetimeToken();
 
         if (!_mesh)
         {
@@ -54,7 +55,8 @@ namespace N2Engine::UI
 
     void Image::ReleaseResources()
     {
-        if (_renderer)
+        // A destroyed renderer freed them itself, and its address may now be another renderer's
+        if (_renderer && !_rendererLifetime.expired())
         {
             if (_mesh)
             {
@@ -68,6 +70,7 @@ namespace N2Engine::UI
         _mesh = nullptr;
         _material = nullptr;
         _renderer = nullptr;
+        _rendererLifetime.reset();
     }
 
     void Image::RenderUI(Renderer::Common::IRenderer *renderer, const Rect &rect,
@@ -77,13 +80,12 @@ namespace N2Engine::UI
         {
             return;
         }
-        if (_renderer && _renderer != renderer)
+        if (_renderer && (_renderer != renderer || _rendererLifetime.expired()))
         {
-            // Drawn by another renderer than the one that made the quad (the window was re-created): start
-            // again with this one. The old resources are forgotten, not destroyed: their renderer may be gone.
-            _mesh = nullptr;
-            _material = nullptr;
-            _renderer = nullptr;
+            // Drawn by another renderer than the one that made the quad, or by a new renderer at the old one's
+            // address (the window was re-created): start again with this one. The old resources are destroyed
+            // only if their renderer still exists.
+            ReleaseResources();
         }
         if (!EnsureResources(renderer))
         {

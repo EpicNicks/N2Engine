@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 
 #include <math/Matrix.hpp>
@@ -44,6 +45,7 @@ namespace N2Engine::UI
         // Created on first draw with the renderer that drew it, released in OnDestroy (as the scene renderables
         // do: by the time a leftover component is freed, the renderer may be gone)
         Renderer::Common::IRenderer *_renderer = nullptr;
+        std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed
         Renderer::Common::IMesh *_mesh = nullptr;
         Renderer::Common::IMaterial *_material = nullptr;
 
