@@ -79,7 +79,7 @@
 </ol>
 </div>
 
-<h2 id="model">UI objects <span class="badge">PR #TBD</span></h2>
+<h2 id="model">UI objects <span class="badge">PR #50</span></h2>
 <p>A UI is a tree of GameObjects under an object with a <code>Canvas</code>. Each element has a <code>RectTransform</code> and usually a graphic such as <code>Image</code>. UI objects need no <code>Positionable</code>, so layout stays separate from 3D transforms and physics. Because they are ordinary scene objects, they are saved with the scene, appear in the editor's entity list, can be added from Lua by name, and receive the usual lifecycle callbacks.</p>
 <div class="table-wrap">
 <table>
@@ -117,7 +117,7 @@ canvas-&gt;AddChild(panel, false);
 <li><code>Rect::Contains(point)</code> includes all four edges, so neighbouring rects leave no gap between them. A rect whose width or height is zero or negative has no area: it isn't drawn and nothing hits it.</li>
 </ul>
 
-<h2 id="layout">RectTransform layout <span class="badge">PR #TBD</span></h2>
+<h2 id="layout">RectTransform layout <span class="badge">PR #50</span></h2>
 <p>An element's rect is worked out from its parent's rect, the same way as in Unity:</p>
 <div class="table-wrap">
 <table>
@@ -149,7 +149,7 @@ rect     = (pivotPos - pivot * size, size)
 </div>
 <p class="src">Source: <code>engine/src/ui/RectTransform.cpp</code> — <code>RectTransform::Resolve</code>, <code>SetOffsetMin</code>, <code>SetOffsetMax</code>; <code>engine/src/ui/UISystem.cpp</code> — <code>LayOut</code></p>
 
-<h2 id="order">Canvases and draw order <span class="badge">PR #TBD</span></h2>
+<h2 id="order">Canvases and draw order <span class="badge">PR #50</span></h2>
 <p><code>UISystem::CollectGraphics(scene, viewport)</code> lays out the scene's UI and returns its graphics in draw order. The UI pass and the hit test both use it.</p>
 <ol class="steps">
 <li><strong>Find the canvases.</strong> A canvas is an enabled <code>Canvas</code> component on an object that is active in the hierarchy and has no <code>Canvas</code> above it. Objects are visited depth first, with roots in scene order. Inactive objects are skipped with their subtrees, and so is the tree of a disabled <code>Canvas</code>.</li>
@@ -160,7 +160,7 @@ rect     = (pivotPos - pivot * size, size)
 <p>So later items draw over earlier ones: a later canvas over an earlier one, a later sibling over an earlier sibling, and a child over its parent. A <code>Canvas</code> nested under another canvas has no effect of its own: its object is laid out and drawn as an ordinary element of the outer canvas, and its <code>sortOrder</code> is ignored. A UI object that isn't under any canvas is never drawn or hit.</p>
 <p class="src">Source: <code>engine/src/ui/UISystem.cpp</code> — <code>UISystem::CollectGraphics</code>, <code>FindCanvases</code>; tests: <code>UIPassTest.HierarchyOrderWithinACanvasAndSortOrderAcrossCanvases</code>, <code>UIPassTest.SkipsInactiveDisabledAndEmptyAndNestedCanvasesJoinTheirParent</code></p>
 
-<h2 id="pass">The UI pass <span class="badge">PR #TBD</span></h2>
+<h2 id="pass">The UI pass <span class="badge">PR #50</span></h2>
 <p><code>Application::Render</code> calls <code>UISystem::Render(scene, renderer, viewport)</code> right after <code>Scene::Render</code> and before <code>EndFrame</code>, with the window's size as the viewport (see <a href="application.html#render">Rendering the scene</a>). It does the following:</p>
 <ol class="steps">
 <li>Collects the graphics. If there are none (no canvas, or a zero-size viewport such as a minimised window), it returns without touching the renderer.</li>
@@ -182,19 +182,19 @@ rect     = (pivotPos - pivot * size, size)
 <p class="callout-title">Backends</p>
 <ul>
 <li><strong>OpenGL</strong> draws the UI as described.</li>
-<li><strong>Software</strong> draws it too, now that each draw keeps the view and projection it was submitted with <span class="badge">PR #TBD</span> (the backend used to apply the frame's last view and projection to every draw). UI draws don't write depth, so they keep their submitted order. The software renderer has no blending, so semi-transparent UI is drawn opaque.</li>
+<li><strong>Software</strong> draws it too, now that each draw keeps the view and projection it was submitted with <span class="badge">PR #50</span> (the backend used to apply the frame's last view and projection to every draw). UI draws don't write depth, so they keep their submitted order. The software renderer has no blending, so semi-transparent UI is drawn opaque.</li>
 <li><strong>Vulkan</strong> draws nothing yet (<a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>).</li>
 </ul>
 </div>
 <p>As with <code>IRenderable::Render</code>, <code>RenderUI</code> must not add, remove or destroy components or GameObjects immediately. <code>Destroy</code> is fine because it is deferred.</p>
 <p class="src">Source: <code>engine/src/ui/UISystem.cpp</code> — <code>UISystem::Render</code>, <code>UISystem::OverlayProjection</code>; <code>engine/src/Application.cpp</code> — <code>Application::Render</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>SoftwareRenderer::DrawMesh</code>, <code>RasterizeMesh</code>; tests: <code>UIPassTest.DrawsWithOverlayStateAndPixelProjection</code>, <code>UIPassTest.NothingToDrawLeavesTheViewProjectionAlone</code>, <code>UIPassTest.TheSceneRenderableQueueNeverDrawsUI</code></p>
 
-<h2 id="image">Image <span class="badge">PR #TBD</span></h2>
+<h2 id="image">Image <span class="badge">PR #50</span></h2>
 <p><code>Image</code> draws its rect in its colour (<code>SetColor</code>; white by default) with the renderer's standard unlit shader. It uses one quad per <code>Image</code>: the unit square (0, 0)–(1, 1), wound counter-clockwise in canvas space, with uv (0, 0) at the bottom-left. Its model matrix (<code>Image::ModelMatrixFor(rect)</code>) scales the square to the rect and moves it there. The quad and material are created with the renderer the first time the <code>Image</code> draws, and released in <code>OnDestroy</code>. If a different renderer draws it later (the window was re-created), it creates them again and forgets the old ones without destroying them, since the old renderer may be gone.</p>
 <p><code>SetTexture(ITexture*)</code> multiplies the colour by a texture made with <code>IRenderer::CreateTexture</code>. The <code>Image</code> neither owns nor saves the texture. Whoever made it keeps it alive while the <code>Image</code> uses it, and calls <code>SetTexture(nullptr)</code> before destroying it. There is no texture asset yet, so a saved scene doesn't keep the texture.</p>
 <p class="src">Source: <code>engine/src/ui/Image.cpp</code> — <code>Image::RenderUI</code>, <code>Image::EnsureResources</code>; tests: <code>UIPassTest.ImageCreatesItsQuadOnceAndReleasesItOnDestroy</code></p>
 
-<h2 id="pointer">Pointer input <span class="badge">PR #TBD</span></h2>
+<h2 id="pointer">Pointer input <span class="badge">PR #50</span></h2>
 <p>The application's <code>PointerDispatcher</code> has <code>UISystem::MakeApplicationHitProvider()</code> as its UI hit provider. It is installed when <code>Application</code> is constructed. Each frame the dispatcher asks it first (see <a href="input.html#picking">Picking</a>). The provider runs <code>UISystem::HitTestWindowPoint</code> on the current scene with the window's size:</p>
 <ol class="steps">
 <li>A cursor outside the viewport (anything but <code>0 &lt;= x &lt; width</code> and <code>0 &lt;= y &lt; height</code>) hits nothing, the same rule as the world pick. Without a window or a loaded scene, nothing is hit either.</li>
@@ -223,7 +223,7 @@ rect     = (pivotPos - pivot * size, size)
 <p>UI elements are GameObjects with <code>Canvas</code>, <code>RectTransform</code> and graphic components, as in Unity's uGUI, not a separate UI tree or an immediate-mode API. That way they get serialization, the editor's entity list, Lua <code>AddComponent</code> and the lifecycle for free. They have no <code>Positionable</code>, so layout never touches 3D transforms or physics. The layout uses Unity's anchor model and Unity's screen space (bottom-left origin, y up), so values from Unity layouts carry over. Graphics are not <code>IRenderable</code>s and the render queues have no Overlay queue. Instead, the UI draws in its own pass after the scene, with depth off (later draws cover earlier ones in hierarchy order), culling off and blending on, which keeps the scene's queues simple. The UI is hit-tested with plain rect tests against the same draw order, topmost first, and gives the pointer to the existing <code>OnMouse*</code> callbacks through the dispatcher's UI hook. One dispatcher and one set of callbacks therefore serve both UI and world objects, and a UI hit keeps the click from reaching the world.</p>
 </div>
 
-<h2 id="lua">Lua API <span class="badge">PR #TBD</span></h2>
+<h2 id="lua">Lua API <span class="badge">PR #50</span></h2>
 <p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code> and <code>"Image"</code>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
 <div class="table-wrap">
 <table>
