@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <glad/glad.h>
@@ -12,6 +14,8 @@
 #include "renderer/common/IMaterial.hpp"
 #include "renderer/common/IShader.hpp"
 #include "renderer/common/IMesh.hpp"
+#include "renderer/common/ITexture.hpp"
+#include "renderer/common/TextureOptions.hpp"
 
 #include "renderer/common/SceneLighting.hpp"
 
@@ -46,6 +50,14 @@ namespace Renderer::Common
     {
     public:
         virtual ~IRenderer() = default;
+
+        /**
+         * Expires when this renderer is destroyed. A component holding resources keeps it next to its
+         * IRenderer*: while it hasn't expired the pointer still names this renderer, and once it has, the
+         * resources are gone and the pointer must not be called, even if a new renderer now lives at the
+         * same address.
+         */
+        [[nodiscard]] std::weak_ptr<const void> GetLifetimeToken() const { return m_lifetime; }
 
         // Lifecycle
         virtual bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) = 0;
@@ -93,10 +105,49 @@ namespace Renderer::Common
         [[nodiscard]] virtual IShader* GetStandardUnlitShader() const = 0;
         [[nodiscard]] virtual IShader* GetStandardLitShader() const = 0;
 
+        // Text support (#1). These have default bodies so renderers that predate them (and test fakes)
+        // keep compiling; the backends override them.
+
+        /**
+         * CreateTexture with explicit sampling options (TextureOptions). The overload without options is
+         * this with TextureOptions::Default(). The default body ignores the options and calls that
+         * overload; a backend that takes options overrides this.
+         */
+        virtual ITexture* CreateTexture(const uint8_t *data, uint32_t width, uint32_t height, uint32_t channels,
+                                        const TextureOptions &options)
+        {
+            static_cast<void>(options);
+            return CreateTexture(data, width, height, channels);
+        }
+
+        /**
+         * Replaces a mesh's vertices and indices in place, keeping the same IMesh*, so a mesh that changes
+         * (such as text) needs no destroy and create. Returns false, leaving the mesh unchanged, if `mesh`
+         * isn't a live mesh of this renderer, if `meshData` has no vertices (as CreateMesh, which needs
+         * some), or if the backend can't update meshes (the default body).
+         */
+        virtual bool UpdateMesh(IMesh *mesh, const MeshData &meshData)
+        {
+            static_cast<void>(mesh);
+            static_cast<void>(meshData);
+            return false;
+        }
+
+        /**
+         * The built-in SDF text shader: samples a single-channel SDF atlas (the material's texture) and
+         * draws its uAlbedo colour, times the vertex colour, where the distance is above 0.5, antialiased
+         * over one screen pixel. Null where the backend can't draw text yet (the default body; software
+         * until #1 P3, Vulkan until #43).
+         */
+        [[nodiscard]] virtual IShader* GetStandardTextShader() const { return nullptr; }
+
         virtual void ReadFramebuffer(std::uint8_t *buffer, int width, int height) const = 0;
 
         // Debug
         virtual void SetWireframe(bool enabled) = 0;
         [[nodiscard]] virtual const char* GetRendererName() const = 0;
+
+    private:
+        std::shared_ptr<const int> m_lifetime = std::make_shared<const int>(0);
     };
 }

@@ -803,7 +803,8 @@ function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
----"SphereRenderer", "AudioSource", "AudioListener", "LuaComponent". Unknown names raise an error.
+---"SphereRenderer", "TextRenderer", "AudioSource", "AudioListener", "LuaComponent". Unknown names
+---raise an error.
 ---@param typeName string
 ---@return Component
 function GameObject:AddComponent(typeName) end
@@ -846,6 +847,70 @@ function SphereRenderer:GetRadius() end
 ---@param latitude integer
 ---@param longitude integer
 function SphereRenderer:SetSubdivision(latitude, longitude) end
+
+---World-space text on the object's x/y plane, facing +Z, drawn with an SDF font in the Transparent queue.
+---Sizes are in world units. Changing a setting other than the colour lays the text out again on the next draw.
+---@alias HorizontalAlign "Left"|"Center"|"Right"
+---@alias VerticalAlign "Top"|"Middle"|"Bottom"|"Baseline"
+---@class TextRenderer : Component
+TextRenderer = {}
+
+---@param text string UTF-8; "\n" breaks lines
+function TextRenderer:SetText(text) end
+
+---@return string
+function TextRenderer:GetText() end
+
+---@param color Color
+function TextRenderer:SetColor(color) end
+
+---@return Color
+function TextRenderer:GetColor() end
+
+---@param size number world units per em (default 1)
+function TextRenderer:SetFontSize(size) end
+
+---@return number
+function TextRenderer:GetFontSize() end
+
+---@param width number wrap width in world units; 0 (the default) never wraps
+function TextRenderer:SetMaxWidth(width) end
+
+---@return number
+function TextRenderer:GetMaxWidth() end
+
+---@param spacing number multiplies the font's line height (default 1)
+function TextRenderer:SetLineSpacing(spacing) end
+
+---@return number
+function TextRenderer:GetLineSpacing() end
+
+---@param spacing number extra space between glyphs, in ems (default 0; negative tightens)
+function TextRenderer:SetLetterSpacing(spacing) end
+
+---@return number
+function TextRenderer:GetLetterSpacing() end
+
+---Where the block sits relative to the object's origin. Unknown names raise an error and change nothing.
+---@param horizontal HorizontalAlign default "Left"
+---@param vertical VerticalAlign default "Top"
+function TextRenderer:SetAlignment(horizontal, vertical) end
+
+---@return HorizontalAlign horizontal
+---@return VerticalAlign vertical
+function TextRenderer:GetAlignment() end
+
+---Draw with a font file; nil goes back to the built-in default font. Raises an error, keeping the
+---current font, if the file doesn't load.
+---@param path string|nil e.g. "res://fonts/Title.ttf"
+function TextRenderer:SetFont(path) end
+
+---The laid-out block in the object's local units (all 0 for empty text)
+---@return number minX
+---@return number minY
+---@return number maxX
+---@return number maxY
+function TextRenderer:GetBounds() end
 
 ---Runs a behaviour script: a file returning a table whose __index is itself, with optional
 ---OnAttach, OnUpdate, OnFixedUpdate, OnLateUpdate, OnDestroy, OnEnable, OnDisable, collision methods and

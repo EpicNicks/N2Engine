@@ -13,6 +13,7 @@
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/rendering/Light.hpp"
+#include "engine/rendering/TextRenderer.hpp"
 #include "engine/scripting/LuaComponent.hpp"
 
 namespace N2Engine
@@ -46,6 +47,7 @@ namespace N2Engine
         Add<Example::CubeRenderer>(registry, "CubeRenderer");
         Add<Example::SphereRenderer>(registry, "SphereRenderer");
         Add<Example::QuadRenderer>(registry, "QuadRenderer");
+        Add<Rendering::TextRenderer>(registry, "TextRenderer");
         Add<Scripting::LuaComponent>(registry, "LuaComponent");
     }
 }

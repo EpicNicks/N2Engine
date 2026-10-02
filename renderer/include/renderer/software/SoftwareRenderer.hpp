@@ -36,7 +36,13 @@ namespace Renderer::Software
         Common::IMesh* CreateMesh(const Common::MeshData &meshData) override;
         void DestroyMesh(Common::IMesh *mesh) override;
         Common::ITexture* CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch) override;
+        /// Stores the options on the SWTexture. Sampling honours wrap but is always nearest, without
+        /// mipmaps, so filter and mipmaps have no visible effect on this backend.
+        Common::ITexture* CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch,
+                                        const Common::TextureOptions &options) override;
         void DestroyTexture(Common::ITexture *texture) override;
+        /// Waits for any frame still rasterizing (which may read the mesh) before replacing its data
+        bool UpdateMesh(Common::IMesh *mesh, const Common::MeshData &meshData) override;
         Common::IMaterial* CreateMaterial(Common::IShader *shader) override;
         Common::IMaterial* CreateMaterial(Common::IShader *shader, Common::ITexture *texture) override;
         void DestroyMaterial(Common::IMaterial *material) override;
@@ -56,6 +62,8 @@ namespace Renderer::Software
 
         Common::IShader* GetStandardUnlitShader() const override { return m_unlitShader.get(); }
         Common::IShader* GetStandardLitShader() const override { return m_litShader.get(); }
+        /// Null: this backend has no SDF text shader until #1 P3, so TextRenderer draws nothing here
+        Common::IShader* GetStandardTextShader() const override { return nullptr; }
 
         void ReadFramebuffer(uint8_t *buffer, int width, int height) const override;
 

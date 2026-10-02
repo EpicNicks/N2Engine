@@ -59,7 +59,10 @@ namespace Renderer::OpenGL
         void DestroyMesh(Common::IMesh* mesh) override;
         Common::ITexture*
         CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels) override;
+        Common::ITexture* CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels,
+                                        const Common::TextureOptions& options) override;
         void DestroyTexture(Common::ITexture* texture) override;
+        bool UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData) override;
 
         // Updated material management
         Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
@@ -82,6 +85,7 @@ namespace Renderer::OpenGL
 
         [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
         [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
+        [[nodiscard]] Common::IShader* GetStandardTextShader() const override;
 
         void ReadFramebuffer(std::uint8_t *buffer, int width, int height) const override;
 
@@ -92,6 +96,7 @@ namespace Renderer::OpenGL
 
         Common::IShader* m_standardUnlitShader;
         Common::IShader* m_standardLitShader;
+        Common::IShader* m_standardTextShader = nullptr;
 
         // View/Projection matrices
         float m_viewMatrix[16]{};
