@@ -699,13 +699,47 @@ void SoftwareRenderer::DestroyMesh(IMesh *mesh)
     }
 }
 
+bool SoftwareRenderer::UpdateMesh(IMesh *mesh, const MeshData &d)
+{
+    if (!mesh || d.vertices.empty())
+    {
+        return false;
+    }
+
+    const auto it = std::ranges::find_if(m_meshes, [mesh](const auto &p) { return p.get() == mesh; });
+    if (it == m_meshes.end())
+    {
+        return false;
+    }
+
+    // A frame submitted by EndFrame rasterizes on the render thread until Present waits for it, and it
+    // reads the mesh's vectors; let it finish first. (Returns at once when no frame is in flight.)
+    m_renderThread.WaitForFrame();
+
+    (*it)->vertices = d.vertices;
+    (*it)->indices = d.indices;
+    return true;
+}
+
 ITexture* SoftwareRenderer::CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch)
 {
+    return CreateTexture(data, w, h, ch, TextureOptions::Default());
+}
+
+ITexture* SoftwareRenderer::CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch,
+                                          const TextureOptions &options)
+{
+    if (!data || w == 0 || h == 0 || ch == 0)
+    {
+        return nullptr;
+    }
+
     auto tex = std::make_unique<SWTexture>();
     tex->width = w;
     tex->height = h;
     tex->channels = ch;
-    tex->data.assign(data, data + w * h * ch);
+    tex->options = options;
+    tex->data.assign(data, data + static_cast<size_t>(w) * h * ch);
     ITexture *raw = tex.get();
     m_textures.push_back(std::move(tex));
     return raw;

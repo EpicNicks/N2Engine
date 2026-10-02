@@ -1,11 +1,15 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
 
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <map>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
+#include <string>
+#include <tuple>
+#include <utility>
 
 #include "engine/GameObjectScene.hpp"
 #include "engine/audio/AudioListener.hpp"
@@ -18,8 +22,11 @@
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SphereCollider.hpp"
+#include "engine/io/Resources.hpp"
+#include "engine/rendering/TextRenderer.hpp"
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/text/Font.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
@@ -82,6 +89,7 @@ namespace N2Engine::Scripting::Bindings
                 {"CapsuleCollider", MakeAccess<Physics::CapsuleCollider>()},
                 {"CubeRenderer", MakeAccess<Example::CubeRenderer>()},
                 {"SphereRenderer", MakeAccess<Example::SphereRenderer>()},
+                {"TextRenderer", MakeAccess<Rendering::TextRenderer>()},
                 {"AudioSource", MakeAccess<Audio::AudioSource>()},
                 {"AudioListener", MakeAccess<Audio::AudioListener>()},
                 {"LuaComponent", MakeAccess<LuaComponent>()},
@@ -107,6 +115,49 @@ namespace N2Engine::Scripting::Bindings
             }
             // sol turns this into a Lua error at the call site
             throw std::runtime_error(std::format("Unknown component type '{}'. Known types: {}", typeName, known));
+        }
+
+        // TextRenderer alignments travel as their scene-file names ("Left", "Middle", ...)
+        Text::HorizontalAlign ParseHorizontalAlign(const std::string &name)
+        {
+            if (name == "Left") return Text::HorizontalAlign::Left;
+            if (name == "Center") return Text::HorizontalAlign::Center;
+            if (name == "Right") return Text::HorizontalAlign::Right;
+            throw std::runtime_error(
+                std::format("Unknown horizontal alignment '{}'. Expected Left, Center or Right", name));
+        }
+
+        Text::VerticalAlign ParseVerticalAlign(const std::string &name)
+        {
+            if (name == "Top") return Text::VerticalAlign::Top;
+            if (name == "Middle") return Text::VerticalAlign::Middle;
+            if (name == "Bottom") return Text::VerticalAlign::Bottom;
+            if (name == "Baseline") return Text::VerticalAlign::Baseline;
+            throw std::runtime_error(
+                std::format("Unknown vertical alignment '{}'. Expected Top, Middle, Bottom or Baseline", name));
+        }
+
+        std::string AlignName(const Text::HorizontalAlign align)
+        {
+            switch (align)
+            {
+            case Text::HorizontalAlign::Center: return "Center";
+            case Text::HorizontalAlign::Right: return "Right";
+            case Text::HorizontalAlign::Left:
+            default: return "Left";
+            }
+        }
+
+        std::string AlignName(const Text::VerticalAlign align)
+        {
+            switch (align)
+            {
+            case Text::VerticalAlign::Middle: return "Middle";
+            case Text::VerticalAlign::Bottom: return "Bottom";
+            case Text::VerticalAlign::Baseline: return "Baseline";
+            case Text::VerticalAlign::Top:
+            default: return "Top";
+            }
         }
     }
 
@@ -189,6 +240,62 @@ namespace N2Engine::Scripting::Bindings
             "SetRadius", Forward<SphereRendererRef, &Example::SphereRenderer::SetRadius>(),
             "GetRadius", Forward<SphereRendererRef, &Example::SphereRenderer::GetRadius>(),
             "SetSubdivision", Forward<SphereRendererRef, &Example::SphereRenderer::SetSubdivision>()
+        );
+
+        using TextRendererRef = ComponentRef<Rendering::TextRenderer>;
+        BindComponentType<Rendering::TextRenderer>(
+            lua, "TextRenderer",
+            "SetText", Forward<TextRendererRef, &Rendering::TextRenderer::SetText>(),
+            "GetText", Forward<TextRendererRef, &Rendering::TextRenderer::GetText>(),
+            "SetColor", Forward<TextRendererRef, &Rendering::TextRenderer::SetColor>(),
+            "GetColor", Forward<TextRendererRef, &Rendering::TextRenderer::GetColor>(),
+            "SetFontSize", Forward<TextRendererRef, &Rendering::TextRenderer::SetFontSize>(),
+            "GetFontSize", Forward<TextRendererRef, &Rendering::TextRenderer::GetFontSize>(),
+            "SetMaxWidth", Forward<TextRendererRef, &Rendering::TextRenderer::SetMaxWidth>(),
+            "GetMaxWidth", Forward<TextRendererRef, &Rendering::TextRenderer::GetMaxWidth>(),
+            "SetLineSpacing", Forward<TextRendererRef, &Rendering::TextRenderer::SetLineSpacing>(),
+            "GetLineSpacing", Forward<TextRendererRef, &Rendering::TextRenderer::GetLineSpacing>(),
+            "SetLetterSpacing", Forward<TextRendererRef, &Rendering::TextRenderer::SetLetterSpacing>(),
+            "GetLetterSpacing", Forward<TextRendererRef, &Rendering::TextRenderer::GetLetterSpacing>(),
+            // Both names are checked before either is applied, so a bad one changes nothing
+            "SetAlignment", [](const TextRendererRef &c, const std::string &horizontal, const std::string &vertical)
+            {
+                const Text::HorizontalAlign h = ParseHorizontalAlign(horizontal);
+                const Text::VerticalAlign v = ParseVerticalAlign(vertical);
+                const auto renderer = c.Pin();
+                renderer->SetHorizontalAlign(h);
+                renderer->SetVerticalAlign(v);
+            },
+            "GetAlignment", [](const TextRendererRef &c)
+            {
+                const auto renderer = c.Pin();
+                return std::make_tuple(AlignName(renderer->GetHorizontalAlign()),
+                                       AlignName(renderer->GetVerticalAlign()));
+            },
+            // A font file, e.g. "res://fonts/Title.ttf"; nil goes back to the default font. A path that
+            // doesn't load raises an error and keeps the current font.
+            "SetFont", [](const TextRendererRef &c, sol::optional<std::string> path)
+            {
+                const auto renderer = c.Pin();
+                if (!path)
+                {
+                    renderer->SetFont(nullptr);
+                    return;
+                }
+                auto font = IO::Resources::Instance().Load<Text::Font>(std::filesystem::path(*path));
+                if (!font || !font->IsLoaded())
+                {
+                    throw std::runtime_error(std::format("TextRenderer:SetFont: can't load font '{}'", *path));
+                }
+                renderer->SetFont(std::move(font));
+            },
+            // The laid-out block in local units: minX, minY, maxX, maxY (all 0 for empty text)
+            "GetBounds", [](const TextRendererRef &c)
+            {
+                const auto renderer = c.Pin();
+                const Text::Rect &bounds = renderer->GetLayout().bounds;
+                return std::make_tuple(bounds.minX, bounds.minY, bounds.maxX, bounds.maxY);
+            }
         );
 
         using LuaComponentRef = ComponentRef<LuaComponent>;

@@ -61,6 +61,20 @@ Renderer::Common::ITexture* Renderer::Vulkan::VulkanRenderer::CreateTexture(
     return nullptr;
 }
 
+Renderer::Common::ITexture* Renderer::Vulkan::VulkanRenderer::CreateTexture(
+    const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels, const Common::TextureOptions& options)
+{
+    static_cast<void>(options);
+    return CreateTexture(data, width, height, channels);
+}
+
+bool Renderer::Vulkan::VulkanRenderer::UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData)
+{
+    static_cast<void>(mesh);
+    static_cast<void>(meshData);
+    return false;
+}
+
 void Renderer::Vulkan::VulkanRenderer::DestroyTexture(Renderer::Common::ITexture* texture)
 {
 }

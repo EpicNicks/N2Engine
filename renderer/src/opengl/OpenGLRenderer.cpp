@@ -211,13 +211,35 @@ void OpenGLRenderer::DestroyMesh(Common::IMesh *mesh)
     m_meshes.erase(mesh);
 }
 
+bool OpenGLRenderer::UpdateMesh(Common::IMesh *mesh, const Common::MeshData &meshData)
+{
+    if (!mesh)
+    {
+        return false;
+    }
+
+    const auto it = m_meshes.find(mesh);
+    if (it == m_meshes.end())
+    {
+        return false;
+    }
+    return it->second->Update(meshData);
+}
+
 Renderer::Common::ITexture* OpenGLRenderer::CreateTexture(const uint8_t *data, const uint32_t width,
                                                           const uint32_t height,
                                                           const uint32_t channels)
 {
+    return CreateTexture(data, width, height, channels, Common::TextureOptions::Default());
+}
+
+Renderer::Common::ITexture* OpenGLRenderer::CreateTexture(const uint8_t *data, const uint32_t width,
+                                                          const uint32_t height, const uint32_t channels,
+                                                          const Common::TextureOptions &options)
+{
     auto texture = std::make_unique<OpenGLTexture>();
 
-    if (!texture->Initialize(data, width, height, channels))
+    if (!texture->Initialize(data, width, height, channels, options))
     {
         std::cerr << "Failed to create texture" << std::endl;
         return nullptr;
@@ -876,10 +898,68 @@ void OpenGLRenderer::CreateStandardShaders()
 
     m_standardLitShader = CreateShaderProgram(litVert, litFrag);
 
-    if (!m_standardUnlitShader || !m_standardLitShader)
+    // ================== SDF TEXT SHADER ==================
+    // uTexture is a single-channel SDF atlas: the glyph edge is at 0.5 (128 in the atlas bytes), inside
+    // is higher. The coverage ramps from 0 to 1 across about one screen pixel around the edge, measured
+    // with fwidth, so text is antialiased at any size or distance without extra settings. The atlas is
+    // read through .r, whatever the texture's swizzle.
+    const char *textVert = R"(
+        #version 330 core
+        layout (location = 0) in vec3 aPos;
+        layout (location = 1) in vec3 aNormal;
+        layout (location = 2) in vec2 aTexCoord;
+        layout (location = 3) in vec4 aColor;
+
+        uniform mat4 uModel;
+        uniform mat4 uView;
+        uniform mat4 uProjection;
+
+        out vec2 fragTexCoord;
+        out vec4 fragColor;
+
+        void main() {
+            gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+            fragTexCoord = aTexCoord;
+            fragColor = aColor;
+        }
+    )";
+
+    const char *textFrag = R"(
+        #version 330 core
+
+        uniform vec4 uAlbedo;
+        uniform sampler2D uTexture;
+
+        in vec2 fragTexCoord;
+        in vec4 fragColor;
+        out vec4 FragColor;
+
+        void main() {
+            float sdf = texture(uTexture, fragTexCoord).r;
+            // Half the change over one pixel each side: a ramp one pixel wide
+            float edgeWidth = max(0.5 * fwidth(sdf), 1e-4);
+            float coverage = smoothstep(0.5 - edgeWidth, 0.5 + edgeWidth, sdf);
+
+            vec4 color = uAlbedo * fragColor;
+            float alpha = color.a * coverage;
+            if (alpha < 0.01) {
+                discard;
+            }
+            FragColor = vec4(color.rgb, alpha);
+        }
+    )";
+
+    m_standardTextShader = CreateShaderProgram(textVert, textFrag);
+
+    if (!m_standardUnlitShader || !m_standardLitShader || !m_standardTextShader)
     {
         std::cerr << "Failed to create standard shaders!" << std::endl;
     }
+}
+
+Renderer::Common::IShader* OpenGLRenderer::GetStandardTextShader() const
+{
+    return m_standardTextShader;
 }
 
 Renderer::Common::IShader* OpenGLRenderer::GetStandardUnlitShader() const

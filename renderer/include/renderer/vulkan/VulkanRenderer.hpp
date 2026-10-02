@@ -95,7 +95,13 @@ namespace Renderer
 
             Common::ITexture*
             CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels) override;
+            // Accepts the options and ignores them, like the overload without them: this backend creates
+            // no textures yet (#43)
+            Common::ITexture* CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels,
+                                            const Common::TextureOptions& options) override;
             void DestroyTexture(Common::ITexture* texture) override;
+            // Stub: there are no Vulkan meshes to update yet (#43), so this always returns false
+            bool UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData) override;
 
             Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
             Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture) override;

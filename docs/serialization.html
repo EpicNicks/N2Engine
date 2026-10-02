@@ -152,7 +152,7 @@
 <li><code>Register(name, factory)</code> overwrites any earlier factory with the same name.</li>
 <li><code>Create(name, go)</code> returns <code>nullptr</code> for an unknown name.</li>
 </ul>
-<p>Built-in types <span class="badge">PR #34</span>: <code>Rigidbody</code>, <code>BoxCollider</code>, <code>SphereCollider</code>, <code>CapsuleCollider</code>, <code>Light</code>, <code>AudioSource</code>, <code>AudioListener</code>, <code>CubeRenderer</code>, <code>SphereRenderer</code>, <code>QuadRenderer</code> and <code>LuaComponent</code>. (<code>LuaComponent.cpp</code> also keeps its own static registrar for the same name; registering twice just overwrites the factory.) Their already-declared fields now round-trip:</p>
+<p>Built-in types <span class="badge">PR #34</span>: <code>Rigidbody</code>, <code>BoxCollider</code>, <code>SphereCollider</code>, <code>CapsuleCollider</code>, <code>Light</code>, <code>AudioSource</code>, <code>AudioListener</code>, <code>CubeRenderer</code>, <code>SphereRenderer</code>, <code>QuadRenderer</code>, <code>TextRenderer</code> <span class="badge">PR #49</span> and <code>LuaComponent</code>. (<code>LuaComponent.cpp</code> also keeps its own static registrar for the same name; registering twice just overwrites the factory.) Their already-declared fields now round-trip:</p>
 <ul>
 <li><strong>Rigidbody</strong>: body type, mass and gravity flag. See <a href="physics.html#scene-switch">Physics</a>.</li>
 <li><strong>AudioSource</strong>: its clip (as an <a href="#asset-references">asset reference</a>), volume, pitch, loop, spatial, play-on-awake, min/max distance, rolloff and mixer group. See <a href="audio.html#audio-source">Audio</a>.</li>

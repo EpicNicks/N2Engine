@@ -61,7 +61,7 @@
 <div class="content">
 
 <h1>Text &amp; fonts</h1>
-<p class="lead">The <code>text</code> library loads fonts, builds single-channel SDF glyph atlases and lays out UTF-8 text into glyph quads, all on the CPU. The engine wraps it in the <code>Text::Font</code> asset for <code>.ttf</code>/<code>.otf</code> files and ships one embedded default font. Nothing draws text yet: renderers and a <code>TextRenderer</code> come in later phases of <a href="https://github.com/EpicNicks/N2Engine/issues/1">issue #1</a>. This page covers the font backend interface, the atlas, layout rules and the asset.</p>
+<p class="lead">The <code>text</code> library loads fonts, builds single-channel SDF glyph atlases and lays out UTF-8 text into glyph quads, all on the CPU. The engine wraps it in the <code>Text::Font</code> asset for <code>.ttf</code>/<code>.otf</code> files, ships one embedded default font, and draws world-space text with the <code>TextRenderer</code> component on OpenGL. Software-renderer text and UI text come in later phases of <a href="https://github.com/EpicNicks/N2Engine/issues/1">issue #1</a>. This page covers the font backend interface, the atlas, layout rules, the asset and the component.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -81,6 +81,14 @@
 <li><a href="#shaping">The shaper seam</a></li>
 <li><a href="#font-asset">The Font asset</a></li>
 <li><a href="#default-font">The default font</a></li>
+<li><a href="#text-renderer">The TextRenderer component</a>
+<ol>
+<li><a href="#text-renderer-drawing">How it draws</a></li>
+<li><a href="#text-shader">The SDF text shader</a></li>
+<li><a href="#text-backends">Backend support</a></li>
+<li><a href="#text-renderer-lua">From Lua and scene files</a></li>
+</ol>
+</li>
 </ol>
 </div>
 
@@ -210,7 +218,7 @@ Project (www.freetype.org).  All rights reserved.</code></pre>
 <p class="src">Source: <code>text/include/text/Shaper.hpp</code>; tests: <code>Backends/TextLayoutTest.ACustomShaperReplacesTheBasicOne</code></p>
 
 <h2 id="font-asset">The Font asset <span class="badge">PR #45</span></h2>
-<p><code>N2Engine::Text::Font</code> (<code>engine/include/engine/text/Font.hpp</code>) is a <code>Base::Asset</code> with resource type <code>"Font"</code>. It owns an <code>SdfFont</code> built with the default backend and holds no GPU objects, so it loads headless; renderers will create their own textures from its atlas.</p>
+<p><code>N2Engine::Text::Font</code> (<code>engine/include/engine/text/Font.hpp</code>) is a <code>Base::Asset</code> with resource type <code>"Font"</code>. It owns an <code>SdfFont</code> built with the default backend and holds no GPU objects, so it loads headless; renderers create their own textures from its atlas (see <a href="#text-renderer">TextRenderer</a>).</p>
 <ul>
 <li><code>ResourceLoader::Initialize</code> calls <code>Font::RegisterLoader()</code>, which registers the loader for <code>.ttf</code> and <code>.otf</code> with <code>IO::Resources</code> (and so <code>ResourceLoader</code>). It runs once per process; later calls do nothing. Registering from <code>Initialize</code> matters because the static registrar in <code>Font.cpp</code> only runs if the linker keeps that file, and a program that never names <code>Font</code> wouldn't. A program that loads fonts through <code>Resources</code> without ever initializing <code>ResourceLoader</code> should call <code>Font::RegisterLoader()</code> itself. New metadata for those extensions gets <code>resourceType: "Font"</code>.</li>
 <li>When the file is a project asset, the atlas settings come from its <code>.meta</code> <code>customData</code>. Every key is optional; a missing key keeps the default, and a key with the wrong type or an out-of-range value is ignored with a warning. A <code>spreadPx</code> too large for the <code>basePx</code> is reduced to the largest allowed, with a warning. Fonts outside the project use the defaults.</li>
@@ -246,6 +254,96 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <p><code>Font::GetDefault()</code> returns the built-in font with the default atlas settings. It is built on first use and shared after that. It is null only if the embedded font fails to build, which means the build itself is broken: that logs an error, asserts in Debug, and every later call returns null. The font is Noto Sans Regular 2.015 (SIL Open Font License 1.1), subset to printable ASCII, Latin-1 and U+FFFD, about 23 KB. Its pair kerning is stored as a legacy <code>kern</code> table so every backend reads the same pairs. The file, its licence and a README with its source and the subsetting script are in <code>engine/assets/fonts/</code>.</p>
 <p>The <code>text</code> target embeds it at <em>build</em> time: a custom command runs <code>text/cmake/EmbedBinary.cmake</code>, which reads the <code>.ttf</code> and writes a C++ array to the build tree, and <code>GetDefaultFontData()</code> returns it. The generated source is never committed, and programs don't need the font file at run time. The script itself is committed: the repository's <code>.gitignore</code> ignores <code>*.cmake</code>, with an exception for <code>text/cmake/*.cmake</code>.</p>
 <p class="src">Source: <code>engine/src/text/Font.cpp</code> — <code>Font::GetDefault</code>; <code>text/CMakeLists.txt</code>; <code>text/cmake/EmbedBinary.cmake</code>; <code>engine/assets/fonts/README.md</code>; tests: <code>DefaultFontAssetTest.LoadsFromTheEmbeddedBytes</code>, <code>FontBackendRegistryTest.TheEmbeddedDefaultFontIsATrueTypeFile</code></p>
+
+<h2 id="text-renderer">The TextRenderer component <span class="badge">PR #49</span></h2>
+<p><code>N2Engine::Rendering::TextRenderer</code> (<code>engine/include/engine/rendering/TextRenderer.hpp</code>) is an <code>IRenderable</code> that draws a block of UTF-8 text in the world. The text lies on its GameObject's local x/y plane and faces +Z, so the default camera (looking down &minus;Z) sees it from the front. Adding the component creates the object's <code>Positionable</code> if it has none, like the example renderers. Its scene-file type name is <code>"TextRenderer"</code>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Setting</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>SetText</code></td><td>empty</td><td>UTF-8 text; <code>\n</code> breaks lines (see <a href="#layout">Layout</a>)</td></tr>
+<tr><td><code>SetFont</code></td><td>null</td><td>A <code>Font</code> asset; null draws with <a href="#default-font"><code>Font::GetDefault()</code></a>. <code>GetFont()</code> returns what was set, <code>GetEffectiveFont()</code> the font actually used.</td></tr>
+<tr><td><code>SetFontSize</code></td><td>1</td><td>World units per em, so a line of the default font is about 1.36 units tall</td></tr>
+<tr><td><code>SetColor</code></td><td>white</td><td>Multiplies the glyphs; its alpha fades the text</td></tr>
+<tr><td><code>SetHorizontalAlign</code>, <code>SetVerticalAlign</code></td><td><code>Left</code>, <code>Top</code></td><td>Where the block sits relative to the object's origin, as in <a href="#layout">Layout</a></td></tr>
+<tr><td><code>SetMaxWidth</code></td><td>0</td><td>Wrap width in world units; 0 or less never wraps</td></tr>
+<tr><td><code>SetLineSpacing</code></td><td>1</td><td>Multiplies the font's line height</td></tr>
+<tr><td><code>SetLetterSpacing</code></td><td>0</td><td>Extra space between glyphs, in ems; negative tightens</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>GetLayout()</code> returns the current <code>TextLayout</code> in the object's local units (its <code>bounds</code> are the block's box). It needs no renderer, and lays the text out again only if a setting changed. <code>GetLayoutOptions()</code> gives the <code>LayoutOptions</code> the settings make.</p>
+
+<h3 id="text-renderer-drawing">How it draws</h3>
+<ol class="steps">
+<li><strong>Queue.</strong> <code>GetRenderQueue()</code> is <code>Transparent</code> with sort key 0, so the text draws after the opaque geometry, sorted back to front by its object's position, with <code>RenderState::Transparent()</code>: blended, depth-tested, not writing depth, back faces culled. <code>Render(renderer)</code> outside a scene uses the same state. (See <a href="application.html#render">Rendering the scene</a>.)</li>
+<li><strong>Layout.</strong> The text is laid out with <code>Font::Layout</code> when any input changes: the text, the effective font, the size, either alignment, the wrap width, or the line or letter spacing. Setting a value equal to the current one is not a change, and a value changed by loading a scene is detected the same way. The colour is not a layout input.</li>
+<li><strong>Mesh.</strong> <code>TextRenderer::BuildMesh(layout)</code> turns each <code>GlyphQuad</code> into 4 vertices and 6 indices, at z = 0 with normal +Z and white vertex colour. Corners go bottom-left, bottom-right, top-right, top-left (counter-clockwise from +Z), and take the glyph's atlas uvs as they are: uvs are y-down, so the top corners get <code>uv.minY</code>. One text is one mesh and one draw call. The first draw creates the mesh; after a layout change the next draw replaces its data with <code>IRenderer::UpdateMesh</code>, keeping the same mesh. A backend that can't update meshes gets the old one destroyed and a new one created.</li>
+<li><strong>Atlas texture.</strong> Each font's atlas is uploaded once per renderer, as a single-channel texture with <code>TextureOptions::SdfAtlas()</code> (linear, clamp to edge, no mipmaps; see <a href="application.html#text-resources">Texture options</a>). Every <code>TextRenderer</code> drawing that font on that renderer shares it; it is destroyed when the last of them releases it.</li>
+<li><strong>Material.</strong> Each component has its own material (the text shader plus the shared atlas), whose <code>uAlbedo</code> is set to the colour before every draw.</li>
+<li><strong>Draw.</strong> The mesh is drawn with the object's local-to-world matrix. Empty text, or text that is only spaces, has no quads and draws nothing; the mesh is kept for when text comes back.</li>
+</ol>
+<p><strong>Releasing resources.</strong> <code>CleanupRenderResources(renderer)</code> destroys the component's mesh and material on that renderer and releases its share of the atlas texture; for a renderer it holds nothing on, it does nothing. <code>OnDestroy</code> calls it, so destroying the object (or unloading its scene) frees everything. Drawing with a different renderer first releases what the old one held. A component freed without <code>OnDestroy</code> (its object was never in a loaded scene) releases its share of the atlas without calling the renderer, which may already be gone; anything it had created stays with the renderer until the renderer shuts down.</p>
+<p><strong>A destroyed renderer.</strong> The component keeps the renderer's <a href="application.html#renderer-lifetime">lifetime token</a> next to the pointer. Once that renderer has been destroyed, the component never calls it again: on its next draw it drops what it held, without destroying anything, and creates new resources on the renderer it is given, even if that renderer has the old one's address (as when <code>Window</code> recreates its renderer). The shared atlas entries carry the token too, so a texture of a destroyed renderer is never handed out.</p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Drawing the same text again, or changing only its colour, creates and updates nothing: no layout, no mesh upload, no texture or material. A changed layout input updates the existing mesh once, on the next draw. Two texts with the same font on the same renderer share one atlas texture.</p>
+</div>
+
+<div class="callout note" id="design-text-mesh-cache">
+<p class="callout-title">Design decision: one cached mesh per text, updated in place</p>
+<p>Text that changes every frame (a score, a timer) would otherwise destroy and create a GPU mesh each frame. So each <code>TextRenderer</code> keeps one mesh and compares a snapshot of its layout inputs every draw; only a real change lays the text out again and rewrites the mesh's buffers through <code>UpdateMesh</code>, which on OpenGL reuses the buffers when the new text fits. Comparing inputs, rather than setting a dirty flag in each setter, also catches values written by scene loading, which bypasses the setters. The atlas is a per-font resource, not a per-text one, so it is uploaded once per font and renderer and shared; the colour is a material uniform so that fading or tinting text rebuilds nothing. Batching several texts into one draw is left for later. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a>.</p>
+</div>
+
+<div class="callout note" id="design-renderer-lifetime">
+<p class="callout-title">Design decision: renderers are told apart by a lifetime token, not their address <span class="badge">PR #49</span></p>
+<p>A component remembers which renderer its resources live on. The pointer alone can't say that: a renderer recreated by <code>Window</code> is a new object that can sit at the old address, and the component would then draw with meshes and textures the old renderer freed. Telling components when a renderer goes away would mean a registry every renderable joins. Instead each <code>IRenderer</code> owns a token, and a holder keeps a <code>weak_ptr</code> to it: unexpired, the pointer is still that renderer; expired, the resources are gone and the pointer is never called. It costs a <code>weak_ptr</code> per component and needs nothing from backends or test fakes. The atlas cache is also deliberately leaked, so a <code>TextRenderer</code> that Lua keeps alive until exit can still release its entry after other statics are gone.</p>
+</div>
+
+<h3 id="text-shader">The SDF text shader</h3>
+<p><code>IRenderer::GetStandardTextShader()</code> returns the built-in text shader. On OpenGL it reads the atlas's red channel as the distance <code>d</code> (the outline at 0.5, inside higher; the atlas stores the edge at 128, which is 0.502), and computes the coverage as <code>smoothstep(0.5 &minus; w, 0.5 + w, d)</code> with <code>w = 0.5 &middot; fwidth(d)</code>: a ramp one screen pixel wide around the outline, so edges stay antialiased at any size or distance with nothing to tune. The colour is <code>uAlbedo</code> times the vertex colour, with the coverage multiplied into its alpha; a fragment whose alpha is below 0.01 is discarded. Outlines, shadows and other effects come later (P5).</p>
+<p class="src">Source: <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>OpenGLRenderer::CreateStandardShaders</code></p>
+
+<h3 id="text-backends">Backend support</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Backend</th><th>Text</th></tr></thead>
+<tbody>
+<tr><td>OpenGL</td><td>Drawn with the SDF shader above, blended.</td></tr>
+<tr><td>Software</td><td>Not drawn yet: <code>GetStandardTextShader()</code> returns null, so <code>TextRenderer</code> creates nothing and draws nothing. The renderer does support everything else text uses (single-channel textures with options, <code>UpdateMesh</code>). Alpha-tested SDF text arrives in P3.</td></tr>
+<tr><td>Vulkan</td><td>Not drawn: the backend draws nothing yet (<a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>), and has no text shader.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Where the text shader is null, the first <code>TextRenderer</code> to draw logs one warning, naming the renderer, for the whole process.</p>
+
+<h3 id="text-renderer-lua">From Lua and scene files</h3>
+<p><code>GameObject:AddComponent("TextRenderer")</code> returns a handle with <code>SetText</code>/<code>GetText</code>, <code>SetColor</code>/<code>GetColor</code>, <code>SetFontSize</code>, <code>SetMaxWidth</code>, <code>SetLineSpacing</code> and <code>SetLetterSpacing</code> (each with its getter), plus:</p>
+<ul>
+<li><code>SetAlignment(horizontal, vertical)</code> with the names <code>"Left"</code>, <code>"Center"</code>, <code>"Right"</code> and <code>"Top"</code>, <code>"Middle"</code>, <code>"Bottom"</code>, <code>"Baseline"</code>. An unknown name is a Lua error and changes neither alignment. <code>GetAlignment()</code> returns both names.</li>
+<li><code>SetFont(path)</code> loads a font through <code>Resources</code> (for example <code>"res://fonts/Title.ttf"</code>); <code>SetFont(nil)</code> goes back to the default font. A path that doesn't load a font is a Lua error and keeps the current font.</li>
+<li><code>GetBounds()</code> returns <code>minX, minY, maxX, maxY</code> of the laid-out block, in local units (all 0 for empty text).</li>
+</ul>
+<pre class="lang-lua"><code>local label = GameObject.Create("Label")
+local text = label:AddComponent("TextRenderer") -- also gives the object a Positionable
+label:GetPositionable():SetPosition(Vector3.new(0, 2, 0))
+text:SetText("Score: 0")
+text:SetFontSize(0.5)
+text:SetAlignment("Center", "Middle")
+text:SetColor(Color.Yellow)
+SceneManager.GetCurrentScene():AddRootGameObject(label)</code></pre>
+<p>Scene files save every setting. Alignments are saved by name, and an unknown name loads as <code>Left</code> / <code>Top</code>. The font is saved as its asset UUID, or <code>null</code> for the default font.</p>
+<pre class="lang-json"><code>{
+  "type": "TextRenderer",
+  "data": {
+    "_text": "Score: 0", "_font": null, "_fontSize": 0.5,
+    "_color": { "r": 1.0, "g": 1.0, "b": 0.0, "a": 1.0 },
+    "_horizontalAlign": "Center", "_verticalAlign": "Middle",
+    "_maxWidth": 0.0, "_lineSpacing": 1.0, "_letterSpacing": 0.0
+  }
+}</code></pre>
+<p class="src">Source: <code>engine/src/rendering/TextRenderer.cpp</code> — <code>TextRenderer::RenderInQueue</code>, <code>TextRenderer::GetLayout</code>, <code>TextRenderer::BuildMesh</code>; <code>engine/include/engine/text/TextJson.hpp</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>; tests: <code>TextRendererMeshTest.*</code>, <code>TextRendererTest.*</code> (<code>tests/engine/rendering/TextRendererTests.cpp</code>)</p>
 
 <div class="page-footer">
 <span>Describes master through PR #34.</span>
