@@ -24,30 +24,45 @@ namespace N2Engine::Rendering
         using Renderer::Common::ITexture;
 
         // One atlas texture per (renderer, font), shared by every TextRenderer drawing that font there.
-        // The entry holds the font, so the font's address (half the key) stays valid while it exists.
+        // The entry holds the font, so the font's address (half the key) stays valid while it exists. The
+        // renderer's address can be reused by a later renderer, so the entry also keeps the renderer's
+        // lifetime token: an entry whose renderer is gone is never handed out or destroyed.
         struct AtlasTexture
         {
             std::shared_ptr<Text::Font> font;
+            std::weak_ptr<const void> rendererLifetime;
             ITexture *texture = nullptr;
             std::size_t users = 0;
         };
 
         using AtlasKey = std::pair<IRenderer *, const Text::Font *>;
 
+        bool SameOwner(const std::weak_ptr<const void> &a, const std::weak_ptr<const void> &b)
+        {
+            return !a.owner_before(b) && !b.owner_before(a);
+        }
+
         std::map<AtlasKey, AtlasTexture> &AtlasTextures()
         {
-            static std::map<AtlasKey, AtlasTexture> textures;
-            return textures;
+            // Leaked on purpose: a TextRenderer kept alive by Lua can be destroyed after function-local statics
+            static auto *textures = new std::map<AtlasKey, AtlasTexture>();
+            return *textures;
         }
 
         ITexture *AcquireAtlasTexture(IRenderer &renderer, const std::shared_ptr<Text::Font> &font)
         {
             auto &textures = AtlasTextures();
             const AtlasKey key{&renderer, font.get()};
+            const std::weak_ptr<const void> lifetime = renderer.GetLifetimeToken();
             if (const auto it = textures.find(key); it != textures.end())
             {
-                ++it->second.users;
-                return it->second.texture;
+                if (SameOwner(it->second.rendererLifetime, lifetime))
+                {
+                    ++it->second.users;
+                    return it->second.texture;
+                }
+                // Left by a destroyed renderer at the same address: its texture went with it
+                textures.erase(it);
             }
 
             const Text::FontAtlas &atlas = font->GetSdfFont().GetAtlas();
@@ -63,15 +78,18 @@ namespace N2Engine::Rendering
             {
                 return nullptr;
             }
-            textures.emplace(key, AtlasTexture{font, texture, 1});
+            textures.emplace(key, AtlasTexture{font, lifetime, texture, 1});
             return texture;
         }
 
-        void ReleaseAtlasTexture(IRenderer *renderer, const Text::Font *font, const bool callRenderer)
+        /// rendererLifetime is the token the caller held when it took the texture: an entry made since by
+        /// another renderer at the same address isn't the caller's to release.
+        void ReleaseAtlasTexture(IRenderer *renderer, const std::weak_ptr<const void> &rendererLifetime,
+                                 const Text::Font *font, const bool callRenderer)
         {
             auto &textures = AtlasTextures();
             const auto it = textures.find(AtlasKey{renderer, font});
-            if (it == textures.end())
+            if (it == textures.end() || !SameOwner(it->second.rendererLifetime, rendererLifetime))
             {
                 return;
             }
@@ -79,7 +97,7 @@ namespace N2Engine::Rendering
             {
                 return;
             }
-            if (callRenderer && renderer)
+            if (callRenderer && renderer && !rendererLifetime.expired())
             {
                 renderer->DestroyTexture(it->second.texture);
             }
@@ -116,9 +134,9 @@ namespace N2Engine::Rendering
         ReleaseRenderResources(false);
     }
 
-    bool TextRenderer::LayoutInputs::Matches(const LayoutInputs &other) const
+    bool TextRenderer::LayoutInputs::MatchesSettings(const LayoutInputs &other) const
     {
-        return text == other.text && font == other.font && SameFloat(fontSize, other.fontSize) &&
+        return font == other.font && SameFloat(fontSize, other.fontSize) &&
                SameFloat(maxWidth, other.maxWidth) && SameFloat(lineSpacing, other.lineSpacing) &&
                SameFloat(letterSpacing, other.letterSpacing) && horizontalAlign == other.horizontalAlign &&
                verticalAlign == other.verticalAlign;
@@ -144,8 +162,9 @@ namespace N2Engine::Rendering
     const Text::TextLayout &TextRenderer::GetLayout() const
     {
         std::shared_ptr<Text::Font> font = GetEffectiveFont();
+        // The text is compared in place and copied only when the layout changes, not every frame
         LayoutInputs inputs{
-            .text = _text,
+            .text = {},
             .font = font.get(),
             .fontSize = _fontSize,
             .maxWidth = _maxWidth,
@@ -155,12 +174,13 @@ namespace N2Engine::Rendering
             .verticalAlign = _verticalAlign,
         };
 
-        if (_layoutInputs && _layoutInputs->Matches(inputs))
+        if (_layoutInputs && _layoutInputs->text == _text && _layoutInputs->MatchesSettings(inputs))
         {
             return _layout;
         }
 
         _layout = font ? font->Layout(_text, GetLayoutOptions()) : Text::TextLayout{};
+        inputs.text = _text;
         _layoutInputs = std::move(inputs);
         _layoutFont = std::move(font);
         ++_layoutVersion;
@@ -202,14 +222,29 @@ namespace N2Engine::Rendering
         RenderInQueue(renderer, Renderer::Common::RenderState::Transparent());
     }
 
-    void TextRenderer::InitializeRenderResources(Renderer::Common::IRenderer *renderer)
+    bool TextRenderer::HoldsRenderer(const Renderer::Common::IRenderer *renderer) const
     {
-        if (!renderer || renderer == _renderer)
+        return renderer && renderer == _renderer && !_rendererLifetime.expired();
+    }
+
+    void TextRenderer::BindRenderer(Renderer::Common::IRenderer *renderer)
+    {
+        if (HoldsRenderer(renderer))
         {
             return;
         }
+        // Everything held belongs to the previous renderer, which is only called if it still exists
         ReleaseRenderResources(true);
         _renderer = renderer;
+        _rendererLifetime = renderer->GetLifetimeToken();
+    }
+
+    void TextRenderer::InitializeRenderResources(Renderer::Common::IRenderer *renderer)
+    {
+        if (renderer)
+        {
+            BindRenderer(renderer);
+        }
     }
 
     void TextRenderer::CleanupRenderResources(Renderer::Common::IRenderer *renderer)
@@ -226,9 +261,11 @@ namespace N2Engine::Rendering
         CleanupRenderResources(_renderer);
     }
 
-    void TextRenderer::ReleaseRenderResources(const bool callRenderer)
+    void TextRenderer::ReleaseRenderResources(bool callRenderer)
     {
-        if (callRenderer && _renderer)
+        // A destroyed renderer freed everything itself, and its address may now be another renderer's
+        callRenderer = callRenderer && _renderer && !_rendererLifetime.expired();
+        if (callRenderer)
         {
             if (_mesh)
             {
@@ -241,7 +278,7 @@ namespace N2Engine::Rendering
         }
         if (_atlasFont)
         {
-            ReleaseAtlasTexture(_renderer, _atlasFont, callRenderer);
+            ReleaseAtlasTexture(_renderer, _rendererLifetime, _atlasFont, callRenderer);
         }
 
         _mesh = nullptr;
@@ -250,6 +287,7 @@ namespace N2Engine::Rendering
         _atlasFont = nullptr;
         _meshVersion = 0;
         _renderer = nullptr;
+        _rendererLifetime.reset();
     }
 
     bool TextRenderer::EnsureAtlasTexture(const std::shared_ptr<Text::Font> &font)
@@ -261,7 +299,7 @@ namespace N2Engine::Rendering
 
         if (_atlasFont)
         {
-            ReleaseAtlasTexture(_renderer, _atlasFont, true);
+            ReleaseAtlasTexture(_renderer, _rendererLifetime, _atlasFont, true);
             _atlasTexture = nullptr;
             _atlasFont = nullptr;
         }
@@ -313,12 +351,7 @@ namespace N2Engine::Rendering
         {
             return;
         }
-        if (renderer != _renderer)
-        {
-            // Everything held belongs to the previous renderer
-            ReleaseRenderResources(true);
-            _renderer = renderer;
-        }
+        BindRenderer(renderer);
 
         const Text::TextLayout &layout = GetLayout();
         const std::shared_ptr<Text::Font> font = _layoutFont;

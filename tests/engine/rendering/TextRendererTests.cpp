@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -692,13 +693,43 @@ TEST(TextRendererTest, ANewRendererReleasesWhatTheOldOneHeld)
     EXPECT_TRUE(second.textures.empty());
 }
 
+TEST(TextRendererTest, ARendererRecreatedAtTheSameAddressGetsNewResources)
+{
+    // Window recreates its renderer, and the new one can land where the old one was. The components
+    // aren't told, so they must not take the new renderer for the old one.
+    std::optional<RecordingRenderer> renderer;
+    renderer.emplace();
+    auto object = MakeText("Recreated", "Text");
+    auto other = MakeText("RecreatedToo", "More"); // shares the atlas texture
+    object.text->Render(&*renderer);
+    other.text->Render(&*renderer);
+    ASSERT_EQ(renderer->createdTextures.size(), 1u);
+
+    renderer.reset();   // frees everything it made
+    renderer.emplace(); // same storage, so the same address
+
+    object.text->Render(&*renderer);
+    other.text->Render(&*renderer);
+    EXPECT_EQ(renderer->createdTextures.size(), 1u); // a new atlas, not the old renderer's
+    EXPECT_EQ(renderer->meshes.size(), 2u);
+    EXPECT_EQ(renderer->materials.size(), 2u);
+    EXPECT_EQ(renderer->draws.size(), 2u);
+    EXPECT_EQ(renderer->destroyMeshCalls, 0); // nothing of the old renderer's is destroyed here
+    EXPECT_EQ(renderer->destroyTextureCalls, 0);
+
+    object.text->CleanupRenderResources(&*renderer);
+    other.text->CleanupRenderResources(&*renderer);
+    EXPECT_TRUE(renderer->meshes.empty());
+    EXPECT_TRUE(renderer->textures.empty());
+}
+
 TEST(TextRendererTest, DestroyingTheObjectInASceneReleasesItsResources)
 {
     RecordingRenderer renderer;
     const auto scene = Scene::Create("TextRenderer_Destroy");
     auto object = MakeText("Destroyed", "Bye");
     scene->AddRootGameObject(object.gameObject);
-    scene->ProcessAttachQueue(); // as a loaded scene does; only attached components get OnDestroy
+    scene->ProcessAttachQueue(); // as a loaded scene does
     scene->Render(&renderer, Camera{});
     ASSERT_EQ(renderer.meshes.size(), 1u);
 

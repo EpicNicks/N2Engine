@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <glad/glad.h>
@@ -48,6 +50,14 @@ namespace Renderer::Common
     {
     public:
         virtual ~IRenderer() = default;
+
+        /**
+         * Expires when this renderer is destroyed. A component holding resources keeps it next to its
+         * IRenderer*: while it hasn't expired the pointer still names this renderer, and once it has, the
+         * resources are gone and the pointer must not be called, even if a new renderer now lives at the
+         * same address.
+         */
+        [[nodiscard]] std::weak_ptr<const void> GetLifetimeToken() const { return m_lifetime; }
 
         // Lifecycle
         virtual bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) = 0;
@@ -136,5 +146,8 @@ namespace Renderer::Common
         // Debug
         virtual void SetWireframe(bool enabled) = 0;
         [[nodiscard]] virtual const char* GetRendererName() const = 0;
+
+    private:
+        std::shared_ptr<const int> m_lifetime = std::make_shared<const int>(0);
     };
 }

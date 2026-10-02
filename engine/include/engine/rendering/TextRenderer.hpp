@@ -13,6 +13,7 @@
 #include "engine/IRenderable.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/text/Font.hpp"
+#include "engine/text/TextJson.hpp" // the alignments' JSON names: every user must see the same serializer
 
 namespace N2Engine::Rendering
 {
@@ -113,12 +114,17 @@ namespace N2Engine::Rendering
             Text::HorizontalAlign horizontalAlign = Text::HorizontalAlign::Left;
             Text::VerticalAlign verticalAlign = Text::VerticalAlign::Top;
 
-            [[nodiscard]] bool Matches(const LayoutInputs &other) const;
+            /// Everything but the text, which GetLayout compares without copying it.
+            [[nodiscard]] bool MatchesSettings(const LayoutInputs &other) const;
         };
 
         /// Releases every GPU resource. With callRenderer false (the destructor, when the renderer may be
         /// gone) nothing is destroyed on the renderer; it frees them itself when it shuts down.
         void ReleaseRenderResources(bool callRenderer);
+        /// Whether the resources held are on this renderer: the same one, still alive.
+        [[nodiscard]] bool HoldsRenderer(const Renderer::Common::IRenderer *renderer) const;
+        /// Makes renderer the one resources are created on, releasing any held on another.
+        void BindRenderer(Renderer::Common::IRenderer *renderer);
         bool EnsureAtlasTexture(const std::shared_ptr<Text::Font> &font);
         bool EnsureMesh(const Text::TextLayout &layout);
 
@@ -142,6 +148,7 @@ namespace N2Engine::Rendering
 
         // GPU resources, all on _renderer
         Renderer::Common::IRenderer *_renderer = nullptr;
+        std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed
         Renderer::Common::IMesh *_mesh = nullptr;
         Renderer::Common::IMaterial *_material = nullptr;
         Renderer::Common::ITexture *_atlasTexture = nullptr; // shared per (renderer, font); not ours to destroy

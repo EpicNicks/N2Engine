@@ -283,6 +283,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <li><strong>Draw.</strong> The mesh is drawn with the object's local-to-world matrix. Empty text, or text that is only spaces, has no quads and draws nothing; the mesh is kept for when text comes back.</li>
 </ol>
 <p><strong>Releasing resources.</strong> <code>CleanupRenderResources(renderer)</code> destroys the component's mesh and material on that renderer and releases its share of the atlas texture; for a renderer it holds nothing on, it does nothing. <code>OnDestroy</code> calls it, so destroying the object (or unloading its scene) frees everything. Drawing with a different renderer first releases what the old one held. A component freed without <code>OnDestroy</code> (its object was never in a loaded scene) releases its share of the atlas without calling the renderer, which may already be gone; anything it had created stays with the renderer until the renderer shuts down.</p>
+<p><strong>A destroyed renderer.</strong> The component keeps the renderer's <a href="application.html#renderer-lifetime">lifetime token</a> next to the pointer. Once that renderer has been destroyed, the component never calls it again: on its next draw it drops what it held, without destroying anything, and creates new resources on the renderer it is given, even if that renderer has the old one's address (as when <code>Window</code> recreates its renderer). The shared atlas entries carry the token too, so a texture of a destroyed renderer is never handed out.</p>
 
 <div class="callout guarantee">
 <p class="callout-title">Guarantee</p>
@@ -292,6 +293,11 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <div class="callout note" id="design-text-mesh-cache">
 <p class="callout-title">Design decision: one cached mesh per text, updated in place</p>
 <p>Text that changes every frame (a score, a timer) would otherwise destroy and create a GPU mesh each frame. So each <code>TextRenderer</code> keeps one mesh and compares a snapshot of its layout inputs every draw; only a real change lays the text out again and rewrites the mesh's buffers through <code>UpdateMesh</code>, which on OpenGL reuses the buffers when the new text fits. Comparing inputs, rather than setting a dirty flag in each setter, also catches values written by scene loading, which bypasses the setters. The atlas is a per-font resource, not a per-text one, so it is uploaded once per font and renderer and shared; the colour is a material uniform so that fading or tinting text rebuilds nothing. Batching several texts into one draw is left for later. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a>.</p>
+</div>
+
+<div class="callout note" id="design-renderer-lifetime">
+<p class="callout-title">Design decision: renderers are told apart by a lifetime token, not their address <span class="badge">PR #49</span></p>
+<p>A component remembers which renderer its resources live on. The pointer alone can't say that: a renderer recreated by <code>Window</code> is a new object that can sit at the old address, and the component would then draw with meshes and textures the old renderer freed. Telling components when a renderer goes away would mean a registry every renderable joins. Instead each <code>IRenderer</code> owns a token, and a holder keeps a <code>weak_ptr</code> to it: unexpired, the pointer is still that renderer; expired, the resources are gone and the pointer is never called. It costs a <code>weak_ptr</code> per component and needs nothing from backends or test fakes. The atlas cache is also deliberately leaked, so a <code>TextRenderer</code> that Lua keeps alive until exit can still release its entry after other statics are gone.</p>
 </div>
 
 <h3 id="text-shader">The SDF text shader</h3>
@@ -319,12 +325,13 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <li><code>GetBounds()</code> returns <code>minX, minY, maxX, maxY</code> of the laid-out block, in local units (all 0 for empty text).</li>
 </ul>
 <pre class="lang-lua"><code>local label = GameObject.Create("Label")
-label:GetPositionable():SetPosition(Vector3(0, 2, 0))
-local text = label:AddComponent("TextRenderer")
+local text = label:AddComponent("TextRenderer") -- also gives the object a Positionable
+label:GetPositionable():SetPosition(Vector3.new(0, 2, 0))
 text:SetText("Score: 0")
 text:SetFontSize(0.5)
 text:SetAlignment("Center", "Middle")
-text:SetColor(Color.Yellow)</code></pre>
+text:SetColor(Color.Yellow)
+SceneManager.GetCurrentScene():AddRootGameObject(label)</code></pre>
 <p>Scene files save every setting. Alignments are saved by name, and an unknown name loads as <code>Left</code> / <code>Top</code>. The font is saved as its asset UUID, or <code>null</code> for the default font.</p>
 <pre class="lang-json"><code>{
   "type": "TextRenderer",
