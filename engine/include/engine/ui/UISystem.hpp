@@ -61,7 +61,7 @@ namespace N2Engine::UI
          * The UI pass, run by Application::Render after Scene::Render. Sets the renderer's view to identity and
          * its projection to OverlayProjection(viewport), then draws each item of CollectGraphics with a rect
          * of positive size, in order, with OverlayState(). Does nothing (and leaves the view and projection
-         * alone) if there is nothing to draw.
+         * alone) if CollectGraphics finds no graphics.
          */
         static void Render(const Scene &scene, Renderer::Common::IRenderer *renderer, const Vector2i &viewport);
 

@@ -22,8 +22,9 @@ namespace N2Engine::UI
      * (ties in hierarchy order), so a higher sortOrder is on top and is hit first.
      *
      * Only canvases with no Canvas above them in the hierarchy count. A Canvas under another canvas is ignored
-     * (its object is laid out and drawn as an ordinary element of the outer canvas). A disabled Canvas
-     * component, like an inactive object, hides its whole tree from drawing and hit tests.
+     * (its object is laid out and drawn as an ordinary element of the outer canvas), whether it is enabled
+     * or not. A disabled root Canvas component, like an inactive object, hides its whole tree from drawing
+     * and hit tests.
      */
     class Canvas final : public SerializableComponent
     {

@@ -1,6 +1,7 @@
 #include "engine/ui/UISystem.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <ranges>
 
 #include "engine/Application.hpp"
@@ -28,10 +29,16 @@ namespace N2Engine::UI
             return nullptr;
         }
 
+        struct RootCanvas
+        {
+            GameObject *gameObject = nullptr;
+            int sortOrder = 0;
+        };
+
         /// Finds the root canvases under an object: the first Canvas on each path down (a Canvas below one is
         /// part of the outer canvas's tree). Inactive objects and their subtrees are skipped, and so is the
         /// tree of a disabled Canvas.
-        void FindCanvases(const GameObject::Ptr &gameObject, std::vector<GameObject *> &out)
+        void FindCanvases(const GameObject::Ptr &gameObject, std::vector<RootCanvas> &out)
         {
             if (!gameObject || !gameObject->IsActiveInHierarchy())
             {
@@ -39,9 +46,9 @@ namespace N2Engine::UI
             }
             if (gameObject->HasComponent<Canvas>())
             {
-                if (ActiveCanvasOn(*gameObject))
+                if (const Canvas *canvas = ActiveCanvasOn(*gameObject))
                 {
-                    out.push_back(gameObject.get());
+                    out.push_back(RootCanvas{gameObject.get(), canvas->GetSortOrder()});
                 }
                 return;
             }
@@ -97,21 +104,18 @@ namespace N2Engine::UI
             return items;
         }
 
-        std::vector<GameObject *> canvasObjects;
+        std::vector<RootCanvas> canvases;
         for (const auto &root : scene.GetRootGameObjects())
         {
-            FindCanvases(root, canvasObjects);
+            FindCanvases(root, canvases);
         }
         // Lower sortOrder first (underneath); ties keep hierarchy order
-        std::ranges::stable_sort(canvasObjects, [](const GameObject *a, const GameObject *b)
-        {
-            return ActiveCanvasOn(*a)->GetSortOrder() < ActiveCanvasOn(*b)->GetSortOrder();
-        });
+        std::ranges::stable_sort(canvases, std::less{}, &RootCanvas::sortOrder);
 
         const Rect canvasRect{0.0f, 0.0f, static_cast<float>(viewport[0]), static_cast<float>(viewport[1])};
-        for (GameObject *canvasObject : canvasObjects)
+        for (const RootCanvas &canvas : canvases)
         {
-            LayOut(*canvasObject, canvasRect, true, items);
+            LayOut(*canvas.gameObject, canvasRect, true, items);
         }
         return items;
     }

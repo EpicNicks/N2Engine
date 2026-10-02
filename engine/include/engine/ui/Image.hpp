@@ -16,8 +16,9 @@ namespace N2Engine::UI
      * background, an icon). Drawn with the renderer's standard unlit shader on a unit quad.
      *
      * The texture is not owned or serialized: whoever created it (IRenderer::CreateTexture) keeps it alive while
-     * the Image uses it, and clears it (SetTexture(nullptr)) before destroying it. Its v = 0 row is at the
-     * bottom of the rect.
+     * the Image uses it, and clears it (SetTexture(nullptr)) before destroying it. The first row of the
+     * texture's pixel data (v = 0) is drawn at the bottom of the rect, so image data stored top row first
+     * shows upside down unless it is flipped before CreateTexture.
      */
     class Image final : public UIGraphic
     {
