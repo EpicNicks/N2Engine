@@ -254,7 +254,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <p>The <code>text</code> target embeds it at <em>build</em> time: a custom command runs <code>text/cmake/EmbedBinary.cmake</code>, which reads the <code>.ttf</code> and writes a C++ array to the build tree, and <code>GetDefaultFontData()</code> returns it. The generated source is never committed, and programs don't need the font file at run time. The script itself is committed: the repository's <code>.gitignore</code> ignores <code>*.cmake</code>, with an exception for <code>text/cmake/*.cmake</code>.</p>
 <p class="src">Source: <code>engine/src/text/Font.cpp</code> — <code>Font::GetDefault</code>; <code>text/CMakeLists.txt</code>; <code>text/cmake/EmbedBinary.cmake</code>; <code>engine/assets/fonts/README.md</code>; tests: <code>DefaultFontAssetTest.LoadsFromTheEmbeddedBytes</code>, <code>FontBackendRegistryTest.TheEmbeddedDefaultFontIsATrueTypeFile</code></p>
 
-<h2 id="text-renderer">The TextRenderer component <span class="badge">Text P2</span></h2>
+<h2 id="text-renderer">The TextRenderer component <span class="badge">PR #49</span></h2>
 <p><code>N2Engine::Rendering::TextRenderer</code> (<code>engine/include/engine/rendering/TextRenderer.hpp</code>) is an <code>IRenderable</code> that draws a block of UTF-8 text in the world. The text lies on its GameObject's local x/y plane and faces +Z, so the default camera (looking down &minus;Z) sees it from the front. Adding the component creates the object's <code>Positionable</code> if it has none, like the example renderers. Its scene-file type name is <code>"TextRenderer"</code>.</p>
 <div class="table-wrap">
 <table>
