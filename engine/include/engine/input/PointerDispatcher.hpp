@@ -36,7 +36,8 @@ namespace N2Engine::Input
      * object under the pointer. Application owns one and runs it once per frame, after input polling and the
      * fixed steps and before Scene::Update (where Unity sends them).
      *
-     * Each frame it finds the target: first the UI hit provider (none until UI exists), then the world hit
+     * Each frame it finds the target: first the UI hit provider (Application's is UI::UISystem's rect hit test;
+     * a dispatcher of your own has none until one is set), then, if the UI hit nothing, the world hit
      * provider, which by default casts the main camera's ScreenPointToRay against physics
      * (Raycast::Single with the pick mask, Layers::DefaultRaycastMask unless changed, so Ignore Raycast can't
      * be clicked; the target is the hit collider's GameObject). Without a physics backend nothing is hit.
@@ -59,13 +60,14 @@ namespace N2Engine::Input
         /// One frame from the given pointer state (what Update does with the mouse's state; tests call it)
         void Process(const PointerState &state);
 
-        /// For UI (#42): asked before the world, and its hit wins. nullptr removes it.
+        /// For UI: asked before the world, and its hit wins (the world provider isn't called). nullptr removes
+        /// it. Application installs UI::UISystem::MakeApplicationHitProvider().
         void SetUIHitProvider(HitProvider provider) { _uiProvider = std::move(provider); }
         /// Replaces the physics pick (tests, or a host with its own camera and viewport); nullptr restores it
         void SetWorldHitProvider(HitProvider provider) { _worldProvider = std::move(provider); }
 
         /// Whether the UI hit provider reported an element under the pointer in the last frame processed.
-        /// Always false until UI exists. Games ask it to keep clicks on UI from reaching gameplay input.
+        /// Games ask it to keep clicks on UI from reaching gameplay input.
         [[nodiscard]] bool IsPointerOverUI() const { return _pointerOverUI; }
 
         /// The layers the default physics pick can hit (Layers::DefaultRaycastMask to start with)

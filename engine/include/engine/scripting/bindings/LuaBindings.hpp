@@ -37,6 +37,8 @@ namespace N2Engine::Scripting
 
         // Components that scripts can add to GameObjects by name (renderers, physics, audio, LuaComponent)
         void BindComponents(LuaRuntime& runtime);
+        // Screen-space UI: RectTransform, Canvas, Image, Rect and the UI table
+        void BindUI(LuaRuntime& runtime);
 
         /// GameObject:AddComponent("BoxCollider"): the component as its Lua type; raises a Lua error for unknown names
         sol::object AddComponentByName(GameObject& gameObject, const std::string& typeName, sol::this_state state);

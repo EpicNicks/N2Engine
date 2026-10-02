@@ -86,6 +86,8 @@ namespace Renderer::Common
         virtual void DestroyMaterial(IMaterial *material) = 0;
 
         // Rendering
+        /// Row-major view and projection for the draws submitted after this call (until the next call), so a
+        /// frame can change them between passes (the UI pass draws after the scene with its own projection)
         virtual void SetViewProjection(const float *view, const float *projection) = 0;
         virtual void UpdateSceneLighting(const SceneLightingData &lighting,
                                          const N2Engine::Math::Vector3 &cameraPosition) = 0;

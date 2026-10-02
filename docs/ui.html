@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UI · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html" aria-current="page">UI</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>UI</h1>
+<p class="lead">Screen-space overlay UI, built from ordinary GameObjects and components as in Unity's uGUI: a <code>Canvas</code> at the root, <code>RectTransform</code> layout instead of a <code>Positionable</code>, and <code>Image</code> graphics. The UI is drawn in its own pass after the scene and gets the pointer before world picking. This page covers the coordinate space, layout, draw order, the UI pass, pointer input and the Lua API. Buttons, UI text and world-space canvases come later in <a href="https://github.com/EpicNicks/N2Engine/issues/42">issue #42</a>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#model">UI objects</a></li>
+<li><a href="#space">Canvas space</a></li>
+<li><a href="#layout">RectTransform layout</a></li>
+<li><a href="#order">Canvases and draw order</a></li>
+<li><a href="#pass">The UI pass</a></li>
+<li><a href="#image">Image</a></li>
+<li><a href="#pointer">Pointer input</a></li>
+<li><a href="#lua">Lua API</a></li>
+<li><a href="#serialization">Serialization</a></li>
+<li><a href="#not-yet">Not yet</a></li>
+</ol>
+</div>
+
+<h2 id="model">UI objects <span class="badge">PR #50</span></h2>
+<p>A UI is a tree of GameObjects under an object with a <code>Canvas</code>. Each element has a <code>RectTransform</code> and usually a graphic such as <code>Image</code>. UI objects need no <code>Positionable</code>, so layout stays separate from 3D transforms and physics. Because they are ordinary scene objects, they are saved with the scene, appear in the editor's entity list, can be added from Lua by name, and receive the usual lifecycle callbacks.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Component</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td><code>UI::Canvas</code></td><td>The root of a UI tree. Has a <code>sortOrder</code>; the render mode is always <code>ScreenSpaceOverlay</code> for now. One per object.</td></tr>
+<tr><td><code>UI::RectTransform</code></td><td>Anchors, pivot, anchored position and size delta; the element's rect is resolved from its parent's rect. One per object (<code>AddComponent</code> returns the existing one).</td></tr>
+<tr><td><code>UI::UIGraphic</code></td><td>Base of everything the UI pass draws: a colour, a <code>raycastTarget</code> flag, and <code>RenderUI(renderer, rect, state)</code>. It is not an <code>IRenderable</code>, so the scene pass never draws it.</td></tr>
+<tr><td><code>UI::Image</code></td><td>A <code>UIGraphic</code> that fills its rect with its colour, optionally multiplied by a texture.</td></tr>
+<tr><td><code>UI::UISystem</code></td><td>Static functions: layout, the UI pass, the hit test, and the helpers below.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>UISystem::CreateCanvas(name)</code> returns a new object on the UI layer (<a href="physics.html#layers">layer 5</a>) with a <code>Canvas</code>. <code>UISystem::CreateElement(name)</code> returns one on the UI layer with a <code>RectTransform</code>. Adding the components by hand works too: the components never change an object's layer, because a scene's saved layer is read before its components are created. The UI ignores layers. The hit test doesn't filter by layer, and the world pick's mask doesn't affect UI.</p>
+<pre class="lang-cpp"><code>auto canvas = UI::UISystem::CreateCanvas("HUD");
+scene.AddRootGameObject(canvas);
+
+auto panel = UI::UISystem::CreateElement("HealthBar");
+auto *rect = panel-&gt;GetComponent&lt;UI::RectTransform&gt;();
+rect-&gt;SetAnchorMin({0.0f, 1.0f});      // top-left corner of the canvas
+rect-&gt;SetAnchorMax({0.0f, 1.0f});
+rect-&gt;SetPivot({0.0f, 1.0f});
+rect-&gt;SetAnchoredPosition({16.0f, -16.0f});
+rect-&gt;SetSizeDelta({200.0f, 24.0f});
+panel-&gt;AddComponent&lt;UI::Image&gt;()-&gt;SetColor(Common::Color{0.8f, 0.1f, 0.1f, 1.0f});
+canvas-&gt;AddChild(panel, false);
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/ui/</code>; <code>engine/src/ui/UISystem.cpp</code> — <code>UISystem::CreateCanvas</code>, <code>UISystem::CreateElement</code>; tests: <code>RectTransformLayoutTest.HelpersPutObjectsOnTheUILayer</code></p>
+
+<h2 id="space">Canvas space</h2>
+<p>Layout uses <strong>canvas space</strong>: pixels in window coordinates' units, with the origin at the canvas's <em>bottom-left</em> and y pointing <em>up</em>, as in Unity's screen space. A <code>UI::Rect</code> is <code>x</code>, <code>y</code> (its bottom-left corner), <code>width</code> and <code>height</code>.</p>
+<ul>
+<li>The cursor (<code>Mouse::GetPosition</code>, Lua <code>Input.GetMousePosition</code>) is in window coordinates, with the origin at the top-left and y down. <code>UISystem::WindowToCanvas(point, viewport)</code> converts a point: <code>y' = height - y</code>.</li>
+<li>The viewport is the window's size in window coordinates (<code>Window::GetWindowDimensions</code>), not the framebuffer's. On a high-DPI display the framebuffer is larger. The UI projection maps the canvas onto whatever the framebuffer is, so the UI is the same size in window units on any display, and the cursor lines up with it.</li>
+<li><code>Rect::Contains(point)</code> includes all four edges, so neighbouring rects leave no gap between them. A rect whose width or height is zero or negative has no area: it isn't drawn and nothing hits it.</li>
+</ul>
+
+<h2 id="layout">RectTransform layout <span class="badge">PR #50</span></h2>
+<p>An element's rect is worked out from its parent's rect, the same way as in Unity:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Meaning</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>anchorMin</code>, <code>anchorMax</code></td><td>The corners of the <em>anchor box</em>, as fractions of the parent rect: (0, 0) is its bottom-left and (1, 1) its top-right. When the anchors are equal, the element is pinned to one point of the parent. When they differ, the element stretches with the parent.</td><td>(0.5, 0.5) both</td></tr>
+<tr><td><code>pivot</code></td><td>The point of the element that <code>anchoredPosition</code> places, as a fraction of its own size</td><td>(0.5, 0.5)</td></tr>
+<tr><td><code>anchoredPosition</code></td><td>The pivot's offset in pixels from the <em>reference point</em>, the point at <code>pivot</code> inside the anchor box</td><td>(0, 0)</td></tr>
+<tr><td><code>sizeDelta</code></td><td>The element's size minus the anchor box's size. With equal anchors it is simply the size.</td><td>(100, 100)</td></tr>
+</tbody>
+</table>
+</div>
+<pre class="lang-text"><code>box.min  = parent.min + anchorMin * parent.size
+box.size = (anchorMax - anchorMin) * parent.size
+size     = box.size + sizeDelta
+pivotPos = box.min + pivot * box.size + anchoredPosition
+rect     = (pivotPos - pivot * size, size)
+</code></pre>
+<ul>
+<li><code>GetOffsetMin</code> and <code>GetOffsetMax</code> give the corners' offsets from the anchor box's corners, as Unity's <code>offsetMin</code> and <code>offsetMax</code> do. <code>SetOffsetMin</code> moves the bottom-left corner and keeps the top-right one where it is. <code>SetOffsetMax</code> does the reverse. Both rewrite <code>sizeDelta</code> and <code>anchoredPosition</code> with Unity's formulas.</li>
+<li><code>StretchToParent()</code> sets anchors (0, 0)–(1, 1) with zero offsets, so the element covers its parent exactly.</li>
+<li><code>ResolveIn(parentRect)</code> and the static <code>Resolve(...)</code> compute a rect without changing anything. <code>GetRect()</code> returns the rect from the last layout. A layout runs every time the UI pass draws and every time the pointer is hit-tested. An inactive object's <code>GetRect()</code> isn't updated.</li>
+<li>An object under a canvas that has <strong>no</strong> <code>RectTransform</code> takes its parent's rect, as if it were stretched with zero offsets, and its children lay out inside that rect.</li>
+<li>There is no rotation or scale, and no layout groups. A <code>RectTransform</code>'s own enabled flag is ignored.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee: layout follows the viewport</p>
+<p>Layout is a pure function of the hierarchy, the components' values and the viewport size, so it gives the same result with or without a window. After a resize, stretched elements stretch and anchored elements keep their size and their distance from their anchor. Tests: <code>RectTransformLayoutTest.PointAnchorWithPivotAndOffset</code>, <code>StretchedAnchorsWithOffsets</code>, <code>SettingOneCornerKeepsTheOther</code>, <code>ResizeMovesAnchoredElementsAndStretchesStretchedOnes</code>, <code>ChildrenResolveInTheirParentsRect</code>, <code>TheCanvasCoversTheViewportWhateverItsRectTransformSays</code>.</p>
+</div>
+<p class="src">Source: <code>engine/src/ui/RectTransform.cpp</code> — <code>RectTransform::Resolve</code>, <code>SetOffsetMin</code>, <code>SetOffsetMax</code>; <code>engine/src/ui/UISystem.cpp</code> — <code>LayOut</code></p>
+
+<h2 id="order">Canvases and draw order <span class="badge">PR #50</span></h2>
+<p><code>UISystem::CollectGraphics(scene, viewport)</code> lays out the scene's UI and returns its graphics in draw order. The UI pass and the hit test both use it.</p>
+<ol class="steps">
+<li><strong>Find the canvases.</strong> A canvas is an enabled <code>Canvas</code> component on an object that is active in the hierarchy and has no <code>Canvas</code> above it. Objects are visited depth first, with roots in scene order. Inactive objects are skipped with their subtrees, and so is the tree of a disabled root <code>Canvas</code>. A <code>Canvas</code> below another one is ignored, enabled or not: its object is an ordinary element of the outer canvas.</li>
+<li><strong>Sort them</strong> by <code>sortOrder</code>, lowest first. The sort is stable, so canvases with equal sort orders keep hierarchy order. A higher <code>sortOrder</code> draws on top.</li>
+<li><strong>Lay out each canvas.</strong> The canvas's rect is the whole viewport, <code>(0, 0, width, height)</code>, whatever a <code>RectTransform</code> on its object says (the canvas's <code>RectTransform</code>, if any, is given that rect). The tree is walked depth first, parents before children and children in order, skipping inactive objects and their subtrees.</li>
+<li><strong>List the graphics.</strong> Each object's enabled <code>UIGraphic</code> components are listed in component order, with the object's rect.</li>
+</ol>
+<p>So later items draw over earlier ones: a later canvas over an earlier one, a later sibling over an earlier sibling, and a child over its parent. A <code>Canvas</code> nested under another canvas has no effect of its own: its object is laid out and drawn as an ordinary element of the outer canvas, and its <code>sortOrder</code> is ignored. A UI object that isn't under any canvas is never drawn or hit.</p>
+<p class="src">Source: <code>engine/src/ui/UISystem.cpp</code> — <code>UISystem::CollectGraphics</code>, <code>FindCanvases</code>; tests: <code>UIPassTest.HierarchyOrderWithinACanvasAndSortOrderAcrossCanvases</code>, <code>UIPassTest.SkipsInactiveDisabledAndEmptyAndNestedCanvasesJoinTheirParent</code></p>
+
+<h2 id="pass">The UI pass <span class="badge">PR #50</span></h2>
+<p><code>Application::Render</code> calls <code>UISystem::Render(scene, renderer, viewport)</code> right after <code>Scene::Render</code> and before <code>EndFrame</code>, with the window's size as the viewport (see <a href="application.html#render">Rendering the scene</a>). It does the following:</p>
+<ol class="steps">
+<li>Collects the graphics. If there are none (no canvas, or a zero-size viewport such as a minimised window), it returns without touching the renderer.</li>
+<li>Sets the view to identity and the projection to <code>UISystem::OverlayProjection(viewport)</code>. This is an orthographic projection of x 0..width, y 0..height (y up) and z −1..1, so a canvas-space point is a pixel.</li>
+<li>Calls <code>RenderUI(renderer, rect, UISystem::OverlayState())</code> on each graphic whose rect has an area, in draw order.</li>
+</ol>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>RenderState</code> field</th><th>UI pass</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><code>depthTest</code>, <code>depthWrite</code></td><td>off</td><td>UI is drawn over the scene, in order. The scene's depth buffer doesn't matter, and later UI simply covers earlier UI.</td></tr>
+<tr><td><code>cull</code></td><td><code>None</code></td><td>Winding doesn't matter in a flat 2D pass, and a projection or quad that flips it can't make UI disappear.</td></tr>
+<tr><td><code>blend</code></td><td>on</td><td>Semi-transparent panels show what is under them.</td></tr>
+</tbody>
+</table>
+</div>
+<p>There is no Overlay render queue: the scene's queues are only Opaque and Transparent (<a href="application.html#design-render-queue">two render queues</a>). The UI pass leaves the UI view and projection on the renderer until the next frame sets the camera's again. <code>IRenderer::SetViewProjection</code> applies to the draws submitted after it, so the scene's draws keep the camera.</p>
+<div class="callout note">
+<p class="callout-title">Backends</p>
+<ul>
+<li><strong>OpenGL</strong> draws the UI as described.</li>
+<li><strong>Software</strong> draws it too, now that each draw keeps the view and projection it was submitted with <span class="badge">PR #50</span> (the backend used to apply the frame's last view and projection to every draw). UI draws don't write depth, so they keep their submitted order. The software renderer has no blending, so semi-transparent UI is drawn opaque.</li>
+<li><strong>Vulkan</strong> draws nothing yet (<a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>).</li>
+</ul>
+</div>
+<p>As with <code>IRenderable::Render</code>, <code>RenderUI</code> must not add, remove or destroy components or GameObjects immediately. <code>Destroy</code> is fine because it is deferred.</p>
+<p class="src">Source: <code>engine/src/ui/UISystem.cpp</code> — <code>UISystem::Render</code>, <code>UISystem::OverlayProjection</code>; <code>engine/src/Application.cpp</code> — <code>Application::Render</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>SoftwareRenderer::DrawMesh</code>, <code>RasterizeMesh</code>; tests: <code>UIPassTest.DrawsWithOverlayStateAndPixelProjection</code>, <code>UIPassTest.NothingToDrawLeavesTheViewProjectionAlone</code>, <code>UIPassTest.TheSceneRenderableQueueNeverDrawsUI</code></p>
+
+<h2 id="image">Image <span class="badge">PR #50</span></h2>
+<p><code>Image</code> draws its rect in its colour (<code>SetColor</code>; white by default) with the renderer's standard unlit shader. It uses one quad per <code>Image</code>: the unit square (0, 0)–(1, 1), wound counter-clockwise in canvas space, with uv (0, 0) at the bottom-left. Its model matrix (<code>Image::ModelMatrixFor(rect)</code>) scales the square to the rect and moves it there. The quad and material are created with the renderer the first time the <code>Image</code> draws, and released in <code>OnDestroy</code>. If a different renderer draws it later, or a new renderer at the old one's address (the window was re-created), it creates them again. It destroys the old ones only if their renderer still exists, which it knows from the renderer's <a href="application.html#renderer-lifetime">lifetime token</a>.</p>
+<p><code>SetTexture(ITexture*)</code> multiplies the colour by a texture made with <code>IRenderer::CreateTexture</code>. The first row of the pixel data (v = 0) is drawn at the <em>bottom</em> of the rect, so image data stored top row first, as most image files are, must be flipped before <code>CreateTexture</code> to show upright. The <code>Image</code> neither owns nor saves the texture. Whoever made it keeps it alive while the <code>Image</code> uses it, and calls <code>SetTexture(nullptr)</code> before destroying it. There is no texture asset yet, so a saved scene doesn't keep the texture.</p>
+<p class="src">Source: <code>engine/src/ui/Image.cpp</code> — <code>Image::RenderUI</code>, <code>Image::EnsureResources</code>; tests: <code>UIPassTest.ImageCreatesItsQuadOnceAndReleasesItOnDestroy</code></p>
+
+<h2 id="pointer">Pointer input <span class="badge">PR #50</span></h2>
+<p>The application's <code>PointerDispatcher</code> has <code>UISystem::MakeApplicationHitProvider()</code> as its UI hit provider. It is installed when <code>Application</code> is constructed. Each frame the dispatcher asks it first (see <a href="input.html#picking">Picking</a>). The provider runs <code>UISystem::HitTestWindowPoint</code> on the current scene with the window's size:</p>
+<ol class="steps">
+<li>A cursor outside the viewport (anything but <code>0 &lt;= x &lt; width</code> and <code>0 &lt;= y &lt; height</code>) hits nothing, the same rule as the world pick. Without a window or a loaded scene, nothing is hit either.</li>
+<li>The point is converted to canvas space, and the scene is laid out for the viewport (<code>CollectGraphics</code>).</li>
+<li>The graphics are tried in <em>reverse</em> draw order, so the topmost comes first. The first graphic with <code>raycastTarget</code> set whose rect contains the point is the hit, and the target is that graphic's GameObject.</li>
+</ol>
+<p>When the UI hits an element, the world pick doesn't run, and <code>PointerDispatcher::IsPointerOverUI()</code> (Lua <code>Input.IsPointerOverUI()</code>) is true for that frame. The element's object gets the same <code>OnMouse*</code> callbacks a picked world object gets, with the same capture rules: <code>OnMouseDown</code> captures, <code>OnMouseDrag</code> follows the pointer off the element and onto the world, and <code>OnMouseUpAsButton</code> fires only if the button is released over the element. Delivery follows the same rule as picking: every component of an active object, disabled ones included. An element deactivated while hovered is dropped without <code>OnMouseExit</code>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Situation</th><th>What happens</th><th>Test</th></tr></thead>
+<tbody>
+<tr><td>Two elements overlap</td><td>The one drawn later (later sibling, child over parent, higher <code>sortOrder</code> canvas) is hit</td><td><code>UIHitTest.TopmostRaycastTargetWins</code></td></tr>
+<tr><td>The top element has <code>raycastTarget</code> off</td><td>The pointer goes through to what is underneath, UI or world</td><td><code>UIHitTest.NonRaycastTargetsAreIgnored</code>, <code>UIPointerTest.NonRaycastTargetAndInactiveElementsLetThePointerThrough</code></td></tr>
+<tr><td>An inactive object, a disabled <code>Image</code>, or an inactive or disabled canvas</td><td>Not hit. An inactive object's children aren't either; a disabled <code>Image</code>'s children still are</td><td><code>UIHitTest.InactiveAndDisabledElementsAreIgnored</code></td></tr>
+<tr><td>Pressed over an element</td><td>The element gets Down; the world provider isn't called</td><td><code>UIPointerTest.UIHitBlocksTheWorldPick</code></td></tr>
+<tr><td>Pressed and released over an element</td><td>Down, Drag while held, then <code>OnMouseUpAsButton</code> and <code>OnMouseUp</code></td><td><code>UIPointerTest.ClickOnAnElement</code></td></tr>
+<tr><td>Moved from an element onto the world</td><td>The element gets Exit, the world object Enter; a captured element keeps getting Drag and gets Up on release</td><td><code>UIPointerTest.MovingOffTheUIReachesTheWorld</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>A host with its own viewport, or a dispatcher of your own, installs its own provider, for example <code>dispatcher.SetUIHitProvider([&amp;](const Math::Vector2 &amp;p) { return UI::UISystem::HitTestWindowPoint(scene, p, viewport); })</code>. Passing <code>nullptr</code> removes UI picking.</p>
+<p class="src">Source: <code>engine/src/ui/UISystem.cpp</code> — <code>UISystem::HitTest</code>, <code>HitTestWindowPoint</code>, <code>MakeApplicationHitProvider</code>; <code>engine/src/Application.cpp</code> — <code>Application::Application</code>; tests: <code>UIHitTest.*</code>, <code>UIPointerTest.*</code> (<code>tests/engine/ui/UITests.cpp</code>)</p>
+
+<div class="callout note" id="design-ui">
+<p class="callout-title">Design decision: UI is GameObjects drawn in a canvas pass after the scene</p>
+<p>UI elements are GameObjects with <code>Canvas</code>, <code>RectTransform</code> and graphic components, as in Unity's uGUI, not a separate UI tree or an immediate-mode API. That way they get serialization, the editor's entity list, Lua <code>AddComponent</code> and the lifecycle for free. They have no <code>Positionable</code>, so layout never touches 3D transforms or physics. The layout uses Unity's anchor model and Unity's screen space (bottom-left origin, y up), so values from Unity layouts carry over. Graphics are not <code>IRenderable</code>s and the render queues have no Overlay queue. Instead, the UI draws in its own pass after the scene, with depth off (later draws cover earlier ones in hierarchy order), culling off and blending on, which keeps the scene's queues simple. The UI is hit-tested with plain rect tests against the same draw order, topmost first, and gives the pointer to the existing <code>OnMouse*</code> callbacks through the dispatcher's UI hook. One dispatcher and one set of callbacks therefore serve both UI and world objects, and a UI hit keeps the click from reaching the world.</p>
+</div>
+
+<h2 id="lua">Lua API <span class="badge">PR #50</span></h2>
+<p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code> and <code>"Image"</code>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Lua</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code>UI.CreateCanvas([name])</code>, <code>UI.CreateElement([name])</code></td><td>The C++ helpers. Return a new GameObject that the script owns until it is added to a scene or parent.</td></tr>
+<tr><td><code>RectTransform:Get/SetAnchorMin</code>, <code>AnchorMax</code>, <code>Pivot</code>, <code>AnchoredPosition</code>, <code>SizeDelta</code>, <code>OffsetMin</code>, <code>OffsetMax</code></td><td>As in C++, with <code>Vector2</code> values</td></tr>
+<tr><td><code>RectTransform:StretchToParent()</code>, <code>RectTransform:GetRect()</code></td><td>As in C++. The rect is a <code>Rect</code> value with <code>x</code>, <code>y</code>, <code>width</code>, <code>height</code> and <code>Contains(point)</code>.</td></tr>
+<tr><td><code>Canvas:Get/SetSortOrder</code></td><td>As in C++</td></tr>
+<tr><td><code>Image:Get/SetColor</code>, <code>Image:Get/SetRaycastTarget</code></td><td>As in C++. Textures aren't exposed to Lua.</td></tr>
+</tbody>
+</table>
+</div>
+<p>A script on a UI element gets clicks by defining <code>OnMouseDown</code>, <code>OnMouseUpAsButton</code> and the rest, as on a world object.</p>
+<pre class="lang-lua"><code>local canvas = UI.CreateCanvas("Menu")
+SceneManager.GetCurrentScene():AddRootGameObject(canvas)
+
+local panel = UI.CreateElement("Panel")
+canvas:AddChild(panel)
+local rect = panel:GetComponent("RectTransform")
+rect:StretchToParent()
+rect:SetOffsetMin(Vector2(40, 40))
+rect:SetOffsetMax(Vector2(-40, -40))
+panel:AddComponent("Image"):SetColor(Color.new(0, 0, 0, 0.6))
+</code></pre>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code> — <code>BindUI</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>; <code>engine-api.lua</code>; tests: <code>LuaUITest.BuildsAndLaysOutAnElement</code>, <code>LuaSceneTest.EveryScriptableComponentCanBeAdded</code></p>
+
+<h2 id="serialization">Serialization</h2>
+<p><code>Canvas</code>, <code>RectTransform</code> and <code>Image</code> are built-in components, registered under those names. They save their fields like any <code>SerializableComponent</code>:</p>
+<ul>
+<li><code>Canvas</code> saves <code>sortOrder</code>.</li>
+<li><code>RectTransform</code> saves <code>anchorMin</code>, <code>anchorMax</code>, <code>pivot</code>, <code>anchoredPosition</code> and <code>sizeDelta</code>, each as <code>{"x", "y"}</code>.</li>
+<li><code>Image</code> saves <code>color</code> and <code>raycastTarget</code>.</li>
+</ul>
+<p>A missing field keeps its default. The resolved rect and the texture are not saved.</p>
+<p class="src">Source: <code>engine/src/serialization/BuiltinComponents.cpp</code>; <code>engine/include/engine/serialization/MathSerialization.hpp</code> (<code>Vector2</code>); tests: <code>RectTransformLayoutTest.SerializationRoundTrip</code></p>
+
+<h2 id="not-yet">Not yet</h2>
+<ul>
+<li><strong>Button</strong>, with tints and an <code>OnClick</code> event, which will be built on <code>OnMouseUpAsButton</code>.</li>
+<li><strong>UI text</strong>, which comes with text rendering (<a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a>).</li>
+<li><strong>World-space canvas</strong>, which will be drawn as one transparent item in the scene, keeping hierarchy order inside it, and picked by ray–plane intersection against the physics hit.</li>
+<li>Rotation and scale on <code>RectTransform</code>, layout groups, scroll views, masks, a reference-resolution scaler, and events for buttons other than the left.</li>
+</ul>
+
+<div class="page-footer">
+<span>Describes master through PR #34.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

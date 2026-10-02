@@ -581,22 +581,17 @@ void SoftwareRenderer::EndFrame()
     auto queue = std::move(m_drawQueue);
     m_drawQueue.clear();   // moved-from -> guaranteed empty and reusable
 
-    std::array<float, 16> view{}, proj{};
-    std::memcpy(view.data(), m_view, 64);
-    std::memcpy(proj.data(), m_proj, 64);
     auto lighting = m_lighting;
     auto camPos   = m_cameraPos;
     const float cr = m_clearR, cg = m_clearG, cb = m_clearB, ca = m_clearA;
 
     m_renderThread.SubmitFrame({
-        [this, queue = std::move(queue), view, proj,
+        [this, queue = std::move(queue),
          lighting = std::move(lighting), camPos, cr, cg, cb, ca]() mutable
         {
             m_clearR = cr; m_clearG = cg; m_clearB = cb; m_clearA = ca;
             ClearBuffers();
 
-            std::memcpy(m_view, view.data(), 64);
-            std::memcpy(m_proj, proj.data(), 64);
             m_lighting  = std::move(lighting);
             m_cameraPos = camPos;
 
@@ -620,7 +615,7 @@ void SoftwareRenderer::EndFrame()
             for (const size_t index : OrderDraws(keys))
             {
                 const DrawCommand& cmd = queue[index];
-                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.material, cmd.state);
+                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.view, cmd.proj, cmd.material, cmd.state);
             }
 
             // NOTE: GL upload stays in Present() — GL context lives on the main thread.
@@ -809,6 +804,8 @@ void SoftwareRenderer::DrawMesh(IMesh* mesh, const float* modelMatrix, IMaterial
     cmd.material = swMat;
     cmd.state = state;
     memcpy(cmd.modelMatrix, modelMatrix, 64);
+    memcpy(cmd.view, m_view, 64);
+    memcpy(cmd.proj, m_proj, 64);
     m_drawQueue.push_back(cmd);
 }
 
@@ -868,15 +865,15 @@ void SoftwareRenderer::SetPixel(int x, int y, float depth, uint32_t color)
     }
 }
 
-void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, SWMaterial* material,
-                                     const RenderState& state)
+void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
+                                     SWMaterial* material, const RenderState& state)
 {
     if (!mesh || !mesh->IsValid()) return;
     if (m_width == 0 || m_height == 0) return;
 
     float mv[16], mvp[16];
-    Mul4x4(m_view, modelMatrix, mv);
-    Mul4x4(m_proj, mv, mvp);
+    Mul4x4(view, modelMatrix, mv);
+    Mul4x4(proj, mv, mvp);
 
     // Everything the pixel loop needs, resolved ONCE per draw. The old path
     // paid string-keyed uniform lookups and dynamic_casts per pixel.

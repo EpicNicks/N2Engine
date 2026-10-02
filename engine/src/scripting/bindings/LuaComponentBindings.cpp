@@ -27,6 +27,9 @@
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/text/Font.hpp"
+#include "engine/ui/Canvas.hpp"
+#include "engine/ui/Image.hpp"
+#include "engine/ui/RectTransform.hpp"
 
 namespace N2Engine::Scripting::Bindings
 {
@@ -76,7 +79,7 @@ namespace N2Engine::Scripting::Bindings
             };
         }
 
-        // Every type here needs a Lua usertype (see BindPhysics, BindAudio and BindComponents)
+        // Every type here needs a Lua usertype (see BindPhysics, BindAudio, BindComponents and BindUI)
         const std::map<std::string, ComponentAccess> &ComponentTable()
         {
             static const std::map<std::string, ComponentAccess> table{
@@ -90,6 +93,9 @@ namespace N2Engine::Scripting::Bindings
                 {"AudioSource", MakeAccess<Audio::AudioSource>()},
                 {"AudioListener", MakeAccess<Audio::AudioListener>()},
                 {"LuaComponent", MakeAccess<LuaComponent>()},
+                {"RectTransform", MakeAccess<UI::RectTransform>()},
+                {"Canvas", MakeAccess<UI::Canvas>()},
+                {"Image", MakeAccess<UI::Image>()},
             };
             return table;
         }
