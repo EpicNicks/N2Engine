@@ -8,6 +8,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -30,6 +31,7 @@
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
+#include "engine/ui/UIText.hpp"
 
 namespace N2Engine::Scripting::Bindings
 {
@@ -96,6 +98,7 @@ namespace N2Engine::Scripting::Bindings
                 {"RectTransform", MakeAccess<UI::RectTransform>()},
                 {"Canvas", MakeAccess<UI::Canvas>()},
                 {"Image", MakeAccess<UI::Image>()},
+                {"UIText", MakeAccess<UI::UIText>()},
             };
             return table;
         }
@@ -116,49 +119,59 @@ namespace N2Engine::Scripting::Bindings
             // sol turns this into a Lua error at the call site
             throw std::runtime_error(std::format("Unknown component type '{}'. Known types: {}", typeName, known));
         }
+    }
 
-        // TextRenderer alignments travel as their scene-file names ("Left", "Middle", ...)
-        Text::HorizontalAlign ParseHorizontalAlign(const std::string &name)
-        {
-            if (name == "Left") return Text::HorizontalAlign::Left;
-            if (name == "Center") return Text::HorizontalAlign::Center;
-            if (name == "Right") return Text::HorizontalAlign::Right;
-            throw std::runtime_error(
-                std::format("Unknown horizontal alignment '{}'. Expected Left, Center or Right", name));
-        }
+    // Text alignments travel as their scene-file names ("Left", "Middle", ...)
+    Text::HorizontalAlign ParseHorizontalAlign(const std::string &name)
+    {
+        if (name == "Left") return Text::HorizontalAlign::Left;
+        if (name == "Center") return Text::HorizontalAlign::Center;
+        if (name == "Right") return Text::HorizontalAlign::Right;
+        throw std::runtime_error(
+            std::format("Unknown horizontal alignment '{}'. Expected Left, Center or Right", name));
+    }
 
-        Text::VerticalAlign ParseVerticalAlign(const std::string &name)
-        {
-            if (name == "Top") return Text::VerticalAlign::Top;
-            if (name == "Middle") return Text::VerticalAlign::Middle;
-            if (name == "Bottom") return Text::VerticalAlign::Bottom;
-            if (name == "Baseline") return Text::VerticalAlign::Baseline;
-            throw std::runtime_error(
-                std::format("Unknown vertical alignment '{}'. Expected Top, Middle, Bottom or Baseline", name));
-        }
+    Text::VerticalAlign ParseVerticalAlign(const std::string &name)
+    {
+        if (name == "Top") return Text::VerticalAlign::Top;
+        if (name == "Middle") return Text::VerticalAlign::Middle;
+        if (name == "Bottom") return Text::VerticalAlign::Bottom;
+        if (name == "Baseline") return Text::VerticalAlign::Baseline;
+        throw std::runtime_error(
+            std::format("Unknown vertical alignment '{}'. Expected Top, Middle, Bottom or Baseline", name));
+    }
 
-        std::string AlignName(const Text::HorizontalAlign align)
+    std::string AlignName(const Text::HorizontalAlign align)
+    {
+        switch (align)
         {
-            switch (align)
-            {
-            case Text::HorizontalAlign::Center: return "Center";
-            case Text::HorizontalAlign::Right: return "Right";
-            case Text::HorizontalAlign::Left:
-            default: return "Left";
-            }
+        case Text::HorizontalAlign::Center: return "Center";
+        case Text::HorizontalAlign::Right: return "Right";
+        case Text::HorizontalAlign::Left:
+        default: return "Left";
         }
+    }
 
-        std::string AlignName(const Text::VerticalAlign align)
+    std::string AlignName(const Text::VerticalAlign align)
+    {
+        switch (align)
         {
-            switch (align)
-            {
-            case Text::VerticalAlign::Middle: return "Middle";
-            case Text::VerticalAlign::Bottom: return "Bottom";
-            case Text::VerticalAlign::Baseline: return "Baseline";
-            case Text::VerticalAlign::Top:
-            default: return "Top";
-            }
+        case Text::VerticalAlign::Middle: return "Middle";
+        case Text::VerticalAlign::Bottom: return "Bottom";
+        case Text::VerticalAlign::Baseline: return "Baseline";
+        case Text::VerticalAlign::Top:
+        default: return "Top";
         }
+    }
+
+    std::shared_ptr<Text::Font> LoadFontOrThrow(const std::string &path, const std::string_view caller)
+    {
+        auto font = IO::Resources::Instance().Load<Text::Font>(std::filesystem::path(path));
+        if (!font || !font->IsLoaded())
+        {
+            throw std::runtime_error(std::format("{}: can't load font '{}'", caller, path));
+        }
+        return font;
     }
 
     sol::object AddComponentByName(GameObject &gameObject, const std::string &typeName, sol::this_state state)
@@ -282,12 +295,7 @@ namespace N2Engine::Scripting::Bindings
                     renderer->SetFont(nullptr);
                     return;
                 }
-                auto font = IO::Resources::Instance().Load<Text::Font>(std::filesystem::path(*path));
-                if (!font || !font->IsLoaded())
-                {
-                    throw std::runtime_error(std::format("TextRenderer:SetFont: can't load font '{}'", *path));
-                }
-                renderer->SetFont(std::move(font));
+                renderer->SetFont(LoadFontOrThrow(*path, "TextRenderer:SetFont"));
             },
             // The laid-out block in local units: minX, minY, maxX, maxY (all 0 for empty text)
             "GetBounds", [](const TextRendererRef &c)

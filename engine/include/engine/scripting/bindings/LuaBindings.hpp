@@ -1,11 +1,19 @@
 #pragma once
 
+#include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <sol/sol.hpp>
+#include <text/TextLayout.hpp>
 
 #include "engine/scripting/LuaHandles.hpp"
+
+namespace N2Engine::Text
+{
+    class Font;
+}
 
 namespace N2Engine::Scripting
 {
@@ -37,8 +45,18 @@ namespace N2Engine::Scripting
 
         // Components that scripts can add to GameObjects by name (renderers, physics, audio, LuaComponent)
         void BindComponents(LuaRuntime& runtime);
-        // Screen-space UI: RectTransform, Canvas, Image, Rect and the UI table
+        // Screen-space UI: RectTransform, Canvas, Image, UIText, Rect and the UI table
         void BindUI(LuaRuntime& runtime);
+
+        /// Text alignments by their scene-file names ("Left", "Center", "Right"; "Top", "Middle", "Bottom",
+        /// "Baseline"), for TextRenderer and UIText. Parse* throw (a Lua error at the call site) for any other.
+        Text::HorizontalAlign ParseHorizontalAlign(const std::string& name);
+        Text::VerticalAlign ParseVerticalAlign(const std::string& name);
+        std::string AlignName(Text::HorizontalAlign align);
+        std::string AlignName(Text::VerticalAlign align);
+        /// A font file through Resources, e.g. "res://fonts/Title.ttf"; throws "<caller>: can't load font ..."
+        /// if it doesn't load
+        std::shared_ptr<Text::Font> LoadFontOrThrow(const std::string& path, std::string_view caller);
 
         /// GameObject:AddComponent("BoxCollider"): the component as its Lua type; raises a Lua error for unknown names
         sol::object AddComponentByName(GameObject& gameObject, const std::string& typeName, sol::this_state state);
