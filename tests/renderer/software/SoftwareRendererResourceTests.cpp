@@ -7,10 +7,12 @@
 #include <renderer/common/TextureOptions.hpp>
 #include <renderer/software/SoftwareRenderer.hpp>
 #include <renderer/software/SWMesh.hpp>
+#include <renderer/software/SWShader.hpp>
 #include <renderer/software/SWTexture.hpp>
 
-// Texture options, UpdateMesh and the text shader query: the parts of the renderer interface that run
-// without a window. The software renderer's resource calls never touch GL, so it is used uninitialized.
+// Texture options, sampling, UpdateMesh and the text shader query: the parts of the renderer interface that
+// run without a window. The software renderer's resource calls never touch GL, so it is used uninitialized.
+// Its pixels are tested headless in SoftwareRendererGoldenTests.cpp.
 
 using Renderer::Common::IMesh;
 using Renderer::Common::ITexture;
@@ -164,6 +166,62 @@ TEST(TextureOptionsTest, SoftwareSamplingHonoursWrap)
     EXPECT_EQ(texture.Sample(-0.5f, 0.0f) & 0xFFu, 0u);
 }
 
+TEST(TextureOptionsTest, SoftwareSamplingFillsMissingChannelsAsOpenGLDoes)
+{
+    // OpenGL reads R8 as (r, 0, 0, 1) and RG8 as (r, g, 0, 1); the software renderer matches it
+    Renderer::Software::SWTexture red;
+    red.width = 1;
+    red.height = 1;
+    red.channels = 1;
+    red.data = {200};
+    EXPECT_EQ(red.Sample(0.5f, 0.5f), 0xFF0000C8u) << "(200, 0, 0, 255), r in the low byte";
+
+    Renderer::Software::SWTexture redGreen;
+    redGreen.width = 1;
+    redGreen.height = 1;
+    redGreen.channels = 2;
+    redGreen.data = {200, 100};
+    EXPECT_EQ(redGreen.Sample(0.5f, 0.5f), 0xFF0064C8u) << "(200, 100, 0, 255)";
+
+    Renderer::Software::SWTexture rgb;
+    rgb.width = 1;
+    rgb.height = 1;
+    rgb.channels = 3;
+    rgb.data = {1, 2, 3};
+    EXPECT_EQ(rgb.Sample(0.5f, 0.5f), 0xFF030201u) << "(1, 2, 3, 255)";
+}
+
+TEST(TextureOptionsTest, SoftwareBilinearSamplingMatchesGLLinear)
+{
+    // Two texels, 0 and 255, with centres at u = 0.25 and 0.75
+    Renderer::Software::SWTexture texture;
+    texture.width = 2;
+    texture.height = 1;
+    texture.channels = 1;
+    texture.data = {0, 255};
+
+    texture.options.wrap = TextureWrap::ClampToEdge;
+    EXPECT_NEAR(texture.SampleFirstChannelBilinear(0.25f, 0.5f), 0.0f, 1e-5f) << "on the first centre";
+    EXPECT_NEAR(texture.SampleFirstChannelBilinear(0.75f, 0.5f), 1.0f, 1e-5f) << "on the second centre";
+    EXPECT_NEAR(texture.SampleFirstChannelBilinear(0.5f, 0.5f), 0.5f, 1e-5f) << "halfway between";
+    EXPECT_NEAR(texture.SampleFirstChannelBilinear(0.0f, 0.5f), 0.0f, 1e-5f) << "clamped at the left edge";
+    EXPECT_NEAR(texture.SampleFirstChannelBilinear(1.0f, 0.5f), 1.0f, 1e-5f) << "clamped at the right edge";
+    EXPECT_NEAR(texture.SampleFirstChannelBilinear(-3.0f, 0.5f), 0.0f, 1e-5f) << "outside, clamped";
+
+    // Repeating, the left edge is halfway between the last texel and the first
+    texture.options.wrap = TextureWrap::Repeat;
+    EXPECT_NEAR(texture.SampleFirstChannelBilinear(0.0f, 0.5f), 0.5f, 1e-5f);
+    EXPECT_NEAR(texture.SampleFirstChannelBilinear(1.25f, 0.5f), 0.0f, 1e-5f) << "1.25 repeats to 0.25";
+
+    // Only the first channel is read
+    Renderer::Software::SWTexture rg;
+    rg.width = 1;
+    rg.height = 1;
+    rg.channels = 2;
+    rg.data = {51, 255};
+    EXPECT_NEAR(rg.SampleFirstChannelBilinear(0.3f, 0.7f), 0.2f, 1e-5f);
+}
+
 // ============================================================================
 // UpdateMesh
 // ============================================================================
@@ -229,7 +287,17 @@ TEST(TextShaderTest, OnlyBackendsThatDrawTextHaveOne)
     MinimalRenderer minimal;
     EXPECT_EQ(static_cast<Renderer::Common::IRenderer &>(minimal).GetStandardTextShader(), nullptr);
 
-    // Software text arrives in #1 P3
+    // The software renderer's built-in shaders exist before Initialize
     Renderer::Software::SoftwareRenderer software;
-    EXPECT_EQ(software.GetStandardTextShader(), nullptr);
+    Renderer::Common::IShader *text = software.GetStandardTextShader();
+    ASSERT_NE(text, nullptr);
+    const auto *swText = dynamic_cast<Renderer::Software::SWShader *>(text);
+    ASSERT_NE(swText, nullptr);
+    EXPECT_EQ(swText->GetType(), Renderer::Software::SWShaderType::Text);
+    EXPECT_NE(text, software.GetStandardUnlitShader());
+    EXPECT_NE(text, software.GetStandardLitShader());
+
+    // A built-in shader isn't destroyed by DestroyShaderProgram
+    EXPECT_TRUE(software.DestroyShaderProgram(text));
+    EXPECT_EQ(software.GetStandardTextShader(), text);
 }
