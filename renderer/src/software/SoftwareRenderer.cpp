@@ -67,13 +67,30 @@ namespace
         return (to8(a) << 24) | (to8(b) << 16) | (to8(g) << 8) | to8(r);
     }
 
+    // Which pixel path a draw takes, chosen once per draw
+    enum class ShadeKind : uint8_t
+    {
+        Flat,    // unlit, untextured: one colour for the whole draw
+        Unlit,   // unlit, textured
+        Lit,     // Blinn-Phong
+        Text     // alpha-tested SDF (SWShaderType::Text)
+    };
+
     struct ResolvedMat
     {
         float aR = 1.f, aG = 1.f, aB = 1.f, aA = 1.f;
         float shininess = 130.f;
         const SWTexture* tex = nullptr;   // null if absent or invalid
         bool lit = false;
+        bool text = false;
         uint32_t flatColor = 0xFFFFFFFF;  // unlit + untextured: constant per draw
+
+        [[nodiscard]] ShadeKind Kind() const
+        {
+            if (text) return ShadeKind::Text;
+            if (lit)  return ShadeKind::Lit;
+            return tex ? ShadeKind::Unlit : ShadeKind::Flat;
+        }
     };
 
     ResolvedMat ResolveMaterial(const SWMaterial* mat)
@@ -91,6 +108,7 @@ namespace
 
             auto* sh = dynamic_cast<const SWShader*>(mat->GetShader());
             r.lit = sh && sh->GetType() == SWShaderType::Lit;
+            r.text = sh && sh->GetType() == SWShaderType::Text;
         }
         r.shininess = 4.f + (256.f - 4.f) * smooth;   // matches mix(4, 256, smoothness)
         r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
@@ -232,17 +250,17 @@ namespace
         float wp[3];  // world-space position
         float wn[3];  // world-space normal
         float uv[2];  // texcoord
-        // NOTE: vertex colors are no longer carried through the pipeline —
-        // neither shader ever read them, so interpolating them was pure waste.
+        float col[4]; // vertex colour (only the text shader reads it)
     };
 
     inline ClipVertex LerpCV(const ClipVertex& a, const ClipVertex& b, float t)
     {
         ClipVertex r;
-        for (int i = 0; i < 4; ++i) r.c[i]  = a.c[i]  + t * (b.c[i]  - a.c[i]);
-        for (int i = 0; i < 3; ++i) r.wp[i] = a.wp[i] + t * (b.wp[i] - a.wp[i]);
-        for (int i = 0; i < 3; ++i) r.wn[i] = a.wn[i] + t * (b.wn[i] - a.wn[i]);
-        for (int i = 0; i < 2; ++i) r.uv[i] = a.uv[i] + t * (b.uv[i] - a.uv[i]);
+        for (int i = 0; i < 4; ++i) r.c[i]   = a.c[i]   + t * (b.c[i]   - a.c[i]);
+        for (int i = 0; i < 3; ++i) r.wp[i]  = a.wp[i]  + t * (b.wp[i]  - a.wp[i]);
+        for (int i = 0; i < 3; ++i) r.wn[i]  = a.wn[i]  + t * (b.wn[i]  - a.wn[i]);
+        for (int i = 0; i < 2; ++i) r.uv[i]  = a.uv[i]  + t * (b.uv[i]  - a.uv[i]);
+        for (int i = 0; i < 4; ++i) r.col[i] = a.col[i] + t * (b.col[i] - a.col[i]);
         return r;
     }
 
@@ -332,6 +350,7 @@ namespace
         float uw, vw;              // u/w, v/w
         float nxw, nyw, nzw;       // world normal / w
         float wxw, wyw, wzw;       // world position / w
+        float crw, cgw, cbw, caw;  // vertex colour / w
     };
 
     inline ScreenVert Project(const ClipVertex& v, float halfW, float halfH)
@@ -345,6 +364,7 @@ namespace
         s.uw  = v.uv[0] * invW;  s.vw  = v.uv[1] * invW;
         s.nxw = v.wn[0] * invW;  s.nyw = v.wn[1] * invW;  s.nzw = v.wn[2] * invW;
         s.wxw = v.wp[0] * invW;  s.wyw = v.wp[1] * invW;  s.wzw = v.wp[2] * invW;
+        s.crw = v.col[0] * invW; s.cgw = v.col[1] * invW; s.cbw = v.col[2] * invW; s.caw = v.col[3] * invW;
         return s;
     }
 
@@ -363,10 +383,18 @@ namespace
         CullMode cull;
     };
 
-    inline RasterState ToRasterState(const RenderState& s)
+    // The text shader writes depth whenever the draw depth-tests, even in the Transparent queue (whose
+    // state says no depth write): with no blending, an alpha-tested glyph is an opaque surface, and
+    // writing its depth keeps anything drawn later behind it from covering it. See SWShaderType::Text.
+    inline RasterState ToRasterState(const RenderState& s, const bool alphaTestedText)
     {
-        return RasterState{ s.depthTest, s.depthTest && s.depthWrite, s.cull };
+        return RasterState{ s.depthTest, s.depthTest && (s.depthWrite || alphaTestedText), s.cull };
     }
+
+    // The text shader's alpha test: the SDF edge (0.5, 128 in the atlas bytes) and, as OpenGL discards a
+    // fragment below alpha 0.01, a colour that transparent draws nothing
+    constexpr float kTextEdge     = 0.5f;
+    constexpr float kTextMinAlpha = 0.01f;
 
     inline int64_t Orient(const ScreenVert& a, const ScreenVert& b, const ScreenVert& c)
     {
@@ -374,7 +402,7 @@ namespace
              - (int64_t)(b.fy - a.fy) * (c.fx - a.fx);
     }
 
-    template <bool LIT>
+    template <ShadeKind KIND>
     void RasterTri(const ScreenVert& sv0, const ScreenVert& sv1, const ScreenVert& sv2,
                    const RasterTarget& t, const RasterState& rs, const ResolvedMat& mat,
                    [[maybe_unused]] const LitState& lit)
@@ -466,8 +494,9 @@ namespace
                     const float z = l0 * zA + l1 * zB + l2 * zC;
                     if (!rs.depthTest || z < drow[px])
                     {
-                        uint32_t colOut;
-                        if constexpr (LIT)
+                        uint32_t colOut = 0;
+                        bool covered = true;   // only the text shader's alpha test clears it
+                        if constexpr (KIND == ShadeKind::Lit)
                         {
                             const float iw = l0*A->invW + l1*B->invW + l2*C->invW;
                             const float rw = 1.f / iw;
@@ -481,7 +510,7 @@ namespace
                             const float wz = (l0*A->wzw + l1*B->wzw + l2*C->wzw) * rw;
                             colOut = ShadeLitPx(wx, wy, wz, nx, ny, nz, u, v, mat, lit);
                         }
-                        else if (mat.tex)
+                        else if constexpr (KIND == ShadeKind::Unlit)
                         {
                             const float iw = l0*A->invW + l1*B->invW + l2*C->invW;
                             const float rw = 1.f / iw;
@@ -489,12 +518,34 @@ namespace
                             const float v  = (l0*A->vw + l1*B->vw + l2*C->vw) * rw;
                             colOut = ShadeUnlitPx(u, v, mat);
                         }
+                        else if constexpr (KIND == ShadeKind::Text)
+                        {
+                            // Caller guarantees mat.tex != nullptr. The distance is tested first, so the
+                            // colour is only interpolated for pixels inside the glyph.
+                            const float iw = l0*A->invW + l1*B->invW + l2*C->invW;
+                            const float rw = 1.f / iw;
+                            const float u  = (l0*A->uw + l1*B->uw + l2*C->uw) * rw;
+                            const float v  = (l0*A->vw + l1*B->vw + l2*C->vw) * rw;
+                            covered = mat.tex->SampleFirstChannelBilinear(u, v) >= kTextEdge;
+                            if (covered)
+                            {
+                                const float r = mat.aR * (l0*A->crw + l1*B->crw + l2*C->crw) * rw;
+                                const float g = mat.aG * (l0*A->cgw + l1*B->cgw + l2*C->cgw) * rw;
+                                const float b = mat.aB * (l0*A->cbw + l1*B->cbw + l2*C->cbw) * rw;
+                                const float a = mat.aA * (l0*A->caw + l1*B->caw + l2*C->caw) * rw;
+                                covered = a >= kTextMinAlpha;
+                                colOut = PackRGBA(r, g, b, a);
+                            }
+                        }
                         else
                         {
                             colOut = mat.flatColor;   // constant per draw — no interpolation at all
                         }
-                        if (rs.depthWrite) drow[px] = z;
-                        crow[px] = colOut;
+                        if (covered)
+                        {
+                            if (rs.depthWrite) drow[px] = z;
+                            crow[px] = colOut;
+                        }
                     }
                 }
                 e0 += s0x; e1 += s1x; e2 += s2x;
@@ -508,17 +559,28 @@ namespace
 // Renderer
 // ============================================================================
 
+SoftwareRenderer::~SoftwareRenderer()
+{
+    // Members are destroyed after this body; the render thread mustn't still be reading them
+    m_renderThread.Stop();
+}
+
 bool SoftwareRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height)
 {
     m_window = windowHandle;
-    glfwMakeContextCurrent(windowHandle);
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return false;
-
-    m_unlitShader = std::make_unique<SWShader>(SWShaderType::Unlit);
-    m_litShader = std::make_unique<SWShader>(SWShaderType::Lit);
+    if (windowHandle)
+    {
+        glfwMakeContextCurrent(windowHandle);
+        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return false;
+    }
 
     Resize(width, height);
-    if (!SetupBlitResources()) return false;
+    if (windowHandle)
+    {
+        // Headless there is no context: no blit resources, and Present never calls GL
+        if (!SetupBlitResources()) return false;
+        m_glReady = true;
+    }
 
     m_renderThread.Start();
     return true;
@@ -529,28 +591,34 @@ void SoftwareRenderer::Shutdown()
     // Stop thread BEFORE tearing down GL/resources it might reference.
     m_renderThread.Stop();
 
+    m_drawQueue.clear();
     m_meshes.clear();
     m_textures.clear();
     m_materials.clear();
     m_shaders.clear();
 
-    glDeleteTextures(1, &m_blitTex);
-    glDeleteVertexArrays(1, &m_blitVAO);
-    glDeleteBuffers(1, &m_blitVBO);
-    glDeleteProgram(m_blitProg);
+    if (m_glReady)
+    {
+        glDeleteTextures(1, &m_blitTex);
+        glDeleteVertexArrays(1, &m_blitVAO);
+        glDeleteBuffers(1, &m_blitVBO);
+        glDeleteProgram(m_blitProg);
+        m_glReady = false;
+    }
+    m_blitTex = m_blitVAO = m_blitVBO = m_blitProg = 0;
+    m_window = nullptr;
 }
 
 void SoftwareRenderer::Resize(uint32_t w, uint32_t h)
 {
-    // CAUTION (pre-existing): if a frame is in flight on the render thread,
-    // reallocating these buffers races with it. Safest call sites are before
-    // EndFrame or after Present. A per-frame buffer mutex or a WaitForFrame
-    // here would make this airtight.
+    // A frame in flight on the render thread writes these buffers: let it finish first.
+    // (Returns at once when no frame is in flight or the thread isn't running.)
+    m_renderThread.WaitForFrame();
     m_width = w;
     m_height = h;
     m_colorBuffer.assign(w * h, 0xFF000000);
     m_depthBuffer.assign(w * h, 1.0f);
-    if (m_blitTex)
+    if (m_glReady && m_blitTex)
     {
         glBindTexture(GL_TEXTURE_2D, m_blitTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -601,6 +669,10 @@ void SoftwareRenderer::EndFrame()
             // (no blending exists, so their order can't change the image);
             // every other draw, such as the Transparent queue that follows
             // the opaque draws, keeps its submission position. See OrderDraws.
+            // Text draws are keyed by the state they were submitted with
+            // (Transparent: no depth write), not by the depth the text shader
+            // writes anyway, so they too keep their position after the opaque
+            // draws; see the DrawOrder.hpp note on text.
             std::vector<DrawOrderKey> keys(queue.size());
             for (size_t i = 0; i < queue.size(); ++i)
             {
@@ -627,6 +699,9 @@ void SoftwareRenderer::Present()
 {
     // Wait for the render thread to finish rasterizing into m_colorBuffer
     m_renderThread.WaitForFrame();
+
+    // Headless: the frame stays in m_colorBuffer for ReadFramebuffer; there is nothing to show it on
+    if (!m_glReady) return;
 
     // Upload CPU framebuffer to GL texture (main thread — context is current here)
     glBindTexture(GL_TEXTURE_2D, m_blitTex);
@@ -661,7 +736,7 @@ void SoftwareRenderer::UseShaderProgram(IShader *) {} // no-op; shader chosen pe
 
 bool SoftwareRenderer::DestroyShaderProgram(IShader *shader)
 {
-    if (shader == m_unlitShader.get() || shader == m_litShader.get())
+    if (shader == m_unlitShader.get() || shader == m_litShader.get() || shader == m_textShader.get())
     {
         return true;
     }
@@ -817,7 +892,12 @@ void SoftwareRenderer::DrawObjects(const std::vector<RenderObject> &objects)
 
 void SoftwareRenderer::ReadFramebuffer(uint8_t *buffer, int width, int height) const
 {
-    // nearest-neighbour downsample/copy into the caller's buffer (RGBA8)
+    // The frame EndFrame submitted is still being written until the render thread finishes it
+    m_renderThread.WaitForFrame();
+    if (!buffer || width <= 0 || height <= 0 || m_width == 0 || m_height == 0) return;
+
+    // Nearest-neighbour downsample/copy into the caller's buffer (RGBA8), bottom row first: the colour
+    // buffer is stored top row first, so rows are flipped, giving glReadPixels' row order
     for (int y = 0; y < height; ++y)
     {
         int sy = (int)((float)y / (float)height * (float)m_height);
@@ -878,6 +958,10 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
     // Everything the pixel loop needs, resolved ONCE per draw. The old path
     // paid string-keyed uniform lookups and dynamic_casts per pixel.
     const ResolvedMat rm = ResolveMaterial(material);
+    const ShadeKind kind = rm.Kind();
+    // Text without an atlas has no distance to test, so nothing is covered (as on OpenGL, where an
+    // unbound sampler reads 0, below the edge)
+    if (kind == ShadeKind::Text && !rm.tex) return;
 
     LitState lit;
     if (rm.lit)
@@ -885,7 +969,7 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
 
     const RasterTarget target{ m_colorBuffer.data(), m_depthBuffer.data(),
                                (int)m_width, (int)m_height };
-    const RasterState rs = ToRasterState(state);
+    const RasterState rs = ToRasterState(state, kind == ShadeKind::Text);
     const float halfW = 0.5f * (float)m_width;
     const float halfH = 0.5f * (float)m_height;
 
@@ -915,6 +999,11 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
         x.cv.uv[0] = v.texCoord[0];
         x.cv.uv[1] = v.texCoord[1];
 
+        x.cv.col[0] = v.color[0];
+        x.cv.col[1] = v.color[1];
+        x.cv.col[2] = v.color[2];
+        x.cv.col[3] = v.color[3];
+
         x.oc = Outcode(x.cv.c);
         if (x.oc == 0)
             x.sv = Project(x.cv, halfW, halfH);   // project once; reused by every triangle sharing it
@@ -922,8 +1011,13 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
 
     auto raster = [&](const ScreenVert& a, const ScreenVert& b, const ScreenVert& c)
     {
-        if (rm.lit) RasterTri<true >(a, b, c, target, rs, rm, lit);
-        else        RasterTri<false>(a, b, c, target, rs, rm, lit);
+        switch (kind)
+        {
+        case ShadeKind::Lit:   RasterTri<ShadeKind::Lit  >(a, b, c, target, rs, rm, lit); break;
+        case ShadeKind::Text:  RasterTri<ShadeKind::Text >(a, b, c, target, rs, rm, lit); break;
+        case ShadeKind::Unlit: RasterTri<ShadeKind::Unlit>(a, b, c, target, rs, rm, lit); break;
+        case ShadeKind::Flat:  RasterTri<ShadeKind::Flat >(a, b, c, target, rs, rm, lit); break;
+        }
     };
 
     for (size_t i = 0; i + 2 < indices.size(); i += 3)

@@ -12,18 +12,40 @@
 
 namespace Renderer::Software
 {
+    /**
+     * A CPU rasterizer. Draws are recorded between BeginFrame and EndFrame, and EndFrame hands the frame to
+     * a render thread that rasterizes it into a CPU colour and depth buffer. Present waits for that frame,
+     * then (with a window) uploads the colour buffer to a GL texture and draws it over the window.
+     *
+     * Headless mode: Initialize(nullptr, width, height) makes no GL calls at all (no context, no glad, no
+     * blit texture). Frames still rasterize on the render thread; Present only waits for the frame, and
+     * ReadFramebuffer returns the CPU colour buffer. It needs no window or GPU, so tests render real pixels
+     * with it in CI.
+     */
     class SoftwareRenderer : public Common::IRenderer
     {
     public:
+        SoftwareRenderer() = default;
+        /// Stops the render thread (if Shutdown hasn't) before any resource it might be reading is freed
+        ~SoftwareRenderer() override;
+        SoftwareRenderer(const SoftwareRenderer &) = delete;
+        SoftwareRenderer &operator=(const SoftwareRenderer &) = delete;
+
         // Lifecycle
+        /// With a window: makes its context current, loads GL (false if that fails) and creates the blit
+        /// resources. With windowHandle null: headless (see the class comment); always succeeds.
         bool Initialize(GLFWwindow *windowHandle, uint32_t width, uint32_t height) override;
+        /// Stops the render thread and frees every resource, and the GL blit objects if they were created.
+        /// Safe headless, without Initialize, and twice.
         void Shutdown() override;
+        /// Waits for a frame still rasterizing before reallocating the buffers
         void Resize(uint32_t width, uint32_t height) override;
         void Clear(float r, float g, float b, float a) override;
 
         // Frame
         void BeginFrame() override;
         void EndFrame() override;
+        /// Waits for the frame EndFrame submitted, then blits it to the window. Headless it only waits.
         void Present() override;
 
         // Shaders
@@ -55,16 +77,25 @@ namespace Renderer::Software
         /// Records the draw; EndFrame rasterizes the frame's draws in the order OrderDraws gives
         /// (DrawOrder.hpp). depthTest, depthWrite and cull are honoured per draw; blend is ignored, as
         /// this renderer has no blending (a Transparent-queue draw is drawn opaque, without writing depth).
+        /// One exception: a draw with the text shader alpha-tests, and writes depth wherever it covers a
+        /// pixel and depthTest is on, whatever depthWrite says (see SWShaderType::Text).
         void DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
                       const Common::RenderState &state) override;
         void DrawObjects(const std::vector<Common::RenderObject> &objects) override;
         void OnResize(int width, int height) override;
 
+        // The built-in shaders exist from construction, so they are valid before Initialize too
         Common::IShader* GetStandardUnlitShader() const override { return m_unlitShader.get(); }
         Common::IShader* GetStandardLitShader() const override { return m_litShader.get(); }
-        /// Null: this backend has no SDF text shader until #1 P3, so TextRenderer draws nothing here
-        Common::IShader* GetStandardTextShader() const override { return nullptr; }
+        /// The alpha-tested SDF text shader (SWShaderType::Text)
+        Common::IShader* GetStandardTextShader() const override { return m_textShader.get(); }
 
+        /**
+         * Waits for the frame in flight, then copies the colour buffer into `buffer` as RGBA8, 4 bytes per
+         * pixel, rows bottom to top (row 0 is the bottom of the image, as glReadPixels gives). A size other
+         * than the renderer's is resampled, nearest. Unlike OpenGL's ReadFramebuffer (BGRA, a region of
+         * the GL framebuffer, not resampled), the channels are in RGBA order.
+         */
         void ReadFramebuffer(uint8_t *buffer, int width, int height) const override;
 
         void SetWireframe(bool enabled) override;
@@ -83,7 +114,8 @@ namespace Renderer::Software
         };
 
         std::vector<DrawCommand> m_drawQueue;
-        RenderThread m_renderThread;
+        // mutable: ReadFramebuffer (const) waits for the frame in flight
+        mutable RenderThread m_renderThread;
 
         // Framebuffer
         uint32_t m_width = 0, m_height = 0;
@@ -91,8 +123,9 @@ namespace Renderer::Software
         std::vector<float> m_depthBuffer;
         float m_clearR = 0, m_clearG = 0, m_clearB = 0, m_clearA = 1;
 
-        // GL blit
+        // GL blit. None of it exists headless (m_glReady false), and then no GL function is ever called.
         GLFWwindow *m_window = nullptr;
+        bool m_glReady = false;
         unsigned int m_blitTex = 0, m_blitVAO = 0, m_blitVBO = 0, m_blitProg = 0;
         bool SetupBlitResources();
 
@@ -104,8 +137,9 @@ namespace Renderer::Software
         N2Engine::Math::Vector3 m_cameraPos{};
 
         // Built-in shaders
-        std::unique_ptr<SWShader> m_unlitShader;
-        std::unique_ptr<SWShader> m_litShader;
+        std::unique_ptr<SWShader> m_unlitShader = std::make_unique<SWShader>(SWShaderType::Unlit);
+        std::unique_ptr<SWShader> m_litShader = std::make_unique<SWShader>(SWShaderType::Lit);
+        std::unique_ptr<SWShader> m_textShader = std::make_unique<SWShader>(SWShaderType::Text);
 
         // Owned resource sets (for lifetime tracking)
         std::vector<std::unique_ptr<SWMesh>> m_meshes;
