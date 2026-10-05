@@ -32,9 +32,12 @@ public:
         if (m_thread.joinable()) m_thread.join();
 
         // A frame submitted but never picked up is dropped, so WaitForFrame can't wait for it forever
-        std::lock_guard lock(m_mutex);
-        m_commands.clear();
-        m_busy = false;
+        {
+            std::lock_guard lock(m_mutex);
+            m_commands.clear();
+            m_busy = false;
+        }
+        m_cv.notify_all(); // wake anyone still waiting on the dropped frame
     }
 
     // Called from main thread — queues a frame's worth of work. Dropped when the thread isn't running

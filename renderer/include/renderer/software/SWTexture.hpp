@@ -57,13 +57,13 @@ namespace Renderer::Software
          * The first channel (red), bilinearly filtered, from 0 to 1, as OpenGL's GL_LINEAR filters without
          * mipmaps: texel centres sit at (i + 0.5) / size, and the four texels around the sample point are
          * weighted by distance. Neighbours outside the texture are clamped to the edge or wrapped around,
-         * per options.wrap. 1 for a texture without data; a NaN coordinate reads as 0.
+         * per options.wrap. 1 for a texture without data; a NaN or infinite coordinate reads as 0.
          */
         [[nodiscard]] float SampleFirstChannelBilinear(float u, float v) const
         {
             if (data.empty() || width == 0 || height == 0 || channels == 0) return 1.0f;
-            if (std::isnan(u)) u = 0.0f;
-            if (std::isnan(v)) v = 0.0f;
+            if (!std::isfinite(u)) u = 0.0f; // NaN or inf would make a garbage texel index
+            if (!std::isfinite(v)) v = 0.0f;
 
             const bool clampToEdge = options.wrap == Common::TextureWrap::ClampToEdge;
             // Bring the coordinate into 0..1 first, so the texel indices below stay small

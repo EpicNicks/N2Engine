@@ -143,7 +143,7 @@ namespace Renderer::Common
          * distance is above 0.5. Per backend:
          * - OpenGL: antialiased over one screen pixel and blended; writes depth as the draw's state says.
          * - Software: alpha-tested at 0.5 (no blending, no antialiasing), sampled bilinearly; a covered
-         *   pixel is written opaque and writes depth whenever the draw depth-tests, even if its state says
+         *   pixel is written unblended and writes depth whenever the draw depth-tests, even if its state says
          *   no depth write.
          * - Vulkan and the default body: null, as the backend can't draw text yet (#43).
          */
