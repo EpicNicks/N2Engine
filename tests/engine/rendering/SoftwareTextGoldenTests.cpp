@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <math/Vector2.hpp>
@@ -19,9 +20,10 @@
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UISystem.hpp"
+#include "engine/ui/UIText.hpp"
 
-// Golden-image tests through the engine: a TextRenderer drawn by Scene::Render, and a UI Image drawn by the
-// UI pass, rasterized by a headless SoftwareRenderer (no window or GPU) and read back. The checks are
+// Golden-image tests through the engine: a TextRenderer drawn by Scene::Render, and a UI Image and UIText
+// drawn by the UI pass, rasterized by a headless SoftwareRenderer (no window or GPU) and read back. The checks are
 // structural (bounding boxes against the layout, colours, separated glyphs) with pixel tolerances, never
 // exact images: Debug and Release may round floats differently.
 
@@ -312,5 +314,264 @@ TEST(SoftwareUIGoldenTest, AnImageFillsItsRect)
     }
 
     scene.reset(); // the scene and its UI go before the renderer shuts down
+    renderer.Shutdown();
+}
+
+namespace
+{
+    // The default font's metrics (Noto Sans Regular, font units): what the UI text checks below are derived
+    // from. "Hi" has no kerning pair, so its line is H's advance plus i's.
+    constexpr float kUnitsPerEm = 1000.0f;
+    constexpr float kAscent = 1069.0f;
+    constexpr float kDescent = -293.0f;
+    constexpr float kAdvanceH = 741.0f;
+    constexpr float kInkLeftH = 97.0f; // H's ink spans 97..643
+    constexpr float kAdvanceI = 258.0f;
+    constexpr float kInkRightI = 181.0f; // i's ink spans 78..181
+
+    /// A canvas in a new scene; elements are pinned to its bottom-left corner, so their rects are exact
+    struct UIScene
+    {
+        std::unique_ptr<Scene> scene;
+        GameObject::Ptr canvas;
+    };
+
+    UIScene MakeUIScene(const std::string &name)
+    {
+        UIScene result{Scene::Create(name), UI::UISystem::CreateCanvas(name + "_Canvas")};
+        result.scene->AddRootGameObject(result.canvas);
+        return result;
+    }
+
+    GameObject::Ptr AddElement(const GameObject::Ptr &parent, const std::string &name, const float x, const float y,
+                               const float width, const float height)
+    {
+        auto element = UI::UISystem::CreateElement(name);
+        auto *rectTransform = element->GetComponent<UI::RectTransform>();
+        rectTransform->SetAnchorMin(Math::Vector2{0.0f, 0.0f});
+        rectTransform->SetAnchorMax(Math::Vector2{0.0f, 0.0f});
+        rectTransform->SetPivot(Math::Vector2{0.0f, 0.0f});
+        rectTransform->SetAnchoredPosition(Math::Vector2{x, y});
+        rectTransform->SetSizeDelta(Math::Vector2{width, height});
+        parent->AddChild(element, false);
+        return element;
+    }
+
+    Frame RenderUIPass(SoftwareRenderer &renderer, const Scene &scene, const int width, const int height)
+    {
+        renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+        renderer.BeginFrame();
+        UI::UISystem::Render(scene, &renderer, Vector2i{width, height});
+        renderer.EndFrame();
+        renderer.Present();
+        return ReadBack(renderer, width, height);
+    }
+
+    int CountColour(const Frame &frame, const Rgb colour)
+    {
+        int count = 0;
+        for (int y = 0; y < frame.height; ++y)
+        {
+            for (int x = 0; x < frame.width; ++x)
+            {
+                count += frame.At(x, y) == colour ? 1 : 0;
+            }
+        }
+        return count;
+    }
+
+    constexpr Rgb Yellow{255, 255, 0};
+    constexpr Rgb Red{255, 0, 0};
+    constexpr Rgb White{255, 255, 255};
+}
+
+TEST(SoftwareUIGoldenTest, UITextInkSitsInsideItsRectWithItsAlignment)
+{
+    constexpr int width = 200;
+    constexpr int height = 80;
+    // The rect (canvas space, y up) and the text size: 32 px per em, so one font unit is 0.032 px
+    constexpr float rectX = 20.0f;
+    constexpr float rectY = 10.0f;
+    constexpr float rectW = 160.0f;
+    constexpr float rectH = 60.0f;
+    constexpr float fontSize = 32.0f;
+    constexpr float s = fontSize / kUnitsPerEm;
+    // Generous: the SDF edge, bilinear sampling and pixel centres each move an edge by under a pixel
+    constexpr float tolerancePx = 2.0f;
+
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, width, height));
+
+    struct Case
+    {
+        Text::HorizontalAlign horizontal;
+        Text::VerticalAlign vertical;
+        const char *name;
+    };
+    for (const Case &alignment : {Case{Text::HorizontalAlign::Left, Text::VerticalAlign::Top, "Left/Top"},
+                                  Case{Text::HorizontalAlign::Center, Text::VerticalAlign::Middle, "Center/Middle"},
+                                  Case{Text::HorizontalAlign::Right, Text::VerticalAlign::Bottom, "Right/Bottom"}})
+    {
+        UIScene ui = MakeUIScene("SoftwareUIGolden_Text");
+        const auto element = AddElement(ui.canvas, "Label", rectX, rectY, rectW, rectH);
+        auto *text = element->AddComponent<UI::UIText>();
+        ASSERT_NE(text, nullptr);
+        text->SetText("Hi");
+        text->SetFontSize(fontSize);
+        text->SetColor(Common::Color::Yellow);
+        text->SetHorizontalAlign(alignment.horizontal);
+        text->SetVerticalAlign(alignment.vertical);
+
+        const Frame frame = RenderUIPass(renderer, *ui.scene, width, height);
+        const Coverage c = CoverageExcept(frame, Black);
+        ASSERT_GT(c.count, 0) << alignment.name << ": the text drew nothing";
+
+        // Alpha-tested: every touched pixel is the text's colour
+        EXPECT_EQ(CountColour(frame, Yellow), c.count) << alignment.name << ": pixels that aren't the text's yellow";
+
+        // The ink is inside the rect
+        EXPECT_GE(static_cast<float>(c.minX), rectX - 1.0f) << alignment.name;
+        EXPECT_LE(static_cast<float>(c.maxX + 1), rectX + rectW + 1.0f) << alignment.name;
+        EXPECT_GE(static_cast<float>(c.minY), rectY - 1.0f) << alignment.name;
+        EXPECT_LE(static_cast<float>(c.maxY + 1), rectY + rectH + 1.0f) << alignment.name;
+        // Both glyphs are there: the ink is about as wide as H's left edge to i's right edge
+        EXPECT_NEAR(static_cast<float>(c.maxX + 1 - c.minX), (kAdvanceH + kInkRightI - kInkLeftH) * s,
+                    2.0f * tolerancePx) << alignment.name;
+
+        // Horizontally: the line (H's advance plus i's) is placed by the alignment, and the ink sits in it
+        const float lineWidth = (kAdvanceH + kAdvanceI) * s;
+        float lineLeft = rectX;
+        switch (alignment.horizontal)
+        {
+        case Text::HorizontalAlign::Left:
+            lineLeft = rectX;
+            break;
+        case Text::HorizontalAlign::Center:
+            lineLeft = rectX + (rectW - lineWidth) * 0.5f;
+            break;
+        case Text::HorizontalAlign::Right:
+            lineLeft = rectX + rectW - lineWidth;
+            break;
+        }
+        EXPECT_NEAR(static_cast<float>(c.minX), lineLeft + kInkLeftH * s, tolerancePx)
+            << alignment.name << ": H's left edge";
+        EXPECT_NEAR(static_cast<float>(c.maxX + 1), lineLeft + (kAdvanceH + kInkRightI) * s, tolerancePx)
+            << alignment.name << ": i's right edge";
+
+        // Vertically: H and i stand on the baseline, which the alignment places
+        const float blockHeight = (kAscent - kDescent) * s;
+        float baseline = 0.0f;
+        switch (alignment.vertical)
+        {
+        case Text::VerticalAlign::Top:
+            baseline = rectY + rectH - kAscent * s;
+            break;
+        case Text::VerticalAlign::Middle:
+            baseline = rectY + rectH * 0.5f + blockHeight * 0.5f - kAscent * s;
+            break;
+        case Text::VerticalAlign::Bottom:
+        case Text::VerticalAlign::Baseline:
+            baseline = rectY - kDescent * s;
+            break;
+        }
+        EXPECT_NEAR(static_cast<float>(c.minY), baseline, tolerancePx) << alignment.name << ": the baseline";
+        // ...and reach well up towards the ascent (H's cap height is about two thirds of an em)
+        EXPECT_GE(static_cast<float>(c.maxY + 1) - baseline, 0.5f * kAscent * s) << alignment.name;
+        EXPECT_LE(static_cast<float>(c.maxY + 1) - baseline, kAscent * s + tolerancePx) << alignment.name;
+
+        ui.scene.reset();
+    }
+
+    renderer.Shutdown();
+}
+
+TEST(SoftwareUIGoldenTest, UITextDrawsOverAnImageInHierarchyOrder)
+{
+    constexpr int width = 120;
+    constexpr int height = 60;
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, width, height));
+
+    const auto addPanel = [](const GameObject::Ptr &parent, const std::string &name)
+    {
+        auto panel = AddElement(parent, name, 10.0f, 10.0f, 100.0f, 40.0f);
+        panel->AddComponent<UI::Image>()->SetColor(Common::Color::Red);
+        return panel;
+    };
+    const auto addLabel = [](const GameObject::Ptr &parent, const std::string &name)
+    {
+        auto label = AddElement(parent, name, 10.0f, 10.0f, 100.0f, 40.0f);
+        auto *text = label->AddComponent<UI::UIText>();
+        text->SetText("HH");
+        text->SetFontSize(32.0f);
+        text->SetColor(Common::Color::White);
+        text->SetHorizontalAlign(Text::HorizontalAlign::Center);
+        text->SetVerticalAlign(Text::VerticalAlign::Middle);
+        return label;
+    };
+
+    // The text after the image (a later sibling) draws on top of it
+    {
+        UIScene ui = MakeUIScene("SoftwareUIGolden_TextOnTop");
+        addPanel(ui.canvas, "Panel");
+        addLabel(ui.canvas, "Label");
+        const Frame frame = RenderUIPass(renderer, *ui.scene, width, height);
+
+        const int white = CountColour(frame, White);
+        const int red = CountColour(frame, Red);
+        EXPECT_GT(white, 50) << "the text shows over the panel";
+        EXPECT_GT(red, 100 * 40 / 2) << "most of the panel is still red";
+        EXPECT_NEAR(white + red, 100 * 40, 100 * 40 / 10) << "text pixels replace panel pixels";
+        EXPECT_EQ(white + red, CoverageExcept(frame, Black).count) << "only the panel's and the text's colours";
+        // Every white pixel is inside the panel
+        const Coverage whiteInk = [&]
+        {
+            Coverage c;
+            c.minX = width;
+            c.minY = height;
+            for (int y = 0; y < height; ++y)
+            {
+                for (int x = 0; x < width; ++x)
+                {
+                    if (frame.At(x, y) == White)
+                    {
+                        c.minX = std::min(c.minX, x);
+                        c.maxX = std::max(c.maxX, x);
+                        c.minY = std::min(c.minY, y);
+                        c.maxY = std::max(c.maxY, y);
+                    }
+                }
+            }
+            return c;
+        }();
+        EXPECT_GE(whiteInk.minX, 9);
+        EXPECT_LE(whiteInk.maxX, 110);
+        EXPECT_GE(whiteInk.minY, 9);
+        EXPECT_LE(whiteInk.maxY, 50);
+        ui.scene.reset();
+    }
+
+    // A child of the image draws on top too
+    {
+        UIScene ui = MakeUIScene("SoftwareUIGolden_TextChild");
+        const auto panel = addPanel(ui.canvas, "Panel");
+        const auto label = addLabel(panel, "Label");
+        label->GetComponent<UI::RectTransform>()->StretchToParent(); // the panel's rect
+        const Frame frame = RenderUIPass(renderer, *ui.scene, width, height);
+        EXPECT_GT(CountColour(frame, White), 50) << "a child draws over its parent";
+        ui.scene.reset();
+    }
+
+    // The text before the image (an earlier sibling) is covered by it
+    {
+        UIScene ui = MakeUIScene("SoftwareUIGolden_TextUnder");
+        addLabel(ui.canvas, "Label");
+        addPanel(ui.canvas, "Panel");
+        const Frame frame = RenderUIPass(renderer, *ui.scene, width, height);
+        EXPECT_EQ(CountColour(frame, White), 0) << "the panel drawn later covers the text";
+        EXPECT_NEAR(CountColour(frame, Red), 100 * 40, 100 * 40 / 10);
+        ui.scene.reset();
+    }
+
     renderer.Shutdown();
 }
