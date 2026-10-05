@@ -15,7 +15,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | File | Covers |
 |---|---|
 | `index.html` | Overview, module list, architecture map, ownership, frame summary, cross-cutting rules |
-| `application.html` | Init/Run/Shutdown, frame order, fixed step, Quit, health, headless mode |
+| `application.html` | Init/Run/Shutdown, frame order, fixed step, Quit, health, headless mode, renderer resources, the software renderer's headless mode |
 | `gameobjects-components.html` | GameObject/Component lifecycle, hierarchy, destroy, component lookup and removal |
 | `transforms.html` | `Positionable` local/world transforms, dirty propagation, physics notification |
 | `scenes.html` | `Scene` and `SceneManager`: storage, loading, switching, teardown |
@@ -23,14 +23,14 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `physics.html` | Backends, bodies, colliders, events, raycasts, mass properties |
 | `input.html` | Input system, action maps, bindings, value combination |
 | `audio.html` | Audio system, sources, one-shots, mixer groups, shutdown |
-| `text.html` | Font backends, SDF atlas, UTF-8 and text layout, the `Font` asset and default font, the `TextRenderer` component |
+| `text.html` | Font backends, SDF atlas, UTF-8 and text layout, the `Font` asset and default font, the `TextRenderer` component, the OpenGL and software text shaders, golden-image tests |
 | `ui.html` | Screen-space UI: canvases, `RectTransform` layout, `Image`, the UI pass, UI picking |
 | `resources.html` | Resource paths, `ResourceLoader`, `Resources` |
 | `serialization.html` | Scene/component JSON, references, failure handling |
 | `math.html` | Math types, SIMD tiers, correctness guarantees |
 | `scripting-lua.html` | `LuaComponent`, fields, checked handles, subscriptions, `engine-api.lua` |
 | `logging-and-editor.html` | Logger, engine health, the editor host |
-| `testing.html` | Test layout, CI, conventions |
+| `testing.html` | Test layout, CI, conventions, pixel tests with the headless software renderer |
 
 ## Adding or changing a page
 

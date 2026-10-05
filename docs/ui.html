@@ -182,7 +182,7 @@ rect     = (pivotPos - pivot * size, size)
 <p class="callout-title">Backends</p>
 <ul>
 <li><strong>OpenGL</strong> draws the UI as described.</li>
-<li><strong>Software</strong> draws it too, now that each draw keeps the view and projection it was submitted with <span class="badge">PR #50</span> (the backend used to apply the frame's last view and projection to every draw). UI draws don't write depth, so they keep their submitted order. The software renderer has no blending, so semi-transparent UI is drawn opaque.</li>
+<li><strong>Software</strong> draws it too, now that each draw keeps the view and projection it was submitted with <span class="badge">PR #50</span> (the backend used to apply the frame's last view and projection to every draw). UI draws don't write depth, so they keep their submitted order. The software renderer has no blending, so semi-transparent UI is drawn opaque. A headless golden test checks that an <code>Image</code> fills its rect there (<code>SoftwareUIGoldenTest</code>) <span class="badge">PR #TBD</span>.</li>
 <li><strong>Vulkan</strong> draws nothing yet (<a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>).</li>
 </ul>
 </div>

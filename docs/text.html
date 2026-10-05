@@ -61,7 +61,7 @@
 <div class="content">
 
 <h1>Text &amp; fonts</h1>
-<p class="lead">The <code>text</code> library loads fonts, builds single-channel SDF glyph atlases and lays out UTF-8 text into glyph quads, all on the CPU. The engine wraps it in the <code>Text::Font</code> asset for <code>.ttf</code>/<code>.otf</code> files, ships one embedded default font, and draws world-space text with the <code>TextRenderer</code> component on OpenGL. Software-renderer text and UI text come in later phases of <a href="https://github.com/EpicNicks/N2Engine/issues/1">issue #1</a>. This page covers the font backend interface, the atlas, layout rules, the asset and the component.</p>
+<p class="lead">The <code>text</code> library loads fonts, builds single-channel SDF glyph atlases and lays out UTF-8 text into glyph quads, all on the CPU. The engine wraps it in the <code>Text::Font</code> asset for <code>.ttf</code>/<code>.otf</code> files, ships one embedded default font, and draws world-space text with the <code>TextRenderer</code> component on OpenGL and the software renderer. UI text comes in a later phase of <a href="https://github.com/EpicNicks/N2Engine/issues/1">issue #1</a>. This page covers the font backend interface, the atlas, layout rules, the asset and the component.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -85,7 +85,9 @@
 <ol>
 <li><a href="#text-renderer-drawing">How it draws</a></li>
 <li><a href="#text-shader">The SDF text shader</a></li>
+<li><a href="#text-shader-software">The software text shader</a></li>
 <li><a href="#text-backends">Backend support</a></li>
+<li><a href="#text-golden">Golden-image tests</a></li>
 <li><a href="#text-renderer-lua">From Lua and scene files</a></li>
 </ol>
 </li>
@@ -276,7 +278,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 
 <h3 id="text-renderer-drawing">How it draws</h3>
 <ol class="steps">
-<li><strong>Queue.</strong> <code>GetRenderQueue()</code> is <code>Transparent</code> with sort key 0, so the text draws after the opaque geometry, sorted back to front by its object's position, with <code>RenderState::Transparent()</code>: blended, depth-tested, not writing depth, back faces culled. <code>Render(renderer)</code> outside a scene uses the same state. (See <a href="application.html#render">Rendering the scene</a>.)</li>
+<li><strong>Queue.</strong> <code>GetRenderQueue()</code> is <code>Transparent</code> with sort key 0, so the text draws after the opaque geometry, sorted back to front by its object's position, with <code>RenderState::Transparent()</code>: blended, depth-tested, not writing depth, back faces culled. <code>Render(renderer)</code> outside a scene uses the same state. (See <a href="application.html#render">Rendering the scene</a>.) On the software renderer, which can't blend, the text shader alpha-tests instead and writes depth where it draws <span class="badge">PR #TBD</span>; see <a href="#text-shader-software">the software text shader</a>.</li>
 <li><strong>Layout.</strong> The text is laid out with <code>Font::Layout</code> when any input changes: the text, the effective font, the size, either alignment, the wrap width, or the line or letter spacing. Setting a value equal to the current one is not a change, and a value changed by loading a scene is detected the same way. The colour is not a layout input.</li>
 <li><strong>Mesh.</strong> <code>TextRenderer::BuildMesh(layout)</code> turns each <code>GlyphQuad</code> into 4 vertices and 6 indices, at z = 0 with normal +Z and white vertex colour. Corners go bottom-left, bottom-right, top-right, top-left (counter-clockwise from +Z), and take the glyph's atlas uvs as they are: uvs are y-down, so the top corners get <code>uv.minY</code>. One text is one mesh and one draw call. The first draw creates the mesh; after a layout change the next draw replaces its data with <code>IRenderer::UpdateMesh</code>, keeping the same mesh. A backend that can't update meshes gets the old one destroyed and a new one created.</li>
 <li><strong>Atlas texture.</strong> Each font's atlas is uploaded once per renderer, as a single-channel texture with <code>TextureOptions::SdfAtlas()</code> (linear, clamp to edge, no mipmaps; see <a href="application.html#text-resources">Texture options</a>). Every <code>TextRenderer</code> drawing that font on that renderer shares it; it is destroyed when the last of them releases it.</li>
@@ -305,18 +307,47 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <p><code>IRenderer::GetStandardTextShader()</code> returns the built-in text shader. On OpenGL it reads the atlas's red channel as the distance <code>d</code> (the outline at 0.5, inside higher; the atlas stores the edge at 128, which is 0.502), and computes the coverage as <code>smoothstep(0.5 &minus; w, 0.5 + w, d)</code> with <code>w = 0.5 &middot; fwidth(d)</code>: a ramp one screen pixel wide around the outline, so edges stay antialiased at any size or distance with nothing to tune. The colour is <code>uAlbedo</code> times the vertex colour, with the coverage multiplied into its alpha; a fragment whose alpha is below 0.01 is discarded. Outlines, shadows and other effects come later (P5).</p>
 <p class="src">Source: <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>OpenGLRenderer::CreateStandardShaders</code></p>
 
+<h3 id="text-shader-software">The software text shader <span class="badge">PR #TBD</span></h3>
+<p>On the software renderer, <code>GetStandardTextShader()</code> returns a built-in <code>SWShader</code> of type <code>SWShaderType::Text</code>. It exists from the renderer's construction, like the unlit and lit shaders, and <code>DestroyShaderProgram</code> never destroys it. Per pixel that passes the depth test:</p>
+<ol class="steps">
+<li><strong>Sample.</strong> The material's texture is sampled <em>bilinearly</em> at the perspective-correct uv, whatever the texture's <code>filter</code> option, reading only the first channel as the distance <code>d</code> (0 to 1). Texel centres sit at <code>(i + 0.5) / size</code>, as with OpenGL's <code>GL_LINEAR</code>, and neighbours past the edge are clamped or wrapped by the texture's <code>wrap</code> (the atlas is <code>ClampToEdge</code>).</li>
+<li><strong>Alpha test.</strong> A pixel with <code>d &lt; 0.5</code> is left untouched: no colour, no depth. The colour is <code>uAlbedo</code> times the interpolated vertex colour; a pixel whose alpha is below 0.01 is also left untouched, as OpenGL discards it.</li>
+<li><strong>Write.</strong> A covered pixel is written opaque with that colour (its alpha goes into the buffer unchanged, as with the other software shaders), with no blending and no antialiasing, so edges are hard.</li>
+<li><strong>Depth.</strong> A covered pixel writes its depth whenever the draw depth-tests, even though <code>RenderState::Transparent()</code> says no depth write. With the depth test off (the UI pass's state) nothing writes depth, as in OpenGL.</li>
+</ol>
+<p>A text material without a texture draws nothing (OpenGL's unbound sampler reads 0, below the edge). Uniforms are resolved once per draw, like the other software shaders: the per-pixel cost is one bilinear sample and, only for covered pixels, the colour interpolation.</p>
+<p><strong>Draw order.</strong> The software renderer reorders runs of draws that depth-test and write depth front to back for early-Z (<a href="application.html#render">Rendering the scene</a>). Text is ordered by the state it was submitted with: a Transparent-queue text draw doesn't write depth by its state, so it keeps its submission position, after all opaque draws and back to front among the transparent ones. Its depth writes then only affect draws submitted after it.</p>
+
+<div class="callout note" id="design-sw-text-alpha-test">
+<p class="callout-title">Design decision: alpha-tested, depth-writing text on the software renderer <span class="badge">PR #TBD</span></p>
+<p>The software renderer has no blending, and adding it would mean read-modify-write per pixel on every transparent draw and an ordering the reordering rasterizer would have to respect. An SDF doesn't need it: thresholding the distance at 0.5 gives the glyph's outline exactly, so the shader keeps a pixel or rejects it, like an alpha test. A kept pixel is then an opaque surface, so it writes depth: otherwise anything drawn later behind the text (a transparent quad further back, intersecting geometry) would paint over the glyphs. The price is hard, aliased edges and no fading (alpha only decides whether text draws at all), which is acceptable for a CPU fallback and for tests. Sampling is bilinear because a nearest-sampled distance makes the outline follow the atlas's texel grid; interpolating it keeps outlines smooth at any scale. Keeping text's draw order keyed on its submitted state, rather than on the depth it writes, changes nothing for correctness: an alpha-tested, depth-writing draw gives the same image wherever it sits among depth-writing draws (its rejected pixels write nothing, like occluded ones), and in the Transparent queue it keeps the back-to-front order <code>Scene::Render</code> chose. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a>.</p>
+</div>
+<p class="src">Source: <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>RasterTri&lt;ShadeKind::Text&gt;</code>, <code>ToRasterState</code>; <code>renderer/include/renderer/software/SWTexture.hpp</code> — <code>SWTexture::SampleFirstChannelBilinear</code>; <code>renderer/include/renderer/software/DrawOrder.hpp</code></p>
+
 <h3 id="text-backends">Backend support</h3>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Backend</th><th>Text</th></tr></thead>
 <tbody>
 <tr><td>OpenGL</td><td>Drawn with the SDF shader above, blended.</td></tr>
-<tr><td>Software</td><td>Not drawn yet: <code>GetStandardTextShader()</code> returns null, so <code>TextRenderer</code> creates nothing and draws nothing. The renderer does support everything else text uses (single-channel textures with options, <code>UpdateMesh</code>). Alpha-tested SDF text arrives in P3.</td></tr>
+<tr><td>Software <span class="badge">PR #TBD</span></td><td>Drawn with the <a href="#text-shader-software">alpha-tested software text shader</a>: hard edges, opaque, writing depth. Works headless, which the <a href="#text-golden">golden-image tests</a> use.</td></tr>
 <tr><td>Vulkan</td><td>Not drawn: the backend draws nothing yet (<a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>), and has no text shader.</td></tr>
 </tbody>
 </table>
 </div>
-<p>Where the text shader is null, the first <code>TextRenderer</code> to draw logs one warning, naming the renderer, for the whole process.</p>
+<p>Where the text shader is null (Vulkan), the first <code>TextRenderer</code> to draw logs one warning, naming the renderer, for the whole process, and creates nothing.</p>
+
+<h3 id="text-golden">Golden-image tests <span class="badge">PR #TBD</span></h3>
+<p>Text pixels are tested in CI with the software renderer in <a href="application.html#sw-headless">headless mode</a>, which needs no window or GPU. Each test renders a frame, reads it back with <code>ReadFramebuffer</code> and checks its structure:</p>
+<ul>
+<li><strong>Renderer level</strong> (<code>SoftwareTextShaderTest</code> in <code>renderer_tests</code>): a quad with a synthetic SDF disc and the text shader. The covered-pixel count is within 8% of &pi;r&sup2;, the bounding box within a pixel of the disc's; pixels clearly inside are the text colour and pixels clearly outside are untouched (nothing in between: no blending). An opaque quad drawn behind it afterwards leaves every text pixel alone (depth was written), while an unlit draw in the same state is painted over. Also: albedo times vertex colour, alpha 0 and a missing atlas draw nothing, and no depth is written with the depth test off.</li>
+<li><strong>Engine level</strong> (<code>SoftwareTextGoldenTest</code> in <code>engine_tests</code>): a <code>TextRenderer</code> saying "Hi" in the default font, drawn through <code>Scene::Render</code> with an orthographic camera. Every touched pixel is the text colour; the ink's bounding box lies within the projected <code>GetLayout().bounds</code> (2 px tolerance) and stands on the projected baseline (3 px); the glyphs form two clusters of columns separated by a gap, each inside its glyph quad, the H wider than the i. A second test recolours a glyph and checks the same pixels change colour.</li>
+</ul>
+<div class="callout note" id="design-structural-goldens">
+<p class="callout-title">Design decision: golden images compare structure, not pixels <span class="badge">PR #TBD</span></p>
+<p>CI runs the tests in Debug and Release, whose float code differs (contraction, vectorisation, intermediate precision), and a distance sampled at an edge can land a hair either side of 0.5. An exact image or hash would fail on a one-pixel change no one could see, and would need re-baselining after every harmless rasterizer change; stored reference images would also be binaries in git. So the tests assert what matters and what is stable: counts and bounding boxes within a pixel or a few percent, colours exact (they are not interpolated across the edge), structure such as separated glyphs, and anything relative between two frames of the same run (which is deterministic). Nothing is compared against a file. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a>.</p>
+</div>
+<p class="src">Tests: <code>tests/renderer/software/SoftwareRendererGoldenTests.cpp</code>, <code>tests/engine/rendering/SoftwareTextGoldenTests.cpp</code></p>
 
 <h3 id="text-renderer-lua">From Lua and scene files</h3>
 <p><code>GameObject:AddComponent("TextRenderer")</code> returns a handle with <code>SetText</code>/<code>GetText</code>, <code>SetColor</code>/<code>GetColor</code>, <code>SetFontSize</code>, <code>SetMaxWidth</code>, <code>SetLineSpacing</code> and <code>SetLetterSpacing</code> (each with its getter), plus:</p>
