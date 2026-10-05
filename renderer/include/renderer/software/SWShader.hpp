@@ -12,7 +12,17 @@
 
 namespace Renderer::Software
 {
-    enum class SWShaderType { Unlit, Lit };
+    /**
+     * The built-in shading models of the software renderer. A material's shader picks one; there is no
+     * programmable shading.
+     * - Unlit: uAlbedo times the texture (if any).
+     * - Lit: Blinn-Phong with the scene lighting, uAlbedo times the texture.
+     * - Text: the SDF text shader (IRenderer::GetStandardTextShader). Samples the first channel of the
+     *   material's texture bilinearly as a distance, and alpha-tests it at 0.5: a pixel at or above the edge
+     *   is written opaque with uAlbedo times the vertex colour, and writes depth whenever the draw
+     *   depth-tests; a pixel below it is left untouched. There is no blending and no antialiasing.
+     */
+    enum class SWShaderType { Unlit, Lit, Text };
 
     class SWShader : public Common::IShader
     {

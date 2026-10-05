@@ -22,7 +22,9 @@ namespace N2Engine::Rendering
      *
      * The text is laid out with Font::Layout (see docs/text.html#layout): fontSize is world units per em,
      * maxWidth (world units, 0 = no wrapping) wraps it, and the alignments place the block relative to
-     * the object's origin. It draws in the Transparent render queue, blended and without writing depth.
+     * the object's origin. It draws in the Transparent render queue with RenderState::Transparent(): on
+     * OpenGL blended and without writing depth; on the software renderer, which can't blend, the text
+     * shader alpha-tests the glyphs instead and writes their depth (see IRenderer::GetStandardTextShader).
      *
      * Rendering:
      * - The layout and mesh are rebuilt only when the text, font, size, alignment, wrap width or spacing
@@ -30,8 +32,8 @@ namespace N2Engine::Rendering
      *   in place (IRenderer::UpdateMesh), or recreated where the backend can't update meshes.
      * - Each font's atlas becomes one texture per renderer, shared by every TextRenderer using that font
      *   there, and destroyed when the last of them releases it.
-     * - It needs IRenderer::GetStandardTextShader. Where that is null (the software renderer until #1 P3,
-     *   Vulkan until #43) it draws nothing and logs one warning per process.
+     * - It needs IRenderer::GetStandardTextShader, which OpenGL and the software renderer have. Where it
+     *   is null (Vulkan until #43) it draws nothing and logs one warning per process.
      * - Empty text, or text with only spaces, draws nothing.
      */
     class TextRenderer final : public IRenderable

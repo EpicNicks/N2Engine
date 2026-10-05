@@ -44,6 +44,8 @@ namespace Renderer::Common
      *   depth-test and write depth (normally the Transparent queue) keeps its submission position. A
      *   Transparent renderable that doesn't override IRenderable::RenderInQueue draws with the default,
      *   depth-writing state, so it can be reordered. It has no blending: RenderState::blend is ignored.
+     *   Its text shader alpha-tests and writes depth wherever a draw depth-tests (see
+     *   GetStandardTextShader); text is still ordered by its submitted (Transparent) state.
      * - VulkanRenderer does not draw yet (#43).
      */
     class IRenderer
@@ -136,13 +138,26 @@ namespace Renderer::Common
         }
 
         /**
-         * The built-in SDF text shader: samples a single-channel SDF atlas (the material's texture) and
-         * draws its uAlbedo colour, times the vertex colour, where the distance is above 0.5, antialiased
-         * over one screen pixel. Null where the backend can't draw text yet (the default body; software
-         * until #1 P3, Vulkan until #43).
+         * The built-in SDF text shader: samples a single-channel SDF atlas (the material's texture, read
+         * through its first channel) and draws its uAlbedo colour, times the vertex colour, where the
+         * distance is above 0.5. Per backend:
+         * - OpenGL: antialiased over one screen pixel and blended; writes depth as the draw's state says.
+         * - Software: alpha-tested at 0.5 (no blending, no antialiasing), sampled bilinearly; a covered
+         *   pixel is written unblended and writes depth whenever the draw depth-tests, even if its state says
+         *   no depth write.
+         * - Vulkan and the default body: null, as the backend can't draw text yet (#43).
          */
         [[nodiscard]] virtual IShader* GetStandardTextShader() const { return nullptr; }
 
+        /**
+         * Copies the last frame into `buffer` (width * height * 4 bytes). Rows are bottom to top (row 0 is
+         * the bottom of the image), as glReadPixels returns them, on every backend. The channel order and
+         * scaling differ:
+         * - OpenGL: glReadPixels of the framebuffer's bottom-left width x height region, in BGRA order.
+         * - Software: the CPU colour buffer, waiting for the frame in flight first, in RGBA order, resampled
+         *   (nearest) to width x height.
+         * - Vulkan: writes nothing (#43).
+         */
         virtual void ReadFramebuffer(std::uint8_t *buffer, int width, int height) const = 0;
 
         // Debug
