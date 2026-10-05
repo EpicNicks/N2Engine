@@ -112,7 +112,7 @@ namespace
         void DestroyTexture(ITexture *) override {}
         void DrawObjects(const std::vector<Renderer::Common::RenderObject> &) override {}
         bool Initialize(GLFWwindow *, uint32_t, uint32_t) override { return true; }
-        void Shutdown() override {}
+        void Shutdown() override { EndLifetime(); } // as the real backends do
         void Resize(uint32_t, uint32_t) override {}
         void Clear(float, float, float, float) override {}
         void BeginFrame() override {}
@@ -220,6 +220,22 @@ TEST(PolygonRendererLifetimeTest, ANewRendererReleasesWhatTheOldOneHeld)
     object.renderer->CleanupRenderResources(&second);
     EXPECT_TRUE(second.meshes.empty());
     EXPECT_TRUE(second.materials.empty());
+}
+
+TEST(PolygonRendererLifetimeTest, ARendererShutDownAndInitialisedAgainCountsAsNew)
+{
+    RecordingRenderer renderer;
+    auto object = MakePolygon<Example::CubeRenderer>("Reinitialised");
+    object.renderer->Render(&renderer);
+    ASSERT_EQ(renderer.createMeshCalls, 1);
+
+    // Shutdown frees everything the renderer made; the same object is then initialised again
+    renderer.Shutdown();
+    renderer.Initialize(nullptr, 1, 1);
+
+    object.renderer->Render(&renderer);
+    EXPECT_EQ(renderer.createMeshCalls, 2);  // new resources, not the freed ones
+    EXPECT_EQ(renderer.DestroyCalls(), 0);   // the old handles were forgotten, not destroyed
 }
 
 TEST(PolygonRendererLifetimeTest, DestroyingAfterTheRendererIsGoneCallsNothing)

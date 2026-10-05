@@ -75,6 +75,7 @@ bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, const uint32_t width, 
 
 void OpenGLRenderer::Shutdown()
 {
+    EndLifetime(); // everything below is freed, so holders must not use their handles again
     m_materials.clear(); // Destroy materials first
     m_meshes.clear(); // Then meshes
     m_textures.clear();
