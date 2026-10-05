@@ -79,6 +79,10 @@ void OpenGLRenderer::Shutdown()
     m_meshes.clear(); // Then meshes
     m_textures.clear();
     m_shaderPrograms.clear();
+    // They were in m_shaderPrograms; don't leave them dangling
+    m_standardUnlitShader = nullptr;
+    m_standardLitShader = nullptr;
+    m_standardTextShader = nullptr;
 }
 
 void OpenGLRenderer::Resize(const uint32_t width, const uint32_t height)
@@ -130,6 +134,11 @@ bool OpenGLRenderer::DestroyShaderProgram(Common::IShader *shader)
     if (!shader)
     {
         return false;
+    }
+    // The standard shaders are shared by every renderable and live as long as the renderer; Shutdown frees them
+    if (shader == m_standardUnlitShader || shader == m_standardLitShader || shader == m_standardTextShader)
+    {
+        return true;
     }
 
     if (auto it = m_shaderPrograms.find(shader); it != m_shaderPrograms.end())

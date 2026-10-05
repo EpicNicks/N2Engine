@@ -204,10 +204,8 @@ namespace N2Engine::Example
                     _cachedRenderer->DestroyMaterial(_material);
                 }
 
-                if (_shader != nullptr)
-                {
-                    _cachedRenderer->DestroyShaderProgram(_shader);
-                }
+                // _shader is the renderer's standard unlit shader, shared by every renderable: the renderer owns
+                // it, so it is never destroyed here
             }
 
             _mesh = nullptr;

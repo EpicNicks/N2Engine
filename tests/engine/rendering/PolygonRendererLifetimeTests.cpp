@@ -206,6 +206,7 @@ TEST(PolygonRendererLifetimeTest, ANewRendererReleasesWhatTheOldOneHeld)
     EXPECT_TRUE(first.materials.empty());
     EXPECT_EQ(first.destroyMeshCalls, 1);
     EXPECT_EQ(first.destroyMaterialCalls, 1);
+    EXPECT_EQ(first.destroyShaderCalls, 0); // the standard shader is the renderer's, shared by everything
     EXPECT_EQ(second.createMeshCalls, 1);
     EXPECT_EQ(second.DestroyCalls(), 0);
     ASSERT_EQ(second.drawnMeshes.size(), 1u);
