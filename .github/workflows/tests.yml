@@ -93,18 +93,24 @@ jobs:
           try {
             # The ready line ("N2EditorHost ready " then key=value fields, port among them) comes once the server
             # listens. Matched with the launcher regex from logging-and-editor.html#ready-line, so port needn't be
-            # first. Only complete lines count; the log is read with sharing, as the host has it open.
+            # first. Only complete lines count, each with its trailing \r stripped (the host's stdout is in text
+            # mode, so lines end in \r\n, and .NET's $ doesn't match before a \r). The log is read with sharing,
+            # as the host has it open.
             $port = $null
+            $text = ""
+            $readError = $null
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
             for ($i = 0; $i -lt 240 -and -not $port; $i++) {
-              $text = ""
               try {
                 $file = [System.IO.File]::Open($logPath, 'Open', 'Read', 'ReadWrite')
                 try { $text = [System.IO.StreamReader]::new($file).ReadToEnd() } finally { $file.Dispose() }
-              } catch { }
+                $readError = $null
+              } catch { $readError = $_.Exception.Message }
               $end = $text.LastIndexOf("`n")
               if ($end -ge 0) {
-                foreach ($line in ($text.Substring(0, $end) -split "`r?`n")) {
-                  if ($line -match '^N2EditorHost ready (?:.* )?port=(\d+)(?: |$)') { $port = [int]$Matches[1]; break }
+                # Up to and including the last \n: the ready line is often the last complete line
+                foreach ($line in ($text.Substring(0, $end + 1) -split "`n")) {
+                  if ($line.TrimEnd("`r") -match '^N2EditorHost ready (?:.* )?port=(\d+)(?: |$)') { $port = [int]$Matches[1]; break }
                 }
               }
               if (-not $port) {
@@ -112,7 +118,13 @@ jobs:
                 Start-Sleep -Milliseconds 500
               }
             }
-            if (-not $port) { throw "Editor host never printed its ready line" }
+            if (-not $port) {
+              $tail = if ($text.Length -gt 2000) { $text.Substring($text.Length - 2000) } else { $text }
+              $escaped = $tail.Replace("`r", '\r').Replace("`n", "\n`n")
+              Write-Host "Waited $([int]$watch.Elapsed.TotalSeconds) s; last read error: $(if ($readError) { $readError } else { 'none' })"
+              Write-Host "Read $($text.Length) chars of stdout; the last 2000, escaped:`n$escaped"
+              throw "Editor host never printed its ready line"
+            }
             if ($port -lt 1 -or $port -gt 65535) { throw "Ready line has an invalid port: $port" }
             Write-Host "Editor host ready on port $port"
 
