@@ -58,6 +58,9 @@ namespace N2Engine::UI
         Renderer::Common::ITexture *_texture = nullptr;
         std::shared_ptr<Rendering::Texture> _sprite; // serialized as "sprite"
         Rendering::GpuCache::Handle _spriteTexture;  // _sprite's texture on _renderer, once drawn
+        // The last sprite a renderer failed to make a texture for, so it isn't retried every frame
+        std::weak_ptr<Rendering::Texture> _failedSprite;
+        std::weak_ptr<const void> _failedRenderer;
 
         // Created on first draw with the renderer that drew it, released in OnDestroy (as the scene renderables
         // do: by the time a leftover component is freed, the renderer may be gone)

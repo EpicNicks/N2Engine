@@ -27,7 +27,8 @@ namespace N2Engine::AssetImport
         std::uint32_t height = 0;
         /// Always 4: grey, grey + alpha and RGB images are expanded to RGBA (alpha 255 where the file has none)
         std::uint32_t channels = 4;
-        /// The channels the file itself holds (1 grey, 2 grey + alpha, 3 RGB, 4 RGBA), for information
+        /// The channels stb_image reports for the file (1 grey, 2 grey + alpha, 3 RGB, 4 RGBA; a palette image
+        /// reports its expanded 3 or 4), for information
         std::uint32_t sourceChannels = 0;
         /// width * height * 4 bytes. With ImageDecodeOptions::flipY (the default) the bottom row of the
         /// picture comes first, otherwise the top row.

@@ -12,7 +12,9 @@
 #define STBI_NO_STDIO
 #define STBI_NO_LINEAR
 #define STBI_MAX_DIMENSIONS 16384
-// stb's asserts are internal invariants; in Release a bad file must fail to decode, never abort
+// stb's asserts are internal invariants. In Release they are compiled out so a bad file can't abort the
+// program: stb's own checks reject malformed data, and an assert that would have fired just doesn't stop it.
+// In Debug they stay on.
 #ifdef NDEBUG
 #define STBI_ASSERT(x) ((void)0)
 #else
