@@ -9,6 +9,7 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
 #include "engine/GameObjectScene.hpp"
+#include "engine/rendering/Texture.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
@@ -108,7 +109,29 @@ namespace N2Engine::Scripting::Bindings
             "GetColor", Forward<ImageRef, &UI::UIGraphic::GetColor>(),
             "SetColor", Forward<ImageRef, &UI::UIGraphic::SetColor>(),
             "GetRaycastTarget", Forward<ImageRef, &UI::UIGraphic::GetRaycastTarget>(),
-            "SetRaycastTarget", Forward<ImageRef, &UI::UIGraphic::SetRaycastTarget>()
+            "SetRaycastTarget", Forward<ImageRef, &UI::UIGraphic::SetRaycastTarget>(),
+            // An image file, e.g. "res://ui/icon.png"; nil clears the sprite. A path that doesn't load raises an
+            // error and keeps the current sprite.
+            "SetSprite", [](const ImageRef &c, sol::optional<std::string> path)
+            {
+                const auto image = c.Pin();
+                if (!path)
+                {
+                    image->SetSprite(nullptr);
+                    return;
+                }
+                image->SetSprite(LoadTextureOrThrow(*path, "Image:SetSprite"));
+            },
+            // The sprite's path (res:// for a project asset), or nil without a sprite
+            "GetSprite", [](const ImageRef &c) -> sol::optional<std::string>
+            {
+                const auto image = c.Pin();
+                if (!image->GetSprite())
+                {
+                    return sol::nullopt;
+                }
+                return TexturePathForLua(*image->GetSprite());
+            }
         );
 
         // ===== UIText =====

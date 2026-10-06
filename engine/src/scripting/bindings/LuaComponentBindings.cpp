@@ -25,6 +25,7 @@
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/rendering/TextRenderer.hpp"
+#include "engine/rendering/Texture.hpp"
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/text/Font.hpp"
@@ -174,6 +175,25 @@ namespace N2Engine::Scripting::Bindings
             throw std::runtime_error(std::format("{}: can't load font '{}'", caller, path));
         }
         return font;
+    }
+
+    std::shared_ptr<Rendering::Texture> LoadTextureOrThrow(const std::string &path, const std::string_view caller)
+    {
+        auto texture = IO::Resources::Instance().Load<Rendering::Texture>(std::filesystem::path(path));
+        if (!texture || !texture->IsLoaded())
+        {
+            throw std::runtime_error(std::format("{}: can't load texture '{}'", caller, path));
+        }
+        return texture;
+    }
+
+    std::string TexturePathForLua(const Rendering::Texture &texture)
+    {
+        if (texture.GetResourcePath().IsValid())
+        {
+            return texture.GetResourcePath().ToString();
+        }
+        return texture.GetSourcePath();
     }
 
     sol::object AddComponentByName(GameObject &gameObject, const std::string &typeName, sol::this_state state)
