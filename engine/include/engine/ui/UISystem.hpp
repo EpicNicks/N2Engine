@@ -161,15 +161,24 @@ namespace N2Engine::UI
          * The whole UI hit test of a window point, in order:
          * 1. Screen-space overlay canvases (HitTestWindowPoint): their hit wins.
          * 2. Otherwise, with a camera, the nearest world-space canvas element along camera.ScreenPointToRay,
-         *    between the near and far planes (HitTestWorldCanvases), unless a physics collider on a layer in
-         *    `physicsMask` is hit nearer along the same ray (Physics::Raycast::Single): then nullptr, so the
-         *    dispatcher's world pick finds that collider. A collider at exactly the canvas's distance doesn't
-         *    block it. Without a physics backend nothing blocks.
+         *    between the near and far planes (HitTestWorldCanvases), unless a solid (non-trigger) physics
+         *    collider on a layer in `physicsMask` is hit nearer along the same ray (Physics::Raycast::All with
+         *    QueryTriggers::Ignore): then nullptr, so the dispatcher's world pick finds that collider.
+         *    Trigger colliders never block, and neither does a collider the ray starts inside (a hit within
+         *    StartInsideTolerance of the ray's origin, such as a player capsule around the camera). A collider
+         *    at exactly the canvas's distance doesn't block it.
+         * The blocking query goes to the application's physics backend (Application::Get3DPhysicsBackend), not
+         * to `scene`; without a backend nothing blocks. Geometry without a collider never blocks: a canvas
+         * hidden behind a mesh-only wall still takes clicks.
          * A point outside the viewport hits nothing.
          */
         [[nodiscard]] static GameObject* HitTestScreenPoint(const Scene &scene, const Camera *camera,
                                                             const Math::Vector2 &windowPoint,
                                                             const Vector2i &viewport, std::uint32_t physicsMask);
+
+        /// A physics hit this close to the ray's origin (world units) is the ray starting inside a collider,
+        /// which doesn't block a world canvas
+        static constexpr float StartInsideTolerance = 1e-4f;
 
         /// Orthographic projection of canvas space onto the viewport: x 0..width, y 0..height (y up), z -1..1.
         /// Row-major, like Camera's matrices.

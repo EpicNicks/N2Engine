@@ -364,12 +364,19 @@ namespace N2Engine::UI
             return nullptr;
         }
 
-        // A collider nearer along the same ray is in front of the canvas: let the world pick have it
-        Physics::RaycastHit physicsHit;
-        if (Physics::Raycast::Single(ray.origin, ray.direction, physicsHit, hit.distance, physicsMask) &&
-            physicsHit.distance < hit.distance)
+        // A solid collider nearer along the same ray is in front of the canvas: let the world pick have it.
+        // Triggers never block (an interaction volume around a world-space button), nor does a collider the
+        // ray starts inside (a first-person player's capsule around the camera), which PhysX reports at
+        // distance 0.
+        std::vector<Physics::RaycastHit> physicsHits;
+        Physics::Raycast::All(ray.origin, ray.direction, physicsHits, hit.distance, physicsMask,
+                              Physics::QueryTriggers::Ignore);
+        for (const Physics::RaycastHit &physicsHit : physicsHits)
         {
-            return nullptr;
+            if (physicsHit.distance > StartInsideTolerance && physicsHit.distance < hit.distance)
+            {
+                return nullptr;
+            }
         }
         return hit.gameObject;
     }

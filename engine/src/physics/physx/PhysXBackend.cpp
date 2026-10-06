@@ -93,9 +93,15 @@ namespace N2Engine::Physics
         class TouchAllHitsFilter final : public PxQueryFilterCallback
         {
         public:
-            PxQueryHitType::Enum preFilter(const PxFilterData &, const PxShape *, const PxRigidActor *,
+            explicit TouchAllHitsFilter(const bool ignoreTriggers = false) : _ignoreTriggers(ignoreTriggers) {}
+
+            PxQueryHitType::Enum preFilter(const PxFilterData &, const PxShape *shape, const PxRigidActor *,
                                            PxHitFlags &) override
             {
+                if (_ignoreTriggers && shape && (shape->getFlags() & PxShapeFlag::eTRIGGER_SHAPE))
+                {
+                    return PxQueryHitType::eNONE;
+                }
                 return PxQueryHitType::eTOUCH;
             }
 
@@ -103,6 +109,30 @@ namespace N2Engine::Physics
                                             const PxRigidActor *) override
             {
                 return PxQueryHitType::eTOUCH;
+            }
+
+        private:
+            bool _ignoreTriggers;
+        };
+
+        // A closest-hit query that skips trigger shapes (QueryTriggers::Ignore)
+        class IgnoreTriggersFilter final : public PxQueryFilterCallback
+        {
+        public:
+            PxQueryHitType::Enum preFilter(const PxFilterData &, const PxShape *shape, const PxRigidActor *,
+                                           PxHitFlags &) override
+            {
+                if (shape && (shape->getFlags() & PxShapeFlag::eTRIGGER_SHAPE))
+                {
+                    return PxQueryHitType::eNONE;
+                }
+                return PxQueryHitType::eBLOCK;
+            }
+
+            PxQueryHitType::Enum postFilter(const PxFilterData &, const PxQueryHit &, const PxShape *,
+                                            const PxRigidActor *) override
+            {
+                return PxQueryHitType::eBLOCK;
             }
         };
 
@@ -2010,7 +2040,8 @@ namespace N2Engine::Physics
         const Math::Vector3 &direction,
         RaycastHit &hit,
         float maxDistance,
-        uint32_t layerMask)
+        uint32_t layerMask,
+        const QueryTriggers triggers)
     {
         hit = RaycastHit{};
         // An all-zero query filter turns PhysX's layer test off (it would hit everything); no layers, no hit
@@ -2027,7 +2058,16 @@ namespace N2Engine::Physics
         PxQueryFilterData filterData;
         filterData.data.word0 = layerMask;
 
-        bool status = _scene->raycast(pxOrigin, pxDir, maxDistance, hitBuffer, PxHitFlag::eDEFAULT, filterData);
+        IgnoreTriggersFilter ignoreTriggers;
+        PxQueryFilterCallback *callback = nullptr;
+        if (triggers == QueryTriggers::Ignore)
+        {
+            filterData.flags |= PxQueryFlag::ePREFILTER;
+            callback = &ignoreTriggers;
+        }
+
+        bool status =
+            _scene->raycast(pxOrigin, pxDir, maxDistance, hitBuffer, PxHitFlag::eDEFAULT, filterData, callback);
 
         if (status && hitBuffer.hasBlock)
         {
@@ -2043,7 +2083,8 @@ namespace N2Engine::Physics
         const Math::Vector3 &direction,
         std::vector<RaycastHit> &hits,
         float maxDistance,
-        uint32_t layerMask)
+        uint32_t layerMask,
+        const QueryTriggers triggers)
     {
         hits.clear();
 
@@ -2062,7 +2103,7 @@ namespace N2Engine::Physics
         PxRaycastBuffer raycastBuffer(hitBuffer, maxHits);
 
         // Report every hit as touching; otherwise PhysX keeps only the closest blocking one
-        TouchAllHitsFilter touchAll;
+        TouchAllHitsFilter touchAll(triggers == QueryTriggers::Ignore);
         filterData.flags |= PxQueryFlag::ePREFILTER;
 
         if (_scene->raycast(pxOrigin, pxDir, maxDistance, raycastBuffer, PxHitFlag::eDEFAULT, filterData, &touchAll))

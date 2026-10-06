@@ -2,6 +2,7 @@
 
 #include <math/Vector3.hpp>
 #include <math/Quaternion.hpp>
+#include <cstdint>
 #include <vector>
 
 #include "engine/physics/PhysicsHandle.hpp"
@@ -12,6 +13,7 @@ namespace N2Engine::Physics
     class Rigidbody;
     class ICollider;
     struct RaycastHit;
+    enum class QueryTriggers : std::uint8_t; // Raycast.hpp
 
     class IPhysicsBackend
     {
@@ -138,20 +140,23 @@ namespace N2Engine::Physics
         [[nodiscard]] virtual Math::Vector3 GetGravity() const = 0;
 
         // Queries: layerMask selects the layers hit (see Layers); 0 hits nothing. Raycast's wrappers default
-        // it to Layers::DefaultRaycastMask.
+        // it to Layers::DefaultRaycastMask. `triggers` (QueryTriggers::Ignore) skips trigger colliders; the
+        // wrappers default it to Collide.
         virtual bool Raycast(
             const Math::Vector3& origin,
             const Math::Vector3& direction,
             RaycastHit& hit,
             float maxDistance,
-            uint32_t layerMask) = 0;
+            uint32_t layerMask,
+            QueryTriggers triggers) = 0;
 
         virtual int RaycastAll(
             const Math::Vector3& origin,
             const Math::Vector3& direction,
             std::vector<RaycastHit>& hits,
             float maxDistance,
-            uint32_t layerMask) = 0;
+            uint32_t layerMask,
+            QueryTriggers triggers) = 0;
 
         virtual bool SphereCast(
             const Math::Vector3& origin,

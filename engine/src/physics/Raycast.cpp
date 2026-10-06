@@ -8,7 +8,8 @@ namespace N2Engine::Physics
         const Math::Vector3& direction,
         RaycastHit& hit,
         const float maxDistance,
-        const uint32_t layerMask)
+        const uint32_t layerMask,
+        const QueryTriggers triggers)
     {
         auto* backend = Application::GetInstance().Get3DPhysicsBackend();
         if (!backend)
@@ -17,7 +18,7 @@ namespace N2Engine::Physics
             return false;
         }
 
-        return backend->Raycast(origin, direction, hit, maxDistance, layerMask);
+        return backend->Raycast(origin, direction, hit, maxDistance, layerMask, triggers);
     }
 
     int Raycast::All(
@@ -25,7 +26,8 @@ namespace N2Engine::Physics
         const Math::Vector3& direction,
         std::vector<RaycastHit>& hits,
         const float maxDistance,
-        const uint32_t layerMask)
+        const uint32_t layerMask,
+        const QueryTriggers triggers)
     {
         auto* backend = Application::GetInstance().Get3DPhysicsBackend();
         if (!backend)
@@ -34,7 +36,7 @@ namespace N2Engine::Physics
             return 0;
         }
 
-        return backend->RaycastAll(origin, direction, hits, maxDistance, layerMask);
+        return backend->RaycastAll(origin, direction, hits, maxDistance, layerMask, triggers);
     }
 
     bool Raycast::SphereCast(
