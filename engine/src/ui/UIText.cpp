@@ -122,7 +122,7 @@ namespace N2Engine::UI
     }
 
     void UIText::RenderUI(Renderer::Common::IRenderer *renderer, const Rect &rect,
-                          const Renderer::Common::RenderState &state)
+                          const Renderer::Common::RenderState &state, const Matrix4 &canvasToWorld)
     {
         if (!renderer || !rect.HasArea())
         {
@@ -135,7 +135,7 @@ namespace N2Engine::UI
         _resources.Bind(renderer);
 
         const Text::TextLayout &layout = GetLayout(rect);
-        const Math::Matrix<float, 4, 4> model = ModelMatrixFor(GetAnchor(rect));
+        const Matrix4 model = ComposeModel(canvasToWorld, ModelMatrixFor(GetAnchor(rect)));
         _resources.Draw(_layoutCache.GetFont(), layout, _layoutCache.GetVersion(), model.Data(), GetDrawColor(), state,
                         "UIText");
     }

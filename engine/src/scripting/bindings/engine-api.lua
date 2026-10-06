@@ -1029,8 +1029,9 @@ function Component:SetActive(active) end
 
 -- ===== UI =====
 
--- Screen-space overlay UI (docs/ui.html). Canvas space is pixels in window units with the origin at the
--- bottom-left and y up (as in Unity), unlike Input.GetMousePosition, which is top-left and y down.
+-- UI (docs/ui.html). On a screen-space overlay canvas, canvas space is pixels in window units with the origin
+-- at the bottom-left and y up (as in Unity), unlike Input.GetMousePosition, which is top-left and y down. On a
+-- world-space canvas it is canvas units in the canvas's own rect, placed in the world by its object's transform.
 
 ---A rectangle in canvas space: (x, y) is its bottom-left corner
 ---@class Rect
@@ -1085,14 +1086,31 @@ function RectTransform:StretchToParent() end
 ---@return Rect
 function RectTransform:GetRect() end
 
----The root of a UI tree, drawn over the scene. Higher sort orders draw on top and are hit first.
+---The root of a UI tree. A screen-space overlay canvas (the default) is drawn over the scene, and higher sort
+---orders draw on top and are hit first. A world-space canvas is a rectangle in the world, drawn with the scene's
+---transparent objects and hit by the camera's ray.
 ---@class Canvas : Component
 Canvas = {}
 
 ---@return integer
 function Canvas:GetSortOrder() end
----@param sortOrder integer
+---@param sortOrder integer only used by overlay canvases
 function Canvas:SetSortOrder(sortOrder) end
+---"WorldSpace" adds a transform (at the origin, scale 1) and a RectTransform if the object has none. An unknown
+---name raises an error and changes nothing.
+---@param mode "ScreenSpaceOverlay"|"WorldSpace"
+function Canvas:SetRenderMode(mode) end
+---@return "ScreenSpaceOverlay"|"WorldSpace"
+function Canvas:GetRenderMode() end
+---@return boolean
+function Canvas:IsWorldSpace() end
+---A world canvas's size in canvas units: its RectTransform's sizeDelta (100 x 100 without one). Its transform's
+---scale is the size of a canvas unit in world units (0.01 from UI.CreateCanvas).
+---@return Vector2
+function Canvas:GetSize() end
+---Sets the RectTransform's sizeDelta, adding a RectTransform if the object has none
+---@param size Vector2
+function Canvas:SetSize(size) end
 
 ---A coloured rectangle over its object's rect, optionally showing a sprite (an image file). A raycast target
 ---(the default) takes the pointer: its object gets the OnMouse* callbacks and Input.IsPointerOverUI() is true.
@@ -1235,10 +1253,13 @@ function Button:Click() end
 ---@class UI
 UI = {}
 
----A new root GameObject on the UI layer with a Canvas (add it to the scene with AddRootGameObject)
+---A new root GameObject on the UI layer with a Canvas (add it to the scene with AddRootGameObject). With mode
+---"WorldSpace" it also gets a transform scaled to 0.01 and a 100 x 100 RectTransform (1 x 1 world units).
+---An unknown mode raises an error.
 ---@param name? string defaults to "Canvas"
+---@param mode? "ScreenSpaceOverlay"|"WorldSpace" defaults to "ScreenSpaceOverlay"
 ---@return GameObject
-function UI.CreateCanvas(name) end
+function UI.CreateCanvas(name, mode) end
 
 ---A new GameObject on the UI layer with a RectTransform (a 100x100 box at its parent's centre);
 ---parent it under a canvas or another element
