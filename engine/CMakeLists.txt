@@ -61,6 +61,7 @@ target_link_libraries(engine
     PRIVATE
     renderer
     MathCore::math
+    N2Engine::assetimport # image decoding for Texture assets; no assetimport type is in an engine header
     PUBLIC
     OpenAL::OpenAL # public audio headers include <AL/al.h>
     lua
