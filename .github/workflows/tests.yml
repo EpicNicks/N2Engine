@@ -61,24 +61,67 @@ jobs:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
 
-      # Starts the editor host, talks to it over its TCP protocol, then asks it to shut down.
+      # Starts the editor host as a launcher would (--port 0, then the port from its ready line), with a
+      # project, talks to it over its TCP protocol, then asks it to shut down.
       # The runner has no GPU, so the window fails and the host serves without one.
       # A non-zero exit code catches crashes during shutdown or static destruction.
       - name: Editor host smoke test
         shell: pwsh
         run: |
           $exe = Resolve-Path "build/bin/${{ matrix.config }}/N2EditorHost.exe"
-          $proc = Start-Process -FilePath $exe -ArgumentList "--port", "9999" -PassThru `
-            -RedirectStandardOutput host.log -RedirectStandardError host.err
+          $logPath = Join-Path $PWD "host.log"
+
+          # A project with one asset: the host's ResourceLoader writes its .meta under .import/ at startup
+          $project = Join-Path $env:RUNNER_TEMP "n2-smoke-project"
+          Remove-Item $project -Recurse -Force -ErrorAction SilentlyContinue
+          $null = New-Item -ItemType Directory -Force (Join-Path $project "assets")
+          Set-Content (Join-Path $project "assets/startup.mat") "{}"
+
+          $proc = Start-Process -FilePath $exe -ArgumentList "--port", "0", "--project", "`"$project`"" -PassThru `
+            -RedirectStandardOutput $logPath -RedirectStandardError host.err
           $null = $proc.Handle # keeps ExitCode readable after the process exits
 
+          # The asset's .meta: its UUID must be a real one (all zeros means ResourceUUID wasn't initialised)
+          function Assert-Meta([string]$name) {
+            $meta = Join-Path $project ".import/$name.meta"
+            if (-not (Test-Path $meta)) { throw "No metadata for $name at $meta" }
+            $uuid = (Get-Content $meta -Raw | ConvertFrom-Json).uuid
+            if (-not $uuid -or $uuid -eq "00000000-0000-0000-0000-000000000000") { throw "$name has no asset UUID: '$uuid'" }
+            Write-Host "$name.meta: uuid $uuid"
+          }
+
           try {
+            # The ready line ("N2EditorHost ready port=<port>", then possibly more key=value fields) comes once
+            # the server listens. Only complete lines count; the log is read with sharing, as the host has it open.
+            $port = $null
+            for ($i = 0; $i -lt 240 -and -not $port; $i++) {
+              $text = ""
+              try {
+                $file = [System.IO.File]::Open($logPath, 'Open', 'Read', 'ReadWrite')
+                try { $text = [System.IO.StreamReader]::new($file).ReadToEnd() } finally { $file.Dispose() }
+              } catch { }
+              $end = $text.LastIndexOf("`n")
+              if ($end -ge 0) {
+                foreach ($line in ($text.Substring(0, $end) -split "`r?`n")) {
+                  if ($line -match '^N2EditorHost ready port=(\d+)( |$)') { $port = [int]$Matches[1]; break }
+                }
+              }
+              if (-not $port) {
+                if ($proc.HasExited) { throw "Editor host exited (code $($proc.ExitCode)) before its ready line" }
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $port) { throw "Editor host never printed its ready line" }
+            if ($port -lt 1 -or $port -gt 65535) { throw "Ready line has an invalid port: $port" }
+            Write-Host "Editor host ready on port $port"
+
+            # Listening before the ready line, so the first attempt should connect; a few retries for safety
             $client = $null
-            for ($i = 0; $i -lt 120 -and -not $client; $i++) {
-              try { $client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", 9999) }
+            for ($i = 0; $i -lt 10 -and -not $client; $i++) {
+              try { $client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", $port) }
               catch { Start-Sleep -Milliseconds 500 }
             }
-            if (-not $client) { throw "Editor host never accepted a connection" }
+            if (-not $client) { throw "Editor host never accepted a connection on port $port" }
             $client.ReceiveTimeout = 10000
             $stream = $client.GetStream()
 
@@ -120,6 +163,18 @@ jobs:
             if ($rate -ne 48000 -or $channels -ne 2) { throw "Unexpected audio format: $rate Hz, $channels channels" }
             Write-Host "GetAudio: $rate Hz, $channels channels, $format, $frames frames"
 
+            # --project initialised the ResourceLoader: the startup asset has metadata, and an asset added
+            # afterwards gets its own on RescanAssets
+            Assert-Meta "startup.mat"
+            Set-Content (Join-Path $project "assets/added.mat") "{}"
+            Send-Command 0x41 # RescanAssets
+            $header = Read-Exact 5
+            $payload = Read-Exact ([BitConverter]::ToUInt32($header, 1))
+            if ($header[0] -ne 0x00) {
+              throw ("Expected Ok response (0x00) to RescanAssets, got 0x{0:X2}: {1}" -f $header[0], [Text.Encoding]::UTF8.GetString($payload))
+            }
+            Assert-Meta "added.mat"
+
             Send-Command 0xFF # Shutdown
             $ok = Read-Exact 5
             if ($ok[0] -ne 0x00) { throw ("Expected Ok response (0x00) to Shutdown, got 0x{0:X2}" -f $ok[0]) }
@@ -131,9 +186,14 @@ jobs:
             }
             if ($proc.ExitCode -ne 0) { throw ("Editor host exited with code 0x{0:X8}" -f $proc.ExitCode) }
             Write-Host "Editor host exited cleanly"
+
+            $log = Get-Content $logPath -Raw
+            foreach ($problem in "Assets directory not found", "ResourceUUID not initialized") {
+              if ($log.Contains($problem)) { throw "Host log reports: $problem" }
+            }
           }
           finally {
             if (-not $proc.HasExited) { $proc.Kill() }
-            Write-Host "----- host stdout -----"; Get-Content host.log -ErrorAction SilentlyContinue
+            Write-Host "----- host stdout -----"; Get-Content $logPath -ErrorAction SilentlyContinue
             Write-Host "----- host stderr -----"; Get-Content host.err -ErrorAction SilentlyContinue
           }
