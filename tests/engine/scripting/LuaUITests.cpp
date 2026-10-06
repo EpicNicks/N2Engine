@@ -1,11 +1,15 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "engine/GameObjectScene.hpp"
 #include "engine/Layers.hpp"
+#include "engine/Logger.hpp"
 #include "engine/scripting/LuaHandles.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
@@ -15,8 +19,8 @@
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
 
-// The UI as scripts see it: UI.CreateCanvas/CreateElement/CreateText, and the RectTransform, Canvas, Image and
-// UIText methods
+// The UI as scripts see it: UI.CreateCanvas/CreateElement/CreateText/CreateButton, and the RectTransform,
+// Canvas, Image, UIText and Button methods
 class LuaUITest : public ::testing::Test
 {
 protected:
@@ -159,4 +163,115 @@ TEST_F(LuaUITest, CreatesAndConfiguresText)
     EXPECT_LT(Eval<float>("lua_ui_maxY"), 150.0f);
 
     Run("lua_ui_text_canvas = nil; lua_ui_label = nil; lua_ui_text = nil; lua_ui_added = nil; lua_ui_added_go = nil");
+}
+
+TEST_F(LuaUITest, ConfiguresAButton)
+{
+    Run(R"(
+        lua_ui_button_go = UI.CreateButton("Play", "Start")
+        lua_ui_button = lua_ui_button_go:GetComponent("Button")
+        lua_ui_button:SetNormalColor(Color.new(0.9, 0.9, 0.9, 1))
+        lua_ui_button:SetHighlightedColor(Color.new(0.8, 0.8, 0.8, 1))
+        lua_ui_button:SetPressedColor(Color.new(0.5, 0.5, 0.5, 1))
+        lua_ui_button:SetDisabledColor(Color.new(0.2, 0.2, 0.2, 0.5))
+        lua_ui_button:SetColorMultiplier(1.25)
+        lua_ui_button:SetFadeDuration(0)
+        lua_ui_added_button_go = UI.CreateElement("Added")
+        lua_ui_added_button = lua_ui_added_button_go:AddComponent("Button")
+    )");
+
+    EXPECT_EQ(Eval<int>("lua_ui_button_go:GetLayer()"), Layers::UI);
+    EXPECT_TRUE(Eval<bool>("lua_ui_button_go:GetComponent('Button') == lua_ui_button"));
+    EXPECT_EQ(Eval<std::string>("lua_ui_button_go:FindChild('Label'):GetComponent('UIText'):GetText()"), "Start");
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_button:GetNormalColor().r"), 0.9f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_button:GetHighlightedColor().g"), 0.8f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_button:GetPressedColor().b"), 0.5f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_button:GetDisabledColor().a"), 0.5f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_button:GetColorMultiplier()"), 1.25f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_button:GetFadeDuration()"), 0.0f);
+    EXPECT_TRUE(Eval<bool>("lua_ui_button:IsInteractable()"));
+    EXPECT_EQ(Eval<std::string>("lua_ui_button:GetState()"), "Normal");
+    EXPECT_TRUE(Eval<bool>("lua_ui_button:GetTargetGraphic() == lua_ui_button_go:GetComponent('Image')"));
+    EXPECT_TRUE(Eval<bool>("lua_ui_added_button:GetTargetGraphic() == nil")) << "no graphic on its object";
+
+    Run("lua_ui_button:SetInteractable(false)");
+    EXPECT_FALSE(Eval<bool>("lua_ui_button:IsInteractable()"));
+    EXPECT_EQ(Eval<std::string>("lua_ui_button:GetState()"), "Disabled");
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_button:GetCurrentTint().r"), 0.25f) << "0.2 times the multiplier 1.25";
+    EXPECT_FALSE(Eval<bool>("lua_ui_button:Click()"));
+
+    // The target graphic: a UIText, back to the default with nil, and anything else is an error
+    Run("lua_ui_button:SetTargetGraphic(lua_ui_button_go:FindChild('Label'):GetComponent('UIText'))");
+    EXPECT_TRUE(Eval<bool>("lua_ui_button:GetTargetGraphic() == lua_ui_button_go:FindChild('Label'):GetComponent('UIText')"));
+    Run("lua_ui_button:SetTargetGraphic(nil)");
+    EXPECT_TRUE(Eval<bool>("lua_ui_button:GetTargetGraphic() == lua_ui_button_go:GetComponent('Image')"));
+    EXPECT_FALSE(Lua().safe_script("lua_ui_button:SetTargetGraphic(lua_ui_button)", sol::script_pass_on_error).valid());
+    EXPECT_TRUE(Eval<bool>("lua_ui_button:GetTargetGraphic() == lua_ui_button_go:GetComponent('Image')"));
+
+    Run("lua_ui_button = nil; lua_ui_button_go = nil; lua_ui_added_button = nil; lua_ui_added_button_go = nil");
+}
+
+TEST_F(LuaUITest, ButtonOnClickListeners)
+{
+    std::vector<std::string> logged;
+    const size_t logId = Logger::logEvent += [&logged](const std::string_view message, Logger::LogLevel)
+    {
+        logged.emplace_back(message);
+    };
+
+    Run(R"(
+        lua_ui_click_go = UI.CreateButton("Clicker")
+        lua_ui_click_button = lua_ui_click_go:GetComponent("Button")
+        lua_ui_click_log = {}
+        lua_ui_first = lua_ui_click_button:AddOnClick(function() table.insert(lua_ui_click_log, "first") end)
+        lua_ui_failing = lua_ui_click_button:AddOnClick(function() error("listener failure from Lua") end)
+        lua_ui_last = lua_ui_click_button:AddOnClick(function() table.insert(lua_ui_click_log, "last") end)
+    )");
+    EXPECT_EQ(Eval<int>("lua_ui_click_button:GetOnClickListenerCount()"), 3);
+
+    // A click through the pointer callbacks, as the dispatcher sends them
+    const sol::object goObject = Lua()["lua_ui_click_go"];
+    ASSERT_TRUE(goObject.valid());
+    const auto buttonObject = goObject.as<GameObjectRef>().Pin();
+    auto *button = buttonObject->GetComponent<UI::Button>();
+    ASSERT_NE(button, nullptr);
+    button->OnMouseEnter();
+    button->OnMouseDown();
+    EXPECT_EQ(Eval<std::string>("lua_ui_click_button:GetState()"), "Pressed");
+    button->OnMouseUpAsButton();
+    button->OnMouseUp();
+    EXPECT_EQ(Eval<std::string>("lua_ui_click_button:GetState()"), "Highlighted");
+
+    EXPECT_EQ(Eval<int>("#lua_ui_click_log"), 2) << "the error didn't stop the listener after it";
+    EXPECT_EQ(Eval<std::string>("lua_ui_click_log[1]"), "first");
+    EXPECT_EQ(Eval<std::string>("lua_ui_click_log[2]"), "last");
+    bool errorLogged = false;
+    for (const std::string &message : logged)
+    {
+        errorLogged = errorLogged || message.find("listener failure from Lua") != std::string::npos;
+    }
+    EXPECT_TRUE(errorLogged) << "the Lua error is logged";
+
+    // RemoveOnClick, also from inside a listener, and ClearOnClick
+    Run(R"(
+        lua_ui_click_log = {}
+        lua_ui_click_button:RemoveOnClick(lua_ui_first)
+        lua_ui_click_button:RemoveOnClick(lua_ui_failing)
+        lua_ui_once = lua_ui_click_button:AddOnClick(function()
+            table.insert(lua_ui_click_log, "once")
+            lua_ui_click_button:RemoveOnClick(lua_ui_once)
+        end)
+        assert(lua_ui_click_button:Click())
+        assert(lua_ui_click_button:Click())
+    )");
+    EXPECT_EQ(Eval<int>("#lua_ui_click_log"), 3);
+    EXPECT_EQ(Eval<std::string>("lua_ui_click_log[1]"), "last");
+    EXPECT_EQ(Eval<std::string>("lua_ui_click_log[2]"), "once");
+    EXPECT_EQ(Eval<std::string>("lua_ui_click_log[3]"), "last");
+
+    Run("lua_ui_click_button:ClearOnClick()");
+    EXPECT_EQ(Eval<int>("lua_ui_click_button:GetOnClickListenerCount()"), 0);
+
+    Logger::logEvent -= logId;
+    Run("lua_ui_click_go = nil; lua_ui_click_button = nil; lua_ui_click_log = nil");
 }
