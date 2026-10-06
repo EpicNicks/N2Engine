@@ -184,10 +184,11 @@ namespace
             // Bilinear or nearest, as the texture's filter says (SWTexture::SampleFiltered)
             const uint32_t s = m.tex->SampleFiltered(u, v);
             constexpr float k = 1.f / 255.f;
-            r *= (float)((s >>  0) & 0xFF) * k;
-            g *= (float)((s >>  8) & 0xFF) * k;
-            b *= (float)((s >> 16) & 0xFF) * k;
-            a *= (float)((s >> 24) & 0xFF) * k;
+            // (albedo * texel) * k, the order the unlit shader always used, so its output is unchanged bit for bit
+            r = m.aR * (float)((s >>  0) & 0xFF) * k;
+            g = m.aG * (float)((s >>  8) & 0xFF) * k;
+            b = m.aB * (float)((s >> 16) & 0xFF) * k;
+            a = m.aA * (float)((s >> 24) & 0xFF) * k;
         }
         if (m.vertexColor)
         {
