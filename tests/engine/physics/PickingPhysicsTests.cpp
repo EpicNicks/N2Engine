@@ -20,6 +20,10 @@
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/ui/Canvas.hpp"
+#include "engine/ui/Image.hpp"
+#include "engine/ui/RectTransform.hpp"
+#include "engine/ui/UISystem.hpp"
 
 // Picking end to end in a real PhysX scene: an injected click goes through Camera::ScreenPointToRay and
 // Raycast::Single to OnMouseDown on the box under it; and the Lua Physics.Raycast/RaycastAll bindings
@@ -196,6 +200,49 @@ TEST_F(PickingPhysicsTest, BeyondTheFarPlaneIsNotPicked)
 
     Frame(Centre, true);
     EXPECT_EQ(distant->GetComponent<ClickCounter>()->down, 0);
+}
+
+TEST_F(PickingPhysicsTest, TheNearerOfAWorldCanvasAndAColliderWins)
+{
+    // A 2 x 2 unit world canvas at z = 0 under the centre of the view, covered by one raycast-target panel, and
+    // the application's UI hit provider rule (overlay, then world canvases unless a collider is nearer)
+    const auto canvas = UI::UISystem::CreateCanvas("WorldCanvas", UI::CanvasRenderMode::WorldSpace);
+    canvas->GetComponent<UI::Canvas>()->SetSize(Vector2(200.0f, 200.0f));
+    const auto panel = UI::UISystem::CreateElement("Panel");
+    panel->GetComponent<UI::RectTransform>()->StretchToParent();
+    panel->AddComponent<UI::Image>();
+    auto *panelCounter = panel->AddComponent<ClickCounter>();
+    canvas->AddChild(panel, false);
+    _scene->AddRootGameObject(canvas);
+    _dispatcher.SetUIHitProvider([this](const Vector2 &screen)
+    {
+        return UI::UISystem::HitTestScreenPoint(*_scene, &_camera, screen, Viewport, _dispatcher.GetPickMask());
+    });
+
+    // A box behind the canvas: the canvas is nearer
+    const auto behind = SpawnBox("Behind", Vector3(0.0f, 0.0f, -4.0f));
+    Step();
+    Frame(Centre, true);
+    EXPECT_EQ(panelCounter->down, 1);
+    EXPECT_EQ(behind->GetComponent<ClickCounter>()->down, 0);
+    EXPECT_TRUE(_dispatcher.IsPointerOverUI());
+    Frame(Centre, false);
+
+    // A box in front of it: the box is nearer, and the world pick gets it
+    const auto front = SpawnBox("Front", Vector3(0.0f, 0.0f, 4.0f));
+    Step();
+    Frame(Centre, true);
+    EXPECT_EQ(front->GetComponent<ClickCounter>()->down, 1);
+    EXPECT_EQ(panelCounter->down, 1);
+    EXPECT_FALSE(_dispatcher.IsPointerOverUI());
+    Frame(Centre, false);
+
+    // A collider outside the pick mask doesn't block the canvas
+    _dispatcher.SetPickMask(Layers::MaskOf(Layers::IgnoreRaycast));
+    Frame(Centre, true);
+    EXPECT_EQ(panelCounter->down, 2);
+    EXPECT_EQ(front->GetComponent<ClickCounter>()->down, 1);
+    Frame(Centre, false);
 }
 
 TEST_F(PickingPhysicsTest, CursorOutsideTheWindowPicksNothing)
