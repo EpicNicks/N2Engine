@@ -27,7 +27,9 @@ namespace N2Engine::Text
     {
         /// Outline width in ems, outward from the glyph edge; 0 (the default) draws no outline
         float outlineWidth = 0.0f;
-        /// The outline's colour (drawn under the face, which covers it where they overlap)
+        /// The outline's colour. The outline fills the whole glyph shape out to its outer edge, under the
+        /// face: an opaque face hides the inner part, but a translucent or faded face shows the outline
+        /// colour through the whole glyph (a silhouette).
         Common::Color outlineColor{0.0f, 0.0f, 0.0f, 1.0f};
 
         /// The shadow's offset in ems: +x right, +y up (down-right is (0.05, -0.05))

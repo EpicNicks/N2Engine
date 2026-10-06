@@ -404,7 +404,7 @@ SceneManager.GetCurrentScene():AddRootGameObject(label)</code></pre>
 <thead><tr><th>Field</th><th>Default</th><th>Meaning</th></tr></thead>
 <tbody>
 <tr><td><code>outlineWidth</code></td><td>0</td><td>Outline width in ems, outward from the glyph edge. 0 draws no outline.</td></tr>
-<tr><td><code>outlineColor</code></td><td>opaque black</td><td>Drawn under the face, which covers it where they overlap.</td></tr>
+<tr><td><code>outlineColor</code></td><td>opaque black</td><td>Fills the glyph shape out to the outline's outer edge, under the face. An opaque face hides its inner part; a translucent or faded face shows the outline colour through the whole glyph, as a silhouette.</td></tr>
 <tr><td><code>shadowOffset</code></td><td>(0, 0)</td><td>The shadow's offset in ems, +x right, +y up: down-right is <code>(0.05, -0.05)</code>.</td></tr>
 <tr><td><code>shadowColor</code></td><td>transparent</td><td>The shadow is drawn only while its alpha is above 0, so the default draws none.</td></tr>
 <tr><td><code>shadowSoftness</code></td><td>0</td><td>How far the shadow's edge fades, in ems (0 = crisp). OpenGL only.</td></tr>
@@ -413,7 +413,7 @@ SceneManager.GetCurrentScene():AddRootGameObject(label)</code></pre>
 </table>
 </div>
 <p>Every length is in <strong>ems</strong>, multiples of the font size (world units for <code>TextRenderer</code>, canvas pixels for <code>UIText</code>), so an effect keeps its proportions when the size changes: an outline of 0.05 em on 24 px UI text is 1.2 px. The shadow is the shape of the face plus its outline, moved by the offset, and goes under both. Both components have <code>SetEffects</code>/<code>GetEffects</code> and the shortcuts <code>SetOutline(width, color)</code>, <code>SetShadow(offset, color, softness = 0)</code> and <code>SetSoftness(softness)</code>.</p>
-<p>The effect colours are drawn as they are: the text colour (and a <code>UIGraphic</code> tint) colours the face only, so fading the text's alpha doesn't fade its outline or shadow.</p>
+<p>The effect colours are drawn as they are: the text colour (and a <code>UIGraphic</code> tint) colours the face only, so fading the text's alpha doesn't fade its outline or shadow. And because the outline covers the glyph's interior too, fading the face shows the outline colour through the whole glyph: faded outlined text becomes an outline-coloured silhouette, not a hollow outline. To fade outlined text, fade the outline colour's alpha with it.</p>
 
 <h3 id="effects-limits">Limits from the spread</h3>
 <p>An effect is drawn from the glyph's distance field, which only exists inside its quad: the SDF bitmap, which reaches <code>spreadPx</code> atlas pixels (<code>spreadPx / basePx</code> ems) past the glyph's outline. The quads aren't made bigger for effects: outside a glyph's bitmap the atlas holds its neighbours, so a larger quad would draw pieces of them. Instead, at draw time each effect is reduced to fit in 90% of the spread (<code>TextDrawing::kUsableSpread</code>; the rest keeps the quad edge, where the distance reaches 0, out of every edge ramp):</p>
