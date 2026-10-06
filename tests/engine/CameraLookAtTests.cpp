@@ -180,6 +180,26 @@ TEST(CameraLookAtTest, ScreenCentreRayPassesThroughTheTarget)
     }
 }
 
+TEST(CameraLookAtTest, ScreenUpDoesNotFlipWhereTheUpFallbackStarts)
+{
+    // An orbit camera passing over the target from the +Z side: just outside the fallback threshold the
+    // default up (+Y) is used, just inside it the world Z fallback is. The screen's up must be the same both
+    // sides (world -Z, the side +Y projects to), not rolled 180 degrees.
+    for (const float z : {0.01f, 0.006f, 0.005f, 0.001f})
+    {
+        Camera camera = PerspectiveCamera(Vector3(0.0f, 5.0f, z));
+        camera.LookAt(Vector3(0.0f, 0.0f, 0.0f));
+        EXPECT_LT(camera.GetUp().z, -0.9f) << "z = " << z;
+    }
+    // And from the -Z side, the mirror image
+    for (const float z : {-0.01f, -0.006f, -0.005f, -0.001f})
+    {
+        Camera camera = PerspectiveCamera(Vector3(0.0f, 5.0f, z));
+        camera.LookAt(Vector3(0.0f, 0.0f, 0.0f));
+        EXPECT_GT(camera.GetUp().z, 0.9f) << "z = " << z;
+    }
+}
+
 TEST(CameraLookAtTest, DegenerateCasesStayFinite)
 {
     // Looking at its own position: no direction, so the rotation is kept

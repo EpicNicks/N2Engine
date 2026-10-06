@@ -188,11 +188,20 @@ void Camera::LookAt(const Math::Vector3 &target, const Math::Vector3 &up)
     const Math::Vector3 back = (-toTarget).Normalized();
 
     // An up vector parallel to the view direction (or a zero one) leaves the right axis undefined: fall back to
-    // world up, or to world +Z when the view is itself vertical
+    // world up, or, when the view is within about 8 degrees of vertical, to the world Z axis on the side world up
+    // projects to (up - (up.back) back has z = -back.y * back.z). That is the screen up the view had just before,
+    // so an orbiting camera doesn't roll 180 degrees on reaching the threshold.
     Math::Vector3 upHint = up.Normalized();
     if (upHint.Cross(back).Length() < 1e-3f)
     {
-        upHint = std::abs(back.y) < 0.99f ? Math::Vector3::Up : Math::Vector3::Forward;
+        if (std::abs(back.y) < 0.99f)
+        {
+            upHint = Math::Vector3::Up;
+        }
+        else
+        {
+            upHint = Math::Vector3{0.0f, 0.0f, back.y * back.z > 0.0f ? -1.0f : 1.0f};
+        }
     }
 
     _rotation = Math::Quaternion::LookRotation(back, upHint);
