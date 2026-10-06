@@ -3,8 +3,11 @@
 #include <cmath>
 #include <cstddef>
 #include <format>
+#include <functional>
 #include <initializer_list>
 #include <map>
+#include <set>
+#include <string>
 #include <utility>
 
 #include <renderer/common/IShader.hpp>
@@ -114,8 +117,12 @@ namespace N2Engine::Rendering::TextDrawing
                    SameFloat(a.tabWidth, b.tabWidth) && a.shaper == b.shaper;
         }
 
-        // Warn once per process, not once per text or per frame
-        bool g_warnedNoTextShader = false;
+        // Warn once per process for each component type (TextRenderer, UIText), not once per text or per frame
+        bool FirstWarningFor(const std::string_view componentName)
+        {
+            static std::set<std::string, std::less<>> warned;
+            return warned.emplace(componentName).second;
+        }
     }
 
     Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout)
@@ -292,9 +299,8 @@ namespace N2Engine::Rendering::TextDrawing
         Renderer::Common::IShader *shader = renderer->GetStandardTextShader();
         if (!shader)
         {
-            if (!g_warnedNoTextShader)
+            if (FirstWarningFor(componentName))
             {
-                g_warnedNoTextShader = true;
                 Logger::Warn(std::format("{}: the {} has no text shader, so text isn't drawn", componentName,
                                          renderer->GetRendererName()));
             }

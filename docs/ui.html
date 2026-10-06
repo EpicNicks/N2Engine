@@ -310,7 +310,7 @@ canvas-&gt;AddChild(label, false);
 <tr><td><code>UIText:Get/SetText</code>, <code>Get/SetColor</code>, <code>Get/SetRaycastTarget</code>, <code>Get/SetFontSize</code>, <code>Get/SetWrap</code>, <code>Get/SetLineSpacing</code>, <code>Get/SetLetterSpacing</code> <span class="badge">PR #53</span></td><td>As in C++</td></tr>
 <tr><td><code>UIText:SetAlignment(h, v)</code>, <code>UIText:GetAlignment()</code> <span class="badge">PR #53</span></td><td>By name: <code>"Left"</code>, <code>"Center"</code>, <code>"Right"</code> and <code>"Top"</code>, <code>"Middle"</code>, <code>"Bottom"</code>, <code>"Baseline"</code>, as for <code>TextRenderer</code>. An unknown name raises an error and changes nothing.</td></tr>
 <tr><td><code>UIText:SetFont(path | nil)</code> <span class="badge">PR #53</span></td><td>A font file such as <code>"res://fonts/Title.ttf"</code>; <code>nil</code> goes back to the default font. A file that doesn't load raises an error and keeps the current font.</td></tr>
-<tr><td><code>UIText:GetBounds()</code> <span class="badge">PR #53</span></td><td>The laid-out block in canvas space, in the rect of the last layout: <code>minX, minY, maxX, maxY</code> (all 0 for empty text)</td></tr>
+<tr><td><code>UIText:GetBounds()</code> <span class="badge">PR #53</span></td><td>The laid-out block in canvas space, in the rect of the last layout: <code>minX, minY, maxX, maxY</code> (all 0 for empty text). Before the first UI pass or hit test that rect is empty, so the bounds are those of the unwrapped text placed at (0, 0)</td></tr>
 </tbody>
 </table>
 </div>
