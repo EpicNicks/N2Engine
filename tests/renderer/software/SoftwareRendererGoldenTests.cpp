@@ -438,3 +438,107 @@ TEST(SoftwareTextShaderTest, TextWithoutAnAtlasDrawsNothing)
     });
     EXPECT_EQ(CoverageOf(frame, Black).count, Width * Height);
 }
+
+// ============================================================================
+// Resource lifetime against the frame in flight
+// ============================================================================
+
+TEST(SoftwareResourceLifetimeTest, DestroyingWhileAFrameIsInFlightWaitsForIt)
+{
+    // EndFrame hands the frame to the render thread, which reads the mesh and samples the texture until
+    // it finishes. Each destroy waits for it first, so the frame comes out whole. The frame is made long
+    // (many full-screen draws) so it is very likely still rasterizing when the destroys run; without the
+    // wait, freed memory would be read (a sanitizer would report it even when the pixels survive).
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
+    renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+    constexpr std::uint8_t greenTexel[4] = {0, 255, 0, 255};
+    ITexture *texture = renderer.CreateTexture(greenTexel, 1, 1, 4);
+    ASSERT_NE(texture, nullptr);
+    IMaterial *material = renderer.CreateMaterial(renderer.GetStandardUnlitShader(), texture);
+    ASSERT_NE(material, nullptr);
+    IMesh *quad = renderer.CreateMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
+    ASSERT_NE(quad, nullptr);
+
+    renderer.BeginFrame();
+    renderer.SetViewProjection(Identity, Identity);
+    for (int i = 0; i < 200; ++i)
+    {
+        renderer.DrawMesh(quad, Identity, material);
+    }
+    renderer.EndFrame();
+    // No Present: the frame may still be rasterizing
+    renderer.DestroyMesh(quad);
+    renderer.DestroyMaterial(material);
+    renderer.DestroyTexture(texture);
+
+    Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Width) * Height * 4), Width, Height};
+    renderer.ReadFramebuffer(frame.rgba.data(), Width, Height);
+    EXPECT_EQ(CoverageOf(frame, Green).count, Width * Height);
+
+    renderer.Shutdown();
+}
+
+// ============================================================================
+// Material uniforms are taken when the draw is recorded, as on OpenGL
+// ============================================================================
+
+TEST(SoftwareMaterialSnapshotTest, AChangeAfterDrawMeshDoesNotAffectThatDraw)
+{
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
+    renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+    IMaterial *material = renderer.CreateMaterial(renderer.GetStandardUnlitShader());
+    ASSERT_NE(material, nullptr);
+    IMesh *quad = renderer.CreateMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
+    ASSERT_NE(quad, nullptr);
+
+    material->SetColor("uAlbedo", 1.0f, 0.0f, 0.0f, 1.0f);
+    renderer.BeginFrame();
+    renderer.SetViewProjection(Identity, Identity);
+    renderer.DrawMesh(quad, Identity, material);
+    // Changed before the frame is submitted, and again while it may be rasterizing
+    material->SetColor("uAlbedo", 0.0f, 1.0f, 0.0f, 1.0f);
+    renderer.EndFrame();
+    material->SetColor("uAlbedo", 0.0f, 0.0f, 1.0f, 1.0f);
+    renderer.Present();
+
+    Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Width) * Height * 4), Width, Height};
+    renderer.ReadFramebuffer(frame.rgba.data(), Width, Height);
+    EXPECT_EQ(CoverageOf(frame, Red).count, Width * Height) << "the colour the material had at DrawMesh";
+
+    renderer.Shutdown();
+}
+
+TEST(SoftwareMaterialSnapshotTest, TwoDrawsOfOneMaterialKeepTheColourEachWasDrawnWith)
+{
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
+    renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+    IMaterial *material = renderer.CreateMaterial(renderer.GetStandardUnlitShader());
+    ASSERT_NE(material, nullptr);
+    IMesh *leftHalf = renderer.CreateMesh(Quad(-1.0f, -1.0f, 0.0f, 1.0f, 0.0f));
+    IMesh *rightHalf = renderer.CreateMesh(Quad(0.0f, -1.0f, 1.0f, 1.0f, 0.0f));
+    ASSERT_NE(leftHalf, nullptr);
+    ASSERT_NE(rightHalf, nullptr);
+
+    renderer.BeginFrame();
+    renderer.SetViewProjection(Identity, Identity);
+    material->SetColor("uAlbedo", 1.0f, 0.0f, 0.0f, 1.0f);
+    renderer.DrawMesh(leftHalf, Identity, material);
+    material->SetColor("uAlbedo", 0.0f, 1.0f, 0.0f, 1.0f);
+    renderer.DrawMesh(rightHalf, Identity, material);
+    renderer.EndFrame();
+    renderer.Present();
+
+    Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Width) * Height * 4), Width, Height};
+    renderer.ReadFramebuffer(frame.rgba.data(), Width, Height);
+    const Coverage red = CoverageOf(frame, Red);
+    const Coverage green = CoverageOf(frame, Green);
+    EXPECT_EQ(red.count, Width * Height / 2);
+    EXPECT_EQ(red.maxX, Width / 2 - 1);
+    EXPECT_EQ(green.count, Width * Height / 2);
+    EXPECT_EQ(green.minX, Width / 2);
+
+    renderer.Shutdown();
+}

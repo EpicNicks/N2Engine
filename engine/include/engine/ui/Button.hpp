@@ -31,6 +31,11 @@ namespace N2Engine::UI
      * tint moves from the old state's colour to the new one's over that many seconds of unscaled time
      * (OnUpdate, or UpdateFade by hand); 0 changes it at once.
      *
+     * When the tint is written: on a state or setting change (Transition), on each fade step, when the target
+     * graphic changes, and on enable, disable and destroy (white). OnUpdate writes it only for a fade step or
+     * a new target, not every frame, so a tint set on the graphic by hand stays until the button next has a
+     * reason to write it.
+     *
      * Target graphic: the one set with SetTargetGraphic, held by its lifetime token (no tint once it is
      * freed), or, while none is set, the first graphic on the button's own object, looked up each time.
      *
@@ -195,6 +200,9 @@ namespace N2Engine::UI
         /// Sets the current tint on the target graphic, and white on a graphic tinted before that isn't the
         /// target any more
         void ApplyTint();
+        /// Whether the target graphic is not the one the tint was last applied to (cheap while the default
+        /// target tinted last is alive: no component scan)
+        [[nodiscard]] bool TargetChanged() const;
         /// Forgets the hover and press (on disable)
         void ClearPointerState();
     };
