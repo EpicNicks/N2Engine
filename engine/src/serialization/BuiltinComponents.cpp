@@ -15,6 +15,7 @@
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/TextRenderer.hpp"
 #include "engine/scripting/LuaComponent.hpp"
+#include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
@@ -57,5 +58,6 @@ namespace N2Engine
         Add<UI::RectTransform>(registry, "RectTransform");
         Add<UI::Image>(registry, "Image");
         Add<UI::UIText>(registry, "UIText");
+        Add<UI::Button>(registry, "Button");
     }
 }
