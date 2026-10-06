@@ -27,8 +27,19 @@ namespace N2Engine::AssetImport
     inline constexpr std::size_t kMaxModelTotalBufferBytes = std::size_t{1024} * 1024 * 1024;
     /// The largest image file a model references (external or embedded): 64 MiB, encoded
     inline constexpr std::size_t kMaxModelImageBytes = std::size_t{64} * 1024 * 1024;
+    /// The most image bytes one model reads in all (every image, embedded or external): 256 MiB, encoded
+    inline constexpr std::size_t kMaxModelTotalImageBytes = std::size_t{256} * 1024 * 1024;
     /// The most elements an accessor may have (vertices, indices): 16 M
     inline constexpr std::size_t kMaxAccessorElements = std::size_t{1} << 24;
+    /// The most vertices one model may read in all, counted per primitive (a primitive reusing another's
+    /// accessors counts again, so does an accessor without a buffer view, which costs no file bytes) plus the
+    /// vertices flat normals add: 8 M
+    inline constexpr std::size_t kMaxSceneVertices = std::size_t{1} << 23;
+    /// The most indices one model may read and make in all (as read, and as triangle lists): 32 M
+    inline constexpr std::size_t kMaxSceneIndices = std::size_t{1} << 25;
+    /// The most memory cgltf may allocate while parsing the JSON (its tokens and object arrays): 256 MiB. A small
+    /// JSON can declare millions of empty objects, each of which cgltf allocates in full.
+    inline constexpr std::size_t kMaxParseMemoryBytes = std::size_t{256} * 1024 * 1024;
     /// The most vertices or indices one imported mesh may have after triangulation: 64 M
     inline constexpr std::size_t kMaxMeshElements = std::size_t{1} << 26;
     /// How deep a node tree may go
@@ -61,7 +72,7 @@ namespace N2Engine::AssetImport
     {
         /// No bytes at all
         EmptyInput,
-        /// Over one of the size caps above
+        /// Over one of the size caps above, or out of memory
         TooLarge,
         /// Not glTF/GLB, truncated, or JSON the parser rejects
         ParseFailed,

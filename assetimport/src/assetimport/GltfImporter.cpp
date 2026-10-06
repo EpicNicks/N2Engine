@@ -9,6 +9,8 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <new>
+#include <stdexcept>
 #include <optional>
 #include <set>
 #include <string>
@@ -41,6 +43,53 @@ namespace N2Engine::AssetImport
             void operator()(cgltf_data *data) const { cgltf_free(data); }
         };
         using CgltfData = std::unique_ptr<cgltf_data, CgltfFree>;
+
+        /**
+         * The memory cgltf may allocate, counted: while parsing it is capped at kMaxParseMemoryBytes (a small JSON
+         * can declare millions of empty objects, each allocated in full); afterwards the cap is lifted for the
+         * buffers this importer allocates through it (capped on their own). Every block carries its size in a
+         * 16-byte header, since cgltf's free callback isn't told the size.
+         */
+        struct ParseAllocator
+        {
+            std::size_t used = 0;
+            std::size_t limit = kMaxParseMemoryBytes;
+        };
+
+        constexpr std::size_t kAllocationHeader = 16;
+
+        void *CountingAlloc(void *user, const cgltf_size size)
+        {
+            auto &state = *static_cast<ParseAllocator *>(user);
+            if (size > state.limit || state.used > state.limit - size ||
+                size > std::numeric_limits<std::size_t>::max() - kAllocationHeader)
+            {
+                return nullptr;
+            }
+            auto *base = static_cast<unsigned char *>(std::malloc(size + kAllocationHeader));
+            if (!base)
+            {
+                return nullptr;
+            }
+            const std::size_t recorded = size;
+            std::memcpy(base, &recorded, sizeof recorded);
+            state.used += size;
+            return base + kAllocationHeader;
+        }
+
+        void CountingFree(void *user, void *pointer)
+        {
+            if (!pointer)
+            {
+                return;
+            }
+            auto &state = *static_cast<ParseAllocator *>(user);
+            unsigned char *base = static_cast<unsigned char *>(pointer) - kAllocationHeader;
+            std::size_t size = 0;
+            std::memcpy(&size, base, sizeof size);
+            state.used -= std::min(size, state.used);
+            std::free(base);
+        }
 
         /// Each warning is kept once, in the order first raised
         class Warnings
@@ -359,8 +408,8 @@ namespace N2Engine::AssetImport
                     bytes = std::move(*read);
                 }
 
-                // cgltf_free releases it with free() (data_free_method_memory_free, the default allocator)
-                void *copy = std::malloc(buffer.size);
+                // Through the data's own allocator, which cgltf_free releases it with (data_free_method_memory_free)
+                void *copy = data.memory.alloc_func(data.memory.user_data, buffer.size);
                 if (!copy)
                 {
                     return ModelImportError{ModelImportErrorCode::TooLarge,
@@ -735,13 +784,46 @@ namespace N2Engine::AssetImport
             return {n[0] / length, n[1] / length, n[2] / length};
         }
 
+        /// What the whole model has read so far, against kMaxSceneVertices and kMaxSceneIndices. Charged before
+        /// the memory is allocated, so a small file whose accessors are reused (or have no buffer view) can't ask
+        /// for gigabytes.
+        struct Budget
+        {
+            std::size_t vertices = 0;
+            std::size_t indices = 0;
+
+            bool AddVertices(const std::size_t count)
+            {
+                if (count > kMaxSceneVertices - vertices)
+                    return false;
+                vertices += count;
+                return true;
+            }
+
+            bool AddIndices(const std::size_t count)
+            {
+                if (count > kMaxSceneIndices - indices)
+                    return false;
+                indices += count;
+                return true;
+            }
+        };
+
         struct MeshContext
         {
             const cgltf_data &data;
             const ModelImportSettings &settings;
             float scale = 1.0f;
             Warnings &warnings;
+            Budget &budget;
         };
+
+        ModelImportError OverBudget(const std::string_view what)
+        {
+            return ModelImportError{ModelImportErrorCode::TooLarge,
+                                    std::format("the model has too many {} in all (over {} vertices or {} indices)",
+                                                what, kMaxSceneVertices, kMaxSceneIndices)};
+        }
 
         /// Vertices a mesh already holds for one set of attribute accessors: primitives of the same mesh that share
         /// their attributes (one vertex buffer, several index lists, as exporters often write) share the vertices
@@ -824,6 +906,11 @@ namespace N2Engine::AssetImport
             }
             const std::size_t vertexCount = positions->count;
             bool nonFinite = false;
+            // Charged before anything is read: the attribute arrays below are proportional to it
+            if (!context.budget.AddVertices(vertexCount))
+            {
+                return OverBudget("vertices");
+            }
 
             std::vector<float> positionData;
             if (auto error = ReadFloats(*positions, 3, "POSITION", positionData, nonFinite))
@@ -865,6 +952,15 @@ namespace N2Engine::AssetImport
                 context.warnings.Add("some vertex values were not finite numbers and were read as 0");
             }
 
+            const std::size_t sourceCount = primitive.indices ? primitive.indices->count : vertexCount;
+            // The indices as read, and the triangle list made from them (a strip or fan makes up to three per index)
+            const std::size_t listCount = primitive.type == cgltf_primitive_type_triangles
+                                              ? sourceCount / 3 * 3
+                                              : (sourceCount >= 3 ? (sourceCount - 2) * 3 : 0);
+            if (!context.budget.AddIndices(sourceCount) || !context.budget.AddIndices(listCount))
+            {
+                return OverBudget("indices");
+            }
             std::vector<std::uint32_t> source;
             if (primitive.indices)
             {
@@ -924,6 +1020,10 @@ namespace N2Engine::AssetImport
             if (generate)
             {
                 // Flat normals: every triangle gets its own three vertices
+                if (!context.budget.AddVertices(triangles.size()))
+                {
+                    return OverBudget("vertices");
+                }
                 if (base + triangles.size() > kMaxMeshElements || firstIndex + triangles.size() > kMaxMeshElements)
                 {
                     return ModelImportError{ModelImportErrorCode::TooLarge,
@@ -1225,8 +1325,26 @@ namespace N2Engine::AssetImport
             return material;
         }
 
-        void ReadImages(const cgltf_data &data, const fs::path &baseDirectory, ImportedScene &scene, Warnings &warnings)
+        ModelImportError ImagesTooLarge()
         {
+            return ModelImportError{ModelImportErrorCode::TooLarge,
+                                    std::format("the model's images come to over the {}-byte limit",
+                                                kMaxModelTotalImageBytes)};
+        }
+
+        /// Reads every image's bytes. One image over kMaxModelImageBytes, or that can't be read, is skipped with a
+        /// warning; all of them over kMaxModelTotalImageBytes is an error (many images can name one big view).
+        std::optional<ModelImportError> ReadImages(const cgltf_data &data, const fs::path &baseDirectory,
+                                                   ImportedScene &scene, Warnings &warnings)
+        {
+            std::size_t total = 0;
+            const auto charge = [&total](const std::size_t size)
+            {
+                if (size > kMaxModelTotalImageBytes - total)
+                    return false;
+                total += size;
+                return true;
+            };
             scene.images.resize(data.images_count);
             for (cgltf_size i = 0; i < data.images_count; ++i)
             {
@@ -1250,6 +1368,8 @@ namespace N2Engine::AssetImport
                     }
                     else
                     {
+                        if (!charge(bytes.size()))
+                            return ImagesTooLarge();
                         image.bytes.assign(bytes.begin(), bytes.end());
                     }
                     continue;
@@ -1263,6 +1383,8 @@ namespace N2Engine::AssetImport
                 if (uri.starts_with("data:"))
                 {
                     const auto payload = Base64Payload(uri);
+                    if (payload && !charge(payload->size() / 4 * 3))
+                        return ImagesTooLarge();
                     auto decoded = payload ? DecodeBase64(*payload, kMaxModelImageBytes) : std::nullopt;
                     if (!decoded)
                     {
@@ -1286,6 +1408,12 @@ namespace N2Engine::AssetImport
                                              "folder are read", label, image.uri));
                     continue;
                 }
+                std::error_code sizeError;
+                const std::uintmax_t fileSize = fs::file_size(path, sizeError);
+                if (!sizeError && fileSize <= kMaxModelImageBytes && !charge(static_cast<std::size_t>(fileSize)))
+                {
+                    return ImagesTooLarge();
+                }
                 std::string error;
                 auto read = ReadFileCapped(path, 0, kMaxModelImageBytes, error);
                 if (!read)
@@ -1295,6 +1423,7 @@ namespace N2Engine::AssetImport
                 }
                 image.bytes = std::move(*read);
             }
+            return std::nullopt;
         }
 
         // ===== The whole file =====
@@ -1512,15 +1641,27 @@ namespace N2Engine::AssetImport
                                                                         bytes.size(), kMaxModelJsonBytes));
             }
 
+            // Declared before the data, so it outlives every block cgltf_free hands back to it
+            ParseAllocator allocator;
             cgltf_options options{};
             options.type = isGlb ? cgltf_file_type_glb : cgltf_file_type_gltf;
+            options.memory.alloc_func = &CountingAlloc;
+            options.memory.free_func = &CountingFree;
+            options.memory.user_data = &allocator;
             cgltf_data *raw = nullptr;
             const cgltf_result parsed = cgltf_parse(&options, bytes.data(), bytes.size(), &raw);
+            if (parsed == cgltf_result_out_of_memory)
+            {
+                return Fail(ModelImportErrorCode::TooLarge,
+                            std::format("parsing the glTF JSON needs over {} bytes of memory (too many objects)",
+                                        kMaxParseMemoryBytes));
+            }
             if (parsed != cgltf_result_success || !raw)
             {
                 return Fail(ModelImportErrorCode::ParseFailed, std::format("not a readable glTF 2.0 file: {}", ResultName(parsed)));
             }
             const CgltfData data(raw);
+            allocator.limit = std::numeric_limits<std::size_t>::max(); // buffers have their own caps
 
             ImportedScene scene;
             Warnings warnings(scene.warnings);
@@ -1556,7 +1697,10 @@ namespace N2Engine::AssetImport
             ImageUse use;
             if (settings.importMaterials)
             {
-                ReadImages(*data, baseDirectory, scene, warnings);
+                if (auto error = ReadImages(*data, baseDirectory, scene, warnings))
+                {
+                    return std::unexpected(std::move(*error));
+                }
                 use.samplerSet.assign(scene.images.size(), false);
                 scene.materials.reserve(data->materials_count);
                 for (cgltf_size i = 0; i < data->materials_count; ++i)
@@ -1565,7 +1709,8 @@ namespace N2Engine::AssetImport
                 }
             }
 
-            const MeshContext context{*data, settings, scale, warnings};
+            Budget budget;
+            const MeshContext context{*data, settings, scale, warnings, budget};
             scene.meshes.resize(data->meshes_count);
             for (cgltf_size m = 0; m < data->meshes_count; ++m)
             {
@@ -1707,7 +1852,19 @@ namespace N2Engine::AssetImport
                                                                         const fs::path &baseDirectory,
                                                                         const ModelImportSettings &settings) const
     {
-        return ImportGltf(bytes, baseDirectory, settings);
+        // The caps keep allocations bounded; this is the backstop, so a failed allocation is an error value too
+        try
+        {
+            return ImportGltf(bytes, baseDirectory, settings);
+        }
+        catch (const std::bad_alloc &)
+        {
+            return Fail(ModelImportErrorCode::TooLarge, "out of memory while importing the model");
+        }
+        catch (const std::length_error &)
+        {
+            return Fail(ModelImportErrorCode::TooLarge, "the model needs a container larger than the library allows");
+        }
     }
 
     bool GltfImporter::HandlesExtension(const std::string_view extension) const

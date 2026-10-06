@@ -831,6 +831,67 @@ TEST(GltfImporterTest, CorruptGlbHeadersAndGarbageAreRejected)
     }
 }
 
+// ===== Memory caps on tiny hostile files =====
+
+TEST(GltfImporterTest, ManyMeshesReusingAHugeAccessorWithoutABufferViewAreAnErrorNotAnAllocation)
+{
+    // An accessor with no buffer view costs no file bytes but declares millions of (zero) vertices; a hundred
+    // meshes reusing it would ask for hundreds of gigabytes
+    Builder b;
+    const int huge = b.AddAccessor(-1, GltfTest::kFloat, kMaxAccessorElements, "VEC3");
+    std::vector<int> nodes;
+    for (int i = 0; i < 100; ++i)
+    {
+        const int mesh = b.AddMesh("M" + std::to_string(i), {Builder::Primitive(huge)});
+        nodes.push_back(b.AddNode("N" + std::to_string(i), {{"mesh", mesh}}));
+    }
+    b.SetScene(nodes);
+    std::expected<ImportedScene, ModelImportError> result = std::unexpected(ModelImportError{});
+    EXPECT_NO_THROW(result = Import(b.ToGltf()));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ModelImportErrorCode::TooLarge) << result.error().message;
+}
+
+TEST(GltfImporterTest, ManyImagesNamingOneBigViewAreAnError)
+{
+    // Eight images share one 33 MiB view: each is under the per-image cap, together they pass the total
+    Builder b = Triangle();
+    const std::vector<std::uint8_t> big(std::size_t{33} * 1024 * 1024, 0);
+    const int view = b.AddView(big);
+    b.doc["images"] = nlohmann::json::array();
+    for (int i = 0; i < 8; ++i)
+    {
+        b.doc["images"].push_back(nlohmann::json{{"bufferView", view}, {"mimeType", "image/png"}});
+    }
+    std::expected<ImportedScene, ModelImportError> result = std::unexpected(ModelImportError{});
+    EXPECT_NO_THROW(result = Import(b.ToGlb()));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ModelImportErrorCode::TooLarge) << result.error().message;
+
+    // Without materials no image is read, so the same file imports
+    ModelImportSettings noMaterials;
+    noMaterials.importMaterials = false;
+    EXPECT_TRUE(Import(b.ToGlb(), noMaterials).has_value());
+}
+
+TEST(GltfImporterTest, AJsonDeclaringMillionsOfEmptyObjectsIsRejectedWhileParsing)
+{
+    // 12 MB of JSON, well under the JSON cap, declaring 4 M empty nodes: cgltf would allocate each in full
+    std::string json = R"({"asset":{"version":"2.0"},"nodes":[)";
+    constexpr std::size_t count = std::size_t{4} * 1024 * 1024;
+    json.reserve(json.size() + count * 3 + 8);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        json += i == 0 ? "{}" : ",{}";
+    }
+    json += "]}";
+    ASSERT_LT(json.size(), kMaxModelJsonBytes);
+    std::expected<ImportedScene, ModelImportError> result = std::unexpected(ModelImportError{});
+    EXPECT_NO_THROW(result = Import(GltfTest::ToBytes(json)));
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ModelImportErrorCode::TooLarge) << result.error().message;
+}
+
 TEST(GltfImporterTest, HandlesTheGltfExtensions)
 {
     const GltfImporter importer;
