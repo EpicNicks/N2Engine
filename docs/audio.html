@@ -146,7 +146,7 @@
 <thead><tr><th>Who calls it</th><th>With what time</th></tr></thead>
 <tbody>
 <tr><td><code>Application::Run</code></td><td><code>Time::GetUnscaledDeltaTime()</code> each frame, right before <code>AudioSystem::Update</code> (see <a href="#frame-timing">frame timing</a>). A no-op on a sound card.</td></tr>
-<tr><td><code>N2EditorHost</code>'s main loop</td><td><code>EditorServer::UpdateAudio()</code> each iteration (about every 16 ms), after <code>ProcessCommands</code>: the real time since its previous call (<code>steady_clock</code>), then <code>AudioSystem::Update</code>. The host runs no game frames (<code>Time</code> only moves in <code>RenderFrame</code>), so this is its clock. It runs <strong>whether or not a client is connected</strong>.</td></tr>
+<tr><td><code>N2EditorHost</code>'s main loop</td><td><code>EditorServer::UpdateAudio()</code> each iteration (at least every 16 ms or so, and right after every request), after <code>ProcessCommands</code>: the real time since its previous call (<code>steady_clock</code>), then <code>AudioSystem::Update</code>. The host runs no game frames (<code>Time</code> only moves in <code>RenderFrame</code>), so this is its clock. It runs <strong>whether or not a client is connected</strong>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -188,6 +188,7 @@
 <div class="callout note" id="design-time-pacing">
 <p class="callout-title">Design decision: pace by elapsed time, render every frame</p>
 <p>Mixing once per <code>RenderFrame</code> or <code>GetAudio</code> request would tie audio speed to how often the client asks: a client at 30 fps would hear half-speed time, and with no client one-shots would never end and never return their sources (the issue's main hazard). Mixing <code>elapsed × sampleRate</code> frames on the main thread every iteration keeps the audio clock equal to real time whatever the client does, and the fractional accumulator means no drift however the time is split. It runs on the main thread, alongside every other OpenAL call, so no locks are needed.</p>
+<p>Two consequences for clients. <strong>Clock drift:</strong> the server mixes against its own clock at a nominal 48 kHz, while the client's sound card plays at its own, slightly different rate, so a client's jitter buffer slowly fills or drains; it must correct for that (skip or repeat a frame now and then, or resample). <strong>Stalls:</strong> one step mixes at most 1 s, so a main-loop stall longer than that (a long scene load) loses the excess time silently, and it is not counted in <code>droppedFrames</code>, which counts only audio dropped from the full buffer.</p>
 </div>
 <div class="callout note" id="design-bounded-stream">
 <p class="callout-title">Design decision: a 250 ms buffer that drops the oldest audio</p>

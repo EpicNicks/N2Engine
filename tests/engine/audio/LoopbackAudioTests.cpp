@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -93,6 +94,18 @@ namespace
 class LoopbackAudioTest : public ::testing::Test
 {
 protected:
+    static void SetUpTestSuite()
+    {
+        // OpenAL Soft reads its config at the first ALC call in the process, which may be here (gtest's order
+        // isn't guaranteed). Use the silent null backend, as AudioTests does, so a test run never needs a
+        // sound card even if a Device-output test follows.
+#ifdef _WIN32
+        _putenv_s("ALSOFT_DRIVERS", "null");
+#else
+        setenv("ALSOFT_DRIVERS", "null", 1);
+#endif
+    }
+
     void SetUp() override
     {
         AudioSystem::Instance().Shutdown(); // whatever an earlier test left running
