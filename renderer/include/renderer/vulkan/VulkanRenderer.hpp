@@ -120,6 +120,9 @@ namespace Renderer
             // Accepts the per-draw RenderState and ignores it: this backend draws nothing yet (#43)
             void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
                           const Common::RenderState& state) override;
+            // Accepts a submesh's index range and ignores it, like the overload above (#43)
+            void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
+                          const Common::RenderState& state, const Common::IndexRange& range) override;
             void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
             void OnResize(int width, int height) override;
 

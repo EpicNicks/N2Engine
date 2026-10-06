@@ -108,7 +108,8 @@ void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera)
         float depth; // distance in front of the camera, along its view direction
     };
 
-    // Split by queue before anything draws. Opaque keeps the traversal order exactly.
+    // Split by queue before anything draws. Opaque keeps the traversal order exactly. A renderable that
+    // draws in both queues (DrawsInQueue) goes in both lists.
     std::vector<IRenderable *> opaque;
     std::vector<TransparentEntry> transparent;
     opaque.reserve(renderables.size());
@@ -116,9 +117,12 @@ void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera)
     for (IRenderable *renderable : renderables)
     {
         const RenderQueueKey key = renderable->GetRenderQueue();
-        if (key.queue != RenderQueue::Transparent)
+        if (renderable->DrawsInQueue(RenderQueue::Opaque))
         {
             opaque.push_back(renderable);
+        }
+        if (!renderable->DrawsInQueue(RenderQueue::Transparent))
+        {
             continue;
         }
 
@@ -147,11 +151,12 @@ void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera)
 
     for (IRenderable *renderable : opaque)
     {
-        renderable->RenderInQueue(renderer, Renderer::Common::RenderState::Opaque());
+        renderable->RenderInQueue(renderer, Renderer::Common::RenderState::Opaque(), RenderQueue::Opaque);
     }
     for (const TransparentEntry &entry : transparent)
     {
-        entry.renderable->RenderInQueue(renderer, Renderer::Common::RenderState::Transparent());
+        entry.renderable->RenderInQueue(renderer, Renderer::Common::RenderState::Transparent(),
+                                        RenderQueue::Transparent);
     }
 }
 

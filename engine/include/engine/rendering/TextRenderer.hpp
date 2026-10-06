@@ -48,7 +48,8 @@ namespace N2Engine::Rendering
         [[nodiscard]] RenderQueueKey GetRenderQueue() const override { return {RenderQueue::Transparent, 0}; }
         /// Draws with RenderState::Transparent(), as Scene::Render would
         void Render(Renderer::Common::IRenderer *renderer) override;
-        void RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state) override;
+        void RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state,
+                           RenderQueue queue) override;
         /// Resources are created on first draw; this only binds the component to the renderer (releasing
         /// what it held on another one)
         void InitializeRenderResources(Renderer::Common::IRenderer *renderer) override;

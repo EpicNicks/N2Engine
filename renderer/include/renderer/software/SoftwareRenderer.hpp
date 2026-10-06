@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
+#include <limits>
 #include <vector>
 #include <memory>
 
@@ -23,6 +25,9 @@ namespace Renderer::Software
     {
         std::array<float, 4> albedo{1.0f, 1.0f, 1.0f, 1.0f}; ///< uAlbedo
         float smoothness = 0.5f;                             ///< uSmoothness (lit only)
+        /// uAlphaCutoff (unlit and lit): a pixel whose final alpha is below it is skipped, as OpenGL discards
+        /// it. The default, 0, skips nothing.
+        float alphaCutoff = 0.0f;
         /// The material's texture, or null when it has none or it is empty. Still a pointer: its pixels are
         /// read at raster time, which is safe because DestroyTexture waits for the frame in flight and a
         /// software texture's pixels never change after creation.
@@ -105,6 +110,11 @@ namespace Renderer::Software
         /// pixel and depthTest is on, whatever depthWrite says (see SWShaderType::Text).
         void DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
                       const Common::RenderState &state) override;
+        /// As DrawMesh above, rasterizing only the triangles in `range` (a submesh). The range is checked against
+        /// the mesh when the frame rasterizes: the part outside the mesh's indices, and a last incomplete
+        /// triangle, are skipped.
+        void DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
+                      const Common::RenderState &state, const Common::IndexRange &range) override;
         void DrawObjects(const std::vector<Common::RenderObject> &objects) override;
         void OnResize(int width, int height) override;
 
@@ -135,6 +145,10 @@ namespace Renderer::Software
             // frame (the UI pass) only affects the draws after it, as in OpenGL
             float view[16];
             float proj[16];
+            // The indices to rasterize (DrawMesh with an IndexRange); the whole mesh by default, as it is when
+            // the frame rasterizes (an UpdateMesh later in the frame still draws in full)
+            uint32_t firstIndex = 0;
+            uint32_t indexCount = std::numeric_limits<uint32_t>::max();
         };
 
         std::vector<DrawCommand> m_drawQueue;
@@ -190,7 +204,11 @@ namespace Renderer::Software
 
         void RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
                            const SWMaterialSnapshot& material, const Common::RenderState& state,
+                           uint32_t firstIndex, uint32_t indexCount,
                            const Common::SceneLightingData& lighting, const N2Engine::Math::Vector3& cameraPos);
+        /// Records a draw of `indexCount` indices from `firstIndex` (both DrawMesh overloads)
+        void RecordDraw(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
+                        const Common::RenderState &state, uint32_t firstIndex, uint32_t indexCount);
 
 
         // Math helpers (row-major)

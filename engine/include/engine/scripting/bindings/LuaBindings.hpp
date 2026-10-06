@@ -17,6 +17,8 @@ namespace N2Engine::Text
 
 namespace N2Engine::Rendering
 {
+    class Material;
+    class Mesh;
     class Texture;
 }
 
@@ -68,6 +70,14 @@ namespace N2Engine::Scripting
         /// What scripts see as a texture's path: its res:// (or user://) path for a project asset, else the file
         /// it was loaded from, else "" (a texture made at runtime)
         std::string TexturePathForLua(const Rendering::Texture& texture);
+        /// A .mat file through Resources, e.g. "res://materials/crate.mat"; throws "<caller>: can't load material
+        /// ..." if it doesn't load
+        std::shared_ptr<Rendering::Material> LoadMaterialOrThrow(const std::string& path, std::string_view caller);
+        /// A built-in mesh by name ("Cube", "Sphere", "Quad"), else a mesh asset through Resources by path; throws
+        /// "<caller>: can't load mesh ..." if neither
+        std::shared_ptr<Rendering::Mesh> LoadMeshOrThrow(const std::string& nameOrPath, std::string_view caller);
+        /// What scripts see as a mesh: a built-in's name, else its res:// path, else "" (made at runtime)
+        std::string MeshNameForLua(const Rendering::Mesh& mesh);
 
         /// GameObject:AddComponent("BoxCollider"): the component as its Lua type; raises a Lua error for unknown names
         sol::object AddComponentByName(GameObject& gameObject, const std::string& typeName, sol::this_state state);

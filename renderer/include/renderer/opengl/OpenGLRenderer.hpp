@@ -6,6 +6,7 @@
 #include "renderer/opengl/OpenGLMesh.hpp"
 #include "renderer/opengl/OpenGLTexture.hpp"
 
+#include <cstdint>
 #include <unordered_map>
 #include <string>
 #include <memory>
@@ -76,6 +77,10 @@ namespace Renderer::OpenGL
         using Common::IRenderer::DrawMesh; // the default-state overload
         void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
                       const Common::RenderState& state) override;
+        /// glDrawElements over the range only (an offset into the index buffer). A range that isn't inside the
+        /// mesh's indices draws nothing.
+        void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
+                      const Common::RenderState& state, const Common::IndexRange& range) override;
         void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
         void OnResize(int width, int height) override;
 
@@ -130,6 +135,9 @@ namespace Renderer::OpenGL
 
         void CreateStandardShaders();
         void ApplyRenderState(const Common::RenderState& state);
+        /// Both DrawMesh overloads: `indexCount` indices from `firstIndex`, already checked against the mesh
+        void DrawIndices(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
+                         const Common::RenderState& state, std::uint32_t firstIndex, std::uint32_t indexCount);
     };
 
     std::unique_ptr<Common::IRenderer> CreateOpenGLRenderer();

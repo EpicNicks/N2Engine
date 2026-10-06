@@ -1,5 +1,7 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -17,6 +19,7 @@
 #include "engine/audio/AudioSource.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/example/renderers/CubeRenderer.hpp"
+#include "engine/example/renderers/QuadRenderer.hpp"
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/physics/BoxCollider.hpp"
@@ -24,6 +27,9 @@
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/io/Resources.hpp"
+#include "engine/rendering/Material.hpp"
+#include "engine/rendering/Mesh.hpp"
+#include "engine/rendering/MeshRenderer.hpp"
 #include "engine/rendering/TextRenderer.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/scripting/LuaComponent.hpp"
@@ -93,6 +99,8 @@ namespace N2Engine::Scripting::Bindings
                 {"CapsuleCollider", MakeAccess<Physics::CapsuleCollider>()},
                 {"CubeRenderer", MakeAccess<Example::CubeRenderer>()},
                 {"SphereRenderer", MakeAccess<Example::SphereRenderer>()},
+                {"QuadRenderer", MakeAccess<Example::QuadRenderer>()},
+                {"MeshRenderer", MakeAccess<Rendering::MeshRenderer>()},
                 {"TextRenderer", MakeAccess<Rendering::TextRenderer>()},
                 {"AudioSource", MakeAccess<Audio::AudioSource>()},
                 {"AudioListener", MakeAccess<Audio::AudioListener>()},
@@ -122,6 +130,94 @@ namespace N2Engine::Scripting::Bindings
             // sol turns this into a Lua error at the call site
             throw std::runtime_error(std::format("Unknown component type '{}'. Known types: {}", typeName, known));
         }
+
+        /// What scripts see as an asset's path: its res:// (or user://) path for a project asset, else `fallback`
+        /// (the file it was loaded from, or "" for one made at runtime)
+        std::string AssetPathForLua(const Base::Asset &asset, const std::string &fallback)
+        {
+            if (asset.GetResourcePath().IsValid())
+            {
+                return asset.GetResourcePath().ToString();
+            }
+            return fallback;
+        }
+
+        /// A material slot's index from Lua (1-based) as a 0-based index; raises a Lua error below 1
+        std::size_t MaterialSlot(const std::int64_t index, const std::string_view caller)
+        {
+            if (index < 1)
+            {
+                throw std::runtime_error(std::format("{}: material slots count from 1, got {}", caller, index));
+            }
+            return static_cast<std::size_t>(index - 1);
+        }
+
+        sol::optional<std::string> MaterialPathOrNil(const std::shared_ptr<Rendering::Material> &material)
+        {
+            if (!material)
+            {
+                return sol::nullopt;
+            }
+            return AssetPathForLua(*material, material->GetSourcePath());
+        }
+
+        /// The Lua methods every built-in shape has, on its handle type
+        template <typename Ref>
+        auto ShapeSetMaterial()
+        {
+            // A .mat file, e.g. "res://materials/crate.mat"; nil goes back to unlit in the shape's colour
+            return [](const Ref &c, sol::optional<std::string> path)
+            {
+                const auto shape = c.Pin();
+                if (!path)
+                {
+                    shape->SetMaterial(nullptr);
+                    return;
+                }
+                shape->SetMaterial(LoadMaterialOrThrow(*path, "SetMaterial"));
+            };
+        }
+
+        template <typename Ref>
+        auto ShapeGetMaterial()
+        {
+            return [](const Ref &c) { return MaterialPathOrNil(c.Pin()->GetMaterial()); };
+        }
+    }
+
+    std::shared_ptr<Rendering::Material> LoadMaterialOrThrow(const std::string &path, const std::string_view caller)
+    {
+        auto material = IO::Resources::Instance().Load<Rendering::Material>(std::filesystem::path(path));
+        if (!material)
+        {
+            throw std::runtime_error(std::format("{}: can't load material '{}'", caller, path));
+        }
+        return material;
+    }
+
+    std::shared_ptr<Rendering::Mesh> LoadMeshOrThrow(const std::string &nameOrPath, const std::string_view caller)
+    {
+        if (const auto builtin = Rendering::Mesh::ParseBuiltinName(nameOrPath))
+        {
+            return Rendering::Mesh::GetBuiltin(*builtin);
+        }
+        auto mesh = IO::Resources::Instance().Load<Rendering::Mesh>(std::filesystem::path(nameOrPath));
+        if (!mesh)
+        {
+            throw std::runtime_error(std::format(
+                "{}: can't load mesh '{}' (the built-in meshes are \"Cube\", \"Sphere\" and \"Quad\")", caller,
+                nameOrPath));
+        }
+        return mesh;
+    }
+
+    std::string MeshNameForLua(const Rendering::Mesh &mesh)
+    {
+        if (mesh.IsBuiltin())
+        {
+            return mesh.GetDebugName();
+        }
+        return AssetPathForLua(mesh, "");
     }
 
     // Text alignments travel as their scene-file names ("Left", "Middle", ...)
@@ -264,7 +360,9 @@ namespace N2Engine::Scripting::Bindings
             "SetColor", Forward<CubeRendererRef, &Example::CubeRenderer::SetColor>(),
             "GetColor", Forward<CubeRendererRef, &Example::CubeRenderer::GetColor>(),
             "SetSize", Forward<CubeRendererRef, &Example::CubeRenderer::SetSize>(),
-            "GetSize", Forward<CubeRendererRef, &Example::CubeRenderer::GetSize>()
+            "GetSize", Forward<CubeRendererRef, &Example::CubeRenderer::GetSize>(),
+            "SetMaterial", ShapeSetMaterial<CubeRendererRef>(),
+            "GetMaterial", ShapeGetMaterial<CubeRendererRef>()
         );
 
         using SphereRendererRef = ComponentRef<Example::SphereRenderer>;
@@ -274,7 +372,79 @@ namespace N2Engine::Scripting::Bindings
             "GetColor", Forward<SphereRendererRef, &Example::SphereRenderer::GetColor>(),
             "SetRadius", Forward<SphereRendererRef, &Example::SphereRenderer::SetRadius>(),
             "GetRadius", Forward<SphereRendererRef, &Example::SphereRenderer::GetRadius>(),
-            "SetSubdivision", Forward<SphereRendererRef, &Example::SphereRenderer::SetSubdivision>()
+            "SetSubdivision", Forward<SphereRendererRef, &Example::SphereRenderer::SetSubdivision>(),
+            "SetMaterial", ShapeSetMaterial<SphereRendererRef>(),
+            "GetMaterial", ShapeGetMaterial<SphereRendererRef>()
+        );
+
+        using QuadRendererRef = ComponentRef<Example::QuadRenderer>;
+        BindComponentType<Example::QuadRenderer>(
+            lua, "QuadRenderer",
+            "SetColor", Forward<QuadRendererRef, &Example::QuadRenderer::SetColor>(),
+            "GetColor", Forward<QuadRendererRef, &Example::QuadRenderer::GetColor>(),
+            "SetSize", Forward<QuadRendererRef, &Example::QuadRenderer::SetSize>(),
+            "GetSize", Forward<QuadRendererRef, &Example::QuadRenderer::GetSize>(),
+            "SetMaterial", ShapeSetMaterial<QuadRendererRef>(),
+            "GetMaterial", ShapeGetMaterial<QuadRendererRef>()
+        );
+
+        using MeshRendererRef = ComponentRef<Rendering::MeshRenderer>;
+        BindComponentType<Rendering::MeshRenderer>(
+            lua, "MeshRenderer",
+            // A built-in mesh by name ("Cube", "Sphere", "Quad") or a mesh asset's path; nil clears it. A name or
+            // path that doesn't load raises an error and keeps the current mesh.
+            "SetMesh", [](const MeshRendererRef &c, sol::optional<std::string> nameOrPath)
+            {
+                const auto renderer = c.Pin();
+                if (!nameOrPath)
+                {
+                    renderer->SetMesh(nullptr);
+                    return;
+                }
+                renderer->SetMesh(LoadMeshOrThrow(*nameOrPath, "MeshRenderer:SetMesh"));
+            },
+            // The built-in mesh's name, or the mesh asset's path ("" for a mesh made at runtime); nil without a mesh
+            "GetMesh", [](const MeshRendererRef &c) -> sol::optional<std::string>
+            {
+                const auto renderer = c.Pin();
+                if (!renderer->GetMesh())
+                {
+                    return sol::nullopt;
+                }
+                return MeshNameForLua(*renderer->GetMesh());
+            },
+            "GetMaterialCount", [](const MeshRendererRef &c)
+            {
+                return static_cast<std::int64_t>(c.Pin()->GetMaterialCount());
+            },
+            // Slot i (1-based): a .mat file's path, or nil to empty the slot (drawn lit white)
+            "SetMaterial", [](const MeshRendererRef &c, const std::int64_t index, sol::optional<std::string> path)
+            {
+                const std::size_t slot = MaterialSlot(index, "MeshRenderer:SetMaterial");
+                const auto renderer = c.Pin();
+                if (!path)
+                {
+                    renderer->SetMaterial(slot, nullptr);
+                    return;
+                }
+                renderer->SetMaterial(slot, LoadMaterialOrThrow(*path, "MeshRenderer:SetMaterial"));
+            },
+            // Slot i's material path (1-based), or nil for an empty slot
+            "GetMaterial", [](const MeshRendererRef &c, const std::int64_t index) -> sol::optional<std::string>
+            {
+                const std::size_t slot = MaterialSlot(index, "MeshRenderer:GetMaterial");
+                return MaterialPathOrNil(c.Pin()->GetMaterial(slot));
+            },
+            // The mesh's bounds in its own space, or nil without a mesh
+            "GetBounds", [](const MeshRendererRef &c) -> sol::optional<BoundingBox>
+            {
+                const auto renderer = c.Pin();
+                if (const auto bounds = renderer->GetBounds())
+                {
+                    return *bounds;
+                }
+                return sol::nullopt;
+            }
         );
 
         using TextRendererRef = ComponentRef<Rendering::TextRenderer>;

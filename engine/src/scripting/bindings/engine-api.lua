@@ -803,8 +803,8 @@ function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
----"SphereRenderer", "TextRenderer", "AudioSource", "AudioListener", "LuaComponent", "RectTransform",
----"Canvas", "Image", "UIText", "Button". Unknown names raise an error.
+---"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "AudioSource", "AudioListener",
+---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
 function GameObject:AddComponent(typeName) end
@@ -814,6 +814,8 @@ function GameObject:AddComponent(typeName) end
 ---@return Component|nil nil when the object has no component of that type
 function GameObject:GetComponent(typeName) end
 
+---A 1 x 1 x 1 cube (the built-in "Cube" mesh), unlit in its colour unless it has a material.
+---Opaque: a translucent colour doesn't blend; give it a material with alphaMode "blend" for that.
 ---@class CubeRenderer : Component
 CubeRenderer = {}
 
@@ -829,6 +831,16 @@ function CubeRenderer:SetSize(size) end
 ---@return Vector3
 function CubeRenderer:GetSize() end
 
+---A .mat file the cube draws with, tinted by its colour; nil goes back to unlit in the colour.
+---Raises an error (keeping the current material) if it doesn't load.
+---@param path string|nil e.g. "res://materials/crate.mat"
+function CubeRenderer:SetMaterial(path) end
+
+---@return string|nil path nil without a material
+function CubeRenderer:GetMaterial() end
+
+---A sphere of diameter 1 (the built-in "Sphere" mesh at the default subdivision), unlit in its colour unless it
+---has a material
 ---@class SphereRenderer : Component
 SphereRenderer = {}
 
@@ -844,9 +856,70 @@ function SphereRenderer:SetRadius(radius) end
 ---@return number
 function SphereRenderer:GetRadius() end
 
+---Mesh quality (16 x 32 by default); takes effect on the next draw
 ---@param latitude integer
 ---@param longitude integer
 function SphereRenderer:SetSubdivision(latitude, longitude) end
+
+---@param path string|nil a .mat file, or nil for unlit in the colour
+function SphereRenderer:SetMaterial(path) end
+
+---@return string|nil
+function SphereRenderer:GetMaterial() end
+
+---A 1 x 1 quad on the object's x/y plane, facing +Z (the built-in "Quad" mesh), unlit in its colour unless it
+---has a material
+---@class QuadRenderer : Component
+QuadRenderer = {}
+
+---@param color Color
+function QuadRenderer:SetColor(color) end
+
+---@return Color
+function QuadRenderer:GetColor() end
+
+---@param size Vector3
+function QuadRenderer:SetSize(size) end
+
+---@return Vector3
+function QuadRenderer:GetSize() end
+
+---@param path string|nil a .mat file, or nil for unlit in the colour
+function QuadRenderer:SetMaterial(path) end
+
+---@return string|nil
+function QuadRenderer:GetMaterial() end
+
+---Draws a mesh with one material per submesh. An empty slot draws lit white. Blend materials draw in the
+---Transparent queue, the rest in the Opaque queue.
+---@class MeshRenderer : Component
+MeshRenderer = {}
+
+---A built-in mesh by name, or a mesh asset's path; nil clears it. Raises an error (keeping the current mesh) if
+---it doesn't load.
+---@param nameOrPath string|nil "Cube", "Sphere", "Quad", or a mesh asset's res:// path
+function MeshRenderer:SetMesh(nameOrPath) end
+
+---@return string|nil nameOrPath the built-in's name or the asset's path ("" for a mesh made at runtime); nil without a mesh
+function MeshRenderer:GetMesh() end
+
+---The number of material slots that draw: the mesh's submesh count (0 without a mesh)
+---@return integer
+function MeshRenderer:GetMaterialCount() end
+
+---Sets material slot `index` (1-based) to a .mat file, or empties it with nil. Raises an error (keeping the
+---slot) if the file doesn't load.
+---@param index integer
+---@param path string|nil
+function MeshRenderer:SetMaterial(index, path) end
+
+---@param index integer 1-based
+---@return string|nil path nil for an empty slot
+function MeshRenderer:GetMaterial(index) end
+
+---The mesh's bounds in its own space (before the object's transform)
+---@return BoundingBox|nil nil without a mesh
+function MeshRenderer:GetBounds() end
 
 ---World-space text on the object's x/y plane, facing +Z, drawn with an SDF font in the Transparent queue.
 ---Sizes are in world units. Changing a setting other than the colour lays the text out again on the next draw.

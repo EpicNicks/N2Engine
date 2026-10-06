@@ -1,9 +1,11 @@
 #pragma once
 
+#include <memory>
+#include <utility>
+
 #include <math/Vector3.hpp>
 #include <renderer/common/Renderer.hpp>
-#include <renderer/common/IMaterial.hpp>
-#include <renderer/common/IShader.hpp>
+#include <renderer/common/RenderState.hpp>
 
 #include "engine/Component.hpp"
 #include "engine/IRenderable.hpp"
@@ -11,207 +13,75 @@
 #include "engine/common/ScriptUtils.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/rendering/Material.hpp"
+#include "engine/rendering/Mesh.hpp"
+#include "engine/rendering/MeshDrawing.hpp"
 
 #include "engine/serialization/MathSerialization.hpp"
-
-#include <concepts>
-#include <memory>
-#include <type_traits>
 
 namespace N2Engine::Example
 {
     /**
-     * @brief CRTP base class for polygon-based renderers (Quad, Cube, Sphere, etc.)
+     * The base of the built-in shapes (CubeRenderer, SphereRenderer, QuadRenderer): a built-in mesh drawn at the
+     * object's transform, scaled by its size, through the same drawing code as Rendering::MeshRenderer.
      *
-     * This template uses the Curiously Recurring Template Pattern to provide:
-     * - Zero-overhead abstraction (no virtual dispatch)
-     * - Code reuse for common rendering logic
-     * - Compile-time type safety
+     * - Unlit, in the shape's colour: with no material it draws with Material::GetDefaultUnlit() (unlit white)
+     *   tinted by `_color`. An optional `_material` (a Material asset) replaces it, still tinted by the colour, so
+     *   a shape can be lit or textured; its alpha mode picks the queue as for MeshRenderer.
+     * - Opaque materials (the default) draw in the Opaque queue without blending: a translucent colour no longer
+     *   blends (it did before #3 P2). Give the shape a Blend material to draw it see-through.
+     * - The GPU mesh and material come from the GpuCache: every shape of a kind on a renderer shares one GPU mesh,
+     *   and every shape without a material shares one GPU material, the colour being set per draw.
      *
-     * Derived classes must implement:
-     * - CreateMesh(Renderer::Common::IRenderer* renderer)
-     * - GetTypeName() const
-     *
-     * @tparam Derived The derived renderer class (e.g., QuadRenderer)
-     *
-     * Example:
-     * @code
-     * class QuadRenderer final : public PolygonRenderer<QuadRenderer> {
-     * protected:
-     *     void CreateMesh(Renderer::Common::IRenderer* renderer) {
-     *         // Generate quad mesh...
-     *     }
-     * };
-     * @endcode
+     * Serialized: `_color`, `_size` and `_material` (asset UUID or null; scenes saved before it load with none).
      */
-    template<typename Derived>
     class PolygonRenderer : public IRenderable
     {
-    protected:
-        Renderer::Common::IMesh *_mesh = nullptr;
-        Renderer::Common::IMaterial *_material = nullptr;
-        Renderer::Common::IShader *_shader = nullptr;
-        bool _resourcesInitialized = false;
+    public:
+        ~PolygonRenderer() override;
 
-        // The renderer the resources belong to, and its lifetime token: once the token expires that renderer
-        // is gone (with the resources), and a new renderer at the same address isn't the same renderer
-        Renderer::Common::IRenderer *_cachedRenderer = nullptr;
-        std::weak_ptr<const void> _cachedRendererLifetime;
+        // IRenderable
+        /// The material's queue: Transparent for a Blend material, else Opaque (sort key 0)
+        [[nodiscard]] RenderQueueKey GetRenderQueue() const override;
+        /// Draws in its queue's state outside a scene
+        void Render(Renderer::Common::IRenderer *renderer) override;
+        void RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state,
+                           RenderQueue queue) override;
+        /// Resources are acquired on first draw; this only binds the component to the renderer (releasing what it
+        /// held on another one)
+        void InitializeRenderResources(Renderer::Common::IRenderer *renderer) override;
+        /// Releases the shares this component holds on `renderer`. Does nothing for a renderer it holds nothing on.
+        void CleanupRenderResources(Renderer::Common::IRenderer *renderer) override;
+        void OnDestroy() override;
+
+        // Common properties
+        void SetColor(const Common::Color &color) { _color = color; }
+        [[nodiscard]] const Common::Color &GetColor() const { return _color; }
+
+        void SetSize(const Math::Vector3 &size) { _size = size; }
+        [[nodiscard]] const Math::Vector3 &GetSize() const { return _size; }
+
+        /// The material drawn with (tinted by the colour); nullptr draws unlit in the colour
+        void SetMaterial(std::shared_ptr<Rendering::Material> material) { _material = std::move(material); }
+        [[nodiscard]] const std::shared_ptr<Rendering::Material> &GetMaterial() const { return _material; }
+
+        /// The mesh this shape draws (a built-in mesh, or a sphere of other subdivisions; nullptr if it can't be made)
+        [[nodiscard]] virtual std::shared_ptr<Rendering::Mesh> GetMesh() = 0;
+
+        /// The GPU shares, for tests
+        [[nodiscard]] const Rendering::MeshDrawing::DrawResources &GetDrawResources() const { return _resources; }
+
+        static constexpr bool IsSingleton = false;
+
+    protected:
+        explicit PolygonRenderer(GameObject &gameObject);
 
         // Rendering properties (common to all polygon renderers)
         Common::Color _color{Common::Color::White};
         Math::Vector3 _size{Math::Vector3::One};
-
-    public:
-        explicit PolygonRenderer(GameObject& gameObject) : IRenderable(gameObject)
-        {
-            _gameObject.CreatePositionable();
-            RegisterMember(NAMEOF(_color), _color);
-            RegisterMember(NAMEOF(_size), _size);
-        }
-
-        void OnDestroy() override
-        {
-            CleanupRenderResources(_cachedRenderer);
-        }
-
-        void InitializeRenderResources(Renderer::Common::IRenderer* renderer) override
-        {
-            if (!renderer)
-            {
-                return;
-            }
-            if (_resourcesInitialized)
-            {
-                if (HoldsRenderer(renderer))
-                {
-                    return;
-                }
-                // The resources belong to another renderer, or to one that has been destroyed
-                ReleaseRenderResources();
-            }
-
-            // Compile-time check that Derived implements CreateMesh
-            // This fires when Derived is complete, giving a clear error message
-            static_assert(requires(Derived& d, Renderer::Common::IRenderer* r) {
-                { d.CreateMesh(r) } -> std::same_as<void>;
-            }, "Derived class must implement: void CreateMesh(Renderer::Common::IRenderer*)");
-
-            _cachedRenderer = renderer;
-            _cachedRendererLifetime = renderer->GetLifetimeToken();
-            _shader = renderer->GetStandardUnlitShader();
-
-            // CRTP: Static dispatch to derived class's CreateMesh
-            static_cast<Derived*>(this)->CreateMesh(renderer);
-            
-            _resourcesInitialized = true;
-        }
-
-        void Render(Renderer::Common::IRenderer* renderer) override
-        {
-            RenderInQueue(renderer, Renderer::Common::RenderState::Opaque());
-        }
-
-        // Draws with the state of its queue, so a subclass that returns the Transparent queue from
-        // GetRenderQueue blends without writing depth
-        void RenderInQueue(Renderer::Common::IRenderer* renderer, const Renderer::Common::RenderState& state) override
-        {
-            if (!renderer)
-            {
-                return;
-            }
-
-            // Initialize resources if not already done, or if they belong to another renderer
-            if (!_resourcesInitialized || !HoldsRenderer(renderer))
-            {
-                InitializeRenderResources(renderer);
-                if (!_resourcesInitialized)
-                {
-                    return;
-                }
-            }
-
-            if (_mesh == nullptr)
-            {
-                return;
-            }
-
-            const GameObject& gameObject = GetGameObject();
-            const Positionable* positionable = gameObject.GetPositionable();
-            if (!positionable)
-                return;
-
-            // Get the world transform matrix (this handles hierarchy automatically)
-            const Positionable::Matrix4 worldMatrix = positionable->GetLocalToWorldMatrix();
-
-            // Apply the polygon's size scaling to the transform
-            Positionable::Matrix4 scaleMatrix{Positionable::Matrix4::identity()};
-            scaleMatrix(0, 0) = _size.x;
-            scaleMatrix(1, 1) = _size.y;
-            scaleMatrix(2, 2) = _size.z;
-
-            // Combine: finalMatrix = worldMatrix * scaleMatrix
-            Positionable::Matrix4 finalMatrix = worldMatrix * scaleMatrix;
-
-            // Set color uniform
-            _material->SetColor("uAlbedo", _color.r, _color.g, _color.b, _color.a);
-
-            // Pass the final matrix to the renderer
-            renderer->DrawMesh(_mesh, finalMatrix.Data(), _material, state);
-        }
-
-        void CleanupRenderResources(Renderer::Common::IRenderer* renderer) override
-        {
-            // Only the renderer the resources belong to releases them
-            if (!_resourcesInitialized || !renderer || renderer != _cachedRenderer)
-                return;
-
-            ReleaseRenderResources();
-        }
-
-        // Common properties
-        void SetColor(const Common::Color& color) { _color = color; }
-        [[nodiscard]] const Common::Color& GetColor() const { return _color; }
-
-        void SetSize(const Math::Vector3& size) { _size = size; }
-        [[nodiscard]] const Math::Vector3& GetSize() const { return _size; }
-
-        static constexpr bool IsSingleton = false;
+        std::shared_ptr<Rendering::Material> _material;
 
     private:
-        // True if the resources belong to `renderer` and it still exists
-        [[nodiscard]] bool HoldsRenderer(const Renderer::Common::IRenderer* renderer) const
-        {
-            return renderer && renderer == _cachedRenderer && !_cachedRendererLifetime.expired();
-        }
-
-        // Forgets the resources, destroying them on their renderer only if it still exists: a destroyed
-        // renderer freed them itself, and its address may now be another renderer's
-        void ReleaseRenderResources()
-        {
-            if (!_resourcesInitialized)
-                return;
-
-            if (_cachedRenderer && !_cachedRendererLifetime.expired())
-            {
-                if (_mesh != nullptr)
-                {
-                    _cachedRenderer->DestroyMesh(_mesh);
-                }
-
-                if (_material != nullptr)
-                {
-                    _cachedRenderer->DestroyMaterial(_material);
-                }
-
-                // _shader is the renderer's standard unlit shader, shared by every renderable: the renderer owns
-                // it, so it is never destroyed here
-            }
-
-            _mesh = nullptr;
-            _material = nullptr;
-            _shader = nullptr;
-            _resourcesInitialized = false;
-        }
+        Rendering::MeshDrawing::DrawResources _resources;
     };
 }

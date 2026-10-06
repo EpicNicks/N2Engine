@@ -29,6 +29,7 @@ namespace
     {
         int id;
         RenderState state;
+        int queue; // the RenderQueue RenderInQueue was given, or -1 for a draw from Render
     };
 
     // Records every DrawMesh: the drawing renderable's id (carried in the model matrix) and the state
@@ -41,7 +42,7 @@ namespace
         void DrawMesh(Renderer::Common::IMesh *, const float *modelMatrix, Renderer::Common::IMaterial *,
                       const RenderState &state) override
         {
-            draws.push_back(RecordedDraw{static_cast<int>(modelMatrix[0]), state});
+            draws.push_back(RecordedDraw{static_cast<int>(modelMatrix[0]), state, static_cast<int>(modelMatrix[1])});
         }
         void DrawObjects(const std::vector<Renderer::Common::RenderObject> &) override {}
 
@@ -89,21 +90,28 @@ namespace
 
         void Render(Renderer::Common::IRenderer *renderer) override
         {
-            RenderInQueue(renderer, RenderState::Opaque());
+            RenderInQueue(renderer, RenderState::Opaque(), RenderQueue::Opaque);
         }
-        void RenderInQueue(Renderer::Common::IRenderer *renderer, const RenderState &state) override
+        void RenderInQueue(Renderer::Common::IRenderer *renderer, const RenderState &state,
+                           const RenderQueue queue) override
         {
             float model[16]{};
             model[0] = static_cast<float>(id);
+            model[1] = static_cast<float>(queue);
             renderer->DrawMesh(nullptr, model, nullptr, state);
         }
         void InitializeRenderResources(Renderer::Common::IRenderer *) override {}
         void CleanupRenderResources(Renderer::Common::IRenderer *) override {}
 
         [[nodiscard]] RenderQueueKey GetRenderQueue() const override { return key; }
+        [[nodiscard]] bool DrawsInQueue(const RenderQueue queue) const override
+        {
+            return bothQueues || IRenderable::DrawsInQueue(queue);
+        }
 
         int id = 0;
         RenderQueueKey key{};
+        bool bothQueues = false; // draws in Opaque and Transparent, as a MeshRenderer with mixed materials does
     };
 
     // Implements only Render, as every renderable written before the render queue does
@@ -118,6 +126,7 @@ namespace
         {
             float model[16]{};
             model[0] = static_cast<float>(id);
+            model[1] = -1.0f;
             renderer->DrawMesh(nullptr, model, nullptr);
         }
         void InitializeRenderResources(Renderer::Common::IRenderer *) override {}
@@ -169,7 +178,7 @@ namespace
     }
 }
 
-TEST(RenderQueueDefaultsTest, DefaultsAreOpaqueWithTodaysState)
+TEST(RenderQueueDefaultsTest, DefaultsAreOpaqueAndUnblended)
 {
     constexpr RenderQueueKey key{};
     EXPECT_EQ(key.queue, RenderQueue::Opaque);
@@ -179,7 +188,7 @@ TEST(RenderQueueDefaultsTest, DefaultsAreOpaqueWithTodaysState)
     EXPECT_TRUE(state.depthTest);
     EXPECT_TRUE(state.depthWrite);
     EXPECT_EQ(state.cull, CullMode::Back);
-    EXPECT_TRUE(state.blend);
+    EXPECT_FALSE(state.blend) << "opaque draws don't blend (#3 P2); only the Transparent queue does";
     EXPECT_EQ(RenderState::Opaque(), state);
 
     constexpr RenderState transparent = RenderState::Transparent();
@@ -353,6 +362,7 @@ TEST(RenderQueueTest, EachQueuePassesItsRenderState)
     EXPECT_EQ(draws[0].id, 2);
     EXPECT_EQ(draws[0].state, RenderState::Opaque());
     EXPECT_TRUE(draws[0].state.depthWrite);
+    EXPECT_FALSE(draws[0].state.blend);
 
     EXPECT_EQ(draws[1].id, 1);
     EXPECT_EQ(draws[1].state, RenderState::Transparent());
@@ -380,4 +390,52 @@ TEST(RenderQueueTest, NullRendererDrawsNothing)
     scene->AddRootGameObject(PlacedObject("Wall", {0, 0, -3}, 1));
 
     EXPECT_NO_THROW(scene->Render(nullptr, Camera{}));
+}
+
+TEST(RenderQueueTest, ARenderableInBothQueuesDrawsOnceInEach)
+{
+    // Opaque walls around a renderable with an opaque part and a blended part, plus plain glass. The two-queue
+    // renderable draws its opaque part in hierarchy order, and its blended part sorted with the glass.
+    const auto scene = Scene::Create("RenderQueue_BothQueues");
+    scene->AddRootGameObject(PlacedObject("WallA", {0, 0, -1}, 1));
+    const auto mixed = PlacedObject("Mixed", {0, 0, -5}, 2);
+    mixed->GetComponent<QueuedRenderable>()->bothQueues = true;
+    scene->AddRootGameObject(mixed);
+    scene->AddRootGameObject(PlacedObject("WallB", {0, 0, -2}, 3));
+    scene->AddRootGameObject(PlacedObject("NearGlass", {0, 0, -3}, 4, Transparent()));
+    scene->AddRootGameObject(PlacedObject("FarGlass", {0, 0, -9}, 5, Transparent()));
+
+    const std::vector<RecordedDraw> draws = RenderOnce(*scene);
+    ASSERT_EQ(draws.size(), 6u);
+
+    // Opaque: hierarchy order, exactly as for single-queue renderables
+    EXPECT_EQ(draws[0].id, 1);
+    EXPECT_EQ(draws[1].id, 2);
+    EXPECT_EQ(draws[2].id, 3);
+    for (int i = 0; i < 3; ++i)
+    {
+        EXPECT_EQ(draws[i].state, RenderState::Opaque()) << i;
+        EXPECT_EQ(draws[i].queue, static_cast<int>(RenderQueue::Opaque)) << i;
+    }
+
+    // Transparent: back to front, the mixed renderable (depth 5) between the far glass (9) and the near one (3)
+    EXPECT_EQ(draws[3].id, 5);
+    EXPECT_EQ(draws[4].id, 2);
+    EXPECT_EQ(draws[5].id, 4);
+    for (int i = 3; i < 6; ++i)
+    {
+        EXPECT_EQ(draws[i].state, RenderState::Transparent()) << i;
+        EXPECT_EQ(draws[i].queue, static_cast<int>(RenderQueue::Transparent)) << i;
+    }
+}
+
+TEST(RenderQueueTest, TheDefaultDrawsInQueueIsTheRenderQueue)
+{
+    const auto gameObject = GameObject::Create("Defaults");
+    auto *opaque = AddRenderable(*gameObject, 1);
+    auto *glass = AddRenderable(*gameObject, 2, Transparent(4));
+    EXPECT_TRUE(opaque->IRenderable::DrawsInQueue(RenderQueue::Opaque));
+    EXPECT_FALSE(opaque->IRenderable::DrawsInQueue(RenderQueue::Transparent));
+    EXPECT_FALSE(glass->IRenderable::DrawsInQueue(RenderQueue::Opaque));
+    EXPECT_TRUE(glass->IRenderable::DrawsInQueue(RenderQueue::Transparent));
 }
