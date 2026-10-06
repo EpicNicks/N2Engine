@@ -147,6 +147,15 @@ namespace N2Engine::IO
             if (typedAsset)
             {
                 RegisterAsset(typedAsset, path);
+                // A model's meshes, materials and textures, so references to them resolve this run (a file outside
+                // the project has no stable UUIDs: they are random, as its own is)
+                for (const Base::SubAssetRef &sub : asset->GetSubAssets())
+                {
+                    if (sub.asset)
+                    {
+                        RegisterAsset(sub.asset);
+                    }
+                }
             }
 
             return typedAsset;

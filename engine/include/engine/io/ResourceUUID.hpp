@@ -1,6 +1,8 @@
 // ResourceUUID.hpp
 #pragma once
 
+#include <string_view>
+
 #include <math/UUID.hpp>
 #include "ResourcePath.hpp"
 
@@ -23,6 +25,14 @@ namespace N2Engine::IO
          * Generate deterministic UUID from resource path
          */
         static Math::UUID FromPath(const ResourcePath& path);
+
+        /**
+         * The deterministic UUID of the sub-asset `key` ("mesh/Body") inside the file `parentPath` (a model's mesh,
+         * material or texture). Name-based in a namespace of its own (derived from the project's), so it never
+         * equals a file's FromPath UUID, whatever the file is called. The same parent and key always give the same
+         * UUID, so scene files save it like any other asset UUID.
+         */
+        static Math::UUID FromSubAsset(const ResourcePath& parentPath, std::string_view key);
 
         /**
          * Get the current project namespace
