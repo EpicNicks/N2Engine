@@ -10,6 +10,7 @@
 
 #include "engine/rendering/TextDrawing.hpp"
 #include "engine/text/Font.hpp"
+#include "engine/text/TextEffects.hpp"
 #include "engine/text/TextJson.hpp" // the alignments' JSON names: every user must see the same serializer
 #include "engine/ui/UIGraphic.hpp"
 
@@ -80,6 +81,26 @@ namespace N2Engine::UI
         void SetLetterSpacing(const float letterSpacing) { _letterSpacing = letterSpacing; }
         [[nodiscard]] float GetLetterSpacing() const { return _letterSpacing; }
 
+        // Effects (see Text::TextEffects): lengths in ems, all off by default. Material uniforms, like the
+        // colour: changing them never lays the text out again.
+        void SetEffects(const Text::TextEffects &effects) { _effects = effects; }
+        [[nodiscard]] const Text::TextEffects &GetEffects() const { return _effects; }
+        /// An outline `width` ems wide (0 turns it off)
+        void SetOutline(const float width, const Common::Color &color)
+        {
+            _effects.outlineWidth = width;
+            _effects.outlineColor = color;
+        }
+        /// A shadow `offset` ems away (+y up), fading over `softness` ems; a colour with alpha 0 turns it off
+        void SetShadow(const Math::Vector2 &offset, const Common::Color &color, const float softness = 0.0f)
+        {
+            _effects.shadowOffset = offset;
+            _effects.shadowColor = color;
+            _effects.shadowSoftness = softness;
+        }
+        /// How far the outer edges fade, in ems (0 = crisp)
+        void SetSoftness(const float softness) { _effects.softness = softness; }
+
         /// The layout options the current settings give in a rect of this width (it is the wrap width
         /// with wrap on)
         [[nodiscard]] Text::LayoutOptions GetLayoutOptions(float rectWidth) const;
@@ -114,6 +135,7 @@ namespace N2Engine::UI
         bool _wrap = true;
         float _lineSpacing = 1.0f;
         float _letterSpacing = 0.0f;
+        Text::TextEffects _effects;
 
         Rect _lastDrawnRect{};
 

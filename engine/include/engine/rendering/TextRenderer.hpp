@@ -12,6 +12,7 @@
 #include "engine/common/Color.hpp"
 #include "engine/rendering/TextDrawing.hpp"
 #include "engine/text/Font.hpp"
+#include "engine/text/TextEffects.hpp"
 #include "engine/text/TextJson.hpp" // the alignments' JSON names: every user must see the same serializer
 
 namespace N2Engine::Rendering
@@ -27,7 +28,8 @@ namespace N2Engine::Rendering
      *
      * Rendering:
      * - The layout and mesh are rebuilt only when the text, font, size, alignment, wrap width or spacing
-     *   changes; the colour is a material uniform and never rebuilds anything. A changed mesh is updated
+     *   changes; the colour and the effects (outline, shadow, softness: Text::TextEffects) are material
+     *   uniforms and never rebuild anything. A changed mesh is updated
      *   in place (IRenderer::UpdateMesh), or recreated where the backend can't update meshes.
      * - Each font's atlas becomes one texture per renderer, shared by every TextRenderer (and UI::UIText)
      *   using that font there, and destroyed when the last of them releases it. The drawing code is
@@ -88,6 +90,26 @@ namespace N2Engine::Rendering
         void SetLetterSpacing(float letterSpacing) { _letterSpacing = letterSpacing; }
         [[nodiscard]] float GetLetterSpacing() const { return _letterSpacing; }
 
+        // Effects (see Text::TextEffects): lengths in ems, all off by default. Material uniforms, like the
+        // colour: changing them never lays the text out again.
+        void SetEffects(const Text::TextEffects &effects) { _effects = effects; }
+        [[nodiscard]] const Text::TextEffects &GetEffects() const { return _effects; }
+        /// An outline `width` ems wide (0 turns it off)
+        void SetOutline(const float width, const Common::Color &color)
+        {
+            _effects.outlineWidth = width;
+            _effects.outlineColor = color;
+        }
+        /// A shadow `offset` ems away (+y up), fading over `softness` ems; a colour with alpha 0 turns it off
+        void SetShadow(const Math::Vector2 &offset, const Common::Color &color, const float softness = 0.0f)
+        {
+            _effects.shadowOffset = offset;
+            _effects.shadowColor = color;
+            _effects.shadowSoftness = softness;
+        }
+        /// How far the outer edges fade, in ems (0 = crisp)
+        void SetSoftness(const float softness) { _effects.softness = softness; }
+
         /// The layout options the current settings give
         [[nodiscard]] Text::LayoutOptions GetLayoutOptions() const;
         /// The current layout, in the object's local space. Laid out again only if a setting changed since
@@ -115,6 +137,7 @@ namespace N2Engine::Rendering
         float _maxWidth = 0.0f;
         float _lineSpacing = 1.0f;
         float _letterSpacing = 0.0f;
+        Text::TextEffects _effects;
 
         // Layout cache and GPU resources, shared code with UI::UIText (see TextDrawing.hpp)
         mutable TextDrawing::LayoutCache _layoutCache;

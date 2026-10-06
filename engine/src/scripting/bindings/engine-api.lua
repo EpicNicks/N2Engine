@@ -964,6 +964,35 @@ function TextRenderer:SetLetterSpacing(spacing) end
 ---@return number
 function TextRenderer:GetLetterSpacing() end
 
+---An outline around the glyphs, drawn under them. Lengths are in ems; effects are limited to 90% of the
+---font's SDF spread (1/6 em for the default font: about 0.15 em), with one warning when reduced.
+---@param width number outline width in ems; 0 (the default) turns it off
+---@param color Color
+function TextRenderer:SetOutline(width, color) end
+
+---@return number width
+---@return Color color
+function TextRenderer:GetOutline() end
+
+---A shadow under the text (with offset 0 and some softness, a glow). Off while the colour's alpha is 0 (the default).
+---@param offsetX number ems, + right
+---@param offsetY number ems, + up
+---@param color Color
+---@param softness number|nil how far its edge fades, in ems (default 0; ignored by the software renderer)
+function TextRenderer:SetShadow(offsetX, offsetY, color, softness) end
+
+---@return number offsetX
+---@return number offsetY
+---@return Color color
+---@return number softness
+function TextRenderer:GetShadow() end
+
+---@param softness number how far the outer edges fade, in ems (default 0 = crisp; ignored by the software renderer)
+function TextRenderer:SetSoftness(softness) end
+
+---@return number
+function TextRenderer:GetSoftness() end
+
 ---Where the block sits relative to the object's origin. Unknown names raise an error and change nothing.
 ---@param horizontal HorizontalAlign default "Left"
 ---@param vertical VerticalAlign default "Top"
@@ -1167,6 +1196,29 @@ function UIText:GetLineSpacing() end
 function UIText:SetLetterSpacing(spacing) end
 ---@return number
 function UIText:GetLetterSpacing() end
+---An outline around the glyphs, drawn under them. Lengths are in ems (fontSize pixels each); effects are
+---limited to 90% of the font's SDF spread (about 0.15 em for the default font), with one warning when reduced.
+---@param width number outline width in ems; 0 (the default) turns it off
+---@param color Color
+function UIText:SetOutline(width, color) end
+---@return number width
+---@return Color color
+function UIText:GetOutline() end
+---A shadow under the text (with offset 0 and some softness, a glow). Off while the colour's alpha is 0 (the default).
+---@param offsetX number ems, + right
+---@param offsetY number ems, + up
+---@param color Color
+---@param softness number|nil how far its edge fades, in ems (default 0; ignored by the software renderer)
+function UIText:SetShadow(offsetX, offsetY, color, softness) end
+---@return number offsetX
+---@return number offsetY
+---@return Color color
+---@return number softness
+function UIText:GetShadow() end
+---@param softness number how far the outer edges fade, in ems (default 0 = crisp; ignored by the software renderer)
+function UIText:SetSoftness(softness) end
+---@return number
+function UIText:GetSoftness() end
 
 ---Where the block sits inside the rect: Left/Center/Right against its left edge, centre and right edge;
 ---Top/Middle/Bottom against its top, centre and bottom; Baseline puts the first baseline on the rect's
