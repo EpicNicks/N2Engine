@@ -1,5 +1,7 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -30,6 +32,7 @@
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
+#include "engine/rendering/Model.hpp"
 #include "engine/rendering/TextRenderer.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/scripting/LuaComponent.hpp"
@@ -132,14 +135,53 @@ namespace N2Engine::Scripting::Bindings
         }
 
         /// What scripts see as an asset's path: its res:// (or user://) path for a project asset, else `fallback`
-        /// (the file it was loaded from, or "" for one made at runtime)
+        /// (the file it was loaded from, or "" for one made at runtime). A model's sub-asset is its model's path, '#'
+        /// and its key: "res://models/robot.glb#mesh/Body".
         std::string AssetPathForLua(const Base::Asset &asset, const std::string &fallback)
         {
             if (asset.GetResourcePath().IsValid())
             {
+                if (asset.IsSubResource())
+                {
+                    return asset.GetResourcePath().ToString() + "#" + asset.GetSubAssetKey();
+                }
                 return asset.GetResourcePath().ToString();
             }
             return fallback;
+        }
+
+        /**
+         * A sub-asset reference, "res://models/robot.glb#mesh/Body": the model file before the '#' is loaded (or
+         * reused) and its sub-asset with the key after it returned (nullptr if there is none, or it isn't a T).
+         * nullopt for a reference with no '#' right after a ".glb" or ".gltf" (any case), which is an ordinary path
+         * (a file or folder name may contain '#').
+         */
+        template <typename T>
+        std::optional<std::shared_ptr<T>> LoadSubAssetReference(const std::string &reference)
+        {
+            std::size_t hash = std::string::npos;
+            for (std::size_t at = reference.find('#'); at != std::string::npos; at = reference.find('#', at + 1))
+            {
+                std::string before = reference.substr(0, at);
+                std::ranges::transform(before, before.begin(),
+                                       [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (before.ends_with(".glb") || before.ends_with(".gltf"))
+                {
+                    hash = at;
+                    break;
+                }
+            }
+            if (hash == std::string::npos)
+            {
+                return std::nullopt;
+            }
+            const auto parent =
+                IO::Resources::Instance().Load<Base::Asset>(std::filesystem::path(reference.substr(0, hash)));
+            if (!parent)
+            {
+                return std::shared_ptr<T>{};
+            }
+            return std::dynamic_pointer_cast<T>(parent->FindSubAsset(std::string_view(reference).substr(hash + 1)));
         }
 
         /// A material slot's index from Lua (1-based) as a 0-based index; raises a Lua error below 1
@@ -187,7 +229,9 @@ namespace N2Engine::Scripting::Bindings
 
     std::shared_ptr<Rendering::Material> LoadMaterialOrThrow(const std::string &path, const std::string_view caller)
     {
-        auto material = IO::Resources::Instance().Load<Rendering::Material>(std::filesystem::path(path));
+        auto subAsset = LoadSubAssetReference<Rendering::Material>(path);
+        auto material = subAsset ? std::move(*subAsset)
+                                 : IO::Resources::Instance().Load<Rendering::Material>(std::filesystem::path(path));
         if (!material)
         {
             throw std::runtime_error(std::format("{}: can't load material '{}'", caller, path));
@@ -201,7 +245,9 @@ namespace N2Engine::Scripting::Bindings
         {
             return Rendering::Mesh::GetBuiltin(*builtin);
         }
-        auto mesh = IO::Resources::Instance().Load<Rendering::Mesh>(std::filesystem::path(nameOrPath));
+        auto subAsset = LoadSubAssetReference<Rendering::Mesh>(nameOrPath);
+        auto mesh = subAsset ? std::move(*subAsset)
+                             : IO::Resources::Instance().Load<Rendering::Mesh>(std::filesystem::path(nameOrPath));
         if (!mesh)
         {
             throw std::runtime_error(std::format(
@@ -275,7 +321,9 @@ namespace N2Engine::Scripting::Bindings
 
     std::shared_ptr<Rendering::Texture> LoadTextureOrThrow(const std::string &path, const std::string_view caller)
     {
-        auto texture = IO::Resources::Instance().Load<Rendering::Texture>(std::filesystem::path(path));
+        auto subAsset = LoadSubAssetReference<Rendering::Texture>(path);
+        auto texture = subAsset ? std::move(*subAsset)
+                                : IO::Resources::Instance().Load<Rendering::Texture>(std::filesystem::path(path));
         if (!texture || !texture->IsLoaded())
         {
             throw std::runtime_error(std::format("{}: can't load texture '{}'", caller, path));
@@ -285,11 +333,7 @@ namespace N2Engine::Scripting::Bindings
 
     std::string TexturePathForLua(const Rendering::Texture &texture)
     {
-        if (texture.GetResourcePath().IsValid())
-        {
-            return texture.GetResourcePath().ToString();
-        }
-        return texture.GetSourcePath();
+        return AssetPathForLua(texture, texture.GetSourcePath());
     }
 
     sol::object AddComponentByName(GameObject &gameObject, const std::string &typeName, sol::this_state state)
@@ -533,6 +577,40 @@ namespace N2Engine::Scripting::Bindings
             },
             "GetScriptPath", [](const LuaComponentRef &c) { return c.Pin()->GetScriptPath().ToString(); },
             "HasMissingScript", Forward<LuaComponentRef, &LuaComponent::HasMissingScript>()
+        );
+
+        // ===== Model (global): a model file's GameObject hierarchy =====
+        // Model.Instantiate(path [, parent]): the root object of a new instance. Under `parent` when given (at its
+        // origin); otherwise in no scene yet, owned by the script until a scene or parent holds it (as
+        // GameObject.Create's are). A model that doesn't load raises an error.
+        const auto instantiate = [](const std::string &path, GameObjectRef *parent) -> GameObjectRef
+        {
+            const auto model = IO::Resources::Instance().Load<Rendering::Model>(std::filesystem::path(path));
+            if (!model || !model->IsLoaded())
+            {
+                throw std::runtime_error(std::format("Model.Instantiate: can't load model '{}'", path));
+            }
+            GameObject::Ptr root = model->Instantiate();
+            if (!root)
+            {
+                throw std::runtime_error(std::format("Model.Instantiate: can't instantiate '{}'", path));
+            }
+            if (parent)
+            {
+                const GameObject::Ptr parentObject = parent->Pin();
+                parentObject->AddChild(root, false);
+                if (root->GetParent() == parentObject)
+                {
+                    return GameObjectRef(root); // the parent owns it
+                }
+            }
+            return GameObjectRef::Owning(std::move(root));
+        };
+        lua["Model"] = lua.create_table_with(
+            "Instantiate", sol::overload(
+                [instantiate](const std::string &path) { return instantiate(path, nullptr); },
+                [instantiate](const std::string &path, GameObjectRef *parent) { return instantiate(path, parent); }
+            )
         );
     }
 }
