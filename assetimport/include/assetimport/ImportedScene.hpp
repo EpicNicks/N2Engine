@@ -36,7 +36,8 @@ namespace N2Engine::AssetImport
     {
         /// The file's name for it ("" when it has none)
         std::string name;
-        /// Every primitive's vertices, one after the other
+        /// Every primitive's vertices, one after the other (primitives with the same attribute accessors share theirs,
+        /// unless their normals are generated)
         std::vector<ImportedVertex> vertices;
         /// Triangle-list indices into `vertices`, each checked to be in range
         std::vector<std::uint32_t> indices;

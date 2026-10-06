@@ -255,6 +255,28 @@ TEST(GltfImporterTest, TwoPrimitivesBecomeTwoSubmeshesOfOneVertexBuffer)
     EXPECT_FLOAT_EQ(scene.materials[1].baseColor[1], 1.0f);
 }
 
+TEST(GltfImporterTest, PrimitivesWithTheSameAttributesShareTheirVertices)
+{
+    // One quad's vertices, drawn by two primitives (one triangle each) with two materials, as exporters write a
+    // mesh whose faces have different materials
+    Builder b;
+    const int red = b.AddUnlitMaterial("Red", 1, 0, 0);
+    const int green = b.AddUnlitMaterial("Green", 0, 1, 0);
+    const int position = b.AddFloats(GltfTest::QuadPositions(), 3);
+    const int normal = b.AddFloats({0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1}, 3);
+    const int first = b.AddIndicesU16({0, 1, 2});
+    const int second = b.AddIndicesU16({0, 2, 3});
+    b.SetScene({b.AddNode("N", {{"mesh", b.AddMesh("Shared", {Builder::Primitive(position, first, red, normal),
+                                                               Builder::Primitive(position, second, green, normal)})}})});
+
+    const ImportedScene scene = ImportOrFail(b.ToGltf());
+    const ImportedMesh &mesh = scene.meshes[0];
+    EXPECT_EQ(mesh.vertices.size(), 4u) << "the four vertices once, not once per primitive";
+    EXPECT_EQ(mesh.indices, (std::vector<std::uint32_t>{0, 1, 2, 0, 2, 3}));
+    ASSERT_EQ(mesh.submeshes.size(), 2u);
+    EXPECT_EQ(mesh.submeshes[1].materialIndex, green);
+}
+
 TEST(GltfImporterTest, MergeSubmeshesByMaterialJoinsPrimitivesThatShareAMaterial)
 {
     Builder b;

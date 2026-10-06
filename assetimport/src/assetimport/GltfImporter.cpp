@@ -730,7 +730,19 @@ namespace N2Engine::AssetImport
             Warnings &warnings;
         };
 
-        std::optional<ModelImportError> ImportPrimitive(const MeshContext &context, const cgltf_primitive &primitive,
+        /// Vertices a mesh already holds for one set of attribute accessors: primitives of the same mesh that share
+        /// their attributes (one vertex buffer, several index lists, as exporters often write) share the vertices
+        struct SharedVertices
+        {
+            const cgltf_accessor *positions = nullptr;
+            const cgltf_accessor *normals = nullptr;
+            const cgltf_accessor *texCoords = nullptr;
+            const cgltf_accessor *colors = nullptr;
+            std::size_t base = 0;
+        };
+
+        std::optional<ModelImportError> ImportPrimitive(const MeshContext &context, std::vector<SharedVertices> &shared,
+                                                        const cgltf_primitive &primitive,
                                                         const std::string &meshName, const std::size_t primitiveIndex,
                                                         ImportedMesh &mesh)
         {
@@ -927,10 +939,26 @@ namespace N2Engine::AssetImport
                     return ModelImportError{ModelImportErrorCode::TooLarge,
                                             std::format("mesh '{}' is over the {}-vertex limit", meshName, kMaxMeshElements)};
                 }
-                mesh.vertices.insert(mesh.vertices.end(), vertices.begin(), vertices.end());
+                // An earlier primitive of this mesh with the same attributes already added these vertices
+                const cgltf_accessor *usedNormals = normalData.empty() ? nullptr : normals;
+                std::size_t start = base;
+                const auto same = std::ranges::find_if(shared, [&](const SharedVertices &run)
+                {
+                    return run.positions == positions && run.normals == usedNormals && run.texCoords == texCoords &&
+                           run.colors == colors;
+                });
+                if (same != shared.end())
+                {
+                    start = same->base;
+                }
+                else
+                {
+                    mesh.vertices.insert(mesh.vertices.end(), vertices.begin(), vertices.end());
+                    shared.push_back(SharedVertices{positions, usedNormals, texCoords, colors, base});
+                }
                 for (const std::uint32_t index : triangles)
                 {
-                    mesh.indices.push_back(static_cast<std::uint32_t>(base + index));
+                    mesh.indices.push_back(static_cast<std::uint32_t>(start + index));
                 }
             }
 
@@ -1532,9 +1560,10 @@ namespace N2Engine::AssetImport
                 ImportedMesh &mesh = scene.meshes[m];
                 mesh.name = source.name ? source.name : "";
                 const std::string label = NameOr(source.name, "mesh", m);
+                std::vector<SharedVertices> shared;
                 for (cgltf_size p = 0; p < source.primitives_count; ++p)
                 {
-                    if (auto error = ImportPrimitive(context, source.primitives[p], label, p, mesh))
+                    if (auto error = ImportPrimitive(context, shared, source.primitives[p], label, p, mesh))
                     {
                         return std::unexpected(std::move(*error));
                     }
