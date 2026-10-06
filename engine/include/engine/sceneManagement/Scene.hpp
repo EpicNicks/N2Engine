@@ -117,11 +117,13 @@ namespace N2Engine
          *
          * One traversal collects the active renderables (active components on objects active in the
          * hierarchy, depth first, parents before children, in component order). Then:
-         * 1. Opaque renderables draw in that traversal order, with RenderState::Opaque().
+         * 1. Opaque renderables draw in that traversal order, with RenderState::Opaque() (not blended).
          * 2. Transparent renderables draw after all of them, stable-sorted by sortKey (ascending), then by
          *    camera-space depth of their world position, back to front, with RenderState::Transparent().
          *    A renderable whose object has no Positionable sorts at depth 0 (at the camera).
-         * Each renderable's queue is read once, before anything draws.
+         * Each renderable's queue (GetRenderQueue, then DrawsInQueue for each queue) is read once, before
+         * anything draws. A renderable that draws in both queues is called once in each (RenderInQueue with
+         * that queue): in hierarchy order among the opaque ones, and sorted among the transparent ones.
          */
         void Render(Renderer::Common::IRenderer *renderer, const Camera &camera);
         [[nodiscard]] Scheduling::CoroutineScheduler* GetCoroutineScheduler() const;

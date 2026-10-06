@@ -109,12 +109,13 @@ namespace N2Engine::Example
 
         void Render(Renderer::Common::IRenderer* renderer) override
         {
-            RenderInQueue(renderer, Renderer::Common::RenderState::Opaque());
+            RenderInQueue(renderer, Renderer::Common::RenderState::Opaque(), RenderQueue::Opaque);
         }
 
         // Draws with the state of its queue, so a subclass that returns the Transparent queue from
         // GetRenderQueue blends without writing depth
-        void RenderInQueue(Renderer::Common::IRenderer* renderer, const Renderer::Common::RenderState& state) override
+        void RenderInQueue(Renderer::Common::IRenderer* renderer, const Renderer::Common::RenderState& state,
+                           RenderQueue) override
         {
             if (!renderer)
             {

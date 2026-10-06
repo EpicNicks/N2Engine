@@ -60,7 +60,7 @@ namespace N2Engine::Rendering
 
     void TextRenderer::Render(Renderer::Common::IRenderer *renderer)
     {
-        RenderInQueue(renderer, Renderer::Common::RenderState::Transparent());
+        RenderInQueue(renderer, Renderer::Common::RenderState::Transparent(), RenderQueue::Transparent);
     }
 
     void TextRenderer::InitializeRenderResources(Renderer::Common::IRenderer *renderer)
@@ -85,8 +85,10 @@ namespace N2Engine::Rendering
         CleanupRenderResources(_resources.GetRenderer());
     }
 
-    void TextRenderer::RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state)
+    void TextRenderer::RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state,
+                                     const RenderQueue queue)
     {
+        static_cast<void>(queue); // it only draws in the Transparent queue
         if (!renderer)
         {
             return;
