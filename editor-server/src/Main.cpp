@@ -2,16 +2,24 @@
 #include <csignal>
 #include <atomic>
 #include <chrono>
-#include <charconv>
+#include <cstdio>
 #include <filesystem>
 #include <print>
+#include <string>
+#include <system_error>
+#include <vector>
+
+#include <math/UUID.hpp>
 
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
+#include "engine/io/ResourceLoader.hpp"
+#include "engine/io/ResourceUUID.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
 #include "editor-server/EditorServer.hpp"
+#include "editor-server/HostOptions.hpp"
 
 namespace
 {
@@ -26,61 +34,48 @@ namespace
             g_running = false;
         }
     }
-
-    bool ParsePort(const std::string &text, int &port)
-    {
-        int value = 0;
-        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-        if (error != std::errc{} || end != text.data() + text.size() || value < 1 || value > 65535)
-        {
-            return false;
-        }
-        port = value;
-        return true;
-    }
 }
 
 int main(int argc, char *argv[])
 {
-    int port = 9999;
-    std::string bindAddress = N2Engine::Editor::EditorServer::DefaultBindAddress;
-    std::string projectPath;
-
-    // Basic arg parsing
-    for (int i = 1; i < argc; ++i)
+    const auto parsed = N2Engine::Editor::ParseHostArguments(std::vector<std::string>(argv + 1, argv + argc));
+    if (!parsed)
     {
-        std::string arg = argv[i];
-        if ((arg == "-p" || arg == "--port") && i + 1 < argc)
-        {
-            if (!ParsePort(argv[++i], port))
-            {
-                std::println(stderr, "Invalid port: {}", argv[i]);
-                return 1;
-            }
-        }
-        else if (arg == "--bind" && i + 1 < argc)
-        {
-            bindAddress = argv[++i];
-        }
-        else if ((arg == "--project") && i + 1 < argc)
-        {
-            projectPath = argv[++i];
-        }
-        else if (arg == "-h" || arg == "--help")
-        {
-            std::println(R"(
+        std::println(stderr, "{}", parsed.error());
+        return 1;
+    }
+    const N2Engine::Editor::HostOptions &options = *parsed;
+
+    if (options.showHelp)
+    {
+        std::println(R"(
                         N2Engine Editor Host
                         Usage: N2EditorHost [options]
                             Options:
-                            -p, --port <port>      Server port (default: 9999)
+                            -p, --port <port>      Server port (default: 9999; 0 lets the OS pick a free one)
                             --bind <ipv4 address>  Address to listen on (default: 127.0.0.1)
                                                    WARNING: the protocol has no authentication; any other
                                                    address lets whoever can reach it control this host,
                                                    including deleting scene files
-                            --project <path>       Project path (DeleteScene works in <path>/scenes)
+                            --project <path>       Project folder: res:// assets load from <path>/assets,
+                                                   and DeleteScene works in <path>/scenes
                             -h, --help             Show this help
+                        Once listening, prints the line "N2EditorHost ready port=<port>" to stdout.
                         )");
-            return 0;
+        return 0;
+    }
+
+    // The project folder must exist: ResourceLoader::Initialize would otherwise create it (for .import/).
+    // Canonical, so the asset UUID namespace named from it doesn't depend on how the path was spelled.
+    std::filesystem::path projectDir;
+    if (!options.projectPath.empty())
+    {
+        std::error_code error;
+        projectDir = std::filesystem::canonical(options.projectPath, error);
+        if (error || !std::filesystem::is_directory(projectDir, error))
+        {
+            std::println(stderr, "Project folder not found: {}", options.projectPath);
+            return 1;
         }
     }
 
@@ -91,7 +86,7 @@ int main(int argc, char *argv[])
     {
         // Initialize engine in editor mode (no window shown initially, or hidden)
         N2Engine::Application::GetInstance().Init({
-            .projectPath = projectPath,
+            .projectPath = projectDir.string(),
             .physicsBackend = N2Engine::Config::ApplicationOptions::PhysicsBackend::PHYSX,
             .renderBackend = N2Engine::Config::ApplicationOptions::RenderBackend::OPENGL,
             .isHeadless = true,
@@ -99,21 +94,44 @@ int main(int argc, char *argv[])
 
         N2Engine::Logger::Info("Engine initialized");
 
+        // After Init, so their log lines reach the console. As lua_project does: asset UUIDs are named from the
+        // project folder's path (until projects get their own id), and res:// resolves under <project>/assets.
+        // Without --project neither is initialised, so assets and asset references are unavailable.
+        if (!projectDir.empty())
+        {
+            N2Engine::IO::ResourceUUID::Initialize(
+                N2Engine::Math::UUID::GenerateNameBased(N2Engine::Math::UUID::ZERO, projectDir.string()));
+            N2Engine::IO::ResourceLoader::Instance().Initialize(projectDir);
+        }
+        else
+        {
+            N2Engine::Logger::Info("No --project given: assets and asset references are unavailable");
+        }
+
         // Start editor server
         N2Engine::Editor::EditorServer server;
-        if (!projectPath.empty())
+        if (!projectDir.empty())
         {
-            server.SetScenesDirectory(std::filesystem::path(projectPath) / "scenes");
+            server.SetScenesDirectory(projectDir / "scenes");
         }
-        if (bindAddress != N2Engine::Editor::EditorServer::DefaultBindAddress)
+        if (options.bindAddress != N2Engine::Editor::EditorServer::DefaultBindAddress)
         {
-            N2Engine::Logger::Warn("Editor server bound to " + bindAddress +
+            N2Engine::Logger::Warn("Editor server bound to " + options.bindAddress +
                                    ": it has no authentication, so anything that can reach it can control this host");
         }
-        const bool serverStarted = server.Start(port, bindAddress);
+        const bool serverStarted = server.Start(options.port, options.bindAddress);
         if (!serverStarted)
         {
             N2Engine::Logger::Error("Editor server failed to start");
+        }
+        else
+        {
+            // For launchers (format in HostOptions.hpp): the bound port, which is the OS's pick with --port 0.
+            // Straight to C stdout, as the Logger's console lines are (std::cout is redirected into the Logger,
+            // which would prefix a level), and flushed, since a piped stdout is fully buffered. The network
+            // thread posts its log lines to this thread, so no log line is written in the middle of this one.
+            std::println(stdout, "{}", N2Engine::Editor::FormatReadyLine(server.GetPort()));
+            std::fflush(stdout);
         }
 
         // Keep serving even without a window, so the editor can still query state such as GetEngineHealth
