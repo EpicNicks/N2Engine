@@ -438,3 +438,39 @@ TEST(SoftwareTextShaderTest, TextWithoutAnAtlasDrawsNothing)
     });
     EXPECT_EQ(CoverageOf(frame, Black).count, Width * Height);
 }
+
+// ============================================================================
+// Resource lifetime against the frame in flight
+// ============================================================================
+
+TEST(SoftwareResourceLifetimeTest, DestroyingWhileAFrameIsInFlightWaitsForIt)
+{
+    // EndFrame hands the frame to the render thread, which reads the mesh and samples the texture until
+    // it finishes. Each destroy waits for it first, so the frame comes out whole (and nothing is read
+    // after being freed, which a sanitizer would catch).
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
+    renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+    constexpr std::uint8_t greenTexel[4] = {0, 255, 0, 255};
+    ITexture *texture = renderer.CreateTexture(greenTexel, 1, 1, 4);
+    ASSERT_NE(texture, nullptr);
+    IMaterial *material = renderer.CreateMaterial(renderer.GetStandardUnlitShader(), texture);
+    ASSERT_NE(material, nullptr);
+    IMesh *quad = renderer.CreateMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
+    ASSERT_NE(quad, nullptr);
+
+    renderer.BeginFrame();
+    renderer.SetViewProjection(Identity, Identity);
+    renderer.DrawMesh(quad, Identity, material);
+    renderer.EndFrame();
+    // No Present: the frame may still be rasterizing
+    renderer.DestroyMesh(quad);
+    renderer.DestroyMaterial(material);
+    renderer.DestroyTexture(texture);
+
+    Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Width) * Height * 4), Width, Height};
+    renderer.ReadFramebuffer(frame.rgba.data(), Width, Height);
+    EXPECT_EQ(CoverageOf(frame, Green).count, Width * Height);
+
+    renderer.Shutdown();
+}

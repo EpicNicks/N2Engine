@@ -51,22 +51,26 @@ namespace Renderer::Software
         // Shaders
         Common::IShader* CreateShaderProgram(const char *vs, const char *fs) override;
         void UseShaderProgram(Common::IShader *shader) override;
+        /// Waits for any frame still rasterizing before freeing the shader. The built-in shaders are never freed.
         bool DestroyShaderProgram(Common::IShader *shader) override;
         bool IsValidShader(Common::IShader *shader) const override;
 
         // Resources
         Common::IMesh* CreateMesh(const Common::MeshData &meshData) override;
+        /// Waits for any frame still rasterizing (which may draw the mesh) before freeing it
         void DestroyMesh(Common::IMesh *mesh) override;
         Common::ITexture* CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch) override;
         /// Stores the options on the SWTexture. Sampling honours wrap but is always nearest, without
         /// mipmaps, so filter and mipmaps have no visible effect on this backend.
         Common::ITexture* CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch,
                                         const Common::TextureOptions &options) override;
+        /// Waits for any frame still rasterizing (which may sample the texture) before freeing it
         void DestroyTexture(Common::ITexture *texture) override;
         /// Waits for any frame still rasterizing (which may read the mesh) before replacing its data
         bool UpdateMesh(Common::IMesh *mesh, const Common::MeshData &meshData) override;
         Common::IMaterial* CreateMaterial(Common::IShader *shader) override;
         Common::IMaterial* CreateMaterial(Common::IShader *shader, Common::ITexture *texture) override;
+        /// Waits for any frame still rasterizing before freeing the material
         void DestroyMaterial(Common::IMaterial *material) override;
 
         // Rendering

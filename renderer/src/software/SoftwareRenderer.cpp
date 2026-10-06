@@ -747,6 +747,9 @@ bool SoftwareRenderer::DestroyShaderProgram(IShader *shader)
     {
         return false;
     }
+    // A frame submitted by EndFrame rasterizes on the render thread until Present waits for it, and its
+    // draws may use this shader; let it finish first. (Returns at once when no frame is in flight.)
+    m_renderThread.WaitForFrame();
     m_shaders.erase(it);
     return true;
 }
@@ -771,6 +774,9 @@ void SoftwareRenderer::DestroyMesh(IMesh *mesh)
     if (const auto it = std::ranges::find_if(m_meshes, [mesh](const auto &p) { return p.get() == mesh; });
         it != m_meshes.end())
     {
+        // The frame in flight on the render thread may still be drawing this mesh: let it finish first.
+        // (Returns at once when no frame is in flight.)
+        m_renderThread.WaitForFrame();
         m_meshes.erase(it);
     }
 }
@@ -826,6 +832,9 @@ void SoftwareRenderer::DestroyTexture(ITexture *texture)
     if (const auto it = std::ranges::find_if(m_textures, [texture](const auto &p) { return p.get() == texture; });
         it != m_textures.end())
     {
+        // The frame in flight on the render thread may still be sampling this texture: let it finish first.
+        // (Returns at once when no frame is in flight.)
+        m_renderThread.WaitForFrame();
         m_textures.erase(it);
     }
 }
@@ -851,6 +860,9 @@ void SoftwareRenderer::DestroyMaterial(IMaterial *material)
     if (const auto it = std::ranges::find_if(m_materials, [material](const auto &p) { return p.get() == material; });
         it != m_materials.end())
     {
+        // The frame in flight on the render thread may still be shading with this material: let it finish
+        // first. (Returns at once when no frame is in flight.)
+        m_renderThread.WaitForFrame();
         m_materials.erase(it);
     }
 }
