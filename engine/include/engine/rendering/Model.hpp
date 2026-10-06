@@ -136,6 +136,9 @@ namespace N2Engine::Rendering
         /// Every mesh, material and texture with its key (null ones left out)
         [[nodiscard]] std::vector<Base::SubAssetRef> GetSubAssets() const override;
         [[nodiscard]] std::shared_ptr<Base::Asset> FindSubAsset(std::string_view key) const override;
+        /// Whether a mesh, material or texture is held by anything besides this model (and, for a texture, its
+        /// materials): a MeshRenderer, a GPU cache entry, a script
+        [[nodiscard]] bool AreSubAssetsInUse() const override;
 
         /**
          * A new GameObject hierarchy for this model, in no scene (add it to one with Scene::AddRootGameObject or

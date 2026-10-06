@@ -83,6 +83,10 @@ namespace N2Engine::Base
         /// when the parent loads.
         [[nodiscard]] virtual std::vector<SubAssetRef> GetSubAssets() const { return {}; }
 
+        /// Whether anything outside this asset holds one of its sub-assets (so a cache must keep this asset, or a
+        /// later load would make second copies of sub-assets still in use). False by default.
+        [[nodiscard]] virtual bool AreSubAssetsInUse() const { return false; }
+
         /// The sub-asset with this key, or nullptr
         [[nodiscard]] virtual std::shared_ptr<Asset> FindSubAsset(const std::string_view key) const
         {

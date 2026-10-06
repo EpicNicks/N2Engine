@@ -361,7 +361,9 @@ namespace N2Engine::IO
             // (this used to require use_count() <= 1, which never happened)
             const auto meta = GetMetadata(it->first);
             const bool inUUIDCache = meta && _cacheByUUID.contains(meta->uuid) && _cacheByUUID.at(meta->uuid) == it->second;
-            if (it->second.use_count() <= (inUUIDCache ? 2 : 1))
+            // A model whose meshes or materials are in use stays: evicting it would make the next load of one of its
+            // sub-assets import the file again, giving second objects (and GPU copies) with the same UUIDs
+            if (it->second.use_count() <= (inUUIDCache ? 2 : 1) && !it->second->AreSubAssetsInUse())
             {
                 auto meta = GetMetadata(it->first);
                 if (meta)

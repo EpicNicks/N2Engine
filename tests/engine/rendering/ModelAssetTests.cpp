@@ -196,6 +196,31 @@ TEST_F(ModelAssetTest, LoadByUuidOfASubAssetLoadsItsParent)
     EXPECT_EQ(Loader().LoadByUUID<Mesh>(red), nullptr) << "a material isn't a mesh";
 }
 
+TEST_F(ModelAssetTest, RemoveUnusedKeepsAModelWhileItsSubAssetsAreInUse)
+{
+    std::shared_ptr<Mesh> body;
+    std::shared_ptr<Texture> albedo;
+    {
+        const auto model = Loader().Load<Model>(kRobot);
+        ASSERT_NE(model, nullptr);
+        body = model->GetMeshes()[0];
+    }
+    Loader().RemoveUnused();
+    EXPECT_NE(Loader().GetCached<Model>(kRobot), nullptr) << "its mesh is still held";
+    EXPECT_EQ(Loader().LoadByUUID<Mesh>(body->GetUUID()), body) << "the same object, not a second import";
+
+    // A texture only its own materials use doesn't count; one held outside does
+    body.reset();
+    albedo = std::dynamic_pointer_cast<Texture>(Loader().GetCached<Model>(kRobot)->FindSubAsset("texture/Albedo"));
+    ASSERT_NE(albedo, nullptr);
+    Loader().RemoveUnused();
+    EXPECT_NE(Loader().GetCached<Model>(kRobot), nullptr) << "its texture is still held";
+
+    albedo.reset();
+    Loader().RemoveUnused();
+    EXPECT_EQ(Loader().GetCached<Model>(kRobot), nullptr) << "nothing holds any of it any more";
+}
+
 TEST_F(ModelAssetTest, ASubAssetLoadsByUuidEvenBeforeItsModelWasEverIndexed)
 {
     // A fresh project (no .import yet): the model has never loaded, so there's no index to read

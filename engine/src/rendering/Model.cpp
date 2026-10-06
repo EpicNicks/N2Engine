@@ -473,6 +473,42 @@ namespace N2Engine::Rendering
         return nullptr;
     }
 
+    bool Model::AreSubAssetsInUse() const
+    {
+        for (const auto &mesh : _meshes)
+        {
+            if (mesh && mesh.use_count() > 1)
+                return true;
+        }
+        for (const auto &material : _materials)
+        {
+            if (material && material.use_count() > 1)
+                return true;
+        }
+        for (const auto &texture : _textures)
+        {
+            if (!texture)
+                continue;
+            // This model's list, plus every slot of its own materials that uses it
+            long internal = 1;
+            for (const auto &material : _materials)
+            {
+                if (!material)
+                    continue;
+                for (const Texture *slot :
+                     {material->GetBaseColorTexture().get(), material->GetNormalTexture().get(),
+                      material->GetOcclusionTexture().get(), material->GetMetallicRoughnessTexture().get(),
+                      material->GetEmissiveTexture().get()})
+                {
+                    internal += slot == texture.get() ? 1 : 0;
+                }
+            }
+            if (texture.use_count() > internal)
+                return true;
+        }
+        return false;
+    }
+
     // ===== Instantiation =====
 
     namespace
