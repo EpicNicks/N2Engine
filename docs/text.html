@@ -93,6 +93,15 @@
 </ol>
 </li>
 <li><a href="#ui-text">UI text</a></li>
+<li><a href="#effects">Text effects</a>
+<ol>
+<li><a href="#effects-settings">Settings and units</a></li>
+<li><a href="#effects-limits">Limits from the spread</a></li>
+<li><a href="#effects-opengl">On OpenGL</a></li>
+<li><a href="#effects-software">On the software renderer</a></li>
+<li><a href="#effects-lua">From Lua and scene files</a></li>
+</ol>
+</li>
 </ol>
 </div>
 
@@ -273,6 +282,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <tr><td><code>SetMaxWidth</code></td><td>0</td><td>Wrap width in world units; 0 or less never wraps</td></tr>
 <tr><td><code>SetLineSpacing</code></td><td>1</td><td>Multiplies the font's line height</td></tr>
 <tr><td><code>SetLetterSpacing</code></td><td>0</td><td>Extra space between glyphs, in ems; negative tightens</td></tr>
+<tr><td><code>SetEffects</code>, <code>SetOutline</code>, <code>SetShadow</code>, <code>SetSoftness</code> <span class="badge">PR #TBD</span></td><td>all off</td><td>Outline, shadow and edge softness, lengths in ems (<a href="#effects">Text effects</a>). <code>GetEffects()</code> returns them.</td></tr>
 </tbody>
 </table>
 </div>
@@ -306,7 +316,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 </div>
 
 <h3 id="text-shader">The SDF text shader</h3>
-<p><code>IRenderer::GetStandardTextShader()</code> returns the built-in text shader. On OpenGL it reads the atlas's red channel as the distance <code>d</code> (the outline at 0.5, inside higher; the atlas stores the edge at 128, which is 0.502), and computes the coverage as <code>smoothstep(0.5 &minus; w, 0.5 + w, d)</code> with <code>w = 0.5 &middot; fwidth(d)</code>: a ramp one screen pixel wide around the outline, so edges stay antialiased at any size or distance with nothing to tune. The colour is <code>uAlbedo</code> times the vertex colour, with the coverage multiplied into its alpha; a fragment whose alpha is below 0.01 is discarded. Outlines, shadows and other effects come later (P5).</p>
+<p><code>IRenderer::GetStandardTextShader()</code> returns the built-in text shader. On OpenGL it reads the atlas's red channel as the distance <code>d</code> (the outline at 0.5, inside higher; the atlas stores the edge at 128, which is 0.502), and computes the coverage as <code>smoothstep(0.5 &minus; w, 0.5 + w, d)</code> with <code>w = 0.5 &middot; fwidth(d)</code>: a ramp one screen pixel wide around the outline, so edges stay antialiased at any size or distance with nothing to tune. The colour is <code>uAlbedo</code> times the vertex colour, with the coverage multiplied into its alpha; a fragment whose alpha is below 0.01 is discarded. Outlines, shadows and softness are uniforms of the same shader, all 0 when off, and then it takes exactly this path; see <a href="#effects">Text effects</a> <span class="badge">PR #TBD</span>.</p>
 <p class="src">Source: <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>OpenGLRenderer::CreateStandardShaders</code></p>
 
 <h3 id="text-shader-software">The software text shader <span class="badge">PR #51</span></h3>
@@ -317,6 +327,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <li><strong>Write.</strong> A covered pixel is written opaque with that colour (its alpha goes into the buffer unchanged, as with the other software shaders), with no blending and no antialiasing, so edges are hard.</li>
 <li><strong>Depth.</strong> A covered pixel writes its depth whenever the draw depth-tests, even though <code>RenderState::Transparent()</code> says no depth write. With the depth test off (the UI pass's state) nothing writes depth, as in OpenGL.</li>
 </ol>
+<p>With an outline or shadow on, the alpha test has layers (face, then outline, then shadow); without, the steps above are exactly the path taken. See <a href="#effects-software">Text effects on the software renderer</a> <span class="badge">PR #TBD</span>.</p>
 <p>A text material without a texture draws nothing (OpenGL's unbound sampler reads 0, below the edge). Uniforms are resolved once per draw, like the other software shaders: the per-pixel cost is one bilinear sample and, only for covered pixels, the colour interpolation.</p>
 <p><strong>Draw order.</strong> The software renderer reorders runs of draws that depth-test and write depth front to back for early-Z (<a href="application.html#render">Rendering the scene</a>). Text is ordered by the state it was submitted with: a Transparent-queue text draw doesn't write depth by its state, so it keeps its submission position, after all opaque draws and back to front among the transparent ones. Its depth writes then only affect draws submitted after it.</p>
 
@@ -357,6 +368,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <li><code>SetAlignment(horizontal, vertical)</code> with the names <code>"Left"</code>, <code>"Center"</code>, <code>"Right"</code> and <code>"Top"</code>, <code>"Middle"</code>, <code>"Bottom"</code>, <code>"Baseline"</code>. An unknown name is a Lua error and changes neither alignment. <code>GetAlignment()</code> returns both names.</li>
 <li><code>SetFont(path)</code> loads a font through <code>Resources</code> (for example <code>"res://fonts/Title.ttf"</code>); <code>SetFont(nil)</code> goes back to the default font. A path that doesn't load a font is a Lua error and keeps the current font.</li>
 <li><code>GetBounds()</code> returns <code>minX, minY, maxX, maxY</code> of the laid-out block, in local units (all 0 for empty text).</li>
+<li><code>SetOutline</code>, <code>SetShadow</code> and <code>SetSoftness</code> (with getters) set the <a href="#effects-lua">text effects</a> <span class="badge">PR #TBD</span>.</li>
 </ul>
 <pre class="lang-lua"><code>local label = GameObject.Create("Label")
 local text = label:AddComponent("TextRenderer") -- also gives the object a Positionable
@@ -382,6 +394,94 @@ SceneManager.GetCurrentScene():AddRootGameObject(label)</code></pre>
 <p>Text in the screen-space UI is the <code>UI::UIText</code> component, documented on the UI page (<a href="ui.html#text">Text (UIText)</a>). It lays text out with the same <code>Font::Layout</code>, with the font size in canvas pixels per em, wraps at its <code>RectTransform</code>'s width, and places the block inside the rect by its alignments. It draws in the UI pass with the same text shader.</p>
 <p>The drawing code is shared, not duplicated: <code>Rendering::TextDrawing</code> (<code>engine/include/engine/rendering/TextDrawing.hpp</code>) holds what used to be private to <code>TextRenderer</code>. <code>LayoutCache</code> lays text out again only when an input changes; <code>BuildMesh</code> turns a layout into the glyph mesh (<code>TextRenderer::BuildMesh</code> calls it); and <code>DrawResources</code> holds one text block's mesh (updated in place), material and share of the per-(renderer, font) atlas texture (a <code>GpuCache::Handle</code> since <span class="badge">PR #64</span>), with the renderer's lifetime token. <code>TextRenderer</code>'s behaviour and its tests are unchanged, apart from an object with no <code>Positionable</code> (which the constructor rules out) now creating nothing before it returns. The missing-shader warning is logged once per process for each component type. Because both components use the same atlas cache, a font drawn in the world and in the UI is one texture per renderer (<code>UITextTest.TheAtlasIsSharedWithTextRendererPerRendererAndFont</code>). See the <a href="ui.html#design-ui-text-shared">design note</a>.</p>
 <p class="src">Source: <code>engine/include/engine/rendering/TextDrawing.hpp</code>; <code>engine/src/rendering/TextDrawing.cpp</code>; <code>engine/src/ui/UIText.cpp</code>; tests: <code>UITextTest.*</code> (<code>tests/engine/ui/UITextTests.cpp</code>)</p>
+
+<h2 id="effects">Text effects <span class="badge">PR #TBD</span></h2>
+<p><code>TextRenderer</code> and <code>UIText</code> can draw an <strong>outline</strong>, a <strong>shadow</strong> (an underlay; with no offset and some softness, a glow) and a <strong>soft edge</strong>. They are a <code>Text::TextEffects</code> value on each component (<code>engine/include/engine/text/TextEffects.hpp</code>). Every effect is off by default, and text without effects draws exactly as before on both backends.</p>
+
+<h3 id="effects-settings">Settings and units</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>outlineWidth</code></td><td>0</td><td>Outline width in ems, outward from the glyph edge. 0 draws no outline.</td></tr>
+<tr><td><code>outlineColor</code></td><td>opaque black</td><td>Drawn under the face, which covers it where they overlap.</td></tr>
+<tr><td><code>shadowOffset</code></td><td>(0, 0)</td><td>The shadow's offset in ems, +x right, +y up: down-right is <code>(0.05, -0.05)</code>.</td></tr>
+<tr><td><code>shadowColor</code></td><td>transparent</td><td>The shadow is drawn only while its alpha is above 0, so the default draws none.</td></tr>
+<tr><td><code>shadowSoftness</code></td><td>0</td><td>How far the shadow's edge fades, in ems (0 = crisp). OpenGL only.</td></tr>
+<tr><td><code>softness</code></td><td>0</td><td>How far the text's edges (face and outline) fade, in ems. 0 keeps the one-pixel antialiasing ramp. OpenGL only.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Every length is in <strong>ems</strong>, multiples of the font size (world units for <code>TextRenderer</code>, canvas pixels for <code>UIText</code>), so an effect keeps its proportions when the size changes: an outline of 0.05 em on 24 px UI text is 1.2 px. The shadow is the shape of the face plus its outline, moved by the offset, and goes under both. Both components have <code>SetEffects</code>/<code>GetEffects</code> and the shortcuts <code>SetOutline(width, color)</code>, <code>SetShadow(offset, color, softness = 0)</code> and <code>SetSoftness(softness)</code>.</p>
+<p>The effect colours are drawn as they are: the text colour (and a <code>UIGraphic</code> tint) colours the face only, so fading the text's alpha doesn't fade its outline or shadow.</p>
+
+<h3 id="effects-limits">Limits from the spread</h3>
+<p>An effect is drawn from the glyph's distance field, which only exists inside its quad: the SDF bitmap, which reaches <code>spreadPx</code> atlas pixels (<code>spreadPx / basePx</code> ems) past the glyph's outline. The quads aren't made bigger for effects: outside a glyph's bitmap the atlas holds its neighbours, so a larger quad would draw pieces of them. Instead, at draw time each effect is reduced to fit in 90% of the spread (<code>TextDrawing::kUsableSpread</code>; the rest keeps the quad edge, where the distance reaches 0, out of every edge ramp):</p>
+<ul>
+<li><code>outlineWidth</code> &le; 0.9 &middot; spread;</li>
+<li><code>outlineWidth + softness / 2</code> &le; 0.9 &middot; spread (the softness gets what the outline leaves);</li>
+<li>for the shadow, <code>outlineWidth + shadowSoftness / 2</code> &le; 0.9 &middot; spread, and then |<code>shadowOffset.x</code>| and |<code>shadowOffset.y</code>| each &le; 0.9 &middot; spread &minus; <code>outlineWidth</code> &minus; <code>shadowSoftness / 2</code>.</li>
+</ul>
+<p>With the default atlas settings (<code>spreadPx</code> 8 at <code>basePx</code> 48, a spread of 1/6 em) the limit is <strong>0.15 em</strong> in all: for example an outline of 0.05 em leaves a shadow offset of up to 0.1 em on each axis. Kept inside the spread, a shadow's second sample never reaches far enough into a neighbouring glyph's bitmap to pick it up: it would have to cross the atlas padding and the neighbour's whole spread. For wider effects give the font a larger <code>spreadPx</code> in its <code>.meta</code> (up to half of <code>basePx</code>, at most 32; see <a href="#font-asset">The Font asset</a>). The settings keep the values set; only the drawing uses the reduced ones, and the first reduction logs one warning per process for each component type, giving the limit. Negative and non-finite lengths count as 0.</p>
+<p>Each glyph is its own quad, and an effect is drawn with its glyph. Where two glyphs come closer than an effect reaches (a wide outline on tightly spaced text), the later glyph's outline or shadow can cover the earlier one's face, as in other single-pass SDF effects. More letter spacing or a narrower outline avoids it.</p>
+
+<h3 id="effects-opengl">On OpenGL</h3>
+<p><code>TextDrawing::ResolveEffects</code> turns the settings into the text shader's uniforms, in the atlas's units: the distance changes by 0.5 over <code>spreadPx</code> pixels, and an em is <code>basePx</code> pixels.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Uniform</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td><code>uOutline</code></td><td><code>0.5 &middot; outlineWidth &middot; basePx / spreadPx</code>: the outline's outer edge is the distance <code>0.5 &minus; uOutline</code></td></tr>
+<tr><td><code>uOutlineColor</code></td><td><code>outlineColor</code></td></tr>
+<tr><td><code>uSoftness</code>, <code>uShadowSoftness</code></td><td>Half the fade, as a distance: <code>0.5 &middot; (softness / 2) &middot; basePx / spreadPx</code></td></tr>
+<tr><td><code>uShadowColor</code></td><td><code>shadowColor</code>; alpha 0 (and every other shadow uniform 0) when off</td></tr>
+<tr><td><code>uShadowOffset</code></td><td>The offset in atlas uv: <code>(x &middot; basePx / atlasWidth, &minus;y &middot; basePx / atlasHeight)</code> (the atlas is y-down). The shadow at a fragment is the shape sampled at <code>uv &minus; uShadowOffset</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The shader's edge ramp half-width becomes <code>max(0.5 &middot; fwidth(d), 1e-4, uSoftness)</code>, so softness widens the ramp and 0 leaves it as it was. With an outline, a second <code>smoothstep</code> at <code>0.5 &minus; uOutline</code> gives the outline's coverage, and the face is composited over it. With a shadow, a second atlas sample at the offset, thresholded at the same outer edge with its own ramp, is composited under both. Compositing is "over" with straight alpha, and the 0.01 discard applies to the result. With every uniform 0 both branches are skipped, and the face colour and alpha are computed exactly as before effects existed.</p>
+
+<h3 id="effects-software">On the software renderer</h3>
+<p>The software text shader can't blend, so effects are alpha-tested in layers from the top. For a pixel that passes the depth test, with <code>d</code> the bilinear distance at its uv:</p>
+<ol class="steps">
+<li><strong>Face</strong> where <code>d &ge; 0.5</code> and the face colour's alpha is at least 0.01.</li>
+<li>Otherwise <strong>outline</strong> colour where <code>d &ge; 0.5 &minus; uOutline</code> (with an outline whose colour's alpha is at least 0.01).</li>
+<li>Otherwise <strong>shadow</strong> colour where the distance sampled at <code>uv &minus; uShadowOffset</code> is at least <code>0.5 &minus; uOutline</code> (with a shadow whose alpha is at least 0.01).</li>
+<li>Otherwise the pixel is left untouched.</li>
+</ol>
+<p>So a face pixel is never overwritten by its own glyph's outline or shadow, and a layer too transparent to draw lets the one under it show. Every drawn pixel is opaque and writes depth as plain text does. <strong>Softness is ignored</strong>: with no blending the only edge is the threshold, and the software renderer draws every edge at its midpoint, where the OpenGL ramp is half covered, so shapes match OpenGL's at 50% coverage. The effect uniforms are copied into <code>SWMaterialSnapshot</code> at <code>DrawMesh</code> (<code>textOutline</code>, <code>textOutlineColor</code>, <code>textShadowColor</code>, <code>textShadowOffset</code>; the softness uniforms aren't). Without an outline or shadow the pixel loop takes the old path unchanged, so plain text is bit-identical and the existing goldens pass as they were.</p>
+<p>Golden tests (<code>SoftwareTextEffectsGoldenTest</code>, <code>tests/engine/rendering/SoftwareTextEffectsGoldenTests.cpp</code>) draw a spaced-out "Hi" and check that:</p>
+<ul>
+<li>effects that are off give the plain frame byte for byte;</li>
+<li>an outline is a ring of outline-colour pixels around an unchanged face: no face pixel touches the background, no outline pixel is further from the face than its width, and a wider outline covers more;</li>
+<li>a shadow is the face moved by the offset in the right direction, in the shadow colour, under the face and under the outline;</li>
+<li>an outline far past the limit draws exactly as the limit and never fills the glyph quads.</li>
+</ul>
+
+<div class="callout note" id="design-effects-uniforms">
+<p class="callout-title">Design decision: effects are per-draw uniforms of the one text shader <span class="badge">PR #TBD</span></p>
+<p>The effects are set on the text block's material on every draw, like its colour, by the shared <code>TextDrawing::DrawResources::Draw</code>. Changing them never lays the text out again, rebuilds the mesh, or creates a material, shader or atlas. One shader handles plain and effect text, with branches on uniforms that plain text skips; the branches are uniform control flow, so <code>fwidth</code> stays valid inside them. A separate shader per effect combination would multiply programs and materials for little gain, as the most an effect costs is one extra texture sample. Every effect uniform is set on every draw because OpenGL materials share the text program, which keeps the last value any material gave it; text materials also start with the no-effect values. Lengths are in ems, not fractions of the spread, so an effect looks the same whatever atlas settings a font has. Clamping to the spread happens where the font is known: at draw time, with a warning, rather than in the setters.</p>
+</div>
+<div class="callout note" id="design-effects-sw-alpha-test">
+<p class="callout-title">Design decision: software effects are alpha-tested layers <span class="badge">PR #TBD</span></p>
+<p>The software renderer keeps its alpha-tested text (<a href="#design-sw-text-alpha-test">see above</a>). An outline is a second threshold and a shadow a second, offset sample, each choosing one opaque colour, tested face first. That is the image OpenGL draws at 50% coverage with opaque colours, which the golden tests can check exactly. Softness has no meaning without partial coverage, and moving the threshold instead would make the software glyphs a different size from OpenGL's, so it is ignored. Plain text keeps the old pixel path (a per-draw branch), which guarantees the existing images are unchanged.</p>
+</div>
+
+<h3 id="effects-lua">From Lua and scene files</h3>
+<p>Both components have the same methods in Lua:</p>
+<ul>
+<li><code>SetOutline(width, color)</code>; <code>GetOutline()</code> returns <code>width, color</code>.</li>
+<li><code>SetShadow(offsetX, offsetY, color[, softness])</code> (softness defaults to 0); <code>GetShadow()</code> returns <code>offsetX, offsetY, color, softness</code>. A colour with alpha 0 turns the shadow off.</li>
+<li><code>SetSoftness(softness)</code> and <code>GetSoftness()</code>.</li>
+</ul>
+<pre class="lang-lua"><code>local text = label:AddComponent("TextRenderer")
+text:SetText("Game Over")
+text:SetOutline(0.06, Color.Black)                         -- 0.06 em
+text:SetShadow(0.05, -0.05, Color.new(0, 0, 0, 0.6), 0.03) -- down-right, soft
+-- A glow: a shadow with no offset and a soft edge
+-- text:SetShadow(0, 0, Color.new(1, 0.8, 0.2, 1), 0.1)</code></pre>
+<p>Scene files save each field under its own key, so a scene saved before effects existed loads with every effect off. <code>TextRenderer</code> uses <code>_outlineWidth</code>, <code>_outlineColor</code>, <code>_shadowOffset</code> (<code>{x, y}</code>), <code>_shadowColor</code>, <code>_shadowSoftness</code> and <code>_softness</code>; <code>UIText</code> uses the same names without the underscore.</p>
+<p class="src">Source: <code>engine/include/engine/text/TextEffects.hpp</code>; <code>engine/src/rendering/TextDrawing.cpp</code> — <code>ResolveEffects</code>, <code>MaxEffectEms</code>, <code>DrawResources::Draw</code>; <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>CreateStandardShaders</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>RasterTri&lt;ShadeKind::Text&gt;</code>, <code>SnapshotMaterial</code>; tests: <code>TextEffectsTest.*</code> (<code>tests/engine/rendering/TextEffectsTests.cpp</code>), <code>SoftwareTextEffectsGoldenTest.*</code></p>
 
 <div class="page-footer">
 <span>Describes master through PR #34.</span>
