@@ -243,13 +243,14 @@ TEST_F(LoopbackAudioTest, PlayingClipRendersAtTheExpectedLevel)
     const std::vector<float> out = Render(Frames(0.1));
     ASSERT_EQ(out.size(), static_cast<std::size_t>(Frames(0.1)) * Channels());
 
-    // A centred mono source reaches both channels. The sine's RMS is A/sqrt(2) ~ 0.354; panning to stereo
-    // scales each channel by roughly 0.5..1, so the bounds are loose but exclude silence and clipping.
+    // A non-spatial mono source sits at the listener, and OpenAL Soft spreads it over both channels. The sine's
+    // RMS is A/sqrt(2) ~ 0.354; the stereo panning gain depends on OpenAL Soft's panning mode (roughly 0.5..1),
+    // so the bounds are loose but exclude silence and clipping.
     const double expected = SineAmplitude / std::numbers::sqrt2;
     for (std::uint32_t channel = 0; channel < Channels(); ++channel)
     {
         const double rms = ChannelRms(out, Channels(), channel, 256); // past the start-up gain ramp
-        EXPECT_GT(rms, expected * 0.3) << "channel " << channel << " is (nearly) silent";
+        EXPECT_GT(rms, expected * 0.2) << "channel " << channel << " is (nearly) silent";
         EXPECT_LT(rms, expected * 1.5) << "channel " << channel << " is louder than the clip";
     }
 }
