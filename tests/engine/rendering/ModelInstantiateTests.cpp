@@ -166,6 +166,7 @@ TEST(ModelInstantiateTest, UnnamedNodesGetANameAndAModelThatDidntLoadInstantiate
     ASSERT_NE(model, nullptr);
     EXPECT_EQ(model->GetName(), "Model");
     EXPECT_NE(model->FindSubAsset("mesh/0"), nullptr) << "an unnamed mesh is keyed by index";
+    EXPECT_FALSE(model->GetMeshes()[0]->IsSubResource()) << "a model from memory makes runtime assets";
     const auto root = model->Instantiate();
     ASSERT_NE(root, nullptr);
     ASSERT_EQ(root->GetChildCount(), 1u);

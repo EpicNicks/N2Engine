@@ -338,10 +338,6 @@ namespace N2Engine::Rendering
             textureSettings.flipY = true; // with the importer's v flip: images show upright
             auto texture = Texture::CreateFromEncoded(image.bytes, textureSettings,
                                                       std::format("{}#{}", debugName, _textureKeys[i]));
-            if (texture)
-            {
-                texture->MarkAsSubAsset(_textureKeys[i]);
-            }
             _textures[i] = std::move(texture);
         }
 
@@ -379,7 +375,6 @@ namespace N2Engine::Rendering
             material->SetOcclusionTexture(textureAt(from.occlusionTexture));
             material->SetMetallicRoughnessTexture(textureAt(from.metallicRoughnessTexture));
             material->SetEmissiveTexture(textureAt(from.emissiveTexture));
-            material->MarkAsSubAsset(_materialKeys[i]);
             _materials.push_back(std::move(material));
         }
 
@@ -401,12 +396,9 @@ namespace N2Engine::Rendering
                                    static_cast<std::size_t>(submesh.materialIndex) < _materials.size();
                 _submeshMaterials[i].push_back(valid ? submesh.materialIndex : -1);
             }
-            auto mesh = MakeMesh(scene.meshes[i]);
-            if (mesh)
-            {
-                mesh->MarkAsSubAsset(_meshKeys[i]);
-            }
-            _meshes[i] = std::move(mesh);
+            // Not marked as sub-assets here: only a project model's are (ResourceLoader does it when it gives them
+            // their deterministic UUIDs). A model loaded from memory is made at runtime, like Texture::Create.
+            _meshes[i] = MakeMesh(scene.meshes[i]);
         }
 
         // Nodes

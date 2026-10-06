@@ -88,8 +88,10 @@ namespace N2Engine::Rendering
         /**
          * A model from a file's bytes held in memory (glTF JSON or GLB), with external files (buffers, images)
          * resolved inside `baseDirectory`. `name` names the root object Instantiate makes and the log messages.
-         * nullptr, with an error logged, if it can't be imported. Its sub-assets have random UUIDs (it isn't a
-         * project file).
+         * nullptr, with an error logged, if it can't be imported. It isn't a project file, so its meshes, materials
+         * and textures are runtime assets, like Texture::Create's: random UUIDs, not marked as sub-assets, and a
+         * saved reference to one (a scene, a .mat) doesn't resolve in a later run. Load project models through
+         * Resources or ResourceLoader for stable UUIDs.
          */
         [[nodiscard]] static std::shared_ptr<Model> LoadFromMemory(std::span<const std::uint8_t> fileBytes,
                                                                    const std::filesystem::path &baseDirectory = {},
