@@ -62,7 +62,7 @@
 <div class="content">
 
 <h1>Meshes, models &amp; textures</h1>
-<p class="lead">How the engine imports and draws content made outside it: images today, and meshes, materials and glTF models in the next phases of <a href="https://github.com/EpicNicks/N2Engine/issues/3">issue #3</a>. This page covers the CPU-only <code>assetimport</code> library, the <code>Texture</code> asset and its import settings, the UV convention every textured thing follows, the <code>GpuCache</code> that shares GPU resources between components, and texture sampling on the software renderer. Textures reach the screen through the UI <a href="ui.html#image-sprite"><code>Image</code> sprite</a> <span class="badge">PR #64</span>.</p>
+<p class="lead">How the engine imports and draws content made outside it: images, meshes and materials today, and glTF models in the next phases of <a href="https://github.com/EpicNicks/N2Engine/issues/3">issue #3</a>. This page covers the CPU-only <code>assetimport</code> library, the <code>Texture</code> asset and its import settings, the UV convention every textured thing follows, the <code>GpuCache</code> that shares GPU resources between components, texture sampling on the software renderer, the <code>Mesh</code> and <code>Material</code> assets <span class="badge">PR #TBD</span>, the <code>MeshRenderer</code> component and the built-in shapes <span class="badge">PR #TBD</span>. Textures reach the screen through a <code>Material</code> or the UI <a href="ui.html#image-sprite"><code>Image</code> sprite</a> <span class="badge">PR #64</span>.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -75,10 +75,15 @@
 <li><a href="#uv-convention">The UV convention</a></li>
 <li><a href="#gpu-cache">GpuCache: shared GPU resources</a></li>
 <li><a href="#sampling">Sampling on the software renderer</a></li>
-<li><a href="#meshes">Meshes (planned)</a></li>
-<li><a href="#materials">Materials (planned)</a></li>
+<li><a href="#meshes">The Mesh asset</a></li>
+<li><a href="#builtins">Built-in meshes</a></li>
+<li><a href="#materials">The Material asset</a></li>
+<li><a href="#mat-files">.mat files</a></li>
+<li><a href="#mesh-renderer">MeshRenderer</a></li>
+<li><a href="#shapes">The built-in shapes</a></li>
+<li><a href="#shaders">Vertex colour and the alpha test</a></li>
 <li><a href="#models">Models and glTF import (planned)</a></li>
-<li><a href="#conventions">Axes, winding and units (planned)</a></li>
+<li><a href="#conventions">Axes, winding and units</a></li>
 <li><a href="#lua">Lua</a></li>
 <li><a href="#tests">Tests</a></li>
 </ol>
@@ -91,7 +96,7 @@
 <thead><tr><th>Phase</th><th>Covers</th><th>State</th></tr></thead>
 <tbody>
 <tr><td>P1 (<a href="https://github.com/EpicNicks/N2Engine/issues/58">#58</a>)</td><td>stb_image and the <code>assetimport</code> library, the <code>Texture</code> asset and its settings, case-insensitive asset types, <code>GpuCache</code> (the text atlas moved onto it), bilinear RGBA sampling on the software renderer, the UI <code>Image</code> sprite</td><td>This page <span class="badge">PR #64</span></td></tr>
-<tr><td>P2 (<a href="https://github.com/EpicNicks/N2Engine/issues/59">#59</a>)</td><td>The <code>Mesh</code> and <code>Material</code> assets, <code>MeshRenderer</code>, the built-in shapes rebuilt on them</td><td>Planned</td></tr>
+<tr><td>P2 (<a href="https://github.com/EpicNicks/N2Engine/issues/59">#59</a>)</td><td>The <code>Mesh</code> and <code>Material</code> assets, <code>.mat</code> files, the <code>IndexRange</code> draw, vertex colour and the alpha test in the shaders, blending from the alpha mode, the render-queue mask, <code>RegisterAssetRefList</code>, <code>MeshRenderer</code>, the built-in shapes rebuilt on them</td><td>This page <span class="badge">PR #TBD</span></td></tr>
 <tr><td>P3 (<a href="https://github.com/EpicNicks/N2Engine/issues/60">#60</a>)</td><td>glTF 2.0 import, the <code>Model</code> asset, sub-assets</td><td>Planned</td></tr>
 <tr><td>P4 (<a href="https://github.com/EpicNicks/N2Engine/issues/61">#61</a>)</td><td>Materials and lighting: spot lights on the software renderer, emissive, sRGB and linear lighting, normal maps, PBR</td><td>Planned</td></tr>
 <tr><td>P5 (<a href="https://github.com/EpicNicks/N2Engine/issues/62">#62</a>)</td><td>Optional FBX and OBJ import through ufbx</td><td>Planned</td></tr>
@@ -186,7 +191,13 @@ auto noise = Rendering::Texture::Create(64, 64, rgba); // linear, repeat, mipmap
 </div>
 
 <h2 id="gpu-cache">GpuCache: shared GPU resources <span class="badge">PR #64</span></h2>
-<p><code>Rendering::GpuCache</code> (<code>engine/include/engine/rendering/GpuCache.hpp</code>, engine-internal) holds one GPU resource per <strong>(renderer, source asset, kind)</strong>, created on first use, shared by every component that asks for it, and destroyed when the last one lets go. Today it holds textures: <code>AcquireTexture(renderer, texture)</code> for <code>Texture</code> assets (uploaded as RGBA8 with the texture's filter, wrap and mipmaps) and <code>AcquireFontAtlas(renderer, font)</code> for fonts' SDF atlases (single channel, <code>TextureOptions::SdfAtlas()</code>). Meshes and materials join it in P2. Users are the UI <a href="ui.html#image-sprite"><code>Image</code></a> (its sprite) and every <code>TextRenderer</code> and <code>UIText</code> (their font's atlas, through <code>TextDrawing::DrawResources</code>), which share one atlas per font and renderer as before.</p>
+<p><code>Rendering::GpuCache</code> (<code>engine/include/engine/rendering/GpuCache.hpp</code>, engine-internal) holds one GPU resource per <strong>(renderer, source asset, kind)</strong>, created on first use, shared by every component that asks for it, and destroyed when the last one lets go. It holds:</p>
+<ul>
+<li><strong>Textures</strong> <span class="badge">PR #64</span>: <code>AcquireTexture(renderer, texture)</code> for <code>Texture</code> assets (uploaded as RGBA8 with the texture's filter, wrap and mipmaps) and <code>AcquireFontAtlas(renderer, font)</code> for fonts' SDF atlases (single channel, <code>TextureOptions::SdfAtlas()</code>).</li>
+<li><strong>Meshes</strong> <span class="badge">PR #TBD</span>: <code>AcquireMesh(renderer, mesh)</code>, one <code>IMesh</code> per <code>(renderer, Mesh)</code>. The entry records the mesh version it uploaded; <code>SyncMesh(handle)</code>, which every user calls before drawing (and every acquire does), re-uploads a changed mesh in place with <code>UpdateMesh</code>, or, on a backend that can't update meshes, makes a new <code>IMesh</code> and destroys the old one, then points the handle at the current one.</li>
+<li><strong>Materials</strong> <span class="badge">PR #TBD</span>: <code>AcquireMaterial(renderer, material)</code>, one <code>IMaterial</code> per <code>(renderer, Material, version)</code>: the standard lit or unlit shader with the material's base colour texture, whose own texture entry the material's entry holds a share of. A changed material is a new version, so its users acquire a new GPU material on their next draw and the old one goes with its last user.</li>
+</ul>
+<p>Users are the UI <a href="ui.html#image-sprite"><code>Image</code></a> (its sprite), every <code>TextRenderer</code> and <code>UIText</code> (their font's atlas, through <code>TextDrawing::DrawResources</code>), and every <a href="#mesh-renderer"><code>MeshRenderer</code></a> and <a href="#shapes">built-in shape</a> (their mesh and materials, through <code>MeshDrawing::DrawResources</code>).</p>
 <p>An acquire returns a move-only <code>GpuCache::Handle</code>: one user's share. It is false when there is nothing to upload (a null or unloaded asset, an empty atlas) or the renderer couldn't create the resource, and then no entry is made. The rules, the ones the text atlas cache had:</p>
 <ol class="steps">
 <li><strong>Refcounted.</strong> Each handle is one user. <code>Release(true)</code>, or a move assignment over a handle, gives the share up; the last share destroys the resource on its renderer, if that renderer is still alive.</li>
@@ -196,8 +207,8 @@ auto noise = Rendering::Texture::Create(64, 64, rgba); // linear, repeat, mipmap
 <li><strong>Destructors don't call the renderer.</strong> A handle destroyed without <code>Release</code> gives up its share without calling the renderer, which may be gone or mid-destruction; a resource whose last share went that way stays with the renderer until it shuts down.</li>
 <li><strong>Leaked on purpose.</strong> The cache is never destroyed, so a component that Lua keeps alive until exit can still release its share after function-local statics are gone.</li>
 </ol>
-<p><code>GetEntryCount()</code> and <code>GetUserCount(renderer, source)</code> report the cache's state for tests and diagnostics. The cache is used on the main thread only, like the components that draw.</p>
-<p class="src">Source: <code>engine/include/engine/rendering/GpuCache.hpp</code>; <code>engine/src/rendering/GpuCache.cpp</code>; <code>engine/src/rendering/TextDrawing.cpp</code> — <code>DrawResources::EnsureAtlasTexture</code>; <code>engine/src/ui/Image.cpp</code> — <code>Image::EnsureSpriteTexture</code>; tests: <code>GpuCacheTest.*</code>, <code>ImageSpriteTest.*</code> (<code>tests/engine/rendering/GpuCacheTests.cpp</code>), and unchanged, <code>TextRendererTest.*</code>, <code>UITextTest.*</code>, <code>SoftwareTextGoldenTest.*</code></p>
+<p>An entry that holds a share of another entry (a material's texture) gives it up after the entry itself is gone, so the texture outlives the material that samples it. <code>GetEntryCount()</code> and <code>GetUserCount(renderer, source, kind, version)</code> report the cache's state for tests and diagnostics (the version only matters for a material). The cache is used on the main thread only, like the components that draw.</p>
+<p class="src">Source: <code>engine/include/engine/rendering/GpuCache.hpp</code>; <code>engine/src/rendering/GpuCache.cpp</code>; <code>engine/src/rendering/TextDrawing.cpp</code> — <code>DrawResources::EnsureAtlasTexture</code>; <code>engine/src/ui/Image.cpp</code> — <code>Image::EnsureSpriteTexture</code>; <code>engine/src/rendering/MeshDrawing.cpp</code>; tests: <code>GpuCacheTest.*</code>, <code>ImageSpriteTest.*</code> (<code>tests/engine/rendering/GpuCacheTests.cpp</code>), <code>GpuCacheMeshTest.*</code>, <code>GpuCacheMaterialTest.*</code> (<code>tests/engine/rendering/GpuCacheMeshMaterialTests.cpp</code>), and unchanged, <code>TextRendererTest.*</code>, <code>UITextTest.*</code>, <code>SoftwareTextGoldenTest.*</code></p>
 
 <div class="callout note" id="design-gpu-cache">
 <p class="callout-title">Design decision: one GPU cache for every shared resource <span class="badge">PR #64</span></p>
@@ -213,31 +224,185 @@ auto noise = Rendering::Texture::Create(64, 64, rgba); // linear, repeat, mipmap
 <p>Both read missing channels as OpenGL reads <code>R8</code>/<code>RG8</code>/<code>RGB8</code> textures (green and blue 0, alpha 255), and read a NaN or infinite coordinate as 0. There are no mipmaps on this backend, so distant textures alias. The text shader is unchanged. <code>SoftwareImageGoldenTest.ALinearSpriteIsFilteredIntoAGradient</code> checks a Linear 2 &times; 1 texture draws a gradient between its texel centres and the Nearest one two flat halves.</p>
 <p class="src">Source: <code>renderer/include/renderer/software/SWTexture.hpp</code> — <code>SWTexture::Sample</code>, <code>SampleBilinear</code>, <code>SampleFiltered</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>ShadeUnlitPx</code>, <code>ShadeLitPx</code>; tests: <code>TextureOptionsTest.SoftwareNearestSamplingPicksTexelsAsGLNearestDoes</code>, <code>TextureOptionsTest.SoftwareBilinearRgbaSamplingMatchesGLLinear</code></p>
 
-<h2 id="meshes">Meshes (planned)</h2>
-<p>The CPU <code>Mesh</code> asset with submeshes as index ranges and bounds, the built-in Cube, Sphere and Quad meshes, and the <code>MeshRenderer</code> component come in P2 (<a href="https://github.com/EpicNicks/N2Engine/issues/59">#59</a>). Their GPU meshes will be shared through <a href="#gpu-cache"><code>GpuCache</code></a>.</p>
+<h2 id="meshes">The Mesh asset <span class="badge">PR #TBD</span></h2>
+<p><code>N2Engine::Rendering::Mesh</code> (<code>engine/include/engine/rendering/Mesh.hpp</code>) is a <code>Base::Asset</code> with resource type <code>"Mesh"</code>: a triangle mesh in CPU memory, never a GPU handle, so it works headless and one mesh serves every renderer. Each renderer gets one GPU copy per mesh through <a href="#gpu-cache"><code>GpuCache</code></a>, shared by every component that draws it.</p>
+<ul>
+<li><strong>Geometry.</strong> <code>GetVertices()</code> and <code>GetIndices()</code> (<code>GetMeshData()</code> gives both, as <code>IRenderer::CreateMesh</code> takes them). <code>Renderer::Common::Vertex</code> stays 48 bytes: position, normal, uv and colour (decision 11; tangents arrive with normal maps in P4, skinning data in a separate stream later).</li>
+<li><strong>Submeshes.</strong> <code>GetSubmeshes()</code> returns at least one <code>Submesh{firstIndex, indexCount, bounds}</code>: a run of whole triangles in the one index buffer, drawn with its own material. They may overlap or leave indices unused.</li>
+<li><strong>Bounds.</strong> <code>GetBounds()</code> is the axis-aligned box around every vertex, and each submesh's <code>bounds</code> the box around the vertices its indices use, in mesh space (<code>BoundingBox</code> from <code>Camera.hpp</code>, which <code>Frustum::IsVisible</code> takes). Nothing culls with them yet.</li>
+<li><strong>Versions.</strong> <code>GetVersion()</code> is 1 for a new mesh and goes up on every change, so GPU copies are re-uploaded (<code>GpuCache::SyncMesh</code>).</li>
+<li><strong>At runtime.</strong> <code>Mesh::Create(MeshData, submeshes)</code> makes a procedural mesh; with no submeshes, one covers every index. <code>SetData(MeshData, submeshes)</code> replaces the geometry. Both check it and refuse (null, or false, with an error naming why) a mesh with no vertices or indices, an index count that isn't a multiple of 3, an index past the last vertex, or a submesh that is empty, isn't whole triangles, or runs past the indices. Bounds are always computed, never taken from the caller. A runtime mesh's UUID is random; register it with <code>Resources::RegisterAsset</code> to have a saved reference find it in the same run.</li>
+<li><strong>Files.</strong> There is no mesh file format in P2: meshes come from code, the built-ins below, and, from P3, glTF models as sub-assets.</li>
+</ul>
+<pre class="lang-cpp"><code>Renderer::Common::MeshData data = BuildTerrain(); // two materials: grass first, then rock
+auto terrain = Rendering::Mesh::Create(std::move(data), {
+    Rendering::Submesh{0, grassIndexCount, {}},
+    Rendering::Submesh{grassIndexCount, rockIndexCount, {}},
+});
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/rendering/Mesh.hpp</code>; <code>engine/src/rendering/Mesh.cpp</code> — <code>Mesh::Create</code>, <code>Mesh::SetData</code>, <code>Mesh::Validate</code>, <code>Mesh::ComputeBounds</code>; tests: <code>MeshTest.*</code> (<code>tests/engine/rendering/MeshAssetTests.cpp</code>)</p>
 
-<h2 id="materials">Materials (planned)</h2>
-<p>The <code>Material</code> asset (base colour and texture, vertex colour, alpha mode and cutoff, double-sided, smoothness) comes in P2; emissive, normal maps, sRGB and PBR in P4 (<a href="https://github.com/EpicNicks/N2Engine/issues/61">#61</a>).</p>
+<div class="callout note" id="design-index-ranges">
+<p class="callout-title">Design decision: submeshes are index ranges in one GPU mesh <span class="badge">PR #TBD</span></p>
+<p>A model's parts usually share vertices, and glTF primitives that share a mesh map naturally onto one vertex buffer with several index ranges (the importer concatenates their vertices and offsets their indices). So a <code>Mesh</code> is one vertex and index buffer, each submesh a range of the indices, and the renderer gained one call to draw a range: <code>DrawMesh(mesh, model, material, state, IndexRange{first, count})</code> (<a href="application.html#index-range">IndexRange draws</a>), a <code>glDrawElements</code> offset on OpenGL and a loop bound on the software renderer. The alternative, one GPU mesh per submesh, needs no renderer change but duplicates shared vertices and multiplies GPU objects. The overload has a default body so test fakes keep compiling, and it never draws the whole mesh for a partial range (that would draw the wrong material over the other submeshes); it draws nothing and logs once. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision 5).</p>
+</div>
+
+<h2 id="builtins">Built-in meshes <span class="badge">PR #TBD</span></h2>
+<p><code>Mesh::GetBuiltin(BuiltinMesh::Cube | Sphere | Quad)</code> returns a mesh every program has, made once on first use and shared. Their geometry is exactly what <code>CubeRenderer</code>, <code>SphereRenderer</code> and <code>QuadRenderer</code> built for themselves before P2, vertex for vertex (<code>BuiltinMeshTest.TheBuiltinsAreExactlyTheShapesTheRenderersUsedToBuild</code> compares them byte for byte with the old generators), so nothing drawn with them looks different.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Mesh</th><th>Shape</th><th>Fixed UUID</th></tr></thead>
+<tbody>
+<tr><td><code>Cube</code></td><td>1 &times; 1 &times; 1, centred; 24 vertices (4 per face, so each face has its own normal and a full 0..1 uv square, v up), 36 indices</td><td><code>6e32656e-6d65-5348-0001-000000000001</code></td></tr>
+<tr><td><code>Sphere</code></td><td>diameter 1, centred; a UV sphere of 16 rings and 32 slices (<code>Mesh::MakeSphere(lat, lon)</code> for others): 17 &times; 33 vertices, u around from +X towards +Z, v from 0 at the top pole to 1 at the bottom</td><td><code>6e32656e-6d65-5348-0001-000000000002</code></td></tr>
+<tr><td><code>Quad</code></td><td>1 &times; 1 on the x/y plane, centred, facing +Z; uv (0, 0) bottom left</td><td><code>6e32656e-6d65-5348-0001-000000000003</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Scene files save a built-in mesh as its UUID, like any asset. <code>Mesh::FindBuiltin(uuid)</code> finds it, and asset references check it before <code>Resources</code> (<a href="serialization.html#asset-references">asset references</a>), so the built-ins load without being registered anywhere. <code>GetBuiltinName</code> and <code>ParseBuiltinName</code> convert to and from <code>"Cube"</code>, <code>"Sphere"</code> and <code>"Quad"</code> (exact case), the names Lua uses. A built-in can't be changed: <code>SetData</code> on one is refused with an error.</p>
+<p class="src">Source: <code>engine/src/rendering/Mesh.cpp</code> — <code>Mesh::GetBuiltin</code>, <code>MakeCube</code>, <code>MakeSphere</code>, <code>MakeQuad</code>, <code>FindBuiltin</code>; tests: <code>BuiltinMeshTest.*</code></p>
+
+<div class="callout note" id="design-builtin-shared">
+<p class="callout-title">Design decision: the built-in shapes are shared meshes <span class="badge">PR #TBD</span></p>
+<p>Before P2 every <code>CubeRenderer</code> built its own GPU cube, so a thousand cubes were a thousand identical meshes. As shared assets with fixed UUIDs, every cube on a renderer draws one GPU mesh, a scene file can name a cube for a <code>MeshRenderer</code>, and the shape components are thin wrappers over the same drawing code instead of a separate CRTP family with its own resource rules. The geometry is copied exactly, so existing scenes look the same. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision 8).</p>
+</div>
+
+<h2 id="materials">The Material asset <span class="badge">PR #TBD</span></h2>
+<p><code>N2Engine::Rendering::Material</code> (<code>engine/include/engine/rendering/Material.hpp</code>) is a <code>Base::Asset</code> with resource type <code>"Material"</code>: how a surface is drawn, as CPU data. Each renderer gets one GPU material per material and version through <a href="#gpu-cache"><code>GpuCache</code></a>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>shading</code> (<code>ShadingModel::Unlit</code> / <code>Lit</code>)</td><td>Lit</td><td>The renderer's standard unlit shader, or the Blinn-Phong lit one with the scene's lights</td></tr>
+<tr><td><code>baseColor</code></td><td>white</td><td><code>uAlbedo</code>: the colour is base colour &times; texture &times; <a href="#shaders">vertex colour</a></td></tr>
+<tr><td><code>baseColorTexture</code></td><td>none</td><td>A <code>Texture</code> asset, sampled with its own filter and wrap</td></tr>
+<tr><td><code>alphaMode</code> (<code>AlphaMode::Opaque</code> / <code>Mask</code> / <code>Blend</code>)</td><td>Opaque</td><td>The queue and blending: Opaque and Mask draw in the Opaque queue unblended, Blend in the Transparent queue blended (<a href="#design-blend-alpha-mode">why</a>)</td></tr>
+<tr><td><code>alphaCutoff</code></td><td>0.5</td><td>Mask only: pixels whose alpha is below it are discarded (<code>uAlphaCutoff</code>); clamped to 0..1</td></tr>
+<tr><td><code>doubleSided</code></td><td>false</td><td>Draws both faces (cull <code>None</code>)</td></tr>
+<tr><td><code>smoothness</code></td><td>0.5</td><td>Lit only: the highlight's tightness (<code>uSmoothness</code>, shininess 4 to 256); clamped to 0..1</td></tr>
+<tr><td><code>metallic</code>, <code>emissive</code>, <code>normalTexture</code>, <code>occlusionTexture</code>, <code>metallicRoughnessTexture</code>, <code>emissiveTexture</code></td><td>0, black, none</td><td><strong>Stored and serialized, no effect yet</strong>: physically based shading, emissive and normal maps come in P4 (<a href="https://github.com/EpicNicks/N2Engine/issues/61">#61</a>), and the glTF importer (P3) fills them from then on</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>At runtime.</strong> <code>Material::Create(shading)</code> makes a white, opaque, single-sided material; setters change it. Every change bumps <code>GetVersion()</code>, and the renderers then make a new GPU material for it on their next draw, so prefer a shape's colour for a value that changes every frame.</li>
+<li><strong>Defaults.</strong> <code>Material::GetDefault()</code> (lit white) is what a <code>MeshRenderer</code> draws an empty slot with; <code>Material::GetDefaultUnlit()</code> (unlit white) is what the built-in shapes draw with, tinted by their colour. Both are shared and fixed (<code>const</code>).</li>
+<li><strong>Uniforms.</strong> <code>ApplyUniforms(gpuMaterial, tint)</code> sets <code>uAlbedo</code> (base colour &times; tint), <code>uHasTexture</code>, <code>uAlphaCutoff</code> (the cutoff for Mask, else 0) and, lit, <code>uSmoothness</code> and <code>uMetallic</code>. The drawing code calls it before every draw, so a GPU material shared by many users always draws with the right values.</li>
+</ul>
+<p class="src">Source: <code>engine/include/engine/rendering/Material.hpp</code>; <code>engine/src/rendering/Material.cpp</code>; tests: <code>MaterialTest.*</code> (<code>tests/engine/rendering/MaterialAssetTests.cpp</code>)</p>
+
+<h2 id="mat-files">.mat files <span class="badge">PR #TBD</span></h2>
+<p>A <code>.mat</code> file (any case) under <code>assets/</code> is a material: <code>ResourceLoader</code> gives it resource type <code>"Material"</code> and a stable UUID like any asset (<a href="resources.html#metadata">resource types</a>). <code>Material::RegisterLoader()</code> registers the loader; a static registrar in <code>Material.cpp</code> calls it, and so does <code>ResourceLoader::Initialize</code>, as for textures and fonts. The file is one JSON object; every key is optional:</p>
+<pre class="lang-json"><code>{
+  "shading": "lit",
+  "baseColor": {"r": 1, "g": 0.8, "b": 0.6, "a": 1},
+  "baseColorTexture": "../textures/crate.png",
+  "alphaMode": "mask",
+  "alphaCutoff": 0.5,
+  "doubleSided": false,
+  "smoothness": 0.3,
+  "metallic": 0,
+  "emissive": [0, 0, 0],
+  "normalTexture": null
+}</code></pre>
+<ul>
+<li><strong>Values.</strong> <code>shading</code> is <code>"lit"</code> or <code>"unlit"</code>; <code>alphaMode</code> is <code>"opaque"</code>, <code>"mask"</code> or <code>"blend"</code> (any case, so glTF's <code>"MASK"</code> works); colours are <code>{"r", "g", "b", "a"}</code> objects as scene files write them (a missing channel is 1) or <code>[r, g, b]</code> / <code>[r, g, b, a]</code> arrays; <code>alphaCutoff</code>, <code>smoothness</code> and <code>metallic</code> are numbers from 0 to 1 (outside that, clamped with a warning).</li>
+<li><strong>Textures.</strong> A <code>res://</code> or <code>user://</code> path, an asset UUID, or a path relative to the <code>.mat</code> file's folder; <code>null</code> for none. Each loads through <code>Resources</code>, so it is the same <code>Texture</code> asset an <code>Image</code> or another material gets.</li>
+<li><strong>Warnings, as for texture settings.</strong> A key with the wrong type or an unknown value, a texture that doesn't load, or an unknown key is ignored with a warning naming the file (<code>Material res://materials/crate.mat: ignoring "alphaMode": "cutout" (expected "opaque", "mask" or "blend")</code>), and the rest of the file still loads. A file that isn't valid JSON, or isn't an object, fails to load with an error.</li>
+<li><strong>Writing one.</strong> <code>ToJson()</code> gives every field in this format, textures as their <code>res://</code> paths (or source file, or UUID for a texture made at runtime); <code>Material::FromJson(json, baseDirectory)</code> reads one from memory.</li>
+</ul>
+<p class="src">Source: <code>engine/src/rendering/Material.cpp</code> — <code>Material::Load</code>, <code>ReadJson</code>, <code>ToJson</code>, <code>RegisterLoader</code>; <code>engine/src/io/ResourceLoader.cpp</code>; tests: <code>MaterialJsonTest.*</code>, <code>MaterialAssetTest.*</code></p>
+
+<h2 id="mesh-renderer">MeshRenderer <span class="badge">PR #TBD</span></h2>
+<p><code>N2Engine::Rendering::MeshRenderer</code> (<code>engine/include/engine/rendering/MeshRenderer.hpp</code>) is the component that draws a mesh at its object's transform. It is registered as <code>"MeshRenderer"</code>, and creates a <code>Positionable</code> if its object has none.</p>
+<ul>
+<li><strong>Mesh and materials.</strong> <code>SetMesh(mesh)</code> (null draws nothing). One material slot per submesh: <code>SetMaterial(i, material)</code>, <code>GetMaterial(i)</code>, <code>SetMaterials(list)</code>. Slot <code>i</code> draws submesh <code>i</code>; an empty or missing slot draws with <code>Material::GetDefault()</code>, <strong>lit white</strong>; slots past the last submesh are kept but unused. <code>GetMaterialCount()</code> is the mesh's submesh count; <code>GetEffectiveMaterial(i)</code> what slot <code>i</code> draws with.</li>
+<li><strong>Drawing.</strong> Each submesh is one <code>DrawMesh(gpuMesh, world, gpuMaterial, state, IndexRange)</code>, its uniforms set from its material first.</li>
+<li><strong>Queues.</strong> A submesh with a <code>Blend</code> material draws in the Transparent queue (blended, sorted back to front by the object's position); the others in the Opaque queue, unblended. A renderer with both kinds draws in both (<code>DrawsInQueue</code>, see <a href="application.html#render">the render queue</a>), each submesh once, in its own queue. <code>GetRenderQueue()</code> is Opaque unless every submesh blends.</li>
+<li><strong>Culling.</strong> Back faces are culled, except with a double-sided material (cull <code>None</code>). A <strong>mirrored</strong> world matrix (a negative determinant, such as a scale of &minus;1 on one axis, common in Blender scenes) culls <strong>front</strong> faces instead, because both backends tell front faces by their winding on screen and mirroring reverses it.</li>
+<li><strong>GPU resources.</strong> Shares from <code>GpuCache</code> (one mesh and one material per renderer and asset), held with the renderer's lifetime token in a <code>MeshDrawing::DrawResources</code>, which the built-in shapes use too. A renderer that is destroyed, shut down or replaced at the same address is never called. <code>OnDestroy</code> releases the shares; <code>Render(nullptr)</code> does nothing.</li>
+<li><strong>Bounds.</strong> <code>GetBounds()</code> is the mesh's box in its own space (nullopt without a mesh).</li>
+<li><strong>Saved</strong> as <code>"_mesh"</code> (the mesh's UUID; built-ins by their fixed UUIDs) and <code>"_materials"</code> (a list of material UUIDs, <code>null</code> for an empty slot, through <a href="serialization.html#asset-ref-list"><code>RegisterAssetRefList</code></a>).</li>
+</ul>
+<pre class="lang-cpp"><code>auto crate = GameObject::Create("Crate");
+auto *renderer = crate-&gt;AddComponent&lt;Rendering::MeshRenderer&gt;();
+renderer-&gt;SetMesh(Rendering::Mesh::GetBuiltin(Rendering::BuiltinMesh::Cube));
+renderer-&gt;SetMaterial(0, IO::Resources::Instance().Load&lt;Rendering::Material&gt;("res://materials/crate.mat"));
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/rendering/MeshRenderer.hpp</code>; <code>engine/src/rendering/MeshRenderer.cpp</code>; <code>engine/include/engine/rendering/MeshDrawing.hpp</code>; <code>engine/src/rendering/MeshDrawing.cpp</code> — <code>DrawResources::Draw</code>, <code>StateFor</code>, <code>IsMirrored</code>, <code>QueueFor</code>; tests: <code>MeshRendererTest.*</code>, <code>MeshRendererQueueTest.*</code>, <code>MeshRendererLifetimeTest.*</code>, <code>MeshRendererSerializationTest.*</code> (<code>tests/engine/rendering/MeshRendererTests.cpp</code>), <code>SoftwareMeshGoldenTest.*</code></p>
+
+<div class="callout note" id="design-one-mesh-renderer">
+<p class="callout-title">Design decision: one MeshRenderer, no MeshFilter <span class="badge">PR #TBD</span></p>
+<p>Unity splits the mesh reference (<code>MeshFilter</code>) from the drawing component so <code>SkinnedMeshRenderer</code> and <code>MeshCollider</code> can share it. Nothing here needs that yet: a future <code>MeshCollider</code> takes its own mesh reference (as Unity's does anyway), and one component is simpler to serialize, to script and, later, to edit. So <code>MeshRenderer</code> holds the mesh and the materials itself. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision 6).</p>
+</div>
+
+<div class="callout note" id="design-queue-mask">
+<p class="callout-title">Design decision: a renderable can draw in both queues <span class="badge">PR #TBD</span></p>
+<p>A model often mixes opaque parts with glass. If the whole renderer had one queue it would either draw its opaque parts late, without depth sorting benefits and blended, or draw the glass early, before what is behind it. Splitting it into separate objects would change the model's hierarchy. Instead <code>IRenderable::DrawsInQueue(queue)</code> lets a renderable say it draws in both, and <code>Scene::Render</code> calls <code>RenderInQueue</code> once per queue, with the queue, so each submesh draws in its own pass. The default keeps every existing renderable in its one queue, and the Opaque order is unchanged. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision 9).</p>
+</div>
+
+<div class="callout note" id="design-blend-alpha-mode">
+<p class="callout-title">Design decision: blending follows the alpha mode <span class="badge">PR #TBD</span></p>
+<p>Before P2 every draw blended: <code>RenderState::Opaque()</code> had <code>blend = true</code>, so an opaque surface with a translucent colour blended with whatever happened to be drawn before it, unsorted. Now the Opaque queue's state (the <code>RenderState</code> default) doesn't blend, and only the Transparent queue does: a material blends exactly when its alpha mode is <code>Blend</code>, which also puts it in the Transparent queue, sorted back to front and not writing depth. <code>Mask</code> materials stay opaque and cut holes with the alpha test instead, which needs no sorting. The UI pass keeps blending (its own state). Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decisions 10 and F).</p>
+</div>
+
+<h2 id="shapes">The built-in shapes <span class="badge">PR #TBD</span></h2>
+<p><code>Example::CubeRenderer</code>, <code>SphereRenderer</code> and <code>QuadRenderer</code> keep their type names, saved fields (<code>_color</code>, <code>_size</code>, the sphere's <code>_latitudeSegments</code> and <code>_longitudeSegments</code>) and C++ API, so scenes and scripts written before P2 load and run unchanged (<code>PolygonRendererCompatibilityTest.APreP2SceneLoadsUnchanged</code> loads a pre-P2 scene object). Inside they are thin: <code>PolygonRenderer</code>, no longer a CRTP template, draws the built-in mesh (<code>GetMesh()</code>) scaled by <code>_size</code> through the same <code>MeshDrawing</code> code as <code>MeshRenderer</code>.</p>
+<ul>
+<li><strong>Still unlit, in their colour.</strong> Without a material they draw with <code>Material::GetDefaultUnlit()</code> tinted by <code>_color</code>, set per draw, so every shape of a kind on a renderer shares one GPU mesh and one GPU material whatever its colour.</li>
+<li><strong>An optional material.</strong> <code>SetMaterial(material)</code> (saved as <code>"_material"</code>, null when unset; older scenes load with none) replaces the unlit default, still tinted by the colour, so a shape can be lit, textured, cut out or see-through. Its alpha mode picks the queue as for <code>MeshRenderer</code>.</li>
+<li><strong>Visible change: no blending in the Opaque queue.</strong> A shape with a translucent <code>_color</code> (alpha below 1) used to blend over what was drawn before it on OpenGL; it now draws opaque, as every Opaque-queue draw does. To draw a see-through shape, give it a material with <code>alphaMode</code> <code>"blend"</code>. (The software renderer never blended, so nothing changes there.)</li>
+<li><strong>Spheres.</strong> At the default 16 &times; 32 subdivision a <code>SphereRenderer</code> draws the shared built-in sphere; any other subdivision makes a mesh of its own, made again when the subdivision changes (which now works at any time, not only before the first draw).</li>
+<li><strong>Lifetime.</strong> As before, a renderer recreated at the same address, a switch to another renderer, a shutdown and re-initialise, and destruction after the renderer is gone are all handled; the resources are now shares counted in the cache (<code>PolygonRendererLifetimeTest.*</code>).</li>
+</ul>
+<p class="src">Source: <code>engine/include/engine/example/renderers/PolygonRenderer.hpp</code>; <code>engine/src/example/renderers/PolygonRenderer.cpp</code>; <code>CubeRenderer.hpp</code>, <code>SphereRenderer.hpp</code>, <code>QuadRenderer.hpp</code>; tests: <code>PolygonRendererLifetimeTest.*</code>, <code>PolygonRendererDrawTest.*</code>, <code>PolygonRendererCompatibilityTest.*</code> (<code>tests/engine/rendering/PolygonRendererLifetimeTests.cpp</code>)</p>
+
+<h2 id="shaders">Vertex colour and the alpha test <span class="badge">PR #TBD</span></h2>
+<p>The standard unlit and lit shaders, on OpenGL and the software renderer alike, now:</p>
+<ul>
+<li><strong>multiply by the vertex colour</strong>: the colour is <code>uAlbedo</code> &times; texture &times; vertex colour (the lit shader lights that). Every mesh the engine made before P2 (the shapes, the UI <code>Image</code> quad) has white vertex colour, so nothing looks different; text has its own shader, which always read it. The software renderer skips the multiply when every vertex of a mesh is white, so those meshes shade bit for bit as before.</li>
+<li><strong>alpha-test against <code>uAlphaCutoff</code></strong>: a pixel whose final alpha is below it is discarded, colour and depth (<code>discard</code> on OpenGL; skipped on the software renderer, in <code>SWMaterialSnapshot::alphaCutoff</code>). <code>CreateMaterial</code> gives every standard material 0, which discards nothing, so existing materials are unaffected. Mask materials set their cutoff.</li>
+</ul>
+<p class="src">Source: <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>CreateStandardShaders</code>, <code>CreateMaterial</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>ShadeUnlitPx</code>, <code>ShadeLitPx</code>, <code>RasterTri</code>; tests: <code>SoftwareVertexColourTest.*</code>, <code>SoftwareAlphaCutoffTest.*</code>, <code>SoftwareMeshGoldenTest.AnAlphaMaskMaterialLeavesHoles</code></p>
+
+<div class="callout note" id="design-vertex-colour">
+<p class="callout-title">Design decision: the standard shaders read vertex colour <span class="badge">PR #TBD</span></p>
+<p><code>Vertex</code> has always carried a colour, but only the text shader read it. glTF models use vertex colours (<code>COLOR_0</code>) for painted or baked detail, and procedural meshes are easiest to colour per vertex, so the unlit and lit shaders multiply it in, matching glTF's base colour &times; texture &times; vertex colour. Every existing mesh is white per vertex, so this changes no output; the software renderer even skips the work for all-white meshes. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision 10).</p>
+</div>
 
 <h2 id="models">Models and glTF import (planned)</h2>
-<p>glTF 2.0 import through cgltf, the <code>Model</code> asset, sub-asset UUIDs, <code>Model::Instantiate</code> and the Blender export workflow come in P3 (<a href="https://github.com/EpicNicks/N2Engine/issues/60">#60</a>); optional FBX and OBJ through ufbx in P5 (<a href="https://github.com/EpicNicks/N2Engine/issues/62">#62</a>). Embedded and external model images will load as <code>Texture</code>s through the same decoder.</p>
+<p>glTF 2.0 import through cgltf, the <code>Model</code> asset, sub-asset UUIDs, <code>Model::Instantiate</code> and the Blender export workflow come in P3 (<a href="https://github.com/EpicNicks/N2Engine/issues/60">#60</a>); optional FBX and OBJ through ufbx in P5 (<a href="https://github.com/EpicNicks/N2Engine/issues/62">#62</a>). Their meshes and materials will be <code>Mesh</code> and <code>Material</code> sub-assets, drawn by <code>MeshRenderer</code>s; embedded and external model images will load as <code>Texture</code>s through the same decoder.</p>
 
-<h2 id="conventions">Axes, winding and units (planned)</h2>
-<p>The engine renders right-handed and Y-up, with front faces counter-clockwise and units in metres; objects face +Z and the camera looks down &minus;Z. This section will document how imported models map onto that (P3), alongside <a href="#uv-convention">the UV convention</a> above.</p>
+<h2 id="conventions">Axes, winding and units <span class="badge">PR #TBD</span></h2>
+<ul>
+<li><strong>Axes.</strong> Right-handed, Y up. Objects face +Z (<code>Positionable::GetForward</code>); the camera looks down its &minus;Z (<a href="math.html#camera-conventions">Camera</a>).</li>
+<li><strong>Winding.</strong> Front faces wind counter-clockwise as seen on screen; back faces are culled by default. A mirrored object (negative determinant) has its winding reversed on screen, so <code>MeshRenderer</code> culls front faces for it.</li>
+<li><strong>Units.</strong> Metres (what PhysX assumes). The built-in shapes are 1 unit across.</li>
+<li><strong>Texture coordinates.</strong> v up: see <a href="#uv-convention">the UV convention</a>. The cube's faces each map the full texture upright as seen from outside the face; <code>SoftwareMeshGoldenTest.ATexturedCubeShowsItsCheckerUprightOnTheFacesTheCameraSees</code> checks the front, right and back faces with a 2 &times; 2 checker.</li>
+<li><strong>Known quirk of the built-in sphere</strong> (unchanged from <code>SphereRenderer</code>, kept so nothing looks different): its triangles wind clockwise seen from outside, so with back-face culling its far inner faces draw rather than its near outer ones. Unlit and flat-coloured, the silhouette is the same; lit, its outward normals light the wrong side. Its v also runs from 0 at the top. Fixing either changes how existing scenes look, so it is left for its own change.</li>
+</ul>
 
-<h2 id="lua">Lua <span class="badge">PR #64</span></h2>
-<p>Scripts reach textures through the UI <code>Image</code>: <code>image:SetSprite("res://ui/icon.png")</code> loads the file through <code>Resources</code> (an error, keeping the current sprite, if it doesn't load), <code>image:SetSprite(nil)</code> clears it, and <code>image:GetSprite()</code> returns the path or <code>nil</code>. See <a href="ui.html#lua">UI from Lua</a>. There is no <code>Texture</code> table yet.</p>
+<h2 id="lua">Lua</h2>
+<p>Scripts reach textures through the UI <code>Image</code> <span class="badge">PR #64</span>: <code>image:SetSprite("res://ui/icon.png")</code> loads the file through <code>Resources</code> (an error, keeping the current sprite, if it doesn't load), <code>image:SetSprite(nil)</code> clears it, and <code>image:GetSprite()</code> returns the path or <code>nil</code>. See <a href="ui.html#lua">UI from Lua</a>. There is no <code>Texture</code> table yet.</p>
 <pre class="lang-lua"><code>local icon = UI.CreateElement("Icon")
 local image = icon:AddComponent("Image")
 image:SetSprite("res://ui/coin.png")
 print(image:GetSprite()) -- res://ui/coin.png
 </code></pre>
-<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>LoadTextureOrThrow</code>, <code>TexturePathForLua</code>; tests: <code>LuaImageSpriteTest.*</code></p>
+<p><code>MeshRenderer</code> and the shapes <span class="badge">PR #TBD</span>: <code>go:AddComponent("MeshRenderer")</code>; <code>SetMesh(nameOrPath)</code> takes a built-in name (<code>"Cube"</code>, <code>"Sphere"</code>, <code>"Quad"</code>) or a mesh asset's path, and <code>GetMesh()</code> returns the name or path (<code>nil</code> without a mesh); <code>GetMaterialCount()</code>; <code>SetMaterial(i, path)</code> and <code>GetMaterial(i)</code> take <strong>1-based</strong> slots and <code>.mat</code> paths (<code>nil</code> empties a slot); <code>GetBounds()</code> returns a <code>BoundingBox</code> (or <code>nil</code>). A name, path or slot that doesn't work raises an error and changes nothing. <code>QuadRenderer</code> now has a Lua type too, and the three shapes have <code>SetMaterial(path)</code> / <code>GetMaterial()</code>.</p>
+<pre class="lang-lua"><code>local crate = GameObject.Create("Crate")
+local renderer = crate:AddComponent("MeshRenderer")
+renderer:SetMesh("Cube")
+renderer:SetMaterial(1, "res://materials/crate.mat")
+print(renderer:GetMaterialCount(), renderer:GetBounds().max.y) -- 1   0.5
+</code></pre>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>LoadTextureOrThrow</code>, <code>TexturePathForLua</code>, <code>LoadMaterialOrThrow</code>, <code>LoadMeshOrThrow</code>, <code>MeshNameForLua</code>; <code>engine/src/scripting/bindings/engine-api.lua</code>; tests: <code>LuaImageSpriteTest.*</code>, <code>LuaMeshRendererTest.*</code></p>
 
 <h2 id="tests">Tests</h2>
 <ul>
 <li><code>assetimport_tests</code> (<code>tests/assetimport/</code>) decodes images built in the test: PNGs written by hand for every colour type and 16-bit, and JPEG, TGA, BMP and compressed PNG from the test-only <code>stb_image_write</code>; plus truncation at every byte, corrupt data and oversized headers.</li>
-<li><code>engine_tests</code> covers the asset pipeline in a temporary project (<code>TextureAssetTest</code>), the settings, <code>GpuCache</code> and <code>Image</code> sprites with a counting renderer, Lua, and two headless software-renderer goldens (<code>SoftwareImageGoldenTest</code>).</li>
+<li><code>engine_tests</code> covers the texture pipeline in a temporary project (<code>TextureAssetTest</code>), the settings, <code>GpuCache</code> and <code>Image</code> sprites with a counting renderer, Lua, and two headless software-renderer goldens (<code>SoftwareImageGoldenTest</code>).</li>
+<li><span class="badge">PR #TBD</span> <code>engine_tests</code> also covers <code>Mesh</code> (validation, bounds, built-ins byte for byte), <code>Material</code> and <code>.mat</code> files, the cache's meshes and materials, <code>RegisterAssetRefList</code>, <code>MeshRenderer</code> and the shapes through a renderer that records every draw (<code>tests/engine/rendering/MeshTestSupport.hpp</code>), and five headless goldens (<code>SoftwareMeshGoldenTest</code>): a checker-textured cube upright on three faces, lit against unlit, a cutout's holes, a double-sided quad from behind, and two submeshes in two materials. <code>renderer_tests</code> covers the index-range draw, vertex colour and the alpha cutoff on the software renderer, and the default <code>IndexRange</code> body.</li>
 </ul>
 <p>See <a href="testing.html#areas">Test suites by area</a>.</p>
 
