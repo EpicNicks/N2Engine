@@ -15,6 +15,7 @@
 #include "engine/serialization/MathSerialization.hpp"
 
 #include <concepts>
+#include <memory>
 #include <type_traits>
 
 namespace N2Engine::Example
@@ -52,7 +53,10 @@ namespace N2Engine::Example
         Renderer::Common::IShader *_shader = nullptr;
         bool _resourcesInitialized = false;
 
+        // The renderer the resources belong to, and its lifetime token: once the token expires that renderer
+        // is gone (with the resources), and a new renderer at the same address isn't the same renderer
         Renderer::Common::IRenderer *_cachedRenderer = nullptr;
+        std::weak_ptr<const void> _cachedRendererLifetime;
 
         // Rendering properties (common to all polygon renderers)
         Common::Color _color{Common::Color::White};
@@ -73,9 +77,18 @@ namespace N2Engine::Example
 
         void InitializeRenderResources(Renderer::Common::IRenderer* renderer) override
         {
-            if (_resourcesInitialized || !renderer)
+            if (!renderer)
             {
                 return;
+            }
+            if (_resourcesInitialized)
+            {
+                if (HoldsRenderer(renderer))
+                {
+                    return;
+                }
+                // The resources belong to another renderer, or to one that has been destroyed
+                ReleaseRenderResources();
             }
 
             // Compile-time check that Derived implements CreateMesh
@@ -85,6 +98,7 @@ namespace N2Engine::Example
             }, "Derived class must implement: void CreateMesh(Renderer::Common::IRenderer*)");
 
             _cachedRenderer = renderer;
+            _cachedRendererLifetime = renderer->GetLifetimeToken();
             _shader = renderer->GetStandardUnlitShader();
 
             // CRTP: Static dispatch to derived class's CreateMesh
@@ -107,8 +121,8 @@ namespace N2Engine::Example
                 return;
             }
 
-            // Initialize resources if not already done
-            if (!_resourcesInitialized)
+            // Initialize resources if not already done, or if they belong to another renderer
+            if (!_resourcesInitialized || !HoldsRenderer(renderer))
             {
                 InitializeRenderResources(renderer);
                 if (!_resourcesInitialized)
@@ -148,28 +162,11 @@ namespace N2Engine::Example
 
         void CleanupRenderResources(Renderer::Common::IRenderer* renderer) override
         {
-            if (!_resourcesInitialized || !renderer)
+            // Only the renderer the resources belong to releases them
+            if (!_resourcesInitialized || !renderer || renderer != _cachedRenderer)
                 return;
 
-            if (_mesh != nullptr)
-            {
-                renderer->DestroyMesh(_mesh);
-                _mesh = nullptr;
-            }
-
-            if (_material != nullptr)
-            {
-                renderer->DestroyMaterial(_material);
-                _material = nullptr;
-            }
-
-            if (_shader != nullptr)
-            {
-                renderer->DestroyShaderProgram(_shader);
-                _shader = nullptr;
-            }
-
-            _resourcesInitialized = false;
+            ReleaseRenderResources();
         }
 
         // Common properties
@@ -180,5 +177,41 @@ namespace N2Engine::Example
         [[nodiscard]] const Math::Vector3& GetSize() const { return _size; }
 
         static constexpr bool IsSingleton = false;
+
+    private:
+        // True if the resources belong to `renderer` and it still exists
+        [[nodiscard]] bool HoldsRenderer(const Renderer::Common::IRenderer* renderer) const
+        {
+            return renderer && renderer == _cachedRenderer && !_cachedRendererLifetime.expired();
+        }
+
+        // Forgets the resources, destroying them on their renderer only if it still exists: a destroyed
+        // renderer freed them itself, and its address may now be another renderer's
+        void ReleaseRenderResources()
+        {
+            if (!_resourcesInitialized)
+                return;
+
+            if (_cachedRenderer && !_cachedRendererLifetime.expired())
+            {
+                if (_mesh != nullptr)
+                {
+                    _cachedRenderer->DestroyMesh(_mesh);
+                }
+
+                if (_material != nullptr)
+                {
+                    _cachedRenderer->DestroyMaterial(_material);
+                }
+
+                // _shader is the renderer's standard unlit shader, shared by every renderable: the renderer owns
+                // it, so it is never destroyed here
+            }
+
+            _mesh = nullptr;
+            _material = nullptr;
+            _shader = nullptr;
+            _resourcesInitialized = false;
+        }
     };
 }

@@ -588,6 +588,7 @@ bool SoftwareRenderer::Initialize(GLFWwindow *windowHandle, uint32_t width, uint
 
 void SoftwareRenderer::Shutdown()
 {
+    EndLifetime(); // its resources are freed below, so holders must not use their handles again
     // Stop thread BEFORE tearing down GL/resources it might reference.
     m_renderThread.Stop();
 
