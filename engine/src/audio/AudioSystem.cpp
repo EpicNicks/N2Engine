@@ -3,11 +3,26 @@
 #include "engine/audio/AudioSource.hpp"
 #include "engine/Logger.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <format>
 #include <limits>
 #include <ranges>
 
 namespace N2Engine::Audio
 {
+    namespace
+    {
+        /// Frames rendered per alcRenderSamplesSOFT call while pacing (bounds the scratch buffer)
+        constexpr std::uint32_t StreamChunkFrames = 1024;
+
+        std::uint32_t StreamCapacityFrames(const LoopbackFormat &format)
+        {
+            return format.sampleRate * AudioSystem::StreamBufferMilliseconds / 1000u;
+        }
+    }
+
     AudioSystem& AudioSystem::Instance()
     {
         // Never destroyed: AudioSources unregister in their destructors, which can run during static
@@ -17,13 +32,31 @@ namespace N2Engine::Audio
         return *instance;
     }
 
-    bool AudioSystem::Initialize()
+    bool AudioSystem::Initialize(AudioOutput output)
     {
         if (_initialized)
         {
+            if (output != _output)
+            {
+                Logger::Warn("AudioSystem is already initialized with another output; call Shutdown first");
+                return false;
+            }
             return true;
         }
 
+        _output = output;
+        const bool opened = output == AudioOutput::Loopback ? OpenLoopbackDevice() : OpenDevice();
+        if (!opened || !FinishInitialize())
+        {
+            ResetLoopbackState();
+            _output = AudioOutput::Device;
+            return false;
+        }
+        return true;
+    }
+
+    bool AudioSystem::OpenDevice()
+    {
         _device = alcOpenDevice(nullptr);
         if (!_device)
         {
@@ -39,7 +72,93 @@ namespace N2Engine::Audio
             _device = nullptr;
             return false;
         }
+        return true;
+    }
 
+    bool AudioSystem::IsLoopbackSupported()
+    {
+        // A device-independent extension, so it can be asked without a device
+        return alcIsExtensionPresent(nullptr, "ALC_SOFT_loopback") == ALC_TRUE;
+    }
+
+    bool AudioSystem::OpenLoopbackDevice()
+    {
+        if (!IsLoopbackSupported())
+        {
+            Logger::Error("OpenAL has no ALC_SOFT_loopback extension; audio is disabled (nothing to stream)");
+            return false;
+        }
+
+        // Extension entry points are loaded at run time (the import library needn't export them)
+        const auto openLoopback = reinterpret_cast<LPALCLOOPBACKOPENDEVICESOFT>(
+            alcGetProcAddress(nullptr, "alcLoopbackOpenDeviceSOFT"));
+        const auto isFormatSupported = reinterpret_cast<LPALCISRENDERFORMATSUPPORTEDSOFT>(
+            alcGetProcAddress(nullptr, "alcIsRenderFormatSupportedSOFT"));
+        const auto renderSamples = reinterpret_cast<LPALCRENDERSAMPLESSOFT>(
+            alcGetProcAddress(nullptr, "alcRenderSamplesSOFT"));
+        if (!openLoopback || !isFormatSupported || !renderSamples)
+        {
+            Logger::Error("OpenAL reports ALC_SOFT_loopback but lacks its functions; audio is disabled");
+            return false;
+        }
+
+        ALCdevice *device = openLoopback(nullptr);
+        if (!device)
+        {
+            Logger::Error("Failed to open an OpenAL loopback device; audio is disabled");
+            return false;
+        }
+
+        // Float keeps the mix's headroom and needs no dither; 16-bit is the fallback every build supports
+        constexpr auto rate = static_cast<ALCsizei>(LoopbackSampleRate);
+        static_assert(LoopbackChannels == 2, "the loopback device is opened as ALC_STEREO_SOFT");
+        LoopbackFormat format{.sampleRate = LoopbackSampleRate, .channels = LoopbackChannels};
+        ALCenum type = ALC_FLOAT_SOFT;
+        if (isFormatSupported(device, rate, ALC_STEREO_SOFT, ALC_FLOAT_SOFT) == ALC_TRUE)
+        {
+            format.sampleFormat = SampleFormat::Float32;
+        }
+        else if (isFormatSupported(device, rate, ALC_STEREO_SOFT, ALC_SHORT_SOFT) == ALC_TRUE)
+        {
+            format.sampleFormat = SampleFormat::Int16;
+            type = ALC_SHORT_SOFT;
+        }
+        else
+        {
+            Logger::Error("The OpenAL loopback device supports neither float32 nor int16 stereo at 48 kHz; audio is disabled");
+            alcCloseDevice(device);
+            return false;
+        }
+
+        const ALCint attributes[] = {
+            ALC_FORMAT_CHANNELS_SOFT, ALC_STEREO_SOFT,
+            ALC_FORMAT_TYPE_SOFT, type,
+            ALC_FREQUENCY, rate,
+            0,
+        };
+        _context = alcCreateContext(device, attributes);
+        if (!_context)
+        {
+            Logger::Error("Failed to create an OpenAL context on the loopback device; audio is disabled");
+            alcCloseDevice(device);
+            return false;
+        }
+
+        _device = device;
+        _renderSamples = renderSamples;
+        _loopbackFormat = format;
+        _streamAccumulator = 0.0;
+        _streamRing.assign(static_cast<std::size_t>(StreamCapacityFrames(format)) * format.BytesPerFrame(), 0);
+        _streamStart = 0;
+        _streamSize = 0;
+        _streamDroppedFrames = 0;
+        Logger::Info(std::format("OpenAL loopback device: {} Hz, {} channels, {}", format.sampleRate, format.channels,
+                                 ToString(format.sampleFormat)));
+        return true;
+    }
+
+    bool AudioSystem::FinishInitialize()
+    {
         if (!alcMakeContextCurrent(_context))
         {
             Logger::Error("Failed to make OpenAL context current");
@@ -123,6 +242,8 @@ namespace N2Engine::Audio
         }
 
         _initialized = false;
+        ResetLoopbackState();
+        _output = AudioOutput::Device;
         Logger::Info("AudioSystem shutdown");
     }
 
@@ -134,6 +255,157 @@ namespace N2Engine::Audio
         }
 
         CleanupFinishedSources();
+    }
+
+    void AudioSystem::ResetLoopbackState()
+    {
+        _renderSamples = nullptr;
+        _loopbackFormat = {};
+        _streamAccumulator = 0.0;
+        _streamRing.clear();
+        _streamRing.shrink_to_fit();
+        _streamStart = 0;
+        _streamSize = 0;
+        _streamDroppedFrames = 0;
+        _streamScratch.clear();
+        _streamScratch.shrink_to_fit();
+    }
+
+    bool AudioSystem::RenderSamples(void *buffer, std::uint32_t frameCount)
+    {
+        if (!IsLoopback() || !_renderSamples || !buffer)
+        {
+            return false;
+        }
+
+        // ALCsizei is an int: render a larger request in pieces
+        constexpr auto maxPerCall = static_cast<std::uint32_t>(std::numeric_limits<ALCsizei>::max() / 16);
+        auto *out = static_cast<std::uint8_t *>(buffer);
+        const std::size_t frameBytes = _loopbackFormat.BytesPerFrame();
+        while (frameCount > 0)
+        {
+            const std::uint32_t frames = std::min(frameCount, maxPerCall);
+            _renderSamples(_device, out, static_cast<ALCsizei>(frames));
+            out += static_cast<std::size_t>(frames) * frameBytes;
+            frameCount -= frames;
+        }
+        return true;
+    }
+
+    void AudioSystem::AdvanceStream(double unscaledSeconds)
+    {
+        // !(x > 0) also rejects NaN
+        if (!IsLoopback() || !(unscaledSeconds > 0.0))
+        {
+            return;
+        }
+
+        _streamAccumulator += std::min(unscaledSeconds, MaxStreamAdvanceSeconds) *
+                              static_cast<double>(_loopbackFormat.sampleRate);
+        const double whole = std::floor(_streamAccumulator);
+        _streamAccumulator -= whole;
+        RenderIntoStream(static_cast<std::uint64_t>(whole));
+    }
+
+    void AudioSystem::RenderIntoStream(std::uint64_t frames)
+    {
+        const std::size_t frameBytes = _loopbackFormat.BytesPerFrame();
+        _streamScratch.resize(static_cast<std::size_t>(StreamChunkFrames) * frameBytes);
+        while (frames > 0)
+        {
+            // Every frame is rendered (that is what moves the clock), even those the buffer then discards
+            const auto chunk = static_cast<std::uint32_t>(std::min<std::uint64_t>(frames, StreamChunkFrames));
+            _renderSamples(_device, _streamScratch.data(), static_cast<ALCsizei>(chunk));
+            PushStream(_streamScratch.data(), static_cast<std::size_t>(chunk) * frameBytes);
+            frames -= chunk;
+        }
+    }
+
+    void AudioSystem::PushStream(const std::uint8_t *data, std::size_t bytes)
+    {
+        const std::size_t capacity = _streamRing.size();
+        const std::size_t frameBytes = _loopbackFormat.BytesPerFrame();
+        if (capacity == 0 || bytes == 0)
+        {
+            return;
+        }
+
+        if (bytes >= capacity)
+        {
+            // Only the newest capacity bytes survive: everything held, and the head of data, is dropped
+            _streamDroppedFrames += (_streamSize + (bytes - capacity)) / frameBytes;
+            data += bytes - capacity;
+            bytes = capacity;
+            _streamStart = 0;
+            _streamSize = 0;
+        }
+        else if (_streamSize + bytes > capacity)
+        {
+            // Discard the oldest frames to make room (capacity and bytes are whole frames)
+            const std::size_t overflow = _streamSize + bytes - capacity;
+            _streamStart = (_streamStart + overflow) % capacity;
+            _streamSize -= overflow;
+            _streamDroppedFrames += overflow / frameBytes;
+        }
+
+        const std::size_t writeAt = (_streamStart + _streamSize) % capacity;
+        const std::size_t first = std::min(bytes, capacity - writeAt);
+        std::memcpy(_streamRing.data() + writeAt, data, first);
+        if (bytes > first)
+        {
+            std::memcpy(_streamRing.data(), data + first, bytes - first);
+        }
+        _streamSize += bytes;
+    }
+
+    StreamedAudio AudioSystem::TakeStreamedAudio()
+    {
+        StreamedAudio out;
+        if (!IsLoopback())
+        {
+            return out;
+        }
+
+        const std::size_t capacity = _streamRing.size();
+        out.samples.resize(_streamSize);
+        if (_streamSize > 0)
+        {
+            const std::size_t first = std::min(_streamSize, capacity - _streamStart);
+            std::memcpy(out.samples.data(), _streamRing.data() + _streamStart, first);
+            if (_streamSize > first)
+            {
+                std::memcpy(out.samples.data() + first, _streamRing.data(), _streamSize - first);
+            }
+        }
+        out.frameCount = static_cast<std::uint32_t>(_streamSize / _loopbackFormat.BytesPerFrame());
+        out.droppedFrames = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(_streamDroppedFrames, std::numeric_limits<std::uint32_t>::max()));
+
+        _streamStart = 0;
+        _streamSize = 0;
+        _streamDroppedFrames = 0;
+        return out;
+    }
+
+    void AudioSystem::ClearStream()
+    {
+        _streamStart = 0;
+        _streamSize = 0;
+        _streamDroppedFrames = 0;
+    }
+
+    std::uint32_t AudioSystem::GetStreamedFrameCount() const
+    {
+        if (!IsLoopback())
+        {
+            return 0;
+        }
+        return static_cast<std::uint32_t>(_streamSize / _loopbackFormat.BytesPerFrame());
+    }
+
+    std::uint32_t AudioSystem::GetStreamCapacityFrames() const
+    {
+        return IsLoopback() ? StreamCapacityFrames(_loopbackFormat) : 0u;
     }
 
     void AudioSystem::InitializeDefaultGroups()
