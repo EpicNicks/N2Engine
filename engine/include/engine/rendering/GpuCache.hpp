@@ -75,7 +75,10 @@ namespace N2Engine::Rendering
             [[nodiscard]] ResourceKind GetKind() const { return _kind; }
             /// The texture, for a Texture handle (nullptr otherwise, or when empty)
             [[nodiscard]] Renderer::Common::ITexture *GetTexture() const;
-            /// The mesh, for a Mesh handle (nullptr otherwise, or when empty). SyncMesh keeps it current.
+            /// The mesh, for a Mesh handle (nullptr otherwise, or when empty), as of this handle's last SyncMesh (or
+            /// acquire). It can be stale: when another handle's sync replaced the entry's IMesh (a backend that can't
+            /// update meshes), this one still names the old, destroyed IMesh until its own SyncMesh. Call SyncMesh
+            /// before drawing with it.
             [[nodiscard]] Renderer::Common::IMesh *GetMesh() const;
             /// The material, for a Material handle (nullptr otherwise, or when empty)
             [[nodiscard]] Renderer::Common::IMaterial *GetMaterial() const;
@@ -129,7 +132,8 @@ namespace N2Engine::Rendering
         /**
          * Re-uploads a Mesh handle's mesh if it has changed (its version is newer than the GPU copy's): in place
          * with IRenderer::UpdateMesh, or, where the backend can't, as a new IMesh replacing the old one (which is
-         * destroyed). Then points the handle at the current IMesh. Every user calls it before drawing, so one
+         * destroyed). Then points the handle at the current IMesh. If both fail, the old copy stays and the version
+         * isn't recorded, so the next sync tries again. Every user calls it before drawing, so one
          * user's sync also serves the others; a handle whose IMesh another user's sync replaced is repointed by
          * its own next sync. False for an empty, non-Mesh or dead handle.
          */

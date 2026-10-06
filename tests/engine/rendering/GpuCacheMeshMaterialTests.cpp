@@ -143,6 +143,37 @@ TEST(GpuCacheMeshTest, ARendererThatCantUpdateMeshesGetsANewOne)
     EXPECT_TRUE(renderer.meshes.empty());
 }
 
+TEST(GpuCacheMeshTest, AFailedReuploadIsTriedAgainOnTheNextSync)
+{
+    RecordingMeshRenderer renderer;
+    renderer.canUpdateMeshes = false;
+    const auto mesh = MakeMesh();
+    GpuCache::Handle handle = GpuCache::AcquireMesh(renderer, mesh);
+    Renderer::Common::IMesh *old = handle.GetMesh();
+
+    // Neither UpdateMesh nor CreateMesh works: the old copy stays, and the change isn't taken as uploaded
+    ASSERT_TRUE(mesh->SetData(Mesh::MakeCube()));
+    renderer.canCreateMeshes = false;
+    EXPECT_TRUE(GpuCache::SyncMesh(handle));
+    EXPECT_EQ(handle.GetMesh(), old);
+    EXPECT_EQ(renderer.GetCounts().destroyedMeshes, 0);
+    EXPECT_EQ(renderer.GetCounts().createdMeshes, 2) << "the first mesh and the failed replacement";
+
+    // The next sync tries again, and this time succeeds
+    renderer.canCreateMeshes = true;
+    EXPECT_TRUE(GpuCache::SyncMesh(handle));
+    EXPECT_NE(handle.GetMesh(), old);
+    EXPECT_EQ(renderer.GetCounts().createdMeshes, 3);
+    EXPECT_EQ(renderer.GetCounts().destroyedMeshes, 1);
+    ASSERT_EQ(renderer.meshes.size(), 1u);
+    EXPECT_EQ(renderer.meshes[0]->indices.size(), 36u);
+
+    // Uploaded: nothing more to do
+    EXPECT_TRUE(GpuCache::SyncMesh(handle));
+    EXPECT_EQ(renderer.GetCounts().createdMeshes, 3);
+    handle.Release(true);
+}
+
 TEST(GpuCacheMeshTest, ADestroyedRendererIsNeverCalledAndItsEntryIsReplaced)
 {
     Counts counts;

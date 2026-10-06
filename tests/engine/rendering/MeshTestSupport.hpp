@@ -64,6 +64,8 @@ namespace MeshTestSupport
         bool canUpdateMeshes = true;
         /// GetStandardLitShader returns null while this is false (as a backend without a lit shader)
         bool hasLitShader = true;
+        /// CreateMesh returns null (still counting the call) while this is false
+        bool canCreateMeshes = true;
 
         std::vector<std::unique_ptr<Renderer::Software::SWMesh>> meshes;
         std::vector<std::unique_ptr<Renderer::Software::SWMaterial>> materials;
@@ -93,6 +95,10 @@ namespace MeshTestSupport
         Renderer::Common::IMesh *CreateMesh(const Renderer::Common::MeshData &meshData) override
         {
             ++_counts.createdMeshes;
+            if (!canCreateMeshes)
+            {
+                return nullptr;
+            }
             auto mesh = std::make_unique<Renderer::Software::SWMesh>();
             mesh->vertices = meshData.vertices;
             mesh->indices = meshData.indices;

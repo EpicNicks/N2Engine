@@ -266,17 +266,23 @@ namespace N2Engine::Rendering
         {
             IRenderer &renderer = *handle._renderer;
             auto *current = static_cast<IMesh *>(entry.resource);
-            if (!renderer.UpdateMesh(current, mesh->GetMeshData()))
+            bool uploaded = renderer.UpdateMesh(current, mesh->GetMeshData());
+            if (!uploaded)
             {
                 // A backend that can't update meshes gets a new one; if even that fails, the old one stays
                 if (IMesh *replacement = renderer.CreateMesh(mesh->GetMeshData()))
                 {
                     renderer.DestroyMesh(current);
                     entry.resource = replacement;
+                    uploaded = true;
                 }
             }
-            // Not retried every frame if it failed: the next change tries again
-            entry.uploadedVersion = mesh->GetVersion();
+            // Only an upload that happened records the version: a failed one is tried again on the next sync, and
+            // the GPU copy is never taken for the current geometry when it isn't
+            if (uploaded)
+            {
+                entry.uploadedVersion = mesh->GetVersion();
+            }
         }
         handle._resource = entry.resource;
         return handle._resource != nullptr;
