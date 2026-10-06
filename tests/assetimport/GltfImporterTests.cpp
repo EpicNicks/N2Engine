@@ -772,6 +772,16 @@ TEST(GltfImporterTest, ResolveModelUriStaysInsideItsFolder)
     EXPECT_TRUE(ResolveModelUri(base, "D:x.bin").empty());
     EXPECT_TRUE(ResolveModelUri(base, "\\\\server\\share\\a.bin").empty());
     EXPECT_TRUE(ResolveModelUri({}, "a.bin").empty());
+    // Windows device names, in any case, with any extension, in any folder
+    for (const char *device : {"nul", "NUL.bin", "con.png", "Con .bin", "sub/aux", "prn.x.y", "COM1.txt", "lpt9",
+                               "CONIN$", "conout$.bin"})
+    {
+        EXPECT_TRUE(ResolveModelUri(base, device).empty()) << device;
+    }
+    for (const char *ordinary : {"console.bin", "com10.bin", "nul_file.bin", "lpt0.bin", "auxiliary/a.bin"})
+    {
+        EXPECT_FALSE(ResolveModelUri(base, ordinary).empty()) << ordinary;
+    }
     EXPECT_EQ(PercentDecode("a%20b%2Fc%zz%4"), "a b/c%zz%4");
 }
 

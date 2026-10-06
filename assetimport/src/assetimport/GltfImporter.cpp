@@ -1783,6 +1783,76 @@ namespace N2Engine::AssetImport
         return out;
     }
 
+    namespace
+    {
+        /// Whether `path` is `base` plus at least one more element, none of them ".." (both lexically normal)
+        bool IsStrictlyInside(const fs::path &base, const fs::path &path)
+        {
+            std::vector<fs::path> baseParts;
+            for (const fs::path &part : base)
+            {
+                if (!part.empty() && part != ".")
+                {
+                    baseParts.push_back(part);
+                }
+            }
+            std::vector<fs::path> pathParts;
+            for (const fs::path &part : path)
+            {
+                if (!part.empty() && part != ".")
+                {
+                    pathParts.push_back(part);
+                }
+            }
+            if (pathParts.size() <= baseParts.size())
+            {
+                return false;
+            }
+            for (std::size_t i = 0; i < baseParts.size(); ++i)
+            {
+                if (pathParts[i] != baseParts[i])
+                {
+                    return false;
+                }
+            }
+            for (std::size_t i = baseParts.size(); i < pathParts.size(); ++i)
+            {
+                if (pathParts[i] == "..")
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// CON, PRN, AUX, NUL, COM1-9, LPT1-9, CONIN$ and CONOUT$, whatever the case and extension (the part
+        /// before the first dot, with trailing spaces ignored, as Windows matches them)
+        bool IsReservedDeviceName(const fs::path &part)
+        {
+            const std::u8string utf8 = part.u8string();
+            std::string stem;
+            for (const char8_t c : utf8)
+            {
+                if (c == u8'.')
+                {
+                    break;
+                }
+                stem.push_back(static_cast<char>(c >= u8'a' && c <= u8'z' ? c - (u8'a' - u8'A') : c));
+            }
+            while (!stem.empty() && stem.back() == ' ')
+            {
+                stem.pop_back();
+            }
+            if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" || stem == "CONIN$" ||
+                stem == "CONOUT$")
+            {
+                return true;
+            }
+            return stem.size() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem[3] >= '1' &&
+                   stem[3] <= '9';
+        }
+    }
+
     fs::path ResolveModelUri(const fs::path &baseDirectory, const std::string_view decodedUri)
     {
         if (baseDirectory.empty() || decodedUri.empty())
@@ -1807,40 +1877,30 @@ namespace N2Engine::AssetImport
         {
             return {};
         }
-        const fs::path base = baseDirectory.lexically_normal();
-        const fs::path resolved = (base / relative).lexically_normal();
-
-        // resolved must be base plus at least one more element, none of them ".."
-        std::vector<fs::path> baseParts;
-        for (const fs::path &part : base)
+        // Windows reserved device names, in any case and with any extension ("nul.bin", "COM1.png"), name devices
+        // rather than files, in any folder
+        for (const fs::path &part : relative)
         {
-            if (!part.empty() && part != ".")
-            {
-                baseParts.push_back(part);
-            }
-        }
-        std::vector<fs::path> resolvedParts;
-        for (const fs::path &part : resolved)
-        {
-            if (!part.empty() && part != ".")
-            {
-                resolvedParts.push_back(part);
-            }
-        }
-        if (resolvedParts.size() <= baseParts.size())
-        {
-            return {};
-        }
-        for (std::size_t i = 0; i < baseParts.size(); ++i)
-        {
-            if (resolvedParts[i] != baseParts[i])
+            if (IsReservedDeviceName(part))
             {
                 return {};
             }
         }
-        for (std::size_t i = baseParts.size(); i < resolvedParts.size(); ++i)
+        const fs::path base = baseDirectory.lexically_normal();
+        const fs::path resolved = (base / relative).lexically_normal();
+        if (!IsStrictlyInside(base, resolved))
         {
-            if (resolvedParts[i] == "..")
+            return {};
+        }
+        // Lexically inside; an existing file must also be inside once symbolic links and junctions are followed
+        std::error_code existsError;
+        if (fs::exists(resolved, existsError))
+        {
+            std::error_code baseError;
+            std::error_code targetError;
+            const fs::path canonicalBase = fs::weakly_canonical(base, baseError);
+            const fs::path canonicalTarget = fs::weakly_canonical(resolved, targetError);
+            if (baseError || targetError || !IsStrictlyInside(canonicalBase, canonicalTarget))
             {
                 return {};
             }
