@@ -175,8 +175,8 @@ namespace GltfTest
             const int accessor = AddAccessor(view, kFloat, count, kTypes[components]);
             if (components == 3 && count > 0)
             {
-                std::vector<float> lo(3, values[0]);
-                std::vector<float> hi(3, values[0]);
+                std::vector<float> lo = {values[0], values[1], values[2]};
+                std::vector<float> hi = lo;
                 for (std::size_t i = 0; i < count; ++i)
                 {
                     for (std::size_t c = 0; c < 3; ++c)
