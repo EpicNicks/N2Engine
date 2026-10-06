@@ -1110,20 +1110,22 @@ void OpenGLRenderer::ReadFramebuffer(std::uint8_t *buffer, int width, int height
     }
     // Read from where BeginFrame drew (0 is the window's). RGBA rows are a multiple of 4 bytes, so they are
     // packed tightly at the default alignment of 4, set here in case anything changed it.
+    // GL_READ_FRAMEBUFFER is left bound to it: nothing else reads, and BeginFrame rebinds GL_FRAMEBUFFER (draw
+    // and read) for the next frame.
     glBindFramebuffer(GL_READ_FRAMEBUFFER, m_offscreenFramebuffer);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
     glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 }
 
-void OpenGLRenderer::SetRenderTargetSize(const uint32_t width, const uint32_t height)
+bool OpenGLRenderer::SetRenderTargetSize(const uint32_t width, const uint32_t height)
 {
     if (width == 0 || height == 0)
     {
-        return;
+        return false;
     }
     if (m_offscreenFramebuffer != 0 && width == m_offscreenWidth && height == m_offscreenHeight)
     {
-        return;
+        return true;
     }
     DestroyOffscreenTarget();
 
@@ -1150,10 +1152,11 @@ void OpenGLRenderer::SetRenderTargetSize(const uint32_t width, const uint32_t he
         std::cerr << "OpenGL: the " << width << "x" << height << " offscreen target is incomplete (status 0x"
                   << std::hex << status << std::dec << "); rendering to the window instead" << std::endl;
         DestroyOffscreenTarget();
-        return;
+        return false;
     }
     m_offscreenWidth = width;
     m_offscreenHeight = height;
+    return true;
 }
 
 void OpenGLRenderer::DestroyOffscreenTarget()

@@ -66,7 +66,7 @@ TEST(SoftwareRenderTargetTest, FramesRenderAtTheNewSizeAndReadBackExactly)
     // Taller and wider than before, and not a multiple of the old size: resampling would show
     constexpr int width = 13;
     constexpr int height = 10;
-    renderer.SetRenderTargetSize(width, height);
+    ASSERT_TRUE(renderer.SetRenderTargetSize(width, height));
 
     renderer.BeginFrame();
     renderer.SetViewProjection(Identity, Identity);
@@ -101,8 +101,8 @@ TEST(SoftwareRenderTargetTest, AZeroDimensionIsIgnored)
     SoftwareRenderer renderer;
     ASSERT_TRUE(renderer.Initialize(nullptr, 4, 4));
     renderer.Clear(0.0f, 0.0f, 1.0f, 1.0f);
-    renderer.SetRenderTargetSize(0, 8);
-    renderer.SetRenderTargetSize(8, 0);
+    EXPECT_FALSE(renderer.SetRenderTargetSize(0, 8));
+    EXPECT_FALSE(renderer.SetRenderTargetSize(8, 0));
 
     renderer.BeginFrame();
     renderer.EndFrame();

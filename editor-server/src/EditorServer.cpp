@@ -337,12 +337,19 @@ namespace N2Engine::Editor
         return width > 0 && height > 0 && width <= MaxViewportDimension && height <= MaxViewportDimension;
     }
 
+    std::string EditorServer::RenderTargetError(const int width, const int height)
+    {
+        return std::format("Couldn't create a {}x{} render target", width, height);
+    }
+
     void EditorServer::ReadFrame(const Renderer::Common::IRenderer &renderer, const int width, const int height,
                                  std::vector<uint8_t> &pixels)
     {
         const size_t rowBytes = width > 0 ? static_cast<size_t>(width) * 4 : 0;
         const size_t rows = height > 0 ? static_cast<size_t>(height) : 0;
-        pixels.assign(rowBytes * rows, 0);
+        // resize, not assign: every live backend writes the whole frame, so zeroing ~3.7 MB per 1280x720 frame
+        // would be wasted. New bytes are zero, so a backend that writes nothing (Vulkan's stub) gives black.
+        pixels.resize(rowBytes * rows);
         if (pixels.empty())
         {
             return;
@@ -494,8 +501,15 @@ namespace N2Engine::Editor
         }
 
         // Render at the viewport size (validated by SetViewportSize). SetViewportSize already applied it; this
-        // covers the default size, before any SetViewportSize, and does nothing when the size is unchanged.
-        window.SetRenderSize(_viewportWidth, _viewportHeight);
+        // covers the default size, before any SetViewportSize, does nothing when the size is unchanged, and
+        // retries a size the renderer failed to make before. A frame of another size is never sent.
+        if (!window.SetRenderSize(_viewportWidth, _viewportHeight))
+        {
+            BufferWriter response;
+            WriteError(response, RenderTargetError(_viewportWidth, _viewportHeight));
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
         app.RenderEditorFrame();
 
         // RGBA, top row first, whatever the backend
@@ -548,11 +562,20 @@ namespace N2Engine::Editor
 
         // The renderer renders at this size from the next frame (an offscreen target on OpenGL, the CPU buffer's
         // size on the software renderer), so frames are neither cropped nor resampled; this also sets the camera's
-        // aspect. Without a renderer only the aspect changes.
+        // aspect. Without a renderer only the aspect changes. The size is kept even when the renderer can't make
+        // the target, so RenderFrame retries it (and answers Error until it works).
         auto &app = Application::GetInstance();
-        if (!app.GetWindow().SetRenderSize(_viewportWidth, _viewportHeight))
+        auto &window = app.GetWindow();
+        if (!window.GetRenderer())
         {
             app.OnWindowResize(_viewportWidth, _viewportHeight);
+        }
+        else if (!window.SetRenderSize(_viewportWidth, _viewportHeight))
+        {
+            BufferWriter response;
+            WriteError(response, RenderTargetError(_viewportWidth, _viewportHeight));
+            SendResponse(clientSocket, response.Release());
+            return;
         }
 
         BufferWriter response;

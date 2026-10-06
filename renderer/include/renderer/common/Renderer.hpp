@@ -201,21 +201,26 @@ namespace Renderer::Common
 
         /**
          * Renders every later frame at width x height pixels, whatever the window's size, for ReadFramebuffer
-         * to read back at that size (the editor's viewport, #69). Zero in either dimension is ignored. Per
-         * backend:
-         * - OpenGL: frames go to an offscreen framebuffer of that size (RGBA8 colour, 24-bit depth) instead of
-         *   the window, so the window shows nothing new; Resize and OnResize still track the window. Calling it
-         *   again with the same size keeps the target; another size replaces it.
+         * to read back at that size (the editor's viewport, #69). Returns true when frames will render at that
+         * size. False for a zero dimension (nothing changes) or when the backend couldn't make a target of that
+         * size; calling it again with the same size then tries again. Per backend:
+         * - OpenGL: frames go to an offscreen framebuffer of that size (RGBA8 colour, D24S8 depth and stencil)
+         *   instead of the window, so the window shows nothing new. Resize and OnResize only set the window's
+         *   size, used while there is no offscreen target (Window::SetRenderSize stops forwarding window resizes
+         *   anyway). The same size again keeps the target; another size replaces it. False when the framebuffer
+         *   is incomplete: it logs, the old target is gone, and frames render to the window.
          * - Software and the default body: Resize(width, height), since the frame is already offscreen (the CPU
-         *   colour buffer). A later Resize or OnResize (the window's) changes it again, so a host that sets this
-         *   stops forwarding window resizes (Window::SetRenderSize does).
+         *   colour buffer); true for any non-zero size. A later Resize or OnResize changes it again, so a host
+         *   that sets this stops forwarding window resizes (Window::SetRenderSize does).
          */
-        virtual void SetRenderTargetSize(uint32_t width, uint32_t height)
+        [[nodiscard]] virtual bool SetRenderTargetSize(uint32_t width, uint32_t height)
         {
-            if (width != 0 && height != 0)
+            if (width == 0 || height == 0)
             {
-                Resize(width, height);
+                return false;
             }
+            Resize(width, height);
+            return true;
         }
 
         // Debug

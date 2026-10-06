@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <utility>
 
 #include "engine/Window.hpp"
 #include "engine/Logger.hpp"
@@ -245,10 +246,26 @@ bool Window::SetRenderSize(const int width, const int height)
         return true;
     }
 
+    if (!_renderer->SetRenderTargetSize(static_cast<uint32_t>(width), static_cast<uint32_t>(height)))
+    {
+        // The renderer couldn't make the target (OpenGL then renders to the window, without its old target):
+        // nothing renders at a fixed size now, and the same size is tried again next call
+        _renderSize.reset();
+        return false;
+    }
     _renderSize = Vector2i{width, height};
-    _renderer->SetRenderTargetSize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
     Application::GetInstance().OnWindowResize(width, height);
     return true;
+}
+
+void Window::AdoptRenderer(std::unique_ptr<Renderer::Common::IRenderer> renderer)
+{
+    if (_renderer)
+    {
+        _renderer->Shutdown();
+    }
+    _renderer = std::move(renderer);
+    _renderSize.reset();
 }
 
 Vector2i Window::GetRenderDimensions() const

@@ -94,8 +94,9 @@ namespace Renderer::OpenGL
 
         /// RGBA, bottom row first, from the offscreen target while there is one, else the window's back buffer
         void ReadFramebuffer(std::uint8_t *buffer, int width, int height) const override;
-        /// Renders to an offscreen framebuffer of this size from the next BeginFrame (see IRenderer)
-        void SetRenderTargetSize(uint32_t width, uint32_t height) override;
+        /// Renders to an offscreen framebuffer of this size from the next BeginFrame (see IRenderer); false, with
+        /// no target, when the framebuffer is incomplete
+        [[nodiscard]] bool SetRenderTargetSize(uint32_t width, uint32_t height) override;
 
     private:
         GLFWwindow* m_window;
