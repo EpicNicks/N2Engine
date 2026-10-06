@@ -1,5 +1,9 @@
 #pragma once
 
+#include <concepts>
+#include <cstddef>
+#include <format>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -208,6 +212,43 @@ namespace N2Engine
         }
 
         /**
+         * The asset a saved reference names: null for a JSON null, else the asset with that UUID. An asset type
+         * with built-in assets (a static FindBuiltin(UUID), such as Rendering::Mesh) is checked first, so its
+         * built-ins resolve without being registered anywhere; then Resources (project assets by their stable
+         * .meta UUIDs, and assets registered at runtime this run). nullptr, with a warning naming `name`, for an
+         * invalid UUID or an asset that isn't found.
+         */
+        template <typename T>
+        static std::shared_ptr<T> ResolveAssetReference(const std::string &name, const nlohmann::json &value)
+        {
+            if (value.is_null())
+            {
+                return nullptr;
+            }
+            const auto uuid = value.get<Math::UUID>();
+            if (uuid == Math::UUID::ZERO)
+            {
+                Logger::Warn(std::format("Invalid UUID for asset '{}': {}", name, uuid.ToString()));
+                return nullptr;
+            }
+            if constexpr (requires(const Math::UUID &id) { { T::FindBuiltin(id) } -> std::convertible_to<std::shared_ptr<T>>; })
+            {
+                if (std::shared_ptr<T> builtin = T::FindBuiltin(uuid))
+                {
+                    return builtin;
+                }
+            }
+            // Project assets are found (or loaded) by their stable .meta UUIDs; assets registered at runtime
+            // have random per-process UUIDs, so only this run finds those
+            std::shared_ptr<T> asset = IO::Resources::Instance().LoadByUUID<T>(uuid);
+            if (!asset)
+            {
+                Logger::Warn(std::format("Asset '{}' not found: {}", name, uuid.ToString()));
+            }
+            return asset;
+        }
+
+        /**
  * Register an Asset reference (resolved via UUID after deserialization)
  * Template parameter T should be the specific asset type
  */
@@ -233,26 +274,61 @@ namespace N2Engine
                 // Deserialize: resolve from AssetManager
                 [&assetRef, name](const nlohmann::json &j, ReferenceResolver *)
                 {
-                    if (!j.contains(name) || j[name].is_null())
+                    if (!j.contains(name))
                     {
                         assetRef = nullptr;
                         return;
                     }
+                    assetRef = ResolveAssetReference<T>(name, j[name]);
+                });
+        }
 
-                    if (const auto uuid = j[name].get<Math::UUID>(); uuid != Math::UUID::ZERO)
+        /**
+         * Register a list of Asset references (a MeshRenderer's materials, one per submesh), saved as an array of
+         * UUIDs where an empty slot is null. Each is resolved as RegisterAssetRef resolves one; a slot whose asset
+         * isn't found (warned about) loads empty, so later slots keep their positions. A missing key or a value
+         * that isn't an array (warned about) loads an empty list.
+         */
+        template <typename T>
+        void RegisterAssetRefList(const std::string &name, std::vector<std::shared_ptr<T>> &assetRefs)
+        {
+            static_assert(std::is_base_of_v<Base::Asset, T>, "T must be an Asset type");
+
+            _members.emplace_back(
+                name,
+                [&assetRefs, name](nlohmann::json &j)
+                {
+                    nlohmann::json array = nlohmann::json::array();
+                    for (const auto &asset : assetRefs)
                     {
-                        // Project assets are found (or loaded) by their stable .meta UUIDs; assets
-                        // registered at runtime have random per-process UUIDs, so only this run finds those
-                        assetRef = IO::Resources::Instance().LoadByUUID<T>(uuid);
-                        if (!assetRef)
+                        if (asset)
                         {
-                            Logger::Warn(std::format("Asset '{}' not found: {}", name, uuid.ToString()));
+                            array.push_back(asset->GetUUID().ToString());
+                        }
+                        else
+                        {
+                            array.push_back(nullptr);
                         }
                     }
-                    else
+                    j[name] = std::move(array);
+                },
+                [&assetRefs, name](const nlohmann::json &j, ReferenceResolver *)
+                {
+                    assetRefs.clear();
+                    if (!j.contains(name) || j[name].is_null())
                     {
-                        Logger::Warn(std::format("Invalid UUID for asset '{}': {}", name, uuid.ToString()));
-                        assetRef = nullptr;
+                        return;
+                    }
+                    const nlohmann::json &array = j[name];
+                    if (!array.is_array())
+                    {
+                        Logger::Warn(std::format("Asset list '{}' isn't an array: {}", name, array.dump()));
+                        return;
+                    }
+                    assetRefs.reserve(array.size());
+                    for (std::size_t i = 0; i < array.size(); ++i)
+                    {
+                        assetRefs.push_back(ResolveAssetReference<T>(std::format("{}[{}]", name, i), array[i]));
                     }
                 });
         }

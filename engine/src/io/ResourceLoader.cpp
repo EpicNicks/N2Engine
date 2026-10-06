@@ -1,6 +1,7 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/Logger.hpp"
+#include "engine/rendering/Material.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/text/Font.hpp"
 #include <algorithm>
@@ -28,18 +29,21 @@ namespace N2Engine::IO
                 return "Texture";
             if (ext == ".ttf" || ext == ".otf")
                 return "Font";
+            if (ext == ".mat")
+                return "Material";
             return "Unknown";
         }
     }
 
     void ResourceLoader::Initialize(const std::filesystem::path& projectRoot)
     {
-        // Font.cpp's and Texture.cpp's own static registrars only run if the linker keeps those files, which
-        // a program that names neither type wouldn't; registering here (idempotent) makes .ttf/.otf and the
-        // image extensions scan and load anyway. Done before the roots change, so a first registration
-        // doesn't rescan anything.
+        // Font.cpp's, Texture.cpp's and Material.cpp's own static registrars only run if the linker keeps those
+        // files, which a program that names none of the types wouldn't; registering here (idempotent) makes
+        // .ttf/.otf, the image extensions and .mat scan and load anyway. Done before the roots change, so a first
+        // registration doesn't rescan anything.
         Text::Font::RegisterLoader();
         Rendering::Texture::RegisterLoader();
+        Rendering::Material::RegisterLoader();
 
         _projectRoot = projectRoot;
         _assetsRoot = projectRoot / "assets";
