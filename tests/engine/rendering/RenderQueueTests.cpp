@@ -169,7 +169,7 @@ namespace
     }
 }
 
-TEST(RenderQueueDefaultsTest, DefaultsAreOpaqueWithTodaysState)
+TEST(RenderQueueDefaultsTest, DefaultsAreOpaqueAndUnblended)
 {
     constexpr RenderQueueKey key{};
     EXPECT_EQ(key.queue, RenderQueue::Opaque);
@@ -179,7 +179,7 @@ TEST(RenderQueueDefaultsTest, DefaultsAreOpaqueWithTodaysState)
     EXPECT_TRUE(state.depthTest);
     EXPECT_TRUE(state.depthWrite);
     EXPECT_EQ(state.cull, CullMode::Back);
-    EXPECT_TRUE(state.blend);
+    EXPECT_FALSE(state.blend) << "opaque draws don't blend (#3 P2); only the Transparent queue does";
     EXPECT_EQ(RenderState::Opaque(), state);
 
     constexpr RenderState transparent = RenderState::Transparent();
@@ -353,6 +353,7 @@ TEST(RenderQueueTest, EachQueuePassesItsRenderState)
     EXPECT_EQ(draws[0].id, 2);
     EXPECT_EQ(draws[0].state, RenderState::Opaque());
     EXPECT_TRUE(draws[0].state.depthWrite);
+    EXPECT_FALSE(draws[0].state.blend);
 
     EXPECT_EQ(draws[1].id, 1);
     EXPECT_EQ(draws[1].state, RenderState::Transparent());

@@ -63,8 +63,8 @@ namespace
     // Which pixel path a draw takes, chosen once per draw
     enum class ShadeKind : uint8_t
     {
-        Flat,    // unlit, untextured: one colour for the whole draw
-        Unlit,   // unlit, textured
+        Flat,    // unlit, untextured, white vertex colours: one colour for the whole draw
+        Unlit,   // unlit, textured or vertex-coloured
         Lit,     // Blinn-Phong
         Text     // alpha-tested SDF (SWShaderType::Text)
     };
@@ -73,17 +73,27 @@ namespace
     {
         float aR = 1.f, aG = 1.f, aB = 1.f, aA = 1.f;
         float shininess = 130.f;
+        float alphaCutoff = 0.f;          // unlit and lit: pixels with alpha below it are skipped
         const SWTexture* tex = nullptr;   // null if absent or invalid
         bool lit = false;
         bool text = false;
+        // Unlit and lit multiply by the interpolated vertex colour. Off when every vertex of the mesh is white,
+        // so such meshes (every built-in one) shade exactly as they did before vertex colour was read.
+        bool vertexColor = false;
         uint32_t flatColor = 0xFFFFFFFF;  // unlit + untextured: constant per draw
 
         [[nodiscard]] ShadeKind Kind() const
         {
             if (text) return ShadeKind::Text;
             if (lit)  return ShadeKind::Lit;
-            return tex ? ShadeKind::Unlit : ShadeKind::Flat;
+            return (tex || vertexColor) ? ShadeKind::Unlit : ShadeKind::Flat;
         }
+    };
+
+    // A shaded pixel before packing, so the alpha test sees the unrounded alpha (as OpenGL's discard does)
+    struct PxColor
+    {
+        float r, g, b, a;
     };
 
     // Main thread, at DrawMesh: copies what the draw reads from the material, so the render thread never
@@ -92,9 +102,11 @@ namespace
     {
         static const std::string albedoKey = "uAlbedo";
         static const std::string smoothnessKey = "uSmoothness";
+        static const std::string alphaCutoffKey = "uAlphaCutoff";
         SWMaterialSnapshot s;
         s.albedo = mat.GetVec4(albedoKey, {1, 1, 1, 1});
         s.smoothness = mat.GetFloat(smoothnessKey, 0.5f);
+        s.alphaCutoff = mat.GetFloat(alphaCutoffKey, 0.0f);
 
         if (auto* t = dynamic_cast<const SWTexture*>(mat.GetTexture()); t && t->IsValid())
             s.texture = t;
@@ -113,6 +125,7 @@ namespace
         r.lit = mat.shader == SWShaderType::Lit;
         r.text = mat.shader == SWShaderType::Text;
         r.shininess = 4.f + (256.f - 4.f) * mat.smoothness;   // matches mix(4, 256, smoothness)
+        r.alphaCutoff = mat.alphaCutoff;
         r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
         return r;
     }
@@ -162,28 +175,40 @@ namespace
     // Per-pixel shading. Same math as before, but everything variable was
     // hoisted into ResolvedMat / LitState, and pow() only runs when N·H > 0.
     // ------------------------------------------------------------------
-    inline uint32_t ShadeUnlitPx(float u, float v, const ResolvedMat& m)
+    // `vc` is the interpolated vertex colour, read only when m.vertexColor is set
+    inline PxColor ShadeUnlitPx(float u, float v, const PxColor& vc, const ResolvedMat& m)
     {
-        // Caller guarantees m.tex != nullptr (the flat case never reaches here). Bilinear or nearest, as the
-        // texture's filter says (SWTexture::SampleFiltered).
-        const uint32_t s = m.tex->SampleFiltered(u, v);
-        constexpr float k = 1.f / 255.f;
-        const float r = m.aR * (float)((s >>  0) & 0xFF) * k;
-        const float g = m.aG * (float)((s >>  8) & 0xFF) * k;
-        const float b = m.aB * (float)((s >> 16) & 0xFF) * k;
-        const float a = m.aA * (float)((s >> 24) & 0xFF) * k;
-        return PackRGBA(r, g, b, a);
+        float r = m.aR, g = m.aG, b = m.aB, a = m.aA;
+        if (m.tex)
+        {
+            // Bilinear or nearest, as the texture's filter says (SWTexture::SampleFiltered)
+            const uint32_t s = m.tex->SampleFiltered(u, v);
+            constexpr float k = 1.f / 255.f;
+            r *= (float)((s >>  0) & 0xFF) * k;
+            g *= (float)((s >>  8) & 0xFF) * k;
+            b *= (float)((s >> 16) & 0xFF) * k;
+            a *= (float)((s >> 24) & 0xFF) * k;
+        }
+        if (m.vertexColor)
+        {
+            r *= vc.r; g *= vc.g; b *= vc.b; a *= vc.a;
+        }
+        return PxColor{r, g, b, a};
     }
 
-    inline uint32_t ShadeLitPx(float wx, float wy, float wz,
-                               float nx, float ny, float nz,
-                               float u, float v,
-                               const ResolvedMat& m, const LitState& L)
+    inline PxColor ShadeLitPx(float wx, float wy, float wz,
+                              float nx, float ny, float nz,
+                              float u, float v, const PxColor& vc,
+                              const ResolvedMat& m, const LitState& L)
     {
         const float nlen = std::sqrt(nx*nx + ny*ny + nz*nz);
         if (nlen > 1e-6f) { const float inv = 1.f / nlen; nx *= inv; ny *= inv; nz *= inv; }
 
         float r = m.aR, g = m.aG, b = m.aB, a = m.aA;
+        if (m.vertexColor)
+        {
+            r *= vc.r; g *= vc.g; b *= vc.b; a *= vc.a;
+        }
         if (m.tex)
         {
             const uint32_t s = m.tex->SampleFiltered(u, v);
@@ -234,7 +259,7 @@ namespace
             lr += p.r * c; lg += p.g * c; lb += p.b * c;
         }
 
-        return PackRGBA(lr * r, lg * g, lb * b, a);
+        return PxColor{lr * r, lg * g, lb * b, a};
     }
 }
 
@@ -253,7 +278,7 @@ namespace
         float wp[3];  // world-space position
         float wn[3];  // world-space normal
         float uv[2];  // texcoord
-        float col[4]; // vertex colour (only the text shader reads it)
+        float col[4]; // vertex colour
     };
 
     inline ClipVertex LerpCV(const ClipVertex& a, const ClipVertex& b, float t)
@@ -498,28 +523,39 @@ namespace
                     if (!rs.depthTest || z < drow[px])
                     {
                         uint32_t colOut = 0;
-                        bool covered = true;   // only the text shader's alpha test clears it
-                        if constexpr (KIND == ShadeKind::Lit)
+                        bool covered = true;   // cleared by an alpha test (text, or uAlphaCutoff)
+                        if constexpr (KIND == ShadeKind::Lit || KIND == ShadeKind::Unlit)
                         {
                             const float iw = l0*A->invW + l1*B->invW + l2*C->invW;
                             const float rw = 1.f / iw;
                             const float u  = (l0*A->uw  + l1*B->uw  + l2*C->uw ) * rw;
                             const float v  = (l0*A->vw  + l1*B->vw  + l2*C->vw ) * rw;
-                            const float nx = (l0*A->nxw + l1*B->nxw + l2*C->nxw) * rw;
-                            const float ny = (l0*A->nyw + l1*B->nyw + l2*C->nyw) * rw;
-                            const float nz = (l0*A->nzw + l1*B->nzw + l2*C->nzw) * rw;
-                            const float wx = (l0*A->wxw + l1*B->wxw + l2*C->wxw) * rw;
-                            const float wy = (l0*A->wyw + l1*B->wyw + l2*C->wyw) * rw;
-                            const float wz = (l0*A->wzw + l1*B->wzw + l2*C->wzw) * rw;
-                            colOut = ShadeLitPx(wx, wy, wz, nx, ny, nz, u, v, mat, lit);
-                        }
-                        else if constexpr (KIND == ShadeKind::Unlit)
-                        {
-                            const float iw = l0*A->invW + l1*B->invW + l2*C->invW;
-                            const float rw = 1.f / iw;
-                            const float u  = (l0*A->uw + l1*B->uw + l2*C->uw) * rw;
-                            const float v  = (l0*A->vw + l1*B->vw + l2*C->vw) * rw;
-                            colOut = ShadeUnlitPx(u, v, mat);
+                            PxColor vc{1.f, 1.f, 1.f, 1.f};
+                            if (mat.vertexColor)
+                            {
+                                vc.r = (l0*A->crw + l1*B->crw + l2*C->crw) * rw;
+                                vc.g = (l0*A->cgw + l1*B->cgw + l2*C->cgw) * rw;
+                                vc.b = (l0*A->cbw + l1*B->cbw + l2*C->cbw) * rw;
+                                vc.a = (l0*A->caw + l1*B->caw + l2*C->caw) * rw;
+                            }
+                            PxColor px{};
+                            if constexpr (KIND == ShadeKind::Lit)
+                            {
+                                const float nx = (l0*A->nxw + l1*B->nxw + l2*C->nxw) * rw;
+                                const float ny = (l0*A->nyw + l1*B->nyw + l2*C->nyw) * rw;
+                                const float nz = (l0*A->nzw + l1*B->nzw + l2*C->nzw) * rw;
+                                const float wx = (l0*A->wxw + l1*B->wxw + l2*C->wxw) * rw;
+                                const float wy = (l0*A->wyw + l1*B->wyw + l2*C->wyw) * rw;
+                                const float wz = (l0*A->wzw + l1*B->wzw + l2*C->wzw) * rw;
+                                px = ShadeLitPx(wx, wy, wz, nx, ny, nz, u, v, vc, mat, lit);
+                            }
+                            else
+                            {
+                                px = ShadeUnlitPx(u, v, vc, mat);
+                            }
+                            // The alpha test (uAlphaCutoff): skipped like a discarded fragment
+                            covered = !(px.a < mat.alphaCutoff);
+                            colOut = PackRGBA(px.r, px.g, px.b, px.a);
                         }
                         else if constexpr (KIND == ShadeKind::Text)
                         {
@@ -689,7 +725,8 @@ void SoftwareRenderer::EndFrame()
             for (const size_t index : OrderDraws(keys))
             {
                 const DrawCommand& cmd = queue[index];
-                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.view, cmd.proj, cmd.material, cmd.state, lighting, camPos);
+                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.view, cmd.proj, cmd.material, cmd.state,
+                              cmd.firstIndex, cmd.indexCount, lighting, camPos);
             }
 
             // NOTE: GL upload stays in Present() — GL context lives on the main thread.
@@ -879,6 +916,20 @@ void SoftwareRenderer::UpdateSceneLighting(const SceneLightingData &lighting, co
 void SoftwareRenderer::DrawMesh(IMesh* mesh, const float* modelMatrix, IMaterial* material,
                                 const RenderState& state)
 {
+    // The whole mesh, as it is when the frame rasterizes
+    RecordDraw(mesh, modelMatrix, material, state, 0, std::numeric_limits<uint32_t>::max());
+}
+
+void SoftwareRenderer::DrawMesh(IMesh* mesh, const float* modelMatrix, IMaterial* material,
+                                const RenderState& state, const IndexRange& range)
+{
+    if (range.count == 0) return;
+    RecordDraw(mesh, modelMatrix, material, state, range.first, range.count);
+}
+
+void SoftwareRenderer::RecordDraw(IMesh* mesh, const float* modelMatrix, IMaterial* material,
+                                  const RenderState& state, const uint32_t firstIndex, const uint32_t indexCount)
+{
     // Just record — don't rasterize yet
     auto* swMesh = dynamic_cast<SWMesh*>(mesh);
     auto* swMat  = dynamic_cast<SWMaterial*>(material);
@@ -893,6 +944,8 @@ void SoftwareRenderer::DrawMesh(IMesh* mesh, const float* modelMatrix, IMaterial
     memcpy(cmd.modelMatrix, modelMatrix, 64);
     memcpy(cmd.view, m_view, 64);
     memcpy(cmd.proj, m_proj, 64);
+    cmd.firstIndex = firstIndex;
+    cmd.indexCount = indexCount;
     m_drawQueue.push_back(cmd);
 }
 
@@ -959,10 +1012,16 @@ void SoftwareRenderer::SetPixel(int x, int y, float depth, uint32_t color)
 
 void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
                                      const SWMaterialSnapshot& material, const RenderState& state,
+                                     const uint32_t firstIndex, const uint32_t indexCount,
                                      const SceneLightingData& lighting, const N2Engine::Math::Vector3& cameraPos)
 {
     if (!mesh || !mesh->IsValid()) return;
     if (m_width == 0 || m_height == 0) return;
+
+    // The indices to draw, clipped to the mesh as it is now
+    const size_t totalIndices = mesh->indices.size();
+    if (firstIndex >= totalIndices) return;
+    const size_t endIndex = std::min<size_t>(totalIndices, (size_t)firstIndex + (size_t)indexCount);
 
     float mv[16], mvp[16];
     Mul4x4(view, modelMatrix, mv);
@@ -970,11 +1029,18 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
 
     // Everything the pixel loop needs, resolved ONCE per draw. The old path
     // paid string-keyed uniform lookups and dynamic_casts per pixel.
-    const ResolvedMat rm = ResolveMaterial(material);
+    ResolvedMat rm = ResolveMaterial(material);
+    // Vertex colour only matters when some vertex isn't white (see ResolvedMat::vertexColor)
+    rm.vertexColor = std::ranges::any_of(mesh->vertices, [](const Vertex& vertex)
+    {
+        return vertex.color[0] != 1.f || vertex.color[1] != 1.f || vertex.color[2] != 1.f || vertex.color[3] != 1.f;
+    });
     const ShadeKind kind = rm.Kind();
     // Text without an atlas has no distance to test, so nothing is covered (as on OpenGL, where an
     // unbound sampler reads 0, below the edge)
     if (kind == ShadeKind::Text && !rm.tex) return;
+    // A flat colour below the alpha cutoff is discarded everywhere
+    if (kind == ShadeKind::Flat && rm.aA < rm.alphaCutoff) return;
 
     LitState lit;
     if (rm.lit)
@@ -1033,7 +1099,7 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
         }
     };
 
-    for (size_t i = 0; i + 2 < indices.size(); i += 3)
+    for (size_t i = firstIndex; i + 2 < endIndex; i += 3)
     {
         const XfVert& v0 = s_xf[indices[i + 0]];
         const XfVert& v1 = s_xf[indices[i + 1]];

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <vector>
 
@@ -95,7 +97,8 @@ namespace Renderer::Common
         virtual void UpdateSceneLighting(const SceneLightingData &lighting,
                                          const N2Engine::Math::Vector3 &cameraPosition) = 0;
 
-        /// Draws with the default RenderState (RenderState::Opaque()).
+        /// Draws with the default RenderState (RenderState::Opaque(): depth-tested and written, back faces
+        /// culled, not blended).
         void DrawMesh(IMesh *mesh, const float *modelMatrix, IMaterial *material)
         {
             DrawMesh(mesh, modelMatrix, material, RenderState{});
@@ -103,6 +106,36 @@ namespace Renderer::Common
         /// Draws with the given fixed-function state. The state applies to this draw only.
         virtual void DrawMesh(IMesh *mesh, const float *modelMatrix, IMaterial *material,
                               const RenderState &state) = 0;
+        /**
+         * Draws only the indices in `range` (a submesh: `range.count` indices from `range.first`), with the given
+         * state. The OpenGL backend draws them with an offset into the index buffer, and draws nothing for a
+         * range that isn't inside the mesh's indices; the software backend loops over them only, clipped to the
+         * mesh. Vulkan draws nothing yet (#43).
+         *
+         * The default body, for backends and test fakes that predate it: a range covering the whole mesh
+         * (first 0, count the mesh's index count) draws through the DrawMesh above; any other range draws
+         * **nothing**, never the whole mesh, and logs one warning per process.
+         */
+        virtual void DrawMesh(IMesh *mesh, const float *modelMatrix, IMaterial *material, const RenderState &state,
+                              const IndexRange &range)
+        {
+            if (!mesh)
+            {
+                return;
+            }
+            if (range.first == 0 && range.count == mesh->GetIndexCount())
+            {
+                DrawMesh(mesh, modelMatrix, material, state);
+                return;
+            }
+            static std::atomic_flag warned;
+            if (!warned.test_and_set())
+            {
+                std::cerr << GetRendererName()
+                          << ": this renderer can't draw part of a mesh (an IndexRange); such draws are skipped"
+                          << std::endl;
+            }
+        }
         /// Draws each object with its own RenderObject::state, in order.
         virtual void DrawObjects(const std::vector<RenderObject> &objects) = 0;
         virtual void OnResize(int width, int height) = 0;

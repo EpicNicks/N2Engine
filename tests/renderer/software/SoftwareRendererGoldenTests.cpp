@@ -542,3 +542,167 @@ TEST(SoftwareMaterialSnapshotTest, TwoDrawsOfOneMaterialKeepTheColourEachWasDraw
 
     renderer.Shutdown();
 }
+
+// ============================================================================
+// Index ranges (submeshes), vertex colour and the alpha cutoff (#3 P2)
+// ============================================================================
+
+namespace
+{
+    constexpr Rgb Blue{0, 0, 255};
+
+    /// One mesh holding two quads: the left half of the screen (indices 0..5), then the right half (6..11)
+    MeshData TwoHalves()
+    {
+        MeshData data = Quad(-1.0f, -1.0f, 0.0f, 1.0f, 0.0f);
+        const MeshData right = Quad(0.0f, -1.0f, 1.0f, 1.0f, 0.0f);
+        const auto base = static_cast<std::uint32_t>(data.vertices.size());
+        data.vertices.insert(data.vertices.end(), right.vertices.begin(), right.vertices.end());
+        for (const std::uint32_t index : right.indices)
+        {
+            data.indices.push_back(base + index);
+        }
+        return data;
+    }
+
+    template <typename Draws>
+    Frame RenderFrame(SoftwareRenderer &renderer, const Draws &draws)
+    {
+        renderer.BeginFrame();
+        renderer.SetViewProjection(Identity, Identity);
+        draws();
+        renderer.EndFrame();
+        renderer.Present();
+        Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Width) * Height * 4), Width, Height};
+        renderer.ReadFramebuffer(frame.rgba.data(), Width, Height);
+        return frame;
+    }
+}
+
+TEST(SoftwareIndexRangeTest, DrawsOnlyTheTrianglesInTheRange)
+{
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
+    renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+    IMaterial *red = renderer.CreateMaterial(renderer.GetStandardUnlitShader());
+    IMaterial *green = renderer.CreateMaterial(renderer.GetStandardUnlitShader());
+    IMesh *mesh = renderer.CreateMesh(TwoHalves());
+    ASSERT_NE(red, nullptr);
+    ASSERT_NE(green, nullptr);
+    ASSERT_NE(mesh, nullptr);
+    red->SetColor("uAlbedo", 1.0f, 0.0f, 0.0f, 1.0f);
+    green->SetColor("uAlbedo", 0.0f, 1.0f, 0.0f, 1.0f);
+
+    // Only the right half
+    Frame frame = RenderFrame(renderer, [&] { renderer.DrawMesh(mesh, Identity, red, RenderState{}, {6, 6}); });
+    Coverage c = CoverageOf(frame, Red);
+    EXPECT_EQ(c.count, Width * Height / 2);
+    EXPECT_EQ(c.minX, Width / 2);
+    EXPECT_EQ(CoverageOf(frame, Black).count, Width * Height / 2) << "the left half is untouched";
+
+    // Each half with its own material: two submeshes, two colours
+    frame = RenderFrame(renderer, [&]
+    {
+        renderer.DrawMesh(mesh, Identity, red, RenderState{}, {0, 6});
+        renderer.DrawMesh(mesh, Identity, green, RenderState{}, {6, 6});
+    });
+    c = CoverageOf(frame, Red);
+    EXPECT_EQ(c.count, Width * Height / 2);
+    EXPECT_EQ(c.maxX, Width / 2 - 1);
+    EXPECT_EQ(CoverageOf(frame, Green).minX, Width / 2);
+
+    // An empty range, or one starting past the end, draws nothing; one running past the end draws what is inside
+    frame = RenderFrame(renderer, [&]
+    {
+        renderer.DrawMesh(mesh, Identity, red, RenderState{}, {0, 0});
+        renderer.DrawMesh(mesh, Identity, red, RenderState{}, {12, 6});
+    });
+    EXPECT_EQ(CoverageOf(frame, Black).count, Width * Height);
+    frame = RenderFrame(renderer, [&] { renderer.DrawMesh(mesh, Identity, green, RenderState{}, {6, 600}); });
+    EXPECT_EQ(CoverageOf(frame, Green).count, Width * Height / 2);
+
+    renderer.Shutdown();
+}
+
+TEST(SoftwareVertexColourTest, UnlitAndLitMultiplyByTheVertexColour)
+{
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
+    renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+    // Green vertices under a white material: green
+    IMesh *greenVertices = renderer.CreateMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f));
+    IMaterial *unlit = renderer.CreateMaterial(renderer.GetStandardUnlitShader());
+    ASSERT_NE(greenVertices, nullptr);
+    ASSERT_NE(unlit, nullptr);
+    Frame frame = RenderFrame(renderer, [&] { renderer.DrawMesh(greenVertices, Identity, unlit); });
+    EXPECT_EQ(CoverageOf(frame, Green).count, Width * Height);
+
+    // ...and times a yellow material: still green (yellow x green)
+    unlit->SetColor("uAlbedo", 1.0f, 1.0f, 0.0f, 1.0f);
+    frame = RenderFrame(renderer, [&] { renderer.DrawMesh(greenVertices, Identity, unlit); });
+    EXPECT_EQ(CoverageOf(frame, Green).count, Width * Height);
+
+    // Lit, with only ambient light (white, full strength): the albedo times the vertex colour
+    Renderer::Common::SceneLightingData lighting;
+    lighting.ambientColor = N2Engine::Math::Vector3(1.0f, 1.0f, 1.0f);
+    renderer.UpdateSceneLighting(lighting, N2Engine::Math::Vector3(0.0f, 0.0f, 5.0f));
+    IMaterial *lit = renderer.CreateMaterial(renderer.GetStandardLitShader());
+    ASSERT_NE(lit, nullptr);
+    frame = RenderFrame(renderer, [&] { renderer.DrawMesh(greenVertices, Identity, lit); });
+    const Rgb centre = frame.At(Width / 2, Height / 2);
+    EXPECT_EQ(centre.r, 0);
+    EXPECT_GT(centre.g, 200);
+    EXPECT_EQ(centre.b, 0);
+
+    renderer.Shutdown();
+}
+
+TEST(SoftwareAlphaCutoffTest, PixelsBelowTheCutoffAreSkipped)
+{
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
+    renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+    // Left texel transparent blue, right texel opaque green
+    constexpr std::uint8_t texels[8] = {0, 0, 255, 0, 0, 255, 0, 255};
+    TextureOptions nearest;
+    nearest.filter = Renderer::Common::TextureFilter::Nearest;
+    ITexture *texture = renderer.CreateTexture(texels, 2, 1, 4, nearest);
+    ASSERT_NE(texture, nullptr);
+    IMaterial *cutout = renderer.CreateMaterial(renderer.GetStandardUnlitShader(), texture);
+    IMaterial *red = renderer.CreateMaterial(renderer.GetStandardUnlitShader());
+    IMesh *front = renderer.CreateMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
+    IMesh *back = renderer.CreateMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.5f));
+    ASSERT_NE(cutout, nullptr);
+    ASSERT_NE(red, nullptr);
+    ASSERT_NE(front, nullptr);
+    ASSERT_NE(back, nullptr);
+    red->SetColor("uAlbedo", 1.0f, 0.0f, 0.0f, 1.0f);
+
+    // No cutoff (the default, 0): every pixel is written, the transparent half as its colour (no blending)
+    Frame frame = RenderFrame(renderer, [&] { renderer.DrawMesh(front, Identity, cutout); });
+    EXPECT_EQ(CoverageOf(frame, Green).count, Width * Height / 2);
+    EXPECT_EQ(CoverageOf(frame, Blue).count, Width * Height / 2);
+
+    // Cutoff 0.5: the transparent half is skipped, colour and depth, so the red quad behind it shows there
+    cutout->SetFloat("uAlphaCutoff", 0.5f);
+    frame = RenderFrame(renderer, [&]
+    {
+        renderer.DrawMesh(front, Identity, cutout);
+        renderer.DrawMesh(back, Identity, red);
+    });
+    const Coverage green = CoverageOf(frame, Green);
+    const Coverage redBehind = CoverageOf(frame, Red);
+    EXPECT_EQ(green.count, Width * Height / 2);
+    EXPECT_EQ(green.minX, Width / 2);
+    EXPECT_EQ(redBehind.count, Width * Height / 2) << "seen through the hole";
+    EXPECT_EQ(redBehind.maxX, Width / 2 - 1);
+    EXPECT_EQ(CoverageOf(frame, Blue).count, 0);
+
+    // A flat colour below the cutoff draws nothing at all
+    red->SetColor("uAlbedo", 1.0f, 0.0f, 0.0f, 0.25f);
+    red->SetFloat("uAlphaCutoff", 0.5f);
+    frame = RenderFrame(renderer, [&] { renderer.DrawMesh(back, Identity, red); });
+    EXPECT_EQ(CoverageOf(frame, Black).count, Width * Height);
+
+    renderer.Shutdown();
+}

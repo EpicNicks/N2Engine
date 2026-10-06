@@ -19,6 +19,19 @@ namespace Renderer::Common
         std::vector<uint32_t> indices;
     };
 
+    /**
+     * A run of a mesh's indices, drawn on its own by IRenderer::DrawMesh(..., IndexRange): `count` indices
+     * starting at index `first` (a submesh). Both are counted in indices, not triangles or bytes; a range of
+     * whole triangles has both a multiple of 3.
+     */
+    struct IndexRange
+    {
+        uint32_t first = 0;
+        uint32_t count = 0;
+
+        friend constexpr bool operator==(const IndexRange &, const IndexRange &) = default;
+    };
+
     struct Transform
     {
         float model[16];

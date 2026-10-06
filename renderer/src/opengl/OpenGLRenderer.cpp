@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <iostream>
 #include <algorithm>
 
@@ -303,12 +304,14 @@ Renderer::Common::IMaterial* OpenGLRenderer::CreateMaterial(Common::IShader *sha
         material->SetFloat("uMetallic", 0.0f);
         material->SetFloat("uSmoothness", 0.5f);
         material->SetInt("uHasTexture", texture != nullptr ? 1 : 0);
+        // Set on every material: a uniform keeps the last value any material gave the shared program
+        material->SetFloat("uAlphaCutoff", 0.0f);
     }
     else if (shader == m_standardUnlitShader)
     {
         material->SetInt("uHasTexture", texture != nullptr ? 1 : 0);
+        material->SetFloat("uAlphaCutoff", 0.0f);
     }
-    // ⭐ END ADD ⭐
 
     auto [iter, inserted] = m_materials.try_emplace(material.get(), std::move(material));
     return iter->first;
@@ -477,7 +480,34 @@ void OpenGLRenderer::ApplyRenderState(const Common::RenderState &state)
 void OpenGLRenderer::DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
                               const Common::RenderState &state)
 {
-    if (!mesh || !mesh->IsValid() || !material)
+    if (!mesh)
+    {
+        return;
+    }
+    DrawIndices(mesh, modelMatrix, material, state, 0, mesh->GetIndexCount());
+}
+
+void OpenGLRenderer::DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
+                              const Common::RenderState &state, const Common::IndexRange &range)
+{
+    if (!mesh || range.count == 0)
+    {
+        return;
+    }
+    // Only a range inside the index buffer is drawn
+    const std::uint64_t end = static_cast<std::uint64_t>(range.first) + range.count;
+    if (end > mesh->GetIndexCount())
+    {
+        return;
+    }
+    DrawIndices(mesh, modelMatrix, material, state, range.first, range.count);
+}
+
+void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, Common::IMaterial *material,
+                                 const Common::RenderState &state, const std::uint32_t firstIndex,
+                                 const std::uint32_t indexCount)
+{
+    if (!mesh || !mesh->IsValid() || !material || !modelMatrix || indexCount == 0)
     {
         return;
     }
@@ -485,6 +515,10 @@ void OpenGLRenderer::DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Com
     // implicitly safe cast to OpenGL-specific types created
     const auto *glMesh = dynamic_cast<OpenGLMesh*>(mesh);
     auto *glMaterial = dynamic_cast<OpenGLMaterial*>(material);
+    if (!glMesh || !glMaterial)
+    {
+        return;
+    }
 
     // Apply material (binds shader and sets material properties)
     glMaterial->Apply();
@@ -529,7 +563,10 @@ void OpenGLRenderer::DrawMesh(Common::IMesh *mesh, const float *modelMatrix, Com
     // Draw mesh, with this draw's depth/cull/blend state
     ApplyRenderState(state);
     glBindVertexArray(glMesh->GetVAO());
-    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(glMesh->GetIndexCount()), GL_UNSIGNED_INT, nullptr);
+    // The offset into the bound index buffer is in bytes
+    const auto offset = static_cast<std::uintptr_t>(firstIndex) * sizeof(std::uint32_t);
+    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indexCount), GL_UNSIGNED_INT,
+                   reinterpret_cast<const void *>(offset));
     glBindVertexArray(0);
 }
 
@@ -682,27 +719,36 @@ void OpenGLRenderer::CreateStandardShaders()
         uniform mat4 uProjection;
 
         out vec2 fragTexCoord;
+        out vec4 fragColor;
 
         void main() {
             gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
             fragTexCoord = aTexCoord;
+            fragColor = aColor;
         }
     )";
 
+    // uAlbedo x texture x vertex colour, alpha-tested against uAlphaCutoff (0 keeps every fragment)
     const char *unlitFrag = R"(
         #version 330 core
 
         uniform vec4 uAlbedo;
         uniform sampler2D uTexture;
         uniform bool uHasTexture;
+        uniform float uAlphaCutoff;
 
         in vec2 fragTexCoord;
+        in vec4 fragColor;
         out vec4 FragColor;
 
         void main() {
             vec4 color = uAlbedo;
             if (uHasTexture) {
                 color *= texture(uTexture, fragTexCoord);
+            }
+            color *= fragColor;
+            if (color.a < uAlphaCutoff) {
+                discard;
             }
             FragColor = color;
         }
@@ -725,6 +771,7 @@ void OpenGLRenderer::CreateStandardShaders()
         out vec3 fragNormal;
         out vec3 fragWorldPos;
         out vec2 fragTexCoord;
+        out vec4 fragColor;
 
         void main() {
             vec4 worldPos = uModel * vec4(aPos, 1.0);
@@ -735,6 +782,7 @@ void OpenGLRenderer::CreateStandardShaders()
             fragNormal = normalize(normalMatrix * aNormal);
 
             fragTexCoord = aTexCoord;
+            fragColor = aColor;
             gl_Position = uProjection * uView * worldPos;
         }
     )";
@@ -748,6 +796,7 @@ void OpenGLRenderer::CreateStandardShaders()
         uniform bool uHasTexture;
         uniform float uMetallic;
         uniform float uSmoothness;
+        uniform float uAlphaCutoff;
 
         // Camera
         uniform vec3 uCameraPos;
@@ -791,6 +840,7 @@ void OpenGLRenderer::CreateStandardShaders()
         in vec3 fragNormal;
         in vec3 fragWorldPos;
         in vec2 fragTexCoord;
+        in vec4 fragColor;
 
         out vec4 FragColor;
 
@@ -800,10 +850,14 @@ void OpenGLRenderer::CreateStandardShaders()
         }
 
         void main() {
-            // Get base color
+            // Base colour: uAlbedo x texture x vertex colour, alpha-tested against uAlphaCutoff
             vec4 albedo = uAlbedo;
             if (uHasTexture) {
                 albedo *= texture(uTexture, fragTexCoord);
+            }
+            albedo *= fragColor;
+            if (albedo.a < uAlphaCutoff) {
+                discard;
             }
 
             vec3 N = normalize(fragNormal);

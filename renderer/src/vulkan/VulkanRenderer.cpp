@@ -111,6 +111,14 @@ void Renderer::Vulkan::VulkanRenderer::DrawMesh(Renderer::Common::IMesh* mesh, c
     // Nothing is drawn yet (#43). When it is, `state` selects the pipeline's depth/cull/blend settings.
 }
 
+void Renderer::Vulkan::VulkanRenderer::DrawMesh(Renderer::Common::IMesh* mesh, const float* modelMatrix,
+                                                Renderer::Common::IMaterial* material,
+                                                const Renderer::Common::RenderState& state,
+                                                const Renderer::Common::IndexRange& range)
+{
+    // Nothing is drawn yet (#43). When it is, `range` becomes the firstIndex and indexCount of vkCmdDrawIndexed.
+}
+
 void Renderer::Vulkan::VulkanRenderer::DrawObjects(const std::vector<Renderer::Common::RenderObject>& objects)
 {
 }

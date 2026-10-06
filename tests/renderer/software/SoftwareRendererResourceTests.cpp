@@ -50,6 +50,7 @@ namespace
     {
     public:
         int plainCreateTextureCalls = 0;
+        int drawCalls = 0; // the four-argument DrawMesh
 
         ITexture *CreateTexture(const uint8_t *, uint32_t, uint32_t, uint32_t) override
         {
@@ -82,7 +83,10 @@ namespace
                                  const N2Engine::Math::Vector3 &) override {}
         using IRenderer::DrawMesh;
         void DrawMesh(IMesh *, const float *, Renderer::Common::IMaterial *,
-                      const Renderer::Common::RenderState &) override {}
+                      const Renderer::Common::RenderState &) override
+        {
+            ++drawCalls;
+        }
         void DrawObjects(const std::vector<Renderer::Common::RenderObject> &) override {}
         void OnResize(int, int) override {}
         [[nodiscard]] Renderer::Common::IShader *GetStandardUnlitShader() const override { return nullptr; }
@@ -359,4 +363,34 @@ TEST(TextShaderTest, OnlyBackendsThatDrawTextHaveOne)
     // A built-in shader isn't destroyed by DestroyShaderProgram
     EXPECT_TRUE(software.DestroyShaderProgram(text));
     EXPECT_EQ(software.GetStandardTextShader(), text);
+}
+
+// ============================================================================
+// DrawMesh with an IndexRange: the default body, for renderers that predate it
+// ============================================================================
+
+TEST(IndexRangeDefaultTest, AWholeMeshRangeDrawsAndAPartialOneDrawsNothing)
+{
+    MinimalRenderer renderer;
+    Renderer::Common::IRenderer &base = renderer;
+    Renderer::Software::SWMesh mesh;
+    const MeshData quad = Quad();
+    mesh.vertices = quad.vertices;
+    mesh.indices = quad.indices;
+    constexpr float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const Renderer::Common::RenderState state{};
+
+    // The whole mesh goes to the four-argument DrawMesh
+    base.DrawMesh(&mesh, identity, nullptr, state, Renderer::Common::IndexRange{0, 6});
+    EXPECT_EQ(renderer.drawCalls, 1);
+
+    // Part of it is never drawn as the whole mesh: it is skipped (with one warning per process)
+    base.DrawMesh(&mesh, identity, nullptr, state, Renderer::Common::IndexRange{0, 3});
+    base.DrawMesh(&mesh, identity, nullptr, state, Renderer::Common::IndexRange{3, 3});
+    base.DrawMesh(&mesh, identity, nullptr, state, Renderer::Common::IndexRange{0, 0});
+    EXPECT_EQ(renderer.drawCalls, 1);
+
+    // No mesh, nothing drawn
+    base.DrawMesh(nullptr, identity, nullptr, state, Renderer::Common::IndexRange{0, 0});
+    EXPECT_EQ(renderer.drawCalls, 1);
 }
