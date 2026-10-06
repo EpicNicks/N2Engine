@@ -464,6 +464,9 @@ namespace
     // fragment below alpha 0.01, a colour that transparent draws nothing
     constexpr float kTextEdge     = 0.5f;
     constexpr float kTextMinAlpha = 0.01f;
+    // Text effect pixels must be this much nearer than the depth already written to draw: coplanar glyph faces
+    // differ from them only by rounding, and a face always wins over a neighbour's outline or shadow
+    constexpr float kTextEffectDepthBias = 1e-5f;
 
     inline int64_t Orient(const ScreenVert& a, const ScreenVert& b, const ScreenVert& c)
     {
@@ -642,14 +645,19 @@ namespace
                                         colOut = PackRGBA(r, g, b, a);
                                     }
                                 }
-                                if (!covered && mat.textOutline && mat.textOutlineA >= kTextMinAlpha &&
-                                    sdf >= mat.textOuterEdge)
+                                // Effect pixels yield to any face already drawn at (nearly) the same depth: a
+                                // coplanar glyph's face wrote depth there, and rounding could otherwise let this
+                                // glyph's outline or shadow pass the strict test by a hair and cover it
+                                const bool effectPassesDepth = !rs.depthTest || z < drow[px] - kTextEffectDepthBias;
+                                if (!covered && effectPassesDepth && mat.textOutline &&
+                                    mat.textOutlineA >= kTextMinAlpha && sdf >= mat.textOuterEdge)
                                 {
                                     covered = true;
                                     writesDepth = false;
                                     colOut = mat.textOutlineColor;
                                 }
-                                if (!covered && mat.textShadow && mat.textShadowA >= kTextMinAlpha &&
+                                if (!covered && effectPassesDepth && mat.textShadow &&
+                                    mat.textShadowA >= kTextMinAlpha &&
                                     mat.tex->SampleFirstChannelBilinear(u - mat.textShadowDU, v - mat.textShadowDV) >=
                                         mat.textOuterEdge)
                                 {
