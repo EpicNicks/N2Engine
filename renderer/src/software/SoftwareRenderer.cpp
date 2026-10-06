@@ -93,24 +93,31 @@ namespace
         }
     };
 
-    ResolvedMat ResolveMaterial(const SWMaterial* mat)
+    // Main thread, at DrawMesh: copies what the draw reads from the material, so the render thread never
+    // touches the SWMaterial (see SWMaterialSnapshot)
+    SWMaterialSnapshot SnapshotMaterial(const SWMaterial& mat)
+    {
+        SWMaterialSnapshot s;
+        s.albedo = mat.GetVec4("uAlbedo", {1, 1, 1, 1});
+        s.smoothness = mat.GetFloat("uSmoothness", 0.5f);
+
+        if (auto* t = dynamic_cast<const SWTexture*>(mat.GetTexture()); t && t->IsValid())
+            s.texture = t;
+
+        if (auto* sh = dynamic_cast<const SWShader*>(mat.GetShader()))
+            s.shader = sh->GetType();
+        return s;
+    }
+
+    // Render thread, once per draw: everything the pixel loop needs, from the draw's snapshot
+    ResolvedMat ResolveMaterial(const SWMaterialSnapshot& mat)
     {
         ResolvedMat r;
-        float smooth = 0.5f;
-        if (mat)
-        {
-            auto alb = mat->GetVec4("uAlbedo", {1, 1, 1, 1});
-            r.aR = alb[0]; r.aG = alb[1]; r.aB = alb[2]; r.aA = alb[3];
-            smooth = mat->GetFloat("uSmoothness", 0.5f);
-
-            if (auto* t = dynamic_cast<const SWTexture*>(mat->GetTexture()); t && t->IsValid())
-                r.tex = t;
-
-            auto* sh = dynamic_cast<const SWShader*>(mat->GetShader());
-            r.lit = sh && sh->GetType() == SWShaderType::Lit;
-            r.text = sh && sh->GetType() == SWShaderType::Text;
-        }
-        r.shininess = 4.f + (256.f - 4.f) * smooth;   // matches mix(4, 256, smoothness)
+        r.aR = mat.albedo[0]; r.aG = mat.albedo[1]; r.aB = mat.albedo[2]; r.aA = mat.albedo[3];
+        r.tex = mat.texture;
+        r.lit = mat.shader == SWShaderType::Lit;
+        r.text = mat.shader == SWShaderType::Text;
+        r.shininess = 4.f + (256.f - 4.f) * mat.smoothness;   // matches mix(4, 256, smoothness)
         r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
         return r;
     }
@@ -747,9 +754,7 @@ bool SoftwareRenderer::DestroyShaderProgram(IShader *shader)
     {
         return false;
     }
-    // A frame submitted by EndFrame rasterizes on the render thread until Present waits for it, and its
-    // draws may use this shader; let it finish first. (Returns at once when no frame is in flight.)
-    m_renderThread.WaitForFrame();
+    // No WaitForFrame: the frame in flight only has each draw's copy of its shader type (SWMaterialSnapshot)
     m_shaders.erase(it);
     return true;
 }
@@ -860,9 +865,7 @@ void SoftwareRenderer::DestroyMaterial(IMaterial *material)
     if (const auto it = std::ranges::find_if(m_materials, [material](const auto &p) { return p.get() == material; });
         it != m_materials.end())
     {
-        // The frame in flight on the render thread may still be shading with this material: let it finish
-        // first. (Returns at once when no frame is in flight.)
-        m_renderThread.WaitForFrame();
+        // No WaitForFrame: the frame in flight shades from each draw's copy (SWMaterialSnapshot), not from this
         m_materials.erase(it);
     }
 }
@@ -889,7 +892,9 @@ void SoftwareRenderer::DrawMesh(IMesh* mesh, const float* modelMatrix, IMaterial
 
     DrawCommand cmd;
     cmd.mesh = swMesh;
-    cmd.material = swMat;
+    // Copied now, on the main thread: a change to the material after this call affects later draws only,
+    // as OpenGL applies uniforms when the draw is submitted
+    cmd.material = SnapshotMaterial(*swMat);
     cmd.state = state;
     memcpy(cmd.modelMatrix, modelMatrix, 64);
     memcpy(cmd.view, m_view, 64);
@@ -959,7 +964,7 @@ void SoftwareRenderer::SetPixel(int x, int y, float depth, uint32_t color)
 }
 
 void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
-                                     SWMaterial* material, const RenderState& state)
+                                     const SWMaterialSnapshot& material, const RenderState& state)
 {
     if (!mesh || !mesh->IsValid()) return;
     if (m_width == 0 || m_height == 0) return;

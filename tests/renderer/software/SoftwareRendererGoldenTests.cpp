@@ -474,3 +474,67 @@ TEST(SoftwareResourceLifetimeTest, DestroyingWhileAFrameIsInFlightWaitsForIt)
 
     renderer.Shutdown();
 }
+
+// ============================================================================
+// Material uniforms are taken when the draw is recorded, as on OpenGL
+// ============================================================================
+
+TEST(SoftwareMaterialSnapshotTest, AChangeAfterDrawMeshDoesNotAffectThatDraw)
+{
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
+    renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+    IMaterial *material = renderer.CreateMaterial(renderer.GetStandardUnlitShader());
+    ASSERT_NE(material, nullptr);
+    IMesh *quad = renderer.CreateMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
+    ASSERT_NE(quad, nullptr);
+
+    material->SetColor("uAlbedo", 1.0f, 0.0f, 0.0f, 1.0f);
+    renderer.BeginFrame();
+    renderer.SetViewProjection(Identity, Identity);
+    renderer.DrawMesh(quad, Identity, material);
+    // Changed before the frame is submitted, and again while it may be rasterizing
+    material->SetColor("uAlbedo", 0.0f, 1.0f, 0.0f, 1.0f);
+    renderer.EndFrame();
+    material->SetColor("uAlbedo", 0.0f, 0.0f, 1.0f, 1.0f);
+    renderer.Present();
+
+    Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Width) * Height * 4), Width, Height};
+    renderer.ReadFramebuffer(frame.rgba.data(), Width, Height);
+    EXPECT_EQ(CoverageOf(frame, Red).count, Width * Height) << "the colour the material had at DrawMesh";
+
+    renderer.Shutdown();
+}
+
+TEST(SoftwareMaterialSnapshotTest, TwoDrawsOfOneMaterialKeepTheColourEachWasDrawnWith)
+{
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
+    renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+    IMaterial *material = renderer.CreateMaterial(renderer.GetStandardUnlitShader());
+    ASSERT_NE(material, nullptr);
+    IMesh *leftHalf = renderer.CreateMesh(Quad(-1.0f, -1.0f, 0.0f, 1.0f, 0.0f));
+    IMesh *rightHalf = renderer.CreateMesh(Quad(0.0f, -1.0f, 1.0f, 1.0f, 0.0f));
+    ASSERT_NE(leftHalf, nullptr);
+    ASSERT_NE(rightHalf, nullptr);
+
+    renderer.BeginFrame();
+    renderer.SetViewProjection(Identity, Identity);
+    material->SetColor("uAlbedo", 1.0f, 0.0f, 0.0f, 1.0f);
+    renderer.DrawMesh(leftHalf, Identity, material);
+    material->SetColor("uAlbedo", 0.0f, 1.0f, 0.0f, 1.0f);
+    renderer.DrawMesh(rightHalf, Identity, material);
+    renderer.EndFrame();
+    renderer.Present();
+
+    Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Width) * Height * 4), Width, Height};
+    renderer.ReadFramebuffer(frame.rgba.data(), Width, Height);
+    const Coverage red = CoverageOf(frame, Red);
+    const Coverage green = CoverageOf(frame, Green);
+    EXPECT_EQ(red.count, Width * Height / 2);
+    EXPECT_EQ(red.maxX, Width / 2 - 1);
+    EXPECT_EQ(green.count, Width * Height / 2);
+    EXPECT_EQ(green.minX, Width / 2);
+
+    renderer.Shutdown();
+}
