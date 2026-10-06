@@ -163,14 +163,16 @@ namespace N2Engine::Physics
             const Math::Vector3& direction,
             RaycastHit& hit,
             float maxDistance,
-            uint32_t layerMask) override;
+            uint32_t layerMask,
+            QueryTriggers triggers) override;
 
         int RaycastAll(
             const Math::Vector3& origin,
             const Math::Vector3& direction,
             std::vector<RaycastHit>& hits,
             float maxDistance,
-            uint32_t layerMask) override;
+            uint32_t layerMask,
+            QueryTriggers triggers) override;
 
         bool SphereCast(
             const Math::Vector3& origin,

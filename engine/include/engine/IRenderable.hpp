@@ -10,8 +10,8 @@ namespace N2Engine
 {
     /**
      * The pass a renderable draws in. Scene::Render draws every Opaque renderable first, in hierarchy
-     * order, then every Transparent one, sorted. There is no overlay queue: UI draws in its own canvas
-     * pass (#42).
+     * order, then every Transparent one, sorted. There is no overlay queue: overlay UI draws in its own
+     * canvas pass (#42), and a world-space canvas is one Transparent renderable (UI::Canvas).
      */
     enum class RenderQueue : std::uint8_t
     {

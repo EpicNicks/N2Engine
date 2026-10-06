@@ -17,9 +17,14 @@
 #include "engine/input/PointerDispatcher.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/Raycast.hpp"
+#include "engine/physics/SphereCollider.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
+#include "engine/ui/Canvas.hpp"
+#include "engine/ui/Image.hpp"
+#include "engine/ui/RectTransform.hpp"
+#include "engine/ui/UISystem.hpp"
 
 // Picking end to end in a real PhysX scene: an injected click goes through Camera::ScreenPointToRay and
 // Raycast::Single to OnMouseDown on the box under it; and the Lua Physics.Raycast/RaycastAll bindings
@@ -196,6 +201,140 @@ TEST_F(PickingPhysicsTest, BeyondTheFarPlaneIsNotPicked)
 
     Frame(Centre, true);
     EXPECT_EQ(distant->GetComponent<ClickCounter>()->down, 0);
+}
+
+TEST_F(PickingPhysicsTest, TheNearerOfAWorldCanvasAndAColliderWins)
+{
+    // A 2 x 2 unit world canvas at z = 0 under the centre of the view, covered by one raycast-target panel, and
+    // the application's UI hit provider rule (overlay, then world canvases unless a collider is nearer)
+    const auto canvas = UI::UISystem::CreateCanvas("WorldCanvas", UI::CanvasRenderMode::WorldSpace);
+    canvas->GetComponent<UI::Canvas>()->SetSize(Vector2(200.0f, 200.0f));
+    const auto panel = UI::UISystem::CreateElement("Panel");
+    panel->GetComponent<UI::RectTransform>()->StretchToParent();
+    panel->AddComponent<UI::Image>();
+    auto *panelCounter = panel->AddComponent<ClickCounter>();
+    canvas->AddChild(panel, false);
+    _scene->AddRootGameObject(canvas);
+    _dispatcher.SetUIHitProvider([this](const Vector2 &screen)
+    {
+        return UI::UISystem::HitTestScreenPoint(*_scene, &_camera, screen, Viewport, _dispatcher.GetPickMask());
+    });
+
+    // A box behind the canvas: the canvas is nearer
+    const auto behind = SpawnBox("Behind", Vector3(0.0f, 0.0f, -4.0f));
+    Step();
+    Frame(Centre, true);
+    EXPECT_EQ(panelCounter->down, 1);
+    EXPECT_EQ(behind->GetComponent<ClickCounter>()->down, 0);
+    EXPECT_TRUE(_dispatcher.IsPointerOverUI());
+    Frame(Centre, false);
+
+    // A box in front of it: the box is nearer, and the world pick gets it
+    const auto front = SpawnBox("Front", Vector3(0.0f, 0.0f, 4.0f));
+    Step();
+    Frame(Centre, true);
+    EXPECT_EQ(front->GetComponent<ClickCounter>()->down, 1);
+    EXPECT_EQ(panelCounter->down, 1);
+    EXPECT_FALSE(_dispatcher.IsPointerOverUI());
+    Frame(Centre, false);
+
+    // A collider outside the pick mask doesn't block the canvas
+    _dispatcher.SetPickMask(Layers::MaskOf(Layers::IgnoreRaycast));
+    Frame(Centre, true);
+    EXPECT_EQ(panelCounter->down, 2);
+    EXPECT_EQ(front->GetComponent<ClickCounter>()->down, 1);
+    Frame(Centre, false);
+}
+
+namespace
+{
+    /// A 2 x 2 unit world canvas at the origin, covered by one raycast-target panel with a ClickCounter
+    GameObject::Ptr AddWorldCanvasPanel(Scene &scene)
+    {
+        const auto canvas = UI::UISystem::CreateCanvas("WorldCanvas", UI::CanvasRenderMode::WorldSpace);
+        canvas->GetComponent<UI::Canvas>()->SetSize(Vector2(200.0f, 200.0f));
+        const auto panel = UI::UISystem::CreateElement("Panel");
+        panel->GetComponent<UI::RectTransform>()->StretchToParent();
+        panel->AddComponent<UI::Image>();
+        panel->AddComponent<ClickCounter>();
+        canvas->AddChild(panel, false);
+        scene.AddRootGameObject(canvas);
+        return panel;
+    }
+}
+
+TEST_F(PickingPhysicsTest, RaycastCanSkipTriggers)
+{
+    const auto zone = GameObject::Create("Zone");
+    zone->CreatePositionable();
+    auto *sphere = zone->AddComponent<SphereCollider>();
+    sphere->SetRadius(1.0f);
+    sphere->SetIsTrigger(true);
+    _scene->AddRootGameObject(zone);
+    const auto wall = SpawnBox("Wall", Vector3(0.0f, 0.0f, -4.0f));
+    Step();
+
+    RaycastHit hit;
+    ASSERT_TRUE(Raycast::Single(Vector3(0.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f), hit, 100.0f));
+    EXPECT_EQ(hit.gameObject, zone.get()) << "triggers are hit by default";
+    ASSERT_TRUE(Raycast::Single(Vector3(0.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f), hit, 100.0f,
+                                Layers::DefaultRaycastMask, QueryTriggers::Ignore));
+    EXPECT_EQ(hit.gameObject, wall.get()) << "QueryTriggers::Ignore goes through the trigger";
+
+    std::vector<RaycastHit> hits;
+    EXPECT_EQ(Raycast::All(Vector3(0.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f), hits, 100.0f), 2);
+    EXPECT_EQ(Raycast::All(Vector3(0.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f), hits, 100.0f,
+                           Layers::DefaultRaycastMask, QueryTriggers::Ignore), 1);
+}
+
+TEST_F(PickingPhysicsTest, ATriggerAroundAWorldCanvasDoesntBlockIt)
+{
+    const auto panel = AddWorldCanvasPanel(*_scene);
+    _dispatcher.SetUIHitProvider([this](const Vector2 &screen)
+    {
+        return UI::UISystem::HitTestScreenPoint(*_scene, &_camera, screen, Viewport, _dispatcher.GetPickMask());
+    });
+
+    // An NPC's interaction volume enclosing the canvas: the ray enters it well in front of the canvas
+    const auto zone = GameObject::Create("InteractionZone");
+    zone->CreatePositionable();
+    auto *sphere = zone->AddComponent<SphereCollider>();
+    sphere->SetRadius(4.0f);
+    sphere->SetIsTrigger(true);
+    zone->AddComponent<ClickCounter>();
+    _scene->AddRootGameObject(zone);
+    Step();
+
+    Frame(Centre, true);
+    EXPECT_EQ(panel->GetComponent<ClickCounter>()->down, 1) << "the trigger doesn't block the canvas";
+    EXPECT_EQ(zone->GetComponent<ClickCounter>()->down, 0);
+    EXPECT_TRUE(_dispatcher.IsPointerOverUI());
+}
+
+TEST_F(PickingPhysicsTest, AColliderAroundTheCameraDoesntBlockAWorldCanvas)
+{
+    const auto panel = AddWorldCanvasPanel(*_scene);
+    _dispatcher.SetUIHitProvider([this](const Vector2 &screen)
+    {
+        return UI::UISystem::HitTestScreenPoint(*_scene, &_camera, screen, Viewport, _dispatcher.GetPickMask());
+    });
+
+    // A first-person player's body around the camera (at z = 10): the ray starts inside it
+    const auto body = SpawnBox("PlayerBody", Vector3(0.0f, 0.0f, 10.0f));
+    Step();
+
+    Frame(Centre, true);
+    EXPECT_EQ(panel->GetComponent<ClickCounter>()->down, 1) << "a collider the ray starts inside doesn't block";
+    EXPECT_TRUE(_dispatcher.IsPointerOverUI());
+    Frame(Centre, false);
+
+    // A solid box between them still blocks it (the world pick then gets whatever it finds first)
+    SpawnBox("Front", Vector3(0.0f, 0.0f, 4.0f));
+    Step();
+    Frame(Centre, true);
+    EXPECT_EQ(panel->GetComponent<ClickCounter>()->down, 1);
+    EXPECT_FALSE(_dispatcher.IsPointerOverUI());
+    static_cast<void>(body);
 }
 
 TEST_F(PickingPhysicsTest, CursorOutsideTheWindowPicksNothing)

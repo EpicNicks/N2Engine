@@ -62,7 +62,7 @@
 <div class="content">
 
 <h1>UI</h1>
-<p class="lead">Screen-space overlay UI, built from ordinary GameObjects and components as in Unity's uGUI: a <code>Canvas</code> at the root, <code>RectTransform</code> layout instead of a <code>Positionable</code>, and <code>Image</code> and <code>UIText</code> graphics. The UI is drawn in its own pass after the scene and gets the pointer before world picking. This page covers the coordinate space, layout, draw order, the UI pass, images, text, pointer input and the Lua API. Buttons and world-space canvases come later in <a href="https://github.com/EpicNicks/N2Engine/issues/42">issue #42</a>.</p>
+<p class="lead">UI built from ordinary GameObjects and components as in Unity's uGUI: a <code>Canvas</code> at the root, <code>RectTransform</code> layout instead of a <code>Positionable</code>, and <code>Image</code> and <code>UIText</code> graphics. A screen-space overlay canvas is drawn in its own pass after the scene and gets the pointer before world picking; a world-space canvas <span class="badge">PR #67</span> is a rectangle in the scene, drawn as one transparent item and picked by the camera's ray. This page covers the coordinate space, layout, draw order, the UI pass, images, text, pointer input, buttons, world-space canvases and the Lua API (<a href="https://github.com/EpicNicks/N2Engine/issues/42">issue #42</a>).</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -76,6 +76,7 @@
 <li><a href="#text">Text (UIText)</a></li>
 <li><a href="#pointer">Pointer input</a></li>
 <li><a href="#button">Button</a></li>
+<li><a href="#world">World-space canvases</a></li>
 <li><a href="#lua">Lua API</a></li>
 <li><a href="#serialization">Serialization</a></li>
 <li><a href="#not-yet">Not yet</a></li>
@@ -88,9 +89,9 @@
 <table>
 <thead><tr><th>Component</th><th>Role</th></tr></thead>
 <tbody>
-<tr><td><code>UI::Canvas</code></td><td>The root of a UI tree. Has a <code>sortOrder</code>; the render mode is always <code>ScreenSpaceOverlay</code> for now. One per object.</td></tr>
+<tr><td><code>UI::Canvas</code></td><td>The root of a UI tree. Has a <code>sortOrder</code> and a render mode: <code>ScreenSpaceOverlay</code> (the default) or, <span class="badge">PR #67</span>, <code>WorldSpace</code> (<a href="#world">World-space canvases</a>). One per object.</td></tr>
 <tr><td><code>UI::RectTransform</code></td><td>Anchors, pivot, anchored position and size delta; the element's rect is resolved from its parent's rect. One per object (<code>AddComponent</code> returns the existing one).</td></tr>
-<tr><td><code>UI::UIGraphic</code></td><td>Base of everything the UI pass draws: a colour, a <code>raycastTarget</code> flag, a tint (<span class="badge">PR #54</span>, below), and <code>RenderUI(renderer, rect, state)</code>. It is not an <code>IRenderable</code>, so the scene pass never draws it.</td></tr>
+<tr><td><code>UI::UIGraphic</code></td><td>Base of everything the UI pass draws: a colour, a <code>raycastTarget</code> flag, a tint (<span class="badge">PR #54</span>, below), and <code>RenderUI(renderer, rect, state, canvasToWorld)</code> (<span class="badge">PR #67</span> the last argument is identity on an overlay canvas, which the three-argument overload passes; a subclass overrides the four-argument one and adds <code>using UIGraphic::RenderUI;</code> so the three-argument call still compiles on it). It is not an <code>IRenderable</code>, so the scene pass never draws it itself; a world-space canvas, which is one, draws its graphics.</td></tr>
 <tr><td><code>UI::Image</code></td><td>A <code>UIGraphic</code> that fills its rect with its colour, optionally multiplied by a sprite (a texture asset) or a raw texture.</td></tr>
 <tr><td><code>UI::UIText</code> <span class="badge">PR #53</span></td><td>A <code>UIGraphic</code> that draws text inside its rect with an SDF font (<a href="#text">Text</a>).</td></tr>
 <tr><td><code>UI::Button</code> <span class="badge">PR #54</span></td><td>Makes its object clickable: tints a target graphic for the pointer's state and invokes an <code>OnClick</code> event (<a href="#button">Button</a>).</td></tr>
@@ -155,10 +156,10 @@ rect     = (pivotPos - pivot * size, size)
 <p class="src">Source: <code>engine/src/ui/RectTransform.cpp</code> — <code>RectTransform::Resolve</code>, <code>SetOffsetMin</code>, <code>SetOffsetMax</code>; <code>engine/src/ui/UISystem.cpp</code> — <code>LayOut</code></p>
 
 <h2 id="order">Canvases and draw order <span class="badge">PR #50</span></h2>
-<p><code>UISystem::CollectGraphics(scene, viewport)</code> lays out the scene's UI and returns its graphics in draw order. The UI pass and the hit test both use it.</p>
+<p><code>UISystem::CollectGraphics(scene, viewport)</code> lays out the scene's screen-space overlay UI and returns its graphics in draw order. The UI pass and the overlay hit test both use it. World-space canvases <span class="badge">PR #67</span> are left out of it: each one is laid out on its own (<code>CollectWorldCanvasGraphics</code>) and draws in the scene's Transparent queue (<a href="#world">below</a>).</p>
 <ol class="steps">
 <li><strong>Find the canvases.</strong> A canvas is an enabled <code>Canvas</code> component on an object that is active in the hierarchy and has no <code>Canvas</code> above it. Objects are visited depth first, with roots in scene order. Inactive objects are skipped with their subtrees, and so is the tree of a disabled root <code>Canvas</code>. A <code>Canvas</code> below another one is ignored, enabled or not: its object is an ordinary element of the outer canvas.</li>
-<li><strong>Sort them</strong> by <code>sortOrder</code>, lowest first. The sort is stable, so canvases with equal sort orders keep hierarchy order. A higher <code>sortOrder</code> draws on top.</li>
+<li><strong>Drop the world-space ones</strong> <span class="badge">PR #67</span> and <strong>sort the rest</strong> by <code>sortOrder</code>, lowest first. The sort is stable, so canvases with equal sort orders keep hierarchy order. A higher <code>sortOrder</code> draws on top.</li>
 <li><strong>Lay out each canvas.</strong> The canvas's rect is the whole viewport, <code>(0, 0, width, height)</code>, whatever a <code>RectTransform</code> on its object says (the canvas's <code>RectTransform</code>, if any, is given that rect). The tree is walked depth first, parents before children and children in order, skipping inactive objects and their subtrees.</li>
 <li><strong>List the graphics.</strong> Each object's enabled <code>UIGraphic</code> components are listed in component order, with the object's rect.</li>
 </ol>
@@ -240,6 +241,9 @@ canvas-&gt;AddChild(label, false);
 <tr><td><code>lineSpacing</code></td><td>Multiplies the font's line height</td><td>1</td></tr>
 <tr><td><code>letterSpacing</code></td><td>Extra space between glyphs, in ems (negative tightens)</td><td>0</td></tr>
 <tr><td><code>raycastTarget</code></td><td><code>UIGraphic</code>'s flag. Off for text: the pointer goes through to what is underneath.</td><td>off</td></tr>
+<tr><td><code>outlineWidth</code>, <code>outlineColor</code> <span class="badge">PR #66</span></td><td>An outline under the glyphs, its width in ems (0.05 at 24 px is 1.2 px). See <a href="text.html#effects">Text effects</a>.</td><td>0, opaque black</td></tr>
+<tr><td><code>shadowOffset</code>, <code>shadowColor</code>, <code>shadowSoftness</code> <span class="badge">PR #66</span></td><td>A shadow under the text, offset in ems (+y up); drawn while the colour's alpha is above 0. With offset 0 and some softness, a glow.</td><td>(0, 0), transparent, 0</td></tr>
+<tr><td><code>softness</code> <span class="badge">PR #66</span></td><td>How far the edges fade, in ems (OpenGL only)</td><td>0</td></tr>
 </tbody>
 </table>
 </div>
@@ -263,6 +267,7 @@ canvas-&gt;AddChild(label, false);
 <li>The mesh is built relative to the anchor, and the model matrix (<code>UIText::ModelMatrixFor(anchor)</code>, a translation) moves it to the rect. So the layout and mesh are rebuilt only when the text, font, size, an alignment, spacing, <code>wrap</code> or, with <code>wrap</code> on, the rect's <em>width</em> changes. Moving the rect, or changing only its height, changes nothing but the model matrix. A rebuilt mesh is updated in place with <code>IRenderer::UpdateMesh</code>, or recreated where the backend can't.</li>
 <li>Each font's atlas is one texture per (renderer, font), shared with every <code>TextRenderer</code> and <code>UIText</code> drawing that font on that renderer and destroyed with its last user. The mesh, material and atlas share are created when the text first draws and released in <code>OnDestroy</code>. Like <code>Image</code>, it uses the renderer's <a href="application.html#renderer-lifetime">lifetime token</a>: a new renderer, or one re-created at the old address, gets new resources, and the old ones are destroyed only if their renderer still exists.</li>
 <li>Empty text, or text with only spaces, draws nothing.</li>
+<li>The effects (outline, shadow, softness) are material uniforms set on each draw, like the colour, so changing them rebuilds nothing <span class="badge">PR #66</span>. They are limited by the font's SDF spread (0.15 em for the default font), as for <code>TextRenderer</code>. The colour and the button tint colour the face only; the effect colours are drawn as set. See <a href="text.html#effects">Text effects</a>.</li>
 </ul>
 <div class="callout note" id="design-ui-text-name">
 <p class="callout-title">Design decision: the component is called <code>UIText</code></p>
@@ -283,11 +288,12 @@ canvas-&gt;AddChild(label, false);
 <p class="src">Source: <code>engine/include/engine/ui/UIText.hpp</code>; <code>engine/src/ui/UIText.cpp</code> — <code>UIText::RenderUI</code>, <code>UIText::AnchorFor</code>; <code>engine/src/rendering/TextDrawing.cpp</code>; tests: <code>UITextTest.*</code> (<code>tests/engine/ui/UITextTests.cpp</code>), <code>SoftwareUIGoldenTest.UITextInkSitsInsideItsRectWithItsAlignment</code>, <code>SoftwareUIGoldenTest.UITextDrawsOverAnImageInHierarchyOrder</code></p>
 
 <h2 id="pointer">Pointer input <span class="badge">PR #50</span></h2>
-<p>The application's <code>PointerDispatcher</code> has <code>UISystem::MakeApplicationHitProvider()</code> as its UI hit provider. It is installed when <code>Application</code> is constructed. Each frame the dispatcher asks it first (see <a href="input.html#picking">Picking</a>). The provider runs <code>UISystem::HitTestWindowPoint</code> on the current scene with the window's size:</p>
+<p>The application's <code>PointerDispatcher</code> has <code>UISystem::MakeApplicationHitProvider()</code> as its UI hit provider. It is installed when <code>Application</code> is constructed. Each frame the dispatcher asks it first (see <a href="input.html#picking">Picking</a>). The provider runs <code>UISystem::HitTestScreenPoint</code> <span class="badge">PR #67</span> on the current scene with the main camera, the window's size and the dispatcher's pick mask. Its first step, for screen-space overlay canvases, is <code>UISystem::HitTestWindowPoint</code>:</p>
 <ol class="steps">
 <li>A cursor outside the viewport (anything but <code>0 &lt;= x &lt; width</code> and <code>0 &lt;= y &lt; height</code>) hits nothing, the same rule as the world pick. Without a window or a loaded scene, nothing is hit either.</li>
 <li>The point is converted to canvas space, and the scene is laid out for the viewport (<code>CollectGraphics</code>).</li>
 <li>The graphics are tried in <em>reverse</em> draw order, so the topmost comes first. The first graphic with <code>raycastTarget</code> set whose rect contains the point is the hit, and the target is that graphic's GameObject.</li>
+<li><span class="badge">PR #67</span> If no overlay element is hit, the world-space canvases are tried along the camera's ray, and a nearer collider beats them (<a href="#world-hit">World canvas hit testing</a>).</li>
 </ol>
 <p>When the UI hits an element, the world pick doesn't run, and <code>PointerDispatcher::IsPointerOverUI()</code> (Lua <code>Input.IsPointerOverUI()</code>) is true for that frame. The element's object gets the same <code>OnMouse*</code> callbacks a picked world object gets, with the same capture rules: <code>OnMouseDown</code> captures, <code>OnMouseDrag</code> follows the pointer off the element and onto the world, and <code>OnMouseUpAsButton</code> fires only if the button is released over the element. Delivery follows the same rule as picking: every component of an active object, disabled ones included. An element deactivated while hovered is dropped without <code>OnMouseExit</code>.</p>
 <div class="table-wrap">
@@ -303,7 +309,7 @@ canvas-&gt;AddChild(label, false);
 </tbody>
 </table>
 </div>
-<p>A host with its own viewport, or a dispatcher of your own, installs its own provider, for example <code>dispatcher.SetUIHitProvider([&amp;](const Math::Vector2 &amp;p) { return UI::UISystem::HitTestWindowPoint(scene, p, viewport); })</code>. Passing <code>nullptr</code> removes UI picking.</p>
+<p>A host with its own viewport, or a dispatcher of your own, installs its own provider, for example <code>dispatcher.SetUIHitProvider([&amp;](const Math::Vector2 &amp;p) { return UI::UISystem::HitTestScreenPoint(scene, &amp;camera, p, viewport, dispatcher.GetPickMask()); })</code>, or <code>HitTestWindowPoint(scene, p, viewport)</code> for overlay canvases only. Passing <code>nullptr</code> removes UI picking.</p>
 <p class="src">Source: <code>engine/src/ui/UISystem.cpp</code> — <code>UISystem::HitTest</code>, <code>HitTestWindowPoint</code>, <code>MakeApplicationHitProvider</code>; <code>engine/src/Application.cpp</code> — <code>Application::Application</code>; tests: <code>UIHitTest.*</code>, <code>UIPointerTest.*</code> (<code>tests/engine/ui/UITests.cpp</code>)</p>
 
 <div class="callout note" id="design-ui">
@@ -407,21 +413,110 @@ button:SetInteractable(false)       -- greyed out until the save loads
 </div>
 <p class="src">Source: <code>engine/include/engine/ui/Button.hpp</code>; <code>engine/src/ui/Button.cpp</code>; <code>engine/src/ui/UISystem.cpp</code> — <code>UISystem::CreateButton</code>; <code>engine/include/engine/base/EventHandler.hpp</code> — <code>EventHandler::Clear</code>; tests: <code>ButtonTest.*</code>, <code>ButtonHelperTest.*</code> (<code>tests/engine/ui/ButtonTests.cpp</code>), <code>SoftwareUIGoldenTest.APressedButtonDrawsItsImageWithThePressedTint</code>, <code>LuaUITest.ConfiguresAButton</code>, <code>LuaUITest.ButtonOnClickListeners</code></p>
 
+<h2 id="world">World-space canvases <span class="badge">PR #67</span></h2>
+<p>A canvas whose render mode is <code>WorldSpace</code> is a flat rectangle in the scene, like Unity's World Space canvas: a health bar over a character, a screen on a console, a sign. Its children lay out and draw exactly as on an overlay canvas, but in the canvas's own rect, placed in 3D by its object's transform, drawn with the scene camera, hidden by geometry in front of it, and clicked through the camera's ray. Closes the world-space part of <a href="https://github.com/EpicNicks/N2Engine/issues/42">#42</a>.</p>
+<pre class="lang-cpp"><code>auto sign = UI::UISystem::CreateCanvas("Sign", UI::CanvasRenderMode::WorldSpace); // scale 0.01, 100 x 100
+sign-&gt;GetComponent&lt;UI::Canvas&gt;()-&gt;SetSize({400.0f, 200.0f});   // 4 x 2 world units
+sign-&gt;GetPositionable()-&gt;SetPosition({0.0f, 2.0f, -3.0f});       // the canvas's centre (its pivot)
+scene.AddRootGameObject(sign);
+
+auto button = UI::UISystem::CreateButton("Open", "Open the door");
+sign-&gt;AddChild(button, false);                                   // laid out in the 400 x 200 rect
+</code></pre>
+
+<h3 id="world-size">Size, placement and scale</h3>
+<ul>
+<li><strong>The render mode.</strong> <code>Canvas::SetRenderMode(CanvasRenderMode::WorldSpace)</code>, <code>GetRenderMode</code>, <code>IsWorldSpace</code>. Switching to world space gives the object a <code>Positionable</code> (at the origin, scale 1) and a <code>RectTransform</code> (Unity's 100 x 100 default) if it has none; switching back removes nothing. <code>UISystem::CreateCanvas(name, CanvasRenderMode::WorldSpace)</code> does the same and also sets the scale to 0.01. A canvas switched with <code>SetRenderMode</code> keeps scale 1, so its default 100 x 100 rect is 100 x 100 <em>world units</em>; set the scale yourself (see the example below this list). Only a root canvas counts, as for overlays: a world-space <code>Canvas</code> under another canvas is an ordinary element of that canvas.</li>
+<li><strong>Size.</strong> The canvas rect is <code>(0, 0, width, height)</code> in <em>canvas units</em>, where the size is the canvas object's own <code>RectTransform</code> <code>sizeDelta</code> (<code>Canvas::GetSize</code>, <code>SetSize</code>), as in Unity, where a world canvas's RectTransform width and height are its size. Its anchors and anchored position are ignored, because the canvas has no parent rect. Without a <code>RectTransform</code> the size is 100 x 100. The canvas's <code>RectTransform::GetRect()</code> is given that rect, and children resolve in it exactly as on an overlay canvas.</li>
+<li><strong>Placement.</strong> The object's <code>Positionable</code> puts the canvas's <em>pivot</em> (the <code>RectTransform</code>'s pivot, the centre by default) at its position. The canvas lies in the object's local x/y plane, facing +Z like a <code>TextRenderer</code>, and its rotation and parents' transforms apply. Without a <code>Positionable</code> the canvas is at the origin, unrotated, with scale 1.</li>
+<li><strong>Scale.</strong> The transform's scale is the size of one canvas unit in world units, as in Unity, where a world canvas is usually scaled to 0.01: a 400 x 200 canvas is then 4 x 2 world units, and font sizes and button sizes keep their usual pixel-like values. Uneven scales stretch the canvas; a zero scale hides it from hit tests.</li>
+<li><strong>The matrix.</strong> <code>Canvas::GetCanvasToWorldMatrix()</code> is the object's local-to-world matrix times a translation by <code>-pivot * size</code>: it maps a canvas-space point (units, y up) to the world.</li>
+</ul>
+<p>Making an existing overlay canvas a world canvas <span class="badge">PR #67</span>: <code>SetRenderMode</code> doesn't touch the scale, so set it, and the size, by hand.</p>
+<pre class="lang-cpp"><code>auto *canvas = hud-&gt;GetComponent&lt;UI::Canvas&gt;();
+canvas-&gt;SetRenderMode(UI::CanvasRenderMode::WorldSpace);        // adds a Positionable (scale 1) and a RectTransform
+hud-&gt;GetPositionable()-&gt;SetLocalScale({0.01f, 0.01f, 0.01f});   // otherwise 100 x 100 canvas units = 100 x 100 world units
+canvas-&gt;SetSize({400.0f, 300.0f});                              // 4 x 3 world units
+hud-&gt;GetPositionable()-&gt;SetPosition({0.0f, 1.5f, -2.0f});
+</code></pre>
+
+<h3 id="world-draw">Drawing and sorting</h3>
+<p><code>Canvas</code> is an <code>IRenderable</code>. A world-space root canvas draws in the <strong>Transparent</strong> queue (<code>DrawsInQueue</code>); every other canvas draws in neither queue, so overlay canvases stay in the UI pass and world canvases never reach it.</p>
+<ol class="steps">
+<li><strong>One item.</strong> <code>Scene::Render</code> sorts the canvas with the other transparent renderables by its object's position (the pivot), back to front (<a href="application.html#design-render-queue">render queues</a>). The whole canvas is drawn at that point, so another transparent object is either entirely behind or entirely in front of it.</li>
+<li><strong>Inside it.</strong> <code>Canvas::RenderInQueue</code> calls <code>UISystem::RenderWorldCanvas</code>, which lays the canvas out (<code>CollectWorldCanvasGraphics</code>) and draws its graphics in hierarchy order, the same order as on an overlay canvas: a later sibling over an earlier one, a child over its parent.</li>
+<li><strong>Matrices.</strong> The renderer keeps the scene camera's view and projection. Each graphic's model matrix is <code>canvasToWorld × its rect matrix</code>: <code>RenderUI</code> receives <code>GetCanvasToWorldMatrix()</code> as its <code>canvasToWorld</code> argument and multiplies it in (<code>UIGraphic::ComposeModel</code>). On an overlay canvas that argument is identity, and the model matrix is exactly what it was.</li>
+<li><strong>State.</strong> <code>UISystem::WorldCanvasState()</code>: the Transparent queue's state with culling off.</li>
+</ol>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>RenderState</code> field</th><th>World canvas</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><code>depthTest</code></td><td>on</td><td>Opaque geometry in front of the canvas hides it.</td></tr>
+<tr><td><code>depthWrite</code></td><td>off</td><td>All the canvas's graphics lie in one plane. Without depth writes they cover each other in hierarchy order, with no z-fighting.</td></tr>
+<tr><td><code>cull</code></td><td><code>None</code></td><td>A canvas seen from behind still shows, mirrored, as in Unity.</td></tr>
+<tr><td><code>blend</code></td><td>on</td><td>As in the UI pass: semi-transparent panels show what is behind them.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout note" id="world-sw-text">
+<p class="callout-title">Software renderer: text on a world canvas writes depth</p>
+<p>The software renderer has no blending and draws <code>UIText</code> alpha-tested, and its text shader writes depth wherever a draw depth-tests, whatever the state says (see <a href="text.html">Text</a>). On an overlay canvas nothing is depth-tested, so this never shows. On a world canvas the glyphs write the canvas plane's depth, and the depth test is strict (<code>z &lt; depth</code>), so a graphic later in the same canvas that overlaps the glyphs fails the test on those pixels: there the text stays visible <em>through</em> a later sibling, instead of being covered. Everything else keeps hierarchy order, and so does OpenGL, which honours <code>depthWrite</code> off for text. A transparent object behind the canvas is drawn before it (back to front) and is unaffected. Keep text above, or beside, what should cover it in a world canvas when the software backend matters.</p>
+</div>
+
+<h3 id="world-hit">World canvas hit testing</h3>
+<p><code>UISystem::HitTestScreenPoint(scene, camera, windowPoint, viewport, physicsMask)</code> is the whole UI hit test, and what the application's provider runs:</p>
+<ol class="steps">
+<li><strong>Overlay canvases first</strong> (<code>HitTestWindowPoint</code>), as before. Their hit wins: they are drawn over everything. A point outside the viewport hits nothing at all.</li>
+<li><strong>The camera's ray.</strong> Otherwise <code>camera-&gt;ScreenPointToRay(windowPoint, viewport)</code>, from the near plane to the far plane, as the world pick casts it.</li>
+<li><strong>Each world canvas</strong> (<code>HitTestWorldCanvases</code>): <code>RaycastCanvasPlane</code> intersects the ray with the canvas's plane (either side; nothing for a ray parallel to it, a crossing behind the camera or past the far plane, or a zero scale) and converts the crossing point to canvas units by solving <code>offset = u·axisX + v·axisY</code> for the canvas's world axes, so rotated canvases and uneven scale under rotated parents work. Then the same rect test as on an overlay canvas runs on that canvas's graphics, topmost first. Graphics outside the canvas rect are still hit, since they still draw.</li>
+<li><strong>The nearest canvas hit</strong> along the ray wins; a canvas the ray crosses where nothing is a raycast target lets it through to the next one. On an exact tie, the later canvas in hierarchy order wins.</li>
+<li><strong>Against physics:</strong> if a <em>solid</em> collider on a layer in <code>physicsMask</code> (the dispatcher's pick mask) is hit <em>nearer</em> along the same ray (<code>Physics::Raycast::All</code> up to the canvas's distance, with <code>QueryTriggers::Ignore</code>), the provider returns nothing, so the dispatcher falls through to its world pick, which finds that collider. A collider must be more than <code>UISystem::BlockTolerance</code> (10<sup>&minus;4</sup> units) in front of the canvas to block it <span class="badge">PR #67</span>, so a canvas on a collider's face (a sign on a wall) isn't blocked by rounding. Mount a canvas slightly off a surface anyway: the depth test is strict, so a canvas exactly in a wall's plane is hidden by the wall wherever they meet, or flickers. The blocking query goes to the application's physics backend (<code>Application::Get3DPhysicsBackend</code>), whatever <code>scene</code> is passed; without a backend nothing blocks.</li>
+<li><strong>What doesn't block</strong> <span class="badge">PR #67</span>: <em>trigger</em> colliders never block a world canvas, as Unity's <code>GraphicRaycaster</code> doesn't, so an NPC's interaction sphere around its world-space button doesn't make the button unclickable from outside. A collider the ray <em>starts inside</em> doesn't either: PhysX reports it at distance 0, and hits within <code>UISystem::StartInsideTolerance</code> (10<sup>&minus;4</sup> units) of the ray's origin are ignored, so a first-person player capsule around the camera doesn't hide every world canvas. The other colliders along the ray still count.</li>
+<li><strong>Only colliders block</strong> <span class="badge">PR #67</span>: the hit test never looks at what is drawn, so opaque geometry with no collider doesn't block a canvas. A canvas hidden behind a mesh-only wall is invisible (the depth test) but still takes clicks through it; give such a wall a collider, or deactivate the canvas.</li>
+</ol>
+<p>A world canvas hit is a UI hit: the element's object gets the <code>OnMouse*</code> callbacks, <code>IsPointerOverUI()</code> is true, and the world pick doesn't run. A <code>Button</code> on a world canvas therefore works unchanged, highlighted, pressed and clicked through the camera's ray.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Situation</th><th>What happens</th><th>Test</th></tr></thead>
+<tbody>
+<tr><td>An overlay element and a world canvas element under the cursor</td><td>The overlay element</td><td><code>WorldCanvasHitTest.OverlayFirstThenTheCameraRay</code></td></tr>
+<tr><td>Two world canvases along the ray</td><td>The nearer one with a raycast target there</td><td><code>WorldCanvasHitTest.TheNearestCanvasHitWinsAndMissesFallThrough</code></td></tr>
+<tr><td>A canvas behind the camera or past the far plane</td><td>Not hit</td><td><code>WorldCanvasHitTest.ACanvasBehindTheCameraOrBeyondTheFarPlaneIsNotHit</code></td></tr>
+<tr><td>A collider in front of the canvas</td><td>The collider (world pick); behind it, the canvas; outside the pick mask, it doesn't block</td><td><code>PickingPhysicsTest.TheNearerOfAWorldCanvasAndAColliderWins</code></td></tr>
+<tr><td>A button on a world canvas clicked</td><td>Highlighted, pressed, one click; the world behind gets nothing</td><td><code>WorldCanvasButtonTest.*</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout note" id="design-world-canvas-item">
+<p class="callout-title">Design decision: a world canvas is one transparent item, drawn by its <code>Canvas</code></p>
+<p>The canvas, not each graphic, is the <code>IRenderable</code>, so the scene sorts one item per canvas by its position, and the graphics inside keep hierarchy order, which is what UI layout means (a later sibling covers an earlier one). Sorting each graphic by depth instead would interleave coplanar graphics unpredictably and let other transparent objects slip between a panel and its label. The cost is the usual one for a single sorted item: a transparent object that crosses the canvas's plane is wholly in front or wholly behind. Making the existing <code>Canvas</code> the renderable (rather than adding a helper component) keeps world canvases to one component and one setting; an overlay canvas returns false from <code>DrawsInQueue</code> for both queues, so the scene pass ignores it, and <code>CollectGraphics</code> drops world canvases, so the UI pass ignores them. The graphics take the canvas's matrix as a <code>RenderUI</code> argument rather than reading it from somewhere, so <code>Image</code>, <code>UIText</code> and <code>Button</code> need no other change, and overlay drawing is bit-for-bit the same.</p>
+</div>
+<div class="callout note" id="design-world-canvas-hit">
+<p class="callout-title">Design decision: overlay first, then the nearer of a world canvas and a collider</p>
+<p>The dispatcher asks its UI provider first and runs the world pick only if the UI hit nothing (<a href="input.html#picking">Picking</a>). Overlay canvases are drawn over everything, so they keep winning outright. A world canvas is in the scene, so it should only win where it is visible, which means comparing distances along one ray: the provider finds the nearest world canvas element, then casts the same ray against physics up to that distance with the dispatcher's pick mask, and gives the pointer up (returns nothing) if a collider is nearer. The dispatcher's composition stays unchanged, and the world pick then finds the same collider. The alternative, a third provider with distances that the dispatcher compares, would need distances from every world provider, including custom ones that only return an object. The cost is one extra physics raycast per frame, only while the pointer is over a world canvas element.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/ui/Canvas.hpp</code>; <code>engine/src/ui/Canvas.cpp</code> — <code>Canvas::GetCanvasToWorldMatrix</code>, <code>Canvas::RenderInQueue</code>; <code>engine/src/ui/UISystem.cpp</code> — <code>RenderWorldCanvas</code>, <code>RaycastCanvasPlane</code>, <code>HitTestWorldCanvases</code>, <code>HitTestScreenPoint</code>; <code>engine/src/ui/UIGraphic.cpp</code> — <code>ComposeModel</code>; tests: <code>WorldCanvasTest.*</code>, <code>WorldCanvasDrawTest.*</code>, <code>WorldCanvasHitTest.*</code>, <code>WorldCanvasButtonTest.*</code> (<code>tests/engine/ui/WorldCanvasTests.cpp</code>), <code>SoftwareWorldCanvasGoldenTest.*</code>, <code>PickingPhysicsTest.TheNearerOfAWorldCanvasAndAColliderWins</code>, <code>LuaUITest.MakesAWorldSpaceCanvas</code></p>
+
 <h2 id="lua">Lua API <span class="badge">PR #50</span></h2>
 <p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code>, <code>"Image"</code>, <code>"UIText"</code> and <code>"Button"</code> <span class="badge">PR #54</span>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Lua</th><th>Does</th></tr></thead>
 <tbody>
-<tr><td><code>UI.CreateCanvas([name])</code>, <code>UI.CreateElement([name])</code></td><td>The C++ helpers. Return a new GameObject that the script owns until it is added to a scene or parent.</td></tr>
+<tr><td><code>UI.CreateCanvas([name[, mode]])</code>, <code>UI.CreateElement([name])</code></td><td>The C++ helpers. Return a new GameObject that the script owns until it is added to a scene or parent. <span class="badge">PR #67</span> <code>mode</code> is <code>"ScreenSpaceOverlay"</code> (the default) or <code>"WorldSpace"</code>; an unknown mode raises an error.</td></tr>
 <tr><td><code>RectTransform:Get/SetAnchorMin</code>, <code>AnchorMax</code>, <code>Pivot</code>, <code>AnchoredPosition</code>, <code>SizeDelta</code>, <code>OffsetMin</code>, <code>OffsetMax</code></td><td>As in C++, with <code>Vector2</code> values</td></tr>
 <tr><td><code>RectTransform:StretchToParent()</code>, <code>RectTransform:GetRect()</code></td><td>As in C++. The rect is a <code>Rect</code> value with <code>x</code>, <code>y</code>, <code>width</code>, <code>height</code> and <code>Contains(point)</code>.</td></tr>
 <tr><td><code>Canvas:Get/SetSortOrder</code></td><td>As in C++</td></tr>
+<tr><td><code>Canvas:SetRenderMode(mode)</code>, <code>GetRenderMode()</code>, <code>IsWorldSpace()</code> <span class="badge">PR #67</span></td><td>By name: <code>"ScreenSpaceOverlay"</code> or <code>"WorldSpace"</code>. An unknown name raises an error and changes nothing.</td></tr>
+<tr><td><code>Canvas:GetSize()</code>, <code>SetSize(size)</code> <span class="badge">PR #67</span></td><td>A world canvas's size in canvas units, a <code>Vector2</code> (the <code>RectTransform</code>'s <code>sizeDelta</code>). Its transform's scale (<code>go:GetPositionable():SetScale(...)</code>) is the size of a canvas unit in world units.</td></tr>
 <tr><td><code>Image:Get/SetColor</code>, <code>Image:Get/SetRaycastTarget</code></td><td>As in C++. Raw textures aren't exposed to Lua.</td></tr>
 <tr><td><code>Image:SetSprite(path | nil)</code>, <code>Image:GetSprite()</code> <span class="badge">PR #64</span></td><td>An image file such as <code>"res://ui/icon.png"</code>, loaded through <code>Resources</code>; <code>nil</code> clears the sprite. A file that doesn't load raises an error and keeps the current sprite. <code>GetSprite</code> returns the sprite's path (<code>res://</code> for a project asset, the file path for one loaded from elsewhere, <code>""</code> for a texture made at runtime), or <code>nil</code> without one.</td></tr>
 <tr><td><code>UI.CreateText([name[, text]])</code> <span class="badge">PR #53</span></td><td><code>UI.CreateElement</code> plus a <code>UIText</code> showing <code>text</code> (name defaults to <code>"Text"</code>)</td></tr>
 <tr><td><code>UIText:Get/SetText</code>, <code>Get/SetColor</code>, <code>Get/SetRaycastTarget</code>, <code>Get/SetFontSize</code>, <code>Get/SetWrap</code>, <code>Get/SetLineSpacing</code>, <code>Get/SetLetterSpacing</code> <span class="badge">PR #53</span></td><td>As in C++</td></tr>
 <tr><td><code>UIText:SetAlignment(h, v)</code>, <code>UIText:GetAlignment()</code> <span class="badge">PR #53</span></td><td>By name: <code>"Left"</code>, <code>"Center"</code>, <code>"Right"</code> and <code>"Top"</code>, <code>"Middle"</code>, <code>"Bottom"</code>, <code>"Baseline"</code>, as for <code>TextRenderer</code>. An unknown name raises an error and changes nothing.</td></tr>
+<tr><td><code>UIText:SetOutline(width, color)</code>, <code>SetShadow(x, y, color[, softness])</code>, <code>SetSoftness(s)</code> and their getters <span class="badge">PR #66</span></td><td>The <a href="text.html#effects-lua">text effects</a>, lengths in ems. <code>GetOutline()</code> returns <code>width, color</code>; <code>GetShadow()</code> returns <code>x, y, color, softness</code>.</td></tr>
 <tr><td><code>UIText:SetFont(path | nil)</code> <span class="badge">PR #53</span></td><td>A font file such as <code>"res://fonts/Title.ttf"</code>; <code>nil</code> goes back to the default font. A file that doesn't load raises an error and keeps the current font.</td></tr>
 <tr><td><code>UI.CreateButton([name[, label]])</code> <span class="badge">PR #54</span></td><td><code>UISystem::CreateButton</code>: an <code>Image</code>, a <code>Button</code> and a <code>"Label"</code> child (both default to <code>"Button"</code>)</td></tr>
 <tr><td><code>Button:IsInteractable()</code>, <code>SetInteractable(b)</code>; <code>Get/SetNormalColor</code>, <code>HighlightedColor</code>, <code>PressedColor</code>, <code>DisabledColor</code>; <code>Get/SetColorMultiplier</code>, <code>Get/SetFadeDuration</code>; <code>GetCurrentTint()</code> <span class="badge">PR #54</span></td><td>As in C++</td></tr>
@@ -451,25 +546,35 @@ local text = title:GetComponent("UIText")
 text:SetFontSize(48)
 text:SetAlignment("Center", "Middle")
 </code></pre>
-<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code> — <code>BindUI</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>; <code>engine-api.lua</code>; tests: <code>LuaUITest.BuildsAndLaysOutAnElement</code>, <code>LuaUITest.CreatesAndConfiguresText</code>, <code>LuaUITest.ConfiguresAButton</code>, <code>LuaUITest.ButtonOnClickListeners</code>, <code>LuaSceneTest.EveryScriptableComponentCanBeAdded</code></p>
+<p>A world-space sign with a button <span class="badge">PR #67</span>:</p>
+<pre class="lang-lua"><code>local sign = UI.CreateCanvas("Sign", "WorldSpace")    -- scale 0.01
+sign:GetComponent("Canvas"):SetSize(Vector2(400, 200)) -- 4 x 2 world units
+sign:GetPositionable():SetPosition(Vector3(0, 2, -3))
+SceneManager.GetCurrentScene():AddRootGameObject(sign)
+
+local open = UI.CreateButton("Open", "Open the door")
+sign:AddChild(open)
+open:GetComponent("Button"):AddOnClick(function() print("opening") end)
+</code></pre>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code> — <code>BindUI</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>; <code>engine-api.lua</code>; tests: <code>LuaUITest.MakesAWorldSpaceCanvas</code>, <code>LuaUITest.BuildsAndLaysOutAnElement</code>, <code>LuaUITest.CreatesAndConfiguresText</code>, <code>LuaUITest.ConfiguresAButton</code>, <code>LuaUITest.ButtonOnClickListeners</code>, <code>LuaSceneTest.EveryScriptableComponentCanBeAdded</code></p>
 
 <h2 id="serialization">Serialization</h2>
 <p><code>Canvas</code>, <code>RectTransform</code>, <code>Image</code>, <code>UIText</code> and <code>Button</code> are built-in components, registered under those names. They save their fields like any <code>SerializableComponent</code>:</p>
 <ul>
-<li><code>Canvas</code> saves <code>sortOrder</code>.</li>
+<li><code>Canvas</code> saves <code>sortOrder</code> and, <span class="badge">PR #67</span>, <code>renderMode</code> by name (<code>"ScreenSpaceOverlay"</code> or <code>"WorldSpace"</code>). A scene saved before world canvases has no <code>renderMode</code> and loads as an overlay, and so does an unknown name. A world canvas's size, pivot and placement are its <code>RectTransform</code> and transform, saved as usual.</li>
 <li><code>RectTransform</code> saves <code>anchorMin</code>, <code>anchorMax</code>, <code>pivot</code>, <code>anchoredPosition</code> and <code>sizeDelta</code>, each as <code>{"x", "y"}</code>.</li>
 <li><code>Image</code> saves <code>color</code>, <code>raycastTarget</code> and <span class="badge">PR #64</span> <code>sprite</code> (the texture asset's UUID, or <code>null</code>).</li>
-<li><code>UIText</code> <span class="badge">PR #53</span> saves <code>color</code>, <code>raycastTarget</code>, <code>text</code>, <code>font</code> (the font asset's UUID, or <code>null</code> for the default font), <code>fontSize</code>, <code>horizontalAlign</code> and <code>verticalAlign</code> (by name, such as <code>"Center"</code>, as <code>TextRenderer</code> does), <code>wrap</code>, <code>lineSpacing</code> and <code>letterSpacing</code>.</li>
+<li><code>UIText</code> <span class="badge">PR #53</span> saves <code>color</code>, <code>raycastTarget</code>, <code>text</code>, <code>font</code> (the font asset's UUID, or <code>null</code> for the default font), <code>fontSize</code>, <code>horizontalAlign</code> and <code>verticalAlign</code> (by name, such as <code>"Center"</code>, as <code>TextRenderer</code> does), <code>wrap</code>, <code>lineSpacing</code> and <code>letterSpacing</code>, and <span class="badge">PR #66</span> the effects <code>outlineWidth</code>, <code>outlineColor</code>, <code>shadowOffset</code> (<code>{"x", "y"}</code>), <code>shadowColor</code>, <code>shadowSoftness</code> and <code>softness</code> (a scene saved before them loads with every effect off).</li>
 <li><code>Button</code> <span class="badge">PR #54</span> saves <code>interactable</code>, <code>normalColor</code>, <code>highlightedColor</code>, <code>pressedColor</code>, <code>disabledColor</code>, <code>colorMultiplier</code> and <code>fadeDuration</code>. Its <code>OnClick</code> listeners and an explicitly set target graphic are not saved (<a href="#design-button-listeners">why</a>); a loaded button tints the first graphic on its object, and shows its saved state's tint when it attaches to the scene.</li>
 </ul>
 <p>A missing field keeps its default (for <code>UIText</code>, <code>raycastTarget</code> stays off; a scene saved before sprites existed loads with none). The resolved rect, an <code>Image</code>'s raw texture, the text's layout and mesh, and a graphic's tint are not saved.</p>
-<p class="src">Source: <code>engine/src/serialization/BuiltinComponents.cpp</code>; <code>engine/include/engine/serialization/MathSerialization.hpp</code> (<code>Vector2</code>); <code>engine/include/engine/text/TextJson.hpp</code> (alignment names); tests: <code>RectTransformLayoutTest.SerializationRoundTrip</code>, <code>UITextTest.SettingsSurviveASceneRoundTrip</code>, <code>ButtonTest.SceneRoundTripKeepsTheSettingsButNotTheListeners</code></p>
+<p class="src">Source: <code>engine/src/serialization/BuiltinComponents.cpp</code>; <code>engine/include/engine/serialization/MathSerialization.hpp</code> (<code>Vector2</code>); <code>engine/include/engine/text/TextJson.hpp</code> (alignment names); tests: <code>RectTransformLayoutTest.SerializationRoundTrip</code>, <code>WorldCanvasTest.RenderModeIsSavedByName</code>, <code>WorldCanvasTest.OldScenesAndUnknownNamesLoadAsOverlay</code>, <code>UITextTest.SettingsSurviveASceneRoundTrip</code>, <code>ButtonTest.SceneRoundTripKeepsTheSettingsButNotTheListeners</code></p>
 
 <h2 id="not-yet">Not yet</h2>
 <ul>
 <li>For <strong>Button</strong>: sprite-swap and animation transitions, keyboard and gamepad navigation and selection (Unity's <code>Selected</code> state), persistent (saved) listeners, and pointer events bubbling to a parent.</li>
 <li>For <strong>UI text</strong>: clipping to the rect, best-fit sizing, rich text, and a reference-resolution scale for font sizes.</li>
-<li><strong>World-space canvas</strong>, which will be drawn as one transparent item in the scene, keeping hierarchy order inside it, and picked by ray–plane intersection against the physics hit.</li>
+<li>For <strong>world-space canvases</strong>: Unity's Screen Space - Camera mode, a per-canvas event camera (the main camera is used), clipping a transparent object that crosses the canvas's plane, and blending on the software renderer (<a href="#world-sw-text">text writes depth there</a>).</li>
 <li>Rotation and scale on <code>RectTransform</code>, layout groups, scroll views, masks, a reference-resolution scaler, and events for buttons other than the left.</li>
 <li>For <strong>Image</strong>: sprite sub-rects and atlases, 9-slicing, and preserving the aspect ratio (a sprite is stretched over the whole rect).</li>
 </ul>

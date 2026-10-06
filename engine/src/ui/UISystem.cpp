@@ -1,12 +1,18 @@
 #include "engine/ui/UISystem.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <ranges>
 
+#include <math/Vector3.hpp>
+
 #include "engine/Application.hpp"
+#include "engine/Camera.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Layers.hpp"
+#include "engine/Positionable.hpp"
+#include "engine/physics/Raycast.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
@@ -35,6 +41,7 @@ namespace N2Engine::UI
         struct RootCanvas
         {
             GameObject *gameObject = nullptr;
+            Canvas *canvas = nullptr;
             int sortOrder = 0;
         };
 
@@ -49,9 +56,9 @@ namespace N2Engine::UI
             }
             if (gameObject->HasComponent<Canvas>())
             {
-                if (const Canvas *canvas = ActiveCanvasOn(*gameObject))
+                if (Canvas *canvas = ActiveCanvasOn(*gameObject))
                 {
-                    out.push_back(RootCanvas{gameObject.get(), canvas->GetSortOrder()});
+                    out.push_back(RootCanvas{gameObject.get(), canvas, canvas->GetSortOrder()});
                 }
                 return;
             }
@@ -69,8 +76,8 @@ namespace N2Engine::UI
             }
 
             RectTransform *rectTransform = gameObject.GetComponent<RectTransform>();
-            // The canvas covers the viewport whatever its RectTransform says; an object without one fills its
-            // parent
+            // The canvas covers its rect (the viewport, or a world canvas's size) whatever its RectTransform's
+            // anchors say; an object without one fills its parent
             Rect rect = parentRect;
             if (rectTransform && !isCanvas)
             {
@@ -97,6 +104,24 @@ namespace N2Engine::UI
                 }
             }
         }
+
+        /// Every root canvas in the scene, in hierarchy order (both render modes)
+        std::vector<RootCanvas> FindAllCanvases(const Scene &scene)
+        {
+            std::vector<RootCanvas> canvases;
+            for (const auto &root : scene.GetRootGameObjects())
+            {
+                FindCanvases(root, canvases);
+            }
+            return canvases;
+        }
+
+        /// The canvas rect of a world-space canvas: (0, 0, its size)
+        Rect WorldCanvasRect(const Canvas &canvas)
+        {
+            const Math::Vector2 size = canvas.GetSize();
+            return Rect{0.0f, 0.0f, size.x, size.y};
+        }
     }
 
     std::vector<UIDrawItem> UISystem::CollectGraphics(const Scene &scene, const Vector2i &viewport)
@@ -107,11 +132,9 @@ namespace N2Engine::UI
             return items;
         }
 
-        std::vector<RootCanvas> canvases;
-        for (const auto &root : scene.GetRootGameObjects())
-        {
-            FindCanvases(root, canvases);
-        }
+        std::vector<RootCanvas> canvases = FindAllCanvases(scene);
+        // World-space canvases draw in the scene's Transparent queue and are hit by the camera's ray instead
+        std::erase_if(canvases, [](const RootCanvas &canvas) { return canvas.canvas->IsWorldSpace(); });
         // Lower sortOrder first (underneath); ties keep hierarchy order
         std::ranges::stable_sort(canvases, std::less{}, &RootCanvas::sortOrder);
 
@@ -188,9 +211,179 @@ namespace N2Engine::UI
             {
                 return nullptr;
             }
-            const Vector2i viewport = Application::GetInstance().GetWindow().GetWindowDimensions();
-            return HitTestWindowPoint(SceneManager::GetCurSceneRef(), windowPoint, viewport);
+            Application &application = Application::GetInstance();
+            const Vector2i viewport = application.GetWindow().GetWindowDimensions();
+            return HitTestScreenPoint(SceneManager::GetCurSceneRef(), application.GetMainCamera(), windowPoint,
+                                      viewport, application.GetPointerDispatcher().GetPickMask());
         };
+    }
+
+    std::vector<UIDrawItem> UISystem::CollectWorldCanvasGraphics(const Canvas &canvas)
+    {
+        std::vector<UIDrawItem> items;
+        GameObject &gameObject = canvas.GetGameObject();
+        if (!canvas.IsWorldSpace() || !canvas.IsActive() || !gameObject.IsActiveInHierarchy() ||
+            !canvas.IsRootCanvas())
+        {
+            return items;
+        }
+        LayOut(gameObject, WorldCanvasRect(canvas), true, items);
+        return items;
+    }
+
+    void UISystem::RenderWorldCanvas(const Canvas &canvas, Renderer::Common::IRenderer *renderer,
+                                     const Renderer::Common::RenderState &state)
+    {
+        if (!renderer)
+        {
+            return;
+        }
+        const std::vector<UIDrawItem> items = CollectWorldCanvasGraphics(canvas);
+        if (items.empty())
+        {
+            return;
+        }
+        const Math::Matrix<float, 4, 4> canvasToWorld = canvas.GetCanvasToWorldMatrix();
+        for (const UIDrawItem &item : items)
+        {
+            if (item.rect.HasArea())
+            {
+                item.graphic->RenderUI(renderer, item.rect, state, canvasToWorld);
+            }
+        }
+    }
+
+    std::optional<CanvasRayHit> UISystem::RaycastCanvasPlane(const Math::Matrix<float, 4, 4> &canvasToWorld,
+                                                             const Math::Ray &ray, const float maxDistance)
+    {
+        // The canvas's axes and origin in the world: its columns (column vectors)
+        const Math::Vector3 axisX{canvasToWorld(0, 0), canvasToWorld(1, 0), canvasToWorld(2, 0)};
+        const Math::Vector3 axisY{canvasToWorld(0, 1), canvasToWorld(1, 1), canvasToWorld(2, 1)};
+        const Math::Vector3 origin{canvasToWorld(0, 3), canvasToWorld(1, 3), canvasToWorld(2, 3)};
+
+        const Math::Vector3 normal = axisX.Cross(axisY);
+        const float normalLength = normal.Length();
+        const float directionLength = ray.direction.Length();
+        if (!(normalLength > 0.0f) || !(directionLength > 0.0f) || !std::isfinite(normalLength) ||
+            !std::isfinite(directionLength))
+        {
+            return std::nullopt; // a zero scale, or no direction
+        }
+
+        // The ray parallel to the plane (within about 1e-6 of the cosine) never crosses it usefully
+        const float denominator = normal.Dot(ray.direction);
+        if (!(std::abs(denominator) > 1e-6f * normalLength * directionLength))
+        {
+            return std::nullopt;
+        }
+        const float distance = normal.Dot(origin - ray.origin) / denominator;
+        if (!std::isfinite(distance) || distance < 0.0f || distance > maxDistance)
+        {
+            return std::nullopt; // behind the ray's origin (the camera), or too far
+        }
+
+        // The point in canvas units: solve offset = u * axisX + v * axisY (the axes need not be orthogonal or
+        // equally long, e.g. with an uneven scale under a rotated parent, so not just a projection on each)
+        const Math::Vector3 offset = ray.GetPoint(distance) - origin;
+        const float xx = axisX.Dot(axisX);
+        const float xy = axisX.Dot(axisY);
+        const float yy = axisY.Dot(axisY);
+        const float determinant = xx * yy - xy * xy;
+        if (!(determinant > 0.0f) || !std::isfinite(determinant))
+        {
+            return std::nullopt;
+        }
+        const float ox = offset.Dot(axisX);
+        const float oy = offset.Dot(axisY);
+        CanvasRayHit hit;
+        hit.distance = distance;
+        hit.canvasPoint = Math::Vector2{(yy * ox - xy * oy) / determinant, (xx * oy - xy * ox) / determinant};
+        if (!std::isfinite(hit.canvasPoint.x) || !std::isfinite(hit.canvasPoint.y))
+        {
+            return std::nullopt;
+        }
+        return hit;
+    }
+
+    WorldUIHit UISystem::HitTestWorldCanvases(const Scene &scene, const Math::Ray &ray, const float maxDistance)
+    {
+        WorldUIHit best;
+        for (const RootCanvas &root : FindAllCanvases(scene))
+        {
+            if (!root.canvas->IsWorldSpace())
+            {
+                continue;
+            }
+            const std::optional<CanvasRayHit> planeHit =
+                RaycastCanvasPlane(root.canvas->GetCanvasToWorldMatrix(), ray, maxDistance);
+            // Nearer wins; a tie goes to the later canvas (as hierarchy order would draw it last)
+            if (!planeHit || (best.gameObject && planeHit->distance > best.distance))
+            {
+                continue;
+            }
+            const std::vector<UIDrawItem> items = CollectWorldCanvasGraphics(*root.canvas);
+            for (const UIDrawItem &item : items | std::views::reverse)
+            {
+                if (item.graphic->GetRaycastTarget() && item.rect.Contains(planeHit->canvasPoint))
+                {
+                    best = WorldUIHit{&item.graphic->GetGameObject(), root.canvas, planeHit->distance,
+                                      planeHit->canvasPoint};
+                    break;
+                }
+            }
+        }
+        return best;
+    }
+
+    GameObject* UISystem::HitTestScreenPoint(const Scene &scene, const Camera *camera,
+                                             const Math::Vector2 &windowPoint, const Vector2i &viewport,
+                                             const std::uint32_t physicsMask)
+    {
+        // Overlay canvases first: they are drawn over everything. This also rejects a point outside the viewport.
+        if (GameObject *overlayHit = HitTestWindowPoint(scene, windowPoint, viewport))
+        {
+            return overlayHit;
+        }
+        if (!camera || viewport[0] <= 0 || viewport[1] <= 0 ||
+            !(windowPoint.x >= 0.0f && windowPoint.x < static_cast<float>(viewport[0]) &&
+              windowPoint.y >= 0.0f && windowPoint.y < static_cast<float>(viewport[1])))
+        {
+            return nullptr;
+        }
+
+        // The world pick's ray (PointerDispatcher::PickWorld): from the near plane to the far plane
+        float nearToFar = 0.0f;
+        const Math::Ray ray = camera->ScreenPointToRay(windowPoint, viewport, &nearToFar);
+        if (!(nearToFar > 0.0f) || !std::isfinite(nearToFar))
+        {
+            return nullptr;
+        }
+        const WorldUIHit hit = HitTestWorldCanvases(scene, ray, nearToFar);
+        if (!hit.gameObject)
+        {
+            return nullptr;
+        }
+
+        // A solid collider nearer along the same ray is in front of the canvas: let the world pick have it.
+        // Triggers never block (an interaction volume around a world-space button), nor does a collider the
+        // ray starts inside (a first-person player's capsule around the camera), which PhysX reports at
+        // distance 0. A collider within BlockTolerance in front of the canvas (the wall it is mounted on)
+        // doesn't block it either, so a canvas on a collider's face isn't hit or missed by rounding.
+        if (hit.distance <= 0.0f)
+        {
+            return hit.gameObject; // on the near plane: nothing can be in front of it
+        }
+        std::vector<Physics::RaycastHit> physicsHits;
+        Physics::Raycast::All(ray.origin, ray.direction, physicsHits, hit.distance, physicsMask,
+                              Physics::QueryTriggers::Ignore);
+        for (const Physics::RaycastHit &physicsHit : physicsHits)
+        {
+            if (physicsHit.distance > StartInsideTolerance && physicsHit.distance < hit.distance - BlockTolerance)
+            {
+                return nullptr;
+            }
+        }
+        return hit.gameObject;
     }
 
     Math::Matrix<float, 4, 4> UISystem::OverlayProjection(const Vector2i &viewport)
@@ -209,11 +402,19 @@ namespace N2Engine::UI
         return projection;
     }
 
-    std::shared_ptr<GameObject> UISystem::CreateCanvas(const std::string &name)
+    std::shared_ptr<GameObject> UISystem::CreateCanvas(const std::string &name, const CanvasRenderMode renderMode)
     {
         auto gameObject = GameObject::Create(name);
         gameObject->SetLayer(Layers::UI);
-        gameObject->AddComponent<Canvas>();
+        Canvas *canvas = gameObject->AddComponent<Canvas>();
+        if (canvas && renderMode == CanvasRenderMode::WorldSpace)
+        {
+            canvas->SetRenderMode(renderMode); // adds the Positionable and the RectTransform
+            if (Positionable *positionable = gameObject->GetPositionable())
+            {
+                positionable->SetLocalScale(Math::Vector3{0.01f, 0.01f, 0.01f});
+            }
+        }
         return gameObject;
     }
 
