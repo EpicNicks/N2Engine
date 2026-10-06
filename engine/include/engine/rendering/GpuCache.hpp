@@ -79,8 +79,8 @@ namespace N2Engine::Rendering
             [[nodiscard]] Renderer::Common::IMesh *GetMesh() const;
             /// The material, for a Material handle (nullptr otherwise, or when empty)
             [[nodiscard]] Renderer::Common::IMaterial *GetMaterial() const;
-            /// The source's version the entry was made for: a Material's version for a Material handle, 0 for
-            /// the other kinds (a mesh entry follows its mesh's versions, see SyncMesh)
+            /// The source's version the entry was made for: a Material's GPU version (Material::GetGpuVersion) for a
+            /// Material handle, 0 for the other kinds (a mesh entry follows its mesh's versions, see SyncMesh)
             [[nodiscard]] std::uint64_t GetVersion() const { return _version; }
             /// The source asset the resource was made from (its address; nullptr when empty)
             [[nodiscard]] const void *GetSource() const { return _source; }
@@ -102,7 +102,7 @@ namespace N2Engine::Rendering
             std::weak_ptr<const void> _rendererLifetime; // the token at acquire time
             ResourceKind _kind = ResourceKind::Texture;
             const void *_source = nullptr;
-            std::uint64_t _version = 0; // part of the key (a Material's version; 0 for the other kinds)
+            std::uint64_t _version = 0; // part of the key (a Material's GPU version; 0 for the other kinds)
             void *_resource = nullptr;
         };
 
@@ -136,12 +136,14 @@ namespace N2Engine::Rendering
         static bool SyncMesh(Handle &handle);
 
         /**
-         * A share of the GPU material for `material`'s current version on `renderer`: the standard lit or unlit
-         * shader (by the material's shading) with its base colour texture (a share of the texture's own cache
-         * entry, held by the material's entry), and its uniforms set (Material::ApplyUniforms). Each version is
-         * a separate entry, so a changed material gets a new GPU material when its users acquire again, and the
-         * old one goes with its last user. Empty for a null material, or if the renderer has no such shader or
-         * can't create the material. A base colour texture the renderer can't create is left out.
+         * A share of the GPU material for `material`'s current GPU version (Material::GetGpuVersion: its shading
+         * and base colour texture) on `renderer`: the standard lit or unlit shader (by the material's shading) with
+         * its base colour texture (a share of the texture's own cache entry, held by the material's entry), and its
+         * uniforms set (Material::ApplyUniforms). Each GPU version is a separate entry, so a material whose shader
+         * or texture changed gets a new GPU material when its users acquire again, and the old one goes with its
+         * last user. Its other fields are uniforms and render state, set per draw, so changing them makes nothing
+         * new. Empty for a null material, or if the renderer has no such shader or can't create the material. A
+         * base colour texture the renderer can't create is left out.
          */
         [[nodiscard]] static Handle AcquireMaterial(Renderer::Common::IRenderer &renderer,
                                                     const std::shared_ptr<const Material> &material);
@@ -151,7 +153,7 @@ namespace N2Engine::Rendering
         /// Every entry, including any left by a destroyed renderer that nothing has replaced or released yet
         [[nodiscard]] static std::size_t GetEntryCount();
         /// The users of `source`'s entry on `renderer` (0 if there is none, or if it belongs to an earlier
-        /// renderer at the same address). `version` is a Material's version for a Material entry, else 0.
+        /// renderer at the same address). `version` is a Material's GPU version for a Material entry, else 0.
         [[nodiscard]] static std::size_t GetUserCount(const Renderer::Common::IRenderer &renderer, const void *source,
                                                       ResourceKind kind = ResourceKind::Texture,
                                                       std::uint64_t version = 0);

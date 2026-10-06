@@ -308,7 +308,7 @@ TEST(MeshRendererLifetimeTest, RenderersOfOneMeshShareOneGpuMeshAndMaterial)
     EXPECT_EQ(renderer.GetCounts().createdMaterials, 1);
     EXPECT_EQ(GpuCache::GetUserCount(renderer, cube.get(), GpuCache::ResourceKind::Mesh), 2u);
     EXPECT_EQ(GpuCache::GetUserCount(renderer, Material::GetDefault().get(), GpuCache::ResourceKind::Material,
-                                     Material::GetDefault()->GetVersion()),
+                                     Material::GetDefault()->GetGpuVersion()),
               2u);
 
     a.renderer->OnDestroy();
@@ -360,13 +360,23 @@ TEST(MeshRendererLifetimeTest, ChangingTheMeshOrTheMaterialSwapsTheShares)
     EXPECT_EQ(renderer.GetCounts().updatedMeshes, 1);
     EXPECT_EQ(renderer.draws.back().range, (IndexRange{0, 36}));
 
-    // The material changes: a new GPU material for the new version, the old one released
-    material->SetBaseColor(Common::Color::Green);
+    // The material's colour changes, 100 times: the same GPU material, the colour set per draw
+    for (int frame = 0; frame < 100; ++frame)
+    {
+        material->SetBaseColor(Common::Color{0.0f, static_cast<float>(frame) / 99.0f, 0.0f, 1.0f});
+        object.renderer->Render(&renderer);
+    }
+    EXPECT_EQ(renderer.GetCounts().createdMaterials, 1);
+    EXPECT_EQ(renderer.GetCounts().destroyedMaterials, 0);
+    EXPECT_FLOAT_EQ(renderer.draws.back().albedo[1], 1.0f);
+    EXPECT_FLOAT_EQ(renderer.draws.back().albedo[0], 0.0f);
+
+    // Its shader changes: a new GPU material for the new GPU version, the old one released
+    material->SetShading(ShadingModel::Lit);
     object.renderer->Render(&renderer);
     EXPECT_EQ(renderer.GetCounts().createdMaterials, 2);
     EXPECT_EQ(renderer.GetCounts().destroyedMaterials, 1);
-    EXPECT_FLOAT_EQ(renderer.draws.back().albedo[1], 1.0f);
-    EXPECT_FLOAT_EQ(renderer.draws.back().albedo[0], 0.0f);
+    EXPECT_EQ(RecordingMeshRenderer::AsSW(renderer.draws.back().material)->GetShader(), &renderer.litShader);
 
     // Another mesh: the old one's share goes (its last user, so it is destroyed)
     object.renderer->SetMesh(Mesh::GetBuiltin(BuiltinMesh::Quad));

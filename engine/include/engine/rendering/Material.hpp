@@ -47,8 +47,11 @@ namespace N2Engine::Rendering
      * metallic, emissive and the normal, occlusion, metallic-roughness and emissive textures are stored and
      * serialized but have no effect yet: physically based shading arrives with #3 P4.
      *
-     * Materials come from `.mat` files (JSON, see Load) or Create at runtime. Every change bumps GetVersion, and
-     * a renderer then makes a new GPU material for the new version on its next draw.
+     * Materials come from `.mat` files (JSON, see Load) or Create at runtime. Every change bumps GetVersion. Only a
+     * change to what the GPU material is made of (the shading, which picks the shader, and the base colour texture)
+     * bumps GetGpuVersion, and a renderer then makes a new GPU material for it on its next draw; every other field
+     * reaches the GPU as a uniform (ApplyUniforms) or a render state, set per draw, so changing it every frame
+     * costs nothing extra.
      */
     class Material final : public Base::Asset
     {
@@ -129,8 +132,11 @@ namespace N2Engine::Rendering
 
         /// Blend: drawn in the Transparent queue, blended
         [[nodiscard]] bool IsBlended() const { return _alphaMode == AlphaMode::Blend; }
-        /// Goes up by one on every change; 1 for a new material
+        /// Goes up by one on every change; 1 for a new material, made at runtime or loaded
         [[nodiscard]] std::uint64_t GetVersion() const { return _version; }
+        /// Goes up by one when the shading or the base colour texture changes, what a GPU material is made with (the
+        /// GpuCache keys GPU materials by it); 1 for a new material
+        [[nodiscard]] std::uint64_t GetGpuVersion() const { return _gpuVersion; }
         /// The file this material was loaded from (empty for one made at runtime)
         [[nodiscard]] const std::string &GetSourcePath() const { return _sourcePath; }
 
@@ -143,7 +149,15 @@ namespace N2Engine::Rendering
         void ApplyUniforms(Renderer::Common::IMaterial &target, const Common::Color &tint = Common::Color::White) const;
 
     private:
-        void Changed() { ++_version; }
+        /// Bumps the version, and the GPU version too for a change to the shader or texture
+        void Changed(const bool structural = false)
+        {
+            ++_version;
+            if (structural)
+            {
+                ++_gpuVersion;
+            }
+        }
         /// Reads the keys of a .mat object into this material (see FromJson)
         void ReadJson(const nlohmann::json &json, const std::filesystem::path &baseDirectory, std::string_view debugName);
 
@@ -161,6 +175,7 @@ namespace N2Engine::Rendering
         std::shared_ptr<Texture> _metallicRoughnessTexture;
         std::shared_ptr<Texture> _emissiveTexture;
         std::uint64_t _version = 1;
+        std::uint64_t _gpuVersion = 1;
         std::string _sourcePath;
     };
 

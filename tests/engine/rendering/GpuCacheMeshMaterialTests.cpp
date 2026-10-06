@@ -191,9 +191,9 @@ TEST(GpuCacheMaterialTest, OneGpuMaterialPerRendererMaterialAndVersion)
     ASSERT_TRUE(first);
     EXPECT_EQ(first.GetKind(), GpuCache::ResourceKind::Material);
     EXPECT_EQ(first.GetMaterial(), second.GetMaterial());
-    EXPECT_EQ(first.GetVersion(), material->GetVersion());
+    EXPECT_EQ(first.GetVersion(), material->GetGpuVersion());
     EXPECT_EQ(renderer.GetCounts().createdMaterials, 1);
-    EXPECT_EQ(GpuCache::GetUserCount(renderer, material.get(), GpuCache::ResourceKind::Material, material->GetVersion()),
+    EXPECT_EQ(GpuCache::GetUserCount(renderer, material.get(), GpuCache::ResourceKind::Material, material->GetGpuVersion()),
               2u);
     EXPECT_EQ(GpuCache::GetEntryCount(), baseline + 1);
 
@@ -203,8 +203,15 @@ TEST(GpuCacheMaterialTest, OneGpuMaterialPerRendererMaterialAndVersion)
     EXPECT_EQ(sw->GetShader(), &renderer.litShader);
     EXPECT_FLOAT_EQ(sw->GetVec4("uAlbedo")[1], 0.25f);
 
-    // A change makes a new version: a separate GPU material, the old one going with its last user
-    const std::uint64_t oldVersion = material->GetVersion();
+    // A uniform-only change (the base colour) keeps the GPU material: the colour is set per draw
+    material->SetBaseColor(Common::Color::Red);
+    GpuCache::Handle sameAfterColour = GpuCache::AcquireMaterial(renderer, material);
+    EXPECT_EQ(sameAfterColour.GetMaterial(), first.GetMaterial());
+    EXPECT_EQ(renderer.GetCounts().createdMaterials, 1);
+    sameAfterColour.Release(true);
+
+    // A change of shader makes a new GPU version: a separate GPU material, the old one going with its last user
+    const std::uint64_t oldVersion = material->GetGpuVersion();
     material->SetShading(ShadingModel::Unlit);
     GpuCache::Handle changed = GpuCache::AcquireMaterial(renderer, material);
     EXPECT_NE(changed.GetMaterial(), first.GetMaterial());
@@ -278,4 +285,58 @@ TEST(GpuCacheMaterialTest, ARendererWithoutTheShaderMakesNothing)
     EXPECT_FALSE(GpuCache::AcquireMaterial(renderer, nullptr));
     EXPECT_EQ(renderer.GetCounts().createdMaterials, 0);
     EXPECT_EQ(renderer.GetCounts().createdTextures, 0) << "no shader: the texture isn't made either";
+}
+
+TEST(GpuCacheMaterialTest, AnimatingUniformsMakesNothingNewAndChangingTheTextureDoes)
+{
+    // A script setting the base colour every frame on a material's only user: no GPU material or texture is made
+    // or destroyed (on the software renderer each texture destroy would wait for the frame in flight)
+    const std::size_t baseline = GpuCache::GetEntryCount();
+    RecordingMeshRenderer renderer;
+    const auto material = Material::Create(ShadingModel::Unlit);
+    material->SetBaseColorTexture(MakeTexture());
+    GpuCache::Handle handle = GpuCache::AcquireMaterial(renderer, material);
+    ASSERT_TRUE(handle);
+    for (int frame = 0; frame < 100; ++frame)
+    {
+        material->SetBaseColor(Common::Color{static_cast<float>(frame) / 100.0f, 0.0f, 0.0f, 1.0f});
+        material->SetSmoothness(0.25f);
+        material->SetAlphaMode(frame % 2 == 0 ? Rendering::AlphaMode::Mask : Rendering::AlphaMode::Opaque);
+        material->SetAlphaCutoff(0.3f);
+        material->SetDoubleSided(frame % 2 == 0);
+        if (handle.GetVersion() != material->GetGpuVersion())
+        {
+            handle = GpuCache::AcquireMaterial(renderer, material);
+        }
+    }
+    EXPECT_EQ(renderer.GetCounts().createdMaterials, 1);
+    EXPECT_EQ(renderer.GetCounts().createdTextures, 1);
+    EXPECT_EQ(renderer.GetCounts().Destroys(), 0);
+
+    // A new texture is structural: a new GPU material with the new texture; the old ones go with their last user
+    material->SetBaseColorTexture(MakeTexture());
+    ASSERT_NE(handle.GetVersion(), material->GetGpuVersion());
+    handle = GpuCache::AcquireMaterial(renderer, material);
+    EXPECT_EQ(renderer.GetCounts().createdMaterials, 2);
+    EXPECT_EQ(renderer.GetCounts().createdTextures, 2);
+    EXPECT_EQ(renderer.GetCounts().destroyedMaterials, 1);
+    EXPECT_EQ(renderer.GetCounts().destroyedTextures, 1);
+    handle.Release(true);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline);
+}
+
+TEST(GpuCacheMaterialTest, ReacquiringTakesTheNewShareBeforeReleasingTheOld)
+{
+    // Two GPU versions sharing a texture: swapping one handle for the other keeps the texture alive
+    RecordingMeshRenderer renderer;
+    const auto texture = MakeTexture();
+    const auto material = Material::Create(ShadingModel::Lit);
+    material->SetBaseColorTexture(texture);
+    GpuCache::Handle handle = GpuCache::AcquireMaterial(renderer, material);
+    material->SetShading(ShadingModel::Unlit);
+    handle = GpuCache::AcquireMaterial(renderer, material); // the move assignment releases the old share last
+    EXPECT_EQ(renderer.GetCounts().createdTextures, 1) << "the texture wasn't destroyed and made again";
+    EXPECT_EQ(renderer.GetCounts().destroyedTextures, 0);
+    EXPECT_EQ(renderer.GetCounts().destroyedMaterials, 1);
+    handle.Release(true);
 }

@@ -288,7 +288,7 @@ namespace N2Engine::Rendering
         {
             return {};
         }
-        return Acquire(renderer, ResourceKind::Material, material->GetVersion(), material,
+        return Acquire(renderer, ResourceKind::Material, material->GetGpuVersion(), material,
                        [&material](IRenderer &target, Handle &dependency) -> void *
         {
             IShader *shader = material->GetShading() == ShadingModel::Lit ? target.GetStandardLitShader()

@@ -202,7 +202,7 @@ namespace N2Engine::Rendering
     void Material::SetShading(const ShadingModel shading)
     {
         _shading = shading;
-        Changed();
+        Changed(true); // a new shader or texture: a new GPU material
     }
 
     void Material::SetBaseColor(const Common::Color &color)
@@ -214,7 +214,7 @@ namespace N2Engine::Rendering
     void Material::SetBaseColorTexture(std::shared_ptr<Texture> texture)
     {
         _baseColorTexture = std::move(texture);
-        Changed();
+        Changed(true); // a new shader or texture: a new GPU material
     }
 
     void Material::SetAlphaMode(const AlphaMode mode)
@@ -395,7 +395,7 @@ namespace N2Engine::Rendering
                 Logger::Warn(std::format("Material {}: ignoring unknown key \"{}\"", debugName, key));
             }
         }
-        Changed();
+        // Not a change: only a new material reads JSON, so a loaded one starts at version 1 like any other
     }
 
     nlohmann::json Material::ToJson() const

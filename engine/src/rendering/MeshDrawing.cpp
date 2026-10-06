@@ -78,11 +78,11 @@ namespace N2Engine::Rendering::MeshDrawing
     {
         GpuCache::Handle &handle = _materials[index];
         if (!handle.Holds(_renderer) || handle.GetSource() != material.get() ||
-            handle.GetVersion() != material->GetVersion())
+            handle.GetVersion() != material->GetGpuVersion())
         {
-            // A new slot, another material, or a changed one: the old share goes first, so the last user of an
-            // old version destroys it
-            handle.Release(true);
+            // A new slot, another material, or one whose shader or texture changed (uniform-only changes keep the
+            // GPU material: ApplyUniforms sets them per draw). The new share is taken before the old one goes (the
+            // move assignment releases it), so what the two share, such as a texture, isn't destroyed and made again.
             handle = GpuCache::AcquireMaterial(*_renderer, material);
         }
         return handle.GetMaterial();
@@ -107,7 +107,7 @@ namespace N2Engine::Rendering::MeshDrawing
             {
                 return 0;
             }
-            _mesh.Release(true);
+            // Acquired before the old share goes (the move assignment releases it)
             _mesh = GpuCache::AcquireMesh(*_renderer, mesh);
             if (!_mesh)
             {

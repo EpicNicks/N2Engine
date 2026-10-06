@@ -65,7 +65,7 @@ namespace
     std::size_t UnlitUsers(const Renderer::Common::IRenderer &renderer)
     {
         const auto unlit = Material::GetDefaultUnlit();
-        return GpuCache::GetUserCount(renderer, unlit.get(), GpuCache::ResourceKind::Material, unlit->GetVersion());
+        return GpuCache::GetUserCount(renderer, unlit.get(), GpuCache::ResourceKind::Material, unlit->GetGpuVersion());
     }
 }
 
