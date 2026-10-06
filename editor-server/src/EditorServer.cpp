@@ -411,11 +411,26 @@ namespace N2Engine::Editor
         return parent / relative.filename();
     }
 
+    bool EditorServer::IsPolledCommand(uint8_t commandType)
+    {
+        switch (static_cast<CommandType>(commandType))
+        {
+        case CommandType::RenderFrame:        // every animation frame
+        case CommandType::GetAudio:           // every ~25 ms while audio plays
+        case CommandType::GetAllEntities:     // the hierarchy panel
+        case CommandType::GetEntityTransform: // the inspector
+        case CommandType::GetCameraPosition:  // the scene view
+        case CommandType::GetEngineHealth:    // the status panel
+            return true;
+        default:
+            return false;
+        }
+    }
+
     void EditorServer::ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload)
     {
-        // RenderFrame and GetAudio are polled every frame; logging them would drown everything else
-        if (commandType != static_cast<uint8_t>(CommandType::RenderFrame) &&
-            commandType != static_cast<uint8_t>(CommandType::GetAudio))
+        // A command a client polls never logs per call (see IsPolledCommand); failures are still logged
+        if (!IsPolledCommand(commandType))
         {
             Logger::Info("Command Issued: " + std::format("0x{:X}", commandType));
         }
@@ -914,7 +929,6 @@ namespace N2Engine::Editor
 
         Scene &scene = SceneManager::GetCurSceneRef();
         auto gameObjects = scene.GetAllGameObjects();
-        Logger::Info("HandleGetAllEntities: Found " + std::to_string(gameObjects.size()) + " game objects");
 
         // Build payload
         BufferWriter payload;

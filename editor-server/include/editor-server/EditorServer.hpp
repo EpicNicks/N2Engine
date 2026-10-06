@@ -93,6 +93,12 @@ namespace N2Engine::Editor
         [[nodiscard]] static std::optional<std::filesystem::path> ResolveSceneFile(
             const std::filesystem::path &scenesDirectory, const std::string &sceneName);
 
+        /// True for a command a client is expected to poll: RenderFrame, GetAudio, and (ahead of the planned editor,
+        /// #6, which refreshes them continuously) GetAllEntities, GetEntityTransform, GetCameraPosition, GetEngineHealth.
+        /// Rule: a command a client polls never logs per call, or its lines would drown everything else. Such a
+        /// command still logs when it fails (ExecuteCommand's error line). A new polled command belongs here.
+        [[nodiscard]] static bool IsPolledCommand(uint8_t commandType);
+
     private:
         void ServerLoop(int listenSocket);
         void HandleClient(int clientSocket);
