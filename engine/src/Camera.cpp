@@ -1,4 +1,5 @@
 #include "engine/Camera.hpp"
+#include <math/Constants.hpp>
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
@@ -176,9 +177,50 @@ void Camera::UpdateProjectionMatrix() const
 
 void Camera::LookAt(const Math::Vector3 &target, const Math::Vector3 &up)
 {
-    Math::Vector3 forward = (target - _position).Normalized();
-    _rotation = Math::Quaternion::LookRotation(forward, up);
+    // The view looks down the camera's local -Z (the OpenGL convention), while LookRotation maps local +Z onto
+    // the direction it is given (the object convention, Positionable::GetForward). So the camera's +Z, its
+    // back, is pointed away from the target, which turns its -Z, the view direction, towards it.
+    const Math::Vector3 toTarget = target - _position;
+    if (toTarget.Length() < Math::Constants::EPSILON)
+    {
+        return; // Looking at its own position has no direction: keep the current rotation
+    }
+    const Math::Vector3 back = (-toTarget).Normalized();
+
+    // An up vector parallel to the view direction (or a zero one) leaves the right axis undefined: fall back to
+    // world up, or, when the view is within about 8 degrees of vertical, to the world Z axis on the side world up
+    // projects to (up - (up.back) back has z = -back.y * back.z). That is the screen up the view had just before,
+    // so an orbiting camera doesn't roll 180 degrees on reaching the threshold.
+    Math::Vector3 upHint = up.Normalized();
+    if (upHint.Cross(back).Length() < 1e-3f)
+    {
+        if (std::abs(back.y) < 0.99f)
+        {
+            upHint = Math::Vector3::Up;
+        }
+        else
+        {
+            upHint = Math::Vector3{0.0f, 0.0f, back.y * back.z > 0.0f ? -1.0f : 1.0f};
+        }
+    }
+
+    _rotation = Math::Quaternion::LookRotation(back, upHint);
     _viewDirty = true;
+}
+
+Math::Vector3 Camera::GetForward() const
+{
+    return _rotation * Math::Vector3::Back;
+}
+
+Math::Vector3 Camera::GetUp() const
+{
+    return _rotation * Math::Vector3::Up;
+}
+
+Math::Vector3 Camera::GetRight() const
+{
+    return _rotation * Math::Vector3::Right;
 }
 
 const Matrix4 &Camera::GetViewMatrix() const

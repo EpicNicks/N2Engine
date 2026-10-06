@@ -73,6 +73,10 @@ namespace N2Engine::Scripting::Bindings
             
             "GetPosition", &Camera::GetPosition,
             "GetRotation", &Camera::GetRotation,
+            // The view direction is the rotation's -Z (objects face +Z; see Camera::LookAt)
+            "GetForward", &Camera::GetForward,
+            "GetUp", &Camera::GetUp,
+            "GetRight", &Camera::GetRight,
             
             // Projection
             "SetPerspective", &Camera::SetPerspective,

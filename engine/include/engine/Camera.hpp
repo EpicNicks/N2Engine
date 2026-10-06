@@ -80,7 +80,21 @@ namespace N2Engine
         // Position and orientation
         void SetPosition(const Math::Vector3 &position);
         void SetRotation(const Math::Quaternion &rotation);
+        /**
+         * Turns the camera so it views target, with up as the screen's up direction. The camera looks down its
+         * local -Z (the OpenGL view convention), unlike objects, which face local +Z (Positionable::GetForward),
+         * so the rotation points the camera's -Z, not its +Z, at the target.
+         * A target at the camera's own position leaves the rotation unchanged. An up vector parallel to the
+         * view direction (or zero) is replaced by world up, or by world +Z when the view is vertical.
+         */
         void LookAt(const Math::Vector3 &target, const Math::Vector3 &up = Math::Vector3{0, 1, 0});
+
+        /// The world direction the camera views: its rotation applied to local -Z (not +Z, as for objects)
+        [[nodiscard]] Math::Vector3 GetForward() const;
+        /// The world direction of the screen's up: its rotation applied to local +Y
+        [[nodiscard]] Math::Vector3 GetUp() const;
+        /// The world direction of the screen's right: its rotation applied to local +X
+        [[nodiscard]] Math::Vector3 GetRight() const;
 
         // Projection settings
         void SetPerspective(float fov, float aspect, float nearPlane, float farPlane);
