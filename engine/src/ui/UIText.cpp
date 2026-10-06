@@ -18,6 +18,13 @@ namespace N2Engine::UI
         RegisterMember("wrap", _wrap);
         RegisterMember("lineSpacing", _lineSpacing);
         RegisterMember("letterSpacing", _letterSpacing);
+        // Effects, one key each (a scene saved before effects existed loads with them all off)
+        RegisterMember("outlineWidth", _effects.outlineWidth);
+        RegisterMember("outlineColor", _effects.outlineColor);
+        RegisterMember("shadowOffset", _effects.shadowOffset);
+        RegisterMember("shadowColor", _effects.shadowColor);
+        RegisterMember("shadowSoftness", _effects.shadowSoftness);
+        RegisterMember("softness", _effects.softness);
     }
 
     UIText::~UIText()
@@ -136,8 +143,8 @@ namespace N2Engine::UI
 
         const Text::TextLayout &layout = GetLayout(rect);
         const Math::Matrix<float, 4, 4> model = ModelMatrixFor(GetAnchor(rect));
-        _resources.Draw(_layoutCache.GetFont(), layout, _layoutCache.GetVersion(), model.Data(), GetDrawColor(), state,
-                        "UIText");
+        _resources.Draw(_layoutCache.GetFont(), layout, _layoutCache.GetVersion(), model.Data(), GetDrawColor(),
+                        _effects, state, "UIText");
     }
 
     void UIText::OnDestroy()

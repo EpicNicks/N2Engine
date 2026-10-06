@@ -1,5 +1,6 @@
 #include "engine/rendering/TextDrawing.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <format>
@@ -36,6 +37,78 @@ namespace N2Engine::Rendering::TextDrawing
             static std::set<std::string, std::less<>> warned;
             return warned.emplace(componentName).second;
         }
+    }
+
+    // ===== Effects =====
+
+    float MaxEffectEms(const Text::AtlasSettings &settings)
+    {
+        if (!(settings.basePx > 0.0f) || settings.spreadPx <= 0)
+        {
+            return 0.0f;
+        }
+        return kUsableSpread * static_cast<float>(settings.spreadPx) / settings.basePx;
+    }
+
+    EffectUniforms ResolveEffects(const Text::TextEffects &effects, const Text::AtlasSettings &settings,
+                                  const int atlasWidth, const int atlasHeight)
+    {
+        EffectUniforms out;
+        const float budget = MaxEffectEms(settings);
+        if (!(budget > 0.0f) || atlasWidth <= 0 || atlasHeight <= 0)
+        {
+            return out;
+        }
+        // Distance units per em: the atlas changes by 0.5 over spreadPx pixels, and an em is basePx pixels
+        const float valuePerEm = 0.5f * settings.basePx / static_cast<float>(settings.spreadPx);
+
+        // A length clamped to [0, limit]; a negative or non-finite one counts as 0
+        const auto clampLength = [&out](const float value, const float limit)
+        {
+            const float length = std::isfinite(value) ? std::max(value, 0.0f) : 0.0f;
+            if (length > limit)
+            {
+                out.clamped = true;
+                return limit;
+            }
+            return length;
+        };
+
+        // The outline first, then each softness in what is left of the spread
+        const float outline = clampLength(effects.outlineWidth, budget);
+        if (outline > 0.0f)
+        {
+            out.outline = outline * valuePerEm;
+            out.outlineColor = effects.outlineColor;
+        }
+        const float softHalf = clampLength(effects.softness * 0.5f, budget - outline);
+        out.softness = softHalf * valuePerEm;
+
+        if (effects.HasShadow())
+        {
+            out.shadowColor = effects.shadowColor;
+            const float shadowSoftHalf = clampLength(effects.shadowSoftness * 0.5f, budget - outline);
+            out.shadowSoftness = shadowSoftHalf * valuePerEm;
+
+            // The offset in each axis gets what the outline and the shadow's softness leave
+            const float offsetLimit = std::max(budget - outline - shadowSoftHalf, 0.0f);
+            const auto clampOffset = [&](const float value)
+            {
+                if (!std::isfinite(value))
+                {
+                    return 0.0f;
+                }
+                const float magnitude = clampLength(std::abs(value), offsetLimit);
+                return value < 0.0f ? -magnitude : magnitude;
+            };
+            const float offsetX = clampOffset(effects.shadowOffset.x);
+            const float offsetY = clampOffset(effects.shadowOffset.y);
+            // An em is basePx atlas pixels. The atlas uv is y-down, so a shadow moved up (+y) is one moved
+            // to smaller v.
+            out.shadowOffsetU = offsetX * settings.basePx / static_cast<float>(atlasWidth);
+            out.shadowOffsetV = -offsetY * settings.basePx / static_cast<float>(atlasHeight);
+        }
+        return out;
     }
 
     Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout)
@@ -186,8 +259,8 @@ namespace N2Engine::Rendering::TextDrawing
 
     bool DrawResources::Draw(const std::shared_ptr<Text::Font> &font, const Text::TextLayout &layout,
                              const std::uint64_t layoutVersion, const float *modelMatrix,
-                             const Common::Color &color, const Renderer::Common::RenderState &state,
-                             const std::string_view componentName)
+                             const Common::Color &color, const Text::TextEffects &effects,
+                             const Renderer::Common::RenderState &state, const std::string_view componentName)
     {
         Renderer::Common::IRenderer *renderer = _renderer;
         if (!renderer || _rendererLifetime.expired() || !modelMatrix)
@@ -228,6 +301,26 @@ namespace N2Engine::Rendering::TextDrawing
         }
 
         _material->SetColor("uAlbedo", color.r, color.g, color.b, color.a);
+
+        // The effects, set on every draw: materials share the text program, which keeps the last values set
+        const Text::FontAtlas &atlas = font->GetSdfFont().GetAtlas();
+        const Text::AtlasSettings &atlasSettings = atlas.GetSettings();
+        const EffectUniforms fx = ResolveEffects(effects, atlasSettings, atlas.GetWidth(), atlas.GetHeight());
+        if (fx.clamped && FirstWarningFor(std::string(componentName) + " effects"))
+        {
+            Logger::Warn(std::format(
+                "{}: text effects were reduced to fit the font's SDF spread. Outline + softness / 2, and each shadow "
+                "offset + outline + shadowSoftness / 2, can be at most {} em with this font (spreadPx {} at basePx {}); "
+                "a larger spreadPx in the font's .meta allows more.",
+                componentName, MaxEffectEms(atlasSettings), atlasSettings.spreadPx, atlasSettings.basePx));
+        }
+        _material->SetFloat("uOutline", fx.outline);
+        _material->SetColor("uOutlineColor", fx.outlineColor.r, fx.outlineColor.g, fx.outlineColor.b,
+                            fx.outlineColor.a);
+        _material->SetFloat("uSoftness", fx.softness);
+        _material->SetColor("uShadowColor", fx.shadowColor.r, fx.shadowColor.g, fx.shadowColor.b, fx.shadowColor.a);
+        _material->SetVec2("uShadowOffset", fx.shadowOffsetU, fx.shadowOffsetV);
+        _material->SetFloat("uShadowSoftness", fx.shadowSoftness);
         renderer->DrawMesh(_mesh, modelMatrix, _material, state);
         return true;
     }

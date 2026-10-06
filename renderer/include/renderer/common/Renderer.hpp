@@ -180,6 +180,9 @@ namespace Renderer::Common
          *   pixel is written unblended and writes depth whenever the draw depth-tests, even if its state says
          *   no depth write.
          * - Vulkan and the default body: null, as the backend can't draw text yet (#43).
+         * Effect uniforms (uOutline, uOutlineColor, uSoftness, uShadowColor, uShadowOffset, uShadowSoftness;
+         * see TextDrawing::EffectUniforms in the engine) are all 0 for plain text. OpenGL composites the
+         * outline and shadow under the face; the software renderer alpha-tests them and ignores softness.
          */
         [[nodiscard]] virtual IShader* GetStandardTextShader() const { return nullptr; }
 

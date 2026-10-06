@@ -28,6 +28,14 @@ namespace Renderer::Software
         /// uAlphaCutoff (unlit and lit): a pixel whose final alpha is below it is skipped, as OpenGL discards
         /// it. The default, 0, skips nothing.
         float alphaCutoff = 0.0f;
+        /// Text effects (text shader only; all 0 = none). uOutline: the outline's outer edge is at distance
+        /// 0.5 - outline. uOutlineColor: its colour. uShadowColor: the shadow's colour (alpha 0 = no shadow).
+        /// uShadowOffset: the shadow's uv displacement (the shadow at uv is the shape at uv - offset). The
+        /// softness uniforms aren't copied: with no blending, the software text shader ignores softness.
+        float textOutline = 0.0f;
+        std::array<float, 4> textOutlineColor{0.0f, 0.0f, 0.0f, 0.0f};
+        std::array<float, 4> textShadowColor{0.0f, 0.0f, 0.0f, 0.0f};
+        std::array<float, 2> textShadowOffset{0.0f, 0.0f};
         /// The material's texture, or null when it has none or it is empty. Still a pointer: its pixels are
         /// read at raster time, which is safe because DestroyTexture waits for the frame in flight and a
         /// software texture's pixels never change after creation.

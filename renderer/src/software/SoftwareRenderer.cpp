@@ -82,6 +82,16 @@ namespace
         bool vertexColor = false;
         uint32_t flatColor = 0xFFFFFFFF;  // unlit + untextured: constant per draw
 
+        // Text effects (text only). Off unless an outline or shadow is drawn, and then the text pixel path
+        // is exactly the one without effects.
+        bool textEffects = false;
+        bool textOutline = false;         // an outline with width and a visible colour
+        bool textShadow = false;          // a shadow with a visible colour
+        float textOuterEdge = 0.5f;       // the outline's (and the shadow shape's) edge: 0.5 - uOutline
+        float textOutlineA = 0.f, textShadowA = 0.f;
+        uint32_t textOutlineColor = 0, textShadowColor = 0;
+        float textShadowDU = 0.f, textShadowDV = 0.f; // the shadow is the shape at (u - DU, v - DV)
+
         [[nodiscard]] ShadeKind Kind() const
         {
             if (text) return ShadeKind::Text;
@@ -108,6 +118,16 @@ namespace
         s.smoothness = mat.GetFloat(smoothnessKey, 0.5f);
         s.alphaCutoff = mat.GetFloat(alphaCutoffKey, 0.0f);
 
+        static const std::string outlineKey = "uOutline";
+        static const std::string outlineColorKey = "uOutlineColor";
+        static const std::string shadowColorKey = "uShadowColor";
+        static const std::string shadowOffsetKey = "uShadowOffset";
+        s.textOutline = mat.GetFloat(outlineKey, 0.0f);
+        s.textOutlineColor = mat.GetVec4(outlineColorKey, {0, 0, 0, 0});
+        s.textShadowColor = mat.GetVec4(shadowColorKey, {0, 0, 0, 0});
+        const std::array<float, 4> shadowOffset = mat.GetVec4(shadowOffsetKey, {0, 0, 0, 0});
+        s.textShadowOffset = {shadowOffset[0], shadowOffset[1]};
+
         if (auto* t = dynamic_cast<const SWTexture*>(mat.GetTexture()); t && t->IsValid())
             s.texture = t;
 
@@ -127,6 +147,22 @@ namespace
         r.shininess = 4.f + (256.f - 4.f) * mat.smoothness;   // matches mix(4, 256, smoothness)
         r.alphaCutoff = mat.alphaCutoff;
         r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
+
+        if (r.text)
+        {
+            const auto &oc = mat.textOutlineColor;
+            const auto &sc = mat.textShadowColor;
+            r.textOutline = mat.textOutline > 0.f && oc[3] > 0.f;
+            r.textShadow = sc[3] > 0.f;
+            r.textEffects = r.textOutline || r.textShadow;
+            r.textOuterEdge = 0.5f - std::max(mat.textOutline, 0.f);
+            r.textOutlineA = oc[3];
+            r.textShadowA = sc[3];
+            r.textOutlineColor = PackRGBA(oc[0], oc[1], oc[2], oc[3]);
+            r.textShadowColor = PackRGBA(sc[0], sc[1], sc[2], sc[3]);
+            r.textShadowDU = mat.textShadowOffset[0];
+            r.textShadowDV = mat.textShadowOffset[1];
+        }
         return r;
     }
 
@@ -566,15 +602,52 @@ namespace
                             const float rw = 1.f / iw;
                             const float u  = (l0*A->uw + l1*B->uw + l2*C->uw) * rw;
                             const float v  = (l0*A->vw + l1*B->vw + l2*C->vw) * rw;
-                            covered = mat.tex->SampleFirstChannelBilinear(u, v) >= kTextEdge;
-                            if (covered)
+                            if (!mat.textEffects)
                             {
-                                const float r = mat.aR * (l0*A->crw + l1*B->crw + l2*C->crw) * rw;
-                                const float g = mat.aG * (l0*A->cgw + l1*B->cgw + l2*C->cgw) * rw;
-                                const float b = mat.aB * (l0*A->cbw + l1*B->cbw + l2*C->cbw) * rw;
-                                const float a = mat.aA * (l0*A->caw + l1*B->caw + l2*C->caw) * rw;
-                                covered = a >= kTextMinAlpha;
-                                colOut = PackRGBA(r, g, b, a);
+                                covered = mat.tex->SampleFirstChannelBilinear(u, v) >= kTextEdge;
+                                if (covered)
+                                {
+                                    const float r = mat.aR * (l0*A->crw + l1*B->crw + l2*C->crw) * rw;
+                                    const float g = mat.aG * (l0*A->cgw + l1*B->cgw + l2*C->cgw) * rw;
+                                    const float b = mat.aB * (l0*A->cbw + l1*B->cbw + l2*C->cbw) * rw;
+                                    const float a = mat.aA * (l0*A->caw + l1*B->caw + l2*C->caw) * rw;
+                                    covered = a >= kTextMinAlpha;
+                                    colOut = PackRGBA(r, g, b, a);
+                                }
+                            }
+                            else
+                            {
+                                // Effects, alpha-tested in layers from the top: the face where the distance
+                                // reaches the edge, else the outline down to its outer edge, else the shadow
+                                // where the shape (face plus outline) sampled at the offset covers. A layer too
+                                // transparent to draw lets the one under it show.
+                                covered = false;
+                                const float sdf = mat.tex->SampleFirstChannelBilinear(u, v);
+                                if (sdf >= kTextEdge)
+                                {
+                                    const float r = mat.aR * (l0*A->crw + l1*B->crw + l2*C->crw) * rw;
+                                    const float g = mat.aG * (l0*A->cgw + l1*B->cgw + l2*C->cgw) * rw;
+                                    const float b = mat.aB * (l0*A->cbw + l1*B->cbw + l2*C->cbw) * rw;
+                                    const float a = mat.aA * (l0*A->caw + l1*B->caw + l2*C->caw) * rw;
+                                    if (a >= kTextMinAlpha)
+                                    {
+                                        covered = true;
+                                        colOut = PackRGBA(r, g, b, a);
+                                    }
+                                }
+                                if (!covered && mat.textOutline && mat.textOutlineA >= kTextMinAlpha &&
+                                    sdf >= mat.textOuterEdge)
+                                {
+                                    covered = true;
+                                    colOut = mat.textOutlineColor;
+                                }
+                                if (!covered && mat.textShadow && mat.textShadowA >= kTextMinAlpha &&
+                                    mat.tex->SampleFirstChannelBilinear(u - mat.textShadowDU, v - mat.textShadowDV) >=
+                                        mat.textOuterEdge)
+                                {
+                                    covered = true;
+                                    colOut = mat.textShadowColor;
+                                }
                             }
                         }
                         else

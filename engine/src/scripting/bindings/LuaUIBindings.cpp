@@ -152,6 +152,31 @@ namespace N2Engine::Scripting::Bindings
             "GetLineSpacing", Forward<UITextRef, &UI::UIText::GetLineSpacing>(),
             "SetLetterSpacing", Forward<UITextRef, &UI::UIText::SetLetterSpacing>(),
             "GetLetterSpacing", Forward<UITextRef, &UI::UIText::GetLetterSpacing>(),
+            // Effects (Text::TextEffects), lengths in ems
+            "SetOutline", [](const UITextRef &c, const float width, const Common::Color &color)
+            {
+                c.Pin()->SetOutline(width, color);
+            },
+            "GetOutline", [](const UITextRef &c)
+            {
+                const auto text = c.Pin();
+                const Text::TextEffects &effects = text->GetEffects();
+                return std::make_tuple(effects.outlineWidth, Common::Color(effects.outlineColor));
+            },
+            "SetShadow", [](const UITextRef &c, const float offsetX, const float offsetY, const Common::Color &color,
+                            const sol::optional<float> softness)
+            {
+                c.Pin()->SetShadow(Math::Vector2(offsetX, offsetY), color, softness.value_or(0.0f));
+            },
+            "GetShadow", [](const UITextRef &c)
+            {
+                const auto text = c.Pin();
+                const Text::TextEffects &effects = text->GetEffects();
+                return std::make_tuple(effects.shadowOffset.x, effects.shadowOffset.y,
+                                       Common::Color(effects.shadowColor), effects.shadowSoftness);
+            },
+            "SetSoftness", Forward<UITextRef, &UI::UIText::SetSoftness>(),
+            "GetSoftness", [](const UITextRef &c) { return c.Pin()->GetEffects().softness; },
             // Both names are checked before either is applied, so a bad one changes nothing
             "SetAlignment", [](const UITextRef &c, const std::string &horizontal, const std::string &vertical)
             {

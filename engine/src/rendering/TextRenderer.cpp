@@ -22,6 +22,13 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(_maxWidth), _maxWidth);
         RegisterMember(NAMEOF(_lineSpacing), _lineSpacing);
         RegisterMember(NAMEOF(_letterSpacing), _letterSpacing);
+        // The effects, one key each (a scene saved before effects existed loads with them all off)
+        RegisterMember("_outlineWidth", _effects.outlineWidth);
+        RegisterMember("_outlineColor", _effects.outlineColor);
+        RegisterMember("_shadowOffset", _effects.shadowOffset);
+        RegisterMember("_shadowColor", _effects.shadowColor);
+        RegisterMember("_shadowSoftness", _effects.shadowSoftness);
+        RegisterMember("_softness", _effects.softness);
     }
 
     TextRenderer::~TextRenderer()
@@ -102,7 +109,7 @@ namespace N2Engine::Rendering
             return;
         }
         const Positionable::Matrix4 world = positionable->GetLocalToWorldMatrix();
-        _resources.Draw(_layoutCache.GetFont(), layout, _layoutCache.GetVersion(), world.Data(), _color, state,
-                        "TextRenderer");
+        _resources.Draw(_layoutCache.GetFont(), layout, _layoutCache.GetVersion(), world.Data(), _color,
+                        _effects, state, "TextRenderer");
     }
 }

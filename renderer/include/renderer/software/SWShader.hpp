@@ -23,6 +23,10 @@ namespace Renderer::Software
      *   material's texture bilinearly as a distance, and alpha-tests it at 0.5: a pixel at or above the edge
      *   is written opaque with uAlbedo times the vertex colour, and writes depth whenever the draw
      *   depth-tests; a pixel below it is left untouched. There is no blending and no antialiasing.
+     *   With effects (uOutline with a visible uOutlineColor, or a visible uShadowColor) a pixel not drawn
+     *   as face is drawn in the outline colour where the distance is at least 0.5 - uOutline, else in the
+     *   shadow colour where the distance sampled at uv - uShadowOffset is at least 0.5 - uOutline. The
+     *   softness uniforms are ignored. Without effects the path is exactly the one above.
      */
     enum class SWShaderType { Unlit, Lit, Text };
 
