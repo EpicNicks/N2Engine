@@ -373,6 +373,38 @@ TEST_F(ButtonTest, FadeMovesTheTintOverUnscaledTime)
     ExpectColor(_button->GetCurrentTint(), Button::DefaultNormalColor, "instant on disable");
 }
 
+TEST_F(ButtonTest, OnUpdateLeavesATintSetByHandAloneWhileIdle)
+{
+    _button->OnUpdate(); // the button has tinted its graphic (white, Normal)
+    ASSERT_EQ(_button->GetState(), Button::State::Normal);
+    ASSERT_FALSE(_button->IsFading());
+
+    const Common::Color byHand{0.25f, 0.5f, 0.75f, 1.0f};
+    _image->SetTint(byHand);
+    _button->OnUpdate();
+    _button->OnUpdate();
+    ExpectColor(_image->GetTint(), byHand, "no fade step and no new target: the button writes nothing");
+
+    // The next state change writes the button's tint again
+    Frame(_over, false);
+    ExpectTint(Button::DefaultHighlightedColor, "hover");
+}
+
+TEST_F(ButtonTest, OnUpdateTintsAGraphicThatReplacesTheDefaultTarget)
+{
+    _button->SetInteractable(false);
+    ExpectTint(Button::DefaultDisabledColor, "own image");
+
+    ASSERT_TRUE(_buttonObject->RemoveComponent(_image));
+    _image = _buttonObject->AddComponent<Image>();
+    _image->SetColor(_base);
+    ExpectColor(_image->GetTint(), Common::Color::White, "not tinted until the button sees it");
+
+    _button->OnUpdate();
+    EXPECT_EQ(_button->GetTargetGraphic(), _image);
+    ExpectTint(Button::DefaultDisabledColor, "the new graphic is the target, and is tinted");
+}
+
 TEST_F(ButtonTest, ExplicitTargetGraphicIsTintedAndTheOldOneIsReleased)
 {
     auto other = UISystem::CreateElement("Other");

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <vector>
 #include <memory>
 
@@ -12,6 +13,23 @@
 
 namespace Renderer::Software
 {
+    /**
+     * Everything rasterizing a draw reads from its material, copied by DrawMesh on the main thread. The
+     * render thread shades from this copy, never from the SWMaterial, so a material changed after DrawMesh
+     * only affects later draws (as OpenGL applies uniforms at draw submission), and changing or destroying
+     * a material never races the frame in flight.
+     */
+    struct SWMaterialSnapshot
+    {
+        std::array<float, 4> albedo{1.0f, 1.0f, 1.0f, 1.0f}; ///< uAlbedo
+        float smoothness = 0.5f;                             ///< uSmoothness (lit only)
+        /// The material's texture, or null when it has none or it is empty. Still a pointer: its pixels are
+        /// read at raster time, which is safe because DestroyTexture waits for the frame in flight and a
+        /// software texture's pixels never change after creation.
+        const SWTexture *texture = nullptr;
+        SWShaderType shader = SWShaderType::Unlit; ///< Unlit too when the material's shader isn't an SWShader
+    };
+
     /**
      * A CPU rasterizer. Draws are recorded between BeginFrame and EndFrame, and EndFrame hands the frame to
      * a render thread that rasterizes it into a CPU colour and depth buffer. Present waits for that frame,
@@ -51,22 +69,26 @@ namespace Renderer::Software
         // Shaders
         Common::IShader* CreateShaderProgram(const char *vs, const char *fs) override;
         void UseShaderProgram(Common::IShader *shader) override;
+        /// The built-in shaders are never freed. No wait is needed: draws keep a copy of the shader type.
         bool DestroyShaderProgram(Common::IShader *shader) override;
         bool IsValidShader(Common::IShader *shader) const override;
 
         // Resources
         Common::IMesh* CreateMesh(const Common::MeshData &meshData) override;
+        /// Waits for any frame still rasterizing (which may draw the mesh) before freeing it
         void DestroyMesh(Common::IMesh *mesh) override;
         Common::ITexture* CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch) override;
         /// Stores the options on the SWTexture. Sampling honours wrap but is always nearest, without
         /// mipmaps, so filter and mipmaps have no visible effect on this backend.
         Common::ITexture* CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch,
                                         const Common::TextureOptions &options) override;
+        /// Waits for any frame still rasterizing (which may sample the texture) before freeing it
         void DestroyTexture(Common::ITexture *texture) override;
         /// Waits for any frame still rasterizing (which may read the mesh) before replacing its data
         bool UpdateMesh(Common::IMesh *mesh, const Common::MeshData &meshData) override;
         Common::IMaterial* CreateMaterial(Common::IShader *shader) override;
         Common::IMaterial* CreateMaterial(Common::IShader *shader, Common::ITexture *texture) override;
+        /// Frees the material at once: the frame in flight shades from copies (SWMaterialSnapshot)
         void DestroyMaterial(Common::IMaterial *material) override;
 
         // Rendering
@@ -74,8 +96,9 @@ namespace Renderer::Software
         void UpdateSceneLighting(const Common::SceneLightingData &lighting,
                                  const N2Engine::Math::Vector3 &cameraPosition) override;
         using Common::IRenderer::DrawMesh; // the default-state overload
-        /// Records the draw; EndFrame rasterizes the frame's draws in the order OrderDraws gives
-        /// (DrawOrder.hpp). depthTest, depthWrite and cull are honoured per draw; blend is ignored, as
+        /// Records the draw, with a copy of what it reads from the material (SWMaterialSnapshot), so later
+        /// changes to the material don't affect it, as on OpenGL. EndFrame rasterizes the frame's draws in
+        /// the order OrderDraws gives (DrawOrder.hpp). depthTest, depthWrite and cull are honoured per draw; blend is ignored, as
         /// this renderer has no blending (a Transparent-queue draw is drawn opaque, without writing depth).
         /// One exception: a draw with the text shader alpha-tests, and writes depth wherever it covers a
         /// pixel and depthTest is on, whatever depthWrite says (see SWShaderType::Text).
@@ -105,7 +128,7 @@ namespace Renderer::Software
         struct DrawCommand {
             SWMesh* mesh;
             float modelMatrix[16];
-            SWMaterial* material;
+            SWMaterialSnapshot material; // copied at DrawMesh: the render thread never reads the SWMaterial
             Common::RenderState state;
             // The view and projection set when the draw was submitted, so a SetViewProjection later in the
             // frame (the UI pass) only affects the draws after it, as in OpenGL
@@ -150,7 +173,9 @@ namespace Renderer::Software
         bool m_wireframe = false;
 
         // Rasterizer internals
-        void ClearBuffers();
+        // Render thread: everything per frame comes in as arguments (the EndFrame snapshot), so the render
+        // thread never writes members the main thread also writes (Clear, UpdateSceneLighting)
+        void ClearBuffers(float r, float g, float b, float a);
         void SetPixel(int x, int y, float depth, uint32_t color);
 
         struct SWFragment
@@ -162,13 +187,10 @@ namespace Renderer::Software
             float r, g, b, a;     // interpolated vertex color
         };
 
-        void RasterizeTriangle(const SWFragment &f0, const SWFragment &f1, const SWFragment &f2, const SWMaterial *mat,
-                               const float *modelMatrix);
         void RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
-                           SWMaterial* material, const Common::RenderState& state);
+                           const SWMaterialSnapshot& material, const Common::RenderState& state,
+                           const Common::SceneLightingData& lighting, const N2Engine::Math::Vector3& cameraPos);
 
-        uint32_t ShadeLit(const SWFragment &frag, const SWMaterial *mat, const float *modelMatrix) const;
-        uint32_t ShadeUnlit(const SWFragment &frag, const SWMaterial *mat) const;
 
         // Math helpers (row-major)
         void Mul4x4(const float *a, const float *b, float *out) const;
