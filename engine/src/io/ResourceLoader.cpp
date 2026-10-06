@@ -106,6 +106,15 @@ namespace N2Engine::IO
         }
 
         ScanDirectory(_assetsRoot);
+
+        // Sub-assets of files deleted since: unknown again, so lookups of them give null quietly rather than an
+        // error about a missing source file
+        std::erase_if(_subAssets, [this](const auto &item)
+        {
+            std::error_code existsError;
+            const std::filesystem::path sourcePath = Resolve(item.second.parent);
+            return sourcePath.empty() || !std::filesystem::exists(sourcePath, existsError);
+        });
     }
 
     void ResourceLoader::ScanDirectory(const std::filesystem::path &directory)
@@ -450,6 +459,23 @@ namespace N2Engine::IO
         }
 
         AssetMetadata &meta = metaIt->second;
+        const std::filesystem::path sourcePath = Resolve(parent);
+        const std::filesystem::path metaPath = parent.GetType() == PathType::Resource && !sourcePath.empty()
+                                                   ? GetMetadataPath(sourcePath)
+                                                   : std::filesystem::path{};
+        // customData as the file has it now: it may have been edited (import settings) since the scan read it
+        std::error_code existsError;
+        if (!metaPath.empty() && std::filesystem::exists(metaPath, existsError))
+        {
+            try
+            {
+                meta.customData = AssetMetadata::FromFile(metaPath).customData;
+            }
+            catch (const std::exception &)
+            {
+                // A corrupt .meta: keep the scan's copy, which the save below rewrites it with
+            }
+        }
         if (meta.customData.is_null())
         {
             meta.customData = nlohmann::json::object();
@@ -460,23 +486,33 @@ namespace N2Engine::IO
                                      parent.ToString()));
             return true;
         }
-        if (const auto existing = meta.customData.find("subAssets");
-            existing != meta.customData.end() && *existing == index)
+        // The source file the index describes; a scan that finds the file changed treats the index as stale
+        const nlohmann::json source = {{"fileSize", meta.fileSize}, {"lastModified", meta.lastModified}};
+        const auto existing = meta.customData.find("subAssets");
+        const auto existingSource = meta.customData.find("subAssetsSource");
+        if (existing != meta.customData.end() && *existing == index && existingSource != meta.customData.end() &&
+            *existingSource == source)
         {
             return true; // unchanged: the .meta isn't rewritten
         }
         meta.customData["subAssets"] = std::move(index);
+        meta.customData["subAssetsSource"] = source;
 
-        const std::filesystem::path sourcePath = Resolve(parent);
-        if (parent.GetType() == PathType::Resource && !sourcePath.empty())
+        if (!metaPath.empty())
         {
+            bool saved = false;
             try
             {
-                meta.SaveToFile(GetMetadataPath(sourcePath));
+                saved = meta.SaveToFile(metaPath);
             }
             catch (const std::exception &e)
             {
                 Logger::Warn(std::format("{}: can't save the sub-asset index: {}", parent.ToString(), e.what()));
+            }
+            if (!saved)
+            {
+                Logger::Warn(std::format("{}: the sub-asset index wasn't saved to {}; it is rebuilt the next time the "
+                                         "model loads", parent.ToString(), metaPath.string()));
             }
         }
         return true;
@@ -506,18 +542,46 @@ namespace N2Engine::IO
         SetSubAssetIndex(parent, entries);
     }
 
-    void ResourceLoader::ReadSubAssetIndex(const AssetMetadata &meta)
+    bool ResourceLoader::HasCurrentSubAssetIndex(const AssetMetadata &meta)
     {
         if (!meta.customData.is_object())
         {
-            return;
+            return false;
         }
         const auto index = meta.customData.find("subAssets");
-        if (index == meta.customData.end() || !index->is_object())
+        const auto source = meta.customData.find("subAssetsSource");
+        if (index == meta.customData.end() || !index->is_object() || source == meta.customData.end() ||
+            !source->is_object())
         {
+            return false;
+        }
+        const auto size = source->find("fileSize");
+        const auto time = source->find("lastModified");
+        return size != source->end() && time != source->end() && size->is_number_unsigned() &&
+               time->is_number_unsigned() && size->get<std::uint64_t>() == meta.fileSize &&
+               time->get<std::uint64_t>() == meta.lastModified;
+    }
+
+    void ResourceLoader::ReadSubAssetIndex(const AssetMetadata &meta)
+    {
+        if (!meta.customData.is_object() || !meta.customData.contains("subAssets"))
+        {
+            return; // never loaded: nothing indexed
+        }
+        if (!HasCurrentSubAssetIndex(meta))
+        {
+            // The file changed since its index was written (or the index has no record of the file): forget the
+            // old entries and the old model, so the next lookup loads the new file and indexes it again
+            const ResourcePath &parent = meta.resourcePath;
+            std::erase_if(_subAssets, [&parent](const auto &item) { return item.second.parent == parent; });
+            if (_cache.erase(parent) > 0)
+            {
+                _cacheByUUID.erase(meta.uuid);
+            }
+            _subAssetParentsTried.erase(parent);
             return;
         }
-        for (const auto &item : index->items())
+        for (const auto &item : meta.customData.at("subAssets").items())
         {
             // Re-derived, not trusted from the file: a moved file's index names its old path's UUIDs
             _subAssets[ResourceUUID::FromSubAsset(meta.resourcePath, item.key())] =
@@ -560,8 +624,10 @@ namespace N2Engine::IO
             {
                 continue;
             }
-            const bool indexed = meta.customData.is_object() && meta.customData.contains("subAssets");
-            if (!indexed)
+            std::error_code existsError;
+            const std::filesystem::path sourcePath = Resolve(path);
+            if (!HasCurrentSubAssetIndex(meta) && !sourcePath.empty() &&
+                std::filesystem::exists(sourcePath, existsError))
             {
                 candidates.push_back(path);
             }

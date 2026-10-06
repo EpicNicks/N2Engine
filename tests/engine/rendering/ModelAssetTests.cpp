@@ -196,6 +196,55 @@ TEST_F(ModelAssetTest, LoadByUuidOfASubAssetLoadsItsParent)
     EXPECT_EQ(Loader().LoadByUUID<Mesh>(red), nullptr) << "a material isn't a mesh";
 }
 
+TEST_F(ModelAssetTest, AReExportAddingAMeshIsReindexedOnTheNextRescan)
+{
+    ASSERT_NE(Loader().Load<Model>(kRobot), nullptr); // writes the index for the old file
+    ASSERT_TRUE(ReadMetaCustomData("models/robot.glb").contains("subAssetsSource"));
+
+    GltfTest::Builder b = ModelTestSupport::Robot();
+    const int leg = b.AddMesh("Leg", {GltfTest::Builder::Primitive(b.AddFloats({0, 0, 0, 1, 0, 0, 0, 1, 0}, 3))});
+    const int legNode = b.AddNode("Leg", {{"mesh", leg}});
+    b.SetScene({1, legNode}); // node 1 is "Robot"
+    WriteFile("models/robot.glb", b.ToGlb());
+    Loader().RescanAssets(); // the file's size changed, so its old index is stale
+
+    const Math::UUID legUuid = IO::ResourceUUID::FromSubAsset(kRobot, "mesh/Leg");
+    const auto mesh = Loader().LoadByUUID<Mesh>(legUuid);
+    ASSERT_NE(mesh, nullptr) << "the new mesh resolves: the model was loaded again and re-indexed";
+    EXPECT_EQ(mesh->GetSubAssetKey(), "mesh/Leg");
+    EXPECT_TRUE(ReadMetaCustomData("models/robot.glb").at("subAssets").contains("mesh/Leg"));
+    EXPECT_NE(Loader().LoadByUUID<Mesh>(IO::ResourceUUID::FromSubAsset(kRobot, "mesh/Body")), nullptr);
+}
+
+TEST_F(ModelAssetTest, WritingTheIndexKeepsCustomDataEditedOnDiskSinceTheScan)
+{
+    // The .meta is edited after the scan read it (no rescan), then the model loads for the first time
+    IO::AssetMetadata meta = IO::AssetMetadata::FromFile(MetaPath("models/robot.glb"));
+    meta.customData = {{"model", {{"scale", 2.0}}}, {"note", "kept"}};
+    ASSERT_TRUE(meta.SaveToFile(MetaPath("models/robot.glb")));
+
+    ASSERT_NE(Loader().Load<Model>(kRobot), nullptr);
+    const json customData = ReadMetaCustomData("models/robot.glb");
+    EXPECT_TRUE(customData.contains("subAssets"));
+    EXPECT_EQ(customData.value("note", ""), "kept");
+    ASSERT_TRUE(customData.contains("model"));
+    EXPECT_EQ(customData.at("model").at("scale"), 2.0);
+}
+
+TEST_F(ModelAssetTest, ADeletedModelsSubAssetsAreForgottenOnRescan)
+{
+    const Math::UUID body = IO::ResourceUUID::FromSubAsset(kRobot, "mesh/Body");
+    ASSERT_NE(Loader().Load<Model>(kRobot), nullptr);
+    Loader().ClearCache();
+    fs::remove(s_root / "assets" / "models" / "robot.glb");
+    Loader().RescanAssets();
+
+    const WarningCapture problems;
+    EXPECT_EQ(Loader().FindSubAssetLocation(body), nullptr);
+    EXPECT_EQ(Loader().LoadByUUID<Mesh>(body), nullptr);
+    EXPECT_TRUE(problems.messages.empty()) << "a quiet miss, not a missing-file error: " << problems.messages.front();
+}
+
 TEST_F(ModelAssetTest, RemoveUnusedKeepsAModelWhileItsSubAssetsAreInUse)
 {
     std::shared_ptr<Mesh> body;

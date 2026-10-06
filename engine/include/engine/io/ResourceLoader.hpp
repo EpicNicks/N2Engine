@@ -121,7 +121,11 @@ namespace N2Engine::IO
         std::filesystem::path GetUserDataPath() const;
         /// Gives a just-loaded asset's sub-assets their UUIDs and resource path, and records the index
         void RegisterSubAssets(const ResourcePath& parent, const Base::Asset& asset);
-        /// Reads a scanned file's .meta sub-asset index into _subAssets (UUIDs re-derived from the path and key)
+        /// Whether a .meta's sub-asset index was written for the file as it is now (its customData.subAssetsSource
+        /// size and time match the metadata's)
+        static bool HasCurrentSubAssetIndex(const AssetMetadata& meta);
+        /// Reads a scanned file's .meta sub-asset index into _subAssets (UUIDs re-derived from the path and key); a
+        /// stale index (the file changed) drops the old entries and the cached parent instead
         void ReadSubAssetIndex(const AssetMetadata& meta);
         /// The sub-asset a UUID names, loading its parent; nullptr if it isn't one
         std::shared_ptr<Base::Asset> LoadSubAsset(const Math::UUID& uuid);
