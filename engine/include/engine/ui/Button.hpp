@@ -65,6 +65,8 @@ namespace N2Engine::UI
         static constexpr float DefaultFadeDuration = 0.1f;
 
         explicit Button(GameObject &gameObject);
+        /// A button freed without OnDestroy (its object never joined a scene) still un-tints its graphic
+        ~Button() override;
 
         [[nodiscard]] std::string GetTypeName() const override { return "Button"; }
 
@@ -185,6 +187,9 @@ namespace N2Engine::UI
 
         /// The tint a state shows: its colour times the multiplier
         [[nodiscard]] Common::Color TintFor(State state) const;
+        /// TintFor(GetState()), or white while the component is disabled or its object inactive (as Unity
+        /// clears a disabled Selectable's tint)
+        [[nodiscard]] Common::Color TargetTint() const;
         /// Moves the tint towards the current state's (at once if `instant` or fadeDuration <= 0) and applies it
         void Transition(bool instant);
         /// Sets the current tint on the target graphic, and white on a graphic tinted before that isn't the

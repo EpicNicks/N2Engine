@@ -257,6 +257,44 @@ TEST_F(ButtonTest, DisabledComponentDoesNothing)
     EXPECT_EQ(_clicks, 1);
 }
 
+TEST_F(ButtonTest, ADisabledButtonClearsItsTintAndChangesShowWhenEnabled)
+{
+    _button->SetFadeDuration(1.0f);
+    _button->SetInteractable(false);
+    _button->UpdateFade(1.0f);
+    ExpectTint(Button::DefaultDisabledColor, "not interactable");
+
+    // Disabled: no tint at all, as Unity clears a disabled Selectable's
+    _button->SetActive(false);
+    ExpectColor(_image->GetDrawColor(), _base, "disabled component, no tint");
+
+    // A change while disabled doesn't start a fade that nothing would advance
+    _button->SetInteractable(true);
+    EXPECT_FALSE(_button->IsFading());
+    ExpectColor(_image->GetDrawColor(), _base, "still untinted");
+
+    _button->SetActive(true);
+    EXPECT_FALSE(_button->IsFading());
+    ExpectTint(Button::DefaultNormalColor, "enabled again");
+}
+
+TEST_F(ButtonTest, AButtonFreedWithoutOnDestroyUntintsItsGraphic)
+{
+    // The target lives on another object; the button's own object is never in a scene, so freeing it
+    // runs no OnDestroy, only the destructor
+    auto target = UISystem::CreateElement("Target");
+    auto *image = target->AddComponent<Image>();
+    auto loose = UISystem::CreateElement("Loose");
+    auto *button = loose->AddComponent<Button>();
+    button->SetFadeDuration(0.0f);
+    button->SetTargetGraphic(image);
+    button->SetInteractable(false);
+    ASSERT_FALSE(image->GetTint() == Common::Color::White);
+
+    loose.reset();
+    ExpectColor(image->GetTint(), Common::Color::White, "untinted when freed");
+}
+
 TEST_F(ButtonTest, DisablingWhilePressedForgetsThePress)
 {
     Frame(_over, true);

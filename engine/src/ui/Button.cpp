@@ -165,10 +165,20 @@ namespace N2Engine::UI
                              color->a * _colorMultiplier};
     }
 
+    Common::Color Button::TargetTint() const
+    {
+        if (!IsActive() || !_gameObject.IsActiveInHierarchy())
+        {
+            return Common::Color::White;
+        }
+        return TintFor(GetState());
+    }
+
     void Button::Transition(const bool instant)
     {
-        const Common::Color target = TintFor(GetState());
-        if (instant || !(_fadeDuration > 0.0f) || target == _currentTint)
+        const Common::Color target = TargetTint();
+        // A disabled button gets no OnUpdate to advance a fade, so it changes at once
+        if (instant || !IsActive() || !(_fadeDuration > 0.0f) || target == _currentTint)
         {
             _fading = false;
             _currentTint = target;
@@ -288,7 +298,7 @@ namespace N2Engine::UI
         // Catches up with anything that changed the state's tint without a transition (settings loaded
         // after OnAttach), and keeps the tint on the right graphic when the target changes (a graphic added,
         // removed or loaded) without a state change
-        if (!_fading && !(TintFor(GetState()) == _currentTint))
+        if (!_fading && !(TargetTint() == _currentTint))
         {
             Transition(false);
         }
@@ -313,6 +323,14 @@ namespace N2Engine::UI
         // Enabling or disabling the component itself (no OnEnable/OnDisable for that): as above
         ClearPointerState();
         Transition(true);
+    }
+
+    Button::~Button()
+    {
+        if (UIGraphic *tinted = _tinted.Get())
+        {
+            tinted->SetTint(Common::Color::White);
+        }
     }
 
     void Button::OnDestroy()

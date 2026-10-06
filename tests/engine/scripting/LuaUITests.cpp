@@ -218,6 +218,12 @@ TEST_F(LuaUITest, ButtonOnClickListeners)
     {
         logged.emplace_back(message);
     };
+    // Unsubscribed however the test ends, so a failed ASSERT can't leave the logger writing to `logged`
+    struct Unsubscribe
+    {
+        size_t id;
+        ~Unsubscribe() { Logger::logEvent -= id; }
+    } unsubscribe{logId};
 
     Run(R"(
         lua_ui_click_go = UI.CreateButton("Clicker")
@@ -272,6 +278,5 @@ TEST_F(LuaUITest, ButtonOnClickListeners)
     Run("lua_ui_click_button:ClearOnClick()");
     EXPECT_EQ(Eval<int>("lua_ui_click_button:GetOnClickListenerCount()"), 0);
 
-    Logger::logEvent -= logId;
     Run("lua_ui_click_go = nil; lua_ui_click_button = nil; lua_ui_click_log = nil");
 }
