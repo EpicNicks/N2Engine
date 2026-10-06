@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include <renderer/opengl/OpenGLRenderer.hpp>
@@ -52,6 +53,8 @@ namespace N2Engine
         WindowData windowData{};
         std::string _initError;
         bool _rendererFailed = false;
+        // Set by SetRenderSize: frames render at this size, whatever the window's
+        std::optional<Vector2i> _renderSize;
 
         static void FramebufferSizeCallback(GLFWwindow *window, int width, int height);
         void OnWindowResize(int width, int height);
@@ -79,6 +82,18 @@ namespace N2Engine
 
         [[nodiscard]] Vector2i GetWindowDimensions() const;
         void SetWindowMode(WindowMode windowMode);
+
+        /**
+         * Renders every later frame at width x height pixels instead of the window's size
+         * (IRenderer::SetRenderTargetSize), for a host that reads frames back rather than showing them: the editor
+         * server sets its viewport size here (#69). From the first call on, window resizes no longer reach the
+         * renderer or the camera's aspect, which follow this size instead. False, changing nothing, without a
+         * renderer or when either dimension isn't positive. The same size again does nothing.
+         */
+        bool SetRenderSize(int width, int height);
+        /// The size SetRenderSize set, or GetWindowDimensions() until it is called: the size the UI pass lays out in
+        [[nodiscard]] Vector2i GetRenderDimensions() const;
+        [[nodiscard]] bool HasRenderSize() const { return _renderSize.has_value(); }
 
         [[nodiscard]] std::string GetTitle() const { return _title; }
         void SetTitle(const std::string &title);

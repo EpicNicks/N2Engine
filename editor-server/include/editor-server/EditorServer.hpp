@@ -11,6 +11,11 @@
 
 #include "editor-server/CommandQueue.hpp"
 
+namespace Renderer::Common
+{
+    class IRenderer;
+}
+
 namespace N2Engine::Editor
 {
     /// TCP host for the editor client.
@@ -69,6 +74,13 @@ namespace N2Engine::Editor
 
         [[nodiscard]] static bool IsPayloadLengthAllowed(uint32_t payloadLength) { return payloadLength <= MaxPayloadBytes; }
         [[nodiscard]] static bool IsViewportSizeValid(int32_t width, int32_t height);
+
+        /// RenderFrame's pixels: reads the renderer's last frame (IRenderer::ReadFramebuffer, RGBA bottom row
+        /// first on every backend) into `pixels` as width x height RGBA8 with the top row first and alpha 255,
+        /// what FrameData carries. `pixels` is resized to width * height * 4 bytes (empty unless both are
+        /// positive); a backend that reads nothing (Vulkan) leaves opaque black.
+        static void ReadFrame(const Renderer::Common::IRenderer &renderer, int width, int height,
+                              std::vector<uint8_t> &pixels);
 
         /// The scene file a DeleteScene request names: sceneName relative to scenesDirectory, with
         /// SceneFileExtension appended unless it already ends with it (case-insensitively). nullopt unless

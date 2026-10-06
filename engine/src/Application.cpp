@@ -330,8 +330,9 @@ void Application::Render()
         renderer->UpdateSceneLighting(sceneLightingData, _mainCamera->GetPosition());
 
         curScene.Render(renderer, *_mainCamera);
-        // The UI pass, over the scene: canvases in sort order, in window coordinates (the cursor's space)
-        UI::UISystem::Render(curScene, renderer, _window.GetWindowDimensions());
+        // The UI pass, over the scene: canvases in sort order, in window coordinates (the cursor's space), or
+        // over the frame's own size when Window::SetRenderSize set one (the editor's viewport)
+        UI::UISystem::Render(curScene, renderer, _window.GetRenderDimensions());
     }
 
     renderer->EndFrame();

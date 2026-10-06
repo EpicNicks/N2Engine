@@ -3,6 +3,7 @@
   "commands": {
     "RenderFrame": {
       "id": "0x01",
+      "description": "Renders one frame at the viewport size (SetViewportSize; 1280x720 until it is called). pixels is width * height * 4 bytes of RGBA8, top row first, alpha 255, on every renderer backend, so it can be drawn as-is (e.g. as canvas ImageData).",
       "request": {},
       "response": {
         "type": "FrameData",
@@ -15,6 +16,7 @@
     },
     "SetViewportSize": {
       "id": "0x02",
+      "description": "Sets the size, in pixels, that later RenderFrame frames are rendered at (each 1 to 4096; anything else is an Error). The renderer itself is resized, so frames are neither cropped nor resampled, and the camera's aspect follows.",
       "request": {
         "width": "int32",
         "height": "int32"

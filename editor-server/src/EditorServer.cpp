@@ -16,6 +16,9 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
+#include "renderer/common/FrameRows.hpp"
+#include "renderer/common/Renderer.hpp"
+
 #include "editor-server/EditorServer.hpp"
 #include "editor-server/Protocol.hpp"
 #include "editor-server/Commands.hpp"
@@ -334,6 +337,29 @@ namespace N2Engine::Editor
         return width > 0 && height > 0 && width <= MaxViewportDimension && height <= MaxViewportDimension;
     }
 
+    void EditorServer::ReadFrame(const Renderer::Common::IRenderer &renderer, const int width, const int height,
+                                 std::vector<uint8_t> &pixels)
+    {
+        const size_t rowBytes = width > 0 ? static_cast<size_t>(width) * 4 : 0;
+        const size_t rows = height > 0 ? static_cast<size_t>(height) : 0;
+        pixels.assign(rowBytes * rows, 0);
+        if (pixels.empty())
+        {
+            return;
+        }
+
+        // Every backend reads back RGBA, bottom row first (IRenderer::ReadFramebuffer); FrameData is top row first
+        renderer.ReadFramebuffer(pixels.data(), width, height);
+        Renderer::Common::FlipRows(pixels.data(), rowBytes, rows);
+
+        // The viewport is opaque: alpha is whatever blending left in the target, which a client drawing the
+        // pixels as an image would show as see-through
+        for (size_t i = 3; i < pixels.size(); i += 4)
+        {
+            pixels[i] = 0xFF;
+        }
+    }
+
     std::optional<std::filesystem::path> EditorServer::ResolveSceneFile(const std::filesystem::path &scenesDirectory,
                                                                         const std::string &sceneName)
     {
@@ -456,8 +482,9 @@ namespace N2Engine::Editor
     void EditorServer::HandleRenderFrame(int clientSocket)
     {
         auto &app = Application::GetInstance();
+        auto &window = app.GetWindow();
 
-        auto *renderer = app.GetWindow().GetRenderer();
+        auto *renderer = window.GetRenderer();
         if (!renderer)
         {
             BufferWriter response;
@@ -466,16 +493,13 @@ namespace N2Engine::Editor
             return;
         }
 
+        // Render at the viewport size (validated by SetViewportSize). SetViewportSize already applied it; this
+        // covers the default size, before any SetViewportSize, and does nothing when the size is unchanged.
+        window.SetRenderSize(_viewportWidth, _viewportHeight);
         app.RenderEditorFrame();
 
-        // Resize frame buffer if needed (the size was validated by SetViewportSize)
-        size_t bufferSize = static_cast<size_t>(_viewportWidth) * static_cast<size_t>(_viewportHeight) * 4;
-        if (_frameBuffer.size() != bufferSize)
-            _frameBuffer.resize(bufferSize);
-
-        // Read pixels from renderer
-        // You'll need to implement ReadFramebuffer in your renderer
-        renderer->ReadFramebuffer(_frameBuffer.data(), _viewportWidth, _viewportHeight);
+        // RGBA, top row first, whatever the backend
+        ReadFrame(*renderer, _viewportWidth, _viewportHeight, _frameBuffer);
 
         BufferWriter response;
         WriteFrameData(response,
@@ -522,7 +546,14 @@ namespace N2Engine::Editor
         _viewportWidth = cmd.width;
         _viewportHeight = cmd.height;
 
-        Application::GetInstance().OnWindowResize(_viewportWidth, _viewportHeight);
+        // The renderer renders at this size from the next frame (an offscreen target on OpenGL, the CPU buffer's
+        // size on the software renderer), so frames are neither cropped nor resampled; this also sets the camera's
+        // aspect. Without a renderer only the aspect changes.
+        auto &app = Application::GetInstance();
+        if (!app.GetWindow().SetRenderSize(_viewportWidth, _viewportHeight))
+        {
+            app.OnWindowResize(_viewportWidth, _viewportHeight);
+        }
 
         BufferWriter response;
         WriteOk(response);

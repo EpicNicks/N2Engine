@@ -41,6 +41,7 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
 {
     _initError.clear();
     _rendererFailed = false;
+    _renderSize.reset();
 
     if (!glfwInit())
     {
@@ -179,6 +180,7 @@ void Window::Shutdown()
 {
     // Before the window: ~Mouse unregisters its scroll callback on it
     _inputSystem.reset();
+    _renderSize.reset();
     if (_renderer)
     {
         _renderer->Shutdown();
@@ -217,6 +219,12 @@ void Window::FramebufferSizeCallback(GLFWwindow *window, int width, int height)
 
 void Window::OnWindowResize(int width, int height)
 {
+    // Frames follow SetRenderSize's size, not the window's
+    if (_renderSize)
+    {
+        return;
+    }
+
     if (_renderer)
     {
         _renderer->OnResize(width, height);
@@ -224,6 +232,28 @@ void Window::OnWindowResize(int width, int height)
 
     // Notify the application about the resize so it can update the camera
     Application::GetInstance().OnWindowResize(width, height);
+}
+
+bool Window::SetRenderSize(const int width, const int height)
+{
+    if (!_renderer || width <= 0 || height <= 0)
+    {
+        return false;
+    }
+    if (_renderSize && (*_renderSize)[0] == width && (*_renderSize)[1] == height)
+    {
+        return true;
+    }
+
+    _renderSize = Vector2i{width, height};
+    _renderer->SetRenderTargetSize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    Application::GetInstance().OnWindowResize(width, height);
+    return true;
+}
+
+Vector2i Window::GetRenderDimensions() const
+{
+    return _renderSize ? *_renderSize : GetWindowDimensions();
 }
 
 void Window::SetWindowMode(WindowMode windowMode)
