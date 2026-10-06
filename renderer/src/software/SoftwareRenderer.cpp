@@ -799,8 +799,7 @@ bool SoftwareRenderer::IsValidShader(IShader *shader) const
 IMesh* SoftwareRenderer::CreateMesh(const MeshData &d)
 {
     auto mesh = std::make_unique<SWMesh>();
-    mesh->vertices = d.vertices;
-    mesh->indices = d.indices;
+    mesh->SetData(d);
     IMesh *raw = mesh.get();
     m_meshes.push_back(std::move(mesh));
     return raw;
@@ -835,8 +834,7 @@ bool SoftwareRenderer::UpdateMesh(IMesh *mesh, const MeshData &d)
     // reads the mesh's vectors; let it finish first. (Returns at once when no frame is in flight.)
     m_renderThread.WaitForFrame();
 
-    (*it)->vertices = d.vertices;
-    (*it)->indices = d.indices;
+    (*it)->SetData(d);
     return true;
 }
 
@@ -1032,10 +1030,7 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
     // paid string-keyed uniform lookups and dynamic_casts per pixel.
     ResolvedMat rm = ResolveMaterial(material);
     // Vertex colour only matters when some vertex isn't white (see ResolvedMat::vertexColor)
-    rm.vertexColor = std::ranges::any_of(mesh->vertices, [](const Vertex& vertex)
-    {
-        return vertex.color[0] != 1.f || vertex.color[1] != 1.f || vertex.color[2] != 1.f || vertex.color[3] != 1.f;
-    });
+    rm.vertexColor = mesh->hasVertexColors; // found once per CreateMesh/UpdateMesh, not per draw
     const ShadeKind kind = rm.Kind();
     // Text without an atlas has no distance to test, so nothing is covered (as on OpenGL, where an
     // unbound sampler reads 0, below the edge)
