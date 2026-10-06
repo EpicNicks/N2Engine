@@ -136,7 +136,7 @@ namespace N2Engine::UI
 
         const Text::TextLayout &layout = GetLayout(rect);
         const Math::Matrix<float, 4, 4> model = ModelMatrixFor(GetAnchor(rect));
-        _resources.Draw(_layoutCache.GetFont(), layout, _layoutCache.GetVersion(), model.Data(), _color, state,
+        _resources.Draw(_layoutCache.GetFont(), layout, _layoutCache.GetVersion(), model.Data(), GetDrawColor(), state,
                         "UIText");
     }
 

@@ -51,6 +51,17 @@ namespace N2Engine::Base
             CompactIfIdle();
         }
 
+        /// Removes every subscriber. Safe during dispatch, like operator-=: none of them is called again,
+        /// and they are erased once the outermost dispatch finishes
+        void Clear()
+        {
+            for (auto &sub : _subscribers)
+            {
+                sub.removed = true;
+            }
+            CompactIfIdle();
+        }
+
         void operator()(ARGS... args)
         {
             // By index over the subscribers present at the start: handlers may subscribe (appending,

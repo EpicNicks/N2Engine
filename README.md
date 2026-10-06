@@ -19,6 +19,7 @@ Behaviour reference for the engine (lifecycles, frame order, guarantees and edge
 - Advanced Input System
 - Scene Serialization/Deserialization
 - Math types with SIMD
+- Screen-space UI: Canvas, RectTransform layout, Image, UIText and Button (state tints and an OnClick event)
 - Unit testing with GoogleTest
 
 ## Objectives

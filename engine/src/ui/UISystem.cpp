@@ -8,7 +8,9 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Layers.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
+#include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UIGraphic.hpp"
 #include "engine/ui/UIText.hpp"
@@ -230,6 +232,33 @@ namespace N2Engine::UI
         {
             uiText->SetText(text);
         }
+        return gameObject;
+    }
+
+    std::shared_ptr<GameObject> UISystem::CreateButton(const std::string &name, const std::string &label)
+    {
+        auto gameObject = CreateElement(name);
+        if (auto *rectTransform = gameObject->GetComponent<RectTransform>())
+        {
+            rectTransform->SetSizeDelta(Math::Vector2{160.0f, 40.0f});
+        }
+        gameObject->AddComponent<Image>(); // white, a raycast target: what the pointer hits and the tint shows on
+        gameObject->AddComponent<Button>(); // tints the first graphic on its object, the Image
+
+        auto labelObject = CreateText("Label", label);
+        if (auto *rectTransform = labelObject->GetComponent<RectTransform>())
+        {
+            rectTransform->StretchToParent();
+        }
+        if (auto *text = labelObject->GetComponent<UIText>())
+        {
+            text->SetFontSize(20.0f);
+            text->SetHorizontalAlign(Text::HorizontalAlign::Center);
+            text->SetVerticalAlign(Text::VerticalAlign::Middle);
+            text->SetWrap(false);
+            text->SetColor(Common::Color{0.196f, 0.196f, 0.196f, 1.0f}); // Unity's label grey (50, 50, 50)
+        }
+        gameObject->AddChild(labelObject, false);
         return gameObject;
     }
 }

@@ -94,7 +94,8 @@ namespace N2Engine::UI
 
         _material->SetTexture(_texture);
         _material->SetInt("uHasTexture", _texture != nullptr ? 1 : 0);
-        _material->SetColor("uAlbedo", _color.r, _color.g, _color.b, _color.a);
+        const Common::Color color = GetDrawColor(); // the colour with a Button's tint, if any
+        _material->SetColor("uAlbedo", color.r, color.g, color.b, color.a);
 
         const Math::Matrix<float, 4, 4> model = ModelMatrixFor(rect);
         renderer->DrawMesh(_mesh, model.Data(), _material, state);

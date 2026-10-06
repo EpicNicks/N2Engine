@@ -104,5 +104,10 @@ namespace N2Engine::UI
         /// A new text element: CreateElement with a UIText showing `text` (the default settings: 24 px,
         /// white, top-left, wrapped to the rect, not a raycast target)
         static std::shared_ptr<GameObject> CreateText(const std::string &name = "Text", const std::string &text = "");
+        /// A new button: CreateElement sized 160x40 with a white Image (the raycast target and the tinted
+        /// graphic) and a Button, and a child "Label" (CreateText, stretched over the button, centred both ways,
+        /// 20 px, dark grey) showing `label`. Parent it under a canvas or another element.
+        static std::shared_ptr<GameObject> CreateButton(const std::string &name = "Button",
+                                                        const std::string &label = "Button");
     };
 }
