@@ -188,7 +188,7 @@ auto script = IO::ResourceLoader::Instance().Load&lt;LuaScript&gt;(IO::ResourceP
   "lastModified": 1767700800,
   "fileSize": 2048
 }</code></pre>
-<p><code>lastModified</code> is the file's write time in Unix seconds. An optional <code>customData</code> object is written only when it is non-empty; asset types read their import settings from it (<a href="text.html#font-asset">fonts</a>, <a href="meshes.html#texture-settings">textures</a>, <a href="meshes.html#model-settings">models</a>), and a model's <a href="#sub-assets">sub-asset index</a> is kept there <span class="badge">PR #TBD</span>. For a new file, <code>resourceType</code> is chosen from the extension:</p>
+<p><code>lastModified</code> is the file's write time in Unix seconds. An optional <code>customData</code> object is written only when it is non-empty; asset types read their import settings from it (<a href="text.html#font-asset">fonts</a>, <a href="meshes.html#texture-settings">textures</a>, <a href="meshes.html#model-settings">models</a>), and a model's <a href="#sub-assets">sub-asset index</a> is kept there <span class="badge">PR #68</span>. For a new file, <code>resourceType</code> is chosen from the extension:</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Extensions (any case)</th><th><code>resourceType</code></th></tr></thead>
@@ -198,7 +198,7 @@ auto script = IO::ResourceLoader::Instance().Load&lt;LuaScript&gt;(IO::ResourceP
 <tr><td><code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.tga</code>, <code>.bmp</code> <span class="badge">PR #64</span></td><td><code>Texture</code></td></tr>
 <tr><td><code>.ttf</code>, <code>.otf</code> <span class="badge">PR #45</span></td><td><code>Font</code></td></tr>
 <tr><td><code>.mat</code> <span class="badge">PR #65</span></td><td><code>Material</code></td></tr>
-<tr><td><code>.gltf</code>, <code>.glb</code> <span class="badge">PR #TBD</span></td><td><code>Model</code></td></tr>
+<tr><td><code>.gltf</code>, <code>.glb</code> <span class="badge">PR #68</span></td><td><code>Model</code></td></tr>
 <tr><td>Anything else</td><td><code>Unknown</code></td></tr>
 </tbody>
 </table>
@@ -232,7 +232,7 @@ auto script = IO::ResourceLoader::Instance().Load&lt;LuaScript&gt;(IO::ResourceP
 <thead><tr><th>Call</th><th>Behaviour</th></tr></thead>
 <tbody>
 <tr><td><code>Load&lt;T&gt;(path)</code></td><td>Returns the cached asset if there is one. Otherwise: no metadata for <code>path</code> gives an error (<code>"Resource not found"</code>) and null. A source file that is missing or rejected by <code>Resolve</code> gives an error and null. No loader for the extension gives an error and null. A loader that returns null gives null without a log. On success the asset's UUID is set to the meta UUID, its <code>ResourcePath</code> is set, it is cached by path and by UUID, and it is returned as <code>T</code>.</td></tr>
-<tr><td><code>LoadByUUID&lt;T&gt;(uuid)</code></td><td>Returns the cached asset by UUID. Otherwise looks up the path for that UUID and calls <code>Load&lt;T&gt;</code>. A <a href="#sub-assets">sub-asset</a> UUID loads (or reuses) its parent and returns the child <span class="badge">PR #TBD</span>. An unknown UUID gives null, silently.</td></tr>
+<tr><td><code>LoadByUUID&lt;T&gt;(uuid)</code></td><td>Returns the cached asset by UUID. Otherwise looks up the path for that UUID and calls <code>Load&lt;T&gt;</code>. A <a href="#sub-assets">sub-asset</a> UUID loads (or reuses) its parent and returns the child <span class="badge">PR #68</span>. An unknown UUID gives null, silently.</td></tr>
 <tr><td><code>GetCached&lt;T&gt;(path)</code> / <code>GetCachedByUUID&lt;T&gt;(uuid)</code></td><td>The cache only (for a sub-asset UUID, its loaded parent's child). Never loads.</td></tr>
 <tr><td><code>GetMetadata(path or uuid)</code>, <code>GetUUID(path)</code>, <code>Exists(path)</code></td><td>Metadata lookups: <code>nullptr</code>, <code>UUID::ZERO</code> or <code>false</code> for unknown paths. <code>Exists</code> means "has metadata", not "is on disk".</td></tr>
 <tr><td><code>GetAllAssets()</code>, <code>GetAssetsByType(type)</code></td><td>Copies of the metadata, in unspecified order.</td></tr>
@@ -276,7 +276,7 @@ auto script = IO::ResourceLoader::Instance().Load&lt;LuaScript&gt;(IO::ResourceP
 <tr><td><code>.ttf</code>, <code>.otf</code> <span class="badge">PR #45</span></td><td><code>Text::Font</code></td><td><code>ResourceLoader::Initialize</code> (and a static registrar in <code>Font.cpp</code>), both calling <code>Font::RegisterLoader</code></td><td>Builds the SDF atlas at load time, with settings from the <code>.meta</code> <code>customData</code>. CPU-only, so it loads headless. See <a href="text.html#font-asset">Text &amp; fonts</a>.</td></tr>
 <tr><td><code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.tga</code>, <code>.bmp</code> <span class="badge">PR #64</span></td><td><code>Rendering::Texture</code></td><td><code>ResourceLoader::Initialize</code> (and a static registrar in <code>Texture.cpp</code>), both calling <code>Texture::RegisterLoader</code></td><td>Decodes the image to RGBA8 pixels (the <code>assetimport</code> library, stb_image), with settings from the <code>.meta</code> <code>customData</code>. CPU-only, so it loads headless; renderers upload it on first use. A corrupt or oversized image logs an error and loads as null. See <a href="meshes.html#textures">Meshes, models &amp; textures</a>.</td></tr>
 <tr><td><code>.mat</code> <span class="badge">PR #65</span></td><td><code>Rendering::Material</code></td><td><code>ResourceLoader::Initialize</code> (and a static registrar in <code>Material.cpp</code>), both calling <code>Material::RegisterLoader</code></td><td>A JSON object of material settings; its textures (res:// paths, UUIDs or paths relative to the file) load through <code>Resources</code> while it loads. Bad values warn and keep their defaults; a file that isn't a JSON object loads as null. See <a href="meshes.html#mat-files">.mat files</a>.</td></tr>
-<tr><td><code>.gltf</code>, <code>.glb</code> <span class="badge">PR #TBD</span></td><td><code>Rendering::Model</code></td><td><code>ResourceLoader::Initialize</code> (and a static registrar in <code>Model.cpp</code>), both calling <code>Model::RegisterLoader</code></td><td>Imports the glTF file (the <code>assetimport</code> library, cgltf), with settings from the <code>.meta</code> <code>customData</code>; its meshes, materials and images become <a href="#sub-assets">sub-assets</a>. External <code>.bin</code> files and images must be inside the model's folder. CPU-only, so it loads headless. A file that doesn't import logs an error and loads as null. See <a href="meshes.html#models">Models and glTF import</a>.</td></tr>
+<tr><td><code>.gltf</code>, <code>.glb</code> <span class="badge">PR #68</span></td><td><code>Rendering::Model</code></td><td><code>ResourceLoader::Initialize</code> (and a static registrar in <code>Model.cpp</code>), both calling <code>Model::RegisterLoader</code></td><td>Imports the glTF file (the <code>assetimport</code> library, cgltf), with settings from the <code>.meta</code> <code>customData</code>; its meshes, materials and images become <a href="#sub-assets">sub-assets</a>. External <code>.bin</code> files and images must be inside the model's folder. CPU-only, so it loads headless. A file that doesn't import logs an error and loads as null. See <a href="meshes.html#models">Models and glTF import</a>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -344,7 +344,7 @@ res.RegisterAsset(generated);
 <p><code>Resources::UnregisterAsset</code> still removes only the first path entry for the asset (it <code>break</code>s after one match). <code>RemoveUnused</code> was fixed in #23 to erase all of them. Unregistering an asset that was registered under two paths leaves the second path entry, which keeps the asset alive and findable by that path. File: <code>engine/src/io/Resources.cpp</code> (<code>Resources::UnregisterAsset</code>).</p>
 </div>
 
-<h2 id="sub-assets">Sub-assets <span class="badge">PR #TBD</span></h2>
+<h2 id="sub-assets">Sub-assets <span class="badge">PR #68</span></h2>
 <p>Some files hold several assets: a model's meshes, materials and textures. Each is a <strong>sub-asset</strong>: an ordinary asset (<code>Mesh</code>, <code>Material</code>, <code>Texture</code>) made by its parent's loader, named inside the parent by a <strong>key</strong> (<code>"mesh/Body"</code>; see <a href="meshes.html#sub-assets">the key rule</a>). A parent lists them through <code>Asset::GetSubAssets()</code> (key and asset) and finds one with <code>FindSubAsset(key)</code>; a sub-asset reports <code>IsSubResource()</code> and <code>GetSubAssetKey()</code>, and its resource path is its parent's.</p>
 <ul>
 <li><strong>UUIDs.</strong> When <code>ResourceLoader::Load</code> loads a file with sub-assets, it gives each the UUID <code>ResourceUUID::FromSubAsset(parentPath, key)</code>: name-based like <code>FromPath</code>, but in a namespace of its own derived from the project's, so a sub-asset's UUID never equals a file's. The same file and key give the same UUID in every run and on every machine; moving the file changes them, as it changes the file's own.</li>
@@ -364,7 +364,7 @@ res.RegisterAsset(generated);
 <li><code>Serialize()</code> writes <code>uuid</code> and <code>resourcePath</code>. <code>Deserialize()</code> restores whichever of them is present. Subclasses extend both (for example, <code>LuaScript</code> adds <code>sourceCode</code>).</li>
 <li><code>Load(path)</code> returns <code>false</code> by default. <code>RegisterSimpleLoader&lt;T&gt;</code> relies on <code>T</code> overriding it.</li>
 <li><code>GetResourceType()</code> is pure virtual (for example <code>"LuaScript"</code> or <code>"Scene"</code>).</li>
-<li><code>GetSubAssets()</code> and <code>FindSubAsset(key)</code> list and find the assets inside this one's file (none by default), and <code>IsSubResource()</code> / <code>GetSubAssetKey()</code> say whether this asset is one <span class="badge">PR #TBD</span>. See <a href="#sub-assets">Sub-assets</a>.</li>
+<li><code>GetSubAssets()</code> and <code>FindSubAsset(key)</code> list and find the assets inside this one's file (none by default), and <code>IsSubResource()</code> / <code>GetSubAssetKey()</code> say whether this asset is one <span class="badge">PR #68</span>. See <a href="#sub-assets">Sub-assets</a>.</li>
 </ul>
 <p class="src">Source: <code>engine/include/engine/base/Asset.hpp</code>, <code>engine/src/base/Asset.cpp</code> — <code>Asset::Asset</code>, <code>Asset::SetUUID</code>; <code>engine/include/engine/scripting/LuaScript.hpp</code></p>
 
