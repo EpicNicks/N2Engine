@@ -167,6 +167,7 @@ namespace N2Engine::UI
          *    Trigger colliders never block, and neither does a collider the ray starts inside (a hit within
          *    StartInsideTolerance of the ray's origin, such as a player capsule around the camera). A collider
          *    less than BlockTolerance in front of the canvas (a wall it is mounted on) doesn't block it.
+         *    A canvas crossed at distance 0 (on the near plane) is never blocked, and no query is made.
          * The blocking query goes to the application's physics backend (Application::Get3DPhysicsBackend), not
          * to `scene`; without a backend nothing blocks. Geometry without a collider never blocks: a canvas
          * hidden behind a mesh-only wall still takes clicks.

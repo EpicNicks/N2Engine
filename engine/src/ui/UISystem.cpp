@@ -369,6 +369,10 @@ namespace N2Engine::UI
         // ray starts inside (a first-person player's capsule around the camera), which PhysX reports at
         // distance 0. A collider within BlockTolerance in front of the canvas (the wall it is mounted on)
         // doesn't block it either, so a canvas on a collider's face isn't hit or missed by rounding.
+        if (hit.distance <= 0.0f)
+        {
+            return hit.gameObject; // on the near plane: nothing can be in front of it
+        }
         std::vector<Physics::RaycastHit> physicsHits;
         Physics::Raycast::All(ray.origin, ray.direction, physicsHits, hit.distance, physicsMask,
                               Physics::QueryTriggers::Ignore);
