@@ -151,6 +151,11 @@ namespace N2Engine::Rendering
             {
                 return nullptr;
             }
+            // A model's texture: its resource path is the model's file, so it is saved by its (deterministic) UUID
+            if (texture->IsSubResource())
+            {
+                return texture->GetUUID().ToString();
+            }
             if (texture->GetResourcePath().IsValid())
             {
                 return texture->GetResourcePath().ToString();

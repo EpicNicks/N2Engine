@@ -57,6 +57,9 @@ namespace N2Engine::IO
         _cache[resourcePath] = asset;
         _cacheByUUID[meta.uuid] = asset;
 
+        // A model's meshes, materials and textures get their deterministic UUIDs, and the .meta its sub-asset index
+        RegisterSubAssets(resourcePath, *asset);
+
         return std::dynamic_pointer_cast<T>(asset);
     }
 
@@ -71,7 +74,8 @@ namespace N2Engine::IO
         auto pathIt = _uuidToPath.find(uuid);
         if (pathIt == _uuidToPath.end())
         {
-            return nullptr;
+            // A sub-asset: its parent loads (or is reused) and hands it over
+            return std::dynamic_pointer_cast<T>(LoadSubAsset(uuid));
         }
 
         return Load<T>(pathIt->second);
@@ -95,6 +99,14 @@ namespace N2Engine::IO
         if (it != _cacheByUUID.end())
         {
             return std::dynamic_pointer_cast<T>(it->second);
+        }
+        // A sub-asset of a loaded parent
+        if (const SubAssetLocation* location = FindSubAssetLocation(uuid))
+        {
+            if (const auto parent = GetCached<Base::Asset>(location->parent))
+            {
+                return std::dynamic_pointer_cast<T>(parent->FindSubAsset(location->key));
+            }
         }
         return nullptr;
     }

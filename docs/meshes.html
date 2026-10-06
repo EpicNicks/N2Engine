@@ -62,7 +62,7 @@
 <div class="content">
 
 <h1>Meshes, models &amp; textures</h1>
-<p class="lead">How the engine imports and draws content made outside it: images, meshes and materials today, and glTF models in the next phases of <a href="https://github.com/EpicNicks/N2Engine/issues/3">issue #3</a>. This page covers the CPU-only <code>assetimport</code> library, the <code>Texture</code> asset and its import settings, the UV convention every textured thing follows, the <code>GpuCache</code> that shares GPU resources between components, texture sampling on the software renderer, the <code>Mesh</code> and <code>Material</code> assets <span class="badge">PR #65</span>, the <code>MeshRenderer</code> component and the built-in shapes <span class="badge">PR #65</span>. Textures reach the screen through a <code>Material</code> or the UI <a href="ui.html#image-sprite"><code>Image</code> sprite</a> <span class="badge">PR #64</span>.</p>
+<p class="lead">How the engine imports and draws content made outside it: images, meshes and materials today, and glTF models in the next phases of <a href="https://github.com/EpicNicks/N2Engine/issues/3">issue #3</a>. This page covers the CPU-only <code>assetimport</code> library, the <code>Texture</code> asset and its import settings, the UV convention every textured thing follows, the <code>GpuCache</code> that shares GPU resources between components, texture sampling on the software renderer, the <code>Mesh</code> and <code>Material</code> assets <span class="badge">PR #65</span>, the <code>MeshRenderer</code> component and the built-in shapes <span class="badge">PR #65</span>, and glTF models: the importer, the <code>Model</code> asset, its sub-assets, instantiation and exporting from Blender <span class="badge">PR #68</span>. Textures reach the screen through a <code>Material</code> or the UI <a href="ui.html#image-sprite"><code>Image</code> sprite</a> <span class="badge">PR #64</span>.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -82,7 +82,14 @@
 <li><a href="#mesh-renderer">MeshRenderer</a></li>
 <li><a href="#shapes">The built-in shapes</a></li>
 <li><a href="#shaders">Vertex colour and the alpha test</a></li>
-<li><a href="#models">Models and glTF import (planned)</a></li>
+<li><a href="#models">Models and glTF import</a></li>
+<li><a href="#gltf-importer">The glTF importer</a></li>
+<li><a href="#unsupported">Unsupported glTF features</a></li>
+<li><a href="#model-asset">The Model asset</a></li>
+<li><a href="#sub-assets">Sub-assets and their keys</a></li>
+<li><a href="#model-settings">Model import settings</a></li>
+<li><a href="#instantiate">Instantiating a model</a></li>
+<li><a href="#blender">Exporting from Blender</a></li>
 <li><a href="#conventions">Axes, winding and units</a></li>
 <li><a href="#lua">Lua</a></li>
 <li><a href="#tests">Tests</a></li>
@@ -97,7 +104,7 @@
 <tbody>
 <tr><td>P1 (<a href="https://github.com/EpicNicks/N2Engine/issues/58">#58</a>)</td><td>stb_image and the <code>assetimport</code> library, the <code>Texture</code> asset and its settings, case-insensitive asset types, <code>GpuCache</code> (the text atlas moved onto it), bilinear RGBA sampling on the software renderer, the UI <code>Image</code> sprite</td><td>This page <span class="badge">PR #64</span></td></tr>
 <tr><td>P2 (<a href="https://github.com/EpicNicks/N2Engine/issues/59">#59</a>)</td><td>The <code>Mesh</code> and <code>Material</code> assets, <code>.mat</code> files, the <code>IndexRange</code> draw, vertex colour and the alpha test in the shaders, blending from the alpha mode, the render-queue mask, <code>RegisterAssetRefList</code>, <code>MeshRenderer</code>, the built-in shapes rebuilt on them</td><td>This page <span class="badge">PR #65</span></td></tr>
-<tr><td>P3 (<a href="https://github.com/EpicNicks/N2Engine/issues/60">#60</a>)</td><td>glTF 2.0 import, the <code>Model</code> asset, sub-assets</td><td>Planned</td></tr>
+<tr><td>P3 (<a href="https://github.com/EpicNicks/N2Engine/issues/60">#60</a>)</td><td>cgltf and the glTF 2.0 importer, the <code>Model</code> asset, sub-assets with deterministic UUIDs and the <code>.meta</code> index, <code>Model::Instantiate</code>, Lua <code>Model.Instantiate</code>, the Blender export guide</td><td>This page <span class="badge">PR #68</span></td></tr>
 <tr><td>P4 (<a href="https://github.com/EpicNicks/N2Engine/issues/61">#61</a>)</td><td>Materials and lighting: spot lights on the software renderer, emissive, sRGB and linear lighting, normal maps, PBR</td><td>Planned</td></tr>
 <tr><td>P5 (<a href="https://github.com/EpicNicks/N2Engine/issues/62">#62</a>)</td><td>Optional FBX and OBJ import through ufbx</td><td>Planned</td></tr>
 </tbody>
@@ -105,7 +112,7 @@
 </div>
 
 <h2 id="assetimport">The assetimport library <span class="badge">PR #64</span></h2>
-<p><code>assetimport/</code> is a static library (<code>N2Engine::assetimport</code>) that turns file bytes into plain CPU structs. Today it decodes images (<code>assetimport/include/assetimport/ImageDecoder.hpp</code>); model parsing joins it in P3. It depends only on <code>math</code> and its vendored decoders, never on the engine, the renderer, GLFW, PhysX or nlohmann. The engine links it privately: no <code>assetimport</code> type appears in an engine header, and no stb type appears in an <code>assetimport</code> header.</p>
+<p><code>assetimport/</code> is a static library (<code>N2Engine::assetimport</code>) that turns file bytes into plain CPU structs. It decodes images (<code>assetimport/include/assetimport/ImageDecoder.hpp</code>) and, since P3 <span class="badge">PR #68</span>, parses glTF models (<code>ModelImporter.hpp</code>, <code>GltfImporter.hpp</code>; see <a href="#models">Models</a>). It depends only on <code>math</code> and its vendored parsers, never on the engine, the renderer, GLFW, PhysX or nlohmann. The engine links it privately: no <code>assetimport</code> type appears in an engine header, and no stb or cgltf type appears in an <code>assetimport</code> header.</p>
 <p>stb_image 2.30 (<code>external/stb_image/</code>, see <code>THIRD_PARTY_NOTICES.md</code>) is compiled once, in <code>assetimport/src/assetimport/ImageDecoder.cpp</code>, with <code>STB_IMAGE_STATIC</code> so its symbols stay in that file. It is configured there: <code>STBI_ONLY_PNG</code>, <code>STBI_ONLY_JPEG</code>, <code>STBI_ONLY_TGA</code>, <code>STBI_ONLY_BMP</code> (PSD, GIF, HDR, PIC and PNM are left out), <code>STBI_NO_STDIO</code> (the engine reads files itself and decodes from memory), <code>STBI_NO_LINEAR</code>, <code>STBI_MAX_DIMENSIONS 16384</code>, and <code>STBI_ASSERT</code> a no-op in Release builds (stb's own <code>assert</code> in Debug).</p>
 <p class="src">Source: <code>assetimport/CMakeLists.txt</code>; <code>assetimport/src/assetimport/ImageDecoder.cpp</code>; <code>external/stb_image/README.md</code></p>
 
@@ -372,8 +379,134 @@ renderer-&gt;SetMaterial(0, IO::Resources::Instance().Load&lt;Rendering::Materia
 <p><code>Vertex</code> has always carried a colour, but only the text shader read it. glTF models use vertex colours (<code>COLOR_0</code>) for painted or baked detail, and procedural meshes are easiest to colour per vertex, so the unlit and lit shaders multiply it in, matching glTF's base colour &times; texture &times; vertex colour. Every existing mesh is white per vertex, so this changes no output; the software renderer even skips the work for all-white meshes. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision 10).</p>
 </div>
 
-<h2 id="models">Models and glTF import (planned)</h2>
-<p>glTF 2.0 import through cgltf, the <code>Model</code> asset, sub-asset UUIDs, <code>Model::Instantiate</code> and the Blender export workflow come in P3 (<a href="https://github.com/EpicNicks/N2Engine/issues/60">#60</a>); optional FBX and OBJ through ufbx in P5 (<a href="https://github.com/EpicNicks/N2Engine/issues/62">#62</a>). Their meshes and materials will be <code>Mesh</code> and <code>Material</code> sub-assets, drawn by <code>MeshRenderer</code>s; embedded and external model images will load as <code>Texture</code>s through the same decoder.</p>
+<h2 id="models">Models and glTF import <span class="badge">PR #68</span></h2>
+<p>A 3D model file (<code>.glb</code>, or <code>.gltf</code> with its <code>.bin</code> files and images) is a <code>Model</code> asset: a node hierarchy plus the meshes, materials and images inside the file, which become <code>Mesh</code>, <code>Material</code> and <code>Texture</code> <a href="#sub-assets">sub-assets</a>. <code>Model::Instantiate()</code> builds a GameObject hierarchy from it, with a <code>MeshRenderer</code> on every node that has a mesh. glTF 2.0 is the format: Blender exports it natively, and its axes (right-handed, Y up), winding (counter-clockwise front faces) and units (metres) are the engine's, so nothing is converted except the texture v (see <a href="#uv-convention">the UV convention</a>). Optional FBX and OBJ through ufbx come in P5 (<a href="https://github.com/EpicNicks/N2Engine/issues/62">#62</a>), behind the same importer interface.</p>
+<pre class="lang-cpp"><code>auto robot = N2Engine::IO::Resources::Instance().Load&lt;N2Engine::Rendering::Model&gt;("res://models/robot.glb");
+scene-&gt;AddRootGameObject(robot-&gt;Instantiate()); // "robot", with one child object per root node
+</code></pre>
+<p>The parsing happens in the <a href="#assetimport"><code>assetimport</code></a> library, behind a library-neutral interface: <code>IModelImporter::Import(bytes, baseDirectory, settings)</code> returns <code>std::expected&lt;ImportedScene, ModelImportError&gt;</code> (<code>assetimport/include/assetimport/ModelImporter.hpp</code>). <code>ImportedScene</code> (<code>ImportedScene.hpp</code>) is plain CPU structs with no cgltf type: nodes (name, local translation, rotation and scale, a mesh index, children), meshes (vertices laid out exactly as the engine's <code>Vertex</code>, triangle-list indices, and one submesh per primitive with its material index), materials (every field the engine's <code>Material</code> has, including the ones stored for P4), images (the encoded bytes, the URI they came from, and the sampling their texture asks for) and the warnings. <code>GltfImporter</code> is the one implementation.</p>
+<p class="src">Source: <code>assetimport/include/assetimport/ModelImporter.hpp</code>, <code>ImportedScene.hpp</code>, <code>GltfImporter.hpp</code>; <code>assetimport/src/assetimport/GltfImporter.cpp</code>; <code>engine/include/engine/rendering/Model.hpp</code>; <code>engine/src/rendering/Model.cpp</code></p>
+
+<h2 id="gltf-importer">The glTF importer <span class="badge">PR #68</span></h2>
+<p>cgltf 1.15 (<code>external/cgltf/</code>, MIT) parses the file; it is compiled once, as C, in <code>assetimport/src/assetimport/CgltfImplementation.c</code>, and only <code>GltfImporter.cpp</code> includes it. On top of the parse, the importer:</p>
+<ul>
+<li><strong>Reads every buffer itself.</strong> A <code>.glb</code>'s BIN chunk, a base64 <code>data:</code> URI, or an external file, never through cgltf's loader (which would open any path the file names). An external URI is percent-decoded (<code>my%20mesh.bin</code> is <code>my mesh.bin</code>) and must be a relative path that stays inside the model's folder once normalised (<code>AssetImport::ResolveModelUri</code>): a scheme (<code>http:</code>, <code>file:</code>), a drive letter, an absolute path, a NUL, a <code>..</code> that climbs out, or a Windows device name in any part (<code>CON</code>, <code>PRN</code>, <code>AUX</code>, <code>NUL</code>, <code>COM1</code>&ndash;<code>COM9</code>, <code>LPT1</code>&ndash;<code>LPT9</code>, <code>CONIN$</code>, <code>CONOUT$</code>, in any case and with any extension) is rejected. A file that exists must also be inside the folder once symbolic links and junctions are followed. A buffer it rejects is an error; an image it rejects is skipped with a warning.</li>
+<li><strong>Checks every range.</strong> Every buffer view against its buffer, and every accessor and sparse substitution against its views, with overflow-safe arithmetic, before <code>cgltf_validate</code> runs (which also must pass). Then, while reading: a stride below the element size, an index past the last vertex, a sparse index past the accessor's end, or an unsupported component type is an <code>InvalidData</code> error.</li>
+<li><strong>Reads what files contain.</strong> Indices as unsigned 8, 16 or 32-bit; attributes as floats or (normalised) integers; sparse accessors, with or without a base view. <code>POSITION</code>, <code>NORMAL</code>, <code>TEXCOORD_0</code> and <code>COLOR_0</code> (RGB or RGBA; white when absent) fill the vertex. A value that isn't a finite number reads as 0, with a warning.</li>
+<li><strong>Makes triangle lists.</strong> Strips and fans become lists in the order the glTF spec gives (so the winding is kept, and degenerate strip triangles are dropped); points and lines are skipped with a warning.</li>
+<li><strong>Flips v</strong> (<code>v' = 1 &minus; v</code>), since glTF's v runs down the image and the engine's up; the images are stored bottom row first as every texture is, so they show upright.</li>
+<li><strong>Generates normals flat</strong> for a primitive without them (and for every primitive with <code>generateNormals: "always"</code>): each triangle gets its own three vertices with its face normal. Flat, because the glTF spec says a client must use flat normals when they're missing; smooth normals belong in the file.</li>
+<li><strong>Concatenates a mesh's primitives</strong> into one vertex buffer with one submesh each (and its material). Primitives that use the same attribute accessors, as exporters write a mesh with several materials, share one run of vertices.</li>
+<li><strong>Decomposes node matrices</strong> into translation, rotation and scale; a mirroring matrix gets a negative x scale. Nodes keep negative scales: <code>MeshRenderer</code> culls front faces for a mirrored world matrix (<a href="#conventions">winding</a>).</li>
+<li><strong>Maps materials.</strong> <code>KHR_materials_unlit</code> gives an unlit material, otherwise lit; <code>baseColorFactor</code> and the base colour texture, <code>alphaMode</code> and <code>alphaCutoff</code>, <code>doubleSided</code>, and smoothness <code>= 1 &minus; roughnessFactor</code> drive drawing; <code>metallicFactor</code>, <code>emissiveFactor</code> and the normal, occlusion, metallic-roughness and emissive textures are stored for P4. A texture's sampler gives its image nearest filtering (a nearest magnification filter) and clamping (clamp-to-edge in s or t).</li>
+</ul>
+<p><strong>Fixed caps</strong> (<code>ModelImporter.hpp</code>), each checked before the memory it guards is allocated: a model file of at most 512 MiB; glTF JSON (a <code>.gltf</code>, or a <code>.glb</code>'s JSON chunk) of at most 64 MiB; at most 256 MiB of memory for cgltf's parse (a counting allocator: a small JSON can declare millions of empty objects); any one buffer at most 512 MiB and all of them at most 1 GiB; an image at most 64 MiB encoded and all images at most 256 MiB <span class="badge">PR #68</span>; an accessor at most 16 M elements; a mesh at most 64 M vertices or indices; a node tree at most 256 deep. On top of those, a <strong>scene-wide budget</strong> of 8 M vertices and 32 M indices is charged per primitive before its data is read, counting again for every primitive that reuses an accessor and for accessors without a buffer view (which cost no file bytes but declare zeros), so a tiny file can't ask for gigabytes <span class="badge">PR #68</span>. A <code>.glb</code>'s header and chunk lengths are checked against the file before cgltf sees it. As a backstop, <code>Import</code> turns <code>std::bad_alloc</code> and <code>std::length_error</code> into a <code>TooLarge</code> error.</p>
+<p class="src">Source: <code>assetimport/src/assetimport/GltfImporter.cpp</code> — <code>CheckGlb</code>, <code>LoadBuffers</code>, <code>CheckRanges</code>, <code>VisitAccessor</code>, <code>ImportPrimitive</code>, <code>Decompose</code>, <code>ImportMaterial</code>; tests: <code>GltfImporterTest.*</code> (<code>tests/assetimport/GltfImporterTests.cpp</code>)</p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>A malformed or hostile model is an error value, never a crash or an exception: a <code>.glb</code> cut short at every byte, and a <code>.gltf</code> cut at every byte, are rejected (<code>GltfImporterTest.AGlbCutShortAtAnyByteIsAnErrorNotACrash</code>); so are out-of-range indices, bad strides, a view past its buffer, an offset so large the sums would wrap, a sparse index past the end, and URIs that leave the model's folder in any spelling (<code>../</code>, <code>%2E%2E/</code>, <code>..\</code>, absolute, drive letters, schemes, an embedded NUL, device names), and files that would make the importer allocate past its caps: a huge accessor without a buffer view reused by a hundred meshes, images that together pass 256 MiB, and 4 M empty JSON objects (<code>GltfImporterTest.ManyMeshesReusingAHugeAccessorWithoutABufferViewAreAnErrorNotAnAllocation</code>, <code>ManyImagesNamingOneBigViewAreAnError</code>, <code>AJsonDeclaringMillionsOfEmptyObjectsIsRejectedWhileParsing</code>). Memory use is bounded by the caps, not small: a file at the caps can still use a few GB. Models are still trusted project assets: don't load downloaded ones at runtime.</p>
+</div>
+
+<h3 id="unsupported">Unsupported glTF features</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Feature</th><th>What happens</th></tr></thead>
+<tbody>
+<tr><td>Draco (<code>KHR_draco_mesh_compression</code>) and meshopt (<code>EXT_meshopt_compression</code>) compression</td><td>An <code>Unsupported</code> error: the geometry can't be read. Export without mesh compression.</td></tr>
+<tr><td><code>KHR_texture_transform</code></td><td>Ignored, with a warning: texture offsets, rotations and scales aren't applied (v1).</td></tr>
+<tr><td>Other extensions (<code>KHR_materials_*</code> besides unlit, <code>KHR_lights_punctual</code>, <code>EXT_mesh_gpu_instancing</code>, ...)</td><td>Ignored, with one warning naming each. <code>KHR_materials_unlit</code> and <code>KHR_mesh_quantization</code> are supported.</td></tr>
+<tr><td><code>TEXCOORD_1</code> and later sets, <code>COLOR_1</code> and later</td><td>Ignored, with a warning; a texture that uses <code>TEXCOORD_1</code> is drawn with <code>TEXCOORD_0</code>.</td></tr>
+<tr><td>Cameras, lights, skins (<code>JOINTS_0</code>/<code>WEIGHTS_0</code>), morph targets, animations</td><td>Ignored, with one warning each; a skinned model imports in its bind pose. Skinning and animation are later work.</td></tr>
+<tr><td>Points and lines</td><td>Skipped, with a warning.</td></tr>
+<tr><td>KTX2 and WebP images</td><td>Skipped, with a warning (only PNG, JPEG, TGA and BMP decode).</td></tr>
+</tbody>
+</table>
+</div>
+<p>Each warning is given once per file, kept in <code>Model::GetImportWarnings()</code> and logged.</p>
+
+<div class="callout note" id="design-unsupported-policy">
+<p class="callout-title">Design decision: warn once and import the rest, except compression <span class="badge">PR #68</span></p>
+<p>Exporters add extensions and features freely, and most of them only refine a model the engine can still show usefully: a scene with a camera, a light or an animation still has meshes to draw. Rejecting those files would make most real exports unusable, while warning once per feature says what's missing without flooding the log. Draco and meshopt are the exception: they replace the geometry itself, so without a decoder there is nothing to draw, and an error says so plainly. <code>KHR_texture_transform</code> is ignored rather than half-applied until materials grow a UV transform. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision D).</p>
+</div>
+
+<h2 id="model-asset">The Model asset <span class="badge">PR #68</span></h2>
+<p><code>Rendering::Model</code> (<code>GetResourceType() == "Model"</code>) loads <code>.gltf</code> and <code>.glb</code> files (any case). Its loader registers itself statically and from <code>ResourceLoader::Initialize</code>, like <code>Font</code>, <code>Texture</code> and <code>Material</code>. <code>Model::LoadFromMemory(bytes, baseDirectory, settings, name)</code> makes one from bytes, outside any project.</p>
+<ul>
+<li><code>GetNodes()</code> and <code>GetRootNodes()</code>: the hierarchy (<code>ModelNode</code>: name, local position, rotation and scale, a mesh index, children).</li>
+<li><code>GetMeshes()</code>: one <code>Mesh</code> per glTF mesh (<code>nullptr</code> for one without triangles), with one submesh per primitive; <code>GetSubmeshMaterials()</code> gives each submesh's material index (&minus;1 for the default).</li>
+<li><code>GetMaterials()</code>: one <code>Material</code> per glTF material; <code>GetTextures()</code>: one <code>Texture</code> per glTF image (<code>nullptr</code> for one that didn't read or decode). A texture records <code>srgb</code> when it is used as colour (base colour or emissive), and takes nearest filtering and clamping from its glTF sampler.</li>
+<li><code>GetName()</code>: the file's name without its extension, which <code>Instantiate</code> gives the root object.</li>
+</ul>
+
+<h2 id="sub-assets">Sub-assets and their keys <span class="badge">PR #68</span></h2>
+<p>A model's meshes, materials and textures are <strong>sub-assets</strong>: assets inside another asset's file. Each has a <strong>key</strong> naming it inside the model: <code>mesh/&lt;name&gt;</code>, <code>material/&lt;name&gt;</code>, <code>texture/&lt;name&gt;</code> (a texture's name is its glTF image's). The name is used when <strong>every</strong> name of that kind in the file is non-empty and unique; if any name of a kind is missing or repeated, <strong>every</strong> sub-asset of that kind is keyed by its index instead (<code>mesh/0</code>, <code>mesh/1</code>, ...). <code>Model::MakeSubAssetKeys</code> applies the rule; <code>Model::FindSubAsset(key)</code> and <code>GetSubAssets()</code> look them up. A sub-asset reports <code>IsSubResource()</code>, its <code>GetSubAssetKey()</code>, and its model's resource path as its own.</p>
+<p>A project model's sub-assets get <strong>deterministic UUIDs</strong> when it loads: <code>ResourceUUID::FromSubAsset(modelPath, key)</code>. Scene files save a <code>MeshRenderer</code>'s mesh and materials by those UUIDs like any other asset reference, and loading one (<code>Resources::LoadByUUID</code>, which asset references use) loads the model, or reuses it if it's loaded, and returns the sub-asset. A <code>.mat</code>-style texture reference inside a model's material is saved as its UUID. Lua names a sub-asset with its model's path, <code>#</code> and its key: <code>"res://models/robot.glb#mesh/Body"</code>.</p>
+<p>When a model first loads, its <code>.meta</code> gets a sub-asset index in <code>customData.subAssets</code>, beside its import settings:</p>
+<pre class="lang-json"><code>{
+  "customData": {
+    "model": { "scale": 1.0 },
+    "subAssets": {
+      "mesh/Body":      { "type": "Mesh",     "uuid": "..." },
+      "material/Red":   { "type": "Material", "uuid": "..." },
+      "texture/Albedo": { "type": "Texture",  "uuid": "..." }
+    }
+  }
+}
+</code></pre>
+<p>The scan reads the index back (re-deriving each UUID from the path and key), so after a restart a sub-asset UUID is found without loading anything first. A project whose <code>.import</code> folder is new has no index yet: <code>LoadByUUID</code> of an unknown UUID then loads every model that has none, once, and looks again. If a key disappears in a re-export, references to it resolve to <code>nullptr</code> with the usual "Asset not found" warning, and that <code>MeshRenderer</code> draws nothing. When the file changes, the scan finds its index stale (the index records the file's size and time in <code>customData.subAssetsSource</code>), drops it and the cached model, and the next lookup loads the new file and indexes it again <span class="badge">PR #68</span>. Outside a project (<code>LoadFromMemory</code>, or a file <code>Resources</code> loads from elsewhere) the meshes, materials and textures are runtime assets, like <code>Texture::Create</code>'s: random UUIDs, not marked as sub-assets, and a reference saved to one (in a scene or a <code>.mat</code>) doesn't resolve in a later run; <code>Resources</code> registers them so references resolve during that run <span class="badge">PR #68</span>.</p>
+<p class="src">Source: <code>engine/include/engine/base/Asset.hpp</code> — <code>SubAssetRef</code>, <code>GetSubAssets</code>, <code>FindSubAsset</code>; <code>engine/src/io/ResourceUUID.cpp</code> — <code>FromSubAsset</code>; <code>engine/src/io/ResourceLoader.cpp</code> — <code>SetSubAssetIndex</code>, <code>RegisterSubAssets</code>, <code>ReadSubAssetIndex</code>, <code>LoadSubAsset</code>; tests: <code>ModelAssetTest.*</code></p>
+
+<div class="callout note" id="design-sub-asset-uuids">
+<p class="callout-title">Design decision: sub-asset UUIDs from their own namespace, keyed by name <span class="badge">PR #68</span></p>
+<p>A scene must be able to name "the Body mesh of robot.glb" as plainly as it names a file, so a sub-asset UUID is derived the same way a file's is, from a path-like name, and <code>RegisterAssetRef</code> and the scene format don't change at all. It is derived in a namespace of its own (itself derived from the project's) rather than by hashing <code>"robot.glb#mesh/Body"</code> as a path, so no file name can ever produce a sub-asset's UUID. Keys use names because a Blender re-export reorders meshes freely but keeps their names; when names can't identify every asset of a kind (missing or repeated), all of that kind fall back to indices together, so one renamed duplicate can't silently swap two keys. <code>ResourceLoader</code> keeps a UUID &rarr; (parent, key) map that <code>LoadByUUID</code> checks after its cache. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decisions 7 and 12).</p>
+</div>
+
+<div class="callout note" id="design-meta-index">
+<p class="callout-title">Design decision: the <code>.meta</code> index is written when the model loads, never by the scan <span class="badge">PR #68</span></p>
+<p>The scan runs over every file at startup and on every rescan; parsing models there would make the engine core depend on the glTF parser and make every rescan as slow as loading every model. Instead, <code>ResourceLoader::Load</code> asks a just-loaded asset for its sub-assets (<code>Asset::GetSubAssets</code>), gives them their UUIDs, and records them through <code>ResourceLoader::SetSubAssetIndex</code>, which rewrites the <code>.meta</code> only when the index changed and keeps the rest of <code>customData</code>. The scan merely reads indexes back. The cost is that a never-loaded model has no index, which the one-time "load the unindexed models" fallback in <code>LoadByUUID</code> covers. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision 7, revised).</p>
+</div>
+
+<h2 id="model-settings">Model import settings <span class="badge">PR #68</span></h2>
+<p>Settings live in the model's <code>.meta</code> <code>customData</code>, read and warned about like <a href="#texture-settings">the texture settings</a>; every key is optional:</p>
+<pre class="lang-json"><code>{"model": {"scale": 1.0, "importMaterials": true, "generateNormals": "ifMissing", "mergeSubmeshesByMaterial": false}}
+</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>scale</code></td><td><code>1.0</code></td><td>Multiplies every vertex position and node translation (0.01 for a model made in centimetres). A number above 0.</td></tr>
+<tr><td><code>importMaterials</code></td><td><code>true</code></td><td>Off: no <code>Material</code> or <code>Texture</code> sub-assets, and every submesh draws with the default lit white.</td></tr>
+<tr><td><code>generateNormals</code></td><td><code>"ifMissing"</code></td><td><code>"never"</code> (a mesh without normals gets (0, 0, 1)), <code>"ifMissing"</code> (flat normals where the file has none) or <code>"always"</code> (flat normals everywhere, ignoring the file's).</td></tr>
+<tr><td><code>mergeSubmeshesByMaterial</code></td><td><code>false</code></td><td>One submesh per material in each mesh, joining primitives that share a material (fewer draws).</td></tr>
+</tbody>
+</table>
+</div>
+<p>A key with the wrong type, an unknown value or an unknown name is ignored with a warning (<code>Model::ParseSettings</code>).</p>
+
+<h2 id="instantiate">Instantiating a model <span class="badge">PR #68</span></h2>
+<p><code>Model::Instantiate()</code> returns a new root <code>GameObject</code>, in no scene (add it with <code>Scene::AddRootGameObject</code> or <code>GameObject::AddChild</code>):</p>
+<ul>
+<li>The root is named after the model and has an identity transform; it has one child object per root node, and so on down the tree.</li>
+<li>Each object has its node's name (an unnamed node is <code>"Node &lt;index&gt;"</code>) and a <code>Positionable</code> with the node's local position, rotation and scale.</li>
+<li>A node with a mesh gets a <code>MeshRenderer</code> drawing that mesh, with material slot <em>i</em> holding submesh <em>i</em>'s material (an empty slot for a primitive without one). Every instance shares the model's meshes and materials, and so their GPU copies.</li>
+<li>It goes through <code>PrefabManager::InstantiatePrefab</code>: the model builds prefab JSON for its tree once, so every call gives every GameObject and component a fresh UUID. The mesh and material references are then set directly, so a model loaded from memory instantiates the same way as a project one.</li>
+<li>There is no live link: the instance is ordinary GameObjects. Re-importing changes the meshes and materials a saved instance references (by UUID), but not nodes added to or removed from the file.</li>
+</ul>
+<p>Mirrored nodes (a negative scale, common in Blender) draw correctly: <code>MeshRenderer</code> culls front faces for a world matrix with a negative determinant. <code>SoftwareModelGoldenTest</code> draws an instantiated model with a mirrored node headless and checks it covers its bounds and shows both materials.</p>
+<p class="src">Source: <code>engine/src/rendering/Model.cpp</code> — <code>Instantiate</code>, <code>GetPrefabJson</code>; tests: <code>ModelInstantiateTest.*</code>, <code>ModelSceneRoundTripTest.*</code>, <code>SoftwareModelGoldenTest.*</code></p>
+
+<h2 id="blender">Exporting from Blender</h2>
+<ol>
+<li><strong>File &rarr; Export &rarr; glTF 2.0 (.glb/.gltf).</strong></li>
+<li><strong>Format:</strong> glTF Binary (<code>.glb</code>), one self-contained file. (glTF Separate, <code>.gltf</code> + <code>.bin</code> + textures, works too; keep the files together inside the project's <code>assets</code> folder.)</li>
+<li><strong>Include:</strong> the objects you want (Selected Objects, or a collection).</li>
+<li><strong>Transform: +Y Up</strong> (on by default): Blender is Z up, the engine Y up.</li>
+<li><strong>Data &rarr; Mesh: Apply Modifiers</strong>, so mirror, subdivision and array modifiers are baked into the exported mesh. UVs and normals on; vertex colours if you painted any.</li>
+<li><strong>Data &rarr; Compression: off.</strong> Draco compression can't be read.</li>
+<li><strong>Materials:</strong> Export. A Principled BSDF's base colour (and image), alpha, roughness and metallic come through; the engine draws base colour, texture, alpha and smoothness today (physically based shading arrives in P4). A material Blender exports with <code>KHR_materials_unlit</code> (the Blender manual's glTF page describes the node setup it writes as unlit) draws unlit.</li>
+</ol>
+<p>Animation, skins and shape keys export but are ignored, with a warning. Scale in Blender's units (metres); if a model arrives at the wrong size, set the <code>scale</code> import setting instead of re-exporting. To automate exports, run <code>blender --background --python export.py</code> yourself; the engine never runs Blender.</p>
 
 <h2 id="conventions">Axes, winding and units <span class="badge">PR #65</span></h2>
 <ul>
@@ -398,13 +531,25 @@ renderer:SetMesh("Cube")
 renderer:SetMaterial(1, "res://materials/crate.mat")
 print(renderer:GetMaterialCount(), renderer:GetBounds().max.y) -- 1   0.5
 </code></pre>
-<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>LoadTextureOrThrow</code>, <code>TexturePathForLua</code>, <code>LoadMaterialOrThrow</code>, <code>LoadMeshOrThrow</code>, <code>MeshNameForLua</code>; <code>engine/src/scripting/bindings/engine-api.lua</code>; tests: <code>LuaImageSpriteTest.*</code>, <code>LuaMeshRendererTest.*</code></p>
+<p>Models <span class="badge">PR #68</span>: <code>Model.Instantiate(path [, parent])</code> returns the root GameObject of a new instance. With a <code>parent</code> it becomes that object's child (at its origin); without one it is in no scene yet and the script owns it, as with <code>GameObject.Create</code>, until a scene or parent holds it. A model that doesn't load raises an error. Wherever Lua takes a mesh, material or texture path, a model's sub-asset is <code>"&lt;model path&gt;#&lt;key&gt;"</code>, and the getters report sub-assets the same way.</p>
+<pre class="lang-lua"><code>local robot = Model.Instantiate("res://models/robot.glb")
+SceneManager.GetCurrentScene():AddRootGameObject(robot)
+local body = robot:FindChild("Robot"):GetComponent("MeshRenderer")
+print(body:GetMesh()) -- res://models/robot.glb#mesh/Body
+
+local copy = GameObject.Create("Copy"):AddComponent("MeshRenderer")
+copy:SetMesh("res://models/robot.glb#mesh/Body")
+copy:SetMaterial(1, "res://models/robot.glb#material/Red")
+</code></pre>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>LoadTextureOrThrow</code>, <code>TexturePathForLua</code>, <code>LoadMaterialOrThrow</code>, <code>LoadMeshOrThrow</code>, <code>LoadSubAssetReference</code>, <code>MeshNameForLua</code>, <code>Model.Instantiate</code>; <code>engine/src/scripting/bindings/engine-api.lua</code>; tests: <code>LuaImageSpriteTest.*</code>, <code>LuaMeshRendererTest.*</code>, <code>LuaModelTest.*</code></p>
 
 <h2 id="tests">Tests</h2>
 <ul>
 <li><code>assetimport_tests</code> (<code>tests/assetimport/</code>) decodes images built in the test: PNGs written by hand for every colour type and 16-bit, and JPEG, TGA, BMP and compressed PNG from the test-only <code>stb_image_write</code>; plus truncation at every byte, corrupt data and oversized headers.</li>
 <li><code>engine_tests</code> covers the texture pipeline in a temporary project (<code>TextureAssetTest</code>), the settings, <code>GpuCache</code> and <code>Image</code> sprites with a counting renderer, Lua, and two headless software-renderer goldens (<code>SoftwareImageGoldenTest</code>).</li>
 <li><span class="badge">PR #65</span> <code>engine_tests</code> also covers <code>Mesh</code> (validation, bounds, built-ins byte for byte), <code>Material</code> and <code>.mat</code> files, the cache's meshes and materials, <code>RegisterAssetRefList</code>, <code>MeshRenderer</code> and the shapes through a renderer that records every draw (<code>tests/engine/rendering/MeshTestSupport.hpp</code>), and five headless goldens (<code>SoftwareMeshGoldenTest</code>): a checker-textured cube upright on three faces, lit against unlit, a cutout's holes, a double-sided quad from behind, and two submeshes in two materials. <code>renderer_tests</code> covers the index-range draw, vertex colour and the alpha cutoff on the software renderer, and the default <code>IndexRange</code> body.</li>
+<li><span class="badge">PR #68</span> <code>assetimport_tests</code> imports glTF files built in the test (<code>tests/common/GltfTestBuilder.hpp</code>: JSON with base64 <code>data:</code> URIs, external <code>.bin</code> files, and GLBs assembled byte by byte): a triangle, an indexed quad, u8/u16/u32 indices, normalised attributes, two primitives with two materials (and shared vertices), strips and fans, sparse accessors, missing normals, TRS and matrix nodes, negative scale, materials and images, the warnings, and rejection of out-of-range indices, bad strides and ranges, escaping URIs, Draco and meshopt, and truncation at every byte (<code>GltfImporterTest</code>).</li>
+<li><span class="badge">PR #68</span> <code>engine_tests</code> covers the model pipeline in a temporary project with a <code>.glb</code> written by the test (<code>ModelAssetTest</code>: types, sub-asset UUIDs across rescans, restarts and a re-export that reorders the meshes, the <code>.meta</code> index, <code>LoadByUUID</code> of a sub-asset, the key rule, settings), instantiation and a scene saved and loaded again (<code>ModelInstantiateTest</code>, <code>ModelSceneRoundTripTest</code>), Lua (<code>LuaModelTest</code>), and a headless golden of an instantiated model with a mirrored node (<code>SoftwareModelGoldenTest</code>). <code>tests/assets/models/textured_cube.glb</code> is a committed sample model, generated by <code>make_sample_models.py</code> beside it, standing in for a Blender export until one is added.</li>
 </ul>
 <p>See <a href="testing.html#areas">Test suites by area</a>.</p>
 

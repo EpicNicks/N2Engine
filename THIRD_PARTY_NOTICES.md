@@ -13,6 +13,7 @@ time into the build tree).
 | stb_truetype 1.26 | `external/stb_truetype/` | MIT or public domain (Unlicense), at your choice |
 | stb_vorbis 1.22 | `external/stb_vorbis/` | MIT or public domain (Unlicense), at your choice |
 | stb_image 2.30 (nothings/stb commit `2c980bb`), with stb_image_write 1.16 for the tests only | `external/stb_image/` | MIT or public domain (Unlicense), at your choice |
+| cgltf 1.15 (jkuhlmann/cgltf tag `v1.15`, which bundles jsmn) | `external/cgltf/` | MIT (`external/cgltf/LICENSE`; jsmn is MIT too) |
 | dr_libs (dr_wav, dr_flac, dr_mp3) | `external/dr_libs/` | Public domain (Unlicense) or MIT-0, at your choice |
 | Lua 5.4 | `external/lua/` | MIT |
 | sol2 | `external/sol2/` | MIT |
