@@ -2051,10 +2051,25 @@ function Camera:SetPosition(position) end
 ---@param rotation Quaternion
 function Camera:SetRotation(rotation) end
 
----Make the camera look at a target
+---Turn the camera to view a target. The camera looks down its local -Z (objects face +Z), so this points
+---the camera's -Z at the target. A target at the camera's position keeps the rotation; an up vector that is zero
+---or parallel to the view direction falls back to Vector3.Up, or, within about 8 degrees of vertical, to the
+---world Z axis on the side that keeps the screen's up continuous.
 ---@param target Vector3
 ---@param up Vector3|nil Optional up vector (default: Vector3.Up)
 function Camera:LookAt(target, up) end
+
+---The world direction the camera views: its rotation applied to -Z (unlike Positionable:GetForward, which is +Z)
+---@return Vector3
+function Camera:GetForward() end
+
+---The world direction of the screen's up: its rotation applied to +Y
+---@return Vector3
+function Camera:GetUp() end
+
+---The world direction of the screen's right: its rotation applied to +X
+---@return Vector3
+function Camera:GetRight() end
 
 ---Get the camera position
 ---@return Vector3
