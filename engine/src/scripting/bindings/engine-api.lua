@@ -804,7 +804,7 @@ function GameObject:Destroy() end
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
 ---"SphereRenderer", "TextRenderer", "AudioSource", "AudioListener", "LuaComponent", "RectTransform",
----"Canvas", "Image", "UIText". Unknown names raise an error.
+---"Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
 function GameObject:AddComponent(typeName) end
@@ -1093,6 +1093,65 @@ function UIText:SetFont(path) end
 ---@return number maxY
 function UIText:GetBounds() end
 
+---A clickable UI element: put it on an object with a raycast-target graphic (an Image). It tints its target
+---graphic for its state (the graphic's own colour times the state's colour times the multiplier, so the
+---graphic's colour itself never changes) and calls its OnClick listeners when the left button is pressed
+---and released over it, if it is interactable and enabled. Listeners are not saved with the scene.
+---@class Button : Component
+Button = {}
+
+---@return boolean
+function Button:IsInteractable() end
+---@param interactable boolean false shows the disabled colour and ignores clicks
+function Button:SetInteractable(interactable) end
+---@return Color
+function Button:GetNormalColor() end
+---@param color Color default white
+function Button:SetNormalColor(color) end
+---@return Color
+function Button:GetHighlightedColor() end
+---@param color Color shown while the pointer is over it (default 245/255 grey)
+function Button:SetHighlightedColor(color) end
+---@return Color
+function Button:GetPressedColor() end
+---@param color Color shown while pressed with the pointer over it (default 200/255 grey)
+function Button:SetPressedColor(color) end
+---@return Color
+function Button:GetDisabledColor() end
+---@param color Color shown while not interactable (default 200/255 grey at half alpha)
+function Button:SetDisabledColor(color) end
+---@return number
+function Button:GetColorMultiplier() end
+---@param multiplier number multiplies every state's colour (default 1)
+function Button:SetColorMultiplier(multiplier) end
+---@return number
+function Button:GetFadeDuration() end
+---@param seconds number unscaled seconds a tint change takes (default 0.1; 0 is instant)
+function Button:SetFadeDuration(seconds) end
+---The tint on the target graphic now (between two states' colours during a fade)
+---@return Color
+function Button:GetCurrentTint() end
+---@return "Normal"|"Highlighted"|"Pressed"|"Disabled"
+function Button:GetState() end
+---The graphic tinted now, or nil
+---@return Image|UIText|nil
+function Button:GetTargetGraphic() end
+---@param graphic Image|UIText|nil nil goes back to the first graphic on the button's object
+function Button:SetTargetGraphic(graphic) end
+---Calls fn on every click. An error in fn is logged and the other listeners still run. A listener a
+---component script added stops once that component is destroyed.
+---@param fn fun()
+---@return integer id for RemoveOnClick
+function Button:AddOnClick(fn) end
+---@param id integer what AddOnClick returned (safe from inside a listener)
+function Button:RemoveOnClick(id) end
+function Button:ClearOnClick() end
+---@return integer
+function Button:GetOnClickListenerCount() end
+---Calls the listeners as a click does, if interactable and enabled
+---@return boolean whether it did
+function Button:Click() end
+
 ---@class UI
 UI = {}
 
@@ -1112,6 +1171,13 @@ function UI.CreateElement(name) end
 ---@param text? string defaults to ""
 ---@return GameObject
 function UI.CreateText(name, text) end
+
+---UI.CreateElement sized 160x40 with a white Image, a Button, and a child "Label" UIText stretched over it
+---and centred (20 px, dark grey) showing `label`
+---@param name? string defaults to "Button"
+---@param label? string defaults to "Button"
+---@return GameObject
+function UI.CreateButton(name, label) end
 
 ---@class Scene
 ---@field sceneName string The name of this scene

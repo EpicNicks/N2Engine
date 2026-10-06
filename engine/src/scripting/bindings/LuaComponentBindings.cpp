@@ -28,6 +28,7 @@
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/text/Font.hpp"
+#include "engine/ui/Button.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
@@ -99,6 +100,7 @@ namespace N2Engine::Scripting::Bindings
                 {"Canvas", MakeAccess<UI::Canvas>()},
                 {"Image", MakeAccess<UI::Image>()},
                 {"UIText", MakeAccess<UI::UIText>()},
+                {"Button", MakeAccess<UI::Button>()},
             };
             return table;
         }
