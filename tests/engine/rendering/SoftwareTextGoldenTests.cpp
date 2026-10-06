@@ -17,6 +17,7 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/rendering/TextRenderer.hpp"
+#include "engine/ui/Button.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UISystem.hpp"
@@ -312,6 +313,54 @@ TEST(SoftwareUIGoldenTest, AnImageFillsItsRect)
     {
         EXPECT_EQ(frame.At((c.minX + c.maxX) / 2, (c.minY + c.maxY) / 2), (Rgb{255, 0, 0}));
     }
+
+    scene.reset(); // the scene and its UI go before the renderer shuts down
+    renderer.Shutdown();
+}
+
+TEST(SoftwareUIGoldenTest, APressedButtonDrawsItsImageWithThePressedTint)
+{
+    constexpr int width = 32;
+    constexpr int height = 32;
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, width, height));
+
+    auto scene = Scene::Create("SoftwareUIGolden_Button");
+    const auto canvas = UI::UISystem::CreateCanvas("Canvas");
+    scene->AddRootGameObject(canvas);
+    const auto element = UI::UISystem::CreateElement("Button");
+    element->GetComponent<UI::RectTransform>()->StretchToParent();
+    auto *image = element->AddComponent<UI::Image>();
+    image->SetColor(Common::Color{0.0f, 1.0f, 1.0f, 1.0f}); // cyan, so the tint shows in two channels
+    auto *button = element->AddComponent<UI::Button>();
+    button->SetFadeDuration(0.0f);
+    button->SetPressedColor(Common::Color{0.5f, 0.5f, 0.5f, 1.0f});
+    canvas->AddChild(element, false);
+
+    const auto draw = [&]
+    {
+        renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+        renderer.BeginFrame();
+        UI::UISystem::Render(*scene, &renderer, Vector2i{width, height});
+        renderer.EndFrame();
+        renderer.Present();
+        return ReadBack(renderer, width, height).At(width / 2, height / 2);
+    };
+
+    EXPECT_EQ(draw(), (Rgb{0, 255, 255})) << "normal: the image's own colour";
+
+    // Pressed with the pointer over it, as the dispatcher would send it
+    button->OnMouseEnter();
+    button->OnMouseDown();
+    ASSERT_EQ(button->GetState(), UI::Button::State::Pressed);
+    const Rgb pressed = draw();
+    EXPECT_EQ(pressed.r, 0);
+    EXPECT_NEAR(pressed.g, 128, 2) << "cyan times the pressed grey";
+    EXPECT_NEAR(pressed.b, 128, 2);
+
+    button->OnMouseUp();
+    button->OnMouseExit();
+    EXPECT_EQ(draw(), (Rgb{0, 255, 255})) << "released: back to the image's own colour";
 
     scene.reset(); // the scene and its UI go before the renderer shuts down
     renderer.Shutdown();
