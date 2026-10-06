@@ -762,9 +762,9 @@ TEST(GltfImporterTest, UrisThatLeaveTheModelsFolderAreRejected)
 TEST(GltfImporterTest, ResolveModelUriStaysInsideItsFolder)
 {
     const fs::path base = fs::temp_directory_path() / "n2engine_model_dir";
-    EXPECT_EQ(ResolveModelUri(base, "a.bin"), (base / "a.bin").lexically_normal());
-    EXPECT_EQ(ResolveModelUri(base, "sub/./b.bin"), (base / "sub" / "b.bin").lexically_normal());
-    EXPECT_EQ(ResolveModelUri(base, "sub/../c.bin"), (base / "c.bin").lexically_normal());
+    EXPECT_EQ(ResolveModelUri(base, "a.bin").generic_string(), (base / "a.bin").lexically_normal().generic_string());
+    EXPECT_EQ(ResolveModelUri(base, "sub/./b.bin").generic_string(), (base / "sub" / "b.bin").lexically_normal().generic_string());
+    EXPECT_EQ(ResolveModelUri(base, "sub/../c.bin").generic_string(), (base / "c.bin").lexically_normal().generic_string());
     EXPECT_TRUE(ResolveModelUri(base, "../a.bin").empty());
     EXPECT_TRUE(ResolveModelUri(base, "..").empty());
     EXPECT_TRUE(ResolveModelUri(base, ".").empty());

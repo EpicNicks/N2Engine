@@ -161,6 +161,19 @@ namespace N2Engine::AssetImport
             return std::nullopt;
         }
 
+        /// A path as UTF-8 text for messages (path::string() can throw for characters the ANSI code page lacks)
+        std::string PathText(const fs::path &path)
+        {
+            const std::u8string utf8 = path.u8string();
+            std::string text;
+            text.reserve(utf8.size());
+            for (const char8_t c : utf8)
+            {
+                text.push_back(static_cast<char>(c));
+            }
+            return text;
+        }
+
         /// Reads up to `maxBytes` of a file, or nullopt (with the reason in `error`)
         std::optional<std::vector<std::uint8_t>> ReadFileCapped(const fs::path &path, const std::size_t wanted,
                                                                 const std::size_t maxBytes, std::string &error)
@@ -168,13 +181,13 @@ namespace N2Engine::AssetImport
             std::ifstream file(path, std::ios::binary | std::ios::ate);
             if (!file.is_open())
             {
-                error = std::format("can't open {}", path.string());
+                error = std::format("can't open {}", PathText(path));
                 return std::nullopt;
             }
             const std::streamoff end = file.tellg();
             if (end < 0)
             {
-                error = std::format("can't read {}", path.string());
+                error = std::format("can't read {}", PathText(path));
                 return std::nullopt;
             }
             const auto size = static_cast<std::size_t>(end);
@@ -182,19 +195,19 @@ namespace N2Engine::AssetImport
             const std::size_t count = wanted == 0 ? size : wanted;
             if (count > maxBytes)
             {
-                error = std::format("{} is {} bytes, over the {}-byte limit", path.string(), count, maxBytes);
+                error = std::format("{} is {} bytes, over the {}-byte limit", PathText(path), count, maxBytes);
                 return std::nullopt;
             }
             if (size < count)
             {
-                error = std::format("{} is {} bytes, shorter than the {} the model says", path.string(), size, count);
+                error = std::format("{} is {} bytes, shorter than the {} the model says", PathText(path), size, count);
                 return std::nullopt;
             }
             std::vector<std::uint8_t> bytes(count);
             file.seekg(0);
             if (count > 0 && !file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(count)))
             {
-                error = std::format("can't read {}", path.string());
+                error = std::format("can't read {}", PathText(path));
                 return std::nullopt;
             }
             return bytes;
