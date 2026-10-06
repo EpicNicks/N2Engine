@@ -367,13 +367,14 @@ namespace N2Engine::UI
         // A solid collider nearer along the same ray is in front of the canvas: let the world pick have it.
         // Triggers never block (an interaction volume around a world-space button), nor does a collider the
         // ray starts inside (a first-person player's capsule around the camera), which PhysX reports at
-        // distance 0.
+        // distance 0. A collider within BlockTolerance in front of the canvas (the wall it is mounted on)
+        // doesn't block it either, so a canvas on a collider's face isn't hit or missed by rounding.
         std::vector<Physics::RaycastHit> physicsHits;
         Physics::Raycast::All(ray.origin, ray.direction, physicsHits, hit.distance, physicsMask,
                               Physics::QueryTriggers::Ignore);
         for (const Physics::RaycastHit &physicsHit : physicsHits)
         {
-            if (physicsHit.distance > StartInsideTolerance && physicsHit.distance < hit.distance)
+            if (physicsHit.distance > StartInsideTolerance && physicsHit.distance < hit.distance - BlockTolerance)
             {
                 return nullptr;
             }
