@@ -35,7 +35,8 @@ int main(int argc, char *argv[])
     SceneManager::ProcessAnyPendingSceneChange();
 
     // Scripts are loaded through ResourceLoader, which resolves res:// paths under <project>/assets
-    IO::ResourceUUID::Initialize(Math::UUID::GenerateNameBased(Math::UUID::ZERO, projectDir.string()));
+    // The namespace the editor host uses for the same folder, so both give its assets the same UUIDs
+    IO::ResourceUUID::Initialize(IO::ResourceUUID::NamespaceForProjectDir(projectDir));
     IO::ResourceLoader::Instance().Initialize(projectDir);
 
     if (!Scripting::LuaRuntime::Instance().RunFile(IO::ResourcePath("res://scene.lua")))
