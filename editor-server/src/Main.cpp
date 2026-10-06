@@ -9,8 +9,6 @@
 #include <system_error>
 #include <vector>
 
-#include <math/UUID.hpp>
-
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -66,7 +64,7 @@ int main(int argc, char *argv[])
     }
 
     // The project folder must exist: ResourceLoader::Initialize would otherwise create it (for .import/).
-    // Canonical, so the asset UUID namespace named from it doesn't depend on how the path was spelled.
+    // (The UUID namespace normalises the path itself: ResourceUUID::NamespaceForProjectDir.)
     std::filesystem::path projectDir;
     if (!options.projectPath.empty())
     {
@@ -95,12 +93,12 @@ int main(int argc, char *argv[])
         N2Engine::Logger::Info("Engine initialized");
 
         // After Init, so their log lines reach the console. As lua_project does: asset UUIDs are named from the
-        // project folder's path (until projects get their own id), and res:// resolves under <project>/assets.
-        // Without --project neither is initialised, so assets and asset references are unavailable.
+        // project folder's path (the same namespace, until projects get their own id), and res:// resolves under
+        // <project>/assets. Without --project neither is initialised, so assets and asset references are
+        // unavailable.
         if (!projectDir.empty())
         {
-            N2Engine::IO::ResourceUUID::Initialize(
-                N2Engine::Math::UUID::GenerateNameBased(N2Engine::Math::UUID::ZERO, projectDir.string()));
+            N2Engine::IO::ResourceUUID::Initialize(N2Engine::IO::ResourceUUID::NamespaceForProjectDir(projectDir));
             N2Engine::IO::ResourceLoader::Instance().Initialize(projectDir);
         }
         else

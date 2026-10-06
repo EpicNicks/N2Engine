@@ -1,6 +1,8 @@
 // ResourceUUID.hpp
 #pragma once
 
+#include <filesystem>
+#include <string>
 #include <string_view>
 
 #include <math/UUID.hpp>
@@ -20,6 +22,21 @@ namespace N2Engine::IO
          * Should be called once during ResourceLoader initialization
          */
         static void Initialize(const Math::UUID& projectNamespace);
+
+        /**
+         * The project namespace for a project folder, shared by every tool that opens one (lua_project, the
+         * editor host), so a folder's assets get the same UUIDs whichever opened it:
+         * GenerateNameBased(UUID::ZERO, NormalizeProjectDir(projectDir)). Until projects carry their own id.
+         */
+        static Math::UUID NamespaceForProjectDir(const std::filesystem::path& projectDir);
+
+        /**
+         * The spelling of a project folder that NamespaceForProjectDir hashes: weakly_canonical (absolute, "."
+         * and ".." resolved, symlinks followed where the path exists), with forward slashes (generic_string), no
+         * trailing slash and, on Windows, an upper-case drive letter. That is how CMake writes a source path
+         * (C:/...), so lua_project's default N2_LUA_PROJECT_DIR keeps the namespace it always had.
+         */
+        static std::string NormalizeProjectDir(const std::filesystem::path& projectDir);
 
         /**
          * Generate deterministic UUID from resource path
