@@ -14,8 +14,11 @@ target_link_libraries(assetimport_tests
         GTest::gtest_main
 )
 
-# stb_image_write (test-only) encodes the JPEG, TGA and BMP test images
-target_include_directories(assetimport_tests PRIVATE ${CMAKE_SOURCE_DIR}/external/stb_image/include)
+# stb_image_write (test-only) encodes the JPEG, TGA and BMP test images; tests/common has the glTF file builder
+target_include_directories(assetimport_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/external/stb_image/include
+        ${CMAKE_SOURCE_DIR}/tests/common
+)
 
 set_target_properties(assetimport_tests PROPERTIES
         CXX_STANDARD 23

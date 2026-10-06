@@ -895,20 +895,21 @@ function QuadRenderer:GetMaterial() end
 ---@class MeshRenderer : Component
 MeshRenderer = {}
 
----A built-in mesh by name, or a mesh asset's path; nil clears it. Raises an error (keeping the current mesh) if
----it doesn't load.
----@param nameOrPath string|nil "Cube", "Sphere", "Quad", or a mesh asset's res:// path
+---A built-in mesh by name, or a mesh asset's path (a model's mesh is "<model path>#<key>"); nil clears it. Raises an
+---error (keeping the current mesh) if it doesn't load.
+---@param nameOrPath string|nil "Cube", "Sphere", "Quad", or e.g. "res://models/robot.glb#mesh/Body"
 function MeshRenderer:SetMesh(nameOrPath) end
 
----@return string|nil nameOrPath the built-in's name or the asset's path ("" for a mesh made at runtime); nil without a mesh
+---@return string|nil nameOrPath the built-in's name or the asset's path ("res://models/robot.glb#mesh/Body" for a
+---model's mesh, "" for a mesh made at runtime); nil without a mesh
 function MeshRenderer:GetMesh() end
 
 ---The number of material slots that draw: the mesh's submesh count (0 without a mesh)
 ---@return integer
 function MeshRenderer:GetMaterialCount() end
 
----Sets material slot `index` (1-based) to a .mat file, or empties it with nil. Raises an error (keeping the
----slot) if the file doesn't load.
+---Sets material slot `index` (1-based) to a .mat file or a model's material ("res://models/robot.glb#material/Paint"),
+---or empties it with nil. Raises an error (keeping the slot) if it doesn't load.
 ---@param index integer
 ---@param path string|nil
 function MeshRenderer:SetMaterial(index, path) end
@@ -920,6 +921,18 @@ function MeshRenderer:GetMaterial(index) end
 ---The mesh's bounds in its own space (before the object's transform)
 ---@return BoundingBox|nil nil without a mesh
 function MeshRenderer:GetBounds() end
+
+---3D model files (.glb, .gltf): see docs/meshes.html#models
+Model = {}
+
+---A new instance of a model's hierarchy: a root object (named after the file) with one child object per node,
+---each with its node's name and local transform, and a MeshRenderer for each node with a mesh. Under `parent` when
+---given (at its origin); otherwise in no scene yet, owned by the script until a scene or parent holds it.
+---Raises an error if the model doesn't load.
+---@param path string e.g. "res://models/robot.glb"
+---@param parent GameObject|nil
+---@return GameObject root
+function Model.Instantiate(path, parent) end
 
 ---World-space text on the object's x/y plane, facing +Z, drawn with an SDF font in the Transparent queue.
 ---Sizes are in world units. Changing a setting other than the colour lays the text out again on the next draw.
