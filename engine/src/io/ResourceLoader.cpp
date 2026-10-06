@@ -2,13 +2,17 @@
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/Logger.hpp"
 #include "engine/rendering/Material.hpp"
+#include "engine/rendering/Model.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/text/Font.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <exception>
+#include <format>
 #include <fstream>
 #include <utility>
+#include <vector>
 
 namespace N2Engine::IO
 {
@@ -31,19 +35,22 @@ namespace N2Engine::IO
                 return "Font";
             if (ext == ".mat")
                 return "Material";
+            if (ext == ".gltf" || ext == ".glb")
+                return "Model";
             return "Unknown";
         }
     }
 
     void ResourceLoader::Initialize(const std::filesystem::path& projectRoot)
     {
-        // Font.cpp's, Texture.cpp's and Material.cpp's own static registrars only run if the linker keeps those
-        // files, which a program that names none of the types wouldn't; registering here (idempotent) makes
-        // .ttf/.otf, the image extensions and .mat scan and load anyway. Done before the roots change, so a first
-        // registration doesn't rescan anything.
+        // Font.cpp's, Texture.cpp's, Material.cpp's and Model.cpp's own static registrars only run if the linker
+        // keeps those files, which a program that names none of the types wouldn't; registering here (idempotent)
+        // makes .ttf/.otf, the image extensions, .mat and .gltf/.glb scan and load anyway. Done before the roots
+        // change, so a first registration doesn't rescan anything.
         Text::Font::RegisterLoader();
         Rendering::Texture::RegisterLoader();
         Rendering::Material::RegisterLoader();
+        Rendering::Model::RegisterLoader();
 
         _projectRoot = projectRoot;
         _assetsRoot = projectRoot / "assets";
@@ -59,6 +66,8 @@ namespace N2Engine::IO
         // previous root would otherwise pass for this one's files
         _metadata.clear();
         _uuidToPath.clear();
+        _subAssets.clear();
+        _subAssetParentsTried.clear();
         ClearCache();
 
         RescanAssets();
@@ -120,6 +129,8 @@ namespace N2Engine::IO
                 AssetMetadata meta = CreateOrUpdateMetadata(entry.path());
                 _metadata[meta.resourcePath] = meta;
                 _uuidToPath[meta.uuid] = meta.resourcePath;
+                // A model's sub-asset index, as its last full load wrote it (the scan never parses a model)
+                ReadSubAssetIndex(meta);
             }
             catch (const std::exception &e)
             {
@@ -405,5 +416,160 @@ namespace N2Engine::IO
         {
             RescanAssets();
         }
+    }
+
+    // ===== Sub-assets =====
+
+    void ResourceLoader::RegisterSubAssetParentType(const std::string &resourceType)
+    {
+        _subAssetParentTypes.insert(resourceType);
+    }
+
+    const ResourceLoader::SubAssetLocation *ResourceLoader::FindSubAssetLocation(const Math::UUID &uuid) const
+    {
+        const auto it = _subAssets.find(uuid);
+        return it != _subAssets.end() ? &it->second : nullptr;
+    }
+
+    bool ResourceLoader::SetSubAssetIndex(const ResourcePath &parent, const std::vector<SubAssetIndexEntry> &entries)
+    {
+        const auto metaIt = _metadata.find(parent);
+        if (metaIt == _metadata.end())
+        {
+            return false;
+        }
+
+        std::erase_if(_subAssets, [&parent](const auto &item) { return item.second.parent == parent; });
+        nlohmann::json index = nlohmann::json::object();
+        for (const SubAssetIndexEntry &entry : entries)
+        {
+            index[entry.key] = {{"type", entry.type}, {"uuid", entry.uuid.ToString()}};
+            _subAssets[entry.uuid] = SubAssetLocation{parent, entry.key};
+        }
+
+        AssetMetadata &meta = metaIt->second;
+        if (meta.customData.is_null())
+        {
+            meta.customData = nlohmann::json::object();
+        }
+        if (!meta.customData.is_object())
+        {
+            Logger::Warn(std::format("{}: the .meta customData isn't an object, so its sub-asset index isn't saved",
+                                     parent.ToString()));
+            return true;
+        }
+        if (const auto existing = meta.customData.find("subAssets");
+            existing != meta.customData.end() && *existing == index)
+        {
+            return true; // unchanged: the .meta isn't rewritten
+        }
+        meta.customData["subAssets"] = std::move(index);
+
+        const std::filesystem::path sourcePath = Resolve(parent);
+        if (parent.GetType() == PathType::Resource && !sourcePath.empty())
+        {
+            try
+            {
+                meta.SaveToFile(GetMetadataPath(sourcePath));
+            }
+            catch (const std::exception &e)
+            {
+                Logger::Warn(std::format("{}: can't save the sub-asset index: {}", parent.ToString(), e.what()));
+            }
+        }
+        return true;
+    }
+
+    void ResourceLoader::RegisterSubAssets(const ResourcePath &parent, const Base::Asset &asset)
+    {
+        std::vector<Base::SubAssetRef> subAssets = asset.GetSubAssets();
+        if (subAssets.empty() && !_subAssetParentTypes.contains(asset.GetResourceType()))
+        {
+            return; // not a file with sub-assets
+        }
+        std::vector<SubAssetIndexEntry> entries;
+        entries.reserve(subAssets.size());
+        for (Base::SubAssetRef &sub : subAssets)
+        {
+            if (!sub.asset)
+            {
+                continue;
+            }
+            const Math::UUID uuid = ResourceUUID::FromSubAsset(parent, sub.key);
+            sub.asset->SetUUID(uuid);
+            sub.asset->SetResourcePath(parent);
+            sub.asset->MarkAsSubAsset(sub.key);
+            entries.push_back(SubAssetIndexEntry{sub.key, sub.asset->GetResourceType(), uuid});
+        }
+        SetSubAssetIndex(parent, entries);
+    }
+
+    void ResourceLoader::ReadSubAssetIndex(const AssetMetadata &meta)
+    {
+        if (!meta.customData.is_object())
+        {
+            return;
+        }
+        const auto index = meta.customData.find("subAssets");
+        if (index == meta.customData.end() || !index->is_object())
+        {
+            return;
+        }
+        for (const auto &item : index->items())
+        {
+            // Re-derived, not trusted from the file: a moved file's index names its old path's UUIDs
+            _subAssets[ResourceUUID::FromSubAsset(meta.resourcePath, item.key())] =
+                SubAssetLocation{meta.resourcePath, item.key()};
+        }
+    }
+
+    std::shared_ptr<Base::Asset> ResourceLoader::LoadSubAsset(const Math::UUID &uuid)
+    {
+        const SubAssetLocation *found = FindSubAssetLocation(uuid);
+        if (!found)
+        {
+            if (!LoadUnindexedSubAssetParents())
+            {
+                return nullptr;
+            }
+            found = FindSubAssetLocation(uuid);
+            if (!found)
+            {
+                return nullptr;
+            }
+        }
+        // A copy: loading the parent rewrites the index (and so this map)
+        const SubAssetLocation location = *found;
+        const std::shared_ptr<Base::Asset> parent = Load<Base::Asset>(location.parent);
+        if (!parent)
+        {
+            return nullptr;
+        }
+        return parent->FindSubAsset(location.key);
+    }
+
+    bool ResourceLoader::LoadUnindexedSubAssetParents()
+    {
+        std::vector<ResourcePath> candidates;
+        for (const auto &[path, meta] : _metadata)
+        {
+            if (!_subAssetParentTypes.contains(meta.resourceType) || _cache.contains(path) ||
+                _subAssetParentsTried.contains(path))
+            {
+                continue;
+            }
+            const bool indexed = meta.customData.is_object() && meta.customData.contains("subAssets");
+            if (!indexed)
+            {
+                candidates.push_back(path);
+            }
+        }
+        bool loadedAny = false;
+        for (const ResourcePath &path : candidates)
+        {
+            _subAssetParentsTried.insert(path);
+            loadedAny = Load<Base::Asset>(path) != nullptr || loadedAny;
+        }
+        return loadedAny;
     }
 }
