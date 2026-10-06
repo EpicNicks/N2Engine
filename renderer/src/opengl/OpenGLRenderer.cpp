@@ -312,6 +312,16 @@ Renderer::Common::IMaterial* OpenGLRenderer::CreateMaterial(Common::IShader *sha
         material->SetInt("uHasTexture", texture != nullptr ? 1 : 0);
         material->SetFloat("uAlphaCutoff", 0.0f);
     }
+    else if (shader == m_standardTextShader)
+    {
+        // No effects: a uniform keeps the last value any material gave the shared program
+        material->SetFloat("uOutline", 0.0f);
+        material->SetVec4("uOutlineColor", 0.0f, 0.0f, 0.0f, 0.0f);
+        material->SetFloat("uSoftness", 0.0f);
+        material->SetVec4("uShadowColor", 0.0f, 0.0f, 0.0f, 0.0f);
+        material->SetVec2("uShadowOffset", 0.0f, 0.0f);
+        material->SetFloat("uShadowSoftness", 0.0f);
+    }
 
     auto [iter, inserted] = m_materials.try_emplace(material.get(), std::move(material));
     return iter->first;
@@ -967,6 +977,10 @@ void OpenGLRenderer::CreateStandardShaders()
     // is higher. The coverage ramps from 0 to 1 across about one screen pixel around the edge, measured
     // with fwidth, so text is antialiased at any size or distance without extra settings. The atlas is
     // read through .r, whatever the texture's swizzle.
+    // Effects (outline, shadow, softness) are uniforms that are all 0 when off, and then the shader takes
+    // exactly the path it took before effects existed. With them on, the outline (a second threshold
+    // below 0.5) and the shadow (a second sample at a uv offset) are composited under the face. See
+    // docs/text.html#effects.
     const char *textVert = R"(
         #version 330 core
         layout (location = 0) in vec3 aPos;
@@ -994,22 +1008,60 @@ void OpenGLRenderer::CreateStandardShaders()
         uniform vec4 uAlbedo;
         uniform sampler2D uTexture;
 
+        // Effects (TextDrawing::EffectUniforms), all 0 when off: distances are in atlas value units
+        uniform float uOutline;         // the outline's outer edge is at 0.5 - uOutline
+        uniform vec4 uOutlineColor;
+        uniform float uSoftness;        // the edge ramp's half width, at least the antialiasing ramp's
+        uniform vec4 uShadowColor;      // alpha 0: no shadow
+        uniform vec2 uShadowOffset;     // in atlas uv: the shadow at uv is the shape at uv - uShadowOffset
+        uniform float uShadowSoftness;
+
         in vec2 fragTexCoord;
         in vec4 fragColor;
         out vec4 FragColor;
 
+        // a over b, neither premultiplied
+        vec4 over(vec4 a, vec4 b) {
+            float alpha = a.a + b.a * (1.0 - a.a);
+            if (alpha <= 0.0) {
+                return vec4(0.0);
+            }
+            return vec4((a.rgb * a.a + b.rgb * b.a * (1.0 - a.a)) / alpha, alpha);
+        }
+
         void main() {
             float sdf = texture(uTexture, fragTexCoord).r;
-            // Half the change over one pixel each side: a ramp one pixel wide
-            float edgeWidth = max(0.5 * fwidth(sdf), 1e-4);
+            // Half the change over one pixel each side: a ramp one pixel wide (or wider, with softness)
+            float edgeWidth = max(max(0.5 * fwidth(sdf), 1e-4), uSoftness);
             float coverage = smoothstep(0.5 - edgeWidth, 0.5 + edgeWidth, sdf);
 
             vec4 color = uAlbedo * fragColor;
             float alpha = color.a * coverage;
-            if (alpha < 0.01) {
+
+            // Without effects this is the whole shader: the face colour, alpha-scaled by coverage
+            vec4 result = vec4(color.rgb, alpha);
+            if (uOutline > 0.0) {
+                // The outline fills from its outer edge inwards, under the face
+                float outlineEdge = 0.5 - uOutline;
+                // The ramp's lower end never goes below 0, the distance at the quad's border: minified text
+                // has a wide antialiasing ramp, which would otherwise give the whole quad some coverage
+                float outlineCoverage = smoothstep(max(outlineEdge - edgeWidth, 0.0), outlineEdge + edgeWidth, sdf);
+                result = over(result, vec4(uOutlineColor.rgb, uOutlineColor.a * outlineCoverage));
+            }
+            if (uShadowColor.a > 0.0) {
+                // The shadow is the face-plus-outline shape, moved, under both
+                float shadowSdf = texture(uTexture, fragTexCoord - uShadowOffset).r;
+                float shadowWidth = max(max(0.5 * fwidth(shadowSdf), 1e-4), uShadowSoftness);
+                float shadowEdge = 0.5 - uOutline;
+                float shadowCoverage = smoothstep(max(shadowEdge - shadowWidth, 0.0), shadowEdge + shadowWidth,
+                                                  shadowSdf);
+                result = over(result, vec4(uShadowColor.rgb, uShadowColor.a * shadowCoverage));
+            }
+
+            if (result.a < 0.01) {
                 discard;
             }
-            FragColor = vec4(color.rgb, alpha);
+            FragColor = result;
         }
     )";
 

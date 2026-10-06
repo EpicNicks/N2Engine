@@ -17,6 +17,7 @@
 #include "engine/common/Color.hpp"
 #include "engine/rendering/GpuCache.hpp"
 #include "engine/text/Font.hpp"
+#include "engine/text/TextEffects.hpp"
 
 // The drawing code every text component shares (TextRenderer in the world, UI::UIText in the UI pass): the
 // layout cache, the glyph mesh, and each font's atlas texture, shared per renderer through GpuCache. Internal
@@ -30,6 +31,49 @@ namespace N2Engine::Rendering::TextDrawing
      * get uv.minY).
      */
     [[nodiscard]] Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout);
+
+    /**
+     * The text shader's effect uniforms for one draw, in the units the shaders use. With every effect off
+     * they are all zero, which the shaders treat as "no effect" (the same maths as text without effects).
+     *
+     * - uOutline (float): the outline width as a distance below the edge value 0.5 (the atlas stores 0.5
+     *   per spreadPx pixels), so the outline's outer edge is at 0.5 - uOutline. 0 = no outline.
+     * - uOutlineColor (vec4): the outline's colour.
+     * - uSoftness (float): the half width of the face's (and outline's) edge ramp, in the same distance
+     *   units; the shader uses the larger of it and its one-pixel antialiasing ramp. 0 = crisp.
+     * - uShadowColor (vec4): the shadow's colour; alpha 0 = no shadow (every shadow uniform is then 0).
+     * - uShadowOffset (vec2): the shadow's displacement in atlas uv (y-down); the shadow at a pixel is the
+     *   shape sampled at uv - uShadowOffset.
+     * - uShadowSoftness (float): the shadow edge ramp's half width, like uSoftness.
+     */
+    struct EffectUniforms
+    {
+        float outline = 0.0f;
+        Common::Color outlineColor{0.0f, 0.0f, 0.0f, 0.0f};
+        float softness = 0.0f;
+        Common::Color shadowColor{0.0f, 0.0f, 0.0f, 0.0f};
+        float shadowOffsetU = 0.0f;
+        float shadowOffsetV = 0.0f;
+        float shadowSoftness = 0.0f;
+        /// Whether a setting was reduced to fit the atlas spread (see Text::TextEffects)
+        bool clamped = false;
+    };
+
+    /// The share of the SDF spread effects may use: the rest keeps the glyph quads' edges (where the
+    /// distance reaches 0) out of every edge ramp
+    inline constexpr float kUsableSpread = 0.9f;
+
+    /// The largest outline (+ softness / 2, + shadow offset and shadowSoftness / 2 for a shadow), in ems,
+    /// for an atlas built with these settings: kUsableSpread * spreadPx / basePx
+    [[nodiscard]] float MaxEffectEms(const Text::AtlasSettings &settings);
+
+    /**
+     * The uniforms for `effects` drawn from an atlas built with `settings`, atlasWidth x atlasHeight
+     * pixels. Lengths are clamped to the spread (Text::TextEffects), negative and non-finite lengths count
+     * as 0, and an effect that is off gives zeros. Shadow offsets are clamped per axis.
+     */
+    [[nodiscard]] EffectUniforms ResolveEffects(const Text::TextEffects &effects, const Text::AtlasSettings &settings,
+                                                int atlasWidth, int atlasHeight);
 
     /**
      * A text block's layout, laid out again only when an input changes. The text is compared in place and
@@ -98,7 +142,10 @@ namespace N2Engine::Rendering::TextDrawing
         /**
          * Draws `layout` (laid out with `font`; layoutVersion tells a new layout from the one the mesh was
          * built from) on the bound renderer with the standard text shader, the colour as the material's
-         * uAlbedo, and the given model matrix (row-major) and state. Creates or updates the mesh, material
+         * uAlbedo, the effects as its effect uniforms (ResolveEffects; set on every draw, so the shared
+         * text program never keeps another material's values), and the given model matrix (row-major)
+         * and state. Effects reduced to fit the font's spread log one warning per process, naming
+         * `componentName`. Creates or updates the mesh, material
          * and atlas share as needed: the mesh is updated in place (IRenderer::UpdateMesh), or recreated
          * where the backend can't.
          *
@@ -108,7 +155,8 @@ namespace N2Engine::Rendering::TextDrawing
          */
         bool Draw(const std::shared_ptr<Text::Font> &font, const Text::TextLayout &layout,
                   std::uint64_t layoutVersion, const float *modelMatrix, const Common::Color &color,
-                  const Renderer::Common::RenderState &state, std::string_view componentName);
+                  const Text::TextEffects &effects, const Renderer::Common::RenderState &state,
+                  std::string_view componentName);
 
     private:
         bool EnsureAtlasTexture(const std::shared_ptr<Text::Font> &font);

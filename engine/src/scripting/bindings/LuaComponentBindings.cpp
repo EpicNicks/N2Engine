@@ -462,6 +462,31 @@ namespace N2Engine::Scripting::Bindings
             "GetLineSpacing", Forward<TextRendererRef, &Rendering::TextRenderer::GetLineSpacing>(),
             "SetLetterSpacing", Forward<TextRendererRef, &Rendering::TextRenderer::SetLetterSpacing>(),
             "GetLetterSpacing", Forward<TextRendererRef, &Rendering::TextRenderer::GetLetterSpacing>(),
+            // Effects (Text::TextEffects), lengths in ems
+            "SetOutline", [](const TextRendererRef &c, const float width, const Common::Color &color)
+            {
+                c.Pin()->SetOutline(width, color);
+            },
+            "GetOutline", [](const TextRendererRef &c)
+            {
+                const auto renderer = c.Pin();
+                const Text::TextEffects &effects = renderer->GetEffects();
+                return std::make_tuple(effects.outlineWidth, Common::Color(effects.outlineColor));
+            },
+            "SetShadow", [](const TextRendererRef &c, const float offsetX, const float offsetY,
+                            const Common::Color &color, const sol::optional<float> softness)
+            {
+                c.Pin()->SetShadow(Math::Vector2(offsetX, offsetY), color, softness.value_or(0.0f));
+            },
+            "GetShadow", [](const TextRendererRef &c)
+            {
+                const auto renderer = c.Pin();
+                const Text::TextEffects &effects = renderer->GetEffects();
+                return std::make_tuple(effects.shadowOffset.x, effects.shadowOffset.y,
+                                       Common::Color(effects.shadowColor), effects.shadowSoftness);
+            },
+            "SetSoftness", Forward<TextRendererRef, &Rendering::TextRenderer::SetSoftness>(),
+            "GetSoftness", [](const TextRendererRef &c) { return c.Pin()->GetEffects().softness; },
             // Both names are checked before either is applied, so a bad one changes nothing
             "SetAlignment", [](const TextRendererRef &c, const std::string &horizontal, const std::string &vertical)
             {
