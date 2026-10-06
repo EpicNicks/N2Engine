@@ -212,7 +212,8 @@ namespace N2Engine::UI
                 return nullptr;
             }
             Application &application = Application::GetInstance();
-            const Vector2i viewport = application.GetWindow().GetWindowDimensions();
+            // The size the UI pass laid out in: the window's, or the host's render size (the editor's viewport)
+            const Vector2i viewport = application.GetWindow().GetRenderDimensions();
             return HitTestScreenPoint(SceneManager::GetCurSceneRef(), application.GetMainCamera(), windowPoint,
                                       viewport, application.GetPointerDispatcher().GetPickMask());
         };

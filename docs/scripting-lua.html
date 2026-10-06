@@ -693,7 +693,7 @@ self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 <ul>
 <li>The engine <code>require</code> and the <code>_loaded_modules()</code> helper are not documented.</li>
 <li><code>SceneManager.LoadScene</code> is documented with an index only. The binding also accepts a scene name.</li>
-<li>The <code>Window</code> instance returned by <code>Window.Get()</code> has <code>GetTitle</code>, <code>SetTitle</code>, <code>GetDimensions</code>, <code>SetWindowMode</code> and a <code>clearColor</code> field. Only the global functions are documented.</li>
+<li>The <code>Window</code> instance returned by <code>Window.Get()</code> has <code>GetTitle</code>, <code>SetTitle</code>, <code>GetDimensions</code>, <code>SetWindowMode</code> and a <code>clearColor</code> field. Only the global functions are documented. <code>GetDimensions</code>, <code>Window.GetWidth</code> and <code>Window.GetHeight</code> are the window's size even when frames render at another size: in the editor host that is the hidden window, not the viewport <span class="badge">PR #85</span> (<code>Camera:ScreenPointToRay</code>'s default uses the viewport).</li>
 <li><code>Camera.Main()</code> and <code>Application.GetCamera()</code> are annotated as returning <code>Camera</code>, but return <code>nil</code> when there is no camera.</li>
 <li>Script-side conventions are described only in prose on <code>LuaComponent</code>: the lifecycle methods (including <code>OnMouse*</code>), <code>SerializableFields</code> and the <code>OnCollision*</code>/<code>OnTrigger*</code> argument types have no annotations.</li>
 </ul>
