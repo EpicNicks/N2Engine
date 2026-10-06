@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 # editor-server/protocol/generators/generate_cpp.py
+#
+# Declarations only (ids, PROTOCOL version, request and response structs); the server's codecs are hand-written in
+# editor-server/include/editor-server/Commands.hpp and tested against protocol.json and the golden vectors.
+#
+# Usage: generate_cpp.py [--out <path>] [--protocol <protocol.json>]   (default: editor-server/clients/cpp/Protocol.generated.hpp)
 
-import json
+import argparse
 from pathlib import Path
 
+import sys
+
+# Importing protocol_spec would otherwise leave a __pycache__ folder in the source tree
+sys.dont_write_bytecode = True
+import protocol_spec  # noqa: E402
+
 SCRIPT_DIR = Path(__file__).parent
-PROTOCOL_PATH = Path(__file__).parent.parent / "protocol.json"
+PROTOCOL_PATH = protocol_spec.PROTOCOL_PATH
 OUTPUT_PATH = Path(__file__).parent.parent.parent / "clients" / "cpp" / "Protocol.generated.hpp"
 
 TYPE_MAP = {
@@ -16,13 +27,14 @@ TYPE_MAP = {
     "bool": "bool",
     "string": "std::string",
     "bytes": "std::vector<uint8_t>",
-    "vec3": "Vec3",
+    # Column-major (element col * 4 + row)
+    "mat4": "std::array<float, 16>",
+    # JSON text, exactly as on the wire
+    "json": "std::string",
 }
 
 def to_pascal_case(name: str) -> str:
     """Convert name to PascalCase."""
-    if name == "vec3":
-        return "Vec3"
     # Already PascalCase or camelCase - just ensure first letter is capital
     if not '_' in name and not ' ' in name:
         return name[0].upper() + name[1:] if name else name
@@ -30,36 +42,39 @@ def to_pascal_case(name: str) -> str:
 
 def get_cpp_type(ftype: str, protocol: dict) -> str:
     """Convert protocol type to C++ type."""
-    # Check for array types (e.g., "EntityInfo[]")
-    if ftype.endswith("[]"):
-        base_type = ftype[:-2]
-        inner_type = get_cpp_type(base_type, protocol)
-        return f"std::vector<{inner_type}>"
+    field_type = protocol_spec.parse_type(ftype, protocol)
+    if field_type.kind == "array":
+        return f"std::vector<{get_cpp_type(field_type.base, protocol)}>"
+    if field_type.kind == "struct":
+        return to_pascal_case(field_type.base)
+    return TYPE_MAP[field_type.base]
 
-    # Check built-in types
-    if ftype in TYPE_MAP:
-        return TYPE_MAP[ftype]
+def field_lines(fields: dict, protocol: dict) -> list:
+    lines = []
+    for field, ftype in fields.items():
+        comment = f" // JSON: {ftype[len('json:'):] if ftype.startswith('json:') else 'any'}" if ftype.startswith("json") else ""
+        lines.append(f"    {get_cpp_type(ftype, protocol)} {field};{comment}")
+    return lines
 
-    # Check custom types defined in protocol
-    if "types" in protocol and ftype in protocol["types"]:
-        return to_pascal_case(ftype)
-
-    return ftype
-
-def generate():
-    with open(PROTOCOL_PATH) as f:
-        protocol = json.load(f)
+def generate(output_path=None, protocol_path=None):
+    output_path = Path(output_path) if output_path else OUTPUT_PATH
+    protocol = protocol_spec.load(Path(protocol_path) if protocol_path else PROTOCOL_PATH)
 
     lines = [
-        "// Auto-generated from protocol.json - do not edit",
+        "// Auto-generated from protocol.json by generate_cpp.py - do not edit",
+        "// Declarations only: the server's codecs are hand-written (editor-server/include/editor-server/Commands.hpp).",
         "#pragma once",
         "",
+        "#include <array>",
         "#include <cstdint>",
         "#include <string>",
         "#include <vector>",
         "",
         "namespace N2Engine::Editor::Protocol",
         "{",
+        "",
+        "// protocol.json's version (major.minor.patch); Hello sends it",
+        f"inline constexpr const char *ProtocolVersion = \"{protocol['version']}\";",
         "",
     ]
 
@@ -90,55 +105,41 @@ def generate():
             pascal_name = to_pascal_case(type_name)
             lines.append(f"struct {pascal_name}")
             lines.append("{")
-            for field, ftype in type_def.items():
-                cpp_type = get_cpp_type(ftype, protocol)
-                lines.append(f"    {cpp_type} {field};")
+            lines.extend(field_lines(type_def, protocol))
             lines.append("};")
             lines.append("")
 
     # Generate command request structs
     lines.append("// Command request structures")
-    for name, cmd in protocol["commands"].items():
-        if cmd["request"]:
-            lines.append(f"struct {name}Cmd")
-            lines.append("{")
-            for field, ftype in cmd["request"].items():
-                cpp_type = get_cpp_type(ftype, protocol)
-                lines.append(f"    {cpp_type} {field};")
-            lines.append("};")
-            lines.append("")
+    for name, request in protocol_spec.commands_with_requests(protocol):
+        lines.append(f"struct {name}Cmd")
+        lines.append("{")
+        lines.extend(field_lines(request, protocol))
+        lines.append("};")
+        lines.append("")
 
     # Generate response structs (deduplicated)
     lines.append("// Response structures")
-    generated = set()
-    for name, cmd in protocol["commands"].items():
-        resp = cmd["response"]
-        resp_type = resp["type"]
-        if resp_type not in ["Ok", "Error"] and "fields" in resp and resp_type not in generated:
-            generated.add(resp_type)
+    for resp_type, _, fields in protocol_spec.responses(protocol):
+        if fields:
             lines.append(f"struct {resp_type}Data")
             lines.append("{")
-            for field, ftype in resp["fields"].items():
-                cpp_type = get_cpp_type(ftype, protocol)
-                lines.append(f"    {cpp_type} {field};")
+            lines.extend(field_lines(fields, protocol))
             lines.append("};")
             lines.append("")
 
     lines.append("} // namespace N2Engine::Editor::Protocol")
+    lines.append("")
 
-    content = "\n".join(lines)
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # The output is checked in: only rewritten when its content changes. The build tracks a separate stamp file.
+    protocol_spec.write_if_changed(output_path, "\n".join(lines))
 
-    # The output is checked in: only rewrite it when the content changes (ignoring line endings, which
-    # git may have converted). The build tracks a separate stamp file, so it isn't touched otherwise.
-    if OUTPUT_PATH.exists():
-        existing = OUTPUT_PATH.read_bytes().decode("utf-8").replace("\r\n", "\n")
-        if existing == content:
-            print(f"Up to date: {OUTPUT_PATH}")
-            return
-
-    OUTPUT_PATH.write_text(content)
-    print(f"Generated {OUTPUT_PATH}")
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Generate the C++ protocol declarations from protocol.json")
+    parser.add_argument("--out", type=Path, help=f"output file (default: {OUTPUT_PATH})")
+    parser.add_argument("--protocol", type=Path, help=f"the spec to read (default: {PROTOCOL_PATH})")
+    args = parser.parse_args(argv)
+    generate(args.out, args.protocol)
 
 if __name__ == "__main__":
-    generate()
+    main()

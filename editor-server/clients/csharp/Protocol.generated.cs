@@ -1,13 +1,21 @@
-// Auto-generated from protocol.json - do not edit
+// Auto-generated from protocol.json by generate_csharp.py - do not edit
+// Declarations only, with no encoding code; nothing uses or tests this client (unsupported).
 using System;
 
 namespace N2Engine.Editor.Protocol
 {
+    public static class ProtocolInfo
+    {
+        /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
+        public const string ProtocolVersion = "1.1.0";
+    }
+
     public enum CommandType : byte
     {
         RenderFrame = 0x01,
         SetViewportSize = 0x02,
         GetAudio = 0x03,
+        Hello = 0x04,
         SetCameraPosition = 0x10,
         GetCameraPosition = 0x12,
         CreateScene = 0x20,
@@ -39,13 +47,22 @@ namespace N2Engine.Editor.Protocol
         ScriptData = 0x08,
         EngineHealth = 0x09,
         AudioSamples = 0x0A,
+        ServerInfo = 0x0B,
     }
 
-    public struct vec3
+    public struct Vec3
     {
         public float X;
         public float Y;
         public float Z;
+    }
+
+    public struct Quat
+    {
+        public float X;
+        public float Y;
+        public float Z;
+        public float W;
     }
 
     public struct EntityInfo
@@ -67,6 +84,13 @@ namespace N2Engine.Editor.Protocol
         public int Height;
     }
 
+    public struct HelloRequest
+    {
+        public string ClientName;
+        public string ProtocolVersion;
+        public string Token;
+    }
+
     public struct SetCameraPositionRequest
     {
         public float X;
@@ -81,12 +105,12 @@ namespace N2Engine.Editor.Protocol
 
     public struct LoadSceneRequest
     {
-        public string Scenejson;
+        public string SceneJson;
     }
 
     public struct DeleteSceneRequest
     {
-        public string Scenename;
+        public string SceneName;
     }
 
     public struct CreateEntityRequest
@@ -96,12 +120,12 @@ namespace N2Engine.Editor.Protocol
 
     public struct DestroyEntityRequest
     {
-        public string Entityid;
+        public string EntityId;
     }
 
     public struct SetEntityTransformRequest
     {
-        public string Entityid;
+        public string EntityId;
         public Vec3 Position;
         public Vec3 Rotation;
         public Vec3 Scale;
@@ -109,7 +133,7 @@ namespace N2Engine.Editor.Protocol
 
     public struct GetEntityTransformRequest
     {
-        public string Entityid;
+        public string EntityId;
     }
 
     public struct CreateScriptRequest
@@ -126,12 +150,21 @@ namespace N2Engine.Editor.Protocol
 
     public struct AudioSamplesResponse
     {
-        public uint Samplerate;
+        public uint SampleRate;
         public uint Channels;
-        public string Sampleformat;
-        public uint Framecount;
-        public uint Droppedframes;
+        public string SampleFormat;
+        public uint FrameCount;
+        public uint DroppedFrames;
         public byte[] Samples;
+    }
+
+    public struct ServerInfoResponse
+    {
+        public string ProtocolVersion;
+        public string EngineVersion;
+        /// <summary>JSON text: string[]</summary>
+        public string Capabilities;
+        public bool ProjectLoaded;
     }
 
     public struct CameraPositionResponse
@@ -143,12 +176,12 @@ namespace N2Engine.Editor.Protocol
 
     public struct SceneDataResponse
     {
-        public string Scenejson;
+        public string SceneJson;
     }
 
     public struct EntityCreatedResponse
     {
-        public string Entityid;
+        public string EntityId;
     }
 
     public struct EntityTransformResponse
@@ -166,7 +199,7 @@ namespace N2Engine.Editor.Protocol
 
     public struct ScriptDataResponse
     {
-        public string Scripttemplate;
+        public string ScriptTemplate;
     }
 
     public struct EngineHealthResponse

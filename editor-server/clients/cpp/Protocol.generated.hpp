@@ -1,6 +1,8 @@
-// Auto-generated from protocol.json - do not edit
+// Auto-generated from protocol.json by generate_cpp.py - do not edit
+// Declarations only: the server's codecs are hand-written (editor-server/include/editor-server/Commands.hpp).
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -8,11 +10,15 @@
 namespace N2Engine::Editor::Protocol
 {
 
+// protocol.json's version (major.minor.patch); Hello sends it
+inline constexpr const char *ProtocolVersion = "1.1.0";
+
 enum class CommandType : uint8_t
 {
     RenderFrame = 0x01,
     SetViewportSize = 0x02,
     GetAudio = 0x03,
+    Hello = 0x04,
     SetCameraPosition = 0x10,
     GetCameraPosition = 0x12,
     CreateScene = 0x20,
@@ -44,6 +50,7 @@ enum class ResponseType : uint8_t
     ScriptData = 0x08,
     EngineHealth = 0x09,
     AudioSamples = 0x0A,
+    ServerInfo = 0x0B,
 };
 
 // Custom types
@@ -52,6 +59,14 @@ struct Vec3
     float x;
     float y;
     float z;
+};
+
+struct Quat
+{
+    float x;
+    float y;
+    float z;
+    float w;
 };
 
 struct EntityInfo
@@ -72,6 +87,13 @@ struct SetViewportSizeCmd
 {
     int32_t width;
     int32_t height;
+};
+
+struct HelloCmd
+{
+    std::string clientName;
+    std::string protocolVersion;
+    std::string token;
 };
 
 struct SetCameraPositionCmd
@@ -140,6 +162,14 @@ struct AudioSamplesData
     uint32_t frameCount;
     uint32_t droppedFrames;
     std::vector<uint8_t> samples;
+};
+
+struct ServerInfoData
+{
+    std::string protocolVersion;
+    std::string engineVersion;
+    std::string capabilities; // JSON: string[]
+    bool projectLoaded;
 };
 
 struct CameraPositionData

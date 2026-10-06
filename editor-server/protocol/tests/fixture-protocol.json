@@ -1,0 +1,79 @@
+{
+  "version": "3.2.1",
+  "commands": {
+    "Everything": {
+      "id": "0x01",
+      "description": "Not a real command: every field type the generators support, so run_tests.py can check codecs for types protocol.json doesn't use yet",
+      "request": {
+        "small": "uint8",
+        "unsigned": "uint32",
+        "signed": "int32",
+        "real": "float32",
+        "flag": "bool",
+        "text": "string",
+        "position": "vec3",
+        "rotation": "quat",
+        "matrix": "mat4",
+        "anything": "json",
+        "nodes": "json:Node[]",
+        "names": "json:string[]",
+        "grid": "json:number[][]",
+        "count": "uint32",
+        "pairs": "Pair[]",
+        "tail": "bytes"
+      },
+      "response": {
+        "type": "Everything",
+        "fields": {
+          "matrix": "mat4",
+          "rotation": "quat",
+          "node": "json:Node",
+          "count": "uint32",
+          "values": "float32[]"
+        }
+      }
+    },
+    "Nothing": {
+      "id": "0x02",
+      "request": {},
+      "response": { "type": "Ok" }
+    }
+  },
+  "types": {
+    "vec3": {
+      "x": "float32",
+      "y": "float32",
+      "z": "float32"
+    },
+    "quat": {
+      "x": "float32",
+      "y": "float32",
+      "z": "float32",
+      "w": "float32"
+    },
+    "Pair": {
+      "key": "string",
+      "value": "int32",
+      "transform": "mat4"
+    }
+  },
+  "jsonTypes": {
+    "Node": {
+      "id": "string",
+      "parentId?": "string",
+      "weight": "number",
+      "visible": "bool",
+      "tags": "string[]",
+      "extra": "json",
+      "leaf": "Leaf"
+    },
+    "Leaf": {
+      "name": "string"
+    }
+  },
+  "responses": {
+    "Ok": "0x00",
+    "Error": "0x01",
+    "Everything": "0x02"
+  }
+}

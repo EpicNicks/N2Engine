@@ -1,5 +1,25 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "encoding": {
+    "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
+    "byteOrder": "Little-endian for every multi-byte number.",
+    "fieldTypes": {
+      "uint8": "1 byte.",
+      "uint32": "4 bytes, unsigned.",
+      "int32": "4 bytes, two's complement.",
+      "float32": "4 bytes, IEEE 754 single precision.",
+      "bool": "1 byte: 0 is false, 1 is true (readers take any non-zero byte as true).",
+      "string": "A uint32 byte count, then that many bytes of UTF-8, with no terminator.",
+      "json": "Identical to string on the wire: a uint32 byte count, then UTF-8 JSON text. Written json (any JSON value) or json:<shape>, where a shape is string, number, bool, json (any value), a jsonTypes entry, or a shape followed by []. A jsonTypes entry maps each key to a shape; a key ending in ? is optional. Clients with codecs parse the text; to anything else it is a string.",
+      "bytes": "The rest of the payload, with no length prefix. Only ever the last field.",
+      "mat4": "16 float32, column-major (element col * 4 + row) for column vectors, so the translation is elements 12, 13 and 14.",
+      "<type>": "An entry of types: its fields in order, with no prefix.",
+      "<type>[]": "Elements of <type> back to back, with no length prefix: their number is the uint32 field named count declared before the array."
+    },
+    "errorPayload": "An Error response's payload is the message as raw UTF-8 bytes, not a string: the frame's length is the message's byte count.",
+    "reservedIds": "Ids 0xC0 to 0xFE are reserved for server-pushed event frames: no command or response uses them.",
+    "versioning": "version is major.minor.patch. New commands, new responses and new trailing request fields bump the minor version (a server ignores request bytes it doesn't read); any other change bumps the major version. Hello refuses a client whose major version differs from the server's."
+  },
   "commands": {
     "RenderFrame": {
       "id": "0x01",
@@ -35,6 +55,24 @@
           "frameCount": "uint32",
           "droppedFrames": "uint32",
           "samples": "bytes"
+        }
+      }
+    },
+    "Hello": {
+      "id": "0x04",
+      "description": "Opens a session: the client's name, the protocol version it speaks (its PROTOCOL_VERSION) and the host's access token (empty when it has none). Error when the major versions differ, or when the host requires a token and this isn't it. Optional on a host without a token. On a host with one, every other command (Shutdown included) is refused with an Error until a Hello on the same connection succeeds, and a failed Hello ends the session. The session belongs to the connection: a client that reconnects sends Hello again. capabilities names optional features beyond what the version implies (none are defined yet); projectLoaded is whether the host has a project (was started with --project).",
+      "request": {
+        "clientName": "string",
+        "protocolVersion": "string",
+        "token": "string"
+      },
+      "response": {
+        "type": "ServerInfo",
+        "fields": {
+          "protocolVersion": "string",
+          "engineVersion": "string",
+          "capabilities": "json:string[]",
+          "projectLoaded": "bool"
         }
       }
     },
@@ -200,6 +238,12 @@
       "y": "float32",
       "z": "float32"
     },
+    "quat": {
+      "x": "float32",
+      "y": "float32",
+      "z": "float32",
+      "w": "float32"
+    },
     "EntityInfo": {
       "id": "string",
       "name": "string"
@@ -210,6 +254,7 @@
       "detail": "string"
     }
   },
+  "jsonTypes": {},
   "responses": {
     "Ok": "0x00",
     "Error": "0x01",
@@ -221,6 +266,7 @@
     "SceneData": "0x07",
     "ScriptData": "0x08",
     "EngineHealth": "0x09",
-    "AudioSamples": "0x0A"
+    "AudioSamples": "0x0A",
+    "ServerInfo": "0x0B"
   }
 }

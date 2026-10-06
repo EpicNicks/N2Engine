@@ -18,6 +18,7 @@ if(Python3_FOUND)
         DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/protocol/protocol.json
         ${CMAKE_CURRENT_SOURCE_DIR}/protocol/generators/generate_cpp.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/protocol/generators/protocol_spec.py
         COMMENT "Generating C++ protocol bindings"
     )
 
