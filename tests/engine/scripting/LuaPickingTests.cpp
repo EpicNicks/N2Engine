@@ -201,6 +201,50 @@ TEST_F(LuaPickingTest, RayAndScreenPointToRay)
     Lua()["picking_camera"] = sol::lua_nil;
 }
 
+// Camera:LookAt from a script points the view (-Z) at the target, exactly as Camera::LookAt does in C++
+TEST_F(LuaPickingTest, CameraLookAtMatchesCpp)
+{
+    const Math::Vector3 position(5.0f, 5.0f, 5.0f);
+    const Math::Vector3 target(1.0f, -1.0f, 2.0f);
+
+    Camera expected;
+    expected.SetPosition(position);
+    expected.LookAt(target);
+
+    Camera scripted;
+    scripted.SetPerspective(60.0f, 4.0f / 3.0f, 0.1f, 100.0f);
+    Lua()["lookat_camera"] = &scripted;
+    Run("lookat_camera:SetPosition(Vector3(5, 5, 5)); lookat_camera:LookAt(Vector3(1, -1, 2))");
+
+    const Math::Quaternion rotation = scripted.GetRotation();
+    const Math::Quaternion expectedRotation = expected.GetRotation();
+    EXPECT_NEAR(rotation.w, expectedRotation.w, 1e-4f);
+    EXPECT_NEAR(rotation.x, expectedRotation.x, 1e-4f);
+    EXPECT_NEAR(rotation.y, expectedRotation.y, 1e-4f);
+    EXPECT_NEAR(rotation.z, expectedRotation.z, 1e-4f);
+
+    // The view direction, as scripts read it, points at the target
+    const Math::Vector3 toTarget = (target - position).Normalized();
+    EXPECT_NEAR(Eval<float>("lookat_camera:GetForward().x"), toTarget.x, 1e-3f);
+    EXPECT_NEAR(Eval<float>("lookat_camera:GetForward().y"), toTarget.y, 1e-3f);
+    EXPECT_NEAR(Eval<float>("lookat_camera:GetForward().z"), toTarget.z, 1e-3f);
+
+    // The target is in front, at the centre of the screen
+    const Math::Vector3 view = scripted.GetViewMatrix().TransformPoint(target);
+    EXPECT_LT(view.z, 0.0f);
+    const Math::Vector3 ndc = scripted.GetViewProjectionMatrix().TransformPoint(target);
+    EXPECT_NEAR(ndc.x, 0.0f, 1e-3f);
+    EXPECT_NEAR(ndc.y, 0.0f, 1e-3f);
+
+    // The two-argument form honours the up vector: world +X is the top of the screen
+    Run("lookat_camera:SetPosition(Vector3(0, 0, 5)); lookat_camera:LookAt(Vector3(0, 0, 0), Vector3(1, 0, 0))");
+    EXPECT_NEAR(Eval<float>("lookat_camera:GetUp().x"), 1.0f, 1e-3f);
+    EXPECT_NEAR(Eval<float>("lookat_camera:GetForward().z"), -1.0f, 1e-3f);
+    EXPECT_GT(scripted.GetViewProjectionMatrix().TransformPoint(Math::Vector3(1.0f, 0.0f, 0.0f)).y, 0.0f);
+
+    Lua()["lookat_camera"] = sol::lua_nil;
+}
+
 TEST_F(LuaPickingTest, RaycastBindingsHandleBadInput)
 {
     // Whatever backend is installed, these can't hit anything
