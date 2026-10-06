@@ -561,6 +561,9 @@ namespace
                     {
                         uint32_t colOut = 0;
                         bool covered = true;   // cleared by an alpha test (text, or uAlphaCutoff)
+                        // Cleared for text effect pixels (outline, shadow): they never write depth, so a
+                        // coplanar glyph drawn later still draws its face over them
+                        bool writesDepth = true;
                         if constexpr (KIND == ShadeKind::Lit || KIND == ShadeKind::Unlit)
                         {
                             const float iw = l0*A->invW + l1*B->invW + l2*C->invW;
@@ -639,6 +642,7 @@ namespace
                                     sdf >= mat.textOuterEdge)
                                 {
                                     covered = true;
+                                    writesDepth = false;
                                     colOut = mat.textOutlineColor;
                                 }
                                 if (!covered && mat.textShadow && mat.textShadowA >= kTextMinAlpha &&
@@ -646,6 +650,7 @@ namespace
                                         mat.textOuterEdge)
                                 {
                                     covered = true;
+                                    writesDepth = false;
                                     colOut = mat.textShadowColor;
                                 }
                             }
@@ -656,7 +661,7 @@ namespace
                         }
                         if (covered)
                         {
-                            if (rs.depthWrite) drow[px] = z;
+                            if (rs.depthWrite && writesDepth) drow[px] = z;
                             crow[px] = colOut;
                         }
                     }

@@ -72,8 +72,9 @@ namespace
         }
     };
 
-    /// "Hi" in yellow, spaced out, drawn by a TextRenderer through an orthographic camera that fits the
-    /// layout with a margin wide enough for the effects
+    /// Text in yellow (by default "Hi", spaced out so no effect reaches the next glyph), drawn by a
+    /// TextRenderer (depth-tested, as in a scene) through an orthographic camera that fits the layout with a
+    /// margin wide enough for the effects
     class EffectsScene
     {
     public:
@@ -81,17 +82,15 @@ namespace
         static constexpr int kHeight = 96;
         static constexpr float kMargin = 20.0f;
 
-        EffectsScene()
+        explicit EffectsScene(const char *content = "Hi", const float letterSpacing = 0.4f)
         {
             _initialized = _renderer.Initialize(nullptr, kWidth, kHeight);
             _renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
             _object = GameObject::Create("Effects");
             _text = _object->AddComponent<Rendering::TextRenderer>();
-            _text->SetText("Hi");
+            _text->SetText(content);
             _text->SetColor(Common::Color::Yellow);
-            // Glyphs further apart than any effect reaches: each glyph is one draw's quad, and an effect from
-            // one glyph's quad may cover a neighbour's face where they come closer than that (docs/text.html)
-            _text->SetLetterSpacing(0.4f);
+            _text->SetLetterSpacing(letterSpacing);
 
             const Text::Rect bounds = _text->GetLayout().bounds;
             _scale = std::min((kWidth - 2.0f * kMargin) / bounds.Width(), (kHeight - 2.0f * kMargin) / bounds.Height());
@@ -421,4 +420,33 @@ TEST(SoftwareTextEffectsGoldenTest, EffectsBeyondTheSpreadAreClampedNotDrawnAsBo
     // A quad filled edge to edge would put outline pixels in the quad's corners, far from any face pixel
     EXPECT_EQ(OutlinePixelsFartherThan(huge, maxEms * scene.Scale()), 0)
         << "outline pixels far from the face: the glyph quads were filled";
+}
+
+TEST(SoftwareTextEffectsGoldenTest, AGlyphsOutlineNeverPunchesHolesInItsNeighboursFace)
+{
+    // Tightly spaced, so each glyph's outline reaches into its neighbours' quads and faces. The text is
+    // depth-tested (a world TextRenderer): an outline pixel that wrote depth would make the next glyph's
+    // coplanar face fail the depth test there.
+    EffectsScene scene("HIH", -0.08f);
+    ASSERT_TRUE(scene.Ok());
+
+    const Frame plain = scene.Render(Text::TextEffects{});
+    ASSERT_GT(plain.Count(Face), 0);
+    const Frame outlined = scene.Render(WithOutline(0.1f));
+    ASSERT_GT(outlined.Count(Outline), 0);
+
+    // Every face pixel of the plain text is still face: no glyph's outline covers another glyph's face,
+    // whichever was drawn first
+    int holes = 0;
+    for (int y = 0; y < plain.height; ++y)
+    {
+        for (int x = 0; x < plain.width; ++x)
+        {
+            if (plain.At(x, y) == Face && outlined.At(x, y) != Face)
+            {
+                ++holes;
+            }
+        }
+    }
+    EXPECT_EQ(holes, 0) << "outline pixels inside a neighbouring glyph's face";
 }

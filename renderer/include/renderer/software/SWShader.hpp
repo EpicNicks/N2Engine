@@ -26,7 +26,9 @@ namespace Renderer::Software
      *   With effects (uOutline with a visible uOutlineColor, or a visible uShadowColor) a pixel not drawn
      *   as face is drawn in the outline colour where the distance is at least 0.5 - uOutline, else in the
      *   shadow colour where the distance sampled at uv - uShadowOffset is at least 0.5 - uOutline. The
-     *   softness uniforms are ignored. Without effects the path is exactly the one above.
+     *   softness uniforms are ignored. Outline and shadow pixels never write depth (only face pixels do),
+     *   so a coplanar glyph drawn later still draws its face over them. Without effects the path is
+     *   exactly the one above.
      */
     enum class SWShaderType { Unlit, Lit, Text };
 
