@@ -20,6 +20,7 @@ export interface SubsystemStatus {
 export const CommandType = {
   RenderFrame: 0x01,
   SetViewportSize: 0x02,
+  GetAudio: 0x03,
   SetCameraPosition: 0x10,
   GetCameraPosition: 0x12,
   CreateScene: 0x20,
@@ -51,6 +52,7 @@ export const ResponseType = {
   SceneData: 0x07,
   ScriptData: 0x08,
   EngineHealth: 0x09,
+  AudioSamples: 0x0A,
 } as const;
 
 export type ResponseType = typeof ResponseType[keyof typeof ResponseType];
@@ -105,6 +107,15 @@ export interface FrameDataResponse {
   width: number;
   height: number;
   pixels: Uint8Array;
+}
+
+export interface AudioSamplesResponse {
+  sampleRate: number;
+  channels: number;
+  sampleFormat: string;
+  frameCount: number;
+  droppedFrames: number;
+  samples: Uint8Array;
 }
 
 export interface CameraPositionResponse {

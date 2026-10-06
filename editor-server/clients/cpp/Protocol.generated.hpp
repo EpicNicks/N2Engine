@@ -12,6 +12,7 @@ enum class CommandType : uint8_t
 {
     RenderFrame = 0x01,
     SetViewportSize = 0x02,
+    GetAudio = 0x03,
     SetCameraPosition = 0x10,
     GetCameraPosition = 0x12,
     CreateScene = 0x20,
@@ -42,6 +43,7 @@ enum class ResponseType : uint8_t
     SceneData = 0x07,
     ScriptData = 0x08,
     EngineHealth = 0x09,
+    AudioSamples = 0x0A,
 };
 
 // Custom types
@@ -128,6 +130,16 @@ struct FrameDataData
     uint32_t width;
     uint32_t height;
     std::vector<uint8_t> pixels;
+};
+
+struct AudioSamplesData
+{
+    uint32_t sampleRate;
+    uint32_t channels;
+    std::string sampleFormat;
+    uint32_t frameCount;
+    uint32_t droppedFrames;
+    std::vector<uint8_t> samples;
 };
 
 struct CameraPositionData

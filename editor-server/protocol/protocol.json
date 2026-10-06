@@ -21,6 +21,21 @@
       },
       "response": { "type": "Ok" }
     },
+    "GetAudio": {
+      "id": "0x03",
+      "request": {},
+      "response": {
+        "type": "AudioSamples",
+        "fields": {
+          "sampleRate": "uint32",
+          "channels": "uint32",
+          "sampleFormat": "string",
+          "frameCount": "uint32",
+          "droppedFrames": "uint32",
+          "samples": "bytes"
+        }
+      }
+    },
     "SetCameraPosition": {
       "id": "0x10",
       "request": {
@@ -203,6 +218,7 @@
     "EntityCreated": "0x06",
     "SceneData": "0x07",
     "ScriptData": "0x08",
-    "EngineHealth": "0x09"
+    "EngineHealth": "0x09",
+    "AudioSamples": "0x0A"
   }
 }

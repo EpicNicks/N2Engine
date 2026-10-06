@@ -12,6 +12,7 @@
 #include "engine/Logger.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/audio/AudioSystem.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
@@ -163,6 +164,19 @@ namespace N2Engine::Editor
     size_t EditorServer::ProcessCommands(std::chrono::milliseconds maxWait)
     {
         return _commands.Drain(maxWait);
+    }
+
+    void EditorServer::UpdateAudio()
+    {
+        auto &audio = Audio::AudioSystem::Instance();
+        const auto now = std::chrono::steady_clock::now();
+        if (_lastAudioUpdate && audio.IsLoopback())
+        {
+            // AdvanceStream caps one step (a stalled main thread doesn't mix minutes at once)
+            audio.AdvanceStream(std::chrono::duration<double>(now - *_lastAudioUpdate).count());
+            audio.Update();
+        }
+        _lastAudioUpdate = now;
     }
 
     void EditorServer::PostLog(std::string message, bool isWarning)
@@ -366,7 +380,9 @@ namespace N2Engine::Editor
 
     void EditorServer::ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload)
     {
-        if (commandType != 0x1)
+        // RenderFrame and GetAudio are polled every frame; logging them would drown everything else
+        if (commandType != static_cast<uint8_t>(CommandType::RenderFrame) &&
+            commandType != static_cast<uint8_t>(CommandType::GetAudio))
         {
             Logger::Info("Command Issued: " + std::format("0x{:X}", commandType));
         }
@@ -379,6 +395,9 @@ namespace N2Engine::Editor
             break;
         case CommandType::SetViewportSize:
             HandleSetViewportSize(clientSocket, payload);
+            break;
+        case CommandType::GetAudio:
+            HandleGetAudio(clientSocket);
             break;
         case CommandType::SetCameraPosition:
             HandleSetCameraPosition(clientSocket, payload);
@@ -464,6 +483,25 @@ namespace N2Engine::Editor
                        static_cast<uint32_t>(_viewportHeight),
                        _frameBuffer);
 
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetAudio(int clientSocket)
+    {
+        auto &audio = Audio::AudioSystem::Instance();
+        BufferWriter response;
+        if (!audio.IsLoopback())
+        {
+            WriteError(response, "No audio stream: audio isn't running on a loopback device (see GetEngineHealth)");
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+
+        // Everything mixed since the previous GetAudio (at most AudioSystem::StreamBufferMilliseconds of it)
+        const Audio::LoopbackFormat &format = audio.GetLoopbackFormat();
+        const Audio::StreamedAudio streamed = audio.TakeStreamedAudio();
+        WriteAudioSamples(response, format.sampleRate, format.channels, std::string{Audio::ToString(format.sampleFormat)},
+                          streamed.frameCount, streamed.droppedFrames, streamed.samples);
         SendResponse(clientSocket, response.Release());
     }
 
