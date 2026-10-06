@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <math/Constants.hpp>
@@ -160,6 +162,41 @@ namespace
         EXPECT_EQ(std::memcmp(actual.vertices.data(), expected.vertices.data(), actual.vertices.size() * sizeof(Vertex)), 0);
     }
 
+    /// The same triangles wound the other way (each triangle's second and third index swapped)
+    MeshData Rewound(MeshData data)
+    {
+        for (std::size_t i = 0; i + 2 < data.indices.size(); i += 3)
+        {
+            std::swap(data.indices[i + 1], data.indices[i + 2]);
+        }
+        return data;
+    }
+
+    struct V3
+    {
+        float x, y, z;
+    };
+
+    V3 Position(const Vertex &vertex)
+    {
+        return V3{vertex.position[0], vertex.position[1], vertex.position[2]};
+    }
+
+    V3 Sub(const V3 &a, const V3 &b)
+    {
+        return V3{a.x - b.x, a.y - b.y, a.z - b.z};
+    }
+
+    V3 Cross(const V3 &a, const V3 &b)
+    {
+        return V3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+    }
+
+    float Dot(const V3 &a, const V3 &b)
+    {
+        return a.x * b.x + a.y * b.y + a.z * b.z;
+    }
+
     Vertex At(const float x, const float y, const float z)
     {
         return Vertex{{x, y, z}, {0, 0, 1}, {0, 0}, {1, 1, 1, 1}};
@@ -189,10 +226,39 @@ namespace
 TEST(BuiltinMeshTest, TheBuiltinsAreExactlyTheShapesTheRenderersUsedToBuild)
 {
     ExpectSameGeometry(Mesh::GetBuiltin(BuiltinMesh::Cube)->GetMeshData(), OldCube());
-    ExpectSameGeometry(Mesh::GetBuiltin(BuiltinMesh::Sphere)->GetMeshData(), OldSphere(16, 32));
     ExpectSameGeometry(Mesh::GetBuiltin(BuiltinMesh::Quad)->GetMeshData(), OldQuad());
+    // The sphere's vertices are the old ones byte for byte; its triangles are the old ones wound the other way
+    // (the old sphere was clockwise from outside, so back-face culling turned it inside out)
+    ExpectSameGeometry(Mesh::GetBuiltin(BuiltinMesh::Sphere)->GetMeshData(), Rewound(OldSphere(16, 32)));
     // ...and so is a sphere of any other subdivision
-    ExpectSameGeometry(Mesh::MakeSphere(8, 12), OldSphere(8, 12));
+    ExpectSameGeometry(Mesh::MakeSphere(8, 12), Rewound(OldSphere(8, 12)));
+}
+
+TEST(BuiltinMeshTest, EveryBuiltinTriangleFacesOutward)
+{
+    // Front faces wind counter-clockwise, so (b - a) x (c - a) is a triangle's front normal. On the cube and sphere
+    // (centred at the origin) it must point away from the centre; on the quad, towards +Z.
+    for (const BuiltinMesh which : {BuiltinMesh::Cube, BuiltinMesh::Sphere, BuiltinMesh::Quad})
+    {
+        const MeshData &data = Mesh::GetBuiltin(which)->GetMeshData();
+        int checked = 0;
+        for (std::size_t i = 0; i + 2 < data.indices.size(); i += 3)
+        {
+            const V3 a = Position(data.vertices[data.indices[i]]);
+            const V3 b = Position(data.vertices[data.indices[i + 1]]);
+            const V3 c = Position(data.vertices[data.indices[i + 2]]);
+            const V3 normal = Cross(Sub(b, a), Sub(c, a));
+            if (Dot(normal, normal) < 1e-12f)
+            {
+                continue; // the sphere's pole triangles are degenerate
+            }
+            const V3 centroid{(a.x + b.x + c.x) / 3.0f, (a.y + b.y + c.y) / 3.0f, (a.z + b.z + c.z) / 3.0f};
+            const float facing = which == BuiltinMesh::Quad ? normal.z : Dot(normal, centroid);
+            EXPECT_GT(facing, 0.0f) << Mesh::GetBuiltinName(which) << " triangle " << i / 3 << " faces inward";
+            ++checked;
+        }
+        EXPECT_GT(checked, 0) << Mesh::GetBuiltinName(which);
+    }
 }
 
 TEST(BuiltinMeshTest, EachIsOneSharedMeshWithAFixedUuid)

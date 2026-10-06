@@ -135,7 +135,7 @@ namespace N2Engine::Rendering
 
     MeshData Mesh::MakeSphere(const std::uint32_t latitudeSegments, const std::uint32_t longitudeSegments)
     {
-        // A UV sphere from parametric equations, exactly as SphereRenderer made it
+        // A UV sphere from parametric equations: the vertices exactly as SphereRenderer made them
         MeshData sphereData;
 
         for (std::uint32_t lat = 0; lat <= latitudeSegments; ++lat)
@@ -186,7 +186,9 @@ namespace N2Engine::Rendering
             }
         }
 
-        // Two triangles per quad
+        // Two triangles per quad, counter-clockwise seen from outside (front faces, as everywhere in the engine).
+        // SphereRenderer used to wind them the other way (first, second, first + 1), which turned the sphere inside
+        // out under back-face culling; the vertices are unchanged.
         for (std::uint32_t lat = 0; lat < latitudeSegments; ++lat)
         {
             for (std::uint32_t lon = 0; lon < longitudeSegments; ++lon)
@@ -195,12 +197,12 @@ namespace N2Engine::Rendering
                 const std::uint32_t second = first + longitudeSegments + 1;
 
                 sphereData.indices.push_back(first);
-                sphereData.indices.push_back(second);
                 sphereData.indices.push_back(first + 1);
+                sphereData.indices.push_back(second);
 
                 sphereData.indices.push_back(second);
-                sphereData.indices.push_back(second + 1);
                 sphereData.indices.push_back(first + 1);
+                sphereData.indices.push_back(second + 1);
             }
         }
         return sphereData;

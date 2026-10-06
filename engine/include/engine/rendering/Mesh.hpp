@@ -32,7 +32,7 @@ namespace N2Engine::Rendering
     enum class BuiltinMesh : std::uint8_t
     {
         Cube,   ///< 1 x 1 x 1, centred, 24 vertices (4 per face, so each face has its own normal)
-        Sphere, ///< diameter 1, centred, 16 rings x 32 slices
+        Sphere, ///< diameter 1, centred, 16 rings x 32 slices (v runs from 0 at the top pole: see MakeSphere)
         Quad    ///< 1 x 1 on the x/y plane, centred, facing +Z
     };
 
@@ -42,7 +42,8 @@ namespace N2Engine::Rendering
      * per Mesh through the engine's GPU cache (GpuCache::AcquireMesh), shared by every component drawing it.
      *
      * Conventions: right-handed, y up, front faces wind counter-clockwise, units are metres, and texture
-     * coordinates are v-up (v = 0 is the first row of a texture's pixel data, the bottom of an imported image).
+     * coordinates are v-up (v = 0 is the first row of a texture's pixel data, the bottom of an imported image),
+     * except the built-in sphere's, whose v = 0 is its top pole (kept from SphereRenderer).
      *
      * Every Mesh has at least one submesh. GetVersion goes up on every change (SetData), so GPU copies are
      * re-uploaded. The built-in meshes (GetBuiltin) have fixed UUIDs, so scene files can name them, and never
@@ -74,11 +75,14 @@ namespace N2Engine::Rendering
         /// The built-in mesh named "Cube", "Sphere" or "Quad" (exactly), or nullopt
         [[nodiscard]] static std::optional<BuiltinMesh> ParseBuiltinName(std::string_view name);
 
-        /// The built-in shapes' geometry, as CubeRenderer, SphereRenderer and QuadRenderer always made it: white
-        /// vertex colour, v-up texture coordinates, counter-clockwise front faces
+        /// The built-in shapes' geometry: the vertices exactly as CubeRenderer, SphereRenderer and QuadRenderer always
+        /// made them (white vertex colour), with every triangle counter-clockwise seen from outside (front faces).
+        /// The cube and quad have v-up texture coordinates.
         [[nodiscard]] static Renderer::Common::MeshData MakeCube();
         /// A UV sphere of diameter 1: (latitudeSegments + 1) x (longitudeSegments + 1) vertices, rings from the top
-        /// (+y, v = 0) to the bottom, u going around from +x towards +z
+        /// (+y) to the bottom, u going around from +x towards +z. Its v is 0 at the top pole and 1 at the bottom, the
+        /// reverse of the engine's v-up convention (kept from SphereRenderer, so a texture shows upside down on it).
+        /// Triangles wind counter-clockwise from outside (SphereRenderer's wound clockwise, inside out).
         [[nodiscard]] static Renderer::Common::MeshData MakeSphere(std::uint32_t latitudeSegments = 16,
                                                                    std::uint32_t longitudeSegments = 32);
         [[nodiscard]] static Renderer::Common::MeshData MakeQuad();
