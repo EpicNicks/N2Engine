@@ -282,7 +282,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <tr><td><code>SetMaxWidth</code></td><td>0</td><td>Wrap width in world units; 0 or less never wraps</td></tr>
 <tr><td><code>SetLineSpacing</code></td><td>1</td><td>Multiplies the font's line height</td></tr>
 <tr><td><code>SetLetterSpacing</code></td><td>0</td><td>Extra space between glyphs, in ems; negative tightens</td></tr>
-<tr><td><code>SetEffects</code>, <code>SetOutline</code>, <code>SetShadow</code>, <code>SetSoftness</code> <span class="badge">PR #TBD</span></td><td>all off</td><td>Outline, shadow and edge softness, lengths in ems (<a href="#effects">Text effects</a>). <code>GetEffects()</code> returns them.</td></tr>
+<tr><td><code>SetEffects</code>, <code>SetOutline</code>, <code>SetShadow</code>, <code>SetSoftness</code> <span class="badge">PR #66</span></td><td>all off</td><td>Outline, shadow and edge softness, lengths in ems (<a href="#effects">Text effects</a>). <code>GetEffects()</code> returns them.</td></tr>
 </tbody>
 </table>
 </div>
@@ -316,7 +316,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 </div>
 
 <h3 id="text-shader">The SDF text shader</h3>
-<p><code>IRenderer::GetStandardTextShader()</code> returns the built-in text shader. On OpenGL it reads the atlas's red channel as the distance <code>d</code> (the outline at 0.5, inside higher; the atlas stores the edge at 128, which is 0.502), and computes the coverage as <code>smoothstep(0.5 &minus; w, 0.5 + w, d)</code> with <code>w = 0.5 &middot; fwidth(d)</code>: a ramp one screen pixel wide around the outline, so edges stay antialiased at any size or distance with nothing to tune. The colour is <code>uAlbedo</code> times the vertex colour, with the coverage multiplied into its alpha; a fragment whose alpha is below 0.01 is discarded. Outlines, shadows and softness are uniforms of the same shader, all 0 when off, and then it takes exactly this path; see <a href="#effects">Text effects</a> <span class="badge">PR #TBD</span>.</p>
+<p><code>IRenderer::GetStandardTextShader()</code> returns the built-in text shader. On OpenGL it reads the atlas's red channel as the distance <code>d</code> (the outline at 0.5, inside higher; the atlas stores the edge at 128, which is 0.502), and computes the coverage as <code>smoothstep(0.5 &minus; w, 0.5 + w, d)</code> with <code>w = 0.5 &middot; fwidth(d)</code>: a ramp one screen pixel wide around the outline, so edges stay antialiased at any size or distance with nothing to tune. The colour is <code>uAlbedo</code> times the vertex colour, with the coverage multiplied into its alpha; a fragment whose alpha is below 0.01 is discarded. Outlines, shadows and softness are uniforms of the same shader, all 0 when off, and then it takes exactly this path; see <a href="#effects">Text effects</a> <span class="badge">PR #66</span>.</p>
 <p class="src">Source: <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>OpenGLRenderer::CreateStandardShaders</code></p>
 
 <h3 id="text-shader-software">The software text shader <span class="badge">PR #51</span></h3>
@@ -327,7 +327,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <li><strong>Write.</strong> A covered pixel is written opaque with that colour (its alpha goes into the buffer unchanged, as with the other software shaders), with no blending and no antialiasing, so edges are hard.</li>
 <li><strong>Depth.</strong> A covered pixel writes its depth whenever the draw depth-tests, even though <code>RenderState::Transparent()</code> says no depth write. With the depth test off (the UI pass's state) nothing writes depth, as in OpenGL.</li>
 </ol>
-<p>With an outline or shadow on, the alpha test has layers (face, then outline, then shadow); without, the steps above are exactly the path taken. See <a href="#effects-software">Text effects on the software renderer</a> <span class="badge">PR #TBD</span>.</p>
+<p>With an outline or shadow on, the alpha test has layers (face, then outline, then shadow); without, the steps above are exactly the path taken. See <a href="#effects-software">Text effects on the software renderer</a> <span class="badge">PR #66</span>.</p>
 <p>A text material without a texture draws nothing (OpenGL's unbound sampler reads 0, below the edge). Uniforms are resolved once per draw, like the other software shaders: the per-pixel cost is one bilinear sample and, only for covered pixels, the colour interpolation.</p>
 <p><strong>Draw order.</strong> The software renderer reorders runs of draws that depth-test and write depth front to back for early-Z (<a href="application.html#render">Rendering the scene</a>). Text is ordered by the state it was submitted with: a Transparent-queue text draw doesn't write depth by its state, so it keeps its submission position, after all opaque draws and back to front among the transparent ones. Its depth writes then only affect draws submitted after it.</p>
 
@@ -368,7 +368,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <li><code>SetAlignment(horizontal, vertical)</code> with the names <code>"Left"</code>, <code>"Center"</code>, <code>"Right"</code> and <code>"Top"</code>, <code>"Middle"</code>, <code>"Bottom"</code>, <code>"Baseline"</code>. An unknown name is a Lua error and changes neither alignment. <code>GetAlignment()</code> returns both names.</li>
 <li><code>SetFont(path)</code> loads a font through <code>Resources</code> (for example <code>"res://fonts/Title.ttf"</code>); <code>SetFont(nil)</code> goes back to the default font. A path that doesn't load a font is a Lua error and keeps the current font.</li>
 <li><code>GetBounds()</code> returns <code>minX, minY, maxX, maxY</code> of the laid-out block, in local units (all 0 for empty text).</li>
-<li><code>SetOutline</code>, <code>SetShadow</code> and <code>SetSoftness</code> (with getters) set the <a href="#effects-lua">text effects</a> <span class="badge">PR #TBD</span>.</li>
+<li><code>SetOutline</code>, <code>SetShadow</code> and <code>SetSoftness</code> (with getters) set the <a href="#effects-lua">text effects</a> <span class="badge">PR #66</span>.</li>
 </ul>
 <pre class="lang-lua"><code>local label = GameObject.Create("Label")
 local text = label:AddComponent("TextRenderer") -- also gives the object a Positionable
@@ -395,7 +395,7 @@ SceneManager.GetCurrentScene():AddRootGameObject(label)</code></pre>
 <p>The drawing code is shared, not duplicated: <code>Rendering::TextDrawing</code> (<code>engine/include/engine/rendering/TextDrawing.hpp</code>) holds what used to be private to <code>TextRenderer</code>. <code>LayoutCache</code> lays text out again only when an input changes; <code>BuildMesh</code> turns a layout into the glyph mesh (<code>TextRenderer::BuildMesh</code> calls it); and <code>DrawResources</code> holds one text block's mesh (updated in place), material and share of the per-(renderer, font) atlas texture (a <code>GpuCache::Handle</code> since <span class="badge">PR #64</span>), with the renderer's lifetime token. <code>TextRenderer</code>'s behaviour and its tests are unchanged, apart from an object with no <code>Positionable</code> (which the constructor rules out) now creating nothing before it returns. The missing-shader warning is logged once per process for each component type. Because both components use the same atlas cache, a font drawn in the world and in the UI is one texture per renderer (<code>UITextTest.TheAtlasIsSharedWithTextRendererPerRendererAndFont</code>). See the <a href="ui.html#design-ui-text-shared">design note</a>.</p>
 <p class="src">Source: <code>engine/include/engine/rendering/TextDrawing.hpp</code>; <code>engine/src/rendering/TextDrawing.cpp</code>; <code>engine/src/ui/UIText.cpp</code>; tests: <code>UITextTest.*</code> (<code>tests/engine/ui/UITextTests.cpp</code>)</p>
 
-<h2 id="effects">Text effects <span class="badge">PR #TBD</span></h2>
+<h2 id="effects">Text effects <span class="badge">PR #66</span></h2>
 <p><code>TextRenderer</code> and <code>UIText</code> can draw an <strong>outline</strong>, a <strong>shadow</strong> (an underlay; with no offset and some softness, a glow) and a <strong>soft edge</strong>. They are a <code>Text::TextEffects</code> value on each component (<code>engine/include/engine/text/TextEffects.hpp</code>). Every effect is off by default, and text without effects draws exactly as before on both backends.</p>
 
 <h3 id="effects-settings">Settings and units</h3>
@@ -459,11 +459,11 @@ SceneManager.GetCurrentScene():AddRootGameObject(label)</code></pre>
 </ul>
 
 <div class="callout note" id="design-effects-uniforms">
-<p class="callout-title">Design decision: effects are per-draw uniforms of the one text shader <span class="badge">PR #TBD</span></p>
+<p class="callout-title">Design decision: effects are per-draw uniforms of the one text shader <span class="badge">PR #66</span></p>
 <p>The effects are set on the text block's material on every draw, like its colour, by the shared <code>TextDrawing::DrawResources::Draw</code>. Changing them never lays the text out again, rebuilds the mesh, or creates a material, shader or atlas. One shader handles plain and effect text, with branches on uniforms that plain text skips; the branches are uniform control flow, so <code>fwidth</code> stays valid inside them. A separate shader per effect combination would multiply programs and materials for little gain, as the most an effect costs is one extra texture sample. Every effect uniform is set on every draw because OpenGL materials share the text program, which keeps the last value any material gave it; text materials also start with the no-effect values. Lengths are in ems, not fractions of the spread, so an effect looks the same whatever atlas settings a font has. Clamping to the spread happens where the font is known: at draw time, with a warning, rather than in the setters.</p>
 </div>
 <div class="callout note" id="design-effects-sw-alpha-test">
-<p class="callout-title">Design decision: software effects are alpha-tested layers <span class="badge">PR #TBD</span></p>
+<p class="callout-title">Design decision: software effects are alpha-tested layers <span class="badge">PR #66</span></p>
 <p>The software renderer keeps its alpha-tested text (<a href="#design-sw-text-alpha-test">see above</a>). An outline is a second threshold and a shadow a second, offset sample, each choosing one opaque colour, tested face first. That is the image OpenGL draws at 50% coverage with opaque colours, which the golden tests can check exactly. Softness has no meaning without partial coverage, and moving the threshold instead would make the software glyphs a different size from OpenGL's, so it is ignored. Plain text keeps the old pixel path (a per-draw branch), which guarantees the existing images are unchanged.</p>
 </div>
 
