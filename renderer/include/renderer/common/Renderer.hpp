@@ -54,7 +54,8 @@ namespace Renderer::Common
         virtual ~IRenderer() = default;
 
         /**
-         * Expires when this renderer is destroyed. A component holding resources keeps it next to its
+         * Expires when this renderer is destroyed or shut down (each backend's Shutdown calls EndLifetime, so
+         * a renderer initialised again counts as a new one). A component holding resources keeps it next to its
          * IRenderer*: while it hasn't expired the pointer still names this renderer, and once it has, the
          * resources are gone and the pointer must not be called, even if a new renderer now lives at the
          * same address.
@@ -163,6 +164,11 @@ namespace Renderer::Common
         // Debug
         virtual void SetWireframe(bool enabled) = 0;
         [[nodiscard]] virtual const char* GetRendererName() const = 0;
+
+    protected:
+        /// Expires every token handed out so far: the renderer's resources are gone (Shutdown). Later calls to
+        /// GetLifetimeToken return a fresh token.
+        void EndLifetime() { m_lifetime = std::make_shared<const int>(0); }
 
     private:
         std::shared_ptr<const int> m_lifetime = std::make_shared<const int>(0);
