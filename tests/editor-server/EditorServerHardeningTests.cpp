@@ -9,6 +9,7 @@
 #include <future>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -16,6 +17,7 @@
 #include <editor-server/Commands.hpp>
 #include <editor-server/EditorServer.hpp>
 #include <editor-server/Protocol.hpp>
+#include <engine/Logger.hpp>
 #include <engine/sceneManagement/SceneManager.hpp>
 
 #ifdef _WIN32
@@ -203,6 +205,105 @@ TEST_F(EditorServerNoSceneTest, SaveSceneAndCreateEntityAreErrors)
     EXPECT_EQ(Execute(server, CommandType::SaveScene).type, ErrorType);
     EXPECT_EQ(Execute(server, CommandType::CreateEntity, StringPayload("Thing")).type, ErrorType);
     EXPECT_EQ(Execute(server, CommandType::GetCurrentScene).type, ErrorType);
+}
+
+// ==================== Polled commands don't log per call ====================
+
+namespace
+{
+    /// Collects every line logged while it lives
+    class LogCapture
+    {
+    public:
+        struct Line
+        {
+            std::string message;
+            Logger::LogLevel level;
+        };
+
+        LogCapture()
+        {
+            _id = Logger::logEvent += [this](const std::string_view message, const Logger::LogLevel level)
+            {
+                lines.push_back({std::string(message), level});
+            };
+        }
+        ~LogCapture() { Logger::logEvent -= _id; }
+        LogCapture(const LogCapture &) = delete;
+        LogCapture &operator=(const LogCapture &) = delete;
+
+        std::vector<Line> lines;
+
+    private:
+        size_t _id = 0;
+    };
+}
+
+TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
+{
+    for (const CommandType polled : {CommandType::RenderFrame, CommandType::GetAudio, CommandType::GetAllEntities,
+                                     CommandType::GetEntityTransform, CommandType::GetCameraPosition,
+                                     CommandType::GetEngineHealth})
+    {
+        EXPECT_TRUE(EditorServer::IsPolledCommand(static_cast<uint8_t>(polled))) << static_cast<int>(polled);
+    }
+
+    for (const CommandType notPolled : {CommandType::SetViewportSize, CommandType::SetCameraPosition,
+                                        CommandType::CreateScene, CommandType::LoadScene, CommandType::SaveScene,
+                                        CommandType::DeleteScene, CommandType::GetCurrentScene,
+                                        CommandType::CreateEntity, CommandType::DestroyEntity,
+                                        CommandType::SetEntityTransform, CommandType::CreateScript,
+                                        CommandType::RescanAssets, CommandType::Shutdown})
+    {
+        EXPECT_FALSE(EditorServer::IsPolledCommand(static_cast<uint8_t>(notPolled))) << static_cast<int>(notPolled);
+    }
+    EXPECT_FALSE(EditorServer::IsPolledCommand(0x7E)); // an unknown command still logs (and warns)
+}
+
+TEST_F(EditorServerNoSceneTest, PolledCommandsLogNothing)
+{
+    LogCapture capture;
+
+    // Each answers normally (an empty list, an Error response for no scene, samples or "no audio stream")
+    // without logging. RenderFrame, GetCameraPosition and GetEngineHealth aren't run here: they need an initialized
+    // Application. PolledCommandsAreTheOnesClientsPoll covers the predicate for them.
+    EXPECT_EQ(Execute(server, CommandType::GetAllEntities).type, static_cast<uint8_t>(ResponseType::EntityList));
+    (void)Execute(server, CommandType::GetAudio);
+    EXPECT_EQ(Execute(server, CommandType::GetEntityTransform,
+                      StringPayload("00000000-0000-0000-0000-000000000000")).type, ErrorType);
+
+    for (const auto &line : capture.lines)
+    {
+        ADD_FAILURE() << "a polled command logged: " << line.message;
+    }
+}
+
+TEST_F(EditorServerNoSceneTest, OtherCommandsStillLogWhenIssued)
+{
+    LogCapture capture;
+
+    EXPECT_EQ(Execute(server, CommandType::CreateScript, StringPayload("player")).type,
+              static_cast<uint8_t>(ResponseType::ScriptData));
+
+    bool issued = false;
+    for (const auto &line : capture.lines)
+    {
+        if (line.message.find("Command Issued: 0x40") != std::string::npos)
+            issued = true;
+    }
+    EXPECT_TRUE(issued) << "CreateScript (0x40) should log that it was issued";
+}
+
+TEST_F(EditorServerNoSceneTest, PolledCommandsStillLogFailures)
+{
+    LogCapture capture;
+
+    // No entity id: the payload is malformed, so the handler throws and ExecuteCommand logs the failure
+    EXPECT_EQ(Execute(server, CommandType::GetEntityTransform).type, ErrorType);
+
+    ASSERT_EQ(capture.lines.size(), 1u);
+    EXPECT_EQ(capture.lines[0].level, Logger::LogLevel::Error);
+    EXPECT_NE(capture.lines[0].message.find("Command 0x33 failed"), std::string::npos) << capture.lines[0].message;
 }
 
 // ==================== DeleteScene path validation ====================
