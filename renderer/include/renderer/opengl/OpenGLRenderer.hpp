@@ -92,12 +92,22 @@ namespace Renderer::OpenGL
         [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
         [[nodiscard]] Common::IShader* GetStandardTextShader() const override;
 
+        /// RGBA, bottom row first, from the offscreen target while there is one, else the window's back buffer
         void ReadFramebuffer(std::uint8_t *buffer, int width, int height) const override;
+        /// Renders to an offscreen framebuffer of this size from the next BeginFrame (see IRenderer)
+        void SetRenderTargetSize(uint32_t width, uint32_t height) override;
 
     private:
         GLFWwindow* m_window;
         uint32_t m_width;
         uint32_t m_height;
+
+        // The offscreen target SetRenderTargetSize creates; 0 (and the window's framebuffer used) until then
+        GLuint m_offscreenFramebuffer = 0;
+        GLuint m_offscreenColor = 0;
+        GLuint m_offscreenDepth = 0;
+        uint32_t m_offscreenWidth = 0;
+        uint32_t m_offscreenHeight = 0;
 
         Common::IShader* m_standardUnlitShader;
         Common::IShader* m_standardLitShader;
@@ -134,6 +144,7 @@ namespace Renderer::OpenGL
         static GLenum GetOpenGLInternalFormat(uint32_t channels);
 
         void CreateStandardShaders();
+        void DestroyOffscreenTarget();
         void ApplyRenderState(const Common::RenderState& state);
         /// Both DrawMesh overloads: `indexCount` indices from `firstIndex`, already checked against the mesh
         void DrawIndices(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,

@@ -77,6 +77,7 @@ bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, const uint32_t width, 
 void OpenGLRenderer::Shutdown()
 {
     EndLifetime(); // everything below is freed, so holders must not use their handles again
+    DestroyOffscreenTarget();
     m_materials.clear(); // Destroy materials first
     m_meshes.clear(); // Then meshes
     m_textures.clear();
@@ -168,6 +169,19 @@ bool OpenGLRenderer::IsValidShader(Common::IShader *shader) const
 
 void OpenGLRenderer::BeginFrame()
 {
+    // The frame's target: the offscreen one while SetRenderTargetSize is in effect, else the window. The
+    // viewport is set every frame, as the two can differ in size.
+    if (m_offscreenFramebuffer != 0)
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, m_offscreenFramebuffer);
+        glViewport(0, 0, static_cast<GLsizei>(m_offscreenWidth), static_cast<GLsizei>(m_offscreenHeight));
+    }
+    else
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, static_cast<GLsizei>(m_width), static_cast<GLsizei>(m_height));
+    }
+
     // glClear only clears depth where depth writes are enabled, and the last draw of the previous frame
     // may have turned them off (a Transparent-queue draw)
     glDepthMask(GL_TRUE);
@@ -1090,7 +1104,83 @@ Renderer::Common::IShader* OpenGLRenderer::GetStandardLitShader() const
 
 void OpenGLRenderer::ReadFramebuffer(std::uint8_t *buffer, int width, int height) const
 {
-    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, buffer);
+    if (!buffer || width <= 0 || height <= 0)
+    {
+        return;
+    }
+    // Read from where BeginFrame drew (0 is the window's). RGBA rows are a multiple of 4 bytes, so they are
+    // packed tightly at the default alignment of 4, set here in case anything changed it.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, m_offscreenFramebuffer);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
+}
+
+void OpenGLRenderer::SetRenderTargetSize(const uint32_t width, const uint32_t height)
+{
+    if (width == 0 || height == 0)
+    {
+        return;
+    }
+    if (m_offscreenFramebuffer != 0 && width == m_offscreenWidth && height == m_offscreenHeight)
+    {
+        return;
+    }
+    DestroyOffscreenTarget();
+
+    const auto w = static_cast<GLsizei>(width);
+    const auto h = static_cast<GLsizei>(height);
+    glGenFramebuffers(1, &m_offscreenFramebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_offscreenFramebuffer);
+
+    glGenRenderbuffers(1, &m_offscreenColor);
+    glBindRenderbuffer(GL_RENDERBUFFER, m_offscreenColor);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_offscreenColor);
+
+    glGenRenderbuffers(1, &m_offscreenDepth);
+    glBindRenderbuffer(GL_RENDERBUFFER, m_offscreenDepth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_offscreenDepth);
+
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE)
+    {
+        std::cerr << "OpenGL: the " << width << "x" << height << " offscreen target is incomplete (status 0x"
+                  << std::hex << status << std::dec << "); rendering to the window instead" << std::endl;
+        DestroyOffscreenTarget();
+        return;
+    }
+    m_offscreenWidth = width;
+    m_offscreenHeight = height;
+}
+
+void OpenGLRenderer::DestroyOffscreenTarget()
+{
+    // No GL calls when there is nothing to free: Shutdown runs this, maybe without GL ever loaded
+    if (m_offscreenFramebuffer == 0 && m_offscreenColor == 0 && m_offscreenDepth == 0)
+    {
+        return;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (m_offscreenFramebuffer != 0)
+    {
+        glDeleteFramebuffers(1, &m_offscreenFramebuffer);
+    }
+    if (m_offscreenColor != 0)
+    {
+        glDeleteRenderbuffers(1, &m_offscreenColor);
+    }
+    if (m_offscreenDepth != 0)
+    {
+        glDeleteRenderbuffers(1, &m_offscreenDepth);
+    }
+    m_offscreenFramebuffer = 0;
+    m_offscreenColor = 0;
+    m_offscreenDepth = 0;
+    m_offscreenWidth = 0;
+    m_offscreenHeight = 0;
 }
 
 // Factory function
