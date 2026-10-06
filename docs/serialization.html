@@ -37,6 +37,7 @@
 <li><a href="audio.html">Audio</a></li>
 <li><a href="text.html">Text &amp; fonts</a></li>
 <li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
 <li><a href="resources.html">Resources &amp; paths</a></li>
 <li><a href="serialization.html" aria-current="page">Serialization</a></li>
 <li><a href="math.html">Math &amp; SIMD</a></li>
@@ -157,6 +158,7 @@
 <li><strong>Rigidbody</strong>: body type, mass and gravity flag. See <a href="physics.html#scene-switch">Physics</a>.</li>
 <li><strong>AudioSource</strong>: its clip (as an <a href="#asset-references">asset reference</a>), volume, pitch, loop, spatial, play-on-awake, min/max distance, rolloff and mixer group. See <a href="audio.html#audio-source">Audio</a>.</li>
 <li><strong>AudioListener</strong>: the component itself (it has no fields beyond the base ones).</li>
+<li><strong>Image</strong> <span class="badge">PR #TBD</span>: its sprite, as an <a href="#asset-references">asset reference</a> to a <a href="meshes.html#textures">texture asset</a> (<code>"sprite"</code>), besides its colour and raycast target. See <a href="ui.html#image-sprite">sprites</a>.</li>
 <li><strong>Renderers</strong>: colour and size, plus the sphere's latitude and longitude segment counts.</li>
 </ul>
 <pre class="lang-cpp"><code>// MyComponent.cpp
@@ -245,7 +247,7 @@ public:
 <li>Otherwise it calls <code>IO::Resources::Instance().LoadByUUID&lt;T&gt;(uuid)</code> <span class="badge">PR #28</span>. That checks Resources' own runtime assets, then ResourceLoader's cache, then <em>loads</em> the project file whose <code>.meta</code> UUID matches. If none of these finds it, the reference is <code>nullptr</code> and <code>"Asset '...' not found: ..."</code> is logged.</li>
 </ol>
 <p><strong>Cross-run stability.</strong> A project file under <code>assets/</code> gets a deterministic UUID from its <code>res://</code> path (see <a href="resources.html#uuid-stability">UUID stability</a>). A reference saved in one run therefore loads the same file in a later run, even if nothing has loaded it yet. This holds whether the asset was first loaded through <code>ResourceLoader</code> or through <code>Resources</code>, because <code>Resources::Load</code> delegates project files to <code>ResourceLoader</code> <span class="badge">PR #28</span>. An asset registered at runtime (<code>Resources::RegisterAsset</code>) has a random UUID, so a reference to it resolves only within the same run.</p>
-<p class="src">Source: <code>engine/include/engine/serialization/ComponentSerializer.hpp</code> — <code>SerializableComponent::RegisterAssetRef</code>; <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::LoadByUUID</code>; tests: <code>AudioAssetReferenceTest.AudioSourceClipResolvesInALaterRun</code>, <code>ResourceLoaderTest.AssetRefToAnAssetLoadedThroughResourcesResolvesInALaterRun</code>, <code>ResourcesTest.AssetRefResolvesAnAssetRegisteredAtRuntime</code></p>
+<p class="src">Source: <code>engine/include/engine/serialization/ComponentSerializer.hpp</code> — <code>SerializableComponent::RegisterAssetRef</code>; <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::LoadByUUID</code>; tests: <code>AudioAssetReferenceTest.AudioSourceClipResolvesInALaterRun</code>, <code>ResourceLoaderTest.AssetRefToAnAssetLoadedThroughResourcesResolvesInALaterRun</code>, <code>ResourcesTest.AssetRefResolvesAnAssetRegisteredAtRuntime</code>, <code>TextureAssetTest.AnImagesSpriteSurvivesASceneSaveAndLoad</code></p>
 
 <div class="callout note">
 <p class="callout-title">Note</p>

@@ -20,6 +20,7 @@ Behaviour reference for the engine (lifecycles, frame order, guarantees and edge
 - Scene Serialization/Deserialization
 - Math types with SIMD
 - Screen-space UI: Canvas, RectTransform layout, Image, UIText and Button (state tints and an OnClick event)
+- Texture assets from PNG, JPEG, TGA and BMP files (stb_image), shown as UI Image sprites
 - Unit testing with GoogleTest
 
 ## Objectives

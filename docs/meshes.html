@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meshes, models &amp; textures · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html" aria-current="page">Meshes, models &amp; textures</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Meshes, models &amp; textures</h1>
+<p class="lead">How the engine imports and draws content made outside it: images today, and meshes, materials and glTF models in the next phases of <a href="https://github.com/EpicNicks/N2Engine/issues/3">issue #3</a>. This page covers the CPU-only <code>assetimport</code> library, the <code>Texture</code> asset and its import settings, the UV convention every textured thing follows, the <code>GpuCache</code> that shares GPU resources between components, and texture sampling on the software renderer. Textures reach the screen through the UI <a href="ui.html#image-sprite"><code>Image</code> sprite</a> <span class="badge">PR #TBD</span>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#status">What exists so far</a></li>
+<li><a href="#assetimport">The assetimport library</a></li>
+<li><a href="#decoding">Image decoding</a></li>
+<li><a href="#textures">The Texture asset</a></li>
+<li><a href="#texture-settings">Texture import settings</a></li>
+<li><a href="#uv-convention">The UV convention</a></li>
+<li><a href="#gpu-cache">GpuCache: shared GPU resources</a></li>
+<li><a href="#sampling">Sampling on the software renderer</a></li>
+<li><a href="#meshes">Meshes (planned)</a></li>
+<li><a href="#materials">Materials (planned)</a></li>
+<li><a href="#models">Models and glTF import (planned)</a></li>
+<li><a href="#conventions">Axes, winding and units (planned)</a></li>
+<li><a href="#lua">Lua</a></li>
+<li><a href="#tests">Tests</a></li>
+</ol>
+</div>
+
+<h2 id="status">What exists so far</h2>
+<p>Issue #3 is split into sub-issues, one per PR. This page grows with them; sections for later phases are placeholders.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Phase</th><th>Covers</th><th>State</th></tr></thead>
+<tbody>
+<tr><td>P1 (<a href="https://github.com/EpicNicks/N2Engine/issues/58">#58</a>)</td><td>stb_image and the <code>assetimport</code> library, the <code>Texture</code> asset and its settings, case-insensitive asset types, <code>GpuCache</code> (the text atlas moved onto it), bilinear RGBA sampling on the software renderer, the UI <code>Image</code> sprite</td><td>This page <span class="badge">PR #TBD</span></td></tr>
+<tr><td>P2 (<a href="https://github.com/EpicNicks/N2Engine/issues/59">#59</a>)</td><td>The <code>Mesh</code> and <code>Material</code> assets, <code>MeshRenderer</code>, the built-in shapes rebuilt on them</td><td>Planned</td></tr>
+<tr><td>P3 (<a href="https://github.com/EpicNicks/N2Engine/issues/60">#60</a>)</td><td>glTF 2.0 import, the <code>Model</code> asset, sub-assets</td><td>Planned</td></tr>
+<tr><td>P4 (<a href="https://github.com/EpicNicks/N2Engine/issues/61">#61</a>)</td><td>Materials and lighting: spot lights on the software renderer, emissive, sRGB and linear lighting, normal maps, PBR</td><td>Planned</td></tr>
+<tr><td>P5 (<a href="https://github.com/EpicNicks/N2Engine/issues/62">#62</a>)</td><td>Optional FBX and OBJ import through ufbx</td><td>Planned</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="assetimport">The assetimport library <span class="badge">PR #TBD</span></h2>
+<p><code>assetimport/</code> is a static library (<code>N2Engine::assetimport</code>) that turns file bytes into plain CPU structs. Today it decodes images (<code>assetimport/include/assetimport/ImageDecoder.hpp</code>); model parsing joins it in P3. It depends only on <code>math</code> and its vendored decoders, never on the engine, the renderer, GLFW, PhysX or nlohmann. The engine links it privately: no <code>assetimport</code> type appears in an engine header, and no stb type appears in an <code>assetimport</code> header.</p>
+<p>stb_image 2.30 (<code>external/stb_image/</code>, see <code>THIRD_PARTY_NOTICES.md</code>) is compiled once, in <code>assetimport/src/assetimport/ImageDecoder.cpp</code>, with <code>STB_IMAGE_STATIC</code> so its symbols stay in that file. It is configured there: <code>STBI_ONLY_PNG</code>, <code>STBI_ONLY_JPEG</code>, <code>STBI_ONLY_TGA</code>, <code>STBI_ONLY_BMP</code> (PSD, GIF, HDR, PIC and PNM are left out), <code>STBI_NO_STDIO</code> (the engine reads files itself and decodes from memory), <code>STBI_NO_LINEAR</code>, <code>STBI_MAX_DIMENSIONS 16384</code>, and <code>STBI_ASSERT</code> a no-op in Release builds (stb's own <code>assert</code> in Debug).</p>
+<p class="src">Source: <code>assetimport/CMakeLists.txt</code>; <code>assetimport/src/assetimport/ImageDecoder.cpp</code>; <code>external/stb_image/README.md</code></p>
+
+<div class="callout note" id="design-assetimport">
+<p class="callout-title">Design decision: asset import is its own CPU-only library <span class="badge">PR #TBD</span></p>
+<p>Parsers are where untrusted bytes meet the engine, so they need the most tests, and those tests should run anywhere. Putting image decoding (and later glTF and FBX parsing) in a library that depends only on <code>math</code>, as <code>text/</code> does for fonts, lets <code>assetimport_tests</code> run every decoder without the engine, a window, a GPU or PhysX. Its output is library-neutral structs (<code>ImportedImage</code>), so a decoder can be swapped or a second one added (ufbx beside cgltf) without touching the engine. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision 3).</p>
+</div>
+
+<h2 id="decoding">Image decoding <span class="badge">PR #TBD</span></h2>
+<p><code>AssetImport::DecodeImage(std::span&lt;const std::uint8_t&gt; bytes, const ImageDecodeOptions &amp;options)</code> returns <code>std::expected&lt;ImportedImage, ImageDecodeError&gt;</code>.</p>
+<ul>
+<li><strong>Formats.</strong> PNG (1 to 16 bits per channel, every colour type, palette with or without <code>tRNS</code>, interlaced), JPEG (baseline and progressive), TGA (with or without RLE) and BMP (bottom-up and top-down, 1 to 32 bits per pixel). The decoder goes by the content, not the file name.</li>
+<li><strong>Always 8-bit RGBA.</strong> <code>ImportedImage</code> has <code>width</code>, <code>height</code>, <code>channels</code> (always 4), <code>sourceChannels</code> (what the file held: 1 grey, 2 grey + alpha, 3 RGB, 4 RGBA) and <code>pixels</code>, <code>width &times; height &times; 4</code> bytes, rows tightly packed. Grey becomes <code>(g, g, g, 255)</code>, so a grey PNG shows grey rather than red as an <code>R8</code> texture would. Missing alpha is 255. 16-bit channels keep their high byte.</li>
+<li><strong>Row order.</strong> With <code>options.flipY</code> (the default) the bottom row of the picture comes first; without it the top row does. See <a href="#uv-convention">the UV convention</a>.</li>
+<li><strong>Size caps.</strong> The header is read first (<code>stbi_info_from_memory</code>), and nothing is decoded or allocated for an image wider or taller than <code>kMaxImageDimension</code> (16384), or whose RGBA pixels would exceed <code>kMaxDecodedImageBytes</code> (256 MiB: an 8192 &times; 8192 image fits, 8192 &times; 8193 doesn't). <code>ImageDecodeOptions::maxDimension</code> and <code>maxDecodedBytes</code> lower the caps for one call; values above the built-in caps are lowered to them. Decoding can briefly need more memory than the cap (stb's working buffers, about twice it for a 16-bit PNG). Input over 2 GiB is refused, since the decoder takes an <code>int</code> length.</li>
+<li><strong>Errors.</strong> An error has a <code>code</code> and a <code>message</code> for the log: <code>EmptyInput</code>; <code>InputTooLarge</code>; <code>UnrecognizedFormat</code> (not one of the four formats, or a corrupt or truncated header; stb's reason is in the message); <code>DimensionsTooLarge</code> (a side over the cap, or zero); <code>DecodedSizeTooLarge</code>; <code>DecodeFailed</code> (a readable header but corrupt, truncated or unsupported pixel data). A PNG or JPEG header over 16384 a side is refused by stb itself while it reads the header, so it reports <code>UnrecognizedFormat</code> with stb's "too large"; oversized TGA and BMP headers report <code>DimensionsTooLarge</code>. Either way nothing is decoded.</li>
+<li><strong>Thread-safe.</strong> No global decoder state is set (stb's failure reason is thread-local, and the flip is done here, not with stb's global flag).</li>
+</ul>
+<p class="src">Source: <code>assetimport/include/assetimport/ImageDecoder.hpp</code>; <code>assetimport/src/assetimport/ImageDecoder.cpp</code> — <code>DecodeImage</code>; tests: <code>ImageDecoderTest.*</code> (<code>tests/assetimport/ImageDecoderTests.cpp</code>)</p>
+
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Truncated or corrupt image data is an error, never a crash or an abort: every prefix of a stored and of a deflate-compressed PNG is decoded in <code>ImageDecoderTest.EveryTruncationOfAPngIsAnErrorNotACrash</code> (the only prefixes that decode are those missing just the final <code>IEND</code> chunk's CRC, which stb doesn't check; they give the whole image). Oversized headers are rejected before any pixel memory is allocated (<code>OversizedDimensionsAreRejectedFromTheHeader</code>, <code>OversizedDecodedBytesAreRejectedFromTheHeader</code>, with crafted BMP headers that carry no pixel data at all).</p>
+</div>
+
+<div class="callout note" id="design-image-caps">
+<p class="callout-title">Design decision: fixed size caps, checked before decoding <span class="badge">PR #TBD</span></p>
+<p>stb_image is small and fast but not hardened; it has a history of CVEs, mostly in formats and paths the engine doesn't need. So only four formats are compiled in, and an image is measured from its header before anything is decoded: a malicious or broken file claiming 100000 &times; 100000 pixels costs a header read, not a 40 GB allocation. 16384 a side matches what GPUs commonly accept for a texture; 256 MiB decoded allows any 8192 &times; 8192 image, far beyond what a game texture needs, while a single bad file can't ask for gigabytes. The caps are compile-time constants, so a project can't raise them by accident; a caller can only lower them. Images are still trusted project assets: don't load downloaded images at runtime. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decisions 2 and C).</p>
+</div>
+
+<h2 id="textures">The Texture asset <span class="badge">PR #TBD</span></h2>
+<p><code>N2Engine::Rendering::Texture</code> (<code>engine/include/engine/rendering/Texture.hpp</code>) is a <code>Base::Asset</code> with resource type <code>"Texture"</code>. It holds CPU data only: <code>GetWidth()</code>, <code>GetHeight()</code>, <code>GetPixels()</code> (8-bit RGBA, the first row being v = 0) and <code>GetSettings()</code>. It never holds a GPU handle, so it loads headless and one texture can serve several renderers; each renderer gets its own GPU copy through <a href="#gpu-cache"><code>GpuCache</code></a>. A texture never changes after it is made; a reload makes a new object.</p>
+<ul>
+<li><strong>Files.</strong> <code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.tga</code> and <code>.bmp</code>, in any case, load as textures. <code>Texture::RegisterLoader()</code> registers the loader with <code>Resources</code> (and so <code>ResourceLoader</code>, which then scans and indexes those files). It is called by a static registrar in <code>Texture.cpp</code> and, because the linker can drop that file from a program that never names <code>Texture</code>, by <code>ResourceLoader::Initialize</code> too, as for fonts. See <a href="resources.html#loaders">Loaders</a>.</li>
+<li><strong>Loading.</strong> <code>Texture::Load(path)</code> reads the file, takes the <a href="#texture-settings">settings</a> from its <code>.meta</code> when <code>ResourceLoader</code> tracks it (defaults otherwise), and decodes it with <code>DecodeImage</code>. A file that can't be read, or doesn't decode, logs an error (<code>"Cannot load texture &lt;path&gt;: &lt;reason&gt;"</code>) and the load returns null. <code>GetSourcePath()</code> is the file it came from.</li>
+<li><strong>From memory.</strong> <code>Texture::CreateFromEncoded(bytes, settings, debugName)</code> decodes image file bytes with the given settings; null and an error on failure.</li>
+<li><strong>At runtime.</strong> <code>Texture::Create(width, height, rgbaPixels, options)</code> makes a procedural texture from <code>width &times; height &times; 4</code> bytes, the first row being v = 0, with <code>TextureOptions</code> for its filter, wrap and mipmaps (the defaults are <code>TextureOptions::Default()</code>). A zero size or a pixel count that doesn't match logs an error and returns null. Its UUID is random, so to be found by UUID (a saved <code>Image</code> sprite, say) it must be registered with <code>Resources::RegisterAsset</code>, and only resolves in that run.</li>
+</ul>
+<pre class="lang-cpp"><code>auto icon = IO::Resources::Instance().Load&lt;Rendering::Texture&gt;("res://ui/icon.png");
+image-&gt;SetSprite(icon); // UI::Image
+
+std::vector&lt;std::uint8_t&gt; rgba = MakeNoise(64, 64);
+auto noise = Rendering::Texture::Create(64, 64, rgba); // linear, repeat, mipmaps
+</code></pre>
+<p class="src">Source: <code>engine/include/engine/rendering/Texture.hpp</code>; <code>engine/src/rendering/Texture.cpp</code> — <code>Texture::Load</code>, <code>Texture::Create</code>, <code>Texture::CreateFromEncoded</code>, <code>Texture::RegisterLoader</code>; <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::Initialize</code>; tests: <code>TextureCreateTest.*</code>, <code>TextureAssetTest.*</code></p>
+
+<h2 id="texture-settings">Texture import settings <span class="badge">PR #TBD</span></h2>
+<p>A project texture takes its settings from its <code>.meta</code> file's <code>customData</code> (see <a href="resources.html#metadata">.meta files</a>), in a <code>"texture"</code> object. Every key is optional:</p>
+<pre class="lang-json"><code>{"texture": {"srgb": true, "filter": "linear", "wrap": "repeat", "mipmaps": true, "flipY": true}}</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Values</th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>srgb</code></td><td><code>true</code>, <code>false</code></td><td><code>true</code></td><td>Whether the colours are sRGB-encoded. <strong>Recorded only</strong>: nothing reads it yet (<a href="#design-srgb-recorded">why</a>).</td></tr>
+<tr><td><code>filter</code></td><td><code>"linear"</code>, <code>"nearest"</code></td><td><code>"linear"</code></td><td><code>TextureOptions::filter</code>. On the software renderer, bilinear or nearest sampling (<a href="#sampling">below</a>).</td></tr>
+<tr><td><code>wrap</code></td><td><code>"repeat"</code>, <code>"clamp"</code></td><td><code>"repeat"</code></td><td><code>TextureOptions::wrap</code> (<code>Repeat</code> or <code>ClampToEdge</code>). One value for both axes.</td></tr>
+<tr><td><code>mipmaps</code></td><td><code>true</code>, <code>false</code></td><td><code>true</code></td><td><code>TextureOptions::mipmaps</code>: OpenGL generates a mip chain (trilinear with <code>linear</code>). The software renderer has none.</td></tr>
+<tr><td><code>flipY</code></td><td><code>true</code>, <code>false</code></td><td><code>true</code></td><td>Store the rows bottom first, so the image shows upright (<a href="#uv-convention">the UV convention</a>). Turn it off only for data meant to be read top row first.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>filter</code>, <code>wrap</code> and <code>mipmaps</code> map one to one onto <code>TextureOptions</code>, and their defaults are <code>TextureOptions::Default()</code>, what <code>CreateTexture</code> did before options existed. <code>Texture::ParseSettings(customData, defaults)</code> does the parsing exactly as <a href="text.html#font-asset"><code>Font::ParseAtlasSettings</code></a> does: a missing key keeps the default; a key with the wrong type or an unknown value is ignored with a warning (<code>Texture settings: ignoring "filter": "cubic" (expected "linear" or "nearest")</code>); a <code>"texture"</code> member that isn't an object is ignored with one warning; unknown keys are ignored silently. The settings are read when the texture loads, so after editing a <code>.meta</code> the texture must be loaded again (rescan, then <code>Reload</code> or a new run).</p>
+<p class="src">Source: <code>engine/src/rendering/Texture.cpp</code> — <code>Texture::ParseSettings</code>, <code>TextureSettings::ToTextureOptions</code>; tests: <code>TextureSettingsTest.*</code>, <code>TextureAssetTest.LoadsWithTheSettingsFromItsMeta</code>, <code>TextureAssetTest.BadSettingsInTheMetaWarnAndKeepTheDefaults</code></p>
+
+<div class="callout note" id="design-srgb-recorded">
+<p class="callout-title">Design decision: sRGB is recorded, not applied <span class="badge">PR #TBD</span></p>
+<p>Image files are almost always sRGB, and correct lighting would decode them to linear (an <code>SRGB8_ALPHA8</code> texture on OpenGL, a lookup table on the software renderer) and encode the result for display. Neither backend has sRGB textures or an sRGB framebuffer today, and the engine lights in gamma space. Turning sRGB on for textures alone would darken every textured surface, and doing it properly changes every colour the engine draws, UI included. So P1 reads and keeps the setting, defaulting to <code>true</code> to describe typical files, and it changes nothing until the engine-wide linear-lighting option arrives in P4a, which will default to off. Projects can set the flag correctly now and it will take effect then. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision A).</p>
+</div>
+
+<h2 id="uv-convention">The UV convention <span class="badge">PR #TBD</span></h2>
+<p>The engine's texture coordinates are <strong>v-up</strong>: <strong>v = 0 is the first row of pixel data</strong>, and that row is the <strong>bottom</strong> of the picture. u = 0 is the left edge. This is what the existing geometry already assumes:</p>
+<ul>
+<li>the UI <code>Image</code> quad has uv (0, 0) at the bottom-left of its rect (<a href="ui.html#image">Image</a>);</li>
+<li>the <code>CubeRenderer</code>'s bottom vertices have v = 0 and the <code>QuadRenderer</code>'s top-left has v = 1;</li>
+<li>OpenGL samples v = 0 from the first row uploaded.</li>
+</ul>
+<p>Image files store the top row first, so texture assets are decoded with <code>flipY</code> on by default: the stored rows go bottom to top and the image shows upright everywhere above. <code>SoftwareImageGoldenTest.ASpriteFromAnImageFileShowsUpright</code> pins this: a 2 &times; 2 BMP whose top-left pixel is red shows red in the top-left quadrant of the screen. A raw texture given to <code>IRenderer::CreateTexture</code> is uploaded as given, so its first row is v = 0.</p>
+<p>Two exceptions keep their own conventions: the SDF glyph atlas uses y-down uvs internally, because the text code produces and consumes them (<a href="text.html#text-renderer">TextRenderer's mesh</a>); and formats whose UVs are v-down, such as glTF, are converted by their importer with <code>v' = 1 &minus; v</code> (P3), never by the renderer.</p>
+
+<div class="callout note" id="design-uv-flipy">
+<p class="callout-title">Design decision: textures are stored bottom row first <span class="badge">PR #TBD</span></p>
+<p>Something has to flip: image files are top row first, and the engine's existing geometry (the UI quad, the cube, sphere and quad primitives) and OpenGL's upload are v-up. Flipping the images once, at import, changes nothing that exists and costs one row copy per load. The alternative, top row first with v-down UVs everywhere, would mean changing every primitive and the <code>Image</code> quad, and every future importer still has to agree with one or the other. Unity makes the same choice. The flip lives in the importer, not the renderer, so a texture's pixels mean the same thing to every backend, and a format with v-down UVs (glTF) flips its UVs instead. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision 4).</p>
+</div>
+
+<h2 id="gpu-cache">GpuCache: shared GPU resources <span class="badge">PR #TBD</span></h2>
+<p><code>Rendering::GpuCache</code> (<code>engine/include/engine/rendering/GpuCache.hpp</code>, engine-internal) holds one GPU resource per <strong>(renderer, source asset, kind)</strong>, created on first use, shared by every component that asks for it, and destroyed when the last one lets go. Today it holds textures: <code>AcquireTexture(renderer, texture)</code> for <code>Texture</code> assets (uploaded as RGBA8 with the texture's filter, wrap and mipmaps) and <code>AcquireFontAtlas(renderer, font)</code> for fonts' SDF atlases (single channel, <code>TextureOptions::SdfAtlas()</code>). Meshes and materials join it in P2. Users are the UI <a href="ui.html#image-sprite"><code>Image</code></a> (its sprite) and every <code>TextRenderer</code> and <code>UIText</code> (their font's atlas, through <code>TextDrawing::DrawResources</code>), which share one atlas per font and renderer as before.</p>
+<p>An acquire returns a move-only <code>GpuCache::Handle</code>: one user's share. It is false when there is nothing to upload (a null or unloaded asset, an empty atlas) or the renderer couldn't create the resource, and then no entry is made. The rules, the ones the text atlas cache had:</p>
+<ol class="steps">
+<li><strong>Refcounted.</strong> Each handle is one user. <code>Release(true)</code>, or a move assignment over a handle, gives the share up; the last share destroys the resource on its renderer, if that renderer is still alive.</li>
+<li><strong>The asset stays alive.</strong> An entry holds its asset's <code>shared_ptr</code>, so the asset's address, half the key, can't be reused by another asset while the entry exists.</li>
+<li><strong>Renderers are told apart by their lifetime token.</strong> Each entry keeps its renderer's <a href="application.html#renderer-lifetime">lifetime token</a>. An entry whose renderer has been destroyed or shut down is never handed out and its resource is never destroyed (the renderer freed it); the next acquire with that key replaces it.</li>
+<li><strong>A stale handle can't touch a new entry.</strong> A release names the token its handle was acquired with, so a handle from a destroyed renderer never releases, or destroys, the entry that a new renderer at the same address has made since.</li>
+<li><strong>Destructors don't call the renderer.</strong> A handle destroyed without <code>Release</code> gives up its share without calling the renderer, which may be gone or mid-destruction; a resource whose last share went that way stays with the renderer until it shuts down.</li>
+<li><strong>Leaked on purpose.</strong> The cache is never destroyed, so a component that Lua keeps alive until exit can still release its share after function-local statics are gone.</li>
+</ol>
+<p><code>GetEntryCount()</code> and <code>GetUserCount(renderer, source)</code> report the cache's state for tests and diagnostics. The cache is used on the main thread only, like the components that draw.</p>
+<p class="src">Source: <code>engine/include/engine/rendering/GpuCache.hpp</code>; <code>engine/src/rendering/GpuCache.cpp</code>; <code>engine/src/rendering/TextDrawing.cpp</code> — <code>DrawResources::EnsureAtlasTexture</code>; <code>engine/src/ui/Image.cpp</code> — <code>Image::EnsureSpriteTexture</code>; tests: <code>GpuCacheTest.*</code>, <code>ImageSpriteTest.*</code> (<code>tests/engine/rendering/GpuCacheTests.cpp</code>), and unchanged, <code>TextRendererTest.*</code>, <code>UITextTest.*</code>, <code>SoftwareTextGoldenTest.*</code></p>
+
+<div class="callout note" id="design-gpu-cache">
+<p class="callout-title">Design decision: one GPU cache for every shared resource <span class="badge">PR #TBD</span></p>
+<p>Textures, and soon meshes and materials, are CPU assets that many components draw. Uploading one copy per component wastes memory and upload time, and each kind of resource would otherwise need its own copy of the subtle rules for renderers that are destroyed or re-created at the same address. Text already had those rules, privately, for font atlases. <code>GpuCache</code> is that cache generalised: keyed by renderer, source asset and kind, refcounted, guarded by the lifetime token, and leaked for static-destruction order, with the text atlas moved onto it so there is one implementation, tested once. A component keeps only handles, so the lifetime scenarios (a new renderer, one re-created at the same address, release after the renderer is gone) behave the same for every user. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/3">#3</a> (decision B).</p>
+</div>
+
+<h2 id="sampling">Sampling on the software renderer <span class="badge">PR #TBD</span></h2>
+<p>The software renderer's unlit and lit shaders sample a texture through <code>SWTexture::SampleFiltered</code>, following its <code>filter</code>:</p>
+<ul>
+<li><strong>Linear</strong> (the default for texture assets and for <code>CreateTexture</code> without options): <code>SampleBilinear</code>, every channel filtered as OpenGL's <code>GL_LINEAR</code> without mipmaps. Texel centres are at <code>(i + 0.5) / size</code>; the four texels around the sample point are weighted by distance; neighbours outside the texture are clamped or wrapped as <code>wrap</code> says. It shares its footprint code with the text shader's <code>SampleFirstChannelBilinear</code>. Each channel is rounded to 8 bits.</li>
+<li><strong>Nearest</strong>: <code>Sample</code>, picking the texel as <code>GL_NEAREST</code> does: texel <code>i</code> covers <code>i / size</code> to <code>(i + 1) / size</code>, and a clamped u = 1 is the last texel. (It used to scale by <code>size &minus; 1</code>, so a texture two texels wide showed its second texel only at u = 1 exactly.)</li>
+</ul>
+<p>Both read missing channels as OpenGL reads <code>R8</code>/<code>RG8</code>/<code>RGB8</code> textures (green and blue 0, alpha 255), and read a NaN or infinite coordinate as 0. There are no mipmaps on this backend, so distant textures alias. The text shader is unchanged. <code>SoftwareImageGoldenTest.ALinearSpriteIsFilteredIntoAGradient</code> checks a Linear 2 &times; 1 texture draws a gradient between its texel centres and the Nearest one two flat halves.</p>
+<p class="src">Source: <code>renderer/include/renderer/software/SWTexture.hpp</code> — <code>SWTexture::Sample</code>, <code>SampleBilinear</code>, <code>SampleFiltered</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>ShadeUnlitPx</code>, <code>ShadeLitPx</code>; tests: <code>TextureOptionsTest.SoftwareNearestSamplingPicksTexelsAsGLNearestDoes</code>, <code>TextureOptionsTest.SoftwareBilinearRgbaSamplingMatchesGLLinear</code></p>
+
+<h2 id="meshes">Meshes (planned)</h2>
+<p>The CPU <code>Mesh</code> asset with submeshes as index ranges and bounds, the built-in Cube, Sphere and Quad meshes, and the <code>MeshRenderer</code> component come in P2 (<a href="https://github.com/EpicNicks/N2Engine/issues/59">#59</a>). Their GPU meshes will be shared through <a href="#gpu-cache"><code>GpuCache</code></a>.</p>
+
+<h2 id="materials">Materials (planned)</h2>
+<p>The <code>Material</code> asset (base colour and texture, vertex colour, alpha mode and cutoff, double-sided, smoothness) comes in P2; emissive, normal maps, sRGB and PBR in P4 (<a href="https://github.com/EpicNicks/N2Engine/issues/61">#61</a>).</p>
+
+<h2 id="models">Models and glTF import (planned)</h2>
+<p>glTF 2.0 import through cgltf, the <code>Model</code> asset, sub-asset UUIDs, <code>Model::Instantiate</code> and the Blender export workflow come in P3 (<a href="https://github.com/EpicNicks/N2Engine/issues/60">#60</a>); optional FBX and OBJ through ufbx in P5 (<a href="https://github.com/EpicNicks/N2Engine/issues/62">#62</a>). Embedded and external model images will load as <code>Texture</code>s through the same decoder.</p>
+
+<h2 id="conventions">Axes, winding and units (planned)</h2>
+<p>The engine renders right-handed and Y-up, with front faces counter-clockwise and units in metres; objects face +Z and the camera looks down &minus;Z. This section will document how imported models map onto that (P3), alongside <a href="#uv-convention">the UV convention</a> above.</p>
+
+<h2 id="lua">Lua <span class="badge">PR #TBD</span></h2>
+<p>Scripts reach textures through the UI <code>Image</code>: <code>image:SetSprite("res://ui/icon.png")</code> loads the file through <code>Resources</code> (an error, keeping the current sprite, if it doesn't load), <code>image:SetSprite(nil)</code> clears it, and <code>image:GetSprite()</code> returns the path or <code>nil</code>. See <a href="ui.html#lua">UI from Lua</a>. There is no <code>Texture</code> table yet.</p>
+<pre class="lang-lua"><code>local icon = UI.CreateElement("Icon")
+local image = icon:AddComponent("Image")
+image:SetSprite("res://ui/coin.png")
+print(image:GetSprite()) -- res://ui/coin.png
+</code></pre>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> — <code>LoadTextureOrThrow</code>, <code>TexturePathForLua</code>; tests: <code>LuaImageSpriteTest.*</code></p>
+
+<h2 id="tests">Tests</h2>
+<ul>
+<li><code>assetimport_tests</code> (<code>tests/assetimport/</code>) decodes images built in the test: PNGs written by hand for every colour type and 16-bit, and JPEG, TGA, BMP and compressed PNG from the test-only <code>stb_image_write</code>; plus truncation at every byte, corrupt data and oversized headers.</li>
+<li><code>engine_tests</code> covers the asset pipeline in a temporary project (<code>TextureAssetTest</code>), the settings, <code>GpuCache</code> and <code>Image</code> sprites with a counting renderer, Lua, and two headless software-renderer goldens (<code>SoftwareImageGoldenTest</code>).</li>
+</ul>
+<p>See <a href="testing.html#areas">Test suites by area</a>.</p>
+
+<div class="page-footer">
+<span>Describes master through PR #34.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

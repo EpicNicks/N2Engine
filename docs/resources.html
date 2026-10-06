@@ -37,6 +37,7 @@
 <li><a href="audio.html">Audio</a></li>
 <li><a href="text.html">Text &amp; fonts</a></li>
 <li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
 <li><a href="resources.html" aria-current="page">Resources &amp; paths</a></li>
 <li><a href="serialization.html">Serialization</a></li>
 <li><a href="math.html">Math &amp; SIMD</a></li>
@@ -186,11 +187,24 @@ auto script = IO::ResourceLoader::Instance().Load&lt;LuaScript&gt;(IO::ResourceP
   "lastModified": 1767700800,
   "fileSize": 2048
 }</code></pre>
-<p><code>lastModified</code> is the file's write time in Unix seconds. An optional <code>customData</code> object is written only when it is non-empty. For a new file, <code>resourceType</code> is chosen from the extension: <code>.lua</code> gives <code>LuaScript</code>; <code>.wav</code>, <code>.ogg</code>, <code>.mp3</code> and <code>.flac</code> give <code>AudioClip</code>; <code>.png</code> and <code>.jpg</code> give <code>Texture</code>; <code>.ttf</code> and <code>.otf</code> give <code>Font</code> <span class="badge">PR #45</span>; anything else gives <code>Unknown</code>. This check is <strong>case-sensitive</strong>, unlike loader matching: <code>Jump.WAV</code> is scanned and loads (its lower-cased extension has a loader) but its new metadata says <code>Unknown</code>, so <code>GetAssetsByType("AudioClip")</code> misses it.</p>
+<p><code>lastModified</code> is the file's write time in Unix seconds. An optional <code>customData</code> object is written only when it is non-empty; asset types read their import settings from it (<a href="text.html#font-asset">fonts</a>, <a href="meshes.html#texture-settings">textures</a>). For a new file, <code>resourceType</code> is chosen from the extension:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Extensions (any case)</th><th><code>resourceType</code></th></tr></thead>
+<tbody>
+<tr><td><code>.lua</code></td><td><code>LuaScript</code></td></tr>
+<tr><td><code>.wav</code>, <code>.ogg</code>, <code>.mp3</code>, <code>.flac</code></td><td><code>AudioClip</code></td></tr>
+<tr><td><code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.tga</code>, <code>.bmp</code> <span class="badge">PR #TBD</span></td><td><code>Texture</code></td></tr>
+<tr><td><code>.ttf</code>, <code>.otf</code> <span class="badge">PR #45</span></td><td><code>Font</code></td></tr>
+<tr><td>Anything else</td><td><code>Unknown</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The extension is compared <strong>lower-cased</strong>, as loader matching is <span class="badge">PR #TBD</span>: <code>Jump.WAV</code> is an <code>AudioClip</code> and <code>Logo.PNG</code> a <code>Texture</code>. (It used to be case-sensitive, so <code>Jump.WAV</code> was scanned and loaded but its metadata said <code>Unknown</code> and <code>GetAssetsByType("AudioClip")</code> missed it.) An existing <code>.meta</code> that says <code>Unknown</code> is given its type, and saved, the next time its file is scanned.</p>
 <p>For each scanned file:</p>
 <ul>
 <li><strong>No <code>.meta</code></strong>: one is created with the deterministic UUID, then <code>"New asset: ..."</code> is logged.</li>
-<li><strong>Existing <code>.meta</code></strong>: its UUID is checked against the deterministic one. On a mismatch it logs <code>"UUID mismatch ... Regenerating."</code>, rewrites the UUID and saves. If the timestamp or size changed, both are updated, saved, and <code>"Asset modified"</code> is logged. The stored <code>resourcePath</code> is <em>not</em> checked or corrected, and it becomes the key the asset is indexed under (metadata map and UUID-to-path map). A <code>.meta</code> whose <code>resourcePath</code> names a different file (for example one copied along with a renamed asset) indexes the asset under that other path, and <code>Load</code> of it resolves that other path.</li>
+<li><strong>Existing <code>.meta</code></strong>: a <code>resourceType</code> of <code>Unknown</code> is replaced by the type the extension gives, if it gives one <span class="badge">PR #TBD</span>. Its UUID is checked against the deterministic one. On a mismatch it logs <code>"UUID mismatch ... Regenerating."</code>, rewrites the UUID and saves. If the timestamp or size changed, both are updated, saved, and <code>"Asset modified"</code> is logged. The stored <code>resourcePath</code> is <em>not</em> checked or corrected, and it becomes the key the asset is indexed under (metadata map and UUID-to-path map). A <code>.meta</code> whose <code>resourcePath</code> names a different file (for example one copied along with a renamed asset) indexes the asset under that other path, and <code>Load</code> of it resolves that other path.</li>
 <li><strong>Corrupt <code>.meta</code></strong> (unparseable, missing keys, wrong types): logs <code>"Corrupt metadata ...; regenerating"</code> and recreates it as if it were new. Before #23 this threw out of <code>Initialize</code>. Because the UUID comes from the path, references to the asset still resolve.</li>
 </ul>
 <p class="src">Source: <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::CreateOrUpdateMetadata</code>, <code>ResourceLoader::GetMetadataPath</code>; <code>engine/src/io/AssetMetadata.cpp</code> — <code>AssetMetadata::FromFile</code>, <code>AssetMetadata::SaveToFile</code>; tests: <code>ResourceLoaderTest.CorruptMetadataIsRegenerated</code></p>
@@ -257,11 +271,11 @@ auto script = IO::ResourceLoader::Instance().Load&lt;LuaScript&gt;(IO::ResourceP
 <tr><td><code>.wav</code>, <code>.ogg</code>, <code>.mp3</code>, <code>.flac</code></td><td><code>Audio::AudioClip</code></td><td>A static registrar in <code>AudioClip.cpp</code>, calling <code>LoadAudioClipFromFile</code></td><td>Uses dr_wav, stb_vorbis, dr_mp3 and dr_flac. Creates an OpenAL buffer, so the <code>AudioSystem</code> must be initialized first. Before #23 the registrar lived in a file the linker dropped. See <a href="audio.html">Audio</a>.</td></tr>
 <tr><td><code>.lua</code></td><td><code>LuaScript</code></td><td>A static registrar in <code>LuaComponent.cpp</code> (<code>RegisterSimpleLoader&lt;LuaScript&gt;</code>)</td><td><code>LuaScript::Load</code> reads the whole file and fails on an <strong>empty</strong> file, so an empty <code>.lua</code> doesn't load. The engine runs scripts as text only, so a <code>.lua</code> file containing precompiled bytecode loads as an asset but is rejected when it runs <span class="badge">PR #34</span> (<code>EngineLoadingRejectsBinaryChunks</code>). See <a href="scripting-lua.html">Lua scripting</a>.</td></tr>
 <tr><td><code>.ttf</code>, <code>.otf</code> <span class="badge">PR #45</span></td><td><code>Text::Font</code></td><td><code>ResourceLoader::Initialize</code> (and a static registrar in <code>Font.cpp</code>), both calling <code>Font::RegisterLoader</code></td><td>Builds the SDF atlas at load time, with settings from the <code>.meta</code> <code>customData</code>. CPU-only, so it loads headless. See <a href="text.html#font-asset">Text &amp; fonts</a>.</td></tr>
+<tr><td><code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.tga</code>, <code>.bmp</code> <span class="badge">PR #TBD</span></td><td><code>Rendering::Texture</code></td><td><code>ResourceLoader::Initialize</code> (and a static registrar in <code>Texture.cpp</code>), both calling <code>Texture::RegisterLoader</code></td><td>Decodes the image to RGBA8 pixels (the <code>assetimport</code> library, stb_image), with settings from the <code>.meta</code> <code>customData</code>. CPU-only, so it loads headless; renderers upload it on first use. A corrupt or oversized image logs an error and loads as null. See <a href="meshes.html#textures">Meshes, models &amp; textures</a>.</td></tr>
 </tbody>
 </table>
 </div>
-<p><code>.png</code> and <code>.jpg</code> get a <code>Texture</code> resource type in new metadata, but no loader is registered for them, so the scan skips them.</p>
-<p class="src">Source: <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::RegisterLoader</code>, <code>RegisterSimpleLoader</code>, <code>LoaderRegistrar</code>; <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::RegisterLoader</code>; <code>engine/src/audio/AudioClip.cpp</code>, <code>engine/src/audio/AudioClipLoader.cpp</code> — <code>LoadAudioClipFromFile</code>; <code>engine/src/scripting/LuaComponent.cpp</code>; <code>engine/include/engine/scripting/LuaScript.hpp</code>; tests: <code>AudioAssetReferenceTest.AudioFilesLoadByExtension</code></p>
+<p class="src">Source: <code>engine/include/engine/io/Resources.hpp</code> — <code>Resources::RegisterLoader</code>, <code>RegisterSimpleLoader</code>, <code>LoaderRegistrar</code>; <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::RegisterLoader</code>; <code>engine/src/audio/AudioClip.cpp</code>, <code>engine/src/audio/AudioClipLoader.cpp</code> — <code>LoadAudioClipFromFile</code>; <code>engine/src/scripting/LuaComponent.cpp</code>; <code>engine/include/engine/scripting/LuaScript.hpp</code>; <code>engine/src/rendering/Texture.cpp</code> — <code>Texture::RegisterLoader</code>; tests: <code>AudioAssetReferenceTest.AudioFilesLoadByExtension</code>, <code>TextureAssetTest.ImageFilesOfEveryExtensionAndCaseAreScannedAsTextures</code></p>
 
 <h2 id="resources-api">IO::Resources: the lookup API <span class="badge">PR #28</span></h2>
 <div class="table-wrap">
