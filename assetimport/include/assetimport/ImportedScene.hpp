@@ -1,0 +1,136 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+// What a model importer produces (#3 P3): plain CPU structs, with no type from the parsing library (cgltf
+// today, ufbx later), so the engine and the tests use every importer the same way.
+//
+// Conventions, already applied by the importer: right-handed, y up, front faces wound counter-clockwise,
+// metres, and v-up texture coordinates (v = 0 is the first row of an image's pixel data once it is stored
+// bottom row first, as the engine stores textures). Every mesh is a triangle list.
+namespace N2Engine::AssetImport
+{
+    /// One vertex, laid out exactly as the engine's Renderer::Common::Vertex (48 bytes), so the engine copies it
+    /// field by field without conversion
+    struct ImportedVertex
+    {
+        float position[3] = {0.0f, 0.0f, 0.0f};
+        float normal[3] = {0.0f, 0.0f, 1.0f};
+        float texCoord[2] = {0.0f, 0.0f};
+        float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    };
+
+    /// A run of a mesh's indices drawn with one material (one glTF primitive)
+    struct ImportedSubmesh
+    {
+        std::uint32_t firstIndex = 0;
+        /// A multiple of 3 (whole triangles), never 0
+        std::uint32_t indexCount = 0;
+        /// An index into ImportedScene::materials, or -1 for none (the engine's default material)
+        std::int32_t materialIndex = -1;
+    };
+
+    struct ImportedMesh
+    {
+        /// The file's name for it ("" when it has none)
+        std::string name;
+        /// Every primitive's vertices, one after the other
+        std::vector<ImportedVertex> vertices;
+        /// Triangle-list indices into `vertices`, each checked to be in range
+        std::vector<std::uint32_t> indices;
+        /// One per primitive kept (in file order, or grouped by material with mergeSubmeshesByMaterial). Empty
+        /// when the mesh had no triangles at all (points or lines only): the engine makes no mesh for it.
+        std::vector<ImportedSubmesh> submeshes;
+        /// Whether any of its normals were generated (missing in the file, or generateNormals = Always)
+        bool generatedNormals = false;
+    };
+
+    enum class ImportedAlphaMode : std::uint8_t
+    {
+        Opaque,
+        Mask,
+        Blend
+    };
+
+    /**
+     * A material: the fields the engine's Material has. Texture fields are indices into ImportedScene::images,
+     * or -1 for none. The ones marked "stored" have no effect in the engine until #3 P4.
+     */
+    struct ImportedMaterial
+    {
+        std::string name;
+        /// KHR_materials_unlit: drawn unlit
+        bool unlit = false;
+        /// Linear RGBA, multiplied by the base colour texture and the vertex colour
+        float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        std::int32_t baseColorTexture = -1;
+        ImportedAlphaMode alphaMode = ImportedAlphaMode::Opaque;
+        float alphaCutoff = 0.5f;
+        bool doubleSided = false;
+        /// 1 - roughnessFactor (glTF's default roughness of 1 gives 0)
+        float smoothness = 0.0f;
+        /// metallicFactor, stored (glTF's default is 1)
+        float metallic = 1.0f;
+        /// emissiveFactor, stored
+        float emissive[3] = {0.0f, 0.0f, 0.0f};
+        std::int32_t normalTexture = -1;            // stored
+        std::int32_t occlusionTexture = -1;         // stored
+        std::int32_t metallicRoughnessTexture = -1; // stored
+        std::int32_t emissiveTexture = -1;          // stored
+    };
+
+    /// An image a material uses: its encoded file bytes (PNG or JPEG as the file stores it, decoded by the
+    /// engine's texture loader), with the sampling its glTF texture asks for
+    struct ImportedModelImage
+    {
+        std::string name;
+        /// The URI it was read from, percent-decoded ("" for an image in a buffer view or a data: URI)
+        std::string uri;
+        /// image/png, image/jpeg, ... when the file says ("" when it doesn't)
+        std::string mimeType;
+        /// The encoded image. Empty if it couldn't be read (a warning says why); the engine then makes no texture.
+        std::vector<std::uint8_t> bytes;
+        /// The sampler of the first texture using it: nearest magnification, and clamp-to-edge wrapping in s or t
+        bool nearest = false;
+        bool clamp = false;
+        /// Used as colour (base colour or emissive), as opposed to data (normals, occlusion, metallic-roughness)
+        bool colour = false;
+    };
+
+    /**
+     * A node: a name, a local transform and an optional mesh. A node matrix is decomposed into translation,
+     * rotation and scale (a mirroring matrix gives a negative x scale).
+     */
+    struct ImportedNode
+    {
+        std::string name;
+        float translation[3] = {0.0f, 0.0f, 0.0f};
+        /// A unit quaternion, x, y, z, w (glTF's order)
+        float rotation[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        float scale[3] = {1.0f, 1.0f, 1.0f};
+        /// An index into ImportedScene::meshes, or -1
+        std::int32_t meshIndex = -1;
+        /// Indices into ImportedScene::nodes
+        std::vector<std::uint32_t> children;
+    };
+
+    struct ImportedScene
+    {
+        /// Every node in the file, in file order (so index i is the file's node i). Those reachable from
+        /// rootNodes form a tree: each appears in at most one children list.
+        std::vector<ImportedNode> nodes;
+        /// The nodes at the top of the scene (the file's default scene, else its first, else every node without
+        /// a parent), in file order
+        std::vector<std::uint32_t> rootNodes;
+        /// Every mesh in the file, in file order
+        std::vector<ImportedMesh> meshes;
+        /// Every material in the file, in file order; empty when ModelImportSettings::importMaterials is off
+        std::vector<ImportedMaterial> materials;
+        /// Every image in the file, in file order
+        std::vector<ImportedModelImage> images;
+        /// What was ignored or couldn't be read, each said once, for the log ("cameras are ignored", ...)
+        std::vector<std::string> warnings;
+    };
+}
