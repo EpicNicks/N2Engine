@@ -63,7 +63,7 @@ namespace N2Engine::Rendering
             Handle(const Handle &) = delete;
             Handle &operator=(const Handle &) = delete;
 
-            [[nodiscard]] explicit operator bool() const { return _resource != nullptr; }
+            explicit operator bool() const { return _resource != nullptr; }
             [[nodiscard]] ResourceKind GetKind() const { return _kind; }
             /// The texture, for a Texture handle (nullptr otherwise, or when empty)
             [[nodiscard]] Renderer::Common::ITexture *GetTexture() const;
