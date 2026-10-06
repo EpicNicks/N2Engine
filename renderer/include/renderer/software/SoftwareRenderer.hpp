@@ -173,7 +173,9 @@ namespace Renderer::Software
         bool m_wireframe = false;
 
         // Rasterizer internals
-        void ClearBuffers();
+        // Render thread: everything per frame comes in as arguments (the EndFrame snapshot), so the render
+        // thread never writes members the main thread also writes (Clear, UpdateSceneLighting)
+        void ClearBuffers(float r, float g, float b, float a);
         void SetPixel(int x, int y, float depth, uint32_t color);
 
         struct SWFragment
@@ -185,13 +187,10 @@ namespace Renderer::Software
             float r, g, b, a;     // interpolated vertex color
         };
 
-        void RasterizeTriangle(const SWFragment &f0, const SWFragment &f1, const SWFragment &f2, const SWMaterial *mat,
-                               const float *modelMatrix);
         void RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
-                           const SWMaterialSnapshot& material, const Common::RenderState& state);
+                           const SWMaterialSnapshot& material, const Common::RenderState& state,
+                           const Common::SceneLightingData& lighting, const N2Engine::Math::Vector3& cameraPos);
 
-        uint32_t ShadeLit(const SWFragment &frag, const SWMaterial *mat, const float *modelMatrix) const;
-        uint32_t ShadeUnlit(const SWFragment &frag, const SWMaterial *mat) const;
 
         // Math helpers (row-major)
         void Mul4x4(const float *a, const float *b, float *out) const;

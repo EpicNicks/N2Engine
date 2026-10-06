@@ -446,8 +446,9 @@ TEST(SoftwareTextShaderTest, TextWithoutAnAtlasDrawsNothing)
 TEST(SoftwareResourceLifetimeTest, DestroyingWhileAFrameIsInFlightWaitsForIt)
 {
     // EndFrame hands the frame to the render thread, which reads the mesh and samples the texture until
-    // it finishes. Each destroy waits for it first, so the frame comes out whole (and nothing is read
-    // after being freed, which a sanitizer would catch).
+    // it finishes. Each destroy waits for it first, so the frame comes out whole. The frame is made long
+    // (many full-screen draws) so it is very likely still rasterizing when the destroys run; without the
+    // wait, freed memory would be read (a sanitizer would report it even when the pixels survive).
     SoftwareRenderer renderer;
     ASSERT_TRUE(renderer.Initialize(nullptr, Width, Height));
     renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
@@ -461,7 +462,10 @@ TEST(SoftwareResourceLifetimeTest, DestroyingWhileAFrameIsInFlightWaitsForIt)
 
     renderer.BeginFrame();
     renderer.SetViewProjection(Identity, Identity);
-    renderer.DrawMesh(quad, Identity, material);
+    for (int i = 0; i < 200; ++i)
+    {
+        renderer.DrawMesh(quad, Identity, material);
+    }
     renderer.EndFrame();
     // No Present: the frame may still be rasterizing
     renderer.DestroyMesh(quad);

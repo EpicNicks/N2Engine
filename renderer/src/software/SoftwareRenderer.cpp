@@ -17,13 +17,6 @@ using namespace Renderer;
 using namespace Renderer::Common;
 using namespace Renderer::Software;
 
-// ============================================================================
-// NOTE ON THE HEADER
-// SoftwareRenderer::RasterizeTriangle / ShadeUnlit / ShadeLit are no longer
-// defined in this file (the raster pipeline below replaces them with faster
-// file-local machinery). Unreferenced private declarations link fine, so no
-// header change is strictly required — but you can delete those three
-// declarations (and SWFragment, if nothing else uses it) when convenient.
 // SetPixel is kept unchanged in case anything else calls it.
 // ============================================================================
 
@@ -97,9 +90,11 @@ namespace
     // touches the SWMaterial (see SWMaterialSnapshot)
     SWMaterialSnapshot SnapshotMaterial(const SWMaterial& mat)
     {
+        static const std::string albedoKey = "uAlbedo";
+        static const std::string smoothnessKey = "uSmoothness";
         SWMaterialSnapshot s;
-        s.albedo = mat.GetVec4("uAlbedo", {1, 1, 1, 1});
-        s.smoothness = mat.GetFloat("uSmoothness", 0.5f);
+        s.albedo = mat.GetVec4(albedoKey, {1, 1, 1, 1});
+        s.smoothness = mat.GetFloat(smoothnessKey, 0.5f);
 
         if (auto* t = dynamic_cast<const SWTexture*>(mat.GetTexture()); t && t->IsValid())
             s.texture = t;
@@ -665,11 +660,9 @@ void SoftwareRenderer::EndFrame()
         [this, queue = std::move(queue),
          lighting = std::move(lighting), camPos, cr, cg, cb, ca]() mutable
         {
-            m_clearR = cr; m_clearG = cg; m_clearB = cb; m_clearA = ca;
-            ClearBuffers();
-
-            m_lighting  = std::move(lighting);
-            m_cameraPos = camPos;
+            // The snapshot is passed down, never written back to members: the main thread may already be
+            // setting the next frame's clear colour and lighting
+            ClearBuffers(cr, cg, cb, ca);
 
             // Sort depth-writing draws front-to-back so early-Z rejects
             // occluded pixels before they're shaded — overdraw becomes nearly
@@ -695,7 +688,7 @@ void SoftwareRenderer::EndFrame()
             for (const size_t index : OrderDraws(keys))
             {
                 const DrawCommand& cmd = queue[index];
-                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.view, cmd.proj, cmd.material, cmd.state);
+                RasterizeMesh(cmd.mesh, cmd.modelMatrix, cmd.view, cmd.proj, cmd.material, cmd.state, lighting, camPos);
             }
 
             // NOTE: GL upload stays in Present() — GL context lives on the main thread.
@@ -938,12 +931,12 @@ void SoftwareRenderer::ReadFramebuffer(uint8_t *buffer, int width, int height) c
     }
 }
 
-void SoftwareRenderer::ClearBuffers()
+void SoftwareRenderer::ClearBuffers(const float clearR, const float clearG, const float clearB, const float clearA)
 {
-    auto r = (uint8_t)(m_clearR * 255);
-    auto g = (uint8_t)(m_clearG * 255);
-    auto b = (uint8_t)(m_clearB * 255);
-    auto a = (uint8_t)(m_clearA * 255);
+    auto r = (uint8_t)(clearR * 255);
+    auto g = (uint8_t)(clearG * 255);
+    auto b = (uint8_t)(clearB * 255);
+    auto a = (uint8_t)(clearA * 255);
     uint32_t bg = ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | r;
     std::fill(m_colorBuffer.begin(), m_colorBuffer.end(), bg);
     std::fill(m_depthBuffer.begin(), m_depthBuffer.end(), 1.0f);
@@ -964,7 +957,8 @@ void SoftwareRenderer::SetPixel(int x, int y, float depth, uint32_t color)
 }
 
 void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, const float* view, const float* proj,
-                                     const SWMaterialSnapshot& material, const RenderState& state)
+                                     const SWMaterialSnapshot& material, const RenderState& state,
+                                     const SceneLightingData& lighting, const N2Engine::Math::Vector3& cameraPos)
 {
     if (!mesh || !mesh->IsValid()) return;
     if (m_width == 0 || m_height == 0) return;
@@ -983,7 +977,7 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
 
     LitState lit;
     if (rm.lit)
-        PrepareLighting(m_lighting, m_cameraPos, lit);   // normalize lights once, not per pixel
+        PrepareLighting(lighting, cameraPos, lit);   // normalize lights once, not per pixel
 
     const RasterTarget target{ m_colorBuffer.data(), m_depthBuffer.data(),
                                (int)m_width, (int)m_height };
