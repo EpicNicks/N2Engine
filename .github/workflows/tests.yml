@@ -91,8 +91,9 @@ jobs:
           }
 
           try {
-            # The ready line ("N2EditorHost ready port=<port>", then possibly more key=value fields) comes once
-            # the server listens. Only complete lines count; the log is read with sharing, as the host has it open.
+            # The ready line ("N2EditorHost ready " then key=value fields, port among them) comes once the server
+            # listens. Matched with the launcher regex from logging-and-editor.html#ready-line, so port needn't be
+            # first. Only complete lines count; the log is read with sharing, as the host has it open.
             $port = $null
             for ($i = 0; $i -lt 240 -and -not $port; $i++) {
               $text = ""
@@ -103,7 +104,7 @@ jobs:
               $end = $text.LastIndexOf("`n")
               if ($end -ge 0) {
                 foreach ($line in ($text.Substring(0, $end) -split "`r?`n")) {
-                  if ($line -match '^N2EditorHost ready port=(\d+)( |$)') { $port = [int]$Matches[1]; break }
+                  if ($line -match '^N2EditorHost ready (?:.* )?port=(\d+)(?: |$)') { $port = [int]$Matches[1]; break }
                 }
               }
               if (-not $port) {
