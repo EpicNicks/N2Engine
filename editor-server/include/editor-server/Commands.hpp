@@ -164,6 +164,26 @@ namespace N2Engine::Editor::Protocol
         w.WriteBytes(pixels);
     }
 
+    /// GetAudio's response: sampleRate, channels, sampleFormat ("float32" or "int16"), frameCount, droppedFrames,
+    /// then the samples as raw bytes to the end of the payload (like FrameData's pixels): frameCount * channels
+    /// interleaved little-endian samples
+    inline void WriteAudioSamples(BufferWriter &w, uint32_t sampleRate, uint32_t channels,
+                                  const std::string &sampleFormat, uint32_t frameCount, uint32_t droppedFrames,
+                                  std::span<const uint8_t> samples)
+    {
+        BufferWriter header;
+        header.WriteU32(sampleRate);
+        header.WriteU32(channels);
+        header.WriteString(sampleFormat);
+        header.WriteU32(frameCount);
+        header.WriteU32(droppedFrames);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::AudioSamples));
+        w.WriteU32(static_cast<uint32_t>(header.Size() + samples.size()));
+        w.WriteBytes(header.Data());
+        w.WriteBytes(samples);
+    }
+
     inline void WriteSceneData(BufferWriter &w, const std::string &jsonString)
     {
         BufferWriter payload;

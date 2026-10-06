@@ -41,6 +41,7 @@ namespace
         static const std::map<std::string, CommandType> commands = {
             {"RenderFrame", CommandType::RenderFrame},
             {"SetViewportSize", CommandType::SetViewportSize},
+            {"GetAudio", CommandType::GetAudio},
             {"SetCameraPosition", CommandType::SetCameraPosition},
             {"GetCameraPosition", CommandType::GetCameraPosition},
             {"CreateScene", CommandType::CreateScene},
@@ -74,6 +75,7 @@ namespace
             {"SceneData", ResponseType::SceneData},
             {"ScriptData", ResponseType::ScriptData},
             {"EngineHealth", ResponseType::EngineHealth},
+            {"AudioSamples", ResponseType::AudioSamples},
         };
         return responses;
     }

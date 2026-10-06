@@ -7,6 +7,7 @@ namespace N2Engine.Editor.Protocol
     {
         RenderFrame = 0x01,
         SetViewportSize = 0x02,
+        GetAudio = 0x03,
         SetCameraPosition = 0x10,
         GetCameraPosition = 0x12,
         CreateScene = 0x20,
@@ -37,6 +38,7 @@ namespace N2Engine.Editor.Protocol
         SceneData = 0x07,
         ScriptData = 0x08,
         EngineHealth = 0x09,
+        AudioSamples = 0x0A,
     }
 
     public struct vec3
@@ -120,6 +122,16 @@ namespace N2Engine.Editor.Protocol
         public uint Width;
         public uint Height;
         public byte[] Pixels;
+    }
+
+    public struct AudioSamplesResponse
+    {
+        public uint Samplerate;
+        public uint Channels;
+        public string Sampleformat;
+        public uint Framecount;
+        public uint Droppedframes;
+        public byte[] Samples;
     }
 
     public struct CameraPositionResponse

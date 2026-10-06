@@ -133,6 +133,8 @@ int main(int argc, char *argv[])
             window.PollEvents();
 
             server.ProcessCommands(std::chrono::milliseconds(16));
+            // Mixes the headless engine's audio for the time that passed, client or not (see UpdateAudio)
+            server.UpdateAudio();
         }
 
         if (!g_running)

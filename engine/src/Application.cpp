@@ -172,10 +172,23 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
 
     if (options.isHeadless)
     {
-        // Headless audio should be mixed and streamed to the editor client, not played locally
-        Logger::Info("Audio disabled in headless mode (streaming not yet implemented)");
-        audioStatus.state = SubsystemState::Disabled;
-        audioStatus.detail = "Headless mode (streaming not yet implemented)";
+        // Headless audio is mixed into a loopback device (nothing plays locally) and streamed to the editor
+        // client; see AudioSystem::AdvanceStream and the editor protocol's GetAudio
+        auto &audio = Audio::AudioSystem::Instance();
+        if (audio.Initialize(Audio::AudioOutput::Loopback))
+        {
+            const Audio::LoopbackFormat &format = audio.GetLoopbackFormat();
+            audioStatus.state = SubsystemState::Running;
+            audioStatus.detail = std::format("Loopback {} Hz, {} channels, {} (streamed to the editor client)",
+                                             format.sampleRate, format.channels,
+                                             Audio::ToString(format.sampleFormat));
+        }
+        else
+        {
+            Logger::Warn("Headless audio is disabled: no OpenAL loopback device. The engine continues without sound.");
+            audioStatus.state = SubsystemState::Failed;
+            audioStatus.detail = "No OpenAL loopback device (ALC_SOFT_loopback; see log)";
+        }
     }
     else if (Audio::AudioSystem::Instance().Initialize())
     {
@@ -259,7 +272,10 @@ void Application::Run()
             // catch-up fixed steps.
             fixedTimestepAccumulator = 0.0;
         }
-        // After LateUpdate, where listeners and sources push their positions
+        // After LateUpdate, where listeners and sources push their positions. A loopback device (headless) only
+        // mixes when asked, so it is paced here by real elapsed time (no-op with a sound card), then Update
+        // recycles whatever that finished.
+        Audio::AudioSystem::Instance().AdvanceStream(Time::GetUnscaledDeltaTime());
         Audio::AudioSystem::Instance().Update();
         Render();
         if (SceneManager::GetCurSceneIndex() != -1)

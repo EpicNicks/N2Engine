@@ -53,6 +53,12 @@ namespace N2Engine::Editor
         /// Main thread: runs every queued request, waiting up to maxWait for one to arrive.
         size_t ProcessCommands(std::chrono::milliseconds maxWait = std::chrono::milliseconds::zero());
 
+        /// Main thread, once per main-loop iteration: paces the headless engine's loopback audio by the real
+        /// time since the previous call (AudioSystem::AdvanceStream, then Update to recycle finished one-shots).
+        /// Runs whether or not a client is connected, so sounds finish; the stream buffer it fills is bounded,
+        /// and GetAudio drains it. No-op unless audio was initialized with a loopback device.
+        void UpdateAudio();
+
         /// Main thread: runs one request and returns its response frame. Never throws: a failing
         /// request (malformed payload, engine exception) produces an Error response.
         std::vector<uint8_t> ExecuteCommand(uint8_t commandType, const std::vector<uint8_t> &payload);
@@ -81,6 +87,7 @@ namespace N2Engine::Editor
         // Command handlers
         void HandleRenderFrame(int clientSocket);
         void HandleSetViewportSize(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetAudio(int clientSocket);
 
         void HandleSetCameraPosition(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetCameraPosition(int clientSocket);
@@ -130,5 +137,8 @@ namespace N2Engine::Editor
         int _viewportWidth{1280};
         int _viewportHeight{720};
         std::vector<uint8_t> _frameBuffer;
+
+        // UpdateAudio's clock; unset until its first call
+        std::optional<std::chrono::steady_clock::time_point> _lastAudioUpdate;
     };
 }

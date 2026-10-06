@@ -104,6 +104,22 @@ jobs:
             $payload = Read-Exact ([BitConverter]::ToUInt32($header, 1))
             Write-Host "GetEngineHealth: $($payload.Length) bytes, healthy=$($payload[0])"
 
+            # Headless audio runs on an OpenAL loopback device (no sound card needed), so GetAudio answers
+            # with AudioSamples: sampleRate, channels, sampleFormat (string), frameCount, droppedFrames, samples
+            Send-Command 0x03 # GetAudio
+            $header = Read-Exact 5
+            $payload = Read-Exact ([BitConverter]::ToUInt32($header, 1))
+            if ($header[0] -ne 0x0A) {
+              throw ("Expected AudioSamples response (0x0A), got 0x{0:X2}: {1}" -f $header[0], [Text.Encoding]::UTF8.GetString($payload))
+            }
+            $rate = [BitConverter]::ToUInt32($payload, 0)
+            $channels = [BitConverter]::ToUInt32($payload, 4)
+            $formatLength = [BitConverter]::ToUInt32($payload, 8)
+            $format = [Text.Encoding]::ASCII.GetString($payload, 12, $formatLength)
+            $frames = [BitConverter]::ToUInt32($payload, 12 + $formatLength)
+            if ($rate -ne 48000 -or $channels -ne 2) { throw "Unexpected audio format: $rate Hz, $channels channels" }
+            Write-Host "GetAudio: $rate Hz, $channels channels, $format, $frames frames"
+
             Send-Command 0xFF # Shutdown
             $ok = Read-Exact 5
             if ($ok[0] -ne 0x00) { throw ("Expected Ok response (0x00) to Shutdown, got 0x{0:X2}" -f $ok[0]) }

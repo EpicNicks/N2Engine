@@ -108,7 +108,7 @@
 <tr><td><code>projectPath</code></td><td>Not read by <code>Application::Init</code>. The editor host fills it from <code>--project</code>; projects initialise <code>ResourceLoader</code> themselves (see <a href="resources.html">Resources</a>).</td></tr>
 <tr><td><code>physicsBackend</code></td><td>Only <code>PHYSX</code> exists. Used only when the build has PhysX (<code>N2ENGINE_PHYSX_ENABLED</code>).</td></tr>
 <tr><td><code>renderBackend</code></td><td><code>OPENGL</code>, <code>VULKAN</code> or <code>SOFTWARE</code>; chooses the GLFW context hints and the renderer the window creates.</td></tr>
-<tr><td><code>isHeadless</code></td><td>Creates the window invisible and skips audio. See <a href="#headless">Headless mode</a>.</td></tr>
+<tr><td><code>isHeadless</code></td><td>Creates the window invisible and runs audio on a loopback device (no local playback; streamed to the editor client, see <a href="audio.html#loopback">Audio</a>) <span class="badge">PR #56</span>. See <a href="#headless">Headless mode</a>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -179,7 +179,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <tr><td>Renderer</td><td>Running</td><td><code>OpenGL</code>, <code>Vulkan</code> or <code>Software</code></td><td>Normal.</td></tr>
 <tr><td>Physics</td><td>Failed</td><td>"PhysX failed to initialize (see log)"</td><td>No backend: <code>Get3DPhysicsBackend()</code> is null, fixed steps still run <code>FixedUpdate</code>, physics components cope with a null backend.</td></tr>
 <tr><td>Physics</td><td>Disabled</td><td>"Built without PhysX"</td><td>As above; the build has <code>N2ENGINE_USE_PHYSX=OFF</code> or the PhysX binaries could not be downloaded.</td></tr>
-<tr><td>Audio</td><td>Disabled</td><td>"Headless mode (streaming not yet implemented)"</td><td><code>AudioSystem</code> stays uninitialised; its <code>Update</code> is a no-op.</td></tr>
+<tr><td>Audio (headless)</td><td>Running (<code>Failed</code> without <code>ALC_SOFT_loopback</code>) <span class="badge">PR #56</span></td><td>"Loopback 48000 Hz, 2 channels, float32 (streamed to the editor client)"</td><td><code>AudioSystem</code> runs on an OpenAL loopback device; <code>Run</code> paces it with <code>AdvanceStream</code>, the editor host with <code>EditorServer::UpdateAudio</code>. See <a href="audio.html#loopback">Audio: loopback output</a>.</td></tr>
 <tr><td>Audio</td><td>Failed</td><td>"Could not open an audio device (see log)"</td><td>Game continues without sound.</td></tr>
 <tr><td>Scripting</td><td>Failed</td><td>"Lua bindings failed to register (see log)"</td><td>Lua components and scripts cannot be relied on.</td></tr>
 </tbody>

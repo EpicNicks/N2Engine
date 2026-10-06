@@ -8,6 +8,7 @@ namespace N2Engine::Editor
     {
         RenderFrame = 0x01,
         SetViewportSize = 0x02,
+        GetAudio = 0x03,
         SetCameraPosition = 0x10,
         GetCameraPosition = 0x12,
         CreateScene = 0x20,
@@ -37,7 +38,8 @@ namespace N2Engine::Editor
         EntityCreated = 0x06,
         SceneData = 0x07,
         ScriptData = 0x08,
-        EngineHealth = 0x09
+        EngineHealth = 0x09,
+        AudioSamples = 0x0A
     };
 
 #pragma pack(push, 1)
