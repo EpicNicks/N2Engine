@@ -74,6 +74,7 @@
 <li><a href="#image">Image</a></li>
 <li><a href="#text">Text (UIText)</a></li>
 <li><a href="#pointer">Pointer input</a></li>
+<li><a href="#button">Button</a></li>
 <li><a href="#lua">Lua API</a></li>
 <li><a href="#serialization">Serialization</a></li>
 <li><a href="#not-yet">Not yet</a></li>
@@ -88,14 +89,15 @@
 <tbody>
 <tr><td><code>UI::Canvas</code></td><td>The root of a UI tree. Has a <code>sortOrder</code>; the render mode is always <code>ScreenSpaceOverlay</code> for now. One per object.</td></tr>
 <tr><td><code>UI::RectTransform</code></td><td>Anchors, pivot, anchored position and size delta; the element's rect is resolved from its parent's rect. One per object (<code>AddComponent</code> returns the existing one).</td></tr>
-<tr><td><code>UI::UIGraphic</code></td><td>Base of everything the UI pass draws: a colour, a <code>raycastTarget</code> flag, and <code>RenderUI(renderer, rect, state)</code>. It is not an <code>IRenderable</code>, so the scene pass never draws it.</td></tr>
+<tr><td><code>UI::UIGraphic</code></td><td>Base of everything the UI pass draws: a colour, a <code>raycastTarget</code> flag, a tint (<span class="badge">PR #TBD</span>, below), and <code>RenderUI(renderer, rect, state)</code>. It is not an <code>IRenderable</code>, so the scene pass never draws it.</td></tr>
 <tr><td><code>UI::Image</code></td><td>A <code>UIGraphic</code> that fills its rect with its colour, optionally multiplied by a texture.</td></tr>
 <tr><td><code>UI::UIText</code> <span class="badge">PR #53</span></td><td>A <code>UIGraphic</code> that draws text inside its rect with an SDF font (<a href="#text">Text</a>).</td></tr>
+<tr><td><code>UI::Button</code> <span class="badge">PR #TBD</span></td><td>Makes its object clickable: tints a target graphic for the pointer's state and invokes an <code>OnClick</code> event (<a href="#button">Button</a>).</td></tr>
 <tr><td><code>UI::UISystem</code></td><td>Static functions: layout, the UI pass, the hit test, and the helpers below.</td></tr>
 </tbody>
 </table>
 </div>
-<p><code>UISystem::CreateCanvas(name)</code> returns a new object on the UI layer (<a href="physics.html#layers">layer 5</a>) with a <code>Canvas</code>. <code>UISystem::CreateElement(name)</code> returns one on the UI layer with a <code>RectTransform</code>. <code>UISystem::CreateText(name, text)</code> <span class="badge">PR #53</span> is <code>CreateElement</code> plus a <code>UIText</code> showing <code>text</code>. Adding the components by hand works too: the components never change an object's layer, because a scene's saved layer is read before its components are created. The UI ignores layers. The hit test doesn't filter by layer, and the world pick's mask doesn't affect UI.</p>
+<p><code>UISystem::CreateCanvas(name)</code> returns a new object on the UI layer (<a href="physics.html#layers">layer 5</a>) with a <code>Canvas</code>. <code>UISystem::CreateElement(name)</code> returns one on the UI layer with a <code>RectTransform</code>. <code>UISystem::CreateText(name, text)</code> <span class="badge">PR #53</span> is <code>CreateElement</code> plus a <code>UIText</code> showing <code>text</code>. <code>UISystem::CreateButton(name, label)</code> <span class="badge">PR #TBD</span> is a ready-made <a href="#button">button</a>. Adding the components by hand works too: the components never change an object's layer, because a scene's saved layer is read before its components are created. The UI ignores layers. The hit test doesn't filter by layer, and the world pick's mask doesn't affect UI.</p>
 <pre class="lang-cpp"><code>auto canvas = UI::UISystem::CreateCanvas("HUD");
 scene.AddRootGameObject(canvas);
 
@@ -194,7 +196,8 @@ rect     = (pivotPos - pivot * size, size)
 <h2 id="image">Image <span class="badge">PR #50</span></h2>
 <p><code>Image</code> draws its rect in its colour (<code>SetColor</code>; white by default) with the renderer's standard unlit shader. It uses one quad per <code>Image</code>: the unit square (0, 0)–(1, 1), wound counter-clockwise in canvas space, with uv (0, 0) at the bottom-left. Its model matrix (<code>Image::ModelMatrixFor(rect)</code>) scales the square to the rect and moves it there. The quad and material are created with the renderer the first time the <code>Image</code> draws, and released in <code>OnDestroy</code>. If a different renderer draws it later, or a new renderer at the old one's address (the window was re-created), it creates them again. It destroys the old ones only if their renderer still exists, which it knows from the renderer's <a href="application.html#renderer-lifetime">lifetime token</a>.</p>
 <p><code>SetTexture(ITexture*)</code> multiplies the colour by a texture made with <code>IRenderer::CreateTexture</code>. The first row of the pixel data (v = 0) is drawn at the <em>bottom</em> of the rect, so image data stored top row first, as most image files are, must be flipped before <code>CreateTexture</code> to show upright. The <code>Image</code> neither owns nor saves the texture. Whoever made it keeps it alive while the <code>Image</code> uses it, and calls <code>SetTexture(nullptr)</code> before destroying it. There is no texture asset yet, so a saved scene doesn't keep the texture.</p>
-<p class="src">Source: <code>engine/src/ui/Image.cpp</code> — <code>Image::RenderUI</code>, <code>Image::EnsureResources</code>; tests: <code>UIPassTest.ImageCreatesItsQuadOnceAndReleasesItOnDestroy</code></p>
+<p>Every graphic also has a <em>tint</em> <span class="badge">PR #TBD</span> (<code>UIGraphic::GetTint</code>/<code>SetTint</code>, white by default): <code>Image</code> and <code>UIText</code> draw with <code>GetDrawColor()</code>, their colour multiplied by the tint channel by channel, alpha included. The tint is what a <a href="#button">Button</a> sets; it is not saved, and it never changes the colour itself.</p>
+<p class="src">Source: <code>engine/src/ui/Image.cpp</code> — <code>Image::RenderUI</code>, <code>Image::EnsureResources</code>; <code>engine/src/ui/UIGraphic.cpp</code> — <code>UIGraphic::GetDrawColor</code>; tests: <code>UIPassTest.ImageCreatesItsQuadOnceAndReleasesItOnDestroy</code></p>
 
 <h2 id="text">Text (UIText) <span class="badge">PR #53</span></h2>
 <p><code>UIText</code> draws a block of UTF-8 text inside its object's rect, with the same SDF fonts, layout and shader as the world-space <a href="text.html#text-renderer"><code>TextRenderer</code></a>. Layout and mesh building come from the text work (<a href="https://github.com/EpicNicks/N2Engine/issues/1">#1</a>); the canvas, rect and UI pass from this page (<a href="https://github.com/EpicNicks/N2Engine/issues/42">#42</a>).</p>
@@ -295,8 +298,103 @@ canvas-&gt;AddChild(label, false);
 <p>UI elements are GameObjects with <code>Canvas</code>, <code>RectTransform</code> and graphic components, as in Unity's uGUI, not a separate UI tree or an immediate-mode API. That way they get serialization, the editor's entity list, Lua <code>AddComponent</code> and the lifecycle for free. They have no <code>Positionable</code>, so layout never touches 3D transforms or physics. The layout uses Unity's anchor model and Unity's screen space (bottom-left origin, y up), so values from Unity layouts carry over. Graphics are not <code>IRenderable</code>s and the render queues have no Overlay queue. Instead, the UI draws in its own pass after the scene, with depth off (later draws cover earlier ones in hierarchy order), culling off and blending on, which keeps the scene's queues simple. The UI is hit-tested with plain rect tests against the same draw order, topmost first, and gives the pointer to the existing <code>OnMouse*</code> callbacks through the dispatcher's UI hook. One dispatcher and one set of callbacks therefore serve both UI and world objects, and a UI hit keeps the click from reaching the world.</p>
 </div>
 
+<h2 id="button">Button <span class="badge">PR #TBD</span></h2>
+<p><code>UI::Button</code> makes its object clickable, as Unity's <code>Selectable</code> and <code>Button</code> do together. Put it on an object with a raycast-target graphic, usually an <code>Image</code>: the graphic is what the <a href="#pointer">UI hit test</a> finds, and the dispatcher then sends the object the <code>OnMouse*</code> callbacks that drive the button. A <code>UIText</code> label is not a raycast target, so a caption on the button lets the pointer through to its <code>Image</code>. A <code>Button</code> on an object with no raycast-target graphic never receives the pointer (it can still be clicked from code with <code>Click()</code>). Closes the Button part of <a href="https://github.com/EpicNicks/N2Engine/issues/42">#42</a>.</p>
+<pre class="lang-cpp"><code>auto play = UI::UISystem::CreateButton("Play", "Start game");  // Image + Button + "Label" child
+canvas-&gt;AddChild(play, false);
+
+auto *button = play-&gt;GetComponent&lt;UI::Button&gt;();
+button-&gt;SetHighlightedColor(Common::Color{0.9f, 0.9f, 1.0f, 1.0f});
+const UI::Button::ListenerId id = button-&gt;AddOnClick([] { SceneManager::LoadScene("Level1"); });
+// later: button-&gt;RemoveOnClick(id);
+</code></pre>
+<p><code>UISystem::CreateButton(name, label)</code> returns an element sized 160 x 40 (centred in its parent, as <code>CreateElement</code> does) with a white <code>Image</code>, a <code>Button</code>, and a child named <code>"Label"</code>: a <code>UIText</code> showing <code>label</code>, stretched over the button, centred both ways, 20 px, unwrapped and dark grey. Like the other helpers it takes no parent: add the result under a canvas or element.</p>
+
+<h3 id="button-states">States and tint</h3>
+<p>The state is worked out from what the pointer did, in this order:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>State</th><th>When</th><th>Tint (times <code>colorMultiplier</code>)</th><th>Default colour</th></tr></thead>
+<tbody>
+<tr><td><code>Disabled</code></td><td><code>interactable</code> is off</td><td><code>disabledColor</code></td><td>(200, 200, 200, 128) / 255</td></tr>
+<tr><td><code>Pressed</code></td><td>The left button went down on it (<code>OnMouseDown</code>) and the pointer is over it</td><td><code>pressedColor</code></td><td>(200, 200, 200, 255) / 255</td></tr>
+<tr><td><code>Highlighted</code></td><td>The pointer is over it (<code>OnMouseEnter</code> until <code>OnMouseExit</code>)</td><td><code>highlightedColor</code></td><td>(245, 245, 245, 255) / 255</td></tr>
+<tr><td><code>Normal</code></td><td>Otherwise, including pressed but dragged off it</td><td><code>normalColor</code></td><td>white</td></tr>
+</tbody>
+</table>
+</div>
+<p>The defaults are Unity's <code>ColorBlock</code>; <code>colorMultiplier</code> is 1. So: Enter highlights, Down presses, Exit returns to normal (a press dragged off shows normal, and pressed again when dragged back on), and Up returns to highlighted if the pointer is over it, otherwise normal. <code>GetState()</code> returns the state and <code>GetCurrentTint()</code> the tint applied now.</p>
+<p>The tint goes to the <em>target graphic</em> through <code>UIGraphic::SetTint</code>, so it is drawn as the graphic's own colour times the state's colour times the multiplier (<code>GetDrawColor()</code>). The graphic's colour is never written: in the normal state (white) the graphic looks exactly as it was set, and changing its colour while it is tinted keeps the tint on top of the new colour.</p>
+<ul>
+<li><strong>Target graphic.</strong> By default, the first live <code>UIGraphic</code> on the button's own object, looked up each time (normally the <code>Image</code>). <code>SetTargetGraphic(graphic)</code> picks another, on any object; <code>nullptr</code> goes back to the default. An explicit target is held by its component lifetime token, never by a bare pointer: once it is destroyed, <code>GetTargetGraphic()</code> returns <code>nullptr</code> and nothing is tinted (it doesn't fall back to the default). A graphic that stops being the target gets a white tint back, and so does the last one tinted when the button is destroyed.</li>
+<li><strong>Fading.</strong> <code>fadeDuration</code> (default 0.1 s, Unity's) moves the tint from where it is to the new state's tint over that many seconds of <em>unscaled</em> time, in <code>OnUpdate</code> (<code>Time::GetUnscaledDeltaTime()</code>), so a paused game (<code>timeScale</code> 0) still animates its menu. 0 or less changes the tint at once. <code>UpdateFade(seconds)</code> advances a fade by hand (tests use it as a fixed time step); <code>IsFading()</code> tells whether one is under way. Changing a colour, enabling or disabling the component, and attaching it to a scene apply the tint at once.</li>
+<li><strong><code>interactable</code></strong> (<code>IsInteractable</code>/<code>SetInteractable</code>) off shows <code>disabledColor</code> and makes clicks do nothing. The hover and press are still followed, so turning it back on while the pointer is over the button shows <code>Highlighted</code> straight away.</li>
+</ul>
+
+<h3 id="button-click">OnClick</h3>
+<p><code>OnClick</code> fires on <code>OnMouseUpAsButton</code>: the left button was pressed on the object and released over it (see <a href="input.html#picking">Picking</a>). A press dragged off and back on before release is one click; a release elsewhere is none, and so is a press that started elsewhere and was released over the button. It fires only if the button is interactable, the component is enabled on an object active in the hierarchy, and the component saw the press itself. <code>Click()</code> invokes it from code with the same interactable and enabled checks and returns whether it did (Unity's <code>Press</code>).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>C++</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code>ListenerId AddOnClick(std::function&lt;void()&gt;)</code></td><td>Adds a listener and returns its id. Added during a click, it is first called on the next click.</td></tr>
+<tr><td><code>RemoveOnClick(id)</code></td><td>Removes one. Safe during a click, from any listener, itself included: it isn't called again.</td></tr>
+<tr><td><code>ClearOnClick()</code></td><td>Removes them all; during a click, the rest of that click calls none of them</td></tr>
+<tr><td><code>GetOnClickListenerCount()</code></td><td>How many there are</td></tr>
+</tbody>
+</table>
+</div>
+<p>The listeners live in a <code>Base::EventHandler&lt;&gt;</code>, the engine's event type, which gained <code>Clear()</code>. Each listener is wrapped so that one that throws is logged with <code>Logger::Error</code> and the others still run. A listener may destroy the button, even with <code>RemoveComponent</code>, which frees it at once: the event is shared, so it outlives the button for the rest of the call, the destroy clears it so no later listener runs, and the button touches nothing of itself afterwards.</p>
+
+<h3 id="button-disabled">Disabled components and deactivated objects</h3>
+<p>The dispatcher sends <code>OnMouse*</code> to every component of an active object, disabled ones included. A disabled <code>Button</code> ignores them, as a disabled Unity <code>Selectable</code> gets no pointer events: no state changes and no clicks. Disabling the component (<code>SetActive(false)</code>, through <code>OnActiveFlagChanged</code>) or deactivating its object (<code>OnDisable</code>) forgets the hover and the press and puts the tint straight back to the resting state, so a button disabled while pressed or hovered doesn't stay tinted. The dispatcher sends a deactivated object no <code>OnMouseExit</code> or <code>OnMouseUp</code>, which is why the button must forget them itself. Once enabled again, the pointer has to come onto it again to highlight it, and a press it forgot doesn't make a click when released.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Situation</th><th>What happens</th><th>Test</th></tr></thead>
+<tbody>
+<tr><td>Hover, press, release over it</td><td>Highlighted, Pressed, one click, Highlighted</td><td><code>ButtonTest.HoverHighlightsPressTintsAndReleaseOverItClicksOnce</code></td></tr>
+<tr><td>Released off it</td><td>Normal while dragged off; no click</td><td><code>ButtonTest.ReleaseOutsideFiresNoClick</code></td></tr>
+<tr><td>Dragged off and back on, then released</td><td>One click</td><td><code>ButtonTest.DraggingOffAndBackOnBeforeReleaseClicksOnce</code></td></tr>
+<tr><td>Not interactable</td><td>Disabled tint, no clicks; Highlighted at once when turned back on over it</td><td><code>ButtonTest.NonInteractableShowsDisabledAndIgnoresClicks</code></td></tr>
+<tr><td>Component disabled</td><td>Nothing changes and nothing clicks</td><td><code>ButtonTest.DisabledComponentDoesNothing</code>, <code>ButtonTest.DisablingWhilePressedForgetsThePress</code></td></tr>
+<tr><td>Object deactivated while hovered</td><td>Normal; a new Enter is needed</td><td><code>ButtonTest.DeactivatingTheObjectWhileHoveredForgetsTheHover</code></td></tr>
+<tr><td>Target graphic destroyed</td><td>No tint, no crash; clicks still work</td><td><code>ButtonTest.DestroyedTargetGraphicDoesNotCrash</code></td></tr>
+<tr><td>A listener throws, or destroys the button</td><td>Logged, the others run; no later listener runs after the destroy</td><td><code>ButtonTest.AThrowingListenerIsLoggedAndTheOthersRun</code>, <code>ButtonTest.AListenerMayDestroyTheButton</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="button-lua">From Lua</h3>
+<pre class="lang-lua"><code>local play = UI.CreateButton("Play", "Start game")
+canvas:AddChild(play)
+local button = play:GetComponent("Button")
+local id = button:AddOnClick(function()
+    SceneManager.LoadScene(1)
+end)
+button:SetInteractable(false)       -- greyed out until the save loads
+</code></pre>
+<p><code>AddOnClick(fn)</code> returns an integer id for <code>RemoveOnClick(id)</code>; <code>ClearOnClick()</code> removes them all. The function is wrapped like the engine's other script callbacks (<code>MakeScriptCallback</code>, as <code>InputAction:Subscribe</code> does): an error in it is logged (<code>Button.OnClick callback error: ...</code>) and the other listeners still run; if a component script added it, it is skipped once that component is destroyed. The Lua state lives for the whole process, so a function held by a button never outlives it, and a button's listeners are released when the button is destroyed. A listener that captures an <em>owning</em> handle to the button's own object (the one <code>UI.CreateButton</code> returned, before the object joins a scene or parent) keeps it alive through the Lua registry, the same caveat as for any Lua-owned object; capture <code>self.gameObject</code> or a component handle instead, which don't own.</p>
+
+<div class="callout note" id="design-button-tint">
+<p class="callout-title">Design decision: a tint multiplied in at draw time, not a replaced colour</p>
+<p>Unity's <code>ColorTint</code> transition multiplies the state's colour into the graphic's <code>CanvasRenderer</code> colour, leaving <code>Graphic.color</code> alone. The engine has no canvas renderer, so the tint is a separate, unsaved field on <code>UIGraphic</code> that the graphics multiply into their colour when they draw. Replacing the colour instead (or multiplying it in place) would lose the graphic's own colour: a red button would turn grey and stay grey, a colour set by a script while the button was pressed would be overwritten on release, and a scene saved mid-hover would save the tinted colour. With a separate tint, white means "as set", the colour is always what the user set, and any graphic, <code>Image</code> or <code>UIText</code>, can be a target.</p>
+</div>
+<div class="callout note" id="design-button-event">
+<p class="callout-title">Design decision: OnClick is an EventHandler driven by OnMouseUpAsButton</p>
+<p>The button adds no input path of its own: the dispatcher's existing <code>OnMouse*</code> callbacks and their Unity capture rules (Down captures, UpAsButton only when released over the same object) already are a button's behaviour, for UI and world objects alike. <code>OnClick</code> reuses <code>Base::EventHandler</code>, which already allows adding and removing during an invoke and which the Lua bindings already wrap. The button adds what a UI event needs on top: a per-listener guard against exceptions, an event that survives the button being destroyed by one of its own listeners, and <code>Clear()</code> on destroy so listeners (and the script functions they hold) go with the button.</p>
+</div>
+<div class="callout note" id="design-button-listeners">
+<p class="callout-title">Design decision: listeners are not serialized</p>
+<p>Unity's persistent listeners save an object, a method name and an argument, and call the method by reflection. The engine has no reflection for that, and C++ lambdas and Lua functions can't be saved. So a scene saves a button's colours, <code>colorMultiplier</code>, <code>fadeDuration</code> and <code>interactable</code>, but not its listeners: the code or script that builds or loads the scene adds them, typically in a script's <code>OnAttach</code>. The explicit target graphic isn't saved either; a loaded button tints the first graphic on its object.</p>
+</div>
+<div class="callout note" id="design-button-raycast">
+<p class="callout-title">Design decision: the button needs a raycast target on its own object</p>
+<p>The dispatcher sends the <code>OnMouse*</code> callbacks to the object whose graphic was hit, not to its parents, so the button has to be on that object. <code>Image</code> is a raycast target by default and <code>UIText</code> isn't, so the usual button (an <code>Image</code> with a label child) works as is: the label lets the pointer through to the <code>Image</code>. A child that <em>is</em> a raycast target (an icon <code>Image</code> on the button, say) takes the pointer away from the button where it covers it; turn its <code>raycastTarget</code> off. Bubbling events up to a parent, as Unity's event system does, may come later.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/ui/Button.hpp</code>; <code>engine/src/ui/Button.cpp</code>; <code>engine/src/ui/UISystem.cpp</code> — <code>UISystem::CreateButton</code>; <code>engine/include/engine/base/EventHandler.hpp</code> — <code>EventHandler::Clear</code>; tests: <code>ButtonTest.*</code>, <code>ButtonHelperTest.*</code> (<code>tests/engine/ui/ButtonTests.cpp</code>), <code>SoftwareUIGoldenTest.APressedButtonDrawsItsImageWithThePressedTint</code>, <code>LuaUITest.ConfiguresAButton</code>, <code>LuaUITest.ButtonOnClickListeners</code></p>
+
 <h2 id="lua">Lua API <span class="badge">PR #50</span></h2>
-<p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code>, <code>"Image"</code> and <code>"UIText"</code>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
+<p>Scripts add and get the components by name (<code>go:AddComponent("Image")</code>; the names are <code>"RectTransform"</code>, <code>"Canvas"</code>, <code>"Image"</code>, <code>"UIText"</code> and <code>"Button"</code> <span class="badge">PR #TBD</span>) and get checked handles, as for every component (see <a href="scripting-lua.html#lifetime-handles">handles</a>).</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Lua</th><th>Does</th></tr></thead>
@@ -310,11 +408,16 @@ canvas-&gt;AddChild(label, false);
 <tr><td><code>UIText:Get/SetText</code>, <code>Get/SetColor</code>, <code>Get/SetRaycastTarget</code>, <code>Get/SetFontSize</code>, <code>Get/SetWrap</code>, <code>Get/SetLineSpacing</code>, <code>Get/SetLetterSpacing</code> <span class="badge">PR #53</span></td><td>As in C++</td></tr>
 <tr><td><code>UIText:SetAlignment(h, v)</code>, <code>UIText:GetAlignment()</code> <span class="badge">PR #53</span></td><td>By name: <code>"Left"</code>, <code>"Center"</code>, <code>"Right"</code> and <code>"Top"</code>, <code>"Middle"</code>, <code>"Bottom"</code>, <code>"Baseline"</code>, as for <code>TextRenderer</code>. An unknown name raises an error and changes nothing.</td></tr>
 <tr><td><code>UIText:SetFont(path | nil)</code> <span class="badge">PR #53</span></td><td>A font file such as <code>"res://fonts/Title.ttf"</code>; <code>nil</code> goes back to the default font. A file that doesn't load raises an error and keeps the current font.</td></tr>
+<tr><td><code>UI.CreateButton([name[, label]])</code> <span class="badge">PR #TBD</span></td><td><code>UISystem::CreateButton</code>: an <code>Image</code>, a <code>Button</code> and a <code>"Label"</code> child (both default to <code>"Button"</code>)</td></tr>
+<tr><td><code>Button:IsInteractable()</code>, <code>SetInteractable(b)</code>; <code>Get/SetNormalColor</code>, <code>HighlightedColor</code>, <code>PressedColor</code>, <code>DisabledColor</code>; <code>Get/SetColorMultiplier</code>, <code>Get/SetFadeDuration</code>; <code>GetCurrentTint()</code> <span class="badge">PR #TBD</span></td><td>As in C++</td></tr>
+<tr><td><code>Button:GetState()</code> <span class="badge">PR #TBD</span></td><td><code>"Normal"</code>, <code>"Highlighted"</code>, <code>"Pressed"</code> or <code>"Disabled"</code></td></tr>
+<tr><td><code>Button:GetTargetGraphic()</code>, <code>SetTargetGraphic(graphic | nil)</code> <span class="badge">PR #TBD</span></td><td>An <code>Image</code> or <code>UIText</code> handle; <code>nil</code> goes back to the default. Anything else raises an error and changes nothing.</td></tr>
+<tr><td><code>Button:AddOnClick(fn)</code>, <code>RemoveOnClick(id)</code>, <code>ClearOnClick()</code>, <code>GetOnClickListenerCount()</code>, <code>Click()</code> <span class="badge">PR #TBD</span></td><td>As in C++; errors in <code>fn</code> are logged (<a href="#button-lua">From Lua</a>)</td></tr>
 <tr><td><code>UIText:GetBounds()</code> <span class="badge">PR #53</span></td><td>The laid-out block in canvas space, in the rect of the last layout: <code>minX, minY, maxX, maxY</code> (all 0 for empty text). Before the first UI pass or hit test that rect is empty, so the bounds are those of the unwrapped text placed at (0, 0)</td></tr>
 </tbody>
 </table>
 </div>
-<p>A script on a UI element gets clicks by defining <code>OnMouseDown</code>, <code>OnMouseUpAsButton</code> and the rest, as on a world object.</p>
+<p>A script on a UI element gets clicks by defining <code>OnMouseDown</code>, <code>OnMouseUpAsButton</code> and the rest, as on a world object, or, for a button, by adding a listener with <code>Button:AddOnClick</code> <span class="badge">PR #TBD</span>.</p>
 <pre class="lang-lua"><code>local canvas = UI.CreateCanvas("Menu")
 SceneManager.GetCurrentScene():AddRootGameObject(canvas)
 
@@ -333,22 +436,23 @@ local text = title:GetComponent("UIText")
 text:SetFontSize(48)
 text:SetAlignment("Center", "Middle")
 </code></pre>
-<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code> — <code>BindUI</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>; <code>engine-api.lua</code>; tests: <code>LuaUITest.BuildsAndLaysOutAnElement</code>, <code>LuaUITest.CreatesAndConfiguresText</code>, <code>LuaSceneTest.EveryScriptableComponentCanBeAdded</code></p>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaUIBindings.cpp</code> — <code>BindUI</code>; <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>; <code>engine-api.lua</code>; tests: <code>LuaUITest.BuildsAndLaysOutAnElement</code>, <code>LuaUITest.CreatesAndConfiguresText</code>, <code>LuaUITest.ConfiguresAButton</code>, <code>LuaUITest.ButtonOnClickListeners</code>, <code>LuaSceneTest.EveryScriptableComponentCanBeAdded</code></p>
 
 <h2 id="serialization">Serialization</h2>
-<p><code>Canvas</code>, <code>RectTransform</code>, <code>Image</code> and <code>UIText</code> are built-in components, registered under those names. They save their fields like any <code>SerializableComponent</code>:</p>
+<p><code>Canvas</code>, <code>RectTransform</code>, <code>Image</code>, <code>UIText</code> and <code>Button</code> are built-in components, registered under those names. They save their fields like any <code>SerializableComponent</code>:</p>
 <ul>
 <li><code>Canvas</code> saves <code>sortOrder</code>.</li>
 <li><code>RectTransform</code> saves <code>anchorMin</code>, <code>anchorMax</code>, <code>pivot</code>, <code>anchoredPosition</code> and <code>sizeDelta</code>, each as <code>{"x", "y"}</code>.</li>
 <li><code>Image</code> saves <code>color</code> and <code>raycastTarget</code>.</li>
 <li><code>UIText</code> <span class="badge">PR #53</span> saves <code>color</code>, <code>raycastTarget</code>, <code>text</code>, <code>font</code> (the font asset's UUID, or <code>null</code> for the default font), <code>fontSize</code>, <code>horizontalAlign</code> and <code>verticalAlign</code> (by name, such as <code>"Center"</code>, as <code>TextRenderer</code> does), <code>wrap</code>, <code>lineSpacing</code> and <code>letterSpacing</code>.</li>
+<li><code>Button</code> <span class="badge">PR #TBD</span> saves <code>interactable</code>, <code>normalColor</code>, <code>highlightedColor</code>, <code>pressedColor</code>, <code>disabledColor</code>, <code>colorMultiplier</code> and <code>fadeDuration</code>. Its <code>OnClick</code> listeners and an explicitly set target graphic are not saved (<a href="#design-button-listeners">why</a>); a loaded button tints the first graphic on its object, and shows its saved state's tint when it attaches to the scene.</li>
 </ul>
-<p>A missing field keeps its default (for <code>UIText</code>, <code>raycastTarget</code> stays off). The resolved rect, the texture and the text's layout and mesh are not saved.</p>
-<p class="src">Source: <code>engine/src/serialization/BuiltinComponents.cpp</code>; <code>engine/include/engine/serialization/MathSerialization.hpp</code> (<code>Vector2</code>); <code>engine/include/engine/text/TextJson.hpp</code> (alignment names); tests: <code>RectTransformLayoutTest.SerializationRoundTrip</code>, <code>UITextTest.SettingsSurviveASceneRoundTrip</code></p>
+<p>A missing field keeps its default (for <code>UIText</code>, <code>raycastTarget</code> stays off). The resolved rect, the texture, the text's layout and mesh, and a graphic's tint are not saved.</p>
+<p class="src">Source: <code>engine/src/serialization/BuiltinComponents.cpp</code>; <code>engine/include/engine/serialization/MathSerialization.hpp</code> (<code>Vector2</code>); <code>engine/include/engine/text/TextJson.hpp</code> (alignment names); tests: <code>RectTransformLayoutTest.SerializationRoundTrip</code>, <code>UITextTest.SettingsSurviveASceneRoundTrip</code>, <code>ButtonTest.SceneRoundTripKeepsTheSettingsButNotTheListeners</code></p>
 
 <h2 id="not-yet">Not yet</h2>
 <ul>
-<li><strong>Button</strong>, with tints and an <code>OnClick</code> event, which will be built on <code>OnMouseUpAsButton</code>.</li>
+<li>For <strong>Button</strong>: sprite-swap and animation transitions, keyboard and gamepad navigation and selection (Unity's <code>Selected</code> state), persistent (saved) listeners, and pointer events bubbling to a parent.</li>
 <li>For <strong>UI text</strong>: clipping to the rect, best-fit sizing, rich text, and a reference-resolution scale for font sizes.</li>
 <li><strong>World-space canvas</strong>, which will be drawn as one transparent item in the scene, keeping hierarchy order inside it, and picked by ray–plane intersection against the physics hit.</li>
 <li>Rotation and scale on <code>RectTransform</code>, layout groups, scroll views, masks, a reference-resolution scaler, and events for buttons other than the left.</li>
