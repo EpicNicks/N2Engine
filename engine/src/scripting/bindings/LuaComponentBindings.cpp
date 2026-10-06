@@ -1,5 +1,7 @@
 #include "engine/scripting/bindings/LuaBindings.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -151,12 +153,24 @@ namespace N2Engine::Scripting::Bindings
         /**
          * A sub-asset reference, "res://models/robot.glb#mesh/Body": the model file before the '#' is loaded (or
          * reused) and its sub-asset with the key after it returned (nullptr if there is none, or it isn't a T).
-         * nullopt for a reference without '#', which is an ordinary path.
+         * nullopt for a reference with no '#' right after a ".glb" or ".gltf" (any case), which is an ordinary path
+         * (a file or folder name may contain '#').
          */
         template <typename T>
         std::optional<std::shared_ptr<T>> LoadSubAssetReference(const std::string &reference)
         {
-            const std::size_t hash = reference.find('#');
+            std::size_t hash = std::string::npos;
+            for (std::size_t at = reference.find('#'); at != std::string::npos; at = reference.find('#', at + 1))
+            {
+                std::string before = reference.substr(0, at);
+                std::ranges::transform(before, before.begin(),
+                                       [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (before.ends_with(".glb") || before.ends_with(".gltf"))
+                {
+                    hash = at;
+                    break;
+                }
+            }
             if (hash == std::string::npos)
             {
                 return std::nullopt;

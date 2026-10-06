@@ -151,3 +151,18 @@ TEST_F(LuaModelTest, MeshRenderersTakeAModelsMeshesAndMaterialsBySubAssetPath)
     const std::string wrongKind = RunExpectingError(R"(lua_mesh:SetMesh("res://models/robot.glb#material/Red"))");
     EXPECT_NE(wrongKind.find("can't load mesh"), std::string::npos) << wrongKind;
 }
+
+TEST_F(LuaModelTest, APathWithAHashThatIsntAModelsIsAnOrdinaryPath)
+{
+    // '#' is only a sub-asset separator right after ".glb" or ".gltf"
+    fs::create_directories(s_root / "assets" / "materials#2");
+    std::ofstream(s_root / "assets" / "materials#2" / "red.mat")
+        << R"({"shading": "unlit", "baseColor": {"r": 1, "g": 0, "b": 0, "a": 1}})";
+    IO::ResourceLoader::Instance().Initialize(s_root);
+    Run(R"(
+        lua_mesh_go = GameObject.Create("LuaMesh")
+        lua_mesh = lua_mesh_go:AddComponent("MeshRenderer")
+        lua_mesh:SetMaterial(1, "res://materials#2/red.mat")
+    )");
+    EXPECT_EQ(Eval<std::string>("lua_mesh:GetMaterial(1)"), "res://materials#2/red.mat");
+}
