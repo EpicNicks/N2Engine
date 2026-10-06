@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <utility>
 
 #include "engine/Window.hpp"
 #include "engine/Logger.hpp"
@@ -41,6 +42,7 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
 {
     _initError.clear();
     _rendererFailed = false;
+    _renderSize.reset();
 
     if (!glfwInit())
     {
@@ -179,6 +181,7 @@ void Window::Shutdown()
 {
     // Before the window: ~Mouse unregisters its scroll callback on it
     _inputSystem.reset();
+    _renderSize.reset();
     if (_renderer)
     {
         _renderer->Shutdown();
@@ -217,6 +220,12 @@ void Window::FramebufferSizeCallback(GLFWwindow *window, int width, int height)
 
 void Window::OnWindowResize(int width, int height)
 {
+    // Frames follow SetRenderSize's size, not the window's
+    if (_renderSize)
+    {
+        return;
+    }
+
     if (_renderer)
     {
         _renderer->OnResize(width, height);
@@ -224,6 +233,44 @@ void Window::OnWindowResize(int width, int height)
 
     // Notify the application about the resize so it can update the camera
     Application::GetInstance().OnWindowResize(width, height);
+}
+
+bool Window::SetRenderSize(const int width, const int height)
+{
+    if (!_renderer || width <= 0 || height <= 0)
+    {
+        return false;
+    }
+    if (_renderSize && (*_renderSize)[0] == width && (*_renderSize)[1] == height)
+    {
+        return true;
+    }
+
+    if (!_renderer->SetRenderTargetSize(static_cast<uint32_t>(width), static_cast<uint32_t>(height)))
+    {
+        // The renderer couldn't make the target (OpenGL then renders to the window, without its old target):
+        // nothing renders at a fixed size now, and the same size is tried again next call
+        _renderSize.reset();
+        return false;
+    }
+    _renderSize = Vector2i{width, height};
+    Application::GetInstance().OnWindowResize(width, height);
+    return true;
+}
+
+void Window::AdoptRenderer(std::unique_ptr<Renderer::Common::IRenderer> renderer)
+{
+    if (_renderer)
+    {
+        _renderer->Shutdown();
+    }
+    _renderer = std::move(renderer);
+    _renderSize.reset();
+}
+
+Vector2i Window::GetRenderDimensions() const
+{
+    return _renderSize ? *_renderSize : GetWindowDimensions();
 }
 
 void Window::SetWindowMode(WindowMode windowMode)

@@ -100,8 +100,9 @@ namespace N2Engine::Scripting::Bindings
             "GetFOV", &Camera::GetFOV,
 
             // Camera:ScreenPointToRay(x, y[, width, height]): the ray through a point in window coordinates
-            // (top-left origin, y down, as Input.GetMousePosition). The viewport defaults to the window's size;
-            // giving only one of width and height is an error.
+            // (top-left origin, y down, as Input.GetMousePosition). The viewport defaults to the size frames render
+            // at (Window::GetRenderDimensions: the window's, or the editor's viewport); giving only one of width
+            // and height is an error.
             "ScreenPointToRay", [](const Camera& cam, const float x, const float y,
                                    const sol::optional<int> width, const sol::optional<int> height)
             {
@@ -109,7 +110,7 @@ namespace N2Engine::Scripting::Bindings
                 {
                     throw std::runtime_error("Camera:ScreenPointToRay: pass both width and height, or neither");
                 }
-                Vector2i viewport = Application::GetInstance().GetWindow().GetWindowDimensions();
+                Vector2i viewport = Application::GetInstance().GetWindow().GetRenderDimensions();
                 if (width && height)
                 {
                     viewport = Vector2i{*width, *height};

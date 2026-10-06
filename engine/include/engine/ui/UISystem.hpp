@@ -61,7 +61,8 @@ namespace N2Engine::UI
      *
      * The viewport is the window size in window coordinates (Window::GetWindowDimensions, the cursor's space),
      * not the framebuffer, which is larger on high-DPI displays: the projection maps the canvas onto whatever
-     * the framebuffer is.
+     * the framebuffer is. Application::Render passes Window::GetRenderDimensions instead, which is the
+     * host's fixed render size when Window::SetRenderSize set one (the editor's viewport).
      *
      * Layout and order (CollectGraphics):
      * 1. Canvases are the active Canvas components on objects active in the hierarchy with no Canvas above
