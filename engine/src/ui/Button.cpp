@@ -8,7 +8,7 @@
 
 #include <math/Vector4.hpp>
 
-#include "engine/GameObject.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/Logger.hpp"
 #include "engine/Time.hpp"
 #include "engine/ui/UIGraphic.hpp"
