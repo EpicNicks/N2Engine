@@ -68,6 +68,7 @@
 <ol>
 <li><a href="#lifetime">AudioSystem lifetime</a></li>
 <li><a href="#no-device">Headless and no-device behaviour</a></li>
+<li><a href="#loopback">Loopback output and streaming to the editor</a></li>
 <li><a href="#frame-timing">Where audio runs in the frame</a></li>
 <li><a href="#audio-source">AudioSource component</a></li>
 <li><a href="#audio-listener">AudioListener component</a></li>
@@ -81,16 +82,16 @@
 </div>
 
 <h2 id="lifetime">AudioSystem lifetime</h2>
-<p><code>AudioSystem::Instance()</code> returns a singleton that is deliberately <strong>leaked</strong>: a heap object created on first use and never destroyed. <code>AudioSource</code> unregisters itself from the system in its destructor, and that destructor can run during static destruction (a scene still held by <code>SceneManager</code>'s static). With a function-local static, the system could be destroyed first whenever it was first used after <code>SceneManager</code> (the headless path, where <code>Init</code> skips audio), and the unregister would touch a dead object.</p>
-<p>Creating the instance does not open a device. That is <code>Initialize()</code>:</p>
+<p><code>AudioSystem::Instance()</code> returns a singleton that is deliberately <strong>leaked</strong>: a heap object created on first use and never destroyed. <code>AudioSource</code> unregisters itself from the system in its destructor, and that destructor can run during static destruction (a scene still held by <code>SceneManager</code>'s static). With a function-local static, the system could be destroyed first whenever it was first used after <code>SceneManager</code> (the headless path, where <code>Init</code> used to skip audio), and the unregister would touch a dead object.</p>
+<p>Creating the instance does not open a device. That is <code>Initialize(AudioOutput output = AudioOutput::Device)</code>:</p>
 <ol class="steps">
-<li>Returns <code>true</code> immediately if already initialized (idempotent).</li>
-<li>Opens the default device, creates a context and makes it current. Any failure is logged with <code>Logger::Error</code>, everything created so far is released, and it returns <code>false</code>.</li>
+<li>Returns <code>true</code> immediately if already initialized with the same output (idempotent), and <code>false</code> with a warning if it is running on the other one <span class="badge">PR #TBD</span>.</li>
+<li>Opens the output and creates a context on it: the default device for <code>AudioOutput::Device</code>, or an OpenAL Soft loopback device with a fixed format for <code>AudioOutput::Loopback</code> <span class="badge">PR #TBD</span> (see <a href="#loopback">Loopback output</a>). Then it makes the context current. Any failure is logged with <code>Logger::Error</code>, everything created so far is released, and it returns <code>false</code>.</li>
 <li>Pre-allocates up to 32 pooled sources (a source that fails to generate is just not pooled).</li>
 <li>Creates the default mixer groups, overwriting any existing groups of those names (see <a href="#mixer-groups">mixer groups</a>).</li>
 <li>Sets the listener gain to the stored master volume, so the master volume survives a re-initialize.</li>
 </ol>
-<p><code>Shutdown()</code> is a no-op when not initialized and safe to call twice; see <a href="#shutdown">Shutdown semantics</a>. <code>IsInitialized()</code> reports the state. <code>Application::Init</code> calls <code>Initialize()</code> (unless headless) and <code>Application::Shutdown</code> calls <code>Shutdown()</code>.</p>
+<p><code>Shutdown()</code> is a no-op when not initialized and safe to call twice; see <a href="#shutdown">Shutdown semantics</a>. <code>IsInitialized()</code> reports the state. <code>Application::Init</code> calls <code>Initialize()</code>, or <code>Initialize(AudioOutput::Loopback)</code> when headless <span class="badge">PR #TBD</span>, and <code>Application::Shutdown</code> calls <code>Shutdown()</code>, which also leaves loopback mode.</p>
 <div class="callout guarantee">
 <p class="callout-title">Guarantee</p>
 <p><code>Initialize</code> is idempotent; <code>IsInitialized</code> tracks <code>Shutdown</code> and a later <code>Initialize</code>; the master volume survives a re-initialize; default groups are reset by it.</p>
@@ -102,9 +103,10 @@
 <table>
 <thead><tr><th>Situation</th><th>Result</th></tr></thead>
 <tbody>
-<tr><td><code>ApplicationOptions::isHeadless</code></td><td><code>Initialize</code> is never called. Audio subsystem health is <code>Disabled</code> ("Headless mode (streaming not yet implemented)"). The intent is to stream mixed audio to the editor client later.</td></tr>
+<tr><td><code>ApplicationOptions::isHeadless</code></td><td><code>Initialize(AudioOutput::Loopback)</code>: audio runs on an OpenAL Soft loopback device, so nothing plays locally and no sound card is needed, and the mix is streamed to the editor client <span class="badge">PR #TBD</span>. Health is <code>Running</code> ("Loopback 48000 Hz, 2 channels, float32 (streamed to the editor client)"). See <a href="#loopback">Loopback output</a>. Before PR #TBD, headless mode skipped audio (<code>Disabled</code>).</td></tr>
+<tr><td>Headless, and OpenAL has no <code>ALC_SOFT_loopback</code></td><td><code>Initialize</code> logs "OpenAL has no ALC_SOFT_loopback extension; audio is disabled (nothing to stream)" and returns <code>false</code>; the engine warns and continues without sound, and health is <code>Failed</code> ("No OpenAL loopback device ...") <span class="badge">PR #TBD</span>. OpenAL Soft always has the extension; this covers another OpenAL implementation.</td></tr>
 <tr><td>No audio device / context failure</td><td><code>Initialize</code> returns <code>false</code>; the engine logs "Failed to initialize audio!" and "Audio will be disabled. Game will continue without sound."; health is <code>Failed</code>. The game keeps running.</td></tr>
-<tr><td>CI and tests</td><td>The Tests workflow sets <code>ALSOFT_DRIVERS=null</code>, and the audio test fixture sets it too before the first ALC call, so OpenAL Soft uses its silent null backend and a real context exists without a sound card.</td></tr>
+<tr><td>CI and tests</td><td>The Tests workflow sets <code>ALSOFT_DRIVERS=null</code>, and the audio test fixture sets it too before the first ALC call, so OpenAL Soft uses its silent null backend and a real context exists without a sound card. The loopback tests need no backend at all: a loopback device has none <span class="badge">PR #TBD</span>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -120,11 +122,84 @@
 
 <div class="callout note" id="design-no-headless-clips">
 <p class="callout-title">Design decision: no audio clips without an audio context</p>
-<p>An <code>AudioClip</code> is an OpenAL buffer, and OpenAL buffers only exist inside a context. Keeping the decoded samples around in a context-less "pending" clip would double memory for every clip and still not be playable, and making headless mode create a context would need a device. So a clip fails to load without an initialized <code>AudioSystem</code>, visibly (a warning and a null asset), rather than appearing loaded with an invalid buffer. Code that runs headless (tests, the editor host) must not rely on audio assets; scene data that references them still loads, with the reference unresolved. Each clip also remembers which context made it, so after a <code>Shutdown</code> and a later <code>Initialize</code> a stale clip reports not loaded and never deletes a buffer id that now belongs to another clip.</p>
+<p>An <code>AudioClip</code> is an OpenAL buffer, and OpenAL buffers only exist inside a context. Keeping the decoded samples around in a context-less "pending" clip would double memory for every clip and still not be playable, and making headless mode create a context would need a device. So a clip fails to load without an initialized <code>AudioSystem</code>, visibly (a warning and a null asset), rather than appearing loaded with an invalid buffer. Code that runs without audio (tests that don't initialize it, or a headless engine whose loopback device failed) must not rely on audio assets; scene data that references them still loads, with the reference unresolved. Since PR #TBD a headless engine normally <em>has</em> a context (on the loopback device), so the editor host loads and plays clips like a game does. Each clip also remembers which context made it, so after a <code>Shutdown</code> and a later <code>Initialize</code> a stale clip reports not loaded and never deletes a buffer id that now belongs to another clip.</p>
+</div>
+
+<h2 id="loopback">Loopback output and streaming to the editor <span class="badge">PR #TBD</span></h2>
+<p>A headless engine (the editor host, <code>N2EditorHost</code>) has no speakers to play to: its audio is mixed on the server and sent to the editor client, which plays it. <code>AudioSystem::Initialize(AudioOutput::Loopback)</code> opens an OpenAL Soft <em>loopback device</em> (the <code>ALC_SOFT_loopback</code> extension) instead of a sound card. Sources, mixer groups, clips, one-shots, <code>AudioSource</code>, <code>AudioListener</code> and the Lua API work exactly as on a device; only where the mix goes changes.</p>
+
+<h3 id="loopback-device">The device and its format</h3>
+<ul>
+<li><code>AudioSystem::IsLoopbackSupported()</code> asks OpenAL whether the extension exists (no device needed). The three entry points (<code>alcLoopbackOpenDeviceSOFT</code>, <code>alcIsRenderFormatSupportedSOFT</code>, <code>alcRenderSamplesSOFT</code>) are loaded with <code>alcGetProcAddress</code>.</li>
+<li>The format is fixed: <strong>48 kHz, stereo, interleaved</strong> (<code>LoopbackSampleRate</code>, <code>LoopbackChannels</code>). The sample type is <strong>float32</strong> when <code>alcIsRenderFormatSupportedSOFT</code> accepts it (OpenAL Soft always does), otherwise <strong>int16</strong>; both little-endian. <code>GetLoopbackFormat()</code> returns the choice (<code>sampleRate</code>, <code>channels</code>, <code>sampleFormat</code>, <code>BytesPerFrame()</code>), and <code>ToString(SampleFormat)</code> names it <code>"float32"</code> or <code>"int16"</code>. The context is created with <code>ALC_FORMAT_CHANNELS_SOFT = ALC_STEREO_SOFT</code>, <code>ALC_FORMAT_TYPE_SOFT</code> and <code>ALC_FREQUENCY = 48000</code>.</li>
+<li><code>IsLoopback()</code> is true while initialized on the loopback device; <code>GetOutput()</code> reports the output.</li>
+<li>A missing extension, missing entry points, or neither sample type being supported logs an error and <code>Initialize</code> returns <code>false</code>: no audio, nothing else affected.</li>
+</ul>
+
+<h3 id="render-samples">Rendering samples</h3>
+<p>A loopback device has no clock of its own: <strong>its time only moves when samples are rendered.</strong> <code>RenderSamples(buffer, frameCount)</code> mixes the next <code>frameCount</code> frames into <code>buffer</code> (<code>frameCount × BytesPerFrame()</code> bytes) on the calling thread, and the sources advance by exactly that much: a playing one-shot reaches its end, and turns <code>AL_STOPPED</code>, once enough frames have been rendered. Until then nothing finishes, so <code>Update</code> recycles nothing. It returns <code>false</code> and leaves the buffer untouched unless <code>IsLoopback()</code>. Tests use it directly; the engine uses <code>AdvanceStream</code>.</p>
+
+<h3 id="pacing">Pacing by elapsed time</h3>
+<p>The editor pulls frames one request at a time and irregularly, but audio has to come out at a steady 48 000 frames a second. So the mix is paced by <em>time</em>, not by requests: <code>AdvanceStream(unscaledSeconds)</code> adds <code>unscaledSeconds × 48000</code> to a fractional accumulator and renders the whole frames (in chunks of 1024) into the stream buffer, carrying the remainder to the next call. One call advances at most <code>MaxStreamAdvanceSeconds</code> (1 s), so a long stall such as a debugger pause doesn't mix minutes of audio at once. Zero, negative or NaN times do nothing, as does any call unless <code>IsLoopback()</code>.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Who calls it</th><th>With what time</th></tr></thead>
+<tbody>
+<tr><td><code>Application::Run</code></td><td><code>Time::GetUnscaledDeltaTime()</code> each frame, right before <code>AudioSystem::Update</code> (see <a href="#frame-timing">frame timing</a>). A no-op on a sound card.</td></tr>
+<tr><td><code>N2EditorHost</code>'s main loop</td><td><code>EditorServer::UpdateAudio()</code> each iteration (about every 16 ms), after <code>ProcessCommands</code>: the real time since its previous call (<code>steady_clock</code>), then <code>AudioSystem::Update</code>. The host runs no game frames (<code>Time</code> only moves in <code>RenderFrame</code>), so this is its clock. It runs <strong>whether or not a client is connected</strong>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Pacing is unscaled: audio keeps time while the game is paused (<code>timeScale</code> 0), as a sound card would.</p>
+
+<h3 id="stream-buffer">The bounded stream buffer</h3>
+<p>Rendered frames go into a ring buffer that holds at most <strong><code>StreamBufferMilliseconds</code> = 250 ms</strong> (12 000 frames; <code>GetStreamCapacityFrames()</code>). When a write would overflow it, the <em>oldest</em> frames are discarded and counted. <code>TakeStreamedAudio()</code> moves everything held out, oldest first (<code>samples</code>, <code>frameCount</code>, and <code>droppedFrames</code> since the previous take), and empties it; <code>GetStreamedFrameCount()</code> reports what is held, and <code>ClearStream()</code> discards it without touching the audio clock. With no client connected, or a client that stops asking, rendering continues, so one-shots finish and return to the pool, while memory stays at 250 ms of audio (96 KB in float32).</p>
+
+<h3 id="get-audio">Sending it to the editor: <code>GetAudio</code></h3>
+<p>The editor protocol's <code>GetAudio</code> (0x03, no request fields) returns everything mixed since the previous <code>GetAudio</code> as an <code>AudioSamples</code> response (0x0A). Without a loopback device it is an <code>Error</code> ("No audio stream: audio isn't running on a loopback device (see GetEngineHealth)"). Payload, in order (see the <a href="logging-and-editor.html#framing">wire format</a>):</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Type</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>sampleRate</code></td><td>uint32</td><td>48000</td></tr>
+<tr><td><code>channels</code></td><td>uint32</td><td>2 (interleaved left, right)</td></tr>
+<tr><td><code>sampleFormat</code></td><td>string</td><td><code>"float32"</code> or <code>"int16"</code> (little-endian)</td></tr>
+<tr><td><code>frameCount</code></td><td>uint32</td><td>Frames in <code>samples</code>; 0 when nothing was mixed since the last call</td></tr>
+<tr><td><code>droppedFrames</code></td><td>uint32</td><td>Frames discarded since the last call because the 250 ms buffer was full: a gap before these samples</td></tr>
+<tr><td><code>samples</code></td><td>bytes</td><td><code>frameCount × channels</code> samples, raw, to the end of the payload (no length prefix, like <code>FrameData.pixels</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<p>A client polls <code>GetAudio</code> alongside <code>RenderFrame</code> (every frame, or on its own timer), appends the samples to a small jitter buffer (50 to 100 ms) and plays from that at 48 kHz. A positive <code>droppedFrames</code> means the client fell more than 250 ms behind; it can insert that much silence to stay in step with the frames, or simply carry on. Audio and frames share the server's clock, so polling both every frame keeps them within one frame plus the client's jitter buffer of each other. The first <code>GetAudio</code> of a connection can return up to 250 ms mixed before the client connected.</p>
+<div class="callout warning">
+<p class="callout-title">Not done: client playback</p>
+<p>The generated C#, TypeScript and C++ clients declare <code>GetAudio</code> and <code>AudioSamplesData</code>/<code>AudioSamplesResponse</code> (they are declarations only, like the rest of the generated code), but no client in this repository decodes or plays the audio yet. Playback (e.g. Web Audio's <code>AudioWorklet</code>, or NAudio/OpenAL in a C# editor), its jitter buffer and the handling of <code>droppedFrames</code> are the client's job and are untested. The server side is covered by tests and the CI smoke test.</p>
+</div>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee</p>
+<p>Rendering through the loopback device is deterministic and needs no sound card: a known clip renders the requested number of frames at the expected level and is silent before it plays and after it ends; nothing finishes without rendering, and a one-shot finishes and returns its source to the pool after enough frames. <code>AdvanceStream</code> renders by elapsed time, however it is split up, and caps one step; the stream buffer never holds more than 250 ms and keeps the newest audio in order. Tests: <code>LoopbackAudioTest.*</code>, <code>LoopbackAudioUninitializedTest.*</code>, <code>AudioStreamProtocolTest.*</code>, <code>AudioStreamServerTest.*</code>.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/audio/AudioSystem.hpp</code>, <code>engine/src/audio/AudioSystem.cpp</code> — <code>Initialize</code>, <code>OpenLoopbackDevice</code>, <code>RenderSamples</code>, <code>AdvanceStream</code>, <code>RenderIntoStream</code>, <code>PushStream</code>, <code>TakeStreamedAudio</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>, <code>Run</code>; <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::UpdateAudio</code>, <code>HandleGetAudio</code>; <code>editor-server/include/editor-server/Commands.hpp</code> — <code>WriteAudioSamples</code>; <code>editor-server/src/Main.cpp</code>; tests: <code>tests/engine/audio/LoopbackAudioTests.cpp</code>, <code>tests/editor-server/AudioStreamProtocolTests.cpp</code></p>
+
+<div class="callout note" id="design-loopback-device">
+<p class="callout-title">Design decision: a loopback device, not the null backend</p>
+<p>OpenAL Soft's <code>null</code> backend also needs no sound card, but it mixes on its own thread in real time and throws the result away: nothing can be sent anywhere, and tests must sleep and poll to see a sound finish. A loopback device hands the mix to the caller and runs only when asked, so the server decides when and how much to mix, gets the samples, and tests are exact (render 50 ms, and a 50 ms clip has ended). The cost is that the engine must keep rendering, or time stops; that is what pacing and the bounded buffer are for. The format is fixed at 48 kHz stereo because one format keeps the protocol and every client simple; float32 is preferred as it keeps the mixer's headroom and needs no dither, with int16 as the universal fallback.</p>
+</div>
+<div class="callout note" id="design-time-pacing">
+<p class="callout-title">Design decision: pace by elapsed time, render every frame</p>
+<p>Mixing once per <code>RenderFrame</code> or <code>GetAudio</code> request would tie audio speed to how often the client asks: a client at 30 fps would hear half-speed time, and with no client one-shots would never end and never return their sources (the issue's main hazard). Mixing <code>elapsed × sampleRate</code> frames on the main thread every iteration keeps the audio clock equal to real time whatever the client does, and the fractional accumulator means no drift however the time is split. It runs on the main thread, alongside every other OpenAL call, so no locks are needed.</p>
+</div>
+<div class="callout note" id="design-bounded-stream">
+<p class="callout-title">Design decision: a 250 ms buffer that drops the oldest audio</p>
+<p>Because rendering never stops, something must bound what is kept. 250 ms is several frames of slack for a client that polls once per rendered frame (even at 10 fps), while staying small (96 KB) and short enough that a reconnecting client doesn't hear a long backlog. Dropping the <em>oldest</em> frames keeps what the client gets closest to now, which is what keeps audio in step with the frames; the dropped count tells the client there was a gap.</p>
+</div>
+<div class="callout note" id="design-get-audio">
+<p class="callout-title">Design decision: a separate <code>GetAudio</code> request</p>
+<p>Audio could ride along in <code>FrameData</code>, but that would change a response every client already decodes, make audio depend on a working renderer (CI and GPU-less machines have none; <code>RenderFrame</code> is an <code>Error</code> there), and couple audio's rate to the frame rate. A separate request/response fits the existing design (one request, one response, no server push), keeps <code>FrameData</code> unchanged, and lets a client poll audio on its own timer. Samples are raw bytes to the end of the payload, as pixels are, rather than base64: the protocol is binary throughout. The format fields come with every response, so a client needs no separate query and a future format change can't be misread.</p>
 </div>
 
 <h2 id="frame-timing">Where audio runs in the frame</h2>
-<p>In <code>Application::Run</code>, <code>AudioSystem::Update()</code> runs once per frame <strong>after</strong> the scene's <code>LateUpdate</code> (and coroutines) and before <code>Render</code>. Components push positions in <code>OnLateUpdate</code>: <code>AudioListener</code> sets the listener, and a playing spatial <code>AudioSource</code> sets its source position. So positions are current when the frame's audio work happens. <code>AudioSystem::Update</code> itself only reclaims finished one-shots (see <a href="#one-shots">One-shots</a>). <code>Application::RenderEditorFrame</code> also calls it.</p>
+<p>In <code>Application::Run</code>, <code>AudioSystem::Update()</code> runs once per frame <strong>after</strong> the scene's <code>LateUpdate</code> (and coroutines) and before <code>Render</code>, right after <code>AdvanceStream</code>, which mixes a loopback device for the frame's unscaled time (a no-op on a sound card) so that <code>Update</code> sees what finished <span class="badge">PR #TBD</span>. Components push positions in <code>OnLateUpdate</code>: <code>AudioListener</code> sets the listener, and a playing spatial <code>AudioSource</code> sets its source position. So positions are current when the frame's audio work happens. <code>AudioSystem::Update</code> itself only reclaims finished one-shots (see <a href="#one-shots">One-shots</a>). <code>Application::RenderEditorFrame</code> also calls it.</p>
 <p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Run</code>, <code>RenderEditorFrame</code>; <code>engine/src/audio/AudioSystem.cpp</code> — <code>AudioSystem::Update</code>, <code>CleanupFinishedSources</code></p>
 
 <h2 id="audio-source">AudioSource component</h2>
