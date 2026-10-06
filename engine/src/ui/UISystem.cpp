@@ -282,8 +282,8 @@ namespace N2Engine::UI
             return std::nullopt; // behind the ray's origin (the camera), or too far
         }
 
-        // The point in canvas units: solve offset = u * axisX + v * axisY (the axes may be scaled unevenly or
-        // sheared by a parent's scale, so not just a projection on each)
+        // The point in canvas units: solve offset = u * axisX + v * axisY (the axes need not be orthogonal or
+        // equally long, e.g. with an uneven scale under a rotated parent, so not just a projection on each)
         const Math::Vector3 offset = ray.GetPoint(distance) - origin;
         const float xx = axisX.Dot(axisX);
         const float xy = axisX.Dot(axisY);

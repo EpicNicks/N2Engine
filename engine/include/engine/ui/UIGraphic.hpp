@@ -19,6 +19,10 @@ namespace N2Engine::UI
      *
      * A graphic with raycastTarget set (the default, except for UIText) is what the UI hit test finds: the
      * pointer over it goes to its object (OnMouse* callbacks) and not to the world behind it.
+     *
+     * Subclasses override the four-argument RenderUI. Declaring it hides the base class's three-argument
+     * overload, so a subclass should also say `using UIGraphic::RenderUI;` (as Image and UIText do) to keep
+     * graphic->RenderUI(renderer, rect, state) compiling on it.
      */
     class UIGraphic : public SerializableComponent
     {
