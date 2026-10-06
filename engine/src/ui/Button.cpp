@@ -109,14 +109,31 @@ namespace N2Engine::UI
         {
             return _explicitTarget.Get();
         }
-        for (UIGraphic *graphic : GetGameObject().GetComponents<UIGraphic>())
+        // GetComponents' order, without building its vector
+        for (const auto &component : GetGameObject().GetAllComponents())
         {
-            if (graphic && !graphic->IsDestroyed())
+            if (auto *graphic = dynamic_cast<UIGraphic *>(component.get()); graphic && !graphic->IsDestroyed())
             {
                 return graphic;
             }
         }
         return nullptr;
+    }
+
+    bool Button::TargetChanged() const
+    {
+        UIGraphic *tinted = _tinted.Get();
+        if (_hasExplicitTarget)
+        {
+            return _explicitTarget.Get() != tinted;
+        }
+        // The default target is the first live graphic on this object. Components are only ever appended, so
+        // while the graphic tinted last is alive and on this object, it is still the first: no scan needed.
+        if (tinted && &tinted->GetGameObject() == &GetGameObject())
+        {
+            return false;
+        }
+        return GetTargetGraphic() != tinted;
     }
 
     void Button::SetTargetGraphic(UIGraphic *graphic)
@@ -296,13 +313,22 @@ namespace N2Engine::UI
     void Button::OnUpdate()
     {
         // Catches up with anything that changed the state's tint without a transition (settings loaded
-        // after OnAttach), and keeps the tint on the right graphic when the target changes (a graphic added,
-        // removed or loaded) without a state change
+        // after OnAttach); Transition applies the tint
         if (!_fading && !(TargetTint() == _currentTint))
         {
             Transition(false);
         }
-        UpdateFade(Time::GetUnscaledDeltaTime());
+        // The tint is written only when it changes (a fade step) or the target graphic does (a graphic added,
+        // removed or loaded, without a state change). Not every frame: that would cost a component scan per
+        // button per frame and overwrite a tint set on the graphic by hand while the button is idle.
+        if (_fading)
+        {
+            UpdateFade(Time::GetUnscaledDeltaTime());
+        }
+        else if (TargetChanged())
+        {
+            ApplyTint();
+        }
     }
 
     void Button::OnEnable()
