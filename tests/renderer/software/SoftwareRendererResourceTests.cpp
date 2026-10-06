@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include <renderer/common/Renderer.hpp>
@@ -220,6 +221,64 @@ TEST(TextureOptionsTest, SoftwareBilinearSamplingMatchesGLLinear)
     rg.channels = 2;
     rg.data = {51, 255};
     EXPECT_NEAR(rg.SampleFirstChannelBilinear(0.3f, 0.7f), 0.2f, 1e-5f);
+}
+
+TEST(TextureOptionsTest, SoftwareNearestSamplingPicksTexelsAsGLNearestDoes)
+{
+    // 2 x 2, row 0 first: texel i covers u from i / 2 to (i + 1) / 2, so each half of the square is one texel
+    Renderer::Software::SWTexture texture;
+    texture.width = 2;
+    texture.height = 2;
+    texture.channels = 1;
+    texture.data = {10, 20, 30, 40};
+    texture.options.filter = TextureFilter::Nearest;
+    texture.options.wrap = TextureWrap::ClampToEdge;
+
+    EXPECT_EQ(texture.Sample(0.25f, 0.25f) & 0xFFu, 10u);
+    EXPECT_EQ(texture.Sample(0.75f, 0.25f) & 0xFFu, 20u) << "the right half is the second texel";
+    EXPECT_EQ(texture.Sample(0.25f, 0.75f) & 0xFFu, 30u) << "the upper half is the second row";
+    EXPECT_EQ(texture.Sample(0.75f, 0.75f) & 0xFFu, 40u);
+    EXPECT_EQ(texture.Sample(0.49f, 0.0f) & 0xFFu, 10u);
+    EXPECT_EQ(texture.Sample(0.51f, 0.0f) & 0xFFu, 20u);
+    EXPECT_EQ(texture.Sample(1.0f, 1.0f) & 0xFFu, 40u) << "u = v = 1, clamped, is the last texel";
+    EXPECT_EQ(texture.SampleFiltered(0.75f, 0.25f) & 0xFFu, 20u) << "Nearest filters through Sample";
+    EXPECT_EQ(texture.Sample(std::numeric_limits<float>::quiet_NaN(), 0.25f) & 0xFFu, 10u) << "NaN reads as 0";
+}
+
+TEST(TextureOptionsTest, SoftwareBilinearRgbaSamplingMatchesGLLinear)
+{
+    // Two RGBA texels, red and blue, with centres at u = 0.25 and 0.75
+    Renderer::Software::SWTexture texture;
+    texture.width = 2;
+    texture.height = 1;
+    texture.channels = 4;
+    texture.data = {255, 0, 0, 255, 0, 0, 255, 128};
+    texture.options.wrap = TextureWrap::ClampToEdge;
+
+    const auto unpack = [](const std::uint32_t packed)
+    {
+        return std::vector<std::uint32_t>{packed & 0xFFu, (packed >> 8) & 0xFFu, (packed >> 16) & 0xFFu, packed >> 24};
+    };
+    EXPECT_EQ(unpack(texture.SampleBilinear(0.25f, 0.5f)), (std::vector<std::uint32_t>{255, 0, 0, 255}));
+    EXPECT_EQ(unpack(texture.SampleBilinear(0.75f, 0.5f)), (std::vector<std::uint32_t>{0, 0, 255, 128}));
+    EXPECT_EQ(unpack(texture.SampleBilinear(0.5f, 0.5f)), (std::vector<std::uint32_t>{128, 0, 128, 192}))
+        << "halfway: every channel interpolated and rounded";
+    EXPECT_EQ(unpack(texture.SampleBilinear(0.0f, 0.5f)), (std::vector<std::uint32_t>{255, 0, 0, 255})) << "clamped";
+
+    // Linear (the default) filters through SampleBilinear; Nearest doesn't
+    texture.options.filter = TextureFilter::Linear;
+    EXPECT_EQ(texture.SampleFiltered(0.5f, 0.5f), texture.SampleBilinear(0.5f, 0.5f));
+    texture.options.filter = TextureFilter::Nearest;
+    EXPECT_EQ(texture.SampleFiltered(0.4f, 0.5f), texture.Sample(0.4f, 0.5f));
+
+    // Missing channels read as Sample reads them: (r, 0, 0, 255) for one channel
+    Renderer::Software::SWTexture grey;
+    grey.width = 2;
+    grey.height = 1;
+    grey.channels = 1;
+    grey.data = {0, 200};
+    grey.options.wrap = TextureWrap::ClampToEdge;
+    EXPECT_EQ(unpack(grey.SampleBilinear(0.5f, 0.5f)), (std::vector<std::uint32_t>{100, 0, 0, 255}));
 }
 
 // ============================================================================
