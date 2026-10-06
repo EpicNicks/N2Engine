@@ -1,5 +1,6 @@
 add_subdirectory(math)
 add_subdirectory(text)
+add_subdirectory(assetimport)
 add_subdirectory(engine)
 add_subdirectory(renderer)
 add_subdirectory(editor-server)

@@ -15,11 +15,12 @@
 #include <text/TextLayout.hpp>
 
 #include "engine/common/Color.hpp"
+#include "engine/rendering/GpuCache.hpp"
 #include "engine/text/Font.hpp"
 
 // The drawing code every text component shares (TextRenderer in the world, UI::UIText in the UI pass): the
-// layout cache, the glyph mesh, and the per-(renderer, font) atlas texture cache. Internal to the engine's
-// text components; game code uses the components.
+// layout cache, the glyph mesh, and each font's atlas texture, shared per renderer through GpuCache. Internal
+// to the engine's text components; game code uses the components.
 namespace N2Engine::Rendering::TextDrawing
 {
     /**
@@ -66,8 +67,8 @@ namespace N2Engine::Rendering::TextDrawing
 
     /**
      * One text block's GPU resources on one renderer: its mesh and material, and a share of the font's atlas
-     * texture. The atlas is one texture per (renderer, font), shared by every text component drawing that
-     * font there (TextRenderer and UIText alike), and destroyed when its last user releases it.
+     * texture. The atlas is one texture per (renderer, font) in the GpuCache, shared by every text component
+     * drawing that font there (TextRenderer and UIText alike), and destroyed when its last user releases it.
      *
      * Like the scene renderables, it holds the renderer's lifetime token (IRenderer::GetLifetimeToken): a
      * renderer that was destroyed, or replaced by a new one at the same address, is never called.
@@ -117,8 +118,7 @@ namespace N2Engine::Rendering::TextDrawing
         std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed
         Renderer::Common::IMesh *_mesh = nullptr;
         Renderer::Common::IMaterial *_material = nullptr;
-        Renderer::Common::ITexture *_atlasTexture = nullptr; // shared per (renderer, font); not ours to destroy
-        const Text::Font *_atlasFont = nullptr;
+        GpuCache::Handle _atlas; // the font's atlas, shared per (renderer, font); its source is the font
         std::uint64_t _meshVersion = 0; // the layout version _mesh was built from
     };
 }

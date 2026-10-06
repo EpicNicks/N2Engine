@@ -1,10 +1,61 @@
 #include "engine/ui/Image.hpp"
 
+#include <utility>
+
 #include <renderer/common/RenderTypes.hpp>
 
 namespace N2Engine::UI
 {
-    Image::Image(GameObject &gameObject) : UIGraphic(gameObject) {}
+    Image::Image(GameObject &gameObject) : UIGraphic(gameObject)
+    {
+        RegisterAssetRef("sprite", _sprite);
+    }
+
+    void Image::SetSprite(std::shared_ptr<Rendering::Texture> sprite)
+    {
+        if (_spriteTexture && _spriteTexture.GetSource() != sprite.get())
+        {
+            // The renderer is only called if it still exists
+            _spriteTexture.Release(true);
+        }
+        _sprite = std::move(sprite);
+    }
+
+    Renderer::Common::ITexture *Image::EnsureSpriteTexture(Renderer::Common::IRenderer *renderer)
+    {
+        if (!_sprite)
+        {
+            // Cleared, possibly by deserializing (which sets the field directly): give up any share now
+            _spriteTexture.Release(true);
+            return nullptr;
+        }
+        if (!_spriteTexture.Holds(renderer) || _spriteTexture.GetSource() != _sprite.get())
+        {
+            // A renderer that couldn't create this sprite's texture (Vulkan until #43) isn't asked every frame
+            const std::weak_ptr<const void> lifetime = renderer->GetLifetimeToken();
+            // Compared by owner, not address: a new sprite or renderer at a freed one's address is a new one
+            const bool sameRenderer = !_failedRenderer.owner_before(lifetime) && !lifetime.owner_before(_failedRenderer);
+            const bool sameSprite = !_failedSprite.owner_before(_sprite) && !_sprite.owner_before(_failedSprite);
+            if (sameSprite && sameRenderer && !_failedSprite.expired() && !_failedRenderer.expired())
+            {
+                return nullptr;
+            }
+            // None acquired on this renderer yet, or the sprite changed (deserializing sets the field directly)
+            _spriteTexture.Release(true);
+            _spriteTexture = Rendering::GpuCache::AcquireTexture(*renderer, _sprite);
+            if (_spriteTexture.GetTexture())
+            {
+                _failedSprite.reset();
+                _failedRenderer.reset();
+            }
+            else
+            {
+                _failedSprite = _sprite;
+                _failedRenderer = lifetime;
+            }
+        }
+        return _spriteTexture.GetTexture();
+    }
 
     Math::Matrix<float, 4, 4> Image::ModelMatrixFor(const Rect &rect)
     {
@@ -67,6 +118,8 @@ namespace N2Engine::UI
                 _renderer->DestroyMaterial(_material);
             }
         }
+        // The sprite's share of its texture: destroyed with the last share, and only on a renderer that exists
+        _spriteTexture.Release(true);
         _mesh = nullptr;
         _material = nullptr;
         _renderer = nullptr;
@@ -92,8 +145,14 @@ namespace N2Engine::UI
             return;
         }
 
-        _material->SetTexture(_texture);
-        _material->SetInt("uHasTexture", _texture != nullptr ? 1 : 0);
+        // A raw texture wins over the sprite
+        if (_texture)
+        {
+            _spriteTexture.Release(true); // the raw texture wins: don't hold a sprite share it hides
+        }
+        Renderer::Common::ITexture *texture = _texture ? _texture : EnsureSpriteTexture(renderer);
+        _material->SetTexture(texture);
+        _material->SetInt("uHasTexture", texture != nullptr ? 1 : 0);
         const Common::Color color = GetDrawColor(); // the colour with a Button's tint, if any
         _material->SetColor("uAlbedo", color.r, color.g, color.b, color.a);
 

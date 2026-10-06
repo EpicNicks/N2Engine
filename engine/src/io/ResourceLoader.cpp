@@ -1,19 +1,45 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/Logger.hpp"
+#include "engine/rendering/Texture.hpp"
 #include "engine/text/Font.hpp"
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <utility>
 
 namespace N2Engine::IO
 {
+    namespace
+    {
+        /// The .meta resourceType for a file, from its extension, case-insensitively (as the loader lookup
+        /// is): Music.WAV is an AudioClip like music.wav
+        std::string ResourceTypeFor(const std::filesystem::path &sourcePath)
+        {
+            std::string ext = sourcePath.extension().string();
+            std::ranges::transform(ext, ext.begin(),
+                                   [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext == ".lua")
+                return "LuaScript";
+            if (ext == ".wav" || ext == ".ogg" || ext == ".mp3" || ext == ".flac")
+                return "AudioClip";
+            if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp")
+                return "Texture";
+            if (ext == ".ttf" || ext == ".otf")
+                return "Font";
+            return "Unknown";
+        }
+    }
+
     void ResourceLoader::Initialize(const std::filesystem::path& projectRoot)
     {
-        // Font.cpp's own static registrar only runs if the linker keeps that file, which a program that
-        // names no Font type wouldn't; registering here (idempotent) makes .ttf/.otf scan and load anyway.
-        // Done before the roots change, so a first registration doesn't rescan anything.
+        // Font.cpp's and Texture.cpp's own static registrars only run if the linker keeps those files, which
+        // a program that names neither type wouldn't; registering here (idempotent) makes .ttf/.otf and the
+        // image extensions scan and load anyway. Done before the roots change, so a first registration
+        // doesn't rescan anything.
         Text::Font::RegisterLoader();
+        Rendering::Texture::RegisterLoader();
 
         _projectRoot = projectRoot;
         _assetsRoot = projectRoot / "assets";
@@ -142,6 +168,17 @@ namespace N2Engine::IO
                 meta.SaveToFile(metaPath);
             }
 
+            // A .meta written before its extension was known (or matched case-insensitively, as Music.WAV
+            // now is) said "Unknown"; give it its type now
+            if (meta.resourceType == "Unknown")
+            {
+                if (std::string type = ResourceTypeFor(sourcePath); type != "Unknown")
+                {
+                    meta.resourceType = std::move(type);
+                    meta.SaveToFile(metaPath);
+                }
+            }
+
             if (meta.lastModified != timestamp || meta.fileSize != fileSize)
             {
                 meta.lastModified = timestamp;
@@ -157,18 +194,7 @@ namespace N2Engine::IO
             meta.lastModified = timestamp;
             meta.fileSize = fileSize;
 
-            std::string ext = sourcePath.extension().string();
-            if (ext == ".lua")
-                meta.resourceType = "LuaScript";
-            else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3" || ext == ".flac")
-                meta.resourceType = "AudioClip";
-            else if (ext == ".png" || ext == ".jpg")
-                meta.resourceType = "Texture";
-            else if (ext == ".ttf" || ext == ".otf")
-                meta.resourceType = "Font";
-            else
-                meta.resourceType = "Unknown";
-
+            meta.resourceType = ResourceTypeFor(sourcePath);
             meta.SaveToFile(metaPath);
             Logger::Info(std::format("New asset: {}", resourcePath.ToString()));
         }

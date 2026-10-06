@@ -5,13 +5,11 @@
 #include <format>
 #include <functional>
 #include <initializer_list>
-#include <map>
 #include <set>
 #include <string>
 #include <utility>
 
 #include <renderer/common/IShader.hpp>
-#include <renderer/common/TextureOptions.hpp>
 
 #include "engine/Logger.hpp"
 
@@ -19,91 +17,6 @@ namespace N2Engine::Rendering::TextDrawing
 {
     namespace
     {
-        using Renderer::Common::IRenderer;
-        using Renderer::Common::ITexture;
-
-        // One atlas texture per (renderer, font), shared by every text component drawing that font there.
-        // The entry holds the font, so the font's address (half the key) stays valid while it exists. The
-        // renderer's address can be reused by a later renderer, so the entry also keeps the renderer's
-        // lifetime token: an entry whose renderer is gone is never handed out or destroyed.
-        struct AtlasTexture
-        {
-            std::shared_ptr<Text::Font> font;
-            std::weak_ptr<const void> rendererLifetime;
-            ITexture *texture = nullptr;
-            std::size_t users = 0;
-        };
-
-        using AtlasKey = std::pair<IRenderer *, const Text::Font *>;
-
-        bool SameOwner(const std::weak_ptr<const void> &a, const std::weak_ptr<const void> &b)
-        {
-            return !a.owner_before(b) && !b.owner_before(a);
-        }
-
-        std::map<AtlasKey, AtlasTexture> &AtlasTextures()
-        {
-            // Leaked on purpose: a text component kept alive by Lua can be destroyed after function-local
-            // statics
-            static auto *textures = new std::map<AtlasKey, AtlasTexture>();
-            return *textures;
-        }
-
-        ITexture *AcquireAtlasTexture(IRenderer &renderer, const std::shared_ptr<Text::Font> &font)
-        {
-            auto &textures = AtlasTextures();
-            const AtlasKey key{&renderer, font.get()};
-            const std::weak_ptr<const void> lifetime = renderer.GetLifetimeToken();
-            if (const auto it = textures.find(key); it != textures.end())
-            {
-                if (SameOwner(it->second.rendererLifetime, lifetime))
-                {
-                    ++it->second.users;
-                    return it->second.texture;
-                }
-                // Left by a destroyed renderer at the same address: its texture went with it
-                textures.erase(it);
-            }
-
-            const Text::FontAtlas &atlas = font->GetSdfFont().GetAtlas();
-            if (atlas.GetWidth() <= 0 || atlas.GetHeight() <= 0 || atlas.GetPixels().empty())
-            {
-                return nullptr;
-            }
-
-            ITexture *texture = renderer.CreateTexture(atlas.GetPixels().data(), static_cast<uint32_t>(atlas.GetWidth()),
-                                                       static_cast<uint32_t>(atlas.GetHeight()), 1,
-                                                       Renderer::Common::TextureOptions::SdfAtlas());
-            if (!texture)
-            {
-                return nullptr;
-            }
-            textures.emplace(key, AtlasTexture{font, lifetime, texture, 1});
-            return texture;
-        }
-
-        /// rendererLifetime is the token the caller held when it took the texture: an entry made since by
-        /// another renderer at the same address isn't the caller's to release.
-        void ReleaseAtlasTexture(IRenderer *renderer, const std::weak_ptr<const void> &rendererLifetime,
-                                 const Text::Font *font, const bool callRenderer)
-        {
-            auto &textures = AtlasTextures();
-            const auto it = textures.find(AtlasKey{renderer, font});
-            if (it == textures.end() || !SameOwner(it->second.rendererLifetime, rendererLifetime))
-            {
-                return;
-            }
-            if (--it->second.users > 0)
-            {
-                return;
-            }
-            if (callRenderer && renderer && !rendererLifetime.expired())
-            {
-                renderer->DestroyTexture(it->second.texture);
-            }
-            textures.erase(it);
-        }
-
         bool SameFloat(const float a, const float b)
         {
             return a == b || (std::isnan(a) && std::isnan(b));
@@ -212,15 +125,11 @@ namespace N2Engine::Rendering::TextDrawing
                 _renderer->DestroyMaterial(_material);
             }
         }
-        if (_atlasFont)
-        {
-            ReleaseAtlasTexture(_renderer, _rendererLifetime, _atlasFont, callRenderer);
-        }
+        // The atlas share: the last user's release destroys the texture, on the same terms
+        _atlas.Release(callRenderer);
 
         _mesh = nullptr;
         _material = nullptr;
-        _atlasTexture = nullptr;
-        _atlasFont = nullptr;
         _meshVersion = 0;
         _renderer = nullptr;
         _rendererLifetime.reset();
@@ -228,29 +137,23 @@ namespace N2Engine::Rendering::TextDrawing
 
     bool DrawResources::EnsureAtlasTexture(const std::shared_ptr<Text::Font> &font)
     {
-        if (_atlasTexture && _atlasFont == font.get())
+        if (_atlas && _atlas.GetSource() == font.get())
         {
             return true;
         }
 
-        if (_atlasFont)
-        {
-            ReleaseAtlasTexture(_renderer, _rendererLifetime, _atlasFont, true);
-            _atlasTexture = nullptr;
-            _atlasFont = nullptr;
-        }
+        // Another font: give up the old atlas share (destroyed if this was its last user)
+        _atlas.Release(true);
 
-        ITexture *texture = AcquireAtlasTexture(*_renderer, font);
-        if (!texture)
+        _atlas = GpuCache::AcquireFontAtlas(*_renderer, font);
+        if (!_atlas)
         {
             return false;
         }
-        _atlasTexture = texture;
-        _atlasFont = font.get();
 
         if (_material)
         {
-            _material->SetTexture(_atlasTexture);
+            _material->SetTexture(_atlas.GetTexture());
         }
         return true;
     }
@@ -313,7 +216,7 @@ namespace N2Engine::Rendering::TextDrawing
         }
         if (!_material)
         {
-            _material = renderer->CreateMaterial(shader, _atlasTexture);
+            _material = renderer->CreateMaterial(shader, _atlas.GetTexture());
             if (!_material)
             {
                 return false;

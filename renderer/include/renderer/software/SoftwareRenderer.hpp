@@ -78,8 +78,9 @@ namespace Renderer::Software
         /// Waits for any frame still rasterizing (which may draw the mesh) before freeing it
         void DestroyMesh(Common::IMesh *mesh) override;
         Common::ITexture* CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch) override;
-        /// Stores the options on the SWTexture. Sampling honours wrap but is always nearest, without
-        /// mipmaps, so filter and mipmaps have no visible effect on this backend.
+        /// Stores the options on the SWTexture. The unlit and lit shaders honour wrap and filter (bilinear for
+        /// Linear, nearest for Nearest); there are no mipmaps, so mipmaps has no visible effect on this backend.
+        /// The text shader always samples bilinearly.
         Common::ITexture* CreateTexture(const uint8_t *data, uint32_t w, uint32_t h, uint32_t ch,
                                         const Common::TextureOptions &options) override;
         /// Waits for any frame still rasterizing (which may sample the texture) before freeing it

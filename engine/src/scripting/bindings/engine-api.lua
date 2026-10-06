@@ -1021,8 +1021,8 @@ function Canvas:GetSortOrder() end
 ---@param sortOrder integer
 function Canvas:SetSortOrder(sortOrder) end
 
----A coloured rectangle over its object's rect. A raycast target (the default) takes the pointer: its
----object gets the OnMouse* callbacks and Input.IsPointerOverUI() is true.
+---A coloured rectangle over its object's rect, optionally showing a sprite (an image file). A raycast target
+---(the default) takes the pointer: its object gets the OnMouse* callbacks and Input.IsPointerOverUI() is true.
 ---@class Image : Component
 Image = {}
 
@@ -1034,6 +1034,13 @@ function Image:SetColor(color) end
 function Image:GetRaycastTarget() end
 ---@param raycastTarget boolean false lets the pointer through to what is underneath
 function Image:SetRaycastTarget(raycastTarget) end
+---Show an image file (PNG, JPEG, TGA or BMP) in the rect, multiplied by the colour; nil clears it. Raises an
+---error, keeping the current sprite, if the file doesn't load. Saved with the scene.
+---@param path string|nil e.g. "res://ui/icon.png"
+function Image:SetSprite(path) end
+---The sprite's path ("res://..." for a project asset), or nil without a sprite
+---@return string|nil
+function Image:GetSprite() end
 
 ---Text drawn inside its object's rect, with an SDF font. Sizes are canvas pixels. Unlike Image it is not a
 ---raycast target by default, so a label lets the pointer through to what is underneath.

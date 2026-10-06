@@ -164,8 +164,9 @@ namespace
     // ------------------------------------------------------------------
     inline uint32_t ShadeUnlitPx(float u, float v, const ResolvedMat& m)
     {
-        // Caller guarantees m.tex != nullptr (the flat case never reaches here).
-        const uint32_t s = m.tex->Sample(u, v);
+        // Caller guarantees m.tex != nullptr (the flat case never reaches here). Bilinear or nearest, as the
+        // texture's filter says (SWTexture::SampleFiltered).
+        const uint32_t s = m.tex->SampleFiltered(u, v);
         constexpr float k = 1.f / 255.f;
         const float r = m.aR * (float)((s >>  0) & 0xFF) * k;
         const float g = m.aG * (float)((s >>  8) & 0xFF) * k;
@@ -185,7 +186,7 @@ namespace
         float r = m.aR, g = m.aG, b = m.aB, a = m.aA;
         if (m.tex)
         {
-            const uint32_t s = m.tex->Sample(u, v);
+            const uint32_t s = m.tex->SampleFiltered(u, v);
             constexpr float k = 1.f / 255.f;
             r *= (float)((s >>  0) & 0xFF) * k;
             g *= (float)((s >>  8) & 0xFF) * k;

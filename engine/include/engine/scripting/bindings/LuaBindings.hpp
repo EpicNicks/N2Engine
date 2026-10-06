@@ -15,6 +15,11 @@ namespace N2Engine::Text
     class Font;
 }
 
+namespace N2Engine::Rendering
+{
+    class Texture;
+}
+
 namespace N2Engine::Scripting
 {
     class LuaRuntime;
@@ -57,6 +62,12 @@ namespace N2Engine::Scripting
         /// A font file through Resources, e.g. "res://fonts/Title.ttf"; throws "<caller>: can't load font ..."
         /// if it doesn't load
         std::shared_ptr<Text::Font> LoadFontOrThrow(const std::string& path, std::string_view caller);
+        /// An image file through Resources, e.g. "res://ui/icon.png"; throws "<caller>: can't load texture ..."
+        /// if it doesn't load
+        std::shared_ptr<Rendering::Texture> LoadTextureOrThrow(const std::string& path, std::string_view caller);
+        /// What scripts see as a texture's path: its res:// (or user://) path for a project asset, else the file
+        /// it was loaded from, else "" (a texture made at runtime)
+        std::string TexturePathForLua(const Rendering::Texture& texture);
 
         /// GameObject:AddComponent("BoxCollider"): the component as its Lua type; raises a Lua error for unknown names
         sol::object AddComponentByName(GameObject& gameObject, const std::string& typeName, sol::this_state state);
