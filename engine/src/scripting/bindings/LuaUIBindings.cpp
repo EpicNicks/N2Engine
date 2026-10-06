@@ -38,6 +38,26 @@ namespace N2Engine::Scripting::Bindings
             return "Normal";
         }
 
+        /// "ScreenSpaceOverlay" or "WorldSpace"; anything else is an error naming `where`
+        UI::CanvasRenderMode ParseRenderMode(const std::string &name, const char *where)
+        {
+            if (name == "ScreenSpaceOverlay")
+            {
+                return UI::CanvasRenderMode::ScreenSpaceOverlay;
+            }
+            if (name == "WorldSpace")
+            {
+                return UI::CanvasRenderMode::WorldSpace;
+            }
+            throw std::runtime_error(std::string(where) + ": unknown render mode \"" + name +
+                                     "\" (expected \"ScreenSpaceOverlay\" or \"WorldSpace\")");
+        }
+
+        std::string RenderModeName(const UI::CanvasRenderMode mode)
+        {
+            return mode == UI::CanvasRenderMode::WorldSpace ? "WorldSpace" : "ScreenSpaceOverlay";
+        }
+
         /// A UI graphic handle from Lua (Image or UIText), or nullptr for nil; any other value is an error
         UI::UIGraphic *GraphicFromLua(const sol::object &object)
         {
@@ -99,7 +119,19 @@ namespace N2Engine::Scripting::Bindings
         BindComponentType<UI::Canvas>(
             lua, "Canvas",
             "GetSortOrder", Forward<CanvasRef, &UI::Canvas::GetSortOrder>(),
-            "SetSortOrder", Forward<CanvasRef, &UI::Canvas::SetSortOrder>()
+            "SetSortOrder", Forward<CanvasRef, &UI::Canvas::SetSortOrder>(),
+            // "ScreenSpaceOverlay" or "WorldSpace"; an unknown name raises an error and changes nothing.
+            // WorldSpace adds a Positionable and a RectTransform if the object has none.
+            "SetRenderMode", [](const CanvasRef &c, const std::string &mode)
+            {
+                const UI::CanvasRenderMode renderMode = ParseRenderMode(mode, "Canvas:SetRenderMode");
+                c.Pin()->SetRenderMode(renderMode);
+            },
+            "GetRenderMode", [](const CanvasRef &c) { return RenderModeName(c.Pin()->GetRenderMode()); },
+            "IsWorldSpace", Forward<CanvasRef, &UI::Canvas::IsWorldSpace>(),
+            // A world canvas's size in canvas units (its RectTransform's sizeDelta)
+            "GetSize", Forward<CanvasRef, &UI::Canvas::GetSize>(),
+            "SetSize", Forward<CanvasRef, &UI::Canvas::SetSize>()
         );
 
         // ===== Image =====
@@ -267,10 +299,16 @@ namespace N2Engine::Scripting::Bindings
 
         // ===== UI (global) =====
         lua["UI"] = lua.create_table_with(
-            // A new root object on the UI layer with a Canvas
+            // A new root object on the UI layer with a Canvas; mode "WorldSpace" also gives it a Positionable
+            // scaled to 0.01 and a 100 x 100 RectTransform. An unknown mode raises an error.
             "CreateCanvas", sol::overload(
                 []() { return GameObjectRef::Owning(UI::UISystem::CreateCanvas()); },
-                [](const std::string &name) { return GameObjectRef::Owning(UI::UISystem::CreateCanvas(name)); }
+                [](const std::string &name) { return GameObjectRef::Owning(UI::UISystem::CreateCanvas(name)); },
+                [](const std::string &name, const std::string &mode)
+                {
+                    const UI::CanvasRenderMode renderMode = ParseRenderMode(mode, "UI.CreateCanvas");
+                    return GameObjectRef::Owning(UI::UISystem::CreateCanvas(name, renderMode));
+                }
             ),
             // A new object on the UI layer with a RectTransform
             "CreateElement", sol::overload(

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <math/Matrix.hpp>
 #include <renderer/common/Renderer.hpp>
 #include <renderer/common/RenderState.hpp>
 
@@ -11,23 +12,44 @@ namespace N2Engine::UI
 {
     /**
      * A UI component that draws in the UI pass (Image, UIText). It is not an IRenderable, so the scene
-     * pass (Scene::Render) never draws it. UISystem draws every active graphic on an active object under a
-     * canvas, in hierarchy order, with the rect the layout resolved for its object.
+     * pass (Scene::Render) never draws it itself. UISystem draws every active graphic on an active object
+     * under a canvas, in hierarchy order, with the rect the layout resolved for its object: in the UI pass for
+     * a screen-space overlay canvas, and inside its canvas's single Transparent-queue draw for a world-space
+     * canvas (see Canvas).
      *
      * A graphic with raycastTarget set (the default, except for UIText) is what the UI hit test finds: the
      * pointer over it goes to its object (OnMouse* callbacks) and not to the world behind it.
+     *
+     * Subclasses override the four-argument RenderUI. Declaring it hides the base class's three-argument
+     * overload, so a subclass should also say `using UIGraphic::RenderUI;` (as Image and UIText do) to keep
+     * graphic->RenderUI(renderer, rect, state) compiling on it.
      */
     class UIGraphic : public SerializableComponent
     {
     public:
+        using Matrix4 = Math::Matrix<float, 4, 4>;
+
         /**
-         * Draws this graphic over `rect` (canvas space, already known to have an area), with the UI pass's
-         * render state. The renderer's view and projection are the canvas's: a model matrix that maps the unit
-         * square onto the rect puts it on screen. Like IRenderable::Render, this must not add, remove or
-         * destroy components or GameObjects immediately.
+         * Draws this graphic over `rect` (canvas space, already known to have an area), with the given render
+         * state. `canvasToWorld` maps canvas space to the space the renderer's view expects: identity on a
+         * screen-space overlay canvas, whose view is identity and projection the canvas's (UISystem::Render),
+         * and the canvas's world matrix (Canvas::GetCanvasToWorldMatrix) on a world-space canvas, drawn with the
+         * scene camera's view and projection. The graphic's model matrix is canvasToWorld times the matrix that
+         * places it in its rect (ComposeModel). Like IRenderable::Render, this must not add, remove or destroy
+         * components or GameObjects immediately.
          */
         virtual void RenderUI(Renderer::Common::IRenderer *renderer, const Rect &rect,
-                              const Renderer::Common::RenderState &state) = 0;
+                              const Renderer::Common::RenderState &state, const Matrix4 &canvasToWorld) = 0;
+
+        /// RenderUI on a screen-space overlay canvas: canvasToWorld is identity
+        void RenderUI(Renderer::Common::IRenderer *renderer, const Rect &rect,
+                      const Renderer::Common::RenderState &state)
+        {
+            RenderUI(renderer, rect, state, Matrix4::identity());
+        }
+
+        /// canvasToWorld * local, or exactly `local` when canvasToWorld is identity (an overlay canvas)
+        [[nodiscard]] static Matrix4 ComposeModel(const Matrix4 &canvasToWorld, const Matrix4 &local);
 
         [[nodiscard]] const Common::Color& GetColor() const { return _color; }
         void SetColor(const Common::Color &color) { _color = color; }

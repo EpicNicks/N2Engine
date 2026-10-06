@@ -47,8 +47,9 @@ namespace N2Engine::UI
 
         [[nodiscard]] std::string GetTypeName() const override { return "UIText"; }
 
+        using UIGraphic::RenderUI; // the overlay overload, with canvasToWorld identity
         void RenderUI(Renderer::Common::IRenderer *renderer, const Rect &rect,
-                      const Renderer::Common::RenderState &state) override;
+                      const Renderer::Common::RenderState &state, const Matrix4 &canvasToWorld) override;
 
         void OnDestroy() override;
 

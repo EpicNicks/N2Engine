@@ -280,3 +280,40 @@ TEST_F(LuaUITest, ButtonOnClickListeners)
 
     Run("lua_ui_click_go = nil; lua_ui_click_button = nil; lua_ui_click_log = nil");
 }
+
+TEST_F(LuaUITest, MakesAWorldSpaceCanvas)
+{
+    Run(R"(
+        lua_ui_world_go = UI.CreateCanvas("World", "WorldSpace")
+        lua_ui_world = lua_ui_world_go:GetComponent("Canvas")
+        lua_ui_overlay_go = UI.CreateCanvas("Overlay")
+        lua_ui_overlay = lua_ui_overlay_go:GetComponent("Canvas")
+    )");
+    EXPECT_EQ(Eval<std::string>("lua_ui_world:GetRenderMode()"), "WorldSpace");
+    EXPECT_TRUE(Eval<bool>("lua_ui_world:IsWorldSpace()"));
+    EXPECT_EQ(Eval<int>("lua_ui_world_go:GetLayer()"), Layers::UI);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_world_go:GetPositionable():GetScale().x"), 0.01f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_world:GetSize().x"), 100.0f);
+    EXPECT_EQ(Eval<std::string>("lua_ui_overlay:GetRenderMode()"), "ScreenSpaceOverlay");
+    EXPECT_FALSE(Eval<bool>("lua_ui_overlay:IsWorldSpace()"));
+
+    Run(R"(lua_ui_world:SetSize(Vector2(400, 300)))");
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_world:GetSize().y"), 300.0f);
+    EXPECT_FLOAT_EQ(Eval<float>("lua_ui_world_go:GetComponent('RectTransform'):GetSizeDelta().x"), 400.0f);
+
+    // Switching an overlay canvas to world space gives it a transform and a RectTransform
+    Run(R"(lua_ui_overlay:SetRenderMode("WorldSpace"))");
+    EXPECT_EQ(Eval<std::string>("lua_ui_overlay:GetRenderMode()"), "WorldSpace");
+    EXPECT_TRUE(Eval<bool>("lua_ui_overlay_go:GetPositionable() ~= nil"));
+    EXPECT_TRUE(Eval<bool>("lua_ui_overlay_go:GetComponent('RectTransform') ~= nil"));
+    Run(R"(lua_ui_overlay:SetRenderMode("ScreenSpaceOverlay"))");
+    EXPECT_EQ(Eval<std::string>("lua_ui_overlay:GetRenderMode()"), "ScreenSpaceOverlay");
+
+    // Unknown modes raise errors and change nothing
+    EXPECT_FALSE(Lua().safe_script(R"(lua_ui_world:SetRenderMode("ScreenSpaceCamera"))", sol::script_pass_on_error)
+                     .valid());
+    EXPECT_EQ(Eval<std::string>("lua_ui_world:GetRenderMode()"), "WorldSpace");
+    EXPECT_FALSE(Lua().safe_script(R"(UI.CreateCanvas("Bad", "Sideways"))", sol::script_pass_on_error).valid());
+
+    Run("lua_ui_world_go = nil; lua_ui_world = nil; lua_ui_overlay_go = nil; lua_ui_overlay = nil");
+}

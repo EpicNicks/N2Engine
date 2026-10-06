@@ -503,6 +503,7 @@ private:
 <li>Queries hit trigger shapes as well as solid ones.</li>
 <li>Objects are only hittable once their bodies exist, i.e. after the attach queue has run.</li>
 <li>Picking (<code>OnMouse*</code>) is built on <code>Raycast::Single</code>; see <a href="input.html#picking">Input</a> <span class="badge">PR #48</span>.</li>
+<li><span class="badge">PR #67</span> <code>Single</code> and <code>All</code> take an optional last argument, <code>QueryTriggers</code> (Unity's <code>QueryTriggerInteraction</code>): <code>Collide</code>, the default and what they always did, hits trigger colliders like solid ones; <code>Ignore</code> skips trigger shapes (a PhysX pre-filter on <code>eTRIGGER_SHAPE</code>). World-space UI uses <code>Ignore</code> when it checks for colliders in front of a canvas (<a href="ui.html#world-hit">UI</a>). The Lua functions don't expose it yet.</li>
 </ul>
 <pre class="lang-cpp"><code>Physics::RaycastHit hit;
 if (Physics::Raycast::Single(origin, Vector3(0.0f, -1.0f, 0.0f), hit, 100.0f))
