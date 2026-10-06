@@ -66,6 +66,29 @@ TEST(HostOptionsTest, HelpIsReportedNotActedOn)
     EXPECT_TRUE(shortForm->showHelp);
 }
 
+TEST(HostOptionsTest, HelpWinsOverParseErrors)
+{
+    for (const std::vector<std::string> &args : {std::vector<std::string>{"--port", "70000", "--help"},
+                                                 std::vector<std::string>{"-h", "--project"},
+                                                 std::vector<std::string>{"--project", "--port", "-h"}})
+    {
+        const auto parsed = ParseHostArguments(args);
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_TRUE(parsed->showHelp);
+    }
+}
+
+TEST(HostOptionsTest, AnOptionFollowedByAnotherOptionIsMissingItsValue)
+{
+    const auto parsed = ParseHostArguments({"--project", "--port", "0"});
+    ASSERT_FALSE(parsed) << parsed->projectPath;
+    EXPECT_EQ(parsed.error(), "--project is missing a value");
+
+    const auto bind = ParseHostArguments({"--bind", "--project", "C:/game"});
+    ASSERT_FALSE(bind);
+    EXPECT_EQ(bind.error(), "--bind is missing a value");
+}
+
 TEST(HostOptionsTest, AnInvalidPortIsAnErrorNamingIt)
 {
     const auto parsed = ParseHostArguments({"--port", "70000"});
@@ -79,7 +102,7 @@ TEST(HostOptionsTest, AnOptionMissingItsValueIsAnError)
     {
         const auto parsed = ParseHostArguments({option});
         ASSERT_FALSE(parsed) << option;
-        EXPECT_NE(parsed.error().find(option), std::string::npos) << parsed.error();
+        EXPECT_EQ(parsed.error(), std::string(option) + " is missing a value");
     }
 }
 

@@ -15,6 +15,8 @@ namespace N2Engine::Editor
 
         /// 0 lets the OS pick a free port; the ready line reports the one it picked
         int port = DefaultPort;
+        /// EditorServer::DefaultBindAddress, spelled out to keep EditorServer.hpp out of this header;
+        /// HostOptionsTest.NoArgumentsGiveTheDefaults pins the two equal
         std::string bindAddress = "127.0.0.1";
         /// Empty: no project, so no ResourceLoader/ResourceUUID (asset references don't resolve)
         std::string projectPath;
@@ -25,8 +27,9 @@ namespace N2Engine::Editor
     /// port" (EditorServer::Start(0)).
     [[nodiscard]] std::optional<int> ParsePort(std::string_view text);
 
-    /// The arguments after the program name. An option missing its value or an invalid port is an error
-    /// (the message names it); unknown arguments are ignored.
+    /// The arguments after the program name. -h/--help anywhere wins: the result is the defaults with showHelp
+    /// set, whatever else is there. Otherwise an option missing its value (none follows, or the next argument
+    /// starts with "--") or an invalid port is an error (the message names it); unknown arguments are ignored.
     [[nodiscard]] std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args);
 
     /// Starts the line N2EditorHost prints to stdout once the server is listening

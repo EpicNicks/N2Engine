@@ -72,7 +72,7 @@ int main(int argc, char *argv[])
         projectDir = std::filesystem::canonical(options.projectPath, error);
         if (error || !std::filesystem::is_directory(projectDir, error))
         {
-            std::println(stderr, "Project folder not found: {}", options.projectPath);
+            std::println(stderr, "Project folder not found or not a folder: {}", options.projectPath);
             return 1;
         }
     }

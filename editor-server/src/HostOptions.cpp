@@ -24,42 +24,48 @@ namespace N2Engine::Editor
     std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args)
     {
         HostOptions options;
+
+        // Help wins: "N2EditorHost --port x --help" shows the usage instead of complaining about the port
+        for (const std::string &arg : args)
+        {
+            if (arg == "-h" || arg == "--help")
+            {
+                options.showHelp = true;
+                return options;
+            }
+        }
+
         for (size_t i = 0; i < args.size(); ++i)
         {
             const std::string &arg = args[i];
-            const bool hasValue = i + 1 < args.size();
+            const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project";
+            if (!takesValue)
+            {
+                continue; // unknown arguments are ignored
+            }
+            // "--project --port 0" is a forgotten path, not a project folder called "--port"
+            if (i + 1 >= args.size() || args[i + 1].starts_with("--"))
+            {
+                return std::unexpected(arg + " is missing a value");
+            }
+            const std::string &value = args[++i];
+
             if (arg == "-p" || arg == "--port")
             {
-                if (!hasValue)
-                {
-                    return std::unexpected(arg + " needs a port");
-                }
-                const std::optional<int> port = ParsePort(args[++i]);
+                const std::optional<int> port = ParsePort(value);
                 if (!port)
                 {
-                    return std::unexpected("Invalid port: " + args[i]);
+                    return std::unexpected("Invalid port: " + value);
                 }
                 options.port = *port;
             }
             else if (arg == "--bind")
             {
-                if (!hasValue)
-                {
-                    return std::unexpected(arg + " needs an address");
-                }
-                options.bindAddress = args[++i];
+                options.bindAddress = value;
             }
-            else if (arg == "--project")
+            else
             {
-                if (!hasValue)
-                {
-                    return std::unexpected(arg + " needs a path");
-                }
-                options.projectPath = args[++i];
-            }
-            else if (arg == "-h" || arg == "--help")
-            {
-                options.showHelp = true;
+                options.projectPath = value;
             }
         }
         return options;
