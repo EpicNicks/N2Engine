@@ -27,9 +27,13 @@ else()
     target_compile_options(engine_tests PRIVATE -Wall -Wextra)
 endif()
 
-# lua_project/assets/scene.lua is built headless by LuaSceneTests
+# lua_project/assets/scene.lua is built headless by LuaSceneTests; tests/assets holds the committed test models
 target_compile_definitions(engine_tests PRIVATE
         N2_LUA_PROJECT_DIR="${CMAKE_SOURCE_DIR}/lua_project"
+        N2_TEST_ASSETS_DIR="${CMAKE_SOURCE_DIR}/tests/assets"
 )
+
+# tests/common has the glTF file builder the model tests share with tests/assetimport
+target_include_directories(engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/common)
 
 add_test(NAME engine_tests COMMAND engine_tests)
