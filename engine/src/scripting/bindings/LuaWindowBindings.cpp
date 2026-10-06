@@ -23,6 +23,8 @@ namespace N2Engine::Scripting::Bindings
             "GetTitle", &Window::GetTitle,
             "SetTitle", &Window::SetTitle,
             
+            // The window's size, even when frames render at another size (Window::SetRenderSize): in the editor
+            // host this is the hidden window, not the viewport
             "GetDimensions", &Window::GetWindowDimensions,
             "SetWindowMode", &Window::SetWindowMode,
             

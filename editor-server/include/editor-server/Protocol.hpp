@@ -64,7 +64,8 @@ namespace N2Engine::Editor
     {
         uint32_t width;
         uint32_t height;
-        // followed by width * height * 4 bytes of BGRA pixel data
+        // followed by width * height * 4 bytes of RGBA8 pixel data, top row first, alpha 255, on every backend
+        // (EditorServer::ReadFrame); width x height is the viewport size SetViewportSize set (default 1280x720)
     };
 
 #pragma pack(pop)

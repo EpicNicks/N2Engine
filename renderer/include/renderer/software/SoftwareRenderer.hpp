@@ -135,8 +135,9 @@ namespace Renderer::Software
         /**
          * Waits for the frame in flight, then copies the colour buffer into `buffer` as RGBA8, 4 bytes per
          * pixel, rows bottom to top (row 0 is the bottom of the image, as glReadPixels gives). A size other
-         * than the renderer's is resampled, nearest. Unlike OpenGL's ReadFramebuffer (BGRA, a region of
-         * the GL framebuffer, not resampled), the channels are in RGBA order.
+         * than the renderer's is resampled, nearest (OpenGL's reads a region instead, not resampled; the
+         * layout is the same). SetRenderTargetSize (the default body: Resize) makes the renderer's size the
+         * one read, so the copy is exact.
          */
         void ReadFramebuffer(uint8_t *buffer, int width, int height) const override;
 

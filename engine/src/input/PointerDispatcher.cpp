@@ -252,8 +252,9 @@ namespace N2Engine::Input
         {
             return nullptr;
         }
-        // Window coordinates, the cursor's space (not the framebuffer, which differs on high-DPI displays)
-        return PickWorld(*camera, screenPosition, application.GetWindow().GetWindowDimensions(), _pickMask);
+        // Window coordinates, the cursor's space (not the framebuffer, which differs on high-DPI displays), or the
+        // host's render size when Window::SetRenderSize set one (the editor's viewport), as the frame is drawn
+        return PickWorld(*camera, screenPosition, application.GetWindow().GetRenderDimensions(), _pickMask);
     }
 
     void PointerDispatcher::Send(GameObject &gameObject, void (Component::*callback)())

@@ -236,6 +236,8 @@
 <tr><td><a href="scenes.html#design-dropped-scenes">A dropped scene undoes only what attached</a></td><td>A scene destroyed without being loaded tears down the components that attached to it, and gives no callbacks to those that never did.</td></tr>
 <tr><td><a href="serialization.html#design-prefab-uuids">A prefab instance is a new object tree</a></td><td>Instantiating resolves references inside the prefab to the new objects, then gives every object and component a fresh UUID; references leaving the prefab become null.</td></tr>
 <tr><td><a href="math.html#design-simd-tiers">SIMD tiers are an algorithm choice</a></td><td>The build already requires AVX; tiers select which implementation runs so each can be tested against scalar, under a written per-operation contract.</td></tr>
+<tr><td><a href="logging-and-editor.html#design-frame-layout">Editor frames are RGBA, top row first</a> <span class="badge">PR #85</span></td><td>Every backend reads back RGBA bottom row first; the editor server flips the rows and makes alpha 255, so <code>FrameData</code> has one layout clients draw as is.</td></tr>
+<tr><td><a href="logging-and-editor.html#design-viewport-render-size">Editor frames render at the viewport size</a> <span class="badge">PR #85</span></td><td><code>SetViewportSize</code> resizes the renderer (an offscreen framebuffer on OpenGL) instead of cropping or resampling a window-sized frame.</td></tr>
 </tbody>
 </table>
 </div>

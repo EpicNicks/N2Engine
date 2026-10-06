@@ -187,15 +187,41 @@ namespace Renderer::Common
         [[nodiscard]] virtual IShader* GetStandardTextShader() const { return nullptr; }
 
         /**
-         * Copies the last frame into `buffer` (width * height * 4 bytes). Rows are bottom to top (row 0 is
-         * the bottom of the image), as glReadPixels returns them, on every backend. The channel order and
-         * scaling differ:
-         * - OpenGL: glReadPixels of the framebuffer's bottom-left width x height region, in BGRA order.
-         * - Software: the CPU colour buffer, waiting for the frame in flight first, in RGBA order, resampled
-         *   (nearest) to width x height.
+         * Copies the last frame into `buffer` (width * height * 4 bytes): RGBA8, rows bottom to top (row 0 is
+         * the bottom of the image), as glReadPixels returns them. Every backend gives this same layout; what
+         * it reads differs:
+         * - OpenGL: glReadPixels of the bottom-left width x height region of the frame's target (the offscreen
+         *   target while SetRenderTargetSize is in effect, otherwise the window's back buffer).
+         * - Software: the CPU colour buffer, waiting for the frame in flight first, resampled (nearest) to
+         *   width x height (a plain copy when that is the renderer's size).
          * - Vulkan: writes nothing (#43).
+         * Callers that want the top row first (the editor's FrameData) flip it with FlipRows (FrameRows.hpp).
          */
         virtual void ReadFramebuffer(std::uint8_t *buffer, int width, int height) const = 0;
+
+        /**
+         * Renders every later frame at width x height pixels, whatever the window's size, for ReadFramebuffer
+         * to read back at that size (the editor's viewport, #69). Returns true when frames will render at that
+         * size. False for a zero dimension (nothing changes) or when the backend couldn't make a target of that
+         * size; calling it again with the same size then tries again. Per backend:
+         * - OpenGL: frames go to an offscreen framebuffer of that size (RGBA8 colour, D24S8 depth and stencil)
+         *   instead of the window, so the window shows nothing new. Resize and OnResize only set the window's
+         *   size, used while there is no offscreen target (Window::SetRenderSize stops forwarding window resizes
+         *   anyway). The same size again keeps the target; another size replaces it. False when the framebuffer
+         *   is incomplete: it logs, the old target is gone, and frames render to the window.
+         * - Software and the default body: Resize(width, height), since the frame is already offscreen (the CPU
+         *   colour buffer); true for any non-zero size. A later Resize or OnResize changes it again, so a host
+         *   that sets this stops forwarding window resizes (Window::SetRenderSize does).
+         */
+        [[nodiscard]] virtual bool SetRenderTargetSize(uint32_t width, uint32_t height)
+        {
+            if (width == 0 || height == 0)
+            {
+                return false;
+            }
+            Resize(width, height);
+            return true;
+        }
 
         // Debug
         virtual void SetWireframe(bool enabled) = 0;
