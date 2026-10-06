@@ -23,8 +23,8 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `physics.html` | Backends, bodies, colliders, events, raycasts, mass properties |
 | `input.html` | Input system, action maps, bindings, value combination |
 | `audio.html` | Audio system, sources, one-shots, mixer groups, shutdown |
-| `text.html` | Font backends, SDF atlas, UTF-8 and text layout, the `Font` asset and default font, the `TextRenderer` component, the OpenGL and software text shaders, golden-image tests |
-| `ui.html` | Screen-space UI: canvases, `RectTransform` layout, `Image`, the UI pass, UI picking |
+| `text.html` | Font backends, SDF atlas, UTF-8 and text layout, the `Font` asset and default font, the `TextRenderer` component, the OpenGL and software text shaders, golden-image tests, the drawing code shared with UI text |
+| `ui.html` | Screen-space UI: canvases, `RectTransform` layout, `Image`, `UIText`, the UI pass, UI picking |
 | `resources.html` | Resource paths, `ResourceLoader`, `Resources` |
 | `serialization.html` | Scene/component JSON, references, failure handling |
 | `math.html` | Math types, SIMD tiers, correctness guarantees |

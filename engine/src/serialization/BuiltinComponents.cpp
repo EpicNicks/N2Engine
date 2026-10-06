@@ -18,6 +18,7 @@
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/Image.hpp"
 #include "engine/ui/RectTransform.hpp"
+#include "engine/ui/UIText.hpp"
 
 namespace N2Engine
 {
@@ -55,5 +56,6 @@ namespace N2Engine
         Add<UI::Canvas>(registry, "Canvas");
         Add<UI::RectTransform>(registry, "RectTransform");
         Add<UI::Image>(registry, "Image");
+        Add<UI::UIText>(registry, "UIText");
     }
 }

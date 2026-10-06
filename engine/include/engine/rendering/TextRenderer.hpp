@@ -1,8 +1,6 @@
 #pragma once
 
-#include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -12,6 +10,7 @@
 
 #include "engine/IRenderable.hpp"
 #include "engine/common/Color.hpp"
+#include "engine/rendering/TextDrawing.hpp"
 #include "engine/text/Font.hpp"
 #include "engine/text/TextJson.hpp" // the alignments' JSON names: every user must see the same serializer
 
@@ -30,8 +29,9 @@ namespace N2Engine::Rendering
      * - The layout and mesh are rebuilt only when the text, font, size, alignment, wrap width or spacing
      *   changes; the colour is a material uniform and never rebuilds anything. A changed mesh is updated
      *   in place (IRenderer::UpdateMesh), or recreated where the backend can't update meshes.
-     * - Each font's atlas becomes one texture per renderer, shared by every TextRenderer using that font
-     *   there, and destroyed when the last of them releases it.
+     * - Each font's atlas becomes one texture per renderer, shared by every TextRenderer (and UI::UIText)
+     *   using that font there, and destroyed when the last of them releases it. The drawing code is
+     *   shared with UI::UIText (TextDrawing.hpp).
      * - It needs IRenderer::GetStandardTextShader, which OpenGL and the software renderer have. Where it
      *   is null (Vulkan until #43) it draws nothing and logs one warning per process.
      * - Empty text, or text with only spaces, draws nothing.
@@ -97,39 +97,13 @@ namespace N2Engine::Rendering
          * The mesh for a layout: one quad (4 vertices, 6 indices) per GlyphQuad, in order, at z = 0 with
          * normal +Z and white vertex colour. Corners are bottom-left, bottom-right, top-right, top-left
          * (counter-clockwise seen from +Z), with the glyph's atlas uvs as given (y-down, so the top corners
-         * get uv.minY).
+         * get uv.minY). The same as TextDrawing::BuildMesh.
          */
         [[nodiscard]] static Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout);
 
         static constexpr bool IsSingleton = false;
 
     private:
-        // Everything that changes the layout. The colour isn't here: it doesn't.
-        struct LayoutInputs
-        {
-            std::string text;
-            const Text::Font *font = nullptr;
-            float fontSize = 0.0f;
-            float maxWidth = 0.0f;
-            float lineSpacing = 0.0f;
-            float letterSpacing = 0.0f;
-            Text::HorizontalAlign horizontalAlign = Text::HorizontalAlign::Left;
-            Text::VerticalAlign verticalAlign = Text::VerticalAlign::Top;
-
-            /// Everything but the text, which GetLayout compares without copying it.
-            [[nodiscard]] bool MatchesSettings(const LayoutInputs &other) const;
-        };
-
-        /// Releases every GPU resource. With callRenderer false (the destructor, when the renderer may be
-        /// gone) nothing is destroyed on the renderer; it frees them itself when it shuts down.
-        void ReleaseRenderResources(bool callRenderer);
-        /// Whether the resources held are on this renderer: the same one, still alive.
-        [[nodiscard]] bool HoldsRenderer(const Renderer::Common::IRenderer *renderer) const;
-        /// Makes renderer the one resources are created on, releasing any held on another.
-        void BindRenderer(Renderer::Common::IRenderer *renderer);
-        bool EnsureAtlasTexture(const std::shared_ptr<Text::Font> &font);
-        bool EnsureMesh(const Text::TextLayout &layout);
-
         // Serialized settings
         std::string _text;
         std::shared_ptr<Text::Font> _font;
@@ -141,20 +115,8 @@ namespace N2Engine::Rendering
         float _lineSpacing = 1.0f;
         float _letterSpacing = 0.0f;
 
-        // Layout cache. _layoutFont keeps the font the layout came from alive, so its address (in the
-        // inputs) can't be reused while the cache refers to it.
-        mutable std::optional<LayoutInputs> _layoutInputs;
-        mutable Text::TextLayout _layout;
-        mutable std::shared_ptr<Text::Font> _layoutFont;
-        mutable std::uint64_t _layoutVersion = 0;
-
-        // GPU resources, all on _renderer
-        Renderer::Common::IRenderer *_renderer = nullptr;
-        std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed
-        Renderer::Common::IMesh *_mesh = nullptr;
-        Renderer::Common::IMaterial *_material = nullptr;
-        Renderer::Common::ITexture *_atlasTexture = nullptr; // shared per (renderer, font); not ours to destroy
-        const Text::Font *_atlasFont = nullptr;
-        std::uint64_t _meshVersion = 0; // the _layoutVersion _mesh was built from
+        // Layout cache and GPU resources, shared code with UI::UIText (see TextDrawing.hpp)
+        mutable TextDrawing::LayoutCache _layoutCache;
+        TextDrawing::DrawResources _resources;
     };
 }

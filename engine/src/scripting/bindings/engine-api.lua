@@ -804,7 +804,7 @@ function GameObject:Destroy() end
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
 ---"SphereRenderer", "TextRenderer", "AudioSource", "AudioListener", "LuaComponent", "RectTransform",
----"Canvas", "Image". Unknown names raise an error.
+---"Canvas", "Image", "UIText". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
 function GameObject:AddComponent(typeName) end
@@ -1035,6 +1035,64 @@ function Image:GetRaycastTarget() end
 ---@param raycastTarget boolean false lets the pointer through to what is underneath
 function Image:SetRaycastTarget(raycastTarget) end
 
+---Text drawn inside its object's rect, with an SDF font. Sizes are canvas pixels. Unlike Image it is not a
+---raycast target by default, so a label lets the pointer through to what is underneath.
+---Changing a setting other than the colour, or the rect's width with wrap on, lays the text out again.
+---@class UIText : Component
+UIText = {}
+
+---@param text string UTF-8; "\n" breaks lines
+function UIText:SetText(text) end
+---@return string
+function UIText:GetText() end
+---@return Color
+function UIText:GetColor() end
+---@param color Color
+function UIText:SetColor(color) end
+---@return boolean
+function UIText:GetRaycastTarget() end
+---@param raycastTarget boolean true makes the text take the pointer (default false)
+function UIText:SetRaycastTarget(raycastTarget) end
+---@param size number canvas pixels per em (default 24)
+function UIText:SetFontSize(size) end
+---@return number
+function UIText:GetFontSize() end
+---@param wrap boolean whether lines wrap at the rect's width (default true)
+function UIText:SetWrap(wrap) end
+---@return boolean
+function UIText:GetWrap() end
+---@param spacing number multiplies the font's line height (default 1)
+function UIText:SetLineSpacing(spacing) end
+---@return number
+function UIText:GetLineSpacing() end
+---@param spacing number extra space between glyphs, in ems (default 0; negative tightens)
+function UIText:SetLetterSpacing(spacing) end
+---@return number
+function UIText:GetLetterSpacing() end
+
+---Where the block sits inside the rect: Left/Center/Right against its left edge, centre and right edge;
+---Top/Middle/Bottom against its top, centre and bottom; Baseline puts the first baseline on the rect's
+---vertical centre. Unknown names raise an error and change nothing.
+---@param horizontal HorizontalAlign default "Left"
+---@param vertical VerticalAlign default "Top"
+function UIText:SetAlignment(horizontal, vertical) end
+
+---@return HorizontalAlign horizontal
+---@return VerticalAlign vertical
+function UIText:GetAlignment() end
+
+---Draw with a font file; nil goes back to the built-in default font. Raises an error, keeping the
+---current font, if the file doesn't load.
+---@param path string|nil e.g. "res://fonts/Title.ttf"
+function UIText:SetFont(path) end
+
+---The laid-out block in canvas space, in the rect of the last layout (all 0 for empty text)
+---@return number minX
+---@return number minY
+---@return number maxX
+---@return number maxY
+function UIText:GetBounds() end
+
 ---@class UI
 UI = {}
 
@@ -1048,6 +1106,12 @@ function UI.CreateCanvas(name) end
 ---@param name? string defaults to "UIElement"
 ---@return GameObject
 function UI.CreateElement(name) end
+
+---UI.CreateElement with a UIText showing `text` (24 px, white, top-left, wrapped to the rect)
+---@param name? string defaults to "Text"
+---@param text? string defaults to ""
+---@return GameObject
+function UI.CreateText(name, text) end
 
 ---@class Scene
 ---@field sceneName string The name of this scene

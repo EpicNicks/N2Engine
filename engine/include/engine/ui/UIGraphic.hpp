@@ -10,12 +10,12 @@
 namespace N2Engine::UI
 {
     /**
-     * A UI component that draws in the UI pass (Image, and later text). It is not an IRenderable, so the scene
+     * A UI component that draws in the UI pass (Image, UIText). It is not an IRenderable, so the scene
      * pass (Scene::Render) never draws it. UISystem draws every active graphic on an active object under a
      * canvas, in hierarchy order, with the rect the layout resolved for its object.
      *
-     * A graphic with raycastTarget set (the default) is what the UI hit test finds: the pointer over it goes to
-     * its object (OnMouse* callbacks) and not to the world behind it.
+     * A graphic with raycastTarget set (the default, except for UIText) is what the UI hit test finds: the
+     * pointer over it goes to its object (OnMouse* callbacks) and not to the world behind it.
      */
     class UIGraphic : public SerializableComponent
     {
@@ -32,7 +32,8 @@ namespace N2Engine::UI
         [[nodiscard]] const Common::Color& GetColor() const { return _color; }
         void SetColor(const Common::Color &color) { _color = color; }
 
-        /// Whether the UI hit test can find this graphic (true by default). False lets the pointer through.
+        /// Whether the UI hit test can find this graphic (true by default; false for UIText). False lets the
+        /// pointer through.
         [[nodiscard]] bool GetRaycastTarget() const { return _raycastTarget; }
         void SetRaycastTarget(const bool raycastTarget) { _raycastTarget = raycastTarget; }
 

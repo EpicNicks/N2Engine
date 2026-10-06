@@ -11,6 +11,7 @@
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UIGraphic.hpp"
+#include "engine/ui/UIText.hpp"
 
 namespace N2Engine::UI
 {
@@ -219,6 +220,16 @@ namespace N2Engine::UI
         auto gameObject = GameObject::Create(name);
         gameObject->SetLayer(Layers::UI);
         gameObject->AddComponent<RectTransform>();
+        return gameObject;
+    }
+
+    std::shared_ptr<GameObject> UISystem::CreateText(const std::string &name, const std::string &text)
+    {
+        auto gameObject = CreateElement(name);
+        if (UIText *uiText = gameObject->AddComponent<UIText>())
+        {
+            uiText->SetText(text);
+        }
         return gameObject;
     }
 }

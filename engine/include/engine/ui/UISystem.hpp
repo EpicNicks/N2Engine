@@ -101,5 +101,8 @@ namespace N2Engine::UI
         /// A new UI element: on the UI layer, with a RectTransform (Unity's defaults: a 100x100 box at the
         /// parent's centre). Parent it under a canvas or another element.
         static std::shared_ptr<GameObject> CreateElement(const std::string &name = "UIElement");
+        /// A new text element: CreateElement with a UIText showing `text` (the default settings: 24 px,
+        /// white, top-left, wrapped to the rect, not a raycast target)
+        static std::shared_ptr<GameObject> CreateText(const std::string &name = "Text", const std::string &text = "");
     };
 }
