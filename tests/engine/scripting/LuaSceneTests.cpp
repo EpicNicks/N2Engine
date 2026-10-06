@@ -633,6 +633,49 @@ TEST_F(LuaProjectSceneTest, EveryProjectAssetLoads)
     EXPECT_GE(checked, 10) << "the smoke test's six .mat files, three images and one model";
 }
 
+// lua_project/scenes/viewport_check.scene, the scene the editor viewport check loads (docs/testing.html): asymmetric
+// in both axes, so a flipped or colour-swapped frame shows
+TEST(LuaProjectViewportSceneTest, ViewportCheckSceneLoadsWithItsObjects)
+{
+    std::ifstream file(std::filesystem::path(N2_LUA_PROJECT_DIR) / "scenes" / "viewport_check.scene");
+    ASSERT_TRUE(file.is_open());
+    const json source = json::parse(file, nullptr, false);
+    ASSERT_FALSE(source.is_discarded());
+
+    const auto scene = Scene::FromJSON(source, true);
+    ASSERT_NE(scene, nullptr);
+
+    const auto cube = scene->FindGameObject("Viewport Blue Cube");
+    ASSERT_NE(cube, nullptr);
+    EXPECT_LT(cube->GetPositionable()->GetPosition().x, 0.0f) << "left";
+    const auto *cubeRenderer = cube->GetComponent<Example::CubeRenderer>();
+    ASSERT_NE(cubeRenderer, nullptr);
+    EXPECT_TRUE(SameColor(cubeRenderer->GetColor(), Common::Color::Blue));
+    EXPECT_FLOAT_EQ(cubeRenderer->GetSize().x, 1.5f);
+
+    const auto sphere = scene->FindGameObject("Viewport Red Sphere");
+    ASSERT_NE(sphere, nullptr);
+    EXPECT_GT(sphere->GetPositionable()->GetPosition().x, 0.0f) << "right";
+    const auto *sphereRenderer = sphere->GetComponent<Example::SphereRenderer>();
+    ASSERT_NE(sphereRenderer, nullptr);
+    EXPECT_TRUE(SameColor(sphereRenderer->GetColor(), Common::Color::Red));
+
+    const auto bar = scene->FindGameObject("Viewport Green Bar");
+    ASSERT_NE(bar, nullptr);
+    EXPECT_LT(bar->GetPositionable()->GetPosition().y, 0.0f) << "bottom";
+    const auto *barRenderer = bar->GetComponent<Example::CubeRenderer>();
+    ASSERT_NE(barRenderer, nullptr);
+    EXPECT_TRUE(SameColor(barRenderer->GetColor(), Common::Color::Green));
+
+    const auto text = scene->FindGameObject("Viewport Text");
+    ASSERT_NE(text, nullptr);
+    EXPECT_GT(text->GetPositionable()->GetPosition().y, 0.0f) << "top";
+    const auto *textRenderer = text->GetComponent<Rendering::TextRenderer>();
+    ASSERT_NE(textRenderer, nullptr);
+    EXPECT_EQ(textRenderer->GetText(), "Top: this text, upright");
+    EXPECT_FLOAT_EQ(textRenderer->GetFontSize(), 0.4f);
+}
+
 TEST_F(LuaProjectSceneTest, SmokeRobotModelHasItsMeshesMaterialsAndTexture)
 {
     const auto model =

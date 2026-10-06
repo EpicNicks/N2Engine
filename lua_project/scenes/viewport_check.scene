@@ -1,0 +1,102 @@
+{
+  "name": "Viewport Check",
+  "rootGameObjects": [
+    {
+      "uuid": "5f0c2b1e-7a43-4d2e-9b61-3c8e0a7d1f01",
+      "name": "Viewport Blue Cube",
+      "tag": "Untagged",
+      "layer": 0,
+      "isActive": true,
+      "positionable": {
+        "localPosition": { "x": -2.5, "y": 0.0, "z": 0.0 },
+        "localRotation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+        "localScale": { "x": 1.0, "y": 1.0, "z": 1.0 }
+      },
+      "components": [
+        {
+          "type": "CubeRenderer",
+          "data": {
+            "uuid": "5f0c2b1e-7a43-4d2e-9b61-3c8e0a7d1f11",
+            "isActive": true,
+            "_color": { "r": 0.0, "g": 0.0, "b": 1.0, "a": 1.0 },
+            "_size": { "x": 1.5, "y": 1.5, "z": 1.5 }
+          }
+        }
+      ],
+      "children": []
+    },
+    {
+      "uuid": "5f0c2b1e-7a43-4d2e-9b61-3c8e0a7d1f02",
+      "name": "Viewport Red Sphere",
+      "tag": "Untagged",
+      "layer": 0,
+      "isActive": true,
+      "positionable": {
+        "localPosition": { "x": 2.5, "y": 0.0, "z": 0.0 },
+        "localRotation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+        "localScale": { "x": 1.0, "y": 1.0, "z": 1.0 }
+      },
+      "components": [
+        {
+          "type": "SphereRenderer",
+          "data": {
+            "uuid": "5f0c2b1e-7a43-4d2e-9b61-3c8e0a7d1f12",
+            "isActive": true,
+            "_color": { "r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0 },
+            "_size": { "x": 1.0, "y": 1.0, "z": 1.0 }
+          }
+        }
+      ],
+      "children": []
+    },
+    {
+      "uuid": "5f0c2b1e-7a43-4d2e-9b61-3c8e0a7d1f03",
+      "name": "Viewport Green Bar",
+      "tag": "Untagged",
+      "layer": 0,
+      "isActive": true,
+      "positionable": {
+        "localPosition": { "x": 0.0, "y": -2.2, "z": 0.0 },
+        "localRotation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+        "localScale": { "x": 1.0, "y": 1.0, "z": 1.0 }
+      },
+      "components": [
+        {
+          "type": "CubeRenderer",
+          "data": {
+            "uuid": "5f0c2b1e-7a43-4d2e-9b61-3c8e0a7d1f13",
+            "isActive": true,
+            "_color": { "r": 0.0, "g": 1.0, "b": 0.0, "a": 1.0 },
+            "_size": { "x": 7.0, "y": 0.4, "z": 0.4 }
+          }
+        }
+      ],
+      "children": []
+    },
+    {
+      "uuid": "5f0c2b1e-7a43-4d2e-9b61-3c8e0a7d1f04",
+      "name": "Viewport Text",
+      "tag": "Untagged",
+      "layer": 0,
+      "isActive": true,
+      "positionable": {
+        "localPosition": { "x": -3.5, "y": 2.6, "z": 0.0 },
+        "localRotation": { "w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0 },
+        "localScale": { "x": 1.0, "y": 1.0, "z": 1.0 }
+      },
+      "components": [
+        {
+          "type": "TextRenderer",
+          "data": {
+            "uuid": "5f0c2b1e-7a43-4d2e-9b61-3c8e0a7d1f14",
+            "isActive": true,
+            "_text": "Top: this text, upright",
+            "_fontSize": 0.4,
+            "_color": { "r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0 }
+          }
+        }
+      ],
+      "children": []
+    }
+  ]
+}
