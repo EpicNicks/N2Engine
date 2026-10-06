@@ -265,7 +265,8 @@ TEST_F(EditorServerNoSceneTest, PolledCommandsLogNothing)
     LogCapture capture;
 
     // Each answers normally (an empty list, an Error response for no scene, samples or "no audio stream")
-    // without logging. RenderFrame isn't run here: it needs an initialized Application.
+    // without logging. RenderFrame, GetCameraPosition and GetEngineHealth aren't run here: they need an initialized
+    // Application. PolledCommandsAreTheOnesClientsPoll covers the predicate for them.
     EXPECT_EQ(Execute(server, CommandType::GetAllEntities).type, static_cast<uint8_t>(ResponseType::EntityList));
     (void)Execute(server, CommandType::GetAudio);
     EXPECT_EQ(Execute(server, CommandType::GetEntityTransform,
