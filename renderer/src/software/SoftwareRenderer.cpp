@@ -118,21 +118,25 @@ namespace
         s.smoothness = mat.GetFloat(smoothnessKey, 0.5f);
         s.alphaCutoff = mat.GetFloat(alphaCutoffKey, 0.0f);
 
-        static const std::string outlineKey = "uOutline";
-        static const std::string outlineColorKey = "uOutlineColor";
-        static const std::string shadowColorKey = "uShadowColor";
-        static const std::string shadowOffsetKey = "uShadowOffset";
-        s.textOutline = mat.GetFloat(outlineKey, 0.0f);
-        s.textOutlineColor = mat.GetVec4(outlineColorKey, {0, 0, 0, 0});
-        s.textShadowColor = mat.GetVec4(shadowColorKey, {0, 0, 0, 0});
-        const std::array<float, 4> shadowOffset = mat.GetVec4(shadowOffsetKey, {0, 0, 0, 0});
-        s.textShadowOffset = {shadowOffset[0], shadowOffset[1]};
-
         if (auto* t = dynamic_cast<const SWTexture*>(mat.GetTexture()); t && t->IsValid())
             s.texture = t;
 
         if (auto* sh = dynamic_cast<const SWShader*>(mat.GetShader()))
             s.shader = sh->GetType();
+
+        // Text effects: only the text shader reads them, so other draws skip the lookups
+        if (s.shader == SWShaderType::Text)
+        {
+            static const std::string outlineKey = "uOutline";
+            static const std::string outlineColorKey = "uOutlineColor";
+            static const std::string shadowColorKey = "uShadowColor";
+            static const std::string shadowOffsetKey = "uShadowOffset";
+            s.textOutline = mat.GetFloat(outlineKey, 0.0f);
+            s.textOutlineColor = mat.GetVec4(outlineColorKey, {0, 0, 0, 0});
+            s.textShadowColor = mat.GetVec4(shadowColorKey, {0, 0, 0, 0});
+            const std::array<float, 4> shadowOffset = mat.GetVec4(shadowOffsetKey, {0, 0, 0, 0});
+            s.textShadowOffset = {shadowOffset[0], shadowOffset[1]};
+        }
         return s;
     }
 
