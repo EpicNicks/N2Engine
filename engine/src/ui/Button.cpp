@@ -277,10 +277,21 @@ namespace N2Engine::UI
 
     // ===== Lifecycle =====
 
+    void Button::OnAttach()
+    {
+        // Settings loaded with the scene (e.g. not interactable) show at once
+        Transition(true);
+    }
+
     void Button::OnUpdate()
     {
-        // Also keeps the tint on the right graphic when the target changes (a graphic added, removed or
-        // loaded) without a state change
+        // Catches up with anything that changed the state's tint without a transition (settings loaded
+        // after OnAttach), and keeps the tint on the right graphic when the target changes (a graphic added,
+        // removed or loaded) without a state change
+        if (!_fading && !(TintFor(GetState()) == _currentTint))
+        {
+            Transition(false);
+        }
         UpdateFade(Time::GetUnscaledDeltaTime());
     }
 

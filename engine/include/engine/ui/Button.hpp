@@ -127,6 +127,7 @@ namespace N2Engine::UI
         bool Click();
 
         // ===== Lifecycle and pointer callbacks =====
+        void OnAttach() override;
         void OnUpdate() override;
         void OnEnable() override;
         void OnDisable() override;
