@@ -74,6 +74,8 @@ def generate(output_path=None, protocol_path=None):
     lines = [
         "// Auto-generated from protocol.json by generate_csharp.py - do not edit",
         "// Declarations only, with no encoding code; nothing uses or tests this client (unsupported).",
+        "// Optional jsonTypes keys are nullable reference and value types (string?, double?), so nullable context is on.",
+        "#nullable enable",
         "using System;",
         "",
         "namespace N2Engine.Editor.Protocol",
