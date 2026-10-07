@@ -803,7 +803,7 @@ function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
----"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "AudioSource", "AudioListener",
+---"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
@@ -921,6 +921,43 @@ function MeshRenderer:GetMaterial(index) end
 ---The mesh's bounds in its own space (before the object's transform)
 ---@return BoundingBox|nil nil without a mesh
 function MeshRenderer:GetBounds() end
+
+---A light the lit shaders use. Every active Light in the scene is collected each frame; a scene with none is lit by
+---a default directional light from the upper left and slightly behind (direction (0.5, -1, 0.3)).
+---@class Light : Component
+Light = {}
+
+---@param type "Directional"|"Point"|"Spot" an unknown name raises an error and changes nothing
+function Light:SetType(type) end
+
+---@return "Directional"|"Point"|"Spot"
+function Light:GetType() end
+
+---A directional light's direction of travel in world space, e.g. Vector3(0.4, -0.6, -0.7) shines down and away
+---from a camera on +Z (need not be normalized; default (0, -1, 0))
+---@param direction Vector3
+function Light:SetDirection(direction) end
+
+---@return Vector3
+function Light:GetDirection() end
+
+---@param color Color r, g and b are used; alpha is ignored
+function Light:SetColor(color) end
+
+---@return Color alpha 1
+function Light:GetColor() end
+
+---@param intensity number default 1
+function Light:SetIntensity(intensity) end
+
+---@return number
+function Light:GetIntensity() end
+
+---@param range number point and spot lights: how far the light reaches, in world units (default 10)
+function Light:SetRange(range) end
+
+---@return number
+function Light:GetRange() end
 
 ---3D model files (.glb, .gltf): see docs/meshes.html#models
 Model = {}
