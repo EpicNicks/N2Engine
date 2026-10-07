@@ -114,7 +114,7 @@ namespace ProtocolVectors
             {"PollEvents", [](BufferReader &r)
             {
                 const auto cmd = PollEventsCmd::Deserialize(r);
-                return json{{"afterSeq", cmd.afterSeq}, {"maxEvents", cmd.maxEvents}};
+                return json{{"epoch", cmd.epoch}, {"afterSeq", cmd.afterSeq}, {"maxEvents", cmd.maxEvents}};
             }},
             {"SetCameraPosition", [](BufferReader &r)
             {
@@ -165,7 +165,8 @@ namespace ProtocolVectors
             }},
             {"Events", [](BufferWriter &w, const json &f)
             {
-                WriteEvents(w, Uint32Field(f, "nextSeq"), Uint32Field(f, "dropped"), f.at("events"));
+                WriteEvents(w, Uint32Field(f, "epoch"), Uint32Field(f, "nextSeq"), Uint32Field(f, "dropped"),
+                            f.at("events"));
             }},
             {"CameraPosition", [](BufferWriter &w, const json &f)
             {

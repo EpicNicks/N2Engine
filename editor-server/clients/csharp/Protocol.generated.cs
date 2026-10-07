@@ -109,6 +109,7 @@ namespace N2Engine.Editor.Protocol
 
     public struct PollEventsRequest
     {
+        public uint Epoch;
         public uint AfterSeq;
         public uint MaxEvents;
     }
@@ -191,6 +192,7 @@ namespace N2Engine.Editor.Protocol
 
     public struct EventsResponse
     {
+        public uint Epoch;
         public uint NextSeq;
         public uint Dropped;
         /// <summary>JSON text: EditorEvent[]</summary>

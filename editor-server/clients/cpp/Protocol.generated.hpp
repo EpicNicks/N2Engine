@@ -100,6 +100,7 @@ struct HelloCmd
 
 struct PollEventsCmd
 {
+    uint32_t epoch;
     uint32_t afterSeq;
     uint32_t maxEvents;
 };
@@ -182,6 +183,7 @@ struct ServerInfoData
 
 struct EventsData
 {
+    uint32_t epoch;
     uint32_t nextSeq;
     uint32_t dropped;
     std::string events; // JSON: EditorEvent[]

@@ -138,6 +138,8 @@ namespace N2Engine::Editor::Protocol
 
     struct PollEventsCmd
     {
+        /// The epoch afterSeq belongs to (the previous poll's epoch), or 0 when the client doesn't know it
+        uint32_t epoch;
         /// The last seq the client has seen (the previous poll's nextSeq), or 0 for everything the server still has
         uint32_t afterSeq;
         /// The most events to return (the server caps it; 0 returns none and skips to the newest)
@@ -145,7 +147,7 @@ namespace N2Engine::Editor::Protocol
 
         static PollEventsCmd Deserialize(BufferReader &r)
         {
-            return {r.ReadU32(), r.ReadU32()};
+            return {r.ReadU32(), r.ReadU32(), r.ReadU32()};
         }
     };
 
@@ -411,10 +413,12 @@ namespace N2Engine::Editor::Protocol
         w.WriteBytes(payload.Data());
     }
 
-    /// PollEvents' response: nextSeq, dropped, then the events as one JSON array of EditorEvent objects
-    inline void WriteEvents(BufferWriter &w, uint32_t nextSeq, uint32_t dropped, const nlohmann::json &events)
+    /// PollEvents' response: epoch, nextSeq, dropped, then the events as one JSON array of EditorEvent objects
+    inline void WriteEvents(BufferWriter &w, uint32_t epoch, uint32_t nextSeq, uint32_t dropped,
+                            const nlohmann::json &events)
     {
         BufferWriter payload;
+        payload.WriteU32(epoch);
         payload.WriteU32(nextSeq);
         payload.WriteU32(dropped);
         WriteJson(payload, events);

@@ -127,6 +127,7 @@ export interface HelloRequest {
 }
 
 export interface PollEventsRequest {
+  epoch: number;
   afterSeq: number;
   maxEvents: number;
 }
@@ -203,6 +204,7 @@ export interface ServerInfoResponse {
 }
 
 export interface EventsResponse {
+  epoch: number;
   nextSeq: number;
   dropped: number;
   events: EditorEvent[];
@@ -565,6 +567,7 @@ export function decodeHelloRequest(payload: Uint8Array): HelloRequest {
 /** PollEvents's request payload (without the frame header) */
 export function encodePollEventsRequest(value: PollEventsRequest): Uint8Array {
   const writer = new ProtocolWriter();
+  writer.u32(value.epoch);
   writer.u32(value.afterSeq);
   writer.u32(value.maxEvents);
   return writer.finish();
@@ -573,9 +576,10 @@ export function encodePollEventsRequest(value: PollEventsRequest): Uint8Array {
 /** Reads PollEvents's request payload; bytes after the last field are ignored */
 export function decodePollEventsRequest(payload: Uint8Array): PollEventsRequest {
   const reader = new ProtocolReader(payload);
+  const epoch = reader.u32();
   const afterSeq = reader.u32();
   const maxEvents = reader.u32();
-  return { afterSeq, maxEvents };
+  return { epoch, afterSeq, maxEvents };
 }
 
 /** SetCameraPosition's request payload (without the frame header) */
@@ -800,6 +804,7 @@ export function decodeServerInfoResponse(payload: Uint8Array): ServerInfoRespons
 /** Events's payload (without the frame header) */
 export function encodeEventsResponse(value: EventsResponse): Uint8Array {
   const writer = new ProtocolWriter();
+  writer.u32(value.epoch);
   writer.u32(value.nextSeq);
   writer.u32(value.dropped);
   writer.json(value.events);
@@ -809,10 +814,11 @@ export function encodeEventsResponse(value: EventsResponse): Uint8Array {
 /** Reads Events's payload; bytes after the last field are ignored */
 export function decodeEventsResponse(payload: Uint8Array): EventsResponse {
   const reader = new ProtocolReader(payload);
+  const epoch = reader.u32();
   const nextSeq = reader.u32();
   const dropped = reader.u32();
   const events = reader.json() as EditorEvent[];
-  return { nextSeq, dropped, events };
+  return { epoch, nextSeq, dropped, events };
 }
 
 /** CameraPosition's payload (without the frame header) */

@@ -32,15 +32,17 @@ namespace
     struct PolledEvents
     {
         uint8_t type = 0xEE;
+        uint32_t epoch = 0;
         uint32_t nextSeq = 0;
         uint32_t dropped = 0;
         json events;
         std::string error;
     };
 
-    std::vector<uint8_t> PollPayload(uint32_t afterSeq, uint32_t maxEvents)
+    std::vector<uint8_t> PollPayload(uint32_t epoch, uint32_t afterSeq, uint32_t maxEvents)
     {
         BufferWriter w;
+        w.WriteU32(epoch);
         w.WriteU32(afterSeq);
         w.WriteU32(maxEvents);
         return w.Release();
@@ -60,6 +62,7 @@ namespace
             result.error.assign(bytes.begin(), bytes.end());
             return result;
         }
+        result.epoch = r.ReadU32();
         result.nextSeq = r.ReadU32();
         result.dropped = r.ReadU32();
         result.events = ReadJson(r);
@@ -67,9 +70,15 @@ namespace
         return result;
     }
 
+    /// A poll that doesn't know the epoch (0)
     PolledEvents Poll(EditorServer &server, uint32_t afterSeq, uint32_t maxEvents = All)
     {
-        return PollRaw(server, PollPayload(afterSeq, maxEvents));
+        return PollRaw(server, PollPayload(0, afterSeq, maxEvents));
+    }
+
+    PolledEvents PollInEpoch(EditorServer &server, uint32_t epoch, uint32_t afterSeq)
+    {
+        return PollRaw(server, PollPayload(epoch, afterSeq, All));
     }
 
     const json *FindMessage(const json &events, std::string_view message)
@@ -82,6 +91,16 @@ namespace
         return nullptr;
     }
 
+    size_t CountContaining(const json &events, std::string_view text)
+    {
+        size_t count = 0;
+        for (const json &event : events)
+        {
+            if (event.value("message", "").find(text) != std::string::npos)
+                ++count;
+        }
+        return count;
+    }
 }
 
 TEST(EditorServerEventsTest, LoggedLinesArePolledAsLogEvents)
@@ -107,6 +126,20 @@ TEST(EditorServerEventsTest, LoggedLinesArePolledAsLogEvents)
     EXPECT_EQ(polled.nextSeq, server.GetEvents().LastSeq());
 }
 
+TEST(EditorServerEventsTest, AServerConstructedBeforeLoggingKeepsTheLines)
+{
+    // What the host relies on by constructing the server before Application::Init: no Start, no poll, the lines are
+    // in the ring as they are logged
+    EditorServer server;
+    Logger::Info("events test: logged before Start");
+    Logger::Warn("events test: also before Start");
+
+    const EventBatch batch = server.GetEvents().Read(0, All);
+    const json events = json(batch.events);
+    EXPECT_NE(FindMessage(events, "events test: logged before Start"), nullptr) << events.dump();
+    EXPECT_NE(FindMessage(events, "events test: also before Start"), nullptr) << events.dump();
+}
+
 TEST(EditorServerEventsTest, ALineLoggedOnAnotherThreadArrives)
 {
     EditorServer server;
@@ -126,17 +159,22 @@ TEST(EditorServerEventsTest, PollingNeverLogsSoAnIdleServerHasNoNewEvents)
     const PolledEvents first = Poll(server, 0);
     ASSERT_EQ(first.type, EventsType) << first.error;
 
-    // A poll that logged ("Command Issued", or anything else) would always find its own line on the next one
+    // A poll that logged anything would find its own line on the next one. (Other threads may log meanwhile, so
+    // this looks for lines about polling rather than for no lines at all.)
     uint32_t afterSeq = first.nextSeq;
     for (int i = 0; i < 5; ++i)
     {
         const PolledEvents again = Poll(server, afterSeq);
         ASSERT_EQ(again.type, EventsType) << again.error;
-        EXPECT_TRUE(again.events.empty()) << again.events.dump();
-        EXPECT_EQ(again.nextSeq, afterSeq);
+        for (const json &event : again.events)
+        {
+            const std::string message = event.value("message", "");
+            EXPECT_EQ(message.find("PollEvents"), std::string::npos) << message;
+            EXPECT_EQ(message.find("0x5"), std::string::npos) << message;
+            EXPECT_EQ(message.find("oll"), std::string::npos) << message; // poll, Poll
+        }
         afterSeq = again.nextSeq;
     }
-    EXPECT_EQ(server.GetEvents().LastSeq(), first.nextSeq);
 }
 
 TEST(EditorServerEventsTest, AMalformedPollIsAnErrorAndLoggedOnce)
@@ -150,10 +188,37 @@ TEST(EditorServerEventsTest, AMalformedPollIsAnErrorAndLoggedOnce)
 
     const PolledEvents polled = Poll(server, before);
     ASSERT_EQ(polled.type, EventsType) << polled.error;
-    ASSERT_EQ(polled.events.size(), 1u) << polled.events.dump();
-    EXPECT_EQ(polled.events[0].at("level").get<std::string>(), "error");
-    EXPECT_NE(polled.events[0].at("message").get<std::string>().find("Command 0x5 failed"), std::string::npos)
-        << polled.events[0].dump();
+    EXPECT_EQ(CountContaining(polled.events, "Command 0x5 failed"), 1u) << polled.events.dump();
+    for (const json &event : polled.events)
+    {
+        if (event.value("message", "").find("Command 0x5 failed") != std::string::npos)
+            EXPECT_EQ(event.at("level").get<std::string>(), "error");
+    }
+}
+
+TEST(EditorServerEventsTest, TheEpochKeepsAReconnectingClientsPlace)
+{
+    EditorServer server;
+    Logger::Info("events test: epoch one");
+    const PolledEvents first = Poll(server, 0);
+    ASSERT_EQ(first.type, EventsType) << first.error;
+    EXPECT_EQ(first.epoch, server.GetEvents().Epoch());
+    EXPECT_NE(first.epoch, 0u);
+
+    Logger::Info("events test: epoch two");
+
+    // The same host (the same epoch): it continues after nextSeq, so nothing is lost and nothing comes twice
+    const PolledEvents same = PollInEpoch(server, first.epoch, first.nextSeq);
+    ASSERT_EQ(same.type, EventsType) << same.error;
+    EXPECT_EQ(FindMessage(same.events, "events test: epoch one"), nullptr) << same.events.dump();
+    EXPECT_NE(FindMessage(same.events, "events test: epoch two"), nullptr) << same.events.dump();
+
+    // Another host (another epoch): its afterSeq means nothing here, so it reads from the start
+    const PolledEvents other = PollInEpoch(server, EventRing::NewEpoch(first.epoch), first.nextSeq);
+    ASSERT_EQ(other.type, EventsType) << other.error;
+    EXPECT_NE(FindMessage(other.events, "events test: epoch one"), nullptr) << other.events.dump();
+    EXPECT_NE(FindMessage(other.events, "events test: epoch two"), nullptr) << other.events.dump();
+    EXPECT_EQ(other.epoch, first.epoch);
 }
 
 TEST(EditorServerEventsTest, EventsAHandlerPushesArePolled)

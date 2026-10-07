@@ -778,9 +778,9 @@ namespace N2Engine::Editor
 
         // Nothing here may log: every logged line is an event, so a poll that logged would always find one more. (Only
         // a failure, such as a malformed payload, is logged, by ExecuteCommand, as for every polled command.)
-        EventBatch batch = _events.Read(cmd.afterSeq, cmd.maxEvents);
+        EventBatch batch = _events.Read(cmd.afterSeq, cmd.maxEvents, cmd.epoch);
         BufferWriter response;
-        WriteEvents(response, batch.nextSeq, batch.dropped, nlohmann::json(std::move(batch.events)));
+        WriteEvents(response, batch.epoch, batch.nextSeq, batch.dropped, nlohmann::json(std::move(batch.events)));
         SendResponse(clientSocket, response.Release());
     }
 
