@@ -363,7 +363,11 @@ jobs:
             Write-Host "Editor host with --exit-on-disconnect exited cleanly when its client left"
           }
           finally {
-            foreach ($p in $proc, $proc2) { if ($p -and -not $p.HasExited) { $p.Kill() } }
+            # A failing Kill (the host exiting meanwhile) must not replace the error that got us here
+            foreach ($p in $proc, $proc2) {
+              try { if ($p -and -not $p.HasExited) { $p.Kill() } }
+              catch { Write-Host "Couldn't kill host process $($p.Id): $($_.Exception.Message)" }
+            }
             Write-Host "----- host stdout -----"; Get-Content $logPath -ErrorAction SilentlyContinue
             Write-Host "----- host stderr -----"; Get-Content $errPath -ErrorAction SilentlyContinue
             Write-Host "----- host (--exit-on-disconnect) stdout -----"; Get-Content $logPath2 -ErrorAction SilentlyContinue
