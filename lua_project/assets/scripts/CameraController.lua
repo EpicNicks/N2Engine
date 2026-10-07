@@ -1,5 +1,9 @@
 -- Fly camera: "Camera Move" moves relative to where the camera faces, "Camera Rotate" turns and looks.
 -- Port of test_project/src/CameraController.cpp.
+-- "Station 1" ... "Station N" (keys 1-7 in scene.lua) jump to the smoke test's stations (SmokeStations.lua), looking
+-- straight down -Z; it starts at station 1.
+
+local Stations = require("scripts.SmokeStations")
 
 local CameraController = {}
 CameraController.__index = CameraController
@@ -14,6 +18,8 @@ function CameraController:OnAttach()
     self.pitch = 0.0
     self.yaw = 0.0
 
+    self:GoToStation(1)
+
     local controls = Input.LoadActionMap("Main Controls")
     if controls == nil then
         Debug.Warn("CameraController: 'Main Controls' action map not found")
@@ -26,6 +32,30 @@ function CameraController:OnAttach()
     controls:Get("Camera Rotate"):Subscribe(function(action)
         self.look = action:GetVector2Value()
     end)
+
+    for index = 1, #(Stations or {}) do
+        local station = controls:Get("Station " .. index)
+        if station ~= nil then
+            station:Subscribe(function(action)
+                if action:GetPhase() == ActionPhase.Started then
+                    self:GoToStation(index)
+                end
+            end)
+        end
+    end
+end
+
+-- Puts the camera at station `index`'s viewpoint, looking down -Z. Nothing without a camera or such a station.
+function CameraController:GoToStation(index)
+    local station = Stations and Stations[index]
+    local camera = Camera.Main()
+    if station == nil or camera == nil then
+        return
+    end
+    self.pitch = 0.0
+    self.yaw = 0.0
+    camera:SetPosition(station.camera)
+    camera:SetRotation(Quaternion.FromEulerAngles(self.pitch, self.yaw, 0.0))
 end
 
 function CameraController:OnUpdate()

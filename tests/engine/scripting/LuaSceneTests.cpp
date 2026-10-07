@@ -1,7 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include <math/UUID.hpp>
 #include <math/Vector3.hpp>
@@ -17,14 +22,26 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/io/Resources.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SphereCollider.hpp"
+#include "engine/rendering/Light.hpp"
+#include "engine/rendering/Material.hpp"
+#include "engine/rendering/MeshRenderer.hpp"
+#include "engine/rendering/Model.hpp"
+#include "engine/rendering/TextRenderer.hpp"
+#include "engine/rendering/Texture.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaJson.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/bindings/LuaBindings.hpp"
+#include "engine/text/TextEffects.hpp"
+#include "engine/ui/Button.hpp"
+#include "engine/ui/Canvas.hpp"
+#include "engine/ui/Image.hpp"
+#include "engine/ui/UIText.hpp"
 
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
@@ -262,6 +279,13 @@ protected:
         ASSERT_TRUE(LuaRuntime::Instance().RunFile(IO::ResourcePath("res://scene.lua")));
     }
 
+    // Later suites shouldn't find the smoke scene's canvases, buttons and light in the current scene
+    static void TearDownTestSuite()
+    {
+        SceneManager::AddScene(Scene::Create("LuaProjectSceneTest_Empty"), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+    }
+
     static std::shared_ptr<GameObject> Find(const std::string &name)
     {
         return SceneManager::GetCurSceneRef().FindGameObject(name);
@@ -340,6 +364,9 @@ TEST_F(LuaProjectSceneTest, BehaviourScriptsLoad)
     for (const auto &[objectName, scriptPath] : {
              std::pair{"Camera Controller", "res://scripts/CameraController.lua"},
              std::pair{"Quit Handler", "res://scripts/QuitHandler.lua"},
+             std::pair{"Smoke HUD", "res://scripts/SmokeHud.lua"},
+             std::pair{"Material Textured Cube", "res://scripts/Spin.lua"},
+             std::pair{"Robot Spinning", "res://scripts/Spin.lua"},
          })
     {
         const auto go = Find(objectName);
@@ -354,4 +381,356 @@ TEST_F(LuaProjectSceneTest, BehaviourScriptsLoad)
         EXPECT_NO_THROW(script->OnAttach()) << scriptPath;
         EXPECT_NO_THROW(script->OnUpdate()) << scriptPath;
     }
+}
+
+// ============================================================================
+// The GPU smoke test's stations (docs/testing.html, "GPU smoke test"), built headless: CI can't see their pixels,
+// but a broken asset, a missing binding or a script error in scene.lua fails here
+// ============================================================================
+
+namespace
+{
+    template <typename T>
+    T *ComponentOf(const std::shared_ptr<GameObject> &go)
+    {
+        return go ? go->GetComponent<T>() : nullptr;
+    }
+
+    std::string UITextOf(const std::shared_ptr<GameObject> &go)
+    {
+        const auto *text = ComponentOf<UI::UIText>(go);
+        return text ? text->GetText() : std::string("<no UIText>");
+    }
+
+    /// The count in a counter label such as "Clicks: 3" (its text after `prefix`), or -1 if it doesn't read so
+    int CounterOf(const std::shared_ptr<GameObject> &go, const std::string &prefix)
+    {
+        const std::string text = UITextOf(go);
+        if (!text.starts_with(prefix) || text.size() == prefix.size())
+        {
+            return -1;
+        }
+        const std::string digits = text.substr(prefix.size());
+        if (!std::ranges::all_of(digits, [](const unsigned char c) { return std::isdigit(c) != 0; }))
+        {
+            return -1;
+        }
+        return std::stoi(digits);
+    }
+}
+
+TEST_F(LuaProjectSceneTest, SmokeWorldTextAndEffects)
+{
+    const auto *large = ComponentOf<Rendering::TextRenderer>(Find("Text Large"));
+    ASSERT_NE(large, nullptr);
+    EXPECT_FLOAT_EQ(large->GetFontSize(), 1.0f);
+    const auto *smallText = ComponentOf<Rendering::TextRenderer>(Find("Text Small"));
+    ASSERT_NE(smallText, nullptr);
+    EXPECT_FLOAT_EQ(smallText->GetFontSize(), 0.25f);
+    const auto *paragraph = ComponentOf<Rendering::TextRenderer>(Find("Text Paragraph"));
+    ASSERT_NE(paragraph, nullptr);
+    EXPECT_GT(paragraph->GetMaxWidth(), 0.0f);
+    EXPECT_EQ(paragraph->GetHorizontalAlign(), Text::HorizontalAlign::Center);
+
+    const auto *outline = ComponentOf<Rendering::TextRenderer>(Find("Effect Outline"));
+    ASSERT_NE(outline, nullptr);
+    EXPECT_FLOAT_EQ(outline->GetEffects().outlineWidth, 0.08f);
+
+    const auto *shadow = ComponentOf<Rendering::TextRenderer>(Find("Effect Shadow"));
+    ASSERT_NE(shadow, nullptr);
+    EXPECT_FLOAT_EQ(shadow->GetEffects().shadowOffset.x, 0.08f);
+    EXPECT_FLOAT_EQ(shadow->GetEffects().shadowOffset.y, -0.08f);
+    EXPECT_GT(shadow->GetEffects().shadowColor.a, 0.0f) << "a transparent shadow draws nothing";
+
+    const auto *glow = ComponentOf<Rendering::TextRenderer>(Find("Effect Glow"));
+    ASSERT_NE(glow, nullptr);
+    EXPECT_FLOAT_EQ(glow->GetEffects().shadowSoftness, 0.12f);
+
+    const auto *softness = ComponentOf<Rendering::TextRenderer>(Find("Effect Softness"));
+    ASSERT_NE(softness, nullptr);
+    EXPECT_FLOAT_EQ(softness->GetEffects().softness, 0.12f);
+
+    const auto *combined = ComponentOf<Rendering::TextRenderer>(Find("Effect Combined"));
+    ASSERT_NE(combined, nullptr);
+    const Text::TextEffects &effects = combined->GetEffects();
+    EXPECT_GT(effects.outlineWidth, 0.0f);
+    EXPECT_GT(effects.shadowSoftness, 0.0f);
+    EXPECT_GT(effects.softness, 0.0f);
+    // Inside the default font's spread (0.15 em), so drawing doesn't reduce them (docs/text.html, Text effects)
+    EXPECT_LE(effects.outlineWidth + effects.softness / 2.0f, 0.15f);
+    EXPECT_LE(effects.outlineWidth + effects.shadowSoftness / 2.0f + effects.shadowOffset.x, 0.15f);
+}
+
+TEST_F(LuaProjectSceneTest, SmokeWorldCanvasButtonCountsClicks)
+{
+    const auto *canvas = ComponentOf<UI::Canvas>(Find("Smoke World Canvas"));
+    ASSERT_NE(canvas, nullptr);
+    EXPECT_TRUE(canvas->IsWorldSpace());
+
+    const auto *icon = ComponentOf<UI::Image>(Find("World Icon"));
+    ASSERT_NE(icon, nullptr);
+    ASSERT_NE(icon->GetSprite(), nullptr);
+    EXPECT_TRUE(icon->GetSprite()->IsLoaded());
+
+    auto *button = ComponentOf<UI::Button>(Find("World Button"));
+    ASSERT_NE(button, nullptr);
+    const int before = CounterOf(Find("World Counter"), "World clicks: ");
+    ASSERT_GE(before, 0) << UITextOf(Find("World Counter"));
+    EXPECT_TRUE(button->Click());
+    EXPECT_EQ(CounterOf(Find("World Counter"), "World clicks: "), before + 1);
+}
+
+TEST_F(LuaProjectSceneTest, SmokeScreenUIButtonsCountAndToggle)
+{
+    const auto panel = Find("Smoke UI Panel");
+    ASSERT_NE(panel, nullptr);
+    const auto *canvas = ComponentOf<UI::Canvas>(panel);
+    ASSERT_NE(canvas, nullptr);
+    EXPECT_FALSE(canvas->IsWorldSpace());
+    // SmokeHud shows the panel only at its station, and an inactive button ignores clicks
+    panel->SetActive(true);
+
+    const auto *icon = ComponentOf<UI::Image>(Find("UI Icon"));
+    ASSERT_NE(icon, nullptr);
+    ASSERT_NE(icon->GetSprite(), nullptr);
+    EXPECT_TRUE(icon->GetSprite()->IsLoaded());
+
+    const auto *wrapped = ComponentOf<UI::UIText>(Find("UI Wrap Text"));
+    ASSERT_NE(wrapped, nullptr);
+    EXPECT_TRUE(wrapped->GetWrap());
+    const auto *bottomRight = ComponentOf<UI::UIText>(Find("UI Align Right / Bottom"));
+    ASSERT_NE(bottomRight, nullptr);
+    EXPECT_EQ(bottomRight->GetHorizontalAlign(), Text::HorizontalAlign::Right);
+    EXPECT_EQ(bottomRight->GetVerticalAlign(), Text::VerticalAlign::Bottom);
+
+    auto *button = ComponentOf<UI::Button>(Find("UI Button"));
+    auto *toggle = ComponentOf<UI::Button>(Find("UI Toggle"));
+    ASSERT_NE(button, nullptr);
+    ASSERT_NE(toggle, nullptr);
+
+    const int before = CounterOf(Find("UI Counter"), "Clicks: ");
+    ASSERT_GE(before, 0) << UITextOf(Find("UI Counter"));
+    ASSERT_TRUE(button->IsInteractable());
+    EXPECT_TRUE(button->Click());
+    EXPECT_EQ(CounterOf(Find("UI Counter"), "Clicks: "), before + 1);
+
+    // The toggle disables the button, which then ignores clicks, and enables it again
+    EXPECT_TRUE(toggle->Click());
+    EXPECT_FALSE(button->IsInteractable());
+    EXPECT_FALSE(button->Click());
+    EXPECT_EQ(CounterOf(Find("UI Counter"), "Clicks: "), before + 1);
+    EXPECT_TRUE(toggle->Click());
+    EXPECT_TRUE(button->IsInteractable());
+}
+
+TEST_F(LuaProjectSceneTest, SmokeSceneHasASunLightingTheStationsFromTheFront)
+{
+    const auto *sun = ComponentOf<Rendering::Light>(Find("Sun"));
+    ASSERT_NE(sun, nullptr);
+    EXPECT_EQ(sun->type, Rendering::LightType::Directional);
+    // The cameras sit on +Z looking down -Z; the light travels away from them, so the faces they see are lit
+    EXPECT_LT(sun->direction.z, 0.0f);
+    EXPECT_LT(sun->direction.y, 0.0f);
+    EXPECT_GT(sun->intensity, 0.0f);
+}
+
+TEST_F(LuaProjectSceneTest, SmokeMaterialsComeFromTheirMatFiles)
+{
+    const auto *cube = ComponentOf<Rendering::MeshRenderer>(Find("Material Textured Cube"));
+    ASSERT_NE(cube, nullptr);
+    const auto cubeMaterial = cube->GetMaterial(0);
+    ASSERT_NE(cubeMaterial, nullptr);
+    EXPECT_EQ(cubeMaterial->GetShading(), Rendering::ShadingModel::Lit);
+    ASSERT_NE(cubeMaterial->GetBaseColorTexture(), nullptr);
+    EXPECT_TRUE(cubeMaterial->GetBaseColorTexture()->IsLoaded());
+
+    for (const auto &[objectName, alphaMode] : {
+             std::pair{"Material Opaque Quad", Rendering::AlphaMode::Opaque},
+             std::pair{"Material Blend Quad", Rendering::AlphaMode::Blend},
+             std::pair{"Material Mask Quad", Rendering::AlphaMode::Mask},
+         })
+    {
+        const auto *quad = ComponentOf<Rendering::MeshRenderer>(Find(objectName));
+        ASSERT_NE(quad, nullptr) << objectName;
+        const auto material = quad->GetMaterial(0);
+        ASSERT_NE(material, nullptr) << objectName;
+        EXPECT_EQ(material->GetAlphaMode(), alphaMode) << objectName;
+        ASSERT_NE(material->GetBaseColorTexture(), nullptr) << objectName;
+        EXPECT_TRUE(material->GetBaseColorTexture()->IsLoaded()) << objectName;
+    }
+
+    const auto *lit = ComponentOf<Rendering::MeshRenderer>(Find("Material Lit Sphere"));
+    const auto *unlit = ComponentOf<Rendering::MeshRenderer>(Find("Material Unlit Sphere"));
+    ASSERT_NE(lit, nullptr);
+    ASSERT_NE(unlit, nullptr);
+    ASSERT_NE(lit->GetMaterial(0), nullptr);
+    ASSERT_NE(unlit->GetMaterial(0), nullptr);
+    EXPECT_EQ(lit->GetMaterial(0)->GetShading(), Rendering::ShadingModel::Lit);
+    EXPECT_EQ(unlit->GetMaterial(0)->GetShading(), Rendering::ShadingModel::Unlit);
+}
+
+TEST_F(LuaProjectSceneTest, SmokeModelIsInstantiatedWithItsHierarchy)
+{
+    for (const std::string holderName : {"Robot Static", "Robot Spinning"})
+    {
+        const auto holder = Find(holderName);
+        ASSERT_NE(holder, nullptr) << holderName;
+        const auto robot = holder->FindChild("smoke_robot");
+        ASSERT_NE(robot, nullptr) << holderName;
+
+        // smoke_robot > Robot > Body > (Arm.L, Arm.R, Head > Antenna)
+        const auto body = robot->FindChildRecursive("Body");
+        ASSERT_NE(body, nullptr) << holderName;
+        for (const std::string part : {"Arm.L", "Arm.R", "Head"})
+        {
+            const auto child = body->FindChild(part);
+            ASSERT_NE(child, nullptr) << holderName << " " << part;
+            EXPECT_NE(child->GetComponent<Rendering::MeshRenderer>(), nullptr) << holderName << " " << part;
+        }
+        const auto head = body->FindChild("Head");
+        ASSERT_NE(head->FindChild("Antenna"), nullptr) << holderName;
+
+        const auto *bodyRenderer = body->GetComponent<Rendering::MeshRenderer>();
+        ASSERT_NE(bodyRenderer, nullptr) << holderName;
+        const auto bodyMaterial = bodyRenderer->GetMaterial(0);
+        ASSERT_NE(bodyMaterial, nullptr) << holderName;
+        ASSERT_NE(bodyMaterial->GetBaseColorTexture(), nullptr) << "the face texture: " << holderName;
+        EXPECT_TRUE(bodyMaterial->GetBaseColorTexture()->IsLoaded()) << holderName;
+    }
+}
+
+TEST_F(LuaProjectSceneTest, SmokeHudShowsTheFirstStation)
+{
+    const auto hud = Find("Smoke HUD");
+    ASSERT_NE(hud, nullptr);
+    auto *script = hud->GetComponent<LuaComponent>();
+    ASSERT_NE(script, nullptr);
+    script->OnAttach();
+
+    EXPECT_EQ(UITextOf(Find("HUD Title")), "Station 1/7: Physics");
+    const auto panel = Find("Smoke UI Panel");
+    ASSERT_NE(panel, nullptr);
+    EXPECT_FALSE(panel->IsActive()) << "the UI panel shows only at its own station";
+    EXPECT_FALSE(UITextOf(Find("HUD Caption")).empty());
+}
+
+// Every asset under lua_project/assets loads: each .mat with the texture it names, each image, and each model with
+// no import warnings and all its meshes and textures. A new smoke asset is covered without a new test.
+TEST_F(LuaProjectSceneTest, EveryProjectAssetLoads)
+{
+    namespace fs = std::filesystem;
+    const fs::path assets = fs::path(N2_LUA_PROJECT_DIR) / "assets";
+    auto &resources = IO::Resources::Instance();
+    int checked = 0;
+    for (const auto &entry : fs::recursive_directory_iterator(assets))
+    {
+        if (!entry.is_regular_file())
+        {
+            continue;
+        }
+        std::string extension = entry.path().extension().string();
+        std::ranges::transform(extension, extension.begin(),
+                               [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const std::string resourcePath = "res://" + fs::relative(entry.path(), assets).generic_string();
+
+        if (extension == ".mat")
+        {
+            const auto material = resources.Load<Rendering::Material>(fs::path(resourcePath));
+            ASSERT_NE(material, nullptr) << resourcePath;
+            std::ifstream file(entry.path());
+            const json source = json::parse(file, nullptr, false);
+            ASSERT_TRUE(source.is_object()) << resourcePath << " isn't a JSON object";
+            if (source.contains("baseColorTexture") && source["baseColorTexture"].is_string())
+            {
+                ASSERT_NE(material->GetBaseColorTexture(), nullptr) << resourcePath;
+                EXPECT_TRUE(material->GetBaseColorTexture()->IsLoaded()) << resourcePath;
+            }
+            ++checked;
+        }
+        else if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga" ||
+                 extension == ".bmp")
+        {
+            const auto texture = resources.Load<Rendering::Texture>(fs::path(resourcePath));
+            ASSERT_NE(texture, nullptr) << resourcePath;
+            EXPECT_TRUE(texture->IsLoaded()) << resourcePath;
+            ++checked;
+        }
+        else if (extension == ".gltf" || extension == ".glb")
+        {
+            const auto model = resources.Load<Rendering::Model>(fs::path(resourcePath));
+            ASSERT_NE(model, nullptr) << resourcePath;
+            ASSERT_TRUE(model->IsLoaded()) << resourcePath;
+            const auto &warnings = model->GetImportWarnings();
+            EXPECT_TRUE(warnings.empty()) << resourcePath << ": " << (warnings.empty() ? "" : warnings.front());
+            EXPECT_FALSE(model->GetMeshes().empty()) << resourcePath;
+            for (const auto &mesh : model->GetMeshes())
+            {
+                EXPECT_NE(mesh, nullptr) << resourcePath;
+            }
+            for (const auto &texture : model->GetTextures())
+            {
+                ASSERT_NE(texture, nullptr) << resourcePath;
+                EXPECT_TRUE(texture->IsLoaded()) << resourcePath;
+            }
+            ++checked;
+        }
+    }
+    EXPECT_GE(checked, 10) << "the smoke test's six .mat files, three images and one model";
+}
+
+// lua_project/scenes/viewport_check.scene, the scene the editor viewport check loads (docs/testing.html): asymmetric
+// in both axes, so a flipped or colour-swapped frame shows
+TEST(LuaProjectViewportSceneTest, ViewportCheckSceneLoadsWithItsObjects)
+{
+    std::ifstream file(std::filesystem::path(N2_LUA_PROJECT_DIR) / "scenes" / "viewport_check.scene");
+    ASSERT_TRUE(file.is_open());
+    const json source = json::parse(file, nullptr, false);
+    ASSERT_FALSE(source.is_discarded());
+
+    const auto scene = Scene::FromJSON(source, true);
+    ASSERT_NE(scene, nullptr);
+
+    const auto cube = scene->FindGameObject("Viewport Blue Cube");
+    ASSERT_NE(cube, nullptr);
+    EXPECT_LT(cube->GetPositionable()->GetPosition().x, 0.0f) << "left";
+    const auto *cubeRenderer = cube->GetComponent<Example::CubeRenderer>();
+    ASSERT_NE(cubeRenderer, nullptr);
+    EXPECT_TRUE(SameColor(cubeRenderer->GetColor(), Common::Color::Blue));
+    EXPECT_FLOAT_EQ(cubeRenderer->GetSize().x, 1.5f);
+
+    const auto sphere = scene->FindGameObject("Viewport Red Sphere");
+    ASSERT_NE(sphere, nullptr);
+    EXPECT_GT(sphere->GetPositionable()->GetPosition().x, 0.0f) << "right";
+    const auto *sphereRenderer = sphere->GetComponent<Example::SphereRenderer>();
+    ASSERT_NE(sphereRenderer, nullptr);
+    EXPECT_TRUE(SameColor(sphereRenderer->GetColor(), Common::Color::Red));
+
+    const auto bar = scene->FindGameObject("Viewport Green Bar");
+    ASSERT_NE(bar, nullptr);
+    EXPECT_LT(bar->GetPositionable()->GetPosition().y, 0.0f) << "bottom";
+    const auto *barRenderer = bar->GetComponent<Example::CubeRenderer>();
+    ASSERT_NE(barRenderer, nullptr);
+    EXPECT_TRUE(SameColor(barRenderer->GetColor(), Common::Color::Green));
+
+    const auto text = scene->FindGameObject("Viewport Text");
+    ASSERT_NE(text, nullptr);
+    EXPECT_GT(text->GetPositionable()->GetPosition().y, 0.0f) << "top";
+    const auto *textRenderer = text->GetComponent<Rendering::TextRenderer>();
+    ASSERT_NE(textRenderer, nullptr);
+    EXPECT_EQ(textRenderer->GetText(), "Top: this text, upright");
+    EXPECT_FLOAT_EQ(textRenderer->GetFontSize(), 0.4f);
+}
+
+TEST_F(LuaProjectSceneTest, SmokeRobotModelHasItsMeshesMaterialsAndTexture)
+{
+    const auto model =
+        IO::Resources::Instance().Load<Rendering::Model>(std::filesystem::path("res://models/smoke_robot.gltf"));
+    ASSERT_NE(model, nullptr);
+    ASSERT_TRUE(model->IsLoaded());
+    EXPECT_EQ(model->GetMeshes().size(), 3u);    // Body, Limb, Head
+    EXPECT_EQ(model->GetMaterials().size(), 3u); // Face (textured), Orange, Teal
+    ASSERT_EQ(model->GetTextures().size(), 1u);
+    ASSERT_NE(model->GetTextures()[0], nullptr);
+    EXPECT_EQ(model->GetTextures()[0]->GetWidth(), 64u);
+    EXPECT_EQ(model->GetNodes().size(), 6u);
 }
