@@ -142,14 +142,78 @@ TEST(EventRingTest, OneReadReturnsAtMostMaxEventsPerRead)
 
 TEST(EventRingTest, AnAfterSeqNeverIssuedReadsAsZero)
 {
-    // A client still holding a seq from an earlier host process gets this one's backlog, rather than nothing until
-    // the seqs catch up
+    // A client that doesn't know the epoch (0) and holds a seq this epoch hasn't reached gets the backlog, rather than
+    // nothing until the seqs catch up
     EventRing ring;
     PushLogs(ring, 3);
     const EventBatch batch = ring.Read(500, All);
     EXPECT_EQ(Seqs(batch), Range(1, 3));
     EXPECT_EQ(batch.nextSeq, 3u);
     EXPECT_EQ(batch.dropped, 0u);
+}
+
+// ==================== Epochs ====================
+
+TEST(EventRingTest, EveryRingHasANonZeroEpochThatReadsReport)
+{
+    const EventRing ring;
+    EXPECT_NE(ring.Epoch(), 0u);
+    EXPECT_EQ(ring.Read(0, All).epoch, ring.Epoch());
+
+    for (int i = 0; i < 100; ++i)
+    {
+        const uint32_t epoch = EventRing::NewEpoch(7);
+        EXPECT_NE(epoch, 0u);
+        EXPECT_NE(epoch, 7u);
+    }
+}
+
+TEST(EventRingTest, AnAfterSeqFromAnotherEpochReadsAsZero)
+{
+    // A client reconnecting to a restarted host: its afterSeq is within the new host's seqs, but from another epoch
+    EventRing ring;
+    PushLogs(ring, 5);
+    const uint32_t otherEpoch = EventRing::NewEpoch(ring.Epoch());
+
+    const EventBatch other = ring.Read(3, All, otherEpoch);
+    EXPECT_EQ(Seqs(other), Range(1, 5));
+    EXPECT_EQ(other.epoch, ring.Epoch());
+    EXPECT_EQ(other.dropped, 0u);
+
+    // The same epoch (a client reconnecting to the same host) continues where it was: nothing lost, nothing twice
+    EXPECT_EQ(Seqs(ring.Read(3, All, ring.Epoch())), Range(4, 5));
+    // An unknown epoch (0) takes afterSeq as it is
+    EXPECT_EQ(Seqs(ring.Read(3, All, 0)), Range(4, 5));
+}
+
+TEST(EventRingTest, PastTheLastSeqTheRingStartsANewEpochAtOne)
+{
+    EventRing ring;
+    ring.SetLastSeqForTesting(EventRing::MaxSeq - 1);
+    const uint32_t firstEpoch = ring.Epoch();
+
+    EXPECT_EQ(ring.PushLog(Logger::LogLevel::Info, "last of the epoch", 0), EventRing::MaxSeq);
+    const EventBatch last = ring.Read(EventRing::MaxSeq - 1, All, firstEpoch);
+    EXPECT_EQ(Seqs(last), (std::vector<uint32_t>{EventRing::MaxSeq}));
+    EXPECT_EQ(last.nextSeq, EventRing::MaxSeq);
+    EXPECT_EQ(last.dropped, 0u);
+    EXPECT_TRUE(ring.Read(EventRing::MaxSeq, All, firstEpoch).events.empty());
+
+    // The next event can't have a seq: the ring empties and numbering restarts at 1 under a new epoch
+    EXPECT_EQ(ring.PushLog(Logger::LogLevel::Info, "first of the next", 0), 1u);
+    EXPECT_NE(ring.Epoch(), firstEpoch);
+    EXPECT_NE(ring.Epoch(), 0u);
+    EXPECT_EQ(ring.Size(), 1u);
+    EXPECT_EQ(ring.LastSeq(), 1u);
+
+    // A client of the old epoch resyncs: its afterSeq reads as 0, so it gets the new epoch's events from the start
+    const EventBatch resync = ring.Read(last.nextSeq, All, last.epoch);
+    EXPECT_EQ(resync.epoch, ring.Epoch());
+    ASSERT_EQ(Seqs(resync), (std::vector<uint32_t>{1}));
+    EXPECT_EQ(resync.events[0].at("message").get<std::string>(), "first of the next");
+    EXPECT_EQ(resync.nextSeq, 1u);
+    // So does one that doesn't know epochs: MaxSeq is newer than anything the new epoch has issued
+    EXPECT_EQ(Seqs(ring.Read(EventRing::MaxSeq, All)), (std::vector<uint32_t>{1}));
 }
 
 // ==================== Bounds and the dropped count ====================

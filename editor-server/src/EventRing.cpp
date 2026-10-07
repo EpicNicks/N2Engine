@@ -2,12 +2,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <random>
 #include <utility>
 
 namespace N2Engine::Editor
 {
     EventRing::EventRing(const size_t maxEvents, const size_t maxBytes)
-        : _maxEvents(std::max<size_t>(maxEvents, 1)), _maxBytes(maxBytes)
+        : _maxEvents(std::max<size_t>(maxEvents, 1)), _maxBytes(maxBytes), _epoch(NewEpoch())
     {
     }
 
@@ -39,9 +40,20 @@ namespace N2Engine::Editor
     uint32_t EventRing::Store(nlohmann::json event, const size_t bytes)
     {
         std::lock_guard lock(_mutex);
-        const uint32_t seq = ++_lastSeq;
+        // Past the uint32 range seqs can't go on: a new epoch, numbered from 1, tells every reader to start over
+        if (_lastSeq >= MaxSeq)
+        {
+            _droppedTotal += _entries.size();
+            ClearLocked();
+            _lastSeq = 0;
+            _epoch = NewEpoch(_epoch);
+        }
+
+        // _lastSeq moves only once the event is stored: if anything here throws (out of memory), the seq isn't used
+        const auto seq = static_cast<uint32_t>(_lastSeq + 1);
         event["seq"] = seq;
         _entries.push_back({seq, std::move(event), bytes});
+        _lastSeq = seq;
         _bytes += bytes;
 
         // The oldest go first; the newest is always kept, even when it alone is over the byte limit
@@ -54,22 +66,26 @@ namespace N2Engine::Editor
         return seq;
     }
 
-    EventBatch EventRing::Read(uint32_t afterSeq, const uint32_t maxEvents) const
+    EventBatch EventRing::Read(uint32_t afterSeq, const uint32_t maxEvents, const uint32_t epoch) const
     {
         EventBatch batch;
         std::lock_guard lock(_mutex);
+        batch.epoch = _epoch;
 
-        // A seq this ring never issued comes from an earlier host process (seqs restart with the host): read from the
-        // start, so a client that reconnects to a restarted host gets its backlog instead of waiting for seqs to catch up
-        if (afterSeq > _lastSeq)
+        // afterSeq counts within an epoch: one from another (an earlier host process, or before the seqs started over)
+        // says nothing about this one, so read from the start. A reader that doesn't know the epoch (0) can still pass
+        // a seq this epoch hasn't reached, which can only come from another epoch too.
+        if ((epoch != 0 && epoch != _epoch) || afterSeq > _lastSeq)
             afterSeq = 0;
 
-        // Seqs are consecutive, so the oldest retained one says how many after afterSeq fell off
-        const uint32_t oldest = _entries.empty() ? _lastSeq + 1 : _entries.front().seq;
-        if (oldest > afterSeq + 1)
-            batch.dropped = oldest - afterSeq - 1;
+        // Seqs are consecutive, so the oldest retained one says how many after afterSeq fell off (64-bit, so seq
+        // MaxSeq + 1 doesn't wrap)
+        const uint64_t oldest = _entries.empty() ? _lastSeq + 1 : _entries.front().seq;
+        const uint64_t after = afterSeq;
+        if (oldest > after + 1)
+            batch.dropped = static_cast<uint32_t>(oldest - after - 1);
 
-        const size_t first = afterSeq >= oldest ? static_cast<size_t>(afterSeq - oldest + 1) : 0;
+        const size_t first = after >= oldest ? static_cast<size_t>(after - oldest + 1) : 0;
         const size_t available = first < _entries.size() ? _entries.size() - first : 0;
         const size_t count = std::min<size_t>(available, std::min(maxEvents, MaxEventsPerRead));
 
@@ -78,14 +94,53 @@ namespace N2Engine::Editor
         {
             batch.events.push_back(_entries[i].event);
         }
-        batch.nextSeq = count > 0 ? _entries[first + count - 1].seq : _lastSeq;
+        batch.nextSeq = count > 0 ? _entries[first + count - 1].seq : static_cast<uint32_t>(_lastSeq);
         return batch;
     }
 
     uint32_t EventRing::LastSeq() const
     {
         std::lock_guard lock(_mutex);
-        return _lastSeq;
+        return static_cast<uint32_t>(_lastSeq);
+    }
+
+    uint32_t EventRing::Epoch() const
+    {
+        std::lock_guard lock(_mutex);
+        return _epoch;
+    }
+
+    void EventRing::SetLastSeqForTesting(const uint32_t lastSeq)
+    {
+        std::lock_guard lock(_mutex);
+        ClearLocked();
+        _lastSeq = lastSeq;
+    }
+
+    void EventRing::ClearLocked()
+    {
+        _entries.clear();
+        _bytes = 0;
+    }
+
+    uint32_t EventRing::NewEpoch(const uint32_t previous)
+    {
+        // Random, so a host that restarts (or a ring that starts over) is told apart from the one before it
+        static std::mutex generatorMutex;
+        static std::mt19937 generator = []
+        {
+            std::random_device device;
+            std::seed_seq seed{device(), device(),
+                               static_cast<unsigned>(std::chrono::steady_clock::now().time_since_epoch().count())};
+            return std::mt19937(seed);
+        }();
+        std::uniform_int_distribution<uint32_t> distribution(1, std::numeric_limits<uint32_t>::max());
+
+        std::lock_guard lock(generatorMutex);
+        uint32_t epoch = distribution(generator);
+        while (epoch == previous)
+            epoch = distribution(generator);
+        return epoch;
     }
 
     size_t EventRing::Size() const
