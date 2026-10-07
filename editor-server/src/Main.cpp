@@ -82,6 +82,11 @@ int main(int argc, char *argv[])
 
     try
     {
+        // Constructed (not started) before Application::Init: it subscribes its event ring to the Logger, so every
+        // startup line is kept for a client that connects later (PollEvents from 0). Not broadcastUnbroadcastLogs: a
+        // Debug build's console subscribes during Init and would take that backlog.
+        N2Engine::Editor::EditorServer server;
+
         // Initialize engine in editor mode (no window shown initially, or hidden)
         N2Engine::Application::GetInstance().Init({
             .projectPath = projectDir.string(),
@@ -107,7 +112,6 @@ int main(int argc, char *argv[])
         }
 
         // Start editor server
-        N2Engine::Editor::EditorServer server;
         if (!projectDir.empty())
         {
             server.SetScenesDirectory(projectDir / "scenes");

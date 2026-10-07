@@ -1,5 +1,7 @@
 // Auto-generated from protocol.json by generate_csharp.py - do not edit
 // Declarations only, with no encoding code; nothing uses or tests this client (unsupported).
+// Optional jsonTypes keys are nullable reference and value types (string?, double?), so nullable context is on.
+#nullable enable
 using System;
 
 namespace N2Engine.Editor.Protocol
@@ -7,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.1.0";
+        public const string ProtocolVersion = "1.2.0";
     }
 
     public enum CommandType : byte
@@ -16,6 +18,7 @@ namespace N2Engine.Editor.Protocol
         SetViewportSize = 0x02,
         GetAudio = 0x03,
         Hello = 0x04,
+        PollEvents = 0x05,
         SetCameraPosition = 0x10,
         GetCameraPosition = 0x12,
         CreateScene = 0x20,
@@ -48,6 +51,7 @@ namespace N2Engine.Editor.Protocol
         EngineHealth = 0x09,
         AudioSamples = 0x0A,
         ServerInfo = 0x0B,
+        Events = 0x0C,
     }
 
     public struct Vec3
@@ -78,6 +82,20 @@ namespace N2Engine.Editor.Protocol
         public string Detail;
     }
 
+    public class EditorEvent
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("seq")]
+        public double Seq { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("kind")]
+        public string Kind { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("level")]
+        public string? Level { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("message")]
+        public string? Message { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("time")]
+        public double? Time { get; set; }
+    }
+
     public struct SetViewportSizeRequest
     {
         public int Width;
@@ -89,6 +107,13 @@ namespace N2Engine.Editor.Protocol
         public string ClientName;
         public string ProtocolVersion;
         public string Token;
+    }
+
+    public struct PollEventsRequest
+    {
+        public uint Epoch;
+        public uint AfterSeq;
+        public uint MaxEvents;
     }
 
     public struct SetCameraPositionRequest
@@ -165,6 +190,15 @@ namespace N2Engine.Editor.Protocol
         /// <summary>JSON text: string[]</summary>
         public string Capabilities;
         public bool ProjectLoaded;
+    }
+
+    public struct EventsResponse
+    {
+        public uint Epoch;
+        public uint NextSeq;
+        public uint Dropped;
+        /// <summary>JSON text: EditorEvent[]</summary>
+        public string Events;
     }
 
     public struct CameraPositionResponse

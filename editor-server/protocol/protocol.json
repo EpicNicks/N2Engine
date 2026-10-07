@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -73,6 +73,24 @@
           "engineVersion": "string",
           "capabilities": "json:string[]",
           "projectLoaded": "bool"
+        }
+      }
+    },
+    "PollEvents": {
+      "id": "0x05",
+      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}; a client ignores kinds and keys it doesn't know.",
+      "request": {
+        "epoch": "uint32",
+        "afterSeq": "uint32",
+        "maxEvents": "uint32"
+      },
+      "response": {
+        "type": "Events",
+        "fields": {
+          "epoch": "uint32",
+          "nextSeq": "uint32",
+          "dropped": "uint32",
+          "events": "json:EditorEvent[]"
         }
       }
     },
@@ -254,7 +272,15 @@
       "detail": "string"
     }
   },
-  "jsonTypes": {},
+  "jsonTypes": {
+    "EditorEvent": {
+      "seq": "number",
+      "kind": "string",
+      "level?": "string",
+      "message?": "string",
+      "time?": "number"
+    }
+  },
   "responses": {
     "Ok": "0x00",
     "Error": "0x01",
@@ -267,6 +293,7 @@
     "ScriptData": "0x08",
     "EngineHealth": "0x09",
     "AudioSamples": "0x0A",
-    "ServerInfo": "0x0B"
+    "ServerInfo": "0x0B",
+    "Events": "0x0C"
   }
 }
