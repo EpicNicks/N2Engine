@@ -211,6 +211,42 @@ namespace N2Engine::Editor
         return true;
     }
 
+    bool EditorServer::SetHelloTimeout(std::chrono::milliseconds timeout)
+    {
+        if (_running || timeout <= std::chrono::milliseconds::zero())
+        {
+            Logger::Warn("The editor server's Hello timeout can't change while it is running, or be zero or negative");
+            return false;
+        }
+        _helloTimeout = timeout;
+        return true;
+    }
+
+    std::string EditorServer::SanitizeForLog(std::string_view text, size_t maxBytes)
+    {
+        bool truncated = false;
+        if (text.size() > maxBytes)
+        {
+            // Back up over UTF-8 continuation bytes (10xxxxxx), so the cut never splits a character
+            size_t cut = maxBytes;
+            while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+                --cut;
+            text = text.substr(0, cut);
+            truncated = true;
+        }
+
+        std::string result;
+        result.reserve(text.size() + 3);
+        for (const char c : text)
+        {
+            const auto byte = static_cast<unsigned char>(c);
+            result += byte < 0x20 || byte == 0x7F ? '?' : c;
+        }
+        if (truncated)
+            result += "...";
+        return result;
+    }
+
     std::string_view EditorServer::EngineVersion()
     {
         return N2ENGINE_VERSION;
@@ -280,25 +316,47 @@ namespace N2Engine::Editor
         // This connection's session: whether its last Hello succeeded. A new connection starts without one, so a
         // client that reconnects must send Hello again.
         bool helloAccepted = false;
-        bool refusalLogged = false;
+        // With an access token, a connection that hasn't succeeded a Hello must not hold the (one-at-a-time) server:
+        // it has until this deadline to do so, and is closed after a refused command or a failed Hello
+        const bool gated = !_accessToken.empty();
+        const auto helloDeadline = std::chrono::steady_clock::now() + _helloTimeout;
+        const auto deadline = [&]() -> std::optional<std::chrono::steady_clock::time_point>
+        {
+            if (gated && !helloAccepted)
+                return helloDeadline;
+            return std::nullopt;
+        };
+        const auto closeUnauthorized = [this](const std::string &reason)
+        {
+            PostLog("Closing an editor connection that hasn't sent a successful Hello: " + reason, true);
+        };
+        const auto logIfHelloTimedOut = [&]
+        {
+            if (deadline().has_value() && _running && std::chrono::steady_clock::now() >= helloDeadline)
+                closeUnauthorized(std::format("no Hello within {} ms", _helloTimeout.count()));
+        };
 
         while (_running)
         {
             // Read command header: [type: 1 byte][length: 4 bytes]
             uint8_t cmdType;
-            if (!Receive(clientSocket, &cmdType, 1))
-                break;
-
             uint32_t payloadLength;
-            if (!Receive(clientSocket, &payloadLength, sizeof(payloadLength)))
+            if (!Receive(clientSocket, &cmdType, 1, deadline()) ||
+                !Receive(clientSocket, &payloadLength, sizeof(payloadLength), deadline()))
+            {
+                logIfHelloTimedOut();
                 break;
+            }
 
             // The length is client-supplied, so check it before allocating. The oversized payload is
-            // still in the stream, so the connection can't be resynchronized and is closed.
-            if (!IsPayloadLengthAllowed(payloadLength))
+            // still in the stream, so the connection can't be resynchronized and is closed. Before a Hello on a
+            // gated connection, a payload bigger than any Hello needs is refused the same way.
+            const bool beforeHello = deadline().has_value();
+            const uint32_t limit = beforeHello ? MaxPayloadBytesBeforeHello : MaxPayloadBytes;
+            if (payloadLength > limit)
             {
-                const std::string message = std::format("Payload of {} bytes exceeds the {} byte limit",
-                                                        payloadLength, MaxPayloadBytes);
+                const std::string message = std::format("Payload of {} bytes exceeds the {} byte limit{}",
+                                                        payloadLength, limit, beforeHello ? " before Hello" : "");
                 BufferWriter response;
                 WriteError(response, message);
                 Send(clientSocket, response.Data().data(), response.Size());
@@ -308,23 +366,21 @@ namespace N2Engine::Editor
 
             // Read payload
             std::vector<uint8_t> payload(payloadLength);
-            if (payloadLength > 0 && !Receive(clientSocket, payload.data(), payloadLength))
+            if (payloadLength > 0 && !Receive(clientSocket, payload.data(), payloadLength, deadline()))
+            {
+                logIfHelloTimedOut();
                 break;
+            }
 
-            // With an access token, nothing but Hello runs (or is even queued) until a Hello has succeeded
-            if (!_accessToken.empty() && !helloAccepted && !IsAllowedBeforeHello(cmdType))
+            // With an access token, nothing but Hello runs (or is even queued) until a Hello has succeeded, and
+            // anything else ends the connection once its Error is sent
+            if (gated && !helloAccepted && !IsAllowedBeforeHello(cmdType))
             {
                 BufferWriter response;
                 WriteError(response, HelloRequiredError);
-                if (!refusalLogged)
-                {
-                    PostLog(std::format("Refused command 0x{:X} from an editor client that hasn't sent a successful Hello",
-                                        cmdType), true);
-                    refusalLogged = true;
-                }
-                if (!Send(clientSocket, response.Data().data(), response.Size()))
-                    break;
-                continue;
+                Send(clientSocket, response.Data().data(), response.Size());
+                closeUnauthorized(std::format("it sent command 0x{:X}", cmdType));
+                break;
             }
 
             if (static_cast<CommandType>(cmdType) == CommandType::Shutdown)
@@ -353,13 +409,21 @@ namespace N2Engine::Editor
             }
 
             // The session follows the connection's last Hello: a refused one (wrong token or version) ends it
-            if (static_cast<CommandType>(cmdType) == CommandType::Hello)
+            const bool isHello = static_cast<CommandType>(cmdType) == CommandType::Hello;
+            if (isHello)
             {
                 helloAccepted = !response.empty() && response[0] == static_cast<uint8_t>(ResponseType::ServerInfo);
             }
 
             if (!Send(clientSocket, response.data(), response.size()))
                 break;
+
+            // With an access token, a refused Hello also ends the connection, once its Error is sent
+            if (gated && isHello && !helloAccepted)
+            {
+                closeUnauthorized("its Hello was refused");
+                break;
+            }
         }
     }
 
@@ -579,8 +643,9 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         const HelloCmd cmd = HelloCmd::Deserialize(reader);
 
-        // The client's name only reaches the log, shortened; the token never does
-        const std::string clientName = cmd.clientName.substr(0, 100);
+        // Client-supplied text only reaches the log, or the Error, sanitised and shortened; the token never does
+        const std::string clientName = SanitizeForLog(cmd.clientName);
+        const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
         BufferWriter response;
 
         // The token first, so a client without it learns nothing else
@@ -600,16 +665,25 @@ namespace N2Engine::Editor
             const std::string message =
                 clientVersion.has_value()
                     ? std::format("Protocol version mismatch: this server speaks {}, the client {} (the major versions "
-                                  "must match)", ProtocolVersion, cmd.protocolVersion)
+                                  "must match)", ProtocolVersion, clientVersionText)
                     : std::format("Invalid protocol version '{}' (expected major.minor.patch; this server speaks {})",
-                                  cmd.protocolVersion.substr(0, 100), ProtocolVersion);
+                                  clientVersionText, ProtocolVersion);
             Logger::Warn("Refused Hello from editor client '" + clientName + "': " + message);
             WriteError(response, message);
             SendResponse(clientSocket, response.Release());
             return;
         }
 
-        Logger::Info(std::format("Editor client '{}' said Hello (protocol {})", clientName, cmd.protocolVersion));
+        if (clientVersion->minorVersion != serverVersion->minorVersion)
+        {
+            // Compatible, but one side has commands the other doesn't: those fail with "Unknown command"
+            Logger::Warn(std::format("Editor client '{}' said Hello with protocol {}, this server speaks {}: commands "
+                                     "only one of them knows will fail", clientName, clientVersionText, ProtocolVersion));
+        }
+        else
+        {
+            Logger::Info(std::format("Editor client '{}' said Hello (protocol {})", clientName, clientVersionText));
+        }
         // A project is loaded when the host was started with --project, which initialised the ResourceLoader
         const bool projectLoaded = !IO::ResourceLoader::Instance().GetProjectRoot().empty();
         WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), projectLoaded);
@@ -1205,14 +1279,15 @@ return {C}
         return true;
     }
 
-    bool EditorServer::Receive(int socket, void *data, size_t size)
+    bool EditorServer::Receive(int socket, void *data, size_t size,
+                               std::optional<std::chrono::steady_clock::time_point> deadline)
     {
         size_t received = 0;
         auto *bytes = static_cast<char*>(data);
 
         while (received < size)
         {
-            if (!WaitUntilReady(socket, false)) return false;
+            if (!WaitUntilReady(socket, false, deadline)) return false;
             int result = recv(socket, bytes + received, static_cast<int>(size - received), 0);
             if (result <= 0) return false;
             received += result;
@@ -1220,11 +1295,15 @@ return {C}
         return true;
     }
 
-    bool EditorServer::WaitUntilReady(int sock, bool forWrite)
+    bool EditorServer::WaitUntilReady(int sock, bool forWrite,
+                                      std::optional<std::chrono::steady_clock::time_point> deadline)
     {
         const auto nativeSocket = static_cast<NativeSocket>(sock);
         while (_running)
         {
+            if (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline)
+                return false;
+
             fd_set set;
             FD_ZERO(&set);
             FD_SET(nativeSocket, &set);

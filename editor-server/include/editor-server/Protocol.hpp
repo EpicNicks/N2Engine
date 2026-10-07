@@ -1,6 +1,7 @@
 #pragma once
 
 #include <charconv>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -19,7 +20,11 @@ namespace N2Engine::Editor
         uint32_t patchVersion = 0;
     };
 
-    /// "major.minor.patch", each part decimal digits; nullopt for anything else (signs, spaces, missing or extra parts)
+    /// The most digits a part of a protocol version may have (a uint32 has at most 10)
+    inline constexpr std::size_t MaxProtocolVersionPartDigits = 10;
+
+    /// "major.minor.patch", each part 1 to 10 decimal digits that fit a uint32; nullopt for anything else (signs,
+    /// spaces, missing or extra parts, or a part padded with zeros past 10 digits, which from_chars would accept)
     [[nodiscard]] inline std::optional<ProtocolVersionNumber> ParseProtocolVersion(std::string_view text)
     {
         ProtocolVersionNumber version;
@@ -38,7 +43,7 @@ namespace N2Engine::Editor
             if (position == end || *position < '0' || *position > '9')
                 return std::nullopt;
             const auto [next, error] = std::from_chars(position, end, *part);
-            if (error != std::errc{})
+            if (error != std::errc{} || static_cast<std::size_t>(next - position) > MaxProtocolVersionPartDigits)
                 return std::nullopt;
             position = next;
         }

@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -90,6 +91,18 @@ namespace N2Engine::Editor::Protocol
     inline nlohmann::json ReadJson(BufferReader &r)
     {
         return nlohmann::json::parse(r.ReadString());
+    }
+
+    /// A trailing request field added in a later minor version (protocol.json's encoding.versioning): a client of an
+    /// older minor version doesn't send it, so it is read only when the payload has bytes left, and is fallback
+    /// otherwise. Every request field added to an existing command must be read this way. For example:
+    ///     cmd.keepWorldTransform = ReadTrailing(r, &BufferReader::ReadBool, true);
+    template <typename T, typename Read>
+    T ReadTrailing(BufferReader &r, Read read, T fallback)
+    {
+        if (!r.HasData())
+            return fallback;
+        return static_cast<T>(std::invoke(read, r));
     }
 
     // ==================== Command Deserializers ====================

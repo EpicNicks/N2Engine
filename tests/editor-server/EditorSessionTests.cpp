@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <format>
 #include <string>
@@ -230,4 +231,81 @@ TEST(EditorSessionTest, TheAccessTokenCantChangeWhileServing)
     EXPECT_FALSE(server.RequiresAccessToken());
     server.Stop();
     EXPECT_TRUE(server.SetAccessToken("now"));
+}
+
+TEST(EditorSessionTest, AnotherMinorVersionIsAcceptedWithAWarning)
+{
+    std::vector<Logger::LogLevel> levels;
+    std::vector<std::string> lines;
+    const size_t id = Logger::logEvent += [&](const std::string_view message, const Logger::LogLevel level)
+    {
+        lines.emplace_back(message);
+        levels.push_back(level);
+    };
+
+    EditorServer server;
+    const ProtocolVersionNumber ours = ParseProtocolVersion(ProtocolVersion).value();
+    const Frame response = Hello(server, std::format("{}.{}.0", ours.majorVersion, ours.minorVersion + 1));
+    Logger::logEvent -= id;
+
+    EXPECT_EQ(response.type, ServerInfoType) << response.Text();
+    bool warned = false;
+    for (size_t i = 0; i < lines.size(); ++i)
+    {
+        if (lines[i].find("said Hello with protocol") != std::string::npos)
+            warned = levels[i] == Logger::LogLevel::Warn;
+    }
+    EXPECT_TRUE(warned) << "a client of another minor version is accepted, with a warning";
+}
+
+TEST(EditorSessionTest, AnOverlongVersionIsRefusedAndNotEchoedInFull)
+{
+    // from_chars accepts any number of leading zeros: such a version is refused, and neither the Error nor the log
+    // carries all of it
+    std::vector<std::string> lines;
+    const size_t id = Logger::logEvent += [&lines](const std::string_view message, Logger::LogLevel)
+    {
+        lines.emplace_back(message);
+    };
+
+    EditorServer server;
+    const std::string version = "1." + std::string(100000, '0') + "1.0";
+    const Frame response = Hello(server, version);
+    Logger::logEvent -= id;
+
+    EXPECT_EQ(response.type, ErrorType);
+    EXPECT_NE(response.Text().find("Invalid protocol version"), std::string::npos);
+    EXPECT_LT(response.Text().size(), 200u) << "the Error echoes the whole version";
+    for (const std::string &line : lines)
+    {
+        EXPECT_LT(line.size(), 400u) << "a log line carries the whole version";
+    }
+}
+
+TEST(EditorSessionTest, ClientTextIsSanitisedForTheLog)
+{
+    EXPECT_EQ(EditorServer::SanitizeForLog("editor"), "editor");
+    EXPECT_EQ(EditorServer::SanitizeForLog("two\nlines\r\tand\x1B[31m\x7F"), "two?lines??and?[31m?");
+    EXPECT_EQ(EditorServer::SanitizeForLog("abcdef", 4), "abcd...");
+    EXPECT_EQ(EditorServer::SanitizeForLog("abcd", 4), "abcd");
+
+    // "a", then U+00E9 (2 bytes), then U+2713 (3 bytes): a cut never splits a character
+    const std::string text = "a\xC3\xA9\xE2\x9C\x93";
+    EXPECT_EQ(EditorServer::SanitizeForLog(text, 2), "a...");
+    EXPECT_EQ(EditorServer::SanitizeForLog(text, 3), "a\xC3\xA9...");
+    EXPECT_EQ(EditorServer::SanitizeForLog(text, 5), "a\xC3\xA9...");
+    EXPECT_EQ(EditorServer::SanitizeForLog(text, 6), text);
+}
+
+TEST(EditorSessionTest, TheHelloTimeoutIsPositiveAndSetBeforeServing)
+{
+    EditorServer server;
+    EXPECT_EQ(server.GetHelloTimeout(), EditorServer::DefaultHelloTimeout);
+    EXPECT_FALSE(server.SetHelloTimeout(std::chrono::milliseconds::zero()));
+    EXPECT_TRUE(server.SetHelloTimeout(std::chrono::milliseconds(250)));
+    EXPECT_EQ(server.GetHelloTimeout(), std::chrono::milliseconds(250));
+
+    ASSERT_TRUE(server.Start(0));
+    EXPECT_FALSE(server.SetHelloTimeout(std::chrono::milliseconds(500)));
+    server.Stop();
 }
