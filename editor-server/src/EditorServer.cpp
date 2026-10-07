@@ -24,6 +24,11 @@
 #include "editor-server/Commands.hpp"
 #include "editor-server/Serialization.hpp"
 
+// CMake's project version (editor-server/CMakeLists.txt); Hello reports it
+#ifndef N2ENGINE_VERSION
+#define N2ENGINE_VERSION "unknown"
+#endif
+
 #ifdef _WIN32
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -195,6 +200,44 @@ namespace N2Engine::Editor
         });
     }
 
+    bool EditorServer::SetAccessToken(std::string token)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's access token can't change while it is running");
+            return false;
+        }
+        _accessToken = std::move(token);
+        return true;
+    }
+
+    std::string_view EditorServer::EngineVersion()
+    {
+        return N2ENGINE_VERSION;
+    }
+
+    std::vector<std::string> EditorServer::Capabilities()
+    {
+        return {};
+    }
+
+    bool EditorServer::TokensMatch(std::string_view accessToken, std::string_view token)
+    {
+        // Every byte of the access token is compared whatever the token holds; only the length is learnt early
+        unsigned int difference = accessToken.size() == token.size() ? 0u : 1u;
+        for (size_t i = 0; i < accessToken.size(); ++i)
+        {
+            const unsigned char given = i < token.size() ? static_cast<unsigned char>(token[i]) : 0;
+            difference |= static_cast<unsigned char>(accessToken[i]) ^ given;
+        }
+        return difference == 0;
+    }
+
+    bool EditorServer::IsAllowedBeforeHello(uint8_t commandType)
+    {
+        return static_cast<CommandType>(commandType) == CommandType::Hello;
+    }
+
     void EditorServer::ServerLoop(int listenSocket)
     {
         while (_running)
@@ -234,6 +277,11 @@ namespace N2Engine::Editor
 
     void EditorServer::HandleClient(int clientSocket)
     {
+        // This connection's session: whether its last Hello succeeded. A new connection starts without one, so a
+        // client that reconnects must send Hello again.
+        bool helloAccepted = false;
+        bool refusalLogged = false;
+
         while (_running)
         {
             // Read command header: [type: 1 byte][length: 4 bytes]
@@ -263,6 +311,22 @@ namespace N2Engine::Editor
             if (payloadLength > 0 && !Receive(clientSocket, payload.data(), payloadLength))
                 break;
 
+            // With an access token, nothing but Hello runs (or is even queued) until a Hello has succeeded
+            if (!_accessToken.empty() && !helloAccepted && !IsAllowedBeforeHello(cmdType))
+            {
+                BufferWriter response;
+                WriteError(response, HelloRequiredError);
+                if (!refusalLogged)
+                {
+                    PostLog(std::format("Refused command 0x{:X} from an editor client that hasn't sent a successful Hello",
+                                        cmdType), true);
+                    refusalLogged = true;
+                }
+                if (!Send(clientSocket, response.Data().data(), response.Size()))
+                    break;
+                continue;
+            }
+
             if (static_cast<CommandType>(cmdType) == CommandType::Shutdown)
             {
                 BufferWriter response;
@@ -286,6 +350,12 @@ namespace N2Engine::Editor
             catch (const std::future_error &)
             {
                 break; // the queue was closed: the server is stopping
+            }
+
+            // The session follows the connection's last Hello: a refused one (wrong token or version) ends it
+            if (static_cast<CommandType>(cmdType) == CommandType::Hello)
+            {
+                helloAccepted = !response.empty() && response[0] == static_cast<uint8_t>(ResponseType::ServerInfo);
             }
 
             if (!Send(clientSocket, response.data(), response.size()))
@@ -438,6 +508,9 @@ namespace N2Engine::Editor
 
         switch (cmd)
         {
+        case CommandType::Hello:
+            HandleHello(clientSocket, payload);
+            break;
         case CommandType::RenderFrame:
             HandleRenderFrame(clientSocket);
             break;
@@ -499,6 +572,48 @@ namespace N2Engine::Editor
             SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
             break;
         }
+    }
+
+    void EditorServer::HandleHello(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const HelloCmd cmd = HelloCmd::Deserialize(reader);
+
+        // The client's name only reaches the log, shortened; the token never does
+        const std::string clientName = cmd.clientName.substr(0, 100);
+        BufferWriter response;
+
+        // The token first, so a client without it learns nothing else
+        if (!_accessToken.empty() && !TokensMatch(_accessToken, cmd.token))
+        {
+            Logger::Warn("Refused Hello from editor client '" + clientName + "': wrong access token");
+            WriteError(response, "Invalid access token");
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+
+        const auto clientVersion = ParseProtocolVersion(cmd.protocolVersion);
+        const auto serverVersion = ParseProtocolVersion(ProtocolVersion);
+        if (!clientVersion.has_value() || !serverVersion.has_value() ||
+            clientVersion->majorVersion != serverVersion->majorVersion)
+        {
+            const std::string message =
+                clientVersion.has_value()
+                    ? std::format("Protocol version mismatch: this server speaks {}, the client {} (the major versions "
+                                  "must match)", ProtocolVersion, cmd.protocolVersion)
+                    : std::format("Invalid protocol version '{}' (expected major.minor.patch; this server speaks {})",
+                                  cmd.protocolVersion.substr(0, 100), ProtocolVersion);
+            Logger::Warn("Refused Hello from editor client '" + clientName + "': " + message);
+            WriteError(response, message);
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+
+        Logger::Info(std::format("Editor client '{}' said Hello (protocol {})", clientName, cmd.protocolVersion));
+        // A project is loaded when the host was started with --project, which initialised the ResourceLoader
+        const bool projectLoaded = !IO::ResourceLoader::Instance().GetProjectRoot().empty();
+        WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), projectLoaded);
+        SendResponse(clientSocket, response.Release());
     }
 
     void EditorServer::HandleRenderFrame(int clientSocket)
@@ -917,34 +1032,18 @@ namespace N2Engine::Editor
     {
         BufferWriter response;
 
-        if (SceneManager::GetCurScene() == nullptr)
+        // No scene: an empty list
+        std::vector<EntityInfo> entities;
+        if (SceneManager::GetCurScene() != nullptr)
         {
-            // No scene, return empty list
-            response.WriteU8(static_cast<uint8_t>(ResponseType::EntityList));
-            response.WriteU32(4); // payload size
-            response.WriteU32(0); // count = 0
-            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
-            return;
+            for (const auto &go : SceneManager::GetCurSceneRef().GetAllGameObjects())
+            {
+                entities.push_back({go->GetUUID().ToString(), go->GetName()});
+            }
         }
 
-        Scene &scene = SceneManager::GetCurSceneRef();
-        auto gameObjects = scene.GetAllGameObjects();
-
-        // Build payload
-        BufferWriter payload;
-        payload.WriteU32(static_cast<uint32_t>(gameObjects.size()));
-
-        for (const auto &go : gameObjects)
-        {
-            payload.WriteString(go->GetUUID().ToString());
-            payload.WriteString(go->GetName());
-        }
-
-        response.WriteU8(static_cast<uint8_t>(ResponseType::EntityList));
-        response.WriteU32(static_cast<uint32_t>(payload.Size()));
-        response.WriteBytes(payload.Data());
-
-        SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+        WriteEntityList(response, entities);
+        SendResponse(clientSocket, response.Release());
     }
 
     void EditorServer::HandleGetEngineHealth(int clientSocket)
@@ -969,59 +1068,22 @@ namespace N2Engine::Editor
             return;
         }
 
-        float posX = 0.0f, posY = 0.0f, posZ = 0.0f;
-        float rotX = 0.0f, rotY = 0.0f, rotZ = 0.0f;
-        float scaleX = 1.0f, scaleY = 1.0f, scaleZ = 1.0f;
-
-        bool found = false;
         if (auto uuid = Math::UUID::FromString(entityId); uuid.has_value())
         {
             auto entity = scene->FindGameObjectByUUID(uuid.value());
             if (entity && entity->HasPositionable())
             {
-                found = true;
                 auto &transform = entity->GetPositionable()->GetGlobalTransform();
-                posX = transform.GetPosition().x;
-                posY = transform.GetPosition().y;
-                posZ = transform.GetPosition().z;
-
-                auto eulerRotation = transform.GetRotation().ToEulerAngles();
-
-                rotX = eulerRotation.x;
-                rotY = eulerRotation.y;
-                rotZ = eulerRotation.z;
-
-                scaleX = transform.GetScale().x;
-                scaleY = transform.GetScale().y;
-                scaleZ = transform.GetScale().z;
+                WriteEntityTransform(response, transform.GetPosition(), transform.GetRotation().ToEulerAngles(),
+                                     transform.GetScale());
+                SendResponse(clientSocket, response.Release());
+                return;
             }
         }
 
         // An unknown entity used to get an identity transform, indistinguishable from a real one
-        if (!found)
-        {
-            WriteError(response, "Entity not found (or has no transform): " + entityId);
-            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
-            return;
-        }
-
-        // Write response
-        response.WriteU8(static_cast<uint8_t>(ResponseType::EntityTransform));
-        response.WriteU32(36); // 9 floats = 36 bytes
-
-        response.WriteF32(posX);
-        response.WriteF32(posY);
-        response.WriteF32(posZ);
-
-        response.WriteF32(rotX);
-        response.WriteF32(rotY);
-        response.WriteF32(rotZ);
-
-        response.WriteF32(scaleX);
-        response.WriteF32(scaleY);
-        response.WriteF32(scaleZ);
-
-        SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+        WriteError(response, "Entity not found (or has no transform): " + entityId);
+        SendResponse(clientSocket, response.Release());
     }
 
     void EditorServer::HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload)

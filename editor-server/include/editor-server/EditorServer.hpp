@@ -8,6 +8,7 @@
 #include <vector>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 #include "editor-server/CommandQueue.hpp"
 
@@ -27,8 +28,13 @@ namespace N2Engine::Editor
     /// and logging all happen there) and hands each response frame back for the network thread to send.
     /// Shutdown is the one command answered on the network thread, since it only stops the server.
     ///
-    /// Security: there is no authentication, so the server binds to loopback by default. Binding to any
-    /// other address lets anything that can reach it drive the host (including deleting scene files).
+    /// Sessions: a client opens one with Hello (protocol version, access token), and it lasts as long as the
+    /// connection, so a client that reconnects sends Hello again. Hello is optional unless the server has an access
+    /// token (SetAccessToken): then the network thread refuses every other command on a connection, Shutdown included,
+    /// until a Hello on that connection has succeeded.
+    ///
+    /// Security: the server binds to loopback by default. Without an access token there is no authentication, so
+    /// any local process can drive the host (including deleting scene files); with --bind, anything that can reach it.
     class EditorServer
     {
     public:
@@ -67,6 +73,25 @@ namespace N2Engine::Editor
         /// Main thread: runs one request and returns its response frame. Never throws: a failing
         /// request (malformed payload, engine exception) produces an Error response.
         std::vector<uint8_t> ExecuteCommand(uint8_t commandType, const std::vector<uint8_t> &payload);
+
+        /// Before Start (the network thread reads it): a non-empty token makes every connection send Hello with this
+        /// token before any other command. Empty (the default) leaves Hello optional and accepts any token in it.
+        /// False, changing nothing, while the server is running.
+        bool SetAccessToken(std::string token);
+        [[nodiscard]] bool RequiresAccessToken() const { return !_accessToken.empty(); }
+
+        /// The engine version Hello reports (CMake's project version)
+        [[nodiscard]] static std::string_view EngineVersion();
+        /// The optional features Hello reports, beyond what the protocol version implies. None are defined yet.
+        [[nodiscard]] static std::vector<std::string> Capabilities();
+        /// Whether a token matches the access token, comparing every byte (the time taken doesn't depend on where
+        /// they first differ, so it doesn't reveal how much of a guess was right)
+        [[nodiscard]] static bool TokensMatch(std::string_view accessToken, std::string_view token);
+        /// The only command a server with an access token answers before a successful Hello: Hello itself
+        [[nodiscard]] static bool IsAllowedBeforeHello(uint8_t commandType);
+        /// The Error a server with an access token answers any other command with before a successful Hello
+        static constexpr const char *HelloRequiredError =
+            "Not authorized: this host requires Hello with its access token before any other command";
 
         /// Where DeleteScene may delete scene files (usually <project>/scenes); empty disables it.
         void SetScenesDirectory(std::filesystem::path scenesDirectory) { _scenesDirectory = std::move(scenesDirectory); }
@@ -107,6 +132,7 @@ namespace N2Engine::Editor
         void PostLog(std::string message, bool isWarning = false);
 
         // Command handlers
+        void HandleHello(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleRenderFrame(int clientSocket);
         void HandleSetViewportSize(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetAudio(int clientSocket);
@@ -150,6 +176,8 @@ namespace N2Engine::Editor
         int _listenSocket{-1};
         int _port{0};
         bool _socketsInitialized{false};
+        // Set before Start only, so both threads read it without a lock
+        std::string _accessToken;
 
         CommandQueue _commands;
         // Main-thread state below

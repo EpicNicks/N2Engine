@@ -253,7 +253,7 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                         CommandType::DeleteScene, CommandType::GetCurrentScene,
                                         CommandType::CreateEntity, CommandType::DestroyEntity,
                                         CommandType::SetEntityTransform, CommandType::CreateScript,
-                                        CommandType::RescanAssets, CommandType::Shutdown})
+                                        CommandType::RescanAssets, CommandType::Hello, CommandType::Shutdown})
     {
         EXPECT_FALSE(EditorServer::IsPolledCommand(static_cast<uint8_t>(notPolled))) << static_cast<int>(notPolled);
     }
@@ -696,6 +696,135 @@ TEST(EditorServerSocketTest, RestartsOnTheSamePortAfterAClientShutdown)
     StopWithin(server, std::chrono::seconds(10));
 
     ASSERT_TRUE(server.Start(port));
+    StopWithin(server, std::chrono::seconds(10));
+}
+
+namespace
+{
+    /// Sends a request and plays the host's main loop until its response arrives (a request the network thread
+    /// answers itself needs no draining)
+    std::optional<DecodedFrame> Roundtrip(EditorServer &server, TestClient &client, CommandType type,
+                                          const std::vector<uint8_t> &payload = {})
+    {
+        if (!client.SendRequest(type, payload, static_cast<uint32_t>(payload.size())))
+            return std::nullopt;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (client.BytesAvailable() < 5 && std::chrono::steady_clock::now() < deadline)
+        {
+            server.ProcessCommands(std::chrono::milliseconds(10));
+        }
+        const auto response = client.ReadResponse();
+        if (!response.has_value())
+            return std::nullopt;
+        return Decode(*response);
+    }
+
+    std::vector<uint8_t> HelloPayload(const std::string &token)
+    {
+        BufferWriter w;
+        w.WriteString("socket test");
+        w.WriteString(std::string{ProtocolVersion});
+        w.WriteString(token);
+        return ToVector(w);
+    }
+
+    const std::vector<uint8_t> NoSuchEntity = StringPayload("00000000-0000-0000-0000-000000000000");
+    constexpr uint8_t ServerInfoType = static_cast<uint8_t>(ResponseType::ServerInfo);
+}
+
+TEST(EditorServerSocketTest, WithAnAccessTokenNothingButHelloIsAnsweredUntilAHelloSucceeds)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.SetAccessToken("socket-token"));
+    ASSERT_TRUE(server.Start(0));
+    TestClient client(server.GetPort());
+    ASSERT_TRUE(client.IsConnected());
+
+    // Refused on the network thread: answered with nothing draining the queue
+    for (const CommandType refused : {CommandType::DestroyEntity, CommandType::GetEngineHealth, CommandType::Shutdown})
+    {
+        const std::vector<uint8_t> payload = refused == CommandType::DestroyEntity ? NoSuchEntity : std::vector<uint8_t>{};
+        ASSERT_TRUE(client.SendRequest(refused, payload, static_cast<uint32_t>(payload.size())));
+        const auto response = client.ReadResponse();
+        ASSERT_TRUE(response.has_value()) << static_cast<int>(refused);
+        EXPECT_EQ(Decode(*response).type, ErrorType);
+        EXPECT_EQ(Decode(*response).body, EditorServer::HelloRequiredError);
+    }
+    EXPECT_TRUE(server.IsRunning()) << "Shutdown before Hello must not stop the server";
+
+    // A wrong token is refused, and the gate stays shut
+    auto response = Roundtrip(server, client, CommandType::Hello, HelloPayload("wrong"));
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->body, "Invalid access token");
+    response = Roundtrip(server, client, CommandType::DestroyEntity, NoSuchEntity);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->body, EditorServer::HelloRequiredError);
+
+    // The right token opens it: the command now runs (and fails on its own terms)
+    response = Roundtrip(server, client, CommandType::Hello, HelloPayload("socket-token"));
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->type, ServerInfoType) << response->body;
+    response = Roundtrip(server, client, CommandType::DestroyEntity, NoSuchEntity);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->type, ErrorType);
+    EXPECT_NE(response->body.find("No scene"), std::string::npos) << response->body;
+
+    // A later Hello that fails ends the session
+    response = Roundtrip(server, client, CommandType::Hello, HelloPayload("wrong again"));
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->type, ErrorType);
+    response = Roundtrip(server, client, CommandType::DestroyEntity, NoSuchEntity);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->body, EditorServer::HelloRequiredError);
+
+    StopWithin(server, std::chrono::seconds(10));
+}
+
+TEST(EditorServerSocketTest, ASessionEndsWithItsConnection)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.SetAccessToken("socket-token"));
+    ASSERT_TRUE(server.Start(0));
+    {
+        TestClient client(server.GetPort());
+        ASSERT_TRUE(client.IsConnected());
+        const auto hello = Roundtrip(server, client, CommandType::Hello, HelloPayload("socket-token"));
+        ASSERT_TRUE(hello.has_value());
+        ASSERT_EQ(hello->type, ServerInfoType) << hello->body;
+    }
+
+    // The same client reconnecting must say Hello again. The server notices the first connection closed (and
+    // accepts this one) on its own; this thread only drains the queue meanwhile.
+    TestClient reconnected(server.GetPort());
+    ASSERT_TRUE(reconnected.IsConnected());
+    auto response = Roundtrip(server, reconnected, CommandType::DestroyEntity, NoSuchEntity);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->body, EditorServer::HelloRequiredError);
+
+    response = Roundtrip(server, reconnected, CommandType::Hello, HelloPayload("socket-token"));
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->type, ServerInfoType) << response->body;
+
+    StopWithin(server, std::chrono::seconds(10));
+}
+
+TEST(EditorServerSocketTest, WithoutAnAccessTokenHelloIsOptional)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.Start(0));
+    TestClient client(server.GetPort());
+    ASSERT_TRUE(client.IsConnected());
+
+    // Runs without a Hello (and fails on its own terms)
+    auto response = Roundtrip(server, client, CommandType::DestroyEntity, NoSuchEntity);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_NE(response->body.find("No scene"), std::string::npos) << response->body;
+
+    // A Hello is still answered, whatever token it carries
+    response = Roundtrip(server, client, CommandType::Hello, HelloPayload("any token"));
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->type, ServerInfoType) << response->body;
+
     StopWithin(server, std::chrono::seconds(10));
 }
 
