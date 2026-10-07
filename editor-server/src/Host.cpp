@@ -37,6 +37,38 @@ namespace N2Engine::Editor
             }
         }
 
+        /// Installs SignalHandler for SIGINT and SIGTERM, and puts back whatever was there before when it goes out of
+        /// scope, so RunHost leaves a game's own host (or a test) with the handlers it had
+        class SignalHandlersScope
+        {
+        public:
+            SignalHandlersScope()
+                : _previousInterrupt(std::signal(SIGINT, SignalHandler)),
+                  _previousTerminate(std::signal(SIGTERM, SignalHandler))
+            {
+            }
+
+            ~SignalHandlersScope()
+            {
+                if (_previousInterrupt != SIG_ERR)
+                {
+                    std::signal(SIGINT, _previousInterrupt);
+                }
+                if (_previousTerminate != SIG_ERR)
+                {
+                    std::signal(SIGTERM, _previousTerminate);
+                }
+            }
+
+            SignalHandlersScope(const SignalHandlersScope &) = delete;
+            SignalHandlersScope &operator=(const SignalHandlersScope &) = delete;
+
+        private:
+            using Handler = decltype(SIG_DFL);
+            Handler _previousInterrupt;
+            Handler _previousTerminate;
+        };
+
         Config::ApplicationOptions::RenderBackend ToRenderBackend(const HostRenderer renderer)
         {
             return renderer == HostRenderer::Software ? Config::ApplicationOptions::RenderBackend::SOFTWARE
@@ -93,8 +125,8 @@ namespace N2Engine::Editor
         }
 
         g_running = true;
-        std::signal(SIGINT, SignalHandler);
-        std::signal(SIGTERM, SignalHandler);
+        // Restored on every return below, the exception path included
+        const SignalHandlersScope signalHandlers;
 
         try
         {
