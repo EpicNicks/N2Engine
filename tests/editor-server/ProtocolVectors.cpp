@@ -193,7 +193,8 @@ namespace ProtocolVectors
 
     namespace
     {
-        json DecodeField(const json &spec, BufferReader &r, const std::string &type, uint32_t &count)
+        json DecodeField(const nlohmann::ordered_json &spec, BufferReader &r, const std::string &type,
+                         uint32_t &count)
         {
             // json first: a JSON shape can end in [] ("json:string[]") but is one string on the wire, not an array
             if (type == "json" || type.starts_with("json:"))
@@ -241,7 +242,8 @@ namespace ProtocolVectors
         }
     }
 
-    json DecodeBySpec(const json &spec, const json &fields, std::span<const uint8_t> payload)
+    json DecodeBySpec(const nlohmann::ordered_json &spec, const nlohmann::ordered_json &fields,
+                      std::span<const uint8_t> payload)
     {
         BufferReader r(payload);
         json values = json::object();
@@ -255,7 +257,7 @@ namespace ProtocolVectors
         return values;
     }
 
-    bool HasJsonField(const json &fields)
+    bool HasJsonField(const nlohmann::ordered_json &fields)
     {
         for (const auto &[field, type] : fields.items())
         {

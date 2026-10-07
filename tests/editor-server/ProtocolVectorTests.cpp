@@ -114,7 +114,8 @@ TEST(ProtocolVectorTest, ServerDeserializersReadTheVectorRequests)
 TEST(ProtocolVectorTest, ServerBuildersWriteTheVectorResponses)
 {
     std::ifstream file(N2_PROTOCOL_JSON);
-    const json spec = json::parse(file);
+    // ordered: fields go on the wire in the order protocol.json lists them (json would sort the keys)
+    const nlohmann::ordered_json spec = nlohmann::ordered_json::parse(file);
     const auto vectors = ProtocolVectors::LoadResponses();
     ASSERT_FALSE(vectors.empty());
     for (const auto &[name, vector] : vectors)
@@ -124,7 +125,7 @@ TEST(ProtocolVectorTest, ServerBuildersWriteTheVectorResponses)
         const std::vector<uint8_t> frame = ProtocolVectors::BuildResponse(name, vector);
         ASSERT_GE(frame.size(), 5u) << name;
 
-        json fields = json::object();
+        nlohmann::ordered_json fields = nlohmann::ordered_json::object();
         for (const auto &[command, declaration] : spec.at("commands").items())
         {
             if (declaration.at("response").at("type") == name && declaration.at("response").contains("fields"))

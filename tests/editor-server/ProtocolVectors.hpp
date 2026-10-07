@@ -39,11 +39,12 @@ namespace ProtocolVectors
     /// The frame the server's builder writes for a response vector (empty, after a test failure, without a builder)
     std::vector<uint8_t> BuildResponse(const std::string &response, const nlohmann::json &vector);
 
-    /// A payload's fields as values, read by protocol.json's field list (fields: name -> type): json fields parsed,
+    /// A payload's fields as values, read in protocol.json's field order (so spec and fields are ordered_json: a
+    /// plain json object sorts its keys) from fields (name -> type): json fields parsed,
     /// bytes as hex, mat4 as 16 numbers, structs as objects. Two payloads that differ only in how their JSON text
     /// is written (key order, spacing) decode to equal values. Throws std::out_of_range on a short payload.
-    nlohmann::json DecodeBySpec(const nlohmann::json &spec, const nlohmann::json &fields,
+    nlohmann::json DecodeBySpec(const nlohmann::ordered_json &spec, const nlohmann::ordered_json &fields,
                                 std::span<const uint8_t> payload);
     /// Whether any of the fields is json
-    bool HasJsonField(const nlohmann::json &fields);
+    bool HasJsonField(const nlohmann::ordered_json &fields);
 }
