@@ -80,8 +80,17 @@ int main(int argc, char *argv[])
     std::signal(SIGINT, SignalHandler);
     std::signal(SIGTERM, SignalHandler);
 
+    // PollEvents(0) gives a client that connects late every startup line. The server below subscribes its event ring
+    // when constructed, before Application::Init, so it sees them as they are logged (waiting for a backlog wouldn't
+    // do: a Debug build's console subscribes during Init and takes it). This keeps, rather than drops, anything logged
+    // before a subscriber exists.
+    N2Engine::Logger::broadcastUnbroadcastLogs = true;
+
     try
     {
+        // Constructed (not started) first: from here every log line also becomes an event for PollEvents
+        N2Engine::Editor::EditorServer server;
+
         // Initialize engine in editor mode (no window shown initially, or hidden)
         N2Engine::Application::GetInstance().Init({
             .projectPath = projectDir.string(),
@@ -107,7 +116,6 @@ int main(int argc, char *argv[])
         }
 
         // Start editor server
-        N2Engine::Editor::EditorServer server;
         if (!projectDir.empty())
         {
             server.SetScenesDirectory(projectDir / "scenes");

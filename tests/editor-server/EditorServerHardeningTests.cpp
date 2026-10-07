@@ -241,9 +241,9 @@ namespace
 
 TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
 {
-    for (const CommandType polled : {CommandType::RenderFrame, CommandType::GetAudio, CommandType::GetAllEntities,
-                                     CommandType::GetEntityTransform, CommandType::GetCameraPosition,
-                                     CommandType::GetEngineHealth})
+    for (const CommandType polled : {CommandType::RenderFrame, CommandType::GetAudio, CommandType::PollEvents,
+                                     CommandType::GetAllEntities, CommandType::GetEntityTransform,
+                                     CommandType::GetCameraPosition, CommandType::GetEngineHealth})
     {
         EXPECT_TRUE(EditorServer::IsPolledCommand(static_cast<uint8_t>(polled))) << static_cast<int>(polled);
     }

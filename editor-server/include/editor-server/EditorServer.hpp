@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "editor-server/CommandQueue.hpp"
+#include "editor-server/EventRing.hpp"
 
 namespace Renderer::Common
 {
@@ -36,6 +37,11 @@ namespace N2Engine::Editor
     /// Hello, and when no Hello has succeeded within the Hello timeout of accepting it. Without an access token none
     /// of this applies.
     ///
+    /// Events: the server keeps an EventRing that PollEvents reads. From construction to destruction it is subscribed to
+    /// the Logger, so every line logged in the process (the server's own included) becomes a log event; a host that
+    /// constructs the server before Application::Init keeps the engine's startup lines for a client that connects later.
+    /// Nothing the ring or PollEvents does logs, so polling an idle server finds no events.
+    ///
     /// Security: the server binds to loopback by default. Without an access token there is no authentication, so
     /// any local process can drive the host (including deleting scene files); with --bind, anything that can reach it.
     class EditorServer
@@ -52,7 +58,9 @@ namespace N2Engine::Editor
         /// DeleteScene only removes files with this extension (any case) inside the scenes directory
         static constexpr const char *SceneFileExtension = ".json";
 
-        EditorServer() = default;
+        /// Subscribes the event ring to the Logger (see Events above)
+        EditorServer();
+        /// Stops the server, then unsubscribes the event ring
         ~EditorServer();
 
         EditorServer(const EditorServer &) = delete;
@@ -133,8 +141,14 @@ namespace N2Engine::Editor
         [[nodiscard]] static std::optional<std::filesystem::path> ResolveSceneFile(
             const std::filesystem::path &scenesDirectory, const std::string &sceneName);
 
-        /// True for a command a client is expected to poll: RenderFrame, GetAudio, and (ahead of the planned editor,
-        /// #6, which refreshes them continuously) GetAllEntities, GetEntityTransform, GetCameraPosition, GetEngineHealth.
+        /// The events PollEvents reads: log lines (the Logger subscription), and whatever a handler pushes. Push is
+        /// thread-safe; see EventRing.
+        [[nodiscard]] EventRing &GetEvents() { return _events; }
+        [[nodiscard]] const EventRing &GetEvents() const { return _events; }
+
+        /// True for a command a client is expected to poll: RenderFrame, GetAudio, PollEvents, and (ahead of the planned
+        /// editor, #6, which refreshes them continuously) GetAllEntities, GetEntityTransform, GetCameraPosition,
+        /// GetEngineHealth.
         /// Rule: a command a client polls never logs per call, or its lines would drown everything else. Such a
         /// command still logs when it fails (ExecuteCommand's error line). A new polled command belongs here.
         [[nodiscard]] static bool IsPolledCommand(uint8_t commandType);
@@ -151,6 +165,7 @@ namespace N2Engine::Editor
         void HandleRenderFrame(int clientSocket);
         void HandleSetViewportSize(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetAudio(int clientSocket);
+        void HandlePollEvents(int clientSocket, const std::vector<uint8_t> &payload);
 
         void HandleSetCameraPosition(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetCameraPosition(int clientSocket);
@@ -200,6 +215,9 @@ namespace N2Engine::Editor
         std::chrono::milliseconds _helloTimeout{DefaultHelloTimeout};
 
         CommandQueue _commands;
+        // Thread-safe (its own mutex): the Logger subscription pushes from whichever thread logged
+        EventRing _events;
+        size_t _logSubscription{0};
         // Main-thread state below
         std::vector<uint8_t> _response;
         std::filesystem::path _scenesDirectory;
