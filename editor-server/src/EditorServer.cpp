@@ -222,6 +222,17 @@ namespace N2Engine::Editor
         return true;
     }
 
+    bool EditorServer::SetStopOnDisconnect(const bool stop)
+    {
+        if (_running)
+        {
+            Logger::Warn("Whether the editor server stops on disconnect can't change while it is running");
+            return false;
+        }
+        _stopOnDisconnect = stop;
+        return true;
+    }
+
     std::string EditorServer::SanitizeForLog(std::string_view text, size_t maxBytes)
     {
         bool truncated = false;
@@ -296,9 +307,10 @@ namespace N2Engine::Editor
             }
 
             PostLog("Editor connected");
+            bool sessionOpened = false;
             try
             {
-                HandleClient(clientSocket);
+                HandleClient(clientSocket, sessionOpened);
             }
             catch (...)
             {
@@ -308,10 +320,17 @@ namespace N2Engine::Editor
 
             CLOSE_SOCKET(clientSocket);
             PostLog("Editor disconnected");
+
+            // A Shutdown (or Stop) has already cleared _running; this is the client going away on its own
+            if (_stopOnDisconnect && sessionOpened && _running)
+            {
+                PostLog("Stopping the editor server: the client's session ended, and it stops on disconnect");
+                _running = false;
+            }
         }
     }
 
-    void EditorServer::HandleClient(int clientSocket)
+    void EditorServer::HandleClient(int clientSocket, bool &sessionOpened)
     {
         // This connection's session: whether its last Hello succeeded. A new connection starts without one, so a
         // client that reconnects must send Hello again.
@@ -319,6 +338,8 @@ namespace N2Engine::Editor
         // With an access token, a connection that hasn't succeeded a Hello must not hold the (one-at-a-time) server:
         // it has until this deadline to do so, and is closed after a refused command or a failed Hello
         const bool gated = !_accessToken.empty();
+        // Without a token every connection is a session (for SetStopOnDisconnect); with one, from its first good Hello
+        sessionOpened = !gated;
         const auto helloDeadline = std::chrono::steady_clock::now() + _helloTimeout;
         const auto deadline = [&]() -> std::optional<std::chrono::steady_clock::time_point>
         {
@@ -413,6 +434,7 @@ namespace N2Engine::Editor
             if (isHello)
             {
                 helloAccepted = !response.empty() && response[0] == static_cast<uint8_t>(ResponseType::ServerInfo);
+                sessionOpened = sessionOpened || helloAccepted;
             }
 
             if (!Send(clientSocket, response.data(), response.size()))
