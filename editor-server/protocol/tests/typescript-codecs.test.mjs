@@ -73,21 +73,29 @@ test("every request with fields and every response has a vector and codecs", () 
   assert.deepEqual(Object.keys(protocol.ResponseCodecs).sort(), Object.keys(spec.responses).sort())
 })
 
+// Encodes the vector's values and checks the bytes: exactly, unless a field is json, whose text may be written any
+// way (key order, spacing), so then the encoding must decode back to the values instead. Decoding the vector's own
+// payload must always give its values.
+function checkVector(fields, codec, vector) {
+  const encoded = codec.encode(toCodecValues(fields, vector.fields))
+  const hasJson = Object.values(fields).some((type) => type.startsWith("json"))
+  if (hasJson) {
+    assert.deepEqual(fromCodecValues(fields, codec.decode(encoded)), vector.fields)
+  } else {
+    assert.equal(hex(encoded), vector.payload)
+  }
+  assert.deepEqual(fromCodecValues(fields, codec.decode(fromHex(vector.payload))), vector.fields)
+}
+
 for (const vector of vectors.requests) {
   test(`request ${vector.command}: encodes to the vector and decodes back`, () => {
-    const fields = spec.commands[vector.command].request
-    const codec = protocol.RequestCodecs[vector.command]
-    assert.equal(hex(codec.encode(toCodecValues(fields, vector.fields))), vector.payload)
-    assert.deepEqual(fromCodecValues(fields, codec.decode(fromHex(vector.payload))), vector.fields)
+    checkVector(spec.commands[vector.command].request, protocol.RequestCodecs[vector.command], vector)
   })
 }
 
 for (const vector of vectors.responses) {
   test(`response ${vector.response}: encodes to the vector and decodes back`, () => {
-    const fields = responseFields(vector.response)
-    const codec = protocol.ResponseCodecs[vector.response]
-    assert.equal(hex(codec.encode(toCodecValues(fields, vector.fields))), vector.payload)
-    assert.deepEqual(fromCodecValues(fields, codec.decode(fromHex(vector.payload))), vector.fields)
+    checkVector(responseFields(vector.response), protocol.ResponseCodecs[vector.response], vector)
   })
 }
 

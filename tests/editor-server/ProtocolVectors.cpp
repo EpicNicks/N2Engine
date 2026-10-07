@@ -191,6 +191,80 @@ namespace ProtocolVectors
         return builders;
     }
 
+    namespace
+    {
+        json DecodeField(const json &spec, BufferReader &r, const std::string &type, uint32_t &count)
+        {
+            // json first: a JSON shape can end in [] ("json:string[]") but is one string on the wire, not an array
+            if (type == "json" || type.starts_with("json:"))
+                return json::parse(r.ReadString());
+            if (type.ends_with("[]"))
+            {
+                json values = json::array();
+                for (uint32_t i = 0; i < count; ++i)
+                {
+                    uint32_t nestedCount = 0;
+                    values.push_back(DecodeField(spec, r, type.substr(0, type.size() - 2), nestedCount));
+                }
+                return values;
+            }
+            if (type == "string")
+                return r.ReadString();
+            if (type == "uint8")
+                return r.ReadU8();
+            if (type == "bool")
+                return r.ReadBool();
+            if (type == "uint32")
+                return r.ReadU32();
+            if (type == "int32")
+                return r.ReadI32();
+            if (type == "float32")
+                return r.ReadF32();
+            if (type == "mat4")
+            {
+                json values = json::array();
+                for (int i = 0; i < 16; ++i)
+                    values.push_back(r.ReadF32());
+                return values;
+            }
+            if (type == "bytes")
+            {
+                const auto rest = r.ReadBytes(r.Remaining());
+                return ToHex({rest.begin(), rest.end()});
+            }
+            json value = json::object();
+            for (const auto &[field, fieldType] : spec.at("types").at(type).items())
+            {
+                value[field] = DecodeField(spec, r, fieldType.get<std::string>(), count);
+            }
+            return value;
+        }
+    }
+
+    json DecodeBySpec(const json &spec, const json &fields, std::span<const uint8_t> payload)
+    {
+        BufferReader r(payload);
+        json values = json::object();
+        uint32_t count = 0;
+        for (const auto &[field, type] : fields.items())
+        {
+            values[field] = DecodeField(spec, r, type.get<std::string>(), count);
+            if (field == "count")
+                count = values[field].get<uint32_t>();
+        }
+        return values;
+    }
+
+    bool HasJsonField(const json &fields)
+    {
+        for (const auto &[field, type] : fields.items())
+        {
+            if (type.get<std::string>().starts_with("json"))
+                return true;
+        }
+        return false;
+    }
+
     std::vector<uint8_t> BuildResponse(const std::string &response, const json &vector)
     {
         const auto builder = ResponseBuilders().find(response);

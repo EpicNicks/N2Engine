@@ -53,3 +53,7 @@ if (WIN32)
     )
 endif()
 add_dependencies(editor_server_tests editor_protocol_generated_check)
+# Compile the header the build is about to regenerate, not the one before it
+if (TARGET N2ProtocolGenerate)
+    add_dependencies(editor_protocol_generated_check N2ProtocolGenerate)
+endif()

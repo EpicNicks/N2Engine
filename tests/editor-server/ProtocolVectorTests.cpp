@@ -109,22 +109,43 @@ TEST(ProtocolVectorTest, ServerDeserializersReadTheVectorRequests)
     }
 }
 
-// Each response vector's fields, written by the server's builder, give exactly the vector's frame
+// Each response vector's fields, written by the server's builder, give the vector's frame: byte for byte, except that
+// json fields are compared as parsed values (how JSON text is written, its key order or spacing, is free)
 TEST(ProtocolVectorTest, ServerBuildersWriteTheVectorResponses)
 {
+    std::ifstream file(N2_PROTOCOL_JSON);
+    const json spec = json::parse(file);
     const auto vectors = ProtocolVectors::LoadResponses();
     ASSERT_FALSE(vectors.empty());
     for (const auto &[name, vector] : vectors)
     {
         const std::vector<uint8_t> payload = ProtocolVectors::FromHex(vector.at("payload").get<std::string>());
-        BufferWriter expected;
-        expected.WriteU8(static_cast<uint8_t>(std::stoi(vector.at("id").get<std::string>(), nullptr, 16)));
-        expected.WriteU32(static_cast<uint32_t>(payload.size()));
-        expected.WriteBytes(payload);
+        const uint8_t id = static_cast<uint8_t>(std::stoi(vector.at("id").get<std::string>(), nullptr, 16));
+        const std::vector<uint8_t> frame = ProtocolVectors::BuildResponse(name, vector);
+        ASSERT_GE(frame.size(), 5u) << name;
 
-        EXPECT_EQ(ProtocolVectors::ToHex(ProtocolVectors::BuildResponse(name, vector)),
-                  ProtocolVectors::ToHex(expected.Release()))
-            << name;
+        json fields = json::object();
+        for (const auto &[command, declaration] : spec.at("commands").items())
+        {
+            if (declaration.at("response").at("type") == name && declaration.at("response").contains("fields"))
+                fields = declaration.at("response").at("fields");
+        }
+
+        if (!ProtocolVectors::HasJsonField(fields))
+        {
+            BufferWriter expected;
+            expected.WriteU8(id);
+            expected.WriteU32(static_cast<uint32_t>(payload.size()));
+            expected.WriteBytes(payload);
+            EXPECT_EQ(ProtocolVectors::ToHex(frame), ProtocolVectors::ToHex(expected.Release())) << name;
+            continue;
+        }
+
+        EXPECT_EQ(frame[0], id) << name;
+        const std::span<const uint8_t> written = std::span<const uint8_t>(frame).subspan(5);
+        json writtenValues;
+        ASSERT_NO_THROW(writtenValues = ProtocolVectors::DecodeBySpec(spec, fields, written)) << name;
+        EXPECT_EQ(writtenValues, ProtocolVectors::DecodeBySpec(spec, fields, payload)) << name;
     }
 }
 
@@ -193,6 +214,27 @@ TEST(ProtocolFieldCodecTest, JsonWritesInvalidUtf8AsAReplacementCharacter)
     ASSERT_NO_THROW(WriteJson(w, json(std::string("bad \xFF byte"))));
     BufferReader r(w.Data());
     EXPECT_EQ(r.ReadString(), "\"bad \xEF\xBF\xBD byte\"");
+}
+
+TEST(ProtocolFieldCodecTest, ATrailingFieldAnOlderClientDoesntSendGetsItsDefault)
+{
+    // A request as a newer client sends it (with the trailing bool) and as an older one does (without)
+    BufferWriter newer;
+    newer.WriteString("id");
+    newer.WriteBool(false);
+    BufferWriter older;
+    older.WriteString("id");
+
+    BufferReader newerReader(newer.Data());
+    (void)newerReader.ReadString();
+    EXPECT_FALSE(ReadTrailing(newerReader, &BufferReader::ReadBool, true));
+    EXPECT_FALSE(newerReader.HasData());
+
+    BufferReader olderReader(older.Data());
+    (void)olderReader.ReadString();
+    EXPECT_TRUE(ReadTrailing(olderReader, &BufferReader::ReadBool, true));
+    EXPECT_EQ(ReadTrailing(olderReader, [](BufferReader &r) { return r.ReadString(); }, std::string{"fallback"}),
+              "fallback");
 }
 
 TEST(ProtocolFieldCodecTest, ReadingTextThatIsntJsonThrows)

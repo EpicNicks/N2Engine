@@ -184,7 +184,10 @@ namespace
     void ReadSpecField(const spec_json &spec, Protocol::BufferReader &r, const std::string &type,
                        const std::string &name, uint32_t &count)
     {
-        if (type.ends_with("[]"))
+        // json first: a JSON shape can end in [] ("json:string[]") but is one string on the wire, not an array
+        if (type == "json" || type.starts_with("json:"))
+            EXPECT_FALSE(nlohmann::json::parse(r.ReadString(), nullptr, false).is_discarded()) << name << " isn't JSON";
+        else if (type.ends_with("[]"))
         {
             const std::string element = type.substr(0, type.size() - 2);
             for (uint32_t i = 0; i < count; ++i)
@@ -195,8 +198,6 @@ namespace
         }
         else if (type == "string")
             (void)r.ReadString();
-        else if (type == "json" || type.starts_with("json:"))
-            EXPECT_FALSE(nlohmann::json::parse(r.ReadString(), nullptr, false).is_discarded()) << name << " isn't JSON";
         else if (type == "uint8" || type == "bool")
             (void)r.ReadU8();
         else if (type == "uint32")
@@ -379,10 +380,17 @@ TEST(ProtocolSpecTest, ParseProtocolVersionTakesOnlyMajorMinorPatch)
     EXPECT_EQ(version->patchVersion, 456u);
 
     for (const char *invalid : {"", "1", "1.1", "1.1.", "1.1.1.1", "v1.1.1", "1.-1.1", "1.+1.1", " 1.1.1", "1.1.1 ",
-                                "1..1", "a.b.c", "99999999999.0.0"})
+                                "1..1", "a.b.c", "99999999999.0.0", "4294967296.0.0", "00000000001.0.0",
+                                "1.0.000000000000000000000000000000000000000000000000000000000000000001"})
     {
         EXPECT_FALSE(ParseProtocolVersion(invalid).has_value()) << invalid;
     }
+
+    // Up to 10 digits a part, leading zeros included (from_chars alone would take any number of them)
+    const auto padded = ParseProtocolVersion("0000000001.4294967295.0");
+    ASSERT_TRUE(padded.has_value());
+    EXPECT_EQ(padded->majorVersion, 1u);
+    EXPECT_EQ(padded->minorVersion, 4294967295u);
 }
 
 // For every response with fields: the server's builder, given the golden vector's values, writes a frame of that
@@ -398,7 +406,7 @@ TEST(ProtocolSpecTest, ResponseBuildersWriteTheSpecFields)
     {
         const spec_json *fields = FindResponseFields(spec, name);
         if (fields == nullptr)
-            continue; // Ok and Error: covered by ResponseBuildersMatchTheGoldenVectors
+            continue; // Ok and Error: covered by ProtocolVectorTest.ServerBuildersWriteTheVectorResponses
 
         const auto vector = vectors.find(name);
         ASSERT_NE(vector, vectors.end()) << "no golden vector for " << name;

@@ -163,7 +163,8 @@ def build(protocol: dict) -> dict:
         "description": "Golden vectors, generated from protocol.json by generators/generate_test_vectors.py - do not edit. "
                        "payload is the hex of the payload (no frame header) that fields encode to. "
                        "bytes fields are hex strings, mat4 16 numbers (column-major), json fields their parsed value "
-                       "(encoded as compact JSON with sorted keys); Error's payload is its message's raw UTF-8 bytes.",
+                       "(encoded as compact JSON with sorted keys only so this file is deterministic: compare json "
+                       "fields as parsed values, never as bytes); Error's payload is its message's raw UTF-8 bytes.",
         "protocolVersion": protocol["version"],
         "requests": requests,
         "responses": responses,

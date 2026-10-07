@@ -18,7 +18,7 @@
     },
     "errorPayload": "An Error response's payload is the message as raw UTF-8 bytes, not a string: the frame's length is the message's byte count.",
     "reservedIds": "Ids 0xC0 to 0xFE are reserved for server-pushed event frames: no command or response uses them.",
-    "versioning": "version is major.minor.patch. New commands, new responses and new trailing request fields bump the minor version (a server ignores request bytes it doesn't read); any other change bumps the major version. Hello refuses a client whose major version differs from the server's."
+    "versioning": "version is major.minor.patch. The minor version goes up for new commands, new responses, new trailing request fields and new trailing response fields; anything else (a changed id, field order or type, a removed field) bumps the major version. Both directions must keep working within a major version: a server reads a trailing request field only when the payload has bytes left and otherwise uses a default, since a client of an older minor version doesn't send it (Commands.hpp: ReadTrailing); a client's decoders ignore response bytes after the fields they know, and a client relies on a response field added in a later minor version only once Hello has shown the server speaks that version. Hello refuses a client whose major version differs from the server's, and accepts any minor version with a warning when it differs."
   },
   "commands": {
     "RenderFrame": {
