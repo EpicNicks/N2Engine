@@ -280,6 +280,19 @@ jobs:
             if ($payload[$payload.Length - 1] -ne 1) { throw "Hello: the host reports no project loaded" }
             Write-Host "Hello: protocol $serverVersion, project loaded"
 
+            # The event ring kept the startup lines: RunHost constructs the server before Application::Init, so lines
+            # Init logs itself are there. PollEvents (0x05): epoch, afterSeq, maxEvents (uint32 each); Events (0x0C):
+            # epoch, nextSeq, dropped (uint32 each), then the events as a json field (a string: byte count, UTF-8 JSON),
+            # searched here as text
+            Send-Frame $stream 0x05 ([byte[]]([BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]1024)))
+            $response = Read-Response $stream
+            Assert-Response $response 0x0C "PollEvents"
+            $eventsText = [Text.Encoding]::UTF8.GetString($response.Payload, 12, $response.Payload.Length - 12)
+            foreach ($line in "Camera initialized", "Using Software renderer, headless (no window)") {
+              if (-not $eventsText.Contains($line)) { throw "PollEvents: no '$line' among the startup events (was the server constructed after Init?)" }
+            }
+            Write-Host "PollEvents: $($response.Payload.Length) bytes, startup lines present"
+
             # The software renderer runs with no window, even on this GPU-less runner
             Send-Frame $stream 0x50 # GetEngineHealth
             $response = Read-Response $stream
