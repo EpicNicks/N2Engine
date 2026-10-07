@@ -2,16 +2,24 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "engine/Window.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/config/ApplicationOptions.hpp"
+#include "engine/input/InputBinding.hpp"
+#include "engine/input/InputSystem.hpp"
+#include "engine/input/InputTypes.hpp"
+
+#include <GLFW/glfw3.h>
 
 // Window's no-window path (#74): a headless application on the software renderer gets a renderer and an input
 // system but no GLFW window, so it runs (and renders real pixels) with no display or GPU, as on the CI runner.
 
 using namespace N2Engine;
+using namespace N2Engine::Input;
 using RenderBackend = Config::ApplicationOptions::RenderBackend;
 
 namespace
@@ -24,9 +32,45 @@ namespace
         options.isHeadless = headless;
         return options;
     }
+
+    /// Collects every GLFW error while a test runs, and expects none: the no-window path must never call GLFW
+    /// (which, never initialised, would report GLFW_NOT_INITIALIZED through this callback)
+    class WindowlessWindowTest : public ::testing::Test
+    {
+    protected:
+        void SetUp() override
+        {
+            Errors().clear();
+            _previous = glfwSetErrorCallback(&Collect);
+        }
+
+        void TearDown() override
+        {
+            glfwSetErrorCallback(_previous);
+            for (const auto &[code, description] : Errors())
+            {
+                ADD_FAILURE() << "GLFW error 0x" << std::hex << code << std::dec << ": " << description
+                              << (code == GLFW_NOT_INITIALIZED ? " (GLFW_NOT_INITIALIZED)" : "");
+            }
+        }
+
+    private:
+        static std::vector<std::pair<int, std::string>> &Errors()
+        {
+            static std::vector<std::pair<int, std::string>> errors;
+            return errors;
+        }
+
+        static void Collect(const int code, const char *description)
+        {
+            Errors().emplace_back(code, description != nullptr ? description : "");
+        }
+
+        GLFWerrorfun _previous = nullptr;
+    };
 }
 
-TEST(WindowlessWindowTest, OnlyAHeadlessSoftwareApplicationHasNoWindow)
+TEST_F(WindowlessWindowTest, OnlyAHeadlessSoftwareApplicationHasNoWindow)
 {
     EXPECT_TRUE(Window::UsesNoWindow(Options(RenderBackend::SOFTWARE, true)));
 
@@ -37,7 +81,7 @@ TEST(WindowlessWindowTest, OnlyAHeadlessSoftwareApplicationHasNoWindow)
     EXPECT_FALSE(Window::UsesNoWindow(Options(RenderBackend::OPENGL, false)));
 }
 
-TEST(WindowlessWindowTest, InitCreatesARendererAndInputButNoWindow)
+TEST_F(WindowlessWindowTest, InitCreatesARendererAndInputButNoWindow)
 {
     Window window;
     ASSERT_TRUE(window.InitWindow(Options(RenderBackend::SOFTWARE, true))) << window.GetInitError();
@@ -56,17 +100,27 @@ TEST(WindowlessWindowTest, InitCreatesARendererAndInputButNoWindow)
     EXPECT_EQ(window.GetRenderDimensions()[0], Window::FallbackWidth);
     EXPECT_EQ(window.GetRenderDimensions()[1], Window::FallbackHeight);
 
-    // None of these may reach GLFW, which was never initialised
+    // None of these may reach GLFW, which was never initialised (TearDown fails on any GLFW error)
+    EXPECT_FALSE(Window::HasGlfw());
     window.PollEvents();
     window.SetTitle("Windowless");
     EXPECT_EQ(window.GetTitle(), "Windowless");
     window.SetWindowMode(WindowMode::Fullscreen);
     EXPECT_FALSE(window.ShouldClose());
 
+    // Gamepads read nothing, without asking GLFW
+    EXPECT_TRUE(InputSystem::GetConnectedGamepads().empty());
+    AxisBinding axis(window, GamepadAxis::LeftX);
+    (void)axis.getValue();
+    GamepadButtonBinding button(window, GamepadButton::South);
+    (void)button.getValue();
+    GamepadStickBinding stick(window, GamepadAxis::LeftX, GamepadAxis::LeftY);
+    (void)stick.getValue();
+
     window.Shutdown();
 }
 
-TEST(WindowlessWindowTest, RendersAndReadsBackAtTheRenderSize)
+TEST_F(WindowlessWindowTest, RendersAndReadsBackAtTheRenderSize)
 {
     Window window;
     ASSERT_TRUE(window.InitWindow(Options(RenderBackend::SOFTWARE, true))) << window.GetInitError();
@@ -99,7 +153,7 @@ TEST(WindowlessWindowTest, RendersAndReadsBackAtTheRenderSize)
     window.Shutdown();
 }
 
-TEST(WindowlessWindowTest, ShutdownLeavesAnInvalidWindowThatCanStartAgain)
+TEST_F(WindowlessWindowTest, ShutdownLeavesAnInvalidWindowThatCanStartAgain)
 {
     Window window;
     ASSERT_TRUE(window.InitWindow(Options(RenderBackend::SOFTWARE, true))) << window.GetInitError();
