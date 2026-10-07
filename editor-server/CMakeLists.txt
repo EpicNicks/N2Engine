@@ -18,6 +18,7 @@ if(Python3_FOUND)
         DEPENDS
         ${CMAKE_CURRENT_SOURCE_DIR}/protocol/protocol.json
         ${CMAKE_CURRENT_SOURCE_DIR}/protocol/generators/generate_cpp.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/protocol/generators/protocol_spec.py
         COMMENT "Generating C++ protocol bindings"
     )
 
@@ -51,6 +52,9 @@ target_link_libraries(N2EditorServer
     PRIVATE
     $<$<PLATFORM_ID:Windows>:ws2_32>
 )
+
+# The engine version Hello reports: the root project's (editor-server declares no project of its own)
+target_compile_definitions(N2EditorServer PRIVATE N2ENGINE_VERSION="${PROJECT_VERSION}")
 
 if(TARGET N2ProtocolGenerate)
     add_dependencies(N2EditorServer N2ProtocolGenerate)

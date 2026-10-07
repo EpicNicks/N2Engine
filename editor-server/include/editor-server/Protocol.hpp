@@ -1,14 +1,63 @@
 #pragma once
 
+#include <charconv>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string_view>
+#include <system_error>
 
 namespace N2Engine::Editor
 {
+    /// The version of protocol.json this server implements (ProtocolSpecTest pins the two equal). Hello compares the
+    /// client's with it: the same major version is compatible, whatever the minor and patch versions.
+    inline constexpr std::string_view ProtocolVersion = "1.1.0";
+
+    struct ProtocolVersionNumber
+    {
+        uint32_t majorVersion = 0;
+        uint32_t minorVersion = 0;
+        uint32_t patchVersion = 0;
+    };
+
+    /// The most digits a part of a protocol version may have (a uint32 has at most 10)
+    inline constexpr std::size_t MaxProtocolVersionPartDigits = 10;
+
+    /// "major.minor.patch", each part 1 to 10 decimal digits that fit a uint32; nullopt for anything else (signs,
+    /// spaces, missing or extra parts, or a part padded with zeros past 10 digits, which from_chars would accept)
+    [[nodiscard]] inline std::optional<ProtocolVersionNumber> ParseProtocolVersion(std::string_view text)
+    {
+        ProtocolVersionNumber version;
+        uint32_t *parts[] = {&version.majorVersion, &version.minorVersion, &version.patchVersion};
+        const char *position = text.data();
+        const char *const end = text.data() + text.size();
+        for (uint32_t *part : parts)
+        {
+            if (part != parts[0])
+            {
+                if (position == end || *position != '.')
+                    return std::nullopt;
+                ++position;
+            }
+            // from_chars would accept no sign anyway, but this also rules out an empty part
+            if (position == end || *position < '0' || *position > '9')
+                return std::nullopt;
+            const auto [next, error] = std::from_chars(position, end, *part);
+            if (error != std::errc{} || static_cast<std::size_t>(next - position) > MaxProtocolVersionPartDigits)
+                return std::nullopt;
+            position = next;
+        }
+        if (position != end)
+            return std::nullopt;
+        return version;
+    }
+
     enum class CommandType : uint8_t
     {
         RenderFrame = 0x01,
         SetViewportSize = 0x02,
         GetAudio = 0x03,
+        Hello = 0x04,
         SetCameraPosition = 0x10,
         GetCameraPosition = 0x12,
         CreateScene = 0x20,
@@ -39,7 +88,8 @@ namespace N2Engine::Editor
         SceneData = 0x07,
         ScriptData = 0x08,
         EngineHealth = 0x09,
-        AudioSamples = 0x0A
+        AudioSamples = 0x0A,
+        ServerInfo = 0x0B
     };
 
 #pragma pack(push, 1)

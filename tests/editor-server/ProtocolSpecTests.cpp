@@ -12,6 +12,8 @@
 #include <editor-server/Protocol.hpp>
 #include <editor-server/Serialization.hpp>
 
+#include "ProtocolVectors.hpp"
+
 using namespace N2Engine::Editor;
 // ordered_json: a request's fields go on the wire in the order protocol.json lists them
 using spec_json = nlohmann::ordered_json;
@@ -42,6 +44,7 @@ namespace
             {"RenderFrame", CommandType::RenderFrame},
             {"SetViewportSize", CommandType::SetViewportSize},
             {"GetAudio", CommandType::GetAudio},
+            {"Hello", CommandType::Hello},
             {"SetCameraPosition", CommandType::SetCameraPosition},
             {"GetCameraPosition", CommandType::GetCameraPosition},
             {"CreateScene", CommandType::CreateScene},
@@ -76,6 +79,7 @@ namespace
             {"ScriptData", ResponseType::ScriptData},
             {"EngineHealth", ResponseType::EngineHealth},
             {"AudioSamples", ResponseType::AudioSamples},
+            {"ServerInfo", ResponseType::ServerInfo},
         };
         return responses;
     }
@@ -88,6 +92,7 @@ namespace
         using namespace Protocol;
         static const std::map<std::string, Deserializer> deserializers = {
             {"SetViewportSize", [](BufferReader &r) { (void)SetViewportSizeCmd::Deserialize(r); }},
+            {"Hello", [](BufferReader &r) { (void)HelloCmd::Deserialize(r); }},
             {"SetCameraPosition", [](BufferReader &r) { (void)SetCameraPositionCmd::Deserialize(r); }},
             {"CreateScene", [](BufferReader &r) { (void)CreateSceneCmd::Deserialize(r); }},
             {"LoadScene", [](BufferReader &r) { (void)LoadSceneCmd::Deserialize(r); }},
@@ -107,6 +112,28 @@ namespace
         if (type == "string")
         {
             w.WriteString("value of " + name);
+        }
+        else if (type == "json" || type.starts_with("json:"))
+        {
+            w.WriteString(R"({"value of":")" + name + R"("})");
+        }
+        else if (type == "uint8")
+        {
+            w.WriteU8(7);
+        }
+        else if (type == "quat")
+        {
+            for (int i = 0; i < 4; ++i)
+            {
+                w.WriteF32(0.5f);
+            }
+        }
+        else if (type == "mat4")
+        {
+            for (int i = 0; i < 16; ++i)
+            {
+                w.WriteF32(static_cast<float>(i));
+            }
         }
         else if (type == "int32")
         {
@@ -135,6 +162,113 @@ namespace
             return false;
         }
         return true;
+    }
+}
+
+namespace
+{
+    // The response a command answers with, as protocol.json declares it ({"type": ..., "fields": {...}})
+    const spec_json *FindResponseFields(const spec_json &spec, const std::string &response)
+    {
+        for (const auto &[name, command] : spec.at("commands").items())
+        {
+            const spec_json &declared = command.at("response");
+            if (declared.at("type").get<std::string>() == response && declared.contains("fields"))
+                return &declared.at("fields");
+        }
+        return nullptr;
+    }
+
+    // Reads one field of the given spec type the way protocol.json's "encoding" section describes it (a client's
+    // view of the payload); count holds the last uint32 named count, which an array's length comes from
+    void ReadSpecField(const spec_json &spec, Protocol::BufferReader &r, const std::string &type,
+                       const std::string &name, uint32_t &count)
+    {
+        // json first: a JSON shape can end in [] ("json:string[]") but is one string on the wire, not an array
+        if (type == "json" || type.starts_with("json:"))
+            EXPECT_FALSE(nlohmann::json::parse(r.ReadString(), nullptr, false).is_discarded()) << name << " isn't JSON";
+        else if (type.ends_with("[]"))
+        {
+            const std::string element = type.substr(0, type.size() - 2);
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                uint32_t nestedCount = 0;
+                ReadSpecField(spec, r, element, name, nestedCount);
+            }
+        }
+        else if (type == "string")
+            (void)r.ReadString();
+        else if (type == "uint8" || type == "bool")
+            (void)r.ReadU8();
+        else if (type == "uint32")
+        {
+            const uint32_t value = r.ReadU32();
+            if (name == "count")
+                count = value;
+        }
+        else if (type == "int32")
+            (void)r.ReadI32();
+        else if (type == "float32")
+            (void)r.ReadF32();
+        else if (type == "mat4")
+            (void)r.ReadBytes(16 * sizeof(float));
+        else if (type == "bytes")
+            (void)r.ReadBytes(r.Remaining());
+        else if (spec.at("types").contains(type))
+        {
+            for (const auto &[field, fieldType] : spec.at("types").at(type).items())
+                ReadSpecField(spec, r, fieldType.get<std::string>(), field, count);
+        }
+        else
+            ADD_FAILURE() << name << " has an unknown type: " << type;
+    }
+
+    bool IsDocumentedFieldType(const spec_json &spec, std::string type)
+    {
+        if (type.starts_with("json:"))
+            type = "json";
+        if (type.ends_with("[]"))
+            type = type.substr(0, type.size() - 2);
+        return spec.at("encoding").at("fieldTypes").contains(type) || spec.at("types").contains(type);
+    }
+}
+
+TEST(ProtocolSpecTest, ProtocolVersionMatchesTheSpec)
+{
+    const spec_json spec = LoadSpec();
+    EXPECT_EQ(spec.at("version").get<std::string>(), ProtocolVersion);
+    EXPECT_TRUE(ParseProtocolVersion(ProtocolVersion).has_value());
+}
+
+TEST(ProtocolSpecTest, EveryFieldTypeIsDocumentedInTheSpec)
+{
+    const spec_json spec = LoadSpec();
+    const auto check = [&](const spec_json &fields, const std::string &where)
+    {
+        for (const auto &[field, type] : fields.items())
+            EXPECT_TRUE(IsDocumentedFieldType(spec, type.get<std::string>())) << where << "." << field << ": " << type;
+    };
+    for (const auto &[name, command] : spec.at("commands").items())
+    {
+        check(command.at("request"), name + ".request");
+        if (command.at("response").contains("fields"))
+            check(command.at("response").at("fields"), name + ".response");
+    }
+    for (const auto &[name, fields] : spec.at("types").items())
+        check(fields, name);
+}
+
+TEST(ProtocolSpecTest, NoIdIsInTheRangeReservedForPushedEvents)
+{
+    const spec_json spec = LoadSpec();
+    for (const auto &[name, command] : spec.at("commands").items())
+    {
+        const int id = ParseId(command.at("id"));
+        EXPECT_FALSE(id >= 0xC0 && id <= 0xFE) << name;
+    }
+    for (const auto &[name, id] : spec.at("responses").items())
+    {
+        EXPECT_FALSE(ParseId(id) >= 0xC0 && ParseId(id) <= 0xFE) << name;
     }
 }
 
@@ -235,4 +369,62 @@ TEST(ProtocolSpecTest, CommandDeserializersKeepFieldValues)
     load.WriteString(R"({"name":"S","rootGameObjects":[]})");
     BufferReader loadReader(load.Data());
     EXPECT_EQ(LoadSceneCmd::Deserialize(loadReader).sceneJson, R"({"name":"S","rootGameObjects":[]})");
+}
+
+TEST(ProtocolSpecTest, ParseProtocolVersionTakesOnlyMajorMinorPatch)
+{
+    const auto version = ParseProtocolVersion("12.3.456");
+    ASSERT_TRUE(version.has_value());
+    EXPECT_EQ(version->majorVersion, 12u);
+    EXPECT_EQ(version->minorVersion, 3u);
+    EXPECT_EQ(version->patchVersion, 456u);
+
+    for (const char *invalid : {"", "1", "1.1", "1.1.", "1.1.1.1", "v1.1.1", "1.-1.1", "1.+1.1", " 1.1.1", "1.1.1 ",
+                                "1..1", "a.b.c", "99999999999.0.0", "4294967296.0.0", "00000000001.0.0",
+                                "1.0.000000000000000000000000000000000000000000000000000000000000000001"})
+    {
+        EXPECT_FALSE(ParseProtocolVersion(invalid).has_value()) << invalid;
+    }
+
+    // Up to 10 digits a part, leading zeros included (from_chars alone would take any number of them)
+    const auto padded = ParseProtocolVersion("0000000001.4294967295.0");
+    ASSERT_TRUE(padded.has_value());
+    EXPECT_EQ(padded->majorVersion, 1u);
+    EXPECT_EQ(padded->minorVersion, 4294967295u);
+}
+
+// For every response with fields: the server's builder, given the golden vector's values, writes a frame of that
+// response's id whose payload is exactly the spec's fields, in order, by type (read as protocol.json describes them)
+TEST(ProtocolSpecTest, ResponseBuildersWriteTheSpecFields)
+{
+    const spec_json spec = LoadSpec();
+    const auto vectors = ProtocolVectors::LoadResponses();
+    ASSERT_FALSE(vectors.empty());
+
+    size_t checked = 0;
+    for (const auto &[name, id] : spec.at("responses").items())
+    {
+        const spec_json *fields = FindResponseFields(spec, name);
+        if (fields == nullptr)
+            continue; // Ok and Error: covered by ProtocolVectorTest.ServerBuildersWriteTheVectorResponses
+
+        const auto vector = vectors.find(name);
+        ASSERT_NE(vector, vectors.end()) << "no golden vector for " << name;
+        const std::vector<uint8_t> frame = ProtocolVectors::BuildResponse(name, vector->second);
+        ASSERT_GE(frame.size(), 5u) << name;
+
+        Protocol::BufferReader r(frame);
+        EXPECT_EQ(r.ReadU8(), ParseId(id)) << name;
+        EXPECT_EQ(r.ReadU32(), frame.size() - 5) << name << ": the frame length isn't the payload's";
+
+        uint32_t count = 0;
+        for (const auto &[field, type] : fields->items())
+        {
+            ASSERT_NO_THROW(ReadSpecField(spec, r, type.get<std::string>(), field, count))
+                << name << "." << field << ": the server writes less than the spec's fields";
+        }
+        EXPECT_EQ(r.Remaining(), 0u) << name << ": the server writes more than the spec's fields";
+        ++checked;
+    }
+    EXPECT_EQ(checked + 2, spec.at("responses").size());
 }
