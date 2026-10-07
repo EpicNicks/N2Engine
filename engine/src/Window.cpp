@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <utility>
 
 #include "engine/Window.hpp"
@@ -10,6 +11,23 @@
 #include "engine/input/InputBinding.hpp"
 
 using namespace N2Engine;
+
+namespace
+{
+    // Process-wide, as GLFW's own state is: set by a successful glfwInit, cleared by glfwTerminate
+    std::atomic<bool> g_glfwInitialized{false};
+
+    void TerminateGlfw()
+    {
+        glfwTerminate(); // does nothing when GLFW isn't initialised (windowless, or after a failed init)
+        g_glfwInitialized = false;
+    }
+}
+
+bool Window::HasGlfw()
+{
+    return g_glfwInitialized;
+}
 
 Window::Window()
     : _window(nullptr),
@@ -36,7 +54,7 @@ bool Window::FailInit(const std::string &error)
         glfwDestroyWindow(_window);
         _window = nullptr;
     }
-    glfwTerminate();
+    TerminateGlfw();
     return false;
 }
 
@@ -78,6 +96,7 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
         Logger::Log(_initError, Logger::LogLevel::Error);
         return false;
     }
+    g_glfwInitialized = true;
 
     // Configure GLFW hints based on chosen renderer
     if (options.renderBackend == Config::ApplicationOptions::RenderBackend::VULKAN)
@@ -220,7 +239,7 @@ void Window::Shutdown()
     }
     _windowless = false;
     _windowlessSize = {0, 0};
-    glfwTerminate(); // does nothing when GLFW isn't initialised (windowless, or after a failed init)
+    TerminateGlfw();
 }
 
 bool Window::ShouldClose() const

@@ -83,6 +83,11 @@ namespace N2Engine
          */
         [[nodiscard]] static bool UsesNoWindow(const Config::ApplicationOptions &options);
 
+        /// True while GLFW is initialised: from a windowed InitWindow until Shutdown (or a failed init). False with
+        /// no window, windowless included. Code that calls GLFW without a window handle (gamepads) checks it, since
+        /// GLFW refuses those calls with GLFW_NOT_INITIALIZED otherwise.
+        [[nodiscard]] static bool HasGlfw();
+
         /// @returns false if the window or renderer failed to start; see GetInitError(). With UsesNoWindow(options)
         /// no window is created: the software renderer starts headless at FallbackWidth x FallbackHeight
         /// (SoftwareRenderer::Initialize(nullptr, ...)), and the input system is created as usual.
