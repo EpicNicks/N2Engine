@@ -1,6 +1,6 @@
 -- Fly camera: "Camera Move" moves relative to where the camera faces, "Camera Rotate" turns and looks.
 -- Port of test_project/src/CameraController.cpp.
--- "Station 1" ... "Station N" (keys 1-6 in scene.lua) jump to the smoke test's stations (SmokeStations.lua), looking
+-- "Station 1" ... "Station N" (keys 1-7 in scene.lua) jump to the smoke test's stations (SmokeStations.lua), looking
 -- straight down -Z; it starts at station 1.
 
 local Stations = require("scripts.SmokeStations")

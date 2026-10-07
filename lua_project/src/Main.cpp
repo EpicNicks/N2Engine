@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <filesystem>
 #include <format>
 #include <optional>
@@ -32,6 +33,12 @@ namespace
         return std::nullopt;
     }
 
+    /// A bad command line, on stderr: the Logger has no console output until Application::Init (and none in Release)
+    void UsageError(const std::string_view message)
+    {
+        std::fprintf(stderr, "%.*s\n", static_cast<int>(message.size()), message.data());
+    }
+
     std::string_view RenderBackendTitle(const RenderBackend backend)
     {
         return backend == RenderBackend::OPENGL ? "OpenGL" : "software";
@@ -57,7 +64,7 @@ int main(int argc, char *argv[])
             {
                 if (i + 1 >= argc)
                 {
-                    Logger::Error("--renderer needs a value: opengl or software");
+                    UsageError("--renderer needs a value: opengl or software");
                     return 1;
                 }
                 value = argv[++i];
@@ -69,10 +76,16 @@ int main(int argc, char *argv[])
             const auto parsed = ParseRenderBackend(value);
             if (!parsed)
             {
-                Logger::Error(std::format("Unknown renderer '{}': expected opengl or software", value));
+                UsageError(std::format("Unknown renderer '{}': expected opengl or software", value));
                 return 1;
             }
             renderBackend = *parsed;
+        }
+        else if (arg.starts_with("--"))
+        {
+            UsageError(std::format("Unknown option '{}'. Usage: lua_project [project folder] "
+                                   "[--renderer opengl|software]", arg));
+            return 1;
         }
         else
         {

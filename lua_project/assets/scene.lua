@@ -1,6 +1,7 @@
 -- The GPU smoke test (docs/testing.html, "GPU smoke test"): one scene that runs every rendering path CI can't see,
--- as six stations the camera jumps between with keys 1-6 (scripts/SmokeStations.lua), plus a screen-space UI panel.
--- Each item has a caption saying what correct output looks like; the HUD says what to look for at each station.
+-- as seven stations the camera jumps between with keys 1-7 (scripts/SmokeStations.lua). Each item has a caption saying
+-- what correct output looks like; the HUD (bottom-left, H hides it) says what to look for at each station. One
+-- directional light, the "Sun", shines into the scene from the front upper left, the side the cameras are on.
 --   1 Physics       the original test scene, as TestEngine() in test_project/src/Main.cpp builds it: a falling cube
 --                   and sphere over a static floor
 --   2 World text    TextRenderer at three sizes and a wrapped, centred paragraph
@@ -8,7 +9,8 @@
 --   4 World canvas  a world-space Canvas with an Image, UIText and a Button clicked through the camera's ray
 --   5 Materials     a lit textured cube from a .mat file, lit and unlit spheres, opaque / blend / mask side by side
 --   6 glTF model    models/smoke_robot.gltf (lua_project/tools/make_smoke_assets.py) instantiated twice
---   UI panel        screen-space Canvas: a sprite Image, UIText alignment and wrapping, Buttons with a counter
+--   7 Screen UI     a screen-space Canvas on the right of the window (shown only here, or with U): a sprite Image,
+--                   UIText alignment and wrapping, Buttons with a counter
 
 local Stations = require("scripts.SmokeStations")
 
@@ -36,6 +38,9 @@ local actions = {
     },
     ["Toggle UI Panel"] = {
         { type = "KeyboardButton", key = "U" },
+    },
+    ["Toggle HUD"] = {
+        { type = "KeyboardButton", key = "H" },
     },
 }
 for index = 1, #Stations do
@@ -153,6 +158,18 @@ local function TintedButton(parent, name, label, color, labelSize)
     element:FindChild("Label"):GetComponent("UIText"):SetFontSize(labelSize or 20)
     return element, button
 end
+
+-- ===== Lighting =====
+
+-- Without a Light the engine's default directional light shines from behind the stations (direction (0.5, -1, 0.3),
+-- +z), so the faces the cameras see would get ambient light only. This one travels down, right and away from the
+-- cameras: it lights the front, top and left faces.
+local sun = GameObject.Create("Sun")
+local sunLight = sun:AddComponent("Light")
+sunLight:SetType("Directional")
+sunLight:SetDirection(Vector3(0.4, -0.6, -0.7))
+sunLight:SetIntensity(0.9)
+table.insert(roots, sun)
 
 -- ===== Station 1: physics (the original test scene) =====
 
@@ -295,9 +312,10 @@ do
     MeshObject("Material Unlit Sphere", "Sphere", "res://materials/unlit_white.mat", Vector3(62.2, 2.2, 0.0),
         Vector3(1.5, 1.5, 1.5))
     WorldText("Material Cube Caption", "Lit, textured (.mat): checker upright on each face (red top-left); faces "
-        .. "brighten and darken as it turns.", Vector3(55.6, 1.1, 0.0), 0.15, CAPTION, 2.5)
-    WorldText("Material Lit Caption", "Lit: bright upper left, dark lower right, a small highlight.",
-        Vector3(58.5, 1.1, 0.0), 0.15, CAPTION, 2.3)
+        .. "toward you or the upper left bright, faces turning away to the right dim.", Vector3(55.6, 1.1, 0.0), 0.15,
+        CAPTION, 2.5)
+    WorldText("Material Lit Caption", "Lit from the front upper left: brightest there, with a highlight, darker "
+        .. "toward the lower right edge.", Vector3(58.5, 1.1, 0.0), 0.15, CAPTION, 2.3)
     WorldText("Material Unlit Caption", "Unlit: a flat white disc, no shading.", Vector3(61.1, 1.1, 0.0), 0.15,
         CAPTION, 2.3)
 
@@ -318,8 +336,8 @@ end
 
 do
     StationTitle(6, Vector3(86.5, 3.2, 0.0))
-    WorldText("Model Caption", "Left: as imported. Right: the same model, spinning as one piece. Grey body with a "
-        .. "face (cyan eyes above a red mouth, upright), orange arms (the right one tilted out), a teal pyramid head, "
+    WorldText("Model Caption", "Left: as imported. Right: the same model, spinning as one piece. Lit from the front: "
+        .. "a grey body with a bright face (cyan eyes above a red mouth, upright), orange arms (the right one tilted out), a teal pyramid head, "
         .. "an orange antenna.", Vector3(86.5, 2.6, 0.0), 0.16, CAPTION, 6.5)
 
     local static = Place(GameObject.Create("Robot Static"), Vector3(87.8, -1.9, 0.0), Vector3(1.2, 1.2, 1.2))
@@ -332,7 +350,7 @@ do
     table.insert(roots, spinning)
 end
 
--- ===== Screen-space UI panel (U hides it) =====
+-- ===== Station 7: screen-space UI panel (shown only at station 7, or with U; SmokeHud.lua) =====
 
 local uiClicks = 0
 do
@@ -349,7 +367,7 @@ do
     rect:SetAnchoredPosition(Vector2(-8, -8))
     rect:SetSizeDelta(Vector2(300, 470))
 
-    Layout(Label(panel, "UI Title", "Screen-space UI (U hides)", { size = 18, wrap = false }), 10, 8, 280, 24)
+    Layout(Label(panel, "UI Title", "7  Screen-space UI (U toggles)", { size = 18, wrap = false }), 10, 8, 280, 24)
 
     local icon = Layout(UI.CreateElement("UI Icon"), 10, 38, 64, 64)
     panel:AddChild(icon)
@@ -409,19 +427,20 @@ do
     local hud = UI.CreateCanvas("Smoke HUD")
     table.insert(roots, hud)
 
+    -- Bottom-left, 580 x 112: the stations' cameras keep everything that matters in the top four fifths of the window
     local background = Panel(hud, "HUD Background", Color.new(0.0, 0.0, 0.0, 0.6))
     local rect = background:GetComponent("RectTransform")
-    rect:SetAnchorMin(Vector2(0, 1))
-    rect:SetAnchorMax(Vector2(0, 1))
-    rect:SetPivot(Vector2(0, 1))
-    rect:SetAnchoredPosition(Vector2(8, -8))
-    rect:SetSizeDelta(Vector2(600, 116))
+    rect:SetAnchorMin(Vector2(0, 0))
+    rect:SetAnchorMax(Vector2(0, 0))
+    rect:SetPivot(Vector2(0, 0))
+    rect:SetAnchoredPosition(Vector2(8, 8))
+    rect:SetSizeDelta(Vector2(580, 112))
 
-    Layout(Label(background, "HUD Title", "", { size = 20, wrap = false }), 10, 6, 580, 26)
-    Layout(Label(background, "HUD Keys", "Keys 1-6: stations   WASD: move   Arrows: look   U: UI panel   "
-        .. "Mouse: buttons   Esc: quit", { size = 13, color = Color.new(0.8, 0.8, 0.85, 1.0), wrap = false }),
-        10, 34, 580, 18)
-    Layout(Label(background, "HUD Caption", "", { size = 14, color = CAPTION }), 10, 54, 580, 60)
+    Layout(Label(background, "HUD Title", "", { size = 18, wrap = false }), 10, 4, 560, 22)
+    Layout(Label(background, "HUD Keys", "Keys 1-7: stations   WASD: move   Arrows: look   U: UI panel   "
+        .. "H: this HUD   Esc: quit", { size = 12, color = Color.new(0.8, 0.8, 0.85, 1.0), wrap = false }),
+        10, 28, 560, 16)
+    Layout(Label(background, "HUD Caption", "", { size = 12, color = CAPTION }), 10, 46, 560, 62)
 
     hud:AddComponent("LuaComponent"):SetScript("res://scripts/SmokeHud.lua")
 end

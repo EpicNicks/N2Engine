@@ -1,11 +1,24 @@
--- The smoke test's heads-up display (on the "Smoke HUD" canvas): which station the camera is at and what to look
--- for there, also written to the log in case text doesn't draw. Keys 1-6 ("Station N") change station, as in
--- CameraController.lua; U ("Toggle UI Panel") shows and hides the screen-space UI station.
+-- The smoke test's heads-up display (on the "Smoke HUD" canvas, bottom-left): which station the camera is at and
+-- what to look for there, also written to the log in case text doesn't draw. Keys 1-7 ("Station N") change station,
+-- as in CameraController.lua, and show the screen-space UI panel only at the station that tests it; U ("Toggle UI
+-- Panel") shows or hides the panel anyway, and H ("Toggle HUD") the HUD.
 
 local Stations = require("scripts.SmokeStations")
 
 local SmokeHud = {}
 SmokeHud.__index = SmokeHud
+
+-- Calls fn when the named action starts, if the map has it
+local function OnStarted(controls, name, fn)
+    local action = controls:Get(name)
+    if action ~= nil then
+        action:Subscribe(function(changed)
+            if changed:GetPhase() == ActionPhase.Started then
+                fn()
+            end
+        end)
+    end
+end
 
 function SmokeHud:OnAttach()
     self:ShowStation(1)
@@ -17,24 +30,10 @@ function SmokeHud:OnAttach()
     end
 
     for index = 1, #(Stations or {}) do
-        local station = controls:Get("Station " .. index)
-        if station ~= nil then
-            station:Subscribe(function(action)
-                if action:GetPhase() == ActionPhase.Started then
-                    self:ShowStation(index)
-                end
-            end)
-        end
+        OnStarted(controls, "Station " .. index, function() self:ShowStation(index) end)
     end
-
-    local toggle = controls:Get("Toggle UI Panel")
-    if toggle ~= nil then
-        toggle:Subscribe(function(action)
-            if action:GetPhase() == ActionPhase.Started then
-                self:TogglePanel()
-            end
-        end)
-    end
+    OnStarted(controls, "Toggle UI Panel", function() self:TogglePanel() end)
+    OnStarted(controls, "Toggle HUD", function() self:ToggleHud() end)
 end
 
 -- The UIText on the HUD's child called `name`, or nil
@@ -57,14 +56,30 @@ function SmokeHud:ShowStation(index)
     if caption ~= nil then
         caption:SetText(station.look)
     end
+    local panel = self:Panel()
+    if panel ~= nil then
+        panel:SetActive(station.uiPanel == true)
+    end
     Debug.Log("GPU smoke test, " .. heading .. ". Look for: " .. station.look)
 end
 
-function SmokeHud:TogglePanel()
+-- The screen-space UI station's canvas, or nil
+function SmokeHud:Panel()
     local scene = SceneManager.GetCurrentScene()
-    local panel = scene and scene:FindGameObject("Smoke UI Panel")
+    return scene and scene:FindGameObject("Smoke UI Panel")
+end
+
+function SmokeHud:TogglePanel()
+    local panel = self:Panel()
     if panel ~= nil then
         panel:SetActive(not panel:IsActive())
+    end
+end
+
+function SmokeHud:ToggleHud()
+    local background = self.gameObject:FindChild("HUD Background")
+    if background ~= nil then
+        background:SetActive(not background:IsActive())
     end
 end
 

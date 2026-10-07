@@ -26,6 +26,7 @@
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SphereCollider.hpp"
+#include "engine/rendering/Light.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
 #include "engine/rendering/Model.hpp"
@@ -278,6 +279,13 @@ protected:
         ASSERT_TRUE(LuaRuntime::Instance().RunFile(IO::ResourcePath("res://scene.lua")));
     }
 
+    // Later suites shouldn't find the smoke scene's canvases, buttons and light in the current scene
+    static void TearDownTestSuite()
+    {
+        SceneManager::AddScene(Scene::Create("LuaProjectSceneTest_Empty"), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+    }
+
     static std::shared_ptr<GameObject> Find(const std::string &name)
     {
         return SceneManager::GetCurSceneRef().FindGameObject(name);
@@ -393,6 +401,22 @@ namespace
         const auto *text = ComponentOf<UI::UIText>(go);
         return text ? text->GetText() : std::string("<no UIText>");
     }
+
+    /// The count in a counter label such as "Clicks: 3" (its text after `prefix`), or -1 if it doesn't read so
+    int CounterOf(const std::shared_ptr<GameObject> &go, const std::string &prefix)
+    {
+        const std::string text = UITextOf(go);
+        if (!text.starts_with(prefix) || text.size() == prefix.size())
+        {
+            return -1;
+        }
+        const std::string digits = text.substr(prefix.size());
+        if (!std::ranges::all_of(digits, [](const unsigned char c) { return std::isdigit(c) != 0; }))
+        {
+            return -1;
+        }
+        return std::stoi(digits);
+    }
 }
 
 TEST_F(LuaProjectSceneTest, SmokeWorldTextAndEffects)
@@ -450,16 +474,21 @@ TEST_F(LuaProjectSceneTest, SmokeWorldCanvasButtonCountsClicks)
 
     auto *button = ComponentOf<UI::Button>(Find("World Button"));
     ASSERT_NE(button, nullptr);
-    EXPECT_EQ(UITextOf(Find("World Counter")), "World clicks: 0");
+    const int before = CounterOf(Find("World Counter"), "World clicks: ");
+    ASSERT_GE(before, 0) << UITextOf(Find("World Counter"));
     EXPECT_TRUE(button->Click());
-    EXPECT_EQ(UITextOf(Find("World Counter")), "World clicks: 1");
+    EXPECT_EQ(CounterOf(Find("World Counter"), "World clicks: "), before + 1);
 }
 
 TEST_F(LuaProjectSceneTest, SmokeScreenUIButtonsCountAndToggle)
 {
-    const auto *canvas = ComponentOf<UI::Canvas>(Find("Smoke UI Panel"));
+    const auto panel = Find("Smoke UI Panel");
+    ASSERT_NE(panel, nullptr);
+    const auto *canvas = ComponentOf<UI::Canvas>(panel);
     ASSERT_NE(canvas, nullptr);
     EXPECT_FALSE(canvas->IsWorldSpace());
+    // SmokeHud shows the panel only at its station, and an inactive button ignores clicks
+    panel->SetActive(true);
 
     const auto *icon = ComponentOf<UI::Image>(Find("UI Icon"));
     ASSERT_NE(icon, nullptr);
@@ -479,17 +508,30 @@ TEST_F(LuaProjectSceneTest, SmokeScreenUIButtonsCountAndToggle)
     ASSERT_NE(button, nullptr);
     ASSERT_NE(toggle, nullptr);
 
-    EXPECT_EQ(UITextOf(Find("UI Counter")), "Clicks: 0");
+    const int before = CounterOf(Find("UI Counter"), "Clicks: ");
+    ASSERT_GE(before, 0) << UITextOf(Find("UI Counter"));
+    ASSERT_TRUE(button->IsInteractable());
     EXPECT_TRUE(button->Click());
-    EXPECT_EQ(UITextOf(Find("UI Counter")), "Clicks: 1");
+    EXPECT_EQ(CounterOf(Find("UI Counter"), "Clicks: "), before + 1);
 
     // The toggle disables the button, which then ignores clicks, and enables it again
     EXPECT_TRUE(toggle->Click());
     EXPECT_FALSE(button->IsInteractable());
     EXPECT_FALSE(button->Click());
-    EXPECT_EQ(UITextOf(Find("UI Counter")), "Clicks: 1");
+    EXPECT_EQ(CounterOf(Find("UI Counter"), "Clicks: "), before + 1);
     EXPECT_TRUE(toggle->Click());
     EXPECT_TRUE(button->IsInteractable());
+}
+
+TEST_F(LuaProjectSceneTest, SmokeSceneHasASunLightingTheStationsFromTheFront)
+{
+    const auto *sun = ComponentOf<Rendering::Light>(Find("Sun"));
+    ASSERT_NE(sun, nullptr);
+    EXPECT_EQ(sun->type, Rendering::LightType::Directional);
+    // The cameras sit on +Z looking down -Z; the light travels away from them, so the faces they see are lit
+    EXPECT_LT(sun->direction.z, 0.0f);
+    EXPECT_LT(sun->direction.y, 0.0f);
+    EXPECT_GT(sun->intensity, 0.0f);
 }
 
 TEST_F(LuaProjectSceneTest, SmokeMaterialsComeFromTheirMatFiles)
@@ -565,7 +607,10 @@ TEST_F(LuaProjectSceneTest, SmokeHudShowsTheFirstStation)
     ASSERT_NE(script, nullptr);
     script->OnAttach();
 
-    EXPECT_EQ(UITextOf(Find("HUD Title")), "Station 1/6: Physics");
+    EXPECT_EQ(UITextOf(Find("HUD Title")), "Station 1/7: Physics");
+    const auto panel = Find("Smoke UI Panel");
+    ASSERT_NE(panel, nullptr);
+    EXPECT_FALSE(panel->IsActive()) << "the UI panel shows only at its own station";
     EXPECT_FALSE(UITextOf(Find("HUD Caption")).empty());
 }
 
