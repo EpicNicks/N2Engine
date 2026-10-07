@@ -12,12 +12,13 @@ using namespace N2Engine::Editor;
 
 namespace
 {
-    void SetTestVariable(const char *name, const char *value)
+    /// False if the variable couldn't be set (callers ASSERT on it)
+    [[nodiscard]] bool SetTestVariable(const char *name, const char *value)
     {
 #ifdef _WIN32
-        ASSERT_EQ(_putenv_s(name, value), 0);
+        return _putenv_s(name, value) == 0;
 #else
-        ASSERT_EQ(setenv(name, value, 1), 0);
+        return setenv(name, value, 1) == 0;
 #endif
     }
 
@@ -118,6 +119,11 @@ TEST(HostOptionsTest, AnOptionFollowedByAnotherOptionIsMissingItsValue)
     const auto bind = ParseHostArguments({"--bind", "--project", "C:/game"});
     ASSERT_FALSE(bind);
     EXPECT_EQ(bind.error(), "--bind is missing a value");
+
+    // A flag is an option too: not a variable called "--exit-on-disconnect"
+    const auto tokenEnv = ParseHostArguments({"--token-env", "--exit-on-disconnect"});
+    ASSERT_FALSE(tokenEnv) << tokenEnv->tokenEnv;
+    EXPECT_EQ(tokenEnv.error(), "--token-env is missing a value");
 }
 
 TEST(HostOptionsTest, AnInvalidPortIsAnErrorNamingIt)
@@ -189,7 +195,7 @@ TEST(HostOptionsTest, TheUsageNamesEveryOption)
 TEST(HostOptionsTest, ReadAccessTokenReadsTheVariableThenRemovesIt)
 {
     constexpr const char *name = "N2_HOST_OPTIONS_TEST_TOKEN";
-    SetTestVariable(name, "s3cret token");
+    ASSERT_TRUE(SetTestVariable(name, "s3cret token"));
 
     const auto token = ReadAccessToken(name);
     ASSERT_TRUE(token) << token.error();
@@ -215,7 +221,7 @@ TEST(HostOptionsTest, ReadAccessTokenRefusesAnUnsetVariable)
 TEST(HostOptionsTest, ReadAccessTokenRefusesAnEmptyVariable)
 {
     constexpr const char *name = "N2_HOST_OPTIONS_TEST_EMPTY";
-    SetTestVariable(name, "");
+    ASSERT_TRUE(SetTestVariable(name, ""));
     const auto token = ReadAccessToken(name);
     ASSERT_FALSE(token);
     EXPECT_EQ(token.error(), std::string("--token-env: the environment variable ") + name + " is empty");
