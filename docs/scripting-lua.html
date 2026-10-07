@@ -701,7 +701,7 @@ self.gameObject:SetLayer(Layers.NameToLayer("Player"))
 
 <h2 id="examples">Example scripts</h2>
 <h3 id="example-scene">Scene setup script</h3>
-<p><code>lua_project</code> builds its whole scene from <code>assets/scene.lua</code>, run with <code>LuaRuntime::RunFile</code> after a scene is loaded and <code>ResourceLoader</code> is initialized. Besides the falling cube and sphere below, it builds the <a href="testing.html#gpu-smoke">GPU smoke test</a>'s stations <span class="badge">PR #TBD</span>. Trimmed:</p>
+<p><code>lua_project</code> builds its whole scene from <code>assets/scene.lua</code>, run with <code>LuaRuntime::RunFile</code> after a scene is loaded and <code>ResourceLoader</code> is initialized. Besides the falling cube and sphere below, it builds the <a href="testing.html#gpu-smoke">GPU smoke test</a>'s stations <span class="badge">PR #86</span>. Trimmed:</p>
 <pre class="lang-lua"><code>local scene = SceneManager.GetCurrentScene()
 if scene == nil then
     error("scene.lua needs a loaded scene")
