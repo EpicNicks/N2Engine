@@ -1,0 +1,373 @@
+{
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "max": [
+        0.6,
+        0.7,
+        0.4
+      ],
+      "min": [
+        -0.6,
+        -0.7,
+        -0.4
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 24,
+      "max": [
+        0.15,
+        0.5,
+        0.15
+      ],
+      "min": [
+        -0.15,
+        -0.5,
+        -0.15
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 16,
+      "max": [
+        0.45,
+        0.7,
+        0.45
+      ],
+      "min": [
+        -0.45,
+        0,
+        -0.45
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5126,
+      "count": 16,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 10,
+      "componentType": 5126,
+      "count": 16,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 11,
+      "componentType": 5123,
+      "count": 18,
+      "type": "SCALAR"
+    }
+  ],
+  "asset": {
+    "generator": "N2Engine make_smoke_assets.py",
+    "version": "2.0"
+  },
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 288,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 288,
+      "byteOffset": 288,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 192,
+      "byteOffset": 576,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 72,
+      "byteOffset": 768,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 288,
+      "byteOffset": 840,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 288,
+      "byteOffset": 1128,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 192,
+      "byteOffset": 1416,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 72,
+      "byteOffset": 1608,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 192,
+      "byteOffset": 1680,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 192,
+      "byteOffset": 1872,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 128,
+      "byteOffset": 2064,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 36,
+      "byteOffset": 2192,
+      "target": 34963
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 2228,
+      "uri": "data:application/octet-stream;base64,mpkZvzMzM7/NzMw+mpkZPzMzM7/NzMw+mpkZPzMzMz/NzMw+mpkZvzMzMz/NzMw+mpkZPzMzM7/NzMw+mpkZPzMzM7/NzMy+mpkZPzMzMz/NzMy+mpkZPzMzMz/NzMw+mpkZvzMzMz/NzMw+mpkZPzMzMz/NzMw+mpkZPzMzMz/NzMy+mpkZvzMzMz/NzMy+mpkZPzMzM7/NzMy+mpkZvzMzM7/NzMy+mpkZvzMzMz/NzMy+mpkZPzMzMz/NzMy+mpkZvzMzM7/NzMy+mpkZvzMzM7/NzMw+mpkZvzMzMz/NzMw+mpkZvzMzMz/NzMy+mpkZvzMzM7/NzMy+mpkZPzMzM7/NzMy+mpkZPzMzM7/NzMw+mpkZvzMzM7/NzMw+AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgD8AAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAgD8AAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgD8AAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAgD8AAIA/AAAAAAAAAAAAAAAAAAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAmpkZvgAAAL+amRk+mpkZPgAAAL+amRk+mpkZPgAAAD+amRk+mpkZvgAAAD+amRk+mpkZPgAAAL+amRk+mpkZPgAAAL+amRm+mpkZPgAAAD+amRm+mpkZPgAAAD+amRk+mpkZvgAAAD+amRk+mpkZPgAAAD+amRk+mpkZPgAAAD+amRm+mpkZvgAAAD+amRm+mpkZPgAAAL+amRm+mpkZvgAAAL+amRm+mpkZvgAAAD+amRm+mpkZPgAAAD+amRm+mpkZvgAAAL+amRm+mpkZvgAAAL+amRk+mpkZvgAAAD+amRk+mpkZvgAAAD+amRm+mpkZvgAAAL+amRm+mpkZPgAAAL+amRm+mpkZPgAAAL+amRk+mpkZvgAAAL+amRk+AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgD8AAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAgD8AAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgD8AAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAPwAAgD8AAIA/AAAAAAAAAAAAAAAAAAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAZmbmvgAAAABmZuY+ZmbmPgAAAABmZuY+AAAAADMzMz8AAAAAZmbmPgAAAABmZuY+ZmbmPgAAAABmZua+AAAAADMzMz8AAAAAZmbmPgAAAABmZua+ZmbmvgAAAABmZua+AAAAADMzMz8AAAAAZmbmvgAAAABmZua+ZmbmvgAAAABmZuY+AAAAADMzMz8AAAAAZmbmvgAAAABmZua+ZmbmPgAAAABmZua+ZmbmPgAAAABmZuY+ZmbmvgAAAABmZuY+AAAAgB5vCj9xV1c/AAAAgB5vCj9xV1c/AAAAgB5vCj9xV1c/cVdXPx5vCj8AAAAAcVdXPx5vCj8AAAAAcVdXPx5vCj8AAAAAAAAAAB5vCj9xV1e/AAAAAB5vCj9xV1e/AAAAAB5vCj9xV1e/cVdXvx5vCj8AAAAAcVdXvx5vCj8AAAAAcVdXvx5vCj8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgD8AAIA/AACAPwAAAD8AAAAAAAAAAAAAgD8AAIA/AACAPwAAAD8AAAAAAAAAAAAAgD8AAIA/AACAPwAAAD8AAAAAAAAAAAAAgD8AAIA/AACAPwAAAD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAEAAgADAAQABQAGAAcACAAJAAoACwAMAA0ADgAMAA4ADwA="
+    }
+  ],
+  "images": [
+    {
+      "name": "RobotFace",
+      "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAjUlEQVR42u3boRHAIAwFUIZAMwm6s6PRDNENWokGrleRJ76IyeWeyUUk1Xo9kZMAAJhFaz1EAAAAAAAAAAAAAAAAAGAbII97KatDftkfAAAAAAAAAAAAAAAAjiEAAAAAAAAAAAAAAAAAALDTbJTyawAAAAAAgDUIAAAAAAAAAAAAAAAAAAcAfocBxAN4AU9Q2BLlGdgwAAAAAElFTkSuQmCC"
+    }
+  ],
+  "materials": [
+    {
+      "name": "Face",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Orange",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          1.0,
+          0.55,
+          0.1,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.4
+      }
+    },
+    {
+      "name": "Teal",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.1,
+          0.75,
+          0.7,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Body",
+      "primitives": [
+        {
+          "attributes": {
+            "NORMAL": 1,
+            "POSITION": 0,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "Limb",
+      "primitives": [
+        {
+          "attributes": {
+            "NORMAL": 5,
+            "POSITION": 4,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "Head",
+      "primitives": [
+        {
+          "attributes": {
+            "NORMAL": 9,
+            "POSITION": 8,
+            "TEXCOORD_0": 10
+          },
+          "indices": 11,
+          "material": 2
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "children": [
+        1
+      ],
+      "name": "Robot"
+    },
+    {
+      "children": [
+        2,
+        3,
+        4
+      ],
+      "mesh": 0,
+      "name": "Body",
+      "translation": [
+        0.0,
+        0.7,
+        0.0
+      ]
+    },
+    {
+      "mesh": 1,
+      "name": "Arm.L",
+      "translation": [
+        -0.85,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "mesh": 1,
+      "name": "Arm.R",
+      "rotation": [
+        0.0,
+        0.0,
+        -0.258819,
+        0.965926
+      ],
+      "translation": [
+        0.85,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "children": [
+        5
+      ],
+      "mesh": 2,
+      "name": "Head",
+      "translation": [
+        0.0,
+        0.7,
+        0.0
+      ]
+    },
+    {
+      "mesh": 1,
+      "name": "Antenna",
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "translation": [
+        0.0,
+        0.95,
+        0.0
+      ]
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9729,
+      "wrapS": 33071,
+      "wrapT": 33071
+    }
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "sampler": 0,
+      "source": 0
+    }
+  ]
+}

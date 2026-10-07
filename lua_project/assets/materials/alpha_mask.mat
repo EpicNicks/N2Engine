@@ -1,0 +1,7 @@
+{
+  "shading": "unlit",
+  "baseColorTexture": "res://textures/alpha_gradient.png",
+  "alphaMode": "mask",
+  "alphaCutoff": 0.5,
+  "doubleSided": true
+}

@@ -1,0 +1,6 @@
+{
+  "shading": "unlit",
+  "baseColorTexture": "res://textures/alpha_gradient.png",
+  "alphaMode": "blend",
+  "doubleSided": true
+}

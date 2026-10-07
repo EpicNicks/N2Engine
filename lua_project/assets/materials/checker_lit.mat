@@ -1,0 +1,6 @@
+{
+  "shading": "lit",
+  "baseColor": {"r": 1, "g": 1, "b": 1, "a": 1},
+  "baseColorTexture": "res://textures/checker.png",
+  "smoothness": 0.6
+}

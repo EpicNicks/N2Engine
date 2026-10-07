@@ -29,6 +29,7 @@
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/io/Resources.hpp"
+#include "engine/rendering/Light.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
@@ -105,6 +106,7 @@ namespace N2Engine::Scripting::Bindings
                 {"QuadRenderer", MakeAccess<Example::QuadRenderer>()},
                 {"MeshRenderer", MakeAccess<Rendering::MeshRenderer>()},
                 {"TextRenderer", MakeAccess<Rendering::TextRenderer>()},
+                {"Light", MakeAccess<Rendering::Light>()},
                 {"AudioSource", MakeAccess<Audio::AudioSource>()},
                 {"AudioListener", MakeAccess<Audio::AudioListener>()},
                 {"LuaComponent", MakeAccess<LuaComponent>()},
@@ -182,6 +184,27 @@ namespace N2Engine::Scripting::Bindings
                 return std::shared_ptr<T>{};
             }
             return std::dynamic_pointer_cast<T>(parent->FindSubAsset(std::string_view(reference).substr(hash + 1)));
+        }
+
+        /// "Directional", "Point" or "Spot"; anything else is an error naming `caller`
+        Rendering::LightType ParseLightType(const std::string &name, const std::string_view caller)
+        {
+            if (name == "Directional") return Rendering::LightType::Directional;
+            if (name == "Point") return Rendering::LightType::Point;
+            if (name == "Spot") return Rendering::LightType::Spot;
+            throw std::runtime_error(
+                std::format("{}: unknown light type '{}'. Expected Directional, Point or Spot", caller, name));
+        }
+
+        std::string LightTypeName(const Rendering::LightType type)
+        {
+            switch (type)
+            {
+            case Rendering::LightType::Point: return "Point";
+            case Rendering::LightType::Spot: return "Spot";
+            case Rendering::LightType::Directional:
+            default: return "Directional";
+            }
         }
 
         /// A material slot's index from Lua (1-based) as a 0-based index; raises a Lua error below 1
@@ -565,6 +588,38 @@ namespace N2Engine::Scripting::Bindings
                 const Text::Rect &bounds = renderer->GetLayout().bounds;
                 return std::make_tuple(bounds.minX, bounds.minY, bounds.maxX, bounds.maxY);
             }
+        );
+
+        // The scene collects every active Light each frame; a scene with none is lit by a default directional light
+        // (Scene::CollectLighting)
+        using LightRef = ComponentRef<Rendering::Light>;
+        BindComponentType<Rendering::Light>(
+            lua, "Light",
+            // "Directional", "Point" or "Spot"; an unknown name raises an error and changes nothing
+            "SetType", [](const LightRef &c, const std::string &type)
+            {
+                const Rendering::LightType parsed = ParseLightType(type, "Light:SetType");
+                c.Pin()->type = parsed;
+            },
+            "GetType", [](const LightRef &c) { return LightTypeName(c.Pin()->type); },
+            // A directional light's direction of travel in world space (need not be normalized)
+            "SetDirection", [](const LightRef &c, const Math::Vector3 &direction) { c.Pin()->direction = direction; },
+            "GetDirection", [](const LightRef &c) { return c.Pin()->direction; },
+            // The colour's r, g and b (alpha is ignored); GetColor returns alpha 1
+            "SetColor", [](const LightRef &c, const Common::Color &color)
+            {
+                c.Pin()->color = Math::Vector3(color.r, color.g, color.b);
+            },
+            "GetColor", [](const LightRef &c)
+            {
+                const Math::Vector3 rgb = c.Pin()->color;
+                return Common::Color(rgb.x, rgb.y, rgb.z, 1.0f);
+            },
+            "SetIntensity", [](const LightRef &c, const float intensity) { c.Pin()->intensity = intensity; },
+            "GetIntensity", [](const LightRef &c) { return c.Pin()->intensity; },
+            // Point and spot lights: how far the light reaches, in world units
+            "SetRange", [](const LightRef &c, const float range) { c.Pin()->range = range; },
+            "GetRange", [](const LightRef &c) { return c.Pin()->range; }
         );
 
         using LuaComponentRef = ComponentRef<LuaComponent>;
