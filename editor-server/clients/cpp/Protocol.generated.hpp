@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.1.0";
+inline constexpr const char *ProtocolVersion = "1.2.0";
 
 enum class CommandType : uint8_t
 {
@@ -19,6 +19,7 @@ enum class CommandType : uint8_t
     SetViewportSize = 0x02,
     GetAudio = 0x03,
     Hello = 0x04,
+    PollEvents = 0x05,
     SetCameraPosition = 0x10,
     GetCameraPosition = 0x12,
     CreateScene = 0x20,
@@ -51,6 +52,7 @@ enum class ResponseType : uint8_t
     EngineHealth = 0x09,
     AudioSamples = 0x0A,
     ServerInfo = 0x0B,
+    Events = 0x0C,
 };
 
 // Custom types
@@ -94,6 +96,12 @@ struct HelloCmd
     std::string clientName;
     std::string protocolVersion;
     std::string token;
+};
+
+struct PollEventsCmd
+{
+    uint32_t afterSeq;
+    uint32_t maxEvents;
 };
 
 struct SetCameraPositionCmd
@@ -170,6 +178,13 @@ struct ServerInfoData
     std::string engineVersion;
     std::string capabilities; // JSON: string[]
     bool projectLoaded;
+};
+
+struct EventsData
+{
+    uint32_t nextSeq;
+    uint32_t dropped;
+    std::string events; // JSON: EditorEvent[]
 };
 
 struct CameraPositionData

@@ -45,6 +45,7 @@ namespace
             {"SetViewportSize", CommandType::SetViewportSize},
             {"GetAudio", CommandType::GetAudio},
             {"Hello", CommandType::Hello},
+            {"PollEvents", CommandType::PollEvents},
             {"SetCameraPosition", CommandType::SetCameraPosition},
             {"GetCameraPosition", CommandType::GetCameraPosition},
             {"CreateScene", CommandType::CreateScene},
@@ -80,6 +81,7 @@ namespace
             {"EngineHealth", ResponseType::EngineHealth},
             {"AudioSamples", ResponseType::AudioSamples},
             {"ServerInfo", ResponseType::ServerInfo},
+            {"Events", ResponseType::Events},
         };
         return responses;
     }
@@ -93,6 +95,7 @@ namespace
         static const std::map<std::string, Deserializer> deserializers = {
             {"SetViewportSize", [](BufferReader &r) { (void)SetViewportSizeCmd::Deserialize(r); }},
             {"Hello", [](BufferReader &r) { (void)HelloCmd::Deserialize(r); }},
+            {"PollEvents", [](BufferReader &r) { (void)PollEventsCmd::Deserialize(r); }},
             {"SetCameraPosition", [](BufferReader &r) { (void)SetCameraPositionCmd::Deserialize(r); }},
             {"CreateScene", [](BufferReader &r) { (void)CreateSceneCmd::Deserialize(r); }},
             {"LoadScene", [](BufferReader &r) { (void)LoadSceneCmd::Deserialize(r); }},

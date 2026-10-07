@@ -136,6 +136,19 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct PollEventsCmd
+    {
+        /// The last seq the client has seen (the previous poll's nextSeq), or 0 for everything the server still has
+        uint32_t afterSeq;
+        /// The most events to return (the server caps it; 0 returns none and skips to the newest)
+        uint32_t maxEvents;
+
+        static PollEventsCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadU32(), r.ReadU32()};
+        }
+    };
+
     struct SetCameraPositionCmd
     {
         float x, y, z;
@@ -394,6 +407,19 @@ namespace N2Engine::Editor::Protocol
         payload.WriteBool(projectLoaded);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::ServerInfo));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// PollEvents' response: nextSeq, dropped, then the events as one JSON array of EditorEvent objects
+    inline void WriteEvents(BufferWriter &w, uint32_t nextSeq, uint32_t dropped, const nlohmann::json &events)
+    {
+        BufferWriter payload;
+        payload.WriteU32(nextSeq);
+        payload.WriteU32(dropped);
+        WriteJson(payload, events);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::Events));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

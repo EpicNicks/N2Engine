@@ -13,5 +13,7 @@ namespace Server = N2Engine::Editor;
 static_assert(std::string_view(Generated::ProtocolVersion) == Server::ProtocolVersion);
 static_assert(static_cast<int>(Generated::CommandType::Hello) == static_cast<int>(Server::CommandType::Hello));
 static_assert(static_cast<int>(Generated::ResponseType::ServerInfo) == static_cast<int>(Server::ResponseType::ServerInfo));
+static_assert(static_cast<int>(Generated::CommandType::PollEvents) == static_cast<int>(Server::CommandType::PollEvents));
+static_assert(static_cast<int>(Generated::ResponseType::Events) == static_cast<int>(Server::ResponseType::Events));
 static_assert(sizeof(Generated::Quat) == 4 * sizeof(float));
 static_assert(sizeof(Generated::ServerInfoData::capabilities) > 0);

@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -73,6 +73,22 @@
           "engineVersion": "string",
           "capabilities": "json:string[]",
           "projectLoaded": "bool"
+        }
+      }
+    },
+    "PollEvents": {
+      "id": "0x05",
+      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Each event has a seq, from 1, never reused while the host runs: pass 0 for everything the server still has, then each response's nextSeq. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. An afterSeq newer than any seq the server has issued (from an earlier host process) reads as 0. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}; a client ignores kinds and keys it doesn't know.",
+      "request": {
+        "afterSeq": "uint32",
+        "maxEvents": "uint32"
+      },
+      "response": {
+        "type": "Events",
+        "fields": {
+          "nextSeq": "uint32",
+          "dropped": "uint32",
+          "events": "json:EditorEvent[]"
         }
       }
     },
@@ -254,7 +270,15 @@
       "detail": "string"
     }
   },
-  "jsonTypes": {},
+  "jsonTypes": {
+    "EditorEvent": {
+      "seq": "number",
+      "kind": "string",
+      "level?": "string",
+      "message?": "string",
+      "time?": "number"
+    }
+  },
   "responses": {
     "Ok": "0x00",
     "Error": "0x01",
@@ -267,6 +291,7 @@
     "ScriptData": "0x08",
     "EngineHealth": "0x09",
     "AudioSamples": "0x0A",
-    "ServerInfo": "0x0B"
+    "ServerInfo": "0x0B",
+    "Events": "0x0C"
   }
 }
