@@ -209,7 +209,9 @@ namespace N2Engine::Editor
         // Set before Start only, so both threads read it without a lock
         std::string _accessToken;
         std::chrono::milliseconds _helloTimeout{DefaultHelloTimeout};
-        bool _stopOnDisconnect{false};
+        // Atomic: a client Shutdown clears _running on the network thread, so the setter's _running check alone
+        // doesn't keep it from racing ServerLoop's read
+        std::atomic<bool> _stopOnDisconnect{false};
 
         CommandQueue _commands;
         // Main-thread state below
