@@ -149,8 +149,10 @@ namespace N2Engine::Editor
         /// True for a command a client is expected to poll: RenderFrame, GetAudio, PollEvents, and (ahead of the planned
         /// editor, #6, which refreshes them continuously) GetAllEntities, GetEntityTransform, GetCameraPosition,
         /// GetEngineHealth.
-        /// Rule: a command a client polls never logs per call, or its lines would drown everything else. Such a
-        /// command still logs when it fails (ExecuteCommand's error line). A new polled command belongs here.
+        /// Rule: a command a client polls never logs per call, or its lines would drown everything else (and, since
+        /// every line is an event, PollEvents would always find one). Such a command still logs when it fails
+        /// (ExecuteCommand's error line). No command logs a generic "issued" line any more, so this lists the handlers
+        /// that must not add a per-call line of their own; a new polled command belongs here.
         [[nodiscard]] static bool IsPolledCommand(uint8_t commandType);
 
     private:

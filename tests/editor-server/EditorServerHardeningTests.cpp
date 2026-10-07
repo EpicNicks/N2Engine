@@ -278,20 +278,23 @@ TEST_F(EditorServerNoSceneTest, PolledCommandsLogNothing)
     }
 }
 
-TEST_F(EditorServerNoSceneTest, OtherCommandsStillLogWhenIssued)
+TEST_F(EditorServerNoSceneTest, NoCommandLogsAGenericIssuedLine)
 {
+    // Every log line is an event for the editor, so "Command Issued: 0x.." for each command was noise there
     LogCapture capture;
 
     EXPECT_EQ(Execute(server, CommandType::CreateScript, StringPayload("player")).type,
               static_cast<uint8_t>(ResponseType::ScriptData));
+    EXPECT_EQ(Execute(server, CommandType::SetCameraPosition, {1}).type, ErrorType) << "a failure still logs";
 
-    bool issued = false;
+    bool failureLogged = false;
     for (const auto &line : capture.lines)
     {
-        if (line.message.find("Command Issued: 0x40") != std::string::npos)
-            issued = true;
+        EXPECT_EQ(line.message.find("Command Issued"), std::string::npos) << line.message;
+        if (line.message.find("Command 0x10 failed") != std::string::npos)
+            failureLogged = true;
     }
-    EXPECT_TRUE(issued) << "CreateScript (0x40) should log that it was issued";
+    EXPECT_TRUE(failureLogged);
 }
 
 TEST_F(EditorServerNoSceneTest, PolledCommandsStillLogFailures)

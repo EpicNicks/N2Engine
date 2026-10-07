@@ -584,11 +584,9 @@ namespace N2Engine::Editor
 
     void EditorServer::ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload)
     {
-        // A command a client polls never logs per call (see IsPolledCommand); failures are still logged
-        if (!IsPolledCommand(commandType))
-        {
-            Logger::Info("Command Issued: " + std::format("0x{:X}", commandType));
-        }
+        // No generic "command issued" line: every log line is an event for the editor (PollEvents), and handlers log
+        // what matters themselves. A polled command's handler never logs per call (see IsPolledCommand); failures are
+        // logged by ExecuteCommand.
         auto cmd = static_cast<CommandType>(commandType);
 
         switch (cmd)
