@@ -105,7 +105,15 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     Time::Init();
 
     const std::string rendererName{RenderBackendName(options.renderBackend)};
-    if (_window.InitWindow(options))
+    if (_window.InitWindow(options) && _window.IsWindowless())
+    {
+        // Deliberately no window (Window::UsesNoWindow): healthy, and frames are read back instead
+        windowStatus.state = SubsystemState::Disabled;
+        windowStatus.detail = "No window: the headless software renderer draws offscreen";
+        rendererStatus.state = SubsystemState::Running;
+        rendererStatus.detail = rendererName + " (headless)";
+    }
+    else if (_window.IsValid())
     {
         windowStatus.state = SubsystemState::Running;
         rendererStatus.state = SubsystemState::Running;

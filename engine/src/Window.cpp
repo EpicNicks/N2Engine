@@ -29,6 +29,8 @@ bool Window::FailInit(const std::string &error)
     // Leave nothing half-initialized: callers check IsValid() and every accessor handles null
     _inputSystem.reset();
     _renderer.reset();
+    _windowless = false;
+    _windowlessSize = {0, 0};
     if (_window)
     {
         glfwDestroyWindow(_window);
@@ -38,11 +40,37 @@ bool Window::FailInit(const std::string &error)
     return false;
 }
 
+bool Window::UsesNoWindow(const Config::ApplicationOptions &options)
+{
+    return options.isHeadless && options.renderBackend == Config::ApplicationOptions::RenderBackend::SOFTWARE;
+}
+
 bool Window::InitWindow(const Config::ApplicationOptions &options)
 {
     _initError.clear();
     _rendererFailed = false;
     _renderSize.reset();
+    _windowless = false;
+    _windowlessSize = {0, 0};
+
+    if (UsesNoWindow(options))
+    {
+        // No GLFW at all (glfwInit needs a display on some platforms): the renderer draws into its CPU buffer, and
+        // frames are read back rather than shown. Window-only calls (SetTitle, SetWindowMode) do nothing.
+        auto renderer = std::make_unique<Renderer::Software::SoftwareRenderer>();
+        if (!renderer->Initialize(nullptr, static_cast<uint32_t>(FallbackWidth), static_cast<uint32_t>(FallbackHeight)))
+        {
+            _rendererFailed = true;
+            return FailInit("Failed to initialize renderer");
+        }
+        _renderer = std::move(renderer);
+        _windowless = true;
+        _windowlessSize = {FallbackWidth, FallbackHeight};
+        Logger::Log("Using Software renderer, headless (no window)", Logger::LogLevel::Info);
+        // Keyboard and mouse bindings read nothing without a window (InputBinding, Mouse), as on a failed one
+        _inputSystem = std::make_unique<Input::InputSystem>(*this);
+        return true;
+    }
 
     if (!glfwInit())
     {
@@ -75,8 +103,6 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
     }
 
     // No monitor is attached on some headless machines; fall back to a fixed size
-    constexpr int FallbackWidth = 1280;
-    constexpr int FallbackHeight = 720;
     GLFWmonitor *primaryMonitor = glfwGetPrimaryMonitor();
     const GLFWvidmode *vidMode = primaryMonitor ? glfwGetVideoMode(primaryMonitor) : nullptr;
     const int WIDTH = vidMode ? vidMode->width / 2 : FallbackWidth;
@@ -138,7 +164,7 @@ Vector2i Window::GetWindowDimensions() const
 {
     if (!_window)
     {
-        return {0, 0};
+        return _windowless ? _windowlessSize : Vector2i{0, 0};
     }
     int width, height;
     glfwGetWindowSize(_window, &width, &height);
@@ -166,11 +192,11 @@ Input::InputSystem *Window::GetInputSystem() const
 
 void Window::PollEvents()
 {
-    if (!_window)
+    // GLFW is terminated when the window fails to open, and never initialised without one
+    if (_window)
     {
-        return; // GLFW is terminated when the window fails to open
+        glfwPollEvents();
     }
-    glfwPollEvents();
     if (_inputSystem)
     {
         _inputSystem->Update();
@@ -192,13 +218,20 @@ void Window::Shutdown()
         glfwDestroyWindow(_window);
         _window = nullptr;
     }
-    glfwTerminate();
+    _windowless = false;
+    _windowlessSize = {0, 0};
+    glfwTerminate(); // does nothing when GLFW isn't initialised (windowless, or after a failed init)
 }
 
 bool Window::ShouldClose() const
 {
-    // A window that failed to open (or was shut down) has nothing to keep running for
-    return _window == nullptr || glfwWindowShouldClose(_window);
+    if (_window)
+    {
+        return glfwWindowShouldClose(_window);
+    }
+    // A window that failed to open (or was shut down) has nothing to keep running for; a windowless one has
+    // nothing that could close
+    return !IsValid();
 }
 
 void Window::SetTitle(const std::string &title)
