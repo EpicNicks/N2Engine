@@ -111,6 +111,11 @@ namespace ProtocolVectors
                 const auto cmd = HelloCmd::Deserialize(r);
                 return json{{"clientName", cmd.clientName}, {"protocolVersion", cmd.protocolVersion}, {"token", cmd.token}};
             }},
+            {"PollEvents", [](BufferReader &r)
+            {
+                const auto cmd = PollEventsCmd::Deserialize(r);
+                return json{{"epoch", cmd.epoch}, {"afterSeq", cmd.afterSeq}, {"maxEvents", cmd.maxEvents}};
+            }},
             {"SetCameraPosition", [](BufferReader &r)
             {
                 const auto cmd = SetCameraPositionCmd::Deserialize(r);
@@ -157,6 +162,11 @@ namespace ProtocolVectors
             {
                 WriteServerInfo(w, StringField(f, "protocolVersion"), StringField(f, "engineVersion"),
                                 f.at("capabilities"), f.at("projectLoaded").get<bool>());
+            }},
+            {"Events", [](BufferWriter &w, const json &f)
+            {
+                WriteEvents(w, Uint32Field(f, "epoch"), Uint32Field(f, "nextSeq"), Uint32Field(f, "dropped"),
+                            f.at("events"));
             }},
             {"CameraPosition", [](BufferWriter &w, const json &f)
             {

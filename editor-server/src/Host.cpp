@@ -132,6 +132,11 @@ namespace N2Engine::Editor
         {
             // Headless: a hidden window (OpenGL), or no window at all (the software renderer, Window::UsesNoWindow),
             // and audio on a loopback device streamed to the client
+            // Constructed (not started) before Application::Init: it subscribes its event ring to the Logger, so every
+            // startup line is kept for a client that connects later (PollEvents from 0). Not broadcastUnbroadcastLogs:
+            // a Debug build's console subscribes during Init and would take that backlog.
+            EditorServer server;
+
             auto &app = Application::GetInstance();
             app.Init({
                 .projectPath = projectDir.string(),
@@ -156,8 +161,7 @@ namespace N2Engine::Editor
                 Logger::Info("No --project given: assets and asset references are unavailable");
             }
 
-            // Start editor server
-            EditorServer server;
+            // Configure and start the editor server (constructed before Init, above)
             if (!projectDir.empty())
             {
                 server.SetScenesDirectory(projectDir / "scenes");

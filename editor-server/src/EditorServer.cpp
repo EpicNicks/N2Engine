@@ -63,9 +63,29 @@ namespace N2Engine::Editor
         constexpr long PollIntervalMicroseconds = 100 * 1000;
     }
 
+    EditorServer::EditorServer()
+    {
+        // Every line logged while the server exists becomes a log event. The subscriber runs on the thread that logged,
+        // holding the Logger's lock, so it only copies the line into the ring (under the ring's own mutex) and never logs
+        // or waits on another thread (see Logger.hpp)
+        _logSubscription = Logger::logEvent += [this](const std::string_view message, const Logger::LogLevel level)
+        {
+            try
+            {
+                _events.PushLog(level, message, EventRing::NowUnixMilliseconds());
+            }
+            catch (...)
+            {
+                // (bad_alloc) Logging must never fail because the editor couldn't keep a copy of the line
+            }
+        };
+    }
+
     EditorServer::~EditorServer()
     {
         Stop();
+        // Once this returns no subscriber call is running (dispatch holds the Logger's lock), so _events can go
+        Logger::logEvent -= _logSubscription;
     }
 
     bool EditorServer::Start(int port, const std::string &bindAddress)
@@ -573,6 +593,7 @@ namespace N2Engine::Editor
         {
         case CommandType::RenderFrame:        // every animation frame
         case CommandType::GetAudio:           // every ~25 ms while audio plays
+        case CommandType::PollEvents:         // every ~100 ms; a line logged per poll would be an event every poll
         case CommandType::GetAllEntities:     // the hierarchy panel
         case CommandType::GetEntityTransform: // the inspector
         case CommandType::GetCameraPosition:  // the scene view
@@ -585,11 +606,9 @@ namespace N2Engine::Editor
 
     void EditorServer::ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload)
     {
-        // A command a client polls never logs per call (see IsPolledCommand); failures are still logged
-        if (!IsPolledCommand(commandType))
-        {
-            Logger::Info("Command Issued: " + std::format("0x{:X}", commandType));
-        }
+        // No generic "command issued" line: every log line is an event for the editor (PollEvents), and handlers log
+        // what matters themselves. A polled command's handler never logs per call (see IsPolledCommand); failures are
+        // logged by ExecuteCommand.
         auto cmd = static_cast<CommandType>(commandType);
 
         switch (cmd)
@@ -605,6 +624,9 @@ namespace N2Engine::Editor
             break;
         case CommandType::GetAudio:
             HandleGetAudio(clientSocket);
+            break;
+        case CommandType::PollEvents:
+            HandlePollEvents(clientSocket, payload);
             break;
         case CommandType::SetCameraPosition:
             HandleSetCameraPosition(clientSocket, payload);
@@ -766,6 +788,19 @@ namespace N2Engine::Editor
         const Audio::StreamedAudio streamed = audio.TakeStreamedAudio();
         WriteAudioSamples(response, format.sampleRate, format.channels, std::string{Audio::ToString(format.sampleFormat)},
                           streamed.frameCount, streamed.droppedFrames, streamed.samples);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandlePollEvents(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const PollEventsCmd cmd = PollEventsCmd::Deserialize(reader);
+
+        // Nothing here may log: every logged line is an event, so a poll that logged would always find one more. (Only
+        // a failure, such as a malformed payload, is logged, by ExecuteCommand, as for every polled command.)
+        EventBatch batch = _events.Read(cmd.afterSeq, cmd.maxEvents, cmd.epoch);
+        BufferWriter response;
+        WriteEvents(response, batch.epoch, batch.nextSeq, batch.dropped, nlohmann::json(std::move(batch.events)));
         SendResponse(clientSocket, response.Release());
     }
 
