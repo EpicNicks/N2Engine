@@ -308,6 +308,11 @@ TEST(HostOptionsTest, CreateOptionsMissingTheirValueAreErrors)
         ASSERT_FALSE(parsed) << option;
         EXPECT_EQ(parsed.error(), std::string(option) + " is missing a value");
     }
+
+    // An empty folder isn't "no --create": that would start a host instead
+    const auto empty = ParseHostArguments({"--create", ""});
+    ASSERT_FALSE(empty);
+    EXPECT_EQ(empty.error(), "--create is missing a value");
 }
 
 TEST(HostOptionsTest, TheCreatedLineHasTheDocumentedFormat)

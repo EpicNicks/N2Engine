@@ -103,6 +103,11 @@ namespace N2Engine::Editor
             }
             else if (arg == "--create")
             {
+                // An empty folder would otherwise mean "don't create" and start a host instead
+                if (value.empty())
+                {
+                    return std::unexpected("--create is missing a value");
+                }
                 options.createPath = value;
             }
             else if (arg == "--name")
