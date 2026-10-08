@@ -47,10 +47,14 @@ namespace N2Engine::Editor
         /// The far plane must be at least this much beyond the near plane
         static constexpr float MinDepthRange = 1.0e-3f;
 
+        /// Exactly equal, number for number (Vector3's and Quaternion's operator== allow a small difference, which would
+        /// swallow a camera moved by a tiny step: it must still make a new frame)
         bool operator==(const EditorCameraState &other) const
         {
-            return position == other.position && rotation == other.rotation && fovY == other.fovY &&
-                   orthographic == other.orthographic && orthoSize == other.orthoSize &&
+            return position.x == other.position.x && position.y == other.position.y && position.z == other.position.z &&
+                   rotation.GetX() == other.rotation.GetX() && rotation.GetY() == other.rotation.GetY() &&
+                   rotation.GetZ() == other.rotation.GetZ() && rotation.GetW() == other.rotation.GetW() &&
+                   fovY == other.fovY && orthographic == other.orthographic && orthoSize == other.orthoSize &&
                    nearPlane == other.nearPlane && farPlane == other.farPlane;
         }
 
