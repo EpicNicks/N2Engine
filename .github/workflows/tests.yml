@@ -137,6 +137,19 @@ jobs:
           if ((Get-Content (Join-Path $project "project.n2proj") -Raw) -ne $before) { throw "--create on a project changed project.n2proj" }
           Write-Host "--create: project $projectId; again: exit 2, unchanged"
 
+          # --project on a folder that isn't a project fails before the engine starts (exit 1); one an older host opened
+          # (it has .import/) is told how to adopt it keeping its asset UUIDs
+          $plain = Join-Path $env:RUNNER_TEMP "n2-not-a-project"
+          Remove-Item $plain -Recurse -Force -ErrorAction SilentlyContinue
+          $null = New-Item -ItemType Directory -Force (Join-Path $plain ".import")
+          $notProject = Start-Process -FilePath $exe -PassThru -Wait -NoNewWindow -ArgumentList "--project", "`"$plain`"", "--port", "0" `
+            -RedirectStandardOutput $createOut -RedirectStandardError $createErr
+          $notProjectErr = Get-Content $createErr -Raw
+          Write-Host "--project on a plain folder (exit $($notProject.ExitCode)): $notProjectErr"
+          if ($notProject.ExitCode -ne 1) { throw "--project on a folder without project.n2proj exited with $($notProject.ExitCode), expected 1" }
+          if (-not "$notProjectErr".Contains("--project-id from-path")) { throw "--project on a folder with .import/ didn't suggest --create --project-id from-path" }
+          if ((Get-Content $createOut -Raw) -match 'N2EditorHost ready') { throw "--project on a plain folder printed a ready line" }
+
           # One more asset: the host's ResourceLoader writes its .meta under .import/ at startup
           Set-Content (Join-Path $project "assets/startup.mat") "{}"
 

@@ -194,7 +194,7 @@
 <p><code>N2EditorHost --project &lt;folder&gt;</code> opens the project in that folder. Before the engine starts, <code>RunHost</code> checks the folder exists, reads <code>project.n2proj</code> (<code>ProjectFile::Load</code>) and compares its <code>engineVersion</code> with the engine's. Each failure prints one line to stderr and exits with code 1 before anything starts, so a launcher pointed at the wrong folder gets a quick, clean answer:</p>
 <ul>
 <li>"Project folder not found or not a folder: ..."</li>
-<li>"project.n2proj not found: ... is not a project (create one with N2EditorHost --create)", or the file's validation error</li>
+<li>"project.n2proj not found: ... is not a project (create one with N2EditorHost --create)", or the file's validation error. When the folder has no project file but has <code>.import/</code> (an older host or <code>lua_project</code> opened it, so its <code>.meta</code> UUIDs come from its path), a second line says how to keep them: "It has asset metadata (.import/): to keep its asset UUIDs, make it a project with N2EditorHost --create "&lt;folder&gt;" --project-id from-path" <span class="badge">PR #90</span>.</li>
 <li>"project.n2proj was made with engine X; this is engine Y, a different major version"</li>
 </ul>
 <p>Then, after <code>Application::Init</code> (so the lines reach the console and <a href="logging-and-editor.html#events">the event ring</a>):</p>
@@ -204,7 +204,7 @@
 <li><code>ResourceLoader::Initialize(folder, project.UserDataPath())</code>: <code>res://</code> is <code>&lt;folder&gt;/assets</code>, <code>user://</code> the project's <a href="#user-data">own folder</a>, and every asset gets its <code>.meta</code>.</li>
 <li><code>ApplyProjectSettings(settings)</code>; each refused block is logged as a warning ("Project settings: ...") and the host carries on.</li>
 <li><code>EditorServer::SetProject(folder, project)</code>, and the deprecated <code>DeleteScene</code> folder, <code>&lt;folder&gt;/scenes</code>.</li>
-<li>Open the startup scene (<code>EditorServer::OpenSceneFile</code>). If there is none, or it can't be opened (logged as "Couldn't open the startup scene: ..."), an empty scene named <code>Untitled</code> with no file is loaded instead, so a host with a project always has a scene.</li>
+<li>Open the startup scene (<code>EditorServer::OpenSceneFile</code>). If there is none, or it can't be opened (logged as "Couldn't open the startup scene: ...", an exception included <span class="badge">PR #90</span>), an empty scene named <code>Untitled</code> with no file is loaded instead, so a host with a project always has a scene.</li>
 </ol>
 <p>Without <code>--project</code> the host has no project and no scene, as before: the project and scene-file commands answer <code>Error</code> "No project: ...". <code>Hello</code>'s <code>projectLoaded</code> is now whether the server has a project (<code>EditorServer::HasProject</code>), rather than whether <code>ResourceLoader</code> was initialised.</p>
 <p class="src">Source: <code>editor-server/src/Host.cpp</code> — <code>Editor::RunHost</code>; <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::SetProject</code>, <code>HandleHello</code>; tests: <code>EditorProjectTest.HelloReportsTheProject</code>, <code>EditorSessionTest.HelloAnswersWithTheServersVersionsAndCapabilities</code>, the CI smoke test</p>

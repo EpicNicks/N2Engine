@@ -159,6 +159,15 @@ namespace N2Engine::Editor
             if (!loaded)
             {
                 std::println(stderr, "{}", loaded.error());
+                // A folder an older host or lua_project opened has .meta files whose UUIDs came from its path: a plain
+                // --create would give it a new id and change them all
+                if (!std::filesystem::exists(IO::ProjectFile::PathIn(projectDir), error) &&
+                    std::filesystem::is_directory(projectDir / ".import", error))
+                {
+                    std::println(stderr, "It has asset metadata (.import/): to keep its asset UUIDs, make it a project "
+                                         "with N2EditorHost --create \"{}\" --project-id {}",
+                                 options.projectPath, ProjectIdFromPath);
+                }
                 return 1;
             }
             versionMatch = IO::CompareEngineVersions(loaded->engineVersion, EngineVersion());
@@ -216,19 +225,34 @@ namespace N2Engine::Editor
                 server.SetScenesDirectory(projectDir / "scenes");
                 server.SetProject(projectDir, *project);
 
-                // The startup scene, or an empty one with no file yet (so entity commands have a scene)
+                // The startup scene, or an empty one with no file yet (so entity commands have a scene). An exception
+                // (a scene whose loading throws) is a warning like any other failure, never the end of the host.
                 if (!project->startupScene.empty())
                 {
-                    if (const auto opened = server.OpenSceneFile(project->startupScene); !opened)
+                    try
                     {
-                        Logger::Warn("Couldn't open the startup scene: " + opened.error());
+                        if (const auto opened = server.OpenSceneFile(project->startupScene); !opened)
+                        {
+                            Logger::Warn("Couldn't open the startup scene: " + opened.error());
+                        }
+                    }
+                    catch (const std::exception &e)
+                    {
+                        Logger::Warn(std::string("Couldn't open the startup scene: ") + e.what());
                     }
                 }
                 if (SceneManager::GetCurScene() == nullptr)
                 {
-                    if (const auto created = server.NewSceneFile("", ""); !created)
+                    try
                     {
-                        Logger::Warn("Couldn't create an empty scene: " + created.error());
+                        if (const auto created = server.NewSceneFile("", ""); !created)
+                        {
+                            Logger::Warn("Couldn't create an empty scene: " + created.error());
+                        }
+                    }
+                    catch (const std::exception &e)
+                    {
+                        Logger::Warn(std::string("Couldn't create an empty scene: ") + e.what());
                     }
                 }
             }
