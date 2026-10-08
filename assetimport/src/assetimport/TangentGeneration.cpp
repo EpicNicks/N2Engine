@@ -42,27 +42,43 @@ namespace N2Engine::AssetImport
             return 3;
         }
 
+        /// MikkTSpace is given only finite numbers and unit normals, whatever the mesh holds: a NaN or a zero normal
+        /// would make its sorting and normalising unpredictable
+        float Finite(const float value)
+        {
+            return std::isfinite(value) ? value : 0.0f;
+        }
+
         void GetPosition(const SMikkTSpaceContext *context, float out[], const int face, const int vertex)
         {
             const ImportedVertex &v = VertexOf(context, face, vertex);
-            out[0] = v.position[0];
-            out[1] = v.position[1];
-            out[2] = v.position[2];
+            out[0] = Finite(v.position[0]);
+            out[1] = Finite(v.position[1]);
+            out[2] = Finite(v.position[2]);
         }
 
         void GetNormal(const SMikkTSpaceContext *context, float out[], const int face, const int vertex)
         {
             const ImportedVertex &v = VertexOf(context, face, vertex);
-            out[0] = v.normal[0];
-            out[1] = v.normal[1];
-            out[2] = v.normal[2];
+            const float x = Finite(v.normal[0]), y = Finite(v.normal[1]), z = Finite(v.normal[2]);
+            const float length = std::sqrt(x * x + y * y + z * z);
+            if (!(length > 1e-12f) || !std::isfinite(length))
+            {
+                out[0] = 0.0f;
+                out[1] = 0.0f;
+                out[2] = 1.0f;
+                return;
+            }
+            out[0] = x / length;
+            out[1] = y / length;
+            out[2] = z / length;
         }
 
         void GetTexCoord(const SMikkTSpaceContext *context, float out[], const int face, const int vertex)
         {
             const ImportedVertex &v = VertexOf(context, face, vertex);
-            out[0] = v.texCoord[0];
-            out[1] = v.texCoord[1];
+            out[0] = Finite(v.texCoord[0]);
+            out[1] = Finite(v.texCoord[1]);
         }
 
         void SetTSpaceBasic(const SMikkTSpaceContext *context, const float tangent[], const float sign, const int face,

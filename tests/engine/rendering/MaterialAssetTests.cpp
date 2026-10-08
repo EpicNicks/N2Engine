@@ -140,13 +140,19 @@ TEST(MaterialTest, OnlyTheShaderAndTextureBumpTheGpuVersion)
     material->SetSmoothness(0.9f);
     material->SetMetallic(0.5f);
     material->SetEmissive(Common::Color::Blue);
-    material->SetNormalTexture(Texture::Create(1, 1, std::vector<std::uint8_t>{1, 2, 3, 4}));
+    material->SetNormalScale(2.0f);
     EXPECT_EQ(material->GetGpuVersion(), 1u) << "uniforms and state, set per draw";
     EXPECT_EQ(material->GetVersion(), 9u);
     material->SetShading(ShadingModel::Unlit);
     EXPECT_EQ(material->GetGpuVersion(), 2u);
+    material->SetShading(ShadingModel::Pbr);
+    EXPECT_EQ(material->GetGpuVersion(), 3u) << "the Pbr shading is a shading change too";
     material->SetBaseColorTexture(nullptr);
-    EXPECT_EQ(material->GetGpuVersion(), 3u);
+    EXPECT_EQ(material->GetGpuVersion(), 4u);
+    material->SetNormalTexture(Texture::Create(1, 1, std::vector<std::uint8_t>{1, 2, 3, 4}));
+    EXPECT_EQ(material->GetGpuVersion(), 5u) << "the normal map is a GPU texture";
+    material->SetMetallicRoughnessTexture(Texture::Create(1, 1, std::vector<std::uint8_t>{1, 2, 3, 4}));
+    EXPECT_EQ(material->GetGpuVersion(), 6u) << "so is the metallic-roughness texture";
 
     // A loaded material starts at 1, as a new one does
     const auto loaded = Material::FromJson(json{{"shading", "unlit"}, {"smoothness", 0.25}});
