@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.5.0";
+inline constexpr const char *ProtocolVersion = "1.6.0";
 
 enum class CommandType : uint8_t
 {
@@ -55,6 +55,14 @@ enum class CommandType : uint8_t
     GetProjectInfo = 0x70,
     SetProjectSettings = 0x71,
     SetStartupScene = 0x72,
+    Undo = 0x90,
+    Redo = 0x91,
+    BeginEditGroup = 0x92,
+    EndEditGroup = 0x93,
+    GetHistory = 0x94,
+    GetAutosave = 0x95,
+    RestoreAutosave = 0x96,
+    DiscardAutosave = 0x97,
     Shutdown = 0xFF,
 };
 
@@ -81,6 +89,9 @@ enum class ResponseType : uint8_t
     ComponentAdded = 0x12,
     ComponentData = 0x13,
     LuaFields = 0x14,
+    EditResult = 0x15,
+    History = 0x16,
+    Autosave = 0x17,
 };
 
 // Custom types
@@ -280,6 +291,11 @@ struct SetStartupSceneCmd
     std::string path;
 };
 
+struct BeginEditGroupCmd
+{
+    std::string label;
+};
+
 // Response structures
 struct FrameDataData
 {
@@ -403,6 +419,26 @@ struct ProjectInfoData
     std::string rootPath;
     std::string userDataPath;
     std::string project; // JSON: ProjectFile
+};
+
+struct EditResultData
+{
+    std::string label;
+    uint32_t revision;
+    bool canUndo;
+    bool canRedo;
+    uint32_t savedRevision;
+};
+
+struct HistoryData
+{
+    uint32_t cursor;
+    std::string entries; // JSON: HistoryEntry[]
+};
+
+struct AutosaveData
+{
+    std::string info; // JSON: AutosaveInfo
 };
 
 } // namespace N2Engine::Editor::Protocol

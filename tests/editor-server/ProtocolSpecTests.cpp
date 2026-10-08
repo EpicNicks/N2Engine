@@ -81,6 +81,14 @@ namespace
             {"GetProjectInfo", CommandType::GetProjectInfo},
             {"SetProjectSettings", CommandType::SetProjectSettings},
             {"SetStartupScene", CommandType::SetStartupScene},
+            {"Undo", CommandType::Undo},
+            {"Redo", CommandType::Redo},
+            {"BeginEditGroup", CommandType::BeginEditGroup},
+            {"EndEditGroup", CommandType::EndEditGroup},
+            {"GetHistory", CommandType::GetHistory},
+            {"GetAutosave", CommandType::GetAutosave},
+            {"RestoreAutosave", CommandType::RestoreAutosave},
+            {"DiscardAutosave", CommandType::DiscardAutosave},
             {"Shutdown", CommandType::Shutdown},
         };
         return commands;
@@ -110,6 +118,9 @@ namespace
             {"ComponentAdded", ResponseType::ComponentAdded},
             {"ComponentData", ResponseType::ComponentData},
             {"LuaFields", ResponseType::LuaFields},
+            {"EditResult", ResponseType::EditResult},
+            {"History", ResponseType::History},
+            {"Autosave", ResponseType::Autosave},
         };
         return responses;
     }
@@ -149,6 +160,7 @@ namespace
             {"NewScene", [](BufferReader &r) { (void)NewSceneCmd::Deserialize(r); }},
             {"SetProjectSettings", [](BufferReader &r) { (void)SetProjectSettingsCmd::Deserialize(r); }},
             {"SetStartupScene", [](BufferReader &r) { (void)SetStartupSceneCmd::Deserialize(r); }},
+            {"BeginEditGroup", [](BufferReader &r) { (void)BeginEditGroupCmd::Deserialize(r); }},
         };
         return deserializers;
     }
