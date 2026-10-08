@@ -72,6 +72,7 @@
 <li><a href="#gameobject-json">GameObject JSON</a></li>
 <li><a href="#component-registry">ComponentRegistry: type name to constructor</a></li>
 <li><a href="#serializable-component">SerializableComponent and RegisterMember</a></li>
+<li><a href="#reflection">Reflection: fields and the inspector API</a></li>
 <li><a href="#references">GameObject and component references</a></li>
 <li><a href="#asset-references">Asset references (RegisterAssetRef, RegisterAssetRefList)</a></li>
 <li><a href="#reference-resolver">ReferenceResolver: create, then resolve</a></li>
@@ -153,6 +154,7 @@
 <li><strong>Game components</strong> use <code>REGISTER_COMPONENT(ClassName)</code>, which registers <code>#ClassName</code> (the unqualified token) with a factory that calls <code>std::make_unique&lt;ClassName&gt;(go)</code>, through a static <code>ComponentRegistrar</code>. <code>test_project</code>'s <code>Spin</code> does this.</li>
 <li><code>Register(name, factory)</code> overwrites any earlier factory with the same name.</li>
 <li><code>Create(name, go)</code> returns <code>nullptr</code> for an unknown name.</li>
+<li><code>Register(name, factory, singleton)</code> also records whether the type may be on an object only once (<code>REGISTER_COMPONENT</code> and the built-ins pass the class's <code>IsSingleton</code>) <span class="badge">PR #TBD</span>, and <code>Describe(name)</code> returns a type's editable fields and default values without an instance in a scene: see <a href="#reflection">Reflection</a>.</li>
 </ul>
 <p>Built-in types <span class="badge">PR #34</span>: <code>Rigidbody</code>, <code>BoxCollider</code>, <code>SphereCollider</code>, <code>CapsuleCollider</code>, <code>Light</code>, <code>AudioSource</code>, <code>AudioListener</code>, <code>CubeRenderer</code>, <code>SphereRenderer</code>, <code>QuadRenderer</code>, <code>TextRenderer</code> <span class="badge">PR #49</span>, <code>MeshRenderer</code> <span class="badge">PR #65</span> and <code>LuaComponent</code>; the UI components <code>Canvas</code>, <code>RectTransform</code> and <code>Image</code> <span class="badge">PR #50</span> and <code>UIText</code> <span class="badge">PR #53</span> and <code>Button</code> <span class="badge">PR #54</span> (fields listed in <a href="ui.html#serialization">UI serialization</a>; a button's <code>OnClick</code> listeners are not saved, see <a href="ui.html#design-button-listeners">why</a>). (<code>LuaComponent.cpp</code> also keeps its own static registrar for the same name; registering twice just overwrites the factory.) Their already-declared fields now round-trip:</p>
 <ul>
@@ -193,6 +195,7 @@ namespace Game
 <ul>
 <li><code>RegisterMember(name, member)</code> works for any type nlohmann::json can convert both ways. Otherwise compilation fails on a <code>static_assert</code>. On load, a missing key leaves the member at its constructor default. A key whose value has the wrong type throws <code>nlohmann::json::type_error</code> (see <a href="#failure-handling">failure handling</a>).</li>
 <li>The serializers capture <em>references to the members</em>. A component is never copied or moved after construction (it is owned through <code>unique_ptr</code>), so the references stay valid for its whole life. Do not register locals or temporaries.</li>
+<li><code>RegisterMember</code> and the other <code>Register*</code> functions return a <code>FieldBuilder</code> <span class="badge">PR #TBD</span>: opt-in editor hints chained on the call (<code>.Range(0, 1)</code>, <code>.Tooltip(...)</code>, <code>.AsColor()</code>). The member's type decides how an editor shows it; see <a href="#reflection">Reflection</a>.</li>
 <li>Engine components use <code>NAMEOF(_field)</code> for the key, so the JSON key is the C++ member name, for example <code>"_mass"</code>, <code>"_halfExtents"</code> or <code>"intensity"</code>. Renaming a member therefore changes the file format.</li>
 </ul>
 <pre class="lang-cpp"><code>class Health final : public N2Engine::SerializableComponent
@@ -214,6 +217,94 @@ public:
 };
 </code></pre>
 <p class="src">Source: <code>engine/include/engine/serialization/ComponentSerializer.hpp</code> — <code>SerializableComponent::RegisterMember</code>, <code>SerializableComponent::Serialize</code>, <code>SerializableComponent::Deserialize</code></p>
+
+<h2 id="reflection">Reflection: fields and the inspector API <span class="badge">PR #TBD</span></h2>
+<p>An editor has to know what a component's saved fields <em>are</em> (a checkbox, a drag field, a colour, an enum drop-down, an asset slot), not only their names. The same <code>RegisterMember</code> call that saves and loads a member now also records that: <code>MemberSerializer</code> holds a <code>FieldInfo</code>, built from the member's C++ type when the member is registered. There is no second reflection system and no list to keep in step: a member that is saved is a member that is described, and the values an inspector reads and writes are exactly the JSON <code>Serialize()</code> writes. The editor protocol side (<code>GetComponentTypes</code>, <code>SetComponentFields</code> and the rest) is on <a href="editor.html#components">Editor projects</a>.</p>
+
+<h3 id="field-info">FieldInfo and FieldKind</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Kind</th><th>The value is</th><th>Comes from</th></tr></thead>
+<tbody>
+<tr><td><code>Bool</code>, <code>Int</code>, <code>Float</code>, <code>String</code></td><td>A JSON boolean, integer, number, string</td><td><code>bool</code>; any other integral type; <code>float</code> and <code>double</code>; <code>std::string</code></td></tr>
+<tr><td><code>Vector2</code>, <code>Vector3</code></td><td><code>{"x","y"}</code>, <code>{"x","y","z"}</code></td><td><code>Math::Vector2</code>, <code>Math::Vector3</code></td></tr>
+<tr><td><code>Vector4</code>, <code>Quaternion</code></td><td><code>{"w","x","y","z"}</code></td><td><code>Math::Vector4</code>, <code>Math::Quaternion</code></td></tr>
+<tr><td><code>Color</code></td><td><code>{"r","g","b","a"}</code> (alpha optional when set), or the <code>{"x","y","z"}</code> of a vector marked <a href="#field-builder"><code>AsColor()</code></a></td><td><code>Common::Color</code>; a marked <code>Vector3</code> or <code>Vector4</code></td></tr>
+<tr><td><code>Enum</code></td><td>A string, one of <code>enumOptions</code></td><td>An enum registered with <code>N2_SERIALIZE_ENUM</code></td></tr>
+<tr><td><code>AssetRef</code>, <code>AssetRefList</code></td><td>A UUID string or <code>null</code> (an array of them), of an asset whose resource type is <code>assetType</code></td><td><code>RegisterAssetRef</code>, <code>RegisterAssetRefList</code></td></tr>
+<tr><td><code>GameObjectRef</code>, <code>GameObjectRefList</code></td><td>A UUID string or <code>null</code> (an array of them)</td><td><code>RegisterGameObjectRef</code>, <code>RegisterGameObjectRefVector</code></td></tr>
+<tr><td><code>ComponentRef</code>, <code>ComponentRefList</code></td><td>A UUID string or <code>null</code> (an array of them)</td><td><code>RegisterComponentRef</code>, <code>RegisterComponentRefVector</code></td></tr>
+<tr><td><code>Json</code></td><td>Whatever the member's own <code>to_json</code> writes</td><td>Any other type (<code>PhysicsMaterial</code>, an enum without <code>N2_SERIALIZE_ENUM</code>, ...): shown as a JSON editor, and still checked by the type's own <code>from_json</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>A <code>FieldInfo</code> also has the JSON key (<code>name</code>), a <code>displayName</code> (<code>"_playOnAwake"</code> becomes <code>"Play On Awake"</code>, <code>"UIText"</code> becomes <code>"UI Text"</code>), the C++ side's <code>typeName</code> (<code>"float"</code>, <code>"Vector3"</code>, <code>"LightType"</code>, <code>"Font"</code>), <code>enumOptions</code>, <code>assetType</code>, an optional <code>range</code> and <code>tooltip</code>, <code>hidden</code> and <code>readOnly</code> flags, and a <code>container</code> (empty for every C++ field; see <a href="#reflection-lua">LuaComponent</a>). <code>FieldInfo::ToJson()</code> is the <code>FieldSchema</code> of <code>protocol.json</code>, and leaves out what is empty.</p>
+
+<h3 id="field-traits">Kinds from the C++ type: FieldTraits and N2_SERIALIZE_ENUM</h3>
+<p><code>FieldTraits&lt;T&gt;</code> maps the member's type to a kind and a type name at the <code>RegisterMember&lt;T&gt;</code> call, where <code>T</code> is known (it used to be thrown away once the lambdas were built). Nothing about a component changes for this. An enum needs one thing: its names. <code>NLOHMANN_JSON_SERIALIZE_ENUM</code> hides them inside a function, so <code>N2_SERIALIZE_ENUM</code> expands to it and also defines, in the enum's namespace, <code>N2EnumOptions</code> (the names in list order) and <code>N2EnumTypeName</code>, which <code>FieldTraits</code> finds through argument-dependent lookup. The five component enums (<code>BodyType</code>, <code>LightType</code>, <code>HorizontalAlign</code>, <code>VerticalAlign</code>, <code>CanvasRenderMode</code>) use it; what they save is unchanged.</p>
+<pre class="lang-cpp"><code>enum class LightType { Directional, Point, Spot };
+
+N2_SERIALIZE_ENUM(LightType, {
+    { LightType::Directional, "Directional" },
+    { LightType::Point, "Point" },
+    { LightType::Spot, "Spot" }
+})
+// FieldTraits&lt;LightType&gt;: kind Enum, typeName "LightType", options Directional, Point, Spot
+</code></pre>
+<p>As with <code>NLOHMANN_JSON_SERIALIZE_ENUM</code>, an unknown name loads as the <em>first</em> entry. The editor protocol refuses a name that isn't one of the options before it gets that far.</p>
+
+<h3 id="field-builder">Opt-in hints: FieldBuilder</h3>
+<p>Every <code>Register*</code> function returns a <code>FieldBuilder</code>, so a component can refine what the type alone says. The calls are optional and chain:</p>
+<pre class="lang-cpp"><code>RegisterMember(NAMEOF(_volume), _volume).Range(0.0, 1.0).Tooltip("Linear gain");
+RegisterMember(NAMEOF(color), color).AsColor();   // Light: a Vector3 shown as a colour
+</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Call</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>Range(lowest, highest)</code></td><td>Int and Float: a value set through the editor protocol is clamped to the range (and rounded, for an Int). Loading a scene does not clamp: a scene file is trusted to hold what it saved.</td></tr>
+<tr><td><code>Tooltip(text)</code>, <code>DisplayName(text)</code></td><td>The text an inspector shows.</td></tr>
+<tr><td><code>AsColor()</code></td><td>A <code>Vector3</code> (or <code>Vector4</code>) member is a colour: kind <code>Color</code>, <code>typeName</code> stays <code>"Vector3"</code> so a client knows the JSON is <code>{x,y,z}</code>. Any other type is left as it was.</td></tr>
+<tr><td><code>ReadOnly()</code>, <code>Hidden()</code></td><td>Shown but refused by <code>SetComponentFields</code>; not shown (still saved).</td></tr>
+</tbody>
+</table>
+</div>
+<p>The built-in components use these sparingly: <code>AudioSource</code>'s volume (0 to 1, the range its own setter clamps to) and pitch (0.5 to 2), <code>Light</code>'s cone angles (0 to 180) and colour, and the sphere's segment counts (3 to 256).</p>
+<div class="callout note" id="design-field-builder-index">
+<p class="callout-title">Design decision: the builder holds the member's index, not a reference <span class="badge">PR #TBD</span></p>
+<p>The obvious design returns <code>MemberSerializer&amp;</code> from <code>RegisterMember</code>, so <code>.Range()</code> chains on it. That reference points into the component's member list, and the next registration may move the list: a builder kept in a variable and used after another <code>Register*</code> call would write through a dangling reference. The two ways out were a rule ("chain in the same statement") or a handle that can't dangle. <code>FieldBuilder</code> holds the list and the member's index, so it stays correct however many members are registered after it (<code>ReflectionTest.ABuilderStaysValidAfterMoreMembersAreRegistered</code> registers 24 in between); the cost is a pointer and an index in a temporary that is nearly always used on the same line. It is still meant for registration time, in the constructor: it points at the component's own list, so it must not outlive the component. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (decision 12, review point 4a), <a href="https://github.com/EpicNicks/N2Engine/issues/77">#77</a>.</p>
+</div>
+<div class="callout note" id="design-light-color-hint">
+<p class="callout-title">Design decision: <code>Light::color</code> is a Vector3 marked as a colour, not a <code>Common::Color</code> <span class="badge">PR #TBD</span></p>
+<p>The editor's colour picker is chosen by kind, so a light's colour, a <code>Math::Vector3</code> in the engine, would show as three number boxes, while every other colour in the engine (<code>Button</code>, the renderers, the UI, the text effects) is a <code>Common::Color</code> and shows a picker. The two fixes were a type change (<code>color</code> becomes a <code>Common::Color</code>, with a compatibility read for the old <code>{x,y,z}</code>) or the opt-in hint. The hint won: it changes no type, so <code>light.color</code> keeps its API for C++ and Lua code (<code>Vector3</code>, with no alpha a light has no use for), and keeps its JSON, so every scene saved so far loads and a scene saved now loads in an older build. A type change would have needed a migration of saved scenes and every script that reads <code>light.color.x</code> for a feature this change doesn't need. The cost is that the client has to read the JSON shape from <code>typeName</code> (<code>"Vector3"</code>: <code>{x,y,z}</code>; <code>"Color"</code>: <code>{r,g,b,a}</code>), which the schema carries. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (decision 12, review point 4b: "decide it in E5"), <a href="https://github.com/EpicNicks/N2Engine/issues/77">#77</a>.</p>
+</div>
+
+<h3 id="describe">Describing a type: ComponentRegistry::Describe</h3>
+<p><code>ComponentRegistry::Describe(typeName)</code> returns a <code>ComponentSchema</code> (<code>typeName</code>, <code>fields</code>, <code>defaults</code>, <code>singleton</code>) for a registered type, or <code>nullopt</code>. It makes a throwaway instance on a <code>GameObject</code> that is in no scene, so nothing is attached (no <code>OnAttach</code>: no physics body, audio source or GPU resource), reads <code>Component::DescribeFields()</code> and <code>Serialize()</code>, and frees it; the result is cached until the type is registered again. <code>defaults</code> is what a new component saves (<code>isActive</code> included, the random <code>uuid</code> left out). This works because every member is registered in the component's constructor, which is also why a new component type needs nothing to be editable. <code>ComponentRegistry::IsSingleton(typeName)</code> says whether the type may be on an object only once (<code>IsSingleton</code> of the class: <code>AudioListener</code>, <code>Canvas</code> and <code>RectTransform</code>); <code>Register(name, factory, singleton)</code> and <code>REGISTER_COMPONENT</code> record it.</p>
+<p><code>GameObject::AddComponent(std::unique_ptr&lt;Component&gt;)</code> adds a component made by name (<code>ComponentRegistry::Create</code>), as <code>AddComponent&lt;T&gt;()</code> adds one made by type; it does not check <code>IsSingleton</code> (the editor server does, by name).</p>
+
+<h3 id="set-editor-fields">Setting fields from an editor</h3>
+<ul>
+<li><code>Component::SetEditorFields(values, resolver)</code> sets <strong>only the members whose keys <code>values</code> has</strong>, through each member's own deserialiser, clamping a field with a range. It throws <code>nlohmann::json::exception</code> for a value of the wrong type. The caller runs the resolver's <code>ResolveAll</code> afterwards, as a scene load does.</li>
+<li><code>ValidateFieldValue(field, value)</code> and <code>ValidateFieldValues(fields, values)</code> check the shape before anything is applied: a number for <code>Float</code>, an object with every axis for a vector, a name from <code>enumOptions</code> for an <code>Enum</code>, a UUID string or <code>null</code> for a reference, an unknown key or a read-only field refused. (A member's deserialiser alone accepts a vector with a missing axis, as 0, and an enum with an unknown name, as its first entry.)</li>
+<li><code>Component::OnEditorFieldsChanged(changed)</code> (default: nothing) runs after a set, with the keys that changed, so a component with state derived from them can rebuild it. An edit-mode scene never attaches its components, so most have nothing to do, and the built-ins override nothing (a <code>SphereRenderer</code> already rebuilds its mesh when its segment counts differ from the mesh it has).</li>
+</ul>
+<div class="callout note" id="design-partial-set">
+<p class="callout-title">Design decision: a set calls only the members that are present, and is checked on a copy from a second instance <span class="badge">PR #TBD</span></p>
+<p>Loading a whole component runs every member's deserialiser, and some of them clear when their key is missing: <code>RegisterGameObjectRefVector</code> and <code>RegisterComponentRefVector</code> <code>clear()</code> the list even when the key is absent (<code>ReflectionTest.SetEditorFieldsKeepsAListWhoseKeyIsAbsent</code> shows both). Setting one field of a component through <code>Deserialize</code> would therefore empty its reference lists. <code>SetEditorFields</code> calls only the members whose keys are in the request. "All or nothing" needs a trial run, and every member's lambda captures the <em>live</em> member by reference, so the trial can't be a deserialise into a copy of the data: the editor server makes a <em>second instance</em> of the type from the registry, on a detached object, applies the request to it, and only if that succeeds applies it to the component. A reference the copy didn't keep (an asset that isn't there or has another type, a component that isn't a <code>T</code>) fails the request. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (decision 12, review point 4c), <a href="https://github.com/EpicNicks/N2Engine/issues/77">#77</a>.</p>
+</div>
+
+<h3 id="resource-type-name">ResourceTypeName</h3>
+<p>Every asset class has a <code>static constexpr std::string_view ResourceTypeName</code> (<code>Texture</code>, <code>Font</code>, <code>Mesh</code>, <code>Material</code>, <code>Model</code>, <code>AudioClip</code>, <code>LuaScript</code>, <code>Scene</code> and <code>SceneFile</code>, <code>Component</code>, <code>GameObject</code>), and its <code>GetResourceType()</code> returns it. <code>RegisterAssetRef&lt;T&gt;</code> records <code>T::ResourceTypeName</code> as the field's <code>assetType</code>, which the editor server compares with the <code>resourceType</code> in an asset's <code>.meta</code>: "Asset 9f1c... is a Texture; field '_font' expects Font".</p>
+<div class="callout note" id="design-resource-type-name">
+<p class="callout-title">Design decision: the virtual is implemented from the static, never written twice <span class="badge">PR #TBD</span></p>
+<p>The type of an asset used to exist only as a virtual, <code>GetResourceType()</code>, which needs an instance: <code>RegisterAssetRef&lt;Font&gt;</code> has none, and can't make one. A second, static spelling would let the two drift ("Font" in one, "font" in the other), and the metadata an asset's file is indexed under and the type a field expects would stop matching with no compile error. So each class declares the name once, as the static, and its virtual returns that (<code>ReflectionTest.GetResourceTypeIsImplementedFromTheStaticName</code>). <code>SceneFile</code> already did this; the others now follow it. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (decision 12, review point 4), <a href="https://github.com/EpicNicks/N2Engine/issues/77">#77</a>.</p>
+</div>
+
+<h3 id="reflection-lua">LuaComponent</h3>
+<p>A <code>LuaComponent</code>'s fields are the script's, not the class's, so it overrides <code>DescribeFields()</code>: <code>scriptUUID</code> (an <code>AssetRef</code> to a <code>LuaScript</code>) and one field per entry of the current script's <code>SerializableFields</code>, sorted by name, each with <code>container</code> <code>"scriptData"</code> (the object that holds them in the saved JSON). A field's kind is its declared <code>type</code> (<code>"string"</code>, <code>"int"</code>/<code>"integer"</code>, <code>"number"</code>/<code>"float"</code>, <code>"bool"</code>/<code>"boolean"</code>, <code>"Vector3"</code>, <code>"GameObject"</code>, or a component type name for a component reference), or else what its default is (a Lua integer is <code>Int</code>, another number <code>Float</code>, a boolean, a string, a <code>Vector3</code>); anything else is <code>Json</code>. A reference there is written <code>{"$ref": uuid-or-null}</code>, as in <a href="scripting-lua.html#fields">Serializable fields</a>. A component without a loaded script has only <code>scriptUUID</code>. <code>SetEditorFields</code> loads the script a <code>scriptUUID</code> names (<code>std::invalid_argument</code> for <code>null</code>, an unknown UUID or an asset that isn't a Lua script; the script it already runs is not reloaded), merges the keys of <code>scriptData</code> into the script's data, injects them, and re-resolves the references.</p>
+
+<p class="src">Source: <code>engine/include/engine/serialization/FieldInfo.hpp</code>, <code>engine/src/serialization/FieldInfo.cpp</code> — <code>FieldKind</code>, <code>FieldInfo</code>, <code>FieldTraits</code>, <code>N2_SERIALIZE_ENUM</code>, <code>ValidateFieldValue</code>, <code>ValidateFieldValues</code>, <code>ClampFieldValue</code>, <code>DefaultDisplayName</code>; <code>engine/include/engine/serialization/ComponentSerializer.hpp</code> — <code>MemberSerializer::info</code>, <code>FieldBuilder</code>, <code>SerializableComponent::DescribeFields</code>, <code>SetEditorFields</code>; <code>engine/include/engine/Component.hpp</code> — <code>DescribeFields</code>, <code>SetEditorFields</code>, <code>OnEditorFieldsChanged</code>; <code>engine/include/engine/serialization/ComponentRegistry.hpp</code>, <code>engine/src/serialization/ComponentRegistry.cpp</code> — <code>ComponentSchema</code>, <code>ComponentRegistry::Describe</code>, <code>IsSingleton</code>; <code>engine/src/scripting/LuaComponent.cpp</code> — <code>LuaComponent::DescribeFields</code>, <code>SetEditorFields</code>; tests: <code>ReflectionTest.*</code>, <code>ReflectionRegistryTest.*</code> (<code>tests/engine/serialization/ReflectionTests.cpp</code>), <code>LuaReflectionTest.*</code>, <code>EditorInspectorTest.*</code></p>
 
 <h2 id="references">GameObject and component references</h2>
 <p>References are written as the target's UUID string, or JSON <code>null</code>. On load they are not looked up straight away. Each one adds a pending fix-up to the <a href="#reference-resolver">ReferenceResolver</a>, which runs once every object in the scene exists.</p>
