@@ -29,6 +29,8 @@ namespace N2Engine
         /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
         Application();
         void Render();
+        /// Draws the current scene (and the UI over it) as seen by `camera`: what Render does with the main camera
+        void Render(const Camera &camera);
         void PhysicsUpdate(const Scene &scene) const;
 
     public:
@@ -45,7 +47,15 @@ namespace N2Engine
         /// Run() (e.g. the editor) should call it before returning from main, so teardown doesn't depend
         /// on static destruction order. Safe to call more than once, or without Init.
         void Shutdown();
+        /// Draws one frame of the current scene from the main camera, without simulating (the editor's RenderFrame)
         void RenderEditorFrame();
+        /**
+         * Draws one frame of the current scene as seen by `camera`, without simulating: the editor's viewport, which
+         * has a camera of its own (the editor camera) and so needs neither a Camera component in the scene nor the
+         * game's main camera. Only the camera differs from RenderEditorFrame(): the view and projection, the position
+         * the lit shaders see, and nothing else. Does nothing without a window and a renderer.
+         */
+        void RenderEditorFrame(const Camera &camera);
 
         /// Requests a quit at the end of the current frame (Run() then calls OnApplicationQuit and
         /// shuts down). Safe to call from components and Lua.
