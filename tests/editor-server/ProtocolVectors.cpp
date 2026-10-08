@@ -141,6 +141,31 @@ namespace ProtocolVectors
             {
                 return json{{"entityId", GetEntityTransformCmd::Deserialize(r).entityId}};
             }},
+            {"AddComponent", [](BufferReader &r)
+            {
+                const auto cmd = AddComponentCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"typeName", cmd.typeName}};
+            }},
+            {"RemoveComponent", [](BufferReader &r)
+            {
+                const auto cmd = RemoveComponentCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"componentId", cmd.componentId}};
+            }},
+            {"SetComponentFields", [](BufferReader &r)
+            {
+                const auto cmd = SetComponentFieldsCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"componentId", cmd.componentId}, {"values", cmd.values}};
+            }},
+            {"GetComponent", [](BufferReader &r)
+            {
+                const auto cmd = GetComponentCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"componentId", cmd.componentId}};
+            }},
+            {"GetLuaFields", [](BufferReader &r)
+            {
+                const auto cmd = GetLuaFieldsCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"componentId", cmd.componentId}};
+            }},
             {"CreateEntityEx", [](BufferReader &r)
             {
                 const auto cmd = CreateEntityExCmd::Deserialize(r);

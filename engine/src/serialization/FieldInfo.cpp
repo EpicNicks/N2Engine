@@ -181,7 +181,9 @@ namespace N2Engine
                     result.push_back(' ');
                 }
             }
-            result.push_back(result.empty() && c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c);
+            // The first letter of every word is a capital
+            const bool wordStart = result.empty() || result.back() == ' ';
+            result.push_back(wordStart && c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c);
         }
         return result;
     }
