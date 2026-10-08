@@ -596,26 +596,37 @@ TEST(GltfTangentImportTest, GeneratedTangentsKeepEverySubmeshRangeValid)
     }
 }
 
-TEST(GltfTangentImportTest, AMalformedTangentAccessorIsRejectedWhateverTheSetting)
+TEST(GltfTangentImportTest, AMalformedTangentAccessorIsHandledWhateverTheSetting)
 {
+    // Not VEC4: the importer ignores it with a warning, and generates tangents as for a file without any
     Builder wrongType = QuadFile();
     wrongType.doc["meshes"][0]["primitives"][0]["attributes"]["TANGENT"] =
         wrongType.AddFloats({0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0}, 3);
+    // A count that differs from POSITION's: cgltf_validate refuses the file before any setting is looked at
     Builder wrongCount = QuadFile();
     wrongCount.doc["meshes"][0]["primitives"][0]["attributes"]["TANGENT"] =
         wrongCount.AddFloats({0, 1, 0, 1, 0, 1, 0, 1}, 4);
 
-    for (const Builder *file : {&wrongType, &wrongCount})
+    for (const TangentGeneration mode : {TangentGeneration::IfMissing, TangentGeneration::Always, TangentGeneration::Never})
     {
-        for (const TangentGeneration mode : {TangentGeneration::IfMissing, TangentGeneration::Always, TangentGeneration::Never})
+        ModelImportSettings settings;
+        settings.generateTangents = mode;
+
+        const auto counted = GltfImporter().Import(wrongCount.ToGltf(), {}, settings);
+        ASSERT_FALSE(counted.has_value());
+        EXPECT_EQ(counted.error().code, ModelImportErrorCode::InvalidData);
+
+        const auto typed = GltfImporter().Import(wrongType.ToGltf(), {}, settings);
+        ASSERT_TRUE(typed.has_value()) << "ignored, not an error";
+        bool warned = false;
+        for (const std::string &warning : typed->warnings)
         {
-            ModelImportSettings settings;
-            settings.generateTangents = mode;
-            // cgltf_validate refuses a TANGENT that isn't VEC4 or whose count differs from POSITION's, before any
-            // setting is looked at (the importer's own check behind it ignores one with a warning)
-            const auto result = GltfImporter().Import(file->ToGltf(), {}, settings);
-            ASSERT_FALSE(result.has_value());
-            EXPECT_EQ(result.error().code, ModelImportErrorCode::InvalidData);
+            warned = warned || warning.find("TANGENT") != std::string::npos;
+        }
+        EXPECT_TRUE(warned) << "a warning names it";
+        if (mode != TangentGeneration::Never)
+        {
+            ExpectTangent(typed->meshes[0].vertices[0], {1, 0, 0}, 1.0f, "generated in its place");
         }
     }
 }
