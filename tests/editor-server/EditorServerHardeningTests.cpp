@@ -281,6 +281,29 @@ TEST_F(EditorServerNoSceneTest, ComponentCommandsAreErrorsExceptTheTypeList)
     EXPECT_EQ(Execute(server, CommandType::GetComponentTypes).type, static_cast<uint8_t>(ResponseType::ComponentTypes));
 }
 
+TEST_F(EditorServerNoSceneTest, UndoCommandsAreErrorsWithoutASceneOrAProject)
+{
+    const auto expectError = [](const DecodedFrame &response, const char *command, const char *text)
+    {
+        EXPECT_EQ(response.type, ErrorType) << command;
+        EXPECT_NE(response.body.find(text), std::string::npos) << command << ": " << response.body;
+    };
+    expectError(Execute(server, CommandType::Undo), "Undo", "No scene");
+    expectError(Execute(server, CommandType::Redo), "Redo", "No scene");
+    expectError(Execute(server, CommandType::EndEditGroup), "EndEditGroup", "No edit group");
+    expectError(Execute(server, CommandType::GetAutosave), "GetAutosave", "No project");
+    expectError(Execute(server, CommandType::RestoreAutosave), "RestoreAutosave", "No project");
+    expectError(Execute(server, CommandType::DiscardAutosave), "DiscardAutosave", "No project");
+
+    // The history itself needs no scene: it is empty
+    const DecodedFrame history = Execute(server, CommandType::GetHistory);
+    EXPECT_EQ(history.type, static_cast<uint8_t>(ResponseType::History));
+    BufferWriter begin;
+    begin.WriteString("A group");
+    EXPECT_EQ(Execute(server, CommandType::BeginEditGroup, ToVector(begin)).type, static_cast<uint8_t>(ResponseType::Ok));
+    EXPECT_EQ(Execute(server, CommandType::EndEditGroup).type, static_cast<uint8_t>(ResponseType::Ok));
+}
+
 // ==================== Polled commands don't log per call ====================
 
 namespace
