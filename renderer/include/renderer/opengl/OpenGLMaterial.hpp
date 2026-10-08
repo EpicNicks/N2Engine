@@ -39,15 +39,18 @@ namespace Renderer::OpenGL
         void SetTexture(Common::ITexture *texture) override;
         void SetAuxTexture(Common::AuxTexture which, Common::ITexture *texture) override;
         Common::ITexture *GetAuxTexture(Common::AuxTexture which) const override;
-        /// The emissive texture (texture unit 1) or the occlusion texture (unit 2), or null
-        OpenGLTexture *GetEmissiveTexture() const { return _emissiveTexture; }
-        OpenGLTexture *GetOcclusionTexture() const { return _occlusionTexture; }
+        /// How many extra textures a material can hold (AuxTexture's values), and the texture unit and sampler uniform
+        /// of each: emissive on unit 1, occlusion 2, normal 3, metallic-roughness 4 (the base colour texture is unit 0)
+        static constexpr std::size_t kAuxTextureCount = 4;
+        [[nodiscard]] static int AuxTextureUnit(Common::AuxTexture which);
+        [[nodiscard]] static const char *AuxSamplerName(Common::AuxTexture which);
+        /// The extra texture, or null (GetAuxTexture, as the OpenGL type)
+        [[nodiscard]] OpenGLTexture *GetAuxOpenGLTexture(Common::AuxTexture which) const;
 
     private:
         std::shared_ptr<OpenGLShader> _shader;
         OpenGLTexture *_texture;
-        OpenGLTexture *_emissiveTexture = nullptr;
-        OpenGLTexture *_occlusionTexture = nullptr;
+        std::array<OpenGLTexture *, kAuxTextureCount> _auxTextures{};
 
         // Property storage
         std::unordered_map<std::string, float> _floats;

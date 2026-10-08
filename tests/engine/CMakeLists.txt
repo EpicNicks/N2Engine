@@ -31,6 +31,7 @@ endif()
 target_compile_definitions(engine_tests PRIVATE
         N2_LUA_PROJECT_DIR="${CMAKE_SOURCE_DIR}/lua_project"
         N2_TEST_ASSETS_DIR="${CMAKE_SOURCE_DIR}/tests/assets"
+        N2_RENDERER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/renderer" # OpenGlShaderSourceTests reads the GLSL as text
 )
 
 # tests/common has the glTF file builder the model tests share with tests/assetimport

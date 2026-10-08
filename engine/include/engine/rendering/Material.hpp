@@ -23,7 +23,11 @@ namespace N2Engine::Rendering
     enum class ShadingModel : std::uint8_t
     {
         Unlit, ///< the base colour as is (GetStandardUnlitShader)
-        Lit    ///< Blinn-Phong with the scene's lights (GetStandardLitShader)
+        Lit,   ///< Blinn-Phong with the scene's lights (GetStandardLitShader)
+        /// Metallic-roughness PBR (Cook-Torrance GGX) with the scene's lights, on the same standard lit shader:
+        /// metallic, smoothness (1 - roughness) and the metallic-roughness texture shape the surface. Optional: no
+        /// material has it unless it is asked for ("shading": "pbr", or a model imported with pbrMaterials).
+        Pbr
     };
 
     /// How a material's alpha is used (glTF's alphaMode)
@@ -50,12 +54,16 @@ namespace N2Engine::Rendering
      * colour and emissive textures are made as sRGB textures when their Texture settings say `srgb` (GpuCache),
      * so they decode when sampled.
      *
-     * metallic and the normal and metallic-roughness textures are stored and serialized but have no effect yet:
-     * normal maps and physically based shading arrive with #3 P4b.
+     * A lit or PBR material may have a normal map (tangent space, green up, scaled by normalScale): the surface
+     * normal the lights see is perturbed by it, from each vertex's tangent (a mesh without tangents is drawn
+     * without normal mapping). With the Pbr shading, metallic and smoothness (roughness = 1 - smoothness) are the
+     * factors that the metallic-roughness texture (glTF's packing: green roughness, blue metallic) multiplies; with
+     * Lit, metallic and that texture are stored but unused (Blinn-Phong has neither). The ambient light is a
+     * uniform environment in the PBR model: there is no image based lighting.
      *
      * Materials come from `.mat` files (JSON, see Load) or Create at runtime. Every change bumps GetVersion. Only a
-     * change to what the GPU material is made of (the shading, which picks the shader, and the base colour, emissive
-     * and occlusion textures) bumps GetGpuVersion, and a renderer then makes a new GPU material for it on its next draw; every other field
+     * change to what the GPU material is made of (the shading, and the base colour, emissive, occlusion, normal and
+     * metallic-roughness textures) bumps GetGpuVersion, and a renderer then makes a new GPU material for it on its next draw; every other field
      * reaches the GPU as a uniform (ApplyUniforms) or a render state, set per draw, so changing it every frame
      * costs nothing extra.
      */
@@ -96,7 +104,7 @@ namespace N2Engine::Rendering
          *   {"shading": "lit", "baseColor": {"r": 1, "g": 1, "b": 1, "a": 1},
          *    "baseColorTexture": "res://textures/crate.png", "alphaMode": "mask", "alphaCutoff": 0.5,
          *    "doubleSided": false, "smoothness": 0.5, "metallic": 0, "emissive": {"r": 0, "g": 0, "b": 0, "a": 1},
-         *    "normalTexture": null, "occlusionTexture": null, "occlusionStrength": 1,
+         *    "normalTexture": null, "normalScale": 1, "occlusionTexture": null, "occlusionStrength": 1,
          *    "metallicRoughnessTexture": null, "emissiveTexture": null}
          * See FromJson for how keys are read. False, with an error, if the file can't be read or isn't a JSON
          * object.
@@ -120,7 +128,8 @@ namespace N2Engine::Rendering
         /// Draws both faces (no culling)
         [[nodiscard]] bool IsDoubleSided() const { return _doubleSided; }
         void SetDoubleSided(bool doubleSided);
-        /// Lit only: 0 (dull, wide highlights) to 1 (glossy, tight highlights); 0.5 by default
+        /// Lit and Pbr: 0 (dull, wide highlights) to 1 (glossy, tight highlights); 0.5 by default. In PBR the
+        /// roughness is 1 - smoothness.
         [[nodiscard]] float GetSmoothness() const { return _smoothness; }
         void SetSmoothness(float smoothness);
 
@@ -143,11 +152,21 @@ namespace N2Engine::Rendering
         [[nodiscard]] float GetOcclusionStrength() const { return _occlusionStrength; }
         void SetOcclusionStrength(float strength);
 
-        // Stored and serialized, no effect until #3 P4b
+        /// Pbr only: 0 (a dielectric) to 1 (a metal), times the metallic-roughness texture's blue channel; 0 by
+        /// default. Stored (glTF's metallicFactor) but not used by Lit.
         [[nodiscard]] float GetMetallic() const { return _metallic; }
         void SetMetallic(float metallic);
+        /// Lit and Pbr: a tangent-space normal map (glTF's normalTexture; red right, green up, blue out; data,
+        /// never decoded as sRGB). It needs vertex tangents (see Renderer::Common::Vertex).
         [[nodiscard]] const std::shared_ptr<Texture> &GetNormalTexture() const { return _normalTexture; }
         void SetNormalTexture(std::shared_ptr<Texture> texture);
+        /// How strongly the normal map applies: its x and y are multiplied by it (glTF's normalTexture.scale), so 0
+        /// is a flat surface and 1 (the default) the map as authored; a negative one flips x and y (glTF allows it).
+        /// Clamped to -4..4.
+        [[nodiscard]] float GetNormalScale() const { return _normalScale; }
+        void SetNormalScale(float scale);
+        /// Pbr only: green is the roughness and blue the metallic factor (glTF's packing), multiplying the
+        /// smoothness-derived roughness and metallic. Data, never decoded as sRGB.
         [[nodiscard]] const std::shared_ptr<Texture> &GetMetallicRoughnessTexture() const { return _metallicRoughnessTexture; }
         void SetMetallicRoughnessTexture(std::shared_ptr<Texture> texture);
 
@@ -165,7 +184,9 @@ namespace N2Engine::Rendering
          * Sets the standard shaders' uniforms on a GPU material from this material: uAlbedo (the base colour times
          * `tint`), uHasTexture (whether `target` has a texture), uAlphaCutoff (the cutoff for Mask, else 0) and,
          * lit, uSmoothness and uMetallic, and the emissive and occlusion inputs: uEmissive (rgb),
-         * uHasEmissiveTexture and uHasOcclusionTexture (whether `target` has those textures), and uOcclusionStrength.
+         * uHasEmissiveTexture and uHasOcclusionTexture (whether `target` has those textures), and uOcclusionStrength,
+         * and the normal map and PBR inputs: uHasNormalTexture, uNormalScale, uPbr (1 for the Pbr shading) and
+         * uHasMetallicRoughnessTexture.
          * The drawing code calls it before every draw, so a GPU material shared
          * by several users (or given a per-draw tint) always draws with the right values.
          */
@@ -194,6 +215,7 @@ namespace N2Engine::Rendering
         float _metallic = 0.0f;
         Common::Color _emissive{Common::Color::Black};
         std::shared_ptr<Texture> _normalTexture;
+        float _normalScale = 1.0f;
         std::shared_ptr<Texture> _occlusionTexture;
         float _occlusionStrength = 1.0f;
         std::shared_ptr<Texture> _metallicRoughnessTexture;

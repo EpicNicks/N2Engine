@@ -35,6 +35,8 @@ namespace N2Engine::Rendering
         } g_materialLoaderRegistrar;
 
         // Fixed, like the built-in meshes' (never saved: an empty slot means the default)
+        constexpr float kMaxNormalScale = 4.0f; // the scale is clamped to -4..4 (a negative one flips the map's x and y)
+
         constexpr const char *DefaultLitUuid = "6e32656e-6d61-5454-0001-000000000001";
         constexpr const char *DefaultUnlitUuid = "6e32656e-6d61-5454-0001-000000000002";
 
@@ -261,6 +263,12 @@ namespace N2Engine::Rendering
     void Material::SetNormalTexture(std::shared_ptr<Texture> texture)
     {
         _normalTexture = std::move(texture);
+        Changed(true); // a new texture: a new GPU material
+    }
+
+    void Material::SetNormalScale(const float scale)
+    {
+        _normalScale = std::isfinite(scale) ? std::clamp(scale, -kMaxNormalScale, kMaxNormalScale) : 1.0f;
         Changed();
     }
 
@@ -279,7 +287,7 @@ namespace N2Engine::Rendering
     void Material::SetMetallicRoughnessTexture(std::shared_ptr<Texture> texture)
     {
         _metallicRoughnessTexture = std::move(texture);
-        Changed();
+        Changed(true); // a new texture: a new GPU material
     }
 
     void Material::SetEmissiveTexture(std::shared_ptr<Texture> texture)
@@ -294,10 +302,19 @@ namespace N2Engine::Rendering
                         _baseColor.a * tint.a);
         target.SetInt("uHasTexture", target.GetTexture() != nullptr ? 1 : 0);
         target.SetFloat("uAlphaCutoff", _alphaMode == AlphaMode::Mask ? _alphaCutoff : 0.0f);
-        if (_shading == ShadingModel::Lit)
+        if (_shading != ShadingModel::Unlit)
         {
             target.SetFloat("uSmoothness", _smoothness);
             target.SetFloat("uMetallic", _metallic);
+            target.SetInt("uPbr", _shading == ShadingModel::Pbr ? 1 : 0);
+            target.SetInt("uHasNormalTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Normal) != nullptr ? 1 : 0);
+            target.SetFloat("uNormalScale", _normalScale);
+            // Only the Pbr shading reads it (and GpuCache only gives it to a Pbr material)
+            target.SetInt("uHasMetallicRoughnessTexture",
+                          _shading == ShadingModel::Pbr &&
+                                  target.GetAuxTexture(Renderer::Common::AuxTexture::MetallicRoughness) != nullptr
+                              ? 1
+                              : 0);
             target.SetVec3("uEmissive", _emissive.r, _emissive.g, _emissive.b);
             target.SetInt("uHasEmissiveTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Emissive) != nullptr ? 1 : 0);
             target.SetInt("uHasOcclusionTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Occlusion) != nullptr ? 1 : 0);
@@ -332,8 +349,10 @@ namespace N2Engine::Rendering
                     _shading = ShadingModel::Lit;
                 else if (name == "unlit")
                     _shading = ShadingModel::Unlit;
+                else if (name == "pbr")
+                    _shading = ShadingModel::Pbr;
                 else
-                    Warn(debugName, key, value, "\"lit\" or \"unlit\"");
+                    Warn(debugName, key, value, "\"lit\", \"unlit\" or \"pbr\"");
             }
             else if (key == "baseColor")
             {
@@ -390,6 +409,21 @@ namespace N2Engine::Rendering
                 if (auto texture = ReadTexture(value, baseDirectory, debugName, key))
                     _normalTexture = std::move(*texture);
             }
+            else if (key == "normalScale")
+            {
+                if (value.is_number() && std::isfinite(value.get<double>()))
+                {
+                    const double number = value.get<double>();
+                    if (std::fabs(number) > static_cast<double>(kMaxNormalScale))
+                        Warn(debugName, key, value, "a number from -4 to 4 (clamped)");
+                    _normalScale = static_cast<float>(
+                        std::clamp(number, -static_cast<double>(kMaxNormalScale), static_cast<double>(kMaxNormalScale)));
+                }
+                else
+                {
+                    Warn(debugName, key, value, "a number from -4 to 4");
+                }
+            }
             else if (key == "occlusionTexture")
             {
                 if (auto texture = ReadTexture(value, baseDirectory, debugName, key))
@@ -421,7 +455,18 @@ namespace N2Engine::Rendering
     nlohmann::json Material::ToJson() const
     {
         nlohmann::json json;
-        json["shading"] = _shading == ShadingModel::Lit ? "lit" : "unlit";
+        switch (_shading)
+        {
+        case ShadingModel::Unlit:
+            json["shading"] = "unlit";
+            break;
+        case ShadingModel::Lit:
+            json["shading"] = "lit";
+            break;
+        case ShadingModel::Pbr:
+            json["shading"] = "pbr";
+            break;
+        }
         json["baseColor"] = ColorJson(_baseColor);
         json["baseColorTexture"] = TextureJson(_baseColorTexture);
         switch (_alphaMode)
@@ -442,6 +487,7 @@ namespace N2Engine::Rendering
         json["metallic"] = _metallic;
         json["emissive"] = ColorJson(_emissive);
         json["normalTexture"] = TextureJson(_normalTexture);
+        json["normalScale"] = _normalScale;
         json["occlusionTexture"] = TextureJson(_occlusionTexture);
         json["occlusionStrength"] = _occlusionStrength;
         json["metallicRoughnessTexture"] = TextureJson(_metallicRoughnessTexture);

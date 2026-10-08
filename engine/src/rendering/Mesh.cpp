@@ -79,40 +79,40 @@ namespace N2Engine::Rendering
 
         cubeData.vertices = {
             // Front face (Z+)
-            {{-h, -h,  h}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h, -h,  h}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h,  h,  h}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
-            {{-h,  h,  h}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
+            {{-h, -h,  h}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{ h, -h,  h}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{ h,  h,  h}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{-h,  h,  h}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
 
             // Back face (Z-)
-            {{ h, -h, -h}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{-h, -h, -h}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{-h,  h, -h}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h,  h, -h}, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
+            {{ h, -h, -h}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {-1.0f, 0.0f, 0.0f, 1.0f}},
+            {{-h, -h, -h}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {-1.0f, 0.0f, 0.0f, 1.0f}},
+            {{-h,  h, -h}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {-1.0f, 0.0f, 0.0f, 1.0f}},
+            {{ h,  h, -h}, {0.0f, 0.0f, -1.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {-1.0f, 0.0f, 0.0f, 1.0f}},
 
             // Right face (X+)
-            {{ h, -h,  h}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h, -h, -h}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h,  h, -h}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h,  h,  h}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
+            {{ h, -h,  h}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {0.0f, 0.0f, -1.0f, 1.0f}},
+            {{ h, -h, -h}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {0.0f, 0.0f, -1.0f, 1.0f}},
+            {{ h,  h, -h}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {0.0f, 0.0f, -1.0f, 1.0f}},
+            {{ h,  h,  h}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {0.0f, 0.0f, -1.0f, 1.0f}},
 
             // Left face (X-)
-            {{-h, -h, -h}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{-h, -h,  h}, {-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{-h,  h,  h}, {-1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
-            {{-h,  h, -h}, {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
+            {{-h, -h, -h}, {-1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {0.0f, 0.0f, 1.0f, 1.0f}},
+            {{-h, -h,  h}, {-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {0.0f, 0.0f, 1.0f, 1.0f}},
+            {{-h,  h,  h}, {-1.0f, 0.0f, 0.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {0.0f, 0.0f, 1.0f, 1.0f}},
+            {{-h,  h, -h}, {-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {0.0f, 0.0f, 1.0f, 1.0f}},
 
             // Top face (Y+)
-            {{-h,  h,  h}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h,  h,  h}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h,  h, -h}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
-            {{-h,  h, -h}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
+            {{-h,  h,  h}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{ h,  h,  h}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{ h,  h, -h}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{-h,  h, -h}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
 
             // Bottom face (Y-)
-            {{-h, -h, -h}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h, -h, -h}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
-            {{ h, -h,  h}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
-            {{-h, -h,  h}, {0.0f, -1.0f, 0.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}}
+            {{-h, -h, -h}, {0.0f, -1.0f, 0.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{ h, -h, -h}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{ h, -h,  h}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{-h, -h,  h}, {0.0f, -1.0f, 0.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}}
         };
 
         // 36 indices (6 faces x 2 triangles x 3 vertices)
@@ -182,6 +182,13 @@ namespace N2Engine::Rendering
                 vertex.color[2] = white[2];
                 vertex.color[3] = white[3];
 
+                // Tangent: the direction of increasing u (around the sphere), (-sin(phi), 0, cos(phi)), defined
+                // at the poles too. v grows downward, along cross(normal, tangent), so the handedness is +1.
+                vertex.tangent[0] = -sinPhi;
+                vertex.tangent[1] = 0.0f;
+                vertex.tangent[2] = cosPhi;
+                vertex.tangent[3] = 1.0f;
+
                 sphereData.vertices.push_back(vertex);
             }
         }
@@ -217,13 +224,13 @@ namespace N2Engine::Rendering
 
         quadData.vertices = {
             // Bottom-left
-            {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
+            {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
             // Bottom-right
-            {{0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}},
+            {{0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
             // Top-right
-            {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}},
+            {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}},
             // Top-left
-            {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}}
+            {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}, {white[0], white[1], white[2], white[3]}, {1.0f, 0.0f, 0.0f, 1.0f}}
         };
 
         // Two triangles: (0,1,2) and (0,2,3)

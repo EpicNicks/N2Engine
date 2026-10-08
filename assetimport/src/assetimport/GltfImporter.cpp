@@ -1,4 +1,5 @@
 #include "assetimport/GltfImporter.hpp"
+#include "assetimport/TangentGeneration.hpp"
 
 #include <algorithm>
 #include <array>
@@ -614,7 +615,8 @@ namespace N2Engine::AssetImport
 
         /// Reads a float (or normalised integer) accessor with `components` components into out (count * components)
         std::optional<std::string> ReadFloats(const cgltf_accessor &accessor, const std::size_t components,
-                                              const std::string_view what, std::vector<float> &out, bool &nonFinite)
+                                              const std::string_view what, std::vector<float> &out, bool &nonFinite,
+                                              std::vector<std::uint8_t> *badElements = nullptr)
         {
             if (cgltf_num_components(accessor.type) != components)
             {
@@ -628,6 +630,10 @@ namespace N2Engine::AssetImport
             }
             const std::size_t elementSize = componentSize * components;
             out.assign(accessor.count * components, 0.0f);
+            if (badElements)
+            {
+                badElements->assign(accessor.count, 0);
+            }
             const cgltf_component_type type = accessor.component_type;
             const bool normalized = accessor.normalized != 0;
             return VisitAccessor(accessor, elementSize, what,
@@ -641,6 +647,10 @@ namespace N2Engine::AssetImport
                                          {
                                              value = 0.0f;
                                              nonFinite = true;
+                                             if (badElements)
+                                             {
+                                                 (*badElements)[i] = 1; // the whole element is unusable, not just this component
+                                             }
                                          }
                                          out[i * components + c] = value;
                                      }
@@ -833,6 +843,7 @@ namespace N2Engine::AssetImport
             const cgltf_accessor *normals = nullptr;
             const cgltf_accessor *texCoords = nullptr;
             const cgltf_accessor *colors = nullptr;
+            const cgltf_accessor *tangents = nullptr;
             std::size_t base = 0;
         };
 
@@ -862,6 +873,7 @@ namespace N2Engine::AssetImport
             const cgltf_accessor *normals = nullptr;
             const cgltf_accessor *texCoords = nullptr;
             const cgltf_accessor *colors = nullptr;
+            const cgltf_accessor *tangents = nullptr;
             for (cgltf_size i = 0; i < primitive.attributes_count; ++i)
             {
                 const cgltf_attribute &attribute = primitive.attributes[i];
@@ -872,6 +884,9 @@ namespace N2Engine::AssetImport
                     break;
                 case cgltf_attribute_type_normal:
                     if (attribute.index == 0) normals = attribute.data;
+                    break;
+                case cgltf_attribute_type_tangent:
+                    if (attribute.index == 0) tangents = attribute.data;
                     break;
                 case cgltf_attribute_type_texcoord:
                     if (attribute.index == 0)
@@ -890,7 +905,7 @@ namespace N2Engine::AssetImport
                     context.warnings.Add("skins are ignored (the model is imported in its bind pose)");
                     break;
                 default:
-                    break; // tangents (until normal maps) and custom attributes
+                    break; // custom attributes
                 }
             }
             if (!positions)
@@ -945,6 +960,22 @@ namespace N2Engine::AssetImport
                 if (colorComponents != 3 && colorComponents != 4)
                     return invalid("COLOR_0 must be VEC3 or VEC4");
                 if (auto error = ReadFloats(*colors, colorComponents, "COLOR_0", colorData, nonFinite))
+                    return invalid(*error);
+            }
+            // The file's tangents are kept unless they are to be generated: with generateTangents = Always, or when this
+            // primitive's normals are (the file's tangents belong to its own normals)
+            std::vector<float> tangentData;
+            std::vector<std::uint8_t> badTangents;
+            // A malformed TANGENT accessor is ignored with a warning, whether the file's tangents would be used or not
+            // (the tangents are then generated, as if the file had none)
+            if (tangents && (cgltf_num_components(tangents->type) != 4 || tangents->count != vertexCount))
+            {
+                context.warnings.Add(std::format("{}: TANGENT must be VEC4 with as many elements as POSITION; it is ignored", where));
+                tangents = nullptr;
+            }
+            if (tangents && !generate && context.settings.generateTangents != TangentGeneration::Always)
+            {
+                if (auto error = ReadFloats(*tangents, 4, "TANGENT", tangentData, nonFinite, &badTangents))
                     return invalid(*error);
             }
             if (nonFinite)
@@ -1013,6 +1044,18 @@ namespace N2Engine::AssetImport
                     for (std::size_t c = 0; c < colorComponents; ++c)
                         vertex.color[c] = colorData[v * colorComponents + c];
                 }
+                if (!tangentData.empty())
+                {
+                    // glTF's tangent is along +u and its w the bitangent's sign, cross(normal, tangent) * w: along
+                    // decreasing glTF v, which is the engine's increasing (flipped) v. So it is used as it is.
+                    // A tangent with any component that isn't a finite number is missing (zero), not half read
+                    if (!badTangents[v])
+                    {
+                        for (std::size_t c = 0; c < 3; ++c)
+                            vertex.tangent[c] = tangentData[v * 4 + c];
+                        vertex.tangent[3] = tangentData[v * 4 + 3] < 0.0f ? -1.0f : 1.0f;
+                    }
+                }
             }
 
             const std::size_t base = mesh.vertices.size();
@@ -1054,11 +1097,12 @@ namespace N2Engine::AssetImport
                 }
                 // An earlier primitive of this mesh with the same attributes already added these vertices
                 const cgltf_accessor *usedNormals = normalData.empty() ? nullptr : normals;
+                const cgltf_accessor *usedTangents = tangentData.empty() ? nullptr : tangents;
                 std::size_t start = base;
                 const auto same = std::ranges::find_if(shared, [&](const SharedVertices &run)
                 {
                     return run.positions == positions && run.normals == usedNormals && run.texCoords == texCoords &&
-                           run.colors == colors;
+                           run.colors == colors && run.tangents == usedTangents;
                 });
                 if (same != shared.end())
                 {
@@ -1067,7 +1111,7 @@ namespace N2Engine::AssetImport
                 else
                 {
                     mesh.vertices.insert(mesh.vertices.end(), vertices.begin(), vertices.end());
-                    shared.push_back(SharedVertices{positions, usedNormals, texCoords, colors, base});
+                    shared.push_back(SharedVertices{positions, usedNormals, texCoords, colors, usedTangents, base});
                 }
                 for (const std::uint32_t index : triangles)
                 {
@@ -1083,6 +1127,64 @@ namespace N2Engine::AssetImport
                 submesh.materialIndex = static_cast<std::int32_t>(primitive.material - context.data.materials);
             }
             mesh.submeshes.push_back(submesh);
+            return std::nullopt;
+        }
+
+        /// Gives a mesh's vertices without a tangent MikkTSpace tangents (all of them with generateTangents = Always),
+        /// from the mesh's own positions, normals and texture coordinates. A vertex whose triangles need different
+        /// tangents is duplicated; the duplicates count against the scene's vertex budget. A mesh with no texture
+        /// coordinates at all keeps zero tangents (it has nothing for a normal map to map).
+        std::optional<ModelImportError> FinishTangents(const MeshContext &context, const std::string &meshName,
+                                                       ImportedMesh &mesh, const std::vector<ImportedMaterial> &materials)
+        {
+            if (context.settings.generateTangents == TangentGeneration::Never || mesh.vertices.empty())
+            {
+                return std::nullopt;
+            }
+            // glTF says a client SHOULD generate tangents for a normal map the file gives none for: so ifMissing
+            // generates for a mesh with a submesh whose material has a normal texture; always, for every mesh
+            if (context.settings.generateTangents == TangentGeneration::IfMissing)
+            {
+                const bool normalMapped = std::ranges::any_of(mesh.submeshes, [&](const ImportedSubmesh &submesh)
+                {
+                    return submesh.materialIndex >= 0 &&
+                           static_cast<std::size_t>(submesh.materialIndex) < materials.size() &&
+                           materials[static_cast<std::size_t>(submesh.materialIndex)].normalTexture >= 0;
+                });
+                if (!normalMapped)
+                {
+                    return std::nullopt;
+                }
+            }
+            const bool hasUvs = std::ranges::any_of(mesh.vertices, [](const ImportedVertex &vertex)
+            {
+                return vertex.texCoord[0] != 0.0f || vertex.texCoord[1] != 0.0f;
+            });
+            if (!hasUvs)
+            {
+                return std::nullopt;
+            }
+            // Duplicates are within what the scene may still hold, and the mesh's own limit, so the budget below
+            // can't fail
+            const std::size_t sceneRoom = kMaxSceneVertices - context.budget.vertices;
+            const std::size_t limit = std::min(kMaxMeshElements, mesh.vertices.size() + sceneRoom);
+            const TangentResult result = GenerateTangents(
+                mesh.vertices, mesh.indices,
+                context.settings.generateTangents == TangentGeneration::Always ? TangentSelect::All : TangentSelect::Missing,
+                limit);
+            if (!result.ok)
+            {
+                context.warnings.Add(std::format("mesh '{}': tangents could not be generated (it keeps what it had)", meshName));
+                return std::nullopt;
+            }
+            if (!context.budget.AddVertices(result.verticesAdded))
+            {
+                return OverBudget("vertices");
+            }
+            if (result.verticesWritten > 0)
+            {
+                mesh.generatedTangents = true;
+            }
             return std::nullopt;
         }
 
@@ -1301,6 +1403,10 @@ namespace N2Engine::AssetImport
                 material.metallicRoughnessTexture = ImageOf(data, pbr.metallic_roughness_texture, false, scene, use, warnings);
             }
             material.normalTexture = ImageOf(data, source.normal_texture, false, scene, use, warnings);
+            // cgltf keeps normalTexture.scale in the view's scale (1 by default; only read for a view in the file)
+            material.normalScale = source.normal_texture.texture && std::isfinite(source.normal_texture.scale)
+                                       ? std::clamp(source.normal_texture.scale, -4.0f, 4.0f)
+                                       : 1.0f;
             material.occlusionTexture = ImageOf(data, source.occlusion_texture, false, scene, use, warnings);
             // cgltf keeps the occlusion texture's strength in the view's scale
             // (zero without a texture: cgltf only sets it for a view that is in the file)
@@ -1728,6 +1834,10 @@ namespace N2Engine::AssetImport
                     {
                         return std::unexpected(std::move(*error));
                     }
+                }
+                if (auto error = FinishTangents(context, label, mesh, scene.materials))
+                {
+                    return std::unexpected(std::move(*error));
                 }
                 if (settings.mergeSubmeshesByMaterial)
                 {

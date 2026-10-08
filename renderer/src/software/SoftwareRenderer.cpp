@@ -85,6 +85,13 @@ namespace
         float occlusionStrength = 1.f;
         const SWTexture* emissiveTex = nullptr;
         const SWTexture* occlusionTex = nullptr;
+        // Lit only: the normal map (and its scale), and the PBR model (uPbr) with its metallic and smoothness
+        const SWTexture* normalTex = nullptr;
+        float normalScale = 1.f;
+        bool pbr = false;
+        float metallic = 0.f;
+        float smoothness = 0.5f;
+        const SWTexture* metallicRoughnessTex = nullptr;
         // Unlit and lit multiply by the interpolated vertex colour. Off when every vertex of the mesh is white,
         // so such meshes (every built-in one) shade exactly as they did before vertex colour was read.
         bool vertexColor = false;
@@ -139,6 +146,16 @@ namespace
                 s.emissiveTexture = e;
             if (auto* o = dynamic_cast<const SWTexture*>(mat.GetAuxTexture(Common::AuxTexture::Occlusion)); o && o->IsValid())
                 s.occlusionTexture = o;
+            static const std::string normalScaleKey = "uNormalScale";
+            static const std::string pbrKey = "uPbr";
+            static const std::string metallicKey = "uMetallic";
+            s.normalScale = mat.GetFloat(normalScaleKey, 1.0f);
+            s.pbr = mat.GetInt(pbrKey, 0) != 0;
+            s.metallic = mat.GetFloat(metallicKey, 0.0f);
+            if (auto* n = dynamic_cast<const SWTexture*>(mat.GetAuxTexture(Common::AuxTexture::Normal)); n && n->IsValid())
+                s.normalTexture = n;
+            if (auto* mr = dynamic_cast<const SWTexture*>(mat.GetAuxTexture(Common::AuxTexture::MetallicRoughness)); mr && mr->IsValid())
+                s.metallicRoughnessTexture = mr;
         }
 
         if (auto* sh = dynamic_cast<const SWShader*>(mat.GetShader()))
@@ -177,6 +194,14 @@ namespace
             r.occlusionTex = mat.occlusionTexture;
             r.occlusionStrength = mat.occlusionStrength;
             r.hasEmissive = r.emR != 0.f || r.emG != 0.f || r.emB != 0.f;
+            r.normalTex = mat.normalTexture;
+            r.normalScale = mat.normalScale;
+            r.pbr = mat.pbr;
+            r.metallic = std::clamp(mat.metallic, 0.f, 1.f);
+            r.smoothness = mat.smoothness;
+            // The metallic-roughness texture is read by the PBR model only (as on OpenGL, where the shader samples it
+            // only with uPbr, and the engine gives it to Pbr materials only)
+            r.metallicRoughnessTex = mat.pbr ? mat.metallicRoughnessTexture : nullptr;
         }
         r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
 
@@ -297,13 +322,47 @@ namespace
         return PxColor{r, g, b, a};
     }
 
+    // The interpolated world-space tangent (not unit length, zero for a vertex without one) and its handedness
+    struct Tangent4 { float x, y, z, w; };
+
     inline PxColor ShadeLitPx(float wx, float wy, float wz,
                               float nx, float ny, float nz,
-                              float u, float v, const PxColor& vc,
+                              float u, float v, const PxColor& vc, const Tangent4& tangent,
                               const ResolvedMat& m, const LitState& L)
     {
         const float nlen = std::sqrt(nx*nx + ny*ny + nz*nz);
         if (nlen > 1e-6f) { const float inv = 1.f / nlen; nx *= inv; ny *= inv; nz *= inv; }
+
+        if (m.normalTex)
+        {
+            // The OpenGL lit shader's normal map: the tangent made perpendicular to the normal (none, zero, leaves the
+            // normal as it is), the bitangent cross(N, T) * handedness, and the texel (a data texture, red right, green
+            // up) with x and y scaled by uNormalScale
+            const float d = nx*tangent.x + ny*tangent.y + nz*tangent.z;
+            float tx = tangent.x - nx*d, ty = tangent.y - ny*d, tz = tangent.z - nz*d;
+            const float t2 = tx*tx + ty*ty + tz*tz;
+            // The interpolated tangent is made of unit vectors (a vertex with none is zero), so this threshold is
+            // relative: a tiny model scale doesn't switch normal mapping off
+            if (t2 > 1e-8f)
+            {
+                const float inv = 1.f / std::sqrt(t2);
+                tx *= inv; ty *= inv; tz *= inv;
+                const float hand = tangent.w < 0.f ? -1.f : 1.f;
+                const float bx = (ny*tz - nz*ty) * hand;
+                const float by = (nz*tx - nx*tz) * hand;
+                const float bz = (nx*ty - ny*tx) * hand;
+                const uint32_t s = m.normalTex->SampleFiltered(u, v);
+                constexpr float k = 1.f / 255.f;
+                const float mx = ((float)((s >> 0) & 0xFF) * k * 2.f - 1.f) * m.normalScale;
+                const float my = ((float)((s >> 8) & 0xFF) * k * 2.f - 1.f) * m.normalScale;
+                const float mz = (float)((s >> 16) & 0xFF) * k * 2.f - 1.f;
+                const float px = tx*mx + bx*my + nx*mz;
+                const float py = ty*mx + by*my + ny*mz;
+                const float pz = tz*mx + bz*my + nz*mz;
+                const float plen = std::sqrt(px*px + py*py + pz*pz);
+                if (plen > 1e-6f) { const float pinv = 1.f / plen; nx = px*pinv; ny = py*pinv; nz = pz*pinv; }
+            }
+        }
 
         float r = m.aR, g = m.aG, b = m.aB, a = m.aA;
         if (m.vertexColor)
@@ -346,6 +405,48 @@ namespace
             return std::pow(ndoth, m.shininess);
         };
 
+        // Metallic-roughness PBR (uPbr): the surface, and the lights' sum (the ambient light and the emissive are added
+        // after). The maths is LightingMath.hpp's, as the GLSL spells it. The base colour here is r, g, b.
+        float metallic = 0.f, perceptualRoughness = 1.f, f0r = 0.f, f0g = 0.f, f0b = 0.f;
+        float pbrR = 0.f, pbrG = 0.f, pbrB = 0.f;
+        if (m.pbr)
+        {
+            metallic = m.metallic;
+            float roughnessTexture = 1.f;
+            if (m.metallicRoughnessTex)
+            {
+                const uint32_t s = m.metallicRoughnessTex->SampleFiltered(u, v);
+                roughnessTexture = (float)((s >> 8) & 0xFF) * (1.f / 255.f);
+                metallic *= (float)((s >> 16) & 0xFF) * (1.f / 255.f);
+            }
+            perceptualRoughness = PerceptualRoughness(m.smoothness, roughnessTexture);
+            f0r = kDielectricF0 + (r - kDielectricF0) * metallic;
+            f0g = kDielectricF0 + (g - kDielectricF0) * metallic;
+            f0b = kDielectricF0 + (b - kDielectricF0) * metallic;
+        }
+        // One light's reply: (diffuse / pi + specular) * pi * NdotL * radiance. (lx, ly, lz) points at the light.
+        const auto pbrLight = [&](float lx, float ly, float lz, float radR, float radG, float radB)
+        {
+            const float nDotL = nx*lx + ny*ly + nz*lz;
+            if (nDotL <= 0.f) return;
+            float hx = lx + vx, hy = ly + vy, hz = lz + vz;
+            const float h2 = hx*hx + hy*hy + hz*hz;
+            if (h2 < 1e-12f) return;
+            const float hinv = 1.f / std::sqrt(h2);
+            hx *= hinv; hy *= hinv; hz *= hinv;
+            const float nDotV = std::max(nx*vx + ny*vy + nz*vz, 0.0001f);
+            const float nDotH = std::max(nx*hx + ny*hy + nz*hz, 0.f);
+            const float vDotH = std::max(vx*hx + vy*hy + vz*hz, 0.f);
+            const float alpha = perceptualRoughness * perceptualRoughness;
+            const float w = SchlickWeight(vDotH);
+            const float fd = kDielectricF0 + (1.f - kDielectricF0) * w;
+            const float diffuse = (1.f - metallic) * (1.f - fd);
+            const float spec = kPi * GgxDistribution(nDotH, alpha) * SmithGgxVisibility(nDotL, nDotV, alpha);
+            pbrR += (diffuse * r + (f0r + (1.f - f0r) * w) * spec) * nDotL * radR;
+            pbrG += (diffuse * g + (f0g + (1.f - f0g) * w) * spec) * nDotL * radG;
+            pbrB += (diffuse * b + (f0b + (1.f - f0b) * w) * spec) * nDotL * radB;
+        };
+
         float lr = L.ambR, lg = L.ambG, lb = L.ambB;
         if (m.occlusionTex)
         {
@@ -357,6 +458,7 @@ namespace
 
         for (const auto& d : L.dirs)
         {
+            if (m.pbr) { pbrLight(d.x, d.y, d.z, d.r * d.intensity, d.g * d.intensity, d.b * d.intensity); continue; }
             const float ndotl = std::max(0.f, nx*d.x + ny*d.y + nz*d.z);
             // Kept from the original / GL shader: spec is NOT gated on N·L.
             const float c = ndotl * d.intensity + blinn(d.x, d.y, d.z) * 0.3f;
@@ -374,6 +476,12 @@ namespace
             const float ndotl = std::max(0.f, nx*lx + ny*ly + nz*lz);
             const float dr    = dist * p.invRange;
             const float atten = 1.f / (1.f + p.atten * dr * dr);
+            if (m.pbr)
+            {
+                const float k = p.intensity * atten;
+                pbrLight(lx, ly, lz, p.r * k, p.g * k, p.b * k);
+                continue;
+            }
             const float c = (ndotl * p.intensity + blinn(lx, ly, lz) * 0.3f) * atten;
             lr += p.r * c; lg += p.g * c; lb += p.b * c;
         }
@@ -393,11 +501,31 @@ namespace
             const float ndotl = std::max(0.f, nx*lx + ny*ly + nz*lz);
             const float dr    = dist * sp.invRange;
             const float atten = 1.f / (1.f + dr * dr);   // as the OpenGL shader's spot attenuation (factor 1)
+            if (m.pbr)
+            {
+                const float k = sp.intensity * atten * cone;
+                pbrLight(lx, ly, lz, sp.r * k, sp.g * k, sp.b * k);
+                continue;
+            }
             const float c = (ndotl * sp.intensity + blinn(lx, ly, lz) * 0.3f) * atten * cone;
             lr += sp.r * c; lg += sp.g * c; lb += sp.b * c;
         }
 
         float outR = lr * r, outG = lg * g, outB = lb * b;
+        if (m.pbr)
+        {
+            // The ambient light (scaled by the occlusion, in lr, lg, lb: the lights above did not add to it) as a
+            // uniform environment: its diffuse reply and its specular reply
+            const float nDotV = std::max(nx*vx + ny*vy + nz*vz, 0.0001f);
+            const EnvBrdf env = EnvironmentBrdf(perceptualRoughness, nDotV);
+            const float diffuse = 1.f - metallic;
+            const float specR = f0r * env.scale + env.bias, specG = f0g * env.scale + env.bias,
+                        specB = f0b * env.scale + env.bias;
+            // The diffuse part gets what the specular part did not reflect, 1 - specular
+            outR = pbrR + lr * (diffuse * r * (1.f - specR) + specR);
+            outG = pbrG + lg * (diffuse * g * (1.f - specG) + specG);
+            outB = pbrB + lb * (diffuse * b * (1.f - specB) + specB);
+        }
         if (m.hasEmissive || m.emissiveTex)
         {
             float er = m.emR, eg = m.emG, eb = m.emB;
@@ -444,6 +572,7 @@ namespace
         float wn[3];  // world-space normal
         float uv[2];  // texcoord
         float col[4]; // vertex colour
+        float tan[4]; // world-space tangent xyz and handedness w (zeros unless the draw has a normal map)
     };
 
     inline ClipVertex LerpCV(const ClipVertex& a, const ClipVertex& b, float t)
@@ -454,6 +583,7 @@ namespace
         for (int i = 0; i < 3; ++i) r.wn[i]  = a.wn[i]  + t * (b.wn[i]  - a.wn[i]);
         for (int i = 0; i < 2; ++i) r.uv[i]  = a.uv[i]  + t * (b.uv[i]  - a.uv[i]);
         for (int i = 0; i < 4; ++i) r.col[i] = a.col[i] + t * (b.col[i] - a.col[i]);
+        for (int i = 0; i < 4; ++i) r.tan[i] = a.tan[i] + t * (b.tan[i] - a.tan[i]);
         return r;
     }
 
@@ -544,6 +674,7 @@ namespace
         float nxw, nyw, nzw;       // world normal / w
         float wxw, wyw, wzw;       // world position / w
         float crw, cgw, cbw, caw;  // vertex colour / w
+        float txw, tyw, tzw, tww;  // world tangent xyz and handedness / w
     };
 
     inline ScreenVert Project(const ClipVertex& v, float halfW, float halfH)
@@ -558,6 +689,7 @@ namespace
         s.nxw = v.wn[0] * invW;  s.nyw = v.wn[1] * invW;  s.nzw = v.wn[2] * invW;
         s.wxw = v.wp[0] * invW;  s.wyw = v.wp[1] * invW;  s.wzw = v.wp[2] * invW;
         s.crw = v.col[0] * invW; s.cgw = v.col[1] * invW; s.cbw = v.col[2] * invW; s.caw = v.col[3] * invW;
+        s.txw = v.tan[0] * invW; s.tyw = v.tan[1] * invW; s.tzw = v.tan[2] * invW; s.tww = v.tan[3] * invW;
         return s;
     }
 
@@ -718,7 +850,15 @@ namespace
                                 const float wx = (l0*A->wxw + l1*B->wxw + l2*C->wxw) * rw;
                                 const float wy = (l0*A->wyw + l1*B->wyw + l2*C->wyw) * rw;
                                 const float wz = (l0*A->wzw + l1*B->wzw + l2*C->wzw) * rw;
-                                px = ShadeLitPx(wx, wy, wz, nx, ny, nz, u, v, vc, mat, lit);
+                                Tangent4 tangent{0.f, 0.f, 0.f, 1.f};
+                                if (mat.normalTex)
+                                {
+                                    tangent.x = (l0*A->txw + l1*B->txw + l2*C->txw) * rw;
+                                    tangent.y = (l0*A->tyw + l1*B->tyw + l2*C->tyw) * rw;
+                                    tangent.z = (l0*A->tzw + l1*B->tzw + l2*C->tzw) * rw;
+                                    tangent.w = (l0*A->tww + l1*B->tww + l2*C->tww) * rw;
+                                }
+                                px = ShadeLitPx(wx, wy, wz, nx, ny, nz, u, v, vc, tangent, mat, lit);
                             }
                             else
                             {
@@ -1256,6 +1396,12 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
     if (rm.lit)
         PrepareLighting(lighting, cameraPos, lit);   // normalize lights once, not per pixel
 
+    // The sign of the model matrix's upper 3x3 determinant: a mirroring matrix reverses the bitangent
+    const float handedness =
+        (modelMatrix[0] * (modelMatrix[5] * modelMatrix[10] - modelMatrix[6] * modelMatrix[9]) -
+         modelMatrix[1] * (modelMatrix[4] * modelMatrix[10] - modelMatrix[6] * modelMatrix[8]) +
+         modelMatrix[2] * (modelMatrix[4] * modelMatrix[9] - modelMatrix[5] * modelMatrix[8])) < 0.f ? -1.f : 1.f;
+
     const RasterTarget target{ m_colorBuffer.data(), m_depthBuffer.data(),
                                (int)m_width, (int)m_height };
     const RasterState rs = ToRasterState(state, kind == ShadeKind::Text);
@@ -1292,6 +1438,31 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
         x.cv.col[1] = v.color[1];
         x.cv.col[2] = v.color[2];
         x.cv.col[3] = v.color[3];
+
+        if (rm.normalTex)
+        {
+            // A direction by the model matrix's upper 3x3, as the OpenGL vertex shader does (a vertex with no tangent,
+            // xyz = 0, stays 0); a mirroring model matrix flips the handedness
+            x.cv.tan[0] = modelMatrix[0] * v.tangent[0] + modelMatrix[1] * v.tangent[1] + modelMatrix[2] * v.tangent[2];
+            x.cv.tan[1] = modelMatrix[4] * v.tangent[0] + modelMatrix[5] * v.tangent[1] + modelMatrix[6] * v.tangent[2];
+            x.cv.tan[2] = modelMatrix[8] * v.tangent[0] + modelMatrix[9] * v.tangent[1] + modelMatrix[10] * v.tangent[2];
+            x.cv.tan[3] = v.tangent[3] * handedness;
+            // Unit length in world space (zero, no tangent, stays zero), whatever the model's scale
+            const float tl = std::sqrt(x.cv.tan[0]*x.cv.tan[0] + x.cv.tan[1]*x.cv.tan[1] + x.cv.tan[2]*x.cv.tan[2]);
+            if (tl > 0.f && std::isfinite(tl))
+            {
+                x.cv.tan[0] /= tl; x.cv.tan[1] /= tl; x.cv.tan[2] /= tl;
+            }
+            else
+            {
+                x.cv.tan[0] = x.cv.tan[1] = x.cv.tan[2] = 0.f;
+            }
+        }
+        else
+        {
+            x.cv.tan[0] = x.cv.tan[1] = x.cv.tan[2] = 0.f;
+            x.cv.tan[3] = 1.f;
+        }
 
         x.oc = Outcode(x.cv.c);
         if (x.oc == 0)

@@ -359,6 +359,15 @@ Renderer::Common::IMaterial* OpenGLRenderer::CreateMaterial(Common::IShader *sha
         material->SetInt("uHasTexture", texture != nullptr ? 1 : 0);
         // Set on every material: a uniform keeps the last value any material gave the shared program
         material->SetFloat("uAlphaCutoff", 0.0f);
+        // Likewise the extras: plain Blinn-Phong with no emissive, occlusion, normal or metallic-roughness input
+        material->SetVec3("uEmissive", 0.0f, 0.0f, 0.0f);
+        material->SetInt("uHasEmissiveTexture", 0);
+        material->SetInt("uHasOcclusionTexture", 0);
+        material->SetFloat("uOcclusionStrength", 1.0f);
+        material->SetInt("uHasNormalTexture", 0);
+        material->SetFloat("uNormalScale", 1.0f);
+        material->SetInt("uPbr", 0);
+        material->SetInt("uHasMetallicRoughnessTexture", 0);
     }
     else if (shader == m_standardUnlitShader)
     {
@@ -638,20 +647,19 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
         }
     }
 
-    // The lit shader's extra textures: emissive on unit 1, occlusion on unit 2 (their sampler uniforms are set
-    // by OpenGLMaterial::Apply, and the shader reads them only when uHasEmissiveTexture/uHasOcclusionTexture say so)
+    // The lit shader's extra textures: emissive on unit 1, occlusion on unit 2, normal on unit 3, metallic-roughness
+    // on unit 4 (their sampler uniforms are set by OpenGLMaterial::Apply, and the shader reads each only when its
+    // uHas...Texture flag says so)
     bool boundExtraTexture = false;
-    if (const OpenGLTexture *texture = glMaterial->GetEmissiveTexture(); texture && texture->IsValid())
+    for (const auto which : {Common::AuxTexture::Emissive, Common::AuxTexture::Occlusion, Common::AuxTexture::Normal,
+                             Common::AuxTexture::MetallicRoughness})
     {
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
-        boundExtraTexture = true;
-    }
-    if (const OpenGLTexture *texture = glMaterial->GetOcclusionTexture(); texture && texture->IsValid())
-    {
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
-        boundExtraTexture = true;
+        if (const OpenGLTexture *texture = glMaterial->GetAuxOpenGLTexture(which); texture && texture->IsValid())
+        {
+            glActiveTexture(GL_TEXTURE0 + static_cast<GLenum>(OpenGLMaterial::AuxTextureUnit(which)));
+            glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
+            boundExtraTexture = true;
+        }
     }
     if (boundExtraTexture)
     {
@@ -882,6 +890,7 @@ void OpenGLRenderer::CreateStandardShaders()
         layout (location = 1) in vec3 aNormal;
         layout (location = 2) in vec2 aTexCoord;
         layout (location = 3) in vec4 aColor;
+        layout (location = 4) in vec4 aTangent;
 
         uniform mat4 uModel;
         uniform mat4 uView;
@@ -891,6 +900,7 @@ void OpenGLRenderer::CreateStandardShaders()
         out vec3 fragWorldPos;
         out vec2 fragTexCoord;
         out vec4 fragColor;
+        out vec4 fragTangent;
 
         void main() {
             vec4 worldPos = uModel * vec4(aPos, 1.0);
@@ -899,6 +909,14 @@ void OpenGLRenderer::CreateStandardShaders()
             // Transform normal to world space (proper method)
             mat3 normalMatrix = transpose(inverse(mat3(uModel)));
             fragNormal = normalize(normalMatrix * aNormal);
+
+            // The tangent is a direction: it goes by the model matrix and is made unit length here, so a tiny model scale
+            // can't shrink it below the fragment shader's test (a vertex with none, xyz = 0, stays 0). A mirroring model
+            // matrix (negative determinant) flips the bitangent, so the handedness w too.
+            vec3 worldTangent = mat3(uModel) * aTangent.xyz;
+            float worldTangentLength = length(worldTangent);
+            worldTangent = worldTangentLength > 0.0 ? worldTangent / worldTangentLength : vec3(0.0);
+            fragTangent = vec4(worldTangent, aTangent.w * (determinant(mat3(uModel)) < 0.0 ? -1.0 : 1.0));
 
             fragTexCoord = aTexCoord;
             fragColor = aColor;
@@ -930,6 +948,19 @@ void OpenGLRenderer::CreateStandardShaders()
         uniform sampler2D uOcclusionTexture;
         uniform bool uHasOcclusionTexture;
         uniform float uOcclusionStrength;
+
+        // Normal map (tangent space, green up): uNormalScale multiplies its x and y. A vertex without a tangent is
+        // drawn with its own normal.
+        uniform sampler2D uNormalTexture;
+        uniform bool uHasNormalTexture;
+        uniform float uNormalScale;
+
+        // Metallic-roughness PBR instead of Blinn-Phong (uPbr = 1): uMetallic and 1 - uSmoothness (the roughness)
+        // times the texture's blue and green channels. Lights give the same light as with Blinn-Phong for a white
+        // dielectric; the ambient light is a uniform environment (no image based lighting).
+        uniform int uPbr;
+        uniform sampler2D uMetallicRoughnessTexture;
+        uniform bool uHasMetallicRoughnessTexture;
 
         // Camera
         uniform vec3 uCameraPos;
@@ -974,8 +1005,58 @@ void OpenGLRenderer::CreateStandardShaders()
         in vec3 fragWorldPos;
         in vec2 fragTexCoord;
         in vec4 fragColor;
+        in vec4 fragTangent;
 
         out vec4 FragColor;
+
+        // ---- PBR (the software renderer's LightingMath.hpp, line for line) ----
+        const float PI = 3.14159265358979323846;
+        const float MIN_PERCEPTUAL_ROUGHNESS = 0.045;
+        const float DIELECTRIC_F0 = 0.04;
+
+        float ggxDistribution(float nDotH, float alpha) {
+            float a2 = alpha * alpha;
+            float d = nDotH * nDotH * (a2 - 1.0) + 1.0;
+            return a2 / (PI * d * d);
+        }
+
+        float smithGgxVisibility(float nDotL, float nDotV, float alpha) {
+            float a2 = alpha * alpha;
+            float gv = nDotL * sqrt(nDotV * nDotV * (1.0 - a2) + a2);
+            float gl = nDotV * sqrt(nDotL * nDotL * (1.0 - a2) + a2);
+            return 0.5 / max(gv + gl, 0.00001);
+        }
+
+        float schlickWeight(float vDotH) {
+            float m = clamp(1.0 - vDotH, 0.0, 1.0);
+            float m2 = m * m;
+            return m2 * m2 * m;
+        }
+
+        // One light's reply: (diffuse / pi + specular) * pi * NdotL * radiance, where radiance is the light's
+        // colour x intensity (x attenuation x cone). L points at the light.
+        vec3 pbrLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 baseColor, float metallic, float perceptualRoughness, vec3 f0) {
+            float nDotL = dot(N, L);
+            if (nDotL <= 0.0) {
+                return vec3(0.0);
+            }
+            vec3 H = L + V;
+            float h2 = dot(H, H);
+            if (h2 < 0.000000000001) {
+                return vec3(0.0);
+            }
+            H *= inversesqrt(h2);
+            float nDotV = max(dot(N, V), 0.0001);
+            float nDotH = max(dot(N, H), 0.0);
+            float vDotH = max(dot(V, H), 0.0);
+            float alpha = perceptualRoughness * perceptualRoughness;
+            float w = schlickWeight(vDotH);
+            vec3 F = f0 + (1.0 - f0) * w;
+            float fd = DIELECTRIC_F0 + (1.0 - DIELECTRIC_F0) * w;
+            vec3 diffuse = (1.0 - metallic) * (1.0 - fd) * baseColor;
+            vec3 specular = F * (PI * ggxDistribution(nDotH, alpha) * smithGgxVisibility(nDotL, nDotV, alpha));
+            return (diffuse + specular) * nDotL * radiance;
+        }
 
         float calculateAttenuation(float distance, float range, float attenuation) {
             float d = distance / range;
@@ -1000,7 +1081,35 @@ void OpenGLRenderer::CreateStandardShaders()
             }
 
             vec3 N = normalize(fragNormal);
+            if (uHasNormalTexture) {
+                // The fetch is outside the branch below (a texture lookup in non-uniform control flow has undefined
+                // derivatives, so undefined mip selection)
+                vec3 m = texture(uNormalTexture, fragTexCoord).xyz * 2.0 - 1.0;
+                // The tangent made perpendicular to the normal; none (zero) leaves the normal as it is. The vertex
+                // stage made it unit length, so the test is relative.
+                vec3 T = fragTangent.xyz - N * dot(N, fragTangent.xyz);
+                float tangentLength2 = dot(T, T);
+                if (tangentLength2 > 0.00000001) {
+                    T *= inversesqrt(tangentLength2);
+                    vec3 B = cross(N, T) * (fragTangent.w < 0.0 ? -1.0 : 1.0);
+                    m.xy *= uNormalScale;
+                    N = normalize(T * m.x + B * m.y + N * m.z);
+                }
+            }
             vec3 V = normalize(uCameraPos - fragWorldPos);
+
+            // PBR surface: metallic and roughness (with the texture's blue and green), and the reflectance at normal
+            // incidence. pbrSum collects the lights; unused with Blinn-Phong.
+            float metallic = clamp(uMetallic, 0.0, 1.0);
+            float roughnessTexture = 1.0;
+            if (uPbr != 0 && uHasMetallicRoughnessTexture) {
+                vec4 mr = texture(uMetallicRoughnessTexture, fragTexCoord);
+                metallic *= mr.b;
+                roughnessTexture = mr.g;
+            }
+            float perceptualRoughness = clamp((1.0 - uSmoothness) * roughnessTexture, MIN_PERCEPTUAL_ROUGHNESS, 1.0);
+            vec3 f0 = mix(vec3(DIELECTRIC_F0), albedo.rgb, metallic);
+            vec3 pbrSum = vec3(0.0);
 
             // Start with ambient, dimmed by the occlusion texture
             float occlusion = 1.0;
@@ -1012,6 +1121,11 @@ void OpenGLRenderer::CreateStandardShaders()
             // Directional lights
             for (int i = 0; i < uNumDirectionalLights; i++) {
                 vec3 L = normalize(-uDirectionalLights[i].direction);
+                if (uPbr != 0) {
+                    pbrSum += pbrLight(N, V, L, uDirectionalLights[i].color * uDirectionalLights[i].intensity,
+                                       albedo.rgb, metallic, perceptualRoughness, f0);
+                    continue;
+                }
                 float NdotL = max(dot(N, L), 0.0);
 
                 // Diffuse
@@ -1044,6 +1158,12 @@ void OpenGLRenderer::CreateStandardShaders()
                     uPointLights[i].range,
                     uPointLights[i].attenuation
                 );
+
+                if (uPbr != 0) {
+                    pbrSum += pbrLight(N, V, L, uPointLights[i].color * uPointLights[i].intensity * attenuation,
+                                       albedo.rgb, metallic, perceptualRoughness, f0);
+                    continue;
+                }
 
                 vec3 diffuse = uPointLights[i].color *
                               uPointLights[i].intensity *
@@ -1085,6 +1205,13 @@ void OpenGLRenderer::CreateStandardShaders()
                 float NdotL = max(dot(N, L), 0.0);
                 float attenuation = calculateAttenuation(distance, uSpotLights[i].range, 1.0);
 
+                if (uPbr != 0) {
+                    pbrSum += pbrLight(N, V, L,
+                                       uSpotLights[i].color * uSpotLights[i].intensity * attenuation * spotIntensity,
+                                       albedo.rgb, metallic, perceptualRoughness, f0);
+                    continue;
+                }
+
                 vec3 diffuse = uSpotLights[i].color *
                               uSpotLights[i].intensity *
                               NdotL *
@@ -1106,6 +1233,19 @@ void OpenGLRenderer::CreateStandardShaders()
             }
 
             vec3 color = lighting * albedo.rgb + emissive;
+            if (uPbr != 0) {
+                // The ambient light as a uniform environment: its diffuse reply and its specular reply (the analytic
+                // fit of the environment BRDF), both scaled by the occlusion; then the lights and the emissive
+                float nDotV = max(dot(N, V), 0.0001);
+                vec4 r = perceptualRoughness * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
+                float a004 = min(r.x * r.x, exp2(-9.28 * nDotV)) * r.x + r.y;
+                vec2 envAB = vec2(-1.04, 1.04) * a004 + r.zw;
+                vec3 ambient = uAmbientLight * occlusion;
+                vec3 specularReflectance = f0 * envAB.x + envAB.y;
+                vec3 ambientDiffuse = ambient * (1.0 - metallic) * albedo.rgb * (1.0 - specularReflectance);
+                vec3 ambientSpecular = ambient * specularReflectance;
+                color = pbrSum + ambientDiffuse + ambientSpecular + emissive;
+            }
             if (uEncodeOutput != 0) {
                 color = linearToSrgb(color);
             }

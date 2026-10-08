@@ -48,6 +48,15 @@ namespace Renderer::Software
         float occlusionStrength = 1.0f;
         const SWTexture *emissiveTexture = nullptr;
         const SWTexture *occlusionTexture = nullptr;
+        /// Lit only. The normal map (a tangent-space normal in rgb, scaled by uNormalScale: x and y are multiplied by
+        /// it) and, with uPbr, the metallic-roughness texture (green roughness, blue metallic). Data textures:
+        /// read as plain bytes, never sRGB.
+        const SWTexture *normalTexture = nullptr;
+        float normalScale = 1.0f;
+        const SWTexture *metallicRoughnessTexture = nullptr;
+        /// Lit only: uPbr (metallic-roughness PBR instead of Blinn-Phong) and uMetallic
+        bool pbr = false;
+        float metallic = 0.0f;
         SWShaderType shader = SWShaderType::Unlit; ///< Unlit too when the material's shader isn't an SWShader
     };
 

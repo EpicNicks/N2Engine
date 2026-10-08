@@ -56,6 +56,19 @@ namespace N2Engine::AssetImport
         Always
     };
 
+    /// What to do about vertex tangents (for normal maps)
+    enum class TangentGeneration : std::uint8_t
+    {
+        /// Keep the file's TANGENT; a primitive without any has none (zero tangents: no normal mapping)
+        Never,
+        /// Generate MikkTSpace tangents for a primitive that has no TANGENT (glTF's rule), and for one whose normals
+        /// were generated, since the file's tangents belong to its own normals; but only for a mesh with a submesh
+        /// whose material has a normal texture (a mesh nothing normal maps pays nothing)
+        IfMissing,
+        /// Ignore the file's tangents and generate for every mesh that has texture coordinates
+        Always
+    };
+
     struct ModelImportSettings
     {
         /// Multiplies every position and node translation (a model in centimetres takes 0.01). Must be finite
@@ -64,6 +77,7 @@ namespace N2Engine::AssetImport
         /// Import materials and the images they use; off gives every submesh material index -1
         bool importMaterials = true;
         NormalGeneration generateNormals = NormalGeneration::IfMissing;
+        TangentGeneration generateTangents = TangentGeneration::IfMissing;
         /// Join a mesh's primitives that share a material into one submesh each
         bool mergeSubmeshesByMaterial = false;
     };

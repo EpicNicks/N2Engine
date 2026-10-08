@@ -5,13 +5,23 @@
 
 namespace Renderer::Common
 {
+    /**
+     * One mesh vertex, 64 bytes. `tangent` (appended last, so a positional aggregate initialiser that stops at
+     * `color` stays valid and leaves it zero) is the normal map's tangent space: xyz is the direction of
+     * increasing u in the vertex's tangent plane, w (+1 or -1) the handedness: bitangent = cross(normal, tangent.xyz)
+     * * w, which points along increasing v (the engine's v-up convention, the glTF normal texture's green-up). A
+     * zero tangent means "none": the lit shaders then draw the vertex without normal mapping.
+     */
     struct Vertex
     {
         float position[3];
         float normal[3];
         float texCoord[2];
         float color[4];
+        float tangent[4];
     };
+
+    static_assert(sizeof(Vertex) == 64, "Vertex is 64 bytes: the OpenGL attribute layout and the importer's ImportedVertex copy depend on it");
 
     struct MeshData
     {
