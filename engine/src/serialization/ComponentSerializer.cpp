@@ -43,9 +43,9 @@ FieldBuilder SerializableComponent::RegisterGameObjectRef(const std::string &nam
             }
         },
         MakeReferenceInfo(name, FieldKind::GameObjectRef, "GameObject"));
-    _members.back().forgetObject = [&gameObjectRef](const GameObject *removed)
+    _members.back().forgetObject = [&gameObjectRef](const std::function<bool(const GameObject *)> &isRemoved)
     {
-        if (gameObjectRef == removed)
+        if (gameObjectRef != nullptr && isRemoved(gameObjectRef))
         {
             gameObjectRef = nullptr;
         }
@@ -114,11 +114,11 @@ FieldBuilder SerializableComponent::RegisterGameObjectRefVector(const std::strin
             }
         },
         MakeReferenceInfo(name, FieldKind::GameObjectRefList, "GameObject"));
-    _members.back().forgetObject = [&gameObjectRefs](const GameObject *removed)
+    _members.back().forgetObject = [&gameObjectRefs](const std::function<bool(const GameObject *)> &isRemoved)
     {
         for (GameObject *&entry : gameObjectRefs)
         {
-            if (entry == removed)
+            if (entry != nullptr && isRemoved(entry))
             {
                 entry = nullptr;
             }

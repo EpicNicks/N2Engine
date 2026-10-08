@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <unordered_set>
 #include <future>
 #include <system_error>
 #include <utility>
@@ -725,10 +726,22 @@ namespace N2Engine::Editor
             return effect;
         }
 
-        /// What an object's own text costs in a step, for the history's byte limit
-        size_t JsonBytes(const nlohmann::json &value)
+        /// JSON kept as text in a step: a parsed nlohmann::json costs several times its text, which the history's byte
+        /// limit would not see, so a step holds the text (as a snapshot does) and parses it when it runs
+        std::shared_ptr<const std::string> DumpJson(const nlohmann::json &value)
         {
-            return value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).size();
+            return std::make_shared<const std::string>(
+                value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+        }
+
+        std::expected<nlohmann::json, std::string> ParseStored(const std::string &text)
+        {
+            nlohmann::json value = nlohmann::json::parse(text, nullptr, false);
+            if (value.is_discarded())
+            {
+                return std::unexpected(std::string("What the edit saved can't be read back"));
+            }
+            return value;
         }
 
         /// "Move Cube": a step's label, with the object's name made safe and short
@@ -766,17 +779,19 @@ namespace N2Engine::Editor
         }
 
         /// Sets the local transform. A state without one (the object had none) puts the identity on an object that
-        /// has one by now: a transform can't be taken away, and the identity is where an object without one is.
-        void ApplyLocalTransform(GameObject &gameObject, const LocalTransformState &state)
+        /// has one by now: a transform can't be taken away, and the identity is where an object without one is. False
+        /// then: the state isn't exactly the one that was captured (the scene saves a "positionable" it didn't).
+        bool ApplyLocalTransform(GameObject &gameObject, const LocalTransformState &state)
         {
             if (!state.present && gameObject.GetPositionable() == nullptr)
             {
-                return;
+                return true;
             }
             gameObject.CreatePositionable();
             Positionable *positionable = gameObject.GetPositionable();
             positionable->SetLocalPositionAndRotation(state.position, state.rotation);
             positionable->SetLocalScale(state.scale);
+            return state.present;
         }
 
         /// SetLocalTransform and SetEntityTransform: coalesces with the next transform edit of the same object, and
@@ -791,9 +806,11 @@ namespace N2Engine::Editor
                 {
                     return std::unexpected(entity.error());
                 }
-                ApplyLocalTransform(**entity, state);
+                const bool exact = ApplyLocalTransform(**entity, state);
                 // The children's world matrices moved with it
-                return EffectFor(SubtreeIds(**entity));
+                EditEffect effect = EffectFor(SubtreeIds(**entity));
+                effect.inexact = !exact;
+                return effect;
             };
             EditOp op;
             op.undo = [apply, before]() -> EditOutcome { return apply(before); };
@@ -911,9 +928,11 @@ namespace N2Engine::Editor
                     return std::unexpected(std::string("The object couldn't be moved back"));
                 }
             }
-            ApplyLocalTransform(**entity, state.transform);
+            const bool exact = ApplyLocalTransform(**entity, state.transform);
             (*entity)->SetSiblingIndex(state.index);
-            return EffectFor(SubtreeIds(**entity));
+            EditEffect effect = EffectFor(SubtreeIds(**entity));
+            effect.inexact = !exact;
+            return effect;
         }
 
         EditOp PlacementOp(const std::string &entityId, const PlacementState &before, const PlacementState &after)
@@ -930,36 +949,35 @@ namespace N2Engine::Editor
         /// the references back by loading the scene as it was, which resolves them again by UUID.
         void ForgetDestroyed(Scene &scene, const GameObject &root)
         {
-            std::vector<const GameObject *> objects{&root};
-            const std::vector<std::shared_ptr<GameObject>> descendants = root.GetChildrenRecursive();
-            for (const auto &descendant : descendants)
+            std::unordered_set<const GameObject *> objects{&root};
+            std::unordered_set<const Component *> components;
+            for (const auto &descendant : root.GetChildrenRecursive())
             {
-                objects.push_back(descendant.get());
+                objects.insert(descendant.get());
             }
-            std::vector<const Component *> components;
             for (const GameObject *object : objects)
             {
                 for (const auto &component : object->GetAllComponents())
                 {
-                    components.push_back(component.get());
+                    components.insert(component.get());
                 }
             }
 
-            scene.TraverseAll([&objects, &components](const std::shared_ptr<GameObject> &holder)
+            // One pass over the scene, and one over each holder's members, whatever the size of the subtree
+            const std::function<bool(const GameObject *)> removedObject = [&objects](const GameObject *candidate)
+            {
+                return objects.contains(candidate);
+            };
+            const std::function<bool(const Component *)> removedComponent = [&components](const Component *candidate)
+            {
+                return components.contains(candidate);
+            };
+            scene.TraverseAll([&removedObject, &removedComponent](const std::shared_ptr<GameObject> &holder)
             {
                 for (const auto &other : holder->GetAllComponents())
                 {
-                    for (const GameObject *object : objects)
-                    {
-                        other->ForgetGameObject(object);
-                    }
-                    for (const Component *component : components)
-                    {
-                        if (other.get() != component)
-                        {
-                            other->ForgetComponent(component);
-                        }
-                    }
+                    other->ForgetGameObjectsIf(removedObject);
+                    other->ForgetComponentsIf(removedComponent);
                 }
             });
         }
@@ -1046,12 +1064,20 @@ namespace N2Engine::Editor
             const std::string entityId = created.GetUUID().ToString();
             const std::string parentId = ParentIdOf(created);
             const size_t index = created.GetSiblingIndex();
-            auto subtree = std::make_shared<const nlohmann::json>(created.Serialize());
+            const auto subtree = DumpJson(created.Serialize());
 
             EditOp op;
             op.undo = [entityId]() -> EditOutcome { return DestroySubtree(entityId); };
-            op.redo = [subtree, parentId, index]() -> EditOutcome { return RestoreSubtree(*subtree, parentId, index); };
-            op.redoBytes = JsonBytes(*subtree);
+            op.redo = [subtree, parentId, index]() -> EditOutcome
+            {
+                const auto saved = ParseStored(*subtree);
+                if (!saved)
+                {
+                    return std::unexpected(saved.error());
+                }
+                return RestoreSubtree(*saved, parentId, index);
+            };
+            op.redoBytes = subtree->size();
             return op;
         }
 
@@ -1122,14 +1148,19 @@ namespace N2Engine::Editor
         EditOp AddedComponentOp(const std::string &entityId, const std::string &componentId, const std::string &typeName,
                                 const nlohmann::json &values)
         {
-            const auto saved = std::make_shared<const nlohmann::json>(values);
+            const auto saved = DumpJson(values);
             EditOp op;
             op.undo = [entityId, componentId]() -> EditOutcome { return RemoveComponentById(entityId, componentId); };
             op.redo = [entityId, typeName, saved]() -> EditOutcome
             {
-                return AddComponentFromValues(entityId, typeName, *saved);
+                const auto parsed = ParseStored(*saved);
+                if (!parsed)
+                {
+                    return std::unexpected(parsed.error());
+                }
+                return AddComponentFromValues(entityId, typeName, *parsed);
             };
-            op.redoBytes = JsonBytes(values);
+            op.redoBytes = saved->size();
             return op;
         }
 
@@ -1151,10 +1182,26 @@ namespace N2Engine::Editor
             const ReferenceResolver sceneReferences = SceneReferences(**scene);
             ReferenceResolver resolver;
             resolver.SetFallback(&sceneReferences);
+            // Deserialize sets the active flag without telling the component (OnActiveFlagChanged), which SetActive does
+            // as SetComponentFields did: so the flag is taken out of what is deserialised and set after it
+            nlohmann::json withoutActive = state;
+            std::optional<bool> active;
+            if (withoutActive.is_object())
+            {
+                if (const auto flag = withoutActive.find("isActive"); flag != withoutActive.end() && flag->is_boolean())
+                {
+                    active = flag->get<bool>();
+                    withoutActive.erase(flag);
+                }
+            }
             try
             {
-                target->component->Deserialize(state, &resolver);
+                target->component->Deserialize(withoutActive, &resolver);
                 resolver.ResolveAll();
+                if (active.has_value() && target->component->IsActive() != *active)
+                {
+                    target->component->SetActive(*active);
+                }
                 target->component->OnEditorFieldsChanged(changed);
             }
             catch (const std::exception &error)
@@ -1169,19 +1216,24 @@ namespace N2Engine::Editor
                                  const nlohmann::json &before, const nlohmann::json &after,
                                  const std::vector<std::string> &changed, const std::string &requestedKeys)
         {
-            const auto beforeState = std::make_shared<const nlohmann::json>(before);
-            const auto afterState = std::make_shared<const nlohmann::json>(after);
+            const auto beforeState = DumpJson(before);
+            const auto afterState = DumpJson(after);
+            // `changed` is what the request named, the same for every edit that merges into this step (the key has it),
+            // so both halves tell the component the same keys
+            const auto restore = [entityId, componentId, changed](const std::string &text) -> EditOutcome
+            {
+                const auto state = ParseStored(text);
+                if (!state)
+                {
+                    return std::unexpected(state.error());
+                }
+                return ApplyComponentState(entityId, componentId, *state, changed);
+            };
             EditOp op;
-            op.undo = [entityId, componentId, beforeState, changed]() -> EditOutcome
-            {
-                return ApplyComponentState(entityId, componentId, *beforeState, changed);
-            };
-            op.redo = [entityId, componentId, afterState, changed]() -> EditOutcome
-            {
-                return ApplyComponentState(entityId, componentId, *afterState, changed);
-            };
-            op.undoBytes = JsonBytes(before);
-            op.redoBytes = JsonBytes(after);
+            op.undo = [restore, beforeState]() -> EditOutcome { return restore(*beforeState); };
+            op.redo = [restore, afterState]() -> EditOutcome { return restore(*afterState); };
+            op.undoBytes = beforeState->size();
+            op.redoBytes = afterState->size();
             op.coalesceKey = "fields:" + entityId + ":" + componentId + ":" + requestedKeys;
             return op;
         }
@@ -1472,6 +1524,8 @@ namespace N2Engine::Editor
             (void)_commands.Enqueue([this]
             {
                 CloseEditGroups();
+                // A client that went away may have crashed: the last edits are written, however recent the autosave
+                FlushAutosave(true);
                 return CommandQueue::Response{};
             });
 
@@ -1565,6 +1619,13 @@ namespace N2Engine::Editor
                 Send(clientSocket, response.Data().data(), response.Size());
                 // Stop serving, so the host's main loop sees !IsRunning() and exits cleanly
                 PostLog("Shutdown requested by editor");
+                // The client chose to shut the host down: what it didn't save is what it chose to drop
+                (void)_commands.Enqueue([this]
+                {
+                    CloseEditGroups();
+                    DiscardWrittenAutosave();
+                    return CommandQueue::Response{};
+                });
                 _running = false;
                 break;
             }
@@ -1623,6 +1684,17 @@ namespace N2Engine::Editor
         {
             failed = true;
             failure = "unknown exception";
+        }
+
+        // The autosave an edit left due, written once the command is done, so it sees the scene as the command left it
+        // (destroyed objects purged) even when the command then threw
+        try
+        {
+            FlushAutosave();
+        }
+        catch (...)
+        {
+            // An autosave is never worth failing a command for
         }
 
         if (failed || _response.empty())
@@ -1737,6 +1809,8 @@ namespace N2Engine::Editor
         case CommandType::GetComponent:       // the inspector, for the components it shows
         case CommandType::GetComponentTypes:  // the inspector, once per session (and after Hello)
         case CommandType::GetLuaFields:       // the inspector, for a script component it shows
+        case CommandType::GetHistory:         // the Edit menu, whenever historyChanged arrives
+        case CommandType::GetAutosave:        // after opening a scene
             return true;
         default:
             return false;
@@ -2163,6 +2237,9 @@ namespace N2Engine::Editor
             return;
         }
 
+        // The scene that was open is left: what it hadn't saved is dropped, and so is its autosave
+        DiscardWrittenAutosave();
+
         if (int sceneIndex = SceneManager::GetSceneIndex(scene->sceneName); sceneIndex != -1)
         {
             SceneManager::UpdateScene(sceneIndex, sceneJson);
@@ -2346,7 +2423,16 @@ namespace N2Engine::Editor
                 std::vector<std::string> destroyedIds = SubtreeIds(*foundGameObject);
                 // What undoing needs: the scene as it is, since destroying leaves references elsewhere dangling, and
                 // putting the objects back alone wouldn't point them at their targets again (a load does, by UUID)
-                const auto snapshot = std::make_shared<const std::string>(SnapshotScene(*scene));
+                std::shared_ptr<const std::string> snapshot;
+                if (scene->IsEditMode())
+                {
+                    snapshot = std::make_shared<const std::string>(SnapshotScene(*scene));
+                    if (_history.InGroup() && _history.GroupBytes() > 0 && _history.GroupBytes() + snapshot->size() > _history.GetMaxBytes())
+                    {
+                        SendError(clientSocket, "The open edit group already holds too much to undo: end it first");
+                        return;
+                    }
+                }
                 const std::string destroyedId = foundGameObject->GetUUID().ToString();
                 const std::string label = Labelled("Delete", foundGameObject->GetName());
                 if (scene->DestroyGameObject(foundGameObject))
@@ -2358,15 +2444,19 @@ namespace N2Engine::Editor
                         // The objects are still there until they are purged: nothing may point at them afterwards
                         ForgetDestroyed(*scene, *foundGameObject);
                     }
-                    scene->ProcessDestroyed();
                     entityDestroyed = true;
 
-                    EditOp op;
-                    op.undo = [this, snapshot]() -> EditOutcome { return RestoreSceneSnapshot(*snapshot); };
-                    op.redo = [destroyedId]() -> EditOutcome { return DestroySubtree(destroyedId); };
-                    op.undoBytes = snapshot->size();
-                    // After the objects are purged: recording may write the autosave
-                    RecordEdit(label, std::move(op));
+                    // Recorded before the purge, which can throw (a callback): the scene has changed either way. The
+                    // autosave it makes due is written once the command is over (ExecuteCommand), objects purged.
+                    if (snapshot != nullptr)
+                    {
+                        EditOp op;
+                        op.undo = [this, snapshot]() -> EditOutcome { return RestoreSceneSnapshot(*snapshot); };
+                        op.redo = [destroyedId]() -> EditOutcome { return DestroySubtree(destroyedId); };
+                        op.undoBytes = snapshot->size();
+                        RecordEdit(label, std::move(op));
+                    }
+                    scene->ProcessDestroyed();
                 }
             }
         }
@@ -2411,10 +2501,11 @@ namespace N2Engine::Editor
                 );
                 entity->GetPositionable()->SetScale(cmd.scale);
                 applied = true;
-                // The children's world matrices moved with it
-                MarkSceneChanged(SubtreeIds(*entity));
+                // The same transform again changes nothing: no revision, no step (as SetLocalTransform)
                 if (const LocalTransformState after = LocalTransformOf(*entity); !after.SameAs(before))
                 {
+                    // The children's world matrices moved with it
+                    MarkSceneChanged(SubtreeIds(*entity));
                     RecordEdit(Labelled("Transform", entity->GetName()),
                                TransformOp(entity->GetUUID().ToString(), before, after));
                 }
@@ -2952,7 +3043,16 @@ namespace N2Engine::Editor
         }
         // What undoing needs: the scene as it is, since removing clears every reference to the component elsewhere,
         // which putting the component back alone wouldn't restore (a load resolves them again, by UUID)
-        const auto snapshot = std::make_shared<const std::string>(SnapshotScene(*SceneManager::GetCurScene()));
+        std::shared_ptr<const std::string> snapshot;
+        if (SceneManager::GetCurScene()->IsEditMode())
+        {
+            snapshot = std::make_shared<const std::string>(SnapshotScene(*SceneManager::GetCurScene()));
+            if (_history.InGroup() && _history.GroupBytes() > 0 && _history.GroupBytes() + snapshot->size() > _history.GetMaxBytes())
+            {
+                SendError(clientSocket, "The open edit group already holds too much to undo: end it first");
+                return;
+            }
+        }
         const std::string entityId = target->entity->GetUUID().ToString();
         const std::string componentId = target->component->GetUUID().ToString();
         const std::string label = Labelled("Remove", target->component->GetTypeName());
@@ -2963,11 +3063,14 @@ namespace N2Engine::Editor
         }
 
         MarkSceneChanged({entityId});
-        EditOp op;
-        op.undo = [this, snapshot]() -> EditOutcome { return RestoreSceneSnapshot(*snapshot); };
-        op.redo = [entityId, componentId]() -> EditOutcome { return RemoveComponentById(entityId, componentId); };
-        op.undoBytes = snapshot->size();
-        RecordEdit(label, std::move(op));
+        if (snapshot != nullptr)
+        {
+            EditOp op;
+            op.undo = [this, snapshot]() -> EditOutcome { return RestoreSceneSnapshot(*snapshot); };
+            op.redo = [entityId, componentId]() -> EditOutcome { return RemoveComponentById(entityId, componentId); };
+            op.undoBytes = snapshot->size();
+            RecordEdit(label, std::move(op));
+        }
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, response.Release());
@@ -3000,25 +3103,50 @@ namespace N2Engine::Editor
             target->component->OnEditorFieldsChanged(changed);
             MarkSceneChanged({target->entity->GetUUID().ToString()});
 
-            // The keys the request named, so typing in one field coalesces and a paste of several is its own step
+            // The fields the request named, so typing in one field coalesces and a paste of several is its own step. A
+            // script's fields are inside the container (scriptData): they are named one by one, "scriptData.speed", so
+            // two fields of one script aren't merged into each other, and the label says which.
+            const std::vector<FieldInfo> fields = target->component->DescribeFields();
             std::vector<std::string> requested;
+            std::vector<std::string> leaves;
             if (cmd.values.is_object())
             {
                 for (const auto &[key, value] : cmd.values.items())
                 {
-                    requested.push_back(key);
+                    const std::string topKey = key;
+                    requested.push_back(topKey);
+                    const bool isContainer = value.is_object() && std::ranges::any_of(fields, [&topKey](const FieldInfo &field)
+                    {
+                        return field.container == topKey;
+                    });
+                    if (isContainer)
+                    {
+                        for (const auto &[inner, innerValue] : value.items())
+                        {
+                            leaves.push_back(topKey + "." + inner);
+                        }
+                    }
+                    else
+                    {
+                        leaves.push_back(topKey);
+                    }
                 }
             }
             std::ranges::sort(requested);
+            std::ranges::sort(leaves);
             std::string requestedKeys;
-            for (const std::string &key : requested)
+            for (const std::string &leaf : leaves)
             {
-                requestedKeys += key + ",";
+                requestedKeys += leaf + ",";
             }
-            RecordEdit(changed.size() == 1 ? Labelled("Set", changed.front())
-                                           : Labelled("Edit", target->component->GetTypeName()),
+            std::string label = Labelled("Edit", target->component->GetTypeName());
+            if (leaves.size() == 1)
+            {
+                label = Labelled("Set", std::string_view(leaves.front()).substr(leaves.front().rfind('.') + 1));
+            }
+            RecordEdit(std::move(label),
                        ComponentFieldsOp(target->entity->GetUUID().ToString(), target->component->GetUUID().ToString(),
-                                         before, stored.value(), changed, requestedKeys));
+                                         before, stored.value(), requested, requestedKeys));
         }
         BufferWriter response;
         WriteComponentData(response, stored.value());
@@ -3133,6 +3261,7 @@ namespace N2Engine::Editor
         }
 
         // The same scene as far as a client can tell: its UUID, its file, edit mode
+        scene->sceneName = current->sceneName;
         scene->SetUUID(current->GetUUID());
         scene->SetResourcePath(current->GetResourcePath());
         scene->SetEditMode(true);
@@ -3168,6 +3297,13 @@ namespace N2Engine::Editor
 
     void EditorServer::RecordEdit(std::string label, EditOp op)
     {
+        // Undo is for a scene opened for editing: in any other (a host that plays) the ops would run component
+        // callbacks and rebuild the scene as an edit-mode one
+        const Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr || !scene->IsEditMode())
+        {
+            return;
+        }
         const EditHistory::Recorded recorded = _history.Record(std::move(label), std::move(op));
         if (recorded == EditHistory::Recorded::NewStep)
         {
@@ -3183,10 +3319,16 @@ namespace N2Engine::Editor
 
     void EditorServer::CloseEditGroups()
     {
-        if (_history.CloseGroups() == EditHistory::GroupEnd::Committed)
+        const EditHistory::GroupEnd ended = _history.CloseGroups();
+        if (ended != EditHistory::GroupEnd::NotOpen)
         {
+            // CanUndo and CanRedo are false while a group is open, and may not be now
             PushHistoryChanged();
+        }
+        if (ended == EditHistory::GroupEnd::Committed)
+        {
             NoteEditStepEnded();
+            FlushAutosave();
         }
     }
 
@@ -3195,6 +3337,11 @@ namespace N2Engine::Editor
         if (SceneManager::GetCurScene() == nullptr)
         {
             SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        if (!SceneManager::GetCurScene()->IsEditMode())
+        {
+            SendError(clientSocket, "Undo and redo work on a scene opened for editing, not on one that runs");
             return;
         }
 
@@ -3216,6 +3363,12 @@ namespace N2Engine::Editor
         // A change like any other (the revision only grows), and the scene is saved again when the step led back to
         // the state that was saved
         ++_sceneRevision;
+        if (applied->effect.inexact)
+        {
+            // The scene isn't exactly what was saved even if the history says it is (a transform the object didn't
+            // have before can't be taken away again)
+            _history.ForgetSaved();
+        }
         if (_history.IsAtSavedState())
         {
             _savedRevision = _sceneRevision;
@@ -3249,11 +3402,17 @@ namespace N2Engine::Editor
         {
             label = "Edit";
         }
+        const bool outermost = !_history.InGroup();
         if (!_history.BeginGroup(std::move(label)))
         {
             SendError(clientSocket, std::format("Edit groups can't be nested more than {} deep",
                                                 EditHistory::MaxGroupDepth));
             return;
+        }
+        if (outermost)
+        {
+            // CanUndo and CanRedo are false while the group is open
+            PushHistoryChanged();
         }
 
         BufferWriter response;
@@ -3269,9 +3428,12 @@ namespace N2Engine::Editor
             SendError(clientSocket, "No edit group is open");
             return;
         }
-        if (ended == EditHistory::GroupEnd::Committed)
+        if (ended == EditHistory::GroupEnd::Committed || ended == EditHistory::GroupEnd::Empty)
         {
             PushHistoryChanged();
+        }
+        if (ended == EditHistory::GroupEnd::Committed)
+        {
             NoteEditStepEnded();
         }
 
@@ -3329,6 +3491,7 @@ namespace N2Engine::Editor
         _autosavePending = false;
         _lastAutosave.reset();
         _autosaveWarned = false;
+        _protectedAutosaveWarned = false;
         // An autosave from before is what a client may want to offer: nothing overwrites it until it decides
         std::error_code error;
         const std::filesystem::path file = GetAutosaveFile();
@@ -3337,8 +3500,19 @@ namespace N2Engine::Editor
 
     void EditorServer::NoteEditStepEnded()
     {
+        // Written when the command is over (ExecuteCommand), so it sees the scene as the command left it
         _autosavePending = true;
-        FlushAutosave();
+    }
+
+    void EditorServer::DiscardWrittenAutosave()
+    {
+        _autosavePending = false;
+        // No scene of this host's yet: whatever autosave is there belongs to an earlier session, not to this host
+        const Scene *loaded = SceneManager::GetCurScene();
+        if (!_autosaveProtected && loaded != nullptr && loaded == _openScene)
+        {
+            RemoveAutosaveFile(GetAutosaveFile());
+        }
     }
 
     void EditorServer::FlushAutosave(const bool force)
@@ -3348,9 +3522,20 @@ namespace N2Engine::Editor
             return;
         }
         const Scene *scene = SceneManager::GetCurScene();
-        if (!_project || scene == nullptr || _autosaveProtected)
+        if (!_project || scene == nullptr)
         {
             _autosavePending = false;
+            return;
+        }
+        if (_autosaveProtected)
+        {
+            _autosavePending = false;
+            if (!_protectedAutosaveWarned)
+            {
+                _protectedAutosaveWarned = true;
+                Logger::Warn("An autosave from an earlier session is kept, and none is written over it, until it is "
+                             "restored or discarded (RestoreAutosave, DiscardAutosave) or the scene is saved");
+            }
             return;
         }
         const std::filesystem::path file = GetAutosaveFile();
@@ -3361,7 +3546,7 @@ namespace N2Engine::Editor
             RemoveAutosaveFile(file);
             return;
         }
-        const auto now = std::chrono::steady_clock::now();
+        const auto now = _autosaveClock ? _autosaveClock() : std::chrono::steady_clock::now();
         if (!force && _lastAutosave.has_value() && now - *_lastAutosave < _autosaveInterval)
         {
             return; // still due: the host's loop flushes it once the interval has passed
@@ -3447,6 +3632,17 @@ namespace N2Engine::Editor
         if (!text)
         {
             SendError(clientSocket, text.error());
+            return;
+        }
+
+        // One scene's autosave is not another's (every scene without a file shares a name for it)
+        const nlohmann::json autosaved = nlohmann::json::parse(*text, nullptr, false);
+        if (autosaved.is_object() && autosaved.contains("name") && autosaved.at("name").is_string() &&
+            autosaved.at("name").get<std::string>() != scene->sceneName)
+        {
+            SendError(clientSocket, std::format("The autosave is of a scene named '{}', not '{}'",
+                                                SanitizeForLog(autosaved.at("name").get<std::string>()),
+                                                SanitizeForLog(scene->sceneName)));
             return;
         }
 
@@ -3606,6 +3802,9 @@ namespace N2Engine::Editor
 
     void EditorServer::LoadOpenedScene(std::unique_ptr<Scene> scene, std::string path)
     {
+        // The scene that was open is left: what it hadn't saved is dropped, and so is its autosave
+        DiscardWrittenAutosave();
+
         // This very object becomes the loaded scene (edit mode: built, never attached)
         Scene *const opened = scene.get();
         opened->SetEditMode(true);

@@ -343,7 +343,8 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                      CommandType::GetCameraPosition, CommandType::GetEngineHealth,
                                      CommandType::GetHierarchy, CommandType::GetEntity,
                                      CommandType::GetComponent, CommandType::GetComponentTypes,
-                                     CommandType::GetLuaFields})
+                                     CommandType::GetLuaFields, CommandType::GetHistory,
+                                     CommandType::GetAutosave})
     {
         EXPECT_TRUE(EditorServer::IsPolledCommand(static_cast<uint8_t>(polled))) << static_cast<int>(polled);
     }

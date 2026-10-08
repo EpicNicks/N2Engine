@@ -40,9 +40,9 @@ namespace N2Engine
         using SerializeFunc = std::function<void(nlohmann::json &)>;
         using DeserializeFunc = std::function<void(const nlohmann::json &, ReferenceResolver *)>;
         /// Clears the member if it points at the component (set for component references only)
-        using ForgetFunc = std::function<void(const Component *)>;
+        using ForgetFunc = std::function<void(const std::function<bool(const Component *)> &)>;
         /// Clears the member if it points at the object (set for GameObject references only)
-        using ForgetObjectFunc = std::function<void(const GameObject *)>;
+        using ForgetObjectFunc = std::function<void(const std::function<bool(const GameObject *)> &)>;
 
         std::string name;
         SerializeFunc serialize;
@@ -232,9 +232,9 @@ namespace N2Engine
                     }
                 },
                 MakeReferenceInfo(name, FieldKind::ComponentRef, "Component"));
-            _members.back().forget = [&componentRef](const Component *removed)
+            _members.back().forget = [&componentRef](const std::function<bool(const Component *)> &isRemoved)
             {
-                if (static_cast<const Component *>(componentRef) == removed)
+                if (componentRef != nullptr && isRemoved(componentRef))
                 {
                     componentRef = nullptr;
                 }
@@ -309,11 +309,11 @@ namespace N2Engine
                     }
                 },
                 MakeReferenceInfo(name, FieldKind::ComponentRefList, "Component"));
-            _members.back().forget = [&componentRefs](const Component *removed)
+            _members.back().forget = [&componentRefs](const std::function<bool(const Component *)> &isRemoved)
             {
                 for (T *&entry : componentRefs)
                 {
-                    if (static_cast<const Component *>(entry) == removed)
+                    if (entry != nullptr && isRemoved(entry))
                     {
                         entry = nullptr;
                     }
@@ -485,23 +485,33 @@ namespace N2Engine
         /// Drops the component references that point at `removed`
         void ForgetComponent(const Component *removed) override
         {
-            for (const MemberSerializer &member : _members)
-            {
-                if (member.forget)
-                {
-                    member.forget(removed);
-                }
-            }
+            ForgetComponentsIf([removed](const Component *candidate) { return candidate == removed; });
         }
 
         /// Drops the GameObject references that point at `removed`
         void ForgetGameObject(const GameObject *removed) override
         {
+            ForgetGameObjectsIf([removed](const GameObject *candidate) { return candidate == removed; });
+        }
+
+        void ForgetComponentsIf(const std::function<bool(const Component *)> &isRemoved) override
+        {
+            for (const MemberSerializer &member : _members)
+            {
+                if (member.forget)
+                {
+                    member.forget(isRemoved);
+                }
+            }
+        }
+
+        void ForgetGameObjectsIf(const std::function<bool(const GameObject *)> &isRemoved) override
+        {
             for (const MemberSerializer &member : _members)
             {
                 if (member.forgetObject)
                 {
-                    member.forgetObject(removed);
+                    member.forgetObject(isRemoved);
                 }
             }
         }

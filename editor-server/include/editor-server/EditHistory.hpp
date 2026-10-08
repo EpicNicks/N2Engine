@@ -17,6 +17,9 @@ namespace N2Engine::Editor
     {
         std::vector<std::string> entityIds;
         bool full = false;
+        /// The change couldn't put the state back exactly (an object can't lose the transform it was given), so the
+        /// state it leads to is not the one that was saved even if the history says it is
+        bool inexact = false;
 
         /// Adds what `other` touched (an id already listed is not listed twice)
         void Merge(EditEffect other);
@@ -124,6 +127,9 @@ namespace N2Engine::Editor
         /// Ends every open group (a client that went away without ending its group). NotOpen when none was open.
         GroupEnd CloseGroups();
         [[nodiscard]] bool InGroup() const { return _groupDepth > 0; }
+        /// What the open group's ops hold (0 without one); it counts against no limit until the group ends, so a caller
+        /// that records big ops into a group (snapshots) checks it against GetMaxBytes itself
+        [[nodiscard]] size_t GroupBytes() const { return _groupBytes; }
         [[nodiscard]] size_t GroupDepth() const { return _groupDepth; }
 
         /// Undoes the latest step that is done. An error (with nothing changed) when there is none or a group is
@@ -150,7 +156,8 @@ namespace N2Engine::Editor
         /// Forgets everything, an open group included. Nothing is the saved state afterwards, until MarkSaved.
         void Clear();
 
-        /// The history is at the state that was saved (the scene as it is on disk): IsAtSavedState now is true
+        /// The history is at the state that was saved (the scene as it is on disk): IsAtSavedState now is true. While
+        /// a group is open the state it will lead to isn't known yet, so a save then forgets the saved state instead.
         void MarkSaved();
         /// The saved state is no longer reachable: IsAtSavedState is false until MarkSaved
         void ForgetSaved();
@@ -205,5 +212,6 @@ namespace N2Engine::Editor
         size_t _groupDepth = 0;
         std::string _groupLabel;
         std::vector<EditOp> _groupOps;
+        size_t _groupBytes = 0;
     };
 }

@@ -24,10 +24,12 @@
 #include <engine/GameObjectScene.hpp>
 #include <engine/io/ProjectFile.hpp>
 #include <engine/io/ResourceLoader.hpp>
+#include <engine/io/ResourcePath.hpp>
 #include <engine/io/ResourceUUID.hpp>
 #include <engine/sceneManagement/Scene.hpp>
 #include <engine/sceneManagement/SceneManager.hpp>
 #include <engine/serialization/ComponentRegistry.hpp>
+#include <engine/scripting/LuaRuntime.hpp>
 #include <engine/serialization/ComponentSerializer.hpp>
 
 using namespace N2Engine;
@@ -102,6 +104,10 @@ namespace
         std::string label = "a";
         GameObject *target = nullptr;
         HistoryHolder *peer = nullptr;
+        int activeChanges = 0;
+
+    protected:
+        void OnActiveFlagChanged() override { ++activeChanges; }
     };
 
     void RegisterHolder()
@@ -227,13 +233,13 @@ namespace
             return Execute(Server(), CommandType::SetEntityProperties, w.Release());
         }
 
-        Frame Reparent(const std::string &id, const std::string &parentId, int32_t siblingIndex)
+        Frame Reparent(const std::string &id, const std::string &parentId, int32_t siblingIndex, bool keepWorld = true)
         {
             BufferWriter w;
             w.WriteString(id);
             w.WriteString(parentId);
             w.WriteI32(siblingIndex);
-            w.WriteBool(true);
+            w.WriteBool(keepWorld);
             return Execute(Server(), CommandType::SetEntityParent, w.Release());
         }
 
@@ -913,9 +919,13 @@ TEST_F(EditorHistoryTest, AGroupIsOneStepForEveryEditInIt)
     const std::string a = Create("A");
     const std::string b = Create("B");
     const json before = SceneJson();
-    const size_t historyEvents = EventsOfKind(server, "historyChanged").size();
+    const size_t eventsBefore = EventsOfKind(server, "historyChanged").size();
 
     ASSERT_EQ(BeginGroup("Move both").type, OkType);
+    // CanUndo and CanRedo are false while a group is open: a menu is told
+    const size_t historyEvents = EventsOfKind(server, "historyChanged").size();
+    EXPECT_EQ(historyEvents, eventsBefore + 1);
+    EXPECT_FALSE(LastEventOfKind(server, "historyChanged").at("canUndo").get<bool>());
     ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
     ASSERT_EQ(SetLocal(b, {2.0f, 0.0f, 0.0f}).type, OkType);
     ASSERT_EQ(SetLocal(a, {3.0f, 0.0f, 0.0f}).type, OkType);
@@ -978,7 +988,7 @@ TEST_F(EditorHistoryTest, AnEmptyGroupMakesNoStep)
     BeginGroup("Nothing");
     EXPECT_EQ(EndGroup().type, OkType);
     EXPECT_TRUE(History().entries.empty());
-    EXPECT_EQ(EventsOfKind(server, "historyChanged").size(), historyEvents);
+    EXPECT_EQ(EventsOfKind(server, "historyChanged").size(), historyEvents + 2) << "opened and closed";
 }
 
 TEST_F(EditorHistoryTest, EndingAGroupThatIsntOpenIsAnError)
@@ -1458,14 +1468,20 @@ TEST_F(EditorHistoryProjectTest, NothingIsAutosavedForAnUnchangedScene)
 
 TEST_F(EditorHistoryProjectTest, AnAutosaveWaitsForItsIntervalAndTheHostsLoopWritesTheLastOne)
 {
-    server.SetAutosaveInterval(300ms);
+    // Time is the test's: nothing sleeps
+    auto now = std::chrono::steady_clock::time_point{} + 1000s;
+    server.SetAutosaveClock([&now] { return now; });
+    server.SetAutosaveInterval(2s);
     Open("res://scenes/Main.scene");
     Create("First");
     ASSERT_TRUE(fs::is_regular_file(AutosaveFile())) << "the first is written at once";
+    now += 1s;
     Create("Second");
     EXPECT_EQ(RootNames(ReadFile(AutosaveFile())), (std::vector<std::string>{"First"})) << "the second waits";
+    server.ProcessCommands();
+    EXPECT_EQ(RootNames(ReadFile(AutosaveFile())), (std::vector<std::string>{"First"})) << "the interval isn't over";
 
-    std::this_thread::sleep_for(600ms);
+    now += 2s;
     server.ProcessCommands();
     EXPECT_EQ(RootNames(ReadFile(AutosaveFile())), (std::vector<std::string>{"First", "Second"}))
         << "the loop writes what is due";
@@ -1578,4 +1594,375 @@ TEST_F(EditorHistoryProjectTest, AServerWithoutAProjectWritesNoAutosave)
     EXPECT_FALSE(fs::exists(_root / ".n2" / "autosave"));
     EXPECT_EQ(Execute(bare, CommandType::Undo).type, EditResultType);
     EXPECT_TRUE(bare.GetHistory().CanRedo());
+}
+
+// ==================== Review fixes: edits ====================
+
+TEST_F(EditorHistoryTest, TheSameLegacyTransformAgainMovesNeitherTheRevisionNorTheHistory)
+{
+    const std::string entity = Create("Still");
+    const uint32_t revision = OpenSceneInfo().revision;
+    const size_t steps = History().entries.size();
+    BufferWriter w;
+    w.WriteString(entity);
+    for (const float v : {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f})
+        w.WriteF32(v);
+    EXPECT_EQ(Execute(server, CommandType::SetEntityTransform, w.Release()).type, OkType);
+    EXPECT_EQ(OpenSceneInfo().revision, revision);
+    EXPECT_EQ(History().entries.size(), steps);
+}
+
+TEST_F(EditorHistoryTest, UndoingAnActiveFlagTellsTheComponent)
+{
+    const std::string entity = Create("Host");
+    const std::string component = AddHolder(entity);
+    const GameObject *object = SceneManager::GetCurSceneRef().FindGameObject("Host").get();
+    ASSERT_NE(object, nullptr);
+    ASSERT_EQ(SetFields(entity, component, json{{"isActive", false}}).type, ComponentDataType);
+    EXPECT_EQ(object->GetComponent<HistoryHolder>()->activeChanges, 1);
+
+    Undo();
+    EXPECT_TRUE(Get(entity, component).at("isActive").get<bool>());
+    EXPECT_EQ(object->GetComponent<HistoryHolder>()->activeChanges, 2) << "OnActiveFlagChanged ran for the undo";
+    Redo();
+    EXPECT_FALSE(Get(entity, component).at("isActive").get<bool>());
+    EXPECT_EQ(object->GetComponent<HistoryHolder>()->activeChanges, 3);
+}
+
+TEST_F(EditorHistoryTest, ReparentingWithoutKeepingTheWorldTransformIsUndone)
+{
+    const std::string parent = Create("Parent");
+    ASSERT_EQ(SetLocal(parent, {10.0f, 0.0f, 0.0f}).type, OkType);
+    const std::string child = Create("Child");
+    ASSERT_EQ(SetLocal(child, {1.0f, 1.0f, 1.0f}).type, OkType);
+    RoundTrip("Reparent Child", [&] { EXPECT_EQ(Reparent(child, parent, 0, false).type, OkType); });
+    EXPECT_EQ(Entity(child).at("transform").at("position").at("x").get<float>(), 1.0f) << "the local transform is kept";
+}
+
+TEST_F(EditorHistoryTest, ReparentingAnObjectWithoutATransformIsUndone)
+{
+    const std::string parent = Create("Parent");
+    const Frame made = Execute(server, CommandType::CreateEntity, Strings({"Bare"}));
+    ASSERT_EQ(made.type, EntityCreatedType);
+    BufferReader r(made.payload);
+    const std::string bare = r.ReadString();
+    RoundTrip("Reparent Bare", [&] { EXPECT_EQ(Reparent(bare, parent, 0).type, OkType); });
+    EXPECT_FALSE(Entity(bare).contains("transform"));
+}
+
+TEST_F(EditorHistoryTest, ADeleteGroupThatWouldHoldTooMuchIsRefusedAndWhatDidFitUndoes)
+{
+    std::vector<std::string> ids;
+    for (int i = 0; i < 20; ++i)
+        ids.push_back(Create("Object " + std::to_string(i)));
+    const json before = SceneJson();
+    const size_t snapshot = before.dump().size();
+    server.GetHistory().SetLimits(200, snapshot * 2);
+
+    ASSERT_EQ(BeginGroup("Delete many").type, OkType);
+    EXPECT_EQ(Destroy(ids[0]).type, OkType);
+    EXPECT_EQ(Destroy(ids[1]).type, OkType);
+    ExpectError(Destroy(ids[2]), "too much to undo");
+    EXPECT_TRUE(Exists(ids[2])) << "a refused delete changes nothing";
+    EXPECT_LE(server.GetHistory().GroupBytes(), snapshot * 3);
+    ASSERT_EQ(EndGroup().type, OkType);
+
+    EXPECT_EQ(Undo().label, "Delete many");
+    EXPECT_EQ(SceneJson(), before);
+}
+
+TEST_F(EditorHistoryTest, ARemoveComponentInAGroupHoldsTheSameGuard)
+{
+    const std::string entity = Create("Host");
+    const std::string first = AddHolder(entity);
+    const std::string second = AddHolder(entity);
+    server.GetHistory().SetLimits(200, 1);
+    BeginGroup("Remove both");
+    EXPECT_EQ(RemoveComponent(entity, first).type, OkType) << "the first always fits an empty group";
+    ExpectError(RemoveComponent(entity, second), "too much to undo");
+    EndGroup();
+}
+
+TEST_F(EditorHistoryTest, JsonHeldByAStepIsCountedAtItsTextSize)
+{
+    const std::string entity = Create("Host");
+    const std::string component = AddHolder(entity);
+    ASSERT_EQ(SetFields(entity, component, json{{"label", std::string(2000, 'x')}}).type, ComponentDataType);
+    const size_t text = Get(entity, component).dump().size();
+    EXPECT_GE(History().entries.back().at("bytes").get<size_t>(), text + 100) << "the after, and the before, held as text";
+}
+
+TEST_F(EditorHistoryTest, AStepThatWasUndoneAndRedoneIsNotCoalescedInto)
+{
+    server.GetHistory().SetCoalesceWindow(1h);
+    const std::string entity = Create("Host");
+    const std::string component = AddHolder(entity);
+    ASSERT_EQ(SetFields(entity, component, json{{"count", 2}}).type, ComponentDataType);
+    Undo();
+    Redo();
+    const size_t steps = History().entries.size();
+    ASSERT_EQ(SetFields(entity, component, json{{"count", 3}}).type, ComponentDataType);
+    EXPECT_EQ(History().entries.size(), steps + 1);
+}
+
+TEST_F(EditorHistoryTest, ClosingEditGroupsEndsAGroupAClientLeftOpenAndSaysSo)
+{
+    const std::string a = Create("A");
+    BeginGroup("Abandoned");
+    SetLocal(a, {1.0f, 0.0f, 0.0f});
+    const size_t events = EventsOfKind(server, "historyChanged").size();
+    server.CloseEditGroups(); // what the host queues when the connection closes
+    EXPECT_FALSE(server.GetHistory().InGroup());
+    EXPECT_EQ(EventsOfKind(server, "historyChanged").size(), events + 1);
+    EXPECT_EQ(Undo().label, "Abandoned");
+    server.CloseEditGroups(); // none open: nothing happens
+}
+
+TEST_F(EditorHistoryTest, ASceneThatIsNotInEditModeRecordsNothingAndRefusesUndo)
+{
+    const std::string a = Create("A");
+    ASSERT_EQ(History().entries.size(), 1u);
+    SceneManager::GetCurSceneRef().SetEditMode(false);
+    Create("Played");
+    EXPECT_EQ(History().entries.size(), 1u) << "no step for a scene that runs";
+    ExpectError(Execute(server, CommandType::Undo), "opened for editing");
+    ExpectError(Execute(server, CommandType::Redo), "opened for editing");
+    SceneManager::GetCurSceneRef().SetEditMode(true);
+    EXPECT_EQ(Undo().label, "Create A");
+    (void)a;
+}
+
+// ==================== Review fixes: with a project ====================
+
+TEST_F(EditorHistoryProjectTest, ASaveInsideAnOpenGroupIsNotTheStateUndoGoesBackTo)
+{
+    Open("res://scenes/Main.scene");
+    BeginGroup("Drag");
+    const std::string a = Create("A");
+    const SceneInfoData saved = Save();
+    EXPECT_EQ(saved.revision, saved.savedRevision);
+    SetLocal(a, {1.0f, 0.0f, 0.0f});
+    EndGroup();
+    EXPECT_NE(OpenSceneInfo().revision, OpenSceneInfo().savedRevision);
+
+    const EditResultData undone = Undo();
+    EXPECT_NE(undone.revision, undone.savedRevision) << "the file has A; the scene doesn't";
+    const EditResultData redone = Redo();
+    EXPECT_NE(redone.revision, redone.savedRevision) << "the file has A at the origin";
+}
+
+TEST_F(EditorHistoryProjectTest, UndoingATransformGivenToAnObjectWithoutOneLeavesTheSceneUnsaved)
+{
+    Open("res://scenes/Main.scene");
+    const Frame made = Execute(server, CommandType::CreateEntity, Strings({"Bare"}));
+    ASSERT_EQ(made.type, EntityCreatedType);
+    BufferReader r(made.payload);
+    const std::string bare = r.ReadString();
+    ASSERT_EQ(Save().revision, OpenSceneInfo().savedRevision);
+
+    ASSERT_EQ(SetLocal(bare, {1.0f, 0.0f, 0.0f}).type, OkType);
+    const EditResultData undone = Undo();
+    // The object keeps the transform it was given (the identity): the scene saves a positionable the file doesn't have
+    EXPECT_NE(undone.revision, undone.savedRevision);
+}
+
+TEST_F(EditorHistoryProjectTest, LeavingASceneRemovesTheAutosaveThisHostWroteForIt)
+{
+    Open("res://scenes/Main.scene");
+    Create("A");
+    ASSERT_TRUE(fs::is_regular_file(AutosaveFile()));
+
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", "Other"})).type, SceneInfoType);
+    EXPECT_FALSE(fs::exists(AutosaveFile())) << "the changes were dropped with the scene";
+
+    // Opening the same scene again (reverting it) too
+    Open("res://scenes/Main.scene");
+    Create("B");
+    ASSERT_TRUE(fs::is_regular_file(AutosaveFile()));
+    Open("res://scenes/Main.scene");
+    EXPECT_FALSE(fs::exists(AutosaveFile()));
+
+    // LoadScene leaves the scene as well
+    Create("C");
+    ASSERT_TRUE(fs::is_regular_file(AutosaveFile()));
+    ASSERT_EQ(Execute(server, CommandType::LoadScene, Strings({R"({"name":"Loaded","rootGameObjects":[]})"})).type, OkType);
+    EXPECT_FALSE(fs::exists(AutosaveFile()));
+}
+
+TEST_F(EditorHistoryProjectTest, LeavingASceneKeepsAnAutosaveNobodyHasDecidedAbout)
+{
+    WriteFile(AutosaveFile(), R"({"name":"Main","rootGameObjects":[]})");
+    Open("res://scenes/Main.scene");
+    ASSERT_TRUE(server.IsAutosaveProtected());
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", "Other"})).type, SceneInfoType);
+    EXPECT_TRUE(fs::is_regular_file(AutosaveFile())) << "what a crash left is still there for the next session";
+}
+
+TEST_F(EditorHistoryProjectTest, ASceneOpenedWithoutAnyoneHavingEditedItDoesntTouchAnotherSessionsAutosave)
+{
+    // An untitled scene's leftover, before this host has a scene at all
+    const fs::path untitled = _root / ".n2" / "autosave" / ".untitled.scene";
+    WriteFile(untitled, R"({"name":"Scratch","rootGameObjects":[]})");
+    Open("res://scenes/Main.scene");
+    EXPECT_TRUE(fs::is_regular_file(untitled));
+}
+
+TEST_F(EditorHistoryProjectTest, AnAutosaveOfAnotherSceneIsNotRestored)
+{
+    WriteFile(AutosaveFile(), R"({"name":"Somebody Else","rootGameObjects":[)"
+              R"({"uuid":"123e4567-e89b-12d3-a456-426614174000","name":"Intruder","components":[],"children":[]}]})");
+    Open("res://scenes/Main.scene");
+    const json before = SceneJson();
+    ExpectError(Execute(server, CommandType::RestoreAutosave), "Somebody Else");
+    EXPECT_EQ(SceneJson(), before);
+    EXPECT_TRUE(History().entries.empty());
+}
+
+TEST_F(EditorHistoryProjectTest, UndoingADestroyKeepsTheNameOfAFilelessScene)
+{
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", "Named Scratch"})).type, SceneInfoType);
+    const std::string a = Create("A");
+    ASSERT_EQ(Destroy(a).type, OkType);
+    Undo();
+    EXPECT_EQ(SceneManager::GetCurSceneRef().sceneName, "Named Scratch");
+    EXPECT_EQ(OpenSceneInfo().name, "Named Scratch");
+}
+
+TEST_F(EditorHistoryProjectTest, AProtectedAutosaveIsMentionedOnceInTheLog)
+{
+    WriteFile(AutosaveFile(), R"({"name":"Main","rootGameObjects":[]})");
+    Open("res://scenes/Main.scene");
+    Create("A");
+    Create("B");
+    Create("C");
+    size_t mentions = 0;
+    for (const json &event : EventsOfKind(server, "log"))
+    {
+        if (event.value("message", "").find("is kept, and none is written over it") != std::string::npos)
+            ++mentions;
+    }
+    EXPECT_EQ(mentions, 1u);
+}
+
+TEST_F(EditorHistoryProjectTest, TheAutosaveOfADestroyHoldsTheSceneWithTheObjectGone)
+{
+    Open("res://scenes/Main.scene");
+    const std::string a = Create("A");
+    const std::string b = Create("B");
+    const std::string holder = AddHolder(b);
+    ASSERT_EQ(SetFields(b, holder, json{{"target", a}}).type, ComponentDataType);
+    ASSERT_EQ(Destroy(a).type, OkType);
+    // Written after the purge, with the reference to the destroyed object cleared
+    EXPECT_EQ(json::parse(ReadFile(AutosaveFile())), SceneJson());
+    EXPECT_EQ(RootNames(ReadFile(AutosaveFile())), (std::vector<std::string>{"B"}));
+}
+
+// ==================== Review fixes: Lua ====================
+
+namespace
+{
+    /// A project with a script of two fields, and the Lua runtime
+    class EditorHistoryLuaTest : public EditorHistoryProjectTest
+    {
+    protected:
+        void SetUp() override
+        {
+            EditorHistoryProjectTest::SetUp();
+            ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize());
+            WriteFile(_root / "assets" / "scripts" / "Fields.lua", R"(
+                local Fields = {}
+                Fields.__index = Fields
+                Fields.SerializableFields = {
+                    count = 3,
+                    label = { type = "string", default = "hi" },
+                }
+                return Fields
+            )");
+            ASSERT_EQ(Execute(server, CommandType::RescanAssets).type, OkType);
+            Open("res://scenes/Main.scene");
+        }
+
+        std::string ScriptId() const
+        {
+            return IO::ResourceLoader::Instance().GetUUID(IO::ResourcePath("res://scripts/Fields.lua")).ToString();
+        }
+
+        std::string AddLua(const std::string &entity)
+        {
+            const Frame added = Execute(server, CommandType::AddComponent, Strings({entity, "LuaComponent"}));
+            EXPECT_EQ(added.type, ComponentAddedType) << added.Text();
+            BufferReader r(added.payload);
+            return r.ReadString();
+        }
+    };
+}
+
+TEST_F(EditorHistoryLuaTest, AddingALuaComponentIsUndoneAndRedone)
+{
+    const std::string entity = Create("Scripted");
+    std::string component;
+    RoundTrip("Add LuaComponent", [&] { component = AddLua(entity); });
+    EXPECT_EQ(Get(entity, component).at("uuid"), component);
+}
+
+TEST_F(EditorHistoryLuaTest, ChoosingTheScriptAndEditingItsDataAreUndoneAndRedone)
+{
+    const std::string entity = Create("Scripted");
+    const std::string component = AddLua(entity);
+    RoundTrip("Set scriptUUID", [&] { EXPECT_EQ(SetFields(entity, component, json{{"scriptUUID", ScriptId()}}).type, ComponentDataType); });
+    EXPECT_EQ(Get(entity, component).at("scriptData").at("count"), 3);
+
+    RoundTrip("Set count", [&]
+    {
+        EXPECT_EQ(SetFields(entity, component, json{{"scriptData", {{"count", 9}}}}).type, ComponentDataType);
+    });
+    EXPECT_EQ(Get(entity, component).at("scriptData").at("count"), 9);
+    Undo();
+    EXPECT_EQ(Get(entity, component).at("scriptData").at("count"), 3);
+}
+
+TEST_F(EditorHistoryLuaTest, TwoFieldsOfOneScriptAreTwoStepsAndOneFieldTypedIsOne)
+{
+    server.GetHistory().SetCoalesceWindow(1h);
+    const std::string entity = Create("Scripted");
+    const std::string component = AddLua(entity);
+    ASSERT_EQ(SetFields(entity, component, json{{"scriptUUID", ScriptId()}}).type, ComponentDataType);
+    const size_t steps = History().entries.size();
+
+    ASSERT_EQ(SetFields(entity, component, json{{"scriptData", {{"count", 4}}}}).type, ComponentDataType);
+    ASSERT_EQ(SetFields(entity, component, json{{"scriptData", {{"count", 5}}}}).type, ComponentDataType);
+    EXPECT_EQ(History().entries.size(), steps + 1) << "the same field again is one step";
+    EXPECT_EQ(Labels().back(), "Set count");
+
+    ASSERT_EQ(SetFields(entity, component, json{{"scriptData", {{"label", "bye"}}}}).type, ComponentDataType);
+    EXPECT_EQ(History().entries.size(), steps + 2) << "another field of the same script is another step";
+    EXPECT_EQ(Labels().back(), "Set label");
+
+    EXPECT_EQ(Undo().label, "Set label");
+    EXPECT_EQ(Get(entity, component).at("scriptData").at("count"), 5);
+    EXPECT_EQ(Undo().label, "Set count");
+    EXPECT_EQ(Get(entity, component).at("scriptData").at("count"), 3);
+}
+
+TEST_F(EditorHistoryLuaTest, ASnapshotRestoreRebuildsAScriptedObjectWithItsData)
+{
+    const std::string entity = Create("Scripted");
+    const std::string component = AddLua(entity);
+    ASSERT_EQ(SetFields(entity, component, json{{"scriptUUID", ScriptId()}}).type, ComponentDataType);
+    ASSERT_EQ(SetFields(entity, component, json{{"scriptData", {{"count", 8}, {"label", "kept"}}}}).type, ComponentDataType);
+    const json before = SceneJson();
+
+    ASSERT_EQ(Destroy(entity).type, OkType);
+    EXPECT_EQ(Undo().label, "Delete Scripted");
+    EXPECT_EQ(SceneJson(), before);
+    EXPECT_EQ(Get(entity, component).at("scriptData").at("count"), 8);
+    EXPECT_EQ(Get(entity, component).at("scriptData").at("label"), "kept");
+
+    // And the component removed and put back
+    ASSERT_EQ(RemoveComponent(entity, component).type, OkType);
+    Undo();
+    EXPECT_EQ(SceneJson(), before);
+    Redo();
+    Undo();
+    EXPECT_EQ(Get(entity, component).at("scriptUUID"), ScriptId());
 }

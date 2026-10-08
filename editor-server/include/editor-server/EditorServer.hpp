@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <expected>
+#include <functional>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -232,6 +233,13 @@ namespace N2Engine::Editor
         /// ProcessCommands). Zero writes it after every step. 2 seconds by default.
         static constexpr std::chrono::milliseconds DefaultAutosaveInterval{2000};
         void SetAutosaveInterval(const std::chrono::milliseconds interval) { _autosaveInterval = interval; }
+        /// The clock the autosave interval is measured with (steady_clock::now when none is set); tests set their own
+        using AutosaveClock = std::function<std::chrono::steady_clock::time_point()>;
+        void SetAutosaveClock(AutosaveClock clock) { _autosaveClock = std::move(clock); }
+
+        /// Ends every open edit group, as a closed connection or a new Hello does, and writes the autosave that is
+        /// waiting. Main thread.
+        void CloseEditGroups();
 
         /// Where the autosave of the open scene goes: <project>/.n2/autosave/ then the scene's path under assets/ (or
         /// ".untitled.scene" for a scene with no file). Empty without a project. Never the scene's own file.
@@ -381,8 +389,6 @@ namespace N2Engine::Editor
         void RecordEdit(std::string label, EditOp op);
         /// Pushes historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount}
         void PushHistoryChanged();
-        /// Ends every open edit group (a client that went away without ending its group)
-        void CloseEditGroups();
         /// The loaded scene rebuilt from a snapshot (Scene::Serialize text), keeping its UUID, file and edit mode:
         /// what undoing a destroy or a component removal does, so every reference is resolved again by UUID. The
         /// effect is full.
@@ -399,6 +405,10 @@ namespace N2Engine::Editor
         void RemoveAutosaveFile(const std::filesystem::path &file);
         /// A scene was loaded: no autosave is due, and one the file system has from before is protected
         void ResetAutosaveState();
+        /// The open scene is being left (another is opened, the client shut the host down): the autosave this host
+        /// wrote for it is removed, since what it holds is what the client chose to drop. One found when the scene was
+        /// opened (protected) is kept: nobody has decided about it.
+        void DiscardWrittenAutosave();
         /// The res:// path of the loaded scene's file, or "" when it has none (or the loaded scene isn't the one
         /// that was opened from it)
         [[nodiscard]] std::string OpenScenePath() const;
@@ -456,6 +466,8 @@ namespace N2Engine::Editor
         EditHistory _history;
         std::chrono::milliseconds _autosaveInterval{DefaultAutosaveInterval};
         std::optional<std::chrono::steady_clock::time_point> _lastAutosave;
+        AutosaveClock _autosaveClock;
+        bool _protectedAutosaveWarned{false};
         bool _autosavePending{false};
         bool _autosaveProtected{false};
         bool _autosaveWarned{false};

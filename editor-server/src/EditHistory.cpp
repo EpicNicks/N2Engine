@@ -16,6 +16,7 @@ namespace N2Engine::Editor
     void EditEffect::Merge(EditEffect other)
     {
         full = full || other.full;
+        inexact = inexact || other.inexact;
         std::unordered_set<std::string> known(entityIds.begin(), entityIds.end());
         for (std::string &id : other.entityIds)
         {
@@ -58,6 +59,7 @@ namespace N2Engine::Editor
                 EditOp &earlier = _groupOps[i];
                 if (!op.coalesceKey.empty() && earlier.coalesceKey == op.coalesceKey)
                 {
+                    _groupBytes = _groupBytes - earlier.redoBytes + op.redoBytes;
                     MergeOps(earlier, std::move(op));
                     return Recorded::InGroup;
                 }
@@ -66,6 +68,7 @@ namespace N2Engine::Editor
                     break;
                 }
             }
+            _groupBytes += op.undoBytes + op.redoBytes + BytesPerOp;
             _groupOps.push_back(std::move(op));
             return Recorded::InGroup;
         }
@@ -173,6 +176,7 @@ namespace N2Engine::Editor
         {
             _groupLabel = std::move(label);
             _groupOps.clear();
+            _groupBytes = 0;
         }
         ++_groupDepth;
         return true;
@@ -183,6 +187,7 @@ namespace N2Engine::Editor
         _groupDepth = 0;
         std::vector<EditOp> ops = std::move(_groupOps);
         _groupOps.clear();
+        _groupBytes = 0;
         if (ops.empty())
         {
             return GroupEnd::Empty;
@@ -269,6 +274,11 @@ namespace N2Engine::Editor
         }
 
         _cursor = undo ? _cursor - 1 : _cursor + 1;
+        // A later edit is a step of its own, not part of one that was undone and redone since
+        if (_cursor > 0)
+        {
+            _steps[_cursor - 1].coalescible = false;
+        }
         return Applied{label, std::move(effect)};
     }
 
@@ -311,6 +321,7 @@ namespace N2Engine::Editor
         _groupDepth = 0;
         _groupLabel.clear();
         _groupOps.clear();
+        _groupBytes = 0;
         // A state of its own: nothing earlier names it
         _baseSerial = ++_nextSerial;
         _markerValid = false;
@@ -318,6 +329,12 @@ namespace N2Engine::Editor
 
     void EditHistory::MarkSaved()
     {
+        if (_groupDepth > 0)
+        {
+            // The open group's step will be a state after the save: no state of the history is the saved one
+            _markerValid = false;
+            return;
+        }
         _markerSerial = StateSerial();
         _markerValid = true;
         // An edit after a save is a new step, so undoing it returns to what was saved

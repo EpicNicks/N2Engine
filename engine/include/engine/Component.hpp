@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -90,6 +91,11 @@ namespace N2Engine
         /// raw pointer to it). A component that holds a pointer to a GameObject drops it when it is `removed`. A
         /// SerializableComponent does so for its RegisterGameObjectRef and RegisterGameObjectRefVector members.
         virtual void ForgetGameObject(const GameObject * /*removed*/) {}
+
+        /// ForgetComponent / ForgetGameObject for many at once: drops every reference `isRemoved` says yes to, in one
+        /// pass over the members (the editor destroys a subtree, and asks once per holder, not once per object)
+        virtual void ForgetComponentsIf(const std::function<bool(const Component *)> & /*isRemoved*/) {}
+        virtual void ForgetGameObjectsIf(const std::function<bool(const GameObject *)> & /*isRemoved*/) {}
 
         // Lifecycle methods
         virtual void OnAttach() {}

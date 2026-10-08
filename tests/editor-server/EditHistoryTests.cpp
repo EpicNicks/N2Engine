@@ -713,3 +713,69 @@ TEST(EditHistoryTest, AFullEffectSurvivesTheStep)
     ASSERT_TRUE(redone.has_value());
     EXPECT_FALSE(redone->effect.full);
 }
+
+// ==================== Review fixes ====================
+
+TEST(EditHistoryTest, ASaveInsideAGroupLeavesNoStateSaved)
+{
+    EditHistory history;
+    Doc doc;
+    history.BeginGroup("Drag");
+    doc.value = 1;
+    history.Record("move", SetValue(doc, 0, 1));
+    history.MarkSaved(); // the state the group will lead to isn't known yet
+    doc.other = 2;
+    history.Record("move", SetOther(doc, 0, 2));
+    EXPECT_EQ(history.EndGroup(), EditHistory::GroupEnd::Committed);
+
+    EXPECT_FALSE(history.IsAtSavedState());
+    ASSERT_TRUE(history.Undo().has_value());
+    EXPECT_FALSE(history.IsAtSavedState()) << "the empty state before the group isn't the saved one either";
+    ASSERT_TRUE(history.Redo().has_value());
+    EXPECT_FALSE(history.IsAtSavedState());
+}
+
+TEST(EditHistoryTest, AnOpenGroupsBytesAreCountedAndMergesReplaceTheRedoSide)
+{
+    EditHistory history;
+    Doc doc;
+    EXPECT_EQ(history.GroupBytes(), 0u);
+    history.BeginGroup("Big");
+    history.Record("a", SetValue(doc, 0, 1, "", 1000));
+    const size_t one = history.GroupBytes();
+    EXPECT_GE(one, 2000u);
+    history.Record("b", SetOther(doc, 0, 1));
+    EXPECT_GT(history.GroupBytes(), one);
+
+    // The same key again keeps one before and one after: the bytes follow the redo that was replaced
+    EditHistory merged;
+    merged.BeginGroup("Drag");
+    merged.Record("m", SetValue(doc, 0, 1, "k", 500));
+    const size_t first = merged.GroupBytes();
+    merged.Record("m", SetValue(doc, 1, 2, "k", 700));
+    EXPECT_EQ(merged.GroupBytes(), first + 200u);
+    merged.EndGroup();
+    EXPECT_EQ(merged.GroupBytes(), 0u);
+    history.Clear();
+    EXPECT_EQ(history.GroupBytes(), 0u);
+}
+
+TEST(EditHistoryTest, AStepThatWasUndoneAndRedoneIsNotMergedInto)
+{
+    EditHistory history;
+    Doc doc;
+    Edit(history, doc, "Set", 1, "k", T0);
+    ASSERT_TRUE(history.Undo().has_value());
+    ASSERT_TRUE(history.Redo().has_value());
+    EXPECT_EQ(Edit(history, doc, "Set", 2, "k", T0 + 10ms), EditHistory::Recorded::NewStep);
+    EXPECT_EQ(history.StepCount(), 2u);
+}
+
+TEST(EditHistoryTest, AnInexactEffectSurvivesMerging)
+{
+    EditEffect first;
+    EditEffect second;
+    second.inexact = true;
+    first.Merge(std::move(second));
+    EXPECT_TRUE(first.inexact);
+}
