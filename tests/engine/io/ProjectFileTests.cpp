@@ -377,8 +377,10 @@ TEST_F(ProjectFileTest, CreateProjectAdoptsAFolderKeepingItsFiles)
 {
     // An existing folder with a scene of its own where Main.scene goes, and assets referenced by UUID
     fs::create_directories(_root / "assets" / "scenes");
-    std::ofstream(_root / "assets" / "scenes" / "Main.scene") << R"({"name":"Mine","rootGameObjects":[]})";
-    std::ofstream(_root / ".gitignore") << "build/\n";
+    // Binary: text mode writes "\r\n" on Windows, and the check below compares bytes
+    std::ofstream(_root / "assets" / "scenes" / "Main.scene", std::ios::binary)
+        << R"({"name":"Mine","rootGameObjects":[]})";
+    std::ofstream(_root / ".gitignore", std::ios::binary) << "build/\n";
 
     // Adopting with the folder's old namespace keeps every asset UUID it had
     const Math::UUID legacy = IO::ResourceUUID::NamespaceForProjectDir(_root);

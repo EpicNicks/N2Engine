@@ -65,6 +65,11 @@ float Time::GetTimeScale()
     return timeScale;
 }
 
+double Time::GetFixedTimestep()
+{
+    return fixedUnscaledDeltaTime;
+}
+
 bool Time::SetFixedTimestep(const double seconds)
 {
     if (!std::isfinite(seconds) || seconds <= 0.0)

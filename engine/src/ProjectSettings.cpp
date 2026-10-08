@@ -3,10 +3,6 @@
 #include <exception>
 #include <format>
 
-#include <nlohmann/json.hpp>
-
-#include <math/Vector3.hpp>
-
 #include "engine/Application.hpp"
 #include "engine/Layers.hpp"
 #include "engine/Time.hpp"
@@ -18,6 +14,11 @@ namespace N2Engine
 {
     namespace
     {
+        Input::InputSystem *CurrentInputSystem()
+        {
+            return Application::GetInstance().GetWindow().GetInputSystem();
+        }
+
         void ApplyPhysics(const nlohmann::json &physics, std::vector<std::string> &problems)
         {
             if (!physics.is_object())
@@ -52,7 +53,8 @@ namespace N2Engine
         }
     }
 
-    std::vector<std::string> ApplyProjectSettings(const nlohmann::json &settings)
+    std::vector<std::string> ApplyProjectSettings(const nlohmann::json &settings,
+                                                  const std::optional<std::set<std::string>> &only)
     {
         std::vector<std::string> problems;
         if (settings.is_null())
@@ -68,6 +70,10 @@ namespace N2Engine
         // Each block on its own: a subsystem that throws on a malformed block mustn't keep the others from applying
         const auto apply = [&](const char *key, const auto &applyBlock)
         {
+            if (only && !only->contains(key))
+            {
+                return;
+            }
             const auto block = settings.find(key);
             if (block == settings.end() || block->is_null())
             {
@@ -92,13 +98,57 @@ namespace N2Engine
         });
         apply("input", [&](const nlohmann::json &input)
         {
-            Input::InputSystem *inputSystem = Application::GetInstance().GetWindow().GetInputSystem();
+            // The shape is checked even without an input system (an editor host without a window), so a block that
+            // could never load isn't saved
+            const auto maps = input.is_object() ? input.find("actionMaps") : input.end();
+            if (!input.is_object() || maps == input.end() || !maps->is_object())
+            {
+                problems.emplace_back("input: expected {\"actionMaps\": {...}}");
+                return;
+            }
+            Input::InputSystem *inputSystem = CurrentInputSystem();
             if (inputSystem != nullptr && !inputSystem->Deserialize(input))
             {
-                problems.emplace_back("input: refused by InputSystem::Deserialize (expected {\"actionMaps\": {...}})");
+                problems.emplace_back("input: refused by InputSystem::Deserialize (see the log)");
             }
         });
         apply("physics", [&](const nlohmann::json &physics) { ApplyPhysics(physics, problems); });
         return problems;
+    }
+
+    ProjectSettingsSnapshot ProjectSettingsSnapshot::Capture()
+    {
+        ProjectSettingsSnapshot snapshot;
+        snapshot.layers = Layers::Serialize();
+        if (const Input::InputSystem *inputSystem = CurrentInputSystem())
+        {
+            snapshot.input = inputSystem->Serialize();
+        }
+        snapshot.fixedTimestep = Time::GetFixedTimestep();
+        if (const Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())
+        {
+            snapshot.gravity = backend->GetGravity();
+        }
+        return snapshot;
+    }
+
+    void ProjectSettingsSnapshot::Restore() const
+    {
+        (void)Layers::Deserialize(layers);
+        if (input)
+        {
+            if (Input::InputSystem *inputSystem = CurrentInputSystem())
+            {
+                (void)inputSystem->Deserialize(*input);
+            }
+        }
+        (void)Time::SetFixedTimestep(fixedTimestep);
+        if (gravity)
+        {
+            if (Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())
+            {
+                backend->SetGravity(*gravity);
+            }
+        }
     }
 }

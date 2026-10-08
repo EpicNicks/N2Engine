@@ -342,7 +342,7 @@
     },
     "SetProjectSettings": {
       "id": "0x71",
-      "description": "Changes the project's settings with a JSON merge patch (RFC 7386: a key set to null is removed, objects merge, anything else replaces), applies them to the running engine (layers, input, physics) and saves project.n2proj. settings must be an object. When a subsystem refuses its block, nothing is saved, the previous settings are applied again, and the Error names the blocks. Answers the project as saved. Error without a project.",
+      "description": "Changes the project's settings with a JSON merge patch (RFC 7386: a key set to null is removed, objects merge, anything else replaces), applies the blocks it touches to the running engine (layers, input, physics) and saves project.n2proj. settings must be an object. When a subsystem refuses its block (or the file can't be saved), nothing is saved, the live state from before the patch is put back, and the Error names the blocks. Answers the project as saved. Error without a project.",
       "request": {
         "settings": "json"
       },

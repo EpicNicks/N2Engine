@@ -16,6 +16,8 @@
 #include <editor-server/HostOptions.hpp>
 #include <editor-server/Protocol.hpp>
 #include <engine/GameObjectScene.hpp>
+#include <engine/Layers.hpp>
+#include <engine/Time.hpp>
 #include <engine/io/ProjectFile.hpp>
 #include <engine/io/ResourceLoader.hpp>
 #include <engine/io/ResourceUUID.hpp>
@@ -317,12 +319,19 @@ TEST_F(EditorProjectTest, EveryMutatingCommandMovesTheRevision)
     BufferReader idReader(created.payload);
     const std::string id = idReader.ReadString();
 
+    // CreateEntity makes an object without a transform (until E4's presets), which SetEntityTransform refuses: give
+    // it one directly. That changes nothing the revision tracks.
+    const auto object = SceneManager::GetCurSceneRef().FindGameObjectByUUID(Math::UUID::FromString(id).value());
+    ASSERT_NE(object, nullptr);
+    object->CreatePositionable();
+    EXPECT_EQ(OpenSceneInfo().revision, revision);
+
     BufferWriter transform;
     transform.WriteString(id);
     for (int i = 0; i < 9; ++i)
         transform.WriteF32(1.0f);
-    ASSERT_EQ(Execute(server, CommandType::SetEntityTransform, transform.Release()).type,
-              static_cast<uint8_t>(ResponseType::Ok));
+    const Frame transformed = Execute(server, CommandType::SetEntityTransform, transform.Release());
+    ASSERT_EQ(transformed.type, static_cast<uint8_t>(ResponseType::Ok)) << transformed.Text();
     moved("SetEntityTransform");
 
     ASSERT_EQ(Execute(server, CommandType::DestroyEntity, Strings({id})).type, static_cast<uint8_t>(ResponseType::Ok));
@@ -543,6 +552,38 @@ TEST_F(EditorProjectTest, SetProjectSettingsRefusesABlockItsSubsystemRefuses)
     EXPECT_EQ(Execute(server, CommandType::SetProjectSettings, Strings({"{ not json"})).type, ErrorType);
 
     EXPECT_EQ(ReadFile(IO::ProjectFile::PathIn(_root)), before) << "nothing refused is saved";
+}
+
+TEST_F(EditorProjectTest, ARefusedPatchPutsTheLiveSettingsBack)
+{
+    // The project has no physics or layers block: rolling back to "the previous settings" would apply nothing, so the
+    // live values themselves must come back
+    ASSERT_FALSE(_project.settings.contains("physics"));
+    const double timestep = Time::GetFixedTimestep();
+    const std::string layerName = Layers::LayerToName(8);
+
+    json layers = Layers::Serialize();
+    layers["layers"][8] = "Patched Layer";
+    const Frame refused = Execute(server, CommandType::SetProjectSettings,
+                                  JsonPayload({{"physics", {{"fixedTimestep", timestep * 2}}},
+                                               {"layers", layers},
+                                               {"input", "not an input block"}}));
+    ASSERT_EQ(refused.type, ErrorType);
+    EXPECT_NE(refused.Text().find("input"), std::string::npos) << refused.Text();
+
+    EXPECT_EQ(Time::GetFixedTimestep(), timestep) << "the timestep the patch applied is undone";
+    EXPECT_EQ(Layers::LayerToName(8), layerName) << "and the layer names";
+
+    // An accepted patch does change them
+    const ProjectInfo accepted = DecodeProjectInfo(Execute(server, CommandType::SetProjectSettings,
+        JsonPayload({{"physics", {{"fixedTimestep", timestep * 2}}}, {"layers", layers}})));
+    EXPECT_EQ(accepted.project.at("settings").at("physics").at("fixedTimestep").get<double>(), timestep * 2);
+    EXPECT_EQ(Time::GetFixedTimestep(), timestep * 2);
+    EXPECT_EQ(Layers::LayerToName(8), "Patched Layer");
+
+    // Put the process-wide state back for the other tests
+    Layers::ResetToDefaults();
+    ASSERT_TRUE(Time::SetFixedTimestep(timestep));
 }
 
 TEST_F(EditorProjectTest, SetStartupSceneSavesItAndAddsItToTheSceneList)

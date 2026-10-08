@@ -5,6 +5,7 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -1684,14 +1685,21 @@ namespace N2Engine::Editor
         }
 
         // A merge patch: keys set to null are removed, objects merge recursively, anything else replaces
-        const nlohmann::json previous = _project->file.settings;
-        nlohmann::json merged = previous;
+        nlohmann::json merged = _project->file.settings;
         merged.merge_patch(cmd.settings);
 
-        // Applied live first: a block its subsystem refuses isn't saved, and what was applied before comes back
-        if (const std::vector<std::string> problems = ApplyProjectSettings(merged); !problems.empty())
+        // Only the blocks the patch touches are applied, live, before saving; the state they change is captured first,
+        // so a refusal (or a failed save) puts back exactly what was running, including a block the previous settings
+        // never had
+        std::set<std::string> touched;
+        for (const auto &[key, value] : cmd.settings.items())
         {
-            (void)ApplyProjectSettings(previous);
+            touched.insert(key);
+        }
+        const ProjectSettingsSnapshot before = ProjectSettingsSnapshot::Capture();
+        if (const std::vector<std::string> problems = ApplyProjectSettings(merged, touched); !problems.empty())
+        {
+            before.Restore();
             std::string message = "Project settings refused:";
             for (const std::string &problem : problems)
             {
@@ -1707,7 +1715,7 @@ namespace N2Engine::Editor
         changed.settings = std::move(merged);
         if (auto saved = SaveProject(std::move(changed)); !saved)
         {
-            (void)ApplyProjectSettings(previous);
+            before.Restore();
             WriteError(response, saved.error());
             SendResponse(clientSocket, response.Release());
             return;

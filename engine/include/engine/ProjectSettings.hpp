@@ -1,9 +1,13 @@
 #pragma once
 
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
-#include <nlohmann/json_fwd.hpp>
+#include <nlohmann/json.hpp>
+
+#include <math/Vector3.hpp>
 
 namespace N2Engine
 {
@@ -12,7 +16,8 @@ namespace N2Engine
      * subsystem, each read by that subsystem's own deserializer:
      *
      *     layers    Layers::Deserialize ({"layers": [32 names], "collisionMatrix": [32 masks]})
-     *     input     the window's InputSystem::Deserialize (skipped without an input system)
+     *     input     must be {"actionMaps": {...}}; the window's InputSystem::Deserialize reads it (without an input
+     *               system the shape is still checked, then nothing is applied)
      *     physics   {"fixedTimestep": seconds > 0, "gravity": {"x", "y", "z"}}: Time::SetFixedTimestep, and the
      *               physics backend's gravity (skipped without a backend)
      *
@@ -20,9 +25,30 @@ namespace N2Engine
      * host has no window to size. A missing or null block changes nothing. Call it after Application::Init (which
      * resets the fixed timestep). Main thread.
      *
+     * only, when given, limits it to those top-level blocks (the ones a settings patch touched).
+     *
      * Returns one message per block that was rejected (its subsystem refused it, or it has the wrong shape); empty
-     * when everything given was applied. A rejected block changes nothing where its subsystem promises so (Layers);
-     * the other blocks are still applied.
+     * when everything given was applied. A rejected block may have been partly applied (physics applies
+     * fixedTimestep before it checks gravity): a caller that must undo takes a ProjectSettingsSnapshot first.
      */
-    [[nodiscard]] std::vector<std::string> ApplyProjectSettings(const nlohmann::json &settings);
+    [[nodiscard]] std::vector<std::string> ApplyProjectSettings(const nlohmann::json &settings,
+                                                                const std::optional<std::set<std::string>> &only = {});
+
+    /**
+     * The live state ApplyProjectSettings changes, taken before applying so it can be put back exactly (a block the
+     * previous settings didn't have would otherwise keep the new value): the layers (Layers::Serialize), the input
+     * maps (when there is an input system), the unscaled fixed timestep and the backend's gravity (when there is a
+     * backend).
+     */
+    struct ProjectSettingsSnapshot
+    {
+        nlohmann::json layers;
+        std::optional<nlohmann::json> input;
+        double fixedTimestep = 0.0;
+        std::optional<Math::Vector3> gravity;
+
+        [[nodiscard]] static ProjectSettingsSnapshot Capture();
+        /// Puts the captured state back
+        void Restore() const;
+    };
 }
