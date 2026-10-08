@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.2.0";
+        public const string ProtocolVersion = "1.3.0";
     }
 
     public enum CommandType : byte
@@ -26,6 +26,10 @@ namespace N2Engine.Editor.Protocol
         SaveScene = 0x22,
         DeleteScene = 0x23,
         GetCurrentScene = 0x24,
+        OpenScene = 0x25,
+        SaveSceneToFile = 0x26,
+        NewScene = 0x27,
+        GetOpenScene = 0x29,
         CreateEntity = 0x30,
         DestroyEntity = 0x31,
         SetEntityTransform = 0x32,
@@ -34,6 +38,9 @@ namespace N2Engine.Editor.Protocol
         CreateScript = 0x40,
         RescanAssets = 0x41,
         GetEngineHealth = 0x50,
+        GetProjectInfo = 0x70,
+        SetProjectSettings = 0x71,
+        SetStartupScene = 0x72,
         Shutdown = 0xFF,
     }
 
@@ -52,6 +59,8 @@ namespace N2Engine.Editor.Protocol
         AudioSamples = 0x0A,
         ServerInfo = 0x0B,
         Events = 0x0C,
+        SceneInfo = 0x0D,
+        ProjectInfo = 0x0E,
     }
 
     public struct Vec3
@@ -94,6 +103,36 @@ namespace N2Engine.Editor.Protocol
         public string? Message { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("time")]
         public double? Time { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("revision")]
+        public double? Revision { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("savedRevision")]
+        public double? SavedRevision { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string? Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("added")]
+        public string[]? Added { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("removed")]
+        public string[]? Removed { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("modified")]
+        public string[]? Modified { get; set; }
+    }
+
+    public class ProjectFile
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("formatVersion")]
+        public double FormatVersion { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("projectId")]
+        public string ProjectId { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("engineVersion")]
+        public string EngineVersion { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("startupScene")]
+        public string StartupScene { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("scenes")]
+        public string[] Scenes { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("settings")]
+        public System.Text.Json.JsonElement Settings { get; set; }
     }
 
     public struct SetViewportSizeRequest
@@ -138,6 +177,22 @@ namespace N2Engine.Editor.Protocol
         public string SceneName;
     }
 
+    public struct OpenSceneRequest
+    {
+        public string Path;
+    }
+
+    public struct SaveSceneToFileRequest
+    {
+        public string Path;
+    }
+
+    public struct NewSceneRequest
+    {
+        public string Path;
+        public string Name;
+    }
+
     public struct CreateEntityRequest
     {
         public string Name;
@@ -164,6 +219,17 @@ namespace N2Engine.Editor.Protocol
     public struct CreateScriptRequest
     {
         public string Name;
+    }
+
+    public struct SetProjectSettingsRequest
+    {
+        /// <summary>JSON text: any JSON value</summary>
+        public string Settings;
+    }
+
+    public struct SetStartupSceneRequest
+    {
+        public string Path;
     }
 
     public struct FrameDataResponse
@@ -213,6 +279,15 @@ namespace N2Engine.Editor.Protocol
         public string SceneJson;
     }
 
+    public struct SceneInfoResponse
+    {
+        public string Path;
+        public string Name;
+        public string Uuid;
+        public uint Revision;
+        public uint SavedRevision;
+    }
+
     public struct EntityCreatedResponse
     {
         public string EntityId;
@@ -241,6 +316,14 @@ namespace N2Engine.Editor.Protocol
         public bool Healthy;
         public uint Count;
         public SubsystemStatus[] Subsystems;
+    }
+
+    public struct ProjectInfoResponse
+    {
+        public string RootPath;
+        public string UserDataPath;
+        /// <summary>JSON text: ProjectFile</summary>
+        public string Project;
     }
 
 }

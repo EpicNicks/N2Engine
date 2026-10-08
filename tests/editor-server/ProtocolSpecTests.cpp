@@ -53,6 +53,10 @@ namespace
             {"SaveScene", CommandType::SaveScene},
             {"DeleteScene", CommandType::DeleteScene},
             {"GetCurrentScene", CommandType::GetCurrentScene},
+            {"OpenScene", CommandType::OpenScene},
+            {"SaveSceneToFile", CommandType::SaveSceneToFile},
+            {"NewScene", CommandType::NewScene},
+            {"GetOpenScene", CommandType::GetOpenScene},
             {"CreateEntity", CommandType::CreateEntity},
             {"DestroyEntity", CommandType::DestroyEntity},
             {"SetEntityTransform", CommandType::SetEntityTransform},
@@ -61,6 +65,9 @@ namespace
             {"CreateScript", CommandType::CreateScript},
             {"RescanAssets", CommandType::RescanAssets},
             {"GetEngineHealth", CommandType::GetEngineHealth},
+            {"GetProjectInfo", CommandType::GetProjectInfo},
+            {"SetProjectSettings", CommandType::SetProjectSettings},
+            {"SetStartupScene", CommandType::SetStartupScene},
             {"Shutdown", CommandType::Shutdown},
         };
         return commands;
@@ -82,6 +89,8 @@ namespace
             {"AudioSamples", ResponseType::AudioSamples},
             {"ServerInfo", ResponseType::ServerInfo},
             {"Events", ResponseType::Events},
+            {"SceneInfo", ResponseType::SceneInfo},
+            {"ProjectInfo", ResponseType::ProjectInfo},
         };
         return responses;
     }
@@ -105,6 +114,11 @@ namespace
             {"SetEntityTransform", [](BufferReader &r) { (void)SetEntityTransformCmd::Deserialize(r); }},
             {"GetEntityTransform", [](BufferReader &r) { (void)GetEntityTransformCmd::Deserialize(r); }},
             {"CreateScript", [](BufferReader &r) { (void)CreateScriptCmd::Deserialize(r); }},
+            {"OpenScene", [](BufferReader &r) { (void)OpenSceneCmd::Deserialize(r); }},
+            {"SaveSceneToFile", [](BufferReader &r) { (void)SaveSceneToFileCmd::Deserialize(r); }},
+            {"NewScene", [](BufferReader &r) { (void)NewSceneCmd::Deserialize(r); }},
+            {"SetProjectSettings", [](BufferReader &r) { (void)SetProjectSettingsCmd::Deserialize(r); }},
+            {"SetStartupScene", [](BufferReader &r) { (void)SetStartupSceneCmd::Deserialize(r); }},
         };
         return deserializers;
     }
