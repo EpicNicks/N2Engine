@@ -46,8 +46,11 @@ namespace
             {"GetAudio", CommandType::GetAudio},
             {"Hello", CommandType::Hello},
             {"PollEvents", CommandType::PollEvents},
+            {"RenderFrameIfChanged", CommandType::RenderFrameIfChanged},
             {"SetCameraPosition", CommandType::SetCameraPosition},
             {"GetCameraPosition", CommandType::GetCameraPosition},
+            {"SetEditorCamera", CommandType::SetEditorCamera},
+            {"GetEditorCamera", CommandType::GetEditorCamera},
             {"CreateScene", CommandType::CreateScene},
             {"LoadScene", CommandType::LoadScene},
             {"SaveScene", CommandType::SaveScene},
@@ -121,6 +124,8 @@ namespace
             {"EditResult", ResponseType::EditResult},
             {"History", ResponseType::History},
             {"Autosave", ResponseType::Autosave},
+            {"FrameUpdate", ResponseType::FrameUpdate},
+            {"EditorCamera", ResponseType::EditorCamera},
         };
         return responses;
     }
@@ -135,7 +140,9 @@ namespace
             {"SetViewportSize", [](BufferReader &r) { (void)SetViewportSizeCmd::Deserialize(r); }},
             {"Hello", [](BufferReader &r) { (void)HelloCmd::Deserialize(r); }},
             {"PollEvents", [](BufferReader &r) { (void)PollEventsCmd::Deserialize(r); }},
+            {"RenderFrameIfChanged", [](BufferReader &r) { (void)RenderFrameIfChangedCmd::Deserialize(r); }},
             {"SetCameraPosition", [](BufferReader &r) { (void)SetCameraPositionCmd::Deserialize(r); }},
+            {"SetEditorCamera", [](BufferReader &r) { (void)SetEditorCameraCmd::Deserialize(r); }},
             {"CreateScene", [](BufferReader &r) { (void)CreateSceneCmd::Deserialize(r); }},
             {"LoadScene", [](BufferReader &r) { (void)LoadSceneCmd::Deserialize(r); }},
             {"DeleteScene", [](BufferReader &r) { (void)DeleteSceneCmd::Deserialize(r); }},

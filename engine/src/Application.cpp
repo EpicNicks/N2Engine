@@ -322,6 +322,13 @@ void Application::Shutdown()
 
 void Application::Render()
 {
+    // The main camera exists after Init; before it (a host driving a bare window) a default one stands in
+    static const Camera fallbackCamera;
+    Render(_mainCamera ? *_mainCamera : fallbackCamera);
+}
+
+void Application::Render(const Camera &camera, const bool screenSpaceUI)
+{
     auto *renderer = _window.GetRenderer();
     if (!renderer)
     {
@@ -335,16 +342,19 @@ void Application::Render()
     {
         auto &curScene = SceneManager::GetCurSceneRef();
 
-        const Matrix4 &viewMatrix = _mainCamera->GetViewMatrix();
-        const Matrix4 &projectionMatrix = _mainCamera->GetProjectionMatrix();
+        const Matrix4 &viewMatrix = camera.GetViewMatrix();
+        const Matrix4 &projectionMatrix = camera.GetProjectionMatrix();
         renderer->SetViewProjection(viewMatrix.Data(), projectionMatrix.Data());
         const Renderer::Common::SceneLightingData sceneLightingData = curScene.CollectLighting();
-        renderer->UpdateSceneLighting(sceneLightingData, _mainCamera->GetPosition());
+        renderer->UpdateSceneLighting(sceneLightingData, camera.GetPosition());
 
-        curScene.Render(renderer, *_mainCamera);
+        curScene.Render(renderer, camera);
         // The UI pass, over the scene: canvases in sort order, in window coordinates (the cursor's space), or
         // over the frame's own size when Window::SetRenderSize set one (the editor's viewport)
-        UI::UISystem::Render(curScene, renderer, _window.GetRenderDimensions());
+        if (screenSpaceUI)
+        {
+            UI::UISystem::Render(curScene, renderer, _window.GetRenderDimensions());
+        }
     }
 
     renderer->EndFrame();
@@ -414,4 +424,16 @@ void Application::RenderEditorFrame()
     Time::Update();
     Audio::AudioSystem::Instance().Update();
     Render();
+}
+
+void Application::RenderEditorFrame(const Camera &camera)
+{
+    if (!_window.IsValid())
+    {
+        return;
+    }
+    // A scene view is not the game: no window events or input (the host's client drives it), and no screen-space UI
+    Time::Update();
+    Audio::AudioSystem::Instance().Update();
+    Render(camera, false);
 }

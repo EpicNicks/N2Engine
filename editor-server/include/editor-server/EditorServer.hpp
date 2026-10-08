@@ -19,7 +19,9 @@
 
 #include "editor-server/CommandQueue.hpp"
 #include "editor-server/EditHistory.hpp"
+#include "editor-server/EditorCamera.hpp"
 #include "editor-server/EventRing.hpp"
+#include "editor-server/FrameTracker.hpp"
 
 namespace Renderer::Common
 {
@@ -286,8 +288,36 @@ namespace N2Engine::Editor
         [[nodiscard]] EventRing &GetEvents() { return _events; }
         [[nodiscard]] const EventRing &GetEvents() const { return _events; }
 
-        /// True for a command a client is expected to poll: RenderFrame, GetAudio, PollEvents, and (ahead of the planned
-        /// editor, #6, which refreshes them continuously) GetAllEntities, GetEntityTransform, GetCameraPosition,
+        // ==================== Editor camera and render on demand (#79, E7a) ====================
+
+        /**
+         * The editor camera (see EditorCameraState): the viewpoint of RenderFrameIfChanged's frames, owned by the server
+         * (not a scene object, not saved, not in undo). SetEditorCamera replaces it; this does the same for the host
+         * and tests, with the same checks, and says why a camera was refused. Setting the camera it has changes nothing.
+         */
+        [[nodiscard]] const EditorCameraState &GetEditorCameraState() const { return _editorCamera; }
+        [[nodiscard]] std::expected<void, std::string> SetEditorCameraState(const EditorCameraState &camera);
+
+        /// The viewport's aspect ratio, width / height (what frames and GetEditorCamera's projection use)
+        [[nodiscard]] float GetViewportAspect() const
+        {
+            return static_cast<float>(_viewportWidth) / static_cast<float>(_viewportHeight);
+        }
+
+        /**
+         * The frame revision (see FrameTracker): the number of the picture the viewport would show now. It moves on
+         * when the open scene changes (any scene revision change, or another scene), the editor camera changes, the
+         * viewport size changes, a RescanAssets finds changes, or the project's settings change; and RenderFrameIfChanged
+         * answers a client that holds this revision without rendering. The first change after a frame was rendered
+         * pushes a frameChanged {revision} event.
+         */
+        [[nodiscard]] uint32_t GetFrameRevision() const { return _frames.Revision(); }
+        /// How many frames RenderFrameIfChanged has rendered (not counting resends of the one in the buffer), for tests
+        [[nodiscard]] uint32_t GetEditorFramesRendered() const { return _editorFramesRendered; }
+
+        /// True for a command a client is expected to poll: RenderFrame, RenderFrameIfChanged, GetAudio, PollEvents, and
+        /// (ahead of the planned editor, #6, which refreshes them continuously) GetAllEntities, GetEntityTransform,
+        /// GetCameraPosition, GetEditorCamera, SetEditorCamera (sent every frame of a drag),
         /// GetEngineHealth, GetHierarchy, GetEntity.
         /// Rule: a command a client polls never logs per call, or its lines would drown everything else (and, since
         /// every line is an event, PollEvents would always find one). Such a command still logs when it fails
@@ -307,6 +337,9 @@ namespace N2Engine::Editor
         // Command handlers
         void HandleHello(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleRenderFrame(int clientSocket);
+        void HandleRenderFrameIfChanged(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSetEditorCamera(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetEditorCamera(int clientSocket);
         void HandleSetViewportSize(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetAudio(int clientSocket);
         void HandlePollEvents(int clientSocket, const std::vector<uint8_t> &payload);
@@ -475,6 +508,23 @@ namespace N2Engine::Editor
         int _viewportWidth{1280};
         int _viewportHeight{720};
         std::vector<uint8_t> _frameBuffer;
+
+        /// What the viewport shows changed (the scene, the editor camera, the viewport size, the assets or the project's
+        /// settings): moves the frame revision on, and pushes frameChanged for the first change since a frame was rendered
+        void NoteViewChanged();
+        /// The scene changed and the handler says so (its revision has just moved): NoteViewChanged(), and the scene as it
+        /// is now is recorded as seen, so a frame is one revision on from the last, not two
+        void NoteSceneChanged();
+        /// Notes the open scene as it is now, and NoteViewChanged()s when it isn't the one last seen
+        void ObserveScene();
+        /// Renders the editor view into _frameBuffer (the open scene from the editor camera at the viewport size) and
+        /// marks the frame rendered. False, with `error` set, when there is no renderer or it can't make the target.
+        bool RenderEditorView(std::string &error);
+
+        EditorCameraState _editorCamera;
+        // Starts numbering at the event epoch, a random number (see FrameTracker)
+        FrameTracker _frames{_events.Epoch()};
+        uint32_t _editorFramesRendered{0};
 
         // UpdateAudio's clock; unset until its first call
         std::optional<std::chrono::steady_clock::time_point> _lastAudioUpdate;

@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.6.0";
+inline constexpr const char *ProtocolVersion = "1.7.0";
 
 enum class CommandType : uint8_t
 {
@@ -20,8 +20,11 @@ enum class CommandType : uint8_t
     GetAudio = 0x03,
     Hello = 0x04,
     PollEvents = 0x05,
+    RenderFrameIfChanged = 0x06,
     SetCameraPosition = 0x10,
     GetCameraPosition = 0x12,
+    SetEditorCamera = 0x13,
+    GetEditorCamera = 0x14,
     CreateScene = 0x20,
     LoadScene = 0x21,
     SaveScene = 0x22,
@@ -92,6 +95,8 @@ enum class ResponseType : uint8_t
     EditResult = 0x15,
     History = 0x16,
     Autosave = 0x17,
+    FrameUpdate = 0x18,
+    EditorCamera = 0x19,
 };
 
 // Custom types
@@ -144,11 +149,27 @@ struct PollEventsCmd
     uint32_t maxEvents;
 };
 
+struct RenderFrameIfChangedCmd
+{
+    uint32_t sinceRevision;
+};
+
 struct SetCameraPositionCmd
 {
     float x;
     float y;
     float z;
+};
+
+struct SetEditorCameraCmd
+{
+    Vec3 position;
+    Quat rotation;
+    float fovY;
+    bool orthographic;
+    float orthoSize;
+    float nearPlane;
+    float farPlane;
 };
 
 struct CreateSceneCmd
@@ -330,11 +351,33 @@ struct EventsData
     std::string events; // JSON: EditorEvent[]
 };
 
+struct FrameUpdateData
+{
+    uint32_t revision;
+    bool modified;
+    uint32_t width;
+    uint32_t height;
+    std::vector<uint8_t> pixels;
+};
+
 struct CameraPositionData
 {
     float x;
     float y;
     float z;
+};
+
+struct EditorCameraData
+{
+    Vec3 position;
+    Quat rotation;
+    float fovY;
+    bool orthographic;
+    float orthoSize;
+    float nearPlane;
+    float farPlane;
+    std::array<float, 16> view;
+    std::array<float, 16> projection;
 };
 
 struct SceneDataData

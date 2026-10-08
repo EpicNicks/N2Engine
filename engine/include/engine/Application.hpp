@@ -29,6 +29,9 @@ namespace N2Engine
         /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
         Application();
         void Render();
+        /// Draws the current scene as seen by `camera`, and, when `screenSpaceUI` is set, the screen-space UI pass over it
+        /// (what Render does with the main camera). World-space canvases are part of the scene and always draw.
+        void Render(const Camera &camera, bool screenSpaceUI = true);
         void PhysicsUpdate(const Scene &scene) const;
 
     public:
@@ -45,7 +48,17 @@ namespace N2Engine
         /// Run() (e.g. the editor) should call it before returning from main, so teardown doesn't depend
         /// on static destruction order. Safe to call more than once, or without Init.
         void Shutdown();
+        /// Draws one frame of the current scene from the main camera, without simulating (the editor's RenderFrame)
         void RenderEditorFrame();
+        /**
+         * Draws one frame of the current scene as seen by `camera`, without simulating: the editor's viewport, which
+         * has a camera of its own (the editor camera) and so needs neither a Camera component in the scene nor the
+         * game's main camera. It differs from RenderEditorFrame() in the camera (the view and projection, and the
+         * position the lit shaders see) and in two ways that suit a scene view: it draws no screen-space UI (the game's
+         * HUD overlay; world-space canvases are scene objects and still draw), and it doesn't poll window events or
+         * read input. Does nothing without a window and a renderer.
+         */
+        void RenderEditorFrame(const Camera &camera);
 
         /// Requests a quit at the end of the current frame (Run() then calls OnApplicationQuit and
         /// shuts down). Safe to call from components and Lua.

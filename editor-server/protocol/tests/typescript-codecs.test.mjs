@@ -99,6 +99,13 @@ for (const vector of vectors.responses) {
   })
 }
 
+// A response with a second shape (FrameUpdate that is not modified: no pixels), vectors of its own
+for (const vector of vectors.responseVariants ?? []) {
+  test(`response variant ${vector.response}: encodes to the vector and decodes back`, () => {
+    checkVector(responseFields(vector.response), protocol.ResponseCodecs[vector.response], vector)
+  })
+}
+
 test("decoders read from a view with an offset (a Buffer slice) and ignore trailing bytes", realProtocol, () => {
   const vector = vectors.responses.find((v) => v.response === "EngineHealth")
   const padded = new Uint8Array(3 + vector.payload.length / 2 + 4)

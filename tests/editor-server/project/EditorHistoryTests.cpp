@@ -1505,7 +1505,9 @@ TEST_F(EditorHistoryProjectTest, AnAutosaveFromBeforeIsKeptUntilItIsRestoredDisc
     EXPECT_EQ(ReadFile(AutosaveFile()), recovered) << "nor removed, though the scene is back at its saved state";
 
     // Restoring replaces the scene's content, as a step that can be undone
+    const uint32_t frameBeforeRestore = server.GetFrameRevision();
     const SceneInfoData restored = DecodeSceneInfo(Execute(server, CommandType::RestoreAutosave));
+    EXPECT_NE(server.GetFrameRevision(), frameBeforeRestore) << "the viewport shows another scene";
     EXPECT_NE(restored.revision, restored.savedRevision) << "it differs from the file";
     EXPECT_FALSE(server.IsAutosaveProtected());
     ASSERT_TRUE(SceneManager::GetCurSceneRef().FindGameObject("Recovered") != nullptr);
