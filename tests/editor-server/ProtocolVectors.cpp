@@ -322,6 +322,7 @@ namespace ProtocolVectors
             {"PlayState", [](BufferWriter &w, const json &f)
             {
                 WritePlayState(w, StringField(f, "state"), Uint32Field(f, "frame"), f.at("time").get<float>());
+            }},
             {"AssetList", [](BufferWriter &w, const json &f) { WriteAssetList(w, f.at("folders"), f.at("assets")); }},
             {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
             {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},
