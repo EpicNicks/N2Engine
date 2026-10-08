@@ -29,8 +29,9 @@ namespace N2Engine
         /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
         Application();
         void Render();
-        /// Draws the current scene (and the UI over it) as seen by `camera`: what Render does with the main camera
-        void Render(const Camera &camera);
+        /// Draws the current scene as seen by `camera`, and, when `screenSpaceUI` is set, the screen-space UI pass over it
+        /// (what Render does with the main camera). World-space canvases are part of the scene and always draw.
+        void Render(const Camera &camera, bool screenSpaceUI = true);
         void PhysicsUpdate(const Scene &scene) const;
 
     public:
@@ -52,8 +53,10 @@ namespace N2Engine
         /**
          * Draws one frame of the current scene as seen by `camera`, without simulating: the editor's viewport, which
          * has a camera of its own (the editor camera) and so needs neither a Camera component in the scene nor the
-         * game's main camera. Only the camera differs from RenderEditorFrame(): the view and projection, the position
-         * the lit shaders see, and nothing else. Does nothing without a window and a renderer.
+         * game's main camera. It differs from RenderEditorFrame() in the camera (the view and projection, and the
+         * position the lit shaders see) and in two ways that suit a scene view: it draws no screen-space UI (the game's
+         * HUD overlay; world-space canvases are scene objects and still draw), and it doesn't poll window events or
+         * read input. Does nothing without a window and a renderer.
          */
         void RenderEditorFrame(const Camera &camera);
 

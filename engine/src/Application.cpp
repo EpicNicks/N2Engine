@@ -327,7 +327,7 @@ void Application::Render()
     Render(_mainCamera ? *_mainCamera : fallbackCamera);
 }
 
-void Application::Render(const Camera &camera)
+void Application::Render(const Camera &camera, const bool screenSpaceUI)
 {
     auto *renderer = _window.GetRenderer();
     if (!renderer)
@@ -351,7 +351,10 @@ void Application::Render(const Camera &camera)
         curScene.Render(renderer, camera);
         // The UI pass, over the scene: canvases in sort order, in window coordinates (the cursor's space), or
         // over the frame's own size when Window::SetRenderSize set one (the editor's viewport)
-        UI::UISystem::Render(curScene, renderer, _window.GetRenderDimensions());
+        if (screenSpaceUI)
+        {
+            UI::UISystem::Render(curScene, renderer, _window.GetRenderDimensions());
+        }
     }
 
     renderer->EndFrame();
@@ -429,8 +432,8 @@ void Application::RenderEditorFrame(const Camera &camera)
     {
         return;
     }
-    _window.PollEvents();
+    // A scene view is not the game: no window events or input (the host's client drives it), and no screen-space UI
     Time::Update();
     Audio::AudioSystem::Instance().Update();
-    Render(camera);
+    Render(camera, false);
 }
