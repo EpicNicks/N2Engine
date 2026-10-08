@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.2.0";
+inline constexpr const char *ProtocolVersion = "1.3.0";
 
 enum class CommandType : uint8_t
 {
@@ -27,6 +27,10 @@ enum class CommandType : uint8_t
     SaveScene = 0x22,
     DeleteScene = 0x23,
     GetCurrentScene = 0x24,
+    OpenScene = 0x25,
+    SaveSceneToFile = 0x26,
+    NewScene = 0x27,
+    GetOpenScene = 0x29,
     CreateEntity = 0x30,
     DestroyEntity = 0x31,
     SetEntityTransform = 0x32,
@@ -35,6 +39,9 @@ enum class CommandType : uint8_t
     CreateScript = 0x40,
     RescanAssets = 0x41,
     GetEngineHealth = 0x50,
+    GetProjectInfo = 0x70,
+    SetProjectSettings = 0x71,
+    SetStartupScene = 0x72,
     Shutdown = 0xFF,
 };
 
@@ -53,6 +60,8 @@ enum class ResponseType : uint8_t
     AudioSamples = 0x0A,
     ServerInfo = 0x0B,
     Events = 0x0C,
+    SceneInfo = 0x0D,
+    ProjectInfo = 0x0E,
 };
 
 // Custom types
@@ -127,6 +136,22 @@ struct DeleteSceneCmd
     std::string sceneName;
 };
 
+struct OpenSceneCmd
+{
+    std::string path;
+};
+
+struct SaveSceneToFileCmd
+{
+    std::string path;
+};
+
+struct NewSceneCmd
+{
+    std::string path;
+    std::string name;
+};
+
 struct CreateEntityCmd
 {
     std::string name;
@@ -153,6 +178,16 @@ struct GetEntityTransformCmd
 struct CreateScriptCmd
 {
     std::string name;
+};
+
+struct SetProjectSettingsCmd
+{
+    std::string settings; // JSON: any
+};
+
+struct SetStartupSceneCmd
+{
+    std::string path;
 };
 
 // Response structures
@@ -201,6 +236,15 @@ struct SceneDataData
     std::string sceneJson;
 };
 
+struct SceneInfoData
+{
+    std::string path;
+    std::string name;
+    std::string uuid;
+    uint32_t revision;
+    uint32_t savedRevision;
+};
+
 struct EntityCreatedData
 {
     std::string entityId;
@@ -229,6 +273,13 @@ struct EngineHealthData
     bool healthy;
     uint32_t count;
     std::vector<SubsystemStatus> subsystems;
+};
+
+struct ProjectInfoData
+{
+    std::string rootPath;
+    std::string userDataPath;
+    std::string project; // JSON: ProjectFile
 };
 
 } // namespace N2Engine::Editor::Protocol

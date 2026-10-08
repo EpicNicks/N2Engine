@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -78,7 +78,7 @@
     },
     "PollEvents": {
       "id": "0x05",
-      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}; a client ignores kinds and keys it doesn't know.",
+      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none); assetsChanged {added, removed, modified} after a RescanAssets that found changes; projectChanged {} after project.n2proj was saved. A client ignores kinds and keys it doesn't know.",
       "request": {
         "epoch": "uint32",
         "afterSeq": "uint32",
@@ -149,7 +149,8 @@
       "request": {
         "sceneName": "string"
       },
-      "response": { "type": "Ok" }
+      "response": { "type": "Ok" },
+      "description": "Deprecated: scene files are .scene assets under assets/ now (OpenScene, SaveSceneToFile). Deletes <project>/scenes/<sceneName>.json, the scene folder of the protocol before projects; never the loaded scene's."
     },
     "GetCurrentScene": {
       "id": "0x24",
@@ -158,6 +159,73 @@
         "type": "SceneData",
         "fields": {
           "sceneJson": "string"
+        }
+      }
+    },
+    "OpenScene": {
+      "id": "0x25",
+      "description": "Opens a scene file of the project: reads it, builds it in edit mode (no component is attached) and makes it the loaded scene, replacing the loaded one (unsaved changes are lost: a client asks first). A scene path is res:// then a path inside the project's assets folder ending in .scene (any case); anything else is an Error. Error without a project, for a missing file, or for one that isn't a valid scene; the loaded scene is kept then. The scene's uuid is its file's asset UUID, the same every run. revision is the scene revision, which every command that changes the loaded scene or loads another moves on (it only grows); savedRevision is the revision the scene was last opened or saved at, so the scene has unsaved changes exactly when revision != savedRevision. Opening moves the revision on and counts as a save.",
+      "request": {
+        "path": "string"
+      },
+      "response": {
+        "type": "SceneInfo",
+        "fields": {
+          "path": "string",
+          "name": "string",
+          "uuid": "string",
+          "revision": "uint32",
+          "savedRevision": "uint32"
+        }
+      }
+    },
+    "SaveSceneToFile": {
+      "id": "0x26",
+      "description": "Writes the loaded scene to a file of the project (its JSON, indented, replacing the file atomically) and stores it in the host as SaveScene does. path empty: the scene's own file (an Error when it has none); another path saves it there (overwriting a file that exists), which becomes the scene's file and gives it that file's uuid. A scene path is res:// then a path inside the project's assets folder ending in .scene (any case); anything else is an Error. savedRevision becomes revision.",
+      "request": {
+        "path": "string"
+      },
+      "response": {
+        "type": "SceneInfo",
+        "fields": {
+          "path": "string",
+          "name": "string",
+          "uuid": "string",
+          "revision": "uint32",
+          "savedRevision": "uint32"
+        }
+      }
+    },
+    "NewScene": {
+      "id": "0x27",
+      "description": "Makes an empty scene the loaded scene, named name (empty: the file's name without .scene, or Untitled). With a path, the scene is written there first, and an existing file is an Error (open it instead); with an empty path it has no file (path is empty) until SaveSceneToFile names one. A scene path is res:// then a path inside the project's assets folder ending in .scene (any case); anything else is an Error. It starts saved: revision equals savedRevision.",
+      "request": {
+        "path": "string",
+        "name": "string"
+      },
+      "response": {
+        "type": "SceneInfo",
+        "fields": {
+          "path": "string",
+          "name": "string",
+          "uuid": "string",
+          "revision": "uint32",
+          "savedRevision": "uint32"
+        }
+      }
+    },
+    "GetOpenScene": {
+      "id": "0x29",
+      "description": "The loaded scene: its file (path, empty when it has none), name, uuid, revision and savedRevision. Error when no scene is loaded. A host started with --project always has one: its startup scene, or an empty one with no file.",
+      "request": {},
+      "response": {
+        "type": "SceneInfo",
+        "fields": {
+          "path": "string",
+          "name": "string",
+          "uuid": "string",
+          "revision": "uint32",
+          "savedRevision": "uint32"
         }
       }
     },
@@ -230,7 +298,8 @@
     "RescanAssets": {
       "id": "0x41",
       "request": {},
-      "response": { "type": "Ok" }
+      "response": { "type": "Ok" },
+      "description": "Indexes the project's assets again: new and changed files get .meta files, and deleted files are forgotten (they no longer load by path or UUID; their .meta files are kept, so import settings come back with the file). When anything changed, an assetsChanged event lists it: {added, removed, modified}, res:// paths, each sorted."
     },
     "GetEngineHealth": {
       "id": "0x50",
@@ -241,6 +310,49 @@
           "healthy": "bool",
           "count": "uint32",
           "subsystems": "SubsystemStatus[]"
+        }
+      }
+    },
+    "GetProjectInfo": {
+      "id": "0x70",
+      "description": "The project the host opened (--project): its folder and user:// folder (absolute paths, UTF-8) and its project.n2proj as saved, unknown keys included. Error without a project.",
+      "request": {},
+      "response": {
+        "type": "ProjectInfo",
+        "fields": {
+          "rootPath": "string",
+          "userDataPath": "string",
+          "project": "json:ProjectFile"
+        }
+      }
+    },
+    "SetProjectSettings": {
+      "id": "0x71",
+      "description": "Changes the project's settings with a JSON merge patch (RFC 7386: a key set to null is removed, objects merge, anything else replaces), applies the blocks it touches to the running engine (layers, input, physics) and saves project.n2proj. settings must be an object. When a subsystem refuses its block (or the file can't be saved), nothing is saved, the live state from before the patch is put back, and the Error names the blocks. Answers the project as saved. Error without a project.",
+      "request": {
+        "settings": "json"
+      },
+      "response": {
+        "type": "ProjectInfo",
+        "fields": {
+          "rootPath": "string",
+          "userDataPath": "string",
+          "project": "json:ProjectFile"
+        }
+      }
+    },
+    "SetStartupScene": {
+      "id": "0x72",
+      "description": "Sets the scene a host opens first (project.n2proj's startupScene) and saves the project file. path is an existing scene file (res:// then a path inside the project's assets folder ending in .scene, any case), which is also added to the scene list, or empty for none; anything else is an Error. Answers the project as saved. Error without a project.",
+      "request": {
+        "path": "string"
+      },
+      "response": {
+        "type": "ProjectInfo",
+        "fields": {
+          "rootPath": "string",
+          "userDataPath": "string",
+          "project": "json:ProjectFile"
         }
       }
     },
@@ -278,7 +390,22 @@
       "kind": "string",
       "level?": "string",
       "message?": "string",
-      "time?": "number"
+      "time?": "number",
+      "revision?": "number",
+      "savedRevision?": "number",
+      "path?": "string",
+      "added?": "string[]",
+      "removed?": "string[]",
+      "modified?": "string[]"
+    },
+    "ProjectFile": {
+      "formatVersion": "number",
+      "name": "string",
+      "projectId": "string",
+      "engineVersion": "string",
+      "startupScene": "string",
+      "scenes": "string[]",
+      "settings": "json"
     }
   },
   "responses": {
@@ -294,6 +421,8 @@
     "EngineHealth": "0x09",
     "AudioSamples": "0x0A",
     "ServerInfo": "0x0B",
-    "Events": "0x0C"
+    "Events": "0x0C",
+    "SceneInfo": "0x0D",
+    "ProjectInfo": "0x0E"
   }
 }

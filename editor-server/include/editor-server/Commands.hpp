@@ -193,6 +193,65 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct OpenSceneCmd
+    {
+        /// The scene file: a res:// path ending in .scene
+        std::string path;
+
+        static OpenSceneCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct SaveSceneToFileCmd
+    {
+        /// Where to save: a res:// path ending in .scene, or empty for the open scene's own file
+        std::string path;
+
+        static SaveSceneToFileCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct NewSceneCmd
+    {
+        /// The new scene's file (a res:// path ending in .scene, which mustn't exist yet), or empty for a scene with
+        /// no file until it is saved
+        std::string path;
+        /// The scene's name; empty: the file's name without its extension ("Untitled" without a path)
+        std::string name;
+
+        static NewSceneCmd Deserialize(BufferReader &r)
+        {
+            // Braced initialisation evaluates left to right, so the fields are read in order
+            return {r.ReadString(), r.ReadString()};
+        }
+    };
+
+    struct SetProjectSettingsCmd
+    {
+        /// A JSON merge patch (RFC 7386) for the project file's settings object
+        nlohmann::json settings;
+
+        static SetProjectSettingsCmd Deserialize(BufferReader &r)
+        {
+            return {ReadJson(r)};
+        }
+    };
+
+    struct SetStartupSceneCmd
+    {
+        /// A res:// path to an existing .scene file, or empty for none
+        std::string path;
+
+        static SetStartupSceneCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
     struct CreateEntityCmd
     {
         std::string name;
@@ -424,6 +483,38 @@ namespace N2Engine::Editor::Protocol
         WriteJson(payload, events);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::Events));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// OpenScene's, NewScene's, SaveSceneToFile's and GetOpenScene's response: the open scene's file (a res:// path,
+    /// or empty when it has none), its name and UUID, the scene revision and the revision last saved (or opened)
+    inline void WriteSceneInfo(BufferWriter &w, const std::string &path, const std::string &name,
+                               const std::string &uuid, uint32_t revision, uint32_t savedRevision)
+    {
+        BufferWriter payload;
+        payload.WriteString(path);
+        payload.WriteString(name);
+        payload.WriteString(uuid);
+        payload.WriteU32(revision);
+        payload.WriteU32(savedRevision);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::SceneInfo));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetProjectInfo's, SetProjectSettings' and SetStartupScene's response: the project's folder and its user://
+    /// folder (both absolute, UTF-8), and its project.n2proj as JSON
+    inline void WriteProjectInfo(BufferWriter &w, const std::string &rootPath, const std::string &userDataPath,
+                                 const nlohmann::json &project)
+    {
+        BufferWriter payload;
+        payload.WriteString(rootPath);
+        payload.WriteString(userDataPath);
+        WriteJson(payload, project);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::ProjectInfo));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

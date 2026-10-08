@@ -95,22 +95,66 @@ jobs:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
 
-      # Starts the editor host as a launcher would (--port 0, then the port from its ready line), with a project, the
-      # windowless software renderer and an access token from the environment (--token-env), talks to it over its TCP
-      # protocol (Hello, a rendered frame, audio, assets), then asks it to shut down. A second host runs with the
+      # Creates a project as a launcher would (--create, which must not start the engine), then starts the editor host
+      # on it (--port 0, then the port from its ready line) with the windowless software renderer and an access token
+      # from the environment (--token-env), talks to it over its TCP protocol (Hello, the startup scene, a rendered
+      # frame, audio, saving and reopening the scene, the project, assets), then asks it to shut down. A second host runs with the
       # default renderer, whose window fails on the GPU-less runner so it serves without one, and with
       # --exit-on-disconnect, so it must exit by itself when its client leaves.
       # A non-zero exit code catches crashes during shutdown or static destruction.
       - name: Editor host smoke test
         shell: pwsh
+        # The configuration comes in through env, not an expression in the script: GitHub refuses a run block over 21000
+        # characters that contains an expression.
+        env:
+          N2_SMOKE_CONFIG: ${{ matrix.config }}
         run: |
-          $exe = Resolve-Path "build/bin/${{ matrix.config }}/N2EditorHost.exe"
+          $exe = Resolve-Path "build/bin/$env:N2_SMOKE_CONFIG/N2EditorHost.exe"
           $protocolVersion = (Get-Content editor-server/protocol/protocol.json -Raw | ConvertFrom-Json).version
 
-          # A project with one asset: the host's ResourceLoader writes its .meta under .import/ at startup
-          $project = Join-Path $env:RUNNER_TEMP "n2-smoke-project"
+          # --create: CPU only (no engine, so no renderer or audio lines), exactly one line on stdout, exit code 0; a
+          # second --create on the same folder changes nothing and exits with 2. The folder name has a space, as a
+          # user's would.
+          $project = Join-Path $env:RUNNER_TEMP "n2 smoke project"
           Remove-Item $project -Recurse -Force -ErrorAction SilentlyContinue
-          $null = New-Item -ItemType Directory -Force (Join-Path $project "assets")
+          $createOut = Join-Path $PWD "create.out"
+          $createErr = Join-Path $PWD "create.err"
+          $create = Start-Process -FilePath $exe -PassThru -Wait -NoNewWindow `
+            -ArgumentList "--create", "`"$project`"", "--name", "`"Smoke Project`"" `
+            -RedirectStandardOutput $createOut -RedirectStandardError $createErr
+          $createLines = @(Get-Content $createOut)
+          Write-Host "--create (exit $($create.ExitCode)):"; $createLines | ForEach-Object { Write-Host "  $_" }
+          Get-Content $createErr -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  stderr: $_" }
+          if ($create.ExitCode -ne 0) { throw "--create exited with $($create.ExitCode)" }
+          if ($createLines.Count -ne 1 -or $createLines[0] -notmatch '^N2EditorHost created (?:.* )?projectId=([0-9a-f-]{36})(?: |$)') {
+            throw "--create didn't print exactly its created line"
+          }
+          $projectId = $Matches[1]
+          if ($createLines[0] -notmatch ' startupScene=res://scenes/Main\.scene(?: |$)') { throw "--create: no startup scene in its line" }
+          $projectFile = Get-Content (Join-Path $project "project.n2proj") -Raw | ConvertFrom-Json
+          if ($projectFile.projectId -ne $projectId -or $projectFile.name -ne "Smoke Project") { throw "project.n2proj doesn't match the created line" }
+          if (-not (Test-Path (Join-Path $project "assets/scenes/Main.scene"))) { throw "--create made no Main.scene" }
+          $before = Get-Content (Join-Path $project "project.n2proj") -Raw
+          $again = Start-Process -FilePath $exe -PassThru -Wait -NoNewWindow -ArgumentList "--create", "`"$project`"" `
+            -RedirectStandardOutput $createOut -RedirectStandardError $createErr
+          if ($again.ExitCode -ne 2) { throw "--create on a project exited with $($again.ExitCode), expected 2" }
+          if ((Get-Content (Join-Path $project "project.n2proj") -Raw) -ne $before) { throw "--create on a project changed project.n2proj" }
+          Write-Host "--create: project $projectId; again: exit 2, unchanged"
+
+          # --project on a folder that isn't a project fails before the engine starts (exit 1); one an older host opened
+          # (it has .import/) is told how to adopt it keeping its asset UUIDs
+          $plain = Join-Path $env:RUNNER_TEMP "n2-not-a-project"
+          Remove-Item $plain -Recurse -Force -ErrorAction SilentlyContinue
+          $null = New-Item -ItemType Directory -Force (Join-Path $plain ".import")
+          $notProject = Start-Process -FilePath $exe -PassThru -Wait -NoNewWindow -ArgumentList "--project", "`"$plain`"", "--port", "0" `
+            -RedirectStandardOutput $createOut -RedirectStandardError $createErr
+          $notProjectErr = Get-Content $createErr -Raw
+          Write-Host "--project on a plain folder (exit $($notProject.ExitCode)): $notProjectErr"
+          if ($notProject.ExitCode -ne 1) { throw "--project on a folder without project.n2proj exited with $($notProject.ExitCode), expected 1" }
+          if (-not "$notProjectErr".Contains("--project-id from-path")) { throw "--project on a folder with .import/ didn't suggest --create --project-id from-path" }
+          if ((Get-Content $createOut -Raw) -match 'N2EditorHost ready') { throw "--project on a plain folder printed a ready line" }
+
+          # One more asset: the host's ResourceLoader writes its .meta under .import/ at startup
           Set-Content (Join-Path $project "assets/startup.mat") "{}"
 
           # The asset's .meta: its UUID must be a real one (all zeros means ResourceUUID wasn't initialised)
@@ -218,6 +262,28 @@ jobs:
           }
           function Get-HelloPayload([string]$token) {
             return ,[byte[]]((Get-StringBytes "CI smoke test") + (Get-StringBytes $protocolVersion) + (Get-StringBytes $token))
+          }
+
+          # A string field at $offset ([uint32 byte count][UTF-8]); $offset moves past it
+          function Read-WireString([byte[]]$payload, [ref]$offset) {
+            $length = [BitConverter]::ToUInt32($payload, $offset.Value)
+            $text = [Text.Encoding]::UTF8.GetString($payload, $offset.Value + 4, $length)
+            $offset.Value += 4 + $length
+            return $text
+          }
+          # SceneInfo (0x0D): path, name, uuid (strings), revision, savedRevision (uint32)
+          function Get-SceneInfo($response, [string]$what) {
+            Assert-Response $response 0x0D $what
+            $offset = 0
+            $info = @{
+              Path = Read-WireString $response.Payload ([ref]$offset)
+              Name = Read-WireString $response.Payload ([ref]$offset)
+              Uuid = Read-WireString $response.Payload ([ref]$offset)
+            }
+            $info.Revision = [BitConverter]::ToUInt32($response.Payload, $offset)
+            $info.SavedRevision = [BitConverter]::ToUInt32($response.Payload, $offset + 4)
+            Write-Host "${what}: '$($info.Path)' ($($info.Name), $($info.Uuid)), revision $($info.Revision), saved $($info.SavedRevision)"
+            return $info
           }
 
           # EngineHealth (0x09): healthy, then a uint32 count of (name, state, detail) strings. As a name -> state map.
@@ -334,6 +400,39 @@ jobs:
             if ($rate -ne 48000 -or $channels -ne 2) { throw "Unexpected audio format: $rate Hz, $channels channels" }
             Write-Host "GetAudio: $rate Hz, $channels channels, $format, $frames frames"
 
+            # The startup scene is open: GetOpenScene (0x29). An entity (CreateEntity, 0x30) leaves it unsaved;
+            # SaveSceneToFile (0x26) with an empty path writes it to its own file; OpenScene (0x25) reads it back
+            $opened = Get-SceneInfo (& { Send-Frame $stream 0x29; Read-Response $stream }) "GetOpenScene"
+            if ($opened.Path -ne "res://scenes/Main.scene" -or $opened.Revision -ne $opened.SavedRevision) { throw "The startup scene isn't open, or opened unsaved" }
+            Send-Frame $stream 0x30 (Get-StringBytes "Smoke Box")
+            Assert-Response (Read-Response $stream) 0x06 "CreateEntity"
+            $edited = Get-SceneInfo (& { Send-Frame $stream 0x29; Read-Response $stream }) "GetOpenScene after CreateEntity"
+            if ($edited.Revision -eq $edited.SavedRevision) { throw "CreateEntity left the scene saved" }
+            $saved = Get-SceneInfo (& { Send-Frame $stream 0x26 (Get-StringBytes ""); Read-Response $stream }) "SaveSceneToFile"
+            if ($saved.Revision -ne $saved.SavedRevision -or $saved.Uuid -ne $opened.Uuid) { throw "SaveSceneToFile didn't save the scene" }
+            if (-not (Get-Content (Join-Path $project "assets/scenes/Main.scene") -Raw).Contains("Smoke Box")) { throw "Main.scene doesn't hold the saved entity" }
+            $reopened = Get-SceneInfo (& { Send-Frame $stream 0x25 (Get-StringBytes "res://scenes/Main.scene"); Read-Response $stream }) "OpenScene"
+            if ($reopened.Uuid -ne $opened.Uuid) { throw "OpenScene gave the scene another UUID" }
+            Send-Frame $stream 0x34 # GetAllEntities: count, then (id, name) strings
+            $response = Read-Response $stream
+            Assert-Response $response 0x05 "GetAllEntities"
+            if (-not [Text.Encoding]::UTF8.GetString($response.Payload).Contains("Smoke Box")) { throw "The reopened scene lost its entity" }
+            # A frame of the reopened scene, on the software renderer
+            Send-Frame $stream 0x01
+            Assert-Response (Read-Response $stream) 0x02 "RenderFrame after OpenScene"
+
+            # GetProjectInfo (0x70): rootPath, userDataPath (strings), then project.n2proj as JSON
+            Send-Frame $stream 0x70
+            $response = Read-Response $stream
+            Assert-Response $response 0x0E "GetProjectInfo"
+            $offset = 0
+            $rootPath = Read-WireString $response.Payload ([ref]$offset)
+            $userDataPath = Read-WireString $response.Payload ([ref]$offset)
+            $projectJson = (Read-WireString $response.Payload ([ref]$offset)) | ConvertFrom-Json
+            if ($projectJson.projectId -ne $projectId) { throw "GetProjectInfo: projectId $($projectJson.projectId), expected $projectId" }
+            if (-not $userDataPath.EndsWith("Smoke_Project-$($projectId.Substring(0, 8))")) { throw "GetProjectInfo: user:// isn't the project's own folder: $userDataPath" }
+            Write-Host "GetProjectInfo: $rootPath, user:// at $userDataPath"
+
             # --project initialised the ResourceLoader: the startup asset has metadata, and an asset added
             # afterwards gets its own on RescanAssets
             Assert-Meta "startup.mat"
@@ -351,7 +450,7 @@ jobs:
             Write-Host "Editor host exited cleanly"
 
             $log = Get-Content $logPath -Raw
-            foreach ($problem in "Assets directory not found", "ResourceUUID not initialized") {
+            foreach ($problem in "Assets directory not found", "ResourceUUID not initialized", "Couldn't open the startup scene") {
               if ($log.Contains($problem)) { throw "Host log reports: $problem" }
             }
             if ($log.Contains($token)) { throw "The host logged its access token" }

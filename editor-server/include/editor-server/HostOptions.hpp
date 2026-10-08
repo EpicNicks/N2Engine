@@ -6,6 +6,8 @@
 #include <string_view>
 #include <vector>
 
+#include <math/UUID.hpp>
+
 namespace N2Engine::Editor
 {
     /// The renderer --renderer chooses
@@ -37,7 +39,33 @@ namespace N2Engine::Editor
         /// doesn't keep running
         bool exitOnDisconnect = false;
         bool showHelp = false;
+
+        /// --create: make this folder a project (IO::CreateProject), print the created line, and exit; the engine
+        /// isn't started. Empty: open --project (or none) as usual.
+        std::string createPath;
+        /// --name, with --create: the new project's name (empty: the folder's name)
+        std::string projectName;
+        /// --project-id <uuid>, with --create: the new project's id (nullopt: a random one, or see projectIdFromPath)
+        std::optional<Math::UUID> projectId;
+        /// --project-id from-path, with --create: the id is the namespace the folder's asset UUIDs had before projects
+        /// had ids (ResourceUUID::NamespaceForProjectDir), so adopting a folder keeps every UUID it has
+        bool projectIdFromPath = false;
     };
+
+    /// The value of --project-id that asks for ResourceUUID::NamespaceForProjectDir of the --create folder
+    inline constexpr std::string_view ProjectIdFromPath = "from-path";
+
+    /// N2EditorHost --create's exit code when the folder already has a project.n2proj (nothing is written). 0 is
+    /// success and 1 any other failure.
+    inline constexpr int ExitCodeAlreadyAProject = 2;
+
+    /// Starts the line N2EditorHost --create prints to stdout once the project exists
+    inline constexpr std::string_view CreatedLinePrefix = "N2EditorHost created";
+
+    /// The created line, without the newline: "N2EditorHost created projectId=<uuid> startupScene=<res path>". As
+    /// with the ready line, a launcher matches the prefix, then space-separated key=value fields (values never hold a
+    /// space), ignoring keys it doesn't know; projectId is always present, startupScene when the project has one.
+    [[nodiscard]] std::string FormatCreatedLine(const Math::UUID &projectId, std::string_view startupScene);
 
     /// A decimal port in [0, 65535], nothing else (no sign, whitespace or trailing text). 0 means "any free
     /// port" (EditorServer::Start(0)).
@@ -48,7 +76,8 @@ namespace N2Engine::Editor
 
     /// The arguments after the program name. -h/--help anywhere wins: the result is the defaults with showHelp
     /// set, whatever else is there. Otherwise an option missing its value (none follows, or the next argument
-    /// starts with "--") or an invalid port is an error (the message names it); unknown arguments are ignored.
+    /// starts with "--"), an invalid port, renderer or --project-id, --create together with --project, and --name or
+    /// --project-id without --create are errors (the message names the option); unknown arguments are ignored.
     [[nodiscard]] std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args);
 
     /// N2EditorHost's usage text (what --help prints), one option per line

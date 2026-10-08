@@ -31,11 +31,11 @@ namespace N2Engine::IO
 
         if (!std::filesystem::exists(sourcePath))
         {
-            Logger::Error(std::format("Source file missing: {}", sourcePath.string()));
+            Logger::Error(std::format("Source file missing: {}", PathToUtf8(sourcePath)));
             return nullptr;
         }
 
-        std::string ext = sourcePath.extension().string();
+        std::string ext = PathToUtf8(sourcePath.extension());
         std::ranges::transform(ext, ext.begin(), ::tolower);
 
         auto loaderIt = _loaders.find(ext);

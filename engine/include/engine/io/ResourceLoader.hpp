@@ -28,8 +28,30 @@ namespace N2Engine::IO
         }
         
         // === Initialization ===
-        void Initialize(const std::filesystem::path& projectRoot);
-        void RescanAssets();
+
+        /// What a rescan found changed since the scan before it, each list sorted
+        struct RescanResult
+        {
+            /// Files with no metadata before (new, or of an extension registered since)
+            std::vector<ResourcePath> added;
+            /// Files that were indexed and are gone: their metadata and cache entries are dropped (their .meta
+            /// files are kept, so import settings come back with the file)
+            std::vector<ResourcePath> removed;
+            /// Files whose size or modification time changed
+            std::vector<ResourcePath> modified;
+
+            [[nodiscard]] bool Empty() const { return added.empty() && removed.empty() && modified.empty(); }
+        };
+
+        /**
+         * Makes projectRoot the project: res:// is <projectRoot>/assets, .meta files go in <projectRoot>/.import,
+         * and user:// is userDataRoot (created if missing). An empty userDataRoot is the shared folder every project
+         * used before projects had ids (ProjectFile::UserDataBase()); a project's own is ProjectFile::UserDataPath().
+         * Forgets everything about the previous project, then scans the assets.
+         */
+        void Initialize(const std::filesystem::path& projectRoot, const std::filesystem::path& userDataRoot = {});
+        /// Indexes new and changed files under the assets folder and forgets deleted ones; returns what changed
+        RescanResult RescanAssets();
         
         // === Loading ===
         template <typename T = Base::Asset>
@@ -111,14 +133,18 @@ namespace N2Engine::IO
         
         std::filesystem::path GetProjectRoot() const { return _projectRoot; }
         std::filesystem::path GetAssetsRoot() const { return _assetsRoot; }
+        /// Where user:// paths resolve (see Initialize); empty before Initialize
+        std::filesystem::path GetUserDataRoot() const { return _userDataRoot; }
         
     private:
         ResourceLoader() = default;
         
-        void ScanDirectory(const std::filesystem::path& directory);
+        /// Indexes every file with a loader under directory, recording in result what is new or changed, and in
+        /// seen every such file found (even one whose metadata failed), so RescanAssets can tell what is gone
+        void ScanDirectory(const std::filesystem::path& directory, RescanResult& result,
+                           std::unordered_set<ResourcePath, ResourcePath::Hash>& seen);
         AssetMetadata CreateOrUpdateMetadata(const std::filesystem::path& sourcePath);
         std::filesystem::path GetMetadataPath(const std::filesystem::path& sourcePath) const;
-        std::filesystem::path GetUserDataPath() const;
         /// Gives a just-loaded asset's sub-assets their UUIDs and resource path, and records the index
         void RegisterSubAssets(const ResourcePath& parent, const Base::Asset& asset);
         /// Whether a .meta's sub-asset index was written for the file as it is now (its customData.subAssetsSource

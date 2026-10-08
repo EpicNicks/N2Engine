@@ -137,6 +137,18 @@ namespace ProtocolVectors
                 return json{{"entityId", GetEntityTransformCmd::Deserialize(r).entityId}};
             }},
             {"CreateScript", [](BufferReader &r) { return json{{"name", CreateScriptCmd::Deserialize(r).name}}; }},
+            {"OpenScene", [](BufferReader &r) { return json{{"path", OpenSceneCmd::Deserialize(r).path}}; }},
+            {"SaveSceneToFile", [](BufferReader &r) { return json{{"path", SaveSceneToFileCmd::Deserialize(r).path}}; }},
+            {"NewScene", [](BufferReader &r)
+            {
+                const auto cmd = NewSceneCmd::Deserialize(r);
+                return json{{"path", cmd.path}, {"name", cmd.name}};
+            }},
+            {"SetProjectSettings", [](BufferReader &r)
+            {
+                return json{{"settings", SetProjectSettingsCmd::Deserialize(r).settings}};
+            }},
+            {"SetStartupScene", [](BufferReader &r) { return json{{"path", SetStartupSceneCmd::Deserialize(r).path}}; }},
         };
         return decoders;
     }
@@ -188,6 +200,15 @@ namespace ProtocolVectors
                 WriteEntityList(w, entities);
             }},
             {"ScriptData", [](BufferWriter &w, const json &f) { WriteScriptData(w, StringField(f, "scriptTemplate")); }},
+            {"SceneInfo", [](BufferWriter &w, const json &f)
+            {
+                WriteSceneInfo(w, StringField(f, "path"), StringField(f, "name"), StringField(f, "uuid"),
+                               Uint32Field(f, "revision"), Uint32Field(f, "savedRevision"));
+            }},
+            {"ProjectInfo", [](BufferWriter &w, const json &f)
+            {
+                WriteProjectInfo(w, StringField(f, "rootPath"), StringField(f, "userDataPath"), f.at("project"));
+            }},
             {"EngineHealth", [](BufferWriter &w, const json &f)
             {
                 std::vector<SubsystemStatusEntry> subsystems;

@@ -9,6 +9,8 @@
 
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
+#include "engine/ProjectSettings.hpp"
+#include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
@@ -109,10 +111,25 @@ int main(int argc, char *argv[])
     SceneManager::AddScene(Scene::Create("Lua Scene"), true);
     SceneManager::ProcessAnyPendingSceneChange();
 
-    // Scripts are loaded through ResourceLoader, which resolves res:// paths under <project>/assets
-    // The namespace the editor host uses for the same folder, so both give its assets the same UUIDs
-    IO::ResourceUUID::Initialize(IO::ResourceUUID::NamespaceForProjectDir(projectDir));
-    IO::ResourceLoader::Instance().Initialize(projectDir);
+    // Scripts are loaded through ResourceLoader, which resolves res:// paths under <project>/assets. A folder with a
+    // project.n2proj (lua_project's own has one) is opened as the editor host opens it: its projectId is the asset UUID
+    // namespace, user:// is the project's own folder and its settings apply. A plain folder still runs, as before
+    // projects had files: the namespace comes from its path, and user:// is the shared folder.
+    if (const auto project = IO::ProjectFile::Load(projectDir); project)
+    {
+        IO::ResourceUUID::Initialize(project->projectId);
+        IO::ResourceLoader::Instance().Initialize(projectDir, project->UserDataPath());
+        for (const std::string &problem : ApplyProjectSettings(project->settings))
+        {
+            Logger::Warn("Project settings: " + problem);
+        }
+    }
+    else
+    {
+        Logger::Warn(project.error() + "; running the folder without one");
+        IO::ResourceUUID::Initialize(IO::ResourceUUID::NamespaceForProjectDir(projectDir));
+        IO::ResourceLoader::Instance().Initialize(projectDir);
+    }
 
     if (!Scripting::LuaRuntime::Instance().RunFile(IO::ResourcePath("res://scene.lua")))
     {

@@ -237,3 +237,102 @@ TEST(HostOptionsTest, ReadAccessTokenRefusesWhatIsntAVariableName)
         EXPECT_NE(token.error().find("is not an environment variable name"), std::string::npos) << token.error();
     }
 }
+
+// ==================== --create ====================
+
+TEST(HostOptionsTest, CreateTakesAFolderANameAndAnId)
+{
+    const auto parsed = ParseHostArguments({"--create", "C:/Games/My Game", "--name", "My Game", "--project-id",
+                                            "8E0C3A8E-0B1F-4F5E-9D0E-3F6F1C7D2A10"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ(parsed->createPath, "C:/Games/My Game");
+    EXPECT_EQ(parsed->projectName, "My Game");
+    ASSERT_TRUE(parsed->projectId.has_value());
+    EXPECT_EQ(parsed->projectId->ToString(), "8e0c3a8e-0b1f-4f5e-9d0e-3f6f1c7d2a10");
+    EXPECT_FALSE(parsed->projectIdFromPath);
+    EXPECT_TRUE(parsed->projectPath.empty());
+}
+
+TEST(HostOptionsTest, CreateDefaultsToTheFolderNameAndARandomId)
+{
+    const auto parsed = ParseHostArguments({"--create", "game"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ(parsed->createPath, "game");
+    EXPECT_TRUE(parsed->projectName.empty());
+    EXPECT_FALSE(parsed->projectId.has_value());
+    EXPECT_FALSE(parsed->projectIdFromPath);
+}
+
+TEST(HostOptionsTest, ProjectIdFromPathAsksForTheFoldersOldNamespace)
+{
+    const auto parsed = ParseHostArguments({"--create", "game", "--project-id", "from-path"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->projectIdFromPath);
+    EXPECT_FALSE(parsed->projectId.has_value());
+}
+
+TEST(HostOptionsTest, AnInvalidProjectIdIsAnError)
+{
+    for (const char *id : {"not-a-uuid", "00000000-0000-0000-0000-000000000000", "8e0c3a8e0b1f4f5e9d0e3f6f1c7d2a10",
+                           "From-Path"})
+    {
+        const auto parsed = ParseHostArguments({"--create", "game", "--project-id", id});
+        ASSERT_FALSE(parsed) << id;
+        EXPECT_EQ(parsed.error().rfind("Invalid --project-id: ", 0), 0u) << parsed.error();
+    }
+}
+
+TEST(HostOptionsTest, CreateAndProjectCantBeCombined)
+{
+    const auto parsed = ParseHostArguments({"--create", "a", "--project", "b"});
+    ASSERT_FALSE(parsed);
+    EXPECT_NE(parsed.error().find("--create and --project"), std::string::npos) << parsed.error();
+}
+
+TEST(HostOptionsTest, NameAndProjectIdOnlyGoWithCreate)
+{
+    const auto name = ParseHostArguments({"--project", "b", "--name", "x"});
+    ASSERT_FALSE(name);
+    EXPECT_EQ(name.error(), "--name only goes with --create");
+
+    const auto id = ParseHostArguments({"--project-id", "from-path"});
+    ASSERT_FALSE(id);
+    EXPECT_EQ(id.error(), "--project-id only goes with --create");
+}
+
+TEST(HostOptionsTest, CreateOptionsMissingTheirValueAreErrors)
+{
+    for (const char *option : {"--create", "--name", "--project-id"})
+    {
+        const auto parsed = ParseHostArguments({option});
+        ASSERT_FALSE(parsed) << option;
+        EXPECT_EQ(parsed.error(), std::string(option) + " is missing a value");
+    }
+
+    // An empty folder isn't "no --create": that would start a host instead
+    const auto empty = ParseHostArguments({"--create", ""});
+    ASSERT_FALSE(empty);
+    EXPECT_EQ(empty.error(), "--create is missing a value");
+}
+
+TEST(HostOptionsTest, TheCreatedLineHasTheDocumentedFormat)
+{
+    // The Electron launcher parses this exact text; see editor.html#create
+    const auto id = N2Engine::Math::UUID::FromString("8e0c3a8e-0b1f-4f5e-9d0e-3f6f1c7d2a10").value();
+    EXPECT_EQ(FormatCreatedLine(id, "res://scenes/Main.scene"),
+              "N2EditorHost created projectId=8e0c3a8e-0b1f-4f5e-9d0e-3f6f1c7d2a10 startupScene=res://scenes/Main.scene");
+    EXPECT_EQ(FormatCreatedLine(id, ""), "N2EditorHost created projectId=8e0c3a8e-0b1f-4f5e-9d0e-3f6f1c7d2a10");
+    // A value never holds a space: such a startup scene is left out rather than breaking the fields
+    EXPECT_EQ(FormatCreatedLine(id, "res://my scenes/A.scene"),
+              "N2EditorHost created projectId=8e0c3a8e-0b1f-4f5e-9d0e-3f6f1c7d2a10");
+    EXPECT_EQ(FormatCreatedLine(id, "").rfind(CreatedLinePrefix, 0), 0u);
+}
+
+TEST(HostOptionsTest, TheUsageNamesTheCreateOptions)
+{
+    const std::string_view usage = HostUsage();
+    for (const std::string_view option : {"--create", "--name", "--project-id", "from-path", "N2EditorHost created"})
+    {
+        EXPECT_NE(usage.find(option), std::string_view::npos) << option;
+    }
+}

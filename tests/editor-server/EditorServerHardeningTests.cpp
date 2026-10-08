@@ -253,7 +253,9 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                         CommandType::DeleteScene, CommandType::GetCurrentScene,
                                         CommandType::CreateEntity, CommandType::DestroyEntity,
                                         CommandType::SetEntityTransform, CommandType::CreateScript,
-                                        CommandType::RescanAssets, CommandType::Hello, CommandType::Shutdown})
+                                        CommandType::RescanAssets, CommandType::Hello, CommandType::Shutdown,
+                                        CommandType::OpenScene, CommandType::SaveSceneToFile, CommandType::NewScene,
+                                        CommandType::SetProjectSettings, CommandType::SetStartupScene})
     {
         EXPECT_FALSE(EditorServer::IsPolledCommand(static_cast<uint8_t>(notPolled))) << static_cast<int>(notPolled);
     }

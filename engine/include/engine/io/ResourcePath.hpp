@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exception>
 #include <string>
 #include <filesystem>
 #include <ranges>
@@ -9,6 +10,37 @@
 
 namespace N2Engine::IO
 {
+    /// A filesystem path from UTF-8 text. Resource paths, .meta keys and the editor protocol hold UTF-8; a path built
+    /// from a std::string directly would read it in the Windows code page instead (and fail for what that can't spell)
+    /// Text that isn't valid UTF-8 (which the conversion refuses) is read as before, in the code page, rather than
+    /// throwing out of every ResourcePath built from it.
+    inline std::filesystem::path PathFromUtf8(const std::string &utf8)
+    {
+        try
+        {
+            return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
+        }
+        catch (const std::exception &)
+        {
+            return std::filesystem::path(utf8);
+        }
+    }
+
+    /// A filesystem path as UTF-8 text with forward slashes (never throws for characters the code page lacks; a path
+    /// that can't be converted at all, such as one holding an unpaired surrogate, gives "")
+    inline std::string PathToUtf8(const std::filesystem::path &path)
+    {
+        try
+        {
+            const std::u8string text = path.generic_u8string();
+            return std::string(text.begin(), text.end());
+        }
+        catch (const std::exception &)
+        {
+            return {};
+        }
+    }
+
     enum class PathType
     {
         Resource,   // res://
@@ -28,7 +60,7 @@ namespace N2Engine::IO
         void Normalize()
         {
             std::ranges::replace(_path, '\\', '/');
-            _path = std::filesystem::path(_path).lexically_normal().generic_string();
+            _path = PathToUtf8(PathFromUtf8(_path).lexically_normal());
             if (_path == ".")
             {
                 _path.clear();
@@ -43,7 +75,7 @@ namespace N2Engine::IO
                 }
             }
             // "a/b/" and "a/b" are the same directory, but a bare root ("/", "C:/") keeps its separator
-            if (_path.ends_with('/') && std::filesystem::path(_path).has_relative_path())
+            if (_path.ends_with('/') && PathFromUtf8(_path).has_relative_path())
             {
                 _path.pop_back();
             }
@@ -64,7 +96,7 @@ namespace N2Engine::IO
                 _type = PathType::User;
                 _path = pathStr.substr(7);
             }
-            else if (std::filesystem::path(pathStr).is_absolute())
+            else if (PathFromUtf8(pathStr).is_absolute())
             {
                 _type = PathType::Absolute;
                 _path = pathStr;
@@ -104,33 +136,29 @@ namespace N2Engine::IO
         
         ResourcePath GetParent() const
         {
-            std::filesystem::path p(_path);
-            return ResourcePath(_type, p.parent_path().string());
+            return ResourcePath(_type, PathToUtf8(PathFromUtf8(_path).parent_path()));
         }
         
         std::string GetFilename() const
         {
-            std::filesystem::path p(_path);
-            return p.filename().string();
+            return PathToUtf8(PathFromUtf8(_path).filename());
         }
         
         std::string GetStem() const
         {
-            std::filesystem::path p(_path);
-            return p.stem().string();
+            return PathToUtf8(PathFromUtf8(_path).stem());
         }
         
         std::string GetExtension() const
         {
-            std::filesystem::path p(_path);
-            return p.extension().string();
+            return PathToUtf8(PathFromUtf8(_path).extension());
         }
         
         ResourcePath operator/(const std::string& child) const
         {
-            std::filesystem::path p(_path);
-            p /= child;
-            return ResourcePath(_type, p.string());
+            std::filesystem::path p = PathFromUtf8(_path);
+            p /= PathFromUtf8(child);
+            return ResourcePath(_type, PathToUtf8(p));
         }
         
         bool operator==(const ResourcePath& other) const

@@ -53,9 +53,6 @@ target_link_libraries(N2EditorServer
     $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
-# The engine version Hello reports: the root project's (editor-server declares no project of its own)
-target_compile_definitions(N2EditorServer PRIVATE N2ENGINE_VERSION="${PROJECT_VERSION}")
-
 if(TARGET N2ProtocolGenerate)
     add_dependencies(N2EditorServer N2ProtocolGenerate)
 endif()

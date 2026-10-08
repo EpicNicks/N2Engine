@@ -38,5 +38,11 @@ namespace N2Engine
 
         static void SetTimeScale(float scale);
         static float GetTimeScale();
+
+        /// The unscaled fixed timestep, in seconds (0.02 by default, and again after Application::Init); the
+        /// scaled one follows the time scale. False, changing nothing, unless seconds is finite and positive.
+        static bool SetFixedTimestep(double seconds);
+        /// The unscaled fixed timestep, in seconds, at full precision (what SetFixedTimestep set)
+        static double GetFixedTimestep();
     };
 }
