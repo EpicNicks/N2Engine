@@ -813,6 +813,7 @@ Renderer::Common::SceneLightingData Scene::CollectLighting(const LightingSource 
 
     SceneLightingData lighting;
     lighting.colorSpace = Rendering::RenderSettings::GetColorSpace();
+    lighting.forceShaderEncode = Rendering::RenderSettings::GetForceShaderEncode();
 
     // The registered lights (attached ones), or, in edit mode, the ones the hierarchy holds
     std::vector<Rendering::Light *> hierarchyLights;

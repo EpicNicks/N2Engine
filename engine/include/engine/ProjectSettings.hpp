@@ -23,7 +23,10 @@ namespace N2Engine
      *               physics backend's gravity (skipped without a backend)
      *     rendering {"colorSpace": "gamma" | "linear"}: Rendering::RenderSettings::SetColorSpace (case-insensitive;
      *               other keys in the block are left alone). A block without colorSpace, with it null, or (when
-     *               `only` names rendering) removed, means the default, gamma; a bad value is refused and changes nothing
+     *               `only` names rendering) removed, means the default, gamma. "forceShaderEncode": true makes
+     *               OpenGL's lit shader encode its own output in linear lighting (an escape hatch for a driver that
+     *               reports the wrong framebuffer encoding); absent, null or removed means false, a non-boolean is
+     *               refused; a bad value is refused and changes nothing
      *
      * Other blocks (window, and keys this version doesn't know) are left to whoever reads them: an editor
      * host has no window to size. A missing or null block changes nothing (except rendering when `only` names it, above). Call it after Application::Init (which
@@ -51,6 +54,7 @@ namespace N2Engine
         double fixedTimestep = 0.0;
         std::optional<Math::Vector3> gravity;
         Renderer::Common::ColorSpace colorSpace = Renderer::Common::ColorSpace::Gamma;
+        bool forceShaderEncode = false;
 
         [[nodiscard]] static ProjectSettingsSnapshot Capture();
         /// Puts the captured state back

@@ -42,8 +42,15 @@ namespace
     class ColorSpaceGuard
     {
     public:
-        ColorSpaceGuard() { RenderSettings::SetColorSpace(ColorSpace::Gamma); }
-        ~ColorSpaceGuard() { RenderSettings::SetColorSpace(ColorSpace::Gamma); }
+        ColorSpaceGuard() { Reset(); }
+        ~ColorSpaceGuard() { Reset(); }
+
+    private:
+        static void Reset()
+        {
+            RenderSettings::SetColorSpace(ColorSpace::Gamma);
+            RenderSettings::SetForceShaderEncode(false);
+        }
     };
 
     /// A lit mid-grey cube drawn as Application::Render draws the scene pass, with the lighting CollectLighting gives
@@ -196,11 +203,55 @@ TEST(RenderSettingsTest, OnlyRenderingLimitsWhichBlocksApply)
     EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Linear);
 }
 
+TEST(RenderSettingsTest, ForceShaderEncodeIsOffByDefaultAndSetByTheProjectSetting)
+{
+    const ColorSpaceGuard guard;
+    EXPECT_FALSE(RenderSettings::GetForceShaderEncode());
+    EXPECT_TRUE(ApplyProjectSettings(json{{"rendering", {{"colorSpace", "linear"}, {"forceShaderEncode", true}}}}).empty());
+    EXPECT_TRUE(RenderSettings::GetForceShaderEncode());
+    EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Linear);
+
+    // Removing the key, or the whole block with a patch, turns it off again
+    EXPECT_TRUE(ApplyProjectSettings(json{{"rendering", {{"colorSpace", "linear"}}}}).empty());
+    EXPECT_FALSE(RenderSettings::GetForceShaderEncode());
+    RenderSettings::SetForceShaderEncode(true);
+    EXPECT_TRUE(ApplyProjectSettings(json{{"rendering", {{"forceShaderEncode", nullptr}}}}).empty());
+    EXPECT_FALSE(RenderSettings::GetForceShaderEncode());
+    RenderSettings::SetForceShaderEncode(true);
+    EXPECT_TRUE(ApplyProjectSettings(json::object(), std::set<std::string>{"rendering"}).empty());
+    EXPECT_FALSE(RenderSettings::GetForceShaderEncode());
+}
+
+TEST(RenderSettingsTest, ABadForceShaderEncodeIsRefusedAndChangesNothingElse)
+{
+    const ColorSpaceGuard guard;
+    RenderSettings::SetForceShaderEncode(true);
+    const auto problems = ApplyProjectSettings(json{{"rendering", {{"forceShaderEncode", "yes"}, {"colorSpace", "linear"}}}});
+    ASSERT_EQ(problems.size(), 1u);
+    EXPECT_NE(problems[0].find("rendering.forceShaderEncode"), std::string::npos);
+    EXPECT_TRUE(RenderSettings::GetForceShaderEncode()) << "the refused value changed nothing";
+    EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Linear) << "the valid key still applied";
+}
+
+TEST(RenderSettingsTest, TheSnapshotAlsoRestoresForceShaderEncode)
+{
+    const ColorSpaceGuard guard;
+    RenderSettings::SetForceShaderEncode(true);
+    const ProjectSettingsSnapshot snapshot = ProjectSettingsSnapshot::Capture();
+    EXPECT_TRUE(snapshot.forceShaderEncode);
+    RenderSettings::SetForceShaderEncode(false);
+    snapshot.Restore();
+    EXPECT_TRUE(RenderSettings::GetForceShaderEncode());
+}
+
 TEST(RenderSettingsTest, CollectLightingCarriesTheColourSpace)
 {
     const ColorSpaceGuard guard;
     auto scene = Scene::Create("RenderSettingsLighting");
     EXPECT_EQ(scene->CollectLighting().colorSpace, ColorSpace::Gamma);
+    EXPECT_FALSE(scene->CollectLighting().forceShaderEncode);
+    RenderSettings::SetForceShaderEncode(true);
+    EXPECT_TRUE(scene->CollectLighting().forceShaderEncode);
     RenderSettings::SetColorSpace(ColorSpace::Linear);
     EXPECT_EQ(scene->CollectLighting().colorSpace, ColorSpace::Linear);
     EXPECT_EQ(scene->CollectLighting(Scene::LightingSource::Hierarchy).colorSpace, ColorSpace::Linear);

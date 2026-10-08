@@ -60,6 +60,20 @@ namespace N2Engine
                 problems.emplace_back("rendering: not an object");
                 return;
             }
+            // forceShaderEncode: a boolean; absent or null means off. A wrong type is refused, changing nothing.
+            const auto force = rendering.find("forceShaderEncode");
+            if (force == rendering.end() || force->is_null())
+            {
+                Rendering::RenderSettings::SetForceShaderEncode(false);
+            }
+            else if (!force->is_boolean())
+            {
+                problems.push_back(std::format("rendering.forceShaderEncode: {} is not true or false", force->dump()));
+            }
+            else
+            {
+                Rendering::RenderSettings::SetForceShaderEncode(force->get<bool>());
+            }
             const auto space = rendering.find("colorSpace");
             if (space == rendering.end() || space->is_null())
             {
@@ -152,6 +166,7 @@ namespace N2Engine
             if (block == settings.end() || block->is_null())
             {
                 Rendering::RenderSettings::SetColorSpace(Rendering::ColorSpace::Gamma);
+                Rendering::RenderSettings::SetForceShaderEncode(false);
             }
         }
         return problems;
@@ -167,6 +182,7 @@ namespace N2Engine
         }
         snapshot.fixedTimestep = Time::GetFixedTimestep();
         snapshot.colorSpace = Rendering::RenderSettings::GetColorSpace();
+        snapshot.forceShaderEncode = Rendering::RenderSettings::GetForceShaderEncode();
         if (const Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             snapshot.gravity = backend->GetGravity();
@@ -186,6 +202,7 @@ namespace N2Engine
         }
         (void)Time::SetFixedTimestep(fixedTimestep);
         Rendering::RenderSettings::SetColorSpace(colorSpace);
+        Rendering::RenderSettings::SetForceShaderEncode(forceShaderEncode);
         if (gravity)
         {
             if (Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())

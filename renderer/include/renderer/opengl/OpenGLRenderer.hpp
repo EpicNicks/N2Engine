@@ -123,8 +123,13 @@ namespace Renderer::OpenGL
         // Linear lighting: GL_FRAMEBUFFER_SRGB is on only while the lit shader draws (see DrawIndices), and only
         // when this frame's target stores sRGB (the window's, if it was made sRGB-capable, and the offscreen
         // target); otherwise the lit shader encodes its own output
-        bool m_framebufferIsSrgb = false;
+        bool m_framebufferIsSrgb = false; // the current target's, chosen at BeginFrame from the two below
         bool m_framebufferSrgbOn = false;
+        // Whether each target stores sRGB, asked once when the target is made (Initialize, SetRenderTargetSize)
+        bool m_windowIsSrgb = false;
+        bool m_offscreenIsSrgb = false;
+        // The standard lit shader's program object, to tell its draws from the others'
+        const void *m_litShaderImpl = nullptr;
 
         uint32_t m_currentShader;
 

@@ -16,6 +16,25 @@ namespace N2Engine::Rendering
         }
     }
 
+    namespace
+    {
+        std::atomic<bool> &Force()
+        {
+            static std::atomic<bool> force{false};
+            return force;
+        }
+    }
+
+    bool RenderSettings::GetForceShaderEncode()
+    {
+        return Force().load();
+    }
+
+    void RenderSettings::SetForceShaderEncode(const bool force)
+    {
+        Force().store(force);
+    }
+
     ColorSpace RenderSettings::GetColorSpace()
     {
         return Current().load();

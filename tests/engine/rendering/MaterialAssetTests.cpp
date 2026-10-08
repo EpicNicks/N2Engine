@@ -219,7 +219,7 @@ TEST(MaterialTest, ApplyUniformsSetsTheEmissiveAndOcclusionInputsForLitMaterials
     EXPECT_EQ(gpu.GetInt("uHasEmissiveTexture", -1), 0);
     EXPECT_EQ(gpu.GetInt("uHasOcclusionTexture", -1), 0);
 
-    // With textures on the GPU material, and the textures' sRGB settings
+    // With textures on the GPU material, the has-texture flags are on
     Renderer::Software::SWTexture glow;
     Renderer::Software::SWTexture occlusion;
     glow.data = {1, 2, 3, 4};

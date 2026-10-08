@@ -74,6 +74,10 @@ namespace Renderer::Common
         N2Engine::Math::Vector3 ambientColor;
         /// Set from the project's rendering settings by Scene::CollectLighting; read by the lit shaders
         ColorSpace colorSpace = ColorSpace::Gamma;
+        /// Linear lighting on OpenGL: have the lit shader encode its own output even when the target says it is
+        /// sRGB (an escape hatch for a driver that reports the wrong colour encoding). The software renderer
+        /// ignores it.
+        bool forceShaderEncode = false;
 
         std::vector<DirectionalLightData> directionalLights;
         std::vector<PointLightData> pointLights;

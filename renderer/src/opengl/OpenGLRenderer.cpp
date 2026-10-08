@@ -40,6 +40,29 @@ void OpenGLRenderer::Clear(const float r, const float g, const float b, const fl
     m_clearColor[3] = a;
 }
 
+namespace
+{
+    /// Whether `framebuffer` (0: the window's back buffer) stores sRGB-encoded colour, as the driver says. Asked
+    /// once per target, not per frame. A target that can't answer (an error) counts as linear, and then the lit
+    /// shader encodes its own output.
+    bool TargetIsSrgb(const GLuint framebuffer)
+    {
+        for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i)
+        {
+            // errors left by earlier calls are not this query's
+        }
+        GLint previous = 0;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        GLint encoding = GL_LINEAR;
+        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, framebuffer != 0 ? GL_COLOR_ATTACHMENT0 : GL_BACK_LEFT,
+                                              GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING, &encoding);
+        const bool answered = glGetError() == GL_NO_ERROR;
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous));
+        return answered && encoding == GL_SRGB;
+    }
+}
+
 bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, const uint32_t width, const uint32_t height)
 {
     m_window = windowHandle;
@@ -71,6 +94,11 @@ bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, const uint32_t width, 
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     CreateStandardShaders();
+    if (const auto lit = m_shaderPrograms.find(m_standardLitShader); lit != m_shaderPrograms.end())
+    {
+        m_litShaderImpl = lit->second.get();
+    }
+    m_windowIsSrgb = TargetIsSrgb(0);
 
     return true;
 }
@@ -87,6 +115,7 @@ void OpenGLRenderer::Shutdown()
     m_standardUnlitShader = nullptr;
     m_standardLitShader = nullptr;
     m_standardTextShader = nullptr;
+    m_litShaderImpl = nullptr;
 }
 
 void OpenGLRenderer::Resize(const uint32_t width, const uint32_t height)
@@ -189,14 +218,7 @@ void OpenGLRenderer::BeginFrame()
     // The clear and every pass but the lit shader's write colours as they are (see DrawIndices)
     glDisable(GL_FRAMEBUFFER_SRGB);
     m_framebufferSrgbOn = false;
-    {
-        GLint encoding = GL_LINEAR;
-        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER,
-                                              m_offscreenFramebuffer != 0 ? GL_COLOR_ATTACHMENT0 : GL_BACK_LEFT,
-                                              GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING, &encoding);
-        glGetError(); // a target that can't say counts as linear: the lit shader then encodes itself
-        m_framebufferIsSrgb = encoding == GL_SRGB;
-    }
+    m_framebufferIsSrgb = m_offscreenFramebuffer != 0 ? m_offscreenIsSrgb : m_windowIsSrgb;
     glClearColor(m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -218,7 +240,12 @@ void OpenGLRenderer::BeginFrame()
 
 void OpenGLRenderer::EndFrame()
 {
-    // Nothing specific needed for OpenGL
+    // Whatever the last draw left on, readback and Present must not run with the sRGB encode enabled
+    if (m_framebufferSrgbOn)
+    {
+        glDisable(GL_FRAMEBUFFER_SRGB);
+        m_framebufferSrgbOn = false;
+    }
 }
 
 void OpenGLRenderer::Present()
@@ -395,7 +422,8 @@ void OpenGLRenderer::UpdateSceneLighting(
     // Linear lighting: the lit result is encoded by the framebuffer (GL_FRAMEBUFFER_SRGB, set per draw), or by
     // the shader when the target isn't sRGB. Gamma lighting writes it as it is.
     shader->SetInt("uEncodeOutput",
-                   lighting.colorSpace == Common::ColorSpace::Linear && !m_framebufferIsSrgb ? 1 : 0);
+                   lighting.colorSpace == Common::ColorSpace::Linear &&
+                           (!m_framebufferIsSrgb || lighting.forceShaderEncode) ? 1 : 0);
 
     // Set ambient
     shader->SetVec3("uAmbientLight",
@@ -633,10 +661,10 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
     // Linear lighting: only the lit shader's output is encoded by the framebuffer; unlit, text and everything else
     // are drawn with the encode off, so they come out as authored in both colour spaces
     bool encodeOutput = false;
-    if (m_currentLighting.colorSpace == Common::ColorSpace::Linear && m_framebufferIsSrgb)
+    if (m_currentLighting.colorSpace == Common::ColorSpace::Linear && m_framebufferIsSrgb &&
+        !m_currentLighting.forceShaderEncode)
     {
-        const auto litIt = m_shaderPrograms.find(m_standardLitShader);
-        encodeOutput = litIt != m_shaderPrograms.end() && litIt->second.get() == shader;
+        encodeOutput = static_cast<const void *>(shader) == m_litShaderImpl;
     }
     if (encodeOutput != m_framebufferSrgbOn)
     {
@@ -1259,6 +1287,7 @@ bool OpenGLRenderer::SetRenderTargetSize(const uint32_t width, const uint32_t he
     }
     m_offscreenWidth = width;
     m_offscreenHeight = height;
+    m_offscreenIsSrgb = TargetIsSrgb(m_offscreenFramebuffer);
     return true;
 }
 

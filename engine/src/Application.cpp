@@ -106,6 +106,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     Time::Init();
     // A project's rendering settings belong to that project: a second Init in the same process starts from the defaults
     Rendering::RenderSettings::SetColorSpace(Rendering::ColorSpace::Gamma);
+    Rendering::RenderSettings::SetForceShaderEncode(false);
 
     const std::string rendererName{RenderBackendName(options.renderBackend)};
     if (_window.InitWindow(options) && _window.IsWindowless())

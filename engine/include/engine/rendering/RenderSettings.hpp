@@ -27,6 +27,12 @@ namespace N2Engine::Rendering
         [[nodiscard]] static ColorSpace GetColorSpace();
         static void SetColorSpace(ColorSpace colorSpace);
 
+        /// Linear lighting on OpenGL: have the lit shader encode its own output instead of the framebuffer
+        /// (GL_FRAMEBUFFER_SRGB), even for a target that says it is sRGB. An escape hatch for a driver that
+        /// reports the wrong encoding; off by default. The project setting is rendering.forceShaderEncode.
+        [[nodiscard]] static bool GetForceShaderEncode();
+        static void SetForceShaderEncode(bool force);
+
         /// "gamma" or "linear" (case-insensitive); nullopt for anything else
         [[nodiscard]] static std::optional<ColorSpace> ParseColorSpace(std::string_view name);
         [[nodiscard]] static std::string_view ColorSpaceName(ColorSpace colorSpace);

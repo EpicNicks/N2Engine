@@ -330,7 +330,7 @@ namespace N2Engine::Rendering
                 continue;
             }
             TextureSettings textureSettings;
-            textureSettings.srgb = image.colour; // recorded only, until linear lighting (#3 P4a)
+            textureSettings.srgb = image.colour; // colour (base colour, emissive) or data; read in linear lighting
             textureSettings.filter =
                 image.nearest ? Renderer::Common::TextureFilter::Nearest : Renderer::Common::TextureFilter::Linear;
             textureSettings.wrap =

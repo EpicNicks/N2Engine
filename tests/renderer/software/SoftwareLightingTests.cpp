@@ -507,11 +507,22 @@ TEST(SoftwareColorSpaceTest, GammaIsTheDefaultAndLeavesLitOutputAsItWas)
     const Frame frame = scene.Draw(lighting, scene.lit);
     EXPECT_NEAR(frame.At(32, 32).r, 64, 1) << "0.5 x 0.5, written as it is";
 
-    // A texture is multiplied as it is, sRGB or not: it is only decoded in linear lighting
-    ITexture *srgbGrey = scene.Texture({128, 128, 128, 255}, 1, 1, true);
-    scene.lit->SetTexture(srgbGrey);
+    // A plain texture is multiplied as it is
+    ITexture *plainGrey = scene.Texture({128, 128, 128, 255}, 1, 1, false);
+    scene.lit->SetTexture(plainGrey);
     scene.lit->SetColor("uAlbedo", 1.0f, 1.0f, 1.0f, 1.0f);
     EXPECT_NEAR(scene.Draw(AmbientOnly(1.0f), scene.lit).At(32, 32).r, 128, 1);
+
+    // An sRGB texture is decoded whatever the colour space, as OpenGL's SRGB8_ALPHA8 is (the engine only makes
+    // one for a lit material in linear lighting): 128 reads as 0.216
+    scene.lit->SetTexture(scene.Texture({128, 128, 128, 255}, 1, 1, true));
+    EXPECT_NEAR(scene.Draw(AmbientOnly(1.0f), scene.lit).At(32, 32).r, 55, 1);
+
+    // and an unlit draw too, written unencoded
+    scene.unlit->SetTexture(scene.Texture({128, 128, 128, 255}, 1, 1, true));
+    EXPECT_NEAR(scene.Draw(AmbientOnly(1.0f), scene.unlit).At(32, 32).r, 55, 1);
+    scene.unlit->SetTexture(scene.Texture({128, 128, 128, 255}, 1, 1, false));
+    EXPECT_NEAR(scene.Draw(AmbientOnly(1.0f), scene.unlit).At(32, 32).r, 128, 1);
 }
 
 TEST(SoftwareColorSpaceTest, LinearLightingEncodesTheResultForDisplay)
@@ -583,8 +594,8 @@ TEST(SoftwareColorSpaceTest, UnlitDrawsTheSameInBothColourSpaces)
 TEST(SoftwareColorSpaceTest, OcclusionIsDataAndNeverDecoded)
 {
     Scene scene;
-    // Even made as an sRGB texture, the occlusion texture is read as it is
-    ITexture *occlusion = scene.Texture({128, 128, 128, 255}, 1, 1, true);
+    // The occlusion texture is read as it is (the engine never makes it an sRGB texture)
+    ITexture *occlusion = scene.Texture({128, 128, 128, 255}, 1, 1, false);
     scene.lit->SetAuxTexture(AuxTexture::Occlusion, occlusion);
     scene.lit->SetInt("uHasOcclusionTexture", 1);
     SceneLightingData lighting = AmbientOnly(1.0f);

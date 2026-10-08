@@ -274,10 +274,20 @@ namespace
             // Bilinear or nearest, as the texture's filter says (SWTexture::SampleFiltered)
             const uint32_t s = m.tex->SampleFiltered(u, v);
             constexpr float k = 1.f / 255.f;
-            // (albedo * texel) * k, the order the unlit shader always used, so its output is unchanged bit for bit
-            r = m.aR * (float)((s >>  0) & 0xFF) * k;
-            g = m.aG * (float)((s >>  8) & 0xFF) * k;
-            b = m.aB * (float)((s >> 16) & 0xFF) * k;
+            if (m.tex->options.srgb)
+            {
+                // As in the lit shader: an sRGB texture reads as linear light (and is drawn as such, unencoded)
+                r = m.aR * SrgbByteToLinear((unsigned char)((s >>  0) & 0xFF));
+                g = m.aG * SrgbByteToLinear((unsigned char)((s >>  8) & 0xFF));
+                b = m.aB * SrgbByteToLinear((unsigned char)((s >> 16) & 0xFF));
+            }
+            else
+            {
+                // (albedo * texel) * k, the order the unlit shader always used, so its output is unchanged bit for bit
+                r = m.aR * (float)((s >>  0) & 0xFF) * k;
+                g = m.aG * (float)((s >>  8) & 0xFF) * k;
+                b = m.aB * (float)((s >> 16) & 0xFF) * k;
+            }
             a = m.aA * (float)((s >> 24) & 0xFF) * k;
         }
         if (m.vertexColor)
@@ -304,9 +314,10 @@ namespace
         {
             const uint32_t s = m.tex->SampleFiltered(u, v);
             constexpr float k = 1.f / 255.f;
-            if (L.linear && m.tex->options.srgb)
+            if (m.tex->options.srgb)
             {
-                // sRGB colour to linear light, after filtering (as the OpenGL shader does); alpha is not colour
+                // An sRGB texture reads as linear light, in any colour space (as OpenGL's SRGB8_ALPHA8 does), but
+                // here after filtering: OpenGL decodes the texels before it interpolates them. Alpha is not colour.
                 r *= SrgbByteToLinear((unsigned char)((s >>  0) & 0xFF));
                 g *= SrgbByteToLinear((unsigned char)((s >>  8) & 0xFF));
                 b *= SrgbByteToLinear((unsigned char)((s >> 16) & 0xFF));
@@ -394,7 +405,7 @@ namespace
             {
                 const uint32_t s = m.emissiveTex->SampleFiltered(u, v);
                 constexpr float k = 1.f / 255.f;
-                if (L.linear && m.emissiveTex->options.srgb)
+                if (m.emissiveTex->options.srgb)
                 {
                     er *= SrgbByteToLinear((unsigned char)((s >>  0) & 0xFF));
                     eg *= SrgbByteToLinear((unsigned char)((s >>  8) & 0xFF));
