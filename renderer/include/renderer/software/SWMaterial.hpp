@@ -8,6 +8,7 @@
 #include <math/Vector4.hpp>
 
 #include "renderer/common/IMaterial.hpp"
+#include "renderer/common/ITexture.hpp"
 
 namespace Renderer::Software
 {
