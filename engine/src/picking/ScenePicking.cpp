@@ -28,42 +28,6 @@ namespace N2Engine::Picking
     {
         using Matrix4 = Math::Matrix<float, 4, 4>;
 
-        /// A ray in an object's own space. The direction is not unit length (it carries the object's scale), so a
-        /// distance along it is the same number as along the world ray.
-        struct LocalRay
-        {
-            Math::Vector3 origin;
-            Math::Vector3 direction;
-        };
-
-        Math::Vector3 TransformDirection(const Matrix4 &m, const Math::Vector3 &v)
-        {
-            return Math::Vector3{m(0, 0) * v.x + m(0, 1) * v.y + m(0, 2) * v.z,
-                                 m(1, 0) * v.x + m(1, 1) * v.y + m(1, 2) * v.z,
-                                 m(2, 0) * v.x + m(2, 1) * v.y + m(2, 2) * v.z};
-        }
-
-        /// The ray in the space `model` maps from; nullopt when the model can't be inverted
-        std::optional<LocalRay> ToLocal(const Matrix4 &model, const Math::Ray &ray)
-        {
-            try
-            {
-                const Matrix4 inverse = model.inverse();
-                const LocalRay local{inverse.TransformPoint(ray.origin), TransformDirection(inverse, ray.direction)};
-                if (!std::isfinite(local.origin.x) || !std::isfinite(local.origin.y) || !std::isfinite(local.origin.z) ||
-                    !std::isfinite(local.direction.x) || !std::isfinite(local.direction.y) ||
-                    !std::isfinite(local.direction.z))
-                {
-                    return std::nullopt;
-                }
-                return local;
-            }
-            catch (const std::runtime_error &)
-            {
-                return std::nullopt; // singular: a zero scale
-            }
-        }
-
         std::optional<float> BoxEntry(const Math::Vector3 &origin, const Math::Vector3 &direction,
                                       const BoundingBox &box, const float maxDistance)
         {
@@ -139,27 +103,25 @@ namespace N2Engine::Picking
             return Math::Vector3{vertex.position[0], vertex.position[1], vertex.position[2]};
         }
 
-        /// A rectangle on the object's z = 0 plane (local space), under the ray
+        /// A rectangle on the object's z = 0 plane (local space), moved by `model`, under the ray: its two triangles
+        /// in world space, so a flat or tiny model (a zero or small scale) needs no inverse
         std::optional<float> RectHit(const Matrix4 &model, const Text::Rect &rect, const Math::Ray &ray,
                                      const float maxDistance)
         {
-            const std::optional<LocalRay> local = ToLocal(model, ray);
-            if (!local || std::abs(local->direction.z) < 1e-12f)
+            const Math::Vector3 c00 = model.TransformPoint(Math::Vector3{rect.minX, rect.minY, 0.0f});
+            const Math::Vector3 c10 = model.TransformPoint(Math::Vector3{rect.maxX, rect.minY, 0.0f});
+            const Math::Vector3 c11 = model.TransformPoint(Math::Vector3{rect.maxX, rect.maxY, 0.0f});
+            const Math::Vector3 c01 = model.TransformPoint(Math::Vector3{rect.minX, rect.maxY, 0.0f});
+            std::optional<float> best;
+            for (const std::optional<float> t : {TriangleHit(ray.origin, ray.direction, c00, c10, c11),
+                                                 TriangleHit(ray.origin, ray.direction, c00, c11, c01)})
             {
-                return std::nullopt;
+                if (t && *t <= maxDistance && (!best || *t < *best))
+                {
+                    best = t;
+                }
             }
-            const float t = -local->origin.z / local->direction.z;
-            if (!(t >= 0.0f) || t > maxDistance)
-            {
-                return std::nullopt;
-            }
-            const float x = local->origin.x + t * local->direction.x;
-            const float y = local->origin.y + t * local->direction.y;
-            if (x < rect.minX || x > rect.maxX || y < rect.minY || y > rect.maxY)
-            {
-                return std::nullopt;
-            }
-            return t;
+            return best;
         }
 
         BoundingBox Padded(const BoundingBox &box)
@@ -196,6 +158,13 @@ namespace N2Engine::Picking
             return true;
         }
 
+        /// A UI object (a canvas, or an element with a RectTransform) has its rect, not a place of its own in the
+        /// world, so it never gets a pick sphere (even when the editor gave it a transform)
+        bool IsUiObject(const GameObject &gameObject)
+        {
+            return gameObject.GetComponent<UI::RectTransform>() != nullptr || gameObject.GetComponent<UI::Canvas>() != nullptr;
+        }
+
         /// What an exact test found
         struct ExactHit
         {
@@ -207,6 +176,8 @@ namespace N2Engine::Picking
         {
             /// Where the ray enters the (padded) box: nothing exact can be nearer
             float entry = 0.0f;
+            /// Where it was collected: hierarchy order, which breaks a tie in distance
+            std::size_t order = 0;
             /// The exact test, within the distance given; nullopt for a miss
             std::function<std::optional<ExactHit>(float)> exact;
         };
@@ -266,9 +237,11 @@ namespace N2Engine::Picking
 
         /// A world-space canvas: the topmost graphic under the ray (any graphic, raycast target or not: the editor
         /// picks what it sees), or a miss
-        std::function<std::optional<ExactHit>(float)> CanvasTest(const UI::Canvas &canvas, const Math::Ray &ray)
+        std::function<std::optional<ExactHit>(float)> CanvasTest(const UI::Canvas &canvas,
+                                                                 std::vector<UI::UIDrawItem> graphics,
+                                                                 const Math::Ray &ray)
         {
-            return [items = UI::UISystem::CollectWorldCanvasGraphics(canvas),
+            return [items = std::move(graphics),
                     canvasToWorld = canvas.GetCanvasToWorldMatrix(), ray](const float limit)
                 -> std::optional<ExactHit>
             {
@@ -309,21 +282,22 @@ namespace N2Engine::Picking
                     continue;
                 }
                 const std::optional<float> entry = RaycastBox(ray, Padded(*bounds), options.maxDistance);
-                const auto *canvas = dynamic_cast<const UI::Canvas *>(renderable);
-                if (canvas == nullptr)
-                {
-                    hasShape = true;
-                }
+                // A world canvas with bounds is a shape too: its graphics are what is clicked, and a sphere at its
+                // centre would cover them
+                hasShape = true;
                 if (!entry)
                 {
                     continue;
                 }
-                out.push_back(Candidate{*entry, canvas != nullptr ? CanvasTest(*canvas, ray)
-                                                                  : ExactTestFor(*renderable, ray, *bounds)});
+                const auto *canvas = dynamic_cast<const UI::Canvas *>(renderable);
+                out.push_back(Candidate{*entry, 0,
+                                        canvas != nullptr
+                                            ? CanvasTest(*canvas, UI::UISystem::CollectWorldCanvasGraphics(*canvas), ray)
+                                            : ExactTestFor(*renderable, ray, *bounds)});
             }
 
-            // No shape of its own (an empty object, a light, a camera, a canvas): a sphere at its position
-            if (!hasShape)
+            // No shape of its own (an empty object, a light, a camera): a sphere at its position. Not for a UI object.
+            if (!hasShape && !IsUiObject(gameObject))
             {
                 if (const Positionable *positionable = gameObject.GetPositionable())
                 {
@@ -331,7 +305,7 @@ namespace N2Engine::Picking
                     if (const auto entry = RaycastBox(ray, PickSphereBounds(center), options.maxDistance))
                     {
                         GameObject *owner = &gameObject;
-                        out.push_back(Candidate{*entry, [owner, center, ray](const float limit)
+                        out.push_back(Candidate{*entry, 0, [owner, center, ray](const float limit)
                         {
                             const std::optional<float> t = RaycastSphere(ray, center, PickSphereRadius, limit);
                             return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
@@ -385,7 +359,7 @@ namespace N2Engine::Picking
             }
             for (const IRenderable *renderable : gameObject.GetComponents<IRenderable>())
             {
-                if (renderable == nullptr || (rootActive && !renderable->IsActive()))
+                if (renderable == nullptr || !renderable->IsActiveSelf())
                 {
                     continue;
                 }
@@ -396,9 +370,11 @@ namespace N2Engine::Picking
             }
 
             // A UI element of a world-space canvas: its rect, as the layout last resolved it
-            if (const UI::RectTransform *rectTransform = gameObject.GetComponent<UI::RectTransform>())
+            // (Not under an inactive canvas or object: the layout skips those, so their rects are stale.)
+            if (const UI::RectTransform *rectTransform = gameObject.GetComponent<UI::RectTransform>();
+                rectTransform != nullptr && rootActive)
             {
-                if (const UI::Canvas *canvas = WorldCanvasAbove(gameObject))
+                if (const UI::Canvas *canvas = WorldCanvasAbove(gameObject); canvas != nullptr && canvas->IsActive())
                 {
                     if (std::ranges::find(laidOut, canvas) == laidOut.end())
                     {
@@ -435,14 +411,31 @@ namespace N2Engine::Picking
         return BoundingBox{position - r, position + r};
     }
 
+    namespace
+    {
+        bool FiniteRay(const Math::Ray &ray)
+        {
+            return std::isfinite(ray.origin.x) && std::isfinite(ray.origin.y) && std::isfinite(ray.origin.z) &&
+                   std::isfinite(ray.direction.x) && std::isfinite(ray.direction.y) && std::isfinite(ray.direction.z);
+        }
+    }
+
     std::optional<float> RaycastBox(const Math::Ray &ray, const BoundingBox &box, const float maxDistance)
     {
+        if (!FiniteRay(ray))
+        {
+            return std::nullopt;
+        }
         return BoxEntry(ray.origin, ray.direction, box, maxDistance);
     }
 
     std::optional<float> RaycastSphere(const Math::Ray &ray, const Math::Vector3 &center, const float radius,
                                        const float maxDistance)
     {
+        if (!FiniteRay(ray))
+        {
+            return std::nullopt;
+        }
         const Math::Vector3 toOrigin = ray.origin - center;
         const float a = ray.direction.Dot(ray.direction);
         if (!(a > 0.0f))
@@ -473,8 +466,7 @@ namespace N2Engine::Picking
     std::optional<float> RaycastMesh(const Rendering::Mesh &mesh, const Math::Matrix<float, 4, 4> &model,
                                      const Math::Ray &ray, const float maxDistance)
     {
-        const std::optional<LocalRay> local = ToLocal(model, ray);
-        if (!local)
+        if (!FiniteRay(ray))
         {
             return std::nullopt;
         }
@@ -502,7 +494,8 @@ namespace N2Engine::Picking
         float limit = maxDistance;
         for (const Range &range : ranges)
         {
-            if (!BoxEntry(local->origin, local->direction, Padded(range.bounds), limit))
+            // In world space throughout: no inverse of the model, which fails for a flat or tiny one
+            if (!BoxEntry(ray.origin, ray.direction, Padded(range.bounds.Transformed(model)), limit))
             {
                 continue;
             }
@@ -516,8 +509,10 @@ namespace N2Engine::Picking
                 {
                     continue;
                 }
-                const std::optional<float> t = TriangleHit(local->origin, local->direction, VertexPosition(vertices[a]),
-                                                           VertexPosition(vertices[b]), VertexPosition(vertices[c]));
+                const std::optional<float> t =
+                    TriangleHit(ray.origin, ray.direction, model.TransformPoint(VertexPosition(vertices[a])),
+                                model.TransformPoint(VertexPosition(vertices[b])),
+                                model.TransformPoint(VertexPosition(vertices[c])));
                 if (t && *t <= limit)
                 {
                     best = t;
@@ -539,9 +534,14 @@ namespace N2Engine::Picking
             }
         }
         // Nearest box first (ties keep hierarchy order)
+        for (std::size_t i = 0; i < candidates.size(); ++i)
+        {
+            candidates[i].order = i;
+        }
         std::ranges::stable_sort(candidates, [](const Candidate &a, const Candidate &b) { return a.entry < b.entry; });
 
         PickHit best;
+        std::size_t bestOrder = 0;
         float limit = options.maxDistance;
         for (const Candidate &candidate : candidates)
         {
@@ -550,10 +550,14 @@ namespace N2Engine::Picking
                 break; // every later box is entered farther away than the hit already found
             }
             const std::optional<ExactHit> hit = candidate.exact(limit);
-            if (hit && hit->gameObject != nullptr && (best.gameObject == nullptr || hit->distance < best.distance))
+            // Nearer wins; at the same distance the object collected first (earlier in hierarchy order)
+            if (hit && hit->gameObject != nullptr &&
+                (best.gameObject == nullptr || hit->distance < best.distance ||
+                 (hit->distance == best.distance && candidate.order < bestOrder)))
             {
                 best.gameObject = hit->gameObject;
                 best.distance = hit->distance;
+                bestOrder = candidate.order;
                 limit = hit->distance;
             }
         }
@@ -573,7 +577,9 @@ namespace N2Engine::Picking
         {
             return bounds;
         }
-        if (const Positionable *positionable = gameObject.GetPositionable())
+        // A UI object has its rect (above), not a place in the world: no sphere for it
+        if (const Positionable *positionable = gameObject.GetPositionable();
+            positionable != nullptr && !IsUiObject(gameObject))
         {
             return PickSphereBounds(positionable->GetPosition());
         }

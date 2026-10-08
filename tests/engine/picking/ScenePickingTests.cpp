@@ -475,9 +475,10 @@ TEST(PickingTest, AWorldCanvasPicksTheGraphicUnderTheRayAndPassesThroughTheRest)
 {
     auto scene = EditScene("Pick_Canvas");
     auto canvas = AddWorldCanvas(*scene, Vector3(0.0f, 0.0f, 0.0f));
-    // The left half of the canvas (x -0.5 to 0 in the world) is a panel; the right half is empty. The canvas's own
-    // pick sphere (radius 0.25 at its centre) is kept clear of the rays below
+    // The left half of the canvas (x -0.5 to 0 in the world) is a panel; the right half is empty; a small panel
+    // sits on the centre, over the first
     const auto panel = AddPanel(canvas, "Panel", UI::Rect{0.0f, 0.0f, 50.0f, 100.0f});
+    const auto centre = AddPanel(canvas, "Centre", UI::Rect{40.0f, 40.0f, 20.0f, 20.0f});
     const auto wall = AddCube(*scene, "Wall", Vector3(0.0f, 0.0f, -3.0f), Vector3(4.0f, 4.0f, 1.0f));
 
     const Picking::PickHit onPanel = Picking::PickGameObject(*scene, Down(-0.4f, 0.0f));
@@ -486,6 +487,11 @@ TEST(PickingTest, AWorldCanvasPicksTheGraphicUnderTheRayAndPassesThroughTheRest)
     ExpectVector(onPanel.point, Vector3(-0.4f, 0.0f, 0.0f), "point on the canvas plane");
 
     EXPECT_EQ(Picking::PickGameObject(*scene, Down(0.4f, 0.0f)).gameObject, wall.get()) << "empty canvas: the wall";
+
+    // The middle of the canvas is where a pick sphere for the canvas object would be: it must not take the click
+    const Picking::PickHit atCentre = Picking::PickGameObject(*scene, Down(0.0f, 0.0f));
+    EXPECT_EQ(atCentre.gameObject, centre.get());
+    EXPECT_NEAR(atCentre.distance, 10.0f, Tolerance);
 }
 
 TEST(PickingTest, AnOverlayCanvasIsNeverPicked)
@@ -558,4 +564,139 @@ TEST(EntityBoundsTest, AUiElementOfAWorldCanvasIsItsRectInTheWorld)
 
     ExpectBox(Picking::GetGameObjectBounds(*panel), Vector3(-0.5f, -0.5f, 0.0f), Vector3(0.0f, 0.5f, 0.0f), "panel");
     ExpectBox(Picking::GetGameObjectBounds(*canvas), Vector3(-0.5f, -0.5f, 0.0f), Vector3(0.5f, 0.5f, 0.0f), "canvas");
+}
+
+// ==================== Small, flat and zero-scaled shapes ====================
+
+TEST(PickingTest, AShapeScaledFlatOrTinyIsStillPicked)
+{
+    auto scene = EditScene("Pick_Scaled");
+    auto flat = GameObject::Create("Flat");
+    flat->AddComponent<Example::QuadRenderer>();
+    flat->GetPositionable()->SetScale(Vector3(1.0f, 1.0f, 0.0f));
+    scene->AddRootGameObject(flat);
+
+    const Picking::PickHit onFlat = Picking::PickGameObject(*scene, Down(0.2f, 0.1f));
+    EXPECT_EQ(onFlat.gameObject, flat.get()) << "a quad with a zero z scale";
+    EXPECT_NEAR(onFlat.distance, 10.0f, Tolerance);
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(0.7f, 0.0f)).gameObject, nullptr);
+
+    auto tiny = GameObject::Create("Tiny");
+    tiny->AddComponent<Example::CubeRenderer>();
+    tiny->GetPositionable()->SetPosition(Vector3(5.0f, 0.0f, 0.0f));
+    tiny->GetPositionable()->SetScale(Vector3(0.003f, 0.003f, 0.003f));
+    scene->AddRootGameObject(tiny);
+    const Picking::PickHit onTiny = Picking::PickGameObject(*scene, Down(5.001f, 0.001f));
+    EXPECT_EQ(onTiny.gameObject, tiny.get()) << "a cube scaled to 0.003";
+    EXPECT_NEAR(onTiny.distance, 10.0f - 0.0015f, 1e-4f);
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(5.002f, 0.0f)).gameObject, nullptr) << "just outside it";
+}
+
+TEST(PickingTest, TextScaledFlatOrTinyIsStillPicked)
+{
+    auto scene = EditScene("Pick_ScaledText");
+    auto flat = GameObject::Create("FlatText");
+    auto *flatText = flat->AddComponent<Rendering::TextRenderer>();
+    flatText->SetText("Label");
+    flat->GetPositionable()->SetScale(Vector3(1.0f, 1.0f, 0.0f));
+    scene->AddRootGameObject(flat);
+    const Text::Rect layout = flatText->GetLayout().bounds;
+    ASSERT_FALSE(layout.IsEmpty());
+    const float cx = (layout.minX + layout.maxX) * 0.5f;
+    const float cy = (layout.minY + layout.maxY) * 0.5f;
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(cx, cy)).gameObject, flat.get());
+
+    auto tiny = GameObject::Create("TinyText");
+    auto *tinyText = tiny->AddComponent<Rendering::TextRenderer>();
+    tinyText->SetText("Label");
+    tiny->GetPositionable()->SetPosition(Vector3(20.0f, 0.0f, 0.0f));
+    tiny->GetPositionable()->SetScale(Vector3(0.003f, 0.003f, 0.003f));
+    scene->AddRootGameObject(tiny);
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(20.0f + cx * 0.003f, cy * 0.003f)).gameObject, tiny.get());
+}
+
+TEST(PickingRayTest, AMeshWithAZeroScaleModelIsSimplyMissed)
+{
+    const auto quad = Rendering::Mesh::GetBuiltin(Rendering::BuiltinMesh::Quad);
+    const auto zero = Math::Matrix<float, 4, 4>::Scale(0.0f, 0.0f, 0.0f);
+    EXPECT_FALSE(Picking::RaycastMesh(*quad, zero, Down(0.0f, 0.0f)).has_value());
+    const auto flat = Math::Matrix<float, 4, 4>::Scale(1.0f, 1.0f, 0.0f);
+    const auto hit = Picking::RaycastMesh(*quad, flat, Down(0.1f, 0.1f));
+    ASSERT_TRUE(hit.has_value());
+    EXPECT_NEAR(*hit, 10.0f, Tolerance);
+}
+
+// ==================== UI elements made as the editor makes them ====================
+
+TEST(PickingTest, UiObjectsWithATransformGetNoPickSphere)
+{
+    auto scene = EditScene("Pick_EditorUi");
+    // The editor gives every object it creates a transform, UI elements and canvases included
+    auto overlay = UI::UISystem::CreateCanvas("Overlay");
+    overlay->CreatePositionable();
+    scene->AddRootGameObject(overlay);
+    const auto element = AddPanel(overlay, "Element", UI::Rect{0.0f, 0.0f, 100.0f, 100.0f});
+    element->CreatePositionable();
+
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(0.0f, 0.0f)).gameObject, nullptr) << "no sphere at the origin";
+    Picking::PickOptions options;
+    options.includeInactive = true;
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(0.0f, 0.0f), options).gameObject, nullptr);
+    EXPECT_FALSE(Picking::GetGameObjectBounds(*element).has_value());
+    EXPECT_FALSE(Picking::GetGameObjectBounds(*overlay).has_value());
+}
+
+TEST(PickingTest, ATiedDistanceGoesToTheObjectEarlierInTheHierarchy)
+{
+    auto scene = EditScene("Pick_Tie");
+    const auto first = AddCube(*scene, "First", Vector3(0.0f, 0.0f, 0.0f));
+    const auto second = AddCube(*scene, "Second", Vector3(0.0f, 0.0f, 0.0f));
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(0.1f, 0.1f)).gameObject, first.get());
+    static_cast<void>(second);
+}
+
+TEST(PickingRayTest, ANonFiniteRayHitsNothing)
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const BoundingBox box(Vector3(-1.0f, -1.0f, -1.0f), Vector3(1.0f, 1.0f, 1.0f));
+    EXPECT_FALSE(Picking::RaycastBox(Ray(Vector3(nan, 0.0f, 5.0f), Vector3(0.0f, 0.0f, -1.0f)), box).has_value());
+    EXPECT_FALSE(Picking::RaycastBox(Ray(Vector3(0.0f, 0.0f, 5.0f), Vector3(0.0f, nan, -1.0f)), box).has_value());
+    EXPECT_FALSE(Picking::RaycastSphere(Ray(Vector3(0.0f, 0.0f, nan), Vector3(0.0f, 0.0f, -1.0f)),
+                                        Vector3(0.0f, 0.0f, 0.0f), 1.0f)
+                     .has_value());
+
+    auto scene = EditScene("Pick_NaN");
+    AddCube(*scene, "Cube", Vector3(0.0f, 0.0f, 0.0f));
+    EXPECT_EQ(Picking::PickGameObject(*scene, Ray(Vector3(nan, nan, nan), Vector3(0.0f, 0.0f, -1.0f))).gameObject,
+              nullptr);
+}
+
+TEST(EntityBoundsTest, ADisabledComponentOnAnInactiveObjectDoesNotCount)
+{
+    auto scene = EditScene("Bounds_DisabledInactive");
+    auto group = AddEmpty(*scene, "Group", Vector3(2.0f, 0.0f, 0.0f));
+    auto child = GameObject::Create("Child");
+    auto *cube = child->AddComponent<Example::CubeRenderer>();
+    group->AddChild(child, false);
+    cube->SetActive(false);
+    group->SetActive(false);
+
+    const float r = Picking::PickSphereRadius;
+    ExpectBox(Picking::GetGameObjectBounds(*group), Vector3(2.0f - r, -r, -r), Vector3(2.0f + r, r, r),
+              "the disabled cube is not measured, so the group's own sphere box is");
+}
+
+TEST(EntityBoundsTest, AnInactiveUiElementOrCanvasHasNoRect)
+{
+    auto scene = EditScene("Bounds_InactiveUi");
+    auto canvas = AddWorldCanvas(*scene, Vector3(0.0f, 0.0f, 0.0f));
+    const auto panel = AddPanel(canvas, "Panel", UI::Rect{0.0f, 0.0f, 50.0f, 100.0f});
+    ASSERT_TRUE(Picking::GetGameObjectBounds(*panel).has_value());
+
+    panel->SetActive(false);
+    EXPECT_FALSE(Picking::GetGameObjectBounds(*panel).has_value()) << "an inactive element isn't laid out";
+    panel->SetActive(true);
+
+    canvas->SetActive(false);
+    EXPECT_FALSE(Picking::GetGameObjectBounds(*panel).has_value()) << "nor is one under an inactive canvas";
 }

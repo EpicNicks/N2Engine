@@ -34,12 +34,11 @@ namespace N2Engine::Picking
      *   that graphic's, not the canvas's; a ray through an empty part of the canvas goes on to what is behind).
      *   A renderable of another kind is picked by its box.
      * - An object with a transform (a Positionable) and no shape of its own (an empty GameObject, a light, a
-     *   camera, text with no text, a canvas) is picked by a small sphere (PickSphereRadius) around its position,
-     *   so it can be selected. An object without a transform has no place in the world and is never picked.
+     *   camera, text with no text) is picked by a small sphere (PickSphereRadius) around its position,
+     *   so it can be selected. Not a UI object (a canvas, or anything with a RectTransform): it has its rect. An object without a transform has no place in the world and is never picked.
      * - Inactive objects, and renderables whose component is disabled, are skipped unless includeInactive is set.
      *   Graphics inside a canvas follow the canvas's layout, which skips inactive objects either way.
-     * - Overlay canvases are not part of the world: their graphics are never picked (the editor's view doesn't
-     *   draw them), though an overlay canvas's object, if it has a transform, is caught by its sphere like any other.
+     * - Overlay canvases are not part of the world: nothing of them is picked (the editor's view doesn't draw them).
      * The nearest exact hit wins; on a tie, the object earlier in hierarchy order.
      */
     inline constexpr float PickSphereRadius = 0.25f;
