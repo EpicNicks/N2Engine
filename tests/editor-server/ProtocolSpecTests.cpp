@@ -72,6 +72,12 @@ namespace
             {"CreateScript", CommandType::CreateScript},
             {"RescanAssets", CommandType::RescanAssets},
             {"GetEngineHealth", CommandType::GetEngineHealth},
+            {"GetComponentTypes", CommandType::GetComponentTypes},
+            {"AddComponent", CommandType::AddComponent},
+            {"RemoveComponent", CommandType::RemoveComponent},
+            {"SetComponentFields", CommandType::SetComponentFields},
+            {"GetComponent", CommandType::GetComponent},
+            {"GetLuaFields", CommandType::GetLuaFields},
             {"GetProjectInfo", CommandType::GetProjectInfo},
             {"SetProjectSettings", CommandType::SetProjectSettings},
             {"SetStartupScene", CommandType::SetStartupScene},
@@ -100,6 +106,10 @@ namespace
             {"ProjectInfo", ResponseType::ProjectInfo},
             {"Hierarchy", ResponseType::Hierarchy},
             {"EntityData", ResponseType::EntityData},
+            {"ComponentTypes", ResponseType::ComponentTypes},
+            {"ComponentAdded", ResponseType::ComponentAdded},
+            {"ComponentData", ResponseType::ComponentData},
+            {"LuaFields", ResponseType::LuaFields},
         };
         return responses;
     }
@@ -128,6 +138,11 @@ namespace
             {"DuplicateEntity", [](BufferReader &r) { (void)DuplicateEntityCmd::Deserialize(r); }},
             {"GetEntity", [](BufferReader &r) { (void)GetEntityCmd::Deserialize(r); }},
             {"SetLocalTransform", [](BufferReader &r) { (void)SetLocalTransformCmd::Deserialize(r); }},
+            {"AddComponent", [](BufferReader &r) { (void)AddComponentCmd::Deserialize(r); }},
+            {"RemoveComponent", [](BufferReader &r) { (void)RemoveComponentCmd::Deserialize(r); }},
+            {"SetComponentFields", [](BufferReader &r) { (void)SetComponentFieldsCmd::Deserialize(r); }},
+            {"GetComponent", [](BufferReader &r) { (void)GetComponentCmd::Deserialize(r); }},
+            {"GetLuaFields", [](BufferReader &r) { (void)GetLuaFieldsCmd::Deserialize(r); }},
             {"CreateScript", [](BufferReader &r) { (void)CreateScriptCmd::Deserialize(r); }},
             {"OpenScene", [](BufferReader &r) { (void)OpenSceneCmd::Deserialize(r); }},
             {"SaveSceneToFile", [](BufferReader &r) { (void)SaveSceneToFileCmd::Deserialize(r); }},
@@ -338,7 +353,9 @@ TEST(ProtocolSpecTest, EntityRequestsCarryUuidStrings)
 {
     const spec_json spec = LoadSpec();
     for (const char *command : {"DestroyEntity", "SetEntityTransform", "GetEntityTransform", "SetEntityParent",
-                                "SetEntityProperties", "DuplicateEntity", "GetEntity", "SetLocalTransform"})
+                                "SetEntityProperties", "DuplicateEntity", "GetEntity", "SetLocalTransform",
+                                "AddComponent", "RemoveComponent", "SetComponentFields", "GetComponent",
+                                "GetLuaFields"})
     {
         EXPECT_EQ(spec.at("commands").at(command).at("request").at("entityId").get<std::string>(), "string")
             << command;

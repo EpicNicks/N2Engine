@@ -300,6 +300,13 @@ namespace N2Engine::Editor
         void HandleGetEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetLocalTransform(int clientSocket, const std::vector<uint8_t> &payload);
 
+        void HandleGetComponentTypes(int clientSocket);
+        void HandleAddComponent(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleRemoveComponent(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSetComponentFields(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetComponent(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetLuaFields(int clientSocket, const std::vector<uint8_t> &payload);
+
         void HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleRescanAssets(int clientSocket);
 

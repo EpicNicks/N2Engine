@@ -33,6 +33,8 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaScriptTemplate.hpp"
+#include "engine/serialization/ComponentRegistry.hpp"
+#include "engine/serialization/FieldInfo.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
 #include "renderer/common/FrameRows.hpp"
@@ -313,6 +315,280 @@ namespace N2Engine::Editor
                 }
             });
             return references;
+        }
+
+        // ==================== Components (#6, E5) ====================
+
+        /// The component of the object with this UUID string, or nullptr (also for text that isn't a UUID)
+        Component *FindComponentOn(const GameObject &entity, const std::string &componentId)
+        {
+            const auto uuid = Math::UUID::FromString(componentId);
+            if (!uuid.has_value())
+            {
+                return nullptr;
+            }
+            for (const auto &component : entity.GetAllComponents())
+            {
+                if (component->GetUUID() == uuid.value())
+                {
+                    return component.get();
+                }
+            }
+            return nullptr;
+        }
+
+        struct ComponentTarget
+        {
+            std::shared_ptr<GameObject> entity;
+            Component *component = nullptr;
+        };
+
+        /// The object and the component of the loaded scene a command names, or the message that says why not
+        std::expected<ComponentTarget, std::string> FindComponentTarget(const std::string &entityId,
+                                                                        const std::string &componentId)
+        {
+            Scene *scene = SceneManager::GetCurScene();
+            if (scene == nullptr)
+            {
+                return std::unexpected("No scene loaded");
+            }
+            ComponentTarget target;
+            target.entity = FindEntity(*scene, entityId);
+            if (target.entity == nullptr)
+            {
+                return std::unexpected(NotFoundMessage("Entity", entityId));
+            }
+            target.component = FindComponentOn(*target.entity, componentId);
+            if (target.component == nullptr)
+            {
+                return std::unexpected(NotFoundMessage("Component", componentId));
+            }
+            return target;
+        }
+
+        /// The UUID strings a reference field's value names, in order, nulls left out
+        std::vector<std::string> ReferencedIds(const FieldInfo &field, const nlohmann::json &value)
+        {
+            std::vector<std::string> ids;
+            const auto add = [&ids](const nlohmann::json &one)
+            {
+                if (one.is_string())
+                {
+                    const std::string text = one.get<std::string>();
+                    // Spelled the one way, so two spellings of an id compare equal
+                    const auto uuid = Math::UUID::FromString(text);
+                    ids.push_back(uuid.has_value() ? uuid->ToString() : text);
+                }
+            };
+            switch (field.kind)
+            {
+            case FieldKind::AssetRef:
+            case FieldKind::GameObjectRef:
+            case FieldKind::ComponentRef:
+                // Inside a container (a script's fields) a reference is {"$ref": id}
+                add(field.container.empty() ? value : value.at("$ref"));
+                break;
+            case FieldKind::AssetRefList:
+            case FieldKind::GameObjectRefList:
+            case FieldKind::ComponentRefList:
+                for (const nlohmann::json &one : value)
+                {
+                    add(one);
+                }
+                break;
+            default:
+                break;
+            }
+            return ids;
+        }
+
+        /// The references of a value that the scene (or the project's assets) can already be seen not to satisfy:
+        /// an object or component that isn't in the scene, a component of another type than the field's, an asset
+        /// of another type than the field's. (An asset that resolves to nothing is found by the copy.)
+        std::optional<std::string> CheckFieldReferences(const FieldInfo &field, const nlohmann::json &value,
+                                                        const ReferenceResolver &sceneReferences)
+        {
+            for (const std::string &id : ReferencedIds(field, value))
+            {
+                const auto uuid = Math::UUID::FromString(id);
+                if (!uuid.has_value())
+                {
+                    continue;
+                }
+                switch (field.kind)
+                {
+                case FieldKind::GameObjectRef:
+                case FieldKind::GameObjectRefList:
+                    if (sceneReferences.FindGameObject(uuid.value()) == nullptr)
+                    {
+                        return std::format("Field '{}': object {} isn't in the scene", field.name, id);
+                    }
+                    break;
+                case FieldKind::ComponentRef:
+                case FieldKind::ComponentRefList:
+                {
+                    const Component *target = sceneReferences.FindComponent(uuid.value());
+                    if (target == nullptr)
+                    {
+                        return std::format("Field '{}': component {} isn't in the scene", field.name, id);
+                    }
+                    if (field.typeName != "Component" && ComponentRegistry::Instance().IsRegistered(field.typeName) &&
+                        target->GetTypeName() != field.typeName)
+                    {
+                        return std::format("Component {} is a {}; field '{}' expects {}", id, target->GetTypeName(),
+                                           field.name, field.typeName);
+                    }
+                    break;
+                }
+                case FieldKind::AssetRef:
+                case FieldKind::AssetRefList:
+                {
+                    const IO::AssetMetadata *meta = IO::ResourceLoader::Instance().GetMetadata(uuid.value());
+                    if (meta != nullptr && !field.assetType.empty() && meta->resourceType != field.assetType)
+                    {
+                        return std::format("Asset {} is a {}; field '{}' expects {}", id, meta->resourceType,
+                                           field.name, field.assetType);
+                    }
+                    break;
+                }
+                default:
+                    break;
+                }
+            }
+            return std::nullopt;
+        }
+
+        /// SetComponentFields: checks `values` (every key a field of the component, every value of its kind, every
+        /// reference something the scene or project has), applies them to a copy made from a second instance of the
+        /// type (a failure there, or a reference that came out other than asked for, is the answer), and only then
+        /// to the component itself, which can't then fail midway. Returns the values the component saves now, and
+        /// in `changedKeys` the top-level keys of `values` whose saved value moved.
+        std::expected<nlohmann::json, std::string> SetComponentValues(Scene &scene, Component &component,
+                                                                      const nlohmann::json &values,
+                                                                      std::vector<std::string> &changedKeys)
+        {
+            const std::vector<FieldInfo> fields = component.DescribeFields();
+            if (const auto problem = ValidateFieldValues(fields, values))
+            {
+                return std::unexpected(EditorServer::SanitizeForLog(*problem, 300));
+            }
+
+            // Every field a key names, with the value it is given (a container's own fields included)
+            struct Given
+            {
+                const FieldInfo *field;
+                const nlohmann::json *value;
+            };
+            std::vector<Given> given;
+            for (const auto &[key, value] : values.items())
+            {
+                if (key == "isActive")
+                {
+                    continue;
+                }
+                for (const FieldInfo &field : fields)
+                {
+                    if (field.container.empty() && field.name == key)
+                    {
+                        given.push_back({&field, &value});
+                    }
+                    else if (!field.container.empty() && field.container == key && value.contains(field.name))
+                    {
+                        given.push_back({&field, &value.at(field.name)});
+                    }
+                }
+            }
+
+            const ReferenceResolver sceneReferences = SceneReferences(scene);
+            for (const Given &one : given)
+            {
+                if (const auto problem = CheckFieldReferences(*one.field, *one.value, sceneReferences))
+                {
+                    return std::unexpected(EditorServer::SanitizeForLog(*problem, 300));
+                }
+            }
+
+            // The copy: another instance of the type, on an object in no scene, so it is never attached
+            const std::shared_ptr<GameObject> holder = GameObject::Create("EditorScratch");
+            const std::unique_ptr<Component> scratch = ComponentRegistry::Instance().Create(component.GetTypeName(), *holder);
+            if (scratch == nullptr)
+            {
+                return std::unexpected(std::format("Component type '{}' isn't registered, so it can't be edited",
+                                                   EditorServer::SanitizeForLog(component.GetTypeName())));
+            }
+            ReferenceResolver scratchReferences;
+            scratchReferences.SetFallback(&sceneReferences);
+            try
+            {
+                scratch->SetEditorFields(values, &scratchReferences);
+                scratchReferences.ResolveAll();
+            }
+            catch (const nlohmann::json::exception &error)
+            {
+                return std::unexpected(EditorServer::SanitizeForLog(std::format("Invalid value: {}", error.what()), 300));
+            }
+            catch (const std::exception &error)
+            {
+                return std::unexpected(EditorServer::SanitizeForLog(error.what(), 300));
+            }
+
+            // A reference the copy didn't keep (an asset that isn't there or isn't of the field's type, a component
+            // that isn't a T) was dropped by its deserialiser; the request is refused rather than half kept
+            const nlohmann::json copied = scratch->Serialize();
+            for (const Given &one : given)
+            {
+                if (!one.field->container.empty() || !copied.contains(one.field->name))
+                {
+                    continue;
+                }
+                const std::vector<std::string> asked = ReferencedIds(*one.field, *one.value);
+                const std::vector<std::string> kept = ReferencedIds(*one.field, copied.at(one.field->name));
+                if (asked != kept)
+                {
+                    const auto lost = std::ranges::find_if(asked, [&kept](const std::string &id)
+                    {
+                        return std::ranges::find(kept, id) == kept.end();
+                    });
+                    const std::string what = (one.field->kind == FieldKind::AssetRef || one.field->kind == FieldKind::AssetRefList)
+                                                 ? std::format("no {} asset has the UUID {}", one.field->assetType.empty() ? std::string("such") : one.field->assetType,
+                                                               lost != asked.end() ? *lost : std::string{})
+                                                 : std::format("{} can't be used", lost != asked.end() ? *lost : std::string{});
+                    return std::unexpected(EditorServer::SanitizeForLog(std::format("Field '{}': {}", one.field->name, what), 300));
+                }
+            }
+
+            // The component itself
+            const nlohmann::json before = component.Serialize();
+            ReferenceResolver references;
+            references.SetFallback(&sceneReferences);
+            try
+            {
+                component.SetEditorFields(values, &references);
+                references.ResolveAll();
+                if (const auto active = values.find("isActive"); active != values.end())
+                {
+                    component.SetActive(active->get<bool>());
+                }
+            }
+            catch (const std::exception &error)
+            {
+                // The copy took it, so this isn't expected: put back what was saved rather than leave half of it
+                ReferenceResolver restore;
+                restore.SetFallback(&sceneReferences);
+                component.Deserialize(before, &restore);
+                restore.ResolveAll();
+                return std::unexpected(EditorServer::SanitizeForLog(error.what(), 300));
+            }
+
+            nlohmann::json after = component.Serialize();
+            for (const auto &[key, value] : values.items())
+            {
+                if (!before.contains(key) || !after.contains(key) || before.at(key) != after.at(key))
+                {
+                    changedKeys.push_back(key);
+                }
+            }
+            return after;
         }
 
         /// SetEntityProperties' properties, checked
@@ -906,6 +1182,8 @@ namespace N2Engine::Editor
         case CommandType::GetEngineHealth:    // the status panel
         case CommandType::GetHierarchy:       // the hierarchy panel, whenever the scene revision moves
         case CommandType::GetEntity:          // the inspector, whenever the selected object changes
+        case CommandType::GetComponent:       // the inspector, for the components it shows
+        case CommandType::GetComponentTypes:  // the inspector, once per session (and after Hello)
             return true;
         default:
             return false;
@@ -1013,6 +1291,24 @@ namespace N2Engine::Editor
             break;
         case CommandType::SetLocalTransform:
             HandleSetLocalTransform(clientSocket, payload);
+            break;
+        case CommandType::GetComponentTypes:
+            HandleGetComponentTypes(clientSocket);
+            break;
+        case CommandType::AddComponent:
+            HandleAddComponent(clientSocket, payload);
+            break;
+        case CommandType::RemoveComponent:
+            HandleRemoveComponent(clientSocket, payload);
+            break;
+        case CommandType::SetComponentFields:
+            HandleSetComponentFields(clientSocket, payload);
+            break;
+        case CommandType::GetComponent:
+            HandleGetComponent(clientSocket, payload);
+            break;
+        case CommandType::GetLuaFields:
+            HandleGetLuaFields(clientSocket, payload);
             break;
         case CommandType::CreateScript:
             HandleCreateScript(clientSocket, payload);
@@ -1942,6 +2238,176 @@ namespace N2Engine::Editor
         MarkSceneChanged(SubtreeIds(*entity));
         BufferWriter response;
         WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    // ==================== Components (#6, E5) ====================
+
+    void EditorServer::HandleGetComponentTypes(int clientSocket)
+    {
+        ComponentRegistry &registry = ComponentRegistry::Instance();
+        std::vector<std::string> names = registry.GetRegisteredTypes();
+        std::ranges::sort(names);
+
+        nlohmann::json types = nlohmann::json::array();
+        for (const std::string &name : names)
+        {
+            if (const std::optional<ComponentSchema> schema = registry.Describe(name))
+            {
+                types.push_back(schema->ToJson());
+            }
+        }
+
+        BufferWriter response;
+        WriteComponentTypes(response, types);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleAddComponent(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const AddComponentCmd cmd = AddComponentCmd::Deserialize(reader);
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+
+        ComponentRegistry &registry = ComponentRegistry::Instance();
+        if (!registry.IsRegistered(cmd.typeName))
+        {
+            SendError(clientSocket, std::format("Unknown component type '{}'", SanitizeForLog(cmd.typeName)));
+            return;
+        }
+        if (registry.IsSingleton(cmd.typeName))
+        {
+            for (const auto &existing : entity->GetAllComponents())
+            {
+                if (existing->GetTypeName() == cmd.typeName)
+                {
+                    SendError(clientSocket, std::format("'{}' can only be added once to an object", SanitizeForLog(cmd.typeName)));
+                    return;
+                }
+            }
+        }
+
+        Component *added = entity->AddComponent(registry.Create(cmd.typeName, *entity));
+        if (added == nullptr)
+        {
+            SendError(clientSocket, std::format("A '{}' couldn't be made", SanitizeForLog(cmd.typeName)));
+            return;
+        }
+
+        MarkSceneChanged({entity->GetUUID().ToString()});
+        BufferWriter response;
+        WriteComponentAdded(response, added->GetUUID().ToString(), added->Serialize());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleRemoveComponent(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const RemoveComponentCmd cmd = RemoveComponentCmd::Deserialize(reader);
+
+        const auto target = FindComponentTarget(cmd.entityId, cmd.componentId);
+        if (!target)
+        {
+            SendError(clientSocket, target.error());
+            return;
+        }
+        if (!target->entity->RemoveComponent(target->component))
+        {
+            SendError(clientSocket, "The component couldn't be removed");
+            return;
+        }
+
+        MarkSceneChanged({target->entity->GetUUID().ToString()});
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetComponentFields(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetComponentFieldsCmd cmd = SetComponentFieldsCmd::Deserialize(reader);
+
+        const auto target = FindComponentTarget(cmd.entityId, cmd.componentId);
+        if (!target)
+        {
+            SendError(clientSocket, target.error());
+            return;
+        }
+
+        std::vector<std::string> changed;
+        const std::expected<nlohmann::json, std::string> stored =
+            SetComponentValues(*SceneManager::GetCurScene(), *target->component, cmd.values, changed);
+        if (!stored)
+        {
+            SendError(clientSocket, stored.error());
+            return;
+        }
+
+        if (!changed.empty())
+        {
+            target->component->OnEditorFieldsChanged(changed);
+            MarkSceneChanged({target->entity->GetUUID().ToString()});
+        }
+        BufferWriter response;
+        WriteComponentData(response, stored.value());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetComponent(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const GetComponentCmd cmd = GetComponentCmd::Deserialize(reader);
+
+        const auto target = FindComponentTarget(cmd.entityId, cmd.componentId);
+        if (!target)
+        {
+            SendError(clientSocket, target.error());
+            return;
+        }
+
+        BufferWriter response;
+        WriteComponentData(response, target->component->Serialize());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetLuaFields(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const GetLuaFieldsCmd cmd = GetLuaFieldsCmd::Deserialize(reader);
+
+        const auto target = FindComponentTarget(cmd.entityId, cmd.componentId);
+        if (!target)
+        {
+            SendError(clientSocket, target.error());
+            return;
+        }
+        if (target->component->GetTypeName() != "LuaComponent")
+        {
+            SendError(clientSocket, std::format("Component {} is a {}, not a LuaComponent",
+                                                SanitizeForLog(cmd.componentId), SanitizeForLog(target->component->GetTypeName())));
+            return;
+        }
+
+        ComponentSchema schema;
+        schema.typeName = target->component->GetTypeName();
+        schema.fields = target->component->DescribeFields();
+        schema.singleton = ComponentRegistry::Instance().IsSingleton(schema.typeName);
+
+        BufferWriter response;
+        WriteLuaFields(response, schema.ToJson());
         SendResponse(clientSocket, response.Release());
     }
 

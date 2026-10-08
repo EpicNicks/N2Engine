@@ -257,6 +257,13 @@ namespace ProtocolVectors
                 }
                 WriteEntityData(w, f.at("entity"), matrix);
             }},
+            {"ComponentTypes", [](BufferWriter &w, const json &f) { WriteComponentTypes(w, f.at("types")); }},
+            {"ComponentAdded", [](BufferWriter &w, const json &f)
+            {
+                WriteComponentAdded(w, StringField(f, "componentId"), f.at("values"));
+            }},
+            {"ComponentData", [](BufferWriter &w, const json &f) { WriteComponentData(w, f.at("values")); }},
+            {"LuaFields", [](BufferWriter &w, const json &f) { WriteLuaFields(w, f.at("schema")); }},
             {"EngineHealth", [](BufferWriter &w, const json &f)
             {
                 std::vector<SubsystemStatusEntry> subsystems;

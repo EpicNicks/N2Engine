@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.4.0";
+inline constexpr const char *ProtocolVersion = "1.5.0";
 
 enum class CommandType : uint8_t
 {
@@ -46,6 +46,12 @@ enum class CommandType : uint8_t
     CreateScript = 0x40,
     RescanAssets = 0x41,
     GetEngineHealth = 0x50,
+    GetComponentTypes = 0x60,
+    AddComponent = 0x61,
+    RemoveComponent = 0x62,
+    SetComponentFields = 0x63,
+    GetComponent = 0x64,
+    GetLuaFields = 0x65,
     GetProjectInfo = 0x70,
     SetProjectSettings = 0x71,
     SetStartupScene = 0x72,
@@ -71,6 +77,10 @@ enum class ResponseType : uint8_t
     ProjectInfo = 0x0E,
     Hierarchy = 0x0F,
     EntityData = 0x10,
+    ComponentTypes = 0x11,
+    ComponentAdded = 0x12,
+    ComponentData = 0x13,
+    LuaFields = 0x14,
 };
 
 // Custom types
@@ -229,6 +239,37 @@ struct CreateScriptCmd
     std::string name;
 };
 
+struct AddComponentCmd
+{
+    std::string entityId;
+    std::string typeName;
+};
+
+struct RemoveComponentCmd
+{
+    std::string entityId;
+    std::string componentId;
+};
+
+struct SetComponentFieldsCmd
+{
+    std::string entityId;
+    std::string componentId;
+    std::string values; // JSON: any
+};
+
+struct GetComponentCmd
+{
+    std::string entityId;
+    std::string componentId;
+};
+
+struct GetLuaFieldsCmd
+{
+    std::string entityId;
+    std::string componentId;
+};
+
 struct SetProjectSettingsCmd
 {
     std::string settings; // JSON: any
@@ -334,6 +375,27 @@ struct EngineHealthData
     bool healthy;
     uint32_t count;
     std::vector<SubsystemStatus> subsystems;
+};
+
+struct ComponentTypesData
+{
+    std::string types; // JSON: ComponentSchema[]
+};
+
+struct ComponentAddedData
+{
+    std::string componentId;
+    std::string values; // JSON: any
+};
+
+struct ComponentDataData
+{
+    std::string values; // JSON: any
+};
+
+struct LuaFieldsData
+{
+    std::string schema; // JSON: ComponentSchema
 };
 
 struct ProjectInfoData

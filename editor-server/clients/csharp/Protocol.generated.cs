@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.4.0";
+        public const string ProtocolVersion = "1.5.0";
     }
 
     public enum CommandType : byte
@@ -45,6 +45,12 @@ namespace N2Engine.Editor.Protocol
         CreateScript = 0x40,
         RescanAssets = 0x41,
         GetEngineHealth = 0x50,
+        GetComponentTypes = 0x60,
+        AddComponent = 0x61,
+        RemoveComponent = 0x62,
+        SetComponentFields = 0x63,
+        GetComponent = 0x64,
+        GetLuaFields = 0x65,
         GetProjectInfo = 0x70,
         SetProjectSettings = 0x71,
         SetStartupScene = 0x72,
@@ -70,6 +76,10 @@ namespace N2Engine.Editor.Protocol
         ProjectInfo = 0x0E,
         Hierarchy = 0x0F,
         EntityData = 0x10,
+        ComponentTypes = 0x11,
+        ComponentAdded = 0x12,
+        ComponentData = 0x13,
+        LuaFields = 0x14,
     }
 
     public struct Vec3
@@ -242,6 +252,46 @@ namespace N2Engine.Editor.Protocol
         public EntityComponent[] Components { get; set; }
     }
 
+    public class FieldSchema
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("displayName")]
+        public string DisplayName { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("kind")]
+        public string Kind { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("typeName")]
+        public string TypeName { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("hidden")]
+        public bool Hidden { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("readOnly")]
+        public bool ReadOnly { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("enumOptions")]
+        public string[]? EnumOptions { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("assetType")]
+        public string? AssetType { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("min")]
+        public double? Min { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("max")]
+        public double? Max { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("tooltip")]
+        public string? Tooltip { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("container")]
+        public string? Container { get; set; }
+    }
+
+    public class ComponentSchema
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("typeName")]
+        public string TypeName { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("singleton")]
+        public bool Singleton { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("fields")]
+        public FieldSchema[] Fields { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("defaults")]
+        public System.Text.Json.JsonElement? Defaults { get; set; }
+    }
+
     public struct SetViewportSizeRequest
     {
         public int Width;
@@ -369,6 +419,38 @@ namespace N2Engine.Editor.Protocol
         public string Name;
     }
 
+    public struct AddComponentRequest
+    {
+        public string EntityId;
+        public string TypeName;
+    }
+
+    public struct RemoveComponentRequest
+    {
+        public string EntityId;
+        public string ComponentId;
+    }
+
+    public struct SetComponentFieldsRequest
+    {
+        public string EntityId;
+        public string ComponentId;
+        /// <summary>JSON text: any JSON value</summary>
+        public string Values;
+    }
+
+    public struct GetComponentRequest
+    {
+        public string EntityId;
+        public string ComponentId;
+    }
+
+    public struct GetLuaFieldsRequest
+    {
+        public string EntityId;
+        public string ComponentId;
+    }
+
     public struct SetProjectSettingsRequest
     {
         /// <summary>JSON text: any JSON value</summary>
@@ -478,6 +560,31 @@ namespace N2Engine.Editor.Protocol
         public bool Healthy;
         public uint Count;
         public SubsystemStatus[] Subsystems;
+    }
+
+    public struct ComponentTypesResponse
+    {
+        /// <summary>JSON text: ComponentSchema[]</summary>
+        public string Types;
+    }
+
+    public struct ComponentAddedResponse
+    {
+        public string ComponentId;
+        /// <summary>JSON text: any JSON value</summary>
+        public string Values;
+    }
+
+    public struct ComponentDataResponse
+    {
+        /// <summary>JSON text: any JSON value</summary>
+        public string Values;
+    }
+
+    public struct LuaFieldsResponse
+    {
+        /// <summary>JSON text: ComponentSchema</summary>
+        public string Schema;
     }
 
     public struct ProjectInfoResponse
