@@ -343,7 +343,14 @@ namespace N2Engine::IO
         {
             return false;
         }
-        const std::string fileName = std::filesystem::path(relative).filename().string();
+        // Not a root name, a rooted path or a ':' anywhere: on NTFS "name.scene:x" names an alternate data stream
+        const std::filesystem::path asPath = PathFromUtf8(relative);
+        if (relative.find(':') != std::string::npos || asPath.has_root_name() || asPath.has_root_directory() ||
+            asPath.is_absolute())
+        {
+            return false;
+        }
+        const std::string fileName = PathToUtf8(asPath.filename());
         return fileName.size() > SceneExtension.size() && EndsWithIgnoringCase(fileName, SceneExtension);
     }
 

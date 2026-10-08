@@ -182,6 +182,40 @@ TEST_F(ResourceLoaderProjectTest, SceneFilesAreSceneAssetsWithPathDerivedUuids)
     EXPECT_EQ(Loader().LoadByUUID<SceneFile>(meta->uuid), scene);
 }
 
+TEST_F(ResourceLoaderProjectTest, ANonAsciiFileNameIsAUtf8ResourcePathWithItsMetaBesideIt)
+{
+    // "Caf\xC3\xA9" is "Cafe" with an e-acute, as UTF-8 (the source stays ASCII); the Windows code page needn't be
+    // able to spell it
+    const std::string name = "Caf\xC3\xA9.scene";
+    const fs::path file = _root / "assets" / "scenes" / IO::PathFromUtf8(name);
+    std::ofstream(file, std::ios::binary) << R"({"name":"Cafe","rootGameObjects":[]})";
+    Loader().Initialize(_root, _userData);
+
+    const IO::ResourcePath path("res://scenes/" + name);
+    const IO::AssetMetadata *meta = Loader().GetMetadata(path);
+    ASSERT_NE(meta, nullptr) << "indexed under its UTF-8 res:// path";
+    EXPECT_EQ(meta->resourcePath.ToString(), "res://scenes/" + name);
+    EXPECT_EQ(meta->uuid, IO::ResourceUUID::FromPath(path));
+    EXPECT_TRUE(fs::exists(_root / ".import" / "scenes" / IO::PathFromUtf8(name + ".meta")));
+    EXPECT_EQ(Loader().Resolve(path), file.lexically_normal());
+    const auto scene = Loader().Load<SceneFile>(path);
+    ASSERT_NE(scene, nullptr);
+    EXPECT_EQ(scene->GetSceneName(), "Cafe");
+
+    // A second scan finds nothing new
+    EXPECT_TRUE(Loader().RescanAssets().Empty());
+}
+
+TEST(ResourcePathUtf8Test, PartsAreUtf8)
+{
+    const IO::ResourcePath path("res://d\xC3\xA9j\xC3\xA0/vu.scene");
+    EXPECT_EQ(path.GetPath(), "d\xC3\xA9j\xC3\xA0/vu.scene");
+    EXPECT_EQ(path.GetParent().ToString(), "res://d\xC3\xA9j\xC3\xA0");
+    EXPECT_EQ(path.GetFilename(), "vu.scene");
+    EXPECT_EQ((IO::ResourcePath("res://a") / "\xC3\xA9.lua").GetPath(), "a/\xC3\xA9.lua");
+    EXPECT_EQ(IO::PathToUtf8(IO::PathFromUtf8("x/\xC3\xA9")), "x/\xC3\xA9");
+}
+
 TEST_F(ResourceLoaderProjectTest, ASceneFileThatIsntAnObjectDoesntLoad)
 {
     Write("scenes/Broken.scene", "[1, 2");

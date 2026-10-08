@@ -211,7 +211,8 @@ TEST(ProjectFileParseTest, ScenePathsAreResPathsToSceneFiles)
     }
     for (const char *path : {"", "res://", "res://.scene", "scenes/Main.scene", "user://Main.scene",
                              "C:/game/assets/Main.scene", "res://../Main.scene", "res://a/../../Main.scene",
-                             "res://Main.scene.json", "res://scenes/"})
+                             "res://Main.scene.json", "res://scenes/", "res://C:/Main.scene", "res://C:Main.scene",
+                             "res://scenes/a:b.scene", "res://Main.scene:stream", "res://Main.scene:x.scene"})
     {
         EXPECT_FALSE(IO::ProjectFile::IsScenePath(path)) << path;
     }

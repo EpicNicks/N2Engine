@@ -1384,7 +1384,32 @@ namespace N2Engine::Editor
         {
             return std::unexpected(std::format("Not a scene path inside the project's assets folder: '{}'", shown));
         }
-        return ResolvedScenePath{resourcePath, parent / file.filename()};
+
+        // An existing file is resolved itself too: a symlinked file can't lead a read or write out of the folder, and
+        // the path takes the spelling the file system has. That spelling, relative to the folder, is the scene's
+        // res:// path, so "res://Scenes/main.scene" on a case-insensitive file system is the same scene (the same
+        // UUID, the same .meta) as "res://scenes/Main.scene".
+        std::filesystem::path target = parent / file.filename();
+        if (std::error_code existsError; std::filesystem::exists(target, existsError))
+        {
+            target = std::filesystem::weakly_canonical(target, error);
+            if (error)
+            {
+                return std::unexpected(std::format("Can't resolve '{}'", shown));
+            }
+        }
+        const std::filesystem::path fromRoot = target.lexically_relative(root);
+        if (outside(fromRoot))
+        {
+            return std::unexpected(std::format("Not a scene path inside the project's assets folder: '{}'", shown));
+        }
+        IO::ResourcePath canonicalPath(IO::PathType::Resource, IO::PathToUtf8(fromRoot));
+        if (!IO::ProjectFile::IsScenePath(canonicalPath.ToString()))
+        {
+            // A link to a file that isn't a .scene
+            return std::unexpected(std::format("Not a scene file: '{}'", shown));
+        }
+        return ResolvedScenePath{std::move(canonicalPath), std::move(target)};
     }
 
     std::string EditorServer::OpenScenePath() const

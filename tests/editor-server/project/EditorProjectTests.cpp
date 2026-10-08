@@ -266,6 +266,75 @@ TEST_F(EditorProjectTest, OpenSceneRefusesWhatIsntASceneFileOfTheProject)
     EXPECT_EQ(after.uuid, before.uuid);
 }
 
+#ifdef _WIN32
+// Windows file names are case-insensitive: another spelling is the same file, so it must be the same scene
+TEST_F(EditorProjectTest, AnotherSpellingOfTheSamePathIsTheSameScene)
+{
+    const SceneInfo canonical = Open("res://scenes/Main.scene");
+    const SceneInfo variant = Open("res://SCENES/main.SCENE");
+    EXPECT_EQ(variant.path, "res://scenes/Main.scene") << "the file system's spelling";
+    EXPECT_EQ(variant.uuid, canonical.uuid);
+
+    // A save through the other spelling is a save to the scene's own file, not a "save as"
+    const SceneInfo saved = DecodeSceneInfo(Save("res://Scenes/MAIN.scene"));
+    EXPECT_EQ(saved.path, "res://scenes/Main.scene");
+    EXPECT_EQ(saved.uuid, canonical.uuid);
+    EXPECT_FALSE(IO::ResourceLoader::Instance().Exists(IO::ResourcePath("res://Scenes/MAIN.scene")))
+        << "no second .meta for the other spelling";
+}
+#endif
+
+TEST_F(EditorProjectTest, ANonAsciiSceneFileOpensUnderItsUtf8Path)
+{
+    // "Caf\xC3\xA9" is "Cafe" with an e-acute, as UTF-8 (the source stays ASCII)
+    const std::string path = "res://scenes/Caf\xC3\xA9.scene";
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({path, ""})).type, SceneInfoType);
+    EXPECT_TRUE(fs::exists(Assets() / "scenes" / IO::PathFromUtf8("Caf\xC3\xA9.scene")));
+    EXPECT_TRUE(fs::exists(_root / ".import" / "scenes" / IO::PathFromUtf8("Caf\xC3\xA9.scene.meta")));
+
+    const SceneInfo opened = Open(path);
+    EXPECT_EQ(opened.path, path);
+    EXPECT_EQ(opened.name, "Caf\xC3\xA9");
+    EXPECT_EQ(opened.uuid, IO::ResourceUUID::FromPath(IO::ResourcePath(path)).ToString());
+    EXPECT_TRUE(IO::ResourceLoader::Instance().Exists(IO::ResourcePath(path)));
+}
+
+TEST_F(EditorProjectTest, ASymlinkedSceneFileThatLeavesTheProjectIsRefused)
+{
+    const fs::path outside = _base / "outside.scene";
+    std::ofstream(outside, std::ios::binary) << R"({"name":"Outside","rootGameObjects":[]})";
+    std::error_code error;
+    fs::create_symlink(outside, Assets() / "scenes" / "Link.scene", error);
+    if (error)
+    {
+        GTEST_SKIP() << "can't create a symlink here (" << error.message() << ")";
+    }
+    const std::string before = ReadFile(outside);
+
+    const Frame opened = Execute(server, CommandType::OpenScene, Strings({"res://scenes/Link.scene"}));
+    EXPECT_EQ(opened.type, ErrorType) << "a read through the link";
+    Open("res://scenes/Main.scene");
+    EXPECT_EQ(Save("res://scenes/Link.scene").type, ErrorType) << "a write through the link";
+    EXPECT_EQ(ReadFile(outside), before);
+}
+
+TEST_F(EditorProjectTest, ASymlinkedFolderThatLeavesTheProjectIsRefused)
+{
+    const fs::path outside = _base / "outside-folder";
+    fs::create_directories(outside);
+    std::error_code error;
+    fs::create_directory_symlink(outside, Assets() / "linked", error);
+    if (error)
+    {
+        GTEST_SKIP() << "can't create a directory symlink here (" << error.message() << ")";
+    }
+    Open("res://scenes/Main.scene");
+    EXPECT_EQ(Save("res://linked/Escaped.scene").type, ErrorType);
+    EXPECT_FALSE(fs::exists(outside / "Escaped.scene"));
+    EXPECT_EQ(Execute(server, CommandType::NewScene, Strings({"res://linked/New.scene", ""})).type, ErrorType);
+    EXPECT_FALSE(fs::exists(outside / "New.scene"));
+}
+
 TEST_F(EditorProjectTest, AFileAddedSinceTheScanOpensAndIsIndexed)
 {
     WriteAsset("levels/Late.scene", R"({"name":"Late","rootGameObjects":[]})");

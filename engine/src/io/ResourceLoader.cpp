@@ -9,6 +9,8 @@
 #include "engine/text/Font.hpp"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <format>
@@ -20,11 +22,21 @@ namespace N2Engine::IO
 {
     namespace
     {
+        /// A file's modification time in whole Unix seconds, converted exactly (clock_cast), so the same file time
+        /// always gives the same number. The old conversion went through both clocks' now(), which differ by a
+        /// moment on each call, so a file could look modified on one scan and not the next.
+        uint64_t UnixSeconds(const std::filesystem::file_time_type fileTime)
+        {
+            const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(fileTime);
+            const auto seconds = std::chrono::floor<std::chrono::seconds>(systemTime).time_since_epoch().count();
+            return seconds > 0 ? static_cast<uint64_t>(seconds) : 0u;
+        }
+
         /// The .meta resourceType for a file, from its extension, case-insensitively (as the loader lookup
         /// is): Music.WAV is an AudioClip like music.wav
         std::string ResourceTypeFor(const std::filesystem::path &sourcePath)
         {
-            std::string ext = sourcePath.extension().string();
+            std::string ext = PathToUtf8(sourcePath.extension());
             std::ranges::transform(ext, ext.begin(),
                                    [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (ext == ".lua")
@@ -66,7 +78,7 @@ namespace N2Engine::IO
         std::filesystem::create_directories(_metadataRoot);
         std::filesystem::create_directories(_userDataRoot);
 
-        Logger::Info(std::format("ResourceLoader initialized: {}", projectRoot.string()));
+        Logger::Info(std::format("ResourceLoader initialized: {}", PathToUtf8(projectRoot)));
 
         // Everything here is keyed by res:// paths, which don't include the root: entries from a
         // previous root would otherwise pass for this one's files
@@ -150,17 +162,21 @@ namespace N2Engine::IO
             if (entry.path().extension() == ".meta")
                 continue;
 
-            std::string ext = entry.path().extension().string();
-            std::ranges::transform(ext, ext.begin(), ::tolower);
-
-            if (_loaders.find(ext) == _loaders.end())
-                continue;
-
-            // Before the metadata: a file whose .meta can't be written still exists, so it isn't "removed"
-            seen.insert(MakeResourcePath(entry.path()));
-
+            // One file whose name can't be converted (or whose metadata fails) is skipped, never the rest of the scan
             try
             {
+                std::string ext = PathToUtf8(entry.path().extension());
+                std::ranges::transform(ext, ext.begin(), [](const unsigned char c)
+                {
+                    return static_cast<char>(std::tolower(c));
+                });
+
+                if (_loaders.find(ext) == _loaders.end())
+                    continue;
+
+                // Before the metadata: a file whose .meta can't be written still exists, so it isn't "removed"
+                seen.insert(MakeResourcePath(entry.path()));
+
                 AssetMetadata meta = CreateOrUpdateMetadata(entry.path());
                 if (const auto previous = _metadata.find(meta.resourcePath); previous == _metadata.end())
                 {
@@ -178,21 +194,16 @@ namespace N2Engine::IO
             }
             catch (const std::exception &e)
             {
-                Logger::Warn(std::format("Skipping asset {}: {}", entry.path().string(), e.what()));
+                // PathToUtf8 never throws, unlike string() for a name the code page can't spell
+                Logger::Warn(std::format("Skipping asset {}: {}", PathToUtf8(entry.path()), e.what()));
             }
         }
     }
 
     AssetMetadata ResourceLoader::CreateOrUpdateMetadata(const std::filesystem::path &sourcePath)
     {
-        auto lastWrite = std::filesystem::last_write_time(sourcePath);
+        const uint64_t timestamp = UnixSeconds(std::filesystem::last_write_time(sourcePath));
         auto fileSize = std::filesystem::file_size(sourcePath);
-
-        auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-            lastWrite - std::filesystem::file_time_type::clock::now() +
-            std::chrono::system_clock::now()
-        );
-        uint64_t timestamp = std::chrono::system_clock::to_time_t(sctp);
 
         ResourcePath resourcePath = MakeResourcePath(sourcePath);
         std::filesystem::path metaPath = GetMetadataPath(sourcePath);
@@ -211,7 +222,7 @@ namespace N2Engine::IO
             {
                 // A corrupt .meta used to throw out of Initialize; regenerate it instead (the UUID is
                 // derived from the path, so references to the asset keep resolving)
-                Logger::Warn(std::format("Corrupt metadata {} ({}); regenerating", metaPath.string(), e.what()));
+                Logger::Warn(std::format("Corrupt metadata {} ({}); regenerating", PathToUtf8(metaPath), e.what()));
             }
         }
 
@@ -264,7 +275,10 @@ namespace N2Engine::IO
     std::filesystem::path ResourceLoader::GetMetadataPath(const std::filesystem::path &sourcePath) const
     {
         auto relative = std::filesystem::relative(sourcePath, _assetsRoot);
-        return _metadataRoot / relative.parent_path() / (relative.filename().string() + ".meta");
+        // Appended as a path, not a narrow string: a file name the code page can't spell keeps its .meta beside it
+        std::filesystem::path metaName = relative.filename();
+        metaName += ".meta";
+        return _metadataRoot / relative.parent_path() / metaName;
     }
 
     namespace
@@ -274,7 +288,7 @@ namespace N2Engine::IO
         std::filesystem::path ResolveUnder(const std::filesystem::path &root, const std::string &relative)
         {
             const std::filesystem::path normalizedRoot = root.lexically_normal();
-            const std::filesystem::path resolved = (root / relative).lexically_normal();
+            const std::filesystem::path resolved = (root / PathFromUtf8(relative)).lexically_normal();
             const std::filesystem::path fromRoot = resolved.lexically_relative(normalizedRoot);
             if (fromRoot.empty() || *fromRoot.begin() == "..")
             {
@@ -304,18 +318,19 @@ namespace N2Engine::IO
     ResourcePath ResourceLoader::MakeResourcePath(const std::filesystem::path &physicalPath) const
     {
         auto relative = std::filesystem::relative(physicalPath, _assetsRoot);
-        if (!relative.string().starts_with(".."))
+        // UTF-8, as every res:// path is (the .meta keys, the editor's wire paths)
+        if (!PathToUtf8(relative).starts_with(".."))
         {
-            return ResourcePath(PathType::Resource, relative.string());
+            return ResourcePath(PathType::Resource, PathToUtf8(relative));
         }
 
         relative = std::filesystem::relative(physicalPath, _userDataRoot);
-        if (!relative.string().starts_with(".."))
+        if (!PathToUtf8(relative).starts_with(".."))
         {
-            return ResourcePath(PathType::User, relative.string());
+            return ResourcePath(PathType::User, PathToUtf8(relative));
         }
 
-        return ResourcePath(PathType::Absolute, physicalPath.string());
+        return ResourcePath(PathType::Absolute, PathToUtf8(physicalPath));
     }
 
     const AssetMetadata* ResourceLoader::GetMetadata(const ResourcePath &resourcePath) const
@@ -355,12 +370,7 @@ namespace N2Engine::IO
         if (!std::filesystem::exists(sourcePath))
             return false;
 
-        auto lastWrite = std::filesystem::last_write_time(sourcePath);
-        auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-            lastWrite - std::filesystem::file_time_type::clock::now() +
-            std::chrono::system_clock::now()
-        );
-        uint64_t timestamp = std::chrono::system_clock::to_time_t(sctp);
+        const uint64_t timestamp = UnixSeconds(std::filesystem::last_write_time(sourcePath));
 
         return timestamp != meta->lastModified;
     }
@@ -547,7 +557,7 @@ namespace N2Engine::IO
             if (!saved)
             {
                 Logger::Warn(std::format("{}: the sub-asset index wasn't saved to {}; it is rebuilt the next time the "
-                                         "model loads", parent.ToString(), metaPath.string()));
+                                         "model loads", parent.ToString(), PathToUtf8(metaPath)));
             }
         }
         return true;

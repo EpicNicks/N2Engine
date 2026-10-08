@@ -14,13 +14,13 @@ namespace N2Engine
         std::ifstream file(path, std::ios::binary);
         if (!file)
         {
-            Logger::Error(std::format("Cannot read scene file {}", path.string()));
+            Logger::Error(std::format("Cannot read scene file {}", IO::PathToUtf8(path)));
             return false;
         }
         nlohmann::json data = nlohmann::json::parse(file, nullptr, false);
         if (data.is_discarded() || !data.is_object())
         {
-            Logger::Error(std::format("Scene file {} doesn't hold a JSON object", path.string()));
+            Logger::Error(std::format("Scene file {} doesn't hold a JSON object", IO::PathToUtf8(path)));
             return false;
         }
         _data = std::move(data);
