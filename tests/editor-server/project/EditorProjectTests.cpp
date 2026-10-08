@@ -368,7 +368,10 @@ TEST_F(EditorProjectTest, EditsLeaveTheSceneUnsavedUntilItIsSaved)
     EXPECT_EQ(text.back(), '\n');
     EXPECT_NE(text.find("\n  \"name\": \"Main\""), std::string::npos) << text;
     EXPECT_NE(text.find("Saved Box"), std::string::npos) << text;
-    EXPECT_FALSE(fs::exists(Assets() / "scenes" / "Main.scene.tmp"));
+    for (const auto &entry : fs::directory_iterator(Assets() / "scenes"))
+    {
+        EXPECT_NE(entry.path().extension(), ".tmp") << "a temporary file was left: " << entry.path().filename().string();
+    }
 }
 
 TEST_F(EditorProjectTest, EveryMutatingCommandMovesTheRevision)

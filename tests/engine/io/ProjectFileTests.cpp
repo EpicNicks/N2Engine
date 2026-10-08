@@ -33,6 +33,18 @@ namespace
         };
     }
 
+    /// Temporary files WriteTextFileAtomically left in a folder
+    int TemporaryFilesIn(const fs::path &folder)
+    {
+        int count = 0;
+        for (const auto &entry : fs::directory_iterator(folder))
+        {
+            if (entry.path().extension() == ".tmp")
+                ++count;
+        }
+        return count;
+    }
+
     std::string ReadFile(const fs::path &path)
     {
         std::ifstream file(path, std::ios::binary);
@@ -267,7 +279,7 @@ TEST_F(ProjectFileTest, SaveThenLoadRoundTrips)
     ASSERT_TRUE(project);
     ASSERT_TRUE(project->Save(_root));
 
-    EXPECT_FALSE(fs::exists(IO::ProjectFile::PathIn(_root).string() + ".tmp")) << "the temporary file is renamed";
+    EXPECT_EQ(TemporaryFilesIn(_root), 0) << "the temporary file is renamed";
     EXPECT_EQ(ReadFile(IO::ProjectFile::PathIn(_root)), project->ToText());
 
     const auto loaded = IO::ProjectFile::Load(_root);
@@ -285,6 +297,30 @@ TEST_F(ProjectFileTest, SaveReplacesTheFile)
     const auto loaded = IO::ProjectFile::Load(_root);
     ASSERT_TRUE(loaded) << loaded.error();
     EXPECT_EQ(loaded->name, "Renamed");
+}
+
+TEST_F(ProjectFileTest, AFailedWriteLeavesNoTemporaryFile)
+{
+    // A folder where the file should go: the rename can't replace it
+    const fs::path target = _root / "target";
+    fs::create_directories(target / "inside");
+    const auto written = IO::WriteTextFileAtomically(target, "text");
+    ASSERT_FALSE(written);
+    EXPECT_NE(written.error().find("can't replace"), std::string::npos) << written.error();
+    EXPECT_TRUE(fs::is_directory(target)) << "the folder is untouched";
+    EXPECT_EQ(TemporaryFilesIn(_root), 0) << "the temporary file is removed";
+}
+
+TEST_F(ProjectFileTest, WritingReplacesTheFileThroughATemporaryOfItsOwn)
+{
+    const fs::path file = _root / "file.txt";
+    ASSERT_TRUE(IO::WriteTextFileAtomically(file, "first"));
+    ASSERT_TRUE(IO::WriteTextFileAtomically(file, "second\n"));
+    EXPECT_EQ(ReadFile(file), "second\n") << "bytes as given: no newline translation";
+    // A stale temporary of the old fixed name (a crash before PR #90) is no obstacle
+    std::ofstream(_root / "file.txt.tmp") << "stale";
+    ASSERT_TRUE(IO::WriteTextFileAtomically(file, "third"));
+    EXPECT_EQ(ReadFile(file), "third");
 }
 
 TEST_F(ProjectFileTest, AnInvalidProjectIsNotSaved)

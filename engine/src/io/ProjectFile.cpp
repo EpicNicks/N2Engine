@@ -4,13 +4,16 @@
 #include <array>
 #include <charconv>
 #include <cstdint>
+#include <chrono>
 #include <cstdlib>
 #include <format>
 #include <fstream>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #include "engine/Version.hpp"
@@ -110,6 +113,39 @@ namespace N2Engine::IO
             // What Scene::Serialize writes for a scene with no objects
             const nlohmann::json scene = {{"name", sceneName}, {"rootGameObjects", nlohmann::json::array()}};
             return scene.dump(2) + "\n";
+        }
+
+        /// Retries of a rename that failed for a moment (WriteTextFileAtomically)
+        constexpr int RenameRetries = 10;
+
+        uint32_t RandomTag()
+        {
+            static thread_local std::mt19937 generator{std::random_device{}()};
+            return static_cast<uint32_t>(generator());
+        }
+
+        /// std::ios::noreplace (C++23: fail if the file exists) where the library has it
+        std::ios::openmode NoReplaceFlag()
+        {
+#if defined(__cpp_lib_ios_noreplace)
+            return std::ios::noreplace;
+#else
+            return std::ios::openmode{};
+#endif
+        }
+
+        /// The errors another process holding the file open gives a rename, which go away on their own
+        bool IsTransientRenameError(const std::error_code &error)
+        {
+#ifdef _WIN32
+            // ERROR_ACCESS_DENIED (5), ERROR_SHARING_VIOLATION (32), ERROR_LOCK_VIOLATION (33)
+            if (error.category() == std::system_category() &&
+                (error.value() == 5 || error.value() == 32 || error.value() == 33))
+            {
+                return true;
+            }
+#endif
+            return error == std::errc::permission_denied || error == std::errc::device_or_resource_busy;
         }
 
         std::string PathText(const std::filesystem::path &path)
@@ -431,30 +467,49 @@ namespace N2Engine::IO
     std::expected<void, std::string> WriteTextFileAtomically(const std::filesystem::path &path,
                                                              const std::string_view text)
     {
-        std::filesystem::path temporary = path;
-        temporary += ".tmp";
+        // A temporary file of its own beside the target (the rename must stay on one volume), created exclusively,
+        // so two writers, or a stale file from a crash, never share one
+        std::filesystem::path temporary;
+        std::ofstream file;
+        for (int attempt = 0; attempt < 16 && !file.is_open(); ++attempt)
         {
-            std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-            if (!file)
-            {
-                return std::unexpected(std::format("can't write {}", PathText(temporary)));
-            }
-            file.write(text.data(), static_cast<std::streamsize>(text.size()));
-            file.flush();
-            if (!file)
-            {
-                file.close();
-                std::error_code ignored;
-                std::filesystem::remove(temporary, ignored);
-                return std::unexpected(std::format("can't write {} (is the disk full?)", PathText(temporary)));
-            }
+            temporary = path;
+            temporary += std::format(".{:08x}.tmp", RandomTag());
+            file.open(temporary, std::ios::binary | std::ios::out | NoReplaceFlag());
         }
-        // Replaces path when it exists (MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows, rename on POSIX)
+        if (!file.is_open())
+        {
+            return std::unexpected(std::format("can't create a temporary file beside {}", PathText(path)));
+        }
+        file.write(text.data(), static_cast<std::streamsize>(text.size()));
+        // To the operating system, not to the disk: this protects against a crash or a failed write of this process,
+        // not against losing power (that would need FlushFileBuffers/fsync)
+        file.flush();
+        const bool written = static_cast<bool>(file);
+        file.close();
+        std::error_code ignored;
+        if (!written || file.fail())
+        {
+            std::filesystem::remove(temporary, ignored);
+            return std::unexpected(std::format("can't write {} (is the disk full?)", PathText(temporary)));
+        }
+
+        // Replaces path when it exists (MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows, rename on POSIX). On
+        // Windows another process reading the file (an editor, a virus scanner, the search indexer) makes the rename
+        // fail for a moment, so that is retried briefly.
         std::error_code error;
-        std::filesystem::rename(temporary, path, error);
+        for (int attempt = 0;; ++attempt)
+        {
+            error.clear();
+            std::filesystem::rename(temporary, path, error);
+            if (!error || attempt >= RenameRetries || !IsTransientRenameError(error))
+            {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(std::min(10 * (attempt + 1), 50)));
+        }
         if (error)
         {
-            std::error_code ignored;
             std::filesystem::remove(temporary, ignored);
             return std::unexpected(std::format("can't replace {}: {}", PathText(path), error.message()));
         }
