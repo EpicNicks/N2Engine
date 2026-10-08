@@ -147,6 +147,29 @@ namespace ProtocolVectors
             {"SetPaused", [](BufferReader &r) { return json{{"paused", SetPausedCmd::Deserialize(r).paused}}; }},
             {"Step", [](BufferReader &r) { return json{{"frames", StepCmd::Deserialize(r).frames}}; }},
             {"SendInput", [](BufferReader &r) { return json{{"events", SendInputCmd::Deserialize(r).events}}; }},
+            {"ListAssets", [](BufferReader &r)
+            {
+                const auto cmd = ListAssetsCmd::Deserialize(r);
+                return json{{"folder", cmd.folder}, {"recursive", cmd.recursive}};
+            }},
+            {"GetAssetInfo", [](BufferReader &r) { return json{{"uuidOrPath", GetAssetInfoCmd::Deserialize(r).uuidOrPath}}; }},
+            {"SetImportSettings", [](BufferReader &r)
+            {
+                const auto cmd = SetImportSettingsCmd::Deserialize(r);
+                return json{{"path", cmd.path}, {"customData", cmd.customData}};
+            }},
+            {"ReadTextAsset", [](BufferReader &r) { return json{{"path", ReadTextAssetCmd::Deserialize(r).path}}; }},
+            {"WriteTextAsset", [](BufferReader &r)
+            {
+                const auto cmd = WriteTextAssetCmd::Deserialize(r);
+                return json{{"path", cmd.path}, {"text", cmd.text}};
+            }},
+            {"CreateScriptAsset", [](BufferReader &r)
+            {
+                const auto cmd = CreateScriptAssetCmd::Deserialize(r);
+                return json{{"path", cmd.path}, {"className", cmd.className}};
+            }},
+            {"CreateFolder", [](BufferReader &r) { return json{{"path", CreateFolderCmd::Deserialize(r).path}}; }},
             {"CreateScene", [](BufferReader &r) { return json{{"name", CreateSceneCmd::Deserialize(r).name}}; }},
             {"LoadScene", [](BufferReader &r) { return json{{"sceneJson", LoadSceneCmd::Deserialize(r).sceneJson}}; }},
             {"DeleteScene", [](BufferReader &r) { return json{{"sceneName", DeleteSceneCmd::Deserialize(r).sceneName}}; }},
@@ -299,6 +322,12 @@ namespace ProtocolVectors
             {"PlayState", [](BufferWriter &w, const json &f)
             {
                 WritePlayState(w, StringField(f, "state"), Uint32Field(f, "frame"), f.at("time").get<float>());
+            {"AssetList", [](BufferWriter &w, const json &f) { WriteAssetList(w, f.at("folders"), f.at("assets")); }},
+            {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
+            {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},
+            {"AssetCreated", [](BufferWriter &w, const json &f)
+            {
+                WriteAssetCreated(w, StringField(f, "path"), StringField(f, "uuid"));
             }},
             {"EntityData", [](BufferWriter &w, const json &f)
             {

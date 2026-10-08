@@ -17,7 +17,9 @@ namespace N2Engine::Scripting
     {
     private:
         IO::ResourcePath _scriptPath;
-        LuaScript* _script = nullptr;
+        // Shared with the loader's cache: a rescan that forgets a deleted script's file frees the cache's copy, and a raw
+        // pointer here would then dangle (the next reload would read freed memory)
+        std::shared_ptr<LuaScript> _script;
         sol::table _scriptInstance;
         // True until this component is destroyed, or its script instance is replaced (SetScript, reload),
         // which gives the new instance a new flag. Callbacks the script registers hold it, so they stop

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <expected>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -50,8 +52,46 @@ namespace N2Engine::IO
          * Forgets everything about the previous project, then scans the assets.
          */
         void Initialize(const std::filesystem::path& projectRoot, const std::filesystem::path& userDataRoot = {});
+
+        /**
+         * A read-only loader never writes the project: it keeps what it finds in memory but writes no .meta file (new,
+         * re-typed or sub-asset index), no .n2/asset-state.json and doesn't create the .import folder, and
+         * SetImportSettings answers an error. For a process that shares the project folder with another that owns it
+         * (the editor's play host, whose edit host does the indexing). Call it before Initialize; Initialize doesn't
+         * change it. user:// is the game's own and is still created. Off by default.
+         */
+        void SetReadOnly(bool readOnly) { _readOnly = readOnly; }
+        [[nodiscard]] bool IsReadOnly() const { return _readOnly; }
         /// Indexes new and changed files under the assets folder and forgets deleted ones; returns what changed
         RescanResult RescanAssets();
+
+        /// What RefreshAsset found out about one file
+        enum class RefreshResult
+        {
+            Missing,   ///< no such file, or not one the loader has a loader for (nothing changed)
+            Added,     ///< no metadata before
+            Modified,  ///< its size or modification time changed
+            Unchanged
+        };
+        /**
+         * RescanAssets for one project file (a res:// path): brings its metadata up to date, indexing it if it is
+         * new. What a caller that has just written the file does, without scanning the whole folder. The cached copy
+         * of a changed file is kept (Reload drops it). A path that isn't a res:// file with a loader, or a file that is gone
+         * (a rescan forgets it), is Missing.
+         */
+        RefreshResult RefreshAsset(const ResourcePath &resourcePath);
+
+        /**
+         * Whether the files a scan looks at differ from the last scan's (a file added, removed, or with another size
+         * or modification time), by walking the assets folder and reading only what the directory listing holds: no
+         * file is opened, so it is cheap enough to ask every second. The editor's watcher asks, and calls
+         * RescanAssets when it says yes. The comparison is a fingerprint taken before each scan reads anything, so a
+         * file changed during a scan counts as changed afterwards. False before Initialize.
+         */
+        [[nodiscard]] bool AssetsChangedOnDisk() const;
+
+        /// Where the last-seen size and modification time of every asset are kept (<project>/.n2/asset-state.json)
+        [[nodiscard]] std::filesystem::path GetAssetStatePath() const;
         
         // === Loading ===
         template <typename T = Base::Asset>
@@ -86,6 +126,18 @@ namespace N2Engine::IO
         template <typename T>
         void RegisterAsset(std::shared_ptr<T> asset, const ResourcePath& path);
         
+        // === Import settings ===
+
+        /**
+         * Replaces an asset's import settings (the .meta's customData) with customData, which must be a JSON object
+         * (null means empty), and saves the .meta. The index of a file's sub-assets (customData.subAssets and
+         * subAssetsSource) belongs to the loader: it is kept as it is, and those two keys in customData are ignored.
+         * The cached copy of the asset is not touched (it was made with the old settings); Reload it. An error
+         * message when the path isn't an indexed project file, customData isn't an object, or the .meta can't be saved.
+         */
+        [[nodiscard]] std::expected<void, std::string> SetImportSettings(const ResourcePath &resourcePath,
+                                                                         const nlohmann::json &customData);
+
         // === Sub-assets (a model's meshes, materials and textures) ===
 
         /// One entry of a file's sub-asset index
@@ -112,6 +164,9 @@ namespace N2Engine::IO
          * scanned project file.
          */
         bool SetSubAssetIndex(const ResourcePath& parent, const std::vector<SubAssetIndexEntry>& entries);
+        /// A file's recorded sub-assets (its .meta index, when it describes the file as it is now), sorted by key,
+        /// with their UUIDs: empty for a file without sub-assets, one never loaded, or a path that isn't indexed
+        [[nodiscard]] std::vector<SubAssetIndexEntry> GetSubAssets(const ResourcePath &parent) const;
         /// The parent and key a sub-asset UUID names, or nullptr for a UUID that isn't a known sub-asset
         [[nodiscard]] const SubAssetLocation* FindSubAssetLocation(const Math::UUID& uuid) const;
         /// A resource type whose files have sub-assets ("Model"). LoadByUUID of an unknown UUID loads every such file
@@ -145,6 +200,19 @@ namespace N2Engine::IO
                            std::unordered_set<ResourcePath, ResourcePath::Hash>& seen);
         AssetMetadata CreateOrUpdateMetadata(const std::filesystem::path& sourcePath);
         std::filesystem::path GetMetadataPath(const std::filesystem::path& sourcePath) const;
+        /// The files with a loader under the assets folder, as a fingerprint of (path, size, modification time): the
+        /// sum of one hash per file, so the walk's order doesn't matter, and the file count
+        struct DirectoryFingerprint
+        {
+            std::uint64_t sum = 0;
+            std::uint64_t count = 0;
+            bool operator==(const DirectoryFingerprint &) const = default;
+        };
+        [[nodiscard]] DirectoryFingerprint ComputeFingerprint() const;
+        /// Reads .n2/asset-state.json into _assetState (a missing or unreadable file is no state)
+        void LoadAssetState();
+        /// Writes .n2/asset-state.json when _assetStateDirty
+        void SaveAssetState();
         /// Gives a just-loaded asset's sub-assets their UUIDs and resource path, and records the index
         void RegisterSubAssets(const ResourcePath& parent, const Base::Asset& asset);
         /// Whether a .meta's sub-asset index was written for the file as it is now (its customData.subAssetsSource
@@ -163,6 +231,22 @@ namespace N2Engine::IO
         std::filesystem::path _metadataRoot;
         std::filesystem::path _userDataRoot;
         
+        /// What each scanned file's size and modification time were when last seen, kept in .n2/asset-state.json (not in
+        /// the .meta files, which would change with every edit of a file and are committed)
+        struct AssetState
+        {
+            std::uint64_t lastModified = 0;
+            std::size_t fileSize = 0;
+        };
+        std::unordered_map<ResourcePath, AssetState, ResourcePath::Hash> _assetState;
+        bool _assetStateDirty = false;
+        bool _assetStateWarned = false;
+        DirectoryFingerprint _fingerprint;
+        bool _hasFingerprint = false;
+        bool _readOnly = false;
+        /// meta.SaveToFile(path), or true without writing when read-only
+        bool PersistMeta(const AssetMetadata &meta, const std::filesystem::path &path) const;
+
         std::unordered_map<ResourcePath, AssetMetadata, ResourcePath::Hash> _metadata;
         std::unordered_map<Math::UUID, ResourcePath, UUIDHash> _uuidToPath;
         

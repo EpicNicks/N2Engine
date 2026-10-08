@@ -276,6 +276,7 @@ namespace
             // The play host's keyboard goes first, then the scene (its components release their resources while the
             // renderer is up), then the renderer
             play.reset();
+            IO::ResourceLoader::Instance().SetReadOnly(false);
             (void)Execute(server, CommandType::NewScene, Strings({"", "Empty"}));
             Application::GetInstance().GetWindow().Shutdown();
             std::error_code error;
@@ -642,7 +643,9 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
     for (const CommandType type : {CommandType::OpenScene, CommandType::NewScene, CommandType::SaveSceneToFile,
                                    CommandType::DeleteScene, CommandType::SetProjectSettings,
                                    CommandType::SetStartupScene, CommandType::RestoreAutosave,
-                                   CommandType::DiscardAutosave, CommandType::LoadScene})
+                                   CommandType::DiscardAutosave, CommandType::LoadScene,
+                                   CommandType::SetImportSettings, CommandType::WriteTextAsset,
+                                   CommandType::CreateScriptAsset, CommandType::CreateFolder})
     {
         EXPECT_TRUE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
         const Frame response = Execute(*play, type);
@@ -652,7 +655,11 @@ TEST_F(EditorPlayTest, APlayHostRefusesTheCommandsThatWriteTheProjectOrSwapTheSc
     EXPECT_FALSE(SceneManager::GetCurSceneRef().IsEditMode()) << "still the game";
     EXPECT_TRUE(SceneHasObjectNamed("Unsaved"));
     EXPECT_EQ(ReadFile(SceneFile()), before);
-    EXPECT_FALSE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(CommandType::GetHierarchy)));
+    for (const CommandType type : {CommandType::GetHierarchy, CommandType::ListAssets, CommandType::GetAssetInfo,
+                                   CommandType::ReadTextAsset, CommandType::RescanAssets})
+    {
+        EXPECT_FALSE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(type))) << static_cast<int>(type);
+    }
 }
 
 TEST_F(EditorPlayTest, APlayHostWritesNoAutosave)
@@ -962,4 +969,24 @@ TEST_F(EditorPlayTest, AFrameThatThrowsIsLoggedAndPausesTheGame)
     EXPECT_EQ(Pause(false).type, OkType);
     RunFrames(1);
     EXPECT_FALSE(play->IsPaused());
+}
+
+// ==================== The asset files belong to the edit host ====================
+
+TEST_F(EditorPlayTest, APlayHostDoesNotWatchAssetsAndItsReadOnlyLoaderWritesNoState)
+{
+    const fs::path state = Root() / ".n2" / "asset-state.json";
+    const std::string stateBefore = ReadFile(state);
+    StartPlaying();
+    EXPECT_FALSE(play->IsWatchingAssets()) << "EnterPlayMode turns the watcher off";
+    EXPECT_TRUE(server.IsWatchingAssets()) << "the edit host's own watcher is on";
+
+    // What RunHost does for --play before it initialises the project (the fixture initialised it already)
+    IO::ResourceLoader::Instance().SetReadOnly(true);
+    WriteFile(Root() / "assets" / "late.mat", "{}");
+    (void)Execute(*play, CommandType::RescanAssets);
+
+    EXPECT_FALSE(fs::exists(Root() / ".import" / "late.mat.meta")) << "no .meta from a play host's rescan";
+    EXPECT_EQ(ReadFile(state), stateBefore) << ".n2/asset-state.json is the edit host's";
+    EXPECT_FALSE(play->PollAssetsIfDue());
 }

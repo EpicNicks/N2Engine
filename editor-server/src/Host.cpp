@@ -217,6 +217,9 @@ namespace N2Engine::Editor
                                              project->engineVersion, EngineVersion()));
                 }
                 IO::ResourceUUID::Initialize(project->projectId);
+                // A play host shares the folder with the host that edits, which owns its .meta files, .n2/asset-state.json
+                // and .import folder: it reads them and writes none (ResourceLoader::SetReadOnly)
+                IO::ResourceLoader::Instance().SetReadOnly(!options.playScene.empty());
                 IO::ResourceLoader::Instance().Initialize(projectDir, project->UserDataPath());
                 for (const std::string &problem : ApplyProjectSettings(project->settings))
                 {

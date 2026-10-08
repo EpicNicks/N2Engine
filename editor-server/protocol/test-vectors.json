@@ -279,6 +279,76 @@
       "payload": "0d0000006e616d65203020e29c9320c3a9"
     },
     {
+      "command": "ListAssets",
+      "id": "0xA0",
+      "fields": {
+        "folder": "folder 0 ✓ é",
+        "recursive": false
+      },
+      "payload": "0f000000666f6c646572203020e29c9320c3a900"
+    },
+    {
+      "command": "GetAssetInfo",
+      "id": "0xA1",
+      "fields": {
+        "uuidOrPath": "uuidOrPath 0 ✓ é"
+      },
+      "payload": "13000000757569644f7250617468203020e29c9320c3a9"
+    },
+    {
+      "command": "SetImportSettings",
+      "id": "0xA2",
+      "fields": {
+        "path": "path 0 ✓ é",
+        "customData": {
+          "list": [
+            1,
+            "two ✓",
+            true,
+            null
+          ],
+          "nested": {
+            "value": 1.5
+          }
+        }
+      },
+      "payload": "0d00000070617468203020e29c9320c3a9370000007b226c697374223a5b312c2274776f20e29c93222c747275652c6e756c6c5d2c226e6573746564223a7b2276616c7565223a312e357d7d"
+    },
+    {
+      "command": "ReadTextAsset",
+      "id": "0xA3",
+      "fields": {
+        "path": "path 0 ✓ é"
+      },
+      "payload": "0d00000070617468203020e29c9320c3a9"
+    },
+    {
+      "command": "WriteTextAsset",
+      "id": "0xA4",
+      "fields": {
+        "path": "path 0 ✓ é",
+        "text": "text 1 ✓ é"
+      },
+      "payload": "0d00000070617468203020e29c9320c3a90d00000074657874203120e29c9320c3a9"
+    },
+    {
+      "command": "CreateScriptAsset",
+      "id": "0xA5",
+      "fields": {
+        "path": "path 0 ✓ é",
+        "className": "className 1 ✓ é"
+      },
+      "payload": "0d00000070617468203020e29c9320c3a912000000636c6173734e616d65203120e29c9320c3a9"
+    },
+    {
+      "command": "CreateFolder",
+      "id": "0xA6",
+      "fields": {
+        "path": "path 0 ✓ é"
+      },
+      "payload": "0d00000070617468203020e29c9320c3a9"
+    },
+    {
       "command": "AddComponent",
       "id": "0x61",
       "fields": {
@@ -882,6 +952,112 @@
         "scriptTemplate": "scriptTemplate 0 ✓ é"
       },
       "payload": "1700000073637269707454656d706c617465203020e29c9320c3a9"
+    },
+    {
+      "response": "AssetList",
+      "id": "0xA0",
+      "fields": {
+        "folders": [
+          "folders 0 ✓",
+          "folders 1 ✓"
+        ],
+        "assets": [
+          {
+            "modified": 7.5,
+            "path": "path 1 ✓",
+            "size": 6.5,
+            "subAssets": [
+              {
+                "key": "key 6 ✓",
+                "type": "type 8 ✓",
+                "uuid": "uuid 7 ✓"
+              },
+              {
+                "key": "key 7 ✓",
+                "type": "type 9 ✓",
+                "uuid": "uuid 8 ✓"
+              }
+            ],
+            "type": "type 3 ✓",
+            "uuid": "uuid 2 ✓"
+          },
+          {
+            "modified": 8.5,
+            "path": "path 2 ✓",
+            "size": 7.5,
+            "subAssets": [
+              {
+                "key": "key 7 ✓",
+                "type": "type 9 ✓",
+                "uuid": "uuid 8 ✓"
+              },
+              {
+                "key": "key 8 ✓",
+                "type": "type 10 ✓",
+                "uuid": "uuid 9 ✓"
+              }
+            ],
+            "type": "type 4 ✓",
+            "uuid": "uuid 3 ✓"
+          }
+        ]
+      },
+      "payload": "210000005b22666f6c64657273203020e29c93222c22666f6c64657273203120e29c93225dbe0100005b7b226d6f646966696564223a372e352c2270617468223a2270617468203120e29c93222c2273697a65223a362e352c22737562417373657473223a5b7b226b6579223a226b6579203620e29c93222c2274797065223a2274797065203820e29c93222c2275756964223a2275756964203720e29c93227d2c7b226b6579223a226b6579203720e29c93222c2274797065223a2274797065203920e29c93222c2275756964223a2275756964203820e29c93227d5d2c2274797065223a2274797065203320e29c93222c2275756964223a2275756964203220e29c93227d2c7b226d6f646966696564223a382e352c2270617468223a2270617468203220e29c93222c2273697a65223a372e352c22737562417373657473223a5b7b226b6579223a226b6579203720e29c93222c2274797065223a2274797065203920e29c93222c2275756964223a2275756964203820e29c93227d2c7b226b6579223a226b6579203820e29c93222c2274797065223a227479706520313020e29c93222c2275756964223a2275756964203920e29c93227d5d2c2274797065223a2274797065203420e29c93222c2275756964223a2275756964203320e29c93227d5d"
+    },
+    {
+      "response": "AssetDetail",
+      "id": "0xA1",
+      "fields": {
+        "info": {
+          "customData": {
+            "list": [
+              6,
+              "two ✓",
+              true,
+              null
+            ],
+            "nested": {
+              "value": 1.5
+            }
+          },
+          "loaded": false,
+          "modified": 6.5,
+          "path": "path 0 ✓",
+          "size": 5.5,
+          "subAssets": [
+            {
+              "key": "key 5 ✓",
+              "type": "type 7 ✓",
+              "uuid": "uuid 6 ✓"
+            },
+            {
+              "key": "key 6 ✓",
+              "type": "type 8 ✓",
+              "uuid": "uuid 7 ✓"
+            }
+          ],
+          "type": "type 2 ✓",
+          "uuid": "uuid 1 ✓"
+        }
+      },
+      "payload": "310100007b22637573746f6d44617461223a7b226c697374223a5b362c2274776f20e29c93222c747275652c6e756c6c5d2c226e6573746564223a7b2276616c7565223a312e357d7d2c226c6f61646564223a66616c73652c226d6f646966696564223a362e352c2270617468223a2270617468203020e29c93222c2273697a65223a352e352c22737562417373657473223a5b7b226b6579223a226b6579203520e29c93222c2274797065223a2274797065203720e29c93222c2275756964223a2275756964203620e29c93227d2c7b226b6579223a226b6579203620e29c93222c2274797065223a2274797065203820e29c93222c2275756964223a2275756964203720e29c93227d5d2c2274797065223a2274797065203220e29c93222c2275756964223a2275756964203120e29c93227d"
+    },
+    {
+      "response": "TextData",
+      "id": "0xA2",
+      "fields": {
+        "text": "text 0 ✓ é"
+      },
+      "payload": "0d00000074657874203020e29c9320c3a9"
+    },
+    {
+      "response": "AssetCreated",
+      "id": "0xA3",
+      "fields": {
+        "path": "path 0 ✓ é",
+        "uuid": "uuid 1 ✓ é"
+      },
+      "payload": "0d00000070617468203020e29c9320c3a90d00000075756964203120e29c9320c3a9"
     },
     {
       "response": "EngineHealth",

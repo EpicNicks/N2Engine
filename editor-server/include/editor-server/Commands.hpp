@@ -323,6 +323,99 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct ListAssetsCmd
+    {
+        /// A res:// folder; "res://" or empty for the assets folder
+        std::string folder;
+        /// Everything below the folder, not only its own files and subfolders
+        bool recursive;
+
+        static ListAssetsCmd Deserialize(BufferReader &r)
+        {
+            ListAssetsCmd cmd;
+            cmd.folder = r.ReadString();
+            cmd.recursive = r.ReadBool();
+            return cmd;
+        }
+    };
+
+    struct GetAssetInfoCmd
+    {
+        /// A res:// path or an asset's UUID string
+        std::string uuidOrPath;
+
+        static GetAssetInfoCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct SetImportSettingsCmd
+    {
+        /// A res:// path to an indexed asset
+        std::string path;
+        /// The new import settings: a JSON object (the handler checks its shape and size)
+        nlohmann::json customData;
+
+        static SetImportSettingsCmd Deserialize(BufferReader &r)
+        {
+            SetImportSettingsCmd cmd;
+            cmd.path = r.ReadString();
+            cmd.customData = ReadBoundedJson(r);
+            return cmd;
+        }
+    };
+
+    struct ReadTextAssetCmd
+    {
+        std::string path;
+
+        static ReadTextAssetCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct WriteTextAssetCmd
+    {
+        std::string path;
+        std::string text;
+
+        static WriteTextAssetCmd Deserialize(BufferReader &r)
+        {
+            WriteTextAssetCmd cmd;
+            cmd.path = r.ReadString();
+            cmd.text = r.ReadString();
+            return cmd;
+        }
+    };
+
+    struct CreateScriptAssetCmd
+    {
+        /// A res:// path ending in .lua
+        std::string path;
+        /// The script's class name (empty: the file's name)
+        std::string className;
+
+        static CreateScriptAssetCmd Deserialize(BufferReader &r)
+        {
+            CreateScriptAssetCmd cmd;
+            cmd.path = r.ReadString();
+            cmd.className = r.ReadString();
+            return cmd;
+        }
+    };
+
+    struct CreateFolderCmd
+    {
+        std::string path;
+
+        static CreateFolderCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
     struct SetCameraPositionCmd
     {
         float x, y, z;
@@ -777,6 +870,52 @@ namespace N2Engine::Editor::Protocol
         WriteJson(payload, bounds);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::Bounds));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// ListAssets's response: a JSON array of folder paths, then a JSON array of AssetInfo objects
+    inline void WriteAssetList(BufferWriter &w, const nlohmann::json &folders, const nlohmann::json &assets)
+    {
+        BufferWriter payload;
+        WriteJson(payload, folders);
+        WriteJson(payload, assets);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::AssetList));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetAssetInfo's response: one AssetDetails object
+    inline void WriteAssetDetail(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::AssetDetail));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// ReadTextAsset's response: the file's text
+    inline void WriteTextData(BufferWriter &w, const std::string &text)
+    {
+        BufferWriter payload;
+        payload.WriteString(text);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::TextData));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// CreateScriptAsset's response: the new file's res:// path and its UUID string
+    inline void WriteAssetCreated(BufferWriter &w, const std::string &path, const std::string &uuid)
+    {
+        BufferWriter payload;
+        payload.WriteString(path);
+        payload.WriteString(uuid);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::AssetCreated));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -38,6 +39,8 @@
 #include "engine/rendering/Mesh.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/scripting/LuaRuntime.hpp"
+#include "engine/scripting/LuaScript.hpp"
 #include "engine/scripting/LuaScriptTemplate.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/FieldInfo.hpp"
@@ -128,6 +131,43 @@ namespace N2Engine::Editor
         std::string SceneFileText(const nlohmann::json &scene)
         {
             return scene.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+        }
+
+        // ==================== Assets ====================
+
+        /// The extensions ReadTextAsset and WriteTextAsset handle (see EditorServer::IsTextAssetPath), lower case
+        constexpr std::array<std::string_view, 17> TextAssetExtensions = {
+            ".lua", ".mat", ".scene", ".json", ".txt", ".md", ".csv", ".xml", ".yaml",
+            ".yml", ".toml", ".ini", ".cfg", ".glsl", ".vert", ".frag", ".shader"};
+
+        std::string LowerAscii(const std::string_view text)
+        {
+            std::string lower(text);
+            std::ranges::transform(lower, lower.begin(),
+                                   [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return lower;
+        }
+
+        /// ListAssets's AssetInfo for an indexed asset (see protocol.json): its path, UUID, type, size, time and sub-assets
+        nlohmann::json AssetInfoJson(const IO::AssetMetadata &meta)
+        {
+            nlohmann::json info{{"path", meta.resourcePath.ToString()},
+                                {"uuid", meta.uuid.ToString()},
+                                {"type", meta.resourceType},
+                                {"size", meta.fileSize},
+                                {"modified", meta.lastModified}};
+            const std::vector<IO::ResourceLoader::SubAssetIndexEntry> subAssets =
+                IO::ResourceLoader::Instance().GetSubAssets(meta.resourcePath);
+            if (!subAssets.empty())
+            {
+                nlohmann::json list = nlohmann::json::array();
+                for (const IO::ResourceLoader::SubAssetIndexEntry &entry : subAssets)
+                {
+                    list.push_back(nlohmann::json{{"key", entry.key}, {"uuid", entry.uuid.ToString()}, {"type", entry.type}});
+                }
+                info["subAssets"] = std::move(list);
+            }
+            return info;
         }
 
         // ==================== Hierarchy and entities ====================
@@ -1384,6 +1424,8 @@ namespace N2Engine::Editor
         const size_t processed = _commands.Drain(maxWait);
         // The autosave an edit left waiting for its interval (a no-op when none is due)
         FlushAutosave();
+        // Asset files changed outside the editor (a no-op unless a client is connected and the interval has passed)
+        (void)PollAssetsIfDue();
         return processed;
     }
 
@@ -1525,6 +1567,7 @@ namespace N2Engine::Editor
             }
 
             PostLog("Editor connected");
+            _clientConnected = true;
             bool sessionOpened = false;
             try
             {
@@ -1537,6 +1580,7 @@ namespace N2Engine::Editor
             }
 
             CLOSE_SOCKET(clientSocket);
+            _clientConnected = false;
             PostLog("Editor disconnected");
             // A group it left open becomes a step (queued: the history is main-thread state)
             (void)_commands.Enqueue([this]
@@ -1824,6 +1868,9 @@ namespace N2Engine::Editor
         case CommandType::GetEntityBounds:    // the selection box, whenever the selection or the scene changes
         case CommandType::GetPlayState:       // the play toolbar
         case CommandType::SendInput:          // the play viewport: every key and pointer event
+        case CommandType::ListAssets:         // the asset panel, whenever assetsChanged arrives
+        case CommandType::GetAssetInfo:       // the asset panel's details, for the selected asset
+        case CommandType::ReadTextAsset:      // the script editor, whenever assetsChanged lists its file
         case CommandType::GetAudio:           // every ~25 ms while audio plays
         case CommandType::PollEvents:         // every ~100 ms; a line logged per poll would be an event every poll
         case CommandType::GetAllEntities:     // the hierarchy panel
@@ -2005,6 +2052,27 @@ namespace N2Engine::Editor
             break;
         case CommandType::RescanAssets:
             HandleRescanAssets(clientSocket);
+            break;
+        case CommandType::ListAssets:
+            HandleListAssets(clientSocket, payload);
+            break;
+        case CommandType::GetAssetInfo:
+            HandleGetAssetInfo(clientSocket, payload);
+            break;
+        case CommandType::SetImportSettings:
+            HandleSetImportSettings(clientSocket, payload);
+            break;
+        case CommandType::ReadTextAsset:
+            HandleReadTextAsset(clientSocket, payload);
+            break;
+        case CommandType::WriteTextAsset:
+            HandleWriteTextAsset(clientSocket, payload);
+            break;
+        case CommandType::CreateScriptAsset:
+            HandleCreateScriptAsset(clientSocket, payload);
+            break;
+        case CommandType::CreateFolder:
+            HandleCreateFolder(clientSocket, payload);
             break;
         case CommandType::GetEngineHealth:
             HandleGetEngineHealth(clientSocket);
@@ -3078,6 +3146,11 @@ namespace N2Engine::Editor
         case CommandType::RestoreAutosave:
         case CommandType::DiscardAutosave:
         case CommandType::LoadScene:
+        // E8's: they write files under assets/ or .import/
+        case CommandType::SetImportSettings:
+        case CommandType::WriteTextAsset:
+        case CommandType::CreateScriptAsset:
+        case CommandType::CreateFolder:
             return true;
         default:
             return false;
@@ -3230,6 +3303,7 @@ namespace N2Engine::Editor
         _keys.ReleaseAll();
         Input::KeySource::Set(&_keys);
         Application::GetInstance().ResetFrameClock();
+        _watchAssets = false;
 
         Logger::Info(std::format("Playing scene '{}' from {}", playing->sceneName, Utf8(snapshotFile)));
         PushPlayState();
@@ -4096,19 +4170,745 @@ namespace N2Engine::Editor
 
     void EditorServer::HandleRescanAssets(int clientSocket)
     {
-        const IO::ResourceLoader::RescanResult changes = IO::ResourceLoader::Instance().RescanAssets();
-        if (!changes.Empty())
-        {
-            // An asset the scene draws (a texture, a mesh) may have changed
-            NoteViewChanged();
-            _events.Push("assetsChanged", nlohmann::json{{"added", PathStrings(changes.added)},
-                                                         {"removed", PathStrings(changes.removed)},
-                                                         {"modified", PathStrings(changes.modified)}});
-        }
+        ApplyAssetChanges(IO::ResourceLoader::Instance().RescanAssets());
 
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    // ==================== Assets and the file watcher (#81, E8) ====================
+
+    bool EditorServer::IsValidAssetName(const std::string_view name)
+    {
+        if (name.empty() || name.size() > 255 || name == "." || name == "..")
+        {
+            return false;
+        }
+        for (const char c : name)
+        {
+            const auto byte = static_cast<unsigned char>(c);
+            if (byte < 0x20 || byte == 0x7F || std::string_view("<>:\"|?*\\/").find(c) != std::string_view::npos)
+            {
+                return false;
+            }
+        }
+        if (name.back() == '.' || name.back() == ' ')
+        {
+            return false;
+        }
+        // A Windows device name, whatever follows its dot ("nul.txt" is the device too)
+        std::string stem = LowerAscii(name.substr(0, name.find('.')));
+        while (!stem.empty() && stem.back() == ' ')
+        {
+            stem.pop_back();
+        }
+        if (stem == "con" || stem == "prn" || stem == "aux" || stem == "nul")
+        {
+            return false;
+        }
+        return !((stem.starts_with("com") || stem.starts_with("lpt")) && stem.size() == 4 && stem[3] >= '1' &&
+                 stem[3] <= '9');
+    }
+
+    bool EditorServer::IsTextAssetPath(const std::string_view path)
+    {
+        const std::size_t dot = path.rfind('.');
+        const std::size_t slash = path.find_last_of('/');
+        if (dot == std::string_view::npos || (slash != std::string_view::npos && dot < slash))
+        {
+            return false;
+        }
+        const std::string extension = LowerAscii(path.substr(dot));
+        return std::ranges::find(TextAssetExtensions, std::string_view(extension)) != TextAssetExtensions.end();
+    }
+
+    bool EditorServer::IsValidUtf8(const std::string_view text)
+    {
+        std::size_t i = 0;
+        const std::size_t size = text.size();
+        while (i < size)
+        {
+            const auto lead = static_cast<unsigned char>(text[i]);
+            if (lead < 0x80)
+            {
+                ++i;
+                continue;
+            }
+            std::size_t extra = 0;
+            std::uint32_t codePoint = 0;
+            std::uint32_t minimum = 0;
+            if ((lead & 0xE0) == 0xC0)
+            {
+                extra = 1;
+                codePoint = lead & 0x1Fu;
+                minimum = 0x80;
+            }
+            else if ((lead & 0xF0) == 0xE0)
+            {
+                extra = 2;
+                codePoint = lead & 0x0Fu;
+                minimum = 0x800;
+            }
+            else if ((lead & 0xF8) == 0xF0)
+            {
+                extra = 3;
+                codePoint = lead & 0x07u;
+                minimum = 0x10000;
+            }
+            else
+            {
+                return false;
+            }
+            if (size - i <= extra)
+            {
+                return false;
+            }
+            for (std::size_t k = 1; k <= extra; ++k)
+            {
+                const auto next = static_cast<unsigned char>(text[i + k]);
+                if ((next & 0xC0) != 0x80)
+                {
+                    return false;
+                }
+                codePoint = (codePoint << 6) | (next & 0x3Fu);
+            }
+            if (codePoint < minimum || codePoint > 0x10FFFF || (codePoint >= 0xD800 && codePoint <= 0xDFFF))
+            {
+                return false;
+            }
+            i += extra + 1;
+        }
+        return true;
+    }
+
+    std::expected<ResolvedScenePath, std::string> EditorServer::ResolveAssetPath(
+        const std::filesystem::path &assetsRoot, const std::string &path, const bool allowRoot)
+    {
+        const std::string shown = SanitizeForLog(path);
+        if (!path.starts_with("res://") || path.find('\0') != std::string::npos)
+        {
+            return std::unexpected(std::format("Not an asset path: '{}' (expected res://<folder>/<name>)", shown));
+        }
+        const IO::ResourcePath resourcePath(path);
+        const std::string &relativeText = resourcePath.GetPath();
+
+        std::error_code error;
+        const std::filesystem::path root = std::filesystem::weakly_canonical(assetsRoot, error);
+        if (error)
+        {
+            return std::unexpected("The project's assets folder can't be resolved");
+        }
+        if (relativeText.empty())
+        {
+            if (!allowRoot)
+            {
+                return std::unexpected(std::format("Not a path inside the assets folder: '{}'", shown));
+            }
+            return ResolvedScenePath{IO::ResourcePath(IO::PathType::Resource, ""), root};
+        }
+
+        // Every part is a name a file can have: this rules out "..", a drive ("C:"), an NTFS stream ("name:stream")
+        // and the characters and device names Windows refuses
+        for (std::size_t start = 0; start <= relativeText.size();)
+        {
+            std::size_t end = relativeText.find('/', start);
+            if (end == std::string::npos)
+            {
+                end = relativeText.size();
+            }
+            const std::string part = relativeText.substr(start, end - start);
+            if (!IsValidAssetName(part))
+            {
+                return std::unexpected(std::format("Not a valid asset path: '{}' ('{}' isn't a name a file can have)",
+                                                   shown, SanitizeForLog(part)));
+            }
+            start = end + 1;
+        }
+
+        // Lexically inside the assets folder, then also with symlinks resolved for the part that exists (as
+        // ResolveScenePath does), so a link inside assets/ can't lead a read or write elsewhere
+        const std::filesystem::path relative = FromUtf8(relativeText);
+        const std::filesystem::path file = (root / relative).lexically_normal();
+        const std::filesystem::path parent = std::filesystem::weakly_canonical(file.parent_path(), error);
+        if (error)
+        {
+            return std::unexpected(std::format("Can't resolve the folder of '{}'", shown));
+        }
+        const auto outside = [](const std::filesystem::path &fromRoot)
+        {
+            return fromRoot.empty() || *fromRoot.begin() == "..";
+        };
+        const std::filesystem::path lexical = file.lexically_relative(root);
+        const std::filesystem::path resolvedParent = parent.lexically_relative(root);
+        if (outside(lexical) || (resolvedParent != "." && outside(resolvedParent)))
+        {
+            return std::unexpected(std::format("Not a path inside the project's assets folder: '{}'", shown));
+        }
+
+        // An existing file or folder is resolved itself too (a symlink in the way can't lead out of the folder), and
+        // the path takes the spelling the file system has
+        std::filesystem::path target = parent / file.filename();
+        if (std::error_code existsError; std::filesystem::exists(target, existsError))
+        {
+            target = std::filesystem::weakly_canonical(target, error);
+            if (error)
+            {
+                return std::unexpected(std::format("Can't resolve '{}'", shown));
+            }
+        }
+        const std::filesystem::path fromRoot = target.lexically_relative(root);
+        if (outside(fromRoot))
+        {
+            return std::unexpected(std::format("Not a path inside the project's assets folder: '{}'", shown));
+        }
+        return ResolvedScenePath{IO::ResourcePath(IO::PathType::Resource, IO::PathToUtf8(fromRoot)), std::move(target)};
+    }
+
+    void EditorServer::ReloadLoadedAsset(const IO::ResourcePath &path)
+    {
+        auto &loader = IO::ResourceLoader::Instance();
+        try
+        {
+            const std::shared_ptr<Base::Asset> held = loader.GetCached<Base::Asset>(path);
+            if (!held)
+            {
+                return; // nothing was made from the old file: the next load reads the new one
+            }
+            if (const auto script = std::dynamic_pointer_cast<LuaScript>(held))
+            {
+                // The same object stays in the cache: LuaComponents point at it, and ReloadModule makes them rebuild
+                // their instances from its source. An error in the new source is logged by the runtime.
+                auto text = ReadTextFile(loader.Resolve(path));
+                if (!text)
+                {
+                    Logger::Warn("Can't reload " + path.ToString() + ": " + text.error());
+                    return;
+                }
+                script->SetSourceCode(*text);
+                Scripting::LuaRuntime::Instance().ReloadModule(path, script.get());
+                return;
+            }
+            (void)loader.Reload(path);
+        }
+        catch (const std::exception &e)
+        {
+            Logger::Error(std::format("Can't reload {}: {}", path.ToString(), SanitizeForLog(e.what(), 300)));
+        }
+        catch (...)
+        {
+            Logger::Error("Can't reload " + path.ToString());
+        }
+    }
+
+    void EditorServer::ApplyAssetChanges(const IO::ResourceLoader::RescanResult &changes)
+    {
+        if (changes.Empty())
+        {
+            return;
+        }
+        for (const IO::ResourcePath &path : changes.modified)
+        {
+            ReloadLoadedAsset(path);
+        }
+        // An asset the scene draws (a texture, a mesh) may have changed
+        NoteViewChanged();
+        _events.Push("assetsChanged", nlohmann::json{{"added", PathStrings(changes.added)},
+                                                     {"removed", PathStrings(changes.removed)},
+                                                     {"modified", PathStrings(changes.modified)}});
+    }
+
+    void EditorServer::NoteAssetWritten(const IO::ResourcePath &path, const bool force)
+    {
+        IO::ResourceLoader::RescanResult changes;
+        switch (IO::ResourceLoader::Instance().RefreshAsset(path))
+        {
+        case IO::ResourceLoader::RefreshResult::Added:
+            changes.added.push_back(path);
+            break;
+        case IO::ResourceLoader::RefreshResult::Modified:
+            changes.modified.push_back(path);
+            break;
+        case IO::ResourceLoader::RefreshResult::Unchanged:
+            if (force)
+            {
+                changes.modified.push_back(path);
+            }
+            break;
+        case IO::ResourceLoader::RefreshResult::Missing:
+            break; // no loader for its extension: not an asset
+        }
+        ApplyAssetChanges(changes);
+    }
+
+    bool EditorServer::PollAssets()
+    {
+        if (!_project)
+        {
+            return false;
+        }
+        auto &loader = IO::ResourceLoader::Instance();
+        try
+        {
+            if (!loader.AssetsChangedOnDisk())
+            {
+                return false;
+            }
+            const IO::ResourceLoader::RescanResult changes = loader.RescanAssets();
+            ApplyAssetChanges(changes);
+            _assetPollFailureLogged = false;
+            return !changes.Empty();
+        }
+        catch (const std::exception &e)
+        {
+            // The folder changed under the scan (a delete, a rename): the next check tries again. Said once, so a
+            // folder that stays unreadable doesn't log every second.
+            if (!_assetPollFailureLogged)
+            {
+                _assetPollFailureLogged = true;
+                Logger::Warn(std::format("The asset watcher couldn't scan the assets folder: {}",
+                                         SanitizeForLog(e.what(), 300)));
+            }
+            return false;
+        }
+    }
+
+    bool EditorServer::PollAssetsIfDue()
+    {
+        // A play host doesn't watch: the host that edits owns the asset files and the state kept about them
+        if (!_watchAssets || !_project || !_clientConnected || _playMode)
+        {
+            return false;
+        }
+        const auto now = _assetPollClock ? _assetPollClock() : std::chrono::steady_clock::now();
+        if (_lastAssetPoll && now - *_lastAssetPoll < _assetPollInterval)
+        {
+            return false;
+        }
+        _lastAssetPoll = now;
+        return PollAssets();
+    }
+
+    void EditorServer::HandleListAssets(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const ListAssetsCmd cmd = ListAssetsCmd::Deserialize(reader);
+        // Never logs (a polled-rate command): a refusal is the Error response
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        const auto resolved =
+            ResolveAssetPath(_project->root / "assets", cmd.folder.empty() ? std::string("res://") : cmd.folder, true);
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        std::error_code error;
+        if (!std::filesystem::is_directory(resolved->file, error))
+        {
+            SendError(clientSocket, "Not a folder: " + SanitizeForLog(cmd.folder));
+            return;
+        }
+        // "" for the assets folder itself, else the folder's path under it, as the file system spells it
+        const std::string prefix = resolved->resourcePath.GetPath();
+
+        // Folders come from the file system (the metadata doesn't know empty ones); links are left out, so a link
+        // can't lead the walk out of the project
+        std::vector<std::string> folderPaths;
+        std::filesystem::recursive_directory_iterator it(resolved->file,
+                                                         std::filesystem::directory_options::skip_permission_denied, error);
+        const std::filesystem::recursive_directory_iterator end;
+        for (; !error && it != end; it.increment(error))
+        {
+            const std::filesystem::directory_entry &entry = *it;
+            std::error_code entryError;
+            if (entry.is_symlink(entryError))
+            {
+                it.disable_recursion_pending();
+                continue;
+            }
+            if (!entry.is_directory(entryError))
+            {
+                continue;
+            }
+            if (!cmd.recursive)
+            {
+                it.disable_recursion_pending();
+            }
+            const std::string relative = IO::PathToUtf8(entry.path().lexically_relative(resolved->file));
+            folderPaths.push_back("res://" + (prefix.empty() ? relative : prefix + "/" + relative));
+        }
+        std::sort(folderPaths.begin(), folderPaths.end());
+
+        std::vector<IO::AssetMetadata> metas = IO::ResourceLoader::Instance().GetAllAssets();
+        std::erase_if(metas, [&](const IO::AssetMetadata &meta)
+        {
+            if (meta.resourcePath.GetType() != IO::PathType::Resource)
+            {
+                return true;
+            }
+            const std::string &assetPath = meta.resourcePath.GetPath();
+            std::size_t nameStart = 0;
+            if (!prefix.empty())
+            {
+                if (assetPath.size() <= prefix.size() || !assetPath.starts_with(prefix) ||
+                    assetPath[prefix.size()] != '/')
+                {
+                    return true;
+                }
+                nameStart = prefix.size() + 1;
+            }
+            // Its own file, or (recursive) anywhere below
+            return !cmd.recursive && assetPath.find('/', nameStart) != std::string::npos;
+        });
+        std::sort(metas.begin(), metas.end(), [](const IO::AssetMetadata &a, const IO::AssetMetadata &b)
+        {
+            return a.resourcePath.GetPath() < b.resourcePath.GetPath();
+        });
+
+        nlohmann::json folders = nlohmann::json::array();
+        for (std::string &folder : folderPaths)
+        {
+            folders.push_back(std::move(folder));
+        }
+        nlohmann::json assets = nlohmann::json::array();
+        for (const IO::AssetMetadata &meta : metas)
+        {
+            assets.push_back(AssetInfoJson(meta));
+        }
+
+        BufferWriter response;
+        WriteAssetList(response, folders, assets);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetAssetInfo(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const GetAssetInfoCmd cmd = GetAssetInfoCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        auto &loader = IO::ResourceLoader::Instance();
+
+        const IO::AssetMetadata *meta = nullptr;
+        if (cmd.uuidOrPath.starts_with("res://"))
+        {
+            const auto resolved = ResolveAssetPath(_project->root / "assets", cmd.uuidOrPath);
+            if (!resolved)
+            {
+                SendError(clientSocket, resolved.error());
+                return;
+            }
+            meta = loader.GetMetadata(resolved->resourcePath);
+            if (meta == nullptr)
+            {
+                SendError(clientSocket, "Not an asset: " + SanitizeForLog(resolved->resourcePath.ToString()));
+                return;
+            }
+        }
+        else if (const auto uuid = Math::UUID::FromString(cmd.uuidOrPath); uuid.has_value())
+        {
+            meta = loader.GetMetadata(uuid.value());
+            if (meta == nullptr)
+            {
+                if (const auto *location = loader.FindSubAssetLocation(uuid.value()))
+                {
+                    SendError(clientSocket, std::format("{} is a part of {} ({}): ask for the file",
+                                                        uuid.value().ToString(), location->parent.ToString(),
+                                                        SanitizeForLog(location->key)));
+                }
+                else
+                {
+                    SendError(clientSocket, "No asset has the UUID " + uuid.value().ToString());
+                }
+                return;
+            }
+        }
+        else
+        {
+            SendError(clientSocket, "Expected a res:// path or an asset UUID: " + SanitizeForLog(cmd.uuidOrPath));
+            return;
+        }
+
+        nlohmann::json info = AssetInfoJson(*meta);
+        // The import settings, without the sub-asset index (it is listed as subAssets)
+        nlohmann::json customData = meta->customData.is_object() ? meta->customData : nlohmann::json::object();
+        customData.erase("subAssets");
+        customData.erase("subAssetsSource");
+        info["customData"] = std::move(customData);
+        info["loaded"] = loader.GetCached<Base::Asset>(meta->resourcePath) != nullptr;
+
+        BufferWriter response;
+        WriteAssetDetail(response, info);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetImportSettings(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetImportSettingsCmd cmd = SetImportSettingsCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        if (!cmd.customData.is_object())
+        {
+            SendError(clientSocket, "customData must be a JSON object");
+            return;
+        }
+        const std::size_t size = cmd.customData.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace).size();
+        if (size > MaxImportSettingsBytes)
+        {
+            SendError(clientSocket, std::format("customData is {} bytes of JSON; at most {} are accepted", size,
+                                                MaxImportSettingsBytes));
+            return;
+        }
+        const auto resolved = ResolveAssetPath(_project->root / "assets", cmd.path);
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        auto &loader = IO::ResourceLoader::Instance();
+        if (!loader.Exists(resolved->resourcePath))
+        {
+            SendError(clientSocket, "Not an asset: " + SanitizeForLog(resolved->resourcePath.ToString()));
+            return;
+        }
+        if (auto saved = loader.SetImportSettings(resolved->resourcePath, cmd.customData); !saved)
+        {
+            SendError(clientSocket, "Couldn't change the import settings: " + saved.error());
+            return;
+        }
+
+        // An asset made with the old settings is dropped, so the next use loads it with the new ones. A script has no
+        // import settings, and LuaComponents point at its object, so it is never dropped.
+        const std::shared_ptr<Base::Asset> held = loader.GetCached<Base::Asset>(resolved->resourcePath);
+        if (held && std::dynamic_pointer_cast<LuaScript>(held) == nullptr)
+        {
+            (void)loader.Reload(resolved->resourcePath);
+        }
+        NoteViewChanged();
+        _events.Push("assetsChanged", nlohmann::json{{"added", nlohmann::json::array()},
+                                                     {"removed", nlohmann::json::array()},
+                                                     {"modified", nlohmann::json::array({resolved->resourcePath.ToString()})}});
+        Logger::Info("Changed the import settings of " + resolved->resourcePath.ToString());
+
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleReadTextAsset(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const ReadTextAssetCmd cmd = ReadTextAssetCmd::Deserialize(reader);
+        // Never logs (a polled-rate command): a refusal is the Error response
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        const auto resolved = ResolveAssetPath(_project->root / "assets", cmd.path);
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        const std::string shown = SanitizeForLog(resolved->resourcePath.ToString());
+        if (!IsTextAssetPath(resolved->resourcePath.GetPath()))
+        {
+            SendError(clientSocket, "Not a text asset: " + shown + " (its extension isn't one ReadTextAsset reads)");
+            return;
+        }
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(resolved->file, error))
+        {
+            SendError(clientSocket, "File not found: " + shown);
+            return;
+        }
+        const std::uintmax_t fileSize = std::filesystem::file_size(resolved->file, error);
+        if (error || fileSize > MaxTextAssetBytes)
+        {
+            SendError(clientSocket, std::format("{} is too large to read as text (at most {} bytes)", shown,
+                                                MaxTextAssetBytes));
+            return;
+        }
+        auto text = ReadTextFile(resolved->file);
+        if (!text)
+        {
+            SendError(clientSocket, "Couldn't read " + shown + ": " + text.error());
+            return;
+        }
+        if (!IsValidUtf8(*text))
+        {
+            SendError(clientSocket, shown + " isn't valid UTF-8 text");
+            return;
+        }
+
+        BufferWriter response;
+        WriteTextData(response, *text);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleWriteTextAsset(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const WriteTextAssetCmd cmd = WriteTextAssetCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        const auto resolved = ResolveAssetPath(_project->root / "assets", cmd.path);
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        const std::string shown = SanitizeForLog(resolved->resourcePath.ToString());
+        if (!IsTextAssetPath(resolved->resourcePath.GetPath()))
+        {
+            SendError(clientSocket, "Not a text asset: " + shown + " (its extension isn't one WriteTextAsset writes)");
+            return;
+        }
+        if (cmd.text.size() > MaxTextAssetBytes)
+        {
+            SendError(clientSocket, std::format("The text is {} bytes; at most {} are accepted", cmd.text.size(),
+                                                MaxTextAssetBytes));
+            return;
+        }
+        if (cmd.text.find('\0') != std::string::npos || !IsValidUtf8(cmd.text))
+        {
+            SendError(clientSocket, "The text must be valid UTF-8 without NUL characters");
+            return;
+        }
+        if (resolved->resourcePath.ToString() == OpenScenePath())
+        {
+            SendError(clientSocket, shown + " is the open scene's file: save the scene with SaveSceneToFile");
+            return;
+        }
+        std::error_code error;
+        if (std::filesystem::exists(resolved->file, error) && !std::filesystem::is_regular_file(resolved->file, error))
+        {
+            SendError(clientSocket, shown + " isn't a file");
+            return;
+        }
+        if (!std::filesystem::is_directory(resolved->file.parent_path(), error))
+        {
+            SendError(clientSocket, "The folder of " + shown + " doesn't exist (create it with CreateFolder)");
+            return;
+        }
+        if (auto written = IO::WriteTextFileAtomically(resolved->file, cmd.text); !written)
+        {
+            SendError(clientSocket, "Couldn't write " + shown + ": " + written.error());
+            return;
+        }
+        NoteAssetWritten(resolved->resourcePath, true);
+        Logger::Info("Wrote " + shown);
+
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleCreateScriptAsset(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const CreateScriptAssetCmd cmd = CreateScriptAssetCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        const auto resolved = ResolveAssetPath(_project->root / "assets", cmd.path);
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        const std::string shown = SanitizeForLog(resolved->resourcePath.ToString());
+        if (LowerAscii(resolved->resourcePath.GetExtension()) != ".lua" || resolved->resourcePath.GetStem().empty())
+        {
+            SendError(clientSocket, "A script's path must end in .lua: " + shown);
+            return;
+        }
+        std::error_code error;
+        if (std::filesystem::exists(resolved->file, error))
+        {
+            SendError(clientSocket, shown + " already exists");
+            return;
+        }
+
+        const std::string className = cmd.className.empty() ? resolved->resourcePath.GetStem() : cmd.className;
+        const std::string scriptText = Scripting::MakeLuaScriptTemplate(className);
+        std::filesystem::create_directories(resolved->file.parent_path(), error);
+        if (error)
+        {
+            SendError(clientSocket, "Couldn't create the folder of " + shown + ": " + error.message());
+            return;
+        }
+        if (auto written = IO::WriteTextFileAtomically(resolved->file, scriptText); !written)
+        {
+            SendError(clientSocket, "Couldn't write " + shown + ": " + written.error());
+            return;
+        }
+        NoteAssetWritten(resolved->resourcePath, false);
+        Logger::Info("Created script " + shown);
+
+        const Math::UUID uuid = IO::ResourceLoader::Instance().GetUUID(resolved->resourcePath);
+        BufferWriter response;
+        WriteAssetCreated(response, resolved->resourcePath.ToString(),
+                          (uuid == Math::UUID::ZERO ? IO::ResourceUUID::FromPath(resolved->resourcePath) : uuid).ToString());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleCreateFolder(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const CreateFolderCmd cmd = CreateFolderCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        const auto resolved = ResolveAssetPath(_project->root / "assets", cmd.path);
+        if (!resolved)
+        {
+            SendError(clientSocket, resolved.error());
+            return;
+        }
+        const std::string shown = SanitizeForLog(resolved->resourcePath.ToString());
+        std::error_code error;
+        if (std::filesystem::exists(resolved->file, error))
+        {
+            if (!std::filesystem::is_directory(resolved->file, error))
+            {
+                SendError(clientSocket, "A file is in the way: " + shown);
+                return;
+            }
+        }
+        else
+        {
+            std::filesystem::create_directories(resolved->file, error);
+            if (error)
+            {
+                SendError(clientSocket, "Couldn't create " + shown + ": " + error.message());
+                return;
+            }
+            Logger::Info("Created folder " + shown);
+        }
+
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
     }
 
     // ==================== Undo, redo and autosave (#6, E6) ====================

@@ -78,7 +78,7 @@
     },
     "PollEvents": {
       "id": "0x05",
-      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} after a RescanAssets that found changes; projectChanged {} after project.n2proj was saved. historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount} since 1.6.0, after a step is recorded, undone or redone, or the history is cleared (label is the step Undo would undo, redoLabel the one Redo would redo, empty for none; the counts are the steps done and undone); an edit merged into the step before it (typing in a number box) sends none. Since 1.6.0 sceneChanged also follows Undo, Redo and RestoreAutosave, with full: true when the step was undone or redone by restoring a snapshot of the scene. Since 1.7.0: frameChanged {revision} when what the viewport would show has changed (the scene, the editor camera, the viewport size, the assets or the project's settings) since the last frame RenderFrameIfChanged rendered: one event per change that follows a rendered frame, not one per change, so dragging the camera sends one. revision is the revision the next frame will have (a later change before that frame moves it on); a client that is showing the viewport answers it with RenderFrameIfChanged. Since 1.10.0: playState {state, frame} from a play host when the game is paused or resumed (state \"Paused\" or \"Playing\", frame the frame count then), and once with \"Playing\" when the game starts; an ordinary host sends none. A client ignores kinds and keys it doesn't know.",
+      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} (res:// paths, each sorted) after a RescanAssets that found changes, and, since 1.9.0, after the host's file watcher found changes (it looks about once a second while a client is connected, so a file added, edited or deleted outside the editor is reported without a RescanAssets) and after WriteTextAsset, CreateScriptAsset and SetImportSettings (modified, though its file is the same, for the last); an asset of a kind the engine can reload that is held in memory is reloaded before the event is sent (see WriteTextAsset); projectChanged {} after project.n2proj was saved. historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount} since 1.6.0, after a step is recorded, undone or redone, or the history is cleared (label is the step Undo would undo, redoLabel the one Redo would redo, empty for none; the counts are the steps done and undone); an edit merged into the step before it (typing in a number box) sends none. Since 1.6.0 sceneChanged also follows Undo, Redo and RestoreAutosave, with full: true when the step was undone or redone by restoring a snapshot of the scene. Since 1.7.0: frameChanged {revision} when what the viewport would show has changed (the scene, the editor camera, the viewport size, the assets or the project's settings) since the last frame RenderFrameIfChanged rendered: one event per change that follows a rendered frame, not one per change, so dragging the camera sends one. revision is the revision the next frame will have (a later change before that frame moves it on); a client that is showing the viewport answers it with RenderFrameIfChanged. Since 1.10.0: playState {state, frame} from a play host when the game is paused or resumed (state \"Paused\" or \"Playing\", frame the frame count then), and once with \"Playing\" when the game starts; an ordinary host sends none. A client ignores kinds and keys it doesn't know.",
       "request": {
         "epoch": "uint32",
         "afterSeq": "uint32",
@@ -465,7 +465,89 @@
       "id": "0x41",
       "request": {},
       "response": { "type": "Ok" },
-      "description": "Indexes the project's assets again: new and changed files get .meta files, and deleted files are forgotten (they no longer load by path or UUID; their .meta files are kept, so import settings come back with the file). When anything changed, an assetsChanged event lists it: {added, removed, modified}, res:// paths, each sorted."
+      "description": "Indexes the project's assets again: new and changed files get .meta files, and deleted files are forgotten (they no longer load by path or UUID; their .meta files are kept, so import settings come back with the file). When anything changed, an assetsChanged event lists it: {added, removed, modified}, res:// paths, each sorted. Since 1.9.0 the host does this by itself about once a second while a client is connected (see PollEvents's assetsChanged), so a client needs this command only to force a scan, and a script or other asset held in memory whose file changed is reloaded here as the watcher does (see WriteTextAsset)."
+    },
+    "ListAssets": {
+      "id": "0xA0",
+      "description": "The assets in a folder of the project (since 1.9.0): the files the engine indexes (those whose extension has a loader: scripts, textures, fonts, audio, materials, models, scenes), each with its UUID, which is its .meta's. folder is a res:// path (\"res://\" or empty for the whole assets folder, \"res://scenes\"); it must be an existing folder, else an Error. A path is \"res://\" then a path inside the project's assets folder (\"res://scripts/Player.lua\"); a path with \"..\", a drive or root, a name Windows can't hold (a character of <>:\"|?*, a control character, a name ending in a dot or space, a device name such as CON) or one that leaves the folder through a symbolic link is an Error. recursive false lists the folder's own files and subfolders, true everything below it. folders is a JSON array of the subfolders' res:// paths (without a trailing slash), found by walking the file system, because the metadata doesn't know empty folders (symbolic links to folders are left out); assets is a JSON array of AssetInfo: {path, uuid, type, size, modified, subAssets?}. type is the resource type (\"LuaScript\", \"Texture\", \"Font\", \"AudioClip\", \"Material\", \"Model\", \"Scene\"), size the file's bytes, modified its modification time in Unix milliseconds, both as the last scan saw them (the watcher scans about once a second while a client is connected, and an assetsChanged event follows a change). subAssets, only on a file that has them (a model's meshes, materials and textures), lists {key, uuid, type} for each, as the .meta's index recorded them when the model last loaded; a model never loaded has none yet. Both arrays are sorted by path; the answer isn't paged. Pure: it changes nothing and never logs. Error without a project.",
+      "request": {
+        "folder": "string",
+        "recursive": "bool"
+      },
+      "response": {
+        "type": "AssetList",
+        "fields": {
+          "folders": "json:string[]",
+          "assets": "json:AssetInfo[]"
+        }
+      }
+    },
+    "GetAssetInfo": {
+      "id": "0xA1",
+      "description": "One asset's details (since 1.9.0). uuidOrPath is a res:// path (checked as in ListAssets) or the UUID string of an asset file. info is an AssetDetails: ListAssets's AssetInfo plus customData, the import settings from the asset's .meta (the sub-asset index the engine keeps there, customData.subAssets and subAssetsSource, is not part of it: it is subAssets), and loaded, whether the engine holds the asset in memory now. customData is {} for an asset with no settings, and SetImportSettings takes the same object back. Error for a path or UUID that is not an indexed asset (a sub-asset's UUID names a part of a file: ask for the file) and without a project. Pure: it never logs.",
+      "request": {
+        "uuidOrPath": "string"
+      },
+      "response": {
+        "type": "AssetDetail",
+        "fields": {
+          "info": "json:AssetDetails"
+        }
+      }
+    },
+    "SetImportSettings": {
+      "id": "0xA2",
+      "description": "Replaces an asset's import settings, the customData of its .meta, and saves the .meta (since 1.9.0). customData must be a JSON object of at most 65536 bytes of JSON text (anything else is an Error), whatever shape the asset's loader reads (for example {\"texture\": {\"filter\": \"nearest\"}}); keys the loader doesn't know are kept. The keys subAssets and subAssetsSource are the engine's own index of a model's parts: they are left as they are, and the same keys in customData are ignored. The change is a replacement, not a merge: GetAssetInfo, change, send back. When the engine holds the asset in memory it is dropped, so the next use loads it with the new settings (objects already holding the old copy keep it until they are rebuilt), the viewport's frame revision moves on, and an assetsChanged event lists the path as modified. Error for a path that is not an indexed asset, and without a project.",
+      "request": {
+        "path": "string",
+        "customData": "json"
+      },
+      "response": { "type": "Ok" }
+    },
+    "ReadTextAsset": {
+      "id": "0xA3",
+      "description": "Reads a text file of the project (since 1.9.0), for the script editor. path is a res:// path to an existing file whose extension is one of .lua, .mat, .scene, .json, .txt, .md, .csv, .xml, .yaml, .yml, .toml, .ini, .cfg, .glsl, .vert, .frag, .shader (any case); another extension is an Error, so a binary asset is never sent as text. The file must be at most 4194304 bytes and valid UTF-8 (a byte order mark is kept: it is part of the text), else an Error. text is the file's content as it is, line endings included. Pure: it never logs. Error without a project.",
+      "request": {
+        "path": "string"
+      },
+      "response": {
+        "type": "TextData",
+        "fields": {
+          "text": "string"
+        }
+      }
+    },
+    "WriteTextAsset": {
+      "id": "0xA4",
+      "description": "Writes a text file of the project (since 1.9.0), creating it when it doesn't exist (its folder must: see CreateFolder). path as in ReadTextAsset, text at most 4194304 bytes of valid UTF-8 without NUL characters, else an Error; it is written as it is (no line ending is added or changed), through a temporary file renamed over the old one, so a crash or a full disk never leaves half a file. A path that names the open scene's file is an Error (the scene in memory would differ from the file: use SaveSceneToFile). Afterwards, when the file's extension has a loader (a .lua, .mat or .scene does; a .txt or .json is no asset), the file is indexed, or its .meta brought up to date, and an assetsChanged event lists it as added or modified; for any other file nothing is reported. When the engine holds a script (.lua) in memory it is reloaded at once: its new source is read, its module runs again and the LuaComponents using it rebuild their script instances (their saved fields carry over), as the watcher does for a change made outside the editor. A script that fails to load or run is not an Error of this command: the error is logged (a log event) and the write stays. Any other asset held in memory is dropped, so the next use loads the new file. Error without a project. There is no undo for a file write.",
+      "request": {
+        "path": "string",
+        "text": "string"
+      },
+      "response": { "type": "Ok" }
+    },
+    "CreateScriptAsset": {
+      "id": "0xA5",
+      "description": "Creates a Lua behaviour script from the engine's template (since 1.9.0), replacing the client-side write of CreateScript's template. path is a res:// path ending in .lua (any case) that doesn't exist yet (an Error if it does); the folders above it that are missing are created. className is the name the script's class gets, made into a valid Lua identifier as CreateScript's name is (\"my enemy\" becomes \"My_enemy\"); empty uses the file's name. The file is written atomically and indexed (an assetsChanged event lists it as added). path is the file's path as the file system spells it and uuid its asset UUID. Error without a project.",
+      "request": {
+        "path": "string",
+        "className": "string"
+      },
+      "response": {
+        "type": "AssetCreated",
+        "fields": {
+          "path": "string",
+          "uuid": "string"
+        }
+      }
+    },
+    "CreateFolder": {
+      "id": "0xA6",
+      "description": "Creates a folder under the assets folder, and the folders above it that are missing (since 1.9.0). path as in ListAssets, but not the assets folder itself. Ok when the folder already exists; an Error when a file is in the way. An empty folder is no asset, so no event follows (ListAssets finds it, as it walks the file system). Error without a project.",
+      "request": {
+        "path": "string"
+      },
+      "response": { "type": "Ok" }
     },
     "GetEngineHealth": {
       "id": "0x50",
@@ -808,6 +890,29 @@
       "size?": "number",
       "modified?": "number"
     },
+    "SubAssetInfo": {
+      "key": "string",
+      "uuid": "string",
+      "type": "string"
+    },
+    "AssetInfo": {
+      "path": "string",
+      "uuid": "string",
+      "type": "string",
+      "size": "number",
+      "modified": "number",
+      "subAssets?": "SubAssetInfo[]"
+    },
+    "AssetDetails": {
+      "path": "string",
+      "uuid": "string",
+      "type": "string",
+      "size": "number",
+      "modified": "number",
+      "subAssets?": "SubAssetInfo[]",
+      "customData": "json",
+      "loaded": "bool"
+    },
     "ProjectFile": {
       "formatVersion": "number",
       "name": "string",
@@ -919,6 +1024,10 @@
     "EditorCamera": "0x19",
     "PickResult": "0x1A",
     "Bounds": "0x1B",
+    "AssetList": "0xA0",
+    "AssetDetail": "0xA1",
+    "TextData": "0xA2",
+    "AssetCreated": "0xA3",
     "PlaySnapshot": "0xB0",
     "PlayState": "0xB1"
   }
