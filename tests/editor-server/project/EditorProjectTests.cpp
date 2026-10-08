@@ -493,7 +493,7 @@ TEST_F(EditorProjectTest, HelloReportsTheProject)
     hello.WriteString("");
     const Frame response = Execute(server, CommandType::Hello, hello.Release());
     ASSERT_EQ(response.type, static_cast<uint8_t>(ResponseType::ServerInfo));
-    EXPECT_EQ(response.payload.back(), 1u) << "projectLoaded is the last field";
+    EXPECT_EQ(response.payload.back(), uint8_t{1}) << "projectLoaded is the last field";
 }
 
 TEST_F(EditorProjectTest, SetProjectSettingsMergesAppliesAndSaves)
