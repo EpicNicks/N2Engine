@@ -31,7 +31,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `math.html` | Math types, SIMD tiers, correctness guarantees |
 | `scripting-lua.html` | `LuaComponent`, fields, checked handles, subscriptions, `engine-api.lua` |
 | `logging-and-editor.html` | Logger, engine health, the editor host |
-| `editor.html` | Editor projects: `project.n2proj`, `--create`, opening a project, scene files, unsaved changes, project settings, per-project `user://` |
+| `editor.html` | Editor projects: `project.n2proj`, `--create`, opening a project, scene files, unsaved changes, the hierarchy and entity commands, project settings, per-project `user://` |
 | `testing.html` | Test layout, CI, conventions, pixel tests with the headless software renderer |
 
 ## Adding or changing a page
