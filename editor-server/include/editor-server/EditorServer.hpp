@@ -17,6 +17,7 @@
 #include "engine/io/ResourcePath.hpp"
 
 #include "editor-server/CommandQueue.hpp"
+#include "editor-server/EditHistory.hpp"
 #include "editor-server/EventRing.hpp"
 
 namespace Renderer::Common
@@ -204,14 +205,40 @@ namespace N2Engine::Editor
         /**
          * The scene revision: 0 until a scene is loaded, then moved on by every command that changes the loaded scene
          * or loads another (OpenScene, NewScene, LoadScene, CreateEntity, CreateEntityEx, DestroyEntity,
-         * SetEntityTransform, SetLocalTransform, SetEntityParent, SetEntityProperties, DuplicateEntity). It only
-         * grows, so a client refetches what it shows (GetHierarchy, GetEntity) whenever it changes. Each change, and
-         * each save, pushes a sceneChanged event {revision, savedRevision, path}; a change adds entityIds (the
-         * objects it touched, when there are few enough) or full (another scene was loaded: every id is invalid).
+         * SetEntityTransform, SetLocalTransform, SetEntityParent, SetEntityProperties, DuplicateEntity, AddComponent,
+         * RemoveComponent, SetComponentFields, and Undo and Redo). It only grows, so a client refetches what it shows
+         * (GetHierarchy, GetEntity) whenever it changes; undoing is a change like any other, so the revision after an
+         * undo is not the revision before the edit. Each change, and each save, pushes a sceneChanged event
+         * {revision, savedRevision, path}; a change adds entityIds (the objects it touched, when there are few enough)
+         * or full (another scene was loaded, or a step was undone or redone by restoring a snapshot of the scene:
+         * every id is invalid).
          */
         [[nodiscard]] uint32_t GetSceneRevision() const { return _sceneRevision; }
-        /// The revision the loaded scene was last opened or saved at (see OpenSceneInfo::savedRevision)
+        /// The revision the loaded scene was last opened or saved at (see OpenSceneInfo::savedRevision). Undoing or
+        /// redoing back to the state that was saved makes it the current revision again (no unsaved changes).
         [[nodiscard]] uint32_t GetSavedRevision() const { return _savedRevision; }
+
+        // ==================== Undo, redo and autosave (#78, E6) ====================
+
+        /**
+         * The undo history. Every editing command records what it did (a step, or part of the open edit group), Undo
+         * and Redo walk it, and opening, creating or loading a scene clears it; saving doesn't. Exposed for the host
+         * and tests: a client only reaches it through the commands.
+         */
+        [[nodiscard]] EditHistory &GetHistory() { return _history; }
+        [[nodiscard]] const EditHistory &GetHistory() const { return _history; }
+
+        /// How often at most the autosave is written while edits keep coming (the last one waits for the host's loop,
+        /// ProcessCommands). Zero writes it after every step. 2 seconds by default.
+        static constexpr std::chrono::milliseconds DefaultAutosaveInterval{2000};
+        void SetAutosaveInterval(const std::chrono::milliseconds interval) { _autosaveInterval = interval; }
+
+        /// Where the autosave of the open scene goes: <project>/.n2/autosave/ then the scene's path under assets/ (or
+        /// ".untitled.scene" for a scene with no file). Empty without a project. Never the scene's own file.
+        [[nodiscard]] std::filesystem::path GetAutosaveFile() const;
+        /// An autosave found when a scene was opened is kept, and none is written over it, until RestoreAutosave,
+        /// DiscardAutosave or a save: a client that finds it after a crash can offer it first
+        [[nodiscard]] bool IsAutosaveProtected() const { return _autosaveProtected; }
 
         /**
          * A scene path a client sent, checked: "res://" then a path that stays inside assetsRoot (lexically, and with
@@ -315,6 +342,15 @@ namespace N2Engine::Editor
         void HandleNewScene(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetOpenScene(int clientSocket);
         void HandleGetProjectInfo(int clientSocket);
+
+        void HandleUndo(int clientSocket);
+        void HandleRedo(int clientSocket);
+        void HandleBeginEditGroup(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleEndEditGroup(int clientSocket);
+        void HandleGetHistory(int clientSocket);
+        void HandleGetAutosave(int clientSocket);
+        void HandleRestoreAutosave(int clientSocket);
+        void HandleDiscardAutosave(int clientSocket);
         void HandleSetProjectSettings(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetStartupScene(int clientSocket, const std::vector<uint8_t> &payload);
 
@@ -336,6 +372,33 @@ namespace N2Engine::Editor
         void PushSceneChanged(std::vector<std::string> entityIds = {}, bool full = false);
         /// Answers with an Error
         void SendError(int clientSocket, const std::string &message);
+
+        // Undo and redo
+        /// Undo (true) or Redo: runs the step, moves the revision on, and answers EditResult
+        void UndoOrRedo(int clientSocket, bool undo);
+        /// Records an edit that was just made: a step of its own, merged into the step before it, or part of the open
+        /// group (see EditHistory::Record). Pushes historyChanged for a new step, and notes that a step ended.
+        void RecordEdit(std::string label, EditOp op);
+        /// Pushes historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount}
+        void PushHistoryChanged();
+        /// Ends every open edit group (a client that went away without ending its group)
+        void CloseEditGroups();
+        /// The loaded scene rebuilt from a snapshot (Scene::Serialize text), keeping its UUID, file and edit mode:
+        /// what undoing a destroy or a component removal does, so every reference is resolved again by UUID. The
+        /// effect is full.
+        EditOutcome RestoreSceneSnapshot(const std::string &snapshot);
+        /// A snapshot of the loaded scene, for RestoreSceneSnapshot
+        [[nodiscard]] static std::string SnapshotScene(const Scene &scene);
+
+        // Autosave
+        /// An edit step ended (or was undone): the autosave is due, written now unless the interval says to wait
+        void NoteEditStepEnded();
+        /// Writes the autosave when one is due and the interval allows (or force). Removes it when the scene has no
+        /// unsaved changes any more.
+        void FlushAutosave(bool force = false);
+        void RemoveAutosaveFile(const std::filesystem::path &file);
+        /// A scene was loaded: no autosave is due, and one the file system has from before is protected
+        void ResetAutosaveState();
         /// The res:// path of the loaded scene's file, or "" when it has none (or the loaded scene isn't the one
         /// that was opened from it)
         [[nodiscard]] std::string OpenScenePath() const;
@@ -389,6 +452,13 @@ namespace N2Engine::Editor
         const Scene *_openScene{nullptr};
         uint32_t _sceneRevision{0};
         uint32_t _savedRevision{0};
+
+        EditHistory _history;
+        std::chrono::milliseconds _autosaveInterval{DefaultAutosaveInterval};
+        std::optional<std::chrono::steady_clock::time_point> _lastAutosave;
+        bool _autosavePending{false};
+        bool _autosaveProtected{false};
+        bool _autosaveWarned{false};
 
         int _viewportWidth{1280};
         int _viewportHeight{720};
