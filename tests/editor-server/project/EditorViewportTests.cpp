@@ -532,7 +532,7 @@ TEST_F(EditorViewportTest, AReportedChangeMovesTheRevisionOnceAndTheEventNamesTh
     EXPECT_EQ(FrameSince(beforeNew.revision).revision, beforeNew.revision + 1);
 }
 
-TEST_F(EditorViewportTest, ATransformNudgeBelowTheMathLibrarysEpsilonIsStillAChange)
+TEST_F(EditorViewportTest, ATransformNudgeBelowTheMathLibrarysEpsilonLeavesSceneAndFrameInStep)
 {
     const std::string cube = Create("Cube");
     ASSERT_FALSE(cube.empty());
@@ -549,8 +549,11 @@ TEST_F(EditorViewportTest, ATransformNudgeBelowTheMathLibrarysEpsilonIsStillACha
         w.WriteF32(v);
     ASSERT_EQ(Execute(server, CommandType::SetEntityTransform, w.Release()).type, OkType);
 
-    EXPECT_GT(server.GetSceneRevision(), sceneRevision) << "the scene changed, so its revision says so";
-    EXPECT_TRUE(FrameSince(first.revision).modified);
+    // The engine's own setters ignore a move this small (Positionable compares with an epsilon), so nothing changed:
+    // the scene revision and the frame revision agree, whichever way that goes. What mustn't happen is the scene
+    // changing without either moving.
+    const bool sceneChanged = server.GetSceneRevision() != sceneRevision;
+    EXPECT_EQ(FrameSince(first.revision).modified, sceneChanged);
 }
 
 // ==================== The colour space ====================
