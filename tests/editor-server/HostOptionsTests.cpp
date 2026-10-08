@@ -65,6 +65,7 @@ TEST(HostOptionsTest, NoArgumentsGiveTheDefaults)
     EXPECT_EQ(parsed->renderer, HostRenderer::OpenGL);
     EXPECT_TRUE(parsed->tokenEnv.empty());
     EXPECT_FALSE(parsed->exitOnDisconnect);
+    EXPECT_FALSE(parsed->exitOnStdinEof);
     EXPECT_FALSE(parsed->showHelp);
 }
 
@@ -72,7 +73,7 @@ TEST(HostOptionsTest, ParsesEveryOption)
 {
     const auto parsed = ParseHostArguments({"--port", "0", "--bind", "0.0.0.0", "--project", "C:/Games/My Game",
                                             "--renderer", "software", "--token-env", "N2_EDITOR_TOKEN",
-                                            "--exit-on-disconnect"});
+                                            "--exit-on-disconnect", "--exit-on-stdin-eof"});
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_EQ(parsed->port, 0);
     EXPECT_EQ(parsed->bindAddress, "0.0.0.0");
@@ -80,6 +81,7 @@ TEST(HostOptionsTest, ParsesEveryOption)
     EXPECT_EQ(parsed->renderer, HostRenderer::Software);
     EXPECT_EQ(parsed->tokenEnv, "N2_EDITOR_TOKEN");
     EXPECT_TRUE(parsed->exitOnDisconnect);
+    EXPECT_TRUE(parsed->exitOnStdinEof);
     EXPECT_FALSE(parsed->showHelp);
 
     const auto shortPort = ParseHostArguments({"-p", "4000"});
@@ -186,10 +188,58 @@ TEST(HostOptionsTest, TheUsageNamesEveryOption)
 {
     const std::string_view usage = HostUsage();
     for (const std::string_view option : {"--port", "-p,", "--bind", "--project", "--renderer", "--token-env",
-                                          "--exit-on-disconnect", "--help", "-h,", "N2EditorHost ready port="})
+                                          "--exit-on-disconnect", "--exit-on-stdin-eof", "--help", "-h,",
+                                          "N2EditorHost ready port="})
     {
         EXPECT_NE(usage.find(option), std::string_view::npos) << option;
     }
+}
+
+TEST(HostOptionsTest, ExitOnStdinEofIsAFlagAndOffByDefault)
+{
+    // Not a value-taking option: the next argument is still parsed on its own
+    const auto parsed = ParseHostArguments({"--exit-on-stdin-eof", "--port", "0"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->exitOnStdinEof);
+    EXPECT_FALSE(parsed->exitOnDisconnect);
+    EXPECT_EQ(parsed->port, 0);
+
+    const auto without = ParseHostArguments({"--exit-on-disconnect"});
+    ASSERT_TRUE(without) << without.error();
+    EXPECT_FALSE(without->exitOnStdinEof);
+}
+
+TEST(HostOptionsTest, DrainUntilEofReadsEverythingThenReturnsAtEndOfFile)
+{
+    int calls = 0;
+    std::size_t total = 0;
+    DrainUntilEof(
+        [&](char *buffer, std::size_t size) -> std::ptrdiff_t
+        {
+            ++calls;
+            EXPECT_NE(buffer, nullptr);
+            EXPECT_GT(size, 0u);
+            if (calls <= 3)
+            {
+                total += 10;
+                return 10;
+            }
+            return 0;
+        });
+    EXPECT_EQ(calls, 4);
+    EXPECT_EQ(total, 30u);
+}
+
+TEST(HostOptionsTest, DrainUntilEofReturnsOnAReadError)
+{
+    int calls = 0;
+    DrainUntilEof(
+        [&](char *, std::size_t) -> std::ptrdiff_t
+        {
+            ++calls;
+            return calls == 1 ? 5 : -1;
+        });
+    EXPECT_EQ(calls, 2);
 }
 
 TEST(HostOptionsTest, ReadAccessTokenReadsTheVariableThenRemovesIt)

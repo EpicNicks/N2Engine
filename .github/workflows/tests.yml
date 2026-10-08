@@ -100,7 +100,9 @@ jobs:
       # from the environment (--token-env), talks to it over its TCP protocol (Hello, the startup scene, a rendered
       # frame, audio, saving and reopening the scene, the project, assets), then asks it to shut down. A second host runs with the
       # default renderer, whose window fails on the GPU-less runner so it serves without one, and with
-      # --exit-on-disconnect, so it must exit by itself when its client leaves.
+      # --exit-on-disconnect, so it must exit by itself when its client leaves. Hosts with --exit-on-stdin-eof must
+      # exit when their stdin closes (a pipe the test closes, and an empty file), and keep running while it is open;
+      # one without the flag must keep running when its stdin is at end of file.
       # A non-zero exit code catches crashes during shutdown or static destruction.
       - name: Editor host smoke test
         shell: pwsh
@@ -309,6 +311,15 @@ jobs:
           $errPath2 = Join-Path $PWD "host-exit-on-disconnect.err"
           $proc = $null
           $proc2 = $null
+          $procPipe = $null
+          $procEof = $null
+          $procNoFlag = $null
+          $emptyStdin = Join-Path $PWD "empty-stdin.txt"
+          Set-Content -Path $emptyStdin -Value "" -NoNewline
+          $logPathEof = Join-Path $PWD "host-stdin-eof.log"
+          $errPathEof = Join-Path $PWD "host-stdin-eof.err"
+          $logPathNoFlag = Join-Path $PWD "host-no-stdin-flag.log"
+          $errPathNoFlag = Join-Path $PWD "host-no-stdin-flag.err"
 
           try {
             # ---- Host 1: --renderer software, --token-env, --project ----
@@ -535,10 +546,46 @@ jobs:
             if (-not $proc2.WaitForExit(30000)) { throw "Editor host with --exit-on-disconnect did not exit within 30s of its client leaving" }
             if ($proc2.ExitCode -ne 0) { throw ("Editor host with --exit-on-disconnect exited with code 0x{0:X8}" -f $proc2.ExitCode) }
             Write-Host "Editor host with --exit-on-disconnect exited cleanly when its client left"
+
+            # ---- --exit-on-stdin-eof, on a real pipe: running while stdin is open, gone once it closes ----
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new($exe.Path)
+            $startInfo.UseShellExecute = $false
+            $startInfo.RedirectStandardInput = $true
+            foreach ($argument in "--port", "0", "--exit-on-stdin-eof") { $startInfo.ArgumentList.Add($argument) }
+            $procPipe = [System.Diagnostics.Process]::Start($startInfo)
+            $null = $procPipe.Handle
+            Start-Sleep -Seconds 5
+            if ($procPipe.HasExited) { throw ("Editor host with --exit-on-stdin-eof exited while its stdin was still open (code 0x{0:X8})" -f $procPipe.ExitCode) }
+            $procPipe.StandardInput.Close()
+            if (-not $procPipe.WaitForExit(30000)) { throw "Editor host with --exit-on-stdin-eof did not exit within 30s of its stdin closing" }
+            if ($procPipe.ExitCode -ne 0) { throw ("Editor host with --exit-on-stdin-eof exited with code 0x{0:X8}" -f $procPipe.ExitCode) }
+            Write-Host "Editor host with --exit-on-stdin-eof exited cleanly when its stdin pipe closed"
+
+            # ---- --exit-on-stdin-eof, stdin already at end of file (an empty file) ----
+            $procEof = Start-Process -FilePath $exe -PassThru -ArgumentList "--port", "0", "--exit-on-stdin-eof" `
+              -RedirectStandardInput $emptyStdin -RedirectStandardOutput $logPathEof -RedirectStandardError $errPathEof
+            $null = $procEof.Handle
+            if (-not $procEof.WaitForExit(30000)) { throw "Editor host with --exit-on-stdin-eof did not exit within 30s with its stdin at end of file" }
+            if ($procEof.ExitCode -ne 0) { throw ("Editor host with --exit-on-stdin-eof (stdin at end of file) exited with code 0x{0:X8}" -f $procEof.ExitCode) }
+            Write-Host "Editor host with --exit-on-stdin-eof exited cleanly with its stdin at end of file"
+            # The Logger writes to the console in Debug builds only
+            if ($env:N2_SMOKE_CONFIG -eq "Debug" -and -not (Get-Content $logPathEof -Raw).Contains("Stdin closed")) {
+              throw "The host's log doesn't say its stdin closed"
+            }
+
+            # ---- Without the flag, the same stdin changes nothing: the host keeps serving ----
+            $procNoFlag = Start-Process -FilePath $exe -PassThru -ArgumentList "--port", "0" `
+              -RedirectStandardInput $emptyStdin -RedirectStandardOutput $logPathNoFlag -RedirectStandardError $errPathNoFlag
+            $null = $procNoFlag.Handle
+            $null = Wait-ReadyLine $procNoFlag $logPathNoFlag
+            Start-Sleep -Seconds 3
+            if ($procNoFlag.HasExited) { throw ("Editor host without --exit-on-stdin-eof exited when its stdin was at end of file (code 0x{0:X8})" -f $procNoFlag.ExitCode) }
+            Write-Host "Editor host without --exit-on-stdin-eof kept running with its stdin at end of file"
+            if ((Get-Content $logPathNoFlag -Raw).Contains("Stdin closed")) { throw "A host without --exit-on-stdin-eof logged that its stdin closed" }
           }
           finally {
             # A failing Kill (the host exiting meanwhile) must not replace the error that got us here
-            foreach ($p in $proc, $proc2) {
+            foreach ($p in $proc, $proc2, $procPipe, $procEof, $procNoFlag) {
               try { if ($p -and -not $p.HasExited) { $p.Kill() } }
               catch { Write-Host "Couldn't kill host process $($p.Id): $($_.Exception.Message)" }
             }
@@ -546,4 +593,8 @@ jobs:
             Write-Host "----- host stderr -----"; Get-Content $errPath -ErrorAction SilentlyContinue
             Write-Host "----- host (--exit-on-disconnect) stdout -----"; Get-Content $logPath2 -ErrorAction SilentlyContinue
             Write-Host "----- host (--exit-on-disconnect) stderr -----"; Get-Content $errPath2 -ErrorAction SilentlyContinue
+            Write-Host "----- host (--exit-on-stdin-eof, empty stdin) stdout -----"; Get-Content $logPathEof -ErrorAction SilentlyContinue
+            Write-Host "----- host (--exit-on-stdin-eof, empty stdin) stderr -----"; Get-Content $errPathEof -ErrorAction SilentlyContinue
+            Write-Host "----- host (no stdin flag) stdout -----"; Get-Content $logPathNoFlag -ErrorAction SilentlyContinue
+            Write-Host "----- host (no stdin flag) stderr -----"; Get-Content $errPathNoFlag -ErrorAction SilentlyContinue
           }
