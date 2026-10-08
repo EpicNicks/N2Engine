@@ -150,6 +150,30 @@ TEST(ProtocolVectorTest, ServerBuildersWriteTheVectorResponses)
     }
 }
 
+// A response with a second shape has a vector of its own (FrameUpdate that isn't modified: 13 bytes, no pixels)
+TEST(ProtocolVectorTest, ServerBuildersWriteTheResponseVariants)
+{
+    const json variants = ProtocolVectors::Load().value("responseVariants", json::array());
+    for (const json &variant : variants)
+    {
+        const std::string name = variant.at("response").get<std::string>();
+        const std::vector<uint8_t> payload = ProtocolVectors::FromHex(variant.at("payload").get<std::string>());
+        BufferWriter expected;
+        expected.WriteU8(static_cast<uint8_t>(std::stoi(variant.at("id").get<std::string>(), nullptr, 16)));
+        expected.WriteU32(static_cast<uint32_t>(payload.size()));
+        expected.WriteBytes(payload);
+        EXPECT_EQ(ProtocolVectors::ToHex(ProtocolVectors::BuildResponse(name, variant)),
+                  ProtocolVectors::ToHex(expected.Release()))
+            << name;
+        if (name == "FrameUpdate")
+        {
+            EXPECT_EQ(payload.size(), 13u) << "revision, modified, width, height: no pixels";
+            EXPECT_EQ(variant.at("fields").at("modified"), false);
+        }
+    }
+    EXPECT_FALSE(variants.empty());
+}
+
 // ==================== quat, mat4 and json ====================
 // The element-level layout of quat and mat4 (SetLocalTransform and GetEntity use them, and their vectors cover
 // the commands), pinned here and by the TypeScript fixture tests

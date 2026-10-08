@@ -11,7 +11,7 @@ namespace N2Engine::Editor
 {
     /// The version of protocol.json this server implements (ProtocolSpecTest pins the two equal). Hello compares the
     /// client's with it: the same major version is compatible, whatever the minor and patch versions.
-    inline constexpr std::string_view ProtocolVersion = "1.6.0";
+    inline constexpr std::string_view ProtocolVersion = "1.7.0";
 
     struct ProtocolVersionNumber
     {
@@ -59,8 +59,11 @@ namespace N2Engine::Editor
         GetAudio = 0x03,
         Hello = 0x04,
         PollEvents = 0x05,
+        RenderFrameIfChanged = 0x06,
         SetCameraPosition = 0x10,
         GetCameraPosition = 0x12,
+        SetEditorCamera = 0x13,
+        GetEditorCamera = 0x14,
         CreateScene = 0x20,
         LoadScene = 0x21,
         SaveScene = 0x22,
@@ -130,7 +133,9 @@ namespace N2Engine::Editor
         LuaFields = 0x14,
         EditResult = 0x15,
         History = 0x16,
-        Autosave = 0x17
+        Autosave = 0x17,
+        FrameUpdate = 0x18,
+        EditorCamera = 0x19
     };
 
 #pragma pack(push, 1)

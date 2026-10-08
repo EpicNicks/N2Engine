@@ -30,6 +30,12 @@ OUTPUT_PATH = Path(__file__).parent.parent / "test-vectors.json"
 # The array length of every sample array
 ARRAY_LENGTH = 2
 
+# Extra response vectors for a response whose layout has a second shape: (response, the sample fields to replace).
+# FrameUpdate with modified false carries no pixels (the "not modified" answer, 13 bytes of payload).
+RESPONSE_VARIANTS = [
+    ("FrameUpdate", {"modified": False, "pixels": ""}),
+]
+
 
 def json_text(value) -> str:
     """Canonical JSON text: compact, keys sorted (as nlohmann::json writes them), UTF-8 rather than \\u escapes"""
@@ -159,6 +165,20 @@ def build(protocol: dict) -> dict:
             "payload": payload.hex(),
         })
 
+    variants = []
+    declared = {name: fields for name, _, fields in protocol_spec.responses(protocol)}
+    for name, overrides in RESPONSE_VARIANTS:
+        if name not in declared:
+            continue
+        values = sample_fields(declared[name], protocol)
+        values.update(overrides)
+        variants.append({
+            "response": name,
+            "id": protocol["responses"][name],
+            "fields": values,
+            "payload": encode_fields(declared[name], values, protocol).hex(),
+        })
+
     return {
         "description": "Golden vectors, generated from protocol.json by generators/generate_test_vectors.py - do not edit. "
                        "payload is the hex of the payload (no frame header) that fields encode to. "
@@ -168,6 +188,7 @@ def build(protocol: dict) -> dict:
         "protocolVersion": protocol["version"],
         "requests": requests,
         "responses": responses,
+        "responseVariants": variants,
     }
 
 

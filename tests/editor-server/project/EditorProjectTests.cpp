@@ -555,6 +555,44 @@ TEST_F(EditorProjectTest, RescanAssetsReportsADeletedAssetAndForgetsIt)
     EXPECT_EQ(EventsOfKind(server, "assetsChanged").size(), 2u);
 }
 
+// What the viewport shows depends on the assets and the project's settings (#79, E7a): changing either makes a new
+// frame (the frame revision moves), and changing nothing doesn't
+TEST_F(EditorProjectTest, AssetAndProjectSettingChangesMoveTheFrameRevision)
+{
+    ASSERT_EQ(Execute(server, CommandType::RescanAssets).type, static_cast<uint8_t>(ResponseType::Ok));
+    const uint32_t settled = server.GetFrameRevision();
+
+    // A rescan that finds nothing is no change
+    ASSERT_EQ(Execute(server, CommandType::RescanAssets).type, static_cast<uint8_t>(ResponseType::Ok));
+    EXPECT_EQ(server.GetFrameRevision(), settled);
+
+    WriteAsset("scenes/Frame.scene", R"({"name":"Frame","rootGameObjects":[]})");
+    ASSERT_EQ(Execute(server, CommandType::RescanAssets).type, static_cast<uint8_t>(ResponseType::Ok));
+    const uint32_t afterAsset = server.GetFrameRevision();
+    EXPECT_NE(afterAsset, settled);
+
+    ASSERT_EQ(Execute(server, CommandType::SetProjectSettings, JsonPayload({{"window", {{"title", "Frame"}}}})).type,
+              ProjectInfoType);
+    const uint32_t afterSettings = server.GetFrameRevision();
+    EXPECT_NE(afterSettings, afterAsset);
+
+    // A request refused before anything was applied changes nothing
+    EXPECT_EQ(Execute(server, CommandType::SetProjectSettings, JsonPayload(json::array({1}))).type, ErrorType);
+    EXPECT_EQ(server.GetFrameRevision(), afterSettings);
+}
+
+TEST_F(EditorProjectTest, LoadingASceneMovesTheFrameRevision)
+{
+    const uint32_t start = server.GetFrameRevision();
+    (void)Open("res://scenes/Main.scene");
+    const uint32_t opened = server.GetFrameRevision();
+    EXPECT_NE(opened, start);
+
+    ASSERT_EQ(Execute(server, CommandType::LoadScene, Strings({R"({"name":"Sent","rootGameObjects":[]})"})).type,
+              static_cast<uint8_t>(ResponseType::Ok));
+    EXPECT_NE(server.GetFrameRevision(), opened);
+}
+
 // ==================== Project commands ====================
 
 TEST_F(EditorProjectTest, GetProjectInfoDescribesTheProject)

@@ -1,5 +1,5 @@
 {
-  "version": "1.6.0",
+  "version": "1.7.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -78,7 +78,7 @@
     },
     "PollEvents": {
       "id": "0x05",
-      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} after a RescanAssets that found changes; projectChanged {} after project.n2proj was saved. historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount} since 1.6.0, after a step is recorded, undone or redone, or the history is cleared (label is the step Undo would undo, redoLabel the one Redo would redo, empty for none; the counts are the steps done and undone); an edit merged into the step before it (typing in a number box) sends none. Since 1.6.0 sceneChanged also follows Undo, Redo and RestoreAutosave, with full: true when the step was undone or redone by restoring a snapshot of the scene. A client ignores kinds and keys it doesn't know.",
+      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} after a RescanAssets that found changes; projectChanged {} after project.n2proj was saved. historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount} since 1.6.0, after a step is recorded, undone or redone, or the history is cleared (label is the step Undo would undo, redoLabel the one Redo would redo, empty for none; the counts are the steps done and undone); an edit merged into the step before it (typing in a number box) sends none. Since 1.6.0 sceneChanged also follows Undo, Redo and RestoreAutosave, with full: true when the step was undone or redone by restoring a snapshot of the scene. Since 1.7.0: frameChanged {revision} when what the viewport would show has changed (the scene, the editor camera, the viewport size, the assets or the project's settings) since the last frame RenderFrameIfChanged rendered: one event per change that follows a rendered frame, not one per change, so dragging the camera sends one. revision is the revision the next frame will have (a later change before that frame moves it on); a client that is showing the viewport answers it with RenderFrameIfChanged. A client ignores kinds and keys it doesn't know.",
       "request": {
         "epoch": "uint32",
         "afterSeq": "uint32",
@@ -91,6 +91,23 @@
           "nextSeq": "uint32",
           "dropped": "uint32",
           "events": "json:EditorEvent[]"
+        }
+      }
+    },
+    "RenderFrameIfChanged": {
+      "id": "0x06",
+      "description": "Renders the editor view only when it changed, so an idle edit-mode viewport costs nothing. The editor view is the open scene drawn from the editor camera (SetEditorCamera) at the viewport size, whether or not the scene has a camera of its own, and without simulating. Every picture has a frame revision (a uint32, never 0): it moves on whenever the scene, the editor camera, the viewport size, the assets or the project's settings change. sinceRevision is the revision of the frame the client holds, or 0 for none. When it is the current revision, the answer is modified false, with the revision, the viewport size and no pixels (a few bytes, and no rendering). Otherwise it renders (or, if the frame of the current revision is still in the server's buffer, resends it) and answers modified true with the frame's revision, width, height and pixels, laid out as RenderFrame's. A client that wants a frame whatever the revision (it dropped its copy) passes 0. Polling it every animation frame is cheap; the frameChanged event (PollEvents) says when a poll will find a new frame. A revision means nothing across hosts (a host starts numbering at a random number), so a client that reconnects keeps its frame only when the revision it holds comes back as current. RenderFrame is unchanged and draws the game's main camera (SetCameraPosition moves it), as a play-mode viewport will; it neither uses nor moves the revision. Error when there is no renderer or it can't make the render target.",
+      "request": {
+        "sinceRevision": "uint32"
+      },
+      "response": {
+        "type": "FrameUpdate",
+        "fields": {
+          "revision": "uint32",
+          "modified": "bool",
+          "width": "uint32",
+          "height": "uint32",
+          "pixels": "bytes"
         }
       }
     },
@@ -112,6 +129,39 @@
           "x": "float32",
           "y": "float32",
           "z": "float32"
+        }
+      }
+    },
+    "SetEditorCamera": {
+      "id": "0x13",
+      "description": "Sets the editor camera, the viewpoint of RenderFrameIfChanged's frames. The server owns it: it isn't a scene object, isn't saved with a scene and isn't part of undo; the game's main camera (SetCameraPosition) is separate. The client computes orbit, pan, zoom and fly and sends the resulting pose. rotation is a quaternion (normalised on receipt; the camera looks down its local -Z, +Y is up). fovY is the perspective camera's vertical field of view in degrees (1 to 179). With orthographic true the camera is orthographic: orthoSize is its half height in world units (0.0001 to 1000000) and the width follows the viewport's aspect ratio. nearPlane and farPlane are distances along the view direction: a perspective camera needs 0.0001 to 1000000 for the near plane, an orthographic one -1000000 to 1000000; the far plane must be at least 0.001 beyond the near plane and at most 10000000. Each position coordinate is within +-1000000. Every number must be a finite number: NaN and infinities are refused, never clamped, and a zero quaternion is refused; a refused request is an Error and changes nothing. Setting the camera it already has changes nothing (no new frame). Only the values of the projection in use are range-checked, so a client may keep an unused fovY or orthoSize at any finite value. Applied at once, so the next RenderFrameIfChanged shows it. Never logs (clients send it every frame while dragging).",
+      "request": {
+        "position": "vec3",
+        "rotation": "quat",
+        "fovY": "float32",
+        "orthographic": "bool",
+        "orthoSize": "float32",
+        "nearPlane": "float32",
+        "farPlane": "float32"
+      },
+      "response": { "type": "Ok" }
+    },
+    "GetEditorCamera": {
+      "id": "0x14",
+      "description": "The editor camera as stored (position, the normalised rotation, fovY, orthographic, orthoSize, nearPlane, farPlane: SetEditorCamera's fields), and the view and projection matrices frames are rendered with at the current viewport size, so a client's gizmos and overlays line up with the picture. The matrices are mat4, for column vectors: view takes world to camera space (the camera looks down -Z) and projection camera space to clip space, so clip = projection * view * (world point, 1). The projection uses the viewport's aspect ratio, so it changes with SetViewportSize. A server that never had SetEditorCamera answers with the defaults: position (0, 0, 10), no rotation, a 60 degree perspective camera, near 0.1, far 1000, orthoSize 5. Never logs.",
+      "request": {},
+      "response": {
+        "type": "EditorCamera",
+        "fields": {
+          "position": "vec3",
+          "rotation": "quat",
+          "fovY": "float32",
+          "orthographic": "bool",
+          "orthoSize": "float32",
+          "nearPlane": "float32",
+          "farPlane": "float32",
+          "view": "mat4",
+          "projection": "mat4"
         }
       }
     },
@@ -769,6 +819,8 @@
     "LuaFields": "0x14",
     "EditResult": "0x15",
     "History": "0x16",
-    "Autosave": "0x17"
+    "Autosave": "0x17",
+    "FrameUpdate": "0x18",
+    "EditorCamera": "0x19"
   }
 }

@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.6.0";
+        public const string ProtocolVersion = "1.7.0";
     }
 
     public enum CommandType : byte
@@ -19,8 +19,11 @@ namespace N2Engine.Editor.Protocol
         GetAudio = 0x03,
         Hello = 0x04,
         PollEvents = 0x05,
+        RenderFrameIfChanged = 0x06,
         SetCameraPosition = 0x10,
         GetCameraPosition = 0x12,
+        SetEditorCamera = 0x13,
+        GetEditorCamera = 0x14,
         CreateScene = 0x20,
         LoadScene = 0x21,
         SaveScene = 0x22,
@@ -91,6 +94,8 @@ namespace N2Engine.Editor.Protocol
         EditResult = 0x15,
         History = 0x16,
         Autosave = 0x17,
+        FrameUpdate = 0x18,
+        EditorCamera = 0x19,
     }
 
     public struct Vec3
@@ -355,11 +360,27 @@ namespace N2Engine.Editor.Protocol
         public uint MaxEvents;
     }
 
+    public struct RenderFrameIfChangedRequest
+    {
+        public uint SinceRevision;
+    }
+
     public struct SetCameraPositionRequest
     {
         public float X;
         public float Y;
         public float Z;
+    }
+
+    public struct SetEditorCameraRequest
+    {
+        public Vec3 Position;
+        public Quat Rotation;
+        public float FovY;
+        public bool Orthographic;
+        public float OrthoSize;
+        public float NearPlane;
+        public float FarPlane;
     }
 
     public struct CreateSceneRequest
@@ -545,11 +566,33 @@ namespace N2Engine.Editor.Protocol
         public string Events;
     }
 
+    public struct FrameUpdateResponse
+    {
+        public uint Revision;
+        public bool Modified;
+        public uint Width;
+        public uint Height;
+        public byte[] Pixels;
+    }
+
     public struct CameraPositionResponse
     {
         public float X;
         public float Y;
         public float Z;
+    }
+
+    public struct EditorCameraResponse
+    {
+        public Vec3 Position;
+        public Quat Rotation;
+        public float FovY;
+        public bool Orthographic;
+        public float OrthoSize;
+        public float NearPlane;
+        public float FarPlane;
+        public float[] View;
+        public float[] Projection;
     }
 
     public struct SceneDataResponse
