@@ -1513,7 +1513,8 @@ namespace N2Engine::Editor
                 );
                 entity->GetPositionable()->SetScale(cmd.scale);
                 applied = true;
-                MarkSceneChanged({entity->GetUUID().ToString()});
+                // The children's world matrices moved with it
+                MarkSceneChanged(SubtreeIds(*entity));
             }
         }
 
@@ -1738,7 +1739,8 @@ namespace N2Engine::Editor
         }
         entity->SetSiblingIndex(target);
 
-        MarkSceneChanged({entity->GetUUID().ToString()});
+        // The subtree: its world transforms and activeInHierarchy changed with the parent
+        MarkSceneChanged(SubtreeIds(*entity));
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, response.Release());
@@ -1770,6 +1772,7 @@ namespace N2Engine::Editor
         }
 
         bool changed = false;
+        bool activeChanged = false;
         if (parsed->name && *parsed->name != entity->GetName())
         {
             entity->SetName(*parsed->name);
@@ -1789,10 +1792,12 @@ namespace N2Engine::Editor
         {
             entity->SetActive(*parsed->active);
             changed = true;
+            activeChanged = true;
         }
         if (changed)
         {
-            MarkSceneChanged({entity->GetUUID().ToString()});
+            // The active state reaches the whole subtree (activeInHierarchy), so a client refetches it all
+            MarkSceneChanged(activeChanged ? SubtreeIds(*entity) : std::vector<std::string>{entity->GetUUID().ToString()});
         }
 
         BufferWriter response;
@@ -1909,19 +1914,32 @@ namespace N2Engine::Editor
         // A client sends a rotation it may have accumulated rounding in: it is normalised, and only a quaternion
         // with no direction at all (all zeros) is refused
         const float rotationLength = rotation.Length();
-        if (!(rotationLength > 1e-6f))
+        if (!std::isfinite(rotationLength) || !(rotationLength > 1e-6f))
         {
-            SendError(clientSocket, "The rotation is a zero quaternion");
+            SendError(clientSocket, "The rotation is a zero quaternion, or too large to normalise");
+            return;
+        }
+
+        // The transform as it will be stored: already that, and nothing changes (the revision doesn't move)
+        const Math::Quaternion normalised = rotation.Normalized();
+        const Positionable *existing = entity->GetPositionable();
+        if (existing != nullptr && existing->GetLocalPosition() == cmd.position &&
+            existing->GetLocalRotation() == normalised && existing->GetLocalScale() == cmd.scale)
+        {
+            BufferWriter unchanged;
+            WriteOk(unchanged);
+            SendResponse(clientSocket, unchanged.Release());
             return;
         }
 
         // An object CreateEntity made has no transform: setting one gives it one
         entity->CreatePositionable();
         Positionable *positionable = entity->GetPositionable();
-        positionable->SetLocalPositionAndRotation(cmd.position, rotation.Normalized());
+        positionable->SetLocalPositionAndRotation(cmd.position, normalised);
         positionable->SetLocalScale(cmd.scale);
 
-        MarkSceneChanged({entity->GetUUID().ToString()});
+        // The subtree's world matrices moved with it
+        MarkSceneChanged(SubtreeIds(*entity));
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, response.Release());

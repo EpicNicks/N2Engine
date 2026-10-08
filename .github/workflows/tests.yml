@@ -353,6 +353,9 @@ jobs:
             Send-Frame $stream 0x05 ([byte[]]([BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]1024)))
             $response = Read-Response $stream
             Assert-Response $response 0x0C "PollEvents"
+            # The place to read on from later: this poll's epoch and nextSeq
+            $pollEpoch = [BitConverter]::ToUInt32($response.Payload, 0)
+            $pollNextSeq = [BitConverter]::ToUInt32($response.Payload, 4)
             $eventsText = [Text.Encoding]::UTF8.GetString($response.Payload, 12, $response.Payload.Length - 12)
             foreach ($line in "Camera initialized", "Using Software renderer, headless (no window)") {
               if (-not $eventsText.Contains($line)) { throw "PollEvents: no '$line' among the startup events (was the server constructed after Init?)" }
@@ -472,7 +475,7 @@ jobs:
             Write-Host "Hierarchy: $($duplicated.Names -join ', ')"
 
             # sceneChanged says which objects changed (and the editor viewport still renders)
-            Send-Frame $stream 0x05 ([byte[]]([BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]1024)))
+            Send-Frame $stream 0x05 ([byte[]]([BitConverter]::GetBytes([uint32]$pollEpoch) + [BitConverter]::GetBytes([uint32]$pollNextSeq) + [BitConverter]::GetBytes([uint32]1024)))
             $response = Read-Response $stream
             Assert-Response $response 0x0C "PollEvents after the hierarchy edits"
             $eventsText = [Text.Encoding]::UTF8.GetString($response.Payload, 12, $response.Payload.Length - 12)

@@ -863,6 +863,22 @@ TEST_F(EditorHierarchyTest, SetLocalTransformSetsTheLocalTransform)
     EXPECT_EQ(Revision(), revision + 1);
 }
 
+TEST_F(EditorHierarchyTest, SetLocalTransformWithTheValuesItHasChangesNothing)
+{
+    const std::string id = Create("Thing");
+    ASSERT_EQ(SetLocal(id, {1.0f, 2.0f, 3.0f}, {0.0f, 0.0f, 0.0f, 2.0f}, {2.0f, 2.0f, 2.0f}).type, OkType);
+    const uint32_t revision = Revision();
+    const size_t events = SceneChangedEvents(server).size();
+
+    // The same values (the rotation normalises to the stored one)
+    EXPECT_EQ(SetLocal(id, {1.0f, 2.0f, 3.0f}, {0.0f, 0.0f, 0.0f, 5.0f}, {2.0f, 2.0f, 2.0f}).type, OkType);
+    EXPECT_EQ(Revision(), revision);
+    EXPECT_EQ(SceneChangedEvents(server).size(), events);
+
+    EXPECT_EQ(SetLocal(id, {1.0f, 2.0f, 4.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {2.0f, 2.0f, 2.0f}).type, OkType);
+    EXPECT_EQ(Revision(), revision + 1);
+}
+
 TEST_F(EditorHierarchyTest, SetLocalTransformGivesAnObjectWithNoTransformOne)
 {
     const Frame created = Execute(server, CommandType::CreateEntity, Strings({"Bare"}));
@@ -891,6 +907,8 @@ TEST_F(EditorHierarchyTest, SetLocalTransformRefusesWhatIsntATransform)
     const Frame zero = SetLocal(id, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f});
     EXPECT_EQ(zero.type, ErrorType) << "a rotation with no direction";
     EXPECT_NE(zero.Text().find("zero"), std::string::npos) << zero.Text();
+    EXPECT_EQ(SetLocal(id, {0.0f, 0.0f, 0.0f}, {1e38f, 0.0f, 0.0f, 0.0f}).type, ErrorType)
+        << "a rotation whose length overflows";
     EXPECT_EQ(SetLocal("00000000-0000-0000-0000-000000000000", {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}).type,
               ErrorType);
 
@@ -936,13 +954,20 @@ TEST_F(EditorHierarchyTest, SceneChangedSaysWhichObjectsChanged)
     const std::string c = Create("C", b);
 
     ASSERT_EQ(Reparent(b, a, Last).type, OkType);
-    EXPECT_EQ(SceneChangedEvents(server).back().at("entityIds"), (json::array({b})));
+    EXPECT_EQ(SceneChangedEvents(server).back().at("entityIds"), (json::array({b, c})))
+        << "the object and its subtree: their world transforms moved with the parent";
 
     ASSERT_EQ(SetProperties(a, json{{"tag", "Hero"}}).type, OkType);
     EXPECT_EQ(SceneChangedEvents(server).back().at("entityIds"), (json::array({a})));
 
     ASSERT_EQ(SetLocal(c, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}).type, OkType);
     EXPECT_EQ(SceneChangedEvents(server).back().at("entityIds"), (json::array({c})));
+    ASSERT_EQ(SetLocal(b, {2.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 1.0f}).type, OkType);
+    EXPECT_EQ(SceneChangedEvents(server).back().at("entityIds"), (json::array({b, c})))
+        << "a child's world matrix follows its parent";
+    ASSERT_EQ(SetProperties(b, json{{"active", false}}).type, OkType);
+    EXPECT_EQ(SceneChangedEvents(server).back().at("entityIds"), (json::array({b, c})))
+        << "activeInHierarchy reaches the subtree";
 
     // A duplicate and its whole subtree are new; a destroyed subtree is gone
     const std::string copy = DuplicateId(a);
