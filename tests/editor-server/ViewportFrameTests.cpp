@@ -818,7 +818,11 @@ TEST_F(ViewportCommandTest, ARefusedRenderTargetIsAnErrorAndRetriedWithoutRender
     fake->acceptTargets = false;
     ASSERT_EQ(SetViewportSize(server, 8, 4).type, ErrorType);
 
-    EXPECT_EQ(FrameIfChanged(server, 0).type, ErrorType);
+    BufferWriter ask;
+    ask.WriteU32(0);
+    const Response refused = Execute(server, CommandType::RenderFrameIfChanged, {ask.Data().begin(), ask.Data().end()});
+    EXPECT_EQ(refused.type, ErrorType);
+    EXPECT_EQ(Text(refused), EditorServer::RenderTargetError(8, 4));
     EXPECT_EQ(server.GetEditorFramesRendered(), 0u);
 
     fake->acceptTargets = true;

@@ -27,7 +27,7 @@ using nlohmann::json;
 // The editor camera and render on demand (#79, E7a) through EditorServer::ExecuteCommand, on a scene made with
 // NewScene and a real headless software renderer: the frames are real pixels, so a scene with no camera of its own is
 // seen from the editor camera, and the frame revision follows the scene, as the commands change it. Pixels are
-// asserted with wide tolerances (a solid colour at the middle of a face, the clear colour away from the object), not
+// asserted with wide tolerances (white at the middle of a face, the clear colour away from the object), not
 // bit for bit, so the tests hold across compilers and build types.
 namespace
 {
@@ -76,7 +76,8 @@ namespace
         int b = 0;
     };
 
-    bool IsRed(const Rgb &c) { return c.r >= 200 && c.g <= 60 && c.b <= 60; }
+    /// The built-in shapes are unlit and white until they are given a colour
+    bool IsCube(const Rgb &c) { return c.r >= 200 && c.g >= 200 && c.b >= 200; }
     bool IsBlue(const Rgb &c) { return c.b >= 200 && c.r <= 60 && c.g <= 60; }
 
     struct Picture
@@ -231,8 +232,8 @@ TEST_F(EditorViewportTest, ASceneWithNoCameraIsSeenFromTheEditorCamera)
     ASSERT_EQ(picture.height, static_cast<uint32_t>(ViewHeight));
     ASSERT_EQ(picture.pixels.size(), static_cast<std::size_t>(ViewWidth) * ViewHeight * 4);
 
-    // The cube is the middle of the view (an unlit red face); the corners are the clear colour
-    EXPECT_TRUE(IsRed(picture.Centre())) << picture.Centre().r << "," << picture.Centre().g << "," << picture.Centre().b;
+    // The cube is the middle of the view (an unlit white face); the corners are the clear colour
+    EXPECT_TRUE(IsCube(picture.Centre())) << picture.Centre().r << "," << picture.Centre().g << "," << picture.Centre().b;
     EXPECT_TRUE(IsBlue(picture.At(2, 2)));
     EXPECT_TRUE(IsBlue(picture.At(ViewWidth - 3, 2)));
     EXPECT_TRUE(IsBlue(picture.At(2, ViewHeight - 3)));
@@ -255,7 +256,7 @@ TEST_F(EditorViewportTest, AnEmptySceneIsTheClearColour)
 TEST_F(EditorViewportTest, TheCameraDecidesWhatIsSeen)
 {
     ASSERT_FALSE(Create("Cube").empty());
-    EXPECT_TRUE(IsRed(Frame0().Centre()));
+    EXPECT_TRUE(IsCube(Frame0().Centre()));
 
     // Off to the side, looking straight ahead: the cube is out of view
     CameraArgs aside;
@@ -274,7 +275,7 @@ TEST_F(EditorViewportTest, TheCameraDecidesWhatIsSeen)
     afar.position = {0.0f, 0.0f, 8.0f};
     SetCamera(afar);
     const Picture distant = Frame0();
-    EXPECT_TRUE(IsRed(distant.Centre()));
+    EXPECT_TRUE(IsCube(distant.Centre()));
     EXPECT_TRUE(IsBlue(distant.At(14, 24))) << "a small cube leaves the sides clear";
 
     // Close up, the cube fills more of the view than it did from afar
@@ -282,8 +283,8 @@ TEST_F(EditorViewportTest, TheCameraDecidesWhatIsSeen)
     closeUp.position = {0.0f, 0.0f, 1.6f};
     SetCamera(closeUp);
     const Picture close = Frame0();
-    EXPECT_TRUE(IsRed(close.Centre()));
-    EXPECT_TRUE(IsRed(close.At(22, 24))) << "the face reaches further out";
+    EXPECT_TRUE(IsCube(close.Centre()));
+    EXPECT_TRUE(IsCube(close.At(22, 24))) << "the face reaches further out";
 }
 
 TEST_F(EditorViewportTest, AnOrthographicCameraDrawsTheCubeAtItsSize)
@@ -296,9 +297,9 @@ TEST_F(EditorViewportTest, AnOrthographicCameraDrawsTheCubeAtItsSize)
 
     const Picture picture = Frame0();
     ASSERT_EQ(picture.type, FrameUpdateType);
-    EXPECT_TRUE(IsRed(picture.Centre()));
-    EXPECT_TRUE(IsRed(picture.At(24, 16))) << "inside the face";
-    EXPECT_TRUE(IsRed(picture.At(40, 32))) << "inside the face";
+    EXPECT_TRUE(IsCube(picture.Centre()));
+    EXPECT_TRUE(IsCube(picture.At(24, 16))) << "inside the face";
+    EXPECT_TRUE(IsCube(picture.At(40, 32))) << "inside the face";
     EXPECT_TRUE(IsBlue(picture.At(10, 24))) << "left of it";
     EXPECT_TRUE(IsBlue(picture.At(54, 24))) << "right of it";
     EXPECT_TRUE(IsBlue(picture.At(32, 6))) << "above it";
@@ -308,7 +309,7 @@ TEST_F(EditorViewportTest, AnOrthographicCameraDrawsTheCubeAtItsSize)
     ortho.orthoSize = 2.0f;
     SetCamera(ortho);
     const Picture wide = Frame0();
-    EXPECT_TRUE(IsRed(wide.Centre()));
+    EXPECT_TRUE(IsCube(wide.Centre()));
     EXPECT_TRUE(IsBlue(wide.At(24, 16))) << "now outside the smaller face";
 }
 
@@ -331,7 +332,7 @@ TEST_F(EditorViewportTest, ACommandThatChangesTheSceneMakesTheNextFrame)
     const Picture withCube = FrameSince(emptyRevision);
     EXPECT_TRUE(withCube.modified);
     EXPECT_NE(withCube.revision, emptyRevision);
-    EXPECT_TRUE(IsRed(withCube.Centre()));
+    EXPECT_TRUE(IsCube(withCube.Centre()));
     EXPECT_EQ(server.GetEditorFramesRendered(), rendered + 1);
 
     // Moving it out of the way
@@ -345,7 +346,7 @@ TEST_F(EditorViewportTest, ACommandThatChangesTheSceneMakesTheNextFrame)
     ASSERT_EQ(undone.type, EditResultType) << undone.Text();
     const Picture back = FrameSince(moved.revision);
     EXPECT_TRUE(back.modified);
-    EXPECT_TRUE(IsRed(back.Centre()));
+    EXPECT_TRUE(IsCube(back.Centre()));
     const Frame redone = Execute(server, CommandType::Redo);
     ASSERT_EQ(redone.type, EditResultType) << redone.Text();
     EXPECT_TRUE(IsBlue(FrameSince(back.revision).Centre()));
@@ -410,7 +411,7 @@ TEST_F(EditorViewportTest, ANewSceneIsANewPicture)
 {
     ASSERT_FALSE(Create("Cube").empty());
     const Picture first = Frame0();
-    ASSERT_TRUE(IsRed(first.Centre()));
+    ASSERT_TRUE(IsCube(first.Centre()));
 
     ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", "Another"})).type, SceneInfoType);
     const Picture another = FrameSince(first.revision);
@@ -432,7 +433,7 @@ TEST_F(EditorViewportTest, ANewViewportSizeRendersAtThatSize)
     EXPECT_EQ(square.width, 32u);
     EXPECT_EQ(square.height, 32u);
     EXPECT_EQ(square.pixels.size(), 32u * 32u * 4u);
-    EXPECT_TRUE(IsRed(square.Centre()));
+    EXPECT_TRUE(IsCube(square.Centre()));
     EXPECT_TRUE(IsBlue(square.At(1, 1)));
 
     // The projection follows the shape: with a square viewport, the same scale across and up (elements 0 and 5)
