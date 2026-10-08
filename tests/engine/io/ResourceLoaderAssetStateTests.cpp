@@ -109,7 +109,7 @@ TEST_F(AssetStateTest, TheStateFileHoldsWhatTheScanSaw)
     Init();
 
     ASSERT_TRUE(fs::exists(Loader().GetAssetStatePath()));
-    EXPECT_EQ(Loader().GetAssetStatePath(), _root / ".n2" / "asset-state.json");
+    EXPECT_TRUE(Loader().GetAssetStatePath() == _root / ".n2" / "asset-state.json") << Loader().GetAssetStatePath().string();
     const json state = ReadJson(Loader().GetAssetStatePath());
     EXPECT_EQ(state.at("formatVersion"), 1);
     const json &assets = state.at("assets");

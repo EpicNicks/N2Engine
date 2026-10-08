@@ -472,6 +472,7 @@ TEST_F(EditorAssetsTest, SetImportSettingsRefusesWhatItCannotApply)
     WriteAsset("a.mat", "{}");
     Rescan();
     const std::string before = ReadFile(_root / ".import" / "a.mat.meta");
+    const std::size_t eventsBefore = EventsOfKind(server, "assetsChanged").size();
 
     EXPECT_EQ(SetSettings("res://a.mat", json::array()).type, ErrorType);
     EXPECT_EQ(SetSettings("res://a.mat", json("text")).type, ErrorType);
@@ -484,7 +485,7 @@ TEST_F(EditorAssetsTest, SetImportSettingsRefusesWhatItCannotApply)
     EXPECT_EQ(SetSettings("res://a.mat", large).type, ErrorType) << "over the size limit";
 
     EXPECT_EQ(ReadFile(_root / ".import" / "a.mat.meta"), before) << "nothing was applied";
-    EXPECT_TRUE(EventsOfKind(server, "assetsChanged").empty());
+    EXPECT_EQ(EventsOfKind(server, "assetsChanged").size(), eventsBefore);
 
     EditorServer noProject;
     BufferWriter request;
@@ -541,7 +542,11 @@ TEST_F(EditorAssetsTest, WriteTextAssetWritesExactlyWhatItIsGivenAndIndexesTheFi
     EXPECT_EQ(ReadFile(Assets() / "scripts" / "Player.lua"), text) << "no line ending added or changed";
     EXPECT_TRUE(Loader().Exists(IO::ResourcePath("res://scripts/Player.lua"))) << "indexed";
     EXPECT_TRUE(fs::exists(_root / ".import" / "scripts" / "Player.lua.meta"));
-    EXPECT_FALSE(fs::exists(Assets() / "scripts" / "Player.lua.tmp")) << "written through a temporary file, renamed";
+    for (const auto &entry : fs::directory_iterator(Assets() / "scripts"))
+    {
+        EXPECT_NE(entry.path().extension().string(), ".tmp")
+            << "written through a temporary file, renamed: " << entry.path().string();
+    }
     const std::vector<json> events = EventsOfKind(server, "assetsChanged");
     ASSERT_EQ(events.size(), 1u);
     EXPECT_EQ(StringList(events.at(0).at("added")), (std::vector<std::string>{"res://scripts/Player.lua"}));
@@ -795,12 +800,12 @@ TEST_F(EditorAssetsTest, ResolveAssetPathKeepsEverythingInsideTheAssetsFolder)
     const auto ok = EditorServer::ResolveAssetPath(assets, "res://scripts/New.lua");
     ASSERT_TRUE(ok) << ok.error();
     EXPECT_EQ(ok->resourcePath.ToString(), "res://scripts/New.lua");
-    EXPECT_EQ(ok->file, fs::weakly_canonical(assets) / "scripts" / "New.lua");
+    EXPECT_TRUE(ok->file == fs::weakly_canonical(assets) / "scripts" / "New.lua") << ok->file.string();
 
     EXPECT_FALSE(EditorServer::ResolveAssetPath(assets, "res://"));
     const auto root = EditorServer::ResolveAssetPath(assets, "res://", true);
     ASSERT_TRUE(root) << root.error();
-    EXPECT_EQ(root->file, fs::weakly_canonical(assets));
+    EXPECT_TRUE(root->file == fs::weakly_canonical(assets)) << root->file.string();
     EXPECT_EQ(root->resourcePath.ToString(), "res://");
 
     EXPECT_TRUE(EditorServer::ResolveAssetPath(assets, "res://scripts/./Example.lua")) << "a dot part is dropped";
