@@ -11,7 +11,7 @@ namespace N2Engine::Editor
 {
     /// The version of protocol.json this server implements (ProtocolSpecTest pins the two equal). Hello compares the
     /// client's with it: the same major version is compatible, whatever the minor and patch versions.
-    inline constexpr std::string_view ProtocolVersion = "1.3.0";
+    inline constexpr std::string_view ProtocolVersion = "1.4.0";
 
     struct ProtocolVersionNumber
     {
@@ -69,13 +69,19 @@ namespace N2Engine::Editor
         OpenScene = 0x25,
         SaveSceneToFile = 0x26,
         NewScene = 0x27,
-        // 0x28 is kept for GetHierarchy (#6, E4)
+        GetHierarchy = 0x28,
         GetOpenScene = 0x29,
         CreateEntity = 0x30,
         DestroyEntity = 0x31,
         SetEntityTransform = 0x32,
         GetEntityTransform = 0x33,
         GetAllEntities = 0x34,
+        CreateEntityEx = 0x35,
+        SetEntityParent = 0x36,
+        SetEntityProperties = 0x37,
+        DuplicateEntity = 0x38,
+        GetEntity = 0x39,
+        SetLocalTransform = 0x3A,
         CreateScript = 0x40,
         RescanAssets = 0x41,
         GetEngineHealth = 0x50,
@@ -101,7 +107,9 @@ namespace N2Engine::Editor
         ServerInfo = 0x0B,
         Events = 0x0C,
         SceneInfo = 0x0D,
-        ProjectInfo = 0x0E
+        ProjectInfo = 0x0E,
+        Hierarchy = 0x0F,
+        EntityData = 0x10
     };
 
 #pragma pack(push, 1)

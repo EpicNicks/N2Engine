@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.3.0";
+        public const string ProtocolVersion = "1.4.0";
     }
 
     public enum CommandType : byte
@@ -29,12 +29,19 @@ namespace N2Engine.Editor.Protocol
         OpenScene = 0x25,
         SaveSceneToFile = 0x26,
         NewScene = 0x27,
+        GetHierarchy = 0x28,
         GetOpenScene = 0x29,
         CreateEntity = 0x30,
         DestroyEntity = 0x31,
         SetEntityTransform = 0x32,
         GetEntityTransform = 0x33,
         GetAllEntities = 0x34,
+        CreateEntityEx = 0x35,
+        SetEntityParent = 0x36,
+        SetEntityProperties = 0x37,
+        DuplicateEntity = 0x38,
+        GetEntity = 0x39,
+        SetLocalTransform = 0x3A,
         CreateScript = 0x40,
         RescanAssets = 0x41,
         GetEngineHealth = 0x50,
@@ -61,6 +68,8 @@ namespace N2Engine.Editor.Protocol
         Events = 0x0C,
         SceneInfo = 0x0D,
         ProjectInfo = 0x0E,
+        Hierarchy = 0x0F,
+        EntityData = 0x10,
     }
 
     public struct Vec3
@@ -109,6 +118,10 @@ namespace N2Engine.Editor.Protocol
         public double? SavedRevision { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("path")]
         public string? Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("entityIds")]
+        public string[]? EntityIds { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("full")]
+        public bool? Full { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("added")]
         public string[]? Added { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("removed")]
@@ -133,6 +146,100 @@ namespace N2Engine.Editor.Protocol
         public string[] Scenes { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("settings")]
         public System.Text.Json.JsonElement Settings { get; set; }
+    }
+
+    public class HierarchyNode
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("parentId")]
+        public string ParentId { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("index")]
+        public double Index { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("active")]
+        public bool Active { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("activeInHierarchy")]
+        public bool ActiveInHierarchy { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("layer")]
+        public double Layer { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("tag")]
+        public string Tag { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("components")]
+        public string[] Components { get; set; }
+    }
+
+    public class EntityHeader
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("parentId")]
+        public string ParentId { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("index")]
+        public double Index { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("active")]
+        public bool Active { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("activeInHierarchy")]
+        public bool ActiveInHierarchy { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("layer")]
+        public double Layer { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("tag")]
+        public string Tag { get; set; }
+    }
+
+    public class JsonVec3
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("x")]
+        public double X { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("y")]
+        public double Y { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("z")]
+        public double Z { get; set; }
+    }
+
+    public class JsonQuat
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("x")]
+        public double X { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("y")]
+        public double Y { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("z")]
+        public double Z { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("w")]
+        public double W { get; set; }
+    }
+
+    public class LocalTransform
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("position")]
+        public JsonVec3 Position { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("rotation")]
+        public JsonQuat Rotation { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("scale")]
+        public JsonVec3 Scale { get; set; }
+    }
+
+    public class EntityComponent
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string Type { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("uuid")]
+        public string Uuid { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("values")]
+        public System.Text.Json.JsonElement Values { get; set; }
+    }
+
+    public class EntityDetails
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("header")]
+        public EntityHeader Header { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("transform")]
+        public LocalTransform? Transform { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("components")]
+        public EntityComponent[] Components { get; set; }
     }
 
     public struct SetViewportSizeRequest
@@ -216,6 +323,47 @@ namespace N2Engine.Editor.Protocol
         public string EntityId;
     }
 
+    public struct CreateEntityExRequest
+    {
+        public string Name;
+        public string ParentId;
+        public int SiblingIndex;
+        public string Preset;
+    }
+
+    public struct SetEntityParentRequest
+    {
+        public string EntityId;
+        public string ParentId;
+        public int SiblingIndex;
+        public bool KeepWorldTransform;
+    }
+
+    public struct SetEntityPropertiesRequest
+    {
+        public string EntityId;
+        /// <summary>JSON text: any JSON value</summary>
+        public string Properties;
+    }
+
+    public struct DuplicateEntityRequest
+    {
+        public string EntityId;
+    }
+
+    public struct GetEntityRequest
+    {
+        public string EntityId;
+    }
+
+    public struct SetLocalTransformRequest
+    {
+        public string EntityId;
+        public Vec3 Position;
+        public Quat Rotation;
+        public Vec3 Scale;
+    }
+
     public struct CreateScriptRequest
     {
         public string Name;
@@ -288,6 +436,13 @@ namespace N2Engine.Editor.Protocol
         public uint SavedRevision;
     }
 
+    public struct HierarchyResponse
+    {
+        public uint Revision;
+        /// <summary>JSON text: HierarchyNode[]</summary>
+        public string Nodes;
+    }
+
     public struct EntityCreatedResponse
     {
         public string EntityId;
@@ -304,6 +459,13 @@ namespace N2Engine.Editor.Protocol
     {
         public uint Count;
         public EntityInfo[] Entities;
+    }
+
+    public struct EntityDataResponse
+    {
+        /// <summary>JSON text: EntityDetails</summary>
+        public string Entity;
+        public float[] WorldMatrix;
     }
 
     public struct ScriptDataResponse
