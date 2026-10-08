@@ -250,6 +250,37 @@ TEST_F(EditorServerNoSceneTest, HierarchyAndEntityCommandsAreErrors)
     expectNoScene(Execute(server, CommandType::SetLocalTransform, ToVector(transform)), "SetLocalTransform");
 }
 
+TEST_F(EditorServerNoSceneTest, ComponentCommandsAreErrorsExceptTheTypeList)
+{
+    const std::string id = "00000000-0000-0000-0000-000000000000";
+    const auto expectNoScene = [](const DecodedFrame &response, const char *command)
+    {
+        EXPECT_EQ(response.type, ErrorType) << command;
+        EXPECT_NE(response.body.find("No scene"), std::string::npos) << command << ": " << response.body;
+    };
+    const auto twoStrings = [&id](const std::string &second)
+    {
+        BufferWriter w;
+        w.WriteString(id);
+        w.WriteString(second);
+        return ToVector(w);
+    };
+
+    expectNoScene(Execute(server, CommandType::AddComponent, twoStrings("Light")), "AddComponent");
+    expectNoScene(Execute(server, CommandType::RemoveComponent, twoStrings(id)), "RemoveComponent");
+    expectNoScene(Execute(server, CommandType::GetComponent, twoStrings(id)), "GetComponent");
+    expectNoScene(Execute(server, CommandType::GetLuaFields, twoStrings(id)), "GetLuaFields");
+
+    BufferWriter set;
+    set.WriteString(id);
+    set.WriteString(id);
+    set.WriteString("{}");
+    expectNoScene(Execute(server, CommandType::SetComponentFields, ToVector(set)), "SetComponentFields");
+
+    // The types are the host's, not the scene's
+    EXPECT_EQ(Execute(server, CommandType::GetComponentTypes).type, static_cast<uint8_t>(ResponseType::ComponentTypes));
+}
+
 // ==================== Polled commands don't log per call ====================
 
 namespace
@@ -287,7 +318,8 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
     for (const CommandType polled : {CommandType::RenderFrame, CommandType::GetAudio, CommandType::PollEvents,
                                      CommandType::GetAllEntities, CommandType::GetEntityTransform,
                                      CommandType::GetCameraPosition, CommandType::GetEngineHealth,
-                                     CommandType::GetHierarchy, CommandType::GetEntity})
+                                     CommandType::GetHierarchy, CommandType::GetEntity,
+                                     CommandType::GetComponent, CommandType::GetComponentTypes})
     {
         EXPECT_TRUE(EditorServer::IsPolledCommand(static_cast<uint8_t>(polled))) << static_cast<int>(polled);
     }
@@ -302,7 +334,9 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                         CommandType::SetProjectSettings, CommandType::SetStartupScene,
                                         CommandType::CreateEntityEx, CommandType::SetEntityParent,
                                         CommandType::SetEntityProperties, CommandType::DuplicateEntity,
-                                        CommandType::SetLocalTransform})
+                                        CommandType::SetLocalTransform, CommandType::AddComponent,
+                                        CommandType::RemoveComponent, CommandType::SetComponentFields,
+                                        CommandType::GetLuaFields})
     {
         EXPECT_FALSE(EditorServer::IsPolledCommand(static_cast<uint8_t>(notPolled))) << static_cast<int>(notPolled);
     }
