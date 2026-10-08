@@ -141,8 +141,9 @@ namespace N2Engine::Rendering
 
         /**
          * A share of the GPU material for `material`'s current GPU version (Material::GetGpuVersion: its shading
-         * and base colour texture) on `renderer`: the standard lit or unlit shader (by the material's shading) with
-         * its base colour texture (a share of the texture's own cache entry, held by the material's entry), and its
+         * and its textures) on `renderer`: the standard lit or unlit shader (by the material's shading) with
+         * its base colour texture and, for lit, its emissive and occlusion textures (each a share of the texture's
+         * own cache entry, held by the material's entry), and its
          * uniforms set (Material::ApplyUniforms). Each GPU version is a separate entry, so a material whose shader
          * or texture changed gets a new GPU material when its users acquire again, and the old one goes with its
          * last user. Its other fields are uniforms and render state, set per draw, so changing them makes nothing
@@ -165,7 +166,7 @@ namespace N2Engine::Rendering
     private:
         /// What makes an entry's resource: returns it (nullptr on failure), and may give the entry a share of
         /// another entry to hold (a material's texture)
-        using CreateFunction = std::function<void *(Renderer::Common::IRenderer &, Handle &dependency)>;
+        using CreateFunction = std::function<void *(Renderer::Common::IRenderer &, std::vector<Handle> &dependencies)>;
 
         /// The shared acquire: finds a live entry and adds a user, or makes the resource with `create` and a new
         /// entry. `uploadedVersion` is recorded on a new entry (a mesh's version).

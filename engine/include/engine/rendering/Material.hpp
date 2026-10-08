@@ -44,12 +44,17 @@ namespace N2Engine::Rendering
      * unblended (Mask also alpha-tests against alphaCutoff), Blend draws in the Transparent queue, blended. On the
      * software renderer, which can't blend, Blend draws opaque without writing depth.
      *
-     * metallic, emissive and the normal, occlusion, metallic-roughness and emissive textures are stored and
-     * serialized but have no effect yet: physically based shading arrives with #3 P4.
+     * Lit materials also draw emissive (a colour, times the emissive texture when set) added after the lighting,
+     * unaffected by it, and an occlusion texture that darkens the ambient light only (see GetOcclusionStrength).
+     * Unlit materials ignore both. In linear lighting (RenderSettings::GetColorSpace) a lit material decodes
+     * its base colour and emissive textures from sRGB when their Texture settings say `srgb`.
+     *
+     * metallic and the normal and metallic-roughness textures are stored and serialized but have no effect yet:
+     * normal maps and physically based shading arrive with #3 P4b.
      *
      * Materials come from `.mat` files (JSON, see Load) or Create at runtime. Every change bumps GetVersion. Only a
-     * change to what the GPU material is made of (the shading, which picks the shader, and the base colour texture)
-     * bumps GetGpuVersion, and a renderer then makes a new GPU material for it on its next draw; every other field
+     * change to what the GPU material is made of (the shading, which picks the shader, and the base colour, emissive
+     * and occlusion textures) bumps GetGpuVersion, and a renderer then makes a new GPU material for it on its next draw; every other field
      * reaches the GPU as a uniform (ApplyUniforms) or a render state, set per draw, so changing it every frame
      * costs nothing extra.
      */
@@ -90,8 +95,8 @@ namespace N2Engine::Rendering
          *   {"shading": "lit", "baseColor": {"r": 1, "g": 1, "b": 1, "a": 1},
          *    "baseColorTexture": "res://textures/crate.png", "alphaMode": "mask", "alphaCutoff": 0.5,
          *    "doubleSided": false, "smoothness": 0.5, "metallic": 0, "emissive": {"r": 0, "g": 0, "b": 0, "a": 1},
-         *    "normalTexture": null, "occlusionTexture": null, "metallicRoughnessTexture": null,
-         *    "emissiveTexture": null}
+         *    "normalTexture": null, "occlusionTexture": null, "occlusionStrength": 1,
+         *    "metallicRoughnessTexture": null, "emissiveTexture": null}
          * See FromJson for how keys are read. False, with an error, if the file can't be read or isn't a JSON
          * object.
          */
@@ -118,19 +123,32 @@ namespace N2Engine::Rendering
         [[nodiscard]] float GetSmoothness() const { return _smoothness; }
         void SetSmoothness(float smoothness);
 
-        // Stored and serialized, no effect until #3 P4
-        [[nodiscard]] float GetMetallic() const { return _metallic; }
-        void SetMetallic(float metallic);
+        /// Lit only: the colour the surface gives off, added after the lighting (so lights don't change it); rgb
+        /// only, alpha is ignored. Black (the default) adds nothing. Values above 1 are allowed (brighter than
+        /// the screen shows, but they still add to the lighting). The number is used as it is in both colour
+        /// spaces (see RenderSettings).
         [[nodiscard]] const Common::Color &GetEmissive() const { return _emissive; }
         void SetEmissive(const Common::Color &emissive);
-        [[nodiscard]] const std::shared_ptr<Texture> &GetNormalTexture() const { return _normalTexture; }
-        void SetNormalTexture(std::shared_ptr<Texture> texture);
-        [[nodiscard]] const std::shared_ptr<Texture> &GetOcclusionTexture() const { return _occlusionTexture; }
-        void SetOcclusionTexture(std::shared_ptr<Texture> texture);
-        [[nodiscard]] const std::shared_ptr<Texture> &GetMetallicRoughnessTexture() const { return _metallicRoughnessTexture; }
-        void SetMetallicRoughnessTexture(std::shared_ptr<Texture> texture);
+        /// Lit only: an image the emissive colour is multiplied by (glTF's emissiveTexture). Set the colour to
+        /// white to show it as is: the default colour is black, which shows nothing.
         [[nodiscard]] const std::shared_ptr<Texture> &GetEmissiveTexture() const { return _emissiveTexture; }
         void SetEmissiveTexture(std::shared_ptr<Texture> texture);
+        /// Lit only: an image whose red channel (1 = open, 0 = fully occluded) scales the ambient light; direct
+        /// lights are not occluded (glTF's occlusionTexture). It is data, never decoded as sRGB.
+        [[nodiscard]] const std::shared_ptr<Texture> &GetOcclusionTexture() const { return _occlusionTexture; }
+        void SetOcclusionTexture(std::shared_ptr<Texture> texture);
+        /// How much of the occlusion texture applies, from 0 (none) to 1 (all, the default): the ambient light is
+        /// scaled by 1 + strength * (occlusion - 1)
+        [[nodiscard]] float GetOcclusionStrength() const { return _occlusionStrength; }
+        void SetOcclusionStrength(float strength);
+
+        // Stored and serialized, no effect until #3 P4b
+        [[nodiscard]] float GetMetallic() const { return _metallic; }
+        void SetMetallic(float metallic);
+        [[nodiscard]] const std::shared_ptr<Texture> &GetNormalTexture() const { return _normalTexture; }
+        void SetNormalTexture(std::shared_ptr<Texture> texture);
+        [[nodiscard]] const std::shared_ptr<Texture> &GetMetallicRoughnessTexture() const { return _metallicRoughnessTexture; }
+        void SetMetallicRoughnessTexture(std::shared_ptr<Texture> texture);
 
         /// Blend: drawn in the Transparent queue, blended
         [[nodiscard]] bool IsBlended() const { return _alphaMode == AlphaMode::Blend; }
@@ -145,7 +163,10 @@ namespace N2Engine::Rendering
         /**
          * Sets the standard shaders' uniforms on a GPU material from this material: uAlbedo (the base colour times
          * `tint`), uHasTexture (whether `target` has a texture), uAlphaCutoff (the cutoff for Mask, else 0) and,
-         * lit, uSmoothness and uMetallic. The drawing code calls it before every draw, so a GPU material shared
+         * lit, uSmoothness and uMetallic, and the emissive and occlusion inputs: uEmissive (rgb),
+         * uHasEmissiveTexture and uHasOcclusionTexture (whether `target` has those textures), uOcclusionStrength,
+         * and uBaseColorSrgb and uEmissiveTextureSrgb (whether those textures' settings say sRGB, read by the
+         * shader only in linear lighting). The drawing code calls it before every draw, so a GPU material shared
          * by several users (or given a per-draw tint) always draws with the right values.
          */
         void ApplyUniforms(Renderer::Common::IMaterial &target, const Common::Color &tint = Common::Color::White) const;
@@ -174,6 +195,7 @@ namespace N2Engine::Rendering
         Common::Color _emissive{Common::Color::Black};
         std::shared_ptr<Texture> _normalTexture;
         std::shared_ptr<Texture> _occlusionTexture;
+        float _occlusionStrength = 1.0f;
         std::shared_ptr<Texture> _metallicRoughnessTexture;
         std::shared_ptr<Texture> _emissiveTexture;
         std::uint64_t _version = 1;

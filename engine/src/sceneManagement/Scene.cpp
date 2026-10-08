@@ -13,6 +13,7 @@
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/rendering/Light.hpp"
+#include "engine/rendering/RenderSettings.hpp"
 #include "engine/Logger.hpp"
 #include "engine/Positionable.hpp"
 
@@ -811,6 +812,7 @@ Renderer::Common::SceneLightingData Scene::CollectLighting(const LightingSource 
     using namespace Renderer::Common;
 
     SceneLightingData lighting;
+    lighting.colorSpace = Rendering::RenderSettings::GetColorSpace();
 
     // The registered lights (attached ones), or, in edit mode, the ones the hierarchy holds
     std::vector<Rendering::Light *> hierarchyLights;

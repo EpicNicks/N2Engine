@@ -22,8 +22,10 @@ namespace N2Engine::Rendering
      */
     struct TextureSettings
     {
-        /// Whether the colours are sRGB-encoded. Recorded only: nothing reads it until the engine gets a
-        /// linear-lighting option (#3 P4a), so it has no effect on drawing yet.
+        /// Whether the colours are sRGB-encoded. Read only in linear lighting (RenderSettings::GetColorSpace),
+        /// by the lit shader, for a material's base colour and emissive textures: they are then decoded to
+        /// linear light. With the default gamma lighting it changes nothing. Data textures (occlusion) are
+        /// never decoded.
         bool srgb = true;
         /// "linear" (the default) or "nearest"
         Renderer::Common::TextureFilter filter = Renderer::Common::TextureFilter::Linear;

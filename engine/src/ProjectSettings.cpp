@@ -9,6 +9,7 @@
 #include "engine/Window.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
+#include "engine/rendering/RenderSettings.hpp"
 
 namespace N2Engine
 {
@@ -48,6 +49,30 @@ namespace N2Engine
                 {
                     backend->SetGravity(Math::Vector3(gravity->at("x").get<float>(), gravity->at("y").get<float>(),
                                                       gravity->at("z").get<float>()));
+                }
+            }
+        }
+
+        void ApplyRendering(const nlohmann::json &rendering, std::vector<std::string> &problems)
+        {
+            if (!rendering.is_object())
+            {
+                problems.emplace_back("rendering: not an object");
+                return;
+            }
+            if (const auto space = rendering.find("colorSpace"); space != rendering.end() && !space->is_null())
+            {
+                const auto parsed = space->is_string()
+                                        ? Rendering::RenderSettings::ParseColorSpace(space->get<std::string>())
+                                        : std::nullopt;
+                if (!parsed)
+                {
+                    problems.push_back(std::format("rendering.colorSpace: {} is not \"gamma\" or \"linear\"",
+                                                   space->dump()));
+                }
+                else
+                {
+                    Rendering::RenderSettings::SetColorSpace(*parsed);
                 }
             }
         }
@@ -113,6 +138,7 @@ namespace N2Engine
             }
         });
         apply("physics", [&](const nlohmann::json &physics) { ApplyPhysics(physics, problems); });
+        apply("rendering", [&](const nlohmann::json &rendering) { ApplyRendering(rendering, problems); });
         return problems;
     }
 
@@ -125,6 +151,7 @@ namespace N2Engine
             snapshot.input = inputSystem->Serialize();
         }
         snapshot.fixedTimestep = Time::GetFixedTimestep();
+        snapshot.colorSpace = Rendering::RenderSettings::GetColorSpace();
         if (const Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             snapshot.gravity = backend->GetGravity();
@@ -143,6 +170,7 @@ namespace N2Engine
             }
         }
         (void)Time::SetFixedTimestep(fixedTimestep);
+        Rendering::RenderSettings::SetColorSpace(colorSpace);
         if (gravity)
         {
             if (Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())

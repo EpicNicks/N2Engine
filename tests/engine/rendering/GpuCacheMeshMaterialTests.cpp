@@ -287,6 +287,52 @@ TEST(GpuCacheMaterialTest, TheMaterialHoldsAShareOfItsTexture)
     EXPECT_EQ(GpuCache::GetEntryCount(), baseline);
 }
 
+TEST(GpuCacheMaterialTest, ALitMaterialHoldsSharesOfItsEmissiveAndOcclusionTextures)
+{
+    const std::size_t baseline = GpuCache::GetEntryCount();
+    RecordingMeshRenderer renderer;
+    const auto glow = MakeTexture();
+    const auto occlusion = MakeTexture();
+    const auto material = Material::Create(ShadingModel::Lit);
+    material->SetEmissive(Common::Color::White);
+    material->SetEmissiveTexture(glow);
+    material->SetOcclusionTexture(occlusion);
+
+    GpuCache::Handle handle = GpuCache::AcquireMaterial(renderer, material);
+    ASSERT_TRUE(handle);
+    EXPECT_EQ(renderer.GetCounts().createdTextures, 2);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline + 3) << "the material's entry and its two textures'";
+    const auto *sw = RecordingMeshRenderer::AsSW(handle.GetMaterial());
+    ASSERT_NE(sw, nullptr);
+    EXPECT_EQ(sw->GetTexture(), nullptr) << "no base colour texture";
+    EXPECT_NE(sw->GetAuxTexture(Renderer::Common::AuxTexture::Emissive), nullptr);
+    EXPECT_NE(sw->GetAuxTexture(Renderer::Common::AuxTexture::Occlusion), nullptr);
+    EXPECT_NE(sw->GetAuxTexture(Renderer::Common::AuxTexture::Emissive),
+              sw->GetAuxTexture(Renderer::Common::AuxTexture::Occlusion));
+    EXPECT_EQ(sw->GetInt("uHasEmissiveTexture", -1), 1) << "the uniforms are set once the textures are on";
+    EXPECT_EQ(sw->GetInt("uHasOcclusionTexture", -1), 1);
+
+    // The last user of the material destroys it, then both textures
+    handle.Release(true);
+    EXPECT_EQ(renderer.GetCounts().destroyedMaterials, 1);
+    EXPECT_EQ(renderer.GetCounts().destroyedTextures, 2);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline);
+}
+
+TEST(GpuCacheMaterialTest, AnUnlitMaterialLeavesTheLitOnlyTexturesOut)
+{
+    const std::size_t baseline = GpuCache::GetEntryCount();
+    RecordingMeshRenderer renderer;
+    const auto material = Material::Create(ShadingModel::Unlit);
+    material->SetEmissiveTexture(MakeTexture());
+    GpuCache::Handle handle = GpuCache::AcquireMaterial(renderer, material);
+    ASSERT_TRUE(handle);
+    EXPECT_EQ(renderer.GetCounts().createdTextures, 0);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline + 1);
+    handle.Release(true);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline);
+}
+
 TEST(GpuCacheMaterialTest, ADestroyedRendererLetsGoOfTheTextureShareWithoutCallingIt)
 {
     const std::size_t baseline = GpuCache::GetEntryCount();

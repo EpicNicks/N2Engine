@@ -267,6 +267,12 @@ namespace N2Engine::Rendering
     void Material::SetOcclusionTexture(std::shared_ptr<Texture> texture)
     {
         _occlusionTexture = std::move(texture);
+        Changed(true); // a new texture: a new GPU material
+    }
+
+    void Material::SetOcclusionStrength(const float strength)
+    {
+        _occlusionStrength = std::isfinite(strength) ? std::clamp(strength, 0.0f, 1.0f) : 1.0f;
         Changed();
     }
 
@@ -279,7 +285,7 @@ namespace N2Engine::Rendering
     void Material::SetEmissiveTexture(std::shared_ptr<Texture> texture)
     {
         _emissiveTexture = std::move(texture);
-        Changed();
+        Changed(true); // a new texture: a new GPU material
     }
 
     void Material::ApplyUniforms(Renderer::Common::IMaterial &target, const Common::Color &tint) const
@@ -292,6 +298,12 @@ namespace N2Engine::Rendering
         {
             target.SetFloat("uSmoothness", _smoothness);
             target.SetFloat("uMetallic", _metallic);
+            target.SetVec3("uEmissive", _emissive.r, _emissive.g, _emissive.b);
+            target.SetInt("uHasEmissiveTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Emissive) != nullptr ? 1 : 0);
+            target.SetInt("uHasOcclusionTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Occlusion) != nullptr ? 1 : 0);
+            target.SetFloat("uOcclusionStrength", _occlusionStrength);
+            target.SetInt("uBaseColorSrgb", _baseColorTexture && _baseColorTexture->GetSettings().srgb ? 1 : 0);
+            target.SetInt("uEmissiveTextureSrgb", _emissiveTexture && _emissiveTexture->GetSettings().srgb ? 1 : 0);
         }
     }
 
@@ -385,6 +397,11 @@ namespace N2Engine::Rendering
                 if (auto texture = ReadTexture(value, baseDirectory, debugName, key))
                     _occlusionTexture = std::move(*texture);
             }
+            else if (key == "occlusionStrength")
+            {
+                if (const auto number = ReadUnitFloat(value, debugName, key))
+                    _occlusionStrength = *number;
+            }
             else if (key == "metallicRoughnessTexture")
             {
                 if (auto texture = ReadTexture(value, baseDirectory, debugName, key))
@@ -428,6 +445,7 @@ namespace N2Engine::Rendering
         json["emissive"] = ColorJson(_emissive);
         json["normalTexture"] = TextureJson(_normalTexture);
         json["occlusionTexture"] = TextureJson(_occlusionTexture);
+        json["occlusionStrength"] = _occlusionStrength;
         json["metallicRoughnessTexture"] = TextureJson(_metallicRoughnessTexture);
         json["emissiveTexture"] = TextureJson(_emissiveTexture);
         return json;

@@ -28,7 +28,7 @@ namespace N2Engine::Rendering
             void *resource = nullptr;
             std::size_t users = 0;
             std::uint64_t uploadedVersion = 0; // Mesh: the mesh version the GPU copy holds
-            GpuCache::Handle dependency;       // Material: its share of the base colour texture's entry
+            std::vector<GpuCache::Handle> dependencies; // Material: its shares of its textures' entries
         };
 
         // (renderer, source, kind, version): the version is a Material's, 0 for the other kinds
@@ -152,16 +152,22 @@ namespace N2Engine::Rendering
             }
             // Left by a destroyed renderer at the same address: its resource went with it. What the entry held of
             // another entry is let go after the erase (releasing it changes the map).
-            Handle staleDependency = std::move(it->second.dependency);
+            std::vector<Handle> staleDependencies = std::move(it->second.dependencies);
             entries.erase(it);
-            staleDependency.Release(false);
+            for (Handle &stale : staleDependencies)
+            {
+                stale.Release(false);
+            }
         }
 
-        Handle dependency;
-        void *resource = create(renderer, dependency);
+        std::vector<Handle> dependencies;
+        void *resource = create(renderer, dependencies);
         if (!resource)
         {
-            dependency.Release(true);
+            for (Handle &dependency : dependencies)
+            {
+                dependency.Release(true);
+            }
             return {};
         }
         const void *sourceAddress = source.get();
@@ -171,7 +177,7 @@ namespace N2Engine::Rendering
         entry.resource = resource;
         entry.users = 1;
         entry.uploadedVersion = uploadedVersion;
-        entry.dependency = std::move(dependency);
+        entry.dependencies = std::move(dependencies);
         entries.emplace(key, std::move(entry));
         return Handle(&renderer, std::move(lifetime), kind, sourceAddress, version, resource);
     }
@@ -196,9 +202,12 @@ namespace N2Engine::Rendering
         }
         // The entry's share of another entry (a material's texture) goes after the erase: releasing it changes
         // the map, and the texture must outlive the material that samples it
-        Handle dependency = std::move(it->second.dependency);
+        std::vector<Handle> dependencies = std::move(it->second.dependencies);
         entries.erase(it);
-        dependency.Release(callRenderer);
+        for (Handle &dependency : dependencies)
+        {
+            dependency.Release(callRenderer);
+        }
     }
 
     GpuCache::Handle GpuCache::AcquireTexture(IRenderer &renderer, const std::shared_ptr<const Texture> &texture)
@@ -207,7 +216,7 @@ namespace N2Engine::Rendering
         {
             return {};
         }
-        return Acquire(renderer, ResourceKind::Texture, 0, texture, [&texture](IRenderer &target, Handle &) -> void *
+        return Acquire(renderer, ResourceKind::Texture, 0, texture, [&texture](IRenderer &target, std::vector<Handle> &) -> void *
         {
             return target.CreateTexture(texture->GetPixels().data(), texture->GetWidth(), texture->GetHeight(),
                                         Texture::GetChannels(), texture->GetTextureOptions());
@@ -295,7 +304,7 @@ namespace N2Engine::Rendering
             return {};
         }
         return Acquire(renderer, ResourceKind::Material, material->GetGpuVersion(), material,
-                       [&material](IRenderer &target, Handle &dependency) -> void *
+                       [&material](IRenderer &target, std::vector<Handle> &dependencies) -> void *
         {
             IShader *shader = material->GetShading() == ShadingModel::Lit ? target.GetStandardLitShader()
                                                                            : target.GetStandardUnlitShader();
@@ -303,15 +312,32 @@ namespace N2Engine::Rendering
             {
                 return nullptr;
             }
-            ITexture *texture = nullptr;
-            if (material->GetBaseColorTexture())
+            // A texture the renderer can't create is left out. Each texture is a share of its own entry, held by
+            // this material's entry (and so alive as long as the material that samples it).
+            const auto acquire = [&](const std::shared_ptr<Texture> &source) -> ITexture *
             {
-                dependency = AcquireTexture(target, material->GetBaseColorTexture());
-                texture = dependency.GetTexture();
-            }
+                if (!source)
+                {
+                    return nullptr;
+                }
+                Handle handle = AcquireTexture(target, source);
+                ITexture *texture = handle.GetTexture();
+                if (texture)
+                {
+                    dependencies.push_back(std::move(handle));
+                }
+                return texture;
+            };
+            ITexture *texture = acquire(material->GetBaseColorTexture());
             IMaterial *created = target.CreateMaterial(shader, texture);
             if (created)
             {
+                // Only the lit shader reads them
+                if (material->GetShading() == ShadingModel::Lit)
+                {
+                    created->SetAuxTexture(Renderer::Common::AuxTexture::Emissive, acquire(material->GetEmissiveTexture()));
+                    created->SetAuxTexture(Renderer::Common::AuxTexture::Occlusion, acquire(material->GetOcclusionTexture()));
+                }
                 material->ApplyUniforms(*created);
             }
             return created;
