@@ -73,6 +73,13 @@ namespace
 
         void TearDown() override
         {
+            // Other tests of this program rely on the engine clock standing still (nothing else ticks it): a frame of no
+            // time leaves the frame deltas at zero again
+            TickOptions rest;
+            rest.render = false;
+            rest.deltaSeconds = 0.0;
+            Application::GetInstance().Tick(rest);
+
             // The scene's components go while the application is still up
             SceneManager::AddScene(Scene::Create("ApplicationTickTest_Empty"), true);
             SceneManager::ProcessAnyPendingSceneChange();
