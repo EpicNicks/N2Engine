@@ -115,7 +115,7 @@
 <tbody>
 <tr><td><code>math/</code></td><td>Vectors, matrices, quaternions, UUIDs, random numbers, with SIMD dispatch. No engine dependencies. See <a href="math.html">Math &amp; SIMD</a>.</td></tr>
 <tr><td><code>text/</code></td><td>Font backends (stb_truetype), SDF glyph atlases, UTF-8 decoding and text layout, CPU-only. Depends only on <code>math</code>. See <a href="text.html">Text &amp; fonts</a>.</td></tr>
-<tr><td><code>assetimport/</code> <span class="badge">PR #64</span></td><td>Asset import: image decoding (stb_image: PNG, JPEG, TGA, BMP) to RGBA, with size caps, CPU-only. glTF 2.0 model parsing (cgltf) <span class="badge">PR #68</span>. Depends only on <code>math</code>. See <a href="meshes.html#assetimport">Meshes, models &amp; textures</a>.</td></tr>
+<tr><td><code>assetimport/</code> <span class="badge">PR #64</span></td><td>Asset import: image decoding (stb_image: PNG, JPEG, TGA, BMP) to RGBA, with size caps, CPU-only. glTF 2.0 model parsing (cgltf) <span class="badge">PR #68</span>, MikkTSpace tangent generation <span class="badge">PR #TBD</span>. Depends only on <code>math</code>. See <a href="meshes.html#assetimport">Meshes, models &amp; textures</a>.</td></tr>
 <tr><td><code>renderer/</code></td><td>Rendering backends behind <code>Renderer::Common::Renderer</code>: OpenGL (default), Vulkan and a software renderer.</td></tr>
 <tr><td><code>engine/</code></td><td>The engine proper: application loop, GameObjects, scenes, physics, audio, input, resources, serialization, coroutines and Lua scripting.</td></tr>
 <tr><td><code>editor-server/</code></td><td><code>N2EditorHost</code>, a headless engine host that editors talk to over TCP. See <a href="logging-and-editor.html">Logging, health &amp; editor</a>.</td></tr>
