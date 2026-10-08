@@ -144,6 +144,15 @@ namespace N2Engine
         Ptr FindChildRecursive(const std::string &name) const;
         std::vector<Ptr> GetChildrenRecursive() const;
 
+        /// This object's place among its siblings: its index in its parent's children, or in its scene's root
+        /// objects when it has no parent. 0 for an object with neither a parent nor a scene.
+        [[nodiscard]] size_t GetSiblingIndex() const;
+        /// Moves this object to index among its siblings (its parent's children, or its scene's roots), clamped
+        /// to the last place; the others keep their order. Nothing else changes: not its transform, nor its
+        /// active state. A no-op for an object with neither a parent nor a scene. Like RemoveChild, it edits the
+        /// root list, so it isn't supported inside a TraverseAll/TraverseUntil callback.
+        void SetSiblingIndex(size_t index);
+
         // Hierarchy utility methods
         bool IsChildOf(const Ptr &potentialParent) const;
         bool IsParentOf(const Ptr &potentialChild);

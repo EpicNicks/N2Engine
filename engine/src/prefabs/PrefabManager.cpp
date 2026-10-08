@@ -91,9 +91,10 @@ namespace
 
     // Rewrites the prefab data in place: every string that is one of the prefab's ids (the ids themselves,
     // GameObject/component reference members, Lua "$ref" fields) becomes the new id. A Lua "$ref" to
-    // anything outside the prefab becomes null: the template may be instantiated where that object isn't.
+    // anything outside the prefab becomes null: the template may be instantiated where that object isn't
+    // (unless keepOutsideRefs: the instance is made where those objects are, and the resolver finds them).
     // Other UUID strings (assets, scripts) are not ids of the prefab and are left alone.
-    void Renumber(nlohmann::json &value, const UUIDMap &ids)
+    void Renumber(nlohmann::json &value, const UUIDMap &ids, const bool keepOutsideRefs)
     {
         if (value.is_string())
         {
@@ -108,7 +109,7 @@ namespace
         }
         if (value.is_object())
         {
-            if (const auto ref = value.find("$ref"); ref != value.end() && ref->is_string())
+            if (const auto ref = value.find("$ref"); ref != value.end() && ref->is_string() && !keepOutsideRefs)
             {
                 const auto canonical = CanonicalUUID(*ref);
                 if (!canonical || !ids.contains(*canonical))
@@ -118,7 +119,7 @@ namespace
             }
             for (auto &item : value.items())
             {
-                Renumber(item.value(), ids);
+                Renumber(item.value(), ids, keepOutsideRefs);
             }
             return;
         }
@@ -126,7 +127,7 @@ namespace
         {
             for (auto &item : value)
             {
-                Renumber(item, ids);
+                Renumber(item, ids, keepOutsideRefs);
             }
         }
     }
@@ -152,7 +153,25 @@ namespace
     }
 }
 
+namespace
+{
+    std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const ReferenceResolver *outside);
+}
+
 std::shared_ptr<GameObject> PrefabManager::InstantiatePrefab(const nlohmann::json &prefabJson)
+{
+    return Instantiate(prefabJson, nullptr);
+}
+
+std::shared_ptr<GameObject> PrefabManager::InstantiatePrefab(const nlohmann::json &prefabJson,
+                                                             const ReferenceResolver &outside)
+{
+    return Instantiate(prefabJson, &outside);
+}
+
+namespace
+{
+std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const ReferenceResolver *outside)
 {
     // Prefab JSON wraps the root; bare GameObject JSON (what this function used to require) is the root
     const nlohmann::json *rootJson = &prefabJson;
@@ -173,13 +192,14 @@ std::shared_ptr<GameObject> PrefabManager::InstantiatePrefab(const nlohmann::jso
     // and Lua "$ref" fields alike) and so the saved form of the instance all use the new UUIDs. The
     // resolver then links references to the objects built here, never to the prefab's source objects.
     ReferenceResolver resolver;
+    resolver.SetFallback(outside);
     std::shared_ptr<GameObject> root;
     try
     {
         nlohmann::json data = *rootJson;
         UUIDMap ids;
         CollectIds(data, ids);
-        Renumber(data, ids);
+        Renumber(data, ids, outside != nullptr);
         root = GameObject::Deserialize(data, &resolver);
         resolver.ResolveAll();
     }
@@ -196,6 +216,7 @@ std::shared_ptr<GameObject> PrefabManager::InstantiatePrefab(const nlohmann::jso
 
     ReplaceZeroUUIDs(*root);
     return root;
+}
 }
 
 bool PrefabManager::RegisterPrefab(std::string prefabName, std::shared_ptr<GameObject> rootObject)

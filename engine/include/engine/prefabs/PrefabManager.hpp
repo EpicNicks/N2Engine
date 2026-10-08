@@ -7,6 +7,7 @@
 namespace N2Engine
 {
     class GameObject;
+    class ReferenceResolver;
 
     namespace PrefabManager
     {
@@ -18,6 +19,15 @@ namespace N2Engine
         /// The instance is in no scene: add it to one (AddRootGameObject/AddChild) to attach it.
         /// Malformed data logs an error and returns nullptr; no exception escapes.
         std::shared_ptr<GameObject> InstantiatePrefab(const nlohmann::json &prefabJson);
+
+        /// InstantiatePrefab, except that references to anything outside the prefab are kept instead of nulled:
+        /// they are looked up in `outside`, which knows the objects and components of the scene the copy is made
+        /// for (every GameObject and component registered under its UUID). A reference `outside` doesn't know
+        /// still comes back null. This is what duplicating an object in a scene needs: a copy's reference to an
+        /// object that isn't part of it keeps pointing at that object, as in Unity. `outside` must stay alive
+        /// for the call only.
+        std::shared_ptr<GameObject> InstantiatePrefab(const nlohmann::json &prefabJson,
+                                                      const ReferenceResolver &outside);
 
         /// Stores a snapshot of rootObject (its hierarchy as serialized now) as the prefab prefabName,
         /// replacing (with a warning) a prefab already registered under that name. The object itself is not

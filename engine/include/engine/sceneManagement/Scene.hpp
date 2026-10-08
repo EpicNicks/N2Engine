@@ -52,6 +52,9 @@ namespace N2Engine
         // Expires when this scene is freed (e.g. on a scene switch); script handles to the scene check it
         Base::LifetimeToken _lifetime;
 
+        // Opened for editing (SetEditMode)
+        bool _editMode = false;
+
         // Set by SceneManager's own destructor (static destruction at process exit): the scenes it still
         // holds are then freed without the drop teardown, as the systems OnDestroy uses may already be gone
         bool _skipDropTeardown = false;
@@ -109,7 +112,37 @@ namespace N2Engine
         template <DerivedFromComponent T>
         std::vector<T*> FindObjectsByType(bool includeInactive = true) const;
 
+        /// Where CollectLighting finds the scene's lights
+        enum class LightingSource
+        {
+            /// The lights that attached to the scene (OnAttach ran): the game's. A scene that was only loaded
+            /// has none, so it is lit by the default light.
+            Attached,
+            /// Every active light in the hierarchy (a Light component on an object active in the hierarchy),
+            /// attached or not, in traversal order, as Render finds renderables. Edit mode (the editor's
+            /// viewport) uses it: components of a scene opened for editing never attach.
+            Hierarchy,
+        };
+
+        /// The lighting Application::Render gives the renderer: the first lights of each type that fit
+        /// (SceneLightingData::MAX_*), or one default directional light when the scene has no active light.
+        /// In edit mode (IsEditMode) the lights come from the hierarchy, otherwise from the attached ones.
         [[nodiscard]] Renderer::Common::SceneLightingData CollectLighting() const;
+        /// CollectLighting with the lights taken from `source`, whatever the mode
+        [[nodiscard]] Renderer::Common::SceneLightingData CollectLighting(LightingSource source) const;
+
+        /**
+         * Marks the scene as opened for editing, not to run (the editor host does, for every scene it loads). Its
+         * components never attach (nothing calls ProcessAttachQueue), so in edit mode:
+         * - CollectLighting finds the lights in the hierarchy (LightingSource::Hierarchy), so the scene's lights
+         *   light the editor's viewport;
+         * - changing a GameObject's active state (SetActive, or reparenting it under an inactive object) runs no
+         *   OnEnable/OnDisable on its components: they were never enabled, and a script's OnEnable must not run
+         *   because someone toggled a checkbox.
+         * Off by default; a scene in the game's loop never has it.
+         */
+        void SetEditMode(const bool editMode) { _editMode = editMode; }
+        [[nodiscard]] bool IsEditMode() const { return _editMode; }
 
         /**
          * Draws the scene's renderables through `renderer` (Application::Render calls it each frame, after
@@ -149,6 +182,8 @@ namespace N2Engine
     private:
         static void CollectRenderablesRecursive(const std::shared_ptr<GameObject> &gameObject,
                                                 std::vector<IRenderable *> &out);
+        static void CollectLightsRecursive(const std::shared_ptr<GameObject> &gameObject,
+                                           std::vector<Rendering::Light *> &out);
         void TraverseGameObjectRecursive(std::shared_ptr<GameObject> gameObject,
                                          std::function<void(std::shared_ptr<GameObject>)> callback,
                                          bool onlyActive = false) const;

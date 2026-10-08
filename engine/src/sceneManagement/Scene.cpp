@@ -780,14 +780,51 @@ std::string Scene::GetResourceType() const
     return "Scene";
 }
 
+void Scene::CollectLightsRecursive(const std::shared_ptr<GameObject> &gameObject, std::vector<Rendering::Light *> &out)
+{
+    if (gameObject == nullptr || !gameObject->IsActiveInHierarchy())
+    {
+        return;
+    }
+
+    for (const auto light : gameObject->GetComponents<Rendering::Light>())
+    {
+        if (light && light->IsActive())
+        {
+            out.push_back(light);
+        }
+    }
+
+    for (const auto &child : gameObject->GetChildren())
+    {
+        CollectLightsRecursive(child, out);
+    }
+}
+
 Renderer::Common::SceneLightingData Scene::CollectLighting() const
+{
+    return CollectLighting(_editMode ? LightingSource::Hierarchy : LightingSource::Attached);
+}
+
+Renderer::Common::SceneLightingData Scene::CollectLighting(const LightingSource source) const
 {
     using namespace Renderer::Common;
 
     SceneLightingData lighting;
 
-    // Iterate through cached scene lights
-    for (auto *light : _sceneLights)
+    // The registered lights (attached ones), or, in edit mode, the ones the hierarchy holds
+    std::vector<Rendering::Light *> hierarchyLights;
+    if (source == LightingSource::Hierarchy)
+    {
+        for (const auto &root : _rootGameObjects)
+        {
+            CollectLightsRecursive(root, hierarchyLights);
+        }
+    }
+    const std::vector<Rendering::Light *> &lights =
+        source == LightingSource::Hierarchy ? hierarchyLights : _sceneLights;
+
+    for (auto *light : lights)
     {
         if (!light || !light->IsActive())
         {

@@ -143,6 +143,13 @@ void GameObject::NotifyIfActiveChanged(const bool wasActiveInHierarchy) const
 
 void GameObject::NotifyActiveChanged(const bool nowActive) const
 {
+    // A scene opened for editing never attached its components: none was enabled, so none is disabled or
+    // re-enabled (Scene::SetEditMode). The flags and caches already changed; only the callbacks are skipped.
+    if (_scene != nullptr && _scene->IsEditMode())
+    {
+        return;
+    }
+
     // A component's own _isActive is its enable flag; hierarchy state is IsActiveInHierarchy().
     // Only components that are enabled themselves see their effective state change.
     // Snapshots: a callback can add, remove or reparent, which invalidated the live iteration.
@@ -353,6 +360,48 @@ void GameObject::DetachChild(Ptr child, bool keepWorldPosition)
         }
 
         child->NotifyIfActiveChanged(childWasActive);
+    }
+}
+
+size_t GameObject::GetSiblingIndex() const
+{
+    const auto parent = _parent.lock();
+    const std::vector<Ptr> *siblings = parent ? &parent->_children : (_scene ? &_scene->_rootGameObjects : nullptr);
+    if (siblings == nullptr)
+    {
+        return 0;
+    }
+    const auto it = std::ranges::find_if(*siblings, [this](const Ptr &sibling) { return sibling.get() == this; });
+    return it == siblings->end() ? 0 : static_cast<size_t>(it - siblings->begin());
+}
+
+void GameObject::SetSiblingIndex(const size_t index)
+{
+    const auto parent = _parent.lock();
+    std::vector<Ptr> *siblings = parent ? &parent->_children : (_scene ? &_scene->_rootGameObjects : nullptr);
+    if (siblings == nullptr)
+    {
+        return;
+    }
+    const auto it = std::ranges::find_if(*siblings, [this](const Ptr &sibling) { return sibling.get() == this; });
+    if (it == siblings->end())
+    {
+        return;
+    }
+
+    const auto from = static_cast<size_t>(it - siblings->begin());
+    const size_t to = std::min(index, siblings->size() - 1);
+    if (from < to)
+    {
+        std::rotate(siblings->begin() + static_cast<std::ptrdiff_t>(from),
+                    siblings->begin() + static_cast<std::ptrdiff_t>(from) + 1,
+                    siblings->begin() + static_cast<std::ptrdiff_t>(to) + 1);
+    }
+    else if (to < from)
+    {
+        std::rotate(siblings->begin() + static_cast<std::ptrdiff_t>(to),
+                    siblings->begin() + static_cast<std::ptrdiff_t>(from),
+                    siblings->begin() + static_cast<std::ptrdiff_t>(from) + 1);
     }
 }
 
