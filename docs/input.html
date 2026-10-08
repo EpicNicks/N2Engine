@@ -238,6 +238,10 @@ if (input)
 </div>
 <p class="src">Source: <code>engine/src/input/ActionMap.cpp</code> — <code>InputAction::CalculateCombinedValue</code>; <code>engine/include/engine/input/InputValue.hpp</code>; tests: <code>InputActionValueTest.SmallStickDeflectionStaysSmall</code>, <code>VectorBindingsAddUpWithinUnitCircle</code>, <code>AxisValueKeepsItsSign</code>, <code>ButtonsAreBooleans</code></p>
 
+<h3 id="key-source">Keys from somewhere else: <code>Input::KeySource</code> <span class="badge">PR #TBD</span></h3>
+<p>The keyboard and mouse-button bindings (<code>KeyboardButtonBinding</code>, <code>Vector2CompositeBinding</code>, <code>MouseButtonBinding</code>) poll their window unless a <code>KeySource</code> is installed (<code>KeySource::Set(&amp;source)</code>; <code>nullptr</code> goes back to the window). While one is, they ask it and never the window, so they work with no window at all and a key the window reports can't mix with the source's. <code>IsKeyDown(Key)</code> and <code>IsMouseButtonDown(MouseButton)</code> are the whole interface; <code>InjectedKeys</code> is the ready-made source that holds exactly what <code>SetKey</code>/<code>SetMouseButton</code>/<code>ReleaseAll</code> told it. The editor's play host installs one and fills it from <code>SendInput</code> (<a href="editor.html#play-input">Play mode: input</a>). Main thread only; the installer keeps the source alive. The pointer position and scroll aren't part of it (<a href="#mouse-buttons"><code>Mouse::InjectPointer</code></a>, <code>AccumulateScroll</code>), nor are gamepads.</p>
+<p class="src">Source: <code>engine/include/engine/input/KeySource.hpp</code>, <code>engine/src/input/KeySource.cpp</code>; <code>engine/src/input/InputBinding.cpp</code> &mdash; <code>KeyboardButtonBinding::getValue</code>, <code>Vector2CompositeBinding::getValue</code>, <code>MouseButtonBinding::getValue</code>; tests: <code>tests/engine/input/KeySourceTests.cpp</code> (<code>KeySourceTest</code>, <code>InjectedKeysTest</code>).</p>
+
 <h2 id="deadzones">Deadzones and axis normalization</h2>
 <h3 id="normalize-axis">Single axes: <code>AxisBinding::NormalizeAxis</code></h3>
 <ol class="steps">
