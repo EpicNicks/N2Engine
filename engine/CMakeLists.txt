@@ -27,6 +27,9 @@ set_target_properties(engine PROPERTIES
     CXX_EXTENSIONS OFF
 )
 
+# The engine version (engine/Version.hpp): the root project's (engine declares no project of its own)
+target_compile_definitions(engine PRIVATE N2ENGINE_VERSION="${PROJECT_VERSION}")
+
 # Debug define — works with multi-config generators (VS) too.
 target_compile_definitions(engine PUBLIC
     $<$<CONFIG:Debug>:N2ENGINE_DEBUG=1>
