@@ -104,8 +104,12 @@ jobs:
       # A non-zero exit code catches crashes during shutdown or static destruction.
       - name: Editor host smoke test
         shell: pwsh
+        # The configuration comes in through env, not an expression in the script: GitHub refuses a run block over 21000
+        # characters that contains an expression.
+        env:
+          N2_SMOKE_CONFIG: ${{ matrix.config }}
         run: |
-          $exe = Resolve-Path "build/bin/${{ matrix.config }}/N2EditorHost.exe"
+          $exe = Resolve-Path "build/bin/$env:N2_SMOKE_CONFIG/N2EditorHost.exe"
           $protocolVersion = (Get-Content editor-server/protocol/protocol.json -Raw | ConvertFrom-Json).version
 
           # --create: CPU only (no engine, so no renderer or audio lines), exactly one line on stdout, exit code 0; a
