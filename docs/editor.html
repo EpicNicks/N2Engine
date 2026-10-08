@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor projects · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html" aria-current="page">Editor projects</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Editor projects</h1>
+<p class="lead">A project is a folder with a <code>project.n2proj</code> file at its root. This page covers the file, creating a project (<code>N2EditorHost --create</code>), what the editor host does when it opens one (<code>--project</code>), scenes as <code>.scene</code> files the host opens and saves, unsaved-change tracking, the project commands, and each project's own <code>user://</code> folder. The host process, the wire format and every other command are on <a href="logging-and-editor.html">Logging, health &amp; editor</a>. Part of the editor plan <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a>, phase E3 (<a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>) <span class="badge">PR #TBD</span>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#layout">A project's folder</a></li>
+<li><a href="#project-file">project.n2proj</a></li>
+<li><a href="#create">Creating a project: <code>--create</code></a></li>
+<li><a href="#open">Opening a project: <code>--project</code></a></li>
+<li><a href="#scene-files">Scene files</a></li>
+<li><a href="#revision">Unsaved changes: revision and savedRevision</a></li>
+<li><a href="#project-commands">Project commands</a></li>
+<li><a href="#user-data">user:// per project</a></li>
+<li><a href="#rescan">Rescanning assets</a></li>
+<li><a href="#lua-project">lua_project</a></li>
+</ol>
+</div>
+
+<h2 id="layout">A project's folder</h2>
+<pre class="lang-text"><code>My Game/
+  project.n2proj        the project file (commit it)
+  assets/               res:// is this folder; every file here is an asset
+    scenes/Main.scene   scenes are assets: JSON, as Scene::Serialize writes it
+    scripts/Example.lua
+  .import/              one .meta per asset (UUID, type, import settings)
+  .gitignore            ".n2/": the editor's per-machine folder
+</code></pre>
+<p><code>.import/</code> is written by <code>ResourceLoader</code> (see <a href="resources.html">Resources</a>). <code>.n2/</code> is reserved for per-machine editor state (later phases of #6: caches, autosaves, play-mode scenes); nothing writes it yet. <code>&lt;project&gt;/scenes/*.json</code>, the folder the deprecated <a href="logging-and-editor.html#delete-scene"><code>DeleteScene</code></a> works in, is not part of this layout.</p>
+
+<h2 id="project-file">project.n2proj</h2>
+<p>One JSON object. <code>IO::ProjectFile</code> (<code>engine/include/engine/io/ProjectFile.hpp</code>) parses, validates and saves it. It is CPU only: it touches nothing but files, so tools and tests use it without starting the engine.</p>
+<pre class="lang-json"><code>{
+  "engineVersion": "1.0.0",
+  "formatVersion": 1,
+  "name": "My Game",
+  "projectId": "8e0c3a8e-0b1f-4f5e-9d0e-3f6f1c7d2a10",
+  "scenes": ["res://scenes/Main.scene"],
+  "settings": {
+    "layers": { "layers": ["Default", "TransparentFX", "..."], "collisionMatrix": [4294967295, "..."] },
+    "physics": { "fixedTimestep": 0.02, "gravity": { "x": 0, "y": -9.81, "z": 0 } }
+  },
+  "startupScene": "res://scenes/Main.scene"
+}
+</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Rule</th></tr></thead>
+<tbody>
+<tr><td><code>formatVersion</code></td><td>Required integer, 1. A newer format is refused ("... is newer than this engine reads; open it with a newer engine").</td></tr>
+<tr><td><code>name</code></td><td>Required, not empty or only whitespace. Shown by editors; names the <a href="#user-data">user:// folder</a>.</td></tr>
+<tr><td><code>projectId</code></td><td>Required UUID, not all zeros; written in lower case. Made once when the project is created. It is the namespace of every asset UUID (<a href="#design-project-id">why</a>).</td></tr>
+<tr><td><code>engineVersion</code></td><td>Required <code>major.minor.patch</code>: the engine version that created the project. Opening it with another major version is refused; another minor version is a warning (<code>IO::CompareEngineVersions</code>). It is not rewritten when the project is saved by a newer engine.</td></tr>
+<tr><td><code>startupScene</code></td><td>Optional: <code>""</code>, or a scene path (<code>res://</code>, inside the assets folder, ending in <code>.scene</code> in any case; <code>ProjectFile::IsScenePath</code>). The host opens it first.</td></tr>
+<tr><td><code>scenes</code></td><td>Optional array of scene paths: the project's scene list. <code>SetStartupScene</code> adds to it; nothing else edits it yet.</td></tr>
+<tr><td><code>settings</code></td><td>Optional object of blocks, each owned by a subsystem (<a href="#settings">below</a>). <code>ProjectFile</code> stores them without reading them.</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>Errors name the key</strong>: <code>FromJson</code>, <code>Parse</code> and <code>Load</code> return <code>std::expected</code>, with messages such as <code>projectId: 'x' is not a UUID</code>. <code>Load</code> of a folder without the file says "project.n2proj not found: ... is not a project (create one with N2EditorHost --create)", and a corrupt file names the file.</li>
+<li><strong>Unknown keys are kept.</strong> Top-level keys this version doesn't know are kept in <code>unknownKeys</code> and written back by <code>ToJson</code>/<code>Save</code>; anything inside <code>settings</code> is kept as it is. A file edited by a newer editor survives an older one.</li>
+<li><strong>Saving</strong> validates first (an invalid project is never written), then writes the file indented by two spaces, keys sorted, ending in a newline, through <code>&lt;file&gt;.tmp</code> renamed over the old file (<code>IO::WriteTextFileAtomically</code>; <a href="#design-atomic-save">why</a>).</li>
+</ul>
+<p class="src">Source: <code>engine/src/io/ProjectFile.cpp</code> — <code>ProjectFile::FromJson</code>, <code>Validate</code>, <code>ToJson</code>, <code>Save</code>, <code>IsScenePath</code>, <code>CompareEngineVersions</code>, <code>WriteTextFileAtomically</code>; tests: <code>ProjectFileParseTest.*</code>, <code>ProjectFileTest.SaveThenLoadRoundTrips</code>, <code>ProjectFileTest.AnInvalidProjectIsNotSaved</code></p>
+
+<div class="callout note" id="design-project-file"><p class="callout-title">Design decision: one JSON project file, whose settings blocks belong to their subsystems <span class="badge">PR #TBD</span></p><p>The project file is what a project is: the editor finds projects by it, the host refuses a folder without it, and it is committed. JSON, because the engine already reads and writes JSON everywhere and a person can review a diff of it. Each <code>settings</code> block is whatever its subsystem's own <code>Serialize</code> writes (<code>Layers</code>, <code>InputSystem</code>), so <code>ProjectFile</code> doesn't duplicate their formats or validate them twice; the subsystem decides at <a href="#settings">apply</a> time. Unknown keys are kept, top-level and in <code>settings</code>, because a project moves between engine versions and between tools: a key one doesn't understand is not one it may delete. The C# client and other tools can add keys of their own the same way. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (decision 1); <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<div class="callout note" id="design-project-id"><p class="callout-title">Design decision: the projectId is the asset UUID namespace <span class="badge">PR #TBD</span></p><p>Asset UUIDs are name-based, from a namespace and the asset's <code>res://</code> path, so <code>.import/</code> can be deleted and regenerated with the same UUIDs. The namespace used to be a hash of the project folder's path (<a href="logging-and-editor.html#design-host-project-namespace">PR #84</a>), so moving, renaming or cloning the folder changed every asset UUID and broke every reference in every scene. A random id made once when the project is created and kept in the committed project file doesn't depend on where the folder is: two clones, or a folder moved, give the same UUIDs (<code>ResourceLoaderProjectTest.TheNamespaceIsTheProjectIdSoUuidsDontDependOnTheFolder</code>). The id is the namespace itself, not hashed again, so a folder can <a href="#design-adopt">adopt the namespace it already had</a>. Moving or renaming an <em>asset</em> still changes its UUID (#6, decision 6: a later move command will rewrite references). Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (decision 3); <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<h3 id="settings">Settings</h3>
+<p><code>ApplyProjectSettings(settings)</code> (<code>engine/ProjectSettings.hpp</code>) applies the blocks it knows to the running engine, each through its subsystem:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Block</th><th>Applied by</th></tr></thead>
+<tbody>
+<tr><td><code>layers</code></td><td><code>Layers::Deserialize</code>: layer names and the collision matrix (<a href="physics.html">#4</a>). Malformed input changes nothing.</td></tr>
+<tr><td><code>input</code></td><td>The window's <code>InputSystem::Deserialize</code> (<code>{"actionMaps": {...}}</code>); skipped when there is no input system.</td></tr>
+<tr><td><code>physics</code></td><td><code>fixedTimestep</code> (seconds, positive) through <code>Time::SetFixedTimestep</code> <span class="badge">PR #TBD</span>; <code>gravity</code> (<code>{x, y, z}</code>) through the physics backend, when there is one.</td></tr>
+<tr><td><code>window</code>, <code>rendering</code>, anything else</td><td>Not applied: an editor host has no window to size. Kept in the file for a player (or a later version) to read.</td></tr>
+</tbody>
+</table>
+</div>
+<p>It returns one message per block that was refused (empty when everything given was applied); other blocks are still applied. A missing or <code>null</code> block changes nothing. It runs after <code>Application::Init</code>, which resets the fixed timestep.</p>
+<p class="src">Source: <code>engine/src/ProjectSettings.cpp</code> — <code>ApplyProjectSettings</code>; <code>engine/src/Time.cpp</code> — <code>Time::SetFixedTimestep</code>; tests: <code>EditorProjectTest.SetProjectSettingsMergesAppliesAndSaves</code>, <code>EditorProjectTest.SetProjectSettingsRefusesABlockItsSubsystemRefuses</code></p>
+
+<h2 id="create">Creating a project: <code>--create</code></h2>
+<p>A launcher creates a project by running the host once with <code>--create</code>. It makes the files and exits; the engine is never started.</p>
+<pre class="lang-shell"><code>N2EditorHost --create &lt;folder&gt; [--name &lt;name&gt;] [--project-id &lt;uuid&gt; | --project-id from-path]
+</code></pre>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>--create &lt;folder&gt;</code></td><td>The folder to make a project. It is created (with its parents) if it doesn't exist; an existing folder is adopted (its files are kept).</td></tr>
+<tr><td><code>--name &lt;name&gt;</code></td><td>The project's name. Default: the folder's name (<code>Project</code> for a drive root). Spaces are fine (quote the argument).</td></tr>
+<tr><td><code>--project-id &lt;uuid&gt;</code></td><td>The project's id, any case, not all zeros. Default: a new random UUID.</td></tr>
+<tr><td><code>--project-id from-path</code></td><td>The id is the namespace the folder's assets had before projects had ids (<code>ResourceUUID::NamespaceForProjectDir(&lt;folder&gt;)</code>), so a folder an older host or <code>lua_project</code> opened keeps every asset UUID. See <a href="#design-adopt">adopting a folder</a>.</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>What it writes.</strong> <code>IO::CreateProject</code>: <code>assets/scenes/Main.scene</code> (an empty scene named <code>Main</code>), <code>assets/scripts/Example.lua</code> (a behaviour script in the <a href="scripting-lua.html">engine's script model</a>, the same template <code>CreateScript</code> returns, class <code>Example</code>), <code>.gitignore</code> (<code>.n2/</code>), then <code>project.n2proj</code> last, with <code>startupScene</code> <code>res://scenes/Main.scene</code>, <code>scenes</code> <code>["res://scenes/Main.scene"]</code>, <code>settings</code> <code>{}</code> and <code>engineVersion</code> the running engine's. A file that already exists (adopting a folder) is kept, never overwritten, even <code>Main.scene</code>. Options are checked before anything is created, and the project file is written last, so a failure never leaves a folder that looks like a project.</p>
+<p><strong>The contract</strong> a launcher relies on (the Electron editor's F2 launcher; tested by <code>HostOptionsTest.TheCreatedLineHasTheDocumentedFormat</code>, <code>EditorCreateTest.RunCreateMakesAProjectAndRefusesToMakeItTwice</code> and the <a href="testing.html#smoke-test">CI smoke test</a>):</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Exit code</th><th>stdout</th><th>stderr</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><strong>0</strong></td><td>Exactly one line: the created line (below)</td><td>Nothing</td><td>The project exists now.</td></tr>
+<tr><td><strong>2</strong></td><td>Nothing</td><td>One line: <code>N2EditorHost --create: &lt;folder&gt; already has a project.n2proj; nothing was changed</code></td><td>The folder already is a project. Nothing was written; open it with <code>--project</code>.</td></tr>
+<tr><td><strong>1</strong></td><td>Nothing</td><td>One line: <code>N2EditorHost --create: &lt;reason&gt;</code>, or an argument error (below)</td><td>Anything else: the path is a file, a file can't be written, a bad option.</td></tr>
+</tbody>
+</table>
+</div>
+<pre class="lang-text"><code>N2EditorHost created projectId=8e0c3a8e-0b1f-4f5e-9d0e-3f6f1c7d2a10 startupScene=res://scenes/Main.scene
+</code></pre>
+<ul>
+<li>The created line starts with <code>N2EditorHost created </code>, then space-separated <code>key=value</code> fields, as the <a href="logging-and-editor.html#ready-line">ready line</a> does: <code>projectId</code> (lower case) is always present, <code>startupScene</code> when the project has one. A value never contains a space (a startup scene path with one would be left out). Later versions may add fields: ignore keys you don't know and don't depend on their order. Regex: <code>^N2EditorHost created (?:.* )?projectId=([0-9a-f-]{36})(?: |$)</code>. Strip a trailing <code>\r</code> first (on Windows the line ends in <code>\r\n</code>).</li>
+<li>The folder and the name are not in the line: the launcher passed them, and they may contain spaces. Read <code>project.n2proj</code> for the rest.</li>
+<li>Argument errors are checked before anything else and exit 1 with one stderr line: <code>--create</code>, <code>--name</code> or <code>--project-id</code> without a value ("--name is missing a value"; a value starting with <code>--</code> counts as missing, so a name can't start with <code>--</code>), "Invalid --project-id: &lt;value&gt; (expected a non-zero UUID, or from-path)", "--create and --project can't be combined: ...", and <code>--name</code> or <code>--project-id</code> without <code>--create</code> ("--name only goes with --create"). Other host options (<code>--port</code>, <code>--renderer</code>, ...) are parsed as usual but unused. <code>--help</code> wins over everything.</li>
+<li>No engine subsystem starts, so no log lines, renderer or audio messages reach stdout, and it works on a machine without a GPU. It takes a few milliseconds.</li>
+<li>Then start the host on it: <code>N2EditorHost --project &lt;folder&gt; --port 0 --renderer software --token-env &lt;VAR&gt; --exit-on-disconnect</code> and wait for the ready line.</li>
+</ul>
+<p class="src">Source: <code>editor-server/src/Host.cpp</code> — <code>Editor::RunCreate</code>; <code>editor-server/src/HostOptions.cpp</code> — <code>ParseHostArguments</code>, <code>FormatCreatedLine</code>; <code>engine/src/io/ProjectFile.cpp</code> — <code>IO::CreateProject</code>; tests: <code>ProjectFileTest.CreateProject*</code>, <code>HostOptionsTest.Create*</code>, <code>HostOptionsTest.ProjectIdFromPathAsksForTheFoldersOldNamespace</code>, <code>HostOptionsTest.AnInvalidProjectIdIsAnError</code>, <code>HostOptionsTest.NameAndProjectIdOnlyGoWithCreate</code></p>
+
+<div class="callout note" id="design-create-cpu-only"><p class="callout-title">Design decision: <code>--create</code> never starts the engine <span class="badge">PR #TBD</span></p><p>Creating a project is writing a few files. Starting the engine for it would initialise PhysX, a GPU context and audio, take seconds, fail on a machine without a GPU, and print subsystem lines into the stdout the launcher reads. So <code>--create</code> runs <code>IO::CreateProject</code>, which uses nothing but the filesystem, and exits. The host is the tool that creates projects, rather than the launcher writing the files itself, so the layout, the id and the script template are the engine's and stay in step with what the host reads. One line on stdout, in the ready line's <code>key=value</code> form, gives the launcher the id without parsing JSON; exit code 2 for "already a project" lets it offer to open the folder instead of showing an error, without matching message text. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (decisions 2 and D); <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<div class="callout note" id="design-adopt"><p class="callout-title">Design decision: adopting a folder can keep its asset UUIDs (<code>--project-id from-path</code>) <span class="badge">PR #TBD</span></p><p>Scenes store asset references as UUIDs. A folder opened before projects had ids (by <code>lua_project</code>, or a host before this change) has UUIDs made in the namespace of its path; a fresh random id would change all of them once and break every reference. Since the id <em>is</em> the namespace, the folder can adopt the namespace it already had. The launcher can't compute it (a UUIDv5 of the path spelled exactly as <code>ResourceUUID::NormalizeProjectDir</code> spells it), so the host does: <code>from-path</code> asks for it, and <code>--project-id &lt;uuid&gt;</code> takes any id a tool already knows. From then on the id is fixed in the file, so moving the folder no longer changes anything. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (decision 1, review §2.6); <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<h2 id="open">Opening a project: <code>--project</code></h2>
+<p><code>N2EditorHost --project &lt;folder&gt;</code> opens the project in that folder. Before the engine starts, <code>RunHost</code> checks the folder exists, reads <code>project.n2proj</code> (<code>ProjectFile::Load</code>) and compares its <code>engineVersion</code> with the engine's. Each failure prints one line to stderr and exits with code 1 before anything starts, so a launcher pointed at the wrong folder gets a quick, clean answer:</p>
+<ul>
+<li>"Project folder not found or not a folder: ..."</li>
+<li>"project.n2proj not found: ... is not a project (create one with N2EditorHost --create)", or the file's validation error</li>
+<li>"project.n2proj was made with engine X; this is engine Y, a different major version"</li>
+</ul>
+<p>Then, after <code>Application::Init</code> (so the lines reach the console and <a href="logging-and-editor.html#events">the event ring</a>):</p>
+<ol class="steps">
+<li>Log "Opening project '&lt;name&gt;' (&lt;id&gt;)", and a warning when the project's minor engine version differs.</li>
+<li><code>ResourceUUID::Initialize(projectId)</code>: the asset UUID namespace.</li>
+<li><code>ResourceLoader::Initialize(folder, project.UserDataPath())</code>: <code>res://</code> is <code>&lt;folder&gt;/assets</code>, <code>user://</code> the project's <a href="#user-data">own folder</a>, and every asset gets its <code>.meta</code>.</li>
+<li><code>ApplyProjectSettings(settings)</code>; each refused block is logged as a warning ("Project settings: ...") and the host carries on.</li>
+<li><code>EditorServer::SetProject(folder, project)</code>, and the deprecated <code>DeleteScene</code> folder, <code>&lt;folder&gt;/scenes</code>.</li>
+<li>Open the startup scene (<code>EditorServer::OpenSceneFile</code>). If there is none, or it can't be opened (logged as "Couldn't open the startup scene: ..."), an empty scene named <code>Untitled</code> with no file is loaded instead, so a host with a project always has a scene.</li>
+</ol>
+<p>Without <code>--project</code> the host has no project and no scene, as before: the project and scene-file commands answer <code>Error</code> "No project: ...". <code>Hello</code>'s <code>projectLoaded</code> is now whether the server has a project (<code>EditorServer::HasProject</code>), rather than whether <code>ResourceLoader</code> was initialised.</p>
+<p class="src">Source: <code>editor-server/src/Host.cpp</code> — <code>Editor::RunHost</code>; <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::SetProject</code>, <code>HandleHello</code>; tests: <code>EditorProjectTest.HelloReportsTheProject</code>, <code>EditorSessionTest.HelloAnswersWithTheServersVersionsAndCapabilities</code>, the CI smoke test</p>
+
+<div class="callout note" id="design-project-required"><p class="callout-title">Design decision: <code>--project</code> needs a project file; there is no plain-folder fallback <span class="badge">PR #TBD</span></p><p>Before, <code>--project</code> took any folder and named its UUIDs after its path (<a href="logging-and-editor.html#host-project">PR #84</a>). Falling back to that for a folder without a project file would give the same folder different UUIDs depending on whether the file exists yet, and a typo in the path would silently open an empty "project". So the host refuses, before starting the engine, and says how to make one. Adopting a folder is one <code>--create --project-id from-path</code> away and keeps its UUIDs. <code>lua_project</code>, which runs folders that aren't editor projects, keeps the fallback, with a warning (<a href="#lua-project">below</a>). Decided for <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<h2 id="scene-files">Scene files</h2>
+<p>A scene is a <code>.scene</code> file under <code>assets/</code>: the JSON <code>Scene::Serialize</code> writes (<code>{"name", "rootGameObjects"}</code>). <code>ResourceLoader</code> scans <code>.scene</code> files like any asset, with resource type <code>"Scene"</code>, the type <code>Scene</code> itself already reports, and loads them as <code>SceneFile</code> (the scene's JSON; <code>engine/sceneManagement/SceneFile.hpp</code>). So a scene has a path-derived UUID in its <code>.meta</code>, and a project file names its scenes by <code>res://</code> path.</p>
+<p>The host owns scene files: a client opens, saves and creates them with commands, never by writing files itself (#6, decision 7). All four answer <code>SceneInfo</code> (0x0D): <code>path</code> (the scene's file as a <code>res://</code> path, or empty when it has none), <code>name</code>, <code>uuid</code>, <code>revision</code> and <code>savedRevision</code> (uint32s, <a href="#revision">below</a>).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Id</th><th>Command</th><th>Request</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td>0x25</td><td>OpenScene</td><td>string path</td><td>Reads the file, builds it (<code>Scene::FromJSON</code>, validated) in edit mode (components are deserialised, never attached; a <code>LuaComponent</code>'s script chunk does run, see <a href="logging-and-editor.html#editor-security">security</a>) and makes it the loaded scene, replacing the loaded one: a client asks before discarding unsaved changes. The scene's UUID becomes its file's asset UUID (<code>ResourceUUID::FromPath</code>, the same as its <code>.meta</code>), so it is the same every run. A file added since the last scan is indexed first. The revision moves on, and the scene counts as saved. Errors: no project, a path that isn't a scene path of the project, a missing file, invalid JSON, or JSON that isn't a valid scene ("Not a valid scene (see the log)"); the loaded scene is kept then.</td></tr>
+<tr><td>0x26</td><td>SaveSceneToFile</td><td>string path</td><td>Writes the loaded scene's JSON, indented by two spaces and ending in a newline, atomically (<code>&lt;file&gt;.tmp</code>, renamed over the file), creating folders as needed, and stores it in the host as <code>SaveScene</code> does. Empty path: the scene's own file ("The open scene has no file yet: pass the path ..." when it has none). Another path is "save as": the file is overwritten if it exists, becomes the scene's file, and the scene takes that file's UUID. The file is indexed (its <code>.meta</code> written or updated, a cached copy dropped). <code>savedRevision</code> becomes <code>revision</code>.</td></tr>
+<tr><td>0x27</td><td>NewScene</td><td>string path, string name</td><td>An empty scene named <code>name</code> (empty: the file's name without <code>.scene</code>, or <code>Untitled</code> without a path) becomes the loaded scene. With a path, the scene is written there first; a file that already exists is an <code>Error</code> ("A file already exists at ... (open it with OpenScene)"), never overwritten. With an empty path it has no file until <code>SaveSceneToFile</code> names one (and needs no project). It starts saved.</td></tr>
+<tr><td>0x29</td><td>GetOpenScene</td><td>—</td><td>The loaded scene, as the others report it. <code>Error</code> "No scene loaded" without one. 0x28 is kept for <code>GetHierarchy</code> (#6, E4).</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Scene paths.</strong> <code>res://</code>, then a path that stays inside the assets folder, whose file name ends in <code>.scene</code> (any case): <code>res://scenes/Main.scene</code>, <code>res://levels/../scenes/Main.scene</code> (normalised). Rejected: no scheme (<code>scenes/Main.scene</code>), <code>user://</code>, absolute paths, <code>..</code> escapes, other extensions. The part of the path that exists is also resolved with symlinks followed and must stay inside the assets folder, so a link under <code>assets/</code> can't send a write elsewhere (<code>EditorServer::ResolveScenePath</code>). The <code>path</code> in <code>SceneInfo</code> is the normalised form.</p>
+<p><strong>Other scene commands.</strong> <code>LoadScene</code> (a scene sent as JSON) still works: the scene it loads has no file (<code>path</code> empty) and is unsaved. <code>SaveScene</code> still only stores the scene in the host's memory; <code>GetCurrentScene</code> and <code>CreateScene</code> are unchanged. <code>DeleteScene</code>'s <code>&lt;project&gt;/scenes/*.json</code> rule is deprecated: scene files are <code>.scene</code> assets now, and deleting assets will be an asset command (#6, E8).</p>
+<p class="src">Source: <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::OpenSceneFile</code>, <code>NewSceneFile</code>, <code>SaveSceneFile</code>, <code>GetOpenSceneInfo</code>, <code>ResolveScenePath</code>, <code>LoadOpenedScene</code>; <code>engine/src/sceneManagement/SceneFile.cpp</code>; tests: <code>EditorProjectTest.OpenScene*</code>, <code>EditorProjectTest.SaveAsMakesTheNewFileTheScenesFile</code>, <code>EditorProjectTest.SavingAndOpeningRoundTripsTheScene</code>, <code>EditorProjectTest.NewScene*</code>, <code>EditorProjectTest.AnUntitledSceneHasNoFileUntilSavedWithAPath</code>, <code>EditorScenePathTest.OnlyScenePathsInsideTheAssetsFolderResolve</code>, <code>ResourceLoaderProjectTest.SceneFilesAreSceneAssetsWithPathDerivedUuids</code></p>
+
+<div class="callout note" id="design-scene-assets"><p class="callout-title">Design decision: <code>.scene</code> files use <code>Scene</code>'s own resource type; the scene takes its file's UUID <span class="badge">PR #TBD</span></p><p><code>Scene</code> already is an asset (<code>Scene : Base::Asset</code>, resource type <code>"Scene"</code>), with a random UUID per instance; what was missing was a file extension and a stable UUID. Adding a second "scene asset" type would give one scene two types and two UUIDs. So <code>.scene</code> files have resource type <code>"Scene"</code>, and opening one gives the live <code>Scene</code> the file's path-derived UUID (<code>Asset::SetUUID</code>), which is what the <code>.meta</code> and any reference to the file hold. The loader still needs a product of its own, because <code>ResourceLoader</code> caches <code>shared_ptr</code>s while <code>SceneManager</code> owns live scenes as <code>unique_ptr</code>s; that product is <code>SceneFile</code>, the file's JSON, named so there aren't two classes called "Scene". <code>OpenScene</code> reads the file itself rather than through the loader's cache, so it always opens what is on disk. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (decision 4); <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<div class="callout note" id="design-atomic-save"><p class="callout-title">Design decision: files are written to a temporary file, then renamed <span class="badge">PR #TBD</span></p><p>Writing a scene or the project file in place truncates it first, so a crash, a full disk or a killed host halfway through leaves a broken file where a good one was, and the project file is the one file a project can't lose. Writing <code>&lt;file&gt;.tmp</code> and renaming it over the old file replaces it in one step (<code>MoveFileExW</code> with <code>MOVEFILE_REPLACE_EXISTING</code> on Windows, <code>rename</code> on POSIX): a reader sees the old file or the new one. A failed write removes the temporary file and leaves the old one. <code>NewScene</code> refuses to overwrite and <code>SaveSceneToFile</code> overwrites, because "new" never means replacing work, while "save as" over a file is what the user asked for after the client confirmed it. Decided for <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<h2 id="revision">Unsaved changes: revision and savedRevision</h2>
+<ul>
+<li><strong>revision</strong> (<code>EditorServer::GetSceneRevision</code>) is 0 until a scene is loaded. Every command that changes the loaded scene, or loads another, moves it on by one: <code>OpenScene</code>, <code>NewScene</code>, <code>LoadScene</code>, <code>CreateEntity</code>, <code>DestroyEntity</code> (when something was destroyed) and <code>SetEntityTransform</code> (when applied). Failures and reads don't. It only grows, across scenes too, so a client refetches what it shows whenever it changes. Later phases add their commands to this list (#6, E4).</li>
+<li><strong>savedRevision</strong> is the revision the loaded scene was last opened or saved at (<code>OpenScene</code>, <code>NewScene</code>, <code>SaveSceneToFile</code>).</li>
+<li>The scene has <strong>unsaved changes exactly when <code>revision != savedRevision</code></strong>: an editor shows its "unsaved" marker and asks before closing, opening another scene or quitting.</li>
+<li>Every change and every save pushes a <code>sceneChanged</code> <a href="logging-and-editor.html#events">event</a>: <code>{"kind": "sceneChanged", "revision", "savedRevision", "path"}</code>, <code>path</code> being the loaded scene's file (empty for none). A client that polls events sees the state change without asking; <code>GetOpenScene</code> gives it on demand, for example right after connecting, when the host has already opened the startup scene.</li>
+</ul>
+<pre class="lang-json"><code>{"kind":"sceneChanged","path":"res://scenes/Main.scene","revision":5,"savedRevision":4,"seq":31}
+</code></pre>
+<p class="src">Source: <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::MarkSceneChanged</code>, <code>PushSceneChanged</code>, <code>HandleCreateEntity</code>, <code>HandleDestroyEntity</code>, <code>HandleSetEntityTransform</code>, <code>HandleLoadScene</code>; tests: <code>EditorProjectTest.EditsLeaveTheSceneUnsavedUntilItIsSaved</code>, <code>EditorProjectTest.EveryMutatingCommandMovesTheRevision</code>, <code>EditorProjectTest.SceneChangesAndSavesPushSceneChangedEvents</code>, <code>EditorProjectTest.ASceneSentWithLoadSceneHasNoFileAndIsUnsaved</code></p>
+
+<div class="callout note" id="design-saved-revision"><p class="callout-title">Design decision: dirty is a revision compared with a saved revision <span class="badge">PR #TBD</span></p><p>A "dirty" flag would have to be cleared by a save and set by every change, and couldn't tell a client which change it last saw; it also stops being right once undo arrives (#6, E6), where undoing back to the saved state should make the scene clean again. A counter that every change moves on, plus the value it had when last saved, answers both: the scene is dirty when they differ, the client refetches when the revision moves, and undo can later restore an earlier revision number. The revision never resets, even on opening another scene, so a client can't mistake a new scene's revision 1 for an old one it already showed. E4's hierarchy commands use the same revision. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> (additional decision C); <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<div class="callout note" id="design-empty-startup-scene"><p class="callout-title">Design decision: a host with a project always has a scene <span class="badge">PR #TBD</span></p><p>Entity commands need a loaded scene, and an editor shouldn't have to create one before it can show anything. So a host that opens a project loads its startup scene, and when there is none, or it can't be opened, an empty <code>Untitled</code> scene with no file, logging why. A broken startup scene doesn't stop the host: the user can still open another scene or fix the file. Decided for <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>, following <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> §(a) ("loads the startup scene, or an empty one").</p></div>
+
+<h2 id="project-commands">Project commands</h2>
+<p>All three answer <code>ProjectInfo</code> (0x0E): <code>rootPath</code> and <code>userDataPath</code> (strings: the project folder and its <code>user://</code> folder, absolute, UTF-8) and <code>project</code> (<code>json:ProjectFile</code>: the project file as saved, unknown keys included). Without a project each is <code>Error</code> "No project: the host wasn't started with --project". A successful change saves <code>project.n2proj</code> (atomically) and pushes a <code>projectChanged</code> event (<code>{"kind": "projectChanged"}</code>).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Id</th><th>Command</th><th>Request</th><th>Behaviour</th></tr></thead>
+<tbody>
+<tr><td>0x70</td><td>GetProjectInfo</td><td>—</td><td>The project.</td></tr>
+<tr><td>0x71</td><td>SetProjectSettings</td><td>json settings</td><td>A <strong>JSON merge patch</strong> (RFC 7386) for the <code>settings</code> object: a key set to <code>null</code> is removed, objects merge key by key, anything else replaces. The patch must be an object. The merged settings are applied to the running engine (<a href="#settings"><code>ApplyProjectSettings</code></a>); if any block is refused, the previous settings are applied again, nothing is saved, and the <code>Error</code> lists the refused blocks ("Project settings refused: physics.fixedTimestep: -1 is not a positive number of seconds"). Otherwise the file is saved.</td></tr>
+<tr><td>0x72</td><td>SetStartupScene</td><td>string path</td><td>Sets <code>startupScene</code> to an existing scene file (a scene path, normalised), adding it to <code>scenes</code> if it isn't listed, or clears it with an empty path. A missing file or a bad path is an <code>Error</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Settings blocks the host doesn't apply (<code>window</code>, <code>rendering</code>, a newer editor's) are merged and saved like the others.</p>
+<p class="src">Source: <code>editor-server/src/EditorServer.cpp</code> — <code>EditorServer::HandleGetProjectInfo</code>, <code>HandleSetProjectSettings</code>, <code>HandleSetStartupScene</code>, <code>SaveProject</code>; tests: <code>EditorProjectTest.GetProjectInfoDescribesTheProject</code>, <code>EditorProjectTest.SetProjectSettings*</code>, <code>EditorProjectTest.SetStartupScene*</code>, <code>EditorNoProjectTest.ProjectAndSceneFileCommandsNeedAProject</code></p>
+
+<div class="callout note" id="design-settings-merge-patch"><p class="callout-title">Design decision: settings change by merge patch, applied before they are saved <span class="badge">PR #TBD</span></p><p>An inspector edits one value at a time, and the client shouldn't have to send (or even know) every block to change one, nor risk overwriting a block another tool added. A merge patch is a standard, one-line way to say "these keys, these values, remove these", which <code>nlohmann::json</code> implements. Applying before saving means the file never holds settings the engine refused, so the next start doesn't fail on them; putting the previous settings back keeps the running engine and the file in agreement. The response is the saved project, so the client shows what was stored without a second request. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> §(b) ("a partial object, merged ... applied live and saved"); <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<h2 id="user-data">user:// per project</h2>
+<p><code>user://</code> paths (saves, settings a game writes at run time) resolve under the folder <code>ResourceLoader::Initialize</code> is given. A project's is <code>ProjectFile::UserDataPath()</code>:</p>
+<pre class="lang-text"><code>%APPDATA%\N2Engine\&lt;sanitised name&gt;-&lt;first 8 hex digits of projectId&gt;     (Windows)
+$HOME/.n2engine/&lt;sanitised name&gt;-&lt;first 8 hex digits of projectId&gt;       (elsewhere)
+</code></pre>
+<p>For example <code>%APPDATA%\N2Engine\My_Game-8e0c3a8e</code>. The name is sanitised to one safe folder name (<code>ProjectFile::SanitizeFolderName</code>): ASCII letters, digits, <code>-</code>, <code>_</code> and <code>.</code> are kept, anything else becomes <code>_</code>, leading and trailing <code>.</code> and <code>_</code> are dropped, at most 48 characters, <code>Project</code> when nothing is left. <code>Initialize</code> creates the folder. Without a folder (<code>Initialize(root)</code>, as tests and plain folders do) <code>user://</code> is the shared <code>%APPDATA%\N2Engine</code> as before (<code>ProjectFile::UserDataBase()</code>). <code>GetProjectInfo</code> reports the folder, and <code>ResourceLoader::GetUserDataRoot()</code> returns it.</p>
+<p class="src">Source: <code>engine/src/io/ProjectFile.cpp</code> — <code>ProjectFile::UserDataPath</code>, <code>UserDataBase</code>, <code>SanitizeFolderName</code>; <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::Initialize</code>; tests: <code>ProjectFileParseTest.TheUserDataFolderIsTheSanitisedNameAndTheIdsFirstEightDigits</code>, <code>ProjectFileParseTest.FolderNamesKeepOnlySafeCharacters</code>, <code>ResourceLoaderProjectTest.UserPathsResolveUnderTheProjectsOwnFolder</code>, <code>ResourceLoaderProjectTest.TwoProjectsGetTwoUserFolders</code></p>
+
+<div class="callout note" id="design-user-data"><p class="callout-title">Design decision: each project's user:// is named after it and its id <span class="badge">PR #TBD</span></p><p>One shared <code>user://</code> folder meant two games on a machine read and overwrote each other's saves. The id makes the folder the project's own (two projects with the same name don't collide), and keeping it under the user's application data, not in the project folder, keeps run-time files out of the committed tree and matches where a shipped game writes. The readable name prefix lets a person find a game's saves; only 8 digits of the id are used because the name already separates almost every project. The cost: renaming the project starts a new folder (the old one is left alone), and a project copied without changing its id shares the original's saves, which a "duplicate project" command would avoid by giving the copy a new id. Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/6">#6</a> §(a); <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<h2 id="rescan">Rescanning assets</h2>
+<p><code>RescanAssets</code> (0x41, <code>ResourceLoader::RescanAssets</code>) indexes new and changed files and now also <strong>forgets deleted ones</strong>: their metadata, their UUID mapping and their cache entries are dropped, so they no longer load by path or UUID and no longer appear in <code>GetAllAssets</code>. Whoever still holds a loaded copy keeps it. The deleted file's <code>.meta</code> stays in <code>.import/</code>, so a file put back (a branch switch, an undo) gets its import settings and UUID back. <code>RescanAssets</code> returns what changed (<code>RescanResult</code>: <code>added</code>, <code>removed</code>, <code>modified</code>, each sorted), and the host pushes it as an <code>assetsChanged</code> event when anything did:</p>
+<pre class="lang-json"><code>{"added":[],"kind":"assetsChanged","modified":["res://scripts/Player.lua"],"removed":["res://scenes/Old.scene"],"seq":42}
+</code></pre>
+<p class="src">Source: <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::RescanAssets</code>, <code>ScanDirectory</code>; <code>editor-server/src/EditorServer.cpp</code> — <code>HandleRescanAssets</code>; tests: <code>ResourceLoaderProjectTest.ARescanForgetsDeletedFilesAndReportsThem</code>, <code>ResourceLoaderProjectTest.ARescanReportsAddedAndModifiedFilesSorted</code>, <code>ResourceLoaderProjectTest.ADeletedLoadedAssetIsDroppedFromTheCache</code>, <code>EditorProjectTest.RescanAssetsReportsADeletedAssetAndForgetsIt</code></p>
+
+<div class="callout note" id="design-rescan-removes"><p class="callout-title">Design decision: a rescan forgets deleted files but keeps their .meta <span class="badge">PR #TBD</span></p><p>A rescan that only ever added entries left deleted files listed, loadable by UUID until the load failed, and an asset browser would show files that aren't there. Forgetting them makes the index match the folder. The <code>.meta</code> is a different matter: it holds import settings (<code>customData</code>) a person chose, and a file can disappear for a moment (a branch switch, an editor's save-by-rename, an undo in a file manager); deleting its <code>.meta</code> would lose those settings for good. Path-derived UUIDs mean keeping it costs nothing: the file put back gets the same UUID either way. Cleaning up orphaned <code>.meta</code> files belongs with the asset commands (#6, E8). Decided for <a href="https://github.com/EpicNicks/N2Engine/issues/75">#75</a>.</p></div>
+
+<h2 id="lua-project">lua_project</h2>
+<p><code>lua_project</code> has a <code>project.n2proj</code> of its own (name <code>lua_project</code>, no startup scene: its scene is built by <code>assets/scene.lua</code>). Its <code>Main.cpp</code> opens a folder the way the host does: with a project file, the <code>projectId</code> is the namespace, <code>user://</code> is the project's own folder and its settings apply. A folder without one still runs, as before projects had files: the namespace comes from its path (<code>NamespaceForProjectDir</code>), <code>user://</code> is the shared folder, and it logs a warning. The new id changed <code>lua_project</code>'s asset UUIDs once, which is harmless: its scene is built from Lua and stores none.</p>
+<p class="src">Source: <code>lua_project/src/Main.cpp</code>; <code>lua_project/project.n2proj</code></p>
+
+<div class="page-footer">
+<span>Describes master through PR #34.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
