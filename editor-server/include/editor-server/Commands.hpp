@@ -284,6 +284,102 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct CreateEntityExCmd
+    {
+        /// The new object's name; empty: the preset's (or "GameObject")
+        std::string name;
+        /// The parent's UUID string, or empty for a root of the scene
+        std::string parentId;
+        /// The place among the siblings; negative (-1) or past the last: the last place
+        int32_t siblingIndex;
+        /// What the object starts with: "" or "Empty", "Cube", "Sphere", "Quad", "Light", "DirectionalLight",
+        /// "PointLight" or "SpotLight"
+        std::string preset;
+
+        static CreateEntityExCmd Deserialize(BufferReader &r)
+        {
+            // Braced initialisation evaluates left to right, so the fields are read in order
+            return {r.ReadString(), r.ReadString(), r.ReadI32(), r.ReadString()};
+        }
+    };
+
+    struct SetEntityParentCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+        /// The new parent's UUID string, or empty for a root of the scene
+        std::string parentId;
+        /// The place among the new siblings; negative (-1) or past the last: the last place
+        int32_t siblingIndex;
+        /// Whether the object keeps its world transform (its local one changes) rather than its local transform
+        bool keepWorldTransform;
+
+        static SetEntityParentCmd Deserialize(BufferReader &r)
+        {
+            std::string id = r.ReadString();
+            std::string parent = r.ReadString();
+            const int32_t index = r.ReadI32();
+            const bool keep = r.ReadBool();
+            return {std::move(id), std::move(parent), index, keep};
+        }
+    };
+
+    struct SetEntityPropertiesCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+        /// An object with any of name (string), active (bool), tag (string), layer (integer 0 to 31)
+        nlohmann::json properties;
+
+        static SetEntityPropertiesCmd Deserialize(BufferReader &r)
+        {
+            std::string id = r.ReadString();
+            nlohmann::json properties = ReadJson(r);
+            return {std::move(id), std::move(properties)};
+        }
+    };
+
+    struct DuplicateEntityCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+
+        static DuplicateEntityCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct GetEntityCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+
+        static GetEntityCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct SetLocalTransformCmd
+    {
+        /// The GameObject's UUID string
+        std::string entityId;
+        /// Relative to its parent (to the scene for a root)
+        Math::Vector3 position;
+        Math::Quaternion rotation;
+        Math::Vector3 scale;
+
+        static SetLocalTransformCmd Deserialize(BufferReader &r)
+        {
+            std::string id = r.ReadString();
+            const Math::Vector3 pos = ReadVec3(r);
+            const Math::Quaternion rot = ReadQuat(r);
+            const Math::Vector3 scl = ReadVec3(r);
+            return {std::move(id), pos, rot, scl};
+        }
+    };
+
     struct CreateScriptCmd
     {
         std::string name;
@@ -515,6 +611,32 @@ namespace N2Engine::Editor::Protocol
         WriteJson(payload, project);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::ProjectInfo));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetHierarchy's response: the scene revision the nodes were read at, then the nodes as one JSON array of
+    /// HierarchyNode objects
+    inline void WriteHierarchy(BufferWriter &w, uint32_t revision, const nlohmann::json &nodes)
+    {
+        BufferWriter payload;
+        payload.WriteU32(revision);
+        WriteJson(payload, nodes);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::Hierarchy));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetEntity's response: the entity as one JSON object (EntityDetails), then its world matrix
+    inline void WriteEntityData(BufferWriter &w, const nlohmann::json &entity,
+                                const Math::Matrix<float, 4, 4> &worldMatrix)
+    {
+        BufferWriter payload;
+        WriteJson(payload, entity);
+        WriteMat4(payload, worldMatrix);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EntityData));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

@@ -364,6 +364,9 @@ jobs:
             Send-Frame $stream 0x05 ([byte[]]([BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]1024)))
             $response = Read-Response $stream
             Assert-Response $response 0x0C "PollEvents"
+            # The place to read on from later: this poll's epoch and nextSeq
+            $pollEpoch = [BitConverter]::ToUInt32($response.Payload, 0)
+            $pollNextSeq = [BitConverter]::ToUInt32($response.Payload, 4)
             $eventsText = [Text.Encoding]::UTF8.GetString($response.Payload, 12, $response.Payload.Length - 12)
             foreach ($line in "Camera initialized", "Using Software renderer, headless (no window)") {
               if (-not $eventsText.Contains($line)) { throw "PollEvents: no '$line' among the startup events (was the server constructed after Init?)" }
@@ -431,6 +434,65 @@ jobs:
             # A frame of the reopened scene, on the software renderer
             Send-Frame $stream 0x01
             Assert-Response (Read-Response $stream) 0x02 "RenderFrame after OpenScene"
+
+            # The hierarchy. GetHierarchy (0x28) answers Hierarchy (0x0F): the revision (uint32), then the nodes as json.
+            # CreateEntityEx (0x35): name, parentId (strings), siblingIndex (int32), preset (string), answers
+            # EntityCreated (0x06): the id. DuplicateEntity (0x38): an id. GetEntity (0x39): an id; EntityData (0x10)
+            # answers the entity as json, then its world matrix (16 float32).
+            function Get-Hierarchy {
+              Send-Frame $stream 0x28
+              $response = Read-Response $stream
+              Assert-Response $response 0x0F "GetHierarchy"
+              $offset = 4
+              $nodes = @((Read-WireString $response.Payload ([ref]$offset)) | ConvertFrom-Json)
+              return @{ Revision = [BitConverter]::ToUInt32($response.Payload, 0); Nodes = $nodes; Names = @($nodes | ForEach-Object { $_.name }) }
+            }
+            function New-Entity([string]$name, [string]$parentId, [int]$siblingIndex, [string]$preset) {
+              Send-Frame $stream 0x35 ([byte[]]((Get-StringBytes $name) + (Get-StringBytes $parentId) + [BitConverter]::GetBytes([int32]$siblingIndex) + (Get-StringBytes $preset)))
+              $response = Read-Response $stream
+              Assert-Response $response 0x06 "CreateEntityEx $preset"
+              $offset = 0
+              return (Read-WireString $response.Payload ([ref]$offset))
+            }
+
+            $hierarchyBefore = Get-Hierarchy
+            if ($hierarchyBefore.Names -notcontains "Smoke Box") { throw "GetHierarchy: the reopened scene lost its entity: $($hierarchyBefore.Names -join ', ')" }
+            $cubeId = New-Entity "Smoke Cube" "" -1 "Cube"
+            $lampId = New-Entity "Smoke Lamp" $cubeId -1 "PointLight"
+            $hierarchy = Get-Hierarchy
+            $cubeIndex = [array]::IndexOf($hierarchy.Names, "Smoke Cube")
+            if ($cubeIndex -lt 0 -or $hierarchy.Names[$cubeIndex + 1] -ne "Smoke Lamp") { throw "GetHierarchy: the lamp doesn't follow its parent: $($hierarchy.Names -join ', ')" }
+            $lampNode = $hierarchy.Nodes[$cubeIndex + 1]
+            if ($lampNode.id -ne $lampId -or $lampNode.parentId -ne $cubeId -or @($lampNode.components)[0] -ne "Light") { throw "GetHierarchy: the lamp's node is wrong" }
+            if ($hierarchy.Revision -le $hierarchyBefore.Revision) { throw "GetHierarchy: the revision didn't move with CreateEntityEx" }
+
+            # A duplicate takes its subtree along, and is named after the original
+            Send-Frame $stream 0x38 (Get-StringBytes $cubeId)
+            Assert-Response (Read-Response $stream) 0x06 "DuplicateEntity"
+            $duplicated = Get-Hierarchy
+            if ($duplicated.Names -notcontains "Smoke Cube (1)" -or @($duplicated.Names | Where-Object { $_ -eq "Smoke Lamp" }).Count -ne 2) { throw "DuplicateEntity: $($duplicated.Names -join ', ')" }
+
+            Send-Frame $stream 0x39 (Get-StringBytes $cubeId)
+            $response = Read-Response $stream
+            Assert-Response $response 0x10 "GetEntity"
+            $offset = 0
+            $entity = (Read-WireString $response.Payload ([ref]$offset)) | ConvertFrom-Json
+            if ($entity.header.name -ne "Smoke Cube" -or @($entity.components)[0].type -ne "CubeRenderer" -or $null -eq $entity.transform) { throw "GetEntity: the cube isn't what CreateEntityEx made" }
+            if ($response.Payload.Length - $offset -ne 64) { throw "GetEntity: $($response.Payload.Length - $offset) bytes of world matrix, expected 64" }
+            # Column-major: a new object at the origin has the identity, so element 15 (and the diagonal) is 1
+            foreach ($element in 0, 5, 10, 15) {
+              if ([BitConverter]::ToSingle($response.Payload, $offset + 4 * $element) -ne 1.0) { throw "GetEntity: world matrix element $element isn't 1" }
+            }
+            Write-Host "Hierarchy: $($duplicated.Names -join ', ')"
+
+            # sceneChanged says which objects changed (and the editor viewport still renders)
+            Send-Frame $stream 0x05 ([byte[]]([BitConverter]::GetBytes([uint32]$pollEpoch) + [BitConverter]::GetBytes([uint32]$pollNextSeq) + [BitConverter]::GetBytes([uint32]1024)))
+            $response = Read-Response $stream
+            Assert-Response $response 0x0C "PollEvents after the hierarchy edits"
+            $eventsText = [Text.Encoding]::UTF8.GetString($response.Payload, 12, $response.Payload.Length - 12)
+            if (-not $eventsText.Contains('"entityIds"') -or -not $eventsText.Contains($cubeId)) { throw "PollEvents: no sceneChanged with the cube's id in entityIds" }
+            Send-Frame $stream 0x01
+            Assert-Response (Read-Response $stream) 0x02 "RenderFrame with a cube and a light"
 
             # GetProjectInfo (0x70): rootPath, userDataPath (strings), then project.n2proj as JSON
             Send-Frame $stream 0x70

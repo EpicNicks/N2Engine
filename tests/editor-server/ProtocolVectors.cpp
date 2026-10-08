@@ -26,6 +26,11 @@ namespace
         return Math::Vector3(v.at("x").get<float>(), v.at("y").get<float>(), v.at("z").get<float>());
     }
 
+    json QuatJson(const Math::Quaternion &q)
+    {
+        return {{"x", q.GetX()}, {"y", q.GetY()}, {"z", q.GetZ()}, {"w", q.GetW()}};
+    }
+
     std::string StringField(const json &fields, const char *name)
     {
         return fields.at(name).get<std::string>();
@@ -136,6 +141,31 @@ namespace ProtocolVectors
             {
                 return json{{"entityId", GetEntityTransformCmd::Deserialize(r).entityId}};
             }},
+            {"CreateEntityEx", [](BufferReader &r)
+            {
+                const auto cmd = CreateEntityExCmd::Deserialize(r);
+                return json{{"name", cmd.name}, {"parentId", cmd.parentId}, {"siblingIndex", cmd.siblingIndex},
+                            {"preset", cmd.preset}};
+            }},
+            {"SetEntityParent", [](BufferReader &r)
+            {
+                const auto cmd = SetEntityParentCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"parentId", cmd.parentId},
+                            {"siblingIndex", cmd.siblingIndex}, {"keepWorldTransform", cmd.keepWorldTransform}};
+            }},
+            {"SetEntityProperties", [](BufferReader &r)
+            {
+                const auto cmd = SetEntityPropertiesCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"properties", cmd.properties}};
+            }},
+            {"DuplicateEntity", [](BufferReader &r) { return json{{"entityId", DuplicateEntityCmd::Deserialize(r).entityId}}; }},
+            {"GetEntity", [](BufferReader &r) { return json{{"entityId", GetEntityCmd::Deserialize(r).entityId}}; }},
+            {"SetLocalTransform", [](BufferReader &r)
+            {
+                const auto cmd = SetLocalTransformCmd::Deserialize(r);
+                return json{{"entityId", cmd.entityId}, {"position", Vec3Json(cmd.position)},
+                            {"rotation", QuatJson(cmd.rotation)}, {"scale", Vec3Json(cmd.scale)}};
+            }},
             {"CreateScript", [](BufferReader &r) { return json{{"name", CreateScriptCmd::Deserialize(r).name}}; }},
             {"OpenScene", [](BufferReader &r) { return json{{"path", OpenSceneCmd::Deserialize(r).path}}; }},
             {"SaveSceneToFile", [](BufferReader &r) { return json{{"path", SaveSceneToFileCmd::Deserialize(r).path}}; }},
@@ -208,6 +238,24 @@ namespace ProtocolVectors
             {"ProjectInfo", [](BufferWriter &w, const json &f)
             {
                 WriteProjectInfo(w, StringField(f, "rootPath"), StringField(f, "userDataPath"), f.at("project"));
+            }},
+            {"Hierarchy", [](BufferWriter &w, const json &f)
+            {
+                WriteHierarchy(w, Uint32Field(f, "revision"), f.at("nodes"));
+            }},
+            {"EntityData", [](BufferWriter &w, const json &f)
+            {
+                // The vector's matrix is 16 numbers, column-major; Matrix is row-major (element (row, col))
+                Math::Matrix<float, 4, 4> matrix;
+                const json &values = f.at("worldMatrix");
+                for (size_t col = 0; col < 4; ++col)
+                {
+                    for (size_t row = 0; row < 4; ++row)
+                    {
+                        matrix(row, col) = values.at(col * 4 + row).get<float>();
+                    }
+                }
+                WriteEntityData(w, f.at("entity"), matrix);
             }},
             {"EngineHealth", [](BufferWriter &w, const json &f)
             {

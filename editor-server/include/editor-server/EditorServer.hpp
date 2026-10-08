@@ -88,6 +88,9 @@ namespace N2Engine::Editor
         static constexpr uint32_t MaxPayloadBytesBeforeHello = 64u * 1024u;
         /// Largest accepted viewport width/height; the frame buffer is width * height * 4 bytes
         static constexpr int32_t MaxViewportDimension = 4096;
+        /// The most entityIds a sceneChanged event carries; a change that touched more carries none, so one event
+        /// stays small however large the subtree that was deleted or duplicated
+        static constexpr size_t MaxEventEntityIds = 256;
         /// DeleteScene only removes files with this extension (any case) inside the scenes directory
         static constexpr const char *SceneFileExtension = ".json";
 
@@ -200,9 +203,11 @@ namespace N2Engine::Editor
 
         /**
          * The scene revision: 0 until a scene is loaded, then moved on by every command that changes the loaded scene
-         * or loads another (OpenScene, NewScene, LoadScene, CreateEntity, DestroyEntity, SetEntityTransform). It only
-         * grows, so a client refetches what it shows whenever it changes. Each change, and each save, pushes a
-         * sceneChanged event {revision, savedRevision, path}.
+         * or loads another (OpenScene, NewScene, LoadScene, CreateEntity, CreateEntityEx, DestroyEntity,
+         * SetEntityTransform, SetLocalTransform, SetEntityParent, SetEntityProperties, DuplicateEntity). It only
+         * grows, so a client refetches what it shows (GetHierarchy, GetEntity) whenever it changes. Each change, and
+         * each save, pushes a sceneChanged event {revision, savedRevision, path}; a change adds entityIds (the
+         * objects it touched, when there are few enough) or full (another scene was loaded: every id is invalid).
          */
         [[nodiscard]] uint32_t GetSceneRevision() const { return _sceneRevision; }
         /// The revision the loaded scene was last opened or saved at (see OpenSceneInfo::savedRevision)
@@ -248,7 +253,7 @@ namespace N2Engine::Editor
 
         /// True for a command a client is expected to poll: RenderFrame, GetAudio, PollEvents, and (ahead of the planned
         /// editor, #6, which refreshes them continuously) GetAllEntities, GetEntityTransform, GetCameraPosition,
-        /// GetEngineHealth.
+        /// GetEngineHealth, GetHierarchy, GetEntity.
         /// Rule: a command a client polls never logs per call, or its lines would drown everything else (and, since
         /// every line is an event, PollEvents would always find one). Such a command still logs when it fails
         /// (ExecuteCommand's error line). No command logs a generic "issued" line any more, so this lists the handlers
@@ -287,6 +292,14 @@ namespace N2Engine::Editor
         void HandleGetEngineHealth(int clientSocket);
         void HandleGetEntityTransform(int clientSocket, const std::vector<uint8_t> &payload);
 
+        void HandleGetHierarchy(int clientSocket);
+        void HandleCreateEntityEx(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSetEntityParent(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSetEntityProperties(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleDuplicateEntity(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetEntity(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSetLocalTransform(int clientSocket, const std::vector<uint8_t> &payload);
+
         void HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleRescanAssets(int clientSocket);
 
@@ -307,10 +320,15 @@ namespace N2Engine::Editor
         /// Saves the project file with this change, then keeps it; an Error message when it can't be saved
         std::expected<void, std::string> SaveProject(IO::ProjectFile changed);
 
-        /// The loaded scene changed (or another was loaded): moves the revision on and pushes sceneChanged
-        void MarkSceneChanged();
-        /// Pushes sceneChanged with the current revisions and path
-        void PushSceneChanged();
+        /// The loaded scene changed (or another was loaded): moves the revision on and pushes sceneChanged.
+        /// entityIds: the objects the change touched (what a client refetches); no more than MaxEventEntityIds of them
+        /// go into the event, and without any (or with more) it carries none, which a client reads as "any may have
+        /// changed". full: another scene was loaded, so every id a client holds is invalid.
+        void MarkSceneChanged(std::vector<std::string> entityIds = {}, bool full = false);
+        /// Pushes sceneChanged with the current revisions and path, and entityIds and full as MarkSceneChanged takes them
+        void PushSceneChanged(std::vector<std::string> entityIds = {}, bool full = false);
+        /// Answers with an Error
+        void SendError(int clientSocket, const std::string &message);
         /// The res:// path of the loaded scene's file, or "" when it has none (or the loaded scene isn't the one
         /// that was opened from it)
         [[nodiscard]] std::string OpenScenePath() const;

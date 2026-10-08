@@ -56,12 +56,19 @@ namespace
             {"OpenScene", CommandType::OpenScene},
             {"SaveSceneToFile", CommandType::SaveSceneToFile},
             {"NewScene", CommandType::NewScene},
+            {"GetHierarchy", CommandType::GetHierarchy},
             {"GetOpenScene", CommandType::GetOpenScene},
             {"CreateEntity", CommandType::CreateEntity},
             {"DestroyEntity", CommandType::DestroyEntity},
             {"SetEntityTransform", CommandType::SetEntityTransform},
             {"GetEntityTransform", CommandType::GetEntityTransform},
             {"GetAllEntities", CommandType::GetAllEntities},
+            {"CreateEntityEx", CommandType::CreateEntityEx},
+            {"SetEntityParent", CommandType::SetEntityParent},
+            {"SetEntityProperties", CommandType::SetEntityProperties},
+            {"DuplicateEntity", CommandType::DuplicateEntity},
+            {"GetEntity", CommandType::GetEntity},
+            {"SetLocalTransform", CommandType::SetLocalTransform},
             {"CreateScript", CommandType::CreateScript},
             {"RescanAssets", CommandType::RescanAssets},
             {"GetEngineHealth", CommandType::GetEngineHealth},
@@ -91,6 +98,8 @@ namespace
             {"Events", ResponseType::Events},
             {"SceneInfo", ResponseType::SceneInfo},
             {"ProjectInfo", ResponseType::ProjectInfo},
+            {"Hierarchy", ResponseType::Hierarchy},
+            {"EntityData", ResponseType::EntityData},
         };
         return responses;
     }
@@ -113,6 +122,12 @@ namespace
             {"DestroyEntity", [](BufferReader &r) { (void)DestroyEntityCmd::Deserialize(r); }},
             {"SetEntityTransform", [](BufferReader &r) { (void)SetEntityTransformCmd::Deserialize(r); }},
             {"GetEntityTransform", [](BufferReader &r) { (void)GetEntityTransformCmd::Deserialize(r); }},
+            {"CreateEntityEx", [](BufferReader &r) { (void)CreateEntityExCmd::Deserialize(r); }},
+            {"SetEntityParent", [](BufferReader &r) { (void)SetEntityParentCmd::Deserialize(r); }},
+            {"SetEntityProperties", [](BufferReader &r) { (void)SetEntityPropertiesCmd::Deserialize(r); }},
+            {"DuplicateEntity", [](BufferReader &r) { (void)DuplicateEntityCmd::Deserialize(r); }},
+            {"GetEntity", [](BufferReader &r) { (void)GetEntityCmd::Deserialize(r); }},
+            {"SetLocalTransform", [](BufferReader &r) { (void)SetLocalTransformCmd::Deserialize(r); }},
             {"CreateScript", [](BufferReader &r) { (void)CreateScriptCmd::Deserialize(r); }},
             {"OpenScene", [](BufferReader &r) { (void)OpenSceneCmd::Deserialize(r); }},
             {"SaveSceneToFile", [](BufferReader &r) { (void)SaveSceneToFileCmd::Deserialize(r); }},
@@ -322,7 +337,8 @@ TEST(ProtocolSpecTest, ResponseIdsMatchTheSpec)
 TEST(ProtocolSpecTest, EntityRequestsCarryUuidStrings)
 {
     const spec_json spec = LoadSpec();
-    for (const char *command : {"DestroyEntity", "SetEntityTransform", "GetEntityTransform"})
+    for (const char *command : {"DestroyEntity", "SetEntityTransform", "GetEntityTransform", "SetEntityParent",
+                                "SetEntityProperties", "DuplicateEntity", "GetEntity", "SetLocalTransform"})
     {
         EXPECT_EQ(spec.at("commands").at(command).at("request").at("entityId").get<std::string>(), "string")
             << command;

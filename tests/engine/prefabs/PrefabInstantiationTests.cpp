@@ -229,6 +229,100 @@ TEST(PrefabInstantiateTest, ReferencesOutsideThePrefabAreNull)
     EXPECT_EQ(instance->GetComponent<PrefabRefHolder>()->target, nullptr);
 }
 
+namespace
+{
+    // What a scene knows of its objects: every GameObject and component of the tree, by UUID
+    void RegisterTree(ReferenceResolver &resolver, GameObject &go)
+    {
+        resolver.RegisterGameObject(go.GetUUID(), &go);
+        for (const auto &component : go.GetAllComponents())
+        {
+            resolver.RegisterComponent(component->GetUUID(), component.get());
+        }
+        for (const auto &child : go.GetChildren())
+        {
+            RegisterTree(resolver, *child);
+        }
+    }
+}
+
+TEST(PrefabInstantiateTest, ReferencesOutsideThePrefabAreKeptWhenTheSceneIsGiven)
+{
+    TurretSource source = MakeTurret();
+    auto *outsideTarget = source.outsider->AddComponent<PrefabRefTarget>();
+    source.holder->target = source.outsider.get();
+    source.holder->components = {outsideTarget, source.target};
+    const json prefabJson = Prefab("Turret", source.root).Serialize();
+
+    // The scene: the turret and the outsider, which the prefab doesn't contain
+    ReferenceResolver scene;
+    RegisterTree(scene, *source.root);
+    RegisterTree(scene, *source.outsider);
+
+    const auto instance = PrefabManager::InstantiatePrefab(prefabJson, scene);
+    ASSERT_NE(instance, nullptr);
+    const auto *holder = instance->GetComponent<PrefabRefHolder>();
+    ASSERT_NE(holder, nullptr);
+
+    EXPECT_EQ(holder->target, source.outsider.get()) << "kept: it is outside the copy";
+    ASSERT_EQ(holder->components.size(), 2u);
+    EXPECT_EQ(holder->components[0], outsideTarget) << "kept, a component this time";
+    // The copy's own objects: the copy's barrel and its component, never the source's
+    EXPECT_EQ(holder->components[1], instance->GetChild(0)->GetComponent<PrefabRefTarget>());
+    EXPECT_NE(holder->components[1], source.target);
+    EXPECT_EQ(holder->component, instance->GetChild(0)->GetComponent<PrefabRefTarget>());
+}
+
+TEST(PrefabInstantiateTest, AReferenceTheSceneDoesntKnowEitherIsStillNull)
+{
+    TurretSource source = MakeTurret();
+    source.holder->target = source.outsider.get(); // in no scene resolver
+    const json prefabJson = Prefab("Turret", source.root).Serialize();
+
+    const ReferenceResolver emptyScene{};
+    const auto instance = PrefabManager::InstantiatePrefab(prefabJson, emptyScene);
+    ASSERT_NE(instance, nullptr);
+    EXPECT_EQ(instance->GetComponent<PrefabRefHolder>()->target, nullptr);
+}
+
+TEST(PrefabInstantiateTest, ACopyWithTheSceneGivenStillHasFreshUUIDs)
+{
+    TurretSource source = MakeTurret();
+    const json prefabJson = Prefab("Turret", source.root).Serialize();
+    ReferenceResolver scene;
+    RegisterTree(scene, *source.root);
+
+    const auto instance = PrefabManager::InstantiatePrefab(prefabJson, scene);
+    ASSERT_NE(instance, nullptr);
+    std::vector<Math::UUID> original;
+    std::vector<Math::UUID> copy;
+    CollectUUIDs(*source.root, original);
+    CollectUUIDs(*instance, copy);
+    EXPECT_FALSE(SharesAny(original, copy));
+}
+
+TEST(ReferenceResolverTest, AFallbackAnswersWhatTheResolverDoesntKnow)
+{
+    const auto one = GameObject::Create("One");
+    const auto two = GameObject::Create("Two");
+    ReferenceResolver fallback;
+    fallback.RegisterGameObject(one->GetUUID(), one.get());
+    fallback.RegisterGameObject(two->GetUUID(), two.get());
+
+    ReferenceResolver resolver;
+    resolver.RegisterGameObject(two->GetUUID(), nullptr); // registered here, so this answer wins
+    EXPECT_EQ(resolver.FindGameObject(one->GetUUID()), nullptr) << "no fallback yet";
+
+    resolver.SetFallback(&fallback);
+    EXPECT_EQ(resolver.FindGameObject(one->GetUUID()), one.get());
+    EXPECT_EQ(resolver.FindGameObject(two->GetUUID()), nullptr);
+    EXPECT_EQ(resolver.FindGameObject(Math::UUID::Random()), nullptr);
+    EXPECT_EQ(resolver.FindComponent(Math::UUID::Random()), nullptr);
+
+    resolver.SetFallback(nullptr);
+    EXPECT_EQ(resolver.FindGameObject(one->GetUUID()), nullptr);
+}
+
 TEST(PrefabInstantiateTest, InstanceIsInNoScene)
 {
     const TurretSource source = MakeTurret();

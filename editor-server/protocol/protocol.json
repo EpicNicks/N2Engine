@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -78,7 +78,7 @@
     },
     "PollEvents": {
       "id": "0x05",
-      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none); assetsChanged {added, removed, modified} after a RescanAssets that found changes; projectChanged {} after project.n2proj was saved. A client ignores kinds and keys it doesn't know.",
+      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} after a RescanAssets that found changes; projectChanged {} after project.n2proj was saved. A client ignores kinds and keys it doesn't know.",
       "request": {
         "epoch": "uint32",
         "afterSeq": "uint32",
@@ -214,6 +214,18 @@
         }
       }
     },
+    "GetHierarchy": {
+      "id": "0x28",
+      "description": "The loaded scene's objects as one flat list in depth-first order (a parent before its children, siblings in their order): each node is {id, parentId (empty for a root of the scene), index (its place among its siblings), name, active (its own flag), activeInHierarchy (it and every ancestor are active), layer, tag, components (the type names, in order)}. revision is the scene revision the list was read at: a client refetches the list when a sceneChanged event's revision moves past the one it holds. Error when no scene is loaded.",
+      "request": {},
+      "response": {
+        "type": "Hierarchy",
+        "fields": {
+          "revision": "uint32",
+          "nodes": "json:HierarchyNode[]"
+        }
+      }
+    },
     "GetOpenScene": {
       "id": "0x29",
       "description": "The loaded scene: its file (path, empty when it has none), name, uuid, revision and savedRevision. Error when no scene is loaded. A host started with --project always has one: its startup scene, or an empty one with no file.",
@@ -282,6 +294,80 @@
           "entities": "EntityInfo[]"
         }
       }
+    },
+    "CreateEntityEx": {
+      "id": "0x35",
+      "description": "Makes a GameObject in the loaded scene, with a transform (CreateEntity's has none) and what preset adds: empty or Empty (nothing), Cube, Sphere or Quad (the renderer of that name), Light or DirectionalLight, PointLight, SpotLight (a Light of that type). An empty name is the preset's own (GameObject, Cube, Directional Light, ...). parentId empty makes it a root of the scene, anything else its parent; siblingIndex is its place among its siblings, -1 (or past the last) meaning the last. Error, with nothing made, without a scene, for a parent that isn't in the scene, or for a preset it doesn't know.",
+      "request": {
+        "name": "string",
+        "parentId": "string",
+        "siblingIndex": "int32",
+        "preset": "string"
+      },
+      "response": {
+        "type": "EntityCreated",
+        "fields": {
+          "entityId": "string"
+        }
+      }
+    },
+    "SetEntityParent": {
+      "id": "0x36",
+      "description": "Moves an object under another (parentId; empty makes it a root of the scene) at siblingIndex among its new siblings (-1, or past the last: the last). keepWorldTransform true keeps where the object is in the world (its local transform changes to match), false keeps its local transform (it moves with its new parent). Moving it to the place it already has changes nothing and doesn't move the revision. Error without a scene, for an object or a parent that isn't in the scene, and when the parent is the object itself or one of its descendants.",
+      "request": {
+        "entityId": "string",
+        "parentId": "string",
+        "siblingIndex": "int32",
+        "keepWorldTransform": "bool"
+      },
+      "response": { "type": "Ok" }
+    },
+    "SetEntityProperties": {
+      "id": "0x37",
+      "description": "Changes an object's own properties: properties is a JSON object with any of name (string), active (bool, the object's own flag), tag (string) and layer (integer, 0 to 31). A key it doesn't know, or a value of the wrong type or out of range, is an Error, and then nothing is changed. A property that already has the value changes nothing and doesn't move the revision. A scene the host opened for editing (every scene it loads) runs no OnEnable or OnDisable on the object's components when active changes: none of them was ever enabled.",
+      "request": {
+        "entityId": "string",
+        "properties": "json"
+      },
+      "response": { "type": "Ok" }
+    },
+    "DuplicateEntity": {
+      "id": "0x38",
+      "description": "Copies an object and everything under it, placing the copy right after the original among its siblings (under the same parent) and naming it as Unity does: Cube gives Cube (1), then Cube (2), and Cube (1) is another copy of Cube. Every object and component of the copy has a new UUID. References between objects of the copy point at the copy; references to anything else in the scene are kept (they still point at the same objects), and a reference to something that isn't in the scene comes back null. Answers the copy's id.",
+      "request": {
+        "entityId": "string"
+      },
+      "response": {
+        "type": "EntityCreated",
+        "fields": {
+          "entityId": "string"
+        }
+      }
+    },
+    "GetEntity": {
+      "id": "0x39",
+      "description": "One object in full. entity is {header (id, parentId, index, name, active, activeInHierarchy, layer and tag, as a hierarchy node has them), transform (the local position, rotation and scale, rotation a quaternion; absent for an object that has no transform), components (each {type, uuid, values}: values is the component's saved form, what Scene saves for it, in component order)}. worldMatrix is the object's local-to-world matrix (the identity for an object with no transform), so a client draws a gizmo without walking the parent chain. Error when there is no scene or no such object.",
+      "request": {
+        "entityId": "string"
+      },
+      "response": {
+        "type": "EntityData",
+        "fields": {
+          "entity": "json:EntityDetails",
+          "worldMatrix": "mat4"
+        }
+      }
+    },
+    "SetLocalTransform": {
+      "id": "0x3A",
+      "description": "Sets an object's transform relative to its parent (to the scene, for a root). rotation is a quaternion, so an inspector that shows Euler angles doesn't drift through round trips; the host normalises it, and a zero quaternion (or one too large to normalise) is an Error. An object that has no transform (CreateEntity makes such objects) gets one. Setting the transform an object already has changes nothing and doesn't move the revision. Error for a value that isn't a finite number, and without a scene or an object.",
+      "request": {
+        "entityId": "string",
+        "position": "vec3",
+        "rotation": "quat",
+        "scale": "vec3"
+      },
+      "response": { "type": "Ok" }
     },
     "CreateScript": {
       "id": "0x40",
@@ -394,6 +480,8 @@
       "revision?": "number",
       "savedRevision?": "number",
       "path?": "string",
+      "entityIds?": "string[]",
+      "full?": "bool",
       "added?": "string[]",
       "removed?": "string[]",
       "modified?": "string[]"
@@ -406,6 +494,53 @@
       "startupScene": "string",
       "scenes": "string[]",
       "settings": "json"
+    },
+    "HierarchyNode": {
+      "id": "string",
+      "parentId": "string",
+      "index": "number",
+      "name": "string",
+      "active": "bool",
+      "activeInHierarchy": "bool",
+      "layer": "number",
+      "tag": "string",
+      "components": "string[]"
+    },
+    "EntityHeader": {
+      "id": "string",
+      "parentId": "string",
+      "index": "number",
+      "name": "string",
+      "active": "bool",
+      "activeInHierarchy": "bool",
+      "layer": "number",
+      "tag": "string"
+    },
+    "JsonVec3": {
+      "x": "number",
+      "y": "number",
+      "z": "number"
+    },
+    "JsonQuat": {
+      "x": "number",
+      "y": "number",
+      "z": "number",
+      "w": "number"
+    },
+    "LocalTransform": {
+      "position": "JsonVec3",
+      "rotation": "JsonQuat",
+      "scale": "JsonVec3"
+    },
+    "EntityComponent": {
+      "type": "string",
+      "uuid": "string",
+      "values": "json"
+    },
+    "EntityDetails": {
+      "header": "EntityHeader",
+      "transform?": "LocalTransform",
+      "components": "EntityComponent[]"
     }
   },
   "responses": {
@@ -423,6 +558,8 @@
     "ServerInfo": "0x0B",
     "Events": "0x0C",
     "SceneInfo": "0x0D",
-    "ProjectInfo": "0x0E"
+    "ProjectInfo": "0x0E",
+    "Hierarchy": "0x0F",
+    "EntityData": "0x10"
   }
 }

@@ -151,7 +151,8 @@ TEST(ProtocolVectorTest, ServerBuildersWriteTheVectorResponses)
 }
 
 // ==================== quat, mat4 and json ====================
-// No command uses quat or mat4 yet, so their codecs are pinned here (and by the TypeScript fixture tests)
+// The element-level layout of quat and mat4 (SetLocalTransform and GetEntity use them, and their vectors cover
+// the commands), pinned here and by the TypeScript fixture tests
 
 TEST(ProtocolFieldCodecTest, QuatIsXyzwWithWLast)
 {

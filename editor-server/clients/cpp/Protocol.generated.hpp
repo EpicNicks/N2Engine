@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.3.0";
+inline constexpr const char *ProtocolVersion = "1.4.0";
 
 enum class CommandType : uint8_t
 {
@@ -30,12 +30,19 @@ enum class CommandType : uint8_t
     OpenScene = 0x25,
     SaveSceneToFile = 0x26,
     NewScene = 0x27,
+    GetHierarchy = 0x28,
     GetOpenScene = 0x29,
     CreateEntity = 0x30,
     DestroyEntity = 0x31,
     SetEntityTransform = 0x32,
     GetEntityTransform = 0x33,
     GetAllEntities = 0x34,
+    CreateEntityEx = 0x35,
+    SetEntityParent = 0x36,
+    SetEntityProperties = 0x37,
+    DuplicateEntity = 0x38,
+    GetEntity = 0x39,
+    SetLocalTransform = 0x3A,
     CreateScript = 0x40,
     RescanAssets = 0x41,
     GetEngineHealth = 0x50,
@@ -62,6 +69,8 @@ enum class ResponseType : uint8_t
     Events = 0x0C,
     SceneInfo = 0x0D,
     ProjectInfo = 0x0E,
+    Hierarchy = 0x0F,
+    EntityData = 0x10,
 };
 
 // Custom types
@@ -175,6 +184,46 @@ struct GetEntityTransformCmd
     std::string entityId;
 };
 
+struct CreateEntityExCmd
+{
+    std::string name;
+    std::string parentId;
+    int32_t siblingIndex;
+    std::string preset;
+};
+
+struct SetEntityParentCmd
+{
+    std::string entityId;
+    std::string parentId;
+    int32_t siblingIndex;
+    bool keepWorldTransform;
+};
+
+struct SetEntityPropertiesCmd
+{
+    std::string entityId;
+    std::string properties; // JSON: any
+};
+
+struct DuplicateEntityCmd
+{
+    std::string entityId;
+};
+
+struct GetEntityCmd
+{
+    std::string entityId;
+};
+
+struct SetLocalTransformCmd
+{
+    std::string entityId;
+    Vec3 position;
+    Quat rotation;
+    Vec3 scale;
+};
+
 struct CreateScriptCmd
 {
     std::string name;
@@ -245,6 +294,12 @@ struct SceneInfoData
     uint32_t savedRevision;
 };
 
+struct HierarchyData
+{
+    uint32_t revision;
+    std::string nodes; // JSON: HierarchyNode[]
+};
+
 struct EntityCreatedData
 {
     std::string entityId;
@@ -261,6 +316,12 @@ struct EntityListData
 {
     uint32_t count;
     std::vector<EntityInfo> entities;
+};
+
+struct EntityDataData
+{
+    std::string entity; // JSON: EntityDetails
+    std::array<float, 16> worldMatrix;
 };
 
 struct ScriptDataData
