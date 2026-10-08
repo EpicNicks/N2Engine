@@ -160,6 +160,18 @@ namespace N2Engine::AssetImport
             return Vec4{t[0] * inv, t[1] * inv, t[2] * inv, raw[3] < 0.0f ? -1.0f : 1.0f};
         }
 
+        /// Whether the triangle whose first corner is `corner` maps a surface area of the texture (its uvs aren't all on
+        /// one line): MikkTSpace gives a degenerate triangle some tangent, but it is no one's tangent space
+        bool HasUvArea(const std::vector<ImportedVertex> &vertices, const std::vector<std::uint32_t> &indices,
+                       const std::size_t corner)
+        {
+            const float *a = vertices[indices[corner]].texCoord;
+            const float *b = vertices[indices[corner + 1]].texCoord;
+            const float *c = vertices[indices[corner + 2]].texCoord;
+            const float area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+            return std::isfinite(area) && std::fabs(area) > 1e-12f;
+        }
+
         /// Two tangents are the same space: the same handedness and (to 0.8 degrees) the same direction
         bool SameTangent(const float a[4], const Vec4 &b)
         {
@@ -251,6 +263,7 @@ namespace N2Engine::AssetImport
             }
             bool usable = true;
             cornerTangents[c] = CleanTangent(corners[c], vertices[original], usable);
+            usable = usable && HasUvArea(vertices, indices, c - c % 3);
             cornerUsable[c] = usable ? 1 : 0;
             if (usable && !assigned[original])
             {

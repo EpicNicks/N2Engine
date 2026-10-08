@@ -596,7 +596,7 @@ TEST(GltfTangentImportTest, GeneratedTangentsKeepEverySubmeshRangeValid)
     }
 }
 
-TEST(GltfTangentImportTest, AMalformedTangentAccessorIsIgnoredWithAWarningWhateverTheSetting)
+TEST(GltfTangentImportTest, AMalformedTangentAccessorIsRejectedWhateverTheSetting)
 {
     Builder wrongType = QuadFile();
     wrongType.doc["meshes"][0]["primitives"][0]["attributes"]["TANGENT"] =
@@ -611,18 +611,11 @@ TEST(GltfTangentImportTest, AMalformedTangentAccessorIsIgnoredWithAWarningWhatev
         {
             ModelImportSettings settings;
             settings.generateTangents = mode;
+            // cgltf_validate refuses a TANGENT that isn't VEC4 or whose count differs from POSITION's, before any
+            // setting is looked at (the importer's own check behind it ignores one with a warning)
             const auto result = GltfImporter().Import(file->ToGltf(), {}, settings);
-            ASSERT_TRUE(result.has_value()) << "ignored, not an error";
-            bool warned = false;
-            for (const std::string &warning : result->warnings)
-            {
-                warned = warned || warning.find("TANGENT") != std::string::npos;
-            }
-            EXPECT_TRUE(warned) << "a warning names it";
-            if (mode != TangentGeneration::Never)
-            {
-                ExpectTangent(result->meshes[0].vertices[0], {1, 0, 0}, 1.0f, "generated in its place");
-            }
+            ASSERT_FALSE(result.has_value());
+            EXPECT_EQ(result.error().code, ModelImportErrorCode::InvalidData);
         }
     }
 }
