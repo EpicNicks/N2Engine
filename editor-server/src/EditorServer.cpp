@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -14,17 +16,24 @@
 #include <utility>
 
 #include "engine/Application.hpp"
+#include "engine/Layers.hpp"
 #include "engine/Logger.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/Version.hpp"
 #include "engine/audio/AudioSystem.hpp"
+#include "engine/example/renderers/CubeRenderer.hpp"
+#include "engine/example/renderers/QuadRenderer.hpp"
+#include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/prefabs/PrefabManager.hpp"
+#include "engine/rendering/Light.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaScriptTemplate.hpp"
+#include "engine/serialization/ReferenceResolver.hpp"
 
 #include "renderer/common/FrameRows.hpp"
 #include "renderer/common/Renderer.hpp"
@@ -111,6 +120,251 @@ namespace N2Engine::Editor
         std::string SceneFileText(const nlohmann::json &scene)
         {
             return scene.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+        }
+
+        // ==================== Hierarchy and entities ====================
+
+        nlohmann::json Vec3Json(const Math::Vector3 &v)
+        {
+            return nlohmann::json{{"x", v.x}, {"y", v.y}, {"z", v.z}};
+        }
+
+        nlohmann::json QuatJson(const Math::Quaternion &q)
+        {
+            return nlohmann::json{{"x", q.GetX()}, {"y", q.GetY()}, {"z", q.GetZ()}, {"w", q.GetW()}};
+        }
+
+        /// The object with this UUID string in the scene, or nullptr (also for text that isn't a UUID)
+        std::shared_ptr<GameObject> FindEntity(Scene &scene, const std::string &entityId)
+        {
+            if (const auto uuid = Math::UUID::FromString(entityId); uuid.has_value())
+            {
+                return scene.FindGameObjectByUUID(uuid.value());
+            }
+            return nullptr;
+        }
+
+        std::string NotFoundMessage(const char *what, const std::string &entityId)
+        {
+            return std::format("{} not found: {}", what, EditorServer::SanitizeForLog(entityId));
+        }
+
+        /// The UUID string of an object's parent, or empty for a root
+        std::string ParentIdOf(const GameObject &gameObject)
+        {
+            const auto parent = gameObject.GetParent();
+            return parent ? parent->GetUUID().ToString() : std::string{};
+        }
+
+        /// The fields GetHierarchy and GetEntity share (the EntityHeader of protocol.json, plus what a node adds)
+        nlohmann::json HeaderJson(const GameObject &gameObject, const std::string &parentId, const size_t index)
+        {
+            return nlohmann::json{
+                {"id", gameObject.GetUUID().ToString()},
+                {"parentId", parentId},
+                {"index", index},
+                {"name", gameObject.GetName()},
+                {"active", gameObject.IsActive()},
+                {"activeInHierarchy", gameObject.IsActiveInHierarchy()},
+                {"layer", gameObject.GetLayer()},
+                {"tag", gameObject.GetTag()},
+            };
+        }
+
+        /// Appends the object and, depth first, everything under it: a HierarchyNode each
+        void AppendHierarchy(const GameObject &gameObject, const std::string &parentId, const size_t index,
+                             nlohmann::json &nodes)
+        {
+            nlohmann::json node = HeaderJson(gameObject, parentId, index);
+            nlohmann::json components = nlohmann::json::array();
+            for (const auto &component : gameObject.GetAllComponents())
+            {
+                components.push_back(component->GetTypeName());
+            }
+            node["components"] = std::move(components);
+            nodes.push_back(std::move(node));
+
+            const std::string id = gameObject.GetUUID().ToString();
+            size_t childIndex = 0;
+            for (const auto &child : gameObject.GetChildren())
+            {
+                if (child && !child->IsDestroyed())
+                {
+                    AppendHierarchy(*child, id, childIndex, nodes);
+                }
+                ++childIndex;
+            }
+        }
+
+        /// The EntityDetails of protocol.json: header, local transform (when the object has one) and the components
+        /// as they are saved
+        nlohmann::json EntityDetailsJson(const GameObject &gameObject)
+        {
+            nlohmann::json entity;
+            entity["header"] = HeaderJson(gameObject, ParentIdOf(gameObject), gameObject.GetSiblingIndex());
+            if (const Positionable *positionable = gameObject.GetPositionable())
+            {
+                entity["transform"] = nlohmann::json{
+                    {"position", Vec3Json(positionable->GetLocalPosition())},
+                    {"rotation", QuatJson(positionable->GetLocalRotation())},
+                    {"scale", Vec3Json(positionable->GetLocalScale())},
+                };
+            }
+            nlohmann::json components = nlohmann::json::array();
+            for (const auto &component : gameObject.GetAllComponents())
+            {
+                components.push_back(nlohmann::json{
+                    {"type", component->GetTypeName()},
+                    {"uuid", component->GetUUID().ToString()},
+                    {"values", component->Serialize()},
+                });
+            }
+            entity["components"] = std::move(components);
+            return entity;
+        }
+
+        /// The UUID strings of the object and everything under it
+        std::vector<std::string> SubtreeIds(const GameObject &gameObject)
+        {
+            std::vector<std::string> ids{gameObject.GetUUID().ToString()};
+            for (const auto &descendant : gameObject.GetChildrenRecursive())
+            {
+                ids.push_back(descendant->GetUUID().ToString());
+            }
+            return ids;
+        }
+
+        /// What CreateEntityEx's preset adds to the new object (which always gets a transform)
+        struct EntityPreset
+        {
+            std::string_view name;
+            /// The new object's name when the request gives none
+            std::string_view objectName;
+            void (*addComponents)(GameObject &);
+        };
+
+        const std::vector<EntityPreset> &EntityPresets()
+        {
+            static const std::vector<EntityPreset> presets = {
+                {"", "GameObject", [](GameObject &) {}},
+                {"Empty", "GameObject", [](GameObject &) {}},
+                {"Cube", "Cube", [](GameObject &object) { object.AddComponent<Example::CubeRenderer>(); }},
+                {"Sphere", "Sphere", [](GameObject &object) { object.AddComponent<Example::SphereRenderer>(); }},
+                {"Quad", "Quad", [](GameObject &object) { object.AddComponent<Example::QuadRenderer>(); }},
+                {"Light", "Light", [](GameObject &object) { object.AddComponent<Rendering::Light>(); }},
+                {"DirectionalLight", "Directional Light", [](GameObject &object)
+                {
+                    object.AddComponent<Rendering::Light>()->type = Rendering::LightType::Directional;
+                }},
+                {"PointLight", "Point Light", [](GameObject &object)
+                {
+                    object.AddComponent<Rendering::Light>()->type = Rendering::LightType::Point;
+                }},
+                {"SpotLight", "Spot Light", [](GameObject &object)
+                {
+                    object.AddComponent<Rendering::Light>()->type = Rendering::LightType::Spot;
+                }},
+            };
+            return presets;
+        }
+
+        /// The name a duplicate of `source` gets among `siblings`, as Unity names it: "Cube" and "Cube (3)" give
+        /// "Cube (1)", then "Cube (2)", ... the first of those no sibling has
+        std::string DuplicateName(const GameObject &source, const std::vector<std::shared_ptr<GameObject>> &siblings)
+        {
+            std::string base = source.GetName();
+            // "Cube (3)" is a duplicate of "Cube", not of itself
+            if (base.size() > 4 && base.back() == ')')
+            {
+                const size_t open = base.rfind(" (");
+                if (open != std::string::npos && base.size() - open >= 4)
+                {
+                    const std::string_view digits = std::string_view(base).substr(open + 2, base.size() - open - 3);
+                    if (!digits.empty() && std::ranges::all_of(digits, [](const char c) { return c >= '0' && c <= '9'; }))
+                    {
+                        base.erase(open);
+                    }
+                }
+            }
+            for (int number = 1;; ++number)
+            {
+                std::string candidate = std::format("{} ({})", base, number);
+                const bool taken = std::ranges::any_of(siblings, [&candidate](const std::shared_ptr<GameObject> &sibling)
+                {
+                    return sibling && sibling->GetName() == candidate;
+                });
+                if (!taken)
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        /// A resolver that knows every object and component of the scene, by UUID
+        ReferenceResolver SceneReferences(const Scene &scene)
+        {
+            ReferenceResolver references;
+            scene.TraverseAll([&references](const std::shared_ptr<GameObject> &gameObject)
+            {
+                references.RegisterGameObject(gameObject->GetUUID(), gameObject.get());
+                for (const auto &component : gameObject->GetAllComponents())
+                {
+                    references.RegisterComponent(component->GetUUID(), component.get());
+                }
+            });
+            return references;
+        }
+
+        /// SetEntityProperties' properties, checked
+        struct EntityProperties
+        {
+            std::optional<std::string> name;
+            std::optional<bool> active;
+            std::optional<std::string> tag;
+            std::optional<int> layer;
+        };
+
+        std::expected<EntityProperties, std::string> ParseEntityProperties(const nlohmann::json &properties)
+        {
+            if (!properties.is_object())
+            {
+                return std::unexpected("properties must be a JSON object with any of name, active, tag and layer");
+            }
+            EntityProperties parsed;
+            for (const auto &[key, value] : properties.items())
+            {
+                if (key == "name" || key == "tag")
+                {
+                    if (!value.is_string())
+                    {
+                        return std::unexpected(std::format("{} must be a string", key));
+                    }
+                    (key == "name" ? parsed.name : parsed.tag) = value.get<std::string>();
+                }
+                else if (key == "active")
+                {
+                    if (!value.is_boolean())
+                    {
+                        return std::unexpected("active must be true or false");
+                    }
+                    parsed.active = value.get<bool>();
+                }
+                else if (key == "layer")
+                {
+                    // Not clamped: a client that means layer 40 has a bug, and finds out
+                    if (!value.is_number_integer() || value.get<int64_t>() < 0 || value.get<int64_t>() >= Layers::Count)
+                    {
+                        return std::unexpected(std::format("layer must be an integer from 0 to {}", Layers::Count - 1));
+                    }
+                    parsed.layer = static_cast<int>(value.get<int64_t>());
+                }
+                else
+                {
+                    return std::unexpected(std::format("Unknown property '{}' (the properties are name, active, tag and "
+                                                       "layer)", EditorServer::SanitizeForLog(key)));
+                }
+            }
+            return parsed;
         }
     }
 
@@ -650,6 +904,8 @@ namespace N2Engine::Editor
         case CommandType::GetEntityTransform: // the inspector
         case CommandType::GetCameraPosition:  // the scene view
         case CommandType::GetEngineHealth:    // the status panel
+        case CommandType::GetHierarchy:       // the hierarchy panel, whenever the scene revision moves
+        case CommandType::GetEntity:          // the inspector, whenever the selected object changes
             return true;
         default:
             return false;
@@ -710,6 +966,9 @@ namespace N2Engine::Editor
         case CommandType::NewScene:
             HandleNewScene(clientSocket, payload);
             break;
+        case CommandType::GetHierarchy:
+            HandleGetHierarchy(clientSocket);
+            break;
         case CommandType::GetOpenScene:
             HandleGetOpenScene(clientSocket);
             break;
@@ -736,6 +995,24 @@ namespace N2Engine::Editor
             break;
         case CommandType::GetAllEntities:
             HandleGetAllEntities(clientSocket);
+            break;
+        case CommandType::CreateEntityEx:
+            HandleCreateEntityEx(clientSocket, payload);
+            break;
+        case CommandType::SetEntityParent:
+            HandleSetEntityParent(clientSocket, payload);
+            break;
+        case CommandType::SetEntityProperties:
+            HandleSetEntityProperties(clientSocket, payload);
+            break;
+        case CommandType::DuplicateEntity:
+            HandleDuplicateEntity(clientSocket, payload);
+            break;
+        case CommandType::GetEntity:
+            HandleGetEntity(clientSocket, payload);
+            break;
+        case CommandType::SetLocalTransform:
+            HandleSetLocalTransform(clientSocket, payload);
             break;
         case CommandType::CreateScript:
             HandleCreateScript(clientSocket, payload);
@@ -1027,7 +1304,12 @@ namespace N2Engine::Editor
         // unsaved
         _openScenePath.clear();
         _openScene = SceneManager::GetCurScene();
-        MarkSceneChanged();
+        if (SceneManager::GetCurScene() != nullptr)
+        {
+            // Opened for editing, like every scene this host loads
+            SceneManager::GetCurScene()->SetEditMode(true);
+        }
+        MarkSceneChanged({}, true);
 
         BufferWriter response;
         WriteOk(response);
@@ -1144,7 +1426,7 @@ namespace N2Engine::Editor
         {
             auto gameObject = GameObject::Create(cmd.name);
             SceneManager::GetCurSceneRef().AddRootGameObject(gameObject);
-            MarkSceneChanged();
+            MarkSceneChanged({gameObject->GetUUID().ToString()});
             WriteEntityCreated(response, gameObject->GetUUID().ToString());
         }
         else
@@ -1180,10 +1462,12 @@ namespace N2Engine::Editor
                 // it flushes every queued destroy in the scene and runs component (incl. Lua) callbacks.
                 // If a callback throws, ExecuteCommand reports it as an Error (some objects may then stay
                 // marked but unpurged) and later commands keep working.
+                // Its whole subtree goes with it: the ids a client drops
+                std::vector<std::string> destroyedIds = SubtreeIds(*foundGameObject);
                 if (scene->DestroyGameObject(foundGameObject))
                 {
                     // Marked first: a callback that throws still leaves the scene changed
-                    MarkSceneChanged();
+                    MarkSceneChanged(std::move(destroyedIds));
                     scene->ProcessDestroyed();
                     entityDestroyed = true;
                 }
@@ -1229,7 +1513,7 @@ namespace N2Engine::Editor
                 );
                 entity->GetPositionable()->SetScale(cmd.scale);
                 applied = true;
-                MarkSceneChanged();
+                MarkSceneChanged({entity->GetUUID().ToString()});
             }
         }
 
@@ -1296,6 +1580,350 @@ namespace N2Engine::Editor
 
         // An unknown entity used to get an identity transform, indistinguishable from a real one
         WriteError(response, "Entity not found (or has no transform): " + entityId);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    // ==================== Hierarchy and entities (#6, E4) ====================
+
+    void EditorServer::HandleGetHierarchy(int clientSocket)
+    {
+        const Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+
+        // Depth first, parents before children, siblings in order: the order the tree shows
+        nlohmann::json nodes = nlohmann::json::array();
+        size_t rootIndex = 0;
+        for (const auto &root : scene->GetRootGameObjects())
+        {
+            if (root && !root->IsDestroyed())
+            {
+                AppendHierarchy(*root, std::string{}, rootIndex, nodes);
+            }
+            ++rootIndex;
+        }
+
+        BufferWriter response;
+        WriteHierarchy(response, _sceneRevision, nodes);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleCreateEntityEx(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const CreateEntityExCmd cmd = CreateEntityExCmd::Deserialize(reader);
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+
+        // Everything is checked before anything is made, so a refused request changes nothing
+        std::shared_ptr<GameObject> parent;
+        if (!cmd.parentId.empty())
+        {
+            parent = FindEntity(*scene, cmd.parentId);
+            if (parent == nullptr)
+            {
+                SendError(clientSocket, NotFoundMessage("Parent", cmd.parentId));
+                return;
+            }
+        }
+        const auto &presets = EntityPresets();
+        const auto preset = std::ranges::find_if(presets, [&cmd](const EntityPreset &candidate)
+        {
+            return candidate.name == cmd.preset;
+        });
+        if (preset == presets.end())
+        {
+            std::string known;
+            for (const EntityPreset &candidate : presets)
+            {
+                if (!candidate.name.empty())
+                {
+                    known += (known.empty() ? "" : ", ") + std::string(candidate.name);
+                }
+            }
+            SendError(clientSocket, std::format("Unknown preset '{}' (the presets are {}, or empty for an empty object)",
+                                                SanitizeForLog(cmd.preset), known));
+            return;
+        }
+
+        // An editor object always has a transform (CreateEntity's has none until something gives it one)
+        auto gameObject = GameObject::Create(cmd.name.empty() ? std::string(preset->objectName) : cmd.name);
+        gameObject->CreatePositionable();
+        preset->addComponents(*gameObject);
+
+        if (parent != nullptr)
+        {
+            parent->AddChild(gameObject, false);
+        }
+        else
+        {
+            scene->AddRootGameObject(gameObject);
+        }
+        if (cmd.siblingIndex >= 0)
+        {
+            gameObject->SetSiblingIndex(static_cast<size_t>(cmd.siblingIndex));
+        }
+
+        const std::string id = gameObject->GetUUID().ToString();
+        MarkSceneChanged({id});
+        BufferWriter response;
+        WriteEntityCreated(response, id);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetEntityParent(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetEntityParentCmd cmd = SetEntityParentCmd::Deserialize(reader);
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+        std::shared_ptr<GameObject> newParent;
+        if (!cmd.parentId.empty())
+        {
+            newParent = FindEntity(*scene, cmd.parentId);
+            if (newParent == nullptr)
+            {
+                SendError(clientSocket, NotFoundMessage("Parent", cmd.parentId));
+                return;
+            }
+            if (newParent == entity || newParent->IsChildOf(entity))
+            {
+                SendError(clientSocket, std::format("Can't make '{}' a child of itself or of its own descendant '{}'",
+                                                    SanitizeForLog(entity->GetName()), SanitizeForLog(newParent->GetName())));
+                return;
+            }
+        }
+
+        // The place it takes: the last of its new siblings unless the request says otherwise (and a place past the
+        // last is the last). Moving it within its own parent leaves one fewer sibling to count.
+        const std::shared_ptr<GameObject> oldParent = entity->GetParent();
+        const bool sameParent = oldParent == newParent;
+        const size_t siblingCount =
+            (newParent != nullptr ? newParent->GetChildCount() : scene->GetRootGameObjectCount()) + (sameParent ? 0 : 1);
+        const size_t target = cmd.siblingIndex < 0 ? siblingCount - 1
+                                                   : std::min(static_cast<size_t>(cmd.siblingIndex), siblingCount - 1);
+        if (sameParent && target == entity->GetSiblingIndex())
+        {
+            // Already there: nothing changes, so the revision doesn't move (the scene isn't made unsaved)
+            BufferWriter response;
+            WriteOk(response);
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+
+        entity->SetParent(newParent, cmd.keepWorldTransform);
+        if (entity->GetParent() != newParent)
+        {
+            SendError(clientSocket, "The entity couldn't be moved there");
+            return;
+        }
+        entity->SetSiblingIndex(target);
+
+        MarkSceneChanged({entity->GetUUID().ToString()});
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetEntityProperties(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetEntityPropertiesCmd cmd = SetEntityPropertiesCmd::Deserialize(reader);
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+        // All of it is checked before any of it is applied
+        const std::expected<EntityProperties, std::string> parsed = ParseEntityProperties(cmd.properties);
+        if (!parsed)
+        {
+            SendError(clientSocket, parsed.error());
+            return;
+        }
+
+        bool changed = false;
+        if (parsed->name && *parsed->name != entity->GetName())
+        {
+            entity->SetName(*parsed->name);
+            changed = true;
+        }
+        if (parsed->tag && *parsed->tag != entity->GetTag())
+        {
+            entity->SetTag(*parsed->tag);
+            changed = true;
+        }
+        if (parsed->layer && *parsed->layer != entity->GetLayer())
+        {
+            entity->SetLayer(*parsed->layer);
+            changed = true;
+        }
+        if (parsed->active && *parsed->active != entity->IsActive())
+        {
+            entity->SetActive(*parsed->active);
+            changed = true;
+        }
+        if (changed)
+        {
+            MarkSceneChanged({entity->GetUUID().ToString()});
+        }
+
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleDuplicateEntity(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const DuplicateEntityCmd cmd = DuplicateEntityCmd::Deserialize(reader);
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        const std::shared_ptr<GameObject> source = FindEntity(*scene, cmd.entityId);
+        if (source == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+
+        // The subtree as it is saved, built again with fresh UUIDs for every object and component. References
+        // between its own objects point at the copies; references to anything else in the scene are kept (the
+        // scene's own references are the fallback), so a copied script still points at the same target.
+        const ReferenceResolver sceneReferences = SceneReferences(*scene);
+        const std::shared_ptr<GameObject> copy = PrefabManager::InstantiatePrefab(source->Serialize(), sceneReferences);
+        if (copy == nullptr)
+        {
+            SendError(clientSocket, "The entity couldn't be duplicated (see the log)");
+            return;
+        }
+
+        // Next to the original, under its parent
+        const std::shared_ptr<GameObject> parent = source->GetParent();
+        copy->SetName(DuplicateName(*source, parent != nullptr ? parent->GetChildren() : scene->GetRootGameObjects()));
+        if (parent != nullptr)
+        {
+            parent->AddChild(copy, false);
+        }
+        else
+        {
+            scene->AddRootGameObject(copy);
+        }
+        copy->SetSiblingIndex(source->GetSiblingIndex() + 1);
+
+        MarkSceneChanged(SubtreeIds(*copy));
+        BufferWriter response;
+        WriteEntityCreated(response, copy->GetUUID().ToString());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetEntity(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const GetEntityCmd cmd = GetEntityCmd::Deserialize(reader);
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+
+        // An object without a transform is at the origin of the world
+        const Positionable *positionable = entity->GetPositionable();
+        const Math::Matrix<float, 4, 4> worldMatrix =
+            positionable != nullptr ? positionable->GetLocalToWorldMatrix() : Math::Matrix<float, 4, 4>::identity();
+
+        BufferWriter response;
+        WriteEntityData(response, EntityDetailsJson(*entity), worldMatrix);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetLocalTransform(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetLocalTransformCmd cmd = SetLocalTransformCmd::Deserialize(reader);
+
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+        const std::shared_ptr<GameObject> entity = FindEntity(*scene, cmd.entityId);
+        if (entity == nullptr)
+        {
+            SendError(clientSocket, NotFoundMessage("Entity", cmd.entityId));
+            return;
+        }
+
+        const auto finite = [](const Math::Vector3 &v)
+        {
+            return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+        };
+        const Math::Quaternion &rotation = cmd.rotation;
+        const bool rotationFinite = std::isfinite(rotation.GetX()) && std::isfinite(rotation.GetY()) &&
+                                    std::isfinite(rotation.GetZ()) && std::isfinite(rotation.GetW());
+        if (!finite(cmd.position) || !finite(cmd.scale) || !rotationFinite)
+        {
+            SendError(clientSocket, "The transform has a value that isn't a finite number");
+            return;
+        }
+        // A client sends a rotation it may have accumulated rounding in: it is normalised, and only a quaternion
+        // with no direction at all (all zeros) is refused
+        const float rotationLength = rotation.Length();
+        if (!(rotationLength > 1e-6f))
+        {
+            SendError(clientSocket, "The rotation is a zero quaternion");
+            return;
+        }
+
+        // An object CreateEntity made has no transform: setting one gives it one
+        entity->CreatePositionable();
+        Positionable *positionable = entity->GetPositionable();
+        positionable->SetLocalPositionAndRotation(cmd.position, rotation.Normalized());
+        positionable->SetLocalScale(cmd.scale);
+
+        MarkSceneChanged({entity->GetUUID().ToString()});
+        BufferWriter response;
+        WriteOk(response);
         SendResponse(clientSocket, response.Release());
     }
 
@@ -1415,23 +2043,41 @@ namespace N2Engine::Editor
         return loaded != nullptr && loaded == _openScene ? _openScenePath : std::string{};
     }
 
-    void EditorServer::PushSceneChanged()
+    void EditorServer::PushSceneChanged(std::vector<std::string> entityIds, const bool full)
     {
-        _events.Push("sceneChanged", nlohmann::json{{"revision", _sceneRevision},
-                                                    {"savedRevision", _savedRevision},
-                                                    {"path", OpenScenePath()}});
+        nlohmann::json event{{"revision", _sceneRevision},
+                             {"savedRevision", _savedRevision},
+                             {"path", OpenScenePath()}};
+        if (full)
+        {
+            // Every id a client holds is invalid, so which ones changed doesn't matter
+            event["full"] = true;
+        }
+        else if (!entityIds.empty() && entityIds.size() <= MaxEventEntityIds)
+        {
+            event["entityIds"] = std::move(entityIds);
+        }
+        _events.Push("sceneChanged", std::move(event));
     }
 
-    void EditorServer::MarkSceneChanged()
+    void EditorServer::MarkSceneChanged(std::vector<std::string> entityIds, const bool full)
     {
         ++_sceneRevision;
-        PushSceneChanged();
+        PushSceneChanged(std::move(entityIds), full);
+    }
+
+    void EditorServer::SendError(int clientSocket, const std::string &message)
+    {
+        BufferWriter response;
+        WriteError(response, message);
+        SendResponse(clientSocket, response.Release());
     }
 
     void EditorServer::LoadOpenedScene(std::unique_ptr<Scene> scene, std::string path)
     {
         // This very object becomes the loaded scene (edit mode: built, never attached)
         Scene *const opened = scene.get();
+        opened->SetEditMode(true);
         SceneManager::AddScene(std::move(scene), true);
         SceneManager::ProcessAnyPendingSceneChange();
         if (SceneManager::GetCurScene() != opened)
@@ -1442,7 +2088,8 @@ namespace N2Engine::Editor
         _openScenePath = std::move(path);
         ++_sceneRevision;
         _savedRevision = _sceneRevision;
-        PushSceneChanged();
+        // Another scene: every id a client holds is invalid
+        PushSceneChanged({}, true);
     }
 
     std::expected<OpenSceneInfo, std::string> EditorServer::GetOpenSceneInfo() const

@@ -207,6 +207,49 @@ TEST_F(EditorServerNoSceneTest, SaveSceneAndCreateEntityAreErrors)
     EXPECT_EQ(Execute(server, CommandType::GetCurrentScene).type, ErrorType);
 }
 
+TEST_F(EditorServerNoSceneTest, HierarchyAndEntityCommandsAreErrors)
+{
+    const std::string id = "00000000-0000-0000-0000-000000000000";
+    const auto expectNoScene = [](const DecodedFrame &response, const char *command)
+    {
+        EXPECT_EQ(response.type, ErrorType) << command;
+        EXPECT_NE(response.body.find("No scene"), std::string::npos) << command << ": " << response.body;
+    };
+
+    expectNoScene(Execute(server, CommandType::GetHierarchy), "GetHierarchy");
+    expectNoScene(Execute(server, CommandType::GetEntity, StringPayload(id)), "GetEntity");
+    expectNoScene(Execute(server, CommandType::DuplicateEntity, StringPayload(id)), "DuplicateEntity");
+
+    BufferWriter create;
+    create.WriteString("Thing");
+    create.WriteString("");
+    create.WriteI32(-1);
+    create.WriteString("Cube");
+    expectNoScene(Execute(server, CommandType::CreateEntityEx, ToVector(create)), "CreateEntityEx");
+
+    BufferWriter parent;
+    parent.WriteString(id);
+    parent.WriteString("");
+    parent.WriteI32(-1);
+    parent.WriteBool(true);
+    expectNoScene(Execute(server, CommandType::SetEntityParent, ToVector(parent)), "SetEntityParent");
+
+    BufferWriter properties;
+    properties.WriteString(id);
+    properties.WriteString("{}");
+    expectNoScene(Execute(server, CommandType::SetEntityProperties, ToVector(properties)), "SetEntityProperties");
+
+    BufferWriter transform;
+    transform.WriteString(id);
+    for (int i = 0; i < 3; ++i)
+        transform.WriteF32(0.0f);
+    for (float component : {0.0f, 0.0f, 0.0f, 1.0f})
+        transform.WriteF32(component);
+    for (int i = 0; i < 3; ++i)
+        transform.WriteF32(1.0f);
+    expectNoScene(Execute(server, CommandType::SetLocalTransform, ToVector(transform)), "SetLocalTransform");
+}
+
 // ==================== Polled commands don't log per call ====================
 
 namespace
@@ -243,7 +286,8 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
 {
     for (const CommandType polled : {CommandType::RenderFrame, CommandType::GetAudio, CommandType::PollEvents,
                                      CommandType::GetAllEntities, CommandType::GetEntityTransform,
-                                     CommandType::GetCameraPosition, CommandType::GetEngineHealth})
+                                     CommandType::GetCameraPosition, CommandType::GetEngineHealth,
+                                     CommandType::GetHierarchy, CommandType::GetEntity})
     {
         EXPECT_TRUE(EditorServer::IsPolledCommand(static_cast<uint8_t>(polled))) << static_cast<int>(polled);
     }
@@ -255,7 +299,10 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                         CommandType::SetEntityTransform, CommandType::CreateScript,
                                         CommandType::RescanAssets, CommandType::Hello, CommandType::Shutdown,
                                         CommandType::OpenScene, CommandType::SaveSceneToFile, CommandType::NewScene,
-                                        CommandType::SetProjectSettings, CommandType::SetStartupScene})
+                                        CommandType::SetProjectSettings, CommandType::SetStartupScene,
+                                        CommandType::CreateEntityEx, CommandType::SetEntityParent,
+                                        CommandType::SetEntityProperties, CommandType::DuplicateEntity,
+                                        CommandType::SetLocalTransform})
     {
         EXPECT_FALSE(EditorServer::IsPolledCommand(static_cast<uint8_t>(notPolled))) << static_cast<int>(notPolled);
     }
@@ -272,6 +319,9 @@ TEST_F(EditorServerNoSceneTest, PolledCommandsLogNothing)
     EXPECT_EQ(Execute(server, CommandType::GetAllEntities).type, static_cast<uint8_t>(ResponseType::EntityList));
     (void)Execute(server, CommandType::GetAudio);
     EXPECT_EQ(Execute(server, CommandType::GetEntityTransform,
+                      StringPayload("00000000-0000-0000-0000-000000000000")).type, ErrorType);
+    EXPECT_EQ(Execute(server, CommandType::GetHierarchy).type, ErrorType);
+    EXPECT_EQ(Execute(server, CommandType::GetEntity,
                       StringPayload("00000000-0000-0000-0000-000000000000")).type, ErrorType);
 
     for (const auto &line : capture.lines)
