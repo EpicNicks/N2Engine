@@ -139,6 +139,11 @@ ActionMap* InputSystem::GetCurActionMap() const
 std::vector<GamepadInfo> InputSystem::GetConnectedGamepads()
 {
     std::vector<GamepadInfo> result;
+    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the calls
+    if (!Window::HasGlfw())
+    {
+        return result;
+    }
     for (int i = GLFW_JOYSTICK_1; i <= GLFW_JOYSTICK_LAST; ++i)
     {
         if (glfwJoystickPresent(i))

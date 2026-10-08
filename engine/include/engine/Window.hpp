@@ -55,6 +55,10 @@ namespace N2Engine
         bool _rendererFailed = false;
         // Set by SetRenderSize: frames render at this size, whatever the window's
         std::optional<Vector2i> _renderSize;
+        // InitWindow took the no-window path (UsesNoWindow): there is a renderer but no GLFW window
+        bool _windowless = false;
+        // The size the windowless renderer started at, which GetWindowDimensions reports in place of a window's
+        Vector2i _windowlessSize{0, 0};
 
         static void FramebufferSizeCallback(GLFWwindow *window, int width, int height);
         void OnWindowResize(int width, int height);
@@ -66,20 +70,47 @@ namespace N2Engine
         Window();
         ~Window();
 
-        /// @returns false if the window or renderer failed to start; see GetInitError()
+        /// The size a window opens at when there is no monitor to size it from, and the size a windowless
+        /// renderer starts at
+        static constexpr int FallbackWidth = 1280;
+        static constexpr int FallbackHeight = 720;
+
+        /**
+         * True when InitWindow creates no window: a headless application on the software renderer. That renderer
+         * draws into a CPU buffer, so a hidden window would only give it a GL context to blit to and nothing would
+         * ever see it. Without a window GLFW isn't initialised at all, so this works on a machine with no display
+         * or GPU (the CI runner): frames are read back with IRenderer::ReadFramebuffer.
+         */
+        [[nodiscard]] static bool UsesNoWindow(const Config::ApplicationOptions &options);
+
+        /// True while GLFW is initialised: from a windowed InitWindow until Shutdown (or a failed init). False with
+        /// no window, windowless included. Code that calls GLFW without a window handle (gamepads) checks it, since
+        /// GLFW refuses those calls with GLFW_NOT_INITIALIZED otherwise.
+        [[nodiscard]] static bool HasGlfw();
+
+        /// @returns false if the window or renderer failed to start; see GetInitError(). With UsesNoWindow(options)
+        /// no window is created: the software renderer starts headless at FallbackWidth x FallbackHeight
+        /// (SoftwareRenderer::Initialize(nullptr, ...)), and the input system is created as usual.
         bool InitWindow(const Config::ApplicationOptions &options);
-        /// True once InitWindow has succeeded and until Shutdown
-        [[nodiscard]] bool IsValid() const { return _window != nullptr && _renderer != nullptr; }
+        /// True once InitWindow has succeeded and until Shutdown: a window and a renderer, or (windowless) a
+        /// renderer alone
+        [[nodiscard]] bool IsValid() const { return (_window != nullptr || _windowless) && _renderer != nullptr; }
+        /// True when InitWindow took the no-window path (UsesNoWindow), until Shutdown
+        [[nodiscard]] bool IsWindowless() const { return _windowless; }
         [[nodiscard]] const std::string& GetInitError() const { return _initError; }
         /// True when the window opened but the renderer failed (the window is then closed again)
         [[nodiscard]] bool RendererFailed() const { return _rendererFailed; }
+        /// True when there is a window and it was asked to close, or when there is nothing to keep running for (no
+        /// valid window). A valid windowless window never closes: its host ends on its own conditions.
         [[nodiscard]] bool ShouldClose() const;
+        /// GLFW's events (with a window), then the input system's update (with or without one)
         void PollEvents();
         void Shutdown();
         void Clear();
         [[nodiscard]] Renderer::Common::IRenderer* GetRenderer() const;
         [[nodiscard]] Input::InputSystem* GetInputSystem() const;
 
+        /// The window's size in screen coordinates; windowless, the size the renderer started at; {0, 0} without either
         [[nodiscard]] Vector2i GetWindowDimensions() const;
         void SetWindowMode(WindowMode windowMode);
 

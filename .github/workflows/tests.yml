@@ -95,25 +95,23 @@ jobs:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
 
-      # Starts the editor host as a launcher would (--port 0, then the port from its ready line), with a
-      # project, talks to it over its TCP protocol, then asks it to shut down.
-      # The runner has no GPU, so the window fails and the host serves without one.
+      # Starts the editor host as a launcher would (--port 0, then the port from its ready line), with a project, the
+      # windowless software renderer and an access token from the environment (--token-env), talks to it over its TCP
+      # protocol (Hello, a rendered frame, audio, assets), then asks it to shut down. A second host runs with the
+      # default renderer, whose window fails on the GPU-less runner so it serves without one, and with
+      # --exit-on-disconnect, so it must exit by itself when its client leaves.
       # A non-zero exit code catches crashes during shutdown or static destruction.
       - name: Editor host smoke test
         shell: pwsh
         run: |
           $exe = Resolve-Path "build/bin/${{ matrix.config }}/N2EditorHost.exe"
-          $logPath = Join-Path $PWD "host.log"
+          $protocolVersion = (Get-Content editor-server/protocol/protocol.json -Raw | ConvertFrom-Json).version
 
           # A project with one asset: the host's ResourceLoader writes its .meta under .import/ at startup
           $project = Join-Path $env:RUNNER_TEMP "n2-smoke-project"
           Remove-Item $project -Recurse -Force -ErrorAction SilentlyContinue
           $null = New-Item -ItemType Directory -Force (Join-Path $project "assets")
           Set-Content (Join-Path $project "assets/startup.mat") "{}"
-
-          $proc = Start-Process -FilePath $exe -ArgumentList "--port", "0", "--project", "`"$project`"" -PassThru `
-            -RedirectStandardOutput $logPath -RedirectStandardError host.err
-          $null = $proc.Handle # keeps ExitCode readable after the process exits
 
           # The asset's .meta: its UUID must be a real one (all zeros means ResourceUUID wasn't initialised)
           function Assert-Meta([string]$name) {
@@ -124,12 +122,12 @@ jobs:
             Write-Host "$name.meta: uuid $uuid"
           }
 
-          try {
-            # The ready line ("N2EditorHost ready " then key=value fields, port among them) comes once the server
-            # listens. Matched with the launcher regex from logging-and-editor.html#ready-line, so port needn't be
-            # first. Only complete lines count, each with its trailing \r stripped (the host's stdout is in text
-            # mode, so lines end in \r\n, and .NET's $ doesn't match before a \r). The log is read with sharing,
-            # as the host has it open.
+          # The port from the host's ready line ("N2EditorHost ready " then key=value fields, port among them), which
+          # comes once the server listens. Matched with the launcher regex from logging-and-editor.html#ready-line, so
+          # port needn't be first. Only complete lines count, each with its trailing \r stripped (the host's stdout is
+          # in text mode, so lines end in \r\n, and .NET's $ doesn't match before a \r). The log is read with sharing,
+          # as the host has it open.
+          function Wait-ReadyLine($proc, [string]$logPath) {
             $port = $null
             $text = ""
             $readError = $null
@@ -161,8 +159,11 @@ jobs:
             }
             if ($port -lt 1 -or $port -gt 65535) { throw "Ready line has an invalid port: $port" }
             Write-Host "Editor host ready on port $port"
+            return $port
+          }
 
-            # Listening before the ready line, so the first attempt should connect; a few retries for safety
+          # Listening before the ready line, so the first attempt should connect; a few retries for safety
+          function Connect-Host([int]$port) {
             $client = $null
             for ($i = 0; $i -lt 10 -and -not $client; $i++) {
               try { $client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", $port) }
@@ -170,39 +171,108 @@ jobs:
             }
             if (-not $client) { throw "Editor host never accepted a connection on port $port" }
             $client.ReceiveTimeout = 10000
-            $stream = $client.GetStream()
+            return $client
+          }
 
-            # Frames are [command: 1 byte][payload length: uint32 LE][payload]
-            function Send-Command([byte]$type) {
-              $bytes = [byte[]](@($type) + [BitConverter]::GetBytes([uint32]0))
-              $stream.Write($bytes, 0, $bytes.Length)
+          # Frames are [type: 1 byte][payload length: uint32 LE][payload], both ways
+          function Send-Frame($stream, [byte]$type, [byte[]]$payload = @()) {
+            $bytes = [byte[]](@($type) + [BitConverter]::GetBytes([uint32]$payload.Length) + $payload)
+            $stream.Write($bytes, 0, $bytes.Length)
+          }
+          function Read-Exact($stream, [int]$count) {
+            $buffer = New-Object byte[] $count
+            $offset = 0
+            while ($offset -lt $count) {
+              $read = $stream.Read($buffer, $offset, $count - $offset)
+              if ($read -le 0) { throw "Connection closed after $offset of $count bytes" }
+              $offset += $read
             }
-            function Read-Exact([int]$count) {
-              $buffer = New-Object byte[] $count
-              $offset = 0
-              while ($offset -lt $count) {
-                $read = $stream.Read($buffer, $offset, $count - $offset)
-                if ($read -le 0) { throw "Connection closed after $offset of $count bytes" }
-                $offset += $read
+            return ,$buffer
+          }
+          function Read-Response($stream) {
+            $header = Read-Exact $stream 5
+            $payload = Read-Exact $stream ([BitConverter]::ToUInt32($header, 1))
+            return @{ Type = $header[0]; Payload = $payload }
+          }
+          # Error's payload is its message, as raw UTF-8
+          function Assert-Response($response, [byte]$expected, [string]$what) {
+            if ($response.Type -ne $expected) {
+              throw ("{0}: expected response 0x{1:X2}, got 0x{2:X2}: {3}" -f $what, $expected, $response.Type,
+                [Text.Encoding]::UTF8.GetString($response.Payload))
+            }
+          }
+          # True once the host has closed the connection (a read returns 0, or the connection was reset)
+          function Test-ClosedByHost($stream) {
+            try { return $stream.Read((New-Object byte[] 1), 0, 1) -eq 0 }
+            catch [System.IO.IOException] {
+              $socketError = $_.Exception.InnerException
+              return -not ($socketError -is [System.Net.Sockets.SocketException] -and $socketError.SocketErrorCode -eq 'TimedOut')
+            }
+          }
+
+          # Hello: clientName, protocolVersion, token (strings: [uint32 byte count][UTF-8]).
+          # ServerInfo (0x0B) answers: protocolVersion, engineVersion, capabilities (JSON text), projectLoaded
+          function Get-StringBytes([string]$text) {
+            $utf8 = [Text.Encoding]::UTF8.GetBytes($text)
+            return ,[byte[]]([BitConverter]::GetBytes([uint32]$utf8.Length) + $utf8)
+          }
+          function Get-HelloPayload([string]$token) {
+            return ,[byte[]]((Get-StringBytes "CI smoke test") + (Get-StringBytes $protocolVersion) + (Get-StringBytes $token))
+          }
+
+          # EngineHealth (0x09): healthy, then a uint32 count of (name, state, detail) strings. As a name -> state map.
+          function Get-SubsystemStates([byte[]]$payload) {
+            $states = @{}
+            $offset = 1
+            $count = [BitConverter]::ToUInt32($payload, $offset); $offset += 4
+            for ($i = 0; $i -lt $count; $i++) {
+              $fields = @()
+              for ($f = 0; $f -lt 3; $f++) {
+                $length = [BitConverter]::ToUInt32($payload, $offset); $offset += 4
+                $fields += [Text.Encoding]::UTF8.GetString($payload, $offset, $length); $offset += $length
               }
-              return ,$buffer
+              $states[$fields[0]] = $fields[1]
+              Write-Host "  $($fields[0]): $($fields[1]) ($($fields[2]))"
             }
+            return $states
+          }
 
-            # Hello: clientName, protocolVersion, token (strings: [uint32 byte count][UTF-8]); the host has no token.
-            # ServerInfo answers: protocolVersion, engineVersion, capabilities (JSON text), projectLoaded
-            function Get-StringBytes([string]$text) {
-              $utf8 = [Text.Encoding]::UTF8.GetBytes($text)
-              return ,[byte[]]([BitConverter]::GetBytes([uint32]$utf8.Length) + $utf8)
-            }
-            $protocolVersion = (Get-Content editor-server/protocol/protocol.json -Raw | ConvertFrom-Json).version
-            $hello = [byte[]]((Get-StringBytes "CI smoke test") + (Get-StringBytes $protocolVersion) + (Get-StringBytes ""))
-            $frame = [byte[]](@([byte]0x04) + [BitConverter]::GetBytes([uint32]$hello.Length) + $hello)
-            $stream.Write($frame, 0, $frame.Length)
-            $header = Read-Exact 5
-            $payload = Read-Exact ([BitConverter]::ToUInt32($header, 1))
-            if ($header[0] -ne 0x0B) {
-              throw ("Expected ServerInfo response (0x0B) to Hello, got 0x{0:X2}: {1}" -f $header[0], [Text.Encoding]::UTF8.GetString($payload))
-            }
+          $logPath = Join-Path $PWD "host.log"
+          $errPath = Join-Path $PWD "host.err"
+          $logPath2 = Join-Path $PWD "host-exit-on-disconnect.log"
+          $errPath2 = Join-Path $PWD "host-exit-on-disconnect.err"
+          $proc = $null
+          $proc2 = $null
+
+          try {
+            # ---- Host 1: --renderer software, --token-env, --project ----
+            # The token is only in the environment the host inherits, never on its command line
+            $token = [guid]::NewGuid().ToString("N")
+            $env:N2_SMOKE_TOKEN = $token
+            $proc = Start-Process -FilePath $exe -PassThru `
+              -ArgumentList "--port", "0", "--project", "`"$project`"", "--renderer", "software", "--token-env", "N2_SMOKE_TOKEN" `
+              -RedirectStandardOutput $logPath -RedirectStandardError $errPath
+            $null = $proc.Handle # keeps ExitCode readable after the process exits
+            Remove-Item Env:N2_SMOKE_TOKEN
+
+            $port = Wait-ReadyLine $proc $logPath
+
+            # The host has an access token: a wrong one is refused, and the connection closed
+            $client = Connect-Host $port
+            $stream = $client.GetStream()
+            Send-Frame $stream 0x04 (Get-HelloPayload "not the token")
+            $response = Read-Response $stream
+            Assert-Response $response 0x01 "Hello with a wrong token"
+            if (-not (Test-ClosedByHost $stream)) { throw "The host kept a connection open after refusing its Hello" }
+            $client.Close()
+            Write-Host "Hello with a wrong token: refused, connection closed"
+
+            $client = Connect-Host $port
+            $stream = $client.GetStream()
+            Send-Frame $stream 0x04 (Get-HelloPayload $token)
+            $response = Read-Response $stream
+            Assert-Response $response 0x0B "Hello with the token"
+            $payload = $response.Payload
             $serverVersionLength = [BitConverter]::ToUInt32($payload, 0)
             $serverVersion = [Text.Encoding]::UTF8.GetString($payload, 4, $serverVersionLength)
             if ($serverVersion -ne $protocolVersion) { throw "Hello: the host speaks protocol $serverVersion, protocol.json is $protocolVersion" }
@@ -210,20 +280,52 @@ jobs:
             if ($payload[$payload.Length - 1] -ne 1) { throw "Hello: the host reports no project loaded" }
             Write-Host "Hello: protocol $serverVersion, project loaded"
 
-            Send-Command 0x50 # GetEngineHealth
-            $header = Read-Exact 5
-            if ($header[0] -ne 0x09) { throw ("Expected EngineHealth response (0x09), got 0x{0:X2}" -f $header[0]) }
-            $payload = Read-Exact ([BitConverter]::ToUInt32($header, 1))
-            Write-Host "GetEngineHealth: $($payload.Length) bytes, healthy=$($payload[0])"
+            # The event ring kept the startup lines: RunHost constructs the server before Application::Init, so lines
+            # Init logs itself are there. PollEvents (0x05): epoch, afterSeq, maxEvents (uint32 each); Events (0x0C):
+            # epoch, nextSeq, dropped (uint32 each), then the events as a json field (a string: byte count, UTF-8 JSON),
+            # searched here as text
+            Send-Frame $stream 0x05 ([byte[]]([BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]0) + [BitConverter]::GetBytes([uint32]1024)))
+            $response = Read-Response $stream
+            Assert-Response $response 0x0C "PollEvents"
+            $eventsText = [Text.Encoding]::UTF8.GetString($response.Payload, 12, $response.Payload.Length - 12)
+            foreach ($line in "Camera initialized", "Using Software renderer, headless (no window)") {
+              if (-not $eventsText.Contains($line)) { throw "PollEvents: no '$line' among the startup events (was the server constructed after Init?)" }
+            }
+            Write-Host "PollEvents: $($response.Payload.Length) bytes, startup lines present"
+
+            # The software renderer runs with no window, even on this GPU-less runner
+            Send-Frame $stream 0x50 # GetEngineHealth
+            $response = Read-Response $stream
+            Assert-Response $response 0x09 "GetEngineHealth"
+            Write-Host "GetEngineHealth: healthy=$($response.Payload[0])"
+            $states = Get-SubsystemStates $response.Payload
+            if ($states["Renderer"] -ne "Running") { throw "The software renderer isn't running: $($states["Renderer"])" }
+            if ($states["Window"] -ne "Disabled") { throw "Expected no window (Disabled), got: $($states["Window"])" }
+
+            # A frame: FrameData (0x02) is width, height (uint32), then width * height RGBA pixels, alpha 255
+            $width = 64
+            $height = 48
+            Send-Frame $stream 0x02 ([byte[]]([BitConverter]::GetBytes([int32]$width) + [BitConverter]::GetBytes([int32]$height))) # SetViewportSize
+            Assert-Response (Read-Response $stream) 0x00 "SetViewportSize"
+            Send-Frame $stream 0x01 # RenderFrame
+            $response = Read-Response $stream
+            Assert-Response $response 0x02 "RenderFrame"
+            $payload = $response.Payload
+            if ($payload.Length -ne 8 + $width * $height * 4) { throw "RenderFrame: $($payload.Length) bytes, expected $(8 + $width * $height * 4)" }
+            $frameWidth = [BitConverter]::ToUInt32($payload, 0)
+            $frameHeight = [BitConverter]::ToUInt32($payload, 4)
+            if ($frameWidth -ne $width -or $frameHeight -ne $height) { throw "RenderFrame: a ${frameWidth}x$frameHeight frame, expected ${width}x$height" }
+            for ($i = 8 + 3; $i -lt $payload.Length; $i += 4) {
+              if ($payload[$i] -ne 255) { throw "RenderFrame: pixel $(($i - 11) / 4) has alpha $($payload[$i])" }
+            }
+            Write-Host "RenderFrame: ${frameWidth}x$frameHeight, $($payload.Length - 8) bytes of pixels"
 
             # Headless audio runs on an OpenAL loopback device (no sound card needed), so GetAudio answers
             # with AudioSamples: sampleRate, channels, sampleFormat (string), frameCount, droppedFrames, samples
-            Send-Command 0x03 # GetAudio
-            $header = Read-Exact 5
-            $payload = Read-Exact ([BitConverter]::ToUInt32($header, 1))
-            if ($header[0] -ne 0x0A) {
-              throw ("Expected AudioSamples response (0x0A), got 0x{0:X2}: {1}" -f $header[0], [Text.Encoding]::UTF8.GetString($payload))
-            }
+            Send-Frame $stream 0x03 # GetAudio
+            $response = Read-Response $stream
+            Assert-Response $response 0x0A "GetAudio"
+            $payload = $response.Payload
             $rate = [BitConverter]::ToUInt32($payload, 0)
             $channels = [BitConverter]::ToUInt32($payload, 4)
             $formatLength = [BitConverter]::ToUInt32($payload, 8)
@@ -236,23 +338,15 @@ jobs:
             # afterwards gets its own on RescanAssets
             Assert-Meta "startup.mat"
             Set-Content (Join-Path $project "assets/added.mat") "{}"
-            Send-Command 0x41 # RescanAssets
-            $header = Read-Exact 5
-            $payload = Read-Exact ([BitConverter]::ToUInt32($header, 1))
-            if ($header[0] -ne 0x00) {
-              throw ("Expected Ok response (0x00) to RescanAssets, got 0x{0:X2}: {1}" -f $header[0], [Text.Encoding]::UTF8.GetString($payload))
-            }
+            Send-Frame $stream 0x41 # RescanAssets
+            Assert-Response (Read-Response $stream) 0x00 "RescanAssets"
             Assert-Meta "added.mat"
 
-            Send-Command 0xFF # Shutdown
-            $ok = Read-Exact 5
-            if ($ok[0] -ne 0x00) { throw ("Expected Ok response (0x00) to Shutdown, got 0x{0:X2}" -f $ok[0]) }
+            Send-Frame $stream 0xFF # Shutdown
+            Assert-Response (Read-Response $stream) 0x00 "Shutdown"
             $client.Close()
 
-            if (-not $proc.WaitForExit(30000)) {
-              $proc.Kill()
-              throw "Editor host did not exit within 30s of Shutdown"
-            }
+            if (-not $proc.WaitForExit(30000)) { throw "Editor host did not exit within 30s of Shutdown" }
             if ($proc.ExitCode -ne 0) { throw ("Editor host exited with code 0x{0:X8}" -f $proc.ExitCode) }
             Write-Host "Editor host exited cleanly"
 
@@ -260,9 +354,35 @@ jobs:
             foreach ($problem in "Assets directory not found", "ResourceUUID not initialized") {
               if ($log.Contains($problem)) { throw "Host log reports: $problem" }
             }
+            if ($log.Contains($token)) { throw "The host logged its access token" }
+
+            # ---- Host 2: the default renderer (no GPU here, so no window), --exit-on-disconnect, no token ----
+            $proc2 = Start-Process -FilePath $exe -PassThru -ArgumentList "--port", "0", "--exit-on-disconnect" `
+              -RedirectStandardOutput $logPath2 -RedirectStandardError $errPath2
+            $null = $proc2.Handle
+            $port = Wait-ReadyLine $proc2 $logPath2
+
+            $client = Connect-Host $port
+            $stream = $client.GetStream()
+            Send-Frame $stream 0x04 (Get-HelloPayload "")
+            Assert-Response (Read-Response $stream) 0x0B "Hello without a token"
+            Send-Frame $stream 0x50 # GetEngineHealth
+            Assert-Response (Read-Response $stream) 0x09 "GetEngineHealth"
+            # Leaving without Shutdown: the session ends, so the host stops by itself
+            $client.Close()
+
+            if (-not $proc2.WaitForExit(30000)) { throw "Editor host with --exit-on-disconnect did not exit within 30s of its client leaving" }
+            if ($proc2.ExitCode -ne 0) { throw ("Editor host with --exit-on-disconnect exited with code 0x{0:X8}" -f $proc2.ExitCode) }
+            Write-Host "Editor host with --exit-on-disconnect exited cleanly when its client left"
           }
           finally {
-            if (-not $proc.HasExited) { $proc.Kill() }
+            # A failing Kill (the host exiting meanwhile) must not replace the error that got us here
+            foreach ($p in $proc, $proc2) {
+              try { if ($p -and -not $p.HasExited) { $p.Kill() } }
+              catch { Write-Host "Couldn't kill host process $($p.Id): $($_.Exception.Message)" }
+            }
             Write-Host "----- host stdout -----"; Get-Content $logPath -ErrorAction SilentlyContinue
-            Write-Host "----- host stderr -----"; Get-Content host.err -ErrorAction SilentlyContinue
+            Write-Host "----- host stderr -----"; Get-Content $errPath -ErrorAction SilentlyContinue
+            Write-Host "----- host (--exit-on-disconnect) stdout -----"; Get-Content $logPath2 -ErrorAction SilentlyContinue
+            Write-Host "----- host (--exit-on-disconnect) stderr -----"; Get-Content $errPath2 -ErrorAction SilentlyContinue
           }

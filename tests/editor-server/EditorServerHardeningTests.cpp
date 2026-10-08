@@ -938,4 +938,84 @@ TEST(EditorServerSocketTest, RejectsAnInvalidBindAddress)
     EXPECT_FALSE(server.Start(0, "not-an-address"));
     EXPECT_FALSE(server.IsRunning());
 }
+
+namespace
+{
+    /// Plays the host's main loop until the server stops itself; false if it is still running after `limit`
+    bool WaitUntilStopped(EditorServer &server, std::chrono::seconds limit)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + limit;
+        while (server.IsRunning() && std::chrono::steady_clock::now() < deadline)
+        {
+            server.ProcessCommands(std::chrono::milliseconds(10));
+        }
+        return !server.IsRunning();
+    }
+}
+
+TEST(EditorServerSocketTest, WithStopOnDisconnectTheServerStopsWhenItsClientLeaves)
+{
+    EditorServer server;
+    EXPECT_FALSE(server.StopsOnDisconnect()) << "off by default";
+    ASSERT_TRUE(server.SetStopOnDisconnect(true));
+    ASSERT_TRUE(server.Start(0));
+    EXPECT_FALSE(server.SetStopOnDisconnect(false)) << "it can't change while serving";
+    EXPECT_TRUE(server.StopsOnDisconnect());
+
+    {
+        // Without an access token the connection is the session
+        TestClient client(server.GetPort());
+        ASSERT_TRUE(client.IsConnected());
+        const auto response = Roundtrip(server, client, CommandType::DestroyEntity, NoSuchEntity);
+        ASSERT_TRUE(response.has_value());
+        EXPECT_TRUE(server.IsRunning());
+    }
+
+    EXPECT_TRUE(WaitUntilStopped(server, std::chrono::seconds(10)));
+    StopWithin(server, std::chrono::seconds(10));
+
+    // It can serve again, until its next client leaves
+    ASSERT_TRUE(server.Start(0));
+    EXPECT_TRUE(server.IsRunning());
+    StopWithin(server, std::chrono::seconds(10));
+}
+
+TEST(EditorServerSocketTest, WithAnAccessTokenOnlyAnAuthenticatedSessionStopsTheServerOnDisconnect)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.SetAccessToken("socket-token"));
+    ASSERT_TRUE(server.SetStopOnDisconnect(true));
+    ASSERT_TRUE(server.Start(0));
+    const int port = server.GetPort();
+
+    {
+        // Connects and leaves without a Hello
+        TestClient silent(port);
+        ASSERT_TRUE(silent.IsConnected());
+    }
+    {
+        // Its Hello is refused, and the server closes the connection
+        TestClient refused(port);
+        ASSERT_TRUE(refused.IsConnected());
+        const auto response = Roundtrip(server, refused, CommandType::Hello, HelloPayload("wrong"));
+        ASSERT_TRUE(response.has_value());
+        EXPECT_EQ(response->type, ErrorType);
+        EXPECT_TRUE(refused.IsClosedByServer());
+    }
+
+    {
+        // Served one connection at a time, so this one is answered only once those two have ended: neither stopped
+        // the server, or nothing would accept it
+        TestClient client(port);
+        ASSERT_TRUE(client.IsConnected());
+        const auto response = Roundtrip(server, client, CommandType::Hello, HelloPayload("socket-token"));
+        ASSERT_TRUE(response.has_value());
+        EXPECT_EQ(response->type, ServerInfoType) << response->body;
+        EXPECT_TRUE(server.IsRunning());
+    }
+
+    // That one had a session, so its leaving stops the server
+    EXPECT_TRUE(WaitUntilStopped(server, std::chrono::seconds(10)));
+    StopWithin(server, std::chrono::seconds(10));
+}
 #endif

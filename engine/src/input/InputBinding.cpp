@@ -47,6 +47,11 @@ float AxisBinding::NormalizeAxis(const GamepadAxis axis, const float raw)
 
 InputValue AxisBinding::getValue()
 {
+    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the call
+    if (!Window::HasGlfw())
+    {
+        return 0.0f;
+    }
     GLFWgamepadstate state;
     if (glfwGetGamepadState(gamepadId, &state))
     {
@@ -58,6 +63,11 @@ InputValue AxisBinding::getValue()
 
 InputValue GamepadStickBinding::getValue()
 {
+    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the call
+    if (!Window::HasGlfw())
+    {
+        return Vector2(0.0f, 0.0f);
+    }
     GLFWgamepadstate state;
     if (glfwGetGamepadState(gamepadId, &state))
     {
@@ -124,6 +134,11 @@ InputValue MouseButtonBinding::getValue()
 
 InputValue GamepadButtonBinding::getValue()
 {
+    // Without GLFW (no window, or windowless) there are no gamepads; GLFW would refuse the call
+    if (!Window::HasGlfw())
+    {
+        return false;
+    }
     GLFWgamepadstate state;
     if (glfwGetGamepadState(gamepadId, &state))
     {

@@ -112,6 +112,15 @@ namespace N2Engine::Editor
         bool SetHelloTimeout(std::chrono::milliseconds timeout);
         [[nodiscard]] std::chrono::milliseconds GetHelloTimeout() const { return _helloTimeout; }
 
+        /// Before Start, like SetAccessToken (false, changing nothing, while running): when set, the server stops (as
+        /// on a Shutdown command, so IsRunning() turns false) once a client's session ends, i.e. its connection
+        /// closes for any reason after the session opened. With an access token a session opens with a successful
+        /// Hello, so a connection that never authenticated can't stop the server; without one, every connection is
+        /// a session. A host launched by an editor sets it (N2EditorHost --exit-on-disconnect), so it doesn't
+        /// outlive an editor that crashed or was killed. Off by default: the server goes back to accepting.
+        bool SetStopOnDisconnect(bool stop);
+        [[nodiscard]] bool StopsOnDisconnect() const { return _stopOnDisconnect; }
+
         /// Client-supplied text made safe for one log line: control characters (newlines included) become '?', and
         /// text over maxBytes is cut at a UTF-8 character boundary, with "..." appended
         [[nodiscard]] static std::string SanitizeForLog(std::string_view text, size_t maxBytes = 100);
@@ -157,7 +166,9 @@ namespace N2Engine::Editor
 
     private:
         void ServerLoop(int listenSocket);
-        void HandleClient(int clientSocket);
+        /// Serves one connection until it closes. sessionOpened is set (and stays set) once the connection has a
+        /// session: at once without an access token, at its first successful Hello with one.
+        void HandleClient(int clientSocket, bool &sessionOpened);
         void ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload);
         /// Network thread: the Logger isn't thread-safe, so log lines are posted to the main thread
         void PostLog(std::string message, bool isWarning = false);
@@ -215,6 +226,9 @@ namespace N2Engine::Editor
         // Set before Start only, so both threads read it without a lock
         std::string _accessToken;
         std::chrono::milliseconds _helloTimeout{DefaultHelloTimeout};
+        // Atomic: a client Shutdown clears _running on the network thread, so the setter's _running check alone
+        // doesn't keep it from racing ServerLoop's read
+        std::atomic<bool> _stopOnDisconnect{false};
 
         CommandQueue _commands;
         // Thread-safe (its own mutex): the Logger subscription pushes from whichever thread logged
