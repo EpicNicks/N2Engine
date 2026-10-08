@@ -46,16 +46,19 @@ namespace N2Engine::Editor
         static constexpr float MaxFar = 1.0e7f;
         /// The far plane must be at least this much beyond the near plane
         static constexpr float MinDepthRange = 1.0e-3f;
+        /// A perspective camera's far / near may be at most this
+        static constexpr float MaxPerspectiveDepthRatio = 1.0e7f;
 
-        /// Exactly equal, number for number (Vector3's and Quaternion's operator== allow a small difference, which would
+        /// Equal in everything that shows, number for number (Vector3's and Quaternion's operator== allow a small difference, which would
         /// swallow a camera moved by a tiny step: it must still make a new frame)
         bool operator==(const EditorCameraState &other) const
         {
             return position.x == other.position.x && position.y == other.position.y && position.z == other.position.z &&
                    rotation.GetX() == other.rotation.GetX() && rotation.GetY() == other.rotation.GetY() &&
                    rotation.GetZ() == other.rotation.GetZ() && rotation.GetW() == other.rotation.GetW() &&
-                   fovY == other.fovY && orthographic == other.orthographic && orthoSize == other.orthoSize &&
-                   nearPlane == other.nearPlane && farPlane == other.farPlane;
+                   orthographic == other.orthographic && nearPlane == other.nearPlane && farPlane == other.farPlane &&
+                   // The projection that isn't in use doesn't change the picture
+                   (orthographic ? orthoSize == other.orthoSize : fovY == other.fovY);
         }
 
         /**
@@ -146,11 +149,21 @@ namespace N2Engine::Editor
         }
         camera.rotation = rotation.Normalized();
 
-        if (!std::isfinite(camera.fovY) || !std::isfinite(camera.orthoSize) || !std::isfinite(camera.nearPlane) ||
-            !std::isfinite(camera.farPlane))
+        const struct
         {
-            result.error = "The camera has a projection value that isn't a finite number";
-            return result;
+            const char *name;
+            float value;
+        } projectionValues[] = {{"field of view", camera.fovY},
+                                {"orthographic size", camera.orthoSize},
+                                {"near plane", camera.nearPlane},
+                                {"far plane", camera.farPlane}};
+        for (const auto &entry : projectionValues)
+        {
+            if (!std::isfinite(entry.value))
+            {
+                result.error = std::string("The camera's ") + entry.name + " isn't a finite number";
+                return result;
+            }
         }
 
         if (camera.orthographic)
@@ -182,6 +195,12 @@ namespace N2Engine::Editor
         if (!(camera.farPlane <= State::MaxFar) || !(camera.farPlane - camera.nearPlane >= State::MinDepthRange))
         {
             result.error = "The far plane must be beyond the near plane (by at least 0.001) and at most 10000000";
+            return result;
+        }
+        // A perspective depth buffer can't tell surfaces apart across a ratio this wide
+        if (!camera.orthographic && !(camera.farPlane / camera.nearPlane <= State::MaxPerspectiveDepthRatio))
+        {
+            result.error = "The far plane is too far for the near plane (far / near must be at most 10000000)";
             return result;
         }
 

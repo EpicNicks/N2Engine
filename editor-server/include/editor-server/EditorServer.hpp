@@ -512,6 +512,9 @@ namespace N2Engine::Editor
         /// What the viewport shows changed (the scene, the editor camera, the viewport size, the assets or the project's
         /// settings): moves the frame revision on, and pushes frameChanged for the first change since a frame was rendered
         void NoteViewChanged();
+        /// The scene changed and the handler says so (its revision has just moved): NoteViewChanged(), and the scene as it
+        /// is now is recorded as seen, so a frame is one revision on from the last, not two
+        void NoteSceneChanged();
         /// Notes the open scene as it is now, and NoteViewChanged()s when it isn't the one last seen
         void ObserveScene();
         /// Renders the editor view into _frameBuffer (the open scene from the editor camera at the viewport size) and

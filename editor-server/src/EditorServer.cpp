@@ -758,10 +758,15 @@ namespace N2Engine::Editor
             Math::Quaternion rotation;
             Math::Vector3 scale{1.0f, 1.0f, 1.0f};
 
+            /// Exactly the same, number for number: Vector3's and Quaternion's operator== allow a small difference, and a
+            /// change that small is still a change (it moves the scene revision and the frame)
             [[nodiscard]] bool SameAs(const LocalTransformState &other) const
             {
-                return present == other.present && position == other.position && rotation == other.rotation &&
-                       scale == other.scale;
+                return present == other.present && position.x == other.position.x && position.y == other.position.y &&
+                       position.z == other.position.z && rotation.GetX() == other.rotation.GetX() &&
+                       rotation.GetY() == other.rotation.GetY() && rotation.GetZ() == other.rotation.GetZ() &&
+                       rotation.GetW() == other.rotation.GetW() && scale.x == other.scale.x &&
+                       scale.y == other.scale.y && scale.z == other.scale.z;
             }
         };
 
@@ -2068,13 +2073,14 @@ namespace N2Engine::Editor
             SendResponse(clientSocket, response.Release());
             return;
         }
+        // This is the game camera's picture, in the buffer that holds the editor view's frame too: the editor view's
+        // frame has to be rendered again to be sent (its revision is still current: nothing about the editor view
+        // changed). Said first, so a render or read that throws can't leave a half-written buffer marked valid.
+        _frames.InvalidateBuffer();
         app.RenderEditorFrame();
 
-        // RGBA, top row first, whatever the backend. This is the game camera's picture, in the buffer that holds the
-        // editor view's frame too: the editor view's frame has to be rendered again to be sent (its revision is still
-        // current: nothing about the editor view changed).
+        // RGBA, top row first, whatever the backend
         ReadFrame(*renderer, _viewportWidth, _viewportHeight, _frameBuffer);
-        _frames.InvalidateBuffer();
 
         BufferWriter response;
         WriteFrameData(response,
@@ -2161,6 +2167,14 @@ namespace N2Engine::Editor
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    void EditorServer::NoteSceneChanged()
+    {
+        NoteViewChanged();
+        // Reported: the lazy look at the scene (ObserveScene) mustn't count this change again, or the frame would be
+        // two revisions on from the last, and frameChanged would announce a revision no frame has
+        _frames.RecordScene(SceneManager::GetCurScene(), _sceneRevision);
     }
 
     void EditorServer::NoteViewChanged()
@@ -2250,6 +2264,8 @@ namespace N2Engine::Editor
             std::string error;
             if (!RenderEditorView(error))
             {
+                // The client was told a frame was waiting and none came: the next change must tell it again
+                _frames.RearmAnnouncement();
                 SendError(clientSocket, error);
                 return;
             }
@@ -3516,7 +3532,7 @@ namespace N2Engine::Editor
         // A change like any other (the revision only grows), and the scene is saved again when the step led back to
         // the state that was saved
         ++_sceneRevision;
-        NoteViewChanged();
+        NoteSceneChanged();
         if (applied->effect.inexact)
         {
             // The scene isn't exactly what was saved even if the history says it is (a transform the object didn't
@@ -3944,7 +3960,7 @@ namespace N2Engine::Editor
     void EditorServer::MarkSceneChanged(std::vector<std::string> entityIds, const bool full)
     {
         ++_sceneRevision;
-        NoteViewChanged();
+        NoteSceneChanged();
         PushSceneChanged(std::move(entityIds), full);
     }
 
@@ -3972,7 +3988,7 @@ namespace N2Engine::Editor
         _openScene = opened;
         _openScenePath = std::move(path);
         ++_sceneRevision;
-        NoteViewChanged();
+        NoteSceneChanged();
         _savedRevision = _sceneRevision;
         // Another scene: nothing done to the last can be undone, and the empty history is the saved state
         _history.Clear();

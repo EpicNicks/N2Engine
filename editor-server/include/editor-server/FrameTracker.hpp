@@ -70,6 +70,19 @@ namespace N2Engine::Editor
         /// True when the frame held in the server's buffer is the current picture (no render needed to answer)
         [[nodiscard]] bool HasCurrentFrame() const { return _frameValid && _renderedRevision == _revision; }
 
+        /// Records the scene as it is now without calling it a change: for a caller that has just reported the change
+        /// itself (MarkChanged), so ObserveScene doesn't count it a second time
+        void RecordScene(const void *scene, const uint32_t sceneRevision)
+        {
+            _sceneObserved = true;
+            _scene = scene;
+            _sceneRevision = sceneRevision;
+        }
+
+        /// A frame couldn't be rendered: the change that was announced went unanswered, so the next change is announced
+        /// again rather than waiting for a render that failed
+        void RearmAnnouncement() { _announced = false; }
+
         /// A frame of the current revision is now in the buffer: it is served until the picture changes
         void MarkRendered()
         {
