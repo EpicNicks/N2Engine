@@ -13,7 +13,6 @@
 #include <editor-server/EditorServer.hpp>
 #include <editor-server/Protocol.hpp>
 #include <engine/Logger.hpp>
-#include <engine/io/ResourceLoader.hpp>
 
 using namespace N2Engine;
 using namespace N2Engine::Editor;
@@ -99,7 +98,7 @@ TEST(EditorSessionTest, HelloAnswersWithTheServersVersionsAndCapabilities)
     EXPECT_FALSE(info.engineVersion.empty());
     EXPECT_TRUE(ParseProtocolVersion(info.engineVersion).has_value()) << info.engineVersion;
     EXPECT_EQ(info.capabilities, nlohmann::json::array()) << "no optional features are defined yet";
-    EXPECT_EQ(info.projectLoaded, !IO::ResourceLoader::Instance().GetProjectRoot().empty());
+    EXPECT_FALSE(info.projectLoaded) << "a server without SetProject has no project";
 }
 
 TEST(EditorSessionTest, HelloAcceptsAnyMinorAndPatchVersionOfTheSameMajor)

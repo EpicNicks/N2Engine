@@ -3,6 +3,10 @@
 #include <cstddef>
 #include <filesystem>
 #include <format>
+#include <fstream>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
 #include <string_view>
 #include <future>
 #include <system_error>
@@ -12,9 +16,13 @@
 #include "engine/Logger.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/ProjectSettings.hpp"
 #include "engine/audio/AudioSystem.hpp"
 #include "engine/io/ResourceLoader.hpp"
+#include "engine/io/ResourceUUID.hpp"
+#include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/scripting/LuaScriptTemplate.hpp"
 
 #include "renderer/common/FrameRows.hpp"
 #include "renderer/common/Renderer.hpp"
@@ -61,6 +69,52 @@ namespace N2Engine::Editor
         constexpr int NoSocket = -1;
         // How often a waiting network thread checks whether the server is stopping
         constexpr long PollIntervalMicroseconds = 100 * 1000;
+
+        /// A path as UTF-8 text for the wire (string() would throw for characters the code page lacks)
+        std::string Utf8(const std::filesystem::path &path)
+        {
+            const std::u8string text = path.u8string();
+            return std::string(text.begin(), text.end());
+        }
+
+        /// A UTF-8 path from the wire as a filesystem path
+        std::filesystem::path FromUtf8(const std::string &text)
+        {
+            return std::filesystem::path(std::u8string(text.begin(), text.end()));
+        }
+
+        std::vector<std::string> PathStrings(const std::vector<IO::ResourcePath> &paths)
+        {
+            std::vector<std::string> strings;
+            strings.reserve(paths.size());
+            for (const IO::ResourcePath &path : paths)
+            {
+                strings.push_back(path.ToString());
+            }
+            return strings;
+        }
+
+        std::expected<std::string, std::string> ReadTextFile(const std::filesystem::path &file)
+        {
+            std::ifstream stream(file, std::ios::binary);
+            if (!stream)
+            {
+                return std::unexpected("can't read " + Utf8(file));
+            }
+            std::ostringstream text;
+            text << stream.rdbuf();
+            if (stream.bad())
+            {
+                return std::unexpected("can't read " + Utf8(file));
+            }
+            return std::move(text).str();
+        }
+
+        /// A scene's JSON as its file holds it: indented by 2, ending in a newline (diffs well under version control)
+        std::string SceneFileText(const nlohmann::json &scene)
+        {
+            return scene.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+        }
     }
 
     EditorServer::EditorServer()
@@ -649,6 +703,27 @@ namespace N2Engine::Editor
         case CommandType::GetCurrentScene:
             HandleGetCurrentScene(clientSocket);
             break;
+        case CommandType::OpenScene:
+            HandleOpenScene(clientSocket, payload);
+            break;
+        case CommandType::SaveSceneToFile:
+            HandleSaveSceneToFile(clientSocket, payload);
+            break;
+        case CommandType::NewScene:
+            HandleNewScene(clientSocket, payload);
+            break;
+        case CommandType::GetOpenScene:
+            HandleGetOpenScene(clientSocket);
+            break;
+        case CommandType::GetProjectInfo:
+            HandleGetProjectInfo(clientSocket);
+            break;
+        case CommandType::SetProjectSettings:
+            HandleSetProjectSettings(clientSocket, payload);
+            break;
+        case CommandType::SetStartupScene:
+            HandleSetStartupScene(clientSocket, payload);
+            break;
         case CommandType::CreateEntity:
             HandleCreateEntity(clientSocket, payload);
             break;
@@ -728,9 +803,8 @@ namespace N2Engine::Editor
         {
             Logger::Info(std::format("Editor client '{}' said Hello (protocol {})", clientName, clientVersionText));
         }
-        // A project is loaded when the host was started with --project, which initialised the ResourceLoader
-        const bool projectLoaded = !IO::ResourceLoader::Instance().GetProjectRoot().empty();
-        WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), projectLoaded);
+        // A project is loaded when the host opened one (--project, SetProject)
+        WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), HasProject());
         SendResponse(clientSocket, response.Release());
     }
 
@@ -951,6 +1025,12 @@ namespace N2Engine::Editor
         }
         SceneManager::ProcessAnyPendingSceneChange();
 
+        // The scene came from the client, not a file: it has none (until SaveSceneToFile names one), and it is
+        // unsaved
+        _openScenePath.clear();
+        _openScene = SceneManager::GetCurScene();
+        MarkSceneChanged();
+
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
@@ -1066,6 +1146,7 @@ namespace N2Engine::Editor
         {
             auto gameObject = GameObject::Create(cmd.name);
             SceneManager::GetCurSceneRef().AddRootGameObject(gameObject);
+            MarkSceneChanged();
             WriteEntityCreated(response, gameObject->GetUUID().ToString());
         }
         else
@@ -1103,6 +1184,8 @@ namespace N2Engine::Editor
                 // marked but unpurged) and later commands keep working.
                 if (scene->DestroyGameObject(foundGameObject))
                 {
+                    // Marked first: a callback that throws still leaves the scene changed
+                    MarkSceneChanged();
                     scene->ProcessDestroyed();
                     entityDestroyed = true;
                 }
@@ -1148,6 +1231,7 @@ namespace N2Engine::Editor
                 );
                 entity->GetPositionable()->SetScale(cmd.scale);
                 applied = true;
+                MarkSceneChanged();
             }
         }
 
@@ -1226,7 +1310,7 @@ namespace N2Engine::Editor
 
         try
         {
-            std::string scriptTemplate = GenerateScriptTemplate(cmd.name);
+            std::string scriptTemplate = Scripting::MakeLuaScriptTemplate(cmd.name);
             WriteScriptData(response, scriptTemplate);
             Logger::Info("Generated script template for: " + cmd.name);
         }
@@ -1238,87 +1322,443 @@ namespace N2Engine::Editor
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
-    std::string EditorServer::GenerateScriptTemplate(const std::string &scriptName)
-    {
-        std::string className = scriptName;
-        if (!className.empty())
-        {
-            className[0] = std::toupper(className[0]);
-        }
-
-        size_t dotPos = className.find('.');
-        if (dotPos != std::string::npos)
-        {
-            className = className.substr(0, dotPos);
-        }
-
-        for (char &c : className)
-        {
-            if (!std::isalnum(c))
-            {
-                c = '_';
-            }
-        }
-
-        return FillTemplate(GetScriptTemplate(), className);
-    }
-
-    std::string EditorServer::GetScriptTemplate()
-    {
-        return R"(
--- {C} Script
--- Auto-generated by N2Engine Editor
-
-local {C} = {}
-{C}.__index = {C}
-
--- Serializable fields that appear in the inspector
-{C}.SerializableFields = {
-    speed = { type = "float", default = 5.0 },
-    enabled = { type = "bool", default = true },
-    -- Reference fields
-    -- target = { type = "GameObject", default = nil },
-    -- rigidBody = { type = "RigidBodyComponent", default = nil },
-}
-
-function {C}:OnAttach()
-    -- Initialize component here
-end
-
-function {C}:OnUpdate()
-    -- Update logic here
-end
-
-function {C}:OnFixedUpdate()
-    -- Physics update logic here
-end
-
-function {C}:OnDestroy()
-    -- Cleanup here
-end
-
-return {C}
-)";
-    }
-
-    std::string EditorServer::FillTemplate(std::string templ, const std::string &className)
-    {
-        size_t pos = 0;
-        while ((pos = templ.find("{C}", pos)) != std::string::npos)
-        {
-            templ.replace(pos, 3, className);
-            pos += className.size();
-        }
-        return templ;
-    }
-
     void EditorServer::HandleRescanAssets(int clientSocket)
     {
-        IO::ResourceLoader::Instance().RescanAssets();
+        const IO::ResourceLoader::RescanResult changes = IO::ResourceLoader::Instance().RescanAssets();
+        if (!changes.Empty())
+        {
+            _events.Push("assetsChanged", nlohmann::json{{"added", PathStrings(changes.added)},
+                                                         {"removed", PathStrings(changes.removed)},
+                                                         {"modified", PathStrings(changes.modified)}});
+        }
 
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    // ==================== Project and scene files ====================
+
+    void EditorServer::SetProject(std::filesystem::path root, IO::ProjectFile project)
+    {
+        _project = ProjectState{std::move(root), std::move(project)};
+    }
+
+    std::expected<ResolvedScenePath, std::string> EditorServer::ResolveScenePath(const std::filesystem::path &assetsRoot,
+                                                                                const std::string &path)
+    {
+        const std::string shown = SanitizeForLog(path);
+        if (!IO::ProjectFile::IsScenePath(path))
+        {
+            return std::unexpected(std::format("Not a scene path: '{}' (expected res://<folder>/<name>.scene)", shown));
+        }
+        const IO::ResourcePath resourcePath(path);
+        const std::filesystem::path relative = FromUtf8(resourcePath.GetPath());
+        if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory())
+        {
+            return std::unexpected(std::format("Not a scene path inside the project: '{}'", shown));
+        }
+
+        // Lexically inside the assets folder, then also with symlinks resolved for the part that exists (as
+        // ResolveSceneFile does), so a link inside assets/ can't lead a write elsewhere
+        std::error_code error;
+        const std::filesystem::path root = std::filesystem::weakly_canonical(assetsRoot, error);
+        if (error)
+        {
+            return std::unexpected("The project's assets folder can't be resolved");
+        }
+        const std::filesystem::path file = (root / relative).lexically_normal();
+        const std::filesystem::path parent = std::filesystem::weakly_canonical(file.parent_path(), error);
+        if (error)
+        {
+            return std::unexpected(std::format("Can't resolve the folder of '{}'", shown));
+        }
+        const std::filesystem::path lexical = file.lexically_relative(root);
+        const std::filesystem::path resolved = parent.lexically_relative(root);
+        const auto outside = [](const std::filesystem::path &fromRoot)
+        {
+            return fromRoot.empty() || *fromRoot.begin() == "..";
+        };
+        if (outside(lexical) || (resolved != "." && outside(resolved)))
+        {
+            return std::unexpected(std::format("Not a scene path inside the project's assets folder: '{}'", shown));
+        }
+        return ResolvedScenePath{resourcePath, parent / file.filename()};
+    }
+
+    std::string EditorServer::OpenScenePath() const
+    {
+        const Scene *loaded = SceneManager::GetCurScene();
+        return loaded != nullptr && loaded == _openScene ? _openScenePath : std::string{};
+    }
+
+    void EditorServer::PushSceneChanged()
+    {
+        _events.Push("sceneChanged", nlohmann::json{{"revision", _sceneRevision},
+                                                    {"savedRevision", _savedRevision},
+                                                    {"path", OpenScenePath()}});
+    }
+
+    void EditorServer::MarkSceneChanged()
+    {
+        ++_sceneRevision;
+        PushSceneChanged();
+    }
+
+    void EditorServer::LoadOpenedScene(std::unique_ptr<Scene> scene, std::string path)
+    {
+        // This very object becomes the loaded scene (edit mode: built, never attached)
+        Scene *const opened = scene.get();
+        SceneManager::AddScene(std::move(scene), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+        if (SceneManager::GetCurScene() != opened)
+        {
+            throw std::runtime_error("the scene couldn't be loaded");
+        }
+        _openScene = opened;
+        _openScenePath = std::move(path);
+        ++_sceneRevision;
+        _savedRevision = _sceneRevision;
+        PushSceneChanged();
+    }
+
+    std::expected<OpenSceneInfo, std::string> EditorServer::GetOpenSceneInfo() const
+    {
+        const Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            return std::unexpected("No scene loaded");
+        }
+        return OpenSceneInfo{
+            .path = OpenScenePath(),
+            .name = scene->sceneName,
+            .uuid = scene->GetUUID().ToString(),
+            .revision = _sceneRevision,
+            .savedRevision = _savedRevision,
+        };
+    }
+
+    std::expected<OpenSceneInfo, std::string> EditorServer::OpenSceneFile(const std::string &path)
+    {
+        if (!_project)
+        {
+            return std::unexpected("No project: scene files need a host started with --project");
+        }
+        auto resolved = ResolveScenePath(_project->root / "assets", path);
+        if (!resolved)
+        {
+            return std::unexpected(resolved.error());
+        }
+        const std::string resourcePath = resolved->resourcePath.ToString();
+
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(resolved->file, error))
+        {
+            return std::unexpected("Scene file not found: " + SanitizeForLog(resourcePath));
+        }
+        auto text = ReadTextFile(resolved->file);
+        if (!text)
+        {
+            return std::unexpected(text.error());
+        }
+        const nlohmann::json sceneJson = nlohmann::json::parse(*text, nullptr, false);
+        if (sceneJson.is_discarded())
+        {
+            return std::unexpected("Not valid JSON: " + SanitizeForLog(resourcePath));
+        }
+        std::unique_ptr<Scene> scene = Scene::FromJSON(sceneJson, true);
+        if (scene == nullptr)
+        {
+            return std::unexpected("Not a valid scene (see the log): " + SanitizeForLog(resourcePath));
+        }
+
+        // The file's asset UUID, the same every run (and what a .meta records for it): a scene's UUID is its file's.
+        // A file added since the last scan is indexed now.
+        auto &loader = IO::ResourceLoader::Instance();
+        if (!loader.Exists(resolved->resourcePath))
+        {
+            (void)loader.Reload(resolved->resourcePath);
+        }
+        scene->SetUUID(IO::ResourceUUID::FromPath(resolved->resourcePath));
+        scene->SetResourcePath(resolved->resourcePath);
+
+        LoadOpenedScene(std::move(scene), resourcePath);
+        Logger::Info("Opened scene " + resourcePath);
+        return GetOpenSceneInfo();
+    }
+
+    std::expected<OpenSceneInfo, std::string> EditorServer::NewSceneFile(const std::string &path, const std::string &name)
+    {
+        std::optional<ResolvedScenePath> resolved;
+        if (!path.empty())
+        {
+            if (!_project)
+            {
+                return std::unexpected("No project: scene files need a host started with --project");
+            }
+            auto checked = ResolveScenePath(_project->root / "assets", path);
+            if (!checked)
+            {
+                return std::unexpected(checked.error());
+            }
+            std::error_code error;
+            if (std::filesystem::exists(checked->file, error))
+            {
+                return std::unexpected("A file already exists at " + SanitizeForLog(checked->resourcePath.ToString()) +
+                                       " (open it with OpenScene)");
+            }
+            resolved = std::move(*checked);
+        }
+
+        std::string sceneName = name;
+        if (sceneName.empty())
+        {
+            sceneName = resolved ? resolved->resourcePath.GetStem() : std::string("Untitled");
+        }
+        std::unique_ptr<Scene> scene = Scene::Create(sceneName);
+
+        std::string resourcePath;
+        if (resolved)
+        {
+            // Written before the switch: a file that can't be written leaves the loaded scene as it is
+            std::error_code error;
+            std::filesystem::create_directories(resolved->file.parent_path(), error);
+            if (auto written = IO::WriteTextFileAtomically(resolved->file, SceneFileText(scene->Serialize())); !written)
+            {
+                return std::unexpected(written.error());
+            }
+            resourcePath = resolved->resourcePath.ToString();
+            (void)IO::ResourceLoader::Instance().Reload(resolved->resourcePath);
+            scene->SetUUID(IO::ResourceUUID::FromPath(resolved->resourcePath));
+            scene->SetResourcePath(resolved->resourcePath);
+        }
+
+        LoadOpenedScene(std::move(scene), resourcePath);
+        Logger::Info(resourcePath.empty() ? "New scene " + SanitizeForLog(sceneName) + " (not saved to a file yet)"
+                                          : "New scene " + SanitizeForLog(sceneName) + " at " + resourcePath);
+        return GetOpenSceneInfo();
+    }
+
+    std::expected<OpenSceneInfo, std::string> EditorServer::SaveSceneFile(const std::string &path)
+    {
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            return std::unexpected("No scene loaded");
+        }
+        if (!_project)
+        {
+            return std::unexpected("No project: scene files need a host started with --project");
+        }
+        const std::string target = path.empty() ? OpenScenePath() : path;
+        if (target.empty())
+        {
+            return std::unexpected("The open scene has no file yet: pass the path to save it to "
+                                   "(res://<folder>/<name>.scene)");
+        }
+        auto resolved = ResolveScenePath(_project->root / "assets", target);
+        if (!resolved)
+        {
+            return std::unexpected(resolved.error());
+        }
+
+        nlohmann::json sceneJson = scene->Serialize();
+        std::error_code error;
+        std::filesystem::create_directories(resolved->file.parent_path(), error);
+        if (auto written = IO::WriteTextFileAtomically(resolved->file, SceneFileText(sceneJson)); !written)
+        {
+            return std::unexpected(written.error());
+        }
+        // As SaveScene does: the stored snapshot is what loading this scene by name rebuilds
+        SceneManager::UpdateScene(SceneManager::GetCurSceneIndex(), sceneJson);
+
+        // The file is indexed (or its .meta brought up to date), and a cached copy of the old file dropped
+        (void)IO::ResourceLoader::Instance().Reload(resolved->resourcePath);
+        const std::string resourcePath = resolved->resourcePath.ToString();
+        if (resourcePath != OpenScenePath())
+        {
+            // Saved as another file: that is the scene's file now, and its UUID the scene's
+            scene->SetUUID(IO::ResourceUUID::FromPath(resolved->resourcePath));
+            scene->SetResourcePath(resolved->resourcePath);
+            _openScene = scene;
+            _openScenePath = resourcePath;
+        }
+        _savedRevision = _sceneRevision;
+        PushSceneChanged();
+        Logger::Info("Saved scene " + resourcePath);
+        return GetOpenSceneInfo();
+    }
+
+    std::expected<void, std::string> EditorServer::SaveProject(IO::ProjectFile changed)
+    {
+        if (auto saved = changed.Save(_project->root); !saved)
+        {
+            return std::unexpected("Couldn't save " + std::string(IO::ProjectFile::FileName) + ": " + saved.error());
+        }
+        _project->file = std::move(changed);
+        _events.Push("projectChanged", nlohmann::json::object());
+        return {};
+    }
+
+    void EditorServer::SendSceneInfo(int clientSocket, const std::expected<OpenSceneInfo, std::string> &info)
+    {
+        BufferWriter response;
+        if (info)
+        {
+            WriteSceneInfo(response, info->path, info->name, info->uuid, info->revision, info->savedRevision);
+        }
+        else
+        {
+            WriteError(response, info.error());
+        }
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::SendProjectInfo(int clientSocket)
+    {
+        BufferWriter response;
+        WriteProjectInfo(response, Utf8(_project->root), Utf8(IO::ResourceLoader::Instance().GetUserDataRoot()),
+                         _project->file.ToJson());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::SendNoProject(int clientSocket)
+    {
+        BufferWriter response;
+        WriteError(response, "No project: the host wasn't started with --project");
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleOpenScene(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const OpenSceneCmd cmd = OpenSceneCmd::Deserialize(reader);
+        SendSceneInfo(clientSocket, OpenSceneFile(cmd.path));
+    }
+
+    void EditorServer::HandleSaveSceneToFile(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SaveSceneToFileCmd cmd = SaveSceneToFileCmd::Deserialize(reader);
+        SendSceneInfo(clientSocket, SaveSceneFile(cmd.path));
+    }
+
+    void EditorServer::HandleNewScene(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const NewSceneCmd cmd = NewSceneCmd::Deserialize(reader);
+        SendSceneInfo(clientSocket, NewSceneFile(cmd.path, cmd.name));
+    }
+
+    void EditorServer::HandleGetOpenScene(int clientSocket)
+    {
+        SendSceneInfo(clientSocket, GetOpenSceneInfo());
+    }
+
+    void EditorServer::HandleGetProjectInfo(int clientSocket)
+    {
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+        SendProjectInfo(clientSocket);
+    }
+
+    void EditorServer::HandleSetProjectSettings(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetProjectSettingsCmd cmd = SetProjectSettingsCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+
+        BufferWriter response;
+        if (!cmd.settings.is_object())
+        {
+            WriteError(response, "settings must be a JSON object: a merge patch (RFC 7386) for the project's settings");
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+
+        // A merge patch: keys set to null are removed, objects merge recursively, anything else replaces
+        const nlohmann::json previous = _project->file.settings;
+        nlohmann::json merged = previous;
+        merged.merge_patch(cmd.settings);
+
+        // Applied live first: a block its subsystem refuses isn't saved, and what was applied before comes back
+        if (const std::vector<std::string> problems = ApplyProjectSettings(merged); !problems.empty())
+        {
+            (void)ApplyProjectSettings(previous);
+            std::string message = "Project settings refused:";
+            for (const std::string &problem : problems)
+            {
+                message += " " + problem + ";";
+            }
+            message.pop_back();
+            WriteError(response, message);
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+
+        IO::ProjectFile changed = _project->file;
+        changed.settings = std::move(merged);
+        if (auto saved = SaveProject(std::move(changed)); !saved)
+        {
+            (void)ApplyProjectSettings(previous);
+            WriteError(response, saved.error());
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+        Logger::Info("Project settings changed and saved");
+        SendProjectInfo(clientSocket);
+    }
+
+    void EditorServer::HandleSetStartupScene(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetStartupSceneCmd cmd = SetStartupSceneCmd::Deserialize(reader);
+        if (!_project)
+        {
+            SendNoProject(clientSocket);
+            return;
+        }
+
+        BufferWriter response;
+        IO::ProjectFile changed = _project->file;
+        if (cmd.path.empty())
+        {
+            changed.startupScene.clear();
+        }
+        else
+        {
+            const auto resolved = ResolveScenePath(_project->root / "assets", cmd.path);
+            std::error_code error;
+            if (!resolved || !std::filesystem::is_regular_file(resolved->file, error))
+            {
+                WriteError(response, resolved ? "Scene file not found: " + SanitizeForLog(cmd.path) : resolved.error());
+                SendResponse(clientSocket, response.Release());
+                return;
+            }
+            // Normalised, and added to the scene list if it isn't there
+            changed.startupScene = resolved->resourcePath.ToString();
+            if (std::ranges::find(changed.scenes, changed.startupScene) == changed.scenes.end())
+            {
+                changed.scenes.push_back(changed.startupScene);
+            }
+        }
+
+        if (auto saved = SaveProject(std::move(changed)); !saved)
+        {
+            WriteError(response, saved.error());
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+        Logger::Info(_project->file.startupScene.empty() ? std::string("The project has no startup scene now")
+                                                         : "Startup scene: " + _project->file.startupScene);
+        SendProjectInfo(clientSocket);
     }
 
     bool EditorServer::Send(int socket, const void *data, size_t size)

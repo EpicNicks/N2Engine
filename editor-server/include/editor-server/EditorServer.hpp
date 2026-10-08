@@ -2,13 +2,19 @@
 
 #include <atomic>
 #include <chrono>
+#include <expected>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <cstdint>
 #include <string>
 #include <string_view>
+
+#include "engine/io/ProjectFile.hpp"
+#include "engine/io/ResourcePath.hpp"
 
 #include "editor-server/CommandQueue.hpp"
 #include "editor-server/EventRing.hpp"
@@ -18,8 +24,35 @@ namespace Renderer::Common
     class IRenderer;
 }
 
+namespace N2Engine
+{
+    class Scene;
+}
+
 namespace N2Engine::Editor
 {
+    /// The open scene, as OpenScene, NewScene, SaveSceneToFile and GetOpenScene report it (SceneInfo)
+    struct OpenSceneInfo
+    {
+        /// Its file, as a res:// path; empty when it has none (a new scene not saved yet, or one LoadScene sent)
+        std::string path;
+        std::string name;
+        /// The scene's UUID: its file's asset UUID (ResourceUUID::FromPath) when it has a file
+        std::string uuid;
+        /// The scene revision (see EditorServer::GetSceneRevision)
+        uint32_t revision = 0;
+        /// The revision when the scene was last opened from or saved to its file; the scene has unsaved changes
+        /// exactly when revision != savedRevision
+        uint32_t savedRevision = 0;
+    };
+
+    /// A scene path a client sent, resolved: the res:// path (normalised) and the file it names
+    struct ResolvedScenePath
+    {
+        IO::ResourcePath resourcePath;
+        std::filesystem::path file;
+    };
+
     /// TCP host for the editor client.
     ///
     /// Threading model: a single network thread accepts one client at a time and reads its requests, but
@@ -125,6 +158,64 @@ namespace N2Engine::Editor
         /// text over maxBytes is cut at a UTF-8 character boundary, with "..." appended
         [[nodiscard]] static std::string SanitizeForLog(std::string_view text, size_t maxBytes = 100);
 
+        // ==================== Project and scene files (main thread) ====================
+
+        /**
+         * The project the host opened, at root (its absolute folder). Call it once ResourceUUID and ResourceLoader are
+         * initialised for the project (RunHost does: the projectId namespace, ResourceLoader::Initialize(root, the
+         * project's user data folder)). Enables GetProjectInfo, SetProjectSettings, SetStartupScene and the scene-file
+         * commands; without a project they answer Error. Hello's projectLoaded reports it.
+         */
+        void SetProject(std::filesystem::path root, IO::ProjectFile project);
+        [[nodiscard]] bool HasProject() const { return _project.has_value(); }
+        /// The project file as last saved, or nullptr without a project
+        [[nodiscard]] const IO::ProjectFile *GetProject() const { return _project ? &_project->file : nullptr; }
+        [[nodiscard]] std::filesystem::path GetProjectRoot() const { return _project ? _project->root : std::filesystem::path{}; }
+
+        /**
+         * What OpenScene runs: reads the .scene file at path (a res:// path), builds it (Scene::FromJSON, validated;
+         * edit mode: no component is attached) and makes it the loaded scene, with the file's asset UUID. The scene
+         * revision moves on and the scene is saved at it. An Error message when there is no project, the path isn't a
+         * res:// .scene path inside the assets folder, or the file can't be read or isn't a valid scene; the loaded
+         * scene is kept then.
+         */
+        std::expected<OpenSceneInfo, std::string> OpenSceneFile(const std::string &path);
+        /**
+         * What NewScene runs: an empty scene named name (empty: the file's stem, or "Untitled") becomes the loaded
+         * scene. With a path (a res:// .scene path that doesn't exist yet) the scene is written there first and has
+         * that file; with an empty path it has none until SaveSceneToFile names one. Either way it starts saved
+         * (nothing to lose). Needs a project when a path is given.
+         */
+        std::expected<OpenSceneInfo, std::string> NewSceneFile(const std::string &path, const std::string &name);
+        /**
+         * What SaveSceneToFile runs: writes the loaded scene's JSON (Scene::Serialize, indented) to path, or to the
+         * scene's own file when path is empty (an Error when it has none), replacing the file atomically; also stores
+         * it in SceneManager as SaveScene does. A path other than the scene's own ("save as") becomes its file, and
+         * the scene takes that file's UUID. The file is indexed (its .meta written) and the saved revision becomes
+         * the current one.
+         */
+        std::expected<OpenSceneInfo, std::string> SaveSceneFile(const std::string &path);
+        /// What GetOpenScene answers; an Error message when no scene is loaded
+        [[nodiscard]] std::expected<OpenSceneInfo, std::string> GetOpenSceneInfo() const;
+
+        /**
+         * The scene revision: 0 until a scene is loaded, then moved on by every command that changes the loaded scene
+         * or loads another (OpenScene, NewScene, LoadScene, CreateEntity, DestroyEntity, SetEntityTransform). It only
+         * grows, so a client refetches what it shows whenever it changes. Each change, and each save, pushes a
+         * sceneChanged event {revision, savedRevision, path}.
+         */
+        [[nodiscard]] uint32_t GetSceneRevision() const { return _sceneRevision; }
+        /// The revision the loaded scene was last opened or saved at (see OpenSceneInfo::savedRevision)
+        [[nodiscard]] uint32_t GetSavedRevision() const { return _savedRevision; }
+
+        /**
+         * A scene path a client sent, checked: "res://" then a path that stays inside assetsRoot (lexically, and with
+         * symlinks resolved for the part that exists), whose file name ends in ".scene" (any case). The file needn't
+         * exist. An Error message otherwise.
+         */
+        [[nodiscard]] static std::expected<ResolvedScenePath, std::string> ResolveScenePath(
+            const std::filesystem::path &assetsRoot, const std::string &path);
+
         /// Where DeleteScene may delete scene files (usually <project>/scenes); empty disables it.
         void SetScenesDirectory(std::filesystem::path scenesDirectory) { _scenesDirectory = std::move(scenesDirectory); }
         [[nodiscard]] const std::filesystem::path& GetScenesDirectory() const { return _scenesDirectory; }
@@ -197,12 +288,34 @@ namespace N2Engine::Editor
         void HandleGetEntityTransform(int clientSocket, const std::vector<uint8_t> &payload);
 
         void HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload);
-        std::string GenerateScriptTemplate(const std::string& scriptName);
         void HandleRescanAssets(int clientSocket);
 
-        // Script Generation
-        static std::string FillTemplate(std::string templ, const std::string &className);
-        static std::string GetScriptTemplate();
+        void HandleOpenScene(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSaveSceneToFile(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleNewScene(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetOpenScene(int clientSocket);
+        void HandleGetProjectInfo(int clientSocket);
+        void HandleSetProjectSettings(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSetStartupScene(int clientSocket, const std::vector<uint8_t> &payload);
+
+        /// Answers a scene-file operation: SceneInfo, or Error with its message
+        void SendSceneInfo(int clientSocket, const std::expected<OpenSceneInfo, std::string> &info);
+        /// ProjectInfo for the project (there must be one)
+        void SendProjectInfo(int clientSocket);
+        /// The Error a project command answers without a project
+        void SendNoProject(int clientSocket);
+        /// Saves the project file with this change, then keeps it; an Error message when it can't be saved
+        std::expected<void, std::string> SaveProject(IO::ProjectFile changed);
+
+        /// The loaded scene changed (or another was loaded): moves the revision on and pushes sceneChanged
+        void MarkSceneChanged();
+        /// Pushes sceneChanged with the current revisions and path
+        void PushSceneChanged();
+        /// The res:// path of the loaded scene's file, or "" when it has none (or the loaded scene isn't the one
+        /// that was opened from it)
+        [[nodiscard]] std::string OpenScenePath() const;
+        /// Makes scene the loaded scene, with this file (empty for none), at a new revision that counts as saved
+        void LoadOpenedScene(std::unique_ptr<Scene> scene, std::string path);
 
         // Network helpers
         bool Send(int socket, const void *data, size_t size);
@@ -237,6 +350,20 @@ namespace N2Engine::Editor
         // Main-thread state below
         std::vector<uint8_t> _response;
         std::filesystem::path _scenesDirectory;
+
+        struct ProjectState
+        {
+            std::filesystem::path root;
+            IO::ProjectFile file;
+        };
+        std::optional<ProjectState> _project;
+
+        // The loaded scene's file (a res:// path, "" for none) and the Scene it was opened into: once another scene is
+        // loaded (LoadScene, or anything else that switches scenes), the file is no longer the loaded scene's
+        std::string _openScenePath;
+        const Scene *_openScene{nullptr};
+        uint32_t _sceneRevision{0};
+        uint32_t _savedRevision{0};
 
         int _viewportWidth{1280};
         int _viewportHeight{720};
