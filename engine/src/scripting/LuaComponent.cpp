@@ -84,7 +84,7 @@ namespace N2Engine::Scripting
             return;
         }
 
-        _script = scriptAsset.get();
+        _script = scriptAsset;
         LoadScriptInstance(false, otherScript);
 
         // Register reload callback, replacing any from a previous SetScript; removed on destroy
@@ -922,6 +922,13 @@ namespace N2Engine::Scripting
             // Try to reload the script if it was missing before
             SetScript(_scriptPath);
             return;
+        }
+
+        // The loader's copy is the current one: a file deleted and put back is a new object, and this component's
+        // own would hold the old source
+        if (auto current = IO::ResourceLoader::Instance().GetCached<LuaScript>(_scriptPath))
+        {
+            _script = std::move(current);
         }
 
         // Saved fields (and resolved references) carry over, fields the new version adds get their

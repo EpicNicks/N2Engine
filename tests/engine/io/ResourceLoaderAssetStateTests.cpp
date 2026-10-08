@@ -82,7 +82,7 @@ namespace
     };
 }
 
-TEST_F(AssetStateTest, AMetaHoldsNoSizeOrTimeAndIsNotRewrittenWhenTheFileChanges)
+TEST_F(AssetStateTest, AMetaHoldsConstantZerosForSizeAndTimeAndIsNotRewrittenWhenTheFileChanges)
 {
     Write("a.mat", "{}");
     Init();
@@ -91,8 +91,10 @@ TEST_F(AssetStateTest, AMetaHoldsNoSizeOrTimeAndIsNotRewrittenWhenTheFileChanges
     EXPECT_TRUE(meta.contains("uuid"));
     EXPECT_EQ(meta.at("resourcePath"), "res://a.mat");
     EXPECT_EQ(meta.at("resourceType"), "Material");
-    EXPECT_FALSE(meta.contains("lastModified")) << "it changes with every edit, and a .meta is committed";
-    EXPECT_FALSE(meta.contains("fileSize"));
+    // Constant, never the real values (they change with every edit, and a .meta is committed); the keys stay so an
+    // older engine, which requires them, doesn't take the file for corrupt and drop its settings
+    EXPECT_EQ(meta.at("lastModified"), 0);
+    EXPECT_EQ(meta.at("fileSize"), 0);
 
     const std::string before = ReadFile(Meta("a.mat"));
     Write("a.mat", R"({"changed": "and longer"})");
@@ -170,12 +172,37 @@ TEST_F(AssetStateTest, AnOldMetaWithSizeAndTimeIsRewrittenWithoutThemKeepingItsS
     Init();
 
     const json meta = ReadJson(Meta("a.mat"));
-    EXPECT_FALSE(meta.contains("lastModified"));
-    EXPECT_FALSE(meta.contains("fileSize"));
+    EXPECT_EQ(meta.at("lastModified"), 0);
+    EXPECT_EQ(meta.at("fileSize"), 0);
     EXPECT_EQ(meta.at("customData").at("material").at("note"), "kept");
     EXPECT_EQ(Loader().GetUUID(IO::ResourcePath("res://a.mat")), uuid);
     EXPECT_GT(Loader().GetMetadata(IO::ResourcePath("res://a.mat"))->lastModified, 1700000000000ull)
         << "the time is in milliseconds now, read from the file";
+}
+
+TEST_F(AssetStateTest, AMetaIsWrittenThroughATemporaryFileThatIsGone)
+{
+    Write("a.mat", "{}");
+    Init();
+    ASSERT_TRUE(Loader().SetImportSettings(IO::ResourcePath("res://a.mat"), json{{"x", 1}}));
+
+    for (const auto &entry : fs::recursive_directory_iterator(_root / ".import"))
+    {
+        EXPECT_NE(entry.path().extension().string(), ".tmp") << entry.path().string();
+    }
+}
+
+TEST_F(AssetStateTest, StateOfFilesThatAreGoneIsPruned)
+{
+    Write("a.mat", "{}");
+    Write("b.mat", "{}");
+    Init();
+    fs::remove(Asset("b.mat")); // deleted while the editor was closed: no scan saw it go
+    Init();
+
+    const json assets = ReadJson(Loader().GetAssetStatePath()).at("assets");
+    EXPECT_TRUE(assets.contains("res://a.mat"));
+    EXPECT_FALSE(assets.contains("res://b.mat"));
 }
 
 TEST_F(AssetStateTest, AssetsChangedOnDiskSeesAddedEditedAndDeletedFiles)

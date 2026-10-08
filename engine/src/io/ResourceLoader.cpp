@@ -137,7 +137,17 @@ namespace N2Engine::IO
         _hasFingerprint = true;
 
         std::unordered_set<ResourcePath, ResourcePath::Hash> seen;
-        ScanDirectory(_assetsRoot, result, seen);
+        try
+        {
+            ScanDirectory(_assetsRoot, result, seen);
+        }
+        catch (...)
+        {
+            // A scan cut short saw only some of the files, and took none of them for gone. Nothing now matches the
+            // fingerprint, so the next AssetsChangedOnDisk says yes and the watcher scans again.
+            _fingerprint = DirectoryFingerprint{~std::uint64_t{0}, ~std::uint64_t{0}};
+            throw;
+        }
 
         // Files indexed before and gone now: forget them, so they stop being listed and loaded by path or UUID. Only
         // project files (res://) are scanned, so only they can be found missing. Their .meta files stay: a file put
@@ -173,6 +183,17 @@ namespace N2Engine::IO
             }
             it = _metadata.erase(it);
         }
+        // State of files that are gone (deleted before this session, or never indexed) is no use
+        for (auto it = _assetState.begin(); it != _assetState.end();)
+        {
+            if (seen.contains(it->first))
+            {
+                ++it;
+                continue;
+            }
+            it = _assetState.erase(it);
+            _assetStateDirty = true;
+        }
         SaveAssetState();
 
         // Sub-assets of files deleted since: unknown again, so lookups of them give null quietly rather than an
@@ -193,9 +214,17 @@ namespace N2Engine::IO
     void ResourceLoader::ScanDirectory(const std::filesystem::path &directory, RescanResult &result,
                                        std::unordered_set<ResourcePath, ResourcePath::Hash> &seen)
     {
-        for (const auto &entry : std::filesystem::recursive_directory_iterator(directory))
+        // Error codes, not exceptions, and unreadable folders skipped (as ComputeFingerprint does). A walk that fails
+        // part way throws below instead of returning: the files it didn't reach would otherwise look deleted.
+        std::error_code walkError;
+        std::filesystem::recursive_directory_iterator walk(
+            directory, std::filesystem::directory_options::skip_permission_denied, walkError);
+        const std::filesystem::recursive_directory_iterator walkEnd;
+        for (; !walkError && walk != walkEnd; walk.increment(walkError))
         {
-            if (!entry.is_regular_file())
+            const std::filesystem::directory_entry &entry = *walk;
+            std::error_code entryError;
+            if (!entry.is_regular_file(entryError) || entryError)
                 continue;
 
             if (entry.path().extension() == ".meta")
@@ -236,6 +265,10 @@ namespace N2Engine::IO
                 // PathToUtf8 never throws, unlike string() for a name the code page can't spell
                 Logger::Warn(std::format("Skipping asset {}: {}", PathToUtf8(entry.path()), e.what()));
             }
+        }
+        if (walkError)
+        {
+            throw std::filesystem::filesystem_error("can't scan the assets folder", directory, walkError);
         }
     }
 

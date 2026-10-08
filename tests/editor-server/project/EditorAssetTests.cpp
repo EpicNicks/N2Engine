@@ -849,6 +849,38 @@ TEST_F(EditorAssetsTest, WritingALoadedScriptReloadsItInPlace)
     owner->RemoveComponent<LuaComponent>();
 }
 
+TEST_F(EditorAssetsTest, ADeletedAndRestoredScriptIsReloadedWithoutTouchingFreedMemory)
+{
+    sol::state &lua = LuaRuntime::Instance().GetState();
+    ASSERT_TRUE(LuaRuntime::Instance().Initialize());
+    lua["e8_gone_version"] = 0;
+    WriteAsset("scripts/Gone.lua", "e8_gone_version = 1\nreturn {}\n");
+    Rescan();
+    const IO::ResourcePath path("res://scripts/Gone.lua");
+    ASSERT_NE(Loader().Load<LuaScript>(path), nullptr);
+    // A component holds the script
+    const auto owner = GameObject::Create("Gone");
+    auto *component = owner->AddComponent<LuaComponent>();
+    component->SetScript(path);
+    ASSERT_EQ(lua["e8_gone_version"].get<int>(), 1);
+
+    // The file is deleted and a rescan forgets it: the cache's copy is released, the component still has its own
+    fs::remove(Assets() / "scripts" / "Gone.lua");
+    Rescan();
+    ASSERT_EQ(Loader().GetCached<LuaScript>(path), nullptr);
+    // Put back and loaded afresh (a new object), then written: the component's callback must use the new one
+    WriteAsset("scripts/Gone.lua", "e8_gone_version = 2\nreturn {}\n");
+    Rescan();
+    const auto reloaded = Loader().Load<LuaScript>(path);
+    ASSERT_NE(reloaded, nullptr);
+
+    EXPECT_EQ(Write("res://scripts/Gone.lua", "e8_gone_version = 3\nreturn {}\n").type, OkType);
+
+    EXPECT_EQ(lua["e8_gone_version"].get<int>(), 3) << "the component rebuilt from the current source";
+    EXPECT_EQ(reloaded->GetSourceCode(), "e8_gone_version = 3\nreturn {}\n");
+    owner->RemoveComponent<LuaComponent>();
+}
+
 TEST_F(EditorAssetsTest, WritingAScriptNothingHoldsRunsNothing)
 {
     sol::state &lua = LuaRuntime::Instance().GetState();
