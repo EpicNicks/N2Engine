@@ -126,6 +126,17 @@ namespace ProtocolVectors
                 const auto cmd = SetCameraPositionCmd::Deserialize(r);
                 return json{{"x", cmd.x}, {"y", cmd.y}, {"z", cmd.z}};
             }},
+            {"RenderFrameIfChanged", [](BufferReader &r)
+            {
+                return json{{"sinceRevision", RenderFrameIfChangedCmd::Deserialize(r).sinceRevision}};
+            }},
+            {"SetEditorCamera", [](BufferReader &r)
+            {
+                const auto cmd = SetEditorCameraCmd::Deserialize(r);
+                return json{{"position", Vec3Json(cmd.position)}, {"rotation", QuatJson(cmd.rotation)},
+                            {"fovY", cmd.fovY}, {"orthographic", cmd.orthographic}, {"orthoSize", cmd.orthoSize},
+                            {"nearPlane", cmd.nearPlane}, {"farPlane", cmd.farPlane}};
+            }},
             {"CreateScene", [](BufferReader &r) { return json{{"name", CreateSceneCmd::Deserialize(r).name}}; }},
             {"LoadScene", [](BufferReader &r) { return json{{"sceneJson", LoadSceneCmd::Deserialize(r).sceneJson}}; }},
             {"DeleteScene", [](BufferReader &r) { return json{{"sceneName", DeleteSceneCmd::Deserialize(r).sceneName}}; }},
@@ -297,6 +308,36 @@ namespace ProtocolVectors
             }},
             {"History", [](BufferWriter &w, const json &f) { WriteHistory(w, Uint32Field(f, "cursor"), f.at("entries")); }},
             {"Autosave", [](BufferWriter &w, const json &f) { WriteAutosave(w, f.at("info")); }},
+            {"FrameUpdate", [](BufferWriter &w, const json &f)
+            {
+                const std::vector<uint8_t> pixels = FromHex(StringField(f, "pixels"));
+                WriteFrameUpdate(w, Uint32Field(f, "revision"), f.at("modified").get<bool>(), Uint32Field(f, "width"),
+                                 Uint32Field(f, "height"), pixels);
+            }},
+            {"EditorCamera", [](BufferWriter &w, const json &f)
+            {
+                // The vectors' matrices are 16 numbers, column-major; Matrix is row-major (element (row, col))
+                const auto matrix = [&f](const char *name)
+                {
+                    Math::Matrix<float, 4, 4> m;
+                    const json &values = f.at(name);
+                    for (size_t col = 0; col < 4; ++col)
+                    {
+                        for (size_t row = 0; row < 4; ++row)
+                        {
+                            m(row, col) = values.at(col * 4 + row).get<float>();
+                        }
+                    }
+                    return m;
+                };
+                const json &q = f.at("rotation");
+                WriteEditorCamera(w, ToVec3(f.at("position")),
+                                  Math::Quaternion(q.at("w").get<float>(), q.at("x").get<float>(),
+                                                   q.at("y").get<float>(), q.at("z").get<float>()),
+                                  f.at("fovY").get<float>(), f.at("orthographic").get<bool>(),
+                                  f.at("orthoSize").get<float>(), f.at("nearPlane").get<float>(),
+                                  f.at("farPlane").get<float>(), matrix("view"), matrix("projection"));
+            }},
             {"EngineHealth", [](BufferWriter &w, const json &f)
             {
                 std::vector<SubsystemStatusEntry> subsystems;

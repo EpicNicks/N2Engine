@@ -213,6 +213,42 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct RenderFrameIfChangedCmd
+    {
+        /// The revision of the frame the client holds, or 0 for none
+        uint32_t sinceRevision;
+
+        static RenderFrameIfChangedCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadU32()};
+        }
+    };
+
+    struct SetEditorCameraCmd
+    {
+        Math::Vector3 position;
+        Math::Quaternion rotation;
+        float fovY;
+        bool orthographic;
+        float orthoSize;
+        float nearPlane;
+        float farPlane;
+
+        static SetEditorCameraCmd Deserialize(BufferReader &r)
+        {
+            // Read in order, one statement each (the arguments of a call have no defined order)
+            SetEditorCameraCmd cmd;
+            cmd.position = ReadVec3(r);
+            cmd.rotation = ReadQuat(r);
+            cmd.fovY = r.ReadF32();
+            cmd.orthographic = r.ReadBool();
+            cmd.orthoSize = r.ReadF32();
+            cmd.nearPlane = r.ReadF32();
+            cmd.farPlane = r.ReadF32();
+            return cmd;
+        }
+    };
+
     struct SetCameraPositionCmd
     {
         float x, y, z;
@@ -583,6 +619,43 @@ namespace N2Engine::Editor::Protocol
         w.WriteF32(x);
         w.WriteF32(y);
         w.WriteF32(z);
+    }
+
+    /// RenderFrameIfChanged's response: the frame revision, whether this is a frame (modified) or only the news that
+    /// the client's is current, the viewport size, then the pixels (RGBA8, top row first, as FrameData's) to the end of
+    /// the payload; none when modified is false
+    inline void WriteFrameUpdate(BufferWriter &w, const uint32_t revision, const bool modified, const uint32_t width,
+                                 const uint32_t height, std::span<const uint8_t> pixels)
+    {
+        w.WriteU8(static_cast<uint8_t>(ResponseType::FrameUpdate));
+        w.WriteU32(13 + static_cast<uint32_t>(pixels.size()));
+        w.WriteU32(revision);
+        w.WriteBool(modified);
+        w.WriteU32(width);
+        w.WriteU32(height);
+        w.WriteBytes(pixels);
+    }
+
+    /// GetEditorCamera's response: the camera's fields (SetEditorCamera's) then the view and projection matrices
+    inline void WriteEditorCamera(BufferWriter &w, const Math::Vector3 &position, const Math::Quaternion &rotation,
+                                  const float fovY, const bool orthographic, const float orthoSize,
+                                  const float nearPlane, const float farPlane, const Math::Matrix<float, 4, 4> &view,
+                                  const Math::Matrix<float, 4, 4> &projection)
+    {
+        BufferWriter payload;
+        WriteVec3(payload, position);
+        WriteQuat(payload, rotation);
+        payload.WriteF32(fovY);
+        payload.WriteBool(orthographic);
+        payload.WriteF32(orthoSize);
+        payload.WriteF32(nearPlane);
+        payload.WriteF32(farPlane);
+        WriteMat4(payload, view);
+        WriteMat4(payload, projection);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EditorCamera));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
     }
 
     inline void WriteEntityCreated(BufferWriter &w, std::string entityId)

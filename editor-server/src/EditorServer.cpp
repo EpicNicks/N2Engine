@@ -1798,6 +1798,9 @@ namespace N2Engine::Editor
         switch (static_cast<CommandType>(commandType))
         {
         case CommandType::RenderFrame:        // every animation frame
+        case CommandType::RenderFrameIfChanged: // every animation frame (mostly answered "not modified")
+        case CommandType::SetEditorCamera:    // every animation frame of a camera drag
+        case CommandType::GetEditorCamera:    // the scene view, with each frame, for its gizmos
         case CommandType::GetAudio:           // every ~25 ms while audio plays
         case CommandType::PollEvents:         // every ~100 ms; a line logged per poll would be an event every poll
         case CommandType::GetAllEntities:     // the hierarchy panel
@@ -1834,6 +1837,15 @@ namespace N2Engine::Editor
             break;
         case CommandType::SetViewportSize:
             HandleSetViewportSize(clientSocket, payload);
+            break;
+        case CommandType::RenderFrameIfChanged:
+            HandleRenderFrameIfChanged(clientSocket, payload);
+            break;
+        case CommandType::SetEditorCamera:
+            HandleSetEditorCamera(clientSocket, payload);
+            break;
+        case CommandType::GetEditorCamera:
+            HandleGetEditorCamera(clientSocket);
             break;
         case CommandType::GetAudio:
             HandleGetAudio(clientSocket);
@@ -2058,8 +2070,11 @@ namespace N2Engine::Editor
         }
         app.RenderEditorFrame();
 
-        // RGBA, top row first, whatever the backend
+        // RGBA, top row first, whatever the backend. This is the game camera's picture, in the buffer that holds the
+        // editor view's frame too: the editor view's frame has to be rendered again to be sent (its revision is still
+        // current: nothing about the editor view changed).
         ReadFrame(*renderer, _viewportWidth, _viewportHeight, _frameBuffer);
+        _frames.InvalidateBuffer();
 
         BufferWriter response;
         WriteFrameData(response,
@@ -2116,8 +2131,14 @@ namespace N2Engine::Editor
             return;
         }
 
+        // A new size is a new picture (a same-size request, which the client sends on every window resize event, isn't)
+        const bool viewportChanged = cmd.width != _viewportWidth || cmd.height != _viewportHeight;
         _viewportWidth = cmd.width;
         _viewportHeight = cmd.height;
+        if (viewportChanged)
+        {
+            NoteViewChanged();
+        }
 
         // The renderer renders at this size from the next frame (an offscreen target on OpenGL, the CPU buffer's
         // size on the software renderer), so frames are neither cropped nor resampled; this also sets the camera's
@@ -2140,6 +2161,136 @@ namespace N2Engine::Editor
         BufferWriter response;
         WriteOk(response);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+    }
+
+    void EditorServer::NoteViewChanged()
+    {
+        if (_frames.MarkChanged())
+        {
+            _events.Push("frameChanged", nlohmann::json{{"revision", _frames.Revision()}});
+        }
+    }
+
+    void EditorServer::ObserveScene()
+    {
+        if (_frames.ObserveScene(SceneManager::GetCurScene(), _sceneRevision))
+        {
+            _events.Push("frameChanged", nlohmann::json{{"revision", _frames.Revision()}});
+        }
+    }
+
+    std::expected<void, std::string> EditorServer::SetEditorCameraState(const EditorCameraState &camera)
+    {
+        EditorCameraCheck checked = CheckEditorCamera(camera);
+        if (!checked.state)
+        {
+            return std::unexpected(std::move(checked.error));
+        }
+        // The camera it has already: no change, so no new frame
+        if (*checked.state == _editorCamera)
+        {
+            return {};
+        }
+        _editorCamera = *checked.state;
+        NoteViewChanged();
+        return {};
+    }
+
+    bool EditorServer::RenderEditorView(std::string &error)
+    {
+        auto &app = Application::GetInstance();
+        auto &window = app.GetWindow();
+
+        auto *renderer = window.GetRenderer();
+        if (!renderer)
+        {
+            error = "No renderer available (see GetEngineHealth)";
+            return false;
+        }
+        // As RenderFrame: the viewport size, retried when the renderer failed to make it before
+        if (!window.SetRenderSize(_viewportWidth, _viewportHeight))
+        {
+            error = RenderTargetError(_viewportWidth, _viewportHeight);
+            return false;
+        }
+
+        // The open scene, drawn from the editor camera (not the scene's, nor the game's main camera), without simulating
+        const Camera camera = _editorCamera.ToCamera(GetViewportAspect());
+        app.RenderEditorFrame(camera);
+        ReadFrame(*renderer, _viewportWidth, _viewportHeight, _frameBuffer);
+
+        _frames.MarkRendered();
+        ++_editorFramesRendered;
+        return true;
+    }
+
+    void EditorServer::HandleRenderFrameIfChanged(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const RenderFrameIfChangedCmd cmd = RenderFrameIfChangedCmd::Deserialize(reader);
+
+        // A scene change no handler reported still moves the revision on
+        ObserveScene();
+
+        BufferWriter response;
+        const auto width = static_cast<uint32_t>(_viewportWidth);
+        const auto height = static_cast<uint32_t>(_viewportHeight);
+        if (_frames.IsCurrent(cmd.sinceRevision))
+        {
+            // The client holds the current picture: nothing is rendered, copied or logged
+            WriteFrameUpdate(response, _frames.Revision(), false, width, height, {});
+            SendResponse(clientSocket, response.Release());
+            return;
+        }
+
+        // Another client may have asked for this picture already: it is still in the buffer unless RenderFrame (the game
+        // camera's picture) has used the buffer since
+        if (!_frames.HasCurrentFrame())
+        {
+            std::string error;
+            if (!RenderEditorView(error))
+            {
+                SendError(clientSocket, error);
+                return;
+            }
+        }
+        WriteFrameUpdate(response, _frames.Revision(), true, width, height, _frameBuffer);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSetEditorCamera(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetEditorCameraCmd cmd = SetEditorCameraCmd::Deserialize(reader);
+
+        EditorCameraState camera;
+        camera.position = cmd.position;
+        camera.rotation = cmd.rotation;
+        camera.fovY = cmd.fovY;
+        camera.orthographic = cmd.orthographic;
+        camera.orthoSize = cmd.orthoSize;
+        camera.nearPlane = cmd.nearPlane;
+        camera.farPlane = cmd.farPlane;
+
+        // Never logs, not even a refusal's reason: the Error response carries it (a polled-rate command)
+        if (const auto set = SetEditorCameraState(camera); !set)
+        {
+            SendError(clientSocket, set.error());
+            return;
+        }
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetEditorCamera(int clientSocket)
+    {
+        const Camera camera = _editorCamera.ToCamera(GetViewportAspect());
+        BufferWriter response;
+        WriteEditorCamera(response, _editorCamera.position, _editorCamera.rotation, _editorCamera.fovY,
+                          _editorCamera.orthographic, _editorCamera.orthoSize, _editorCamera.nearPlane,
+                          _editorCamera.farPlane, camera.GetViewMatrix(), camera.GetProjectionMatrix());
+        SendResponse(clientSocket, response.Release());
     }
 
     void EditorServer::HandleSetCameraPosition(int clientSocket, const std::vector<uint8_t> &payload)
@@ -3224,6 +3375,8 @@ namespace N2Engine::Editor
         const IO::ResourceLoader::RescanResult changes = IO::ResourceLoader::Instance().RescanAssets();
         if (!changes.Empty())
         {
+            // An asset the scene draws (a texture, a mesh) may have changed
+            NoteViewChanged();
             _events.Push("assetsChanged", nlohmann::json{{"added", PathStrings(changes.added)},
                                                          {"removed", PathStrings(changes.removed)},
                                                          {"modified", PathStrings(changes.modified)}});
@@ -3363,6 +3516,7 @@ namespace N2Engine::Editor
         // A change like any other (the revision only grows), and the scene is saved again when the step led back to
         // the state that was saved
         ++_sceneRevision;
+        NoteViewChanged();
         if (applied->effect.inexact)
         {
             // The scene isn't exactly what was saved even if the history says it is (a transform the object didn't
@@ -3790,6 +3944,7 @@ namespace N2Engine::Editor
     void EditorServer::MarkSceneChanged(std::vector<std::string> entityIds, const bool full)
     {
         ++_sceneRevision;
+        NoteViewChanged();
         PushSceneChanged(std::move(entityIds), full);
     }
 
@@ -3817,6 +3972,7 @@ namespace N2Engine::Editor
         _openScene = opened;
         _openScenePath = std::move(path);
         ++_sceneRevision;
+        NoteViewChanged();
         _savedRevision = _sceneRevision;
         // Another scene: nothing done to the last can be undone, and the empty history is the saved state
         _history.Clear();
@@ -4110,6 +4266,8 @@ namespace N2Engine::Editor
             touched.insert(key);
         }
         const ProjectSettingsSnapshot before = ProjectSettingsSnapshot::Capture();
+        // Applied settings can change the picture (rendering.colorSpace, the lighting), applied or restored
+        NoteViewChanged();
         if (const std::vector<std::string> problems = ApplyProjectSettings(merged, touched); !problems.empty())
         {
             before.Restore();
