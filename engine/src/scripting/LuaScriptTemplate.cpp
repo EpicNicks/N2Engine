@@ -63,6 +63,11 @@ return {C}
         {
             className[0] = static_cast<char>(className[0] - 'a' + 'A');
         }
+        // A Lua name can't start with a digit ("2d_player" -> "_2d_player")
+        if (className[0] >= '0' && className[0] <= '9')
+        {
+            className.insert(className.begin(), '_');
+        }
         return className;
     }
 

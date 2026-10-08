@@ -7,7 +7,7 @@ namespace N2Engine::Scripting
 {
     /// The class name a new script gets from its file name: the part before the first '.', first letter upper-cased,
     /// every character but ASCII letters and digits turned into '_' ("player.lua" -> "Player", "my enemy" ->
-    /// "My_enemy"); "Script" when that leaves nothing
+    /// "My_enemy"), and '_' in front of a leading digit ("2d.lua" -> "_2d"); "Script" when that leaves nothing
     [[nodiscard]] std::string LuaScriptClassName(std::string_view scriptName);
 
     /**

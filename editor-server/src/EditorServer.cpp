@@ -18,6 +18,7 @@
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/ProjectSettings.hpp"
+#include "engine/Version.hpp"
 #include "engine/audio/AudioSystem.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
@@ -32,11 +33,6 @@
 #include "editor-server/Protocol.hpp"
 #include "editor-server/Commands.hpp"
 #include "editor-server/Serialization.hpp"
-
-// CMake's project version (editor-server/CMakeLists.txt); Hello reports it
-#ifndef N2ENGINE_VERSION
-#define N2ENGINE_VERSION "unknown"
-#endif
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -335,7 +331,8 @@ namespace N2Engine::Editor
 
     std::string_view EditorServer::EngineVersion()
     {
-        return N2ENGINE_VERSION;
+        // The engine's own (CMake's project version), the one project files record
+        return N2Engine::EngineVersion();
     }
 
     std::vector<std::string> EditorServer::Capabilities()

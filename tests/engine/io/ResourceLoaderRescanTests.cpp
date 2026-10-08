@@ -5,6 +5,7 @@
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #include <engine/io/ProjectFile.hpp>
@@ -50,6 +51,22 @@ namespace
         }
 
         static IO::ResourceLoader &Loader() { return IO::ResourceLoader::Instance(); }
+
+        /// A folder rename, retried for a moment: on Windows a virus scanner or the search indexer may still hold
+        /// a file the loader just wrote
+        static bool RenameWithRetry(const fs::path &from, const fs::path &to)
+        {
+            std::error_code error;
+            for (int attempt = 0; attempt < 20; ++attempt)
+            {
+                fs::rename(from, to, error);
+                if (!error)
+                    return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            ADD_FAILURE() << "can't rename " << from << " to " << to << ": " << error.message();
+            return false;
+        }
 
         static std::vector<std::string> Strings(const std::vector<IO::ResourcePath> &paths)
         {
@@ -237,11 +254,11 @@ TEST_F(ResourceLoaderProjectTest, TheNamespaceIsTheProjectIdSoUuidsDontDependOnT
     Loader().Initialize(_root, _userData);
     const Math::UUID here = Loader().GetUUID(IO::ResourcePath("res://scenes/Main.scene"));
 
-    fs::rename(_root, elsewhere);
+    ASSERT_TRUE(RenameWithRetry(_root, elsewhere));
     IO::ResourceUUID::Initialize(projectId);
     Loader().Initialize(elsewhere, _userData);
     const Math::UUID there = Loader().GetUUID(IO::ResourcePath("res://scenes/Main.scene"));
-    fs::rename(elsewhere, _root);
+    ASSERT_TRUE(RenameWithRetry(elsewhere, _root));
 
     EXPECT_NE(here, Math::UUID::ZERO);
     EXPECT_EQ(here, there);

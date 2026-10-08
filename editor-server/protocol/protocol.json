@@ -41,9 +41,7 @@
         "width": "int32",
         "height": "int32"
       },
-      "response": {
-        "type": "Ok"
-      }
+      "response": { "type": "Ok" }
     },
     "GetAudio": {
       "id": "0x03",
@@ -103,9 +101,7 @@
         "y": "float32",
         "z": "float32"
       },
-      "response": {
-        "type": "Ok"
-      }
+      "response": { "type": "Ok" }
     },
     "GetCameraPosition": {
       "id": "0x12",
@@ -136,9 +132,7 @@
       "request": {
         "sceneJson": "string"
       },
-      "response": {
-        "type": "Ok"
-      }
+      "response": { "type": "Ok" }
     },
     "SaveScene": {
       "id": "0x22",
@@ -155,9 +149,7 @@
       "request": {
         "sceneName": "string"
       },
-      "response": {
-        "type": "Ok"
-      },
+      "response": { "type": "Ok" },
       "description": "Deprecated: scene files are .scene assets under assets/ now (OpenScene, SaveSceneToFile). Deletes <project>/scenes/<sceneName>.json, the scene folder of the protocol before projects; never the loaded scene's."
     },
     "GetCurrentScene": {
@@ -254,9 +246,7 @@
       "request": {
         "entityId": "string"
       },
-      "response": {
-        "type": "Ok"
-      }
+      "response": { "type": "Ok" }
     },
     "SetEntityTransform": {
       "id": "0x32",
@@ -266,9 +256,7 @@
         "rotation": "vec3",
         "scale": "vec3"
       },
-      "response": {
-        "type": "Ok"
-      }
+      "response": { "type": "Ok" }
     },
     "GetEntityTransform": {
       "id": "0x33",
@@ -310,9 +298,7 @@
     "RescanAssets": {
       "id": "0x41",
       "request": {},
-      "response": {
-        "type": "Ok"
-      },
+      "response": { "type": "Ok" },
       "description": "Indexes the project's assets again: new and changed files get .meta files, and deleted files are forgotten (they no longer load by path or UUID; their .meta files are kept, so import settings come back with the file). When anything changed, an assetsChanged event lists it: {added, removed, modified}, res:// paths, each sorted."
     },
     "GetEngineHealth": {
@@ -373,9 +359,7 @@
     "Shutdown": {
       "id": "0xFF",
       "request": {},
-      "response": {
-        "type": "Ok"
-      }
+      "response": { "type": "Ok" }
     }
   },
   "types": {

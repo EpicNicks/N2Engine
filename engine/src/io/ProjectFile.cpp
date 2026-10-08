@@ -393,14 +393,17 @@ namespace N2Engine::IO
     std::filesystem::path ProjectFile::UserDataBase()
     {
 #ifdef _WIN32
-        char *appData = nullptr;
+        // The wide variable: a profile folder the code page can't spell (a user name in another script) is read
+        // exactly
+        wchar_t *appData = nullptr;
         size_t length = 0;
-        if (_dupenv_s(&appData, &length, "APPDATA") == 0 && appData != nullptr)
+        if (_wdupenv_s(&appData, &length, L"APPDATA") == 0 && appData != nullptr)
         {
             std::filesystem::path path(appData);
             std::free(appData);
             return path / "N2Engine";
         }
+        std::free(appData);
         return std::filesystem::path(".");
 #else
         if (const char *home = std::getenv("HOME"); home != nullptr)
