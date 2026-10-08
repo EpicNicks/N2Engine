@@ -143,6 +143,29 @@ namespace ProtocolVectors
                 return json{{"x", cmd.x}, {"y", cmd.y}, {"includeInactive", cmd.includeInactive}};
             }},
             {"GetEntityBounds", [](BufferReader &r) { return json{{"entityIds", GetEntityBoundsCmd::Deserialize(r).entityIds}}; }},
+            {"ListAssets", [](BufferReader &r)
+            {
+                const auto cmd = ListAssetsCmd::Deserialize(r);
+                return json{{"folder", cmd.folder}, {"recursive", cmd.recursive}};
+            }},
+            {"GetAssetInfo", [](BufferReader &r) { return json{{"uuidOrPath", GetAssetInfoCmd::Deserialize(r).uuidOrPath}}; }},
+            {"SetImportSettings", [](BufferReader &r)
+            {
+                const auto cmd = SetImportSettingsCmd::Deserialize(r);
+                return json{{"path", cmd.path}, {"customData", cmd.customData}};
+            }},
+            {"ReadTextAsset", [](BufferReader &r) { return json{{"path", ReadTextAssetCmd::Deserialize(r).path}}; }},
+            {"WriteTextAsset", [](BufferReader &r)
+            {
+                const auto cmd = WriteTextAssetCmd::Deserialize(r);
+                return json{{"path", cmd.path}, {"text", cmd.text}};
+            }},
+            {"CreateScriptAsset", [](BufferReader &r)
+            {
+                const auto cmd = CreateScriptAssetCmd::Deserialize(r);
+                return json{{"path", cmd.path}, {"className", cmd.className}};
+            }},
+            {"CreateFolder", [](BufferReader &r) { return json{{"path", CreateFolderCmd::Deserialize(r).path}}; }},
             {"CreateScene", [](BufferReader &r) { return json{{"name", CreateSceneCmd::Deserialize(r).name}}; }},
             {"LoadScene", [](BufferReader &r) { return json{{"sceneJson", LoadSceneCmd::Deserialize(r).sceneJson}}; }},
             {"DeleteScene", [](BufferReader &r) { return json{{"sceneName", DeleteSceneCmd::Deserialize(r).sceneName}}; }},
@@ -291,6 +314,13 @@ namespace ProtocolVectors
                 WritePickResult(w, StringField(f, "entityId"), ToVec3(f.at("point")), f.at("distance").get<float>());
             }},
             {"Bounds", [](BufferWriter &w, const json &f) { WriteBounds(w, f.at("bounds")); }},
+            {"AssetList", [](BufferWriter &w, const json &f) { WriteAssetList(w, f.at("folders"), f.at("assets")); }},
+            {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
+            {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},
+            {"AssetCreated", [](BufferWriter &w, const json &f)
+            {
+                WriteAssetCreated(w, StringField(f, "path"), StringField(f, "uuid"));
+            }},
             {"EntityData", [](BufferWriter &w, const json &f)
             {
                 // The vector's matrix is 16 numbers, column-major; Matrix is row-major (element (row, col))

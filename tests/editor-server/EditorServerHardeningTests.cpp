@@ -344,7 +344,8 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                      CommandType::GetHierarchy, CommandType::GetEntity,
                                      CommandType::GetComponent, CommandType::GetComponentTypes,
                                      CommandType::GetLuaFields, CommandType::GetHistory,
-                                     CommandType::GetAutosave})
+                                     CommandType::GetAutosave, CommandType::ListAssets, CommandType::GetAssetInfo,
+                                     CommandType::ReadTextAsset})
     {
         EXPECT_TRUE(EditorServer::IsPolledCommand(static_cast<uint8_t>(polled))) << static_cast<int>(polled);
     }
@@ -360,7 +361,9 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                         CommandType::CreateEntityEx, CommandType::SetEntityParent,
                                         CommandType::SetEntityProperties, CommandType::DuplicateEntity,
                                         CommandType::SetLocalTransform, CommandType::AddComponent,
-                                        CommandType::RemoveComponent, CommandType::SetComponentFields})
+                                        CommandType::RemoveComponent, CommandType::SetComponentFields,
+                                        CommandType::SetImportSettings, CommandType::WriteTextAsset,
+                                        CommandType::CreateScriptAsset, CommandType::CreateFolder})
     {
         EXPECT_FALSE(EditorServer::IsPolledCommand(static_cast<uint8_t>(notPolled))) << static_cast<int>(notPolled);
     }

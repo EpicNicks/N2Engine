@@ -20,8 +20,13 @@ namespace N2Engine::IO
         meta.uuid = j["uuid"].get<Math::UUID>();
         meta.resourcePath = j["resourcePath"].get<ResourcePath>();
         meta.resourceType = j["resourceType"];
-        meta.lastModified = j["lastModified"];
-        meta.fileSize = j["fileSize"];
+        // Written by older versions only: the scan takes over from the state file, and rewrites the .meta without them
+        if (j.contains("lastModified") || j.contains("fileSize"))
+        {
+            meta.hadStateFields = true;
+            meta.lastModified = j.value("lastModified", std::uint64_t{0});
+            meta.fileSize = j.value("fileSize", std::size_t{0});
+        }
         
         if (j.contains("customData"))
         {
@@ -39,9 +44,7 @@ namespace N2Engine::IO
         j["uuid"] = uuid.ToString();
         j["resourcePath"] = resourcePath;
         j["resourceType"] = resourceType;
-        j["lastModified"] = lastModified;
-        j["fileSize"] = fileSize;
-        
+
         if (!customData.empty())
         {
             j["customData"] = customData;

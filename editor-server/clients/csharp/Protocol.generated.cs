@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.8.0";
+        public const string ProtocolVersion = "1.9.0";
     }
 
     public enum CommandType : byte
@@ -49,6 +49,13 @@ namespace N2Engine.Editor.Protocol
         SetLocalTransform = 0x3A,
         CreateScript = 0x40,
         RescanAssets = 0x41,
+        ListAssets = 0xA0,
+        GetAssetInfo = 0xA1,
+        SetImportSettings = 0xA2,
+        ReadTextAsset = 0xA3,
+        WriteTextAsset = 0xA4,
+        CreateScriptAsset = 0xA5,
+        CreateFolder = 0xA6,
         GetEngineHealth = 0x50,
         GetComponentTypes = 0x60,
         AddComponent = 0x61,
@@ -100,6 +107,10 @@ namespace N2Engine.Editor.Protocol
         EditorCamera = 0x19,
         PickResult = 0x1A,
         Bounds = 0x1B,
+        AssetList = 0xA0,
+        AssetDetail = 0xA1,
+        TextData = 0xA2,
+        AssetCreated = 0xA3,
     }
 
     public struct Vec3
@@ -190,6 +201,52 @@ namespace N2Engine.Editor.Protocol
         public double? Size { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("modified")]
         public double? Modified { get; set; }
+    }
+
+    public class SubAssetInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("key")]
+        public string Key { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("uuid")]
+        public string Uuid { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string Type { get; set; }
+    }
+
+    public class AssetInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("uuid")]
+        public string Uuid { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string Type { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("size")]
+        public double Size { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("modified")]
+        public double Modified { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("subAssets")]
+        public SubAssetInfo[]? SubAssets { get; set; }
+    }
+
+    public class AssetDetails
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("uuid")]
+        public string Uuid { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string Type { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("size")]
+        public double Size { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("modified")]
+        public double Modified { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("subAssets")]
+        public SubAssetInfo[]? SubAssets { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("customData")]
+        public System.Text.Json.JsonElement CustomData { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("loaded")]
+        public bool Loaded { get; set; }
     }
 
     public class ProjectFile
@@ -510,6 +567,46 @@ namespace N2Engine.Editor.Protocol
         public string Name;
     }
 
+    public struct ListAssetsRequest
+    {
+        public string Folder;
+        public bool Recursive;
+    }
+
+    public struct GetAssetInfoRequest
+    {
+        public string UuidOrPath;
+    }
+
+    public struct SetImportSettingsRequest
+    {
+        public string Path;
+        /// <summary>JSON text: any JSON value</summary>
+        public string CustomData;
+    }
+
+    public struct ReadTextAssetRequest
+    {
+        public string Path;
+    }
+
+    public struct WriteTextAssetRequest
+    {
+        public string Path;
+        public string Text;
+    }
+
+    public struct CreateScriptAssetRequest
+    {
+        public string Path;
+        public string ClassName;
+    }
+
+    public struct CreateFolderRequest
+    {
+        public string Path;
+    }
+
     public struct AddComponentRequest
     {
         public string EntityId;
@@ -684,6 +781,31 @@ namespace N2Engine.Editor.Protocol
     public struct ScriptDataResponse
     {
         public string ScriptTemplate;
+    }
+
+    public struct AssetListResponse
+    {
+        /// <summary>JSON text: string[]</summary>
+        public string Folders;
+        /// <summary>JSON text: AssetInfo[]</summary>
+        public string Assets;
+    }
+
+    public struct AssetDetailResponse
+    {
+        /// <summary>JSON text: AssetDetails</summary>
+        public string Info;
+    }
+
+    public struct TextDataResponse
+    {
+        public string Text;
+    }
+
+    public struct AssetCreatedResponse
+    {
+        public string Path;
+        public string Uuid;
     }
 
     public struct EngineHealthResponse

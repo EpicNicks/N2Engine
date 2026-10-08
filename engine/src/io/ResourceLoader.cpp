@@ -17,6 +17,7 @@
 #include <exception>
 #include <format>
 #include <fstream>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -24,14 +25,32 @@ namespace N2Engine::IO
 {
     namespace
     {
-        /// A file's modification time in whole Unix seconds, converted exactly (clock_cast), so the same file time
+        /// A file's modification time in whole Unix milliseconds, converted exactly (clock_cast), so the same file time
         /// always gives the same number. The old conversion went through both clocks' now(), which differ by a
-        /// moment on each call, so a file could look modified on one scan and not the next.
-        uint64_t UnixSeconds(const std::filesystem::file_time_type fileTime)
+        /// moment on each call, so a file could look modified on one scan and not the next. Milliseconds, not seconds
+        /// (as it was before the state file): two saves of a file a second apart, with the same size, are two changes.
+        uint64_t UnixMilliseconds(const std::filesystem::file_time_type fileTime)
         {
             const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(fileTime);
-            const auto seconds = std::chrono::floor<std::chrono::seconds>(systemTime).time_since_epoch().count();
-            return seconds > 0 ? static_cast<uint64_t>(seconds) : 0u;
+            const auto milliseconds = std::chrono::floor<std::chrono::milliseconds>(systemTime).time_since_epoch().count();
+            return milliseconds > 0 ? static_cast<uint64_t>(milliseconds) : 0u;
+        }
+
+        /// A file's extension, lower-cased, as the loader lookup spells it
+        std::string LowerExtension(const std::filesystem::path &path)
+        {
+            std::string ext = PathToUtf8(path.extension());
+            std::ranges::transform(ext, ext.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return ext;
+        }
+
+        /// splitmix64's finaliser: spreads a value over all 64 bits
+        uint64_t Mix(uint64_t value)
+        {
+            value += 0x9E3779B97F4A7C15ull;
+            value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
+            value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
+            return value ^ (value >> 31);
         }
 
         /// The .meta resourceType for a file, from its extension, case-insensitively (as the loader lookup
@@ -89,6 +108,12 @@ namespace N2Engine::IO
         _subAssets.clear();
         _subAssetParentsTried.clear();
         ClearCache();
+        _assetState.clear();
+        _assetStateDirty = false;
+        _assetStateWarned = false;
+        _fingerprint = {};
+        _hasFingerprint = false;
+        LoadAssetState();
 
         (void)RescanAssets();
 
@@ -101,8 +126,15 @@ namespace N2Engine::IO
         if (!std::filesystem::exists(_assetsRoot))
         {
             Logger::Warn("Assets directory not found");
+            _fingerprint = {};
+            _hasFingerprint = true;
             return result;
         }
+
+        // Taken before the scan reads anything: a file that changes while it runs differs from this, so the next
+        // AssetsChangedOnDisk says so
+        _fingerprint = ComputeFingerprint();
+        _hasFingerprint = true;
 
         std::unordered_set<ResourcePath, ResourcePath::Hash> seen;
         ScanDirectory(_assetsRoot, result, seen);
@@ -135,8 +167,13 @@ namespace N2Engine::IO
                 _cache.erase(cached);
             }
             _subAssetParentsTried.erase(path);
+            if (_assetState.erase(path) > 0)
+            {
+                _assetStateDirty = true;
+            }
             it = _metadata.erase(it);
         }
+        SaveAssetState();
 
         // Sub-assets of files deleted since: unknown again, so lookups of them give null quietly rather than an
         // error about a missing source file
@@ -204,7 +241,7 @@ namespace N2Engine::IO
 
     AssetMetadata ResourceLoader::CreateOrUpdateMetadata(const std::filesystem::path &sourcePath)
     {
-        const uint64_t timestamp = UnixSeconds(std::filesystem::last_write_time(sourcePath));
+        const uint64_t timestamp = UnixMilliseconds(std::filesystem::last_write_time(sourcePath));
         auto fileSize = std::filesystem::file_size(sourcePath);
 
         ResourcePath resourcePath = MakeResourcePath(sourcePath);
@@ -228,8 +265,20 @@ namespace N2Engine::IO
             }
         }
 
+        // What the file was when last seen: from the state file (or this session's scans). A .meta still holding the
+        // old lastModified and fileSize (seconds, not milliseconds) isn't used for it, only rewritten without them.
+        std::optional<AssetState> lastSeen;
+        if (const auto known = _assetState.find(resourcePath); known != _assetState.end())
+        {
+            lastSeen = known->second;
+        }
+
         if (haveMeta)
         {
+            // The .meta is written when something it keeps changed, never for the file's size or time
+            bool saveMeta = meta.hadStateFields;
+            meta.hadStateFields = false;
+
             // Verify UUID is deterministic
             Math::UUID expectedUUID = ResourceUUID::FromPath(resourcePath);
             if (meta.uuid != expectedUUID)
@@ -237,7 +286,7 @@ namespace N2Engine::IO
                 Logger::Warn(std::format("UUID mismatch for {}. Regenerating.",
                                          resourcePath.ToString()));
                 meta.uuid = expectedUUID;
-                meta.SaveToFile(metaPath);
+                saveMeta = true;
             }
 
             // A .meta written before its extension was known (or matched case-insensitively, as Music.WAV
@@ -247,16 +296,19 @@ namespace N2Engine::IO
                 if (std::string type = ResourceTypeFor(sourcePath); type != "Unknown")
                 {
                     meta.resourceType = std::move(type);
-                    meta.SaveToFile(metaPath);
+                    saveMeta = true;
                 }
             }
 
-            if (meta.lastModified != timestamp || meta.fileSize != fileSize)
+            if (lastSeen && (lastSeen->lastModified != timestamp || lastSeen->fileSize != fileSize))
             {
-                meta.lastModified = timestamp;
-                meta.fileSize = fileSize;
-                meta.SaveToFile(metaPath);
                 Logger::Info(std::format("Asset modified: {}", resourcePath.ToString()));
+            }
+            meta.lastModified = timestamp;
+            meta.fileSize = fileSize;
+            if (saveMeta)
+            {
+                meta.SaveToFile(metaPath);
             }
         }
         else
@@ -269,6 +321,12 @@ namespace N2Engine::IO
             meta.resourceType = ResourceTypeFor(sourcePath);
             meta.SaveToFile(metaPath);
             Logger::Info(std::format("New asset: {}", resourcePath.ToString()));
+        }
+
+        if (!lastSeen || lastSeen->lastModified != timestamp || lastSeen->fileSize != fileSize)
+        {
+            _assetState[resourcePath] = AssetState{timestamp, fileSize};
+            _assetStateDirty = true;
         }
 
         return meta;
@@ -372,7 +430,7 @@ namespace N2Engine::IO
         if (!std::filesystem::exists(sourcePath))
             return false;
 
-        const uint64_t timestamp = UnixSeconds(std::filesystem::last_write_time(sourcePath));
+        const uint64_t timestamp = UnixMilliseconds(std::filesystem::last_write_time(sourcePath));
 
         return timestamp != meta->lastModified;
     }
@@ -686,5 +744,234 @@ namespace N2Engine::IO
             loadedAny = Load<Base::Asset>(path) != nullptr || loadedAny;
         }
         return loadedAny;
+    }
+
+    // ===== Single-file refresh, change detection, import settings =====
+
+    ResourceLoader::RefreshResult ResourceLoader::RefreshAsset(const ResourcePath &resourcePath)
+    {
+        if (resourcePath.GetType() != PathType::Resource || _assetsRoot.empty())
+        {
+            return RefreshResult::Missing;
+        }
+        const std::filesystem::path sourcePath = Resolve(resourcePath);
+        std::error_code error;
+        if (sourcePath.empty() || !std::filesystem::is_regular_file(sourcePath, error) ||
+            sourcePath.extension() == ".meta" || !_loaders.contains(LowerExtension(sourcePath)))
+        {
+            return RefreshResult::Missing;
+        }
+
+        const auto previous = _metadata.find(resourcePath);
+        const bool wasIndexed = previous != _metadata.end();
+        const uint64_t previousModified = wasIndexed ? previous->second.lastModified : 0;
+        const std::size_t previousSize = wasIndexed ? previous->second.fileSize : 0;
+
+        const AssetMetadata meta = CreateOrUpdateMetadata(sourcePath);
+        _metadata[meta.resourcePath] = meta;
+        _uuidToPath[meta.uuid] = meta.resourcePath;
+        // As the scan does: a model changed since its index was written loses the index's entries
+        ReadSubAssetIndex(meta);
+        SaveAssetState();
+
+        if (!wasIndexed)
+        {
+            return RefreshResult::Added;
+        }
+        return previousModified != meta.lastModified || previousSize != meta.fileSize ? RefreshResult::Modified
+                                                                                      : RefreshResult::Unchanged;
+    }
+
+    std::filesystem::path ResourceLoader::GetAssetStatePath() const
+    {
+        return _projectRoot / ".n2" / "asset-state.json";
+    }
+
+    ResourceLoader::DirectoryFingerprint ResourceLoader::ComputeFingerprint() const
+    {
+        DirectoryFingerprint fingerprint;
+        std::error_code error;
+        if (_assetsRoot.empty() || !std::filesystem::exists(_assetsRoot, error))
+        {
+            return fingerprint;
+        }
+
+        // One walk of the directory listing: a directory_entry holds the size and time the listing gave (on Windows the
+        // same find-data call), so no file is opened or even stat'ed one by one
+        std::filesystem::recursive_directory_iterator iterator(
+            _assetsRoot, std::filesystem::directory_options::skip_permission_denied, error);
+        const std::filesystem::recursive_directory_iterator end;
+        for (; !error && iterator != end; iterator.increment(error))
+        {
+            const std::filesystem::directory_entry &entry = *iterator;
+            std::error_code entryError;
+            if (!entry.is_regular_file(entryError) || entryError)
+            {
+                continue;
+            }
+            const std::filesystem::path &path = entry.path();
+            if (path.extension() == ".meta" || !_loaders.contains(LowerExtension(path)))
+            {
+                continue;
+            }
+            const std::uintmax_t size = entry.file_size(entryError);
+            if (entryError)
+            {
+                continue;
+            }
+            const auto time = entry.last_write_time(entryError);
+            if (entryError)
+            {
+                continue;
+            }
+            uint64_t hash = std::hash<std::string>{}(PathToUtf8(path));
+            hash = Mix(hash ^ Mix(static_cast<uint64_t>(size)));
+            hash = Mix(hash ^ Mix(UnixMilliseconds(time)));
+            fingerprint.sum += hash;
+            ++fingerprint.count;
+        }
+        return fingerprint;
+    }
+
+    bool ResourceLoader::AssetsChangedOnDisk() const
+    {
+        if (!_hasFingerprint)
+        {
+            return false;
+        }
+        return ComputeFingerprint() != _fingerprint;
+    }
+
+    void ResourceLoader::LoadAssetState()
+    {
+        std::ifstream file(GetAssetStatePath(), std::ios::binary);
+        if (!file)
+        {
+            return; // none yet: every file is new to it
+        }
+        const nlohmann::json state = nlohmann::json::parse(file, nullptr, false);
+        if (!state.is_object() || !state.contains("assets") || !state.at("assets").is_object())
+        {
+            Logger::Warn(std::format("{} can't be read; it is rebuilt", PathToUtf8(GetAssetStatePath())));
+            return;
+        }
+        for (const auto &item : state.at("assets").items())
+        {
+            const ResourcePath path(item.key());
+            const nlohmann::json &entry = item.value();
+            if (path.GetType() != PathType::Resource || !entry.is_object() || !entry.contains("lastModified") ||
+                !entry.contains("fileSize") || !entry.at("lastModified").is_number_unsigned() ||
+                !entry.at("fileSize").is_number_unsigned())
+            {
+                continue;
+            }
+            _assetState[path] = AssetState{entry.at("lastModified").get<std::uint64_t>(),
+                                           entry.at("fileSize").get<std::size_t>()};
+        }
+    }
+
+    void ResourceLoader::SaveAssetState()
+    {
+        if (!_assetStateDirty || _projectRoot.empty())
+        {
+            return;
+        }
+        nlohmann::json assets = nlohmann::json::object();
+        for (const auto &[path, state] : _assetState)
+        {
+            assets[path.ToString()] = {{"lastModified", state.lastModified}, {"fileSize", state.fileSize}};
+        }
+        const nlohmann::json document = {{"formatVersion", 1}, {"assets", std::move(assets)}};
+
+        std::error_code error;
+        std::filesystem::create_directories(GetAssetStatePath().parent_path(), error);
+        std::expected<void, std::string> written = std::unexpected(error ? error.message() : std::string{});
+        if (!error)
+        {
+            written = WriteTextFileAtomically(GetAssetStatePath(), document.dump(2) + "\n");
+        }
+        if (written)
+        {
+            _assetStateDirty = false;
+        }
+        else if (!_assetStateWarned)
+        {
+            // Once: a read-only project folder would otherwise say so on every scan. Nothing depends on the file
+            // (it only says what was last seen), so the scan goes on.
+            _assetStateWarned = true;
+            Logger::Warn(std::format("Can't save {}: {}", PathToUtf8(GetAssetStatePath()), written.error()));
+        }
+    }
+
+    std::expected<void, std::string> ResourceLoader::SetImportSettings(const ResourcePath &resourcePath,
+                                                                       const nlohmann::json &customData)
+    {
+        if (resourcePath.GetType() != PathType::Resource)
+        {
+            return std::unexpected("import settings belong to project (res://) files");
+        }
+        const auto found = _metadata.find(resourcePath);
+        if (found == _metadata.end())
+        {
+            return std::unexpected("not an asset: " + resourcePath.ToString());
+        }
+        if (!customData.is_object() && !customData.is_null())
+        {
+            return std::unexpected("import settings must be a JSON object");
+        }
+
+        AssetMetadata &meta = found->second;
+        nlohmann::json settings = customData.is_object() ? customData : nlohmann::json::object();
+        // The sub-asset index is the loader's own, not an import setting
+        for (const char *key : {"subAssets", "subAssetsSource"})
+        {
+            settings.erase(key);
+            if (meta.customData.is_object() && meta.customData.contains(key))
+            {
+                settings[key] = meta.customData.at(key);
+            }
+        }
+
+        const std::filesystem::path sourcePath = Resolve(resourcePath);
+        if (sourcePath.empty())
+        {
+            return std::unexpected("can't resolve " + resourcePath.ToString());
+        }
+        AssetMetadata updated = meta;
+        updated.customData = settings;
+        try
+        {
+            if (!updated.SaveToFile(GetMetadataPath(sourcePath)))
+            {
+                return std::unexpected("can't save the .meta of " + resourcePath.ToString());
+            }
+        }
+        catch (const std::exception &e)
+        {
+            return std::unexpected(std::format("can't save the .meta of {}: {}", resourcePath.ToString(), e.what()));
+        }
+        meta.customData = std::move(settings);
+        return {};
+    }
+
+    std::vector<ResourceLoader::SubAssetIndexEntry> ResourceLoader::GetSubAssets(const ResourcePath &parent) const
+    {
+        std::vector<SubAssetIndexEntry> entries;
+        const auto found = _metadata.find(parent);
+        if (found == _metadata.end() || !HasCurrentSubAssetIndex(found->second))
+        {
+            return entries;
+        }
+        for (const auto &item : found->second.customData.at("subAssets").items())
+        {
+            std::string type = item.value().is_object() && item.value().contains("type") &&
+                                       item.value().at("type").is_string()
+                                   ? item.value().at("type").get<std::string>()
+                                   : std::string{};
+            // Re-derived, as the scan does: a moved file's index names its old path's UUIDs
+            entries.push_back(
+                SubAssetIndexEntry{item.key(), std::move(type), ResourceUUID::FromSubAsset(parent, item.key())});
+        }
+        return entries;
     }
 }
