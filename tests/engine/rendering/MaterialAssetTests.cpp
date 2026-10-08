@@ -309,7 +309,7 @@ TEST(MaterialJsonTest, BadValuesAreIgnoredWithAWarningAndKeepTheDefaults)
 {
     WarningCapture capture;
     const json mat = {
-        {"shading", "pbr"},
+        {"shading", "phong"},
         {"baseColor", "red"},
         {"alphaMode", 3},
         {"alphaCutoff", "half"},

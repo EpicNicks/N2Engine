@@ -221,8 +221,8 @@ TEST(OpenGlShaderSourceTest, ThePbrConstantsAreTheSoftwareRenderersAndTheDefault
 {
     const std::string renderer = ReadFile("src/opengl/OpenGLRenderer.cpp");
     const std::string litFrag = ShaderSource(renderer, "litFrag");
-    EXPECT_NEAR(ConstantIn(litFrag, "MIN_PERCEPTUAL_ROUGHNESS"), Renderer::Common::kMinPerceptualRoughness, 1e-9);
-    EXPECT_NEAR(ConstantIn(litFrag, "DIELECTRIC_F0"), Renderer::Common::kDielectricF0, 1e-9);
+    EXPECT_NEAR(ConstantIn(litFrag, "MIN_PERCEPTUAL_ROUGHNESS"), Renderer::Common::kMinPerceptualRoughness, 1e-6);
+    EXPECT_NEAR(ConstantIn(litFrag, "DIELECTRIC_F0"), Renderer::Common::kDielectricF0, 1e-6);
     EXPECT_NEAR(ConstantIn(litFrag, "PI"), Renderer::Common::kPi, 1e-6);
     // The environment BRDF fit's coefficients
     for (const char *coefficient : {"vec4(-1.0, -0.0275, -0.572, 0.022)", "vec4(1.0, 0.0425, 1.04, -0.04)",

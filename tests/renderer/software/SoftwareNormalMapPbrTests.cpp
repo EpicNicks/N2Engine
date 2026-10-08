@@ -291,8 +291,16 @@ TEST(SoftwareNormalMapTest, TheScaleMultipliesTheTexelsXAndY)
     const int half = scene.Draw(light, scene.lit).At(kCentre, kCentre).r;
     scene.lit->SetFloat("uNormalScale", 1.0f);
     const int full = scene.Draw(light, scene.lit).At(kCentre, kCentre).r;
-    EXPECT_GT(half, zero + 20);
-    EXPECT_GT(full, half + 3) << "the full 45 degree lean faces the light";
+    EXPECT_GT(half, zero + 20) << "half the lean already faces the light more";
+
+    // Half of x scales the leaning normal (0.71, 0, 0.71) to (0.45, 0, 0.89) after normalising: the surface tilted by
+    // atan(0.5) = 26.57 degrees, which the same quad turned that far shows too; and the full scale is the 45 degree turn
+    constexpr float s = 0.4472136f;
+    constexpr float c = 0.8944272f;
+    constexpr float tiltedHalf[16] = {c, 0, s, 0, 0, 1, 0, 0, -s, 0, c, 0, 0, 0, 0, 1};
+    scene.lit->SetAuxTexture(AuxTexture::Normal, nullptr);
+    EXPECT_NEAR(half, scene.Draw(light, scene.lit, nullptr, tiltedHalf).At(kCentre, kCentre).r, 4);
+    EXPECT_NEAR(full, scene.Draw(light, scene.lit, nullptr, RotateY45).At(kCentre, kCentre).r, 4);
 }
 
 TEST(SoftwareNormalMapTest, TheNormalMapIsDataNeverDecodedAsSrgb)
