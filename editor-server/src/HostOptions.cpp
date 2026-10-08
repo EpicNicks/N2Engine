@@ -39,6 +39,8 @@ namespace N2Engine::Editor
     std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args)
     {
         HostOptions options;
+        bool givenName = false;
+        bool givenId = false;
 
         // Help wins: "N2EditorHost --port x --help" shows the usage instead of complaining about the port
         for (const std::string &arg : args)
@@ -59,7 +61,8 @@ namespace N2Engine::Editor
                 continue;
             }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
-                                    arg == "--renderer" || arg == "--token-env";
+                                    arg == "--renderer" || arg == "--token-env" || arg == "--create" ||
+                                    arg == "--name" || arg == "--project-id";
             if (!takesValue)
             {
                 continue; // unknown arguments are ignored
@@ -98,10 +101,47 @@ namespace N2Engine::Editor
                 // The variable's name; the token is read from it at startup (ReadAccessToken), not here
                 options.tokenEnv = value;
             }
+            else if (arg == "--create")
+            {
+                options.createPath = value;
+            }
+            else if (arg == "--name")
+            {
+                options.projectName = value;
+                givenName = true;
+            }
+            else if (arg == "--project-id")
+            {
+                givenId = true;
+                if (value == ProjectIdFromPath)
+                {
+                    options.projectIdFromPath = true;
+                    options.projectId.reset();
+                    continue;
+                }
+                const std::optional<Math::UUID> id = Math::UUID::FromString(value);
+                if (!id || *id == Math::UUID::ZERO)
+                {
+                    return std::unexpected("Invalid --project-id: " + value + " (expected a non-zero UUID, or " +
+                                           std::string(ProjectIdFromPath) + ")");
+                }
+                options.projectId = *id;
+                options.projectIdFromPath = false;
+            }
             else
             {
                 options.projectPath = value;
             }
+        }
+
+        if (!options.createPath.empty() && !options.projectPath.empty())
+        {
+            return std::unexpected("--create and --project can't be combined: create the project, then start a host "
+                                   "with --project");
+        }
+        if (options.createPath.empty() && (givenName || givenId))
+        {
+            return std::unexpected(std::string(givenName ? "--name" : "--project-id") + " only goes with --create");
         }
         return options;
     }
@@ -116,8 +156,8 @@ Options:
                             WARNING: the access token isn't encrypted; any other address lets whoever
                             can reach it (and, without --token-env, anyone at all) control this host,
                             including deleting scene files
-  --project <path>          Project folder: res:// assets load from <path>/assets,
-                            and DeleteScene works in <path>/scenes
+  --project <path>          Project folder, holding project.n2proj (see --create): res:// assets
+                            load from <path>/assets, and its startup scene opens
   --renderer <name>         opengl (default: a hidden window, needs a GPU) or
                             software (no window at all; renders without a GPU or display)
   --token-env <variable>    Read the access token from this environment variable (then removed
@@ -125,8 +165,17 @@ Options:
                             before any other command
   --exit-on-disconnect      Exit once a client's session ends (its connection closes after a
                             successful Hello, or with no token, after it connected)
+  --create <path>           Make <path> a project (project.n2proj, assets/scenes/Main.scene,
+                            assets/scripts/Example.lua), print one line to stdout, and exit
+                            without starting the engine. Exit code 0: created; 2: the folder
+                            already has a project.n2proj (nothing written); 1: any other error
+  --name <name>             With --create: the project's name (default: the folder's name)
+  --project-id <uuid>       With --create: the project's id, the namespace of its asset UUIDs
+                            (default: a new random one); "from-path" keeps the UUIDs the folder's
+                            assets had before projects had ids
   -h, --help                Show this help
 Once listening, prints the line "N2EditorHost ready port=<port>" to stdout.
+With --create, prints "N2EditorHost created projectId=<uuid> startupScene=<res path>" instead.
 )";
     }
 
@@ -175,5 +224,16 @@ Once listening, prints the line "N2EditorHost ready port=<port>" to stdout.
     std::string FormatReadyLine(const int port)
     {
         return std::format("{} port={}", ReadyLinePrefix, port);
+    }
+
+    std::string FormatCreatedLine(const Math::UUID &projectId, const std::string_view startupScene)
+    {
+        std::string line = std::format("{} projectId={}", CreatedLinePrefix, projectId.ToString());
+        // A value never holds a space (the fields are space-separated); a startup scene with one is left out
+        if (!startupScene.empty() && startupScene.find_first_of(" \t\r\n") == std::string_view::npos)
+        {
+            line += std::format(" startupScene={}", startupScene);
+        }
+        return line;
     }
 }
