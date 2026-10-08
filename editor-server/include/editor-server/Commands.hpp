@@ -520,6 +520,17 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct BeginEditGroupCmd
+    {
+        /// What the group's undo step is called (an Edit menu shows it)
+        std::string label;
+
+        static BeginEditGroupCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
     struct CreateScriptCmd
     {
         std::string name;
@@ -822,6 +833,47 @@ namespace N2Engine::Editor::Protocol
         WriteJson(payload, schema);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::LuaFields));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// Undo's and Redo's response: the label of the step undone or redone, the scene revision after it, whether
+    /// another step can be undone and redone, and the revision last saved (or opened)
+    inline void WriteEditResult(BufferWriter &w, const std::string &label, uint32_t revision, bool canUndo,
+                                bool canRedo, uint32_t savedRevision)
+    {
+        BufferWriter payload;
+        payload.WriteString(label);
+        payload.WriteU32(revision);
+        payload.WriteBool(canUndo);
+        payload.WriteBool(canRedo);
+        payload.WriteU32(savedRevision);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EditResult));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetHistory's response: how many steps are done, then the steps (oldest first) as one JSON array of
+    /// HistoryEntry objects
+    inline void WriteHistory(BufferWriter &w, uint32_t cursor, const nlohmann::json &entries)
+    {
+        BufferWriter payload;
+        payload.WriteU32(cursor);
+        WriteJson(payload, entries);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::History));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetAutosave's response: an AutosaveInfo as JSON
+    inline void WriteAutosave(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::Autosave));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

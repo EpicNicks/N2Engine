@@ -154,7 +154,12 @@ int SceneManager::StoreScene(nlohmann::json data, std::unique_ptr<Scene> &droppe
     if (const int existing = name.empty() ? -1 : FindSceneIndex(name); existing != -1)
     {
         // Same name: replace it, since lookups by name could never reach a second entry
-        Logger::Warn("SceneManager - replacing the stored data of scene: " + name);
+        // Replacing the data of the scene that is loaded is a reload of it (the editor rebuilds the scene it edits to
+        // undo a destroy), not a second scene taking its name
+        if (existing != instance._curSceneIndex)
+        {
+            Logger::Warn("SceneManager - replacing the stored data of scene: " + name);
+        }
         instance._scenes[existing].data = std::move(data);
         if (instance._sceneChange._pendingSceneIndex == existing)
         {
