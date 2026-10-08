@@ -1,10 +1,23 @@
 #pragma once
 
+#include <cstdint>
 #include <math/Vector3.hpp>
 #include <vector>
 
 namespace Renderer::Common
 {
+    /**
+     * How the lit shaders work with colour. Gamma (the default) is what the engine always did: colours and
+     * lighting are used as they are and the result is written as it is. Linear decodes sRGB textures to linear
+     * light, lights in linear light and encodes the result to sRGB for display. Only the standard lit shader
+     * differs; unlit and text draw the same in both.
+     */
+    enum class ColorSpace : std::uint8_t
+    {
+        Gamma,
+        Linear
+    };
+
     struct DirectionalLightData
     {
         N2Engine::Math::Vector3 direction;
@@ -59,6 +72,8 @@ namespace Renderer::Common
     struct SceneLightingData
     {
         N2Engine::Math::Vector3 ambientColor;
+        /// Set from the project's rendering settings by Scene::CollectLighting; read by the lit shaders
+        ColorSpace colorSpace = ColorSpace::Gamma;
 
         std::vector<DirectionalLightData> directionalLights;
         std::vector<PointLightData> pointLights;

@@ -380,6 +380,9 @@ void OpenGLRenderer::UpdateSceneLighting(
     auto *shader = static_cast<OpenGLShader*>(shaderIt->second.get());
     shader->Bind();
 
+    // Gamma (0, the default) or linear (1) lighting: see ColorSpace
+    shader->SetInt("uLinear", lighting.colorSpace == Common::ColorSpace::Linear ? 1 : 0);
+
     // Set ambient
     shader->SetVec3("uAmbientLight",
                     lighting.ambientColor.x,
@@ -582,6 +585,26 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
         {
             glUniform1i(uniforms.textureLoc, 0);
         }
+    }
+
+    // The lit shader's extra textures: emissive on unit 1, occlusion on unit 2 (their sampler uniforms are set
+    // by OpenGLMaterial::Apply, and the shader reads them only when uHasEmissiveTexture/uHasOcclusionTexture say so)
+    bool boundExtraTexture = false;
+    if (const OpenGLTexture *texture = glMaterial->GetEmissiveTexture(); texture && texture->IsValid())
+    {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
+        boundExtraTexture = true;
+    }
+    if (const OpenGLTexture *texture = glMaterial->GetOcclusionTexture(); texture && texture->IsValid())
+    {
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
+        boundExtraTexture = true;
+    }
+    if (boundExtraTexture)
+    {
+        glActiveTexture(GL_TEXTURE0);
     }
 
     // Draw mesh, with this draw's depth/cull/blend state
@@ -822,6 +845,22 @@ void OpenGLRenderer::CreateStandardShaders()
         uniform float uSmoothness;
         uniform float uAlphaCutoff;
 
+        // Colour space: 0 lights the values as they are (gamma), 1 decodes sRGB textures, lights in linear
+        // light and encodes the result (uLinear is set per frame, by UpdateSceneLighting). uBaseColorSrgb and
+        // uEmissiveTextureSrgb say whether those textures hold sRGB colour (a texture's "srgb" setting).
+        uniform int uLinear;
+        uniform bool uBaseColorSrgb;
+
+        // Emissive: added after lighting, unaffected by it. Occlusion: scales the ambient light by the texture's
+        // red channel, mixed in by uOcclusionStrength (0 = none, 1 = full).
+        uniform vec3 uEmissive;
+        uniform sampler2D uEmissiveTexture;
+        uniform bool uHasEmissiveTexture;
+        uniform bool uEmissiveTextureSrgb;
+        uniform sampler2D uOcclusionTexture;
+        uniform bool uHasOcclusionTexture;
+        uniform float uOcclusionStrength;
+
         // Camera
         uniform vec3 uCameraPos;
 
@@ -873,11 +912,26 @@ void OpenGLRenderer::CreateStandardShaders()
             return 1.0 / (1.0 + attenuation * d * d);
         }
 
+        // The sRGB transfer function (the software renderer's SrgbToLinear / LinearToSrgb)
+        vec3 srgbToLinear(vec3 c) {
+            c = max(c, vec3(0.0));
+            return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+        }
+
+        vec3 linearToSrgb(vec3 c) {
+            c = max(c, vec3(0.0));
+            return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+        }
+
         void main() {
             // Base colour: uAlbedo x texture x vertex colour, alpha-tested against uAlphaCutoff
             vec4 albedo = uAlbedo;
             if (uHasTexture) {
-                albedo *= texture(uTexture, fragTexCoord);
+                vec4 texel = texture(uTexture, fragTexCoord);
+                if (uLinear != 0 && uBaseColorSrgb) {
+                    texel.rgb = srgbToLinear(texel.rgb);
+                }
+                albedo *= texel;
             }
             albedo *= fragColor;
             if (albedo.a < uAlphaCutoff) {
@@ -887,8 +941,12 @@ void OpenGLRenderer::CreateStandardShaders()
             vec3 N = normalize(fragNormal);
             vec3 V = normalize(uCameraPos - fragWorldPos);
 
-            // Start with ambient
-            vec3 lighting = uAmbientLight;
+            // Start with ambient, dimmed by the occlusion texture
+            float occlusion = 1.0;
+            if (uHasOcclusionTexture) {
+                occlusion = 1.0 + uOcclusionStrength * (texture(uOcclusionTexture, fragTexCoord).r - 1.0);
+            }
+            vec3 lighting = uAmbientLight * occlusion;
 
             // Directional lights
             for (int i = 0; i < uNumDirectionalLights; i++) {
@@ -950,11 +1008,13 @@ void OpenGLRenderer::CreateStandardShaders()
 
                 vec3 L = normalize(-lightToFrag);
 
-                // Cone attenuation
+                // Cone: 1 inside the inner cone, 0 outside the outer, a ramp in the cosine between (the
+                // software renderer's SpotConeFactor). The angles are half-angles in radians.
                 float theta = dot(L, normalize(-uSpotLights[i].direction));
-                float epsilon = uSpotLights[i].innerConeAngle - uSpotLights[i].outerConeAngle;
+                float cosInner = cos(uSpotLights[i].innerConeAngle);
+                float cosOuter = cos(uSpotLights[i].outerConeAngle);
                 float spotIntensity = clamp(
-                    (theta - uSpotLights[i].outerConeAngle) / epsilon,
+                    (theta - cosOuter) / max(cosInner - cosOuter, 0.0001),
                     0.0,
                     1.0
                 );
@@ -980,7 +1040,20 @@ void OpenGLRenderer::CreateStandardShaders()
                 lighting += diffuse + specular;
             }
 
-            FragColor = vec4(lighting * albedo.rgb, albedo.a);
+            vec3 emissive = uEmissive;
+            if (uHasEmissiveTexture) {
+                vec3 glow = texture(uEmissiveTexture, fragTexCoord).rgb;
+                if (uLinear != 0 && uEmissiveTextureSrgb) {
+                    glow = srgbToLinear(glow);
+                }
+                emissive *= glow;
+            }
+
+            vec3 color = lighting * albedo.rgb + emissive;
+            if (uLinear != 0) {
+                color = linearToSrgb(color);
+            }
+            FragColor = vec4(color, albedo.a);
         }
     )";
 

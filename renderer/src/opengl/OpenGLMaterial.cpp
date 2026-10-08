@@ -61,6 +61,20 @@ void OpenGLMaterial::SetTexture(Renderer::Common::ITexture *texture)
     _texture = texture ? static_cast<OpenGLTexture *>(texture) : nullptr;
 }
 
+void OpenGLMaterial::SetAuxTexture(Common::AuxTexture which, Common::ITexture *texture)
+{
+    auto *glTexture = texture ? static_cast<OpenGLTexture *>(texture) : nullptr;
+    (which == Common::AuxTexture::Emissive ? _emissiveTexture : _occlusionTexture) = glTexture;
+    // The sampler's texture unit (the base colour texture is unit 0); sent with the other ints on every draw
+    _ints[which == Common::AuxTexture::Emissive ? "uEmissiveTexture" : "uOcclusionTexture"] =
+        which == Common::AuxTexture::Emissive ? 1 : 2;
+}
+
+Common::ITexture *OpenGLMaterial::GetAuxTexture(Common::AuxTexture which) const
+{
+    return which == Common::AuxTexture::Emissive ? _emissiveTexture : _occlusionTexture;
+}
+
 void OpenGLMaterial::Apply()
 {
     if (!_shader || !_shader->IsValid())
