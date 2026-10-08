@@ -15,6 +15,7 @@
 #include <renderer/common/RenderTypes.hpp>
 #include <renderer/common/SceneLighting.hpp>
 #include <renderer/common/TextureOptions.hpp>
+#include <renderer/software/SWTexture.hpp>
 #include <renderer/software/SoftwareRenderer.hpp>
 
 // The software renderer's lit shading beyond directional and point lights: spot lights (cone, falloff, range and the
@@ -363,12 +364,14 @@ TEST(SoftwareSpotLightTest, OnlyTheFirstFourSpotLightsCountAsOnOpenGL)
 TEST(SoftwareSpotLightTest, TwoSpotLightsAdd)
 {
     Scene scene;
+    // A dim surface, so that the sum stays below 255 (the specular term is not scaled by the intensity)
+    scene.lit->SetColor("uAlbedo", 0.3f, 0.3f, 0.3f, 1.0f);
     const int one = scene.Draw(WithSpot(SpotAtTheQuad(20.0f, 40.0f, 0.3f)), scene.lit).At(32, 32).r;
     SceneLightingData both = WithSpot(SpotAtTheQuad(20.0f, 40.0f, 0.3f));
     both.spotLights.push_back(SpotAtTheQuad(20.0f, 40.0f, 0.3f));
     const int two = scene.Draw(both, scene.lit).At(32, 32).r;
-    ASSERT_GT(one, 20);
-    ASSERT_LT(two, 255);
+    ASSERT_GT(one, 15);
+    ASSERT_LT(two, 200);
     EXPECT_NEAR(two, 2 * one, 2);
 }
 
@@ -434,6 +437,16 @@ TEST(SoftwareEmissiveTest, TheEmissiveTextureMultipliesTheColour)
     scene.lit->SetVec3("uEmissive", 0.5f, 0.5f, 0.5f);
     frame = scene.Draw(AmbientOnly(0.0f), scene.lit);
     EXPECT_NEAR(frame.At(10, 32).r, 128, 1);
+}
+
+TEST(SoftwareEmissiveTest, AnInvalidTextureIsStoredAsNoneSoTheHasTextureFlagsAgreeWithWhatIsDrawn)
+{
+    Scene scene;
+    Renderer::Software::SWTexture empty; // no pixels: not valid
+    scene.lit->SetAuxTexture(AuxTexture::Emissive, &empty);
+    scene.lit->SetAuxTexture(AuxTexture::Occlusion, &empty);
+    EXPECT_EQ(scene.lit->GetAuxTexture(AuxTexture::Emissive), nullptr);
+    EXPECT_EQ(scene.lit->GetAuxTexture(AuxTexture::Occlusion), nullptr);
 }
 
 TEST(SoftwareEmissiveTest, UnlitMaterialsIgnoreEmissive)

@@ -224,6 +224,12 @@ TEST(MaterialTest, ApplyUniformsSetsTheEmissiveAndOcclusionInputsForLitMaterials
     // With textures on the GPU material, and the textures' sRGB settings
     Renderer::Software::SWTexture glow;
     Renderer::Software::SWTexture occlusion;
+    glow.data = {1, 2, 3, 4};
+    glow.width = glow.height = 1;
+    glow.channels = 4;
+    occlusion.data = {1, 2, 3, 4};
+    occlusion.width = occlusion.height = 1;
+    occlusion.channels = 4;
     gpu.SetAuxTexture(Renderer::Common::AuxTexture::Emissive, &glow);
     gpu.SetAuxTexture(Renderer::Common::AuxTexture::Occlusion, &occlusion);
     Rendering::TextureSettings data;

@@ -1302,6 +1302,9 @@ namespace N2Engine::AssetImport
             }
             material.normalTexture = ImageOf(data, source.normal_texture, false, scene, use, warnings);
             material.occlusionTexture = ImageOf(data, source.occlusion_texture, false, scene, use, warnings);
+            // cgltf keeps the occlusion texture's strength in the view's scale
+            // (zero without a texture: cgltf only sets it for a view that is in the file)
+            material.occlusionStrength = source.occlusion_texture.texture ? Unit(source.occlusion_texture.scale, 1.0f) : 1.0f;
             material.emissiveTexture = ImageOf(data, source.emissive_texture, true, scene, use, warnings);
             for (int c = 0; c < 3; ++c)
             {

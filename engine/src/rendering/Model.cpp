@@ -373,6 +373,7 @@ namespace N2Engine::Rendering
             material->SetEmissive(Common::Color(from.emissive[0], from.emissive[1], from.emissive[2], 1.0f));
             material->SetNormalTexture(textureAt(from.normalTexture));
             material->SetOcclusionTexture(textureAt(from.occlusionTexture));
+            material->SetOcclusionStrength(from.occlusionStrength);
             material->SetMetallicRoughnessTexture(textureAt(from.metallicRoughnessTexture));
             material->SetEmissiveTexture(textureAt(from.emissiveTexture));
             _materials.push_back(std::move(material));

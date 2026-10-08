@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <iostream>
 #include <algorithm>
+#include <cmath>
 
 #include <math/Matrix.hpp>
 
@@ -432,26 +433,35 @@ void OpenGLRenderer::UpdateSceneLighting(
     }
 
     // Set spot lights
-    const int numSpotLights = std::min<int>(static_cast<int>(lighting.spotLights.size()),
-                                            Common::SceneLightingData::MAX_SPOT_LIGHTS);
-    shader->SetInt("uNumSpotLights", numSpotLights);
-
-    for (int i = 0; i < numSpotLights; ++i)
+    // At most MAX_SPOT_LIGHTS of the list, as the software renderer takes them; one without an axis (a zero
+    // direction) lights nothing and is left out, since normalising it would give NaN
+    const int spotCandidates = std::min<int>(static_cast<int>(lighting.spotLights.size()),
+                                             Common::SceneLightingData::MAX_SPOT_LIGHTS);
+    int numSpotLights = 0;
+    for (int candidate = 0; candidate < spotCandidates; ++candidate)
     {
-        const auto &light = lighting.spotLights[i];
+        const auto &light = lighting.spotLights[candidate];
+        const float length = std::sqrt(light.direction.x * light.direction.x + light.direction.y * light.direction.y +
+                                       light.direction.z * light.direction.z);
+        if (!(length > 1e-6f))
+        {
+            continue;
+        }
+        const int i = numSpotLights++;
         std::string base = "uSpotLights[" + std::to_string(i) + "]";
 
         shader->SetVec3(base + ".position",
                         light.position.x, light.position.y, light.position.z);
         shader->SetVec3(base + ".direction",
-                        light.direction.x, light.direction.y, light.direction.z);
+                        light.direction.x / length, light.direction.y / length, light.direction.z / length);
         shader->SetVec3(base + ".color",
                         light.color.x, light.color.y, light.color.z);
         shader->SetFloat(base + ".intensity", light.intensity);
         shader->SetFloat(base + ".range", light.range);
-        shader->SetFloat(base + ".innerConeAngle", light.innerConeAngle);
-        shader->SetFloat(base + ".outerConeAngle", light.outerConeAngle);
+        shader->SetFloat(base + ".cosInner", std::cos(light.innerConeAngle));
+        shader->SetFloat(base + ".cosOuter", std::cos(light.outerConeAngle));
     }
+    shader->SetInt("uNumSpotLights", numSpotLights);
 }
 
 
@@ -894,8 +904,8 @@ void OpenGLRenderer::CreateStandardShaders()
             vec3 color;
             float intensity;
             float range;
-            float innerConeAngle;
-            float outerConeAngle;
+            float cosInner;  // cos of the cone half-angles, set by UpdateSceneLighting
+            float cosOuter;
         };
         uniform int uNumSpotLights;
         uniform SpotLight uSpotLights[4];
@@ -1006,15 +1016,14 @@ void OpenGLRenderer::CreateStandardShaders()
                 if (distance > uSpotLights[i].range)
                     continue;
 
-                vec3 L = normalize(-lightToFrag);
+                // At the light itself there is no direction (and normalize would give NaN): none
+                vec3 L = distance > 0.000001 ? -lightToFrag / distance : vec3(0.0);
 
                 // Cone: 1 inside the inner cone, 0 outside the outer, a ramp in the cosine between (the
-                // software renderer's SpotConeFactor). The angles are half-angles in radians.
-                float theta = dot(L, normalize(-uSpotLights[i].direction));
-                float cosInner = cos(uSpotLights[i].innerConeAngle);
-                float cosOuter = cos(uSpotLights[i].outerConeAngle);
+                // software renderer's SpotConeFactor). The axis is a unit vector.
+                float theta = dot(L, -uSpotLights[i].direction);
                 float spotIntensity = clamp(
-                    (theta - cosOuter) / max(cosInner - cosOuter, 0.0001),
+                    (theta - uSpotLights[i].cosOuter) / max(uSpotLights[i].cosInner - uSpotLights[i].cosOuter, 0.0001),
                     0.0,
                     1.0
                 );

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include <renderer/common/IMaterial.hpp>
 #include <renderer/common/IMesh.hpp>

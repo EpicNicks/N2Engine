@@ -77,7 +77,9 @@ namespace N2Engine::AssetImport
         /// emissiveFactor, stored
         float emissive[3] = {0.0f, 0.0f, 0.0f};
         std::int32_t normalTexture = -1;            // stored
-        std::int32_t occlusionTexture = -1;         // stored
+        std::int32_t occlusionTexture = -1;
+        /// occlusionTexture.strength (glTF's default is 1), 0 to 1
+        float occlusionStrength = 1.0f;
         std::int32_t metallicRoughnessTexture = -1; // stored
         std::int32_t emissiveTexture = -1;          // stored
     };

@@ -120,15 +120,57 @@ TEST(RenderSettingsTest, TheProjectSettingsRenderingBlockSetsTheColourSpace)
     EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Gamma);
 }
 
-TEST(RenderSettingsTest, ASettingsObjectWithoutTheBlockOrTheKeyChangesNothing)
+TEST(RenderSettingsTest, SettingsWithoutARenderingBlockChangeNothing)
 {
     const ColorSpaceGuard guard;
     RenderSettings::SetColorSpace(ColorSpace::Linear);
     EXPECT_TRUE(ApplyProjectSettings(json::object()).empty());
-    EXPECT_TRUE(ApplyProjectSettings(json{{"rendering", json::object()}}).empty());
-    EXPECT_TRUE(ApplyProjectSettings(json{{"rendering", {{"colorSpace", nullptr}}}}).empty());
-    EXPECT_TRUE(ApplyProjectSettings(json{{"rendering", {{"somethingElse", 3}}}}).empty()) << "other keys are left alone";
     EXPECT_TRUE(ApplyProjectSettings(json{{"rendering", nullptr}}).empty());
+    EXPECT_TRUE(ApplyProjectSettings(json{{"physics", json::object()}}).empty());
+    EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Linear);
+}
+
+TEST(RenderSettingsTest, ABlockWithoutAColourSpaceMeansTheDefault)
+{
+    const ColorSpaceGuard guard;
+    for (const json &block : {json::object(), json{{"colorSpace", nullptr}}, json{{"somethingElse", 3}}})
+    {
+        RenderSettings::SetColorSpace(ColorSpace::Linear);
+        EXPECT_TRUE(ApplyProjectSettings(json{{"rendering", block}}).empty()) << block.dump();
+        EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Gamma) << block.dump();
+    }
+}
+
+TEST(RenderSettingsTest, APatchThatRemovesTheBlockResetsTheColourSpace)
+{
+    const ColorSpaceGuard guard;
+    const std::set<std::string> touched{"rendering"};
+    RenderSettings::SetColorSpace(ColorSpace::Linear);
+    EXPECT_TRUE(ApplyProjectSettings(json::object(), touched).empty());
+    EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Gamma);
+
+    RenderSettings::SetColorSpace(ColorSpace::Linear);
+    EXPECT_TRUE(ApplyProjectSettings(json{{"rendering", nullptr}}, touched).empty());
+    EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Gamma);
+
+    // A patch that touches other blocks only leaves it alone
+    RenderSettings::SetColorSpace(ColorSpace::Linear);
+    EXPECT_TRUE(ApplyProjectSettings(json::object(), std::set<std::string>{"physics"}).empty());
+    EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Linear);
+}
+
+TEST(RenderSettingsTest, TheSnapshotPutsTheColourSpaceBackAfterARefusedPatch)
+{
+    const ColorSpaceGuard guard;
+    RenderSettings::SetColorSpace(ColorSpace::Linear);
+    const ProjectSettingsSnapshot snapshot = ProjectSettingsSnapshot::Capture();
+    EXPECT_EQ(snapshot.colorSpace, ColorSpace::Linear);
+
+    // One block applies, another is refused; the caller undoes the whole patch
+    const auto problems = ApplyProjectSettings(json{{"rendering", {{"colorSpace", "gamma"}}}, {"physics", 5}});
+    EXPECT_EQ(problems.size(), 1u);
+    EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Gamma);
+    snapshot.Restore();
     EXPECT_EQ(RenderSettings::GetColorSpace(), ColorSpace::Linear);
 }
 
@@ -175,6 +217,8 @@ TEST(RenderSettingsTest, ASceneDrawsLinearDifferentlyFromGammaAndTheDefaultIsGam
     RenderSettings::SetColorSpace(ColorSpace::Linear);
     const std::vector<std::uint8_t> linear = RenderCube();
     EXPECT_NE(linear, gamma);
+    RenderSettings::SetColorSpace(ColorSpace::Gamma);
+    EXPECT_EQ(RenderCube(), byDefault) << "going back to gamma gives the default picture again";
     // Encoding for display lifts midtones; the black background is unchanged, so the total goes up
     EXPECT_GT(Sum(linear), Sum(gamma));
 }

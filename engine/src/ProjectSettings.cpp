@@ -60,7 +60,13 @@ namespace N2Engine
                 problems.emplace_back("rendering: not an object");
                 return;
             }
-            if (const auto space = rendering.find("colorSpace"); space != rendering.end() && !space->is_null())
+            const auto space = rendering.find("colorSpace");
+            if (space == rendering.end() || space->is_null())
+            {
+                // The block is there without a colour space (or with it removed): the default
+                Rendering::RenderSettings::SetColorSpace(Rendering::ColorSpace::Gamma);
+            }
+            else
             {
                 const auto parsed = space->is_string()
                                         ? Rendering::RenderSettings::ParseColorSpace(space->get<std::string>())
@@ -139,6 +145,15 @@ namespace N2Engine
         });
         apply("physics", [&](const nlohmann::json &physics) { ApplyPhysics(physics, problems); });
         apply("rendering", [&](const nlohmann::json &rendering) { ApplyRendering(rendering, problems); });
+        // A patch that removed the whole block (only names it, and it is gone): back to the default too
+        if (only && only->contains("rendering"))
+        {
+            const auto block = settings.find("rendering");
+            if (block == settings.end() || block->is_null())
+            {
+                Rendering::RenderSettings::SetColorSpace(Rendering::ColorSpace::Gamma);
+            }
+        }
         return problems;
     }
 

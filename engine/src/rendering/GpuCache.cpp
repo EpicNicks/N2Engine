@@ -229,7 +229,7 @@ namespace N2Engine::Rendering
         {
             return {};
         }
-        return Acquire(renderer, ResourceKind::Texture, 0, font, [&font](IRenderer &target, Handle &) -> void *
+        return Acquire(renderer, ResourceKind::Texture, 0, font, [&font](IRenderer &target, std::vector<Handle> &) -> void *
         {
             const Text::FontAtlas &atlas = font->GetSdfFont().GetAtlas();
             if (atlas.GetWidth() <= 0 || atlas.GetHeight() <= 0 || atlas.GetPixels().empty())
@@ -248,7 +248,7 @@ namespace N2Engine::Rendering
         {
             return {};
         }
-        Handle handle = Acquire(renderer, ResourceKind::Mesh, 0, mesh, [&mesh](IRenderer &target, Handle &) -> void *
+        Handle handle = Acquire(renderer, ResourceKind::Mesh, 0, mesh, [&mesh](IRenderer &target, std::vector<Handle> &) -> void *
         {
             return target.CreateMesh(mesh->GetMeshData());
         }, mesh->GetVersion());

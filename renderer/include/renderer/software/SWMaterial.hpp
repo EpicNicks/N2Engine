@@ -29,7 +29,9 @@ namespace Renderer::Software
         void SetTexture(Common::ITexture *t) override { m_texture = t; }
         void SetAuxTexture(Common::AuxTexture which, Common::ITexture *t) override
         {
-            (which == Common::AuxTexture::Emissive ? m_emissiveTexture : m_occlusionTexture) = t;
+            // An invalid texture is stored as none, as on OpenGL, so the has-texture flags agree
+            (which == Common::AuxTexture::Emissive ? m_emissiveTexture : m_occlusionTexture) =
+                t && t->IsValid() ? t : nullptr;
         }
         [[nodiscard]] Common::ITexture* GetAuxTexture(Common::AuxTexture which) const override
         {
