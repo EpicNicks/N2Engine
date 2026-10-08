@@ -27,6 +27,9 @@ namespace N2Engine
         [[nodiscard]] Math::Vector3 GetExtents() const;
         // Get corner point (0-7, where bits represent min/max for each axis)
         [[nodiscard]] Math::Vector3 GetCorner(int index) const;
+        /// The box around this one's eight corners after `matrix` (an affine transform, column vectors) moved
+        /// them: the world box of a local-space box. A rotation makes it larger than a tight fit.
+        [[nodiscard]] BoundingBox Transformed(const Matrix4 &matrix) const;
     };
 
     struct Frustum

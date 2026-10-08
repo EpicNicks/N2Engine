@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
@@ -102,6 +103,9 @@ namespace N2Engine::UI
         [[nodiscard]] bool IsRootCanvas() const;
 
         // IRenderable: a world-space root canvas draws in the Transparent queue; any other draws nowhere
+        /// A world-space root canvas: the box around its rect and the rects of its graphics (which draw even
+        /// outside it), in the world. nullopt for any other canvas (an overlay canvas isn't in the world).
+        [[nodiscard]] std::optional<BoundingBox> GetWorldBounds() const override;
         [[nodiscard]] RenderQueueKey GetRenderQueue() const override;
         [[nodiscard]] bool DrawsInQueue(RenderQueue queue) const override;
         /// RenderInQueue in the Transparent queue with RenderState::Transparent(), as Scene::Render would

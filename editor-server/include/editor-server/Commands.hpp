@@ -249,6 +249,36 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct PickEntityCmd
+    {
+        /// Pixels in the viewport, the origin at its top-left corner, y down
+        float x;
+        float y;
+        bool includeInactive;
+
+        static PickEntityCmd Deserialize(BufferReader &r)
+        {
+            PickEntityCmd cmd;
+            cmd.x = r.ReadF32();
+            cmd.y = r.ReadF32();
+            cmd.includeInactive = r.ReadBool();
+            return cmd;
+        }
+    };
+
+    struct GetEntityBoundsCmd
+    {
+        /// A JSON array of GameObject UUID strings (the handler checks its shape and size)
+        nlohmann::json entityIds;
+
+        static GetEntityBoundsCmd Deserialize(BufferReader &r)
+        {
+            GetEntityBoundsCmd cmd;
+            cmd.entityIds = ReadBoundedJson(r);
+            return cmd;
+        }
+    };
+
     struct SetCameraPositionCmd
     {
         float x, y, z;
@@ -654,6 +684,31 @@ namespace N2Engine::Editor::Protocol
         WriteMat4(payload, projection);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::EditorCamera));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// PickEntity's response: the object's UUID string (empty for none), where the ray met it, and how far along the ray
+    inline void WritePickResult(BufferWriter &w, const std::string &entityId, const Math::Vector3 &point,
+                                const float distance)
+    {
+        BufferWriter payload;
+        payload.WriteString(entityId);
+        WriteVec3(payload, point);
+        payload.WriteF32(distance);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::PickResult));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetEntityBounds's response: a JSON array of {id, min, max}
+    inline void WriteBounds(BufferWriter &w, const nlohmann::json &bounds)
+    {
+        BufferWriter payload;
+        WriteJson(payload, bounds);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::Bounds));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

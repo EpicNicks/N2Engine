@@ -48,8 +48,8 @@ namespace N2Engine::Example
         {
             return;
         }
-        const Positionable *positionable = GetGameObject().GetPositionable();
-        if (!positionable)
+        const std::optional<Positionable::Matrix4> world = GetModelMatrix();
+        if (!world)
         {
             return;
         }
@@ -59,16 +59,40 @@ namespace N2Engine::Example
             return;
         }
 
+        _resources.Bind(renderer);
+        _resources.Draw(mesh, std::span<const std::shared_ptr<Rendering::Material>>(&_material, 1),
+                        Rendering::Material::GetDefaultUnlit(), *world, _color, queue, state);
+    }
+
+    std::optional<Positionable::Matrix4> PolygonRenderer::GetModelMatrix() const
+    {
+        const Positionable *positionable = GetGameObject().GetPositionable();
+        if (!positionable)
+        {
+            return std::nullopt;
+        }
         // The world transform (with the hierarchy), times the shape's size
         Positionable::Matrix4 scaleMatrix{Positionable::Matrix4::identity()};
         scaleMatrix(0, 0) = _size.x;
         scaleMatrix(1, 1) = _size.y;
         scaleMatrix(2, 2) = _size.z;
-        const Positionable::Matrix4 world = positionable->GetLocalToWorldMatrix() * scaleMatrix;
+        return positionable->GetLocalToWorldMatrix() * scaleMatrix;
+    }
 
-        _resources.Bind(renderer);
-        _resources.Draw(mesh, std::span<const std::shared_ptr<Rendering::Material>>(&_material, 1),
-                        Rendering::Material::GetDefaultUnlit(), world, _color, queue, state);
+    std::optional<BoundingBox> PolygonRenderer::GetWorldBounds() const
+    {
+        const std::optional<Positionable::Matrix4> world = GetModelMatrix();
+        if (!world)
+        {
+            return std::nullopt;
+        }
+        // GetMesh may make (and remember) a custom sphere: a cache, not a change to what the shape is
+        const std::shared_ptr<Rendering::Mesh> mesh = const_cast<PolygonRenderer *>(this)->GetMesh();
+        if (!mesh)
+        {
+            return std::nullopt;
+        }
+        return mesh->GetBounds().Transformed(*world);
     }
 
     void PolygonRenderer::InitializeRenderResources(Renderer::Common::IRenderer *renderer)

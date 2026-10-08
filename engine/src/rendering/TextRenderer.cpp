@@ -60,6 +60,23 @@ namespace N2Engine::Rendering
         return _layoutCache.Get(_text, GetEffectiveFont(), GetLayoutOptions());
     }
 
+    std::optional<BoundingBox> TextRenderer::GetWorldBounds() const
+    {
+        const Positionable *positionable = GetGameObject().GetPositionable();
+        if (!positionable)
+        {
+            return std::nullopt;
+        }
+        const Text::Rect &bounds = GetLayout().bounds;
+        if (bounds.IsEmpty())
+        {
+            return std::nullopt;
+        }
+        // The block lies in the object's x/y plane (z = 0)
+        const BoundingBox local{Math::Vector3{bounds.minX, bounds.minY, 0.0f}, Math::Vector3{bounds.maxX, bounds.maxY, 0.0f}};
+        return local.Transformed(positionable->GetLocalToWorldMatrix());
+    }
+
     Renderer::Common::MeshData TextRenderer::BuildMesh(const Text::TextLayout &layout)
     {
         return TextDrawing::BuildMesh(layout);

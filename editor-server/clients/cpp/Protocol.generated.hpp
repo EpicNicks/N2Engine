@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.7.0";
+inline constexpr const char *ProtocolVersion = "1.8.0";
 
 enum class CommandType : uint8_t
 {
@@ -25,6 +25,8 @@ enum class CommandType : uint8_t
     GetCameraPosition = 0x12,
     SetEditorCamera = 0x13,
     GetEditorCamera = 0x14,
+    PickEntity = 0x15,
+    GetEntityBounds = 0x16,
     CreateScene = 0x20,
     LoadScene = 0x21,
     SaveScene = 0x22,
@@ -97,6 +99,8 @@ enum class ResponseType : uint8_t
     Autosave = 0x17,
     FrameUpdate = 0x18,
     EditorCamera = 0x19,
+    PickResult = 0x1A,
+    Bounds = 0x1B,
 };
 
 // Custom types
@@ -170,6 +174,18 @@ struct SetEditorCameraCmd
     float orthoSize;
     float nearPlane;
     float farPlane;
+};
+
+struct PickEntityCmd
+{
+    float x;
+    float y;
+    bool includeInactive;
+};
+
+struct GetEntityBoundsCmd
+{
+    std::string entityIds; // JSON: string[]
 };
 
 struct CreateSceneCmd
@@ -378,6 +394,18 @@ struct EditorCameraData
     float farPlane;
     std::array<float, 16> view;
     std::array<float, 16> projection;
+};
+
+struct PickResultData
+{
+    std::string entityId;
+    Vec3 point;
+    float distance;
+};
+
+struct BoundsData
+{
+    std::string bounds; // JSON: EntityBounds[]
 };
 
 struct SceneDataData

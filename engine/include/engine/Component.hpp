@@ -154,6 +154,9 @@ namespace N2Engine
         /// Expires when this component is freed (for references that must not dangle, e.g. from Lua)
         [[nodiscard]] std::weak_ptr<const bool> GetLifetimeToken() const { return _lifetime; }
         [[nodiscard]] bool IsActive() const;
+        /// The component's own flag alone: enabled and not marked for destruction, whether or not its object is
+        /// active in the hierarchy (IsActive adds that)
+        [[nodiscard]] bool IsActiveSelf() const { return _isActive && !_isMarkedForDestruction; }
         void SetActive(bool active);
 
         static constexpr bool IsSingleton = false;

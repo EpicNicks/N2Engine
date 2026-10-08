@@ -1,5 +1,5 @@
 {
-  "version": "1.7.0",
+  "version": "1.8.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -162,6 +162,36 @@
           "farPlane": "float32",
           "view": "mat4",
           "projection": "mat4"
+        }
+      }
+    },
+    "PickEntity": {
+      "id": "0x15",
+      "description": "The object under a point of the editor view, for clicking in the viewport (since 1.8.0). x and y are pixels in the viewport, the origin its top-left corner and y pointing down, as the frames RenderFrameIfChanged returns (SetViewportSize's size): a point outside the viewport (or a non-finite one: an Error) picks nothing. The server casts a ray through the point from the editor camera (SetEditorCamera) at the viewport size and tests it against the open scene's renderables on the CPU, with no physics (an edit-mode scene has no bodies, and most visual objects have no collider). Each active renderable with world bounds is a candidate, tried nearest box first and then exactly: the triangles of a mesh (MeshRenderer and the built-in cube, sphere and quad, either face), the laid-out text rectangle of a TextRenderer, and for a world-space canvas the topmost graphic under the ray (any graphic, whatever its raycast target; entityId is that graphic's object, and a ray through an empty part of the canvas goes on to what is behind). An object with a transform and no shape of its own (an empty object, a light, a camera, text with no text) is picked by a sphere of radius 0.25 world units around its position, but a UI object (a canvas, or anything with a RectTransform) never is; an object without a transform has no place in the world and is never picked. Screen-space overlay canvases are not part of the editor view and are never picked. The nearest hit between the camera's near and far planes wins; at the same distance, the object earlier in hierarchy order. includeInactive false skips objects that are inactive (in the hierarchy) and disabled components; true picks them too (a canvas's graphics follow its layout, which skips inactive objects either way). entityId is the object's UUID string, empty for a miss (then point is (0, 0, 0) and distance 0); point is where the ray meets it in world space; distance is the length from the ray's origin, the point on the camera's near plane under the pixel, to point, in world units. Pure: it changes nothing and never logs (clients send it on every click or mouse move).",
+      "request": {
+        "x": "float32",
+        "y": "float32",
+        "includeInactive": "bool"
+      },
+      "response": {
+        "type": "PickResult",
+        "fields": {
+          "entityId": "string",
+          "point": "vec3",
+          "distance": "float32"
+        }
+      }
+    },
+    "GetEntityBounds": {
+      "id": "0x16",
+      "description": "World-space bounds of objects, for \"frame selected\" and a selection box (since 1.8.0). entityIds is a JSON array of object UUID strings (at most 4096; anything else is an Error). bounds has one {id, min, max} for each of them that has bounds, in the order asked (an id asked twice is answered once); min and max are the corners of an axis-aligned box in world space. An id that names no object is left out, not an Error, as is an object with neither a transform nor any bounds below it, so a client compares what it asked with what came back. An object's box is the union of the world bounds of the renderables on it and on everything under it (a rotated mesh's box is larger than the mesh: it is a box around the transformed mesh bounds), plus the rect of each UI element of a world-space canvas; descendants that are switched off don't count (nor what is under them), nor does a disabled renderable component, and the object itself counts even when it is inactive; a UI element of an inactive object or canvas has no rect to measure. An object with nothing to measure but a transform (an empty object, a light; not a UI object, which has only its rect) gets the box of its pick sphere: 0.25 world units either side of its position, so \"frame selected\" has something to frame. Pure: it changes nothing and never logs. Error when there is no scene.",
+      "request": {
+        "entityIds": "json:string[]"
+      },
+      "response": {
+        "type": "Bounds",
+        "fields": {
+          "bounds": "json:EntityBounds[]"
         }
       }
     },
@@ -759,6 +789,11 @@
       "z": "number",
       "w": "number"
     },
+    "EntityBounds": {
+      "id": "string",
+      "min": "JsonVec3",
+      "max": "JsonVec3"
+    },
     "LocalTransform": {
       "position": "JsonVec3",
       "rotation": "JsonQuat",
@@ -821,6 +856,8 @@
     "History": "0x16",
     "Autosave": "0x17",
     "FrameUpdate": "0x18",
-    "EditorCamera": "0x19"
+    "EditorCamera": "0x19",
+    "PickResult": "0x1A",
+    "Bounds": "0x1B"
   }
 }
