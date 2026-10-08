@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.9.0";
+        public const string ProtocolVersion = "1.10.0";
     }
 
     public enum CommandType : byte
@@ -74,6 +74,11 @@ namespace N2Engine.Editor.Protocol
         GetAutosave = 0x95,
         RestoreAutosave = 0x96,
         DiscardAutosave = 0x97,
+        WritePlaySnapshot = 0xB0,
+        SetPaused = 0xB1,
+        Step = 0xB2,
+        GetPlayState = 0xB3,
+        SendInput = 0xB4,
         Shutdown = 0xFF,
     }
 
@@ -111,6 +116,8 @@ namespace N2Engine.Editor.Protocol
         AssetDetail = 0xA1,
         TextData = 0xA2,
         AssetCreated = 0xA3,
+        PlaySnapshot = 0xB0,
+        PlayState = 0xB1,
     }
 
     public struct Vec3
@@ -181,6 +188,26 @@ namespace N2Engine.Editor.Protocol
         public double? UndoCount { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("redoCount")]
         public double? RedoCount { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("state")]
+        public string? State { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("frame")]
+        public double? Frame { get; set; }
+    }
+
+    public class InputEvent
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("type")]
+        public string Type { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("key")]
+        public string? Key { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("button")]
+        public string? Button { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("down")]
+        public bool? Down { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("x")]
+        public double? X { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("y")]
+        public double? Y { get; set; }
     }
 
     public class HistoryEntry
@@ -655,6 +682,27 @@ namespace N2Engine.Editor.Protocol
         public string Label;
     }
 
+    public struct WritePlaySnapshotRequest
+    {
+        public string ScenePath;
+    }
+
+    public struct SetPausedRequest
+    {
+        public bool Paused;
+    }
+
+    public struct StepRequest
+    {
+        public uint Frames;
+    }
+
+    public struct SendInputRequest
+    {
+        /// <summary>JSON text: InputEvent[]</summary>
+        public string Events;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -868,6 +916,18 @@ namespace N2Engine.Editor.Protocol
     {
         /// <summary>JSON text: AutosaveInfo</summary>
         public string Info;
+    }
+
+    public struct PlaySnapshotResponse
+    {
+        public string File;
+    }
+
+    public struct PlayStateResponse
+    {
+        public string State;
+        public uint Frame;
+        public float Time;
     }
 
 }

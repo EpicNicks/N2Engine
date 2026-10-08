@@ -1,5 +1,5 @@
 {
-  "version": "1.9.0",
+  "version": "1.10.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -23,7 +23,7 @@
   "commands": {
     "RenderFrame": {
       "id": "0x01",
-      "description": "Renders one frame at the viewport size (SetViewportSize; 1280x720 until it is called). pixels is width * height * 4 bytes of RGBA8, top row first, alpha 255, on every renderer backend, so it can be drawn as-is (e.g. as canvas ImageData).",
+      "description": "Renders one frame at the viewport size (SetViewportSize; 1280x720 until it is called). pixels is width * height * 4 bytes of RGBA8, top row first, alpha 255, on every renderer backend, so it can be drawn as-is (e.g. as canvas ImageData). On a play host (started with --play; since 1.10.0) it draws the running game from the game's main camera, with its screen-space UI, without running a frame or moving the game's time, so polling it at the display rate never changes what the game does; this is the play viewport's command.",
       "request": {},
       "response": {
         "type": "FrameData",
@@ -78,7 +78,7 @@
     },
     "PollEvents": {
       "id": "0x05",
-      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} (res:// paths, each sorted) after a RescanAssets that found changes, and, since 1.9.0, after the host's file watcher found changes (it looks about once a second while a client is connected, so a file added, edited or deleted outside the editor is reported without a RescanAssets) and after WriteTextAsset, CreateScriptAsset and SetImportSettings (modified, though its file is the same, for the last); an asset of a kind the engine can reload that is held in memory is reloaded before the event is sent (see WriteTextAsset); projectChanged {} after project.n2proj was saved. historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount} since 1.6.0, after a step is recorded, undone or redone, or the history is cleared (label is the step Undo would undo, redoLabel the one Redo would redo, empty for none; the counts are the steps done and undone); an edit merged into the step before it (typing in a number box) sends none. Since 1.6.0 sceneChanged also follows Undo, Redo and RestoreAutosave, with full: true when the step was undone or redone by restoring a snapshot of the scene. Since 1.7.0: frameChanged {revision} when what the viewport would show has changed (the scene, the editor camera, the viewport size, the assets or the project's settings) since the last frame RenderFrameIfChanged rendered: one event per change that follows a rendered frame, not one per change, so dragging the camera sends one. revision is the revision the next frame will have (a later change before that frame moves it on); a client that is showing the viewport answers it with RenderFrameIfChanged. A client ignores kinds and keys it doesn't know.",
+      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} (res:// paths, each sorted) after a RescanAssets that found changes, and, since 1.9.0, after the host's file watcher found changes (it looks about once a second while a client is connected, so a file added, edited or deleted outside the editor is reported without a RescanAssets) and after WriteTextAsset, CreateScriptAsset and SetImportSettings (modified, though its file is the same, for the last); an asset of a kind the engine can reload that is held in memory is reloaded before the event is sent (see WriteTextAsset); projectChanged {} after project.n2proj was saved. historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount} since 1.6.0, after a step is recorded, undone or redone, or the history is cleared (label is the step Undo would undo, redoLabel the one Redo would redo, empty for none; the counts are the steps done and undone); an edit merged into the step before it (typing in a number box) sends none. Since 1.6.0 sceneChanged also follows Undo, Redo and RestoreAutosave, with full: true when the step was undone or redone by restoring a snapshot of the scene. Since 1.7.0: frameChanged {revision} when what the viewport would show has changed (the scene, the editor camera, the viewport size, the assets or the project's settings) since the last frame RenderFrameIfChanged rendered: one event per change that follows a rendered frame, not one per change, so dragging the camera sends one. revision is the revision the next frame will have (a later change before that frame moves it on); a client that is showing the viewport answers it with RenderFrameIfChanged. Since 1.10.0: playState {state, frame} from a play host when the game is paused or resumed (state \"Paused\" or \"Playing\", frame the frame count then), and once with \"Playing\" when the game starts; an ordinary host sends none. A client ignores kinds and keys it doesn't know.",
       "request": {
         "epoch": "uint32",
         "afterSeq": "uint32",
@@ -96,7 +96,7 @@
     },
     "RenderFrameIfChanged": {
       "id": "0x06",
-      "description": "Renders the editor view only when it changed, so an idle edit-mode viewport costs nothing. The editor view is the open scene drawn from the editor camera (SetEditorCamera) at the viewport size, whether or not the scene has a camera of its own, and without simulating. Every picture has a frame revision (a uint32, never 0): it moves on whenever the scene, the editor camera, the viewport size, the assets or the project's settings change. sinceRevision is the revision of the frame the client holds, or 0 for none. When it is the current revision, the answer is modified false, with the revision, the viewport size and no pixels (a few bytes, and no rendering). Otherwise it renders (or, if the frame of the current revision is still in the server's buffer, resends it) and answers modified true with the frame's revision, width, height and pixels, laid out as RenderFrame's. A client that wants a frame whatever the revision (it dropped its copy) passes 0. Polling it every animation frame is cheap; the frameChanged event (PollEvents) says when a poll will find a new frame. A revision means nothing across hosts (a host starts numbering at a random number), so a client that reconnects keeps its frame only when the revision it holds comes back as current. RenderFrame is unchanged and draws the game's main camera (SetCameraPosition moves it), as a play-mode viewport will; it neither uses nor moves the revision. Error when there is no renderer or it can't make the render target.",
+      "description": "Renders the editor view only when it changed, so an idle edit-mode viewport costs nothing. The editor view is the open scene drawn from the editor camera (SetEditorCamera) at the viewport size, whether or not the scene has a camera of its own, and without simulating. Every picture has a frame revision (a uint32, never 0): it moves on whenever the scene, the editor camera, the viewport size, the assets or the project's settings change. sinceRevision is the revision of the frame the client holds, or 0 for none. When it is the current revision, the answer is modified false, with the revision, the viewport size and no pixels (a few bytes, and no rendering). Otherwise it renders (or, if the frame of the current revision is still in the server's buffer, resends it) and answers modified true with the frame's revision, width, height and pixels, laid out as RenderFrame's. A client that wants a frame whatever the revision (it dropped its copy) passes 0. Polling it every animation frame is cheap; the frameChanged event (PollEvents) says when a poll will find a new frame. A revision means nothing across hosts (a host starts numbering at a random number), so a client that reconnects keeps its frame only when the revision it holds comes back as current. RenderFrame is unchanged and draws the game's main camera (SetCameraPosition moves it), as a play-mode viewport will; it neither uses nor moves the revision. Error when there is no renderer or it can't make the render target. A play host (started with --play; since 1.10.0) answers Error: its picture changes every frame and has no revision, so a play viewport uses RenderFrame.",
       "request": {
         "sinceRevision": "uint32"
       },
@@ -684,7 +684,7 @@
     },
     "Undo": {
       "id": "0x90",
-      "description": "Undoes the step that was done last: the latest edit made by an editing command (CreateEntity, CreateEntityEx, DuplicateEntity, DestroyEntity, SetEntityTransform, SetLocalTransform, SetEntityParent, SetEntityProperties, AddComponent, RemoveComponent, SetComponentFields) or, when it was made between BeginEditGroup and EndEditGroup, the whole group. Answers EditResult: the step's label, the scene revision after it, whether another step can be undone or redone, and savedRevision. Error without a scene, with nothing to undo, or while a group is open (end it first); a step that can't be undone (an object it needs is gone) clears the history and the Error says so. The revision moves and sceneChanged follows: entityIds names the objects the step touched, or full is true when the step was undone by putting back a snapshot of the scene (undoing DestroyEntity, RemoveComponent or RestoreAutosave rebuilds every object, with the same UUIDs), so a client refetches everything. Undoing back to the state the scene was last opened or saved at makes savedRevision equal the revision (no unsaved changes). historyChanged follows. Editing commands are meant for a scene opened for editing: a client doesn't send them to a play-mode host.",
+      "description": "Undoes the step that was done last: the latest edit made by an editing command (CreateEntity, CreateEntityEx, DuplicateEntity, DestroyEntity, SetEntityTransform, SetLocalTransform, SetEntityParent, SetEntityProperties, AddComponent, RemoveComponent, SetComponentFields) or, when it was made between BeginEditGroup and EndEditGroup, the whole group. Answers EditResult: the step's label, the scene revision after it, whether another step can be undone or redone, and savedRevision. Error without a scene, with nothing to undo, or while a group is open (end it first); a step that can't be undone (an object it needs is gone) clears the history and the Error says so. The revision moves and sceneChanged follows: entityIds names the objects the step touched, or full is true when the step was undone by putting back a snapshot of the scene (undoing DestroyEntity, RemoveComponent or RestoreAutosave rebuilds every object, with the same UUIDs), so a client refetches everything. Undoing back to the state the scene was last opened or saved at makes savedRevision equal the revision (no unsaved changes). historyChanged follows. Editing commands are meant for a scene opened for editing: a client doesn't send them to a play-mode host (which answers Error to the ones that write project files: OpenScene, NewScene, LoadScene, SaveSceneToFile, DeleteScene, SetProjectSettings, SetStartupScene, RestoreAutosave and DiscardAutosave, and never writes an autosave; the others change the running game).",
       "request": {},
       "response": {
         "type": "EditResult",
@@ -770,6 +770,56 @@
       "request": {},
       "response": { "type": "Ok" }
     },
+    "WritePlaySnapshot": {
+      "id": "0xB0",
+      "description": "Writes the scene to play as a snapshot file, for a launcher to start a play child from (since 1.10.0). Play mode is a second host process, not a mode of this one: the launcher starts N2EditorHost with the same --project and --renderer as this host and --play <file> (with --port 0 and, as for any host, a token from the environment: --token-env), reads its ready line, and connects to it as to any host, so this host and the edit scene are never touched by the game. scenePath is a res:// .scene path, or empty for the open scene. For the open scene (empty, or its own path) the snapshot is the scene as it is in memory now, so what the client edited and didn't save plays as it is (the scene stays as it was: nothing is saved, no revision moves, no history changes); for any other scene it is that file as it is on disk (Error when it can't be read or isn't a scene). file is the snapshot's absolute path, <project>/.n2/play/<scene name>-<hash>.scene (the name made safe for a file name, then a hash of the scene's file path so same-named scenes in different folders don't share a snapshot; a file of the same name is replaced, written atomically), exactly what --play takes. A snapshot isn't deleted by the host: the launcher may delete it after the play host has loaded it. Error without a project, with an empty scenePath and no open scene, for a path that isn't a res:// scene path inside the assets folder, and on a play host. Doesn't start anything.",
+      "request": {
+        "scenePath": "string"
+      },
+      "response": {
+        "type": "PlaySnapshot",
+        "fields": {
+          "file": "string"
+        }
+      }
+    },
+    "SetPaused": {
+      "id": "0xB1",
+      "description": "Play host only (started with --play; Error on any other host; since 1.10.0). Pauses the game (paused true) or resumes it. While paused the play host runs no frame at all (no Update, no physics, no coroutines, no audio mixing, no input polling) but keeps answering commands, so a client can still draw frames (RenderFrame), read the scene and Step. Resuming continues from the same game time: the time spent paused isn't a frame. Pausing a paused game, or resuming a running one, changes nothing and sends no event; a change pushes playState.",
+      "request": {
+        "paused": "bool"
+      },
+      "response": { "type": "Ok" }
+    },
+    "Step": {
+      "id": "0xB2",
+      "description": "Play host only, and only while paused (Error otherwise; since 1.10.0). Runs frames game frames now, one after the other, each a frame of exactly one fixed timestep of time (so each runs one fixed update and one Update; the time scale applies to the scaled time as usual), polling input as every frame does, and draws none (RenderFrame draws when asked). frames is 1 to 1000 (anything else is an Error and nothing runs). The frame counter GetPlayState reports moves on by frames. With the time scale at 0 a step runs no fixed update (as in a running game: no physics at scale 0), only the per-frame callbacks. The host answers Ok when they have all run, so a long step delays every other command by as long as it takes. A script that quits the application ends the step early and the host then exits.",
+      "request": {
+        "frames": "uint32"
+      },
+      "response": { "type": "Ok" }
+    },
+    "GetPlayState": {
+      "id": "0xB3",
+      "description": "Whether this host is playing, for a client that holds a connection to either kind of host (since 1.10.0). state is \"Edit\" on an ordinary host, \"Playing\" or \"Paused\" on a play host (started with --play). \"Starting\" (the launcher has started the process and has no connection yet) and \"Exited\" (the process has ended, with an exit code) are the launcher's own states: a host that answers is neither. frame is the number of game frames the play host has run (frames Step ran included; 0 on an ordinary host), and time the game time in seconds (Time::GetTime: scaled by the time scale, 0 on an ordinary host). Never logs (a client polls it).",
+      "request": {},
+      "response": {
+        "type": "PlayState",
+        "fields": {
+          "state": "string",
+          "frame": "uint32",
+          "time": "float32"
+        }
+      }
+    },
+    "SendInput": {
+      "id": "0xB4",
+      "description": "Play host only (Error on any other host; since 1.10.0): gives the game input, as a window of its own would. events is a JSON array (at most 1024) of InputEvent objects, applied in order; the whole batch is checked first, and one that is invalid (an unknown type, key or button, a missing or mistyped field, a non-finite number) is an Error that applies none of them. {type: \"key\", key, down}: a keyboard key goes down or up; key is the name of the engine's Key enum as in an input map (\"W\", \"Space\", \"LeftShift\", \"Key1\"). {type: \"mouseButton\", button, down}: a mouse button (\"Left\", \"Right\", \"Middle\", \"Button4\" to \"Button8\") goes down or up. {type: \"pointer\", x, y}: the pointer moves to x, y in window coordinates, the origin the top-left corner of the viewport's frame (the size SetViewportSize set) and y pointing down, as PickEntity's. {type: \"scroll\", x, y}: the wheel scrolled by x, y (added to what has arrived since the last frame). {type: \"releaseAll\"}: every key and mouse button comes up (a client sends it when the viewport loses focus). Keys and buttons stay down until released, whatever the frames in between; the pointer stays where it was put. In a play host the game's keys and mouse buttons are always exactly these (Input::KeySource replaces polling the window, so a keyboard on a window the host has is ignored), and, once a pointer event has come, the pointer is where the last one put it, restored before every frame (before the first, it is left where the host's device or last injection had it). Every key and button comes up when a client says Hello and when its connection ends. A paused game takes the input too, and acts on it at its next frame. Never logs.",
+      "request": {
+        "events": "json:InputEvent[]"
+      },
+      "response": { "type": "Ok" }
+    },
     "Shutdown": {
       "id": "0xFF",
       "request": {},
@@ -818,7 +868,17 @@
       "label?": "string",
       "redoLabel?": "string",
       "undoCount?": "number",
-      "redoCount?": "number"
+      "redoCount?": "number",
+      "state?": "string",
+      "frame?": "number"
+    },
+    "InputEvent": {
+      "type": "string",
+      "key?": "string",
+      "button?": "string",
+      "down?": "bool",
+      "x?": "number",
+      "y?": "number"
     },
     "HistoryEntry": {
       "label": "string",
@@ -967,6 +1027,8 @@
     "AssetList": "0xA0",
     "AssetDetail": "0xA1",
     "TextData": "0xA2",
-    "AssetCreated": "0xA3"
+    "AssetCreated": "0xA3",
+    "PlaySnapshot": "0xB0",
+    "PlayState": "0xB1"
   }
 }

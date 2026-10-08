@@ -87,6 +87,7 @@
 <li><a href="#time">Time</a></li>
 <li><a href="#quit">Quitting</a></li>
 <li><a href="#shutdown">Shutdown order</a></li>
+<li><a href="#tick">Tick: one frame</a></li>
 <li><a href="#editor-frame">RenderEditorFrame</a></li>
 <li><a href="#tests">Using Application in tests and tools</a></li>
 <li><a href="#singletons">Singletons and static destruction</a></li>
@@ -463,6 +464,21 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p class="callout-title">Note</p>
 <p><code>Shutdown</code> does not tear down the Lua runtime, the main camera, <code>ResourceLoader</code>/<code>Resources</code> caches or stored scene data; those live until static destruction. The health report also keeps its last values.</p>
 </div>
+
+<h2 id="tick">Tick: one frame <span class="badge">PR #102</span></h2>
+<p>The thirteen steps above are <code>Application::Tick(const TickOptions &amp;options = {})</code>; <code>Run()</code> does <code>while (!window.ShouldClose() &amp;&amp; !quitRequested) Tick();</code> after zeroing the fixed-step accumulator (which is now a member, so it carries over between calls). A host with a loop of its own, such as the editor's play child (<a href="editor.html#play">Play mode</a>), calls <code>Tick</code> itself between serving its client. Everything in the list happens in the same order, the same way.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>TickOptions</code></th><th>Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>pollEvents</code></td><td><code>true</code></td><td>Step 1 (<code>Window::PollEvents</code>) runs. Off: the window's events and the input system's <code>Update</code> are skipped.</td></tr>
+<tr><td><code>render</code></td><td><code>true</code></td><td>Step 11 (<code>Render()</code>) runs. Off: nothing is drawn; <code>RenderGameFrame()</code> draws later.</td></tr>
+<tr><td><code>deltaSeconds</code></td><td>none</td><td>Step 2 advances time by exactly this many seconds (<code>Time::Advance</code>) instead of reading the clock. The play host's <code>Step</code> passes the fixed timestep.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>RenderGameFrame()</code> draws the current scene from the main camera with the screen-space UI, without polling events or touching the clock; it does nothing without a valid window. <code>ResetFrameClock()</code> makes the next <code>Tick</code> measure from now, for resuming after a pause. Both exist for the play child; the editor's own <a href="#editor-frame"><code>RenderEditorFrame</code></a> still polls and calls <code>Time::Update</code>, so it isn't used while a game's clock is running.</p>
+<p class="src">Source: <code>engine/include/engine/Application.hpp</code> &mdash; <code>TickOptions</code>; <code>engine/src/Application.cpp</code> &mdash; <code>Application::Tick</code>, <code>Run</code>, <code>RenderGameFrame</code>, <code>ResetFrameClock</code>; <code>engine/src/Time.cpp</code> &mdash; <code>Time::Advance</code>, <code>ResetFrameClock</code>; tests: <code>tests/engine/ApplicationTickTests.cpp</code> (<code>ApplicationTickTest</code>).</p>
 
 <h2 id="editor-frame">RenderEditorFrame</h2>
 <p><code>RenderEditorFrame()</code> renders one frame for a host that drives the engine itself (the editor server's <code>RenderFrame</code> command). It returns immediately if the window is invalid; otherwise it runs <code>PollEvents</code>, <code>Time::Update</code>, <code>AudioSystem::Update</code> and <code>Render</code>.</p>

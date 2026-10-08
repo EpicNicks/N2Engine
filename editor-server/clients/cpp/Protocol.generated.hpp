@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.9.0";
+inline constexpr const char *ProtocolVersion = "1.10.0";
 
 enum class CommandType : uint8_t
 {
@@ -75,6 +75,11 @@ enum class CommandType : uint8_t
     GetAutosave = 0x95,
     RestoreAutosave = 0x96,
     DiscardAutosave = 0x97,
+    WritePlaySnapshot = 0xB0,
+    SetPaused = 0xB1,
+    Step = 0xB2,
+    GetPlayState = 0xB3,
+    SendInput = 0xB4,
     Shutdown = 0xFF,
 };
 
@@ -112,6 +117,8 @@ enum class ResponseType : uint8_t
     AssetDetail = 0xA1,
     TextData = 0xA2,
     AssetCreated = 0xA3,
+    PlaySnapshot = 0xB0,
+    PlayState = 0xB1,
 };
 
 // Custom types
@@ -383,6 +390,26 @@ struct BeginEditGroupCmd
     std::string label;
 };
 
+struct WritePlaySnapshotCmd
+{
+    std::string scenePath;
+};
+
+struct SetPausedCmd
+{
+    bool paused;
+};
+
+struct StepCmd
+{
+    uint32_t frames;
+};
+
+struct SendInputCmd
+{
+    std::string events; // JSON: InputEvent[]
+};
+
 // Response structures
 struct FrameDataData
 {
@@ -582,6 +609,18 @@ struct HistoryData
 struct AutosaveData
 {
     std::string info; // JSON: AutosaveInfo
+};
+
+struct PlaySnapshotData
+{
+    std::string file;
+};
+
+struct PlayStateData
+{
+    std::string state;
+    uint32_t frame;
+    float time;
 };
 
 } // namespace N2Engine::Editor::Protocol

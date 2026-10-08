@@ -143,6 +143,10 @@ namespace ProtocolVectors
                 return json{{"x", cmd.x}, {"y", cmd.y}, {"includeInactive", cmd.includeInactive}};
             }},
             {"GetEntityBounds", [](BufferReader &r) { return json{{"entityIds", GetEntityBoundsCmd::Deserialize(r).entityIds}}; }},
+            {"WritePlaySnapshot", [](BufferReader &r) { return json{{"scenePath", WritePlaySnapshotCmd::Deserialize(r).scenePath}}; }},
+            {"SetPaused", [](BufferReader &r) { return json{{"paused", SetPausedCmd::Deserialize(r).paused}}; }},
+            {"Step", [](BufferReader &r) { return json{{"frames", StepCmd::Deserialize(r).frames}}; }},
+            {"SendInput", [](BufferReader &r) { return json{{"events", SendInputCmd::Deserialize(r).events}}; }},
             {"ListAssets", [](BufferReader &r)
             {
                 const auto cmd = ListAssetsCmd::Deserialize(r);
@@ -314,6 +318,11 @@ namespace ProtocolVectors
                 WritePickResult(w, StringField(f, "entityId"), ToVec3(f.at("point")), f.at("distance").get<float>());
             }},
             {"Bounds", [](BufferWriter &w, const json &f) { WriteBounds(w, f.at("bounds")); }},
+            {"PlaySnapshot", [](BufferWriter &w, const json &f) { WritePlaySnapshot(w, StringField(f, "file")); }},
+            {"PlayState", [](BufferWriter &w, const json &f)
+            {
+                WritePlayState(w, StringField(f, "state"), Uint32Field(f, "frame"), f.at("time").get<float>());
+            }},
             {"AssetList", [](BufferWriter &w, const json &f) { WriteAssetList(w, f.at("folders"), f.at("assets")); }},
             {"AssetDetail", [](BufferWriter &w, const json &f) { WriteAssetDetail(w, f.at("info")); }},
             {"TextData", [](BufferWriter &w, const json &f) { WriteTextData(w, StringField(f, "text")); }},

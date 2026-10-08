@@ -96,7 +96,10 @@ namespace N2Engine::IO
         _metadataRoot = projectRoot / ".import";
         _userDataRoot = userDataRoot.empty() ? ProjectFile::UserDataBase() : userDataRoot;
 
-        std::filesystem::create_directories(_metadataRoot);
+        if (!_readOnly)
+        {
+            std::filesystem::create_directories(_metadataRoot);
+        }
         std::filesystem::create_directories(_userDataRoot);
 
         Logger::Info(std::format("ResourceLoader initialized: {}", PathToUtf8(projectRoot)));
@@ -341,7 +344,7 @@ namespace N2Engine::IO
             meta.fileSize = fileSize;
             if (saveMeta)
             {
-                meta.SaveToFile(metaPath);
+                PersistMeta(meta, metaPath);
             }
         }
         else
@@ -352,7 +355,7 @@ namespace N2Engine::IO
             meta.fileSize = fileSize;
 
             meta.resourceType = ResourceTypeFor(sourcePath);
-            meta.SaveToFile(metaPath);
+            PersistMeta(meta, metaPath);
             Logger::Info(std::format("New asset: {}", resourcePath.ToString()));
         }
 
@@ -641,7 +644,7 @@ namespace N2Engine::IO
             bool saved = false;
             try
             {
-                saved = meta.SaveToFile(metaPath);
+                saved = PersistMeta(meta, metaPath);
             }
             catch (const std::exception &e)
             {
@@ -903,9 +906,14 @@ namespace N2Engine::IO
         }
     }
 
+    bool ResourceLoader::PersistMeta(const AssetMetadata &meta, const std::filesystem::path &path) const
+    {
+        return _readOnly || meta.SaveToFile(path);
+    }
+
     void ResourceLoader::SaveAssetState()
     {
-        if (!_assetStateDirty || _projectRoot.empty())
+        if (!_assetStateDirty || _projectRoot.empty() || _readOnly)
         {
             return;
         }
@@ -969,6 +977,10 @@ namespace N2Engine::IO
         if (sourcePath.empty())
         {
             return std::unexpected("can't resolve " + resourcePath.ToString());
+        }
+        if (_readOnly)
+        {
+            return std::unexpected("the project is open read-only: " + resourcePath.ToString() + " was not changed");
         }
         AssetMetadata updated = meta;
         updated.customData = settings;

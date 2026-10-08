@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include <editor-server/Commands.hpp>
+#include <editor-server/EditorServer.hpp>
 #include <editor-server/Protocol.hpp>
 #include <editor-server/Serialization.hpp>
 
@@ -51,6 +52,11 @@ namespace
             {"GetCameraPosition", CommandType::GetCameraPosition},
             {"SetEditorCamera", CommandType::SetEditorCamera},
             {"GetEditorCamera", CommandType::GetEditorCamera},
+            {"WritePlaySnapshot", CommandType::WritePlaySnapshot},
+            {"SetPaused", CommandType::SetPaused},
+            {"Step", CommandType::Step},
+            {"GetPlayState", CommandType::GetPlayState},
+            {"SendInput", CommandType::SendInput},
             {"PickEntity", CommandType::PickEntity},
             {"GetEntityBounds", CommandType::GetEntityBounds},
             {"CreateScene", CommandType::CreateScene},
@@ -137,6 +143,8 @@ namespace
             {"EditorCamera", ResponseType::EditorCamera},
             {"PickResult", ResponseType::PickResult},
             {"Bounds", ResponseType::Bounds},
+            {"PlaySnapshot", ResponseType::PlaySnapshot},
+            {"PlayState", ResponseType::PlayState},
             {"AssetList", ResponseType::AssetList},
             {"AssetDetail", ResponseType::AssetDetail},
             {"TextData", ResponseType::TextData},
@@ -158,6 +166,10 @@ namespace
             {"RenderFrameIfChanged", [](BufferReader &r) { (void)RenderFrameIfChangedCmd::Deserialize(r); }},
             {"SetCameraPosition", [](BufferReader &r) { (void)SetCameraPositionCmd::Deserialize(r); }},
             {"SetEditorCamera", [](BufferReader &r) { (void)SetEditorCameraCmd::Deserialize(r); }},
+            {"WritePlaySnapshot", [](BufferReader &r) { (void)WritePlaySnapshotCmd::Deserialize(r); }},
+            {"SetPaused", [](BufferReader &r) { (void)SetPausedCmd::Deserialize(r); }},
+            {"Step", [](BufferReader &r) { (void)StepCmd::Deserialize(r); }},
+            {"SendInput", [](BufferReader &r) { (void)SendInputCmd::Deserialize(r); }},
             {"PickEntity", [](BufferReader &r) { (void)PickEntityCmd::Deserialize(r); }},
             {"GetEntityBounds", [](BufferReader &r) { (void)GetEntityBoundsCmd::Deserialize(r); }},
             {"ListAssets", [](BufferReader &r) { (void)ListAssetsCmd::Deserialize(r); }},
@@ -520,4 +532,51 @@ TEST(ProtocolSpecTest, ResponseBuildersWriteTheSpecFields)
         ++checked;
     }
     EXPECT_EQ(checked + 2, spec.at("responses").size());
+}
+
+// A play host refuses the commands that write the project or swap the scene (EditorServer::IsEditOnlyCommand, a
+// deny-list). A command added later is allowed in a play host unless somebody lists it, so every command of the spec
+// has to be named here, as refused (true) or allowed (false), and the test fails on one that isn't: each new command
+// forces the decision.
+TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
+{
+    const std::map<std::string, bool> refusedInAPlayHost = {
+        // Write the project's files, or replace the scene the host is playing
+        {"LoadScene", true}, {"SaveSceneToFile", true}, {"DeleteScene", true}, {"OpenScene", true},
+        {"NewScene", true}, {"SetProjectSettings", true}, {"SetStartupScene", true}, {"RestoreAutosave", true},
+        {"DiscardAutosave", true},
+        {"SetImportSettings", true}, {"WriteTextAsset", true}, {"CreateScriptAsset", true}, {"CreateFolder", true},
+        // Allowed: they read, or change only the running game, the in-memory scene store or the connection
+        {"RenderFrame", false}, {"SetViewportSize", false}, {"GetAudio", false}, {"Hello", false},
+        {"PollEvents", false}, {"RenderFrameIfChanged", false}, {"SetCameraPosition", false},
+        {"GetCameraPosition", false}, {"SetEditorCamera", false}, {"GetEditorCamera", false},
+        {"PickEntity", false}, {"GetEntityBounds", false}, {"CreateScene", false}, {"SaveScene", false},
+        {"GetCurrentScene", false}, {"GetHierarchy", false}, {"GetOpenScene", false}, {"CreateEntity", false},
+        {"DestroyEntity", false}, {"SetEntityTransform", false}, {"GetEntityTransform", false},
+        {"GetAllEntities", false}, {"CreateEntityEx", false}, {"SetEntityParent", false},
+        {"SetEntityProperties", false}, {"DuplicateEntity", false}, {"GetEntity", false},
+        {"SetLocalTransform", false}, {"CreateScript", false}, {"RescanAssets", false},
+        {"GetEngineHealth", false}, {"GetComponentTypes", false}, {"AddComponent", false},
+        {"RemoveComponent", false}, {"SetComponentFields", false}, {"GetComponent", false},
+        {"GetLuaFields", false}, {"GetProjectInfo", false}, {"Undo", false}, {"Redo", false},
+        {"BeginEditGroup", false}, {"EndEditGroup", false}, {"GetHistory", false}, {"GetAutosave", false},
+        {"ListAssets", false}, {"GetAssetInfo", false}, {"ReadTextAsset", false},
+        {"WritePlaySnapshot", false}, {"SetPaused", false}, {"Step", false}, {"GetPlayState", false},
+        {"SendInput", false}, {"Shutdown", false},
+    };
+
+    const spec_json spec = LoadSpec();
+    for (const auto &[name, command] : spec.at("commands").items())
+    {
+        const auto found = refusedInAPlayHost.find(name);
+        ASSERT_NE(found, refusedInAPlayHost.end())
+            << name << " is a command nobody has classified for a play host: add it to this list, and, if it writes "
+            << "project files or swaps the scene, to EditorServer::IsEditOnlyCommand";
+        EXPECT_EQ(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(ParseId(command.at("id")))), found->second) << name;
+    }
+    for (const auto &[name, refused] : refusedInAPlayHost)
+    {
+        (void)refused;
+        EXPECT_TRUE(spec.at("commands").contains(name)) << name << " is classified here but isn't in protocol.json";
+    }
 }

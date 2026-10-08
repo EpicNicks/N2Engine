@@ -386,3 +386,47 @@ TEST(HostOptionsTest, TheUsageNamesTheCreateOptions)
         EXPECT_NE(usage.find(option), std::string_view::npos) << option;
     }
 }
+
+TEST(HostOptionsTest, PlayTakesASnapshotFileAndIsOffByDefault)
+{
+    const auto none = ParseHostArguments({"--project", "p"});
+    ASSERT_TRUE(none) << none.error();
+    EXPECT_TRUE(none->playScene.empty());
+
+    const auto parsed = ParseHostArguments({"--project", "C:/Games/My Game", "--play",
+                                            "C:/Games/My Game/.n2/play/Main.scene", "--port", "0", "--renderer",
+                                            "software"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ(parsed->playScene, "C:/Games/My Game/.n2/play/Main.scene");
+    EXPECT_EQ(parsed->projectPath, "C:/Games/My Game");
+    EXPECT_EQ(parsed->renderer, HostRenderer::Software) << "the play host is told the renderer like any host";
+
+    const auto resPath = ParseHostArguments({"--project", "p", "--play", "res://scenes/Main.scene"});
+    ASSERT_TRUE(resPath) << resPath.error();
+    EXPECT_EQ(resPath->playScene, "res://scenes/Main.scene");
+}
+
+TEST(HostOptionsTest, PlayMissingItsValueIsAnError)
+{
+    const auto atTheEnd = ParseHostArguments({"--project", "p", "--play"});
+    ASSERT_FALSE(atTheEnd);
+    EXPECT_NE(atTheEnd.error().find("--play"), std::string::npos) << atTheEnd.error();
+
+    const auto beforeAnOption = ParseHostArguments({"--play", "--port", "0"});
+    ASSERT_FALSE(beforeAnOption);
+    EXPECT_NE(beforeAnOption.error().find("--play"), std::string::npos) << beforeAnOption.error();
+}
+
+TEST(HostOptionsTest, CreateAndPlayCantBeCombined)
+{
+    const auto parsed = ParseHostArguments({"--create", "a", "--play", "b.scene"});
+    ASSERT_FALSE(parsed);
+    EXPECT_NE(parsed.error().find("--create and --play"), std::string::npos) << parsed.error();
+}
+
+TEST(HostOptionsTest, TheUsageNamesPlay)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--play"), std::string_view::npos);
+    EXPECT_NE(usage.find("WritePlaySnapshot"), std::string_view::npos);
+}

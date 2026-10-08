@@ -1,7 +1,7 @@
 // Auto-generated from protocol.json by generate_typescript.py - do not edit
 
 /** protocol.json's version (major.minor.patch); Hello sends it, and the server answers with its own */
-export const PROTOCOL_VERSION = "1.9.0";
+export const PROTOCOL_VERSION = "1.10.0";
 
 // ==================== Types ====================
 
@@ -54,6 +54,17 @@ export interface EditorEvent {
   redoLabel?: string;
   undoCount?: number;
   redoCount?: number;
+  state?: string;
+  frame?: number;
+}
+
+export interface InputEvent {
+  type: string;
+  key?: string;
+  button?: string;
+  down?: boolean;
+  x?: number;
+  y?: number;
 }
 
 export interface HistoryEntry {
@@ -249,6 +260,11 @@ export const CommandType = {
   GetAutosave: 0x95,
   RestoreAutosave: 0x96,
   DiscardAutosave: 0x97,
+  WritePlaySnapshot: 0xB0,
+  SetPaused: 0xB1,
+  Step: 0xB2,
+  GetPlayState: 0xB3,
+  SendInput: 0xB4,
   Shutdown: 0xFF,
 } as const;
 
@@ -287,6 +303,8 @@ export const ResponseType = {
   AssetDetail: 0xA1,
   TextData: 0xA2,
   AssetCreated: 0xA3,
+  PlaySnapshot: 0xB0,
+  PlayState: 0xB1,
 } as const;
 
 export type ResponseType = typeof ResponseType[keyof typeof ResponseType];
@@ -353,6 +371,11 @@ export const CommandResponse = {
   GetAutosave: "Autosave",
   RestoreAutosave: "SceneInfo",
   DiscardAutosave: "Ok",
+  WritePlaySnapshot: "PlaySnapshot",
+  SetPaused: "Ok",
+  Step: "Ok",
+  GetPlayState: "PlayState",
+  SendInput: "Ok",
   Shutdown: "Ok",
 } as const;
 
@@ -557,6 +580,22 @@ export interface BeginEditGroupRequest {
   label: string;
 }
 
+export interface WritePlaySnapshotRequest {
+  scenePath: string;
+}
+
+export interface SetPausedRequest {
+  paused: boolean;
+}
+
+export interface StepRequest {
+  frames: number;
+}
+
+export interface SendInputRequest {
+  events: InputEvent[];
+}
+
 /** Ok has no payload */
 export type OkResponse = Record<string, never>;
 
@@ -733,6 +772,16 @@ export interface HistoryResponse {
 
 export interface AutosaveResponse {
   info: AutosaveInfo;
+}
+
+export interface PlaySnapshotResponse {
+  file: string;
+}
+
+export interface PlayStateResponse {
+  state: string;
+  frame: number;
+  time: number;
 }
 
 // ==================== Codec runtime ====================
@@ -1658,6 +1707,62 @@ export function decodeBeginEditGroupRequest(payload: Uint8Array): BeginEditGroup
   return { label };
 }
 
+/** WritePlaySnapshot's request payload (without the frame header) */
+export function encodeWritePlaySnapshotRequest(value: WritePlaySnapshotRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.scenePath);
+  return writer.finish();
+}
+
+/** Reads WritePlaySnapshot's request payload; bytes after the last field are ignored */
+export function decodeWritePlaySnapshotRequest(payload: Uint8Array): WritePlaySnapshotRequest {
+  const reader = new ProtocolReader(payload);
+  const scenePath = reader.string();
+  return { scenePath };
+}
+
+/** SetPaused's request payload (without the frame header) */
+export function encodeSetPausedRequest(value: SetPausedRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.bool(value.paused);
+  return writer.finish();
+}
+
+/** Reads SetPaused's request payload; bytes after the last field are ignored */
+export function decodeSetPausedRequest(payload: Uint8Array): SetPausedRequest {
+  const reader = new ProtocolReader(payload);
+  const paused = reader.bool();
+  return { paused };
+}
+
+/** Step's request payload (without the frame header) */
+export function encodeStepRequest(value: StepRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.u32(value.frames);
+  return writer.finish();
+}
+
+/** Reads Step's request payload; bytes after the last field are ignored */
+export function decodeStepRequest(payload: Uint8Array): StepRequest {
+  const reader = new ProtocolReader(payload);
+  const frames = reader.u32();
+  return { frames };
+}
+
+/** SendInput's request payload (without the frame header) */
+export function encodeSendInputRequest(value: SendInputRequest): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.json(value.events);
+  return writer.finish();
+}
+
+/** Reads SendInput's request payload; bytes after the last field are ignored */
+export function decodeSendInputRequest(payload: Uint8Array): SendInputRequest {
+  const reader = new ProtocolReader(payload);
+  const events = reader.json() as InputEvent[];
+  return { events };
+}
+
 /** Ok's (empty) payload */
 export function encodeOkResponse(_value: OkResponse): Uint8Array {
   const writer = new ProtocolWriter();
@@ -2199,6 +2304,38 @@ export function decodeAutosaveResponse(payload: Uint8Array): AutosaveResponse {
   return { info };
 }
 
+/** PlaySnapshot's payload (without the frame header) */
+export function encodePlaySnapshotResponse(value: PlaySnapshotResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.file);
+  return writer.finish();
+}
+
+/** Reads PlaySnapshot's payload; bytes after the last field are ignored */
+export function decodePlaySnapshotResponse(payload: Uint8Array): PlaySnapshotResponse {
+  const reader = new ProtocolReader(payload);
+  const file = reader.string();
+  return { file };
+}
+
+/** PlayState's payload (without the frame header) */
+export function encodePlayStateResponse(value: PlayStateResponse): Uint8Array {
+  const writer = new ProtocolWriter();
+  writer.string(value.state);
+  writer.u32(value.frame);
+  writer.f32(value.time);
+  return writer.finish();
+}
+
+/** Reads PlayState's payload; bytes after the last field are ignored */
+export function decodePlayStateResponse(payload: Uint8Array): PlayStateResponse {
+  const reader = new ProtocolReader(payload);
+  const state = reader.string();
+  const frame = reader.u32();
+  const time = reader.f32();
+  return { state, frame, time };
+}
+
 /** Each command's request codecs, for commands with request fields */
 export const RequestCodecs = {
   SetViewportSize: { encode: encodeSetViewportSizeRequest, decode: decodeSetViewportSizeRequest },
@@ -2241,6 +2378,10 @@ export const RequestCodecs = {
   SetProjectSettings: { encode: encodeSetProjectSettingsRequest, decode: decodeSetProjectSettingsRequest },
   SetStartupScene: { encode: encodeSetStartupSceneRequest, decode: decodeSetStartupSceneRequest },
   BeginEditGroup: { encode: encodeBeginEditGroupRequest, decode: decodeBeginEditGroupRequest },
+  WritePlaySnapshot: { encode: encodeWritePlaySnapshotRequest, decode: decodeWritePlaySnapshotRequest },
+  SetPaused: { encode: encodeSetPausedRequest, decode: decodeSetPausedRequest },
+  Step: { encode: encodeStepRequest, decode: decodeStepRequest },
+  SendInput: { encode: encodeSendInputRequest, decode: decodeSendInputRequest },
 } as const;
 
 /** Each response's codecs */
@@ -2277,4 +2418,6 @@ export const ResponseCodecs = {
   EditResult: { encode: encodeEditResultResponse, decode: decodeEditResultResponse },
   History: { encode: encodeHistoryResponse, decode: decodeHistoryResponse },
   Autosave: { encode: encodeAutosaveResponse, decode: decodeAutosaveResponse },
+  PlaySnapshot: { encode: encodePlaySnapshotResponse, decode: decodePlaySnapshotResponse },
+  PlayState: { encode: encodePlayStateResponse, decode: decodePlayStateResponse },
 } as const;

@@ -52,6 +52,16 @@ namespace N2Engine::IO
          * Forgets everything about the previous project, then scans the assets.
          */
         void Initialize(const std::filesystem::path& projectRoot, const std::filesystem::path& userDataRoot = {});
+
+        /**
+         * A read-only loader never writes the project: it keeps what it finds in memory but writes no .meta file (new,
+         * re-typed or sub-asset index), no .n2/asset-state.json and doesn't create the .import folder, and
+         * SetImportSettings answers an error. For a process that shares the project folder with another that owns it
+         * (the editor's play host, whose edit host does the indexing). Call it before Initialize; Initialize doesn't
+         * change it. user:// is the game's own and is still created. Off by default.
+         */
+        void SetReadOnly(bool readOnly) { _readOnly = readOnly; }
+        [[nodiscard]] bool IsReadOnly() const { return _readOnly; }
         /// Indexes new and changed files under the assets folder and forgets deleted ones; returns what changed
         RescanResult RescanAssets();
 
@@ -233,6 +243,9 @@ namespace N2Engine::IO
         bool _assetStateWarned = false;
         DirectoryFingerprint _fingerprint;
         bool _hasFingerprint = false;
+        bool _readOnly = false;
+        /// meta.SaveToFile(path), or true without writing when read-only
+        bool PersistMeta(const AssetMetadata &meta, const std::filesystem::path &path) const;
 
         std::unordered_map<ResourcePath, AssetMetadata, ResourcePath::Hash> _metadata;
         std::unordered_map<Math::UUID, ResourcePath, UUIDHash> _uuidToPath;

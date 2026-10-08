@@ -22,10 +22,13 @@
 #include "engine/Logger.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/Time.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/Version.hpp"
 #include "engine/audio/AudioSystem.hpp"
 #include "engine/example/renderers/CubeRenderer.hpp"
+#include "engine/input/InputTypes.hpp"
+#include "engine/input/Mouse.hpp"
 #include "engine/example/renderers/QuadRenderer.hpp"
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -1306,6 +1309,11 @@ namespace N2Engine::Editor
     EditorServer::~EditorServer()
     {
         Stop();
+        // The keyboard this server installed goes with it
+        if (Input::KeySource::Get() == &_keys)
+        {
+            Input::KeySource::Set(nullptr);
+        }
         // Once this returns no subscriber call is running (dispatch holds the Logger's lock), so _events can go
         Logger::logEvent -= _logSubscription;
     }
@@ -1423,6 +1431,10 @@ namespace N2Engine::Editor
 
     void EditorServer::UpdateAudio()
     {
+        if (_playMode)
+        {
+            return; // Application::Tick paces the audio with the game
+        }
         auto &audio = Audio::AudioSystem::Instance();
         const auto now = std::chrono::steady_clock::now();
         if (_lastAudioUpdate && audio.IsLoopback())
@@ -1574,6 +1586,8 @@ namespace N2Engine::Editor
             (void)_commands.Enqueue([this]
             {
                 CloseEditGroups();
+                // A play host's keys the client held go up with it (a key held when it crashed would stay down)
+                _keys.ReleaseAll();
                 // A client that went away may have crashed: the last edits are written, however recent the autosave
                 FlushAutosave(true);
                 return CommandQueue::Response{};
@@ -1672,8 +1686,7 @@ namespace N2Engine::Editor
                 // The client chose to shut the host down: what it didn't save is what it chose to drop
                 (void)_commands.Enqueue([this]
                 {
-                    CloseEditGroups();
-                    DiscardWrittenAutosave();
+                    PrepareForShutdown();
                     return CommandQueue::Response{};
                 });
                 _running = false;
@@ -1853,6 +1866,8 @@ namespace N2Engine::Editor
         case CommandType::GetEditorCamera:    // the scene view, with each frame, for its gizmos
         case CommandType::PickEntity:         // a click, or the mouse moving over the scene view
         case CommandType::GetEntityBounds:    // the selection box, whenever the selection or the scene changes
+        case CommandType::GetPlayState:       // the play toolbar
+        case CommandType::SendInput:          // the play viewport: every key and pointer event
         case CommandType::ListAssets:         // the asset panel, whenever assetsChanged arrives
         case CommandType::GetAssetInfo:       // the asset panel's details, for the selected asset
         case CommandType::ReadTextAsset:      // the script editor, whenever assetsChanged lists its file
@@ -1882,6 +1897,13 @@ namespace N2Engine::Editor
         // logged by ExecuteCommand.
         auto cmd = static_cast<CommandType>(commandType);
 
+        // A play host plays a snapshot: it never opens another scene or writes the project's files
+        if (_playMode && IsEditOnlyCommand(commandType))
+        {
+            SendError(clientSocket, "Not available in a play host: it plays a snapshot and never changes the project's files");
+            return;
+        }
+
         switch (cmd)
         {
         case CommandType::Hello:
@@ -1907,6 +1929,21 @@ namespace N2Engine::Editor
             break;
         case CommandType::GetEntityBounds:
             HandleGetEntityBounds(clientSocket, payload);
+            break;
+        case CommandType::WritePlaySnapshot:
+            HandleWritePlaySnapshot(clientSocket, payload);
+            break;
+        case CommandType::SetPaused:
+            HandleSetPaused(clientSocket, payload);
+            break;
+        case CommandType::Step:
+            HandleStep(clientSocket, payload);
+            break;
+        case CommandType::GetPlayState:
+            HandleGetPlayState(clientSocket);
+            break;
+        case CommandType::SendInput:
+            HandleSendInput(clientSocket, payload);
             break;
         case CommandType::GetAudio:
             HandleGetAudio(clientSocket);
@@ -2119,8 +2156,9 @@ namespace N2Engine::Editor
         {
             Logger::Info(std::format("Editor client '{}' said Hello (protocol {})", clientName, clientVersionText));
         }
-        // A new session: a group the last one left open is ended
+        // A new session: a group the last one left open is ended, and the keys it held (a play host's) go up
         CloseEditGroups();
+        _keys.ReleaseAll();
         // A project is loaded when the host opened one (--project, SetProject)
         WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), HasProject());
         SendResponse(clientSocket, response.Release());
@@ -2154,7 +2192,15 @@ namespace N2Engine::Editor
         // frame has to be rendered again to be sent (its revision is still current: nothing about the editor view
         // changed). Said first, so a render or read that throws can't leave a half-written buffer marked valid.
         _frames.InvalidateBuffer();
-        app.RenderEditorFrame();
+        if (_playMode)
+        {
+            // The running game from its main camera: no window events, no clock (the game's frames own both)
+            app.RenderGameFrame();
+        }
+        else
+        {
+            app.RenderEditorFrame();
+        }
 
         // RGBA, top row first, whatever the backend
         ReadFrame(*renderer, _viewportWidth, _viewportHeight, _frameBuffer);
@@ -2319,6 +2365,14 @@ namespace N2Engine::Editor
     {
         BufferReader reader(payload);
         const RenderFrameIfChangedCmd cmd = RenderFrameIfChangedCmd::Deserialize(reader);
+
+        if (_playMode)
+        {
+            // The game changes every frame and its picture has no revision (and the editor view's render would move the
+            // game's clock): a play viewport draws with RenderFrame
+            SendError(clientSocket, "A play host draws the running game with RenderFrame, not the editor view");
+            return;
+        }
 
         // A scene change no handler reported still moves the revision on
         ObserveScene();
@@ -2888,6 +2942,548 @@ namespace N2Engine::Editor
         }
 
         WriteEntityList(response, entities);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    // ==================== Play mode (#82, E9) ====================
+
+    namespace
+    {
+        constexpr const char *NotAPlayHostError =
+            "Not a play host: start the host with --play <snapshot file> (WritePlaySnapshot writes one)";
+
+        /// One SendInput event, checked
+        struct InputAction
+        {
+            enum class Kind
+            {
+                Key,
+                MouseButton,
+                Pointer,
+                Scroll,
+                ReleaseAll
+            };
+            Kind kind = Kind::ReleaseAll;
+            Input::Key key = Input::Key::Unknown;
+            Input::MouseButton button = Input::MouseButton::Left;
+            bool down = false;
+            float x = 0.0f;
+            float y = 0.0f;
+        };
+
+        /// A number member of an event: present, a JSON number, and finite
+        std::optional<float> FiniteNumber(const nlohmann::json &event, const char *member)
+        {
+            const auto found = event.find(member);
+            if (found == event.end() || !found->is_number())
+            {
+                return std::nullopt;
+            }
+            const double value = found->get<double>();
+            if (!std::isfinite(value) || std::abs(value) > 1.0e9)
+            {
+                return std::nullopt;
+            }
+            return static_cast<float>(value);
+        }
+
+        /// SendInput's whole batch, checked before anything is applied; an Error message names the event
+        std::expected<std::vector<InputAction>, std::string> ParseInputEvents(const nlohmann::json &events)
+        {
+            if (!events.is_array())
+            {
+                return std::unexpected("events must be a JSON array of InputEvent objects");
+            }
+            if (events.size() > EditorServer::MaxInputEvents)
+            {
+                return std::unexpected(std::format("At most {} input events at once, not {}",
+                                                   EditorServer::MaxInputEvents, events.size()));
+            }
+
+            std::vector<InputAction> actions;
+            actions.reserve(events.size());
+            for (std::size_t i = 0; i < events.size(); ++i)
+            {
+                const nlohmann::json &event = events[i];
+                const auto bad = [i](const std::string &why)
+                {
+                    return std::unexpected(std::format("events[{}]: {}", i, why));
+                };
+                if (!event.is_object() || !event.contains("type") || !event.at("type").is_string())
+                {
+                    return bad("not an object with a string \"type\"");
+                }
+                const std::string type = event.at("type").get<std::string>();
+                InputAction action;
+                if (type == "key" || type == "mouseButton")
+                {
+                    const bool isKey = type == "key";
+                    const char *nameMember = isKey ? "key" : "button";
+                    if (!event.contains(nameMember) || !event.at(nameMember).is_string())
+                    {
+                        return bad(std::format("{} needs a string \"{}\"", type, nameMember));
+                    }
+                    if (!event.contains("down") || !event.at("down").is_boolean())
+                    {
+                        return bad(type + " needs a boolean \"down\"");
+                    }
+                    const std::string name = event.at(nameMember).get<std::string>();
+                    action.down = event.at("down").get<bool>();
+                    if (isKey)
+                    {
+                        action.kind = InputAction::Kind::Key;
+                        action.key = event.at(nameMember).get<Input::Key>();
+                        // An unknown name reads as the enum's first entry: only a name that comes back is a key
+                        if (action.key == Input::Key::Unknown || nlohmann::json(action.key).get<std::string>() != name)
+                        {
+                            return bad("unknown key \"" + EditorServer::SanitizeForLog(name) + "\"");
+                        }
+                    }
+                    else
+                    {
+                        action.kind = InputAction::Kind::MouseButton;
+                        action.button = event.at(nameMember).get<Input::MouseButton>();
+                        if (nlohmann::json(action.button).get<std::string>() != name)
+                        {
+                            return bad("unknown mouse button \"" + EditorServer::SanitizeForLog(name) + "\"");
+                        }
+                    }
+                }
+                else if (type == "pointer" || type == "scroll")
+                {
+                    const std::optional<float> x = FiniteNumber(event, "x");
+                    const std::optional<float> y = FiniteNumber(event, "y");
+                    if (!x || !y)
+                    {
+                        return bad(type + " needs finite numbers \"x\" and \"y\"");
+                    }
+                    action.kind = type == "pointer" ? InputAction::Kind::Pointer : InputAction::Kind::Scroll;
+                    action.x = *x;
+                    action.y = *y;
+                }
+                else if (type == "releaseAll")
+                {
+                    action.kind = InputAction::Kind::ReleaseAll;
+                }
+                else
+                {
+                    return bad("unknown type \"" + EditorServer::SanitizeForLog(type) + "\"");
+                }
+                actions.push_back(action);
+            }
+            return actions;
+        }
+
+        /// 32-bit FNV-1a of text, as 8 hex digits: the same on every platform, unlike std::hash
+        std::string ShortHash(std::string_view text)
+        {
+            uint32_t hash = 2166136261u;
+            for (const char c : text)
+            {
+                hash ^= static_cast<unsigned char>(c);
+                hash *= 16777619u;
+            }
+            return std::format("{:08x}", hash);
+        }
+
+        /// A scene's name as a file name: letters, digits, dot, dash, underscore and space stay, the rest becomes '_'.
+        /// A name Windows reserves for a device (CON, NUL, COM1...), with or without an extension, gets a '_' in front.
+        std::string SafeSnapshotName(std::string_view name)
+        {
+            std::string safe;
+            for (const char c : name)
+            {
+                const bool keep = std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '.' || c == '-' ||
+                                  c == '_' || c == ' ';
+                safe.push_back(keep ? c : '_');
+                if (safe.size() >= 80)
+                {
+                    break;
+                }
+            }
+            // No leading or trailing dots and spaces (Windows strips them), and not empty
+            while (!safe.empty() && (safe.back() == '.' || safe.back() == ' '))
+            {
+                safe.pop_back();
+            }
+            while (!safe.empty() && (safe.front() == '.' || safe.front() == ' '))
+            {
+                safe.erase(safe.begin());
+            }
+            if (safe.empty())
+            {
+                return "scene";
+            }
+            std::string base = safe.substr(0, safe.find('.'));
+            while (!base.empty() && base.back() == ' ')
+            {
+                base.pop_back();
+            }
+            for (char &c : base)
+            {
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            }
+            const bool numbered = base.size() == 4 && base[3] >= '1' && base[3] <= '9' &&
+                                  (base.starts_with("COM") || base.starts_with("LPT"));
+            if (base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || numbered)
+            {
+                safe.insert(safe.begin(), '_');
+            }
+            return safe;
+        }
+    }
+
+    bool EditorServer::IsEditOnlyCommand(const uint8_t commandType)
+    {
+        switch (static_cast<CommandType>(commandType))
+        {
+        case CommandType::OpenScene:
+        case CommandType::NewScene:
+        case CommandType::SaveSceneToFile:
+        case CommandType::DeleteScene:
+        case CommandType::SetProjectSettings:
+        case CommandType::SetStartupScene:
+        case CommandType::RestoreAutosave:
+        case CommandType::DiscardAutosave:
+        case CommandType::LoadScene:
+        // E8's: they write files under assets/ or .import/
+        case CommandType::SetImportSettings:
+        case CommandType::WriteTextAsset:
+        case CommandType::CreateScriptAsset:
+        case CommandType::CreateFolder:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    std::expected<std::filesystem::path, std::string> EditorServer::WritePlaySnapshot(const std::string &scenePath)
+    {
+        if (_playMode)
+        {
+            return std::unexpected("A play host plays a snapshot; the host that edits writes them");
+        }
+        if (!_project)
+        {
+            return std::unexpected("No project: play snapshots go in the project's .n2 folder (start the host with --project)");
+        }
+
+        // The scene to play: the open one as it is in memory (no file read, so unsaved edits play), or another one's file
+        bool useOpenScene = scenePath.empty();
+        std::optional<ResolvedScenePath> resolved;
+        if (!scenePath.empty())
+        {
+            auto checked = ResolveScenePath(_project->root / "assets", scenePath);
+            if (!checked)
+            {
+                return std::unexpected(checked.error());
+            }
+            const std::string open = OpenScenePath();
+            if (!open.empty() && checked->resourcePath.ToString() == open)
+            {
+                useOpenScene = true;
+            }
+            else
+            {
+                resolved = std::move(*checked);
+            }
+        }
+
+        nlohmann::json sceneJson;
+        std::string name;
+        // What tells two scenes of one name apart: the scene's file (empty for one that has none)
+        std::string sceneKey;
+        if (useOpenScene)
+        {
+            const Scene *scene = SceneManager::GetCurScene();
+            if (scene == nullptr)
+            {
+                return std::unexpected("No scene loaded");
+            }
+            sceneJson = scene->Serialize();
+            name = scene->sceneName;
+            sceneKey = OpenScenePath();
+        }
+        else
+        {
+            const std::string resourcePath = resolved->resourcePath.ToString();
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(resolved->file, error))
+            {
+                return std::unexpected("Scene file not found: " + SanitizeForLog(resourcePath));
+            }
+            auto text = ReadTextFile(resolved->file);
+            if (!text)
+            {
+                return std::unexpected(text.error());
+            }
+            sceneJson = nlohmann::json::parse(*text, nullptr, false);
+            if (sceneJson.is_discarded())
+            {
+                return std::unexpected("Not valid JSON: " + SanitizeForLog(resourcePath));
+            }
+            // It must build as a scene (edit mode: built, never attached), or the play host would refuse it
+            if (Scene::FromJSON(sceneJson, true) == nullptr)
+            {
+                return std::unexpected("Not a valid scene (see the log): " + SanitizeForLog(resourcePath));
+            }
+            name = resolved->resourcePath.GetStem();
+            sceneKey = resolved->resourcePath.ToString();
+        }
+
+        const std::filesystem::path file = _project->root / ".n2" / "play" / (SafeSnapshotName(name) + "-" + ShortHash(sceneKey) + ".scene");
+        std::error_code error;
+        std::filesystem::create_directories(file.parent_path(), error);
+        if (auto written = IO::WriteTextFileAtomically(file, SceneFileText(sceneJson)); !written)
+        {
+            return std::unexpected(written.error());
+        }
+        return file;
+    }
+
+    void EditorServer::HandleWritePlaySnapshot(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const WritePlaySnapshotCmd cmd = WritePlaySnapshotCmd::Deserialize(reader);
+
+        const auto written = WritePlaySnapshot(cmd.scenePath);
+        if (!written)
+        {
+            SendError(clientSocket, written.error());
+            return;
+        }
+        Logger::Info("Wrote the play snapshot " + Utf8(*written));
+        BufferWriter response;
+        Protocol::WritePlaySnapshot(response, Utf8(*written));
+        SendResponse(clientSocket, response.Release());
+    }
+
+    std::expected<void, std::string> EditorServer::EnterPlayMode(const std::filesystem::path &snapshotFile)
+    {
+        if (_playMode)
+        {
+            return std::unexpected("This host is playing already");
+        }
+        auto text = ReadTextFile(snapshotFile);
+        if (!text)
+        {
+            return std::unexpected(text.error());
+        }
+        const nlohmann::json sceneJson = nlohmann::json::parse(*text, nullptr, false);
+        if (sceneJson.is_discarded())
+        {
+            return std::unexpected("Not valid JSON: " + Utf8(snapshotFile));
+        }
+        std::unique_ptr<Scene> scene = Scene::FromJSON(sceneJson, true);
+        if (scene == nullptr)
+        {
+            return std::unexpected("Not a valid scene (see the log): " + Utf8(snapshotFile));
+        }
+
+        // Not edit mode: the components attach (OnAttach, Start) at the first game frame
+        Scene *const playing = scene.get();
+        SceneManager::AddScene(std::move(scene), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+        if (SceneManager::GetCurScene() != playing)
+        {
+            return std::unexpected("The scene couldn't be loaded");
+        }
+
+        _playMode = true;
+        _paused = false;
+        _playFrame = 0;
+        _openScene = playing;
+        _openScenePath.clear();
+        ++_sceneRevision;
+        _savedRevision = _sceneRevision;
+        NoteSceneChanged();
+        PushSceneChanged({}, true);
+
+        // The game's keys are what SendInput sets, never the window's; its clock starts now
+        _keys.ReleaseAll();
+        Input::KeySource::Set(&_keys);
+        Application::GetInstance().ResetFrameClock();
+        _watchAssets = false;
+
+        Logger::Info(std::format("Playing scene '{}' from {}", playing->sceneName, Utf8(snapshotFile)));
+        PushPlayState();
+        return {};
+    }
+
+    void EditorServer::PushPlayState()
+    {
+        _events.Push("playState", nlohmann::json{{"state", _paused ? "Paused" : "Playing"}, {"frame", _playFrame}});
+    }
+
+    void EditorServer::SetPausedState(const bool paused)
+    {
+        if (paused == _paused)
+        {
+            return;
+        }
+        _paused = paused;
+        if (!paused)
+        {
+            // The time spent paused isn't a frame
+            Application::GetInstance().ResetFrameClock();
+        }
+        PushPlayState();
+    }
+
+    void EditorServer::RunGameFrame(const std::optional<double> deltaSeconds)
+    {
+        // The pointer and its buttons are what SendInput set: a window's own device is sampled over them otherwise
+        if (Input::Mouse *mouse = Input::Mouse::Get())
+        {
+            uint32_t buttons = 0;
+            for (int button = 0; button < Input::Mouse::ButtonCount; ++button)
+            {
+                if (_keys.IsMouseButtonDown(static_cast<Input::MouseButton>(button)))
+                {
+                    buttons |= Input::Mouse::ButtonBit(button);
+                }
+            }
+            mouse->InjectPointer(_pointer ? *_pointer : mouse->GetPosition(), buttons);
+        }
+
+        TickOptions options;
+        options.render = false; // frames are drawn when the client asks (RenderFrame)
+        options.deltaSeconds = deltaSeconds;
+        Application::GetInstance().Tick(options);
+        ++_playFrame;
+    }
+
+    size_t EditorServer::RunPlayFrame(const std::chrono::milliseconds frameBudget)
+    {
+        if (!_playMode)
+        {
+            return ProcessCommands(frameBudget);
+        }
+
+        const auto start = std::chrono::steady_clock::now();
+        if (!_paused)
+        {
+            try
+            {
+                RunGameFrame(std::nullopt);
+            }
+            catch (const std::exception &e)
+            {
+                // Another frame would only throw the same way sixty times a second
+                Logger::Error(std::string("A game frame failed, so the game is paused: ") + e.what());
+                SetPausedState(true);
+            }
+        }
+
+        const auto deadline = start + frameBudget;
+        size_t processed = 0;
+        do
+        {
+            const auto now = std::chrono::steady_clock::now();
+            // Rounded up: a fraction of a millisecond left must wait, not spin
+            const auto remaining = now < deadline ? std::chrono::ceil<std::chrono::milliseconds>(deadline - now)
+                                                  : std::chrono::milliseconds::zero();
+            processed += ProcessCommands(remaining);
+        } while (std::chrono::steady_clock::now() < deadline);
+        return processed;
+    }
+
+    void EditorServer::HandleSetPaused(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SetPausedCmd cmd = SetPausedCmd::Deserialize(reader);
+        if (!_playMode)
+        {
+            SendError(clientSocket, NotAPlayHostError);
+            return;
+        }
+        SetPausedState(cmd.paused);
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleStep(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const StepCmd cmd = StepCmd::Deserialize(reader);
+        if (!_playMode)
+        {
+            SendError(clientSocket, NotAPlayHostError);
+            return;
+        }
+        if (!_paused)
+        {
+            SendError(clientSocket, "Step runs frames of a paused game: pause it first (SetPaused)");
+            return;
+        }
+        if (cmd.frames < 1 || cmd.frames > MaxStepFrames)
+        {
+            SendError(clientSocket, std::format("frames must be 1 to {}, not {}", MaxStepFrames, cmd.frames));
+            return;
+        }
+
+        // Each frame is one fixed timestep of time, so it runs exactly one fixed update
+        const double step = Time::GetFixedTimestep();
+        for (uint32_t i = 0; i < cmd.frames && !Application::GetInstance().IsQuitRequested(); ++i)
+        {
+            RunGameFrame(step);
+        }
+        BufferWriter response;
+        WriteOk(response);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetPlayState(const int clientSocket)
+    {
+        BufferWriter response;
+        WritePlayState(response, _playMode ? (_paused ? "Paused" : "Playing") : "Edit", _playFrame,
+                       _playMode ? Time::GetTime() : 0.0f);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleSendInput(const int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const SendInputCmd cmd = SendInputCmd::Deserialize(reader);
+        if (!_playMode)
+        {
+            SendError(clientSocket, NotAPlayHostError);
+            return;
+        }
+        // All of it is checked first, so a bad event applies none of the batch
+        const auto actions = ParseInputEvents(cmd.events);
+        if (!actions)
+        {
+            SendError(clientSocket, actions.error());
+            return;
+        }
+        for (const InputAction &action : *actions)
+        {
+            switch (action.kind)
+            {
+            case InputAction::Kind::Key:
+                _keys.SetKey(action.key, action.down);
+                break;
+            case InputAction::Kind::MouseButton:
+                _keys.SetMouseButton(action.button, action.down);
+                break;
+            case InputAction::Kind::Pointer:
+                _pointer = Math::Vector2(action.x, action.y);
+                break;
+            case InputAction::Kind::Scroll:
+                if (Input::Mouse *mouse = Input::Mouse::Get())
+                {
+                    mouse->AccumulateScroll(action.x, action.y);
+                }
+                break;
+            case InputAction::Kind::ReleaseAll:
+                _keys.ReleaseAll();
+                break;
+            }
+        }
+        BufferWriter response;
+        WriteOk(response);
         SendResponse(clientSocket, response.Release());
     }
 
@@ -3879,7 +4475,8 @@ namespace N2Engine::Editor
 
     bool EditorServer::PollAssetsIfDue()
     {
-        if (!_watchAssets || !_project || !_clientConnected)
+        // A play host doesn't watch: the host that edits owns the asset files and the state kept about them
+        if (!_watchAssets || !_project || !_clientConnected || _playMode)
         {
             return false;
         }
@@ -4538,7 +5135,9 @@ namespace N2Engine::Editor
 
     std::filesystem::path EditorServer::GetAutosaveFile() const
     {
-        if (!_project)
+        // A play host has no autosave: the files under .n2/autosave belong to the host that edits (the scene it plays
+        // has no file of its own, so its autosave path would be the untitled scene's, which that host may have written)
+        if (!_project || _playMode)
         {
             return {};
         }
@@ -4585,9 +5184,19 @@ namespace N2Engine::Editor
         _autosavePending = true;
     }
 
+    void EditorServer::PrepareForShutdown()
+    {
+        CloseEditGroups();
+        DiscardWrittenAutosave();
+    }
+
     void EditorServer::DiscardWrittenAutosave()
     {
         _autosavePending = false;
+        if (_playMode)
+        {
+            return; // nothing a play host wrote, and nothing of the edit host's to remove
+        }
         // No scene of this host's yet: whatever autosave is there belongs to an earlier session, not to this host
         const Scene *loaded = SceneManager::GetCurScene();
         if (!_autosaveProtected && loaded != nullptr && loaded == _openScene)
@@ -4598,7 +5207,7 @@ namespace N2Engine::Editor
 
     void EditorServer::FlushAutosave(const bool force)
     {
-        if (!_autosavePending)
+        if (!_autosavePending || _playMode)
         {
             return;
         }

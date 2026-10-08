@@ -244,58 +244,10 @@ void Application::Run()
         return;
     }
 
-    // Longest frame the fixed-step loop catches up on; after a long stall (debugger, loading) it would
-    // otherwise queue hundreds of physics steps and fall further behind while running them
-    constexpr double MaxFrameTime = 0.25;
-    double fixedTimestepAccumulator = 0.0;
-
+    _fixedTimestepAccumulator = 0.0;
     while (!_window.ShouldClose() && !_quitRequested)
     {
-        _window.PollEvents();
-
-        Time::Update();
-        // The frame delta itself, not a difference of float absolute times (which lost precision: ~1 ms
-        // steps after 3 hours of running, 8 ms after 18)
-        fixedTimestepAccumulator += std::min(static_cast<double>(Time::GetUnscaledDeltaTime()), MaxFrameTime);
-        if (SceneManager::GetCurSceneIndex() != -1)
-        {
-            Scene &curScene = SceneManager::GetCurSceneRef();
-            curScene.ProcessAttachQueue();
-
-            while (fixedTimestepAccumulator >= Time::GetFixedUnscaledDeltaTime())
-            {
-                // Paused (timeScale 0): no fixed steps, as in Unity; stepping PhysX by 0 is an error
-                if (Time::GetFixedDeltaTime() > 0.0f)
-                {
-                    PhysicsUpdate(curScene);
-                }
-                fixedTimestepAccumulator -= Time::GetFixedUnscaledDeltaTime();
-            }
-            // OnMouse*: after the fixed steps (so it picks against this frame's physics) and before Update,
-            // where Unity sends them
-            _pointerDispatcher.Update();
-            curScene.Update();
-            curScene.AdvanceCoroutines();
-            curScene.LateUpdate();
-        }
-        else
-        {
-            // Nothing to step. It used to keep accumulating, so the first scene to load ran a burst of
-            // catch-up fixed steps.
-            fixedTimestepAccumulator = 0.0;
-        }
-        // After LateUpdate, where listeners and sources push their positions. A loopback device (headless) only
-        // mixes when asked, so it is paced here by real elapsed time (no-op with a sound card), then Update
-        // recycles whatever that finished.
-        Audio::AudioSystem::Instance().AdvanceStream(Time::GetUnscaledDeltaTime());
-        Audio::AudioSystem::Instance().Update();
-        Render();
-        if (SceneManager::GetCurSceneIndex() != -1)
-        {
-            Scene &curScene = SceneManager::GetCurSceneRef();
-            curScene.ProcessDestroyed();
-        }
-        SceneManager::ProcessAnyPendingSceneChange();
+        Tick();
     }
 
     // Window close and Quit() both end the run; components get OnApplicationQuit either way
@@ -304,6 +256,86 @@ void Application::Run()
         SceneManager::GetCurSceneRef().OnApplicationQuit();
     }
     Shutdown();
+}
+
+void Application::Tick(const TickOptions &options)
+{
+    // Longest frame the fixed-step loop catches up on; after a long stall (debugger, loading) it would
+    // otherwise queue hundreds of physics steps and fall further behind while running them
+    constexpr double MaxFrameTime = 0.25;
+
+    if (options.pollEvents)
+    {
+        _window.PollEvents();
+    }
+
+    if (options.deltaSeconds)
+    {
+        Time::Advance(*options.deltaSeconds);
+    }
+    else
+    {
+        Time::Update();
+    }
+    // The frame delta itself, not a difference of float absolute times (which lost precision: ~1 ms
+    // steps after 3 hours of running, 8 ms after 18)
+    _fixedTimestepAccumulator += std::min(static_cast<double>(Time::GetUnscaledDeltaTime()), MaxFrameTime);
+    if (SceneManager::GetCurSceneIndex() != -1)
+    {
+        Scene &curScene = SceneManager::GetCurSceneRef();
+        curScene.ProcessAttachQueue();
+
+        while (_fixedTimestepAccumulator >= Time::GetFixedUnscaledDeltaTime())
+        {
+            // Paused (timeScale 0): no fixed steps, as in Unity; stepping PhysX by 0 is an error
+            if (Time::GetFixedDeltaTime() > 0.0f)
+            {
+                PhysicsUpdate(curScene);
+            }
+            _fixedTimestepAccumulator -= Time::GetFixedUnscaledDeltaTime();
+        }
+        // OnMouse*: after the fixed steps (so it picks against this frame's physics) and before Update,
+        // where Unity sends them
+        _pointerDispatcher.Update();
+        curScene.Update();
+        curScene.AdvanceCoroutines();
+        curScene.LateUpdate();
+    }
+    else
+    {
+        // Nothing to step. It used to keep accumulating, so the first scene to load ran a burst of
+        // catch-up fixed steps.
+        _fixedTimestepAccumulator = 0.0;
+    }
+    // After LateUpdate, where listeners and sources push their positions. A loopback device (headless) only
+    // mixes when asked, so it is paced here by real elapsed time (no-op with a sound card), then Update
+    // recycles whatever that finished.
+    Audio::AudioSystem::Instance().AdvanceStream(Time::GetUnscaledDeltaTime());
+    Audio::AudioSystem::Instance().Update();
+    if (options.render)
+    {
+        Render();
+    }
+    if (SceneManager::GetCurSceneIndex() != -1)
+    {
+        Scene &curScene = SceneManager::GetCurSceneRef();
+        curScene.ProcessDestroyed();
+    }
+    SceneManager::ProcessAnyPendingSceneChange();
+}
+
+void Application::ResetFrameClock()
+{
+    Time::ResetFrameClock();
+}
+
+void Application::RenderGameFrame()
+{
+    if (!_window.IsValid())
+    {
+        return;
+    }
+    Render();
 }
 
 void Application::Shutdown()

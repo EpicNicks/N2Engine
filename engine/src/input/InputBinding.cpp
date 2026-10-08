@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "engine/input/InputValue.hpp"
+#include "engine/input/KeySource.hpp"
 #include <engine/input/InputMapping.hpp>
 #include <engine/Application.hpp>
 #include <engine/Window.hpp>
@@ -19,6 +20,11 @@ InputBinding::InputBinding(const Window &win)
 
 InputValue KeyboardButtonBinding::getValue()
 {
+    // An installed KeySource (the editor's play child) replaces the window, which may not even exist
+    if (const KeySource *source = KeySource::Get())
+    {
+        return source->IsKeyDown(boundKey);
+    }
     // No window (e.g. an InputSystem on a Window that never opened): nothing is pressed, and GLFW is
     // never handed a null window
     if (window == nullptr)
@@ -102,19 +108,26 @@ InputValue Vector2CompositeBinding::getValue()
 {
     float x = 0.0f, y = 0.0f;
 
-    // No window: no key is pressed (GLFW is never handed a null window)
-    if (window == nullptr)
+    // An installed KeySource replaces the window (see KeyboardButtonBinding)
+    const KeySource *source = KeySource::Get();
+
+    // No window and no source: no key is pressed (GLFW is never handed a null window)
+    if (window == nullptr && source == nullptr)
     {
         return Vector2(x, y);
     }
 
-    if (glfwGetKey(window, KeyToGLFW.at(right)) == GLFW_PRESS)
+    const auto isDown = [&](const Key key)
+    {
+        return source != nullptr ? source->IsKeyDown(key) : glfwGetKey(window, KeyToGLFW.at(key)) == GLFW_PRESS;
+    };
+    if (isDown(right))
         x += 1.0f;
-    if (glfwGetKey(window, KeyToGLFW.at(left)) == GLFW_PRESS)
+    if (isDown(left))
         x -= 1.0f;
-    if (glfwGetKey(window, KeyToGLFW.at(up)) == GLFW_PRESS)
+    if (isDown(up))
         y += 1.0f;
-    if (glfwGetKey(window, KeyToGLFW.at(down)) == GLFW_PRESS)
+    if (isDown(down))
         y -= 1.0f;
 
     return Vector2(x, y);
@@ -122,6 +135,11 @@ InputValue Vector2CompositeBinding::getValue()
 
 InputValue MouseButtonBinding::getValue()
 {
+    // An installed KeySource replaces the window (see KeyboardButtonBinding)
+    if (const KeySource *source = KeySource::Get())
+    {
+        return source->IsMouseButtonDown(boundButton);
+    }
     // No window: no button is pressed (GLFW is never handed a null window)
     if (window == nullptr)
     {

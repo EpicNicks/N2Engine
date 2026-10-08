@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 
 #include "engine/config/ApplicationOptions.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
@@ -12,6 +13,18 @@
 
 namespace N2Engine
 {
+    /// What one Application::Tick does besides simulating
+    struct TickOptions
+    {
+        /// Poll the window's events and update the input system (Window::PollEvents) at the start of the frame
+        bool pollEvents = true;
+        /// Draw the frame (and present it) at the end. A host that renders on request (the editor's play child)
+        /// turns it off and calls RenderGameFrame when a client asks for a picture.
+        bool render = true;
+        /// Advance time by exactly this many seconds (a step) instead of reading the clock. nullopt: the clock.
+        std::optional<double> deltaSeconds;
+    };
+
     class Application
     {
         friend class SceneManager;
@@ -24,6 +37,8 @@ namespace N2Engine
         EngineHealth _health;
         bool _quitRequested = false;
         bool _initialized = false; // from Init until Shutdown
+        // The fixed-step loop's catch-up time, carried from one Tick to the next
+        double _fixedTimestepAccumulator = 0.0;
 
     private:
         /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
@@ -44,6 +59,22 @@ namespace N2Engine
         EngineHealth Init(const Config::ApplicationOptions &options);
         void Init(std::unique_ptr<Scene> &&initialScene);
         void Run();
+
+        /**
+         * One frame of the game, exactly the body of Run()'s loop (which calls it until the window closes or Quit): window
+         * events, Time::Update, the fixed steps (physics, FixedUpdate), the pointer dispatch, Update, coroutines,
+         * LateUpdate, audio, the frame, then destroyed objects and a pending scene change. A host with its own loop (the
+         * editor's play child, which has to answer its client between frames) calls this instead of Run().
+         * Without a current scene it still advances time and draws.
+         */
+        void Tick(const TickOptions &options = TickOptions{});
+        /// Makes the next Tick measure its frame from now rather than from the last Tick: call it when ticking resumes
+        /// after a pause, so the pause isn't one long frame
+        void ResetFrameClock();
+        /// Draws one frame of the current scene from the main camera (with the screen-space UI), without simulating,
+        /// polling events or advancing time: what a Tick with render off leaves undone. Does nothing without a window
+        /// and a renderer.
+        void RenderGameFrame();
         /// Shuts subsystems down in reverse order of Init. Run() and Quit() call it; hosts that don't use
         /// Run() (e.g. the editor) should call it before returning from main, so teardown doesn't depend
         /// on static destruction order. Safe to call more than once, or without Init.

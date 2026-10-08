@@ -14,6 +14,11 @@ namespace N2Engine::Editor
      * project.n2proj, another engine major version) or the server couldn't be set up, or a std::exception escaped.
      * With options.showHelp it only prints HostUsage() and returns 0; with options.createPath it is RunCreate.
      *
+     * With options.playScene (--play) the host is a play host (#82, E9): it loads that scene snapshot instead of the
+     * startup scene and runs it as a game, with EditorServer::RunPlayFrame as its loop (a game frame, then the client's
+     * commands, sixty times a second) rather than ProcessCommands. A snapshot that can't be loaded ends the host with
+     * exit code 1 and a line on stderr, before the ready line.
+     *
      * In the library rather than N2EditorHost's main so a game with its own C++ components can build its own editor
      * host: a main that registers them, then calls RunHost (#6, decision 18). Call it at most once at a time; it
      * installs SIGINT/SIGTERM handlers and uses the Application singleton.

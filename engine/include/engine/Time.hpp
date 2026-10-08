@@ -27,6 +27,11 @@ namespace N2Engine
 
         static void Init();
         static void Update();
+        /// A frame of exactly `seconds` instead of the clock's (Application::Tick with a delta: the editor's Step); the
+        /// clock itself is left alone
+        static void Advance(double seconds);
+        /// Makes the next Update measure from now (after a pause, so the pause isn't one long frame)
+        static void ResetFrameClock();
 
     public:
         static float GetDeltaTime();

@@ -15,6 +15,9 @@
 #include <string>
 #include <string_view>
 
+#include <math/Vector2.hpp>
+
+#include "engine/input/KeySource.hpp"
 #include "engine/io/ProjectFile.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
@@ -125,6 +128,7 @@ namespace N2Engine::Editor
         /// Runs whether or not a client is connected, so sounds finish; the stream buffer it fills is bounded,
         /// and GetAudio drains it. No-op unless audio was initialized with a loopback device.
         void UpdateAudio();
+        // (A play host's audio is paced by its game frames, Application::Tick, so UpdateAudio does nothing there.)
 
         /// Main thread: runs one request and returns its response frame. Never throws: a failing
         /// request (malformed payload, engine exception) produces an Error response.
@@ -386,6 +390,62 @@ namespace N2Engine::Editor
         /// that must not add a per-call line of their own; a new polled command belongs here.
         [[nodiscard]] static bool IsPolledCommand(uint8_t commandType);
 
+        // ==================== Play mode (#82, E9) ====================
+
+        /// How long RunPlayFrame spends on one game frame and the commands that come in around it (60 frames a second)
+        static constexpr std::chrono::milliseconds DefaultPlayFrameBudget{16};
+        /// The most frames one Step runs
+        static constexpr uint32_t MaxStepFrames = 1000;
+        /// The most events one SendInput takes
+        static constexpr std::size_t MaxInputEvents = 1024;
+
+        /**
+         * WritePlaySnapshot: writes the scene to play as <project>/.n2/play/<name>.scene, for a launcher to start a play
+         * host from (N2EditorHost --play <file>). Play mode is a second host process (the Godot model), so this host is
+         * never touched by the game: the snapshot is the open scene as it is in memory now (unsaved edits play as they
+         * are; nothing is saved, no revision moves), or, for another scene path, that file as it is on disk (validated:
+         * it must build as a scene). scenePath is a res:// .scene path, or empty for the open scene. Returns the
+         * snapshot's absolute path (<name>-<8 hex digits of a hash of the scene's file path>.scene, so scenes of one name
+         * in different folders have files of their own); an Error message without a project, without a scene to snapshot, for a bad path or
+         * an unreadable or invalid scene, or on a play host.
+         */
+        [[nodiscard]] std::expected<std::filesystem::path, std::string> WritePlaySnapshot(const std::string &scenePath);
+
+        /**
+         * Makes this server a play host, as N2EditorHost --play does (after the project's resources are set up): reads
+         * the scene snapshot at snapshotFile (Scene::FromJSON, validated) and makes it the loaded scene as a game (not
+         * edit mode, so its components attach at the first frame), installs this server's keyboard as the game's
+         * Input::KeySource (SendInput drives it), and starts playing (not paused). An Error message, changing nothing,
+         * when the file can't be read or isn't a scene, or this server is a play host already. From now on RunPlayFrame
+         * runs the game; SetPaused, Step and SendInput answer; RenderFrame draws the game; and the commands that would
+         * write project files or swap the scene (OpenScene, NewScene, SaveSceneToFile, DeleteScene, SetProjectSettings,
+         * SetStartupScene, RestoreAutosave, DiscardAutosave, LoadScene, and the asset writers SetImportSettings, WriteTextAsset,
+         * CreateScriptAsset, CreateFolder) answer Error. The asset watcher is turned off. Main thread.
+         */
+        [[nodiscard]] std::expected<void, std::string> EnterPlayMode(const std::filesystem::path &snapshotFile);
+        [[nodiscard]] bool IsPlayMode() const { return _playMode; }
+        [[nodiscard]] bool IsPaused() const { return _paused; }
+        /// How many game frames the play host has run (Step's included)
+        [[nodiscard]] uint32_t GetPlayFrame() const { return _playFrame; }
+
+        /**
+         * Main thread, in a play host's loop in place of ProcessCommands: runs one game frame (none while paused; a
+         * frame that throws is logged and pauses the game), then serves the commands that arrive for what is left of
+         * frameBudget (at least one pass, so a game frame that takes longer than the budget doesn't starve the client).
+         * Frames come at the budget's pace (60 a second by default), each measured by the real time since the one
+         * before; a client sending commands as fast as it can doesn't speed them up, and the frames don't keep it from
+         * being answered. Returns how many commands ran. Without play mode it is ProcessCommands(frameBudget).
+         */
+        size_t RunPlayFrame(std::chrono::milliseconds frameBudget = DefaultPlayFrameBudget);
+
+        /// What a client's Shutdown runs on the main thread before the host stops: ends open edit groups and removes the
+        /// autosave this host wrote for the open scene (what it didn't save is what the client chose to drop). A play
+        /// host has no autosave and removes none: the files under .n2/autosave are the edit host's. Public for tests.
+        void PrepareForShutdown();
+
+        /// The commands a play host answers with an Error: the ones that write project files or swap the scene
+        [[nodiscard]] static bool IsEditOnlyCommand(uint8_t commandType);
+
     private:
         void ServerLoop(int listenSocket);
         /// Serves one connection until it closes. sessionOpened is set (and stays set) once the connection has a
@@ -403,6 +463,11 @@ namespace N2Engine::Editor
         void HandleGetEditorCamera(int clientSocket);
         void HandlePickEntity(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetEntityBounds(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleWritePlaySnapshot(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSetPaused(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleStep(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetPlayState(int clientSocket);
+        void HandleSendInput(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetViewportSize(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetAudio(int clientSocket);
         void HandlePollEvents(int clientSocket, const std::vector<uint8_t> &payload);
@@ -608,6 +673,21 @@ namespace N2Engine::Editor
         // Starts numbering at the event epoch, a random number (see FrameTracker)
         FrameTracker _frames{_events.Epoch()};
         uint32_t _editorFramesRendered{0};
+
+        // Play mode (EnterPlayMode)
+        bool _playMode{false};
+        bool _paused{false};
+        uint32_t _playFrame{0};
+        /// The game's keys and mouse buttons, as SendInput set them (installed as the Input::KeySource in play mode)
+        Input::InjectedKeys _keys;
+        /// Where SendInput last put the pointer, restored before every game frame
+        /// Until the first pointer event the pointer is left where the device (or the last injection) put it
+        std::optional<Math::Vector2> _pointer;
+        /// Runs one game frame: restores the pointer, then Application::Tick (no rendering: frames are drawn on request)
+        /// with the clock's time, or exactly deltaSeconds of it
+        void RunGameFrame(std::optional<double> deltaSeconds);
+        void SetPausedState(bool paused);
+        void PushPlayState();
 
         // UpdateAudio's clock; unset until its first call
         std::optional<std::chrono::steady_clock::time_point> _lastAudioUpdate;

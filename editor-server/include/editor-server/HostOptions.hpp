@@ -48,6 +48,12 @@ namespace N2Engine::Editor
         bool exitOnStdinEof = false;
         bool showHelp = false;
 
+        /// --play <file>: start as a play host (#82, E9): instead of the startup scene, load the scene snapshot in this
+        /// file (what WritePlaySnapshot writes, or a res:// .scene path inside the project's assets), run it as a game
+        /// (EditorServer::EnterPlayMode, then RunPlayFrame in the host's loop) and serve SetPaused, Step, SendInput and
+        /// RenderFrame for it. A launcher passes the edit host's --project and --renderer. Empty: an ordinary host.
+        std::string playScene;
+
         /// --create: make this folder a project (IO::CreateProject), print the created line, and exit; the engine
         /// isn't started. Empty: open --project (or none) as usual.
         std::string createPath;
