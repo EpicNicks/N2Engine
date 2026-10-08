@@ -63,17 +63,46 @@ void OpenGLMaterial::SetTexture(Renderer::Common::ITexture *texture)
 
 void OpenGLMaterial::SetAuxTexture(Common::AuxTexture which, Common::ITexture *texture)
 {
+    const auto slot = static_cast<std::size_t>(which);
+    if (slot >= kAuxTextureCount)
+        return;
     // An invalid texture is stored as none, so what ApplyUniforms reads (the has-texture flags) is what is bound
-    auto *glTexture = texture && texture->IsValid() ? static_cast<OpenGLTexture *>(texture) : nullptr;
-    (which == Common::AuxTexture::Emissive ? _emissiveTexture : _occlusionTexture) = glTexture;
+    _auxTextures[slot] = texture && texture->IsValid() ? static_cast<OpenGLTexture *>(texture) : nullptr;
     // The sampler's texture unit (the base colour texture is unit 0); sent with the other ints on every draw
-    _ints[which == Common::AuxTexture::Emissive ? "uEmissiveTexture" : "uOcclusionTexture"] =
-        which == Common::AuxTexture::Emissive ? 1 : 2;
+    _ints[AuxSamplerName(which)] = AuxTextureUnit(which);
 }
 
 Renderer::Common::ITexture *OpenGLMaterial::GetAuxTexture(Common::AuxTexture which) const
 {
-    return which == Common::AuxTexture::Emissive ? _emissiveTexture : _occlusionTexture;
+    return GetAuxOpenGLTexture(which);
+}
+
+OpenGLTexture *OpenGLMaterial::GetAuxOpenGLTexture(Common::AuxTexture which) const
+{
+    const auto slot = static_cast<std::size_t>(which);
+    return slot < kAuxTextureCount ? _auxTextures[slot] : nullptr;
+}
+
+const char *OpenGLMaterial::AuxSamplerName(Common::AuxTexture which)
+{
+    switch (which)
+    {
+    case Common::AuxTexture::Emissive:
+        return "uEmissiveTexture";
+    case Common::AuxTexture::Occlusion:
+        return "uOcclusionTexture";
+    case Common::AuxTexture::Normal:
+        return "uNormalTexture";
+    case Common::AuxTexture::MetallicRoughness:
+        return "uMetallicRoughnessTexture";
+    }
+    return "";
+}
+
+int OpenGLMaterial::AuxTextureUnit(Common::AuxTexture which)
+{
+    // Unit 0 is the base colour texture
+    return 1 + static_cast<int>(which);
 }
 
 void OpenGLMaterial::Apply()

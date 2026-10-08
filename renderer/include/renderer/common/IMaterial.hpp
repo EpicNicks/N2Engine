@@ -18,8 +18,10 @@ namespace Renderer::Common
     /// The textures a material can hold besides its base colour texture (SetTexture)
     enum class AuxTexture : unsigned char
     {
-        Emissive,  ///< the standard lit shader adds its rgb times uEmissive
-        Occlusion  ///< the standard lit shader scales the ambient light by its red channel (see uOcclusionStrength)
+        Emissive,          ///< the standard lit shader adds its rgb times uEmissive
+        Occlusion,         ///< the standard lit shader scales the ambient light by its red channel (see uOcclusionStrength)
+        Normal,            ///< the standard lit shader perturbs the surface normal by it, in tangent space (see uNormalScale)
+        MetallicRoughness  ///< PBR (uPbr): green times roughness, blue times metallic (glTF's packing)
     };
 
     class IMaterial

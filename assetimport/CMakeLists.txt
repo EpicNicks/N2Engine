@@ -1,11 +1,11 @@
 # Asset import: image decoding (#3 P1) and glTF model parsing (#3 P3). CPU-only: depends on math and the
-# vendored stb_image and cgltf, never on the engine, the renderer, GLFW, PhysX or nlohmann, so its tests run
+# vendored stb_image, cgltf and MikkTSpace, never on the engine, the renderer, GLFW, PhysX or nlohmann, so its tests run
 # headless without them (as the text library's do).
 file(GLOB_RECURSE ASSETIMPORT_SOURCES
     "src/*.cpp"
     "src/*.cc"
     "src/*.cxx"
-    "src/*.c" # cgltf's implementation, compiled as C
+    "src/*.c" # the cgltf and MikkTSpace implementations, compiled as C
 )
 
 add_library(assetimport STATIC ${ASSETIMPORT_SOURCES})
@@ -20,6 +20,7 @@ target_include_directories(assetimport
         # Private: no stb or cgltf type or header reaches the library's interface
         ${CMAKE_SOURCE_DIR}/external/stb_image/include
         ${CMAKE_SOURCE_DIR}/external/cgltf/include
+        ${CMAKE_SOURCE_DIR}/external/mikktspace/include
 )
 
 set_target_properties(assetimport PROPERTIES

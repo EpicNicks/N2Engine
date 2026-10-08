@@ -99,6 +99,19 @@ namespace N2Engine::Rendering
             result.scale = settings.scale;
             result.importMaterials = settings.importMaterials;
             result.mergeSubmeshesByMaterial = settings.mergeSubmeshesByMaterial;
+            switch (settings.generateTangents)
+            {
+            case ModelTangents::Never:
+                result.generateTangents = AssetImport::TangentGeneration::Never;
+                break;
+            case ModelTangents::Always:
+                result.generateTangents = AssetImport::TangentGeneration::Always;
+                break;
+            case ModelTangents::IfMissing:
+            default:
+                result.generateTangents = AssetImport::TangentGeneration::IfMissing;
+                break;
+            }
             switch (settings.generateNormals)
             {
             case ModelNormals::Never:
@@ -148,6 +161,7 @@ namespace N2Engine::Rendering
                 for (std::size_t c = 0; c < 4; ++c)
                 {
                     to.color[c] = from.color[c];
+                    to.tangent[c] = from.tangent[c];
                 }
             }
             data.indices = imported.indices;
@@ -210,6 +224,25 @@ namespace N2Engine::Rendering
                     settings.generateNormals = ModelNormals::Always;
                 else
                     WarnBadSetting(key, value, "\"never\", \"ifMissing\" or \"always\"");
+            }
+            else if (key == "generateTangents")
+            {
+                const std::string name = value.is_string() ? value.get<std::string>() : std::string{};
+                if (name == "never")
+                    settings.generateTangents = ModelTangents::Never;
+                else if (name == "ifMissing")
+                    settings.generateTangents = ModelTangents::IfMissing;
+                else if (name == "always")
+                    settings.generateTangents = ModelTangents::Always;
+                else
+                    WarnBadSetting(key, value, "\"never\", \"ifMissing\" or \"always\"");
+            }
+            else if (key == "pbrMaterials")
+            {
+                if (value.is_boolean())
+                    settings.pbrMaterials = value.get<bool>();
+                else
+                    WarnBadSetting(key, value, "true or false");
             }
             else if (key == "mergeSubmeshesByMaterial")
             {
@@ -359,7 +392,8 @@ namespace N2Engine::Rendering
         for (std::size_t i = 0; i < scene.materials.size(); ++i)
         {
             const AssetImport::ImportedMaterial &from = scene.materials[i];
-            auto material = Material::Create(from.unlit ? ShadingModel::Unlit : ShadingModel::Lit);
+            auto material = Material::Create(from.unlit ? ShadingModel::Unlit
+                                                        : (_settings.pbrMaterials ? ShadingModel::Pbr : ShadingModel::Lit));
             material->SetBaseColor(Common::Color(from.baseColor[0], from.baseColor[1], from.baseColor[2], from.baseColor[3]));
             if (auto texture = textureAt(from.baseColorTexture))
             {
@@ -372,6 +406,7 @@ namespace N2Engine::Rendering
             material->SetMetallic(from.metallic);
             material->SetEmissive(Common::Color(from.emissive[0], from.emissive[1], from.emissive[2], 1.0f));
             material->SetNormalTexture(textureAt(from.normalTexture));
+            material->SetNormalScale(from.normalScale);
             material->SetOcclusionTexture(textureAt(from.occlusionTexture));
             material->SetOcclusionStrength(from.occlusionStrength);
             material->SetMetallicRoughnessTexture(textureAt(from.metallicRoughnessTexture));

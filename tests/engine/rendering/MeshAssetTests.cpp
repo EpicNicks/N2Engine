@@ -153,13 +153,18 @@ namespace
         return quadData;
     }
 
-    /// Byte for byte: positions, normals, uvs, colours and indices
+    /// Byte for byte: positions, normals, uvs, colours (the first 48 bytes of each vertex: the tangent that follows is
+    /// new in #3 P4b, and MeshTangentTests checks it) and indices
     void ExpectSameGeometry(const MeshData &actual, const MeshData &expected)
     {
         ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
         ASSERT_EQ(actual.indices, expected.indices);
-        static_assert(sizeof(Vertex) == 48, "Vertex stays 48 bytes until normal maps (#3 P4)");
-        EXPECT_EQ(std::memcmp(actual.vertices.data(), expected.vertices.data(), actual.vertices.size() * sizeof(Vertex)), 0);
+        static_assert(sizeof(Vertex) == 64, "Vertex is 64 bytes since normal maps (#3 P4b)");
+        static_assert(offsetof(Vertex, tangent) == 48, "the tangent is appended after the colour");
+        for (std::size_t i = 0; i < actual.vertices.size(); ++i)
+        {
+            EXPECT_EQ(std::memcmp(&actual.vertices[i], &expected.vertices[i], offsetof(Vertex, tangent)), 0) << "vertex " << i;
+        }
     }
 
     /// The same triangles wound the other way (each triangle's second and third index swapped)

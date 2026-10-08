@@ -31,12 +31,13 @@ namespace Renderer::Software
         void SetAuxTexture(Common::AuxTexture which, Common::ITexture *t) override
         {
             // An invalid texture is stored as none, as on OpenGL, so the has-texture flags agree
-            (which == Common::AuxTexture::Emissive ? m_emissiveTexture : m_occlusionTexture) =
-                t && t->IsValid() ? t : nullptr;
+            if (const auto slot = static_cast<std::size_t>(which); slot < m_auxTextures.size())
+                m_auxTextures[slot] = t && t->IsValid() ? t : nullptr;
         }
         [[nodiscard]] Common::ITexture* GetAuxTexture(Common::AuxTexture which) const override
         {
-            return which == Common::AuxTexture::Emissive ? m_emissiveTexture : m_occlusionTexture;
+            const auto slot = static_cast<std::size_t>(which);
+            return slot < m_auxTextures.size() ? m_auxTextures[slot] : nullptr;
         }
 
         [[nodiscard]] Common::IShader* GetShader() const override { return m_shader; }
@@ -64,8 +65,7 @@ namespace Renderer::Software
     private:
         Common::IShader *m_shader = nullptr;
         Common::ITexture *m_texture = nullptr;
-        Common::ITexture *m_emissiveTexture = nullptr;
-        Common::ITexture *m_occlusionTexture = nullptr;
+        std::array<Common::ITexture *, 4> m_auxTextures{}; // by Common::AuxTexture
         std::unordered_map<std::string, int> m_ints;
         std::unordered_map<std::string, float> m_floats;
         std::unordered_map<std::string, std::array<float, 4>> m_vec4s;

@@ -13,6 +13,9 @@ namespace N2Engine::AssetImport
      * - Texture coordinates are flipped (v' = 1 - v) to the engine's v-up convention.
      * - A mesh's primitives share one vertex buffer, one submesh each.
      * - Missing normals are generated flat (the glTF rule).
+     * - Tangents: the file's TANGENT (VEC4) is kept; a primitive without one, or whose normals were generated, gets
+     *   MikkTSpace tangents from its positions, normals and (flipped) texture coordinates, which may duplicate
+     *   vertices where a vertex needs two tangents (ModelImportSettings::generateTangents).
      * - KHR_materials_unlit gives unlit materials; roughness becomes smoothness = 1 - roughness.
      * - Draco and meshopt compression are errors. KHR_texture_transform, other extensions, TEXCOORD_1, cameras,
      *   lights, skins, morph targets and animations are ignored, each with one warning.

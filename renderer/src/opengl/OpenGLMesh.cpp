@@ -55,6 +55,11 @@ bool OpenGLMesh::Initialize(const Common::MeshData &meshData)
                           (void *)offsetof(Common::Vertex, color));
     glEnableVertexAttribArray(3);
 
+    // Tangent (xyz, and the handedness in w): read by the lit shader's normal mapping only
+    glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, sizeof(Common::Vertex),
+                          (void *)offsetof(Common::Vertex, tangent));
+    glEnableVertexAttribArray(4);
+
     glBindVertexArray(0);
 
     m_isValid = true;

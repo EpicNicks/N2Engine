@@ -233,7 +233,7 @@ namespace N2Engine::Rendering
         /// A lit material in linear lighting: its colour textures are sRGB textures
         bool UsesSrgbTextures(const Material &material)
         {
-            return material.GetShading() == ShadingModel::Lit &&
+            return material.GetShading() != ShadingModel::Unlit &&
                    RenderSettings::GetColorSpace() == ColorSpace::Linear;
         }
     }
@@ -328,8 +328,9 @@ namespace N2Engine::Rendering
         return Acquire(renderer, ResourceKind::Material, MaterialVersion(*material), material,
                        [&material, sRgbTextures](IRenderer &target, std::vector<Handle> &dependencies) -> void *
         {
-            IShader *shader = material->GetShading() == ShadingModel::Lit ? target.GetStandardLitShader()
-                                                                           : target.GetStandardUnlitShader();
+            // Lit and Pbr are both the standard lit shader (uPbr picks the model)
+            IShader *shader = material->GetShading() != ShadingModel::Unlit ? target.GetStandardLitShader()
+                                                                             : target.GetStandardUnlitShader();
             if (!shader)
             {
                 return nullptr;
@@ -356,10 +357,14 @@ namespace N2Engine::Rendering
             if (created)
             {
                 // Only the lit shader reads them
-                if (material->GetShading() == ShadingModel::Lit)
+                if (material->GetShading() != ShadingModel::Unlit)
                 {
                     created->SetAuxTexture(Renderer::Common::AuxTexture::Emissive, acquire(material->GetEmissiveTexture(), true));
                     created->SetAuxTexture(Renderer::Common::AuxTexture::Occlusion, acquire(material->GetOcclusionTexture(), false));
+                    // Data, not colour: never sRGB. The metallic-roughness texture is read by the Pbr shading only
+                    created->SetAuxTexture(Renderer::Common::AuxTexture::Normal, acquire(material->GetNormalTexture(), false));
+                    created->SetAuxTexture(Renderer::Common::AuxTexture::MetallicRoughness,
+                                           acquire(material->GetMetallicRoughnessTexture(), false));
                 }
                 material->ApplyUniforms(*created);
             }
