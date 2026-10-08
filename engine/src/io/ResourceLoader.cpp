@@ -1,9 +1,11 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/Logger.hpp"
+#include "engine/io/ProjectFile.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Model.hpp"
 #include "engine/rendering/Texture.hpp"
+#include "engine/sceneManagement/SceneFile.hpp"
 #include "engine/text/Font.hpp"
 #include <algorithm>
 #include <cctype>
@@ -37,25 +39,29 @@ namespace N2Engine::IO
                 return "Material";
             if (ext == ".gltf" || ext == ".glb")
                 return "Model";
+            if (ext == SceneFile::Extension)
+                return std::string(SceneFile::ResourceTypeName);
             return "Unknown";
         }
     }
 
-    void ResourceLoader::Initialize(const std::filesystem::path& projectRoot)
+    void ResourceLoader::Initialize(const std::filesystem::path& projectRoot, const std::filesystem::path& userDataRoot)
     {
-        // Font.cpp's, Texture.cpp's, Material.cpp's and Model.cpp's own static registrars only run if the linker
-        // keeps those files, which a program that names none of the types wouldn't; registering here (idempotent)
-        // makes .ttf/.otf, the image extensions, .mat and .gltf/.glb scan and load anyway. Done before the roots
-        // change, so a first registration doesn't rescan anything.
+        // Font.cpp's, Texture.cpp's, Material.cpp's, Model.cpp's and SceneFile.cpp's own registration only runs if
+        // something calls it (or, for the static registrars, the linker keeps those files, which a program that
+        // names none of the types wouldn't); registering here (idempotent) makes .ttf/.otf, the image extensions,
+        // .mat, .gltf/.glb and .scene scan and load anyway. Done before the roots change, so a first registration
+        // doesn't rescan anything.
         Text::Font::RegisterLoader();
         Rendering::Texture::RegisterLoader();
         Rendering::Material::RegisterLoader();
         Rendering::Model::RegisterLoader();
+        SceneFile::RegisterLoader();
 
         _projectRoot = projectRoot;
         _assetsRoot = projectRoot / "assets";
         _metadataRoot = projectRoot / ".import";
-        _userDataRoot = GetUserDataPath();
+        _userDataRoot = userDataRoot.empty() ? ProjectFile::UserDataBase() : userDataRoot;
 
         std::filesystem::create_directories(_metadataRoot);
         std::filesystem::create_directories(_userDataRoot);
@@ -70,42 +76,53 @@ namespace N2Engine::IO
         _subAssetParentsTried.clear();
         ClearCache();
 
-        RescanAssets();
+        (void)RescanAssets();
 
         Logger::Info(std::format("Found {} assets", _metadata.size()));
     }
 
-    std::filesystem::path ResourceLoader::GetUserDataPath() const
+    ResourceLoader::RescanResult ResourceLoader::RescanAssets()
     {
-#ifdef _WIN32
-        char *appData = nullptr;
-        size_t len = 0;
-        if (_dupenv_s(&appData, &len, "APPDATA") == 0 && appData != nullptr)
-        {
-            std::filesystem::path path(appData);
-            free(appData);
-            return path / "N2Engine";
-        }
-        return std::filesystem::path(".");
-#else
-        // _dupenv_s is MSVC-only
-        if (const char *home = std::getenv("HOME"); home != nullptr)
-        {
-            return std::filesystem::path(home) / ".n2engine";
-        }
-        return std::filesystem::path(".");
-#endif
-    }
-
-    void ResourceLoader::RescanAssets()
-    {
+        RescanResult result;
         if (!std::filesystem::exists(_assetsRoot))
         {
             Logger::Warn("Assets directory not found");
-            return;
+            return result;
         }
 
-        ScanDirectory(_assetsRoot);
+        std::unordered_set<ResourcePath, ResourcePath::Hash> seen;
+        ScanDirectory(_assetsRoot, result, seen);
+
+        // Files indexed before and gone now: forget them, so they stop being listed and loaded by path or UUID. Only
+        // project files (res://) are scanned, so only they can be found missing. Their .meta files stay: a file put
+        // back (a branch switch, an undo) gets its import settings back.
+        for (auto it = _metadata.begin(); it != _metadata.end();)
+        {
+            const ResourcePath &path = it->first;
+            if (path.GetType() != PathType::Resource || seen.contains(path))
+            {
+                ++it;
+                continue;
+            }
+            result.removed.push_back(path);
+            const Math::UUID uuid = it->second.uuid;
+            if (const auto byUUID = _uuidToPath.find(uuid); byUUID != _uuidToPath.end() && byUUID->second == path)
+            {
+                _uuidToPath.erase(byUUID);
+            }
+            // Whoever holds the asset keeps it; a later file at this path loads afresh
+            if (const auto cached = _cache.find(path); cached != _cache.end())
+            {
+                if (const auto cachedByUUID = _cacheByUUID.find(uuid);
+                    cachedByUUID != _cacheByUUID.end() && cachedByUUID->second == cached->second)
+                {
+                    _cacheByUUID.erase(cachedByUUID);
+                }
+                _cache.erase(cached);
+            }
+            _subAssetParentsTried.erase(path);
+            it = _metadata.erase(it);
+        }
 
         // Sub-assets of files deleted since: unknown again, so lookups of them give null quietly rather than an
         // error about a missing source file
@@ -115,9 +132,15 @@ namespace N2Engine::IO
             const std::filesystem::path sourcePath = Resolve(item.second.parent);
             return sourcePath.empty() || !std::filesystem::exists(sourcePath, existsError);
         });
+
+        std::sort(result.added.begin(), result.added.end());
+        std::sort(result.removed.begin(), result.removed.end());
+        std::sort(result.modified.begin(), result.modified.end());
+        return result;
     }
 
-    void ResourceLoader::ScanDirectory(const std::filesystem::path &directory)
+    void ResourceLoader::ScanDirectory(const std::filesystem::path &directory, RescanResult &result,
+                                       std::unordered_set<ResourcePath, ResourcePath::Hash> &seen)
     {
         for (const auto &entry : std::filesystem::recursive_directory_iterator(directory))
         {
@@ -133,9 +156,21 @@ namespace N2Engine::IO
             if (_loaders.find(ext) == _loaders.end())
                 continue;
 
+            // Before the metadata: a file whose .meta can't be written still exists, so it isn't "removed"
+            seen.insert(MakeResourcePath(entry.path()));
+
             try
             {
                 AssetMetadata meta = CreateOrUpdateMetadata(entry.path());
+                if (const auto previous = _metadata.find(meta.resourcePath); previous == _metadata.end())
+                {
+                    result.added.push_back(meta.resourcePath);
+                }
+                else if (previous->second.lastModified != meta.lastModified ||
+                         previous->second.fileSize != meta.fileSize)
+                {
+                    result.modified.push_back(meta.resourcePath);
+                }
                 _metadata[meta.resourcePath] = meta;
                 _uuidToPath[meta.uuid] = meta.resourcePath;
                 // A model's sub-asset index, as its last full load wrote it (the scan never parses a model)
