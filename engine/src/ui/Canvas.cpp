@@ -1,5 +1,9 @@
 #include "engine/ui/Canvas.hpp"
 
+#include <algorithm>
+#include <span>
+#include <string>
+
 #include <math/Vector3.hpp>
 
 #include "engine/GameObjectScene.hpp"
@@ -26,6 +30,14 @@ namespace N2Engine::UI
             {
                 gameObject.AddComponent<RectTransform>();
             }
+        }
+    }
+
+    void Canvas::OnEditorFieldsChanged(const std::span<const std::string> changed)
+    {
+        if (std::ranges::find(changed, "renderMode") != changed.end())
+        {
+            SetRenderMode(_renderMode);
         }
     }
 

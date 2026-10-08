@@ -777,7 +777,7 @@ std::unique_ptr<Scene> Scene::FromJSON(const nlohmann::json &j, bool validate)
 
 std::string Scene::GetResourceType() const
 {
-    return "Scene";
+    return std::string(ResourceTypeName);
 }
 
 void Scene::CollectLightsRecursive(const std::shared_ptr<GameObject> &gameObject, std::vector<Rendering::Light *> &out)

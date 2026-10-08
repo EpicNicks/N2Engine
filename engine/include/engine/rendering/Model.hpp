@@ -114,7 +114,9 @@ namespace N2Engine::Rendering
 
         /// Loads a .gltf or .glb file, with settings from its .meta when ResourceLoader tracks it
         bool Load(const std::filesystem::path &path) override;
-        [[nodiscard]] std::string GetResourceType() const override { return "Model"; }
+        /// What GetResourceType() returns, for code that needs it without an instance (asset metadata, a field's asset type)
+        static constexpr std::string_view ResourceTypeName = "Model";
+        [[nodiscard]] std::string GetResourceType() const override { return std::string(ResourceTypeName); }
 
         [[nodiscard]] bool IsLoaded() const { return _loaded; }
         /// The name Instantiate gives the root object: the file's name without its extension

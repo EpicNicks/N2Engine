@@ -17,11 +17,11 @@ namespace N2Engine::Physics
     };
 
     // literals as values because the mapping shouldn't change if one of the BodyType constants has a name change
-    NLOHMANN_JSON_SERIALIZE_ENUM(BodyType, {
-                                 { BodyType::Static, "Static" },
-                                 { BodyType::Dynamic, "Dynamic"},
-                                 { BodyType::Kinematic, "Kinematic"}
-                                 })
+    N2_SERIALIZE_ENUM(BodyType, {
+                      { BodyType::Static, "Static" },
+                      { BodyType::Dynamic, "Dynamic"},
+                      { BodyType::Kinematic, "Kinematic"}
+                      })
 
     /**
      * Rigidbody component - adds physics simulation to a GameObject

@@ -1,10 +1,14 @@
 #pragma once
 
 #include <memory>
+#include <span>
+#include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include "engine/base/Asset.hpp"
 #include "engine/physics/PhysicsTypes.hpp"
+#include "engine/serialization/FieldInfo.hpp"
 
 namespace N2Engine
 {
@@ -57,7 +61,30 @@ namespace N2Engine
         virtual void Deserialize(const nlohmann::json &j, ReferenceResolver *resolver);
         [[nodiscard]] virtual std::string GetTypeName() const = 0;
 
-        std::string GetResourceType() const override { return "Component"; }
+        static constexpr std::string_view ResourceTypeName = "Component";
+        std::string GetResourceType() const override { return std::string(ResourceTypeName); }
+
+        // Editor reflection (see docs/serialization.html, "Reflection"): what an inspector shows and sets
+
+        /// The component's editable fields, which is what it saves besides the base keys (uuid, isActive). A
+        /// SerializableComponent lists the members it registered; the default is none.
+        [[nodiscard]] virtual std::vector<FieldInfo> DescribeFields() const { return {}; }
+
+        /// Sets the fields `values` has keys for, and only those (a field missing from it keeps its value, even one
+        /// whose deserialiser would clear it), clamping a field with a range. Throws nlohmann::json::exception for a
+        /// value of the wrong type: the editor server checks a copy first, so a request is all or nothing. References
+        /// are resolved through `resolver` (the caller runs its ResolveAll). The default sets nothing.
+        virtual void SetEditorFields(const nlohmann::json & /*values*/, ReferenceResolver * /*resolver*/) {}
+
+        /// The editor changed these fields (the keys of the JSON, a container's own key for one inside it), after
+        /// SetEditorFields: a component with state derived from them rebuilds it here. Edit-mode components are
+        /// never attached, so most have none.
+        virtual void OnEditorFieldsChanged(std::span<const std::string> /*changed*/) {}
+
+        /// `removed` is being removed from its object (in a scene opened for editing: the editor can undo it, so
+        /// nothing may keep a raw pointer to it). A component that holds a pointer to another component drops it
+        /// when it is `removed`. A SerializableComponent does so for its RegisterComponentRef members.
+        virtual void ForgetComponent(const Component * /*removed*/) {}
 
         // Lifecycle methods
         virtual void OnAttach() {}

@@ -11,6 +11,7 @@
 #include <renderer/common/RenderState.hpp>
 
 #include "engine/IRenderable.hpp"
+#include "engine/serialization/FieldInfo.hpp"
 
 namespace N2Engine::UI
 {
@@ -25,10 +26,10 @@ namespace N2Engine::UI
 
     // Saved by name. A missing key (a scene saved before world canvases) keeps the default, overlay; an unknown
     // name reads as the first entry, overlay too.
-    NLOHMANN_JSON_SERIALIZE_ENUM(CanvasRenderMode, {
-                                 { CanvasRenderMode::ScreenSpaceOverlay, "ScreenSpaceOverlay" },
-                                 { CanvasRenderMode::WorldSpace, "WorldSpace" }
-                                 })
+    N2_SERIALIZE_ENUM(CanvasRenderMode, {
+                      { CanvasRenderMode::ScreenSpaceOverlay, "ScreenSpaceOverlay" },
+                      { CanvasRenderMode::WorldSpace, "WorldSpace" }
+                      })
 
     /**
      * The root of a UI tree. Its object's descendants with UI components (Image, ...) are laid out inside the
@@ -78,6 +79,8 @@ namespace N2Engine::UI
         /// Switching to WorldSpace gives the object a Positionable (at the origin, scale 1) and a RectTransform
         /// (Unity's 100 x 100 default) if it has none. Nothing is removed on switching back.
         void SetRenderMode(CanvasRenderMode renderMode);
+        /// The editor set renderMode: a world-space canvas gets what SetRenderMode gives it (a transform and a RectTransform)
+        void OnEditorFieldsChanged(std::span<const std::string> changed) override;
         [[nodiscard]] bool IsWorldSpace() const { return _renderMode == CanvasRenderMode::WorldSpace; }
 
         /// A world-space canvas's size in canvas units: its RectTransform's sizeDelta, or 100 x 100 without one

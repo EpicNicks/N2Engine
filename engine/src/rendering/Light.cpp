@@ -12,7 +12,8 @@ namespace N2Engine::Rendering
         : SerializableComponent(gameObject)
     {
         RegisterMember(NAMEOF(type), type);
-        RegisterMember(NAMEOF(color), color);
+        // A Vector3 in the JSON ({x,y,z}, as scenes have always saved it), shown as a colour picker
+        RegisterMember(NAMEOF(color), color).AsColor();
         RegisterMember(NAMEOF(intensity), intensity);
 
         RegisterMember(NAMEOF(direction), direction);
@@ -20,8 +21,8 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(attenuation), attenuation);
         RegisterMember(NAMEOF(range), range);
 
-        RegisterMember(NAMEOF(innerConeAngle), innerConeAngle);
-        RegisterMember(NAMEOF(outerConeAngle), outerConeAngle);
+        RegisterMember(NAMEOF(innerConeAngle), innerConeAngle).Range(0.0, 180.0).Tooltip("Degrees; full brightness inside it");
+        RegisterMember(NAMEOF(outerConeAngle), outerConeAngle).Range(0.0, 180.0).Tooltip("Degrees; fades to zero at it");
     }
 
     std::string Light::GetTypeName() const

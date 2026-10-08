@@ -1,11 +1,18 @@
 #pragma once
 
+#include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <ranges>
 #include <vector>
+
+#include <nlohmann/json.hpp>
+
+#include "engine/serialization/FieldInfo.hpp"
 
 namespace N2Engine
 {
@@ -16,6 +23,34 @@ namespace N2Engine
     /// Registers the engine's own component types (BuiltinComponents.cpp). The registry's constructor calls
     /// it, so using the registry links them in.
     void RegisterBuiltinComponents(ComponentRegistry &registry);
+
+    /// What an editor needs to know about a component type without an instance of it in a scene
+    struct ComponentSchema
+    {
+        std::string typeName;
+        /// The editable fields (Component::DescribeFields of a throwaway instance)
+        std::vector<FieldInfo> fields;
+        /// What a new component of the type saves (its Serialize(), without the random uuid), isActive included.
+        /// Null in the schema of a live component (see EditorServer's GetLuaFields).
+        nlohmann::json defaults;
+        /// At most one per object (the type's IsSingleton)
+        bool singleton = false;
+
+        /// The ComponentSchema of the editor protocol (protocol.json)
+        [[nodiscard]] nlohmann::json ToJson() const
+        {
+            nlohmann::json j = {{"typeName", typeName}, {"singleton", singleton}, {"fields", nlohmann::json::array()}};
+            for (const FieldInfo &field : fields)
+            {
+                j["fields"].push_back(field.ToJson());
+            }
+            if (!defaults.is_null())
+            {
+                j["defaults"] = defaults;
+            }
+            return j;
+        }
+    };
 
     /**
      * Central registry for component types
@@ -28,6 +63,11 @@ namespace N2Engine
 
     private:
         std::unordered_map<std::string, CreateFunc> _creators;
+        std::unordered_set<std::string> _singletons;
+        // Describe's results: a type's schema doesn't change while it stays registered.
+        // The registry is used from one thread: types register during static initialisation, and the editor's
+        // commands run on the main thread. Nothing here is locked.
+        std::unordered_map<std::string, ComponentSchema> _schemas;
 
         ComponentRegistry() { RegisterBuiltinComponents(*this); }
 
@@ -46,12 +86,20 @@ namespace N2Engine
         ComponentRegistry &operator=(const ComponentRegistry &) = delete;
 
         /**
-         * Register a component type with a creation function
+         * Register a component type with a creation function. `singleton`: an object can have only one (the
+         * editor server refuses a second AddComponent); registering a name again replaces the type.
          */
-        void Register(const std::string &typeName, const CreateFunc& creator)
-        {
-            _creators[typeName] = creator;
-        }
+        void Register(const std::string &typeName, const CreateFunc& creator, bool singleton = false);
+
+        /**
+         * What an editor shows for a type, or nullopt for a name that isn't registered. Made from a throwaway
+         * instance on a detached object (in no scene, so it is never attached: no physics body, audio source
+         * or GPU resource is made), and cached.
+         */
+        [[nodiscard]] std::optional<ComponentSchema> Describe(const std::string &typeName);
+
+        /// Whether the type is registered as a singleton (an object can have only one)
+        [[nodiscard]] bool IsSingleton(const std::string &typeName) const;
 
         /**
          * Create a component by type name
@@ -104,7 +152,8 @@ namespace N2Engine
                 [](GameObject &go) -> std::unique_ptr<Component>
                 {
                     return std::make_unique<T>(go);
-                });
+                },
+                T::IsSingleton);
         }
     };
 }

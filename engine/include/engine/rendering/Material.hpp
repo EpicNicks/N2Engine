@@ -96,7 +96,9 @@ namespace N2Engine::Rendering
          * object.
          */
         bool Load(const std::filesystem::path &path) override;
-        [[nodiscard]] std::string GetResourceType() const override { return "Material"; }
+        /// What GetResourceType() returns, for code that needs it without an instance (asset metadata, a field's asset type)
+        static constexpr std::string_view ResourceTypeName = "Material";
+        [[nodiscard]] std::string GetResourceType() const override { return std::string(ResourceTypeName); }
 
         [[nodiscard]] ShadingModel GetShading() const { return _shading; }
         void SetShading(ShadingModel shading);

@@ -1,6 +1,8 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/Logger.hpp"
+#include "engine/audio/AudioClip.hpp"
+#include "engine/scripting/LuaScript.hpp"
 #include "engine/io/ProjectFile.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Model.hpp"
@@ -40,17 +42,17 @@ namespace N2Engine::IO
             std::ranges::transform(ext, ext.begin(),
                                    [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (ext == ".lua")
-                return "LuaScript";
+                return std::string(LuaScript::ResourceTypeName);
             if (ext == ".wav" || ext == ".ogg" || ext == ".mp3" || ext == ".flac")
-                return "AudioClip";
+                return std::string(Audio::AudioClip::ResourceTypeName);
             if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp")
-                return "Texture";
+                return std::string(Rendering::Texture::ResourceTypeName);
             if (ext == ".ttf" || ext == ".otf")
-                return "Font";
+                return std::string(Text::Font::ResourceTypeName);
             if (ext == ".mat")
-                return "Material";
+                return std::string(Rendering::Material::ResourceTypeName);
             if (ext == ".gltf" || ext == ".glb")
-                return "Model";
+                return std::string(Rendering::Model::ResourceTypeName);
             if (ext == SceneFile::Extension)
                 return std::string(SceneFile::ResourceTypeName);
             return "Unknown";

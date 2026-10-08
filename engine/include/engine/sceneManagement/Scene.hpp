@@ -177,6 +177,8 @@ namespace N2Engine
 
         static std::unique_ptr<Scene> FromJSON(const nlohmann::json &j, bool validate = false);
 
+        /// The same type name as SceneFile's: a scene is one kind of asset, in two forms
+        static constexpr std::string_view ResourceTypeName = "Scene";
         std::string GetResourceType() const override;
 
     private:

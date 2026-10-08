@@ -52,7 +52,9 @@ namespace N2Engine::Text
 
         /// Loads a font file, with atlas settings from its .meta when ResourceLoader tracks it
         bool Load(const std::filesystem::path &path) override;
-        [[nodiscard]] std::string GetResourceType() const override { return "Font"; }
+        /// What GetResourceType() returns, for code that needs it without an instance (asset metadata, a field's asset type)
+        static constexpr std::string_view ResourceTypeName = "Font";
+        [[nodiscard]] std::string GetResourceType() const override { return std::string(ResourceTypeName); }
 
         [[nodiscard]] bool IsLoaded() const { return _font != nullptr; }
         /// Requires IsLoaded(): there is no font to return otherwise

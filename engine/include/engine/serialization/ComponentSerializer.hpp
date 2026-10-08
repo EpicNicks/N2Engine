@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <format>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "engine/Component.hpp"
 #include "engine/Logger.hpp"
 
+#include "engine/serialization/FieldInfo.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -37,13 +39,92 @@ namespace N2Engine
     public:
         using SerializeFunc = std::function<void(nlohmann::json &)>;
         using DeserializeFunc = std::function<void(const nlohmann::json &, ReferenceResolver *)>;
+        /// Clears the member if it points at the component (set for component references only)
+        using ForgetFunc = std::function<void(const Component *)>;
 
         std::string name;
         SerializeFunc serialize;
         DeserializeFunc deserialize;
+        /// What an editor shows this member as (kind, type, options, range...), filled at registration
+        FieldInfo info;
+        ForgetFunc forget;
 
-        MemberSerializer(std::string name, SerializeFunc s, DeserializeFunc d)
-            : name(std::move(name)), serialize(std::move(s)), deserialize(std::move(d)) {}
+        MemberSerializer(std::string name, SerializeFunc s, DeserializeFunc d, FieldInfo fieldInfo = {})
+            : name(std::move(name)), serialize(std::move(s)), deserialize(std::move(d)), info(std::move(fieldInfo))
+        {
+            info.name = this->name;
+            if (info.displayName.empty())
+            {
+                info.displayName = DefaultDisplayName(this->name);
+            }
+        }
+    };
+
+    /**
+     * What the Register* functions return: opt-in editor metadata for the member just registered, chained on the
+     * call. It holds the member's index, not a reference into the list (which the next registration may move), so it
+     * stays valid however many members are registered after it; it is meant to be used straight away all the same.
+     *
+     *     RegisterMember(NAMEOF(_volume), _volume).Range(0.0, 1.0).Tooltip("Linear gain");
+     *     RegisterMember(NAMEOF(color), color).AsColor();
+     */
+    class FieldBuilder
+    {
+    public:
+        FieldBuilder(std::vector<MemberSerializer> &members, const std::size_t index)
+            : _members(&members), _index(index) {}
+
+        /// Int and Float: a value the editor sets is clamped to [lowest, highest]. (Loading a scene doesn't clamp.)
+        FieldBuilder &Range(const double lowest, const double highest)
+        {
+            Info().range = std::make_pair(lowest, highest);
+            return *this;
+        }
+
+        FieldBuilder &Tooltip(std::string text)
+        {
+            Info().tooltip = std::move(text);
+            return *this;
+        }
+
+        /// Instead of the name made from the key ("_playOnAwake" -> "Play On Awake")
+        FieldBuilder &DisplayName(std::string text)
+        {
+            Info().displayName = std::move(text);
+            return *this;
+        }
+
+        /// A Vector3 or Vector4 member is a colour: the editor shows a picker, the JSON stays {x,y,z} (or
+        /// {w,x,y,z}), so scenes saved before the hint still load. Any other type is left as it was.
+        FieldBuilder &AsColor()
+        {
+            FieldInfo &info = Info();
+            if (info.kind == FieldKind::Vector3 || info.kind == FieldKind::Vector4)
+            {
+                info.kind = FieldKind::Color;
+            }
+            return *this;
+        }
+
+        /// Shown, but the editor protocol refuses to set it
+        FieldBuilder &ReadOnly()
+        {
+            Info().readOnly = true;
+            return *this;
+        }
+
+        /// Not shown by an inspector (still saved)
+        FieldBuilder &Hidden()
+        {
+            Info().hidden = true;
+            return *this;
+        }
+
+    private:
+        FieldInfo &Info() { return (*_members)[_index].info; }
+
+        std::vector<MemberSerializer> *_members;
+        std::size_t _index;
     };
 
     /**
@@ -60,9 +141,10 @@ namespace N2Engine
         /**
          * Register a primitive/value member for automatic serialization
          * Works with any type that nlohmann::json can handle (int, float, string, etc.)
+         * The member's type decides how an editor shows it (FieldTraits); the returned FieldBuilder refines that.
          */
         template <typename T>
-        void RegisterMember(const std::string &name, T &member)
+        FieldBuilder RegisterMember(const std::string &name, T &member)
         {
             static_assert(JsonSerializable<T>,
                           "\n"
@@ -83,7 +165,9 @@ namespace N2Engine
                     {
                         member = j[name].get<T>();
                     }
-                });
+                },
+                MakeFieldInfo<T>(name));
+            return FieldBuilder(_members, _members.size() - 1);
         }
 
         /**
@@ -91,7 +175,7 @@ namespace N2Engine
          * Takes the member by reference: it used to take the pointer by value, so the serializer
          * captured (and on load, wrote to) a copy that died when this function returned.
          */
-        void RegisterGameObjectRef(const std::string &name, GameObject *&gameObjectRef);
+        FieldBuilder RegisterGameObjectRef(const std::string &name, GameObject *&gameObjectRef);
 
         /**
          * Register a Component reference (resolved via UUID after deserialization)
@@ -101,7 +185,7 @@ namespace N2Engine
         // (This used to take shared_ptr<T>&, which couldn't be instantiated: no shared_ptr to a
         // component exists, and the resolver hands out Component*.)
         template <typename T>
-        void RegisterComponentRef(const std::string &name, T *&componentRef)
+        FieldBuilder RegisterComponentRef(const std::string &name, T *&componentRef)
         {
             static_assert(std::is_base_of_v<Component, T>, "T must be a Component type");
 
@@ -125,8 +209,11 @@ namespace N2Engine
                     if (!j.contains(name) || j[name].is_null())
                     {
                         componentRef = nullptr;
-                        Logger::Info(
-                            "Component deserialize for component with name: " + name + " was not found in the json");
+                        if (!j.contains(name))
+                        {
+                            Logger::Info(
+                                "Component deserialize for component with name: " + name + " was not found in the json");
+                        }
                         return;
                     }
 
@@ -140,19 +227,28 @@ namespace N2Engine
                             componentRef = dynamic_cast<T *>(resolver->FindComponent(uuid));
                         });
                     }
-                });
+                },
+                MakeReferenceInfo(name, FieldKind::ComponentRef, "Component"));
+            _members.back().forget = [&componentRef](const Component *removed)
+            {
+                if (static_cast<const Component *>(componentRef) == removed)
+                {
+                    componentRef = nullptr;
+                }
+            };
+            return FieldBuilder(_members, _members.size() - 1);
         }
 
         /**
          * Register a vector of GameObject references
          */
-        void RegisterGameObjectRefVector(const std::string &name, std::vector<GameObject*> &gameObjectRefs);
+        FieldBuilder RegisterGameObjectRefVector(const std::string &name, std::vector<GameObject*> &gameObjectRefs);
 
         /**
          * Register a vector of Component references
          */
         template <typename T>
-        void RegisterComponentRefVector(const std::string &name, std::vector<T *> &componentRefs)
+        FieldBuilder RegisterComponentRefVector(const std::string &name, std::vector<T *> &componentRefs)
         {
             static_assert(std::is_base_of_v<Component, T>, "T must be a Component type");
 
@@ -208,7 +304,19 @@ namespace N2Engine
                             });
                         }
                     }
-                });
+                },
+                MakeReferenceInfo(name, FieldKind::ComponentRefList, "Component"));
+            _members.back().forget = [&componentRefs](const Component *removed)
+            {
+                for (T *&entry : componentRefs)
+                {
+                    if (static_cast<const Component *>(entry) == removed)
+                    {
+                        entry = nullptr;
+                    }
+                }
+            };
+            return FieldBuilder(_members, _members.size() - 1);
         }
 
         /**
@@ -253,7 +361,7 @@ namespace N2Engine
  * Template parameter T should be the specific asset type
  */
         template <typename T>
-        void RegisterAssetRef(const std::string &name, std::shared_ptr<T> &assetRef)
+        FieldBuilder RegisterAssetRef(const std::string &name, std::shared_ptr<T> &assetRef)
         {
             static_assert(std::is_base_of_v<Base::Asset, T>, "T must be an Asset type");
 
@@ -280,7 +388,9 @@ namespace N2Engine
                         return;
                     }
                     assetRef = ResolveAssetReference<T>(name, j[name]);
-                });
+                },
+                MakeAssetInfo<T>(name, FieldKind::AssetRef));
+            return FieldBuilder(_members, _members.size() - 1);
         }
 
         /**
@@ -290,7 +400,7 @@ namespace N2Engine
          * that isn't an array (warned about) loads an empty list.
          */
         template <typename T>
-        void RegisterAssetRefList(const std::string &name, std::vector<std::shared_ptr<T>> &assetRefs)
+        FieldBuilder RegisterAssetRefList(const std::string &name, std::vector<std::shared_ptr<T>> &assetRefs)
         {
             static_assert(std::is_base_of_v<Base::Asset, T>, "T must be an Asset type");
 
@@ -330,10 +440,82 @@ namespace N2Engine
                     {
                         assetRefs.push_back(ResolveAssetReference<T>(std::format("{}[{}]", name, i), array[i]));
                     }
-                });
+                },
+                MakeAssetInfo<T>(name, FieldKind::AssetRefList));
+            return FieldBuilder(_members, _members.size() - 1);
+        }
+
+    private:
+        /// The FieldInfo of a reference member (a GameObject or a component, or a list of them)
+        static FieldInfo MakeReferenceInfo(const std::string &name, const FieldKind kind, std::string typeName)
+        {
+            FieldInfo info;
+            info.name = name;
+            info.displayName = DefaultDisplayName(name);
+            info.kind = kind;
+            info.typeName = std::move(typeName);
+            return info;
+        }
+
+        /// The FieldInfo of an asset reference member: its asset type is T's ResourceTypeName
+        template <typename T>
+        static FieldInfo MakeAssetInfo(const std::string &name, const FieldKind kind)
+        {
+            FieldInfo info = MakeReferenceInfo(name, kind, AssetTypeNameOf<T>());
+            info.assetType = info.typeName;
+            return info;
         }
 
     public:
+        /// The registered members' FieldInfos, in registration order
+        [[nodiscard]] std::vector<FieldInfo> DescribeFields() const override
+        {
+            std::vector<FieldInfo> fields;
+            fields.reserve(_members.size());
+            for (const MemberSerializer &member : _members)
+            {
+                fields.push_back(member.info);
+            }
+            return fields;
+        }
+
+        /// Drops the component references that point at `removed`
+        void ForgetComponent(const Component *removed) override
+        {
+            for (const MemberSerializer &member : _members)
+            {
+                if (member.forget)
+                {
+                    member.forget(removed);
+                }
+            }
+        }
+
+        /**
+         * Calls the deserialiser of exactly the members `values` has a key for, so a field it doesn't mention keeps
+         * its value (the reference-list deserialisers clear their list when the key is missing, which loading a
+         * whole component relies on and an edit of one field mustn't trigger). A field with a range is clamped.
+         * Keys that aren't members are ignored here: the editor server rejects them first (ValidateFieldValues).
+         */
+        void SetEditorFields(const nlohmann::json &values, ReferenceResolver *resolver) override
+        {
+            if (!values.is_object())
+            {
+                return;
+            }
+            for (const MemberSerializer &member : _members)
+            {
+                const auto found = values.find(member.name);
+                if (found == values.end())
+                {
+                    continue;
+                }
+                nlohmann::json one = nlohmann::json::object();
+                one[member.name] = ClampFieldValue(member.info, *found);
+                member.deserialize(one, resolver);
+            }
+        }
+
         /**
          * Serialize this component and all registered members
          */

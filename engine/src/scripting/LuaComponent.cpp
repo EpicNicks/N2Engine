@@ -11,6 +11,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <format>
+#include <iterator>
+#include <limits>
+#include <stdexcept>
 
 namespace N2Engine::Scripting
 {
@@ -235,6 +239,9 @@ namespace N2Engine::Scripting
 
         for (const auto &[key, value] : *fieldsTable)
         {
+            // A field is named by a string; any other key (a positional entry) would make sol panic in as<>
+            if (key.get_type() != sol::type::string)
+                continue;
             std::string fieldName = key.as<std::string>();
 
             if (!_scriptData.contains(fieldName))
@@ -280,7 +287,7 @@ namespace N2Engine::Scripting
             if (value.is_number_float())
                 _scriptInstance[key] = value.get<float>();
             else if (value.is_number_integer())
-                _scriptInstance[key] = value.get<int>();
+                _scriptInstance[key] = value.get<std::int64_t>();
             else if (value.is_boolean())
                 _scriptInstance[key] = value.get<bool>();
             else if (value.is_string())
@@ -548,7 +555,7 @@ namespace N2Engine::Scripting
     {
         SerializableComponent::Deserialize(j, resolver);
 
-        if (j.contains("scriptData"))
+        if (j.contains("scriptData") && !j["scriptData"].is_null())
         {
             _scriptData = j["scriptData"];
         }
@@ -662,13 +669,195 @@ namespace N2Engine::Scripting
         }
     }
 
-    bool LuaComponent::IsComponentType(const std::string &type)
+    bool LuaComponent::IsComponentType(const std::string &type) const
     {
         // Any type scripts can add by name (Rigidbody, BoxCollider, ...), or a name ending in "Component".
         // Only the latter used to count, so `type = "Rigidbody"` reference fields were silently skipped.
         const auto names = Bindings::GetScriptableComponentNames();
         return std::ranges::find(names, type) != names.end() ||
                (type.size() > 9 && type.ends_with("Component"));
+    }
+
+    std::vector<FieldInfo> LuaComponent::DescribeFields() const
+    {
+        std::vector<FieldInfo> fields;
+
+        FieldInfo script;
+        script.name = "scriptUUID";
+        script.displayName = "Script";
+        script.kind = FieldKind::AssetRef;
+        script.typeName = std::string(LuaScript::ResourceTypeName);
+        script.assetType = script.typeName;
+        fields.push_back(std::move(script));
+
+        sol::table instance = _scriptInstance;
+        if (!instance.valid())
+        {
+            return fields;
+        }
+        sol::optional<sol::table> declared = instance["SerializableFields"];
+        if (!declared)
+        {
+            return fields;
+        }
+
+        std::vector<FieldInfo> scriptFields;
+        for (const auto &[key, value] : *declared)
+        {
+            // A field is named by a string (a table can be keyed by anything: the script's own business)
+            if (key.get_type() != sol::type::string)
+            {
+                continue;
+            }
+            FieldInfo info;
+            info.name = key.as<std::string>();
+            info.displayName = DefaultDisplayName(info.name);
+            info.container = "scriptData";
+
+            // Either { default = 5, type = "..." } or the shorthand `speed = 5`
+            std::string declaredType;
+            sol::object defaultValue = value;
+            if (value.is<sol::table>())
+            {
+                const sol::table definition = value.as<sol::table>();
+                declaredType = definition.get_or<std::string>("type", "");
+                defaultValue = definition.get<sol::object>("default");
+            }
+
+            if (declaredType == "GameObject")
+            {
+                info.kind = FieldKind::GameObjectRef;
+                info.typeName = "GameObject";
+            }
+            else if (!declaredType.empty() && IsComponentType(declaredType))
+            {
+                info.kind = FieldKind::ComponentRef;
+                info.typeName = declaredType;
+            }
+            else if (declaredType == "string")
+            {
+                info.kind = FieldKind::String;
+                info.typeName = "string";
+            }
+            else if (declaredType == "int" || declaredType == "integer")
+            {
+                info.kind = FieldKind::Int;
+                info.typeName = "int";
+            }
+            else if (declaredType == "number" || declaredType == "float")
+            {
+                info.kind = FieldKind::Float;
+                info.typeName = "float";
+            }
+            else if (declaredType == "bool" || declaredType == "boolean")
+            {
+                info.kind = FieldKind::Bool;
+                info.typeName = "bool";
+            }
+            else if (declaredType == "Vector3")
+            {
+                info.kind = FieldKind::Vector3;
+                info.typeName = "Vector3";
+            }
+            else if (defaultValue.get_type() == sol::type::number)
+            {
+                // As ExtractSerializableFields stores it: a Lua integer is an integer
+                lua_State *L = defaultValue.lua_state();
+                defaultValue.push(L);
+                const bool isInteger = lua_isinteger(L, -1) != 0;
+                lua_pop(L, 1);
+                info.kind = isInteger ? FieldKind::Int : FieldKind::Float;
+                info.typeName = isInteger ? "int" : "float";
+            }
+            else if (defaultValue.is<bool>())
+            {
+                info.kind = FieldKind::Bool;
+                info.typeName = "bool";
+            }
+            else if (defaultValue.is<std::string>())
+            {
+                info.kind = FieldKind::String;
+                info.typeName = "string";
+            }
+            else if (defaultValue.is<Math::Vector3>())
+            {
+                info.kind = FieldKind::Vector3;
+                info.typeName = "Vector3";
+            }
+            // else Json (the FieldInfo's own default): whatever the data holds
+            if (info.kind == FieldKind::Int)
+            {
+                // Stored as a JSON integer and injected as a Lua integer
+                info.limits = {static_cast<double>(std::numeric_limits<std::int64_t>::lowest()),
+                               static_cast<double>(std::numeric_limits<std::int64_t>::max())};
+            }
+            scriptFields.push_back(std::move(info));
+        }
+
+        // A Lua table's order isn't the order it was written in
+        std::ranges::sort(scriptFields, {}, &FieldInfo::name);
+        fields.insert(fields.end(), std::make_move_iterator(scriptFields.begin()),
+                      std::make_move_iterator(scriptFields.end()));
+        return fields;
+    }
+
+    void LuaComponent::SetEditorFields(const nlohmann::json &values, ReferenceResolver *resolver)
+    {
+        if (!values.is_object())
+        {
+            return;
+        }
+
+        if (const auto found = values.find("scriptUUID"); found != values.end())
+        {
+            if (!found->is_string())
+            {
+                throw std::invalid_argument("A LuaComponent needs a script: scriptUUID can't be null");
+            }
+            const auto uuid = Math::UUID::FromString(found->get<std::string>());
+            const IO::AssetMetadata *meta = uuid.has_value() ? IO::ResourceLoader::Instance().GetMetadata(uuid.value()) : nullptr;
+            if (meta == nullptr)
+            {
+                throw std::invalid_argument(std::format("Script not found: {}", found->get<std::string>()));
+            }
+            if (meta->resourceType != LuaScript::ResourceTypeName)
+            {
+                throw std::invalid_argument(std::format("Asset {} is a {}; field 'scriptUUID' expects LuaScript",
+                                                        found->get<std::string>(), meta->resourceType));
+            }
+            // The script it already runs: nothing to reload, unless it failed to load (choosing it again retries)
+            if (meta->resourcePath != _scriptPath || _hasMissingScript)
+            {
+                SetScript(meta->resourcePath);
+            }
+        }
+
+        if (const auto found = values.find("scriptData"); found != values.end() && found->is_object())
+        {
+            if (!_scriptData.is_object())
+            {
+                _scriptData = nlohmann::json::object();
+            }
+            const std::vector<FieldInfo> fields = DescribeFields();
+            for (const auto &[fieldName, fieldValue] : found->items())
+            {
+                // An integer field is stored as an integer, whatever the client's number looked like
+                const auto field = std::ranges::find_if(fields, [&fieldName](const FieldInfo &candidate)
+                {
+                    return candidate.container == "scriptData" && candidate.name == fieldName;
+                });
+                _scriptData[fieldName] = field != fields.end() ? ClampFieldValue(*field, fieldValue) : fieldValue;
+            }
+            InjectFieldsIntoScript();
+            if (resolver != nullptr)
+            {
+                // References are objects of the scene: found once the caller resolves
+                resolver->AddPendingReference([this, resolver]()
+                {
+                    ResolveReferences(_scriptData, resolver);
+                });
+            }
+        }
     }
 
     void LuaComponent::SetScriptData(const nlohmann::json &data)

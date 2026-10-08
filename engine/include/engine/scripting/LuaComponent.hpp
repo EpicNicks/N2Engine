@@ -26,7 +26,8 @@ namespace N2Engine::Scripting
         // Set by the first OnAttach: a script instance replaced after that is torn down, and the new one
         // attached, as if the component had been removed and re-added
         bool _attached = false;
-        nlohmann::json _scriptData;
+        // An object (empty until a script declares fields), so what GetComponent returns can be sent back
+        nlohmann::json _scriptData = nlohmann::json::object();
 
         // Track missing lua script and refs
         bool _hasMissingScript = false;
@@ -85,7 +86,7 @@ namespace N2Engine::Scripting
         /// retires the old one first; on an attached component the new one gets OnAttach straight away
         /// (not OnEnable, as on a first attach).
         void SetScript(const IO::ResourcePath& path);
-        bool IsComponentType(const std::string &type);
+        bool IsComponentType(const std::string &type) const;
         void SetScriptData(const nlohmann::json& data);
 
         [[nodiscard]] const IO::ResourcePath& GetScriptPath() const;
@@ -137,5 +138,13 @@ namespace N2Engine::Scripting
         [[nodiscard]] nlohmann::json Serialize() const override;
         void Deserialize(const nlohmann::json& j, ReferenceResolver* resolver) override;
         void ResolveReferences(const nlohmann::json &j, ReferenceResolver *resolver);
+
+        // Editor reflection. The fields are the script (scriptUUID, an asset of type LuaScript) and one per entry of
+        // the current script's SerializableFields, inside "scriptData" (their container). A type is a declared
+        // type = "..." or what the default's type says; a reference is {"$ref": uuid or null}.
+        [[nodiscard]] std::vector<FieldInfo> DescribeFields() const override;
+        /// scriptUUID loads that script (std::invalid_argument for null, an unknown UUID or an asset that isn't a
+        /// script); scriptData's keys are merged into the script's data and injected, references re-resolved
+        void SetEditorFields(const nlohmann::json &values, ReferenceResolver *resolver) override;
     };
 }

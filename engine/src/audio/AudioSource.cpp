@@ -10,8 +10,8 @@ namespace N2Engine::Audio
     AudioSource::AudioSource(GameObject& gameObject)
         : SerializableComponent(gameObject)
     {
-        RegisterMember(NAMEOF(_volume), _volume);
-        RegisterMember(NAMEOF(_pitch), _pitch);
+        RegisterMember(NAMEOF(_volume), _volume).Range(0.0, 1.0).Tooltip("Linear gain");
+        RegisterMember(NAMEOF(_pitch), _pitch).Range(0.5, 2.0);
         RegisterMember(NAMEOF(_loop), _loop);
         RegisterMember(NAMEOF(_spatial), _spatial);
         RegisterMember(NAMEOF(_playOnAwake), _playOnAwake);

@@ -32,7 +32,7 @@ namespace N2Engine
             registry.Register(typeName, [](GameObject &gameObject) -> std::unique_ptr<Component>
             {
                 return std::make_unique<T>(gameObject);
-            });
+            }, T::IsSingleton);
         }
     }
 

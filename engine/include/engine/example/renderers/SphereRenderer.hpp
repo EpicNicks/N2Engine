@@ -35,8 +35,8 @@ namespace N2Engine::Example
         explicit SphereRenderer(GameObject &gameObject) : PolygonRenderer(gameObject)
         {
             // Register sphere-specific parameters
-            RegisterMember(NAMEOF(_latitudeSegments), _latitudeSegments);
-            RegisterMember(NAMEOF(_longitudeSegments), _longitudeSegments);
+            RegisterMember(NAMEOF(_latitudeSegments), _latitudeSegments).Range(3.0, 256.0);
+            RegisterMember(NAMEOF(_longitudeSegments), _longitudeSegments).Range(3.0, 256.0);
         }
 
         [[nodiscard]] std::string GetTypeName() const override

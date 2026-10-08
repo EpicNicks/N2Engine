@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -399,6 +399,84 @@
         }
       }
     },
+    "GetComponentTypes": {
+      "id": "0x60",
+      "description": "Every component type the host can create, sorted by name, each as a ComponentSchema: its typeName, whether an object can have only one (singleton), its editable fields (FieldSchema: name, displayName, kind, typeName, hidden, readOnly, and when they apply enumOptions, assetType, min and max, tooltip, container), and defaults, the JSON a new component of the type saves (isActive included, the random uuid left out). The fields are what the type registered with RegisterMember and its relatives, so they are the keys the component saves besides uuid and isActive (a LuaComponent is the exception: its fields are scriptUUID and the current script's, which the types list can't know, see GetLuaFields; what it saves is scriptUUID or scriptPath, and scriptData). A field's kind decides its editor: Bool, Int, Float, String, Vector2, Vector3, Vector4 and Quaternion are objects of numbers ({x,y,z} and so on); Color is {r,g,b,a} when typeName is Color, or {x,y,z} (Vector3) or {w,x,y,z} (Vector4) for a vector marked as a colour (Light.color); Enum is a string, one of enumOptions; AssetRef and AssetRefList are a UUID string (an array of them) or null, of an asset whose type is assetType; GameObjectRef, GameObjectRefList, ComponentRef and ComponentRefList are a UUID string (an array of them) or null; Json is whatever the member's own JSON is, shown as a JSON editor. A field with a container is not at the top of the component's JSON but inside its object of that name (the script fields of a LuaComponent, in scriptData, with a reference written {\"$ref\": uuid}). The types never change while the host runs, so a client keeps the answer; ask again after Hello.",
+      "request": {},
+      "response": {
+        "type": "ComponentTypes",
+        "fields": {
+          "types": "json:ComponentSchema[]"
+        }
+      }
+    },
+    "AddComponent": {
+      "id": "0x61",
+      "description": "Adds a new component of the type typeName (a name from GetComponentTypes) to an object, with the values a new component has: componentId is its UUID and values its saved form (what GetComponent returns). Error for an unknown type, a singleton type the object already has, or without a scene or an object. The scene revision moves and sceneChanged lists the object.",
+      "request": {
+        "entityId": "string",
+        "typeName": "string"
+      },
+      "response": {
+        "type": "ComponentAdded",
+        "fields": {
+          "componentId": "string",
+          "values": "json"
+        }
+      }
+    },
+    "RemoveComponent": {
+      "id": "0x62",
+      "description": "Removes one component from an object, by the UUID GetEntity and AddComponent give (the second of two of a type, too). Error when the object has no such component. In a scene the host opened for editing the component never attached, so it gets no OnDisable or OnDestroy (a script's callbacks don't run), and every component reference to it in the scene is cleared. The scene revision moves and sceneChanged lists the object.",
+      "request": {
+        "entityId": "string",
+        "componentId": "string"
+      },
+      "response": { "type": "Ok" }
+    },
+    "SetComponentFields": {
+      "id": "0x63",
+      "description": "Sets fields of one component. values is a partial JSON object in the shape GetComponent returns: only the keys it has are touched (a field it doesn't mention keeps its value, a list included), isActive is accepted, and a field with a container is set as the container's key holding an object of just those fields. Keys that are not fields are refused, except an echo: the uuid, a LuaComponent's scriptPath, or the scriptData of one without a script, when it is what the component has, so what GetComponent returned can be sent back. A number a member's C++ type can't hold (an integer outside its range, a negative for an unsigned, a float beyond what a float holds) is refused. A LuaComponent's scriptUUID and scriptData are set in separate requests (the data is checked against the script the component has when the request arrives). The text is refused when it nests deeper than 64 levels or has more than 200000 values. It is all or nothing: every value is checked against its field (a wrong type, a name that isn't one of an enum's options, a reference that isn't a UUID or null, a UUID that names nothing in the scene or an asset of another type than the field's assetType, an unknown or read-only field) and applied to a copy first, and any problem is an Error naming the field with nothing changed. A field with a range is clamped. The response is the component's values as stored (clamped, enum names canonical), so a client shows what was kept. Setting values that are already stored changes nothing and doesn't move the revision; otherwise the revision moves, sceneChanged lists the object, and the component's OnEditorFieldsChanged runs with the keys that changed. Edit mode only in practice: a client doesn't send it to a play-mode host (the inspector is read-only while playing).",
+      "request": {
+        "entityId": "string",
+        "componentId": "string",
+        "values": "json"
+      },
+      "response": {
+        "type": "ComponentData",
+        "fields": {
+          "values": "json"
+        }
+      }
+    },
+    "GetComponent": {
+      "id": "0x64",
+      "description": "One component's values, as it saves them (the same JSON GetEntity lists under components, and Scene saves). Error when the object or the component isn't found.",
+      "request": {
+        "entityId": "string",
+        "componentId": "string"
+      },
+      "response": {
+        "type": "ComponentData",
+        "fields": {
+          "values": "json"
+        }
+      }
+    },
+    "GetLuaFields": {
+      "id": "0x65",
+      "description": "The fields of one LuaComponent as its script declares them: a ComponentSchema (typeName LuaComponent, no defaults) whose fields are scriptUUID (an AssetRef to a LuaScript, so the script can be changed) and one per entry of the script's SerializableFields, with container scriptData. A script field's kind is its declared type (type = \"string\", \"int\", \"number\", \"bool\", \"Vector3\", \"GameObject\" or a component type name) or else what its default is (an integer is Int, another number Float, a boolean, a string, a Vector3); anything else is Json. The fields are sorted by name. A component without a loaded script has only scriptUUID. Error when the component isn't a LuaComponent.",
+      "request": {
+        "entityId": "string",
+        "componentId": "string"
+      },
+      "response": {
+        "type": "LuaFields",
+        "fields": {
+          "schema": "json:ComponentSchema"
+        }
+      }
+    },
     "GetProjectInfo": {
       "id": "0x70",
       "description": "The project the host opened (--project): its folder and user:// folder (absolute paths, UTF-8) and its project.n2proj as saved, unknown keys included. Error without a project.",
@@ -541,6 +619,26 @@
       "header": "EntityHeader",
       "transform?": "LocalTransform",
       "components": "EntityComponent[]"
+    },
+    "FieldSchema": {
+      "name": "string",
+      "displayName": "string",
+      "kind": "string",
+      "typeName": "string",
+      "hidden": "bool",
+      "readOnly": "bool",
+      "enumOptions?": "string[]",
+      "assetType?": "string",
+      "min?": "number",
+      "max?": "number",
+      "tooltip?": "string",
+      "container?": "string"
+    },
+    "ComponentSchema": {
+      "typeName": "string",
+      "singleton": "bool",
+      "fields": "FieldSchema[]",
+      "defaults?": "json"
     }
   },
   "responses": {
@@ -560,6 +658,10 @@
     "SceneInfo": "0x0D",
     "ProjectInfo": "0x0E",
     "Hierarchy": "0x0F",
-    "EntityData": "0x10"
+    "EntityData": "0x10",
+    "ComponentTypes": "0x11",
+    "ComponentAdded": "0x12",
+    "ComponentData": "0x13",
+    "LuaFields": "0x14"
   }
 }
