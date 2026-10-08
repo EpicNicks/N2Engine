@@ -1758,7 +1758,8 @@ TEST_F(EditorHistoryProjectTest, UndoingATransformGivenToAnObjectWithoutOneLeave
     ASSERT_EQ(made.type, EntityCreatedType);
     BufferReader r(made.payload);
     const std::string bare = r.ReadString();
-    ASSERT_EQ(Save().revision, OpenSceneInfo().savedRevision);
+    const SceneInfoData saved = Save();
+    ASSERT_EQ(saved.revision, saved.savedRevision);
 
     ASSERT_EQ(SetLocal(bare, {1.0f, 0.0f, 0.0f}).type, OkType);
     const EditResultData undone = Undo();

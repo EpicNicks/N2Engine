@@ -66,6 +66,10 @@ namespace N2Engine::Scripting
         /// hierarchy) and OnDestroy once the component is attached, then its subscriptions stop firing and
         /// its self.component/self.gameObject are cleared. Returns it (invalid if there was none).
         sol::table RetireScriptInstance();
+        /// Back to a component with no script (what a new one is): the instance is retired and the path forgotten.
+        /// Deserialize does it for a saved "scriptPath" that is empty, so a component whose script was chosen in the
+        /// editor can be put back as it was (undo), not left with the script or with the path "res://".
+        void ClearScript();
         /// $ref fields hold resolved handles on the instance, not values in _scriptData
         void CopyReferenceFields(const sol::table &from);
         void ExtractSerializableFields();

@@ -96,6 +96,16 @@ namespace N2Engine::Scripting
         }, this);
     }
 
+    void LuaComponent::ClearScript()
+    {
+        LuaRuntime::Instance().UnregisterReloadCallbacks(this);
+        RetireScriptInstance();
+        _scriptPath = IO::ResourcePath{};
+        _script = nullptr;
+        _hasMissingScript = false;
+        CacheLifecycleMethods();
+    }
+
     sol::table LuaComponent::CreateScriptInstance()
     {
         if (!_script)
@@ -583,7 +593,15 @@ namespace N2Engine::Scripting
         else if (j.contains("scriptPath"))
         {
             IO::ResourcePath path = j["scriptPath"].get<IO::ResourcePath>();
-            SetScript(path);
+            if (path.IsValid())
+            {
+                SetScript(path);
+            }
+            else if (_scriptPath.IsValid() || _hasMissingScript)
+            {
+                // Saved with no script (a new component's scriptPath is empty): a script it has since been given goes
+                ClearScript();
+            }
         }
 
         // Resolve references if resolver provided
