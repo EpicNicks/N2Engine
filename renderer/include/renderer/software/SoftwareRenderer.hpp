@@ -40,6 +40,14 @@ namespace Renderer::Software
         /// read at raster time, which is safe because DestroyTexture waits for the frame in flight and a
         /// software texture's pixels never change after creation.
         const SWTexture *texture = nullptr;
+        /// Lit only. uEmissive (rgb; added after lighting) and uOcclusionStrength. The emissive texture multiplies
+        /// uEmissive; the occlusion texture's red channel scales the ambient light. Textures are pointers like
+        /// `texture`, null when absent. A base colour or emissive texture made with TextureOptions::srgb is
+        /// decoded through a table in linear lighting.
+        std::array<float, 4> emissive{0.0f, 0.0f, 0.0f, 0.0f};
+        float occlusionStrength = 1.0f;
+        const SWTexture *emissiveTexture = nullptr;
+        const SWTexture *occlusionTexture = nullptr;
         SWShaderType shader = SWShaderType::Unlit; ///< Unlit too when the material's shader isn't an SWShader
     };
 

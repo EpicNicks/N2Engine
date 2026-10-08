@@ -8,6 +8,7 @@
 
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
+#include "engine/rendering/RenderSettings.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/text/Font.hpp"
 
@@ -28,7 +29,7 @@ namespace N2Engine::Rendering
             void *resource = nullptr;
             std::size_t users = 0;
             std::uint64_t uploadedVersion = 0; // Mesh: the mesh version the GPU copy holds
-            GpuCache::Handle dependency;       // Material: its share of the base colour texture's entry
+            std::vector<GpuCache::Handle> dependencies; // Material: its shares of its textures' entries
         };
 
         // (renderer, source, kind, version): the version is a Material's, 0 for the other kinds
@@ -152,16 +153,22 @@ namespace N2Engine::Rendering
             }
             // Left by a destroyed renderer at the same address: its resource went with it. What the entry held of
             // another entry is let go after the erase (releasing it changes the map).
-            Handle staleDependency = std::move(it->second.dependency);
+            std::vector<Handle> staleDependencies = std::move(it->second.dependencies);
             entries.erase(it);
-            staleDependency.Release(false);
+            for (Handle &stale : staleDependencies)
+            {
+                stale.Release(false);
+            }
         }
 
-        Handle dependency;
-        void *resource = create(renderer, dependency);
+        std::vector<Handle> dependencies;
+        void *resource = create(renderer, dependencies);
         if (!resource)
         {
-            dependency.Release(true);
+            for (Handle &dependency : dependencies)
+            {
+                dependency.Release(true);
+            }
             return {};
         }
         const void *sourceAddress = source.get();
@@ -171,7 +178,7 @@ namespace N2Engine::Rendering
         entry.resource = resource;
         entry.users = 1;
         entry.uploadedVersion = uploadedVersion;
-        entry.dependency = std::move(dependency);
+        entry.dependencies = std::move(dependencies);
         entries.emplace(key, std::move(entry));
         return Handle(&renderer, std::move(lifetime), kind, sourceAddress, version, resource);
     }
@@ -196,22 +203,45 @@ namespace N2Engine::Rendering
         }
         // The entry's share of another entry (a material's texture) goes after the erase: releasing it changes
         // the map, and the texture must outlive the material that samples it
-        Handle dependency = std::move(it->second.dependency);
+        std::vector<Handle> dependencies = std::move(it->second.dependencies);
         entries.erase(it);
-        dependency.Release(callRenderer);
+        for (Handle &dependency : dependencies)
+        {
+            dependency.Release(callRenderer);
+        }
     }
 
-    GpuCache::Handle GpuCache::AcquireTexture(IRenderer &renderer, const std::shared_ptr<const Texture> &texture)
+    GpuCache::Handle GpuCache::AcquireTexture(IRenderer &renderer, const std::shared_ptr<const Texture> &texture,
+                                              const bool sRgb)
     {
         if (!texture || !texture->IsLoaded())
         {
             return {};
         }
-        return Acquire(renderer, ResourceKind::Texture, 0, texture, [&texture](IRenderer &target, Handle &) -> void *
+        return Acquire(renderer, ResourceKind::Texture, sRgb ? 1 : 0, texture,
+                       [&texture, sRgb](IRenderer &target, std::vector<Handle> &) -> void *
         {
+            Renderer::Common::TextureOptions options = texture->GetTextureOptions();
+            options.srgb = sRgb;
             return target.CreateTexture(texture->GetPixels().data(), texture->GetWidth(), texture->GetHeight(),
-                                        Texture::GetChannels(), texture->GetTextureOptions());
+                                        Texture::GetChannels(), options);
         });
+    }
+
+    namespace
+    {
+        /// A lit material in linear lighting: its colour textures are sRGB textures
+        bool UsesSrgbTextures(const Material &material)
+        {
+            return material.GetShading() == ShadingModel::Lit &&
+                   RenderSettings::GetColorSpace() == ColorSpace::Linear;
+        }
+    }
+
+    std::uint64_t GpuCache::MaterialVersion(const Material &material)
+    {
+        constexpr std::uint64_t srgbBit = std::uint64_t{1} << 62;
+        return material.GetGpuVersion() | (UsesSrgbTextures(material) ? srgbBit : 0);
     }
 
     GpuCache::Handle GpuCache::AcquireFontAtlas(IRenderer &renderer, const std::shared_ptr<const Text::Font> &font)
@@ -220,7 +250,7 @@ namespace N2Engine::Rendering
         {
             return {};
         }
-        return Acquire(renderer, ResourceKind::Texture, 0, font, [&font](IRenderer &target, Handle &) -> void *
+        return Acquire(renderer, ResourceKind::Texture, 0, font, [&font](IRenderer &target, std::vector<Handle> &) -> void *
         {
             const Text::FontAtlas &atlas = font->GetSdfFont().GetAtlas();
             if (atlas.GetWidth() <= 0 || atlas.GetHeight() <= 0 || atlas.GetPixels().empty())
@@ -239,7 +269,7 @@ namespace N2Engine::Rendering
         {
             return {};
         }
-        Handle handle = Acquire(renderer, ResourceKind::Mesh, 0, mesh, [&mesh](IRenderer &target, Handle &) -> void *
+        Handle handle = Acquire(renderer, ResourceKind::Mesh, 0, mesh, [&mesh](IRenderer &target, std::vector<Handle> &) -> void *
         {
             return target.CreateMesh(mesh->GetMeshData());
         }, mesh->GetVersion());
@@ -294,8 +324,9 @@ namespace N2Engine::Rendering
         {
             return {};
         }
-        return Acquire(renderer, ResourceKind::Material, material->GetGpuVersion(), material,
-                       [&material](IRenderer &target, Handle &dependency) -> void *
+        const bool sRgbTextures = UsesSrgbTextures(*material);
+        return Acquire(renderer, ResourceKind::Material, MaterialVersion(*material), material,
+                       [&material, sRgbTextures](IRenderer &target, std::vector<Handle> &dependencies) -> void *
         {
             IShader *shader = material->GetShading() == ShadingModel::Lit ? target.GetStandardLitShader()
                                                                            : target.GetStandardUnlitShader();
@@ -303,15 +334,33 @@ namespace N2Engine::Rendering
             {
                 return nullptr;
             }
-            ITexture *texture = nullptr;
-            if (material->GetBaseColorTexture())
+            // A texture the renderer can't create is left out. Each texture is a share of its own entry, held by
+            // this material's entry (and so alive as long as the material that samples it).
+            const auto acquire = [&](const std::shared_ptr<Texture> &source, const bool colour) -> ITexture *
             {
-                dependency = AcquireTexture(target, material->GetBaseColorTexture());
-                texture = dependency.GetTexture();
-            }
+                if (!source)
+                {
+                    return nullptr;
+                }
+                // A colour texture marked sRGB, in linear lighting, is an sRGB texture (decoded when sampled)
+                Handle handle = AcquireTexture(target, source, colour && sRgbTextures && source->GetSettings().srgb);
+                ITexture *texture = handle.GetTexture();
+                if (texture)
+                {
+                    dependencies.push_back(std::move(handle));
+                }
+                return texture;
+            };
+            ITexture *texture = acquire(material->GetBaseColorTexture(), true);
             IMaterial *created = target.CreateMaterial(shader, texture);
             if (created)
             {
+                // Only the lit shader reads them
+                if (material->GetShading() == ShadingModel::Lit)
+                {
+                    created->SetAuxTexture(Renderer::Common::AuxTexture::Emissive, acquire(material->GetEmissiveTexture(), true));
+                    created->SetAuxTexture(Renderer::Common::AuxTexture::Occlusion, acquire(material->GetOcclusionTexture(), false));
+                }
                 material->ApplyUniforms(*created);
             }
             return created;

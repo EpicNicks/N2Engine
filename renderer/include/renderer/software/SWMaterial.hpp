@@ -8,6 +8,7 @@
 #include <math/Vector4.hpp>
 
 #include "renderer/common/IMaterial.hpp"
+#include "renderer/common/ITexture.hpp"
 
 namespace Renderer::Software
 {
@@ -27,6 +28,16 @@ namespace Renderer::Software
         void SetVec4(const std::string &n, N2Engine::Math::Vector4 &v) override { m_vec4s[n] = {v.x, v.y, v.z, v.w}; }
         void SetColor(const std::string &n, float r, float g, float b, float a) override { m_vec4s[n] = {r, g, b, a}; }
         void SetTexture(Common::ITexture *t) override { m_texture = t; }
+        void SetAuxTexture(Common::AuxTexture which, Common::ITexture *t) override
+        {
+            // An invalid texture is stored as none, as on OpenGL, so the has-texture flags agree
+            (which == Common::AuxTexture::Emissive ? m_emissiveTexture : m_occlusionTexture) =
+                t && t->IsValid() ? t : nullptr;
+        }
+        [[nodiscard]] Common::ITexture* GetAuxTexture(Common::AuxTexture which) const override
+        {
+            return which == Common::AuxTexture::Emissive ? m_emissiveTexture : m_occlusionTexture;
+        }
 
         [[nodiscard]] Common::IShader* GetShader() const override { return m_shader; }
         [[nodiscard]] Common::ITexture* GetTexture() const override { return m_texture; }
@@ -38,6 +49,12 @@ namespace Renderer::Software
             return it != m_vec4s.end() ? it->second : def;
         }
 
+        [[nodiscard]] int GetInt(const std::string &n, int def = 0) const
+        {
+            const auto it = m_ints.find(n);
+            return it != m_ints.end() ? it->second : def;
+        }
+
         [[nodiscard]] float GetFloat(const std::string &n, float def = 0.f) const
         {
             const auto it = m_floats.find(n);
@@ -47,6 +64,8 @@ namespace Renderer::Software
     private:
         Common::IShader *m_shader = nullptr;
         Common::ITexture *m_texture = nullptr;
+        Common::ITexture *m_emissiveTexture = nullptr;
+        Common::ITexture *m_occlusionTexture = nullptr;
         std::unordered_map<std::string, int> m_ints;
         std::unordered_map<std::string, float> m_floats;
         std::unordered_map<std::string, std::array<float, 4>> m_vec4s;

@@ -299,3 +299,17 @@ TEST_F(ModelSceneRoundTripTest, ASavedInstanceLoadsBackWithItsSubAssetsResolved)
     EXPECT_FALSE(warnings.Mentions("not found")) << "every reference resolved";
     EXPECT_NE(IO::ResourceLoader::Instance().GetCached<Model>(path), nullptr) << "the model loaded to resolve them";
 }
+
+TEST(ModelInstantiateTest, AnOcclusionTexturesStrengthReachesTheMaterial)
+{
+    GltfTest::Builder b = ModelTestSupport::Robot();
+    b.doc["materials"][0]["occlusionTexture"] = {{"index", 0}, {"strength", 0.4}};
+    const std::vector<std::uint8_t> glb = b.ToGlb();
+    const auto model = Model::LoadFromMemory(glb, {}, {}, "occluded");
+    ASSERT_NE(model, nullptr);
+    ASSERT_FALSE(model->GetMaterials().empty());
+    const auto &red = model->GetMaterials()[0];
+    ASSERT_NE(red->GetOcclusionTexture(), nullptr);
+    EXPECT_NEAR(red->GetOcclusionStrength(), 0.4f, 1e-6f);
+    EXPECT_NEAR(model->GetMaterials()[1]->GetOcclusionStrength(), 1.0f, 1e-6f) << "the default";
+}

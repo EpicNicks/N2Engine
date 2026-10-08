@@ -6,6 +6,7 @@
 #include <cassert>
 #include <vector>
 
+#include "renderer/common/LightingMath.hpp"
 #include "renderer/software/SWMaterial.hpp"
 #include "renderer/software/SWMesh.hpp"
 #include "renderer/software/SWShader.hpp"
@@ -77,6 +78,13 @@ namespace
         const SWTexture* tex = nullptr;   // null if absent or invalid
         bool lit = false;
         bool text = false;
+        // Lit only: emissive (added after lighting), the occlusion texture (scales the ambient light) and which
+        // textures are sRGB colour (decoded in linear lighting)
+        float emR = 0.f, emG = 0.f, emB = 0.f;
+        bool hasEmissive = false;          // an emissive colour: otherwise (and without a texture) the add is skipped
+        float occlusionStrength = 1.f;
+        const SWTexture* emissiveTex = nullptr;
+        const SWTexture* occlusionTex = nullptr;
         // Unlit and lit multiply by the interpolated vertex colour. Off when every vertex of the mesh is white,
         // so such meshes (every built-in one) shade exactly as they did before vertex colour was read.
         bool vertexColor = false;
@@ -121,6 +129,18 @@ namespace
         if (auto* t = dynamic_cast<const SWTexture*>(mat.GetTexture()); t && t->IsValid())
             s.texture = t;
 
+        if (auto* lit = dynamic_cast<const SWShader*>(mat.GetShader()); lit && lit->GetType() == SWShaderType::Lit)
+        {
+            static const std::string emissiveKey = "uEmissive";
+            static const std::string occlusionStrengthKey = "uOcclusionStrength";
+            s.emissive = mat.GetVec4(emissiveKey, {0, 0, 0, 0});
+            s.occlusionStrength = mat.GetFloat(occlusionStrengthKey, 1.0f);
+            if (auto* e = dynamic_cast<const SWTexture*>(mat.GetAuxTexture(Common::AuxTexture::Emissive)); e && e->IsValid())
+                s.emissiveTexture = e;
+            if (auto* o = dynamic_cast<const SWTexture*>(mat.GetAuxTexture(Common::AuxTexture::Occlusion)); o && o->IsValid())
+                s.occlusionTexture = o;
+        }
+
         if (auto* sh = dynamic_cast<const SWShader*>(mat.GetShader()))
             s.shader = sh->GetType();
 
@@ -150,6 +170,14 @@ namespace
         r.text = mat.shader == SWShaderType::Text;
         r.shininess = 4.f + (256.f - 4.f) * mat.smoothness;   // matches mix(4, 256, smoothness)
         r.alphaCutoff = mat.alphaCutoff;
+        if (r.lit)
+        {
+            r.emR = mat.emissive[0]; r.emG = mat.emissive[1]; r.emB = mat.emissive[2];
+            r.emissiveTex = mat.emissiveTexture;
+            r.occlusionTex = mat.occlusionTexture;
+            r.occlusionStrength = mat.occlusionStrength;
+            r.hasEmissive = r.emR != 0.f || r.emG != 0.f || r.emB != 0.f;
+        }
         r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
 
         if (r.text)
@@ -173,13 +201,17 @@ namespace
     // Lights pre-normalized / pre-squared ONCE per draw instead of per pixel.
     struct PrepDirLight   { float x, y, z, r, g, b, intensity; };
     struct PrepPointLight { float x, y, z, r, g, b, intensity, range2, invRange, atten; };
+    // ax, ay, az: the unit axis the light shines along
+    struct PrepSpotLight  { float x, y, z, ax, ay, az, r, g, b, intensity, range2, invRange, cosInner, cosOuter; };
 
     struct LitState
     {
         float ambR = 0.f, ambG = 0.f, ambB = 0.f;
         float camX = 0.f, camY = 0.f, camZ = 0.f;
+        bool linear = false;   // linear lighting: sRGB textures decoded, the result encoded
         std::vector<PrepDirLight>   dirs;
         std::vector<PrepPointLight> points;
+        std::vector<PrepSpotLight>  spots;
     };
 
     void PrepareLighting(const SceneLightingData& L, const N2Engine::Math::Vector3& cam, LitState& out)
@@ -188,6 +220,7 @@ namespace
         out.ambG = L.ambientColor.y;
         out.ambB = L.ambientColor.z;
         out.camX = cam.x; out.camY = cam.y; out.camZ = cam.z;
+        out.linear = L.colorSpace == ColorSpace::Linear;
 
         out.dirs.clear();
         out.dirs.reserve(L.directionalLights.size());
@@ -209,6 +242,23 @@ namespace
                                   pl.intensity, pl.range * pl.range, 1.f / pl.range,
                                   pl.attenuation});
         }
+
+        // At most MAX_SPOT_LIGHTS, in order, as the OpenGL shader's array holds
+        out.spots.clear();
+        const size_t spotCount = std::min<size_t>(L.spotLights.size(), SceneLightingData::MAX_SPOT_LIGHTS);
+        for (size_t i = 0; i < spotCount; ++i)
+        {
+            const auto& sl = L.spotLights[i];
+            if (sl.range <= 0.f) continue;   // nothing is within range
+            float ax = sl.direction.x, ay = sl.direction.y, az = sl.direction.z;
+            const float len = std::sqrt(ax*ax + ay*ay + az*az);
+            if (!(len > 1e-6f)) continue;    // no axis, no cone
+            ax /= len; ay /= len; az /= len;
+            out.spots.push_back({sl.position.x, sl.position.y, sl.position.z, ax, ay, az,
+                                 sl.color.x, sl.color.y, sl.color.z, sl.intensity,
+                                 sl.range * sl.range, 1.f / sl.range,
+                                 std::cos(sl.innerConeAngle), std::cos(sl.outerConeAngle)});
+        }
     }
 
     // ------------------------------------------------------------------
@@ -224,10 +274,20 @@ namespace
             // Bilinear or nearest, as the texture's filter says (SWTexture::SampleFiltered)
             const uint32_t s = m.tex->SampleFiltered(u, v);
             constexpr float k = 1.f / 255.f;
-            // (albedo * texel) * k, the order the unlit shader always used, so its output is unchanged bit for bit
-            r = m.aR * (float)((s >>  0) & 0xFF) * k;
-            g = m.aG * (float)((s >>  8) & 0xFF) * k;
-            b = m.aB * (float)((s >> 16) & 0xFF) * k;
+            if (m.tex->options.srgb)
+            {
+                // As in the lit shader: an sRGB texture reads as linear light (and is drawn as such, unencoded)
+                r = m.aR * SrgbByteToLinear((unsigned char)((s >>  0) & 0xFF));
+                g = m.aG * SrgbByteToLinear((unsigned char)((s >>  8) & 0xFF));
+                b = m.aB * SrgbByteToLinear((unsigned char)((s >> 16) & 0xFF));
+            }
+            else
+            {
+                // (albedo * texel) * k, the order the unlit shader always used, so its output is unchanged bit for bit
+                r = m.aR * (float)((s >>  0) & 0xFF) * k;
+                g = m.aG * (float)((s >>  8) & 0xFF) * k;
+                b = m.aB * (float)((s >> 16) & 0xFF) * k;
+            }
             a = m.aA * (float)((s >> 24) & 0xFF) * k;
         }
         if (m.vertexColor)
@@ -254,9 +314,20 @@ namespace
         {
             const uint32_t s = m.tex->SampleFiltered(u, v);
             constexpr float k = 1.f / 255.f;
-            r *= (float)((s >>  0) & 0xFF) * k;
-            g *= (float)((s >>  8) & 0xFF) * k;
-            b *= (float)((s >> 16) & 0xFF) * k;
+            if (m.tex->options.srgb)
+            {
+                // An sRGB texture reads as linear light, in any colour space (as OpenGL's SRGB8_ALPHA8 does), but
+                // here after filtering: OpenGL decodes the texels before it interpolates them. Alpha is not colour.
+                r *= SrgbByteToLinear((unsigned char)((s >>  0) & 0xFF));
+                g *= SrgbByteToLinear((unsigned char)((s >>  8) & 0xFF));
+                b *= SrgbByteToLinear((unsigned char)((s >> 16) & 0xFF));
+            }
+            else
+            {
+                r *= (float)((s >>  0) & 0xFF) * k;
+                g *= (float)((s >>  8) & 0xFF) * k;
+                b *= (float)((s >> 16) & 0xFF) * k;
+            }
             a *= (float)((s >> 24) & 0xFF) * k;
         }
 
@@ -276,6 +347,13 @@ namespace
         };
 
         float lr = L.ambR, lg = L.ambG, lb = L.ambB;
+        if (m.occlusionTex)
+        {
+            // The texture's red channel scales the ambient light: 1 + strength * (occlusion - 1)
+            const float occlusion = (float)(m.occlusionTex->SampleFiltered(u, v) & 0xFF) * (1.f / 255.f);
+            const float scale = 1.f + m.occlusionStrength * (occlusion - 1.f);
+            lr *= scale; lg *= scale; lb *= scale;
+        }
 
         for (const auto& d : L.dirs)
         {
@@ -300,7 +378,53 @@ namespace
             lr += p.r * c; lg += p.g * c; lb += p.b * c;
         }
 
-        return PxColor{lr * r, lg * g, lb * b, a};
+        for (const auto& sp : L.spots)
+        {
+            float lx = sp.x - wx, ly = sp.y - wy, lz = sp.z - wz;
+            const float d2 = lx*lx + ly*ly + lz*lz;
+            if (d2 > sp.range2) continue;
+            const float dist = std::sqrt(d2);
+            if (dist > 1e-6f) { const float inv = 1.f / dist; lx *= inv; ly *= inv; lz *= inv; }
+
+            // L points at the light, the axis away from it: the angle off the axis has cosine -(L . axis)
+            const float cone = SpotConeFactorFromCosines(-(lx*sp.ax + ly*sp.ay + lz*sp.az), sp.cosInner, sp.cosOuter);
+            if (cone == 0.f) continue;
+
+            const float ndotl = std::max(0.f, nx*lx + ny*ly + nz*lz);
+            const float dr    = dist * sp.invRange;
+            const float atten = 1.f / (1.f + dr * dr);   // as the OpenGL shader's spot attenuation (factor 1)
+            const float c = (ndotl * sp.intensity + blinn(lx, ly, lz) * 0.3f) * atten * cone;
+            lr += sp.r * c; lg += sp.g * c; lb += sp.b * c;
+        }
+
+        float outR = lr * r, outG = lg * g, outB = lb * b;
+        if (m.hasEmissive || m.emissiveTex)
+        {
+            float er = m.emR, eg = m.emG, eb = m.emB;
+            if (m.emissiveTex)
+            {
+                const uint32_t s = m.emissiveTex->SampleFiltered(u, v);
+                constexpr float k = 1.f / 255.f;
+                if (m.emissiveTex->options.srgb)
+                {
+                    er *= SrgbByteToLinear((unsigned char)((s >>  0) & 0xFF));
+                    eg *= SrgbByteToLinear((unsigned char)((s >>  8) & 0xFF));
+                    eb *= SrgbByteToLinear((unsigned char)((s >> 16) & 0xFF));
+                }
+                else
+                {
+                    er *= (float)((s >>  0) & 0xFF) * k;
+                    eg *= (float)((s >>  8) & 0xFF) * k;
+                    eb *= (float)((s >> 16) & 0xFF) * k;
+                }
+            }
+            outR += er; outG += eg; outB += eb;
+        }
+        if (L.linear)
+        {
+            outR = LinearToSrgb(outR); outG = LinearToSrgb(outG); outB = LinearToSrgb(outB);
+        }
+        return PxColor{outR, outG, outB, a};
     }
 }
 

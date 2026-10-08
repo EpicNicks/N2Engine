@@ -330,7 +330,7 @@ namespace N2Engine::Rendering
                 continue;
             }
             TextureSettings textureSettings;
-            textureSettings.srgb = image.colour; // recorded only, until linear lighting (#3 P4a)
+            textureSettings.srgb = image.colour; // colour (base colour, emissive) or data; read in linear lighting
             textureSettings.filter =
                 image.nearest ? Renderer::Common::TextureFilter::Nearest : Renderer::Common::TextureFilter::Linear;
             textureSettings.wrap =
@@ -373,6 +373,7 @@ namespace N2Engine::Rendering
             material->SetEmissive(Common::Color(from.emissive[0], from.emissive[1], from.emissive[2], 1.0f));
             material->SetNormalTexture(textureAt(from.normalTexture));
             material->SetOcclusionTexture(textureAt(from.occlusionTexture));
+            material->SetOcclusionStrength(from.occlusionStrength);
             material->SetMetallicRoughnessTexture(textureAt(from.metallicRoughnessTexture));
             material->SetEmissiveTexture(textureAt(from.emissiveTexture));
             _materials.push_back(std::move(material));

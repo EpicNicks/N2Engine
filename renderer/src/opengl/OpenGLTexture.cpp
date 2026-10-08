@@ -67,11 +67,11 @@ bool OpenGLTexture::Initialize(const uint8_t *data, uint32_t width, uint32_t hei
         break;
     case 3:
         format = GL_RGB;
-        internalFormat = GL_RGB8;
+        internalFormat = options.srgb ? GL_SRGB8 : GL_RGB8;
         break;
     case 4:
         format = GL_RGBA;
-        internalFormat = GL_RGBA8;
+        internalFormat = options.srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
         break;
     default:
         format = GL_RGB;

@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <iostream>
 #include <algorithm>
+#include <cmath>
 
 #include <math/Matrix.hpp>
 
@@ -39,6 +40,29 @@ void OpenGLRenderer::Clear(const float r, const float g, const float b, const fl
     m_clearColor[3] = a;
 }
 
+namespace
+{
+    /// Whether `framebuffer` (0: the window's back buffer) stores sRGB-encoded colour, as the driver says. Asked
+    /// once per target, not per frame. A target that can't answer (an error) counts as linear, and then the lit
+    /// shader encodes its own output.
+    bool TargetIsSrgb(const GLuint framebuffer)
+    {
+        for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i)
+        {
+            // errors left by earlier calls are not this query's
+        }
+        GLint previous = 0;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        GLint encoding = GL_LINEAR;
+        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, framebuffer != 0 ? GL_COLOR_ATTACHMENT0 : GL_BACK_LEFT,
+                                              GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING, &encoding);
+        const bool answered = glGetError() == GL_NO_ERROR;
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous));
+        return answered && encoding == GL_SRGB;
+    }
+}
+
 bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, const uint32_t width, const uint32_t height)
 {
     m_window = windowHandle;
@@ -70,6 +94,11 @@ bool OpenGLRenderer::Initialize(GLFWwindow *windowHandle, const uint32_t width, 
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     CreateStandardShaders();
+    if (const auto lit = m_shaderPrograms.find(m_standardLitShader); lit != m_shaderPrograms.end())
+    {
+        m_litShaderImpl = lit->second.get();
+    }
+    m_windowIsSrgb = TargetIsSrgb(0);
 
     return true;
 }
@@ -86,6 +115,7 @@ void OpenGLRenderer::Shutdown()
     m_standardUnlitShader = nullptr;
     m_standardLitShader = nullptr;
     m_standardTextShader = nullptr;
+    m_litShaderImpl = nullptr;
 }
 
 void OpenGLRenderer::Resize(const uint32_t width, const uint32_t height)
@@ -185,6 +215,10 @@ void OpenGLRenderer::BeginFrame()
     // glClear only clears depth where depth writes are enabled, and the last draw of the previous frame
     // may have turned them off (a Transparent-queue draw)
     glDepthMask(GL_TRUE);
+    // The clear and every pass but the lit shader's write colours as they are (see DrawIndices)
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    m_framebufferSrgbOn = false;
+    m_framebufferIsSrgb = m_offscreenFramebuffer != 0 ? m_offscreenIsSrgb : m_windowIsSrgb;
     glClearColor(m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -206,7 +240,12 @@ void OpenGLRenderer::BeginFrame()
 
 void OpenGLRenderer::EndFrame()
 {
-    // Nothing specific needed for OpenGL
+    // Whatever the last draw left on, readback and Present must not run with the sRGB encode enabled
+    if (m_framebufferSrgbOn)
+    {
+        glDisable(GL_FRAMEBUFFER_SRGB);
+        m_framebufferSrgbOn = false;
+    }
 }
 
 void OpenGLRenderer::Present()
@@ -380,6 +419,12 @@ void OpenGLRenderer::UpdateSceneLighting(
     auto *shader = static_cast<OpenGLShader*>(shaderIt->second.get());
     shader->Bind();
 
+    // Linear lighting: the lit result is encoded by the framebuffer (GL_FRAMEBUFFER_SRGB, set per draw), or by
+    // the shader when the target isn't sRGB. Gamma lighting writes it as it is.
+    shader->SetInt("uEncodeOutput",
+                   lighting.colorSpace == Common::ColorSpace::Linear &&
+                           (!m_framebufferIsSrgb || lighting.forceShaderEncode) ? 1 : 0);
+
     // Set ambient
     shader->SetVec3("uAmbientLight",
                     lighting.ambientColor.x,
@@ -429,26 +474,35 @@ void OpenGLRenderer::UpdateSceneLighting(
     }
 
     // Set spot lights
-    const int numSpotLights = std::min<int>(static_cast<int>(lighting.spotLights.size()),
-                                            Common::SceneLightingData::MAX_SPOT_LIGHTS);
-    shader->SetInt("uNumSpotLights", numSpotLights);
-
-    for (int i = 0; i < numSpotLights; ++i)
+    // At most MAX_SPOT_LIGHTS of the list, as the software renderer takes them; one without an axis (a zero
+    // direction) lights nothing and is left out, since normalising it would give NaN
+    const int spotCandidates = std::min<int>(static_cast<int>(lighting.spotLights.size()),
+                                             Common::SceneLightingData::MAX_SPOT_LIGHTS);
+    int numSpotLights = 0;
+    for (int candidate = 0; candidate < spotCandidates; ++candidate)
     {
-        const auto &light = lighting.spotLights[i];
+        const auto &light = lighting.spotLights[candidate];
+        const float length = std::sqrt(light.direction.x * light.direction.x + light.direction.y * light.direction.y +
+                                       light.direction.z * light.direction.z);
+        if (!(length > 1e-6f))
+        {
+            continue;
+        }
+        const int i = numSpotLights++;
         std::string base = "uSpotLights[" + std::to_string(i) + "]";
 
         shader->SetVec3(base + ".position",
                         light.position.x, light.position.y, light.position.z);
         shader->SetVec3(base + ".direction",
-                        light.direction.x, light.direction.y, light.direction.z);
+                        light.direction.x / length, light.direction.y / length, light.direction.z / length);
         shader->SetVec3(base + ".color",
                         light.color.x, light.color.y, light.color.z);
         shader->SetFloat(base + ".intensity", light.intensity);
         shader->SetFloat(base + ".range", light.range);
-        shader->SetFloat(base + ".innerConeAngle", light.innerConeAngle);
-        shader->SetFloat(base + ".outerConeAngle", light.outerConeAngle);
+        shader->SetFloat(base + ".cosInner", std::cos(light.innerConeAngle));
+        shader->SetFloat(base + ".cosOuter", std::cos(light.outerConeAngle));
     }
+    shader->SetInt("uNumSpotLights", numSpotLights);
 }
 
 
@@ -582,6 +636,47 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
         {
             glUniform1i(uniforms.textureLoc, 0);
         }
+    }
+
+    // The lit shader's extra textures: emissive on unit 1, occlusion on unit 2 (their sampler uniforms are set
+    // by OpenGLMaterial::Apply, and the shader reads them only when uHasEmissiveTexture/uHasOcclusionTexture say so)
+    bool boundExtraTexture = false;
+    if (const OpenGLTexture *texture = glMaterial->GetEmissiveTexture(); texture && texture->IsValid())
+    {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
+        boundExtraTexture = true;
+    }
+    if (const OpenGLTexture *texture = glMaterial->GetOcclusionTexture(); texture && texture->IsValid())
+    {
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, texture->GetHandle());
+        boundExtraTexture = true;
+    }
+    if (boundExtraTexture)
+    {
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    // Linear lighting: only the lit shader's output is encoded by the framebuffer; unlit, text and everything else
+    // are drawn with the encode off, so they come out as authored in both colour spaces
+    bool encodeOutput = false;
+    if (m_currentLighting.colorSpace == Common::ColorSpace::Linear && m_framebufferIsSrgb &&
+        !m_currentLighting.forceShaderEncode)
+    {
+        encodeOutput = static_cast<const void *>(shader) == m_litShaderImpl;
+    }
+    if (encodeOutput != m_framebufferSrgbOn)
+    {
+        if (encodeOutput)
+        {
+            glEnable(GL_FRAMEBUFFER_SRGB);
+        }
+        else
+        {
+            glDisable(GL_FRAMEBUFFER_SRGB);
+        }
+        m_framebufferSrgbOn = encodeOutput;
     }
 
     // Draw mesh, with this draw's depth/cull/blend state
@@ -822,6 +917,20 @@ void OpenGLRenderer::CreateStandardShaders()
         uniform float uSmoothness;
         uniform float uAlphaCutoff;
 
+        // Linear lighting: sRGB textures are SRGB8_ALPHA8 and decode themselves when sampled, and the framebuffer
+        // encodes the result (GL_FRAMEBUFFER_SRGB). uEncodeOutput (set per frame by UpdateSceneLighting) is 1 only
+        // when linear lighting is on and the target is not sRGB: then this shader encodes its own output.
+        uniform int uEncodeOutput;
+
+        // Emissive: added after lighting, unaffected by it. Occlusion: scales the ambient light by the texture's
+        // red channel, mixed in by uOcclusionStrength (0 = none, 1 = full).
+        uniform vec3 uEmissive;
+        uniform sampler2D uEmissiveTexture;
+        uniform bool uHasEmissiveTexture;
+        uniform sampler2D uOcclusionTexture;
+        uniform bool uHasOcclusionTexture;
+        uniform float uOcclusionStrength;
+
         // Camera
         uniform vec3 uCameraPos;
 
@@ -855,8 +964,8 @@ void OpenGLRenderer::CreateStandardShaders()
             vec3 color;
             float intensity;
             float range;
-            float innerConeAngle;
-            float outerConeAngle;
+            float cosInner;  // cos of the cone half-angles, set by UpdateSceneLighting
+            float cosOuter;
         };
         uniform int uNumSpotLights;
         uniform SpotLight uSpotLights[4];
@@ -873,6 +982,12 @@ void OpenGLRenderer::CreateStandardShaders()
             return 1.0 / (1.0 + attenuation * d * d);
         }
 
+        // The sRGB encode (the software renderer's LinearToSrgb)
+        vec3 linearToSrgb(vec3 c) {
+            c = max(c, vec3(0.0));
+            return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+        }
+
         void main() {
             // Base colour: uAlbedo x texture x vertex colour, alpha-tested against uAlphaCutoff
             vec4 albedo = uAlbedo;
@@ -887,8 +1002,12 @@ void OpenGLRenderer::CreateStandardShaders()
             vec3 N = normalize(fragNormal);
             vec3 V = normalize(uCameraPos - fragWorldPos);
 
-            // Start with ambient
-            vec3 lighting = uAmbientLight;
+            // Start with ambient, dimmed by the occlusion texture
+            float occlusion = 1.0;
+            if (uHasOcclusionTexture) {
+                occlusion = 1.0 + uOcclusionStrength * (texture(uOcclusionTexture, fragTexCoord).r - 1.0);
+            }
+            vec3 lighting = uAmbientLight * occlusion;
 
             // Directional lights
             for (int i = 0; i < uNumDirectionalLights; i++) {
@@ -948,13 +1067,14 @@ void OpenGLRenderer::CreateStandardShaders()
                 if (distance > uSpotLights[i].range)
                     continue;
 
-                vec3 L = normalize(-lightToFrag);
+                // At the light itself there is no direction (and normalize would give NaN): none
+                vec3 L = distance > 0.000001 ? -lightToFrag / distance : vec3(0.0);
 
-                // Cone attenuation
-                float theta = dot(L, normalize(-uSpotLights[i].direction));
-                float epsilon = uSpotLights[i].innerConeAngle - uSpotLights[i].outerConeAngle;
+                // Cone: 1 inside the inner cone, 0 outside the outer, a ramp in the cosine between (the
+                // software renderer's SpotConeFactor). The axis is a unit vector.
+                float theta = dot(L, -uSpotLights[i].direction);
                 float spotIntensity = clamp(
-                    (theta - uSpotLights[i].outerConeAngle) / epsilon,
+                    (theta - uSpotLights[i].cosOuter) / max(uSpotLights[i].cosInner - uSpotLights[i].cosOuter, 0.0001),
                     0.0,
                     1.0
                 );
@@ -980,7 +1100,16 @@ void OpenGLRenderer::CreateStandardShaders()
                 lighting += diffuse + specular;
             }
 
-            FragColor = vec4(lighting * albedo.rgb, albedo.a);
+            vec3 emissive = uEmissive;
+            if (uHasEmissiveTexture) {
+                emissive *= texture(uEmissiveTexture, fragTexCoord).rgb;
+            }
+
+            vec3 color = lighting * albedo.rgb + emissive;
+            if (uEncodeOutput != 0) {
+                color = linearToSrgb(color);
+            }
+            FragColor = vec4(color, albedo.a);
         }
     )";
 
@@ -1136,7 +1265,9 @@ bool OpenGLRenderer::SetRenderTargetSize(const uint32_t width, const uint32_t he
 
     glGenRenderbuffers(1, &m_offscreenColor);
     glBindRenderbuffer(GL_RENDERBUFFER, m_offscreenColor);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+    // sRGB storage, so that linear lighting can encode into it; with GL_FRAMEBUFFER_SRGB off (everything but the lit
+    // shader in linear lighting) it stores and reads back the values as written, like RGBA8
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_SRGB8_ALPHA8, w, h);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_offscreenColor);
 
     glGenRenderbuffers(1, &m_offscreenDepth);
@@ -1156,6 +1287,7 @@ bool OpenGLRenderer::SetRenderTargetSize(const uint32_t width, const uint32_t he
     }
     m_offscreenWidth = width;
     m_offscreenHeight = height;
+    m_offscreenIsSrgb = TargetIsSrgb(m_offscreenFramebuffer);
     return true;
 }
 

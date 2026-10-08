@@ -577,6 +577,7 @@ TEST(GltfImporterTest, MaterialsKeepTheirFieldsWithRoughnessAsSmoothness)
                                         {"roughnessFactor", 0.25}};
     material["normalTexture"] = {{"index", texture}};
     material["emissiveFactor"] = {0.1, 0.2, 0.3};
+    material["occlusionTexture"] = {{"index", texture}, {"strength", 0.4}};
     material["alphaMode"] = "MASK";
     material["alphaCutoff"] = 0.4;
     material["doubleSided"] = true;
@@ -596,12 +597,15 @@ TEST(GltfImporterTest, MaterialsKeepTheirFieldsWithRoughnessAsSmoothness)
     EXPECT_NEAR(m.smoothness, 0.75f, 1e-6f) << "1 - roughness";
     EXPECT_NEAR(m.metallic, 0.3f, 1e-6f);
     EXPECT_NEAR(m.emissive[2], 0.3f, 1e-6f);
+    EXPECT_EQ(m.occlusionTexture, image);
+    EXPECT_NEAR(m.occlusionStrength, 0.4f, 1e-6f);
     EXPECT_EQ(m.alphaMode, ImportedAlphaMode::Mask);
     EXPECT_NEAR(m.alphaCutoff, 0.4f, 1e-6f);
     EXPECT_TRUE(m.doubleSided);
     EXPECT_EQ(scene.meshes[0].submeshes[0].materialIndex, painted);
 
     const ImportedMaterial &defaults = scene.materials[static_cast<std::size_t>(plain)];
+    EXPECT_FLOAT_EQ(defaults.occlusionStrength, 1.0f);
     EXPECT_FLOAT_EQ(defaults.baseColor[0], 1.0f);
     EXPECT_FLOAT_EQ(defaults.smoothness, 0.0f) << "glTF's default roughness is 1";
     EXPECT_FLOAT_EQ(defaults.metallic, 1.0f) << "glTF's default metallic is 1";

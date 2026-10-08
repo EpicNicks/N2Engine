@@ -11,9 +11,11 @@
 #include "engine/rendering/GpuCache.hpp"
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
+#include "engine/rendering/RenderSettings.hpp"
 #include "engine/rendering/Texture.hpp"
 
 #include "MeshTestSupport.hpp"
+#include "TextureTestSupport.hpp"
 
 // GpuCache's meshes and materials: one IMesh per (renderer, Mesh), re-uploaded when the mesh changes, and one
 // IMaterial per (renderer, Material, version) holding a share of its texture, under the same lifetime-token rules as
@@ -284,6 +286,150 @@ TEST(GpuCacheMaterialTest, TheMaterialHoldsAShareOfItsTexture)
     handle.Release(true);
     EXPECT_EQ(renderer.GetCounts().destroyedMaterials, 1);
     EXPECT_EQ(renderer.GetCounts().destroyedTextures, 1);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline);
+}
+
+TEST(GpuCacheMaterialTest, ALitMaterialHoldsSharesOfItsEmissiveAndOcclusionTextures)
+{
+    const std::size_t baseline = GpuCache::GetEntryCount();
+    RecordingMeshRenderer renderer;
+    const auto glow = MakeTexture();
+    const auto occlusion = MakeTexture();
+    const auto material = Material::Create(ShadingModel::Lit);
+    material->SetEmissive(Common::Color::White);
+    material->SetEmissiveTexture(glow);
+    material->SetOcclusionTexture(occlusion);
+
+    GpuCache::Handle handle = GpuCache::AcquireMaterial(renderer, material);
+    ASSERT_TRUE(handle);
+    EXPECT_EQ(renderer.GetCounts().createdTextures, 2);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline + 3) << "the material's entry and its two textures'";
+    const auto *sw = RecordingMeshRenderer::AsSW(handle.GetMaterial());
+    ASSERT_NE(sw, nullptr);
+    EXPECT_EQ(sw->GetTexture(), nullptr) << "no base colour texture";
+    EXPECT_NE(sw->GetAuxTexture(Renderer::Common::AuxTexture::Emissive), nullptr);
+    EXPECT_NE(sw->GetAuxTexture(Renderer::Common::AuxTexture::Occlusion), nullptr);
+    EXPECT_NE(sw->GetAuxTexture(Renderer::Common::AuxTexture::Emissive),
+              sw->GetAuxTexture(Renderer::Common::AuxTexture::Occlusion));
+    EXPECT_EQ(sw->GetInt("uHasEmissiveTexture", -1), 1) << "the uniforms are set once the textures are on";
+    EXPECT_EQ(sw->GetInt("uHasOcclusionTexture", -1), 1);
+
+    // The last user of the material destroys it, then both textures
+    handle.Release(true);
+    EXPECT_EQ(renderer.GetCounts().destroyedMaterials, 1);
+    EXPECT_EQ(renderer.GetCounts().destroyedTextures, 2);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline);
+}
+
+namespace
+{
+    /// The colour space is process-wide: back to gamma around a test
+    struct LinearGuard
+    {
+        LinearGuard() { Rendering::RenderSettings::SetColorSpace(Renderer::Common::ColorSpace::Linear); }
+        ~LinearGuard() { Rendering::RenderSettings::SetColorSpace(Renderer::Common::ColorSpace::Gamma); }
+    };
+}
+
+TEST(GpuCacheMaterialTest, ALitMaterialsColourTexturesAreSrgbTexturesOnlyInLinearLighting)
+{
+    const std::size_t baseline = GpuCache::GetEntryCount();
+    RecordingMeshRenderer renderer;
+    const auto colour = MakeTexture(); // srgb by default
+    const auto data = MakeTexture();
+    const auto material = Material::Create(ShadingModel::Lit);
+    material->SetBaseColorTexture(colour);
+    material->SetEmissiveTexture(colour);
+    material->SetOcclusionTexture(data);
+
+    // Gamma lighting (the default): every texture is plain, and the version is the GPU version
+    EXPECT_EQ(GpuCache::MaterialVersion(*material), material->GetGpuVersion());
+    GpuCache::Handle gamma = GpuCache::AcquireMaterial(renderer, material);
+    ASSERT_TRUE(gamma);
+    EXPECT_EQ(gamma.GetVersion(), material->GetGpuVersion());
+    ASSERT_FALSE(renderer.textures.empty());
+    for (const auto &texture : renderer.textures)
+    {
+        EXPECT_FALSE(texture->options.srgb);
+    }
+
+    // Linear lighting: a new GPU material, whose colour textures are sRGB textures and whose occlusion texture isn't
+    {
+        const LinearGuard linear;
+        EXPECT_NE(GpuCache::MaterialVersion(*material), material->GetGpuVersion());
+        GpuCache::Handle fresh = GpuCache::AcquireMaterial(renderer, material);
+        ASSERT_TRUE(fresh);
+        EXPECT_NE(fresh.GetMaterial(), gamma.GetMaterial());
+        const auto *sw = RecordingMeshRenderer::AsSW(fresh.GetMaterial());
+        ASSERT_NE(sw, nullptr);
+        const auto *base = dynamic_cast<const Renderer::Software::SWTexture *>(sw->GetTexture());
+        const auto *glow = dynamic_cast<const Renderer::Software::SWTexture *>(
+            sw->GetAuxTexture(Renderer::Common::AuxTexture::Emissive));
+        const auto *occlusion = dynamic_cast<const Renderer::Software::SWTexture *>(
+            sw->GetAuxTexture(Renderer::Common::AuxTexture::Occlusion));
+        ASSERT_NE(base, nullptr);
+        ASSERT_NE(glow, nullptr);
+        ASSERT_NE(occlusion, nullptr);
+        EXPECT_TRUE(base->options.srgb);
+        EXPECT_TRUE(glow->options.srgb);
+        EXPECT_FALSE(occlusion->options.srgb) << "data, never sRGB";
+        fresh.Release(true);
+    }
+
+    // A texture marked as not sRGB stays plain in linear lighting; an unlit material never has sRGB textures
+    {
+        const LinearGuard linear;
+        Rendering::TextureSettings plain;
+        plain.srgb = false;
+        const auto linearData = Texture::CreateFromEncoded(TextureTestSupport::MakeBmp(1, 1, {{9, 9, 9}}), plain);
+        ASSERT_NE(linearData, nullptr);
+        const auto marked = Material::Create(ShadingModel::Lit);
+        marked->SetBaseColorTexture(linearData);
+        GpuCache::Handle handle = GpuCache::AcquireMaterial(renderer, marked);
+        ASSERT_TRUE(handle);
+        const auto *base = dynamic_cast<const Renderer::Software::SWTexture *>(handle.GetMaterial()->GetTexture());
+        ASSERT_NE(base, nullptr);
+        EXPECT_FALSE(base->options.srgb);
+
+        const auto unlit = Material::Create(ShadingModel::Unlit);
+        unlit->SetBaseColorTexture(colour);
+        EXPECT_EQ(GpuCache::MaterialVersion(*unlit), unlit->GetGpuVersion());
+        GpuCache::Handle unlitHandle = GpuCache::AcquireMaterial(renderer, unlit);
+        ASSERT_TRUE(unlitHandle);
+        const auto *unlitBase =
+            dynamic_cast<const Renderer::Software::SWTexture *>(unlitHandle.GetMaterial()->GetTexture());
+        ASSERT_NE(unlitBase, nullptr);
+        EXPECT_FALSE(unlitBase->options.srgb);
+        unlitHandle.Release(true);
+        handle.Release(true);
+    }
+
+    gamma.Release(true);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline) << "everything is released with its last user";
+}
+
+TEST(GpuCacheMaterialTest, ASpritesTextureIsNeverAnSrgbTexture)
+{
+    RecordingMeshRenderer renderer;
+    const LinearGuard linear;
+    GpuCache::Handle handle = GpuCache::AcquireTexture(renderer, MakeTexture());
+    ASSERT_TRUE(handle);
+    ASSERT_EQ(renderer.textures.size(), 1u);
+    EXPECT_FALSE(renderer.textures[0]->options.srgb) << "UI and text sample their textures as they are";
+    handle.Release(true);
+}
+
+TEST(GpuCacheMaterialTest, AnUnlitMaterialLeavesTheLitOnlyTexturesOut)
+{
+    const std::size_t baseline = GpuCache::GetEntryCount();
+    RecordingMeshRenderer renderer;
+    const auto material = Material::Create(ShadingModel::Unlit);
+    material->SetEmissiveTexture(MakeTexture());
+    GpuCache::Handle handle = GpuCache::AcquireMaterial(renderer, material);
+    ASSERT_TRUE(handle);
+    EXPECT_EQ(renderer.GetCounts().createdTextures, 0);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline + 1);
+    handle.Release(true);
     EXPECT_EQ(GpuCache::GetEntryCount(), baseline);
 }
 

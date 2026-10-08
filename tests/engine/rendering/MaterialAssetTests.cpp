@@ -3,14 +3,17 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include <math/UUID.hpp>
 #include <nlohmann/json.hpp>
+#include <renderer/common/IMaterial.hpp>
 #include <renderer/software/SWMaterial.hpp>
 #include <renderer/software/SWShader.hpp>
+#include <renderer/software/SWTexture.hpp>
 
 #include "engine/io/AssetMetadata.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -58,6 +61,7 @@ namespace
         ExpectColor(material.GetEmissive(), 0.0f, 0.0f, 0.0f, 1.0f);
         EXPECT_EQ(material.GetNormalTexture(), nullptr);
         EXPECT_EQ(material.GetOcclusionTexture(), nullptr);
+        EXPECT_FLOAT_EQ(material.GetOcclusionStrength(), 1.0f);
         EXPECT_EQ(material.GetMetallicRoughnessTexture(), nullptr);
         EXPECT_EQ(material.GetEmissiveTexture(), nullptr);
     }
@@ -175,6 +179,78 @@ TEST(MaterialTest, ApplyUniformsSetsTheStandardShadersUniforms)
     EXPECT_FLOAT_EQ(gpu.GetFloat("uAlphaCutoff"), 0.3f);
 }
 
+TEST(MaterialTest, EmissiveAndOcclusionTexturesMakeANewGpuMaterialButTheirValuesDoNot)
+{
+    const auto material = Material::Create();
+    material->SetEmissive(Common::Color{1.0f, 0.5f, 0.0f, 1.0f});
+    material->SetOcclusionStrength(0.25f);
+    EXPECT_EQ(material->GetGpuVersion(), 1u) << "the colour and the strength are uniforms";
+    EXPECT_FLOAT_EQ(material->GetOcclusionStrength(), 0.25f);
+
+    material->SetEmissiveTexture(Texture::Create(1, 1, std::vector<std::uint8_t>{1, 2, 3, 4}));
+    EXPECT_EQ(material->GetGpuVersion(), 2u) << "a texture is part of what the GPU material is made of";
+    material->SetOcclusionTexture(Texture::Create(1, 1, std::vector<std::uint8_t>{1, 2, 3, 4}));
+    EXPECT_EQ(material->GetGpuVersion(), 3u);
+
+    // The strength is clamped to 0..1; a non-finite one is the default
+    material->SetOcclusionStrength(3.0f);
+    EXPECT_FLOAT_EQ(material->GetOcclusionStrength(), 1.0f);
+    material->SetOcclusionStrength(-1.0f);
+    EXPECT_FLOAT_EQ(material->GetOcclusionStrength(), 0.0f);
+    material->SetOcclusionStrength(std::numeric_limits<float>::quiet_NaN());
+    EXPECT_FLOAT_EQ(material->GetOcclusionStrength(), 1.0f);
+}
+
+TEST(MaterialTest, ApplyUniformsSetsTheEmissiveAndOcclusionInputsForLitMaterialsOnly)
+{
+    Renderer::Software::SWShader litShader(Renderer::Software::SWShaderType::Lit);
+    Renderer::Software::SWMaterial gpu(&litShader);
+    const auto material = Material::Create();
+    material->SetEmissive(Common::Color{0.25f, 0.5f, 0.75f, 0.1f});
+    material->SetOcclusionStrength(0.5f);
+
+    // No textures: the flags are off
+    material->ApplyUniforms(gpu);
+    const auto emissive = gpu.GetVec4("uEmissive");
+    EXPECT_FLOAT_EQ(emissive[0], 0.25f);
+    EXPECT_FLOAT_EQ(emissive[1], 0.5f);
+    EXPECT_FLOAT_EQ(emissive[2], 0.75f);
+    EXPECT_FLOAT_EQ(gpu.GetFloat("uOcclusionStrength", -1.0f), 0.5f);
+    EXPECT_EQ(gpu.GetInt("uHasEmissiveTexture", -1), 0);
+    EXPECT_EQ(gpu.GetInt("uHasOcclusionTexture", -1), 0);
+
+    // With textures on the GPU material, the has-texture flags are on
+    Renderer::Software::SWTexture glow;
+    Renderer::Software::SWTexture occlusion;
+    glow.data = {1, 2, 3, 4};
+    glow.width = glow.height = 1;
+    glow.channels = 4;
+    occlusion.data = {1, 2, 3, 4};
+    occlusion.width = occlusion.height = 1;
+    occlusion.channels = 4;
+    gpu.SetAuxTexture(Renderer::Common::AuxTexture::Emissive, &glow);
+    gpu.SetAuxTexture(Renderer::Common::AuxTexture::Occlusion, &occlusion);
+    Rendering::TextureSettings data;
+    data.srgb = false;
+    const auto colourTexture = Texture::CreateFromEncoded(TextureTestSupport::MakeBmp(1, 1, {{9, 9, 9}}));
+    ASSERT_NE(colourTexture, nullptr);
+    ASSERT_TRUE(colourTexture->GetSettings().srgb);
+    material->SetBaseColorTexture(colourTexture);
+    material->SetEmissiveTexture(Texture::CreateFromEncoded(TextureTestSupport::MakeBmp(1, 1, {{9, 9, 9}}), data));
+    material->ApplyUniforms(gpu);
+    EXPECT_EQ(gpu.GetInt("uHasEmissiveTexture", -1), 1);
+    EXPECT_EQ(gpu.GetInt("uHasOcclusionTexture", -1), 1);
+
+    // An unlit material never reads them: none are set
+    Renderer::Software::SWShader unlitShader(Renderer::Software::SWShaderType::Unlit);
+    Renderer::Software::SWMaterial unlitGpu(&unlitShader);
+    const auto unlit = Material::Create(ShadingModel::Unlit);
+    unlit->SetEmissive(Common::Color::White);
+    unlit->ApplyUniforms(unlitGpu);
+    EXPECT_EQ(unlitGpu.GetInt("uHasEmissiveTexture", -1), -1);
+    EXPECT_FLOAT_EQ(unlitGpu.GetVec4("uEmissive", {-1, -1, -1, -1})[0], -1.0f);
+}
+
 // ============================================================================
 // .mat JSON
 // ============================================================================
@@ -255,6 +331,55 @@ TEST(MaterialJsonTest, BadValuesAreIgnoredWithAWarningAndKeepTheDefaults)
     WarningCapture errorCapture;
     EXPECT_EQ(Material::FromJson(json::array()), nullptr);
     EXPECT_EQ(errorCapture.messages.size(), 1u);
+}
+
+TEST(MaterialJsonTest, OldMaterialFilesWithoutTheNewKeysLoadWithTheirDefaults)
+{
+    // A .mat written before occlusionStrength existed: the keys it has are read, the strength is 1 and nothing warns
+    WarningCapture capture;
+    const json old = {
+        {"shading", "lit"},
+        {"baseColor", {{"r", 1}, {"g", 0.5}, {"b", 0.5}, {"a", 1}}},
+        {"baseColorTexture", nullptr},
+        {"alphaMode", "opaque"},
+        {"alphaCutoff", 0.5},
+        {"doubleSided", false},
+        {"smoothness", 0.5},
+        {"metallic", 0.0},
+        {"emissive", {{"r", 0}, {"g", 0}, {"b", 0}, {"a", 1}}},
+        {"normalTexture", nullptr},
+        {"occlusionTexture", nullptr},
+        {"metallicRoughnessTexture", nullptr},
+        {"emissiveTexture", nullptr},
+    };
+    const auto material = Material::FromJson(old, {}, "old.mat");
+    ASSERT_NE(material, nullptr);
+    EXPECT_TRUE(capture.messages.empty());
+    EXPECT_FLOAT_EQ(material->GetOcclusionStrength(), 1.0f);
+    ExpectColor(material->GetEmissive(), 0.0f, 0.0f, 0.0f, 1.0f);
+    // Saving it adds the new key and reads back the same
+    const json saved = material->ToJson();
+    EXPECT_FLOAT_EQ(saved.at("occlusionStrength").get<float>(), 1.0f);
+    EXPECT_EQ(Material::FromJson(saved)->ToJson(), saved);
+}
+
+TEST(MaterialJsonTest, OcclusionStrengthIsReadWrittenAndRangeChecked)
+{
+    WarningCapture capture;
+    EXPECT_FLOAT_EQ(Material::FromJson(json{{"occlusionStrength", 0.4}})->GetOcclusionStrength(), 0.4f);
+    EXPECT_TRUE(capture.messages.empty());
+
+    WarningCapture bad;
+    EXPECT_FLOAT_EQ(Material::FromJson(json{{"occlusionStrength", "lots"}})->GetOcclusionStrength(), 1.0f);
+    EXPECT_FLOAT_EQ(Material::FromJson(json{{"occlusionStrength", 2.0}})->GetOcclusionStrength(), 1.0f);
+    EXPECT_EQ(bad.messages.size(), 2u);
+
+    const auto material = Material::Create();
+    material->SetOcclusionStrength(0.6f);
+    material->SetEmissive(Common::Color{2.0f, 0.5f, 0.0f, 1.0f}); // brighter than the screen shows
+    const auto loaded = Material::FromJson(material->ToJson());
+    EXPECT_FLOAT_EQ(loaded->GetOcclusionStrength(), 0.6f);
+    ExpectColor(loaded->GetEmissive(), 2.0f, 0.5f, 0.0f, 1.0f);
 }
 
 TEST(MaterialJsonTest, ToJsonReadsBackAsTheSameMaterial)

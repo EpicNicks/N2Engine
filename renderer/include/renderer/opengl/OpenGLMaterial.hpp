@@ -37,10 +37,17 @@ namespace Renderer::OpenGL
         OpenGLShader *GetShader() const { return _shader.get(); }
         OpenGLTexture *GetTexture() const { return _texture; }
         void SetTexture(Common::ITexture *texture) override;
+        void SetAuxTexture(Common::AuxTexture which, Common::ITexture *texture) override;
+        Common::ITexture *GetAuxTexture(Common::AuxTexture which) const override;
+        /// The emissive texture (texture unit 1) or the occlusion texture (unit 2), or null
+        OpenGLTexture *GetEmissiveTexture() const { return _emissiveTexture; }
+        OpenGLTexture *GetOcclusionTexture() const { return _occlusionTexture; }
 
     private:
         std::shared_ptr<OpenGLShader> _shader;
         OpenGLTexture *_texture;
+        OpenGLTexture *_emissiveTexture = nullptr;
+        OpenGLTexture *_occlusionTexture = nullptr;
 
         // Property storage
         std::unordered_map<std::string, float> _floats;

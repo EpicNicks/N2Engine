@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include <renderer/common/IMaterial.hpp>
 #include <renderer/common/IMesh.hpp>
@@ -82,8 +83,9 @@ namespace N2Engine::Rendering
             [[nodiscard]] Renderer::Common::IMesh *GetMesh() const;
             /// The material, for a Material handle (nullptr otherwise, or when empty)
             [[nodiscard]] Renderer::Common::IMaterial *GetMaterial() const;
-            /// The source's version the entry was made for: a Material's GPU version (Material::GetGpuVersion) for a
-            /// Material handle, 0 for the other kinds (a mesh entry follows its mesh's versions, see SyncMesh)
+            /// The version the entry is keyed by: GpuCache::MaterialVersion (the GPU version, plus a flag for linear
+            /// lighting) for a Material handle, 1 for an sRGB texture, 0 for the other kinds (a mesh entry follows
+            /// its mesh's versions, see SyncMesh)
             [[nodiscard]] std::uint64_t GetVersion() const { return _version; }
             /// The source asset the resource was made from (its address; nullptr when empty)
             [[nodiscard]] const void *GetSource() const { return _source; }
@@ -111,8 +113,15 @@ namespace N2Engine::Rendering
 
         /// A share of `texture`'s GPU texture on `renderer`, created (RGBA8, with the texture's filter, wrap and
         /// mipmaps) on first use. Empty for a null or unloaded texture, or if the renderer can't create it.
+        /// With `sRgb` the GPU texture is made as an sRGB texture (TextureOptions::srgb: a separate entry from the
+        /// plain one, whose key version is 0), for a lit material's colour textures in linear lighting.
         [[nodiscard]] static Handle AcquireTexture(Renderer::Common::IRenderer &renderer,
-                                                   const std::shared_ptr<const Texture> &texture);
+                                                   const std::shared_ptr<const Texture> &texture, bool sRgb = false);
+
+        /// The version a Material's GPU material is keyed by (and a handle reports as GetVersion): its
+        /// GetGpuVersion, plus a flag bit for a lit material in linear lighting, whose colour textures are sRGB
+        /// textures then. Switching the colour space therefore makes the users acquire a new GPU material.
+        [[nodiscard]] static std::uint64_t MaterialVersion(const Material &material);
 
         /// A share of `font`'s SDF atlas texture on `renderer` (single channel, TextureOptions::SdfAtlas()),
         /// created on first use. Empty for a null or unloaded font, an empty atlas, or if the renderer can't
@@ -140,11 +149,13 @@ namespace N2Engine::Rendering
         static bool SyncMesh(Handle &handle);
 
         /**
-         * A share of the GPU material for `material`'s current GPU version (Material::GetGpuVersion: its shading
-         * and base colour texture) on `renderer`: the standard lit or unlit shader (by the material's shading) with
-         * its base colour texture (a share of the texture's own cache entry, held by the material's entry), and its
+         * A share of the GPU material for `material`'s current version (MaterialVersion: its GetGpuVersion, which
+         * covers its shading and textures, plus whether it is lit in linear lighting) on `renderer`: the standard lit or unlit shader (by the material's shading) with
+         * its base colour texture and, for lit, its emissive and occlusion textures (each a share of the texture's
+         * own cache entry, held by the material's entry), and its
          * uniforms set (Material::ApplyUniforms). Each GPU version is a separate entry, so a material whose shader
-         * or texture changed gets a new GPU material when its users acquire again, and the old one goes with its
+         * or texture changed, or the colour space (for a lit material), gets a new GPU material when its users
+         * acquire again, and the old one goes with its
          * last user. Its other fields are uniforms and render state, set per draw, so changing them makes nothing
          * new. Empty for a null material, or if the renderer has no such shader or can't create the material. A
          * base colour texture the renderer can't create is left out.
@@ -157,7 +168,8 @@ namespace N2Engine::Rendering
         /// Every entry, including any left by a destroyed renderer that nothing has replaced or released yet
         [[nodiscard]] static std::size_t GetEntryCount();
         /// The users of `source`'s entry on `renderer` (0 if there is none, or if it belongs to an earlier
-        /// renderer at the same address). `version` is a Material's GPU version for a Material entry, else 0.
+        /// renderer at the same address). `version` is MaterialVersion for a Material entry, 1 for an sRGB texture
+        /// entry (see AcquireTexture), else 0.
         [[nodiscard]] static std::size_t GetUserCount(const Renderer::Common::IRenderer &renderer, const void *source,
                                                       ResourceKind kind = ResourceKind::Texture,
                                                       std::uint64_t version = 0);
@@ -165,7 +177,7 @@ namespace N2Engine::Rendering
     private:
         /// What makes an entry's resource: returns it (nullptr on failure), and may give the entry a share of
         /// another entry to hold (a material's texture)
-        using CreateFunction = std::function<void *(Renderer::Common::IRenderer &, Handle &dependency)>;
+        using CreateFunction = std::function<void *(Renderer::Common::IRenderer &, std::vector<Handle> &dependencies)>;
 
         /// The shared acquire: finds a live entry and adds a user, or makes the resource with `create` and a new
         /// entry. `uploadedVersion` is recorded on a new entry (a mesh's version).

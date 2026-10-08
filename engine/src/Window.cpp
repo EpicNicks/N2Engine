@@ -110,6 +110,13 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        // The OpenGL renderer's linear lighting needs an sRGB-capable framebuffer (GL_FRAMEBUFFER_SRGB, which it
+        // turns on only for the lit shader); it stores what is written as it is while that is off. The software
+        // renderer only blits its own buffer, so its window is left as it was.
+        if (options.renderBackend == Config::ApplicationOptions::RenderBackend::OPENGL)
+        {
+            glfwWindowHint(GLFW_SRGB_CAPABLE, GLFW_TRUE);
+        }
 
 #ifdef __APPLE__
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);

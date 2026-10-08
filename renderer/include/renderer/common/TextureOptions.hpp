@@ -31,6 +31,12 @@ namespace Renderer::Common
         TextureWrap wrap = TextureWrap::Repeat;
         /// Generate a mipmap chain (and, with Linear, sample it trilinearly when minifying)
         bool mipmaps = true;
+        /// The pixels are sRGB colour (3 and 4 channels): OpenGL stores them as SRGB8 / SRGB8_ALPHA8, so every
+        /// shader reads them as linear light, filtered in linear light; the software renderer keeps the bytes and
+        /// its unlit and lit shaders decode them through a table after filtering. Either way it applies in any
+        /// colour space, to whatever draws with the texture. Off by default, which is what every texture was made
+        /// with before; the engine makes only a lit material's colour textures with it, in linear lighting.
+        bool srgb = false;
 
         /// What the overload without options uses
         [[nodiscard]] static constexpr TextureOptions Default() { return TextureOptions{}; }

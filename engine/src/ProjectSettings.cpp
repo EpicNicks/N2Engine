@@ -9,6 +9,7 @@
 #include "engine/Window.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
+#include "engine/rendering/RenderSettings.hpp"
 
 namespace N2Engine
 {
@@ -48,6 +49,50 @@ namespace N2Engine
                 {
                     backend->SetGravity(Math::Vector3(gravity->at("x").get<float>(), gravity->at("y").get<float>(),
                                                       gravity->at("z").get<float>()));
+                }
+            }
+        }
+
+        void ApplyRendering(const nlohmann::json &rendering, std::vector<std::string> &problems)
+        {
+            if (!rendering.is_object())
+            {
+                problems.emplace_back("rendering: not an object");
+                return;
+            }
+            // forceShaderEncode: a boolean; absent or null means off. A wrong type is refused, changing nothing.
+            const auto force = rendering.find("forceShaderEncode");
+            if (force == rendering.end() || force->is_null())
+            {
+                Rendering::RenderSettings::SetForceShaderEncode(false);
+            }
+            else if (!force->is_boolean())
+            {
+                problems.push_back(std::format("rendering.forceShaderEncode: {} is not true or false", force->dump()));
+            }
+            else
+            {
+                Rendering::RenderSettings::SetForceShaderEncode(force->get<bool>());
+            }
+            const auto space = rendering.find("colorSpace");
+            if (space == rendering.end() || space->is_null())
+            {
+                // The block is there without a colour space (or with it removed): the default
+                Rendering::RenderSettings::SetColorSpace(Rendering::ColorSpace::Gamma);
+            }
+            else
+            {
+                const auto parsed = space->is_string()
+                                        ? Rendering::RenderSettings::ParseColorSpace(space->get<std::string>())
+                                        : std::nullopt;
+                if (!parsed)
+                {
+                    problems.push_back(std::format("rendering.colorSpace: {} is not \"gamma\" or \"linear\"",
+                                                   space->dump()));
+                }
+                else
+                {
+                    Rendering::RenderSettings::SetColorSpace(*parsed);
                 }
             }
         }
@@ -113,6 +158,17 @@ namespace N2Engine
             }
         });
         apply("physics", [&](const nlohmann::json &physics) { ApplyPhysics(physics, problems); });
+        apply("rendering", [&](const nlohmann::json &rendering) { ApplyRendering(rendering, problems); });
+        // A patch that removed the whole block (only names it, and it is gone): back to the default too
+        if (only && only->contains("rendering"))
+        {
+            const auto block = settings.find("rendering");
+            if (block == settings.end() || block->is_null())
+            {
+                Rendering::RenderSettings::SetColorSpace(Rendering::ColorSpace::Gamma);
+                Rendering::RenderSettings::SetForceShaderEncode(false);
+            }
+        }
         return problems;
     }
 
@@ -125,6 +181,8 @@ namespace N2Engine
             snapshot.input = inputSystem->Serialize();
         }
         snapshot.fixedTimestep = Time::GetFixedTimestep();
+        snapshot.colorSpace = Rendering::RenderSettings::GetColorSpace();
+        snapshot.forceShaderEncode = Rendering::RenderSettings::GetForceShaderEncode();
         if (const Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())
         {
             snapshot.gravity = backend->GetGravity();
@@ -143,6 +201,8 @@ namespace N2Engine
             }
         }
         (void)Time::SetFixedTimestep(fixedTimestep);
+        Rendering::RenderSettings::SetColorSpace(colorSpace);
+        Rendering::RenderSettings::SetForceShaderEncode(forceShaderEncode);
         if (gravity)
         {
             if (Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend())
