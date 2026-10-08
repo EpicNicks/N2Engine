@@ -186,6 +186,17 @@ void OpenGLRenderer::BeginFrame()
     // glClear only clears depth where depth writes are enabled, and the last draw of the previous frame
     // may have turned them off (a Transparent-queue draw)
     glDepthMask(GL_TRUE);
+    // The clear and every pass but the lit shader's write colours as they are (see DrawIndices)
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    m_framebufferSrgbOn = false;
+    {
+        GLint encoding = GL_LINEAR;
+        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER,
+                                              m_offscreenFramebuffer != 0 ? GL_COLOR_ATTACHMENT0 : GL_BACK_LEFT,
+                                              GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING, &encoding);
+        glGetError(); // a target that can't say counts as linear: the lit shader then encodes itself
+        m_framebufferIsSrgb = encoding == GL_SRGB;
+    }
     glClearColor(m_clearColor[0], m_clearColor[1], m_clearColor[2], m_clearColor[3]);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -381,8 +392,10 @@ void OpenGLRenderer::UpdateSceneLighting(
     auto *shader = static_cast<OpenGLShader*>(shaderIt->second.get());
     shader->Bind();
 
-    // Gamma (0, the default) or linear (1) lighting: see ColorSpace
-    shader->SetInt("uLinear", lighting.colorSpace == Common::ColorSpace::Linear ? 1 : 0);
+    // Linear lighting: the lit result is encoded by the framebuffer (GL_FRAMEBUFFER_SRGB, set per draw), or by
+    // the shader when the target isn't sRGB. Gamma lighting writes it as it is.
+    shader->SetInt("uEncodeOutput",
+                   lighting.colorSpace == Common::ColorSpace::Linear && !m_framebufferIsSrgb ? 1 : 0);
 
     // Set ambient
     shader->SetVec3("uAmbientLight",
@@ -615,6 +628,27 @@ void OpenGLRenderer::DrawIndices(Common::IMesh *mesh, const float *modelMatrix, 
     if (boundExtraTexture)
     {
         glActiveTexture(GL_TEXTURE0);
+    }
+
+    // Linear lighting: only the lit shader's output is encoded by the framebuffer; unlit, text and everything else
+    // are drawn with the encode off, so they come out as authored in both colour spaces
+    bool encodeOutput = false;
+    if (m_currentLighting.colorSpace == Common::ColorSpace::Linear && m_framebufferIsSrgb)
+    {
+        const auto litIt = m_shaderPrograms.find(m_standardLitShader);
+        encodeOutput = litIt != m_shaderPrograms.end() && litIt->second.get() == shader;
+    }
+    if (encodeOutput != m_framebufferSrgbOn)
+    {
+        if (encodeOutput)
+        {
+            glEnable(GL_FRAMEBUFFER_SRGB);
+        }
+        else
+        {
+            glDisable(GL_FRAMEBUFFER_SRGB);
+        }
+        m_framebufferSrgbOn = encodeOutput;
     }
 
     // Draw mesh, with this draw's depth/cull/blend state
@@ -855,18 +889,16 @@ void OpenGLRenderer::CreateStandardShaders()
         uniform float uSmoothness;
         uniform float uAlphaCutoff;
 
-        // Colour space: 0 lights the values as they are (gamma), 1 decodes sRGB textures, lights in linear
-        // light and encodes the result (uLinear is set per frame, by UpdateSceneLighting). uBaseColorSrgb and
-        // uEmissiveTextureSrgb say whether those textures hold sRGB colour (a texture's "srgb" setting).
-        uniform int uLinear;
-        uniform bool uBaseColorSrgb;
+        // Linear lighting: sRGB textures are SRGB8_ALPHA8 and decode themselves when sampled, and the framebuffer
+        // encodes the result (GL_FRAMEBUFFER_SRGB). uEncodeOutput (set per frame by UpdateSceneLighting) is 1 only
+        // when linear lighting is on and the target is not sRGB: then this shader encodes its own output.
+        uniform int uEncodeOutput;
 
         // Emissive: added after lighting, unaffected by it. Occlusion: scales the ambient light by the texture's
         // red channel, mixed in by uOcclusionStrength (0 = none, 1 = full).
         uniform vec3 uEmissive;
         uniform sampler2D uEmissiveTexture;
         uniform bool uHasEmissiveTexture;
-        uniform bool uEmissiveTextureSrgb;
         uniform sampler2D uOcclusionTexture;
         uniform bool uHasOcclusionTexture;
         uniform float uOcclusionStrength;
@@ -922,12 +954,7 @@ void OpenGLRenderer::CreateStandardShaders()
             return 1.0 / (1.0 + attenuation * d * d);
         }
 
-        // The sRGB transfer function (the software renderer's SrgbToLinear / LinearToSrgb)
-        vec3 srgbToLinear(vec3 c) {
-            c = max(c, vec3(0.0));
-            return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
-        }
-
+        // The sRGB encode (the software renderer's LinearToSrgb)
         vec3 linearToSrgb(vec3 c) {
             c = max(c, vec3(0.0));
             return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
@@ -937,11 +964,7 @@ void OpenGLRenderer::CreateStandardShaders()
             // Base colour: uAlbedo x texture x vertex colour, alpha-tested against uAlphaCutoff
             vec4 albedo = uAlbedo;
             if (uHasTexture) {
-                vec4 texel = texture(uTexture, fragTexCoord);
-                if (uLinear != 0 && uBaseColorSrgb) {
-                    texel.rgb = srgbToLinear(texel.rgb);
-                }
-                albedo *= texel;
+                albedo *= texture(uTexture, fragTexCoord);
             }
             albedo *= fragColor;
             if (albedo.a < uAlphaCutoff) {
@@ -1051,15 +1074,11 @@ void OpenGLRenderer::CreateStandardShaders()
 
             vec3 emissive = uEmissive;
             if (uHasEmissiveTexture) {
-                vec3 glow = texture(uEmissiveTexture, fragTexCoord).rgb;
-                if (uLinear != 0 && uEmissiveTextureSrgb) {
-                    glow = srgbToLinear(glow);
-                }
-                emissive *= glow;
+                emissive *= texture(uEmissiveTexture, fragTexCoord).rgb;
             }
 
             vec3 color = lighting * albedo.rgb + emissive;
-            if (uLinear != 0) {
+            if (uEncodeOutput != 0) {
                 color = linearToSrgb(color);
             }
             FragColor = vec4(color, albedo.a);
@@ -1218,7 +1237,9 @@ bool OpenGLRenderer::SetRenderTargetSize(const uint32_t width, const uint32_t he
 
     glGenRenderbuffers(1, &m_offscreenColor);
     glBindRenderbuffer(GL_RENDERBUFFER, m_offscreenColor);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+    // sRGB storage, so that linear lighting can encode into it; with GL_FRAMEBUFFER_SRGB off (everything but the lit
+    // shader in linear lighting) it stores and reads back the values as written, like RGBA8
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_SRGB8_ALPHA8, w, h);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_offscreenColor);
 
     glGenRenderbuffers(1, &m_offscreenDepth);

@@ -302,8 +302,6 @@ namespace N2Engine::Rendering
             target.SetInt("uHasEmissiveTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Emissive) != nullptr ? 1 : 0);
             target.SetInt("uHasOcclusionTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Occlusion) != nullptr ? 1 : 0);
             target.SetFloat("uOcclusionStrength", _occlusionStrength);
-            target.SetInt("uBaseColorSrgb", _baseColorTexture && _baseColorTexture->GetSettings().srgb ? 1 : 0);
-            target.SetInt("uEmissiveTextureSrgb", _emissiveTexture && _emissiveTexture->GetSettings().srgb ? 1 : 0);
         }
     }
 

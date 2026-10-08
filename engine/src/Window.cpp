@@ -110,6 +110,9 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        // An sRGB-capable framebuffer, for linear lighting (GL_FRAMEBUFFER_SRGB, which the renderer turns on only
+        // for the lit shader); it stores what is written as it is while that is off
+        glfwWindowHint(GLFW_SRGB_CAPABLE, GLFW_TRUE);
 
 #ifdef __APPLE__
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);

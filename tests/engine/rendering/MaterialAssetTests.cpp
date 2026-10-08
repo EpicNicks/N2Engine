@@ -218,8 +218,6 @@ TEST(MaterialTest, ApplyUniformsSetsTheEmissiveAndOcclusionInputsForLitMaterials
     EXPECT_FLOAT_EQ(gpu.GetFloat("uOcclusionStrength", -1.0f), 0.5f);
     EXPECT_EQ(gpu.GetInt("uHasEmissiveTexture", -1), 0);
     EXPECT_EQ(gpu.GetInt("uHasOcclusionTexture", -1), 0);
-    EXPECT_EQ(gpu.GetInt("uBaseColorSrgb", -1), 0);
-    EXPECT_EQ(gpu.GetInt("uEmissiveTextureSrgb", -1), 0);
 
     // With textures on the GPU material, and the textures' sRGB settings
     Renderer::Software::SWTexture glow;
@@ -242,8 +240,6 @@ TEST(MaterialTest, ApplyUniformsSetsTheEmissiveAndOcclusionInputsForLitMaterials
     material->ApplyUniforms(gpu);
     EXPECT_EQ(gpu.GetInt("uHasEmissiveTexture", -1), 1);
     EXPECT_EQ(gpu.GetInt("uHasOcclusionTexture", -1), 1);
-    EXPECT_EQ(gpu.GetInt("uBaseColorSrgb", -1), 1) << "the texture's srgb setting, true by default";
-    EXPECT_EQ(gpu.GetInt("uEmissiveTextureSrgb", -1), 0) << "this one is marked as data";
 
     // An unlit material never reads them: none are set
     Renderer::Software::SWShader unlitShader(Renderer::Software::SWShaderType::Unlit);

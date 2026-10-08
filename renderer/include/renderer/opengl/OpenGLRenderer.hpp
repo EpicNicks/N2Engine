@@ -120,6 +120,12 @@ namespace Renderer::OpenGL
 
         Common::SceneLightingData m_currentLighting;
 
+        // Linear lighting: GL_FRAMEBUFFER_SRGB is on only while the lit shader draws (see DrawIndices), and only
+        // when this frame's target stores sRGB (the window's, if it was made sRGB-capable, and the offscreen
+        // target); otherwise the lit shader encodes its own output
+        bool m_framebufferIsSrgb = false;
+        bool m_framebufferSrgbOn = false;
+
         uint32_t m_currentShader;
 
         // resource containers

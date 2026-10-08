@@ -119,10 +119,14 @@ namespace
             return frame;
         }
 
-        ITexture *Texture(const std::vector<std::uint8_t> &rgba, const std::uint32_t width, const std::uint32_t height)
+        /// A 4-channel texture; `srgb` makes it an sRGB texture (TextureOptions::srgb), as GpuCache does for a lit
+        /// material's colour textures in linear lighting
+        ITexture *Texture(const std::vector<std::uint8_t> &rgba, const std::uint32_t width, const std::uint32_t height,
+                          const bool srgb = false)
         {
             TextureOptions nearest;
             nearest.filter = TextureFilter::Nearest;
+            nearest.srgb = srgb;
             ITexture *texture = renderer.CreateTexture(rgba.data(), width, height, 4, nearest);
             EXPECT_NE(texture, nullptr);
             return texture;
@@ -503,15 +507,9 @@ TEST(SoftwareColorSpaceTest, GammaIsTheDefaultAndLeavesLitOutputAsItWas)
     const Frame frame = scene.Draw(lighting, scene.lit);
     EXPECT_NEAR(frame.At(32, 32).r, 64, 1) << "0.5 x 0.5, written as it is";
 
-    // The sRGB flags are read only in linear lighting
-    scene.lit->SetInt("uBaseColorSrgb", 1);
-    scene.lit->SetInt("uEmissiveTextureSrgb", 1);
-    const Frame flagged = scene.Draw(lighting, scene.lit);
-    EXPECT_EQ(flagged.At(32, 32).r, frame.At(32, 32).r);
-
-    // An sRGB texture is multiplied as it is
-    ITexture *grey = scene.Texture({128, 128, 128, 255}, 1, 1);
-    scene.lit->SetTexture(grey);
+    // A texture is multiplied as it is, sRGB or not: it is only decoded in linear lighting
+    ITexture *srgbGrey = scene.Texture({128, 128, 128, 255}, 1, 1, true);
+    scene.lit->SetTexture(srgbGrey);
     scene.lit->SetColor("uAlbedo", 1.0f, 1.0f, 1.0f, 1.0f);
     EXPECT_NEAR(scene.Draw(AmbientOnly(1.0f), scene.lit).At(32, 32).r, 128, 1);
 }
@@ -538,17 +536,17 @@ TEST(SoftwareColorSpaceTest, LinearLightingEncodesTheResultForDisplay)
 TEST(SoftwareColorSpaceTest, LinearLightingDecodesSrgbTexturesOnly)
 {
     Scene scene;
-    ITexture *grey = scene.Texture({128, 128, 128, 255}, 1, 1);
-    scene.lit->SetTexture(grey);
+    ITexture *srgbGrey = scene.Texture({128, 128, 128, 255}, 1, 1, true);
+    ITexture *plainGrey = scene.Texture({128, 128, 128, 255}, 1, 1, false);
     SceneLightingData lighting = AmbientOnly(1.0f);
     lighting.colorSpace = ColorSpace::Linear;
 
     // An sRGB texture is decoded then encoded again: the colour it shows is its own
-    scene.lit->SetInt("uBaseColorSrgb", 1);
+    scene.lit->SetTexture(srgbGrey);
     EXPECT_NEAR(scene.Draw(lighting, scene.lit).At(32, 32).r, 128, 1);
 
     // A texture of plain numbers (not sRGB) is taken as linear, so it displays brighter
-    scene.lit->SetInt("uBaseColorSrgb", 0);
+    scene.lit->SetTexture(plainGrey);
     EXPECT_NEAR(scene.Draw(lighting, scene.lit).At(32, 32).r, 188, 2);
 }
 
@@ -562,12 +560,10 @@ TEST(SoftwareColorSpaceTest, LinearLightingEncodesTheEmissiveSumAndDecodesItsTex
     scene.lit->SetVec3("uEmissive", 0.25f, 0.25f, 0.25f);
     EXPECT_NEAR(scene.Draw(lighting, scene.lit).At(32, 32).g, 137, 1);
 
-    ITexture *glow = scene.Texture({128, 128, 128, 255}, 1, 1);
-    scene.lit->SetAuxTexture(AuxTexture::Emissive, glow);
     scene.lit->SetVec3("uEmissive", 1.0f, 1.0f, 1.0f);
-    scene.lit->SetInt("uEmissiveTextureSrgb", 1);
+    scene.lit->SetAuxTexture(AuxTexture::Emissive, scene.Texture({128, 128, 128, 255}, 1, 1, true));
     EXPECT_NEAR(scene.Draw(lighting, scene.lit).At(32, 32).g, 128, 1) << "decoded, then encoded again";
-    scene.lit->SetInt("uEmissiveTextureSrgb", 0);
+    scene.lit->SetAuxTexture(AuxTexture::Emissive, scene.Texture({128, 128, 128, 255}, 1, 1, false));
     EXPECT_NEAR(scene.Draw(lighting, scene.lit).At(32, 32).g, 188, 2);
 }
 
@@ -587,11 +583,10 @@ TEST(SoftwareColorSpaceTest, UnlitDrawsTheSameInBothColourSpaces)
 TEST(SoftwareColorSpaceTest, OcclusionIsDataAndNeverDecoded)
 {
     Scene scene;
-    ITexture *occlusion = scene.Texture({128, 128, 128, 255}, 1, 1);
+    // Even made as an sRGB texture, the occlusion texture is read as it is
+    ITexture *occlusion = scene.Texture({128, 128, 128, 255}, 1, 1, true);
     scene.lit->SetAuxTexture(AuxTexture::Occlusion, occlusion);
     scene.lit->SetInt("uHasOcclusionTexture", 1);
-    scene.lit->SetInt("uBaseColorSrgb", 1);
-    scene.lit->SetInt("uEmissiveTextureSrgb", 1);
     SceneLightingData lighting = AmbientOnly(1.0f);
     lighting.colorSpace = ColorSpace::Linear;
     // 0.502 of the ambient in linear light, encoded: 0.502 -> 0.7366 -> 188

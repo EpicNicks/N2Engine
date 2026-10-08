@@ -8,6 +8,7 @@
 
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
+#include "engine/rendering/RenderSettings.hpp"
 #include "engine/rendering/Texture.hpp"
 #include "engine/text/Font.hpp"
 
@@ -210,17 +211,37 @@ namespace N2Engine::Rendering
         }
     }
 
-    GpuCache::Handle GpuCache::AcquireTexture(IRenderer &renderer, const std::shared_ptr<const Texture> &texture)
+    GpuCache::Handle GpuCache::AcquireTexture(IRenderer &renderer, const std::shared_ptr<const Texture> &texture,
+                                              const bool sRgb)
     {
         if (!texture || !texture->IsLoaded())
         {
             return {};
         }
-        return Acquire(renderer, ResourceKind::Texture, 0, texture, [&texture](IRenderer &target, std::vector<Handle> &) -> void *
+        return Acquire(renderer, ResourceKind::Texture, sRgb ? 1 : 0, texture,
+                       [&texture, sRgb](IRenderer &target, std::vector<Handle> &) -> void *
         {
+            Renderer::Common::TextureOptions options = texture->GetTextureOptions();
+            options.srgb = sRgb;
             return target.CreateTexture(texture->GetPixels().data(), texture->GetWidth(), texture->GetHeight(),
-                                        Texture::GetChannels(), texture->GetTextureOptions());
+                                        Texture::GetChannels(), options);
         });
+    }
+
+    namespace
+    {
+        /// A lit material in linear lighting: its colour textures are sRGB textures
+        bool UsesSrgbTextures(const Material &material)
+        {
+            return material.GetShading() == ShadingModel::Lit &&
+                   RenderSettings::GetColorSpace() == ColorSpace::Linear;
+        }
+    }
+
+    std::uint64_t GpuCache::MaterialVersion(const Material &material)
+    {
+        constexpr std::uint64_t srgbBit = std::uint64_t{1} << 62;
+        return material.GetGpuVersion() | (UsesSrgbTextures(material) ? srgbBit : 0);
     }
 
     GpuCache::Handle GpuCache::AcquireFontAtlas(IRenderer &renderer, const std::shared_ptr<const Text::Font> &font)
@@ -303,8 +324,9 @@ namespace N2Engine::Rendering
         {
             return {};
         }
-        return Acquire(renderer, ResourceKind::Material, material->GetGpuVersion(), material,
-                       [&material](IRenderer &target, std::vector<Handle> &dependencies) -> void *
+        const bool sRgbTextures = UsesSrgbTextures(*material);
+        return Acquire(renderer, ResourceKind::Material, MaterialVersion(*material), material,
+                       [&material, sRgbTextures](IRenderer &target, std::vector<Handle> &dependencies) -> void *
         {
             IShader *shader = material->GetShading() == ShadingModel::Lit ? target.GetStandardLitShader()
                                                                            : target.GetStandardUnlitShader();
@@ -314,13 +336,14 @@ namespace N2Engine::Rendering
             }
             // A texture the renderer can't create is left out. Each texture is a share of its own entry, held by
             // this material's entry (and so alive as long as the material that samples it).
-            const auto acquire = [&](const std::shared_ptr<Texture> &source) -> ITexture *
+            const auto acquire = [&](const std::shared_ptr<Texture> &source, const bool colour) -> ITexture *
             {
                 if (!source)
                 {
                     return nullptr;
                 }
-                Handle handle = AcquireTexture(target, source);
+                // A colour texture marked sRGB, in linear lighting, is an sRGB texture (decoded when sampled)
+                Handle handle = AcquireTexture(target, source, colour && sRgbTextures && source->GetSettings().srgb);
                 ITexture *texture = handle.GetTexture();
                 if (texture)
                 {
@@ -328,15 +351,15 @@ namespace N2Engine::Rendering
                 }
                 return texture;
             };
-            ITexture *texture = acquire(material->GetBaseColorTexture());
+            ITexture *texture = acquire(material->GetBaseColorTexture(), true);
             IMaterial *created = target.CreateMaterial(shader, texture);
             if (created)
             {
                 // Only the lit shader reads them
                 if (material->GetShading() == ShadingModel::Lit)
                 {
-                    created->SetAuxTexture(Renderer::Common::AuxTexture::Emissive, acquire(material->GetEmissiveTexture()));
-                    created->SetAuxTexture(Renderer::Common::AuxTexture::Occlusion, acquire(material->GetOcclusionTexture()));
+                    created->SetAuxTexture(Renderer::Common::AuxTexture::Emissive, acquire(material->GetEmissiveTexture(), true));
+                    created->SetAuxTexture(Renderer::Common::AuxTexture::Occlusion, acquire(material->GetOcclusionTexture(), false));
                 }
                 material->ApplyUniforms(*created);
             }

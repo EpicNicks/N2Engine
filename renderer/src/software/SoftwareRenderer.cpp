@@ -83,7 +83,6 @@ namespace
         float emR = 0.f, emG = 0.f, emB = 0.f;
         bool hasEmissive = false;          // an emissive colour: otherwise (and without a texture) the add is skipped
         float occlusionStrength = 1.f;
-        bool baseSrgb = false, emissiveSrgb = false;
         const SWTexture* emissiveTex = nullptr;
         const SWTexture* occlusionTex = nullptr;
         // Unlit and lit multiply by the interpolated vertex colour. Off when every vertex of the mesh is white,
@@ -134,12 +133,8 @@ namespace
         {
             static const std::string emissiveKey = "uEmissive";
             static const std::string occlusionStrengthKey = "uOcclusionStrength";
-            static const std::string baseSrgbKey = "uBaseColorSrgb";
-            static const std::string emissiveSrgbKey = "uEmissiveTextureSrgb";
             s.emissive = mat.GetVec4(emissiveKey, {0, 0, 0, 0});
             s.occlusionStrength = mat.GetFloat(occlusionStrengthKey, 1.0f);
-            s.baseColorSrgb = mat.GetInt(baseSrgbKey, 0) != 0;
-            s.emissiveTextureSrgb = mat.GetInt(emissiveSrgbKey, 0) != 0;
             if (auto* e = dynamic_cast<const SWTexture*>(mat.GetAuxTexture(Common::AuxTexture::Emissive)); e && e->IsValid())
                 s.emissiveTexture = e;
             if (auto* o = dynamic_cast<const SWTexture*>(mat.GetAuxTexture(Common::AuxTexture::Occlusion)); o && o->IsValid())
@@ -181,8 +176,6 @@ namespace
             r.emissiveTex = mat.emissiveTexture;
             r.occlusionTex = mat.occlusionTexture;
             r.occlusionStrength = mat.occlusionStrength;
-            r.baseSrgb = mat.baseColorSrgb;
-            r.emissiveSrgb = mat.emissiveTextureSrgb;
             r.hasEmissive = r.emR != 0.f || r.emG != 0.f || r.emB != 0.f;
         }
         r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
@@ -311,7 +304,7 @@ namespace
         {
             const uint32_t s = m.tex->SampleFiltered(u, v);
             constexpr float k = 1.f / 255.f;
-            if (L.linear && m.baseSrgb)
+            if (L.linear && m.tex->options.srgb)
             {
                 // sRGB colour to linear light, after filtering (as the OpenGL shader does); alpha is not colour
                 r *= SrgbByteToLinear((unsigned char)((s >>  0) & 0xFF));
@@ -401,7 +394,7 @@ namespace
             {
                 const uint32_t s = m.emissiveTex->SampleFiltered(u, v);
                 constexpr float k = 1.f / 255.f;
-                if (L.linear && m.emissiveSrgb)
+                if (L.linear && m.emissiveTex->options.srgb)
                 {
                     er *= SrgbByteToLinear((unsigned char)((s >>  0) & 0xFF));
                     eg *= SrgbByteToLinear((unsigned char)((s >>  8) & 0xFF));

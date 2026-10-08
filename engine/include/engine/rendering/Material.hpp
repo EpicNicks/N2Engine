@@ -46,8 +46,9 @@ namespace N2Engine::Rendering
      *
      * Lit materials also draw emissive (a colour, times the emissive texture when set) added after the lighting,
      * unaffected by it, and an occlusion texture that darkens the ambient light only (see GetOcclusionStrength).
-     * Unlit materials ignore both. In linear lighting (RenderSettings::GetColorSpace) a lit material decodes
-     * its base colour and emissive textures from sRGB when their Texture settings say `srgb`.
+     * Unlit materials ignore both. In linear lighting (RenderSettings::GetColorSpace) a lit material's base
+     * colour and emissive textures are made as sRGB textures when their Texture settings say `srgb` (GpuCache),
+     * so they decode when sampled.
      *
      * metallic and the normal and metallic-roughness textures are stored and serialized but have no effect yet:
      * normal maps and physically based shading arrive with #3 P4b.
@@ -165,8 +166,7 @@ namespace N2Engine::Rendering
          * `tint`), uHasTexture (whether `target` has a texture), uAlphaCutoff (the cutoff for Mask, else 0) and,
          * lit, uSmoothness and uMetallic, and the emissive and occlusion inputs: uEmissive (rgb),
          * uHasEmissiveTexture and uHasOcclusionTexture (whether `target` has those textures), uOcclusionStrength,
-         * and uBaseColorSrgb and uEmissiveTextureSrgb (whether those textures' settings say sRGB, read by the
-         * shader only in linear lighting). The drawing code calls it before every draw, so a GPU material shared
+         * The drawing code calls it before every draw, so a GPU material shared
          * by several users (or given a per-draw tint) always draws with the right values.
          */
         void ApplyUniforms(Renderer::Common::IMaterial &target, const Common::Color &tint = Common::Color::White) const;

@@ -78,7 +78,7 @@ namespace N2Engine::Rendering::MeshDrawing
     {
         GpuCache::Handle &handle = _materials[index];
         if (!handle.Holds(_renderer) || handle.GetSource() != material.get() ||
-            handle.GetVersion() != material->GetGpuVersion())
+            handle.GetVersion() != GpuCache::MaterialVersion(*material))
         {
             // A new slot, another material, or one whose shader or texture changed (uniform-only changes keep the
             // GPU material: ApplyUniforms sets them per draw). The new share is taken before the old one goes (the
