@@ -51,6 +51,8 @@ namespace
             {"GetCameraPosition", CommandType::GetCameraPosition},
             {"SetEditorCamera", CommandType::SetEditorCamera},
             {"GetEditorCamera", CommandType::GetEditorCamera},
+            {"PickEntity", CommandType::PickEntity},
+            {"GetEntityBounds", CommandType::GetEntityBounds},
             {"CreateScene", CommandType::CreateScene},
             {"LoadScene", CommandType::LoadScene},
             {"SaveScene", CommandType::SaveScene},
@@ -126,6 +128,8 @@ namespace
             {"Autosave", ResponseType::Autosave},
             {"FrameUpdate", ResponseType::FrameUpdate},
             {"EditorCamera", ResponseType::EditorCamera},
+            {"PickResult", ResponseType::PickResult},
+            {"Bounds", ResponseType::Bounds},
         };
         return responses;
     }
@@ -143,6 +147,8 @@ namespace
             {"RenderFrameIfChanged", [](BufferReader &r) { (void)RenderFrameIfChangedCmd::Deserialize(r); }},
             {"SetCameraPosition", [](BufferReader &r) { (void)SetCameraPositionCmd::Deserialize(r); }},
             {"SetEditorCamera", [](BufferReader &r) { (void)SetEditorCameraCmd::Deserialize(r); }},
+            {"PickEntity", [](BufferReader &r) { (void)PickEntityCmd::Deserialize(r); }},
+            {"GetEntityBounds", [](BufferReader &r) { (void)GetEntityBoundsCmd::Deserialize(r); }},
             {"CreateScene", [](BufferReader &r) { (void)CreateSceneCmd::Deserialize(r); }},
             {"LoadScene", [](BufferReader &r) { (void)LoadSceneCmd::Deserialize(r); }},
             {"DeleteScene", [](BufferReader &r) { (void)DeleteSceneCmd::Deserialize(r); }},

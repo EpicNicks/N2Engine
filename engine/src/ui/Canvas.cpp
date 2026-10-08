@@ -114,6 +114,44 @@ namespace N2Engine::UI
         return true;
     }
 
+    std::optional<BoundingBox> Canvas::GetWorldBounds() const
+    {
+        if (!IsWorldSpace() || !IsRootCanvas())
+        {
+            return std::nullopt;
+        }
+        // The canvas rect, and the rects of the graphics that draw (in canvas space, y up)
+        const Math::Vector2 size = GetSize();
+        bool any = false;
+        float minX = 0.0f;
+        float minY = 0.0f;
+        float maxX = 0.0f;
+        float maxY = 0.0f;
+        const auto cover = [&](const Rect &rect)
+        {
+            if (!rect.HasArea())
+            {
+                return;
+            }
+            minX = any ? std::min(minX, rect.XMin()) : rect.XMin();
+            minY = any ? std::min(minY, rect.YMin()) : rect.YMin();
+            maxX = any ? std::max(maxX, rect.XMax()) : rect.XMax();
+            maxY = any ? std::max(maxY, rect.YMax()) : rect.YMax();
+            any = true;
+        };
+        cover(Rect{0.0f, 0.0f, size.x, size.y});
+        for (const UIDrawItem &item : UISystem::CollectWorldCanvasGraphics(*this))
+        {
+            cover(item.rect);
+        }
+        if (!any)
+        {
+            return std::nullopt;
+        }
+        const BoundingBox local{Math::Vector3{minX, minY, 0.0f}, Math::Vector3{maxX, maxY, 0.0f}};
+        return local.Transformed(GetCanvasToWorldMatrix());
+    }
+
     RenderQueueKey Canvas::GetRenderQueue() const
     {
         if (IsWorldSpace())

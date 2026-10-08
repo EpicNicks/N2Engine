@@ -42,6 +42,26 @@ Math::Vector3 BoundingBox::GetCorner(int index) const
         (index & 4) ? max.z : min.z};
 }
 
+BoundingBox BoundingBox::Transformed(const Matrix4 &matrix) const
+{
+    BoundingBox result;
+    for (int i = 0; i < 8; ++i)
+    {
+        const Math::Vector3 corner = matrix.TransformPoint(GetCorner(i));
+        if (i == 0)
+        {
+            result.min = corner;
+            result.max = corner;
+            continue;
+        }
+        result.min = Math::Vector3{std::min(result.min.x, corner.x), std::min(result.min.y, corner.y),
+                                   std::min(result.min.z, corner.z)};
+        result.max = Math::Vector3{std::max(result.max.x, corner.x), std::max(result.max.y, corner.y),
+                                   std::max(result.max.z, corner.z)};
+    }
+    return result;
+}
+
 bool Frustum::IsVisible(const BoundingBox &bbox) const
 {
     for (int i = 0; i < 6; i++)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include <math/Vector3.hpp>
@@ -43,6 +44,9 @@ namespace N2Engine::Example
         // IRenderable
         /// The material's queue: Transparent for a Blend material, else Opaque (sort key 0)
         [[nodiscard]] RenderQueueKey GetRenderQueue() const override;
+        /// The mesh's bounds scaled by the size and moved by the object's world transform; nullopt without a
+        /// transform or a mesh
+        [[nodiscard]] std::optional<BoundingBox> GetWorldBounds() const override;
         /// Draws in its queue's state outside a scene
         void Render(Renderer::Common::IRenderer *renderer) override;
         void RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state,
@@ -64,6 +68,10 @@ namespace N2Engine::Example
         /// The material drawn with (tinted by the colour); nullptr draws unlit in the colour
         void SetMaterial(std::shared_ptr<Rendering::Material> material) { _material = std::move(material); }
         [[nodiscard]] const std::shared_ptr<Rendering::Material> &GetMaterial() const { return _material; }
+
+        /// What the shape's mesh is drawn with: the object's local-to-world matrix times the size's scale; nullopt
+        /// without a transform (the shape then draws nothing)
+        [[nodiscard]] std::optional<Positionable::Matrix4> GetModelMatrix() const;
 
         /// The mesh this shape draws (a built-in mesh, or a sphere of other subdivisions; nullptr if it can't be made)
         [[nodiscard]] virtual std::shared_ptr<Rendering::Mesh> GetMesh() = 0;

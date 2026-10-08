@@ -137,6 +137,12 @@ namespace ProtocolVectors
                             {"fovY", cmd.fovY}, {"orthographic", cmd.orthographic}, {"orthoSize", cmd.orthoSize},
                             {"nearPlane", cmd.nearPlane}, {"farPlane", cmd.farPlane}};
             }},
+            {"PickEntity", [](BufferReader &r)
+            {
+                const auto cmd = PickEntityCmd::Deserialize(r);
+                return json{{"x", cmd.x}, {"y", cmd.y}, {"includeInactive", cmd.includeInactive}};
+            }},
+            {"GetEntityBounds", [](BufferReader &r) { return json{{"entityIds", GetEntityBoundsCmd::Deserialize(r).entityIds}}; }},
             {"CreateScene", [](BufferReader &r) { return json{{"name", CreateSceneCmd::Deserialize(r).name}}; }},
             {"LoadScene", [](BufferReader &r) { return json{{"sceneJson", LoadSceneCmd::Deserialize(r).sceneJson}}; }},
             {"DeleteScene", [](BufferReader &r) { return json{{"sceneName", DeleteSceneCmd::Deserialize(r).sceneName}}; }},
@@ -280,6 +286,11 @@ namespace ProtocolVectors
             {
                 WriteHierarchy(w, Uint32Field(f, "revision"), f.at("nodes"));
             }},
+            {"PickResult", [](BufferWriter &w, const json &f)
+            {
+                WritePickResult(w, StringField(f, "entityId"), ToVec3(f.at("point")), f.at("distance").get<float>());
+            }},
+            {"Bounds", [](BufferWriter &w, const json &f) { WriteBounds(w, f.at("bounds")); }},
             {"EntityData", [](BufferWriter &w, const json &f)
             {
                 // The vector's matrix is 16 numbers, column-major; Matrix is row-major (element (row, col))

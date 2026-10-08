@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.7.0";
+        public const string ProtocolVersion = "1.8.0";
     }
 
     public enum CommandType : byte
@@ -24,6 +24,8 @@ namespace N2Engine.Editor.Protocol
         GetCameraPosition = 0x12,
         SetEditorCamera = 0x13,
         GetEditorCamera = 0x14,
+        PickEntity = 0x15,
+        GetEntityBounds = 0x16,
         CreateScene = 0x20,
         LoadScene = 0x21,
         SaveScene = 0x22,
@@ -96,6 +98,8 @@ namespace N2Engine.Editor.Protocol
         Autosave = 0x17,
         FrameUpdate = 0x18,
         EditorCamera = 0x19,
+        PickResult = 0x1A,
+        Bounds = 0x1B,
     }
 
     public struct Vec3
@@ -270,6 +274,16 @@ namespace N2Engine.Editor.Protocol
         public double W { get; set; }
     }
 
+    public class EntityBounds
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("min")]
+        public JsonVec3 Min { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("max")]
+        public JsonVec3 Max { get; set; }
+    }
+
     public class LocalTransform
     {
         [System.Text.Json.Serialization.JsonPropertyName("position")]
@@ -381,6 +395,19 @@ namespace N2Engine.Editor.Protocol
         public float OrthoSize;
         public float NearPlane;
         public float FarPlane;
+    }
+
+    public struct PickEntityRequest
+    {
+        public float X;
+        public float Y;
+        public bool IncludeInactive;
+    }
+
+    public struct GetEntityBoundsRequest
+    {
+        /// <summary>JSON text: string[]</summary>
+        public string EntityIds;
     }
 
     public struct CreateSceneRequest
@@ -593,6 +620,19 @@ namespace N2Engine.Editor.Protocol
         public float FarPlane;
         public float[] View;
         public float[] Projection;
+    }
+
+    public struct PickResultResponse
+    {
+        public string EntityId;
+        public Vec3 Point;
+        public float Distance;
+    }
+
+    public struct BoundsResponse
+    {
+        /// <summary>JSON text: EntityBounds[]</summary>
+        public string Bounds;
     }
 
     public struct SceneDataResponse

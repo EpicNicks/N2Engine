@@ -124,6 +124,16 @@ namespace N2Engine::Rendering
         return Material::GetDefault();
     }
 
+    std::optional<BoundingBox> MeshRenderer::GetWorldBounds() const
+    {
+        const Positionable *positionable = GetGameObject().GetPositionable();
+        if (!_mesh || !positionable)
+        {
+            return std::nullopt;
+        }
+        return _mesh->GetBounds().Transformed(positionable->GetLocalToWorldMatrix());
+    }
+
     std::optional<BoundingBox> MeshRenderer::GetBounds() const
     {
         if (!_mesh)

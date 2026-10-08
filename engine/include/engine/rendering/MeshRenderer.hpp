@@ -48,6 +48,8 @@ namespace N2Engine::Rendering
         [[nodiscard]] RenderQueueKey GetRenderQueue() const override;
         /// Whether any submesh's material belongs in `queue`
         [[nodiscard]] bool DrawsInQueue(RenderQueue queue) const override;
+        /// The mesh's bounds moved by the object's world transform; nullopt without a mesh or a transform
+        [[nodiscard]] std::optional<BoundingBox> GetWorldBounds() const override;
         /// Draws every submesh outside a scene: the opaque ones with RenderState::Opaque(), then the blended ones
         /// with RenderState::Transparent()
         void Render(Renderer::Common::IRenderer *renderer) override;

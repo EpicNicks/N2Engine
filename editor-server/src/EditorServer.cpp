@@ -29,6 +29,7 @@
 #include "engine/example/renderers/SphereRenderer.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/picking/ScenePicking.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/Mesh.hpp"
@@ -1806,6 +1807,8 @@ namespace N2Engine::Editor
         case CommandType::RenderFrameIfChanged: // every animation frame (mostly answered "not modified")
         case CommandType::SetEditorCamera:    // every animation frame of a camera drag
         case CommandType::GetEditorCamera:    // the scene view, with each frame, for its gizmos
+        case CommandType::PickEntity:         // a click, or the mouse moving over the scene view
+        case CommandType::GetEntityBounds:    // the selection box, whenever the selection or the scene changes
         case CommandType::GetAudio:           // every ~25 ms while audio plays
         case CommandType::PollEvents:         // every ~100 ms; a line logged per poll would be an event every poll
         case CommandType::GetAllEntities:     // the hierarchy panel
@@ -1851,6 +1854,12 @@ namespace N2Engine::Editor
             break;
         case CommandType::GetEditorCamera:
             HandleGetEditorCamera(clientSocket);
+            break;
+        case CommandType::PickEntity:
+            HandlePickEntity(clientSocket, payload);
+            break;
+        case CommandType::GetEntityBounds:
+            HandleGetEntityBounds(clientSocket, payload);
             break;
         case CommandType::GetAudio:
             HandleGetAudio(clientSocket);
@@ -2306,6 +2315,115 @@ namespace N2Engine::Editor
         WriteEditorCamera(response, _editorCamera.position, _editorCamera.rotation, _editorCamera.fovY,
                           _editorCamera.orthographic, _editorCamera.orthoSize, _editorCamera.nearPlane,
                           _editorCamera.farPlane, camera.GetViewMatrix(), camera.GetProjectionMatrix());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandlePickEntity(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const PickEntityCmd cmd = PickEntityCmd::Deserialize(reader);
+
+        // Never logs (a polled-rate command): a refusal is the Error response
+        if (!std::isfinite(cmd.x) || !std::isfinite(cmd.y))
+        {
+            SendError(clientSocket, "x and y must be finite numbers");
+            return;
+        }
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+
+        std::string entityId;
+        Math::Vector3 point{0.0f, 0.0f, 0.0f};
+        float distance = 0.0f;
+        // A point outside the viewport is over nothing (the same rule as the UI's window hit test)
+        if (cmd.x >= 0.0f && cmd.y >= 0.0f && cmd.x < static_cast<float>(_viewportWidth) &&
+            cmd.y < static_cast<float>(_viewportHeight))
+        {
+            // The ray the editor view's frames are seen through: the same camera, at the viewport size
+            const Camera camera = _editorCamera.ToCamera(GetViewportAspect());
+            float nearToFar = 0.0f;
+            const Math::Ray ray = camera.ScreenPointToRay(Math::Vector2{cmd.x, cmd.y},
+                                                          Vector2i{_viewportWidth, _viewportHeight}, &nearToFar);
+            Picking::PickOptions options;
+            options.includeInactive = cmd.includeInactive;
+            if (std::isfinite(nearToFar) && nearToFar > 0.0f)
+            {
+                options.maxDistance = nearToFar; // nothing beyond the far plane is drawn
+            }
+            const Picking::PickHit hit = Picking::PickGameObject(*scene, ray, options);
+            if (hit.gameObject != nullptr)
+            {
+                entityId = hit.gameObject->GetUUID().ToString();
+                point = hit.point;
+                distance = hit.distance;
+            }
+        }
+
+        BufferWriter response;
+        WritePickResult(response, entityId, point, distance);
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetEntityBounds(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const GetEntityBoundsCmd cmd = GetEntityBoundsCmd::Deserialize(reader);
+
+        // Never logs (a polled-rate command): a refusal is the Error response
+        if (!cmd.entityIds.is_array())
+        {
+            SendError(clientSocket, "entityIds must be a JSON array of UUID strings");
+            return;
+        }
+        if (cmd.entityIds.size() > MaxBoundsEntityIds)
+        {
+            SendError(clientSocket, std::format("entityIds has {} ids; at most {} are answered at once",
+                                                cmd.entityIds.size(), MaxBoundsEntityIds));
+            return;
+        }
+        for (const nlohmann::json &id : cmd.entityIds)
+        {
+            if (!id.is_string())
+            {
+                SendError(clientSocket, "entityIds must be a JSON array of UUID strings");
+                return;
+            }
+        }
+        Scene *scene = SceneManager::GetCurScene();
+        if (scene == nullptr)
+        {
+            SendError(clientSocket, "No scene loaded");
+            return;
+        }
+
+        nlohmann::json bounds = nlohmann::json::array();
+        std::unordered_set<std::string> answered;
+        for (const nlohmann::json &id : cmd.entityIds)
+        {
+            // An id that names no object (a stale one) is left out
+            const std::shared_ptr<GameObject> entity = FindEntity(*scene, id.get<std::string>());
+            if (entity == nullptr)
+            {
+                continue;
+            }
+            std::string canonical = entity->GetUUID().ToString();
+            if (!answered.insert(canonical).second)
+            {
+                continue;
+            }
+            if (const std::optional<BoundingBox> box = Picking::GetGameObjectBounds(*entity))
+            {
+                bounds.push_back(nlohmann::json{{"id", std::move(canonical)}, {"min", Vec3Json(box->min)},
+                                                {"max", Vec3Json(box->max)}});
+            }
+        }
+
+        BufferWriter response;
+        WriteBounds(response, bounds);
         SendResponse(clientSocket, response.Release());
     }
 

@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <expected>
 #include <functional>
 #include <filesystem>
@@ -315,9 +316,12 @@ namespace N2Engine::Editor
         /// How many frames RenderFrameIfChanged has rendered (not counting resends of the one in the buffer), for tests
         [[nodiscard]] uint32_t GetEditorFramesRendered() const { return _editorFramesRendered; }
 
+        /// The most ids GetEntityBounds answers at once (more is an Error)
+        static constexpr std::size_t MaxBoundsEntityIds = 4096;
+
         /// True for a command a client is expected to poll: RenderFrame, RenderFrameIfChanged, GetAudio, PollEvents, and
         /// (ahead of the planned editor, #6, which refreshes them continuously) GetAllEntities, GetEntityTransform,
-        /// GetCameraPosition, GetEditorCamera, SetEditorCamera (sent every frame of a drag),
+        /// GetCameraPosition, GetEditorCamera, SetEditorCamera (sent every frame of a drag), PickEntity, GetEntityBounds,
         /// GetEngineHealth, GetHierarchy, GetEntity.
         /// Rule: a command a client polls never logs per call, or its lines would drown everything else (and, since
         /// every line is an event, PollEvents would always find one). Such a command still logs when it fails
@@ -340,6 +344,8 @@ namespace N2Engine::Editor
         void HandleRenderFrameIfChanged(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetEditorCamera(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetEditorCamera(int clientSocket);
+        void HandlePickEntity(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetEntityBounds(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSetViewportSize(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetAudio(int clientSocket);
         void HandlePollEvents(int clientSocket, const std::vector<uint8_t> &payload);

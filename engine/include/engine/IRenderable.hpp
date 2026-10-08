@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include <renderer/common/Renderer.hpp>
 #include <renderer/common/RenderState.hpp>
+#include "engine/Camera.hpp" // BoundingBox
 #include "engine/serialization/ComponentSerializer.hpp"
 
 namespace N2Engine
@@ -63,6 +65,17 @@ namespace N2Engine
          * is the same as for any other renderable.
          */
         [[nodiscard]] virtual bool DrawsInQueue(const RenderQueue queue) const { return queue == GetRenderQueue().queue; }
+
+        /**
+         * The box, in world space (axis-aligned), around what this renderable draws now: its object's world
+         * transform applied to the bounds of its geometry. nullopt when it draws nothing that has a place in the
+         * world (no mesh, empty text, no transform, a canvas that isn't a world-space root), which is also the
+         * default. The editor's picking and "frame selected" read it (EditorServer's PickEntity and
+         * GetEntityBounds): an object whose renderables have none is picked by a small sphere around its position.
+         * A box, not an exact shape: a rotated mesh's box is larger than the mesh.
+         * It does not look at whether the renderable or its object is active (callers decide what counts).
+         */
+        [[nodiscard]] virtual std::optional<BoundingBox> GetWorldBounds() const { return std::nullopt; }
 
         /**
          * What Scene::Render calls, once per queue the renderable draws in (DrawsInQueue), with that queue and

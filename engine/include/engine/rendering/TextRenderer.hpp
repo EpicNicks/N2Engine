@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -48,6 +49,9 @@ namespace N2Engine::Rendering
 
         // IRenderable
         [[nodiscard]] RenderQueueKey GetRenderQueue() const override { return {RenderQueue::Transparent, 0}; }
+        /// The laid-out text block (the layout's bounds, a rectangle on the object's x/y plane) moved by the
+        /// object's world transform; nullopt for empty text or without a transform
+        [[nodiscard]] std::optional<BoundingBox> GetWorldBounds() const override;
         /// Draws with RenderState::Transparent(), as Scene::Render would
         void Render(Renderer::Common::IRenderer *renderer) override;
         void RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state,
