@@ -107,6 +107,7 @@ namespace
             RegisterMember("offset", offset);
             RegisterMember("tint", tint).AsColor();
             RegisterMember("locked", locked).ReadOnly();
+            RegisterMember("signedCount", signedCount);
             RegisterMember("unsignedCount", unsignedCount);
             RegisterMember("wide", wide);
             RegisterGameObjectRef("target", target);
@@ -131,6 +132,7 @@ namespace
         Math::Vector3 offset = {0.0f, 0.0f, 0.0f};
         Math::Vector3 tint = {1.0f, 1.0f, 1.0f};
         int locked = 5;
+        int signedCount = 0;
         std::uint32_t unsignedCount = 0;
         double wide = 0.0;
         GameObject *target = nullptr;
@@ -211,10 +213,11 @@ namespace
             ComponentRegistry::Instance().Register(
                 "EditorInspectorTest_RefHolder",
                 [](GameObject &gameObject) -> std::unique_ptr<Component> { return std::make_unique<InspectorRefHolder>(gameObject); });
-            InspectorThing::disableCalls = 0;
-            InspectorThing::destroyCalls = 0;
             const Frame made = Execute(server, CommandType::NewScene, Strings({"", "Inspector Test"}));
             ASSERT_EQ(made.type, SceneInfoType) << made.Text();
+            // After the new scene: it unloads the last test's, whose components get their OnDestroy
+            InspectorThing::disableCalls = 0;
+            InspectorThing::destroyCalls = 0;
         }
 
         std::string Create(const std::string &name)
@@ -909,7 +912,7 @@ TEST_F(EditorInspectorTest, ALuaComponentsScriptMustBeAScriptTheProjectHas)
 {
     const std::string entity = Create("Scripted");
     const std::string component = AddOk(entity, "LuaComponent");
-    ExpectError(SetFields(entity, component, json{{"scriptUUID", Math::UUID::Random().ToString()}}), "Script not found");
+    ExpectError(SetFields(entity, component, json{{"scriptUUID", Math::UUID::Random().ToString()}}), "no LuaScript asset");
     ExpectError(SetFields(entity, component, json{{"scriptUUID", nullptr}}), "needs a script");
     ExpectError(SetFields(entity, component, json{{"scriptData", {{"speed", 1}}}}), "scriptData"); // no script declares it
     EXPECT_TRUE(Get(entity, component).at("scriptData").empty());
@@ -925,7 +928,7 @@ TEST_F(EditorInspectorTest, ANumberTheMemberCantHoldIsRefusedAndNothingChanges)
     const uint32_t revision = Revision();
 
     ExpectError(SetFields(entity, component, json{{"ratio", 1.0e300}}), "ratio");
-    ExpectError(SetFields(entity, component, json{{"locked", 3000000000LL}}), "locked");
+    ExpectError(SetFields(entity, component, json{{"signedCount", 3000000000LL}}), "signedCount");
     ExpectError(SetFields(entity, component, json{{"unsignedCount", -1}}), "unsignedCount");
     ExpectError(SetFields(entity, component, json{{"unsignedCount", 5000000000ULL}}), "unsignedCount");
     ExpectError(SetFields(entity, component, json{{"offset", {{"x", 1.0e300}, {"y", 0.0}, {"z", 0.0}}}}), "offset");
@@ -940,7 +943,7 @@ TEST_F(EditorInspectorTest, TheLargestNumbersTheMembersHoldAreAcceptedAndTheScen
     const std::string entity = Create("Thing");
     const std::string component = AddOk(entity, ThingType);
     const json values = Set(entity, component,
-                            json{{"ratio", 3.0e38}, {"locked", 2147483647}, {"unsignedCount", 4294967295ULL},
+                            json{{"ratio", 3.0e38}, {"signedCount", 2147483647}, {"unsignedCount", 4294967295ULL},
                                  {"offset", {{"x", -3.0e38}, {"y", 0.0}, {"z", 3.0e38}}}, {"wide", 1.0e300}});
     EXPECT_EQ(values.at("unsignedCount"), 4294967295ULL);
     EXPECT_EQ(values.at("wide"), 1.0e300);
@@ -953,7 +956,7 @@ TEST_F(EditorInspectorTest, TheLargestNumbersTheMembersHoldAreAcceptedAndTheScen
     const InspectorThing *thing = copy->GetComponent<InspectorThing>();
     ASSERT_NE(thing, nullptr);
     EXPECT_EQ(thing->unsignedCount, 4294967295u);
-    EXPECT_EQ(thing->locked, 2147483647);
+    EXPECT_EQ(thing->signedCount, 2147483647);
 }
 
 // ==================== Removing components ====================

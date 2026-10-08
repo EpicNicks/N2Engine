@@ -239,6 +239,9 @@ namespace N2Engine::Scripting
 
         for (const auto &[key, value] : *fieldsTable)
         {
+            // A field is named by a string; any other key (a positional entry) would make sol panic in as<>
+            if (key.get_type() != sol::type::string)
+                continue;
             std::string fieldName = key.as<std::string>();
 
             if (!_scriptData.contains(fieldName))
