@@ -279,7 +279,10 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 <li>Fail on a non-zero exit code. This catches crashes during <code>Shutdown</code> and static destruction, which only show up when the process exits.</li>
 <li>Fail if the host's log contains "Assets directory not found" or "ResourceUUID not initialized" <span class="badge">PR #84</span>, "Couldn't open the startup scene" <span class="badge">PR #90</span>, or the token <span class="badge">PR #89</span>.</li>
 <li>Start a second host, <code>N2EditorHost.exe --port 0 --exit-on-disconnect</code> (the default renderer, no token) <span class="badge">PR #89</span>. Read its ready line, connect, send <code>Hello</code> (expect <code>ServerInfo</code>) and <code>GetEngineHealth</code> (expect 0x09), then close the connection without <code>Shutdown</code>. The host must exit by itself within 30 s, with code 0.</li>
-<li>Always kill a host still running, and print both hosts' stdout and stderr.</li>
+<li>Start a host with <code>--port 0 --exit-on-stdin-eof</code> whose stdin is a pipe the test owns <span class="badge">PR #91</span>. It must still be running after 5 s; close the pipe and it must exit within 30 s with code 0.</li>
+<li>Start a host with <code>--exit-on-stdin-eof</code> whose stdin is an empty file (already at end of file): it must exit within 30 s with code 0.</li>
+<li>Start a host without the flag, stdin the same empty file: after its ready line and 3 more seconds it must still be running.</li>
+<li>Always kill a host still running, and print every host's stdout and stderr.</li>
 </ol>
 <p>The wire format it uses is described in <a href="logging-and-editor.html#framing">Wire format</a>.</p>
 <p class="src">Source: <code>.github/workflows/tests.yml</code></p>

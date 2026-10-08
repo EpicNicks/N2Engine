@@ -3,7 +3,21 @@
 #include <charconv>
 #include <cstdlib>
 #include <format>
+#include <thread>
 #include <utility>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <unistd.h>
+#endif
 
 namespace N2Engine::Editor
 {
@@ -58,6 +72,11 @@ namespace N2Engine::Editor
             if (arg == "--exit-on-disconnect")
             {
                 options.exitOnDisconnect = true;
+                continue;
+            }
+            if (arg == "--exit-on-stdin-eof")
+            {
+                options.exitOnStdinEof = true;
                 continue;
             }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
@@ -151,6 +170,73 @@ namespace N2Engine::Editor
         return options;
     }
 
+    void DrainUntilEof(const StdinReader &readSome)
+    {
+        char buffer[512];
+        while (readSome(buffer, sizeof(buffer)) > 0)
+        {
+        }
+    }
+
+    namespace
+    {
+        std::ptrdiff_t ReadStdinHandle(char *buffer, const std::size_t size)
+        {
+#ifdef _WIN32
+            const HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+            if (handle == nullptr || handle == INVALID_HANDLE_VALUE)
+            {
+                return -1; // no stdin at all
+            }
+            const bool isPipe = GetFileType(handle) == FILE_TYPE_PIPE;
+            for (;;)
+            {
+                DWORD read = 0;
+                if (!ReadFile(handle, buffer, static_cast<DWORD>(size), &read, nullptr))
+                {
+                    return -1; // a broken pipe (the writer closed) is the usual way here
+                }
+                // A pipe's end of file is the failed read above; a successful read of nothing (a zero-length write by
+                // the other side) isn't one. A file or console reports its end as 0 bytes.
+                if (read == 0 && isPipe)
+                {
+                    continue;
+                }
+                return static_cast<std::ptrdiff_t>(read);
+            }
+#else
+            for (;;)
+            {
+                const ssize_t read = ::read(0, buffer, size);
+                if (read < 0 && errno == EINTR)
+                {
+                    continue;
+                }
+                return static_cast<std::ptrdiff_t>(read);
+            }
+#endif
+        }
+    }
+
+    std::shared_ptr<std::atomic<bool>> StartStdinEofWatcher()
+    {
+        // Once per process: stdin is the process's, so a second RunHost shares the first watcher (and its flag, true if
+        // stdin has closed) instead of starting a competing reader
+        static const std::shared_ptr<std::atomic<bool>> closed = []
+        {
+            auto flag = std::make_shared<std::atomic<bool>>(false);
+            std::thread(
+                [flag]
+                {
+                    DrainUntilEof(ReadStdinHandle);
+                    *flag = true;
+                })
+                .detach();
+            return flag;
+        }();
+        return closed;
+    }
+
     std::string_view HostUsage()
     {
         return R"(N2Engine Editor Host
@@ -170,6 +256,9 @@ Options:
                             before any other command
   --exit-on-disconnect      Exit once a client's session ends (its connection closes after a
                             successful Hello, or with no token, after it connected)
+  --exit-on-stdin-eof       Exit once stdin reaches end of file or can't be read (a launcher's pipe
+                            closes when the launcher dies, even before any client connects). Leave it
+                            off when stdin may be closed or absent: the host would exit at once
   --create <path>           Make <path> a project (project.n2proj, assets/scenes/Main.scene,
                             assets/scripts/Example.lua), print one line to stdout, and exit
                             without starting the engine. Exit code 0: created; 2: the folder
