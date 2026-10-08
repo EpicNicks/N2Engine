@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,12 +20,16 @@
 #include <editor-server/EditorServer.hpp>
 #include <editor-server/Protocol.hpp>
 #include <engine/GameObjectScene.hpp>
+#include <engine/io/ResourceLoader.hpp>
+#include <engine/io/ResourcePath.hpp>
+#include <engine/io/ResourceUUID.hpp>
 #include <engine/io/Resources.hpp>
 #include <engine/rendering/Mesh.hpp>
 #include <engine/rendering/Texture.hpp>
 #include <engine/sceneManagement/Scene.hpp>
 #include <engine/sceneManagement/SceneManager.hpp>
 #include <engine/serialization/ComponentRegistry.hpp>
+#include <engine/scripting/LuaRuntime.hpp>
 #include <engine/serialization/ComponentSerializer.hpp>
 
 using namespace N2Engine;
@@ -100,6 +107,8 @@ namespace
             RegisterMember("offset", offset);
             RegisterMember("tint", tint).AsColor();
             RegisterMember("locked", locked).ReadOnly();
+            RegisterMember("unsignedCount", unsignedCount);
+            RegisterMember("wide", wide);
             RegisterGameObjectRef("target", target);
             RegisterGameObjectRefVector("targets", targets);
             RegisterAssetRef("texture", texture);
@@ -122,13 +131,34 @@ namespace
         Math::Vector3 offset = {0.0f, 0.0f, 0.0f};
         Math::Vector3 tint = {1.0f, 1.0f, 1.0f};
         int locked = 5;
+        std::uint32_t unsignedCount = 0;
+        double wide = 0.0;
         GameObject *target = nullptr;
         std::vector<GameObject *> targets;
         std::shared_ptr<Rendering::Texture> texture;
         std::vector<std::shared_ptr<Rendering::Texture>> textures;
 
+        void OnDisable() override { ++disableCalls; }
+        void OnDestroy() override { ++destroyCalls; }
+
         int changedCalls = 0;
         std::vector<std::string> lastChanged;
+        static inline int disableCalls = 0;
+        static inline int destroyCalls = 0;
+    };
+
+    /// Points at an InspectorThing component
+    class InspectorRefHolder final : public SerializableComponent
+    {
+    public:
+        explicit InspectorRefHolder(GameObject &gameObject) : SerializableComponent(gameObject)
+        {
+            RegisterComponentRef("thing", thing);
+        }
+
+        [[nodiscard]] std::string GetTypeName() const override { return "EditorInspectorTest_RefHolder"; }
+
+        InspectorThing *thing = nullptr;
     };
 
     /// A texture registered at runtime (a random UUID, found by this run), unregistered when it goes
@@ -178,6 +208,11 @@ namespace
             ComponentRegistry::Instance().Register(
                 ThingType,
                 [](GameObject &gameObject) -> std::unique_ptr<Component> { return std::make_unique<InspectorThing>(gameObject); });
+            ComponentRegistry::Instance().Register(
+                "EditorInspectorTest_RefHolder",
+                [](GameObject &gameObject) -> std::unique_ptr<Component> { return std::make_unique<InspectorRefHolder>(gameObject); });
+            InspectorThing::disableCalls = 0;
+            InspectorThing::destroyCalls = 0;
             const Frame made = Execute(server, CommandType::NewScene, Strings({"", "Inspector Test"}));
             ASSERT_EQ(made.type, SceneInfoType) << made.Text();
         }
@@ -341,7 +376,7 @@ namespace
 
 // ==================== GetComponentTypes ====================
 
-TEST_F(EditorInspectorTest, EveryRegisteredTypeIsListedWithItsFieldsSortedByName)
+TEST_F(EditorInspectorTest, EveryRegisteredTypeIsListedSortedByNameWithItsDefaults)
 {
     const json types = Types();
     ASSERT_TRUE(types.is_array());
@@ -878,4 +913,291 @@ TEST_F(EditorInspectorTest, ALuaComponentsScriptMustBeAScriptTheProjectHas)
     ExpectError(SetFields(entity, component, json{{"scriptUUID", nullptr}}), "needs a script");
     ExpectError(SetFields(entity, component, json{{"scriptData", {{"speed", 1}}}}), "scriptData"); // no script declares it
     EXPECT_TRUE(Get(entity, component).at("scriptData").empty());
+}
+
+// ==================== Numbers, limits and stored values ====================
+
+TEST_F(EditorInspectorTest, ANumberTheMemberCantHoldIsRefusedAndNothingChanges)
+{
+    const std::string entity = Create("Thing");
+    const std::string component = AddOk(entity, ThingType);
+    const json before = Get(entity, component);
+    const uint32_t revision = Revision();
+
+    ExpectError(SetFields(entity, component, json{{"ratio", 1.0e300}}), "ratio");
+    ExpectError(SetFields(entity, component, json{{"locked", 3000000000LL}}), "locked");
+    ExpectError(SetFields(entity, component, json{{"unsignedCount", -1}}), "unsignedCount");
+    ExpectError(SetFields(entity, component, json{{"unsignedCount", 5000000000ULL}}), "unsignedCount");
+    ExpectError(SetFields(entity, component, json{{"offset", {{"x", 1.0e300}, {"y", 0.0}, {"z", 0.0}}}}), "offset");
+    ExpectError(SetFields(entity, component, json{{"tint", {{"x", 0.0}, {"y", 0.0}, {"z", -1.0e40}}}}), "tint");
+
+    EXPECT_EQ(Get(entity, component), before);
+    EXPECT_EQ(Revision(), revision);
+}
+
+TEST_F(EditorInspectorTest, TheLargestNumbersTheMembersHoldAreAcceptedAndTheSceneStillLoads)
+{
+    const std::string entity = Create("Thing");
+    const std::string component = AddOk(entity, ThingType);
+    const json values = Set(entity, component,
+                            json{{"ratio", 3.0e38}, {"locked", 2147483647}, {"unsignedCount", 4294967295ULL},
+                                 {"offset", {{"x", -3.0e38}, {"y", 0.0}, {"z", 3.0e38}}}, {"wide", 1.0e300}});
+    EXPECT_EQ(values.at("unsignedCount"), 4294967295ULL);
+    EXPECT_EQ(values.at("wide"), 1.0e300);
+
+    // Saved and loaded again: no value became infinity (null in JSON), which would fail the load
+    const std::unique_ptr<Scene> loaded = Scene::FromJSON(SceneManager::GetCurSceneRef().Serialize());
+    ASSERT_NE(loaded, nullptr);
+    const std::shared_ptr<GameObject> copy = loaded->FindGameObjectByUUID(Math::UUID::FromString(entity).value());
+    ASSERT_NE(copy, nullptr);
+    const InspectorThing *thing = copy->GetComponent<InspectorThing>();
+    ASSERT_NE(thing, nullptr);
+    EXPECT_EQ(thing->unsignedCount, 4294967295u);
+    EXPECT_EQ(thing->locked, 2147483647);
+}
+
+// ==================== Removing components ====================
+
+TEST_F(EditorInspectorTest, RemovingAComponentRunsNoCallbacksInAScenePassedForEditing)
+{
+    const std::string entity = Create("Thing");
+    const std::string component = AddOk(entity, ThingType);
+    EXPECT_EQ(Remove(entity, component).type, OkType);
+    EXPECT_EQ(InspectorThing::disableCalls, 0);
+    EXPECT_EQ(InspectorThing::destroyCalls, 0);
+}
+
+TEST_F(EditorInspectorTest, RemovingAComponentClearsTheReferencesToIt)
+{
+    const std::string entity = Create("Thing");
+    const std::string thingId = AddOk(entity, ThingType);
+    const std::string holderEntity = Create("Holder");
+    const std::string holderId = AddOk(holderEntity, "EditorInspectorTest_RefHolder");
+    const InspectorRefHolder *holder = Entity(holderEntity)->GetComponent<InspectorRefHolder>();
+    ASSERT_NE(holder, nullptr);
+
+    const json stored = Set(holderEntity, holderId, json{{"thing", thingId}});
+    EXPECT_EQ(stored.at("thing"), thingId);
+    EXPECT_NE(holder->thing, nullptr);
+
+    EXPECT_EQ(Remove(entity, thingId).type, OkType);
+    EXPECT_EQ(holder->thing, nullptr) << "a pointer to a freed component";
+    EXPECT_TRUE(Get(holderEntity, holderId).at("thing").is_null());
+}
+
+TEST_F(EditorInspectorTest, ARefusedComponentReferenceNamesTheField)
+{
+    const std::string entity = Create("Thing");
+    AddOk(entity, ThingType);
+    const std::string holderEntity = Create("Holder");
+    const std::string holderId = AddOk(holderEntity, "EditorInspectorTest_RefHolder");
+    ExpectError(SetFields(holderEntity, holderId, json{{"thing", Math::UUID::Random().ToString()}}), "isn't in the scene");
+    // A component that exists, but isn't an InspectorThing: the copy drops it, and the request is refused
+    const std::string lampId = AddOk(Create("Lamp"), "Light");
+    ExpectError(SetFields(holderEntity, holderId, json{{"thing", lampId}}), "thing");
+}
+
+// ==================== The limits on json a client sends ====================
+
+TEST_F(EditorInspectorTest, JsonNestedTooDeepIsRefusedBeforeItIsParsed)
+{
+    const std::string entity = Create("Thing");
+    const std::string component = AddOk(entity, ThingType);
+    const std::string deep = "{\"label\":" + std::string(100000, '[') + std::string(100000, ']') + "}";
+
+    BufferWriter w;
+    w.WriteString(entity);
+    w.WriteString(component);
+    w.WriteString(deep);
+    const Frame frame = Execute(server, CommandType::SetComponentFields, w.Release());
+    ExpectError(frame, "levels deep");
+    EXPECT_EQ(Thing(entity)->label, "a");
+
+    // A string that merely holds brackets doesn't count, and nesting within the limit is fine
+    BufferWriter ok;
+    ok.WriteString(entity);
+    ok.WriteString(component);
+    ok.WriteString("{\"label\":\"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[\"}");
+    EXPECT_EQ(Execute(server, CommandType::SetComponentFields, ok.Release()).type, ComponentDataType);
+}
+
+TEST(EditorJsonLimitsTest, DepthAndSizeAreChecked)
+{
+    EXPECT_NO_THROW(CheckJsonDepth("[[[[1]]]]", 4));
+    EXPECT_THROW(CheckJsonDepth("[[[[[1]]]]]", 4), std::runtime_error);
+    EXPECT_NO_THROW(CheckJsonDepth("{\"a\":\"[[[[[[\\\"[[\"}", 2));
+    EXPECT_NO_THROW(CheckJsonDepth("", 1));
+
+    std::string many = "[";
+    for (std::size_t i = 0; i < MaxJsonValues; ++i)
+        many += "0,";
+    many += "0]";
+    BufferWriter w;
+    w.WriteString(many);
+    const std::vector<uint8_t> bytes = w.Release();
+    BufferReader r(bytes);
+    EXPECT_THROW((void)ReadBoundedJson(r), std::runtime_error);
+
+    BufferWriter small;
+    small.WriteString("{\"a\":[1,2,3]}");
+    const std::vector<uint8_t> smallBytes = small.Release();
+    BufferReader smallReader(smallBytes);
+    EXPECT_EQ(ReadBoundedJson(smallReader).at("a").size(), 3u);
+}
+
+TEST_F(EditorInspectorTest, EchoingWhatGetComponentReturnedIsAccepted)
+{
+    const std::string entity = Create("Lamp");
+    const std::string component = AddOk(entity, "Light");
+    const uint32_t revision = Revision();
+    // Its uuid and every value, as read: nothing to change
+    const json values = Get(entity, component);
+    EXPECT_EQ(Set(entity, component, values), values);
+    EXPECT_EQ(Revision(), revision);
+
+    // A uuid that isn't this component's is not an echo
+    json other = values;
+    other["uuid"] = Math::UUID::Random().ToString();
+    ExpectError(SetFields(entity, component, other), "uuid");
+}
+
+TEST_F(EditorInspectorTest, ACanvasSetToWorldSpaceGetsWhatSetRenderModeGives)
+{
+    const std::string entity = Create("Ui");
+    const std::string canvas = AddOk(entity, "Canvas");
+    EXPECT_EQ(Set(entity, canvas, json{{"renderMode", "WorldSpace"}}).at("renderMode"), "WorldSpace");
+    bool hasRect = false;
+    for (const json &component : EntityComponents(entity))
+        hasRect = hasRect || component.at("type") == "RectTransform";
+    EXPECT_TRUE(hasRect);
+}
+
+// ==================== LuaComponent scripts in a project ====================
+
+namespace
+{
+class EditorInspectorProjectTest : public EditorInspectorTest
+{
+protected:
+    static inline std::filesystem::path s_root;
+
+    static void WriteAsset(const std::string &relativePath, const std::string &source)
+    {
+        const std::filesystem::path path = s_root / "assets" / relativePath;
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream(path) << source;
+    }
+
+    static void SetUpTestSuite()
+    {
+        ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize());
+        s_root = std::filesystem::temp_directory_path() / "n2engine_editor_inspector_project";
+        std::error_code ec;
+        std::filesystem::remove_all(s_root, ec);
+        WriteAsset("scripts/Fields.lua", R"(
+            local Fields = {}
+            Fields.__index = Fields
+            Fields.SerializableFields = {
+                count = 3,
+                label = { type = "string", default = "hi" },
+                target = { type = "GameObject" },
+            }
+            return Fields
+        )");
+        WriteAsset("scripts/Other.lua", R"(
+            local Other = {}
+            Other.__index = Other
+            Other.SerializableFields = { brand = "new" }
+            return Other
+        )");
+        IO::ResourceUUID::Initialize(Math::UUID::Random());
+        IO::ResourceLoader::Instance().Initialize(s_root);
+    }
+
+    static void TearDownTestSuite()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(s_root, ec);
+    }
+
+    static std::string ScriptId(const char *path)
+    {
+        return IO::ResourceLoader::Instance().GetUUID(IO::ResourcePath(path)).ToString();
+    }
+
+    /// A LuaComponent running scripts/Fields.lua, set through SetComponentFields
+    std::string ScriptedComponent(const std::string &entity)
+    {
+        const std::string component = AddOk(entity, "LuaComponent");
+        const Frame set = SetFields(entity, component, json{{"scriptUUID", ScriptId("res://scripts/Fields.lua")}});
+        EXPECT_EQ(set.type, ComponentDataType) << set.Text();
+        return component;
+    }
+};
+}
+
+TEST_F(EditorInspectorProjectTest, AProjectScriptIsChosenByItsMetaUuidAndItsFieldsAreListed)
+{
+    const std::string entity = Create("Scripted");
+    const std::string component = ScriptedComponent(entity);
+    EXPECT_EQ(Get(entity, component).at("scriptUUID"), ScriptId("res://scripts/Fields.lua"));
+
+    const Frame frame = Execute(server, CommandType::GetLuaFields, Strings({entity, component}));
+    ASSERT_EQ(frame.type, LuaFieldsType) << frame.Text();
+    BufferReader r(frame.payload);
+    const json schema = ReadJson(r);
+    std::vector<std::string> names;
+    for (const json &field : schema.at("fields"))
+        names.push_back(field.at("name").get<std::string>());
+    EXPECT_EQ(names, (std::vector<std::string>{"scriptUUID", "count", "label", "target"}));
+    EXPECT_EQ(Get(entity, component).at("scriptData").at("count"), 3);
+}
+
+TEST_F(EditorInspectorProjectTest, ScriptDataIsCheckedAgainstTheScriptsFields)
+{
+    const std::string entity = Create("Scripted");
+    const std::string component = ScriptedComponent(entity);
+    const std::string other = Create("Other");
+
+    const json stored = Set(entity, component, json{{"scriptData", {{"count", 7.0}, {"label", "bye"}, {"target", {{"$ref", other}}}}}});
+    EXPECT_EQ(stored.at("scriptData").at("count"), 7);
+    EXPECT_TRUE(stored.at("scriptData").at("count").is_number_integer());
+    EXPECT_EQ(stored.at("scriptData").at("label"), "bye");
+    EXPECT_EQ(stored.at("scriptData").at("target").at("$ref"), other);
+
+    ExpectError(SetFields(entity, component, json{{"scriptData", {{"count", "many"}}}}), "count");
+    ExpectError(SetFields(entity, component, json{{"scriptData", {{"nothing", 1}}}}), "nothing");
+    ExpectError(SetFields(entity, component, json{{"scriptData", {{"target", {{"$ref", Math::UUID::Random().ToString()}}}}}}),
+                "isn't in the scene");
+    ExpectError(SetFields(entity, component, json{{"scriptData", {{"target", other}}}}), "target");
+    EXPECT_EQ(Get(entity, component).at("scriptData").at("label"), "bye");
+}
+
+TEST_F(EditorInspectorProjectTest, ChangingTheScriptAndItsDataInOneRequestIsRefused)
+{
+    const std::string entity = Create("Scripted");
+    const std::string component = ScriptedComponent(entity);
+    ExpectError(SetFields(entity, component, json{{"scriptUUID", ScriptId("res://scripts/Other.lua")},
+                                                  {"scriptData", {{"brand", "x"}}}}),
+                "separate requests");
+    EXPECT_EQ(Get(entity, component).at("scriptUUID"), ScriptId("res://scripts/Fields.lua"));
+
+    // One at a time, it works, and the new script's own fields are the ones that count
+    EXPECT_EQ(Set(entity, component, json{{"scriptUUID", ScriptId("res://scripts/Other.lua")}}).at("scriptData").at("brand"), "new");
+    ExpectError(SetFields(entity, component, json{{"scriptData", {{"count", 1}}}}), "count");
+    EXPECT_EQ(Set(entity, component, json{{"scriptData", {{"brand", "x"}}}}).at("scriptData").at("brand"), "x");
+}
+
+TEST_F(EditorInspectorProjectTest, WhatGetComponentReturnedForAScriptCanBeSentBack)
+{
+    const std::string entity = Create("Scripted");
+    const std::string component = ScriptedComponent(entity);
+    const json values = Get(entity, component);
+    EXPECT_EQ(Set(entity, component, values), values);
+
+    // A component without a script: its scriptPath and an empty scriptData are echoes too
+    const std::string bareEntity = Create("Bare");
+    const std::string bare = AddOk(bareEntity, "LuaComponent");
+    const json bareValues = Get(bareEntity, bare);
+    EXPECT_EQ(Set(bareEntity, bare, bareValues), bareValues);
 }

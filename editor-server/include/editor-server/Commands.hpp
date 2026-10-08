@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <functional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -91,6 +92,67 @@ namespace N2Engine::Editor::Protocol
     inline nlohmann::json ReadJson(BufferReader &r)
     {
         return nlohmann::json::parse(r.ReadString());
+    }
+
+    /// The deepest nesting, and the most values, a json field a client sends may have where the host keeps the value
+    /// (a component's fields, the project's settings): deeper text is refused before it is parsed, since a tree
+    /// 100 000 deep would overflow the stack of every recursive walk that copies, saves or dumps it.
+    inline constexpr std::size_t MaxJsonDepth = 64;
+    inline constexpr std::size_t MaxJsonValues = 200000;
+
+    /// Throws std::runtime_error when the JSON text nests deeper than maxDepth (counting [ and { outside strings)
+    inline void CheckJsonDepth(std::string_view text, const std::size_t maxDepth)
+    {
+        std::size_t depth = 0;
+        bool inString = false;
+        bool escaped = false;
+        for (const char c : text)
+        {
+            if (inString)
+            {
+                if (escaped)
+                    escaped = false;
+                else if (c == '\\')
+                    escaped = true;
+                else if (c == '"')
+                    inString = false;
+                continue;
+            }
+            if (c == '"')
+                inString = true;
+            else if (c == '[' || c == '{')
+            {
+                if (++depth > maxDepth)
+                    throw std::runtime_error("the JSON nests more than " + std::to_string(maxDepth) + " levels deep");
+            }
+            else if ((c == ']' || c == '}') && depth > 0)
+                --depth;
+        }
+    }
+
+    /// ReadJson with the limits above: nesting checked before parsing, the number of values after. Throws
+    /// std::runtime_error (an Error response) for either, and nlohmann::json::parse_error for text that isn't JSON.
+    inline nlohmann::json ReadBoundedJson(BufferReader &r)
+    {
+        const std::string text = r.ReadString();
+        CheckJsonDepth(text, MaxJsonDepth);
+        nlohmann::json value = nlohmann::json::parse(text);
+
+        std::size_t count = 0;
+        std::vector<const nlohmann::json *> pending{&value};
+        while (!pending.empty())
+        {
+            const nlohmann::json *item = pending.back();
+            pending.pop_back();
+            if (++count > MaxJsonValues)
+                throw std::runtime_error("the JSON has more than " + std::to_string(MaxJsonValues) + " values");
+            if (item->is_structured())
+            {
+                for (const nlohmann::json &child : *item)
+                    pending.push_back(&child);
+            }
+        }
+        return value;
     }
 
     /// A trailing request field added in a later minor version (protocol.json's encoding.versioning): a client of an
@@ -237,7 +299,7 @@ namespace N2Engine::Editor::Protocol
 
         static SetProjectSettingsCmd Deserialize(BufferReader &r)
         {
-            return {ReadJson(r)};
+            return {ReadBoundedJson(r)};
         }
     };
 
@@ -423,7 +485,7 @@ namespace N2Engine::Editor::Protocol
         {
             std::string id = r.ReadString();
             std::string component = r.ReadString();
-            nlohmann::json values = ReadJson(r);
+            nlohmann::json values = ReadBoundedJson(r);
             return {std::move(id), std::move(component), std::move(values)};
         }
     };

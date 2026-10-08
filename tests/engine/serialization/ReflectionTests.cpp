@@ -86,6 +86,8 @@ namespace
             RegisterMember("plain", plain);
             RegisterMember("locked", locked).ReadOnly();
             RegisterMember("flagged", flagged).AsColor(); // not a vector: the hint is ignored
+            RegisterMember("unsignedCount", unsignedCount);
+            RegisterMember("wide", wide);
             RegisterGameObjectRef("target", target);
             RegisterGameObjectRefVector("targets", targets);
             RegisterAssetRef("texture", texture);
@@ -106,6 +108,8 @@ namespace
         PlainMode plain = PlainMode::One;
         int locked = 5;
         bool flagged = false;
+        std::uint32_t unsignedCount = 0;
+        double wide = 0.0;
         GameObject *target = nullptr;
         std::vector<GameObject *> targets;
         std::shared_ptr<Rendering::Texture> texture;
@@ -127,6 +131,33 @@ namespace
         explicit LonelyComponent(GameObject &gameObject) : Component(gameObject) {}
         [[nodiscard]] std::string GetTypeName() const override { return "ReflectionTest_Lonely"; }
         static constexpr bool IsSingleton = true;
+    };
+
+    /// Points at other components, which must not dangle when they are removed
+    class RefHolder final : public SerializableComponent
+    {
+    public:
+        explicit RefHolder(GameObject &gameObject) : SerializableComponent(gameObject)
+        {
+            RegisterComponentRef("thing", thing);
+            RegisterComponentRefVector("things", things);
+        }
+        [[nodiscard]] std::string GetTypeName() const override { return "ReflectionTest_RefHolder"; }
+
+        ReflectedThing *thing = nullptr;
+        std::vector<ReflectedThing *> things;
+    };
+
+    /// Counts the OnDisable and OnDestroy calls it gets
+    class CallbackProbe final : public Component
+    {
+    public:
+        explicit CallbackProbe(GameObject &gameObject) : Component(gameObject) {}
+        [[nodiscard]] std::string GetTypeName() const override { return "ReflectionTest_Probe"; }
+        void OnDisable() override { ++disables; }
+        void OnDestroy() override { ++destroys; }
+        static inline int disables = 0;
+        static inline int destroys = 0;
     };
 
     const FieldInfo *Find(const std::vector<FieldInfo> &fields, const std::string &name)
@@ -826,5 +857,130 @@ TEST(ReflectionRegistryTest, AddingANullComponentDoesNothing)
 {
     const auto go = GameObject::Create("Empty");
     EXPECT_EQ(go->AddComponent(nullptr), nullptr);
+    EXPECT_EQ(go->GetComponentCount(), 0u);
+}
+
+// ==================== Numbers a member can't hold ====================
+
+TEST(ReflectionTest, ANumberOutsideTheMembersTypeIsRefused)
+{
+    const auto go = GameObject::Create("Thing");
+    const std::vector<FieldInfo> fields = go->AddComponent<ReflectedThing>()->DescribeFields();
+
+    // int: 32 bits; unsigned: not negative; float: not more than a float holds (it would become infinity, which JSON
+    // can't save, so the scene would no longer load); double: anything finite
+    EXPECT_FALSE(ValidateFieldValue(*Find(fields, "count"), 2147483647).has_value());
+    EXPECT_TRUE(ValidateFieldValue(*Find(fields, "count"), 3000000000LL).has_value());
+    EXPECT_TRUE(ValidateFieldValue(*Find(fields, "count"), -3000000000LL).has_value());
+    EXPECT_TRUE(ValidateFieldValue(*Find(fields, "unsignedCount"), -1).has_value());
+    EXPECT_FALSE(ValidateFieldValue(*Find(fields, "unsignedCount"), 4000000000ULL).has_value());
+    EXPECT_TRUE(ValidateFieldValue(*Find(fields, "unsignedCount"), 5000000000ULL).has_value());
+    EXPECT_FALSE(ValidateFieldValue(*Find(fields, "ratio"), 1.0e38).has_value());
+    EXPECT_TRUE(ValidateFieldValue(*Find(fields, "ratio"), 1.0e300).has_value());
+    EXPECT_TRUE(ValidateFieldValue(*Find(fields, "ratio"), -1.0e300).has_value());
+    EXPECT_FALSE(ValidateFieldValue(*Find(fields, "wide"), 1.0e300).has_value());
+    EXPECT_TRUE(ValidateFieldValue(*Find(fields, "offset"), json{{"x", 1.0e300}, {"y", 0}, {"z", 0}}).has_value());
+    EXPECT_TRUE(ValidateFieldValue(*Find(fields, "tint"), json{{"x", 0}, {"y", 0}, {"z", -1.0e40}}).has_value());
+
+    FieldInfo color = Field(FieldKind::Color);
+    color.typeName = "Color";
+    EXPECT_TRUE(ValidateFieldValue(color, json{{"r", 1}, {"g", 0}, {"b", 0}, {"a", 1.0e300}}).has_value());
+
+    const auto problem = ValidateFieldValue(*Find(fields, "count"), 3000000000LL);
+    ASSERT_TRUE(problem.has_value());
+    EXPECT_NE(problem->find("count"), std::string::npos) << *problem;
+}
+
+TEST(ReflectionTest, AWholeFloatIsStoredAsAnIntegerForAnIntField)
+{
+    const json three = ClampFieldValue(Field(FieldKind::Int), 3.0);
+    EXPECT_TRUE(three.is_number_integer()) << three.dump();
+    EXPECT_EQ(three, 3);
+    EXPECT_TRUE(ClampFieldValue(Field(FieldKind::Float), 3).is_number_integer()); // a float field's number is left alone
+}
+
+TEST(ReflectionTest, ASceneStillSavesAndLoadsAfterTheLargestAcceptedNumbers)
+{
+    ComponentRegistry::Instance().Register("ReflectionTest_Thing", [](GameObject &gameObject) -> std::unique_ptr<Component>
+    {
+        return std::make_unique<ReflectedThing>(gameObject);
+    });
+    const auto go = GameObject::Create("Thing");
+    auto *thing = go->AddComponent<ReflectedThing>();
+    thing->SetEditorFields(json{{"ratio", 3.0e38}, {"locked", 2147483647}, {"unsignedCount", 4294967295ULL},
+                                {"offset", {{"x", -3.0e38}, {"y", 0}, {"z", 3.0e38}}}, {"wide", 1.0e300}},
+                           nullptr);
+
+    const auto scene = Scene::Create("Limits");
+    scene->AddRootGameObject(go);
+    const std::unique_ptr<Scene> loaded = Scene::FromJSON(scene->Serialize());
+    ASSERT_NE(loaded, nullptr);
+    const auto *copy = loaded->FindGameObject("Thing")->GetComponent<ReflectedThing>();
+    ASSERT_NE(copy, nullptr);
+    EXPECT_EQ(copy->locked, 2147483647);
+    EXPECT_EQ(copy->unsignedCount, 4294967295u);
+    EXPECT_FLOAT_EQ(copy->ratio, 3.0e38f);
+    EXPECT_DOUBLE_EQ(copy->wide, 1.0e300);
+}
+
+// ==================== Removing components in a scene opened for editing ====================
+
+TEST(ReflectionRegistryTest, RemovingAComponentInAnEditSceneRunsNoCallbacks)
+{
+    CallbackProbe::disables = 0;
+    CallbackProbe::destroys = 0;
+    const auto scene = Scene::Create("EditRemoval");
+    scene->SetEditMode(true);
+    const auto go = GameObject::Create("Object");
+    scene->AddRootGameObject(go);
+
+    Component *probe = go->AddComponent<CallbackProbe>();
+    EXPECT_TRUE(go->RemoveComponent(probe));
+    EXPECT_EQ(CallbackProbe::disables, 0) << "never attached, so never enabled";
+    EXPECT_EQ(CallbackProbe::destroys, 0);
+    EXPECT_EQ(go->GetComponentCount(), 0u);
+}
+
+TEST(ReflectionRegistryTest, RemovingAComponentInAnOrdinarySceneStillRunsOnDestroy)
+{
+    CallbackProbe::disables = 0;
+    CallbackProbe::destroys = 0;
+    const auto scene = Scene::Create("Removal");
+    const auto go = GameObject::Create("Object");
+    scene->AddRootGameObject(go);
+
+    Component *probe = go->AddComponent<CallbackProbe>();
+    EXPECT_TRUE(go->RemoveComponent(probe));
+    EXPECT_EQ(CallbackProbe::destroys, 1);
+}
+
+TEST(ReflectionRegistryTest, RemovingAComponentClearsTheReferencesToItInAnEditScene)
+{
+    const auto scene = Scene::Create("RefRemoval");
+    scene->SetEditMode(true);
+    const auto target = GameObject::Create("Target");
+    const auto holderObject = GameObject::Create("Holder");
+    scene->AddRootGameObject(target);
+    scene->AddRootGameObject(holderObject);
+
+    auto *first = target->AddComponent<ReflectedThing>();
+    auto *second = target->AddComponent<ReflectedThing>();
+    auto *holder = holderObject->AddComponent<RefHolder>();
+    holder->thing = first;
+    holder->things = {first, second, first};
+
+    EXPECT_TRUE(target->RemoveComponent(static_cast<Component *>(first)));
+    EXPECT_EQ(holder->thing, nullptr);
+    ASSERT_EQ(holder->things.size(), 3u);
+    EXPECT_EQ(holder->things[0], nullptr);
+    EXPECT_EQ(holder->things[1], second); // another component: kept
+    EXPECT_EQ(holder->things[2], nullptr);
+}
+
+TEST(ReflectionRegistryTest, AComponentMadeForAnotherObjectIsNotAdded)
+{
+    const auto go = GameObject::Create("Mine");
+    const auto other = GameObject::Create("Theirs");
+    EXPECT_EQ(go->AddComponent(ComponentRegistry::Instance().Create("Light", *other)), nullptr);
     EXPECT_EQ(go->GetComponentCount(), 0u);
 }

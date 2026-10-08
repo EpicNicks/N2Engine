@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <concepts>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -78,6 +79,11 @@ namespace N2Engine
         std::string assetType;
         /// Int and Float: a value set through the editor is clamped to it
         std::optional<std::pair<double, double>> range;
+        /// What the member's C++ type can hold (Int and Float; for the axes of a vector or colour, a float's): a
+        /// number outside it is refused rather than wrapped, or turned into infinity, which JSON can't save.
+        /// Not part of the protocol's FieldSchema.
+        std::pair<double, double> limits = {-static_cast<double>(std::numeric_limits<float>::max()),
+                                            static_cast<double>(std::numeric_limits<float>::max())};
         std::string tooltip;
         /// Not empty: the field lives in the object under this key of the component's JSON, not at its top level
         /// (a LuaComponent's script fields are under "scriptData"). A reference there is written {"$ref": uuid}.
@@ -215,6 +221,11 @@ namespace N2Engine
         info.kind = FieldTraits<T>::kind;
         info.typeName = FieldTraits<T>::TypeName();
         info.enumOptions = FieldTraits<T>::EnumOptions();
+        if constexpr (std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
+        {
+            info.limits = {static_cast<double>(std::numeric_limits<T>::lowest()),
+                           static_cast<double>(std::numeric_limits<T>::max())};
+        }
         return info;
     }
 

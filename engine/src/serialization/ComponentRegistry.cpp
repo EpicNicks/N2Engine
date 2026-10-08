@@ -7,7 +7,6 @@ namespace N2Engine
 {
     void ComponentRegistry::Register(const std::string &typeName, const CreateFunc &creator, const bool singleton)
     {
-        const std::scoped_lock lock(_schemaMutex);
         _creators[typeName] = creator;
         if (singleton)
         {
@@ -23,28 +22,22 @@ namespace N2Engine
 
     bool ComponentRegistry::IsSingleton(const std::string &typeName) const
     {
-        const std::scoped_lock lock(_schemaMutex);
         return _singletons.contains(typeName);
     }
 
     std::optional<ComponentSchema> ComponentRegistry::Describe(const std::string &typeName)
     {
-        CreateFunc creator;
-        bool singleton = false;
+        if (const auto cached = _schemas.find(typeName); cached != _schemas.end())
         {
-            const std::scoped_lock lock(_schemaMutex);
-            if (const auto cached = _schemas.find(typeName); cached != _schemas.end())
-            {
-                return cached->second;
-            }
-            const auto found = _creators.find(typeName);
-            if (found == _creators.end())
-            {
-                return std::nullopt;
-            }
-            creator = found->second;
-            singleton = _singletons.contains(typeName);
+            return cached->second;
         }
+        const auto found = _creators.find(typeName);
+        if (found == _creators.end())
+        {
+            return std::nullopt;
+        }
+        const CreateFunc creator = found->second;
+        const bool singleton = _singletons.contains(typeName);
 
         ComponentSchema schema;
         schema.typeName = typeName;
@@ -67,7 +60,6 @@ namespace N2Engine
             schema.defaults.erase("resourcePath");
         }
 
-        const std::scoped_lock lock(_schemaMutex);
         _schemas[typeName] = schema;
         return schema;
     }

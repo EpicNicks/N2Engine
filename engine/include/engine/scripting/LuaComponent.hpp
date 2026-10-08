@@ -26,7 +26,8 @@ namespace N2Engine::Scripting
         // Set by the first OnAttach: a script instance replaced after that is torn down, and the new one
         // attached, as if the component had been removed and re-added
         bool _attached = false;
-        nlohmann::json _scriptData;
+        // An object (empty until a script declares fields), so what GetComponent returns can be sent back
+        nlohmann::json _scriptData = nlohmann::json::object();
 
         // Track missing lua script and refs
         bool _hasMissingScript = false;

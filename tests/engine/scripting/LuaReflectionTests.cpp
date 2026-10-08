@@ -14,6 +14,11 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/rendering/Material.hpp"
+#include "engine/rendering/Model.hpp"
+#include "engine/rendering/Texture.hpp"
+#include "engine/sceneManagement/SceneFile.hpp"
+#include "engine/text/Font.hpp"
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
@@ -72,6 +77,27 @@ protected:
             }
             return Other
         )");
+
+        // Fails to load until the global is set: a script that can be retried
+        WriteAsset("reflect/Broken.lua", R"(
+            if not BROKEN_FIXED then error("not yet") end
+            local Broken = {}
+            Broken.__index = Broken
+            Broken.SerializableFields = { level = 1 }
+            return Broken
+        )");
+        // A table keyed by something that isn't a name
+        WriteAsset("reflect/Odd.lua", R"(
+            local Odd = {}
+            Odd.__index = Odd
+            Odd.SerializableFields = { count = 3, [1] = "positional" }
+            return Odd
+        )");
+        // Only their extensions matter: the metadata is made from them
+        for (const char *file : {"types/a.png", "types/a.ttf", "types/a.mat", "types/a.gltf", "types/a.scene"})
+        {
+            WriteAsset(file, "x");
+        }
 
         IO::ResourceUUID::Initialize(Math::UUID::Random());
         IO::ResourceLoader::Instance().Initialize(s_projectRoot);
@@ -208,4 +234,61 @@ TEST_F(LuaReflectionTest, AReferenceFieldIsResolvedThroughTheResolver)
 
     EXPECT_FALSE(script->HasUnresolvedReferences());
     EXPECT_EQ(script->GetScriptData().at("target").at("$ref"), other->GetUUID().ToString());
+}
+
+TEST_F(LuaReflectionTest, AnIntegerFieldIsStoredAsAnInteger)
+{
+    const auto go = GameObject::Create("Fields");
+    auto *script = go->AddComponent<LuaComponent>();
+    script->SetScript(IO::ResourcePath("res://reflect/Fields.lua"));
+
+    script->SetEditorFields(json{{"scriptData", {{"count", 7.0}, {"ratio", 2}}}}, nullptr);
+    EXPECT_TRUE(script->GetScriptData().at("count").is_number_integer()) << script->GetScriptData().dump();
+    EXPECT_EQ(script->GetScriptData().at("count"), 7);
+    EXPECT_EQ(script->GetScriptData().at("ratio"), 2); // a float field keeps what it was given
+
+    // Integers beyond 32 bits are kept: the field's limits are a 64-bit integer's
+    const std::vector<FieldInfo> fields = script->DescribeFields();
+    EXPECT_GT(Find(fields, "count")->limits.second, 3.0e9);
+    EXPECT_FALSE(ValidateFieldValue(*Find(fields, "count"), 5000000000LL).has_value());
+}
+
+TEST_F(LuaReflectionTest, AScriptWhoseTableHasAPositionalKeyStillDescribesItsNamedFields)
+{
+    const auto go = GameObject::Create("Odd");
+    auto *script = go->AddComponent<LuaComponent>();
+    script->SetScript(IO::ResourcePath("res://reflect/Odd.lua"));
+    const std::vector<FieldInfo> fields = script->DescribeFields();
+    EXPECT_NE(Find(fields, "count"), nullptr);
+    EXPECT_EQ(Find(fields, "1"), nullptr);
+}
+
+TEST_F(LuaReflectionTest, ChoosingTheScriptAgainRetriesOneThatFailedToLoad)
+{
+    sol::state &lua = LuaRuntime::Instance().GetState();
+    lua["BROKEN_FIXED"] = false;
+    const auto go = GameObject::Create("Broken");
+    auto *script = go->AddComponent<LuaComponent>();
+    script->SetScript(IO::ResourcePath("res://reflect/Broken.lua"));
+    ASSERT_TRUE(script->HasMissingScript());
+
+    lua["BROKEN_FIXED"] = true;
+    script->SetEditorFields(json{{"scriptUUID", ScriptUuid("res://reflect/Broken.lua")}}, nullptr);
+    EXPECT_FALSE(script->HasMissingScript());
+    EXPECT_EQ(script->GetScriptData().at("level"), 1);
+}
+
+TEST_F(LuaReflectionTest, ResourceTypesInMetadataAreTheStaticNames)
+{
+    const auto typeOf = [](const char *path) -> std::string
+    {
+        const IO::AssetMetadata *meta = IO::ResourceLoader::Instance().GetMetadata(IO::ResourcePath(path));
+        return meta != nullptr ? meta->resourceType : std::string("<no metadata>");
+    };
+    EXPECT_EQ(typeOf("res://reflect/Fields.lua"), LuaScript::ResourceTypeName);
+    EXPECT_EQ(typeOf("res://types/a.png"), Rendering::Texture::ResourceTypeName);
+    EXPECT_EQ(typeOf("res://types/a.ttf"), Text::Font::ResourceTypeName);
+    EXPECT_EQ(typeOf("res://types/a.mat"), Rendering::Material::ResourceTypeName);
+    EXPECT_EQ(typeOf("res://types/a.gltf"), Rendering::Model::ResourceTypeName);
+    EXPECT_EQ(typeOf("res://types/a.scene"), SceneFile::ResourceTypeName);
 }

@@ -184,7 +184,7 @@ namespace N2Engine
         // Component system - Non-template methods
         /// Adds a component made elsewhere (by name, from ComponentRegistry::Create for the object): the same as
         /// AddComponent<T>() for it, except that a singleton type isn't checked (the caller knows the type's name).
-        /// Returns the component, or nullptr for a null one.
+        /// Returns the component, or nullptr for a null one or one made for another object.
         Component* AddComponent(std::unique_ptr<Component> component);
         Component* GetComponent(const std::type_index &type) const;
         /// Removes the component GetComponent finds for the type (the first of it)

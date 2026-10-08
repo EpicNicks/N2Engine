@@ -319,7 +319,8 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                      CommandType::GetAllEntities, CommandType::GetEntityTransform,
                                      CommandType::GetCameraPosition, CommandType::GetEngineHealth,
                                      CommandType::GetHierarchy, CommandType::GetEntity,
-                                     CommandType::GetComponent, CommandType::GetComponentTypes})
+                                     CommandType::GetComponent, CommandType::GetComponentTypes,
+                                     CommandType::GetLuaFields})
     {
         EXPECT_TRUE(EditorServer::IsPolledCommand(static_cast<uint8_t>(polled))) << static_cast<int>(polled);
     }
@@ -335,8 +336,7 @@ TEST(EditorServerLoggingTest, PolledCommandsAreTheOnesClientsPoll)
                                         CommandType::CreateEntityEx, CommandType::SetEntityParent,
                                         CommandType::SetEntityProperties, CommandType::DuplicateEntity,
                                         CommandType::SetLocalTransform, CommandType::AddComponent,
-                                        CommandType::RemoveComponent, CommandType::SetComponentFields,
-                                        CommandType::GetLuaFields})
+                                        CommandType::RemoveComponent, CommandType::SetComponentFields})
     {
         EXPECT_FALSE(EditorServer::IsPolledCommand(static_cast<uint8_t>(notPolled))) << static_cast<int>(notPolled);
     }
@@ -357,6 +357,12 @@ TEST_F(EditorServerNoSceneTest, PolledCommandsLogNothing)
     EXPECT_EQ(Execute(server, CommandType::GetHierarchy).type, ErrorType);
     EXPECT_EQ(Execute(server, CommandType::GetEntity,
                       StringPayload("00000000-0000-0000-0000-000000000000")).type, ErrorType);
+    EXPECT_EQ(Execute(server, CommandType::GetComponentTypes).type, static_cast<uint8_t>(ResponseType::ComponentTypes));
+    BufferWriter twoIds;
+    twoIds.WriteString("00000000-0000-0000-0000-000000000000");
+    twoIds.WriteString("00000000-0000-0000-0000-000000000000");
+    EXPECT_EQ(Execute(server, CommandType::GetComponent, ToVector(twoIds)).type, ErrorType);
+    EXPECT_EQ(Execute(server, CommandType::GetLuaFields, ToVector(twoIds)).type, ErrorType);
 
     for (const auto &line : capture.lines)
     {

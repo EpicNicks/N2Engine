@@ -30,6 +30,7 @@
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/rendering/Light.hpp"
+#include "engine/rendering/Mesh.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaScriptTemplate.hpp"
@@ -449,6 +450,17 @@ namespace N2Engine::Editor
                         return std::format("Asset {} is a {}; field '{}' expects {}", id, meta->resourceType,
                                            field.name, field.assetType);
                     }
+                    // Nothing knows the UUID (not a project file, a sub-asset, a runtime asset or a built-in mesh):
+                    // refused here, since looking it up as a T would load every model of the project to look for it
+                    const bool known = meta != nullptr ||
+                                       IO::ResourceLoader::Instance().FindSubAssetLocation(uuid.value()) != nullptr ||
+                                       IO::Resources::Instance().GetAsset<Base::Asset>(uuid.value()) != nullptr ||
+                                       Rendering::Mesh::FindBuiltin(uuid.value()) != nullptr;
+                    if (!known)
+                    {
+                        return std::format("Field '{}': no {} asset has the UUID {}", field.name,
+                                           field.assetType.empty() ? std::string("such") : field.assetType, id);
+                    }
                     break;
                 }
                 default:
@@ -464,10 +476,41 @@ namespace N2Engine::Editor
         /// to the component itself, which can't then fail midway. Returns the values the component saves now, and
         /// in `changedKeys` the top-level keys of `values` whose saved value moved.
         std::expected<nlohmann::json, std::string> SetComponentValues(Scene &scene, Component &component,
-                                                                      const nlohmann::json &values,
+                                                                      const nlohmann::json &requested,
                                                                       std::vector<std::string> &changedKeys)
         {
+            nlohmann::json values = requested;
             const std::vector<FieldInfo> fields = component.DescribeFields();
+            if (values.is_object())
+            {
+                // What GetComponent returned can be sent back: a key that is no field (the uuid, a LuaComponent's
+                // scriptPath, the scriptData of one without a script) is accepted when it is what the component
+                // has, and refused otherwise
+                const nlohmann::json current = component.Serialize();
+                std::vector<std::string> echoes;
+                for (const auto &[key, value] : values.items())
+                {
+                    const bool isField = key == "isActive" || std::ranges::any_of(fields, [&key](const FieldInfo &field)
+                    {
+                        return field.name == key || field.container == key;
+                    });
+                    if (!isField && current.contains(key) && value == current.at(key))
+                    {
+                        echoes.push_back(key);
+                    }
+                }
+                for (const std::string &key : echoes)
+                {
+                    values.erase(key);
+                }
+                // The check below validates scriptData against the script the component has now; a request that
+                // also changes the script would be checked against the wrong one
+                if (values.contains("scriptUUID") && values.contains("scriptData") &&
+                    values.at("scriptUUID") != current.value("scriptUUID", nlohmann::json()))
+                {
+                    return std::unexpected("Set the script (scriptUUID) and its data (scriptData) in separate requests");
+                }
+            }
             if (const auto problem = ValidateFieldValues(fields, values))
             {
                 return std::unexpected(EditorServer::SanitizeForLog(*problem, 300));
@@ -1184,6 +1227,7 @@ namespace N2Engine::Editor
         case CommandType::GetEntity:          // the inspector, whenever the selected object changes
         case CommandType::GetComponent:       // the inspector, for the components it shows
         case CommandType::GetComponentTypes:  // the inspector, once per session (and after Hello)
+        case CommandType::GetLuaFields:       // the inspector, for a script component it shows
             return true;
         default:
             return false;

@@ -489,6 +489,11 @@ Component *GameObject::AddComponent(std::unique_ptr<Component> component)
     {
         return nullptr;
     }
+    // Made for another object: its _gameObject would point there
+    if (&component->GetGameObject() != this)
+    {
+        return nullptr;
+    }
     Component *added = component.get();
 
     // As AddComponent<T>: the first of a type is the one GetComponent finds, and an object already in a scene
@@ -519,7 +524,27 @@ bool GameObject::RemoveComponent(Component *component)
         return false;
     }
 
-    component->RunDestroyCallbacks(IsActiveInHierarchyIgnoringDestruction());
+    if (_scene != nullptr && _scene->IsEditMode())
+    {
+        // A scene opened for editing never attached its components (no OnEnable, OnAttach), so they get no
+        // OnDisable/OnDestroy either: a script's callbacks must not run because someone removed a component. And
+        // nothing may keep a raw pointer to it, since the editor can put it back (undo).
+        component->_isMarkedForDestruction = true;
+        _scene->TraverseAll([component](const std::shared_ptr<GameObject> &object)
+        {
+            for (const auto &other : object->GetAllComponents())
+            {
+                if (other.get() != component)
+                {
+                    other->ForgetComponent(component);
+                }
+            }
+        });
+    }
+    else
+    {
+        component->RunDestroyCallbacks(IsActiveInHierarchyIgnoringDestruction());
+    }
     const std::type_index componentType = typeid(*component);
 
     // The scene keeps raw pointers to attached components; drop them before the component is freed

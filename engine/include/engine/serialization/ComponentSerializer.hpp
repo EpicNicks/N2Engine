@@ -39,12 +39,15 @@ namespace N2Engine
     public:
         using SerializeFunc = std::function<void(nlohmann::json &)>;
         using DeserializeFunc = std::function<void(const nlohmann::json &, ReferenceResolver *)>;
+        /// Clears the member if it points at the component (set for component references only)
+        using ForgetFunc = std::function<void(const Component *)>;
 
         std::string name;
         SerializeFunc serialize;
         DeserializeFunc deserialize;
         /// What an editor shows this member as (kind, type, options, range...), filled at registration
         FieldInfo info;
+        ForgetFunc forget;
 
         MemberSerializer(std::string name, SerializeFunc s, DeserializeFunc d, FieldInfo fieldInfo = {})
             : name(std::move(name)), serialize(std::move(s)), deserialize(std::move(d)), info(std::move(fieldInfo))
@@ -206,8 +209,11 @@ namespace N2Engine
                     if (!j.contains(name) || j[name].is_null())
                     {
                         componentRef = nullptr;
-                        Logger::Info(
-                            "Component deserialize for component with name: " + name + " was not found in the json");
+                        if (!j.contains(name))
+                        {
+                            Logger::Info(
+                                "Component deserialize for component with name: " + name + " was not found in the json");
+                        }
                         return;
                     }
 
@@ -223,6 +229,13 @@ namespace N2Engine
                     }
                 },
                 MakeReferenceInfo(name, FieldKind::ComponentRef, "Component"));
+            _members.back().forget = [&componentRef](const Component *removed)
+            {
+                if (static_cast<const Component *>(componentRef) == removed)
+                {
+                    componentRef = nullptr;
+                }
+            };
             return FieldBuilder(_members, _members.size() - 1);
         }
 
@@ -293,6 +306,16 @@ namespace N2Engine
                     }
                 },
                 MakeReferenceInfo(name, FieldKind::ComponentRefList, "Component"));
+            _members.back().forget = [&componentRefs](const Component *removed)
+            {
+                for (T *&entry : componentRefs)
+                {
+                    if (static_cast<const Component *>(entry) == removed)
+                    {
+                        entry = nullptr;
+                    }
+                }
+            };
             return FieldBuilder(_members, _members.size() - 1);
         }
 
@@ -454,6 +477,18 @@ namespace N2Engine
                 fields.push_back(member.info);
             }
             return fields;
+        }
+
+        /// Drops the component references that point at `removed`
+        void ForgetComponent(const Component *removed) override
+        {
+            for (const MemberSerializer &member : _members)
+            {
+                if (member.forget)
+                {
+                    member.forget(removed);
+                }
+            }
         }
 
         /**

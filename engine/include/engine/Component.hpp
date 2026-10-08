@@ -81,6 +81,11 @@ namespace N2Engine
         /// never attached, so most have none.
         virtual void OnEditorFieldsChanged(std::span<const std::string> /*changed*/) {}
 
+        /// `removed` is being removed from its object (in a scene opened for editing: the editor can undo it, so
+        /// nothing may keep a raw pointer to it). A component that holds a pointer to another component drops it
+        /// when it is `removed`. A SerializableComponent does so for its RegisterComponentRef members.
+        virtual void ForgetComponent(const Component * /*removed*/) {}
+
         // Lifecycle methods
         virtual void OnAttach() {}
 

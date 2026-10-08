@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <format>
 #include <initializer_list>
+#include <limits>
 
 #include <math/UUID.hpp>
 
@@ -26,7 +27,18 @@ namespace N2Engine
             return std::format("Field '{}': expected {}, got {}", field.name, expected, Describe(value));
         }
 
-        /// An object with every key a number
+        /// A number a float can hold (the axes of vectors and colours are floats)
+        bool IsFloatNumber(const json &value)
+        {
+            if (!value.is_number())
+            {
+                return false;
+            }
+            const double number = value.get<double>();
+            return std::isfinite(number) && std::fabs(number) <= static_cast<double>(std::numeric_limits<float>::max());
+        }
+
+        /// An object with every key a number a float can hold
         bool HasNumbers(const json &value, std::initializer_list<const char *> keys)
         {
             if (!value.is_object())
@@ -36,7 +48,7 @@ namespace N2Engine
             for (const char *key : keys)
             {
                 const auto found = value.find(key);
-                if (found == value.end() || !found->is_number())
+                if (found == value.end() || !IsFloatNumber(*found))
                 {
                     return false;
                 }
@@ -198,18 +210,37 @@ namespace N2Engine
         case FieldKind::Bool:
             return value.is_boolean() ? std::nullopt : WrongType(field, "a boolean", value);
         case FieldKind::Int:
-            if (value.is_number_integer())
+        {
+            // 3.0 is 3; 3.5 isn't an integer
+            const bool whole = value.is_number_integer() ||
+                               (value.is_number_float() && std::isfinite(value.get<double>()) &&
+                                value.get<double>() == std::trunc(value.get<double>()));
+            if (!whole)
             {
-                return std::nullopt;
+                return WrongType(field, "an integer", value);
             }
-            if (value.is_number_float() && std::isfinite(value.get<double>()) &&
-                value.get<double>() == std::trunc(value.get<double>()))
+            const double number = value.get<double>();
+            if (number < field.limits.first || number > field.limits.second)
             {
-                return std::nullopt; // 3.0 is 3
+                return std::format("Field '{}': {} is outside what the field can hold ({} to {})", field.name,
+                                   value.dump(), field.limits.first, field.limits.second);
             }
-            return WrongType(field, "an integer", value);
+            return std::nullopt;
+        }
         case FieldKind::Float:
-            return value.is_number() ? std::nullopt : WrongType(field, "a number", value);
+        {
+            if (!value.is_number())
+            {
+                return WrongType(field, "a number", value);
+            }
+            const double number = value.get<double>();
+            if (!std::isfinite(number) || number < field.limits.first || number > field.limits.second)
+            {
+                return std::format("Field '{}': {} is outside what the field can hold ({} to {})", field.name,
+                                   value.dump(), field.limits.first, field.limits.second);
+            }
+            return std::nullopt;
+        }
         case FieldKind::String:
             return value.is_string() ? std::nullopt : WrongType(field, "a string", value);
         case FieldKind::Vector2:
@@ -237,7 +268,7 @@ namespace N2Engine
                            ? std::nullopt
                            : WrongType(field, "a colour {w, x, y, z} of numbers", value);
             }
-            if (!HasNumbers(value, {"r", "g", "b"}) || (value.contains("a") && !value.at("a").is_number()))
+            if (!HasNumbers(value, {"r", "g", "b"}) || (value.contains("a") && !IsFloatNumber(value.at("a"))))
             {
                 return WrongType(field, "a colour {r, g, b, a} of numbers", value);
             }
@@ -276,16 +307,31 @@ namespace N2Engine
 
     json ClampFieldValue(const FieldInfo &field, const json &value)
     {
-        if (!field.range.has_value() || !value.is_number())
+        if (!value.is_number())
         {
             return value;
         }
-        const double clamped = std::min(std::max(value.get<double>(), field.range->first), field.range->second);
+        // An Int is written as an integer, whatever the client's number looked like (3.0 is 3)
+        const bool wholeFloat = field.kind == FieldKind::Int && value.is_number_float();
+        if (!field.range.has_value() && !wholeFloat)
+        {
+            return value;
+        }
+        double number = value.get<double>();
+        if (field.range.has_value())
+        {
+            number = std::min(std::max(number, field.range->first), field.range->second);
+        }
         if (field.kind == FieldKind::Int)
         {
-            return json(static_cast<std::int64_t>(std::llround(clamped)));
+            // Beyond what an int64 holds (an unsigned 64-bit value): left as it was
+            if (std::fabs(number) >= 9.0e18)
+            {
+                return value;
+            }
+            return json(static_cast<std::int64_t>(std::llround(number)));
         }
-        return json(clamped);
+        return json(number);
     }
 
     std::optional<std::string> ValidateFieldValues(const std::vector<FieldInfo> &fields, const json &values)

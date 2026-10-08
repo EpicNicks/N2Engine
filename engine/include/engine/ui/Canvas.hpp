@@ -79,6 +79,8 @@ namespace N2Engine::UI
         /// Switching to WorldSpace gives the object a Positionable (at the origin, scale 1) and a RectTransform
         /// (Unity's 100 x 100 default) if it has none. Nothing is removed on switching back.
         void SetRenderMode(CanvasRenderMode renderMode);
+        /// The editor set renderMode: a world-space canvas gets what SetRenderMode gives it (a transform and a RectTransform)
+        void OnEditorFieldsChanged(std::span<const std::string> changed) override;
         [[nodiscard]] bool IsWorldSpace() const { return _renderMode == CanvasRenderMode::WorldSpace; }
 
         /// A world-space canvas's size in canvas units: its RectTransform's sizeDelta, or 100 x 100 without one

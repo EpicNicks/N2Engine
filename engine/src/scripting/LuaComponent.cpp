@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <format>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 
 namespace N2Engine::Scripting
@@ -283,7 +284,7 @@ namespace N2Engine::Scripting
             if (value.is_number_float())
                 _scriptInstance[key] = value.get<float>();
             else if (value.is_number_integer())
-                _scriptInstance[key] = value.get<int>();
+                _scriptInstance[key] = value.get<std::int64_t>();
             else if (value.is_boolean())
                 _scriptInstance[key] = value.get<bool>();
             else if (value.is_string())
@@ -551,7 +552,7 @@ namespace N2Engine::Scripting
     {
         SerializableComponent::Deserialize(j, resolver);
 
-        if (j.contains("scriptData"))
+        if (j.contains("scriptData") && !j["scriptData"].is_null())
         {
             _scriptData = j["scriptData"];
         }
@@ -700,6 +701,11 @@ namespace N2Engine::Scripting
         std::vector<FieldInfo> scriptFields;
         for (const auto &[key, value] : *declared)
         {
+            // A field is named by a string (a table can be keyed by anything: the script's own business)
+            if (key.get_type() != sol::type::string)
+            {
+                continue;
+            }
             FieldInfo info;
             info.name = key.as<std::string>();
             info.displayName = DefaultDisplayName(info.name);
@@ -776,6 +782,12 @@ namespace N2Engine::Scripting
                 info.typeName = "Vector3";
             }
             // else Json (the FieldInfo's own default): whatever the data holds
+            if (info.kind == FieldKind::Int)
+            {
+                // Stored as a JSON integer and injected as a Lua integer
+                info.limits = {static_cast<double>(std::numeric_limits<std::int64_t>::lowest()),
+                               static_cast<double>(std::numeric_limits<std::int64_t>::max())};
+            }
             scriptFields.push_back(std::move(info));
         }
 
@@ -810,8 +822,8 @@ namespace N2Engine::Scripting
                 throw std::invalid_argument(std::format("Asset {} is a {}; field 'scriptUUID' expects LuaScript",
                                                         found->get<std::string>(), meta->resourceType));
             }
-            // The script it already runs: nothing to reload
-            if (meta->resourcePath != _scriptPath)
+            // The script it already runs: nothing to reload, unless it failed to load (choosing it again retries)
+            if (meta->resourcePath != _scriptPath || _hasMissingScript)
             {
                 SetScript(meta->resourcePath);
             }
@@ -823,9 +835,15 @@ namespace N2Engine::Scripting
             {
                 _scriptData = nlohmann::json::object();
             }
+            const std::vector<FieldInfo> fields = DescribeFields();
             for (const auto &[fieldName, fieldValue] : found->items())
             {
-                _scriptData[fieldName] = fieldValue;
+                // An integer field is stored as an integer, whatever the client's number looked like
+                const auto field = std::ranges::find_if(fields, [&fieldName](const FieldInfo &candidate)
+                {
+                    return candidate.container == "scriptData" && candidate.name == fieldName;
+                });
+                _scriptData[fieldName] = field != fields.end() ? ClampFieldValue(*field, fieldValue) : fieldValue;
             }
             InjectFieldsIntoScript();
             if (resolver != nullptr)

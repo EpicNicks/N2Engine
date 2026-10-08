@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -65,9 +64,10 @@ namespace N2Engine
     private:
         std::unordered_map<std::string, CreateFunc> _creators;
         std::unordered_set<std::string> _singletons;
-        // Describe's results: a type's schema doesn't change while it stays registered
+        // Describe's results: a type's schema doesn't change while it stays registered.
+        // The registry is used from one thread: types register during static initialisation, and the editor's
+        // commands run on the main thread. Nothing here is locked.
         std::unordered_map<std::string, ComponentSchema> _schemas;
-        mutable std::mutex _schemaMutex;
 
         ComponentRegistry() { RegisterBuiltinComponents(*this); }
 
