@@ -43,6 +43,13 @@ FieldBuilder SerializableComponent::RegisterGameObjectRef(const std::string &nam
             }
         },
         MakeReferenceInfo(name, FieldKind::GameObjectRef, "GameObject"));
+    _members.back().forgetObject = [&gameObjectRef](const GameObject *removed)
+    {
+        if (gameObjectRef == removed)
+        {
+            gameObjectRef = nullptr;
+        }
+    };
     return FieldBuilder(_members, _members.size() - 1);
 }
 
@@ -107,5 +114,15 @@ FieldBuilder SerializableComponent::RegisterGameObjectRefVector(const std::strin
             }
         },
         MakeReferenceInfo(name, FieldKind::GameObjectRefList, "GameObject"));
+    _members.back().forgetObject = [&gameObjectRefs](const GameObject *removed)
+    {
+        for (GameObject *&entry : gameObjectRefs)
+        {
+            if (entry == removed)
+            {
+                entry = nullptr;
+            }
+        }
+    };
     return FieldBuilder(_members, _members.size() - 1);
 }

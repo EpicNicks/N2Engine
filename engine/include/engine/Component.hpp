@@ -86,6 +86,11 @@ namespace N2Engine
         /// when it is `removed`. A SerializableComponent does so for its RegisterComponentRef members.
         virtual void ForgetComponent(const Component * /*removed*/) {}
 
+        /// `removed` is being destroyed (in a scene opened for editing: the editor can undo it, so nothing may keep a
+        /// raw pointer to it). A component that holds a pointer to a GameObject drops it when it is `removed`. A
+        /// SerializableComponent does so for its RegisterGameObjectRef and RegisterGameObjectRefVector members.
+        virtual void ForgetGameObject(const GameObject * /*removed*/) {}
+
         // Lifecycle methods
         virtual void OnAttach() {}
 

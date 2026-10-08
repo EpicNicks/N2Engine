@@ -41,6 +41,8 @@ namespace N2Engine
         using DeserializeFunc = std::function<void(const nlohmann::json &, ReferenceResolver *)>;
         /// Clears the member if it points at the component (set for component references only)
         using ForgetFunc = std::function<void(const Component *)>;
+        /// Clears the member if it points at the object (set for GameObject references only)
+        using ForgetObjectFunc = std::function<void(const GameObject *)>;
 
         std::string name;
         SerializeFunc serialize;
@@ -48,6 +50,7 @@ namespace N2Engine
         /// What an editor shows this member as (kind, type, options, range...), filled at registration
         FieldInfo info;
         ForgetFunc forget;
+        ForgetObjectFunc forgetObject;
 
         MemberSerializer(std::string name, SerializeFunc s, DeserializeFunc d, FieldInfo fieldInfo = {})
             : name(std::move(name)), serialize(std::move(s)), deserialize(std::move(d)), info(std::move(fieldInfo))
@@ -487,6 +490,18 @@ namespace N2Engine
                 if (member.forget)
                 {
                     member.forget(removed);
+                }
+            }
+        }
+
+        /// Drops the GameObject references that point at `removed`
+        void ForgetGameObject(const GameObject *removed) override
+        {
+            for (const MemberSerializer &member : _members)
+            {
+                if (member.forgetObject)
+                {
+                    member.forgetObject(removed);
                 }
             }
         }
