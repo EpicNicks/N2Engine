@@ -18,7 +18,9 @@ namespace N2Engine
         LuaScript() = default;
         explicit LuaScript(std::string sourceCode) : _sourceCode(std::move(sourceCode)) {}
 
-        [[nodiscard]] std::string GetResourceType() const override { return "LuaScript"; }
+        /// What GetResourceType() returns, for code that needs it without an instance (asset metadata, a field's asset type)
+        static constexpr std::string_view ResourceTypeName = "LuaScript";
+        [[nodiscard]] std::string GetResourceType() const override { return std::string(ResourceTypeName); }
 
         [[nodiscard]] const std::string& GetSourceCode() const { return _sourceCode; }
         void SetSourceCode(const std::string& code) { _sourceCode = code; }

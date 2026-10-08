@@ -25,7 +25,9 @@ namespace N2Engine::Audio
         /// Needs an initialized AudioSystem (an OpenAL context); fails with a warning without one
         bool CreateFromData(const AudioData &data);
 
-        std::string GetResourceType() const override { return "AudioClip"; }
+        /// What GetResourceType() returns, for code that needs it without an instance (asset metadata, a field's asset type)
+        static constexpr std::string_view ResourceTypeName = "AudioClip";
+        std::string GetResourceType() const override { return std::string(ResourceTypeName); }
 
         // Unload the audio buffer
         void Unload();

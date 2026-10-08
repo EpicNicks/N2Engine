@@ -13,11 +13,11 @@ namespace N2Engine::Rendering
         Spot // Flashlight, cone of light
     };
 
-    NLOHMANN_JSON_SERIALIZE_ENUM(LightType, {
-                                 { LightType::Directional, "Directional" },
-                                 { LightType::Point, "Point" },
-                                 { LightType::Spot, "Spot" }
-                                 })
+    N2_SERIALIZE_ENUM(LightType, {
+                      { LightType::Directional, "Directional" },
+                      { LightType::Point, "Point" },
+                      { LightType::Spot, "Spot" }
+                      })
 
     class Light : public SerializableComponent
     {

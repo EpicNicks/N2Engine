@@ -483,6 +483,25 @@ bool GameObject::RemoveComponent(const std::type_index &type)
     return it != _componentMap.end() && RemoveComponent(it->second);
 }
 
+Component *GameObject::AddComponent(std::unique_ptr<Component> component)
+{
+    if (component == nullptr)
+    {
+        return nullptr;
+    }
+    Component *added = component.get();
+
+    // As AddComponent<T>: the first of a type is the one GetComponent finds, and an object already in a scene
+    // queues the component for attaching there
+    _componentMap.emplace(std::type_index(typeid(*added)), added);
+    _components.push_back(std::move(component));
+    if (_scene != nullptr)
+    {
+        _scene->AddComponentToAttachQueue(added);
+    }
+    return added;
+}
+
 bool GameObject::RemoveComponent(Component *component)
 {
     const auto vecIt = std::ranges::find_if(_components, [component](const std::unique_ptr<Component> &ptr)

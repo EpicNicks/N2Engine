@@ -6,7 +6,7 @@
 using namespace N2Engine;
 using json = nlohmann::json;
 
-void SerializableComponent::RegisterGameObjectRef(const std::string &name, GameObject *&gameObjectRef)
+FieldBuilder SerializableComponent::RegisterGameObjectRef(const std::string &name, GameObject *&gameObjectRef)
 {
     _members.emplace_back(
         name,
@@ -41,11 +41,13 @@ void SerializableComponent::RegisterGameObjectRef(const std::string &name, GameO
                     gameObjectRef = resolver->FindGameObject(uuid);
                 });
             }
-        });
+        },
+        MakeReferenceInfo(name, FieldKind::GameObjectRef, "GameObject"));
+    return FieldBuilder(_members, _members.size() - 1);
 }
 
-void SerializableComponent::RegisterGameObjectRefVector(const std::string &name,
-                                                        std::vector<GameObject*> &gameObjectRefs)
+FieldBuilder SerializableComponent::RegisterGameObjectRefVector(const std::string &name,
+                                                                std::vector<GameObject*> &gameObjectRefs)
 {
     _members.emplace_back(
         name,
@@ -103,5 +105,7 @@ void SerializableComponent::RegisterGameObjectRefVector(const std::string &name,
                     });
                 }
             }
-        });
+        },
+        MakeReferenceInfo(name, FieldKind::GameObjectRefList, "GameObject"));
+    return FieldBuilder(_members, _members.size() - 1);
 }

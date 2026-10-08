@@ -98,7 +98,9 @@ namespace N2Engine::Rendering
          */
         bool SetData(Renderer::Common::MeshData data, std::vector<Submesh> submeshes = {});
 
-        [[nodiscard]] std::string GetResourceType() const override { return "Mesh"; }
+        /// What GetResourceType() returns, for code that needs it without an instance (asset metadata, a field's asset type)
+        static constexpr std::string_view ResourceTypeName = "Mesh";
+        [[nodiscard]] std::string GetResourceType() const override { return std::string(ResourceTypeName); }
 
         [[nodiscard]] const std::vector<Renderer::Common::Vertex> &GetVertices() const { return _data.vertices; }
         [[nodiscard]] const std::vector<std::uint32_t> &GetIndices() const { return _data.indices; }

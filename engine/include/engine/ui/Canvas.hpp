@@ -11,6 +11,7 @@
 #include <renderer/common/RenderState.hpp>
 
 #include "engine/IRenderable.hpp"
+#include "engine/serialization/FieldInfo.hpp"
 
 namespace N2Engine::UI
 {
@@ -25,10 +26,10 @@ namespace N2Engine::UI
 
     // Saved by name. A missing key (a scene saved before world canvases) keeps the default, overlay; an unknown
     // name reads as the first entry, overlay too.
-    NLOHMANN_JSON_SERIALIZE_ENUM(CanvasRenderMode, {
-                                 { CanvasRenderMode::ScreenSpaceOverlay, "ScreenSpaceOverlay" },
-                                 { CanvasRenderMode::WorldSpace, "WorldSpace" }
-                                 })
+    N2_SERIALIZE_ENUM(CanvasRenderMode, {
+                      { CanvasRenderMode::ScreenSpaceOverlay, "ScreenSpaceOverlay" },
+                      { CanvasRenderMode::WorldSpace, "WorldSpace" }
+                      })
 
     /**
      * The root of a UI tree. Its object's descendants with UI components (Image, ...) are laid out inside the

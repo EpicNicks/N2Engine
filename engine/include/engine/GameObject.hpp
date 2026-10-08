@@ -182,6 +182,10 @@ namespace N2Engine
         bool RemoveComponent();
 
         // Component system - Non-template methods
+        /// Adds a component made elsewhere (by name, from ComponentRegistry::Create for the object): the same as
+        /// AddComponent<T>() for it, except that a singleton type isn't checked (the caller knows the type's name).
+        /// Returns the component, or nullptr for a null one.
+        Component* AddComponent(std::unique_ptr<Component> component);
         Component* GetComponent(const std::type_index &type) const;
         /// Removes the component GetComponent finds for the type (the first of it)
         bool RemoveComponent(const std::type_index &type);
@@ -209,7 +213,9 @@ namespace N2Engine
         nlohmann::json Serialize() const override;
         static Ptr Deserialize(const nlohmann::json &j, ReferenceResolver *resolver = nullptr);
 
-        std::string GetResourceType() const override { return "GameObject"; }
+        /// What GetResourceType() returns, for code that needs it without an instance (asset metadata, a field's asset type)
+        static constexpr std::string_view ResourceTypeName = "GameObject";
+        std::string GetResourceType() const override { return std::string(ResourceTypeName); }
 
         // Static utility methods
         /// Scene::FindGameObject on the given scene (nullptr for a null scene)
