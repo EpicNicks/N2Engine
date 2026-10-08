@@ -266,6 +266,50 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    struct WritePlaySnapshotCmd
+    {
+        /// A res:// scene path, or empty for the open scene
+        std::string scenePath;
+
+        static WritePlaySnapshotCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadString()};
+        }
+    };
+
+    struct SetPausedCmd
+    {
+        bool paused;
+
+        static SetPausedCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadBool()};
+        }
+    };
+
+    struct StepCmd
+    {
+        uint32_t frames;
+
+        static StepCmd Deserialize(BufferReader &r)
+        {
+            return {r.ReadU32()};
+        }
+    };
+
+    struct SendInputCmd
+    {
+        /// A JSON array of InputEvent objects (the handler checks its shape and size)
+        nlohmann::json events;
+
+        static SendInputCmd Deserialize(BufferReader &r)
+        {
+            SendInputCmd cmd;
+            cmd.events = ReadBoundedJson(r);
+            return cmd;
+        }
+    };
+
     struct GetEntityBoundsCmd
     {
         /// A JSON array of GameObject UUID strings (the handler checks its shape and size)
@@ -698,6 +742,30 @@ namespace N2Engine::Editor::Protocol
         payload.WriteF32(distance);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::PickResult));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// WritePlaySnapshot's response: the snapshot file's absolute path
+    inline void WritePlaySnapshot(BufferWriter &w, const std::string &file)
+    {
+        BufferWriter payload;
+        payload.WriteString(file);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::PlaySnapshot));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetPlayState's response
+    inline void WritePlayState(BufferWriter &w, const std::string &state, const uint32_t frame, const float time)
+    {
+        BufferWriter payload;
+        payload.WriteString(state);
+        payload.WriteU32(frame);
+        payload.WriteF32(time);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::PlayState));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

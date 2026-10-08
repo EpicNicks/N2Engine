@@ -81,7 +81,7 @@ namespace N2Engine::Editor
             }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--renderer" || arg == "--token-env" || arg == "--create" ||
-                                    arg == "--name" || arg == "--project-id";
+                                    arg == "--name" || arg == "--project-id" || arg == "--play";
             if (!takesValue)
             {
                 continue; // unknown arguments are ignored
@@ -119,6 +119,10 @@ namespace N2Engine::Editor
             {
                 // The variable's name; the token is read from it at startup (ReadAccessToken), not here
                 options.tokenEnv = value;
+            }
+            else if (arg == "--play")
+            {
+                options.playScene = value;
             }
             else if (arg == "--create")
             {
@@ -162,6 +166,10 @@ namespace N2Engine::Editor
         {
             return std::unexpected("--create and --project can't be combined: create the project, then start a host "
                                    "with --project");
+        }
+        if (!options.createPath.empty() && !options.playScene.empty())
+        {
+            return std::unexpected("--create and --play can't be combined");
         }
         if (options.createPath.empty() && (givenName || givenId))
         {
@@ -259,6 +267,11 @@ Options:
   --exit-on-stdin-eof       Exit once stdin reaches end of file or can't be read (a launcher's pipe
                             closes when the launcher dies, even before any client connects). Leave it
                             off when stdin may be closed or absent: the host would exit at once
+  --play <file>             Start as a play host: run the scene snapshot in <file> (what the
+                            WritePlaySnapshot command writes; or a res:// .scene path in the project)
+                            as a game instead of opening the startup scene. Pass the same --project
+                            and --renderer as the editing host, and --exit-on-disconnect. Serves
+                            SetPaused, Step, SendInput and RenderFrame for the running game
   --create <path>           Make <path> a project (project.n2proj, assets/scenes/Main.scene,
                             assets/scripts/Example.lua), print one line to stdout, and exit
                             without starting the engine. Exit code 0: created; 2: the folder

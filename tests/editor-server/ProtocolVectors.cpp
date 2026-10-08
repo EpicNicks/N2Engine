@@ -143,6 +143,10 @@ namespace ProtocolVectors
                 return json{{"x", cmd.x}, {"y", cmd.y}, {"includeInactive", cmd.includeInactive}};
             }},
             {"GetEntityBounds", [](BufferReader &r) { return json{{"entityIds", GetEntityBoundsCmd::Deserialize(r).entityIds}}; }},
+            {"WritePlaySnapshot", [](BufferReader &r) { return json{{"scenePath", WritePlaySnapshotCmd::Deserialize(r).scenePath}}; }},
+            {"SetPaused", [](BufferReader &r) { return json{{"paused", SetPausedCmd::Deserialize(r).paused}}; }},
+            {"Step", [](BufferReader &r) { return json{{"frames", StepCmd::Deserialize(r).frames}}; }},
+            {"SendInput", [](BufferReader &r) { return json{{"events", SendInputCmd::Deserialize(r).events}}; }},
             {"CreateScene", [](BufferReader &r) { return json{{"name", CreateSceneCmd::Deserialize(r).name}}; }},
             {"LoadScene", [](BufferReader &r) { return json{{"sceneJson", LoadSceneCmd::Deserialize(r).sceneJson}}; }},
             {"DeleteScene", [](BufferReader &r) { return json{{"sceneName", DeleteSceneCmd::Deserialize(r).sceneName}}; }},
@@ -291,6 +295,11 @@ namespace ProtocolVectors
                 WritePickResult(w, StringField(f, "entityId"), ToVec3(f.at("point")), f.at("distance").get<float>());
             }},
             {"Bounds", [](BufferWriter &w, const json &f) { WriteBounds(w, f.at("bounds")); }},
+            {"PlaySnapshot", [](BufferWriter &w, const json &f) { WritePlaySnapshot(w, StringField(f, "file")); }},
+            {"PlayState", [](BufferWriter &w, const json &f)
+            {
+                WritePlayState(w, StringField(f, "state"), Uint32Field(f, "frame"), f.at("time").get<float>());
+            }},
             {"EntityData", [](BufferWriter &w, const json &f)
             {
                 // The vector's matrix is 16 numbers, column-major; Matrix is row-major (element (row, col))

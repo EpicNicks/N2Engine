@@ -598,3 +598,14 @@ jobs:
             Write-Host "----- host (no stdin flag) stdout -----"; Get-Content $logPathNoFlag -ErrorAction SilentlyContinue
             Write-Host "----- host (no stdin flag) stderr -----"; Get-Content $errPathNoFlag -ErrorAction SilentlyContinue
           }
+
+      # What the Electron editor does for play mode, with the real binary on the software renderer (see the script's
+      # header): an edit host writes a play snapshot (WritePlaySnapshot) of its unsaved scene, a second process
+      # (N2EditorHost --play <snapshot> with the same --project and --renderer) plays it, and the test checks the script
+      # ran, frames advance beside a busy client, pause, step, input, RenderFrame and Shutdown, that the edit host and its
+      # scene file are untouched, and that --exit-on-disconnect and a missing snapshot end the child as documented.
+      - name: Play child smoke test
+        shell: pwsh
+        env:
+          N2_SMOKE_CONFIG: ${{ matrix.config }}
+        run: ./tests/editor-server/PlaySmokeTest.ps1 -Config $env:N2_SMOKE_CONFIG

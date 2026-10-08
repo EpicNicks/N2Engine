@@ -99,9 +99,19 @@ void Time::Update()
     const double frameTime = std::chrono::duration<double>(currentTime - lastFrameTime).count();
     lastFrameTime = currentTime;
 
-    unscaledDeltaTime = frameTime;
-    scaledDeltaTime = frameTime * timeScale;
+    Advance(frameTime);
+}
 
-    unscaledTime += frameTime;
+void Time::Advance(const double seconds)
+{
+    unscaledDeltaTime = seconds;
+    scaledDeltaTime = seconds * timeScale;
+
+    unscaledTime += seconds;
     time += scaledDeltaTime;
+}
+
+void Time::ResetFrameClock()
+{
+    lastFrameTime = std::chrono::high_resolution_clock::now();
 }

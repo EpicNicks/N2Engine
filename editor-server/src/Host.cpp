@@ -228,7 +228,8 @@ namespace N2Engine::Editor
 
                 // The startup scene, or an empty one with no file yet (so entity commands have a scene). An exception
                 // (a scene whose loading throws) is a warning like any other failure, never the end of the host.
-                if (!project->startupScene.empty())
+                // A play host (--play) opens its snapshot below instead.
+                if (options.playScene.empty() && !project->startupScene.empty())
                 {
                     try
                     {
@@ -242,7 +243,7 @@ namespace N2Engine::Editor
                         Logger::Warn(std::string("Couldn't open the startup scene: ") + e.what());
                     }
                 }
-                if (SceneManager::GetCurScene() == nullptr)
+                if (options.playScene.empty() && SceneManager::GetCurScene() == nullptr)
                 {
                     try
                     {
@@ -260,6 +261,48 @@ namespace N2Engine::Editor
             else
             {
                 Logger::Info("No --project given: assets and asset references are unavailable");
+            }
+
+            // --play: the game is the snapshot (a file a launcher got from WritePlaySnapshot, or a res:// scene of the
+            // project); the host serves it as a play host. A snapshot that can't be played ends the host before it
+            // listens, with exit code 1 and a line on stderr, so a launcher never waits for a ready line that won't come.
+            if (!options.playScene.empty())
+            {
+                std::filesystem::path snapshotFile;
+                std::string playError;
+                if (options.playScene.starts_with("res://"))
+                {
+                    if (!project)
+                    {
+                        playError = "a res:// scene needs --project";
+                    }
+                    else if (const auto resolved = EditorServer::ResolveScenePath(projectDir / "assets", options.playScene))
+                    {
+                        snapshotFile = resolved->file;
+                    }
+                    else
+                    {
+                        playError = resolved.error();
+                    }
+                }
+                else
+                {
+                    snapshotFile = std::filesystem::absolute(std::filesystem::path(options.playScene));
+                }
+                if (playError.empty())
+                {
+                    if (const auto entered = server.EnterPlayMode(snapshotFile); !entered)
+                    {
+                        playError = entered.error();
+                    }
+                }
+                if (!playError.empty())
+                {
+                    std::println(stderr, "N2EditorHost --play: {}", playError);
+                    Logger::Error("Couldn't start playing: " + playError);
+                    app.Shutdown();
+                    return 1;
+                }
             }
 
             // Configure and start the editor server (constructed before Init, above)
@@ -322,6 +365,14 @@ namespace N2Engine::Editor
             while (g_running && server.IsRunning() && !app.IsQuitRequested() &&
                    (!window.IsValid() || !window.ShouldClose()) && (!stdinClosed || !stdinClosed->load()))
             {
+                if (server.IsPlayMode())
+                {
+                    // A play host: a game frame (Application::Tick polls the window's events and updates the input itself),
+                    // then the client's commands for the rest of the frame, so neither starves the other
+                    server.RunPlayFrame();
+                    continue;
+                }
+
                 // Poll window events to keep OS happy (even if window is hidden), and update input
                 window.PollEvents();
 

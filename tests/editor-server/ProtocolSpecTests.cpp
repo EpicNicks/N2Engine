@@ -51,6 +51,11 @@ namespace
             {"GetCameraPosition", CommandType::GetCameraPosition},
             {"SetEditorCamera", CommandType::SetEditorCamera},
             {"GetEditorCamera", CommandType::GetEditorCamera},
+            {"WritePlaySnapshot", CommandType::WritePlaySnapshot},
+            {"SetPaused", CommandType::SetPaused},
+            {"Step", CommandType::Step},
+            {"GetPlayState", CommandType::GetPlayState},
+            {"SendInput", CommandType::SendInput},
             {"PickEntity", CommandType::PickEntity},
             {"GetEntityBounds", CommandType::GetEntityBounds},
             {"CreateScene", CommandType::CreateScene},
@@ -130,6 +135,8 @@ namespace
             {"EditorCamera", ResponseType::EditorCamera},
             {"PickResult", ResponseType::PickResult},
             {"Bounds", ResponseType::Bounds},
+            {"PlaySnapshot", ResponseType::PlaySnapshot},
+            {"PlayState", ResponseType::PlayState},
         };
         return responses;
     }
@@ -147,6 +154,10 @@ namespace
             {"RenderFrameIfChanged", [](BufferReader &r) { (void)RenderFrameIfChangedCmd::Deserialize(r); }},
             {"SetCameraPosition", [](BufferReader &r) { (void)SetCameraPositionCmd::Deserialize(r); }},
             {"SetEditorCamera", [](BufferReader &r) { (void)SetEditorCameraCmd::Deserialize(r); }},
+            {"WritePlaySnapshot", [](BufferReader &r) { (void)WritePlaySnapshotCmd::Deserialize(r); }},
+            {"SetPaused", [](BufferReader &r) { (void)SetPausedCmd::Deserialize(r); }},
+            {"Step", [](BufferReader &r) { (void)StepCmd::Deserialize(r); }},
+            {"SendInput", [](BufferReader &r) { (void)SendInputCmd::Deserialize(r); }},
             {"PickEntity", [](BufferReader &r) { (void)PickEntityCmd::Deserialize(r); }},
             {"GetEntityBounds", [](BufferReader &r) { (void)GetEntityBoundsCmd::Deserialize(r); }},
             {"CreateScene", [](BufferReader &r) { (void)CreateSceneCmd::Deserialize(r); }},
