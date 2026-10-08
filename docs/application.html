@@ -465,7 +465,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p><code>Shutdown</code> does not tear down the Lua runtime, the main camera, <code>ResourceLoader</code>/<code>Resources</code> caches or stored scene data; those live until static destruction. The health report also keeps its last values.</p>
 </div>
 
-<h2 id="tick">Tick: one frame <span class="badge">PR #TBD</span></h2>
+<h2 id="tick">Tick: one frame <span class="badge">PR #102</span></h2>
 <p>The thirteen steps above are <code>Application::Tick(const TickOptions &amp;options = {})</code>; <code>Run()</code> does <code>while (!window.ShouldClose() &amp;&amp; !quitRequested) Tick();</code> after zeroing the fixed-step accumulator (which is now a member, so it carries over between calls). A host with a loop of its own, such as the editor's play child (<a href="editor.html#play">Play mode</a>), calls <code>Tick</code> itself between serving its client. Everything in the list happens in the same order, the same way.</p>
 <div class="table-wrap">
 <table>
