@@ -1542,6 +1542,8 @@ namespace N2Engine::Editor
             (void)_commands.Enqueue([this]
             {
                 CloseEditGroups();
+                // A play host's keys the client held go up with it (a key held when it crashed would stay down)
+                _keys.ReleaseAll();
                 // A client that went away may have crashed: the last edits are written, however recent the autosave
                 FlushAutosave(true);
                 return CommandQueue::Response{};
@@ -1640,8 +1642,7 @@ namespace N2Engine::Editor
                 // The client chose to shut the host down: what it didn't save is what it chose to drop
                 (void)_commands.Enqueue([this]
                 {
-                    CloseEditGroups();
-                    DiscardWrittenAutosave();
+                    PrepareForShutdown();
                     return CommandQueue::Response{};
                 });
                 _running = false;
@@ -2087,8 +2088,9 @@ namespace N2Engine::Editor
         {
             Logger::Info(std::format("Editor client '{}' said Hello (protocol {})", clientName, clientVersionText));
         }
-        // A new session: a group the last one left open is ended
+        // A new session: a group the last one left open is ended, and the keys it held (a play host's) go up
         CloseEditGroups();
+        _keys.ReleaseAll();
         // A project is loaded when the host opened one (--project, SetProject)
         WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), HasProject());
         SendResponse(clientSocket, response.Release());
@@ -3004,7 +3006,20 @@ namespace N2Engine::Editor
             return actions;
         }
 
-        /// A scene's name as a file name: letters, digits, dot, dash, underscore and space stay, the rest becomes '_'
+        /// 32-bit FNV-1a of text, as 8 hex digits: the same on every platform, unlike std::hash
+        std::string ShortHash(std::string_view text)
+        {
+            uint32_t hash = 2166136261u;
+            for (const char c : text)
+            {
+                hash ^= static_cast<unsigned char>(c);
+                hash *= 16777619u;
+            }
+            return std::format("{:08x}", hash);
+        }
+
+        /// A scene's name as a file name: letters, digits, dot, dash, underscore and space stay, the rest becomes '_'.
+        /// A name Windows reserves for a device (CON, NUL, COM1...), with or without an extension, gets a '_' in front.
         std::string SafeSnapshotName(std::string_view name)
         {
             std::string safe;
@@ -3027,7 +3042,26 @@ namespace N2Engine::Editor
             {
                 safe.erase(safe.begin());
             }
-            return safe.empty() ? std::string("scene") : safe;
+            if (safe.empty())
+            {
+                return "scene";
+            }
+            std::string base = safe.substr(0, safe.find('.'));
+            while (!base.empty() && base.back() == ' ')
+            {
+                base.pop_back();
+            }
+            for (char &c : base)
+            {
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            }
+            const bool numbered = base.size() == 4 && base[3] >= '1' && base[3] <= '9' &&
+                                  (base.starts_with("COM") || base.starts_with("LPT"));
+            if (base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || numbered)
+            {
+                safe.insert(safe.begin(), '_');
+            }
+            return safe;
         }
     }
 
@@ -3084,6 +3118,8 @@ namespace N2Engine::Editor
 
         nlohmann::json sceneJson;
         std::string name;
+        // What tells two scenes of one name apart: the scene's file (empty for one that has none)
+        std::string sceneKey;
         if (useOpenScene)
         {
             const Scene *scene = SceneManager::GetCurScene();
@@ -3093,6 +3129,7 @@ namespace N2Engine::Editor
             }
             sceneJson = scene->Serialize();
             name = scene->sceneName;
+            sceneKey = OpenScenePath();
         }
         else
         {
@@ -3118,9 +3155,10 @@ namespace N2Engine::Editor
                 return std::unexpected("Not a valid scene (see the log): " + SanitizeForLog(resourcePath));
             }
             name = resolved->resourcePath.GetStem();
+            sceneKey = resolved->resourcePath.ToString();
         }
 
-        const std::filesystem::path file = _project->root / ".n2" / "play" / (SafeSnapshotName(name) + ".scene");
+        const std::filesystem::path file = _project->root / ".n2" / "play" / (SafeSnapshotName(name) + "-" + ShortHash(sceneKey) + ".scene");
         std::error_code error;
         std::filesystem::create_directories(file.parent_path(), error);
         if (auto written = IO::WriteTextFileAtomically(file, SceneFileText(sceneJson)); !written)
@@ -3231,7 +3269,7 @@ namespace N2Engine::Editor
                     buttons |= Input::Mouse::ButtonBit(button);
                 }
             }
-            mouse->InjectPointer(_pointer, buttons);
+            mouse->InjectPointer(_pointer ? *_pointer : mouse->GetPosition(), buttons);
         }
 
         TickOptions options;
@@ -3268,9 +3306,9 @@ namespace N2Engine::Editor
         do
         {
             const auto now = std::chrono::steady_clock::now();
-            const auto remaining = now < deadline
-                                       ? std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
-                                       : std::chrono::milliseconds::zero();
+            // Rounded up: a fraction of a millisecond left must wait, not spin
+            const auto remaining = now < deadline ? std::chrono::ceil<std::chrono::milliseconds>(deadline - now)
+                                                  : std::chrono::milliseconds::zero();
             processed += ProcessCommands(remaining);
         } while (std::chrono::steady_clock::now() < deadline);
         return processed;
@@ -4297,7 +4335,9 @@ namespace N2Engine::Editor
 
     std::filesystem::path EditorServer::GetAutosaveFile() const
     {
-        if (!_project)
+        // A play host has no autosave: the files under .n2/autosave belong to the host that edits (the scene it plays
+        // has no file of its own, so its autosave path would be the untitled scene's, which that host may have written)
+        if (!_project || _playMode)
         {
             return {};
         }
@@ -4344,9 +4384,19 @@ namespace N2Engine::Editor
         _autosavePending = true;
     }
 
+    void EditorServer::PrepareForShutdown()
+    {
+        CloseEditGroups();
+        DiscardWrittenAutosave();
+    }
+
     void EditorServer::DiscardWrittenAutosave()
     {
         _autosavePending = false;
+        if (_playMode)
+        {
+            return; // nothing a play host wrote, and nothing of the edit host's to remove
+        }
         // No scene of this host's yet: whatever autosave is there belongs to an earlier session, not to this host
         const Scene *loaded = SceneManager::GetCurScene();
         if (!_autosaveProtected && loaded != nullptr && loaded == _openScene)
@@ -4357,7 +4407,7 @@ namespace N2Engine::Editor
 
     void EditorServer::FlushAutosave(const bool force)
     {
-        if (!_autosavePending)
+        if (!_autosavePending || _playMode)
         {
             return;
         }

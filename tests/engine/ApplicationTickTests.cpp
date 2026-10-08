@@ -57,7 +57,8 @@ namespace
             // No physics backend: the fixed step is FixedUpdate alone
             Application::GetInstance().Set3DPhysicsBackend(nullptr);
 
-            SceneManager::AddScene(Scene::Create("ApplicationTickTest"), true);
+            // A name of its own each time: the scenes the manager stores are kept by name
+            SceneManager::AddScene(Scene::Create("ApplicationTickTest_" + std::to_string(++sceneCounter)), true);
             SceneManager::ProcessAnyPendingSceneChange();
             ASSERT_NE(SceneManager::GetCurScene(), nullptr);
 
@@ -81,7 +82,7 @@ namespace
             Application::GetInstance().Tick(rest);
 
             // The scene's components go while the application is still up
-            SceneManager::AddScene(Scene::Create("ApplicationTickTest_Empty"), true);
+            SceneManager::AddScene(Scene::Create("ApplicationTickTest_Empty_" + std::to_string(++sceneCounter)), true);
             SceneManager::ProcessAnyPendingSceneChange();
             Application::GetInstance().GetWindow().Shutdown();
         }
@@ -106,6 +107,7 @@ namespace
 
         static constexpr int Width = 8;
         static constexpr int Height = 4;
+        static inline int sceneCounter = 0;
     };
 }
 
@@ -156,8 +158,9 @@ TEST_F(ApplicationTickTest, WithoutADeltaAFrameIsMeasuredByTheClock)
     EXPECT_GE(TickProbe::fixedUpdates, 1);
     EXPECT_EQ(TickProbe::updates, 1);
 
-    // The accumulator's remainder isn't a frame's: leave nothing behind for the next test
-    Application::GetInstance().ResetFrameClock();
+    // This frame left time in the fixed-step accumulator (less than one step: whole steps were run). That remainder carries
+    // to the next test's first frame, which still runs exactly the steps its own delta pays for, since a remainder under
+    // one step plus k steps is k steps.
 }
 
 TEST_F(ApplicationTickTest, ResetFrameClockMakesAPausedStretchNotAFrame)

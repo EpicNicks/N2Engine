@@ -348,7 +348,8 @@ namespace N2Engine::Editor
          * never touched by the game: the snapshot is the open scene as it is in memory now (unsaved edits play as they
          * are; nothing is saved, no revision moves), or, for another scene path, that file as it is on disk (validated:
          * it must build as a scene). scenePath is a res:// .scene path, or empty for the open scene. Returns the
-         * snapshot's absolute path; an Error message without a project, without a scene to snapshot, for a bad path or
+         * snapshot's absolute path (<name>-<8 hex digits of a hash of the scene's file path>.scene, so scenes of one name
+         * in different folders have files of their own); an Error message without a project, without a scene to snapshot, for a bad path or
          * an unreadable or invalid scene, or on a play host.
          */
         [[nodiscard]] std::expected<std::filesystem::path, std::string> WritePlaySnapshot(const std::string &scenePath);
@@ -378,6 +379,11 @@ namespace N2Engine::Editor
          * being answered. Returns how many commands ran. Without play mode it is ProcessCommands(frameBudget).
          */
         size_t RunPlayFrame(std::chrono::milliseconds frameBudget = DefaultPlayFrameBudget);
+
+        /// What a client's Shutdown runs on the main thread before the host stops: ends open edit groups and removes the
+        /// autosave this host wrote for the open scene (what it didn't save is what the client chose to drop). A play
+        /// host has no autosave and removes none: the files under .n2/autosave are the edit host's. Public for tests.
+        void PrepareForShutdown();
 
         /// The commands a play host answers with an Error: the ones that write project files or swap the scene
         [[nodiscard]] static bool IsEditOnlyCommand(uint8_t commandType);
@@ -597,7 +603,8 @@ namespace N2Engine::Editor
         /// The game's keys and mouse buttons, as SendInput set them (installed as the Input::KeySource in play mode)
         Input::InjectedKeys _keys;
         /// Where SendInput last put the pointer, restored before every game frame
-        Math::Vector2 _pointer{0.0f, 0.0f};
+        /// Until the first pointer event the pointer is left where the device (or the last injection) put it
+        std::optional<Math::Vector2> _pointer;
         /// Runs one game frame: restores the pointer, then Application::Tick (no rendering: frames are drawn on request)
         /// with the clock's time, or exactly deltaSeconds of it
         void RunGameFrame(std::optional<double> deltaSeconds);

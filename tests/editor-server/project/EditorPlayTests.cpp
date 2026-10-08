@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -59,6 +60,7 @@ namespace
     constexpr uint8_t FrameDataType = static_cast<uint8_t>(ResponseType::FrameData);
 
     constexpr const char *ProbeType = "EditorPlayTest_Probe";
+    constexpr const char *ThrowerType = "EditorPlayTest_Thrower";
     constexpr int ViewWidth = 16;
     constexpr int ViewHeight = 12;
 
@@ -173,6 +175,27 @@ namespace
         return false;
     }
 
+    /// Throws from OnUpdate while `armed`
+    class PlayThrower final : public SerializableComponent
+    {
+    public:
+        explicit PlayThrower(GameObject &gameObject) : SerializableComponent(gameObject)
+        {
+            RegisterMember("marker", marker);
+        }
+
+        [[nodiscard]] std::string GetTypeName() const override { return ThrowerType; }
+
+        void OnUpdate() override
+        {
+            if (armed)
+                throw std::runtime_error("PlayThrower says no");
+        }
+
+        int marker = 1;
+        static inline bool armed = false;
+    };
+
     /// Counts the frame callbacks it gets, in the play scene
     class PlayProbe final : public SerializableComponent
     {
@@ -202,6 +225,11 @@ namespace
             ComponentRegistry::Instance().Register(
                 ProbeType,
                 [](GameObject &gameObject) -> std::unique_ptr<Component> { return std::make_unique<PlayProbe>(gameObject); });
+
+            ComponentRegistry::Instance().Register(
+                ThrowerType,
+                [](GameObject &gameObject) -> std::unique_ptr<Component> { return std::make_unique<PlayThrower>(gameObject); });
+            PlayThrower::armed = false;
 
             const auto *info = ::testing::UnitTest::GetInstance()->current_test_info();
             _base = fs::temp_directory_path() / "n2-editor-play-test" / info->name();
@@ -332,7 +360,7 @@ TEST_F(EditorPlayTest, TheSnapshotOfTheOpenSceneIsTheSceneAsItIsInMemory)
     EXPECT_TRUE(file.is_absolute());
     EXPECT_TRUE(fs::equivalent(file.parent_path(), Root() / ".n2" / "play"));
     EXPECT_EQ(file.extension(), ".scene");
-    EXPECT_EQ(file.filename().string(), "Play Test.scene");
+    EXPECT_TRUE(file.filename().string().starts_with("Play Test-")) << file.filename().string();
 
     const json snapshot = json::parse(ReadFile(file));
     EXPECT_EQ(snapshot, SceneManager::GetCurSceneRef().Serialize()) << "what the editor has, saved or not";
@@ -376,7 +404,7 @@ TEST_F(EditorPlayTest, ASceneByPathIsSnapshotFromItsFileNotFromMemory)
     ASSERT_TRUE(fs::is_regular_file(file));
     EXPECT_EQ(json::parse(ReadFile(file)), json::parse(SavedText()));
     EXPECT_EQ(ReadFile(file).find("Unsaved"), std::string::npos);
-    EXPECT_EQ(file.filename().string(), "Play.scene") << "named after the file's stem";
+    EXPECT_TRUE(file.filename().string().starts_with("Play-")) << "named after the file's stem: " << file.filename().string();
 }
 
 TEST_F(EditorPlayTest, ThePathOfTheOpenSceneMeansTheOpenSceneInMemory)
@@ -391,7 +419,7 @@ TEST_F(EditorPlayTest, TheSnapshotNameIsMadeSafeAndASecondSnapshotReplacesTheFir
     ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", "Odd:/Name?"})).type, SceneInfoType);
 
     const fs::path first = Snapshot();
-    EXPECT_EQ(first.filename().string(), "Odd__Name_.scene");
+    EXPECT_TRUE(first.filename().string().starts_with("Odd__Name_-")) << first.filename().string();
     const std::string before = ReadFile(first);
 
     Create("Added Later");
@@ -804,4 +832,134 @@ TEST_F(EditorPlayTest, InputIsRefusedThatIsNotAnArrayOrTooLong)
         enough.push_back(releaseAll);
     EXPECT_EQ(Send(enough).type, OkType);
     EXPECT_EQ(Send(json::array()).type, OkType) << "an empty batch is fine";
+}
+
+// ==================== Snapshot names ====================
+
+TEST_F(EditorPlayTest, ScenesOfOneNameInDifferentFoldersHaveSnapshotsOfTheirOwn)
+{
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"res://one/Same.scene", "Same"})).type, SceneInfoType);
+    const fs::path first = Snapshot();
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"res://two/Same.scene", "Same"})).type, SceneInfoType);
+    const fs::path second = Snapshot();
+
+    EXPECT_NE(first, second);
+    EXPECT_TRUE(fs::is_regular_file(first)) << "the second snapshot didn't replace the first";
+    EXPECT_TRUE(fs::is_regular_file(second));
+    EXPECT_TRUE(first.filename().string().starts_with("Same-"));
+    EXPECT_TRUE(second.filename().string().starts_with("Same-"));
+}
+
+TEST_F(EditorPlayTest, ANameWindowsReservesForADeviceIsNotUsedAsIs)
+{
+    for (const std::string name : {"CON", "nul", "Com1", "LPT9", "aux.x"})
+    {
+        ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", name})).type, SceneInfoType);
+        const std::string file = Snapshot().filename().string();
+        EXPECT_TRUE(file.starts_with("_" + name + "-")) << file;
+    }
+    // Not reserved: COM0, CONSOLE
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", "CONSOLE"})).type, SceneInfoType);
+    EXPECT_TRUE(Snapshot().filename().string().starts_with("CONSOLE-"));
+}
+
+// ==================== The edit host's autosave is not the play host's ====================
+
+TEST_F(EditorPlayTest, APlayHostsShutdownLeavesTheEditHostsAutosaveInPlace)
+{
+    const fs::path untitled = Root() / ".n2" / "autosave" / ".untitled.scene";
+    WriteFile(untitled, "the edit host's untitled autosave");
+    StartPlaying();
+
+    play->PrepareForShutdown();
+
+    ASSERT_TRUE(fs::is_regular_file(untitled)) << "a play host removed the edit host's autosave";
+    EXPECT_EQ(ReadFile(untitled), "the edit host's untitled autosave");
+    EXPECT_TRUE(play->GetAutosaveFile().empty());
+}
+
+TEST_F(EditorPlayTest, ARunningGamesEditsNeitherWriteNorRemoveAnAutosave)
+{
+    const fs::path untitled = Root() / ".n2" / "autosave" / ".untitled.scene";
+    WriteFile(untitled, "kept");
+    StartPlaying();
+    play->SetAutosaveInterval(std::chrono::milliseconds(0));
+
+    BufferWriter w;
+    w.WriteString("Made In Play");
+    w.WriteString("");
+    w.WriteI32(-1);
+    w.WriteString("Empty");
+    (void)Execute(*play, CommandType::CreateEntityEx, w.Release());
+    (void)play->ProcessCommands();
+    play->CloseEditGroups();
+
+    EXPECT_EQ(ReadFile(untitled), "kept");
+}
+
+// ==================== Held keys ====================
+
+TEST_F(EditorPlayTest, KeysHeldByAClientAreReleasedWhenTheNextClientSaysHello)
+{
+    StartPlaying();
+    ASSERT_EQ(Send(json::parse(R"([{"type": "key", "key": "W", "down": true},
+                                   {"type": "mouseButton", "button": "Left", "down": true}])")).type, OkType);
+    const Input::KeySource *source = Input::KeySource::Get();
+    ASSERT_TRUE(source->IsKeyDown(Input::Key::W));
+
+    const Frame hello = Execute(*play, CommandType::Hello, Strings({"test", std::string(ProtocolVersion), ""}));
+    ASSERT_NE(hello.type, ErrorType) << hello.Text();
+
+    EXPECT_FALSE(source->IsKeyDown(Input::Key::W));
+    EXPECT_FALSE(source->IsMouseButtonDown(Input::MouseButton::Left));
+}
+
+TEST_F(EditorPlayTest, BeforeTheFirstPointerEventTheMouseIsLeftWhereItWas)
+{
+    StartPlaying();
+    Input::Mouse *mouse = Input::Mouse::Get();
+    ASSERT_NE(mouse, nullptr);
+    mouse->InjectPointer(Math::Vector2(7.0f, 9.0f), 0);
+    RunFrames(1);
+    ASSERT_FLOAT_EQ(mouse->GetPosition().x, 7.0f);
+
+    ASSERT_EQ(Send(json::parse(R"([{"type": "mouseButton", "button": "Left", "down": true}])")).type, OkType);
+    RunFrames(1);
+
+    EXPECT_FLOAT_EQ(mouse->GetPosition().x, 7.0f) << "a button press moved the pointer to the origin";
+    EXPECT_FLOAT_EQ(mouse->GetPosition().y, 9.0f);
+    EXPECT_TRUE(mouse->GetButton(0));
+}
+
+// ==================== A frame that throws ====================
+
+TEST_F(EditorPlayTest, AFrameThatThrowsIsLoggedAndPausesTheGame)
+{
+    const std::string entity = Create("Thrower");
+    ASSERT_EQ(Execute(server, CommandType::AddComponent, Strings({entity, ThrowerType})).type, ComponentAddedType);
+    StartPlaying();
+    RunFrames(1);
+    ASSERT_FALSE(play->IsPaused()) << "unarmed, the component is harmless";
+
+    PlayThrower::armed = true;
+    EXPECT_NO_THROW(RunFrames(1)) << "the exception must not leave RunPlayFrame";
+    PlayThrower::armed = false;
+
+    EXPECT_TRUE(play->IsPaused());
+    EXPECT_EQ(GetPlayState(*play).state, "Paused");
+    const std::vector<json> states = EventsOfKind(*play, "playState");
+    ASSERT_GE(states.size(), 2u);
+    EXPECT_EQ(states.back().value("state", ""), "Paused");
+    bool logged = false;
+    for (const json &event : play->GetEvents().Read(0, 4096, 0).events)
+    {
+        if (event.value("kind", "") == "log" && event.value("message", "").find("PlayThrower says no") != std::string::npos)
+            logged = true;
+    }
+    EXPECT_TRUE(logged) << "the exception's message is in the log";
+
+    // It can be resumed and runs again
+    EXPECT_EQ(Pause(false).type, OkType);
+    RunFrames(1);
+    EXPECT_FALSE(play->IsPaused());
 }
