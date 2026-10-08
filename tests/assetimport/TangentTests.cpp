@@ -331,6 +331,28 @@ TEST(TangentGenerationTest, AVertexNeedingTwoTangentsIsDuplicatedForTheTriangleT
     }
 }
 
+TEST(TangentGenerationTest, ADegenerateTriangleNeverTakesAVertexsSlotOrAsksForACopy)
+{
+    // Vertex 0 is shared by a triangle with one uv for all its corners, listed first, and a good one
+    std::vector<ImportedVertex> vertices = {
+        MakeVertex(0, 0, 0, 0, 0),       // 0: shared
+        MakeVertex(0, 1, 0, 0, 0),       // 1 (degenerate uv)
+        MakeVertex(-1, 0, 0, 0, 0),      // 2 (degenerate uv)
+        MakeVertex(1, 0, 0, 1, 0),       // 3
+        MakeVertex(0, 1, 0, 0, 1),       // 4
+    };
+    std::vector<std::uint32_t> indices = {0, 1, 2, 0, 3, 4};
+    const TangentResult result = GenerateTangents(vertices, indices);
+    ASSERT_TRUE(result.ok);
+    EXPECT_EQ(result.verticesAdded, 0u) << "the degenerate corner uses the slot instead of asking for a copy";
+    ExpectTangent(vertices[0], {1, 0, 0}, 1.0f, "the shared vertex has the good triangle's tangent");
+    for (std::size_t i = 0; i < vertices.size(); ++i)
+    {
+        ExpectValidTangent(vertices[i], "vertex " + std::to_string(i));
+    }
+    EXPECT_EQ(indices, (std::vector<std::uint32_t>{0, 1, 2, 0, 3, 4}));
+}
+
 TEST(TangentGenerationTest, TheVertexLimitStopsDuplicationAndLeavesTheMeshUnchanged)
 {
     std::vector<ImportedVertex> vertices = {MakeVertex(0, 0, 0, 0, 0), MakeVertex(1, 0, 0, 1, 0),
@@ -409,15 +431,25 @@ namespace
         return std::move(*result);
     }
 
-    /// A unit quad facing +z with normals and uvs (glTF's v runs down: the bottom-left vertex has v = 1), indexed
-    Builder QuadFile(const bool withNormals = true, const bool withUvs = true)
+    /// A unit quad facing +z with normals and uvs (glTF's v runs down: the bottom-left vertex has v = 1), indexed.
+    /// `normalMapped` gives its primitive a material with a normal texture (so generateTangents = ifMissing generates).
+    Builder QuadFile(const bool withNormals = true, const bool withUvs = true, const bool normalMapped = true)
     {
         Builder b;
+        int material = -1;
+        if (normalMapped)
+        {
+            const int image = b.AddImage("Normals", {1, 2, 3, 4}, "image/png");
+            const int texture = b.AddTexture(image);
+            nlohmann::json json;
+            json["normalTexture"] = {{"index", texture}};
+            material = b.AddMaterial(json);
+        }
         const int position = b.AddFloats(GltfTest::QuadPositions(), 3);
         const int normal = withNormals ? b.AddFloats({0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1}, 3) : -1;
         const int uv = withUvs ? b.AddFloats({0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f}, 2) : -1;
         const int indices = b.AddIndicesU16({0, 1, 2, 0, 2, 3});
-        const int mesh = b.AddMesh("Quad", {Builder::Primitive(position, indices, -1, normal, uv)});
+        const int mesh = b.AddMesh("Quad", {Builder::Primitive(position, indices, material, normal, uv)});
         b.SetScene({b.AddNode("Quad", {{"mesh", mesh}})});
         return b;
     }
@@ -529,8 +561,12 @@ TEST(GltfTangentImportTest, GeneratedTangentsKeepEverySubmeshRangeValid)
     const int uv = b.AddFloats({0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f}, 2);
     const int first = b.AddIndicesU16({0, 1, 2});
     const int second = b.AddIndicesU16({0, 2, 3});
-    const int mesh = b.AddMesh("Halves", {Builder::Primitive(position, first, -1, normal, uv),
-                                          Builder::Primitive(position, second, -1, normal, uv)});
+    const int image = b.AddImage("Normals", {1, 2, 3, 4}, "image/png");
+    nlohmann::json bumpy;
+    bumpy["normalTexture"] = {{"index", b.AddTexture(image)}};
+    const int material = b.AddMaterial(bumpy);
+    const int mesh = b.AddMesh("Halves", {Builder::Primitive(position, first, material, normal, uv),
+                                          Builder::Primitive(position, second, material, normal, uv)});
     b.SetScene({b.AddNode("Halves", {{"mesh", mesh}})});
 
     for (const bool merge : {false, true})
@@ -560,21 +596,79 @@ TEST(GltfTangentImportTest, GeneratedTangentsKeepEverySubmeshRangeValid)
     }
 }
 
-TEST(GltfTangentImportTest, ATangentAccessorThatIsNotVec4OrHasTheWrongCountIsRejected)
+TEST(GltfTangentImportTest, AMalformedTangentAccessorIsIgnoredWithAWarningWhateverTheSetting)
 {
     Builder wrongType = QuadFile();
     wrongType.doc["meshes"][0]["primitives"][0]["attributes"]["TANGENT"] =
-        wrongType.AddFloats({1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0}, 3);
-    const auto typeResult = GltfImporter().Import(wrongType.ToGltf(), {}, {});
-    // Either cgltf's validation or the importer's own check refuses it
-    ASSERT_FALSE(typeResult.has_value());
-    EXPECT_EQ(typeResult.error().code, ModelImportErrorCode::InvalidData);
-
+        wrongType.AddFloats({0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0}, 3);
     Builder wrongCount = QuadFile();
-    wrongCount.doc["meshes"][0]["primitives"][0]["attributes"]["TANGENT"] = wrongCount.AddFloats({1, 0, 0, 1, 1, 0, 0, 1}, 4);
-    const auto countResult = GltfImporter().Import(wrongCount.ToGltf(), {}, {});
-    ASSERT_FALSE(countResult.has_value());
-    EXPECT_EQ(countResult.error().code, ModelImportErrorCode::InvalidData);
+    wrongCount.doc["meshes"][0]["primitives"][0]["attributes"]["TANGENT"] =
+        wrongCount.AddFloats({0, 1, 0, 1, 0, 1, 0, 1}, 4);
+
+    for (const Builder *file : {&wrongType, &wrongCount})
+    {
+        for (const TangentGeneration mode : {TangentGeneration::IfMissing, TangentGeneration::Always, TangentGeneration::Never})
+        {
+            ModelImportSettings settings;
+            settings.generateTangents = mode;
+            const auto result = GltfImporter().Import(file->ToGltf(), {}, settings);
+            ASSERT_TRUE(result.has_value()) << "ignored, not an error";
+            bool warned = false;
+            for (const std::string &warning : result->warnings)
+            {
+                warned = warned || warning.find("TANGENT") != std::string::npos;
+            }
+            EXPECT_TRUE(warned) << "a warning names it";
+            if (mode != TangentGeneration::Never)
+            {
+                ExpectTangent(result->meshes[0].vertices[0], {1, 0, 0}, 1.0f, "generated in its place");
+            }
+        }
+    }
+}
+
+TEST(GltfTangentImportTest, OneNonFiniteComponentMakesTheWholeTangentMissing)
+{
+    Builder b = QuadFile();
+    AddTangents(b, {0.0f, 1.0f, std::nanf(""), 1.0f}); // (0, 1, 0) would be half read, and wrong
+    const ImportedScene scene = ImportOrFail(b.ToGltf());
+    for (const ImportedVertex &vertex : scene.meshes[0].vertices)
+    {
+        ExpectTangent(vertex, {1, 0, 0}, 1.0f, "generated, not the half read (0, 1, 0)");
+    }
+}
+
+TEST(GltfTangentImportTest, IfMissingGeneratesOnlyForMeshesWithANormalMappedMaterial)
+{
+    // No material at all: nothing to normal map, so nothing is generated (and the vertices are not copied)
+    const ImportedScene plain = ImportOrFail(QuadFile(true, true, false).ToGltf());
+    EXPECT_FALSE(plain.meshes[0].generatedTangents);
+    for (const ImportedVertex &vertex : plain.meshes[0].vertices)
+    {
+        EXPECT_EQ(vertex.tangent[0], 0.0f);
+        EXPECT_EQ(vertex.tangent[3], 0.0f);
+    }
+
+    // A material without a normal texture is the same
+    Builder unlit = QuadFile(true, true, false);
+    const int material = unlit.AddMaterial(nlohmann::json::object());
+    unlit.doc["meshes"][0]["primitives"][0]["material"] = material;
+    EXPECT_FALSE(ImportOrFail(unlit.ToGltf()).meshes[0].generatedTangents);
+
+    // With materials not imported there is no normal texture to find
+    ModelImportSettings noMaterials;
+    noMaterials.importMaterials = false;
+    EXPECT_FALSE(ImportOrFail(QuadFile().ToGltf(), noMaterials).meshes[0].generatedTangents);
+
+    // Always is for the tangents of a normal map assigned later: every mesh with texture coordinates
+    ModelImportSettings always;
+    always.generateTangents = TangentGeneration::Always;
+    const ImportedScene forced = ImportOrFail(QuadFile(true, true, false).ToGltf(), always);
+    EXPECT_TRUE(forced.meshes[0].generatedTangents);
+    ExpectTangent(forced.meshes[0].vertices[0], {1, 0, 0}, 1.0f, "generated for no material");
+
+    // And the normal-mapped one generates by default
+    EXPECT_TRUE(ImportOrFail(QuadFile().ToGltf()).meshes[0].generatedTangents);
 }
 
 TEST(GltfTangentImportTest, ANonFiniteFileTangentIsReadAsZeroAndGenerated)
@@ -590,7 +684,7 @@ TEST(GltfTangentImportTest, ANonFiniteFileTangentIsReadAsZeroAndGenerated)
 
 TEST(GltfTangentImportTest, TheNormalTexturesScaleIsImportedAndClamped)
 {
-    Builder b = QuadFile();
+    Builder b = QuadFile(true, true, false);
     const int image = b.AddImage("Normals", {1, 2, 3, 4}, "image/png");
     const int texture = b.AddTexture(image);
     nlohmann::json scaled;
@@ -600,13 +694,21 @@ TEST(GltfTangentImportTest, TheNormalTexturesScaleIsImportedAndClamped)
     nlohmann::json huge;
     huge["normalTexture"] = {{"index", texture}, {"scale", 100.0}};
     nlohmann::json none = nlohmann::json::object();
+    nlohmann::json flipped;
+    flipped["normalTexture"] = {{"index", texture}, {"scale", -2.5}};
+    nlohmann::json veryNegative;
+    veryNegative["normalTexture"] = {{"index", texture}, {"scale", -100.0}};
     b.AddMaterial(scaled);
     b.AddMaterial(plain);
     b.AddMaterial(huge);
     b.AddMaterial(none);
+    b.AddMaterial(flipped);
+    b.AddMaterial(veryNegative);
 
     const ImportedScene scene = ImportOrFail(b.ToGltf());
-    ASSERT_EQ(scene.materials.size(), 4u);
+    ASSERT_EQ(scene.materials.size(), 6u);
+    EXPECT_FLOAT_EQ(scene.materials[4].normalScale, -2.5f) << "a negative scale flips the map, as glTF allows";
+    EXPECT_FLOAT_EQ(scene.materials[5].normalScale, -4.0f) << "clamped";
     EXPECT_FLOAT_EQ(scene.materials[0].normalScale, 2.5f);
     EXPECT_FLOAT_EQ(scene.materials[1].normalScale, 1.0f) << "glTF's default";
     EXPECT_FLOAT_EQ(scene.materials[2].normalScale, 4.0f) << "clamped";
@@ -618,7 +720,7 @@ TEST(GltfTangentImportTest, TheNormalTexturesScaleIsImportedAndClamped)
 
 TEST(GltfTangentImportTest, TheMetallicRoughnessTextureAndFactorsAreImportedAsData)
 {
-    Builder b = QuadFile();
+    Builder b = QuadFile(true, true, false);
     const int image = b.AddImage("MR", {1, 2, 3, 4}, "image/png");
     const int texture = b.AddTexture(image);
     nlohmann::json material;

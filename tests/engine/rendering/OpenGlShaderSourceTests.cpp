@@ -109,6 +109,33 @@ namespace
         [[nodiscard]] bool IsValid() const override { return true; }
     };
 
+    /// Runs of whitespace (newlines, indentation) as one space, so a reformatted shader still matches the needles
+    std::string Normalised(const std::string &text)
+    {
+        std::string out;
+        bool space = false;
+        for (const char c : text)
+        {
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+            {
+                space = !out.empty();
+                continue;
+            }
+            if (space)
+            {
+                out.push_back(' ');
+                space = false;
+            }
+            out.push_back(c);
+        }
+        return out;
+    }
+
+    bool Contains(const std::string &source, const std::string &needle)
+    {
+        return Normalised(source).find(Normalised(needle)) != std::string::npos;
+    }
+
     /// The number after `name = ` in GLSL source, or -1
     double ConstantIn(const std::string &source, const std::string &name)
     {
@@ -165,7 +192,27 @@ TEST(OpenGlShaderSourceTest, EveryUniformAMaterialSetsIsDeclaredByTheShaderItDra
     for (const std::string &name : recorded.names)
     {
         EXPECT_TRUE(DeclaresUniform(unlitFrag, name)) << "the unlit fragment shader doesn't declare " << name;
-        EXPECT_FALSE(recorded.names.contains("uPbr")) << "an unlit material sets no lit-shader uniform";
+    }
+    EXPECT_FALSE(recorded.names.contains("uPbr")) << "an unlit material sets no lit-shader uniform";
+}
+
+TEST(OpenGlShaderSourceTest, EveryUniformTheLitShaderTakesFromAMaterialHasADefaultWhenAMaterialIsMadeWithoutOne)
+{
+    // The shared program keeps the last value any material gave a uniform, so a material nobody called ApplyUniforms on
+    // (CreateMaterial alone) must set every one of them itself: a declared uniform without a default is a leak
+    const std::string renderer = ReadFile("src/opengl/OpenGLRenderer.cpp");
+    const std::string material = ReadFile("src/opengl/OpenGLMaterial.cpp");
+    const std::size_t from = renderer.find("OpenGLRenderer::CreateMaterial(");
+    const std::size_t to = renderer.find("OpenGLRenderer::DestroyMaterial(");
+    ASSERT_NE(from, std::string::npos);
+    ASSERT_NE(to, std::string::npos);
+    const std::string created = renderer.substr(from, to - from) + material; // the constructor sets uAlbedo
+
+    RecordingMaterial recorded;
+    Material::Create(ShadingModel::Pbr)->ApplyUniforms(recorded);
+    for (const std::string &name : recorded.names)
+    {
+        EXPECT_NE(created.find("\"" + name + "\""), std::string::npos) << name << " has no default in CreateMaterial";
     }
 }
 
@@ -180,23 +227,18 @@ TEST(OpenGlShaderSourceTest, TheSamplersAndTheirTextureUnitsLineUpWithTheMateria
     static_assert(static_cast<int>(Renderer::Common::AuxTexture::Occlusion) == 1);
     static_assert(static_cast<int>(Renderer::Common::AuxTexture::Normal) == 2);
     static_assert(static_cast<int>(Renderer::Common::AuxTexture::MetallicRoughness) == 3);
-    EXPECT_NE(material.find("return 1 + static_cast<int>(which);"), std::string::npos);
+    EXPECT_TRUE(Contains(material, "return 1 + static_cast<int>(which);"));
 
     for (const char *sampler : {"uEmissiveTexture", "uOcclusionTexture", "uNormalTexture", "uMetallicRoughnessTexture"})
     {
         EXPECT_TRUE(DeclaresUniform(litFrag, sampler)) << sampler << " in the shader";
-        EXPECT_NE(material.find(std::string("return \"") + sampler + "\";"), std::string::npos)
+        EXPECT_TRUE(Contains(material, std::string("return \"") + sampler + "\";"))
             << sampler << " in OpenGLMaterial::AuxSamplerName";
+        EXPECT_TRUE(Contains(litFrag, std::string("uniform sampler2D ") + sampler + ";")) << sampler << " is a sampler2D";
     }
-    // Each sampler is a sampler2D
-    for (const char *sampler : {"uNormalTexture", "uMetallicRoughnessTexture"})
-    {
-        EXPECT_NE(litFrag.find(std::string("uniform sampler2D ") + sampler + ";"), std::string::npos) << sampler;
-    }
-    // The renderer binds every extra texture to its unit, and a draw puts the active unit back
-    EXPECT_NE(renderer.find("GL_TEXTURE0 + static_cast<GLenum>(OpenGLMaterial::AuxTextureUnit(which))"),
-              std::string::npos);
-    EXPECT_NE(renderer.find("Common::AuxTexture::MetallicRoughness})"), std::string::npos);
+    // The renderer binds every extra texture to its unit
+    EXPECT_TRUE(Contains(renderer, "GL_TEXTURE0 + static_cast<GLenum>(OpenGLMaterial::AuxTextureUnit(which))"));
+    EXPECT_TRUE(Contains(renderer, "Common::AuxTexture::MetallicRoughness})"));
 }
 
 TEST(OpenGlShaderSourceTest, TheTangentIsAttributeFourOfBothTheShaderAndTheMeshAndPassedBetweenTheStages)
@@ -205,19 +247,19 @@ TEST(OpenGlShaderSourceTest, TheTangentIsAttributeFourOfBothTheShaderAndTheMeshA
     const std::string mesh = ReadFile("src/opengl/OpenGLMesh.cpp");
     const std::string litVert = ShaderSource(renderer, "litVert");
     const std::string litFrag = ShaderSource(renderer, "litFrag");
-    EXPECT_NE(litVert.find("layout (location = 4) in vec4 aTangent;"), std::string::npos);
-    EXPECT_NE(litVert.find("out vec4 fragTangent;"), std::string::npos);
-    EXPECT_NE(litFrag.find("in vec4 fragTangent;"), std::string::npos);
+    EXPECT_TRUE(Contains(litVert, "layout (location = 4) in vec4 aTangent;"));
+    EXPECT_TRUE(Contains(litVert, "out vec4 fragTangent;"));
+    EXPECT_TRUE(Contains(litFrag, "in vec4 fragTangent;"));
 
-    EXPECT_NE(mesh.find("glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, sizeof(Common::Vertex),"), std::string::npos);
-    EXPECT_NE(mesh.find("offsetof(Common::Vertex, tangent)"), std::string::npos);
-    EXPECT_NE(mesh.find("glEnableVertexAttribArray(4);"), std::string::npos);
+    EXPECT_TRUE(Contains(mesh, "glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, sizeof(Common::Vertex),"));
+    EXPECT_TRUE(Contains(mesh, "offsetof(Common::Vertex, tangent)"));
+    EXPECT_TRUE(Contains(mesh, "glEnableVertexAttribArray(4);"));
     // The other attributes are where the shaders put them
-    EXPECT_NE(litVert.find("layout (location = 0) in vec3 aPos;"), std::string::npos);
-    EXPECT_NE(litVert.find("layout (location = 3) in vec4 aColor;"), std::string::npos);
+    EXPECT_TRUE(Contains(litVert, "layout (location = 0) in vec3 aPos;"));
+    EXPECT_TRUE(Contains(litVert, "layout (location = 3) in vec4 aColor;"));
 }
 
-TEST(OpenGlShaderSourceTest, ThePbrConstantsAreTheSoftwareRenderersAndTheDefaultsKeepBlinnPhong)
+TEST(OpenGlShaderSourceTest, ThePbrConstantsAreTheSoftwareRenderersAndPbrOnlyInputsAreGatedOnUPbr)
 {
     const std::string renderer = ReadFile("src/opengl/OpenGLRenderer.cpp");
     const std::string litFrag = ShaderSource(renderer, "litFrag");
@@ -228,14 +270,15 @@ TEST(OpenGlShaderSourceTest, ThePbrConstantsAreTheSoftwareRenderersAndTheDefault
     for (const char *coefficient : {"vec4(-1.0, -0.0275, -0.572, 0.022)", "vec4(1.0, 0.0425, 1.04, -0.04)",
                                     "exp2(-9.28 * nDotV)", "vec2(-1.04, 1.04)"})
     {
-        EXPECT_NE(litFrag.find(coefficient), std::string::npos) << coefficient;
+        EXPECT_TRUE(Contains(litFrag, coefficient)) << coefficient;
     }
-    // A material made with no Material to set its uniforms is plain Blinn-Phong with nothing extra: the shared
-    // program keeps the last value any material gave it, so every extra is reset
+    // A Lit material never samples the metallic-roughness texture
+    EXPECT_TRUE(Contains(litFrag, "if (uPbr != 0 && uHasMetallicRoughnessTexture)"));
+    // A material made without ApplyUniforms is plain Blinn-Phong with nothing extra
     for (const char *reset : {"material->SetInt(\"uPbr\", 0);", "material->SetInt(\"uHasNormalTexture\", 0);",
                               "material->SetInt(\"uHasMetallicRoughnessTexture\", 0);",
                               "material->SetFloat(\"uNormalScale\", 1.0f);"})
     {
-        EXPECT_NE(renderer.find(reset), std::string::npos) << reset;
+        EXPECT_TRUE(Contains(renderer, reset)) << reset;
     }
 }

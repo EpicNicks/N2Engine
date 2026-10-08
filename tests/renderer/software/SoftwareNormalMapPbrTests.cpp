@@ -264,6 +264,42 @@ TEST(SoftwareNormalMapTest, AMirroringModelMatrixFlipsTheHandednessSoUpStaysUp)
     EXPECT_GT(mirrored, 150);
 }
 
+TEST(SoftwareNormalMapTest, ANegativeScaleFlipsTheMapsXAndY)
+{
+    Scene scene;
+    const SceneLightingData light = DirectionalFrom(Vector3(kInvSqrt2, 0, kInvSqrt2), 0.8f);
+    scene.lit->SetAuxTexture(AuxTexture::Normal, NormalTexel(scene, kInvSqrt2, 0, kInvSqrt2));
+    scene.lit->SetFloat("uNormalScale", 1.0f);
+    const int toward = scene.Draw(light, scene.lit).At(kCentre, kCentre).r;
+    scene.lit->SetFloat("uNormalScale", -1.0f);
+    const int away = scene.Draw(light, scene.lit).At(kCentre, kCentre).r;
+    EXPECT_GT(toward, 150);
+    EXPECT_LT(away, 12) << "leaning along -x: away from a light on the right";
+}
+
+TEST(SoftwareNormalMapTest, ATinyModelScaleDoesNotSwitchNormalMappingOff)
+{
+    Scene scene;
+    const SceneLightingData light = DirectionalFrom(Vector3(kInvSqrt2, 0, kInvSqrt2), 0.8f);
+    scene.lit->SetAuxTexture(AuxTexture::Normal, NormalTexel(scene, kInvSqrt2, 0, kInvSqrt2));
+    const int full = scene.Draw(light, scene.lit).At(kCentre, kCentre).r;
+    ASSERT_GT(full, 150);
+
+    // The quad scaled down by 1e-4 (its tangent in world space is 1e-4 long) and the projection scaled up to match
+    constexpr float tiny = 1e-4f;
+    constexpr float model[16] = {tiny, 0, 0, 0, 0, tiny, 0, 0, 0, 0, tiny, 0, 0, 0, 0, 1};
+    constexpr float projection[16] = {1.0f / tiny, 0, 0, 0, 0, 1.0f / tiny, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    scene.renderer.BeginFrame();
+    scene.renderer.SetViewProjection(Identity, projection);
+    scene.renderer.UpdateSceneLighting(light, Vector3(0, 0, 100));
+    scene.renderer.DrawMesh(scene.mesh, model, scene.lit, RenderState{});
+    scene.renderer.EndFrame();
+    scene.renderer.Present();
+    Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Size) * Size * 4)};
+    scene.renderer.ReadFramebuffer(frame.rgba.data(), Size, Size);
+    EXPECT_NEAR(frame.At(kCentre, kCentre).r, full, 3) << "the normal map still applies";
+}
+
 TEST(SoftwareNormalMapTest, AMeshWithoutTangentsIsDrawnWithoutNormalMapping)
 {
     Scene scene;
@@ -431,8 +467,9 @@ TEST(SoftwarePbrTest, UnderAmbientLightAMetalReflectsItsColourAndADielectricScat
         << "a metal: F0 = the base colour";
     MakePbr(scene.lit, 0.0f, 0.5f);
     const float f0 = Renderer::Common::kDielectricF0;
-    EXPECT_NEAR(scene.Draw(ambient, scene.lit).At(kCentre, kCentre).r, Byte(0.8f + f0 * env.scale + env.bias), 3)
-        << "a dielectric: its diffuse colour plus a faint reflection";
+    const float reflected = f0 * env.scale + env.bias;
+    EXPECT_NEAR(scene.Draw(ambient, scene.lit).At(kCentre, kCentre).r, Byte(0.8f * (1.0f - reflected) + reflected), 3)
+        << "a dielectric: its diffuse colour with what the faint reflection did not take, plus the reflection";
 
     // No light, no ambient: nothing to reflect
     MakePbr(scene.lit, 1.0f, 0.5f);

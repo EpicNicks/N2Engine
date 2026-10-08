@@ -260,14 +260,21 @@ TEST(MaterialPbrTest, BadValuesAreWarnedAboutAndTheNormalScaleIsClamped)
     {
         WarningCapture capture;
         EXPECT_FLOAT_EQ(Material::FromJson(json{{"normalScale", 100}})->GetNormalScale(), 4.0f);
-        EXPECT_FLOAT_EQ(Material::FromJson(json{{"normalScale", -3}})->GetNormalScale(), 0.0f);
+        EXPECT_FLOAT_EQ(Material::FromJson(json{{"normalScale", -100}})->GetNormalScale(), -4.0f);
         EXPECT_EQ(capture.messages.size(), 2u) << "one warning each";
+        EXPECT_FLOAT_EQ(Material::FromJson(json{{"normalScale", -3}})->GetNormalScale(), -3.0f)
+            << "a negative scale flips the map and is allowed";
+        EXPECT_EQ(capture.messages.size(), 2u) << "and is no warning";
     }
     const auto material = Material::Create();
     material->SetNormalScale(std::numeric_limits<float>::quiet_NaN());
     EXPECT_FLOAT_EQ(material->GetNormalScale(), 1.0f);
     material->SetNormalScale(9.0f);
     EXPECT_FLOAT_EQ(material->GetNormalScale(), 4.0f);
+    material->SetNormalScale(-9.0f);
+    EXPECT_FLOAT_EQ(material->GetNormalScale(), -4.0f);
+    material->SetNormalScale(-1.0f);
+    EXPECT_FLOAT_EQ(material->GetNormalScale(), -1.0f);
     material->SetNormalScale(0.0f);
     EXPECT_FLOAT_EQ(material->GetNormalScale(), 0.0f);
 }
@@ -285,6 +292,15 @@ TEST(MaterialPbrTest, ApplyUniformsSetsThePbrAndNormalMapInputsForLitAndPbrMater
     EXPECT_EQ(gpu.GetInt("uHasNormalTexture", -1), 0);
     EXPECT_EQ(gpu.GetInt("uHasMetallicRoughnessTexture", -1), 0);
     EXPECT_FLOAT_EQ(gpu.GetFloat("uNormalScale", -1.0f), 2.0f);
+    // Even with a metallic-roughness texture on the GPU material, Lit does not read it
+    Renderer::Software::SWTexture strayMr;
+    strayMr.data = {1, 2, 3, 4};
+    strayMr.width = strayMr.height = 1;
+    strayMr.channels = 4;
+    gpu.SetAuxTexture(Renderer::Common::AuxTexture::MetallicRoughness, &strayMr);
+    lit->ApplyUniforms(gpu);
+    EXPECT_EQ(gpu.GetInt("uHasMetallicRoughnessTexture", -1), 0) << "only the Pbr shading reads it";
+    gpu.SetAuxTexture(Renderer::Common::AuxTexture::MetallicRoughness, nullptr);
 
     // Pbr, with both textures on the GPU material
     const auto pbr = Material::Create(ShadingModel::Pbr);
@@ -395,6 +411,33 @@ TEST(GpuCachePbrTest, NormalAndMetallicRoughnessTexturesAreDataNeverSrgbEvenInLi
     handle.Release(true);
 }
 
+TEST(GpuCachePbrTest, OnlyAPbrMaterialUploadsTheMetallicRoughnessTexture)
+{
+    const std::size_t baseline = GpuCache::GetEntryCount();
+    RecordingMeshRenderer renderer;
+    const auto mr = DataTexture();
+    const auto material = Material::Create(ShadingModel::Lit);
+    material->SetMetallicRoughnessTexture(mr);
+    GpuCache::Handle lit = GpuCache::AcquireMaterial(renderer, material);
+    ASSERT_TRUE(lit);
+    EXPECT_EQ(renderer.GetCounts().createdTextures, 0) << "a Lit material has no use for it";
+    const auto *sw = RecordingMeshRenderer::AsSW(lit.GetMaterial());
+    EXPECT_EQ(sw->GetAuxTexture(Renderer::Common::AuxTexture::MetallicRoughness), nullptr);
+    EXPECT_EQ(sw->GetInt("uHasMetallicRoughnessTexture", -1), 0);
+
+    // Switching to Pbr makes a new GPU material, which uploads it
+    material->SetShading(ShadingModel::Pbr);
+    GpuCache::Handle pbr = GpuCache::AcquireMaterial(renderer, material);
+    ASSERT_TRUE(pbr);
+    EXPECT_EQ(renderer.GetCounts().createdTextures, 1);
+    const auto *swPbr = RecordingMeshRenderer::AsSW(pbr.GetMaterial());
+    EXPECT_NE(swPbr->GetAuxTexture(Renderer::Common::AuxTexture::MetallicRoughness), nullptr);
+    EXPECT_EQ(swPbr->GetInt("uHasMetallicRoughnessTexture", -1), 1);
+    pbr.Release(true);
+    lit.Release(true);
+    EXPECT_EQ(GpuCache::GetEntryCount(), baseline);
+}
+
 TEST(GpuCachePbrTest, AnUnlitMaterialNeverGetsTheExtraTextures)
 {
     RecordingMeshRenderer renderer;
@@ -467,6 +510,20 @@ TEST(ModelNormalMapTest, ByDefaultMaterialsStayLitAndTheNormalMapAndTangentsCome
         EXPECT_EQ(vertex.tangent[3], 1.0f);
     }
     EXPECT_EQ(ExpectTangentsFollowTheUvs(*model->GetMeshes()[0], 0.999f, "imported quad"), 2u);
+
+    // The mesh with only an unlit material has nothing to normal map: no tangents were generated
+    for (const Vertex &vertex : model->GetMeshes()[1]->GetVertices())
+    {
+        for (const float component : vertex.tangent)
+        {
+            EXPECT_EQ(component, 0.0f);
+        }
+    }
+    ModelSettings always;
+    always.generateTangents = ModelTangents::Always;
+    const auto forced = Model::LoadFromMemory(BumpyQuad().ToGlb(), {}, always);
+    ASSERT_NE(forced, nullptr);
+    EXPECT_EQ(forced->GetMeshes()[1]->GetVertices()[0].tangent[0], 1.0f) << "always: for a normal map assigned later";
 }
 
 TEST(ModelNormalMapTest, PbrMaterialsAreAnImportSettingAndNeverMakeAnUnlitMaterialPbr)

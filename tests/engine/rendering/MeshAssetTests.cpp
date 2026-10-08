@@ -154,7 +154,7 @@ namespace
     }
 
     /// Byte for byte: positions, normals, uvs, colours (the first 48 bytes of each vertex: the tangent that follows is
-    /// new in #3 P4b, and MeshTangentTests checks it) and indices
+    /// new in #3 P4b, and VertexTangentTest in NormalMapPbrAssetTests.cpp checks it) and indices
     void ExpectSameGeometry(const MeshData &actual, const MeshData &expected)
     {
         ASSERT_EQ(actual.vertices.size(), expected.vertices.size());

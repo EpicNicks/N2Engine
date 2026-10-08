@@ -910,10 +910,13 @@ void OpenGLRenderer::CreateStandardShaders()
             mat3 normalMatrix = transpose(inverse(mat3(uModel)));
             fragNormal = normalize(normalMatrix * aNormal);
 
-            // The tangent is a direction: it goes by the model matrix, not unit length (a vertex with none, xyz = 0,
-            // stays 0). A mirroring model matrix (negative determinant) flips the bitangent, so the handedness w too.
-            fragTangent = vec4(mat3(uModel) * aTangent.xyz,
-                               aTangent.w * (determinant(mat3(uModel)) < 0.0 ? -1.0 : 1.0));
+            // The tangent is a direction: it goes by the model matrix and is made unit length here, so a tiny model scale
+            // can't shrink it below the fragment shader's test (a vertex with none, xyz = 0, stays 0). A mirroring model
+            // matrix (negative determinant) flips the bitangent, so the handedness w too.
+            vec3 worldTangent = mat3(uModel) * aTangent.xyz;
+            float worldTangentLength = length(worldTangent);
+            worldTangent = worldTangentLength > 0.0 ? worldTangent / worldTangentLength : vec3(0.0);
+            fragTangent = vec4(worldTangent, aTangent.w * (determinant(mat3(uModel)) < 0.0 ? -1.0 : 1.0));
 
             fragTexCoord = aTexCoord;
             fragColor = aColor;
@@ -1079,13 +1082,16 @@ void OpenGLRenderer::CreateStandardShaders()
 
             vec3 N = normalize(fragNormal);
             if (uHasNormalTexture) {
-                // The tangent made perpendicular to the normal; none (zero) leaves the normal as it is
+                // The fetch is outside the branch below (a texture lookup in non-uniform control flow has undefined
+                // derivatives, so undefined mip selection)
+                vec3 m = texture(uNormalTexture, fragTexCoord).xyz * 2.0 - 1.0;
+                // The tangent made perpendicular to the normal; none (zero) leaves the normal as it is. The vertex
+                // stage made it unit length, so the test is relative.
                 vec3 T = fragTangent.xyz - N * dot(N, fragTangent.xyz);
                 float tangentLength2 = dot(T, T);
                 if (tangentLength2 > 0.00000001) {
                     T *= inversesqrt(tangentLength2);
                     vec3 B = cross(N, T) * (fragTangent.w < 0.0 ? -1.0 : 1.0);
-                    vec3 m = texture(uNormalTexture, fragTexCoord).xyz * 2.0 - 1.0;
                     m.xy *= uNormalScale;
                     N = normalize(T * m.x + B * m.y + N * m.z);
                 }
@@ -1096,7 +1102,7 @@ void OpenGLRenderer::CreateStandardShaders()
             // incidence. pbrSum collects the lights; unused with Blinn-Phong.
             float metallic = clamp(uMetallic, 0.0, 1.0);
             float roughnessTexture = 1.0;
-            if (uHasMetallicRoughnessTexture) {
+            if (uPbr != 0 && uHasMetallicRoughnessTexture) {
                 vec4 mr = texture(uMetallicRoughnessTexture, fragTexCoord);
                 metallic *= mr.b;
                 roughnessTexture = mr.g;
@@ -1235,8 +1241,9 @@ void OpenGLRenderer::CreateStandardShaders()
                 float a004 = min(r.x * r.x, exp2(-9.28 * nDotV)) * r.x + r.y;
                 vec2 envAB = vec2(-1.04, 1.04) * a004 + r.zw;
                 vec3 ambient = uAmbientLight * occlusion;
-                vec3 ambientDiffuse = ambient * (1.0 - metallic) * albedo.rgb;
-                vec3 ambientSpecular = ambient * (f0 * envAB.x + envAB.y);
+                vec3 specularReflectance = f0 * envAB.x + envAB.y;
+                vec3 ambientDiffuse = ambient * (1.0 - metallic) * albedo.rgb * (1.0 - specularReflectance);
+                vec3 ambientSpecular = ambient * specularReflectance;
                 color = pbrSum + ambientDiffuse + ambientSpecular + emissive;
             }
             if (uEncodeOutput != 0) {

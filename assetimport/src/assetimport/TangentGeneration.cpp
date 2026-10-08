@@ -237,6 +237,11 @@ namespace N2Engine::AssetImport
         std::vector<Vec4> addedTangents;
 
         std::vector<std::uint32_t> newIndices = indices; // applied only when everything fits
+
+        // First pass: a vertex's own slot is the tangent of its first corner that MikkTSpace gave a usable one. A corner
+        // without one (a degenerate triangle) never takes the slot, and never asks for a copy: it uses the slot.
+        std::vector<Vec4> cornerTangents(cornerCount);
+        std::vector<std::uint8_t> cornerUsable(cornerCount, 0);
         for (std::size_t c = 0; c < cornerCount; ++c)
         {
             const std::uint32_t original = indices[c];
@@ -245,17 +250,22 @@ namespace N2Engine::AssetImport
                 continue;
             }
             bool usable = true;
-            const Vec4 tangent = CleanTangent(corners[c], vertices[original], usable);
-            if (!assigned[original])
+            cornerTangents[c] = CleanTangent(corners[c], vertices[original], usable);
+            cornerUsable[c] = usable ? 1 : 0;
+            if (usable && !assigned[original])
             {
                 assigned[original] = 1;
-                own[original] = tangent;
-                if (!usable)
-                {
-                    ++result.fallbackVertices;
-                }
+                own[original] = cornerTangents[c];
+            }
+        }
+        for (std::size_t c = 0; c < cornerCount; ++c)
+        {
+            const std::uint32_t original = indices[c];
+            if (!wanted[original] || !cornerUsable[c])
+            {
                 continue;
             }
+            const Vec4 &tangent = cornerTangents[c];
             if (SameTangent(own[original].data(), tangent))
             {
                 continue; // the vertex's own slot already holds it

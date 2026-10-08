@@ -615,7 +615,8 @@ namespace N2Engine::AssetImport
 
         /// Reads a float (or normalised integer) accessor with `components` components into out (count * components)
         std::optional<std::string> ReadFloats(const cgltf_accessor &accessor, const std::size_t components,
-                                              const std::string_view what, std::vector<float> &out, bool &nonFinite)
+                                              const std::string_view what, std::vector<float> &out, bool &nonFinite,
+                                              std::vector<std::uint8_t> *badElements = nullptr)
         {
             if (cgltf_num_components(accessor.type) != components)
             {
@@ -629,6 +630,10 @@ namespace N2Engine::AssetImport
             }
             const std::size_t elementSize = componentSize * components;
             out.assign(accessor.count * components, 0.0f);
+            if (badElements)
+            {
+                badElements->assign(accessor.count, 0);
+            }
             const cgltf_component_type type = accessor.component_type;
             const bool normalized = accessor.normalized != 0;
             return VisitAccessor(accessor, elementSize, what,
@@ -642,6 +647,10 @@ namespace N2Engine::AssetImport
                                          {
                                              value = 0.0f;
                                              nonFinite = true;
+                                             if (badElements)
+                                             {
+                                                 (*badElements)[i] = 1; // the whole element is unusable, not just this component
+                                             }
                                          }
                                          out[i * components + c] = value;
                                      }
@@ -956,13 +965,17 @@ namespace N2Engine::AssetImport
             // The file's tangents are kept unless they are to be generated: with generateTangents = Always, or when this
             // primitive's normals are (the file's tangents belong to its own normals)
             std::vector<float> tangentData;
+            std::vector<std::uint8_t> badTangents;
+            // A malformed TANGENT accessor is ignored with a warning, whether the file's tangents would be used or not
+            // (the tangents are then generated, as if the file had none)
+            if (tangents && (cgltf_num_components(tangents->type) != 4 || tangents->count != vertexCount))
+            {
+                context.warnings.Add(std::format("{}: TANGENT must be VEC4 with as many elements as POSITION; it is ignored", where));
+                tangents = nullptr;
+            }
             if (tangents && !generate && context.settings.generateTangents != TangentGeneration::Always)
             {
-                if (cgltf_num_components(tangents->type) != 4)
-                    return invalid("TANGENT must be VEC4");
-                if (tangents->count != vertexCount)
-                    return invalid("TANGENT has a different element count from POSITION");
-                if (auto error = ReadFloats(*tangents, 4, "TANGENT", tangentData, nonFinite))
+                if (auto error = ReadFloats(*tangents, 4, "TANGENT", tangentData, nonFinite, &badTangents))
                     return invalid(*error);
             }
             if (nonFinite)
@@ -1035,9 +1048,13 @@ namespace N2Engine::AssetImport
                 {
                     // glTF's tangent is along +u and its w the bitangent's sign, cross(normal, tangent) * w: along
                     // decreasing glTF v, which is the engine's increasing (flipped) v. So it is used as it is.
-                    for (std::size_t c = 0; c < 3; ++c)
-                        vertex.tangent[c] = tangentData[v * 4 + c];
-                    vertex.tangent[3] = tangentData[v * 4 + 3] < 0.0f ? -1.0f : 1.0f;
+                    // A tangent with any component that isn't a finite number is missing (zero), not half read
+                    if (!badTangents[v])
+                    {
+                        for (std::size_t c = 0; c < 3; ++c)
+                            vertex.tangent[c] = tangentData[v * 4 + c];
+                        vertex.tangent[3] = tangentData[v * 4 + 3] < 0.0f ? -1.0f : 1.0f;
+                    }
                 }
             }
 
@@ -1118,11 +1135,26 @@ namespace N2Engine::AssetImport
         /// tangents is duplicated; the duplicates count against the scene's vertex budget. A mesh with no texture
         /// coordinates at all keeps zero tangents (it has nothing for a normal map to map).
         std::optional<ModelImportError> FinishTangents(const MeshContext &context, const std::string &meshName,
-                                                       ImportedMesh &mesh)
+                                                       ImportedMesh &mesh, const std::vector<ImportedMaterial> &materials)
         {
             if (context.settings.generateTangents == TangentGeneration::Never || mesh.vertices.empty())
             {
                 return std::nullopt;
+            }
+            // glTF says a client SHOULD generate tangents for a normal map the file gives none for: so ifMissing
+            // generates for a mesh with a submesh whose material has a normal texture; always, for every mesh
+            if (context.settings.generateTangents == TangentGeneration::IfMissing)
+            {
+                const bool normalMapped = std::ranges::any_of(mesh.submeshes, [&](const ImportedSubmesh &submesh)
+                {
+                    return submesh.materialIndex >= 0 &&
+                           static_cast<std::size_t>(submesh.materialIndex) < materials.size() &&
+                           materials[static_cast<std::size_t>(submesh.materialIndex)].normalTexture >= 0;
+                });
+                if (!normalMapped)
+                {
+                    return std::nullopt;
+                }
             }
             const bool hasUvs = std::ranges::any_of(mesh.vertices, [](const ImportedVertex &vertex)
             {
@@ -1373,7 +1405,7 @@ namespace N2Engine::AssetImport
             material.normalTexture = ImageOf(data, source.normal_texture, false, scene, use, warnings);
             // cgltf keeps normalTexture.scale in the view's scale (1 by default; only read for a view in the file)
             material.normalScale = source.normal_texture.texture && std::isfinite(source.normal_texture.scale)
-                                       ? std::clamp(source.normal_texture.scale, 0.0f, 4.0f)
+                                       ? std::clamp(source.normal_texture.scale, -4.0f, 4.0f)
                                        : 1.0f;
             material.occlusionTexture = ImageOf(data, source.occlusion_texture, false, scene, use, warnings);
             // cgltf keeps the occlusion texture's strength in the view's scale
@@ -1803,7 +1835,7 @@ namespace N2Engine::AssetImport
                         return std::unexpected(std::move(*error));
                     }
                 }
-                if (auto error = FinishTangents(context, label, mesh))
+                if (auto error = FinishTangents(context, label, mesh, scene.materials))
                 {
                     return std::unexpected(std::move(*error));
                 }

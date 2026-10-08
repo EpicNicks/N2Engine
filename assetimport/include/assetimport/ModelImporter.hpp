@@ -62,9 +62,10 @@ namespace N2Engine::AssetImport
         /// Keep the file's TANGENT; a primitive without any has none (zero tangents: no normal mapping)
         Never,
         /// Generate MikkTSpace tangents for a primitive that has no TANGENT (glTF's rule), and for one whose normals
-        /// were generated, since the file's tangents belong to its own normals
+        /// were generated, since the file's tangents belong to its own normals; but only for a mesh with a submesh
+        /// whose material has a normal texture (a mesh nothing normal maps pays nothing)
         IfMissing,
-        /// Ignore the file's tangents and generate everywhere
+        /// Ignore the file's tangents and generate for every mesh that has texture coordinates
         Always
     };
 

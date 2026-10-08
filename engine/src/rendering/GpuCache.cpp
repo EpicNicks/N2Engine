@@ -361,10 +361,13 @@ namespace N2Engine::Rendering
                 {
                     created->SetAuxTexture(Renderer::Common::AuxTexture::Emissive, acquire(material->GetEmissiveTexture(), true));
                     created->SetAuxTexture(Renderer::Common::AuxTexture::Occlusion, acquire(material->GetOcclusionTexture(), false));
-                    // Data, not colour: never sRGB. The metallic-roughness texture is read by the Pbr shading only
+                    // Data, not colour: never sRGB. The metallic-roughness texture is read by the Pbr shading only, so
+                    // only a Pbr material uploads it (a shading change makes a new GPU material)
                     created->SetAuxTexture(Renderer::Common::AuxTexture::Normal, acquire(material->GetNormalTexture(), false));
                     created->SetAuxTexture(Renderer::Common::AuxTexture::MetallicRoughness,
-                                           acquire(material->GetMetallicRoughnessTexture(), false));
+                                           material->GetShading() == ShadingModel::Pbr
+                                               ? acquire(material->GetMetallicRoughnessTexture(), false)
+                                               : nullptr);
                 }
                 material->ApplyUniforms(*created);
             }

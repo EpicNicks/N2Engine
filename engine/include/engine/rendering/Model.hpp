@@ -38,7 +38,7 @@ namespace N2Engine::Rendering
     enum class ModelTangents : std::uint8_t
     {
         Never,     ///< "never": keep the file's; a mesh without any is drawn without normal mapping
-        IfMissing, ///< "ifMissing" (the default): MikkTSpace tangents for meshes the file gives none (and for flat-shaded ones)
+        IfMissing, ///< "ifMissing" (the default): MikkTSpace tangents for meshes with a normal-mapped material and none in the file (or flat-shaded ones)
         Always     ///< "always": ignore the file's and generate MikkTSpace tangents everywhere
     };
 
@@ -56,10 +56,11 @@ namespace N2Engine::Rendering
         /// MeshRenderer's default material (lit white).
         bool importMaterials = true;
         ModelNormals generateNormals = ModelNormals::IfMissing;
+        /// MikkTSpace tangents: by default only for a mesh with a material that has a normal texture
         ModelTangents generateTangents = ModelTangents::IfMissing;
         /// Imported materials (those not KHR_materials_unlit) use the Pbr shading (metallic-roughness, as glTF
-        /// defines them) instead of Blinn-Phong. Off by default, so models drawn the way they were before keep looking
-        /// the same.
+        /// defines them) instead of Blinn-Phong. Off by default, so the lighting of an imported model does not change
+        /// (its normal map, if it has one, applies under Lit too).
         bool pbrMaterials = false;
         /// One submesh per material in each mesh, joining primitives that share a material
         bool mergeSubmeshesByMaterial = false;

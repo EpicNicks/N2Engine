@@ -161,7 +161,8 @@ namespace N2Engine::Rendering
         [[nodiscard]] const std::shared_ptr<Texture> &GetNormalTexture() const { return _normalTexture; }
         void SetNormalTexture(std::shared_ptr<Texture> texture);
         /// How strongly the normal map applies: its x and y are multiplied by it (glTF's normalTexture.scale), so 0
-        /// is a flat surface and 1 (the default) the map as authored. Clamped to 0..4.
+        /// is a flat surface and 1 (the default) the map as authored; a negative one flips x and y (glTF allows it).
+        /// Clamped to -4..4.
         [[nodiscard]] float GetNormalScale() const { return _normalScale; }
         void SetNormalScale(float scale);
         /// Pbr only: green is the roughness and blue the metallic factor (glTF's packing), multiplying the

@@ -35,7 +35,7 @@ namespace N2Engine::Rendering
         } g_materialLoaderRegistrar;
 
         // Fixed, like the built-in meshes' (never saved: an empty slot means the default)
-        constexpr float kMaxNormalScale = 4.0f;
+        constexpr float kMaxNormalScale = 4.0f; // the scale is clamped to -4..4 (a negative one flips the map's x and y)
 
         constexpr const char *DefaultLitUuid = "6e32656e-6d61-5454-0001-000000000001";
         constexpr const char *DefaultUnlitUuid = "6e32656e-6d61-5454-0001-000000000002";
@@ -268,7 +268,7 @@ namespace N2Engine::Rendering
 
     void Material::SetNormalScale(const float scale)
     {
-        _normalScale = std::isfinite(scale) ? std::clamp(scale, 0.0f, kMaxNormalScale) : 1.0f;
+        _normalScale = std::isfinite(scale) ? std::clamp(scale, -kMaxNormalScale, kMaxNormalScale) : 1.0f;
         Changed();
     }
 
@@ -309,8 +309,12 @@ namespace N2Engine::Rendering
             target.SetInt("uPbr", _shading == ShadingModel::Pbr ? 1 : 0);
             target.SetInt("uHasNormalTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Normal) != nullptr ? 1 : 0);
             target.SetFloat("uNormalScale", _normalScale);
+            // Only the Pbr shading reads it (and GpuCache only gives it to a Pbr material)
             target.SetInt("uHasMetallicRoughnessTexture",
-                          target.GetAuxTexture(Renderer::Common::AuxTexture::MetallicRoughness) != nullptr ? 1 : 0);
+                          _shading == ShadingModel::Pbr &&
+                                  target.GetAuxTexture(Renderer::Common::AuxTexture::MetallicRoughness) != nullptr
+                              ? 1
+                              : 0);
             target.SetVec3("uEmissive", _emissive.r, _emissive.g, _emissive.b);
             target.SetInt("uHasEmissiveTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Emissive) != nullptr ? 1 : 0);
             target.SetInt("uHasOcclusionTexture", target.GetAuxTexture(Renderer::Common::AuxTexture::Occlusion) != nullptr ? 1 : 0);
@@ -410,13 +414,14 @@ namespace N2Engine::Rendering
                 if (value.is_number() && std::isfinite(value.get<double>()))
                 {
                     const double number = value.get<double>();
-                    if (number < 0.0 || number > static_cast<double>(kMaxNormalScale))
-                        Warn(debugName, key, value, "a number from 0 to 4 (clamped)");
-                    _normalScale = static_cast<float>(std::clamp(number, 0.0, static_cast<double>(kMaxNormalScale)));
+                    if (std::fabs(number) > static_cast<double>(kMaxNormalScale))
+                        Warn(debugName, key, value, "a number from -4 to 4 (clamped)");
+                    _normalScale = static_cast<float>(
+                        std::clamp(number, -static_cast<double>(kMaxNormalScale), static_cast<double>(kMaxNormalScale)));
                 }
                 else
                 {
-                    Warn(debugName, key, value, "a number from 0 to 4");
+                    Warn(debugName, key, value, "a number from -4 to 4");
                 }
             }
             else if (key == "occlusionTexture")

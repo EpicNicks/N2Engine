@@ -199,8 +199,8 @@ namespace
             r.pbr = mat.pbr;
             r.metallic = std::clamp(mat.metallic, 0.f, 1.f);
             r.smoothness = mat.smoothness;
-            // The metallic-roughness texture is read by the PBR model only (as on OpenGL, where uHasMetallicRoughnessTexture
-            // is set but the Blinn-Phong path never samples it)
+            // The metallic-roughness texture is read by the PBR model only (as on OpenGL, where the shader samples it
+            // only with uPbr, and the engine gives it to Pbr materials only)
             r.metallicRoughnessTex = mat.pbr ? mat.metallicRoughnessTexture : nullptr;
         }
         r.flatColor = PackRGBA(r.aR, r.aG, r.aB, r.aA);
@@ -341,6 +341,8 @@ namespace
             const float d = nx*tangent.x + ny*tangent.y + nz*tangent.z;
             float tx = tangent.x - nx*d, ty = tangent.y - ny*d, tz = tangent.z - nz*d;
             const float t2 = tx*tx + ty*ty + tz*tz;
+            // The interpolated tangent is made of unit vectors (a vertex with none is zero), so this threshold is
+            // relative: a tiny model scale doesn't switch normal mapping off
             if (t2 > 1e-8f)
             {
                 const float inv = 1.f / std::sqrt(t2);
@@ -517,9 +519,12 @@ namespace
             const float nDotV = std::max(nx*vx + ny*vy + nz*vz, 0.0001f);
             const EnvBrdf env = EnvironmentBrdf(perceptualRoughness, nDotV);
             const float diffuse = 1.f - metallic;
-            outR = pbrR + lr * (diffuse * r + f0r * env.scale + env.bias);
-            outG = pbrG + lg * (diffuse * g + f0g * env.scale + env.bias);
-            outB = pbrB + lb * (diffuse * b + f0b * env.scale + env.bias);
+            const float specR = f0r * env.scale + env.bias, specG = f0g * env.scale + env.bias,
+                        specB = f0b * env.scale + env.bias;
+            // The diffuse part gets what the specular part did not reflect, 1 - specular
+            outR = pbrR + lr * (diffuse * r * (1.f - specR) + specR);
+            outG = pbrG + lg * (diffuse * g * (1.f - specG) + specG);
+            outB = pbrB + lb * (diffuse * b * (1.f - specB) + specB);
         }
         if (m.hasEmissive || m.emissiveTex)
         {
@@ -1442,6 +1447,16 @@ void SoftwareRenderer::RasterizeMesh(SWMesh* mesh, const float* modelMatrix, con
             x.cv.tan[1] = modelMatrix[4] * v.tangent[0] + modelMatrix[5] * v.tangent[1] + modelMatrix[6] * v.tangent[2];
             x.cv.tan[2] = modelMatrix[8] * v.tangent[0] + modelMatrix[9] * v.tangent[1] + modelMatrix[10] * v.tangent[2];
             x.cv.tan[3] = v.tangent[3] * handedness;
+            // Unit length in world space (zero, no tangent, stays zero), whatever the model's scale
+            const float tl = std::sqrt(x.cv.tan[0]*x.cv.tan[0] + x.cv.tan[1]*x.cv.tan[1] + x.cv.tan[2]*x.cv.tan[2]);
+            if (tl > 0.f && std::isfinite(tl))
+            {
+                x.cv.tan[0] /= tl; x.cv.tan[1] /= tl; x.cv.tan[2] /= tl;
+            }
+            else
+            {
+                x.cv.tan[0] = x.cv.tan[1] = x.cv.tan[2] = 0.f;
+            }
         }
         else
         {
