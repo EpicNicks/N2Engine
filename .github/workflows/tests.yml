@@ -506,6 +506,10 @@ jobs:
             if (-not $procEof.WaitForExit(30000)) { throw "Editor host with --exit-on-stdin-eof did not exit within 30s with its stdin at end of file" }
             if ($procEof.ExitCode -ne 0) { throw ("Editor host with --exit-on-stdin-eof (stdin at end of file) exited with code 0x{0:X8}" -f $procEof.ExitCode) }
             Write-Host "Editor host with --exit-on-stdin-eof exited cleanly with its stdin at end of file"
+            # The Logger writes to the console in Debug builds only
+            if ($env:N2_SMOKE_CONFIG -eq "Debug" -and -not (Get-Content $logPathEof -Raw).Contains("Stdin closed")) {
+              throw "The host's log doesn't say its stdin closed"
+            }
 
             # ---- Without the flag, the same stdin changes nothing: the host keeps serving ----
             $procNoFlag = Start-Process -FilePath $exe -PassThru -ArgumentList "--port", "0" `
@@ -515,6 +519,7 @@ jobs:
             Start-Sleep -Seconds 3
             if ($procNoFlag.HasExited) { throw ("Editor host without --exit-on-stdin-eof exited when its stdin was at end of file (code 0x{0:X8})" -f $procNoFlag.ExitCode) }
             Write-Host "Editor host without --exit-on-stdin-eof kept running with its stdin at end of file"
+            if ((Get-Content $logPathNoFlag -Raw).Contains("Stdin closed")) { throw "A host without --exit-on-stdin-eof logged that its stdin closed" }
           }
           finally {
             # A failing Kill (the host exiting meanwhile) must not replace the error that got us here

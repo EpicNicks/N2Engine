@@ -101,6 +101,11 @@ namespace N2Engine::Editor
      * end of file or on any read error (a closed or invalid stdin included), sets the returned flag. The caller
      * polls the flag in its main loop. The thread is detached because a read on a pipe that stays open can't be
      * interrupted; it only holds the flag, so it is harmless once the host has returned, and ends with the process.
+     *
+     * The watcher starts once per process (a later call returns the same flag, already true if stdin has closed): the
+     * flag hands stdin to the host for the life of the process, and whatever stdin held is discarded. Give it a pipe or
+     * a file, not a terminal: a POSIX background process reading its terminal gets SIGTTIN, and a Windows console
+     * discards the lines typed into it (Ctrl+Z then Enter is its end of file).
      */
     [[nodiscard]] std::shared_ptr<std::atomic<bool>> StartStdinEofWatcher();
 

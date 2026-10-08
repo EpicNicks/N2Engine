@@ -188,12 +188,22 @@ namespace N2Engine::Editor
             {
                 return -1; // no stdin at all
             }
-            DWORD read = 0;
-            if (!ReadFile(handle, buffer, static_cast<DWORD>(size), &read, nullptr))
+            const bool isPipe = GetFileType(handle) == FILE_TYPE_PIPE;
+            for (;;)
             {
-                return -1; // a broken pipe (the writer closed) is the usual way here
+                DWORD read = 0;
+                if (!ReadFile(handle, buffer, static_cast<DWORD>(size), &read, nullptr))
+                {
+                    return -1; // a broken pipe (the writer closed) is the usual way here
+                }
+                // A pipe's end of file is the failed read above; a successful read of nothing (a zero-length write by
+                // the other side) isn't one. A file or console reports its end as 0 bytes.
+                if (read == 0 && isPipe)
+                {
+                    continue;
+                }
+                return static_cast<std::ptrdiff_t>(read);
             }
-            return static_cast<std::ptrdiff_t>(read);
 #else
             for (;;)
             {
@@ -210,14 +220,20 @@ namespace N2Engine::Editor
 
     std::shared_ptr<std::atomic<bool>> StartStdinEofWatcher()
     {
-        auto closed = std::make_shared<std::atomic<bool>>(false);
-        std::thread(
-            [closed]
-            {
-                DrainUntilEof(ReadStdinHandle);
-                *closed = true;
-            })
-            .detach();
+        // Once per process: stdin is the process's, so a second RunHost shares the first watcher (and its flag, true if
+        // stdin has closed) instead of starting a competing reader
+        static const std::shared_ptr<std::atomic<bool>> closed = []
+        {
+            auto flag = std::make_shared<std::atomic<bool>>(false);
+            std::thread(
+                [flag]
+                {
+                    DrainUntilEof(ReadStdinHandle);
+                    *flag = true;
+                })
+                .detach();
+            return flag;
+        }();
         return closed;
     }
 

@@ -188,7 +188,8 @@ TEST(HostOptionsTest, TheUsageNamesEveryOption)
 {
     const std::string_view usage = HostUsage();
     for (const std::string_view option : {"--port", "-p,", "--bind", "--project", "--renderer", "--token-env",
-                                          "--exit-on-disconnect", "--exit-on-stdin-eof", "--help", "-h,", "N2EditorHost ready port="})
+                                          "--exit-on-disconnect", "--exit-on-stdin-eof", "--help", "-h,",
+                                          "N2EditorHost ready port="})
     {
         EXPECT_NE(usage.find(option), std::string_view::npos) << option;
     }
