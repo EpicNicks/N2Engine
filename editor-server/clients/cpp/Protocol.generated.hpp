@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.8.0";
+inline constexpr const char *ProtocolVersion = "1.9.0";
 
 enum class CommandType : uint8_t
 {
@@ -50,6 +50,13 @@ enum class CommandType : uint8_t
     SetLocalTransform = 0x3A,
     CreateScript = 0x40,
     RescanAssets = 0x41,
+    ListAssets = 0xA0,
+    GetAssetInfo = 0xA1,
+    SetImportSettings = 0xA2,
+    ReadTextAsset = 0xA3,
+    WriteTextAsset = 0xA4,
+    CreateScriptAsset = 0xA5,
+    CreateFolder = 0xA6,
     GetEngineHealth = 0x50,
     GetComponentTypes = 0x60,
     AddComponent = 0x61,
@@ -101,6 +108,10 @@ enum class ResponseType : uint8_t
     EditorCamera = 0x19,
     PickResult = 0x1A,
     Bounds = 0x1B,
+    AssetList = 0xA0,
+    AssetDetail = 0xA1,
+    TextData = 0xA2,
+    AssetCreated = 0xA3,
 };
 
 // Custom types
@@ -287,6 +298,45 @@ struct CreateScriptCmd
     std::string name;
 };
 
+struct ListAssetsCmd
+{
+    std::string folder;
+    bool recursive;
+};
+
+struct GetAssetInfoCmd
+{
+    std::string uuidOrPath;
+};
+
+struct SetImportSettingsCmd
+{
+    std::string path;
+    std::string customData; // JSON: any
+};
+
+struct ReadTextAssetCmd
+{
+    std::string path;
+};
+
+struct WriteTextAssetCmd
+{
+    std::string path;
+    std::string text;
+};
+
+struct CreateScriptAssetCmd
+{
+    std::string path;
+    std::string className;
+};
+
+struct CreateFolderCmd
+{
+    std::string path;
+};
+
 struct AddComponentCmd
 {
     std::string entityId;
@@ -455,6 +505,28 @@ struct EntityDataData
 struct ScriptDataData
 {
     std::string scriptTemplate;
+};
+
+struct AssetListData
+{
+    std::string folders; // JSON: string[]
+    std::string assets; // JSON: AssetInfo[]
+};
+
+struct AssetDetailData
+{
+    std::string info; // JSON: AssetDetails
+};
+
+struct TextDataData
+{
+    std::string text;
+};
+
+struct AssetCreatedData
+{
+    std::string path;
+    std::string uuid;
 };
 
 struct EngineHealthData

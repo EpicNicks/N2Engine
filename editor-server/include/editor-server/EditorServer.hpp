@@ -16,6 +16,7 @@
 #include <string_view>
 
 #include "engine/io/ProjectFile.hpp"
+#include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 
 #include "editor-server/CommandQueue.hpp"
@@ -319,9 +320,65 @@ namespace N2Engine::Editor
         /// The most ids GetEntityBounds answers at once (more is an Error)
         static constexpr std::size_t MaxBoundsEntityIds = 4096;
 
+        // ==================== Assets and the file watcher (#81, E8) ====================
+
+        /// The most bytes of text ReadTextAsset and WriteTextAsset carry (more is an Error)
+        static constexpr std::size_t MaxTextAssetBytes = 4u * 1024u * 1024u;
+        /// The most bytes of JSON text SetImportSettings accepts
+        static constexpr std::size_t MaxImportSettingsBytes = 64u * 1024u;
+        /// How often the watcher looks for changed asset files while a client is connected: once a second
+        static constexpr std::chrono::milliseconds DefaultAssetPollInterval{1000};
+
+        /**
+         * A res:// asset path a client sent, checked: "res://" then a path of valid file names (no "..", drive, stream
+         * or character a file name can't have) that stays inside assetsRoot, lexically and with symlinks resolved
+         * for the part that exists. The file needn't exist. With allowRoot, "res://" (the assets folder itself) is
+         * accepted. The result has the path as the file system spells it, so "res://Scripts/player.lua" on a
+         * case-insensitive file system is the same asset as "res://scripts/Player.lua". An Error message otherwise.
+         */
+        [[nodiscard]] static std::expected<ResolvedScenePath, std::string> ResolveAssetPath(
+            const std::filesystem::path &assetsRoot, const std::string &path, bool allowRoot = false);
+        /// Whether one path part is a name a file or folder may have on every platform the editor runs on: not empty,
+        /// at most 255 bytes, none of <>:"|?*\/ or a control character, not "." or "..", no trailing dot or space, and
+        /// not a Windows device name (CON, NUL, COM1, ...), with or without an extension
+        [[nodiscard]] static bool IsValidAssetName(std::string_view name);
+        /// Whether ReadTextAsset and WriteTextAsset handle files with this path's extension (any case): .lua, .mat,
+        /// .scene, .json, .txt, .md, .csv, .xml, .yaml, .yml, .toml, .ini, .cfg, .glsl, .vert, .frag, .shader
+        [[nodiscard]] static bool IsTextAssetPath(std::string_view path);
+        /// Whether text is well-formed UTF-8 (no overlong forms, surrogates, or values above U+10FFFF)
+        [[nodiscard]] static bool IsValidUtf8(std::string_view text);
+
+        /**
+         * The file watcher's check, run now: when the files the asset scan looks at differ from the last scan's
+         * (ResourceLoader::AssetsChangedOnDisk, which only reads the directory listing), rescans, reloads the assets the
+         * engine holds in memory whose files changed (a script is reloaded in place and its LuaComponents rebuild their
+         * script; any other asset is dropped from the cache, so its next use loads the file again), moves the frame
+         * revision on and pushes assetsChanged. Main thread. True when it found changes. False, doing nothing, without a
+         * project. ProcessCommands calls it through PollAssetsIfDue.
+         */
+        bool PollAssets();
+        /// What ProcessCommands calls: PollAssets, but only while watching is on (SetAssetWatching), a client is
+        /// connected (HasClient), the project has been opened, and the poll interval has passed since the last check. So
+        /// a host with no editor attached never walks the assets folder. True when it found changes.
+        bool PollAssetsIfDue();
+        /// On by default; off stops PollAssetsIfDue (and so the watcher). Main thread.
+        void SetAssetWatching(const bool enabled) { _watchAssets = enabled; }
+        [[nodiscard]] bool IsWatchingAssets() const { return _watchAssets; }
+        /// The time between the watcher's checks (DefaultAssetPollInterval); zero checks on every ProcessCommands call
+        void SetAssetPollInterval(const std::chrono::milliseconds interval) { _assetPollInterval = interval; }
+        [[nodiscard]] std::chrono::milliseconds GetAssetPollInterval() const { return _assetPollInterval; }
+        /// The clock the poll interval is measured with (steady_clock::now when none is set); tests set their own
+        using AssetPollClock = std::function<std::chrono::steady_clock::time_point()>;
+        void SetAssetPollClock(AssetPollClock clock) { _assetPollClock = std::move(clock); }
+        /// Whether a client is connected, which the watcher waits for. The network thread sets it as connections open and
+        /// close; a test that has no socket sets it to stand in for one.
+        void SetClientConnected(const bool connected) { _clientConnected = connected; }
+        [[nodiscard]] bool HasClient() const { return _clientConnected; }
+
         /// True for a command a client is expected to poll: RenderFrame, RenderFrameIfChanged, GetAudio, PollEvents, and
         /// (ahead of the planned editor, #6, which refreshes them continuously) GetAllEntities, GetEntityTransform,
         /// GetCameraPosition, GetEditorCamera, SetEditorCamera (sent every frame of a drag), PickEntity, GetEntityBounds,
+        /// ListAssets, GetAssetInfo, ReadTextAsset (the asset panel and script editor, whenever assetsChanged arrives),
         /// GetEngineHealth, GetHierarchy, GetEntity.
         /// Rule: a command a client polls never logs per call, or its lines would drown everything else (and, since
         /// every line is an event, PollEvents would always find one). Such a command still logs when it fails
@@ -383,6 +440,26 @@ namespace N2Engine::Editor
 
         void HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleRescanAssets(int clientSocket);
+        void HandleListAssets(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleGetAssetInfo(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleSetImportSettings(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleReadTextAsset(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleWriteTextAsset(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleCreateScriptAsset(int clientSocket, const std::vector<uint8_t> &payload);
+        void HandleCreateFolder(int clientSocket, const std::vector<uint8_t> &payload);
+
+        /// A rescan found changes (the RescanAssets command or the watcher): reloads the assets held in memory whose files
+        /// changed, moves the frame revision on and pushes assetsChanged {added, removed, modified}. Nothing for none.
+        void ApplyAssetChanges(const IO::ResourceLoader::RescanResult &changes);
+        /// A project file was just written by a command: ResourceLoader::RefreshAsset, then, when it is new or changed
+        /// (always, with force: a write may leave the size and the clock's tick as they were), the reload and the
+        /// assetsChanged event ApplyAssetChanges gives a rescan's changes
+        void NoteAssetWritten(const IO::ResourcePath &path, bool force);
+        /// The engine holds this asset in memory and its file changed: a script's source is read again into the same
+        /// object (the LuaComponents hold it) and its module runs again, which rebuilds the components' script instances;
+        /// any other asset is dropped from the cache, so its next use loads the file. A failure is logged (a log event),
+        /// never thrown. Nothing when the asset isn't held.
+        void ReloadLoadedAsset(const IO::ResourcePath &path);
 
         void HandleOpenScene(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleSaveSceneToFile(int clientSocket, const std::vector<uint8_t> &payload);
@@ -534,5 +611,13 @@ namespace N2Engine::Editor
 
         // UpdateAudio's clock; unset until its first call
         std::optional<std::chrono::steady_clock::time_point> _lastAudioUpdate;
+
+        // The asset watcher. _clientConnected is written by the network thread and read by the main thread.
+        std::atomic<bool> _clientConnected{false};
+        bool _watchAssets{true};
+        std::chrono::milliseconds _assetPollInterval{DefaultAssetPollInterval};
+        std::optional<std::chrono::steady_clock::time_point> _lastAssetPoll;
+        AssetPollClock _assetPollClock;
+        bool _assetPollFailureLogged{false};
     };
 }
