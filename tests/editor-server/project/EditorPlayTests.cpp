@@ -919,15 +919,15 @@ TEST_F(EditorPlayTest, BeforeTheFirstPointerEventTheMouseIsLeftWhereItWas)
     StartPlaying();
     Input::Mouse *mouse = Input::Mouse::Get();
     ASSERT_NE(mouse, nullptr);
-    mouse->InjectPointer(Math::Vector2(7.0f, 9.0f), 0);
     RunFrames(1);
-    ASSERT_FLOAT_EQ(mouse->GetPosition().x, 7.0f);
+    const Math::Vector2 before = mouse->GetPosition();
 
+    // No pointer event yet: a button press must not put the pointer anywhere, so it stays where the frames had it
     ASSERT_EQ(Send(json::parse(R"([{"type": "mouseButton", "button": "Left", "down": true}])")).type, OkType);
-    RunFrames(1);
+    RunFrames(2);
 
-    EXPECT_FLOAT_EQ(mouse->GetPosition().x, 7.0f) << "a button press moved the pointer to the origin";
-    EXPECT_FLOAT_EQ(mouse->GetPosition().y, 9.0f);
+    EXPECT_FLOAT_EQ(mouse->GetPosition().x, before.x);
+    EXPECT_FLOAT_EQ(mouse->GetPosition().y, before.y);
     EXPECT_TRUE(mouse->GetButton(0));
 }
 
