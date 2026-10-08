@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include <math/UUID.hpp>
 #include <nlohmann/json.hpp>
 
 #include <editor-server/Commands.hpp>

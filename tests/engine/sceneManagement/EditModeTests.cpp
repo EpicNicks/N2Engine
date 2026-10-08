@@ -6,6 +6,7 @@
 
 #include "engine/Component.hpp"
 #include "engine/GameObjectScene.hpp"
+#include "engine/Positionable.hpp"
 #include "engine/rendering/Light.hpp"
 
 using namespace N2Engine;
