@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.5.0";
+        public const string ProtocolVersion = "1.6.0";
     }
 
     public enum CommandType : byte
@@ -54,6 +54,14 @@ namespace N2Engine.Editor.Protocol
         GetProjectInfo = 0x70,
         SetProjectSettings = 0x71,
         SetStartupScene = 0x72,
+        Undo = 0x90,
+        Redo = 0x91,
+        BeginEditGroup = 0x92,
+        EndEditGroup = 0x93,
+        GetHistory = 0x94,
+        GetAutosave = 0x95,
+        RestoreAutosave = 0x96,
+        DiscardAutosave = 0x97,
         Shutdown = 0xFF,
     }
 
@@ -80,6 +88,9 @@ namespace N2Engine.Editor.Protocol
         ComponentAdded = 0x12,
         ComponentData = 0x13,
         LuaFields = 0x14,
+        EditResult = 0x15,
+        History = 0x16,
+        Autosave = 0x17,
     }
 
     public struct Vec3
@@ -138,6 +149,38 @@ namespace N2Engine.Editor.Protocol
         public string[]? Removed { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("modified")]
         public string[]? Modified { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("canUndo")]
+        public bool? CanUndo { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("canRedo")]
+        public bool? CanRedo { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("label")]
+        public string? Label { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("redoLabel")]
+        public string? RedoLabel { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("undoCount")]
+        public double? UndoCount { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("redoCount")]
+        public double? RedoCount { get; set; }
+    }
+
+    public class HistoryEntry
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("label")]
+        public string Label { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("bytes")]
+        public double Bytes { get; set; }
+    }
+
+    public class AutosaveInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("exists")]
+        public bool Exists { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string? Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("size")]
+        public double? Size { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("modified")]
+        public double? Modified { get; set; }
     }
 
     public class ProjectFile
@@ -462,6 +505,11 @@ namespace N2Engine.Editor.Protocol
         public string Path;
     }
 
+    public struct BeginEditGroupRequest
+    {
+        public string Label;
+    }
+
     public struct FrameDataResponse
     {
         public uint Width;
@@ -593,6 +641,28 @@ namespace N2Engine.Editor.Protocol
         public string UserDataPath;
         /// <summary>JSON text: ProjectFile</summary>
         public string Project;
+    }
+
+    public struct EditResultResponse
+    {
+        public string Label;
+        public uint Revision;
+        public bool CanUndo;
+        public bool CanRedo;
+        public uint SavedRevision;
+    }
+
+    public struct HistoryResponse
+    {
+        public uint Cursor;
+        /// <summary>JSON text: HistoryEntry[]</summary>
+        public string Entries;
+    }
+
+    public struct AutosaveResponse
+    {
+        /// <summary>JSON text: AutosaveInfo</summary>
+        public string Info;
     }
 
 }

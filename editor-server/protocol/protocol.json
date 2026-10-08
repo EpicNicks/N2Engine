@@ -1,5 +1,5 @@
 {
-  "version": "1.5.0",
+  "version": "1.6.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -78,7 +78,7 @@
     },
     "PollEvents": {
       "id": "0x05",
-      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} after a RescanAssets that found changes; projectChanged {} after project.n2proj was saved. A client ignores kinds and keys it doesn't know.",
+      "description": "Returns the server's events after afterSeq, oldest first: log lines (every line the host logs, from startup on) and, in later versions, other kinds. Seqs are numbered from 1 within an epoch, a random non-zero number the server picks when it starts (and again if seqs would pass 4294967295, when it starts over at 1). One rule: afterSeq means the last seq the client has seen in the epoch it passes; when that epoch is not 0 and is not the server's, or afterSeq is newer than any seq of the server's epoch, the server reads afterSeq as 0. So a client passes epoch 0 and afterSeq 0 first, then each response's epoch and nextSeq: reconnecting to the same host it misses nothing and gets nothing twice, and after the host restarted (or started over) it gets the new epoch's events from the start. Returns at most maxEvents (and at most 1024) events; nextSeq is the last one's seq, or, when none is returned, the newest seq, so maxEvents 0 skips everything retained. The server keeps the newest 4096 events (and about 2 MiB of them); dropped counts the events after afterSeq that fell off before this poll. A client polls it (about every 100 ms); it never logs, so an idle server returns no events. A log event is {seq, kind: \"log\", level: \"info\" | \"warn\" | \"error\", message, time: Unix milliseconds}. Since 1.3.0: sceneChanged {revision, savedRevision, path} whenever the scene revision moves, a scene is saved, or another is loaded (path is the loaded scene's file, empty for none). Since 1.4.0 it also says what changed: entityIds, the UUIDs of the objects whose GetEntity data the change touched (those it created, destroyed with everything under them, renamed, re-tagged or moved to another layer; and, with everything under them, those it reparented, transformed, activated or deactivated, whose world matrices or activeInHierarchy changed with them, and the copy and its subtree for a duplicate), when there are at most 256 of them. It doesn't list the siblings whose index shifted: header.index is only guaranteed fresh in a GetHierarchy read, so a client that shows the tree refetches it when the revision moves; full: true when another scene was loaded (OpenScene, NewScene, LoadScene), so every id a client holds is invalid and it refetches everything. A save changes no object and carries neither. Any other event with neither (a change that touched more than 256 objects) means anything may have changed, so a client refetches what it shows; one with entityIds lets it refetch only those, and GetHierarchy when the revision moved. assetsChanged {added, removed, modified} after a RescanAssets that found changes; projectChanged {} after project.n2proj was saved. historyChanged {canUndo, canRedo, label, redoLabel, undoCount, redoCount} since 1.6.0, after a step is recorded, undone or redone, or the history is cleared (label is the step Undo would undo, redoLabel the one Redo would redo, empty for none; the counts are the steps done and undone); an edit merged into the step before it (typing in a number box) sends none. Since 1.6.0 sceneChanged also follows Undo, Redo and RestoreAutosave, with full: true when the step was undone or redone by restoring a snapshot of the scene. A client ignores kinds and keys it doesn't know.",
       "request": {
         "epoch": "uint32",
         "afterSeq": "uint32",
@@ -520,6 +520,94 @@
         }
       }
     },
+    "Undo": {
+      "id": "0x90",
+      "description": "Undoes the step that was done last: the latest edit made by an editing command (CreateEntity, CreateEntityEx, DuplicateEntity, DestroyEntity, SetEntityTransform, SetLocalTransform, SetEntityParent, SetEntityProperties, AddComponent, RemoveComponent, SetComponentFields) or, when it was made between BeginEditGroup and EndEditGroup, the whole group. Answers EditResult: the step's label, the scene revision after it, whether another step can be undone or redone, and savedRevision. Error without a scene, with nothing to undo, or while a group is open (end it first); a step that can't be undone (an object it needs is gone) clears the history and the Error says so. The revision moves and sceneChanged follows: entityIds names the objects the step touched, or full is true when the step was undone by putting back a snapshot of the scene (undoing DestroyEntity, RemoveComponent or RestoreAutosave rebuilds every object, with the same UUIDs), so a client refetches everything. Undoing back to the state the scene was last opened or saved at makes savedRevision equal the revision (no unsaved changes). historyChanged follows. Editing commands are meant for a scene opened for editing: a client doesn't send them to a play-mode host.",
+      "request": {},
+      "response": {
+        "type": "EditResult",
+        "fields": {
+          "label": "string",
+          "revision": "uint32",
+          "canUndo": "bool",
+          "canRedo": "bool",
+          "savedRevision": "uint32"
+        }
+      }
+    },
+    "Redo": {
+      "id": "0x91",
+      "description": "Redoes the step Undo undid last; the same answer and errors as Undo, for redoing. A new edit after an Undo discards what could have been redone.",
+      "request": {},
+      "response": {
+        "type": "EditResult",
+        "fields": {
+          "label": "string",
+          "revision": "uint32",
+          "canUndo": "bool",
+          "canRedo": "bool",
+          "savedRevision": "uint32"
+        }
+      }
+    },
+    "BeginEditGroup": {
+      "id": "0x92",
+      "description": "Starts a group: every edit until the matching EndEditGroup becomes one undo step labelled label (a gizmo drag, a paste of several fields). Edits of the same thing in a group (the same object's transform, the same component's same fields) are kept as one, so a drag holds one before and one after however many requests it sends. Groups nest: an inner group is part of the outer one, which gives the label, up to 16 deep (Error past that). Undo and Redo are refused while a group is open. A group left open when its client disconnects, or by a new Hello, is ended by the host; opening, creating or loading another scene discards it. label is cut to 100 bytes.",
+      "request": {
+        "label": "string"
+      },
+      "response": { "type": "Ok" }
+    },
+    "EndEditGroup": {
+      "id": "0x93",
+      "description": "Ends the innermost group opened by BeginEditGroup; ending the outermost makes its edits one step (none when it held no edit). Error when no group is open. historyChanged follows a step, and so does the autosave (see GetAutosave).",
+      "request": {},
+      "response": { "type": "Ok" }
+    },
+    "GetHistory": {
+      "id": "0x94",
+      "description": "The undo history, for an Edit menu: entries is every step, oldest first, each {label, bytes} (bytes is what the step holds in memory), and cursor is how many of them are done: entries before it can be undone (the last of them is what Undo undoes), the rest redone. The history holds at most 200 steps and 128 MiB (the newest step is always kept) and drops the oldest first; it is kept when the scene is saved and cleared when a scene is opened, created or loaded.",
+      "request": {},
+      "response": {
+        "type": "History",
+        "fields": {
+          "cursor": "uint32",
+          "entries": "json:HistoryEntry[]"
+        }
+      }
+    },
+    "GetAutosave": {
+      "id": "0x95",
+      "description": "Whether the host holds an autosave of the open scene, and where: info is {exists, and when it does: path (the file, absolute), size (bytes), modified (Unix milliseconds)}. The host writes the autosave to <project>/.n2/autosave/ (the scene's path under assets/, or .untitled.scene for a scene with no file) when an edit step ends while the scene has unsaved changes (at most once per 2 seconds; the last one is written by the host's loop), and removes it when the scene is saved or is back at its saved state. It never writes the scene's own file. An autosave found when a scene is opened is kept and not overwritten until RestoreAutosave, DiscardAutosave or a save, so a client that finds one after a crash can offer it. Error without a project or a scene.",
+      "request": {},
+      "response": {
+        "type": "Autosave",
+        "fields": {
+          "info": "json:AutosaveInfo"
+        }
+      }
+    },
+    "RestoreAutosave": {
+      "id": "0x96",
+      "description": "Replaces the open scene's content with its autosave, as one undoable step labelled \"Restore autosave\" (the scene then has unsaved changes, and every object is rebuilt with the UUIDs the autosave has: a sceneChanged with full follows). Answers the open scene as OpenScene does. Error without a project or a scene, without an autosave, or when it isn't a valid scene (it is kept then).",
+      "request": {},
+      "response": {
+        "type": "SceneInfo",
+        "fields": {
+          "path": "string",
+          "name": "string",
+          "uuid": "string",
+          "revision": "uint32",
+          "savedRevision": "uint32"
+        }
+      }
+    },
+    "DiscardAutosave": {
+      "id": "0x97",
+      "description": "Deletes the open scene's autosave (and lets the host write new ones). Ok when there was none. Error without a project or a scene.",
+      "request": {},
+      "response": { "type": "Ok" }
+    },
     "Shutdown": {
       "id": "0xFF",
       "request": {},
@@ -562,7 +650,23 @@
       "full?": "bool",
       "added?": "string[]",
       "removed?": "string[]",
-      "modified?": "string[]"
+      "modified?": "string[]",
+      "canUndo?": "bool",
+      "canRedo?": "bool",
+      "label?": "string",
+      "redoLabel?": "string",
+      "undoCount?": "number",
+      "redoCount?": "number"
+    },
+    "HistoryEntry": {
+      "label": "string",
+      "bytes": "number"
+    },
+    "AutosaveInfo": {
+      "exists": "bool",
+      "path?": "string",
+      "size?": "number",
+      "modified?": "number"
     },
     "ProjectFile": {
       "formatVersion": "number",
@@ -662,6 +766,9 @@
     "ComponentTypes": "0x11",
     "ComponentAdded": "0x12",
     "ComponentData": "0x13",
-    "LuaFields": "0x14"
+    "LuaFields": "0x14",
+    "EditResult": "0x15",
+    "History": "0x16",
+    "Autosave": "0x17"
   }
 }

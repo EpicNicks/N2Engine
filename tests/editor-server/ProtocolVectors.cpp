@@ -166,6 +166,7 @@ namespace ProtocolVectors
                 const auto cmd = GetLuaFieldsCmd::Deserialize(r);
                 return json{{"entityId", cmd.entityId}, {"componentId", cmd.componentId}};
             }},
+            {"BeginEditGroup", [](BufferReader &r) { return json{{"label", BeginEditGroupCmd::Deserialize(r).label}}; }},
             {"CreateEntityEx", [](BufferReader &r)
             {
                 const auto cmd = CreateEntityExCmd::Deserialize(r);
@@ -289,6 +290,13 @@ namespace ProtocolVectors
             }},
             {"ComponentData", [](BufferWriter &w, const json &f) { WriteComponentData(w, f.at("values")); }},
             {"LuaFields", [](BufferWriter &w, const json &f) { WriteLuaFields(w, f.at("schema")); }},
+            {"EditResult", [](BufferWriter &w, const json &f)
+            {
+                WriteEditResult(w, StringField(f, "label"), Uint32Field(f, "revision"), f.at("canUndo").get<bool>(),
+                                f.at("canRedo").get<bool>(), Uint32Field(f, "savedRevision"));
+            }},
+            {"History", [](BufferWriter &w, const json &f) { WriteHistory(w, Uint32Field(f, "cursor"), f.at("entries")); }},
+            {"Autosave", [](BufferWriter &w, const json &f) { WriteAutosave(w, f.at("info")); }},
             {"EngineHealth", [](BufferWriter &w, const json &f)
             {
                 std::vector<SubsystemStatusEntry> subsystems;
