@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string>
 
 #include <editor-server/EditorCamera.hpp>
 #include <editor-server/FrameTracker.hpp>
@@ -150,7 +151,7 @@ TEST(EditorCameraCheckTest, TheDefaultsAndOrdinaryCamerasPass)
     EditorCameraState wide;
     wide.position = Math::Vector3(-999999.0f, 5.0f, 999999.0f);
     wide.nearPlane = 0.01f;
-    wide.farPlane = 5.0e6f;
+    wide.farPlane = 5.0e4f;
     wide.fovY = 1.0f;
     EXPECT_TRUE(CheckEditorCamera(wide).state.has_value());
     wide.fovY = 179.0f;
@@ -245,6 +246,56 @@ TEST(EditorCameraCheckTest, TheRotationIsNormalisedAndAZeroOneIsRefused)
     EXPECT_FALSE(CheckEditorCamera(state).state.has_value());
 }
 
+TEST(EditorCameraCheckTest, APerspectiveDepthRangeIsLimitedByTheRatioOfFarToNear)
+{
+    EditorCameraState state;
+    state.nearPlane = 0.001f;
+    state.farPlane = 5000.0f; // ratio 5e6
+    EXPECT_TRUE(CheckEditorCamera(state).state.has_value());
+    state.farPlane = 50000.0f; // ratio 5e7
+    const EditorCameraCheck refused = CheckEditorCamera(state);
+    EXPECT_FALSE(refused.state.has_value());
+    EXPECT_NE(refused.error.find("far"), std::string::npos) << refused.error;
+
+    // An orthographic camera has no such ratio
+    state.orthographic = true;
+    EXPECT_TRUE(CheckEditorCamera(state).state.has_value());
+}
+
+TEST(EditorCameraCheckTest, TheErrorNamesTheFieldThatWasRefused)
+{
+    const auto errorFor = [](auto change)
+    {
+        EditorCameraState state;
+        change(state);
+        return CheckEditorCamera(state).error;
+    };
+    const auto mentions = [](const std::string &error, const char *word) { return error.find(word) != std::string::npos; };
+    EXPECT_TRUE(mentions(errorFor([](EditorCameraState &s) { s.fovY = Nan; }), "field of view"));
+    EXPECT_TRUE(mentions(errorFor([](EditorCameraState &s) { s.orthoSize = Inf; }), "orthographic size"));
+    EXPECT_TRUE(mentions(errorFor([](EditorCameraState &s) { s.nearPlane = Nan; }), "near plane"));
+    EXPECT_TRUE(mentions(errorFor([](EditorCameraState &s) { s.farPlane = Inf; }), "far plane"));
+    EXPECT_TRUE(mentions(errorFor([](EditorCameraState &s) { s.position = Math::Vector3(Nan, 0.0f, 0.0f); }), "position"));
+    EXPECT_TRUE(mentions(errorFor([](EditorCameraState &s) { s.rotation = Math::Quaternion(0.0f, 0.0f, 0.0f, 0.0f); }), "rotation"));
+}
+
+TEST(EditorCameraTest, TheProjectionThatIsntInUseIsNotPartOfEquality)
+{
+    EditorCameraState a;
+    EditorCameraState b = a;
+    b.orthoSize = 99.0f; // perspective: unused
+    EXPECT_TRUE(a == b);
+    b.fovY = 70.0f;
+    EXPECT_FALSE(a == b);
+
+    a.orthographic = true;
+    b = a;
+    b.fovY = 120.0f; // orthographic: unused
+    EXPECT_TRUE(a == b);
+    b.orthoSize = 6.0f;
+    EXPECT_FALSE(a == b);
+}
+
 // ==================== The frame revision ====================
 
 TEST(FrameTrackerTest, ARevisionIsNeverZeroAndOnlyGrows)
@@ -320,6 +371,36 @@ TEST(FrameTrackerTest, ChangesAreAnnouncedOncePerRenderedFrame)
     // Using the buffer for something else isn't a render
     tracker.InvalidateBuffer();
     EXPECT_FALSE(tracker.MarkChanged());
+}
+
+TEST(FrameTrackerTest, ASceneChangeThatWasReportedIsNotCountedAgainWhenObserved)
+{
+    FrameTracker tracker;
+    int scene = 0;
+    (void)tracker.ObserveScene(&scene, 3);
+    tracker.MarkRendered();
+    const uint32_t rendered = tracker.Revision();
+
+    // The server reports a change (one revision on) and records the scene it made it to
+    tracker.MarkChanged();
+    tracker.RecordScene(&scene, 4);
+    EXPECT_FALSE(tracker.ObserveScene(&scene, 4));
+    EXPECT_EQ(tracker.Revision(), rendered + 1);
+
+    // A change nobody reported is still noticed
+    EXPECT_FALSE(tracker.ObserveScene(&scene, 4));
+    tracker.MarkRendered();
+    EXPECT_TRUE(tracker.ObserveScene(&scene, 5));
+    EXPECT_EQ(tracker.Revision(), rendered + 2);
+}
+
+TEST(FrameTrackerTest, AnAnnouncementThatWentUnansweredCanBeRearmed)
+{
+    FrameTracker tracker;
+    EXPECT_TRUE(tracker.MarkChanged());
+    EXPECT_FALSE(tracker.MarkChanged()) << "announced, and no frame since";
+    tracker.RearmAnnouncement();
+    EXPECT_TRUE(tracker.MarkChanged()) << "a render that failed doesn't leave it stuck";
 }
 
 TEST(FrameTrackerTest, ASceneChangeNobodyReportedIsNoticed)

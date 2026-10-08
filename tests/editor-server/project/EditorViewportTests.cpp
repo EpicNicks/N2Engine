@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <initializer_list>
 #include <string>
 #include <utility>
@@ -17,6 +18,15 @@
 #include <engine/Window.hpp>
 #include <engine/common/Color.hpp>
 #include <engine/config/ApplicationOptions.hpp>
+#include <engine/io/ProjectFile.hpp>
+#include <engine/io/ResourceLoader.hpp>
+#include <engine/io/ResourceUUID.hpp>
+#include <engine/rendering/Material.hpp>
+#include <engine/rendering/Mesh.hpp>
+#include <engine/rendering/MeshRenderer.hpp>
+#include <engine/rendering/RenderSettings.hpp>
+#include <engine/GameObjectScene.hpp>
+#include <engine/sceneManagement/Scene.hpp>
 #include <engine/sceneManagement/SceneManager.hpp>
 
 using namespace N2Engine;
@@ -493,4 +503,112 @@ TEST_F(EditorViewportTest, ARefusedCameraLeavesTheFrameAlone)
     bad.WriteF32(100.0f);
     EXPECT_EQ(Execute(server, CommandType::SetEditorCamera, bad.Release()).type, ErrorType);
     EXPECT_FALSE(FrameSince(first.revision).modified);
+}
+
+// ==================== The frame revision and its event ====================
+
+TEST_F(EditorViewportTest, AReportedChangeMovesTheRevisionOnceAndTheEventNamesTheNextFramesRevision)
+{
+    const Picture first = Frame0();
+    const uint32_t seq = server.GetEvents().LastSeq();
+
+    ASSERT_FALSE(Create("Cube").empty());
+    std::vector<uint32_t> announced;
+    for (const json &event : server.GetEvents().Read(seq, 4096, 0).events)
+    {
+        if (event.value("kind", "") == "frameChanged")
+            announced.push_back(event.at("revision").get<uint32_t>());
+    }
+    ASSERT_EQ(announced.size(), 1u);
+    EXPECT_EQ(announced[0], first.revision + 1) << "one revision on, not two";
+
+    const Picture next = FrameSince(first.revision);
+    ASSERT_TRUE(next.modified);
+    EXPECT_EQ(next.revision, announced[0]) << "the event announces the revision of the frame that follows";
+
+    // Opening another scene is one change too
+    const Picture beforeNew = next;
+    ASSERT_EQ(Execute(server, CommandType::NewScene, Strings({"", "Next"})).type, SceneInfoType);
+    EXPECT_EQ(FrameSince(beforeNew.revision).revision, beforeNew.revision + 1);
+}
+
+TEST_F(EditorViewportTest, ATransformNudgeBelowTheMathLibrarysEpsilonIsStillAChange)
+{
+    const std::string cube = Create("Cube");
+    ASSERT_FALSE(cube.empty());
+    const Picture first = Frame0();
+    const uint32_t sceneRevision = server.GetSceneRevision();
+
+    BufferWriter w;
+    w.WriteString(cube);
+    for (const float v : {1.0e-7f, 0.0f, 0.0f}) // position
+        w.WriteF32(v);
+    for (const float v : {0.0f, 0.0f, 0.0f}) // Euler angles
+        w.WriteF32(v);
+    for (const float v : {1.0f, 1.0f, 1.0f}) // scale
+        w.WriteF32(v);
+    ASSERT_EQ(Execute(server, CommandType::SetEntityTransform, w.Release()).type, OkType);
+
+    EXPECT_GT(server.GetSceneRevision(), sceneRevision) << "the scene changed, so its revision says so";
+    EXPECT_TRUE(FrameSince(first.revision).modified);
+}
+
+// ==================== The colour space ====================
+
+/// A project too, for SetProjectSettings
+class EditorViewportProjectTest : public EditorViewportTest
+{
+protected:
+    void SetUp() override
+    {
+        EditorViewportTest::SetUp();
+        const auto *info = ::testing::UnitTest::GetInstance()->current_test_info();
+        _base = std::filesystem::temp_directory_path() / "n2-editor-viewport-test" / info->name();
+        std::error_code error;
+        std::filesystem::remove_all(_base, error);
+        const auto created = IO::CreateProject(_base / "Game");
+        ASSERT_TRUE(created) << created.error().message;
+        const IO::ProjectFile project = *created;
+        const std::filesystem::path root = std::filesystem::canonical(_base / "Game");
+        IO::ResourceUUID::Initialize(project.projectId);
+        IO::ResourceLoader::Instance().Initialize(root, project.UserDataPath(_base / "user"));
+        server.SetProject(root, project);
+    }
+
+    void TearDown() override
+    {
+        Rendering::RenderSettings::SetColorSpace(Renderer::Common::ColorSpace::Gamma);
+        EditorViewportTest::TearDown();
+        std::error_code error;
+        std::filesystem::remove_all(_base.parent_path(), error);
+    }
+
+    std::filesystem::path _base;
+};
+
+TEST_F(EditorViewportProjectTest, ChangingTheColourSpaceMakesANewFrameWithOtherPixels)
+{
+    // A lit mid-grey cube, put into the scene directly (a project setting is what changes next, not the scene)
+    auto cube = GameObject::Create("Grey");
+    auto *meshRenderer = cube->AddComponent<Rendering::MeshRenderer>();
+    meshRenderer->SetMesh(Rendering::Mesh::GetBuiltin(Rendering::BuiltinMesh::Cube));
+    auto grey = Rendering::Material::Create();
+    grey->SetBaseColor(Common::Color{0.5f, 0.5f, 0.5f, 1.0f});
+    meshRenderer->SetMaterial(0, grey);
+    ASSERT_NE(SceneManager::GetCurScene(), nullptr);
+    SceneManager::GetCurSceneRef().AddRootGameObject(cube);
+
+    const Picture gamma = Frame0();
+    ASSERT_EQ(gamma.type, FrameUpdateType);
+    EXPECT_FALSE(IsBlue(gamma.Centre())) << "the cube is drawn";
+
+    BufferWriter settings;
+    WriteJson(settings, json{{"rendering", {{"colorSpace", "linear"}}}});
+    ASSERT_EQ(Execute(server, CommandType::SetProjectSettings, settings.Release()).type,
+              static_cast<uint8_t>(ResponseType::ProjectInfo));
+
+    const Picture linear = FrameSince(gamma.revision);
+    ASSERT_TRUE(linear.modified) << "the colour space is a change";
+    EXPECT_NE(linear.revision, gamma.revision);
+    EXPECT_NE(linear.pixels, gamma.pixels) << "and the picture is not the same";
 }

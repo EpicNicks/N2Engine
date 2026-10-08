@@ -581,6 +581,18 @@ TEST_F(EditorProjectTest, AssetAndProjectSettingChangesMoveTheFrameRevision)
     EXPECT_EQ(server.GetFrameRevision(), afterSettings);
 }
 
+TEST_F(EditorProjectTest, LoadingASceneMovesTheFrameRevision)
+{
+    const uint32_t start = server.GetFrameRevision();
+    (void)Open("res://scenes/Main.scene");
+    const uint32_t opened = server.GetFrameRevision();
+    EXPECT_NE(opened, start);
+
+    ASSERT_EQ(Execute(server, CommandType::LoadScene, Strings({R"({"name":"Sent","rootGameObjects":[]})"})).type,
+              static_cast<uint8_t>(ResponseType::Ok));
+    EXPECT_NE(server.GetFrameRevision(), opened);
+}
+
 // ==================== Project commands ====================
 
 TEST_F(EditorProjectTest, GetProjectInfoDescribesTheProject)

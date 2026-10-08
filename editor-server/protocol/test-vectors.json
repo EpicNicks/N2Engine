@@ -1061,5 +1061,19 @@
       },
       "payload": "3d0000007b22657869737473223a747275652c226d6f646966696564223a352e352c2270617468223a2270617468203120e29c93222c2273697a65223a342e357d"
     }
+  ],
+  "responseVariants": [
+    {
+      "response": "FrameUpdate",
+      "id": "0x18",
+      "fields": {
+        "revision": 305419896,
+        "modified": false,
+        "width": 305419898,
+        "height": 305419899,
+        "pixels": ""
+      },
+      "payload": "78563412007a5634127b563412"
+    }
   ]
 }

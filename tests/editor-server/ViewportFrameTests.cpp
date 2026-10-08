@@ -846,3 +846,38 @@ TEST(EditorServerPolledCommandsTest, TheViewportCommandsAreQuiet)
         EXPECT_TRUE(EditorServer::IsPolledCommand(static_cast<std::uint8_t>(type))) << static_cast<int>(type);
     }
 }
+
+TEST_F(ViewportCommandTest, FrameChangedIsAnnouncedAgainAfterARenderThatFailed)
+{
+    ASSERT_EQ(SetViewportSize(server, 6, 3).type, OkType);
+    ASSERT_TRUE(FrameIfChanged(server, 0).modified);
+
+    const std::uint32_t before = server.GetEvents().LastSeq();
+    fake->acceptTargets = false;
+    ASSERT_EQ(SetViewportSize(server, 8, 4).type, ErrorType); // a change: announced
+    CameraArgs camera;
+    camera.position[0] = 1.0f;
+    ASSERT_EQ(SetCamera(server, camera).type, OkType); // not announced again: no frame since
+    EXPECT_EQ(CountKind(EventKindsAfter(server, before), "frameChanged"), 1u);
+
+    // The client asks, and the render fails: the announcement didn't lead to a frame
+    BufferWriter ask;
+    ask.WriteU32(0);
+    EXPECT_EQ(Execute(server, CommandType::RenderFrameIfChanged, {ask.Data().begin(), ask.Data().end()}).type, ErrorType);
+
+    camera.position[0] = 2.0f;
+    ASSERT_EQ(SetCamera(server, camera).type, OkType);
+    EXPECT_EQ(CountKind(EventKindsAfter(server, before), "frameChanged"), 2u) << "so the next change says so again";
+}
+
+TEST_F(ViewportCommandTest, RenderFrameMarksTheBufferStaleBeforeItDraws)
+{
+    ASSERT_EQ(SetViewportSize(server, 6, 3).type, OkType);
+    ASSERT_TRUE(FrameIfChanged(server, 0).modified);
+    ASSERT_EQ(server.GetEditorFramesRendered(), 1u);
+
+    // The game camera's frame uses the buffer; a client with no frame then gets the editor view rendered afresh
+    ASSERT_EQ(Execute(server, CommandType::RenderFrame).type, FrameDataType);
+    ASSERT_TRUE(FrameIfChanged(server, 0).modified);
+    EXPECT_EQ(server.GetEditorFramesRendered(), 2u);
+}
