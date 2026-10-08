@@ -12,6 +12,7 @@
 #include "engine/input/InputBinding.hpp"
 #include "engine/input/InputSystem.hpp"
 #include "engine/input/InputTypes.hpp"
+#include "engine/input/InputValue.hpp"
 
 #include <GLFW/glfw3.h>
 
