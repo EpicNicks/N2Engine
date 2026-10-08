@@ -1,6 +1,10 @@
 #pragma once
 
+#include <atomic>
+#include <cstddef>
 #include <expected>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -38,6 +42,10 @@ namespace N2Engine::Editor
         /// Stop once a client's session ends (EditorServer::SetStopOnDisconnect), so a host whose launcher has gone
         /// doesn't keep running
         bool exitOnDisconnect = false;
+        /// Stop when stdin reaches end of file or fails to read (StartStdinEofWatcher): a launcher that dies before its
+        /// client's first Hello leaves nothing else to end the host, but its stdin pipe closes. Opt-in, since a
+        /// launcher that closes or doesn't provide stdin would otherwise kill the host at once.
+        bool exitOnStdinEof = false;
         bool showHelp = false;
 
         /// --create: make this folder a project (IO::CreateProject), print the created line, and exit; the engine
@@ -79,6 +87,22 @@ namespace N2Engine::Editor
     /// starts with "--"), an invalid port, renderer or --project-id, --create together with --project, and --name or
     /// --project-id without --create are errors (the message names the option); unknown arguments are ignored.
     [[nodiscard]] std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args);
+
+    /// Reads up to `size` bytes into `buffer`; returns the count read, 0 at end of file, and a negative number on error
+    using StdinReader = std::function<std::ptrdiff_t(char *buffer, std::size_t size)>;
+
+    /// --exit-on-stdin-eof's loop: reads with `readSome` and discards what it gets, until it reports end of file (0) or
+    /// an error (negative), then returns
+    void DrainUntilEof(const StdinReader &readSome);
+
+    /**
+     * --exit-on-stdin-eof: starts a detached thread that drains this process's stdin (DrainUntilEof over a raw
+     * ReadFile/read on the OS handle, never the CRT's stdin, so the exit of the process can't wait on its lock) and, at
+     * end of file or on any read error (a closed or invalid stdin included), sets the returned flag. The caller
+     * polls the flag in its main loop. The thread is detached because a read on a pipe that stays open can't be
+     * interrupted; it only holds the flag, so it is harmless once the host has returned, and ends with the process.
+     */
+    [[nodiscard]] std::shared_ptr<std::atomic<bool>> StartStdinEofWatcher();
 
     /// N2EditorHost's usage text (what --help prints), one option per line
     [[nodiscard]] std::string_view HostUsage();

@@ -7,6 +7,7 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <memory>
 #include <optional>
 #include <print>
 #include <string>
@@ -307,11 +308,19 @@ namespace N2Engine::Editor
                 Logger::Info("Rendering with the software renderer, without a window");
             }
 
+            // --exit-on-stdin-eof: the flag turns true when stdin ends or fails (a launcher that died)
+            std::shared_ptr<std::atomic<bool>> stdinClosed;
+            if (options.exitOnStdinEof)
+            {
+                stdinClosed = StartStdinEofWatcher();
+                Logger::Info("The host exits when its stdin closes (--exit-on-stdin-eof)");
+            }
+
             // Main loop: handle OS events and run the editor's requests. Requests touch engine state, so they
             // run here on the main thread (see EditorServer); waiting for them doubles as the idle sleep. A
             // windowless window never closes, so the other conditions end it.
             while (g_running && server.IsRunning() && !app.IsQuitRequested() &&
-                   (!window.IsValid() || !window.ShouldClose()))
+                   (!window.IsValid() || !window.ShouldClose()) && (!stdinClosed || !stdinClosed->load()))
             {
                 // Poll window events to keep OS happy (even if window is hidden), and update input
                 window.PollEvents();
@@ -324,6 +333,10 @@ namespace N2Engine::Editor
             if (!g_running)
             {
                 Logger::Info("Shutdown signal received");
+            }
+            if (stdinClosed && stdinClosed->load())
+            {
+                Logger::Info("Stdin closed");
             }
             server.ProcessCommands(); // flushes log lines the network thread has posted
             server.Stop();
