@@ -278,6 +278,7 @@
 <tr><td><a href="editor.html#design-frame-revision">One frame revision for every cause</a> <span class="badge">PR #98</span></td><td>The scene, camera, viewport size, assets and project settings all move one number, so a client compares one number to know its frame is current; the scene is also observed when a frame is asked for.</td></tr>
 <tr><td><a href="editor.html#design-frame-update-one-response"><code>FrameUpdate</code> is one response with a flag</a> <span class="badge">PR #98</span></td><td>Not a frame or a "not modified" response: the spec, generators and vectors assume one response type per command.</td></tr>
 <tr><td><a href="editor.html#design-renderframe-game-camera"><code>RenderFrame</code> keeps drawing the game camera</a> <span class="badge">PR #98</span></td><td>Existing clients, and play mode, expect the game view; the editor view is a separate command that shares only the frame buffer.</td></tr>
+<tr><td><a href="editor.html#design-editor-view-no-hud">The editor view draws no screen-space UI and polls no input</a> <span class="badge">PR #98</span></td><td><code>RenderEditorFrame(camera)</code> leaves out the HUD overlay and window-event polling; world-space canvases still draw.</td></tr>
 <tr><td><a href="editor.html#design-frame-changed-event"><code>frameChanged</code> is sent once per rendered frame</a> <span class="badge">PR #98</span></td><td>A drag would otherwise fill the event ring; the event only has to say "your frame is stale".</td></tr>
 </tbody>
 </table>
