@@ -19,6 +19,7 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/ui/Canvas.hpp"
 #include "engine/ui/RectTransform.hpp"
+#include "engine/ui/UIGraphic.hpp"
 #include "engine/ui/UISystem.hpp"
 
 namespace N2Engine::Picking
