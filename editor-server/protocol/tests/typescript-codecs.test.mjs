@@ -114,6 +114,14 @@ test("decoders read from a view with an offset (a Buffer slice) and ignore trail
   assert.deepEqual(protocol.decodeEngineHealthResponse(view), vector.fields)
 })
 
+test("a string keeps a leading byte order mark (U+FEFF) through encode and decode", realProtocol, () => {
+  const value = { clientName: "\uFEFFeditor", protocolVersion: "1.0.0", token: "\uFEFF" }
+  assert.deepEqual(protocol.decodeHelloRequest(protocol.encodeHelloRequest(value)), value)
+  // An Error's message is decoded straight from the payload, as text
+  const error = { message: "\uFEFFbad" }
+  assert.deepEqual(protocol.decodeErrorResponse(protocol.encodeErrorResponse(error)), error)
+})
+
 test("a truncated payload throws a RangeError", realProtocol, () => {
   const vector = vectors.requests.find((v) => v.command === "Hello")
   const payload = fromHex(vector.payload)
