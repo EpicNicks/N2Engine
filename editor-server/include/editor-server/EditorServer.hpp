@@ -580,6 +580,9 @@ namespace N2Engine::Editor
         // Autosave
         /// An edit step ended (or was undone): the autosave is due, written now unless the interval says to wait
         void NoteEditStepEnded();
+        /// An edit group ended with writes that cancelled out (no step): the scene is as saved as it was before it, and
+        /// an autosave written for the writes is out of date. Pushes sceneChanged, which carries the saved revision.
+        void NoteGroupWithoutChange();
         /// Writes the autosave when one is due and the interval allows (or force). Removes it when the scene has no
         /// unsaved changes any more.
         void FlushAutosave(bool force = false);
