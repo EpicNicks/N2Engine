@@ -608,17 +608,63 @@ scene-&gt;AddRootGameObject(robot-&gt;Instantiate()); // "robot", with one child
 
 <div class="callout note" id="design-ufbx-optional">
 <p class="callout-title">Design decision: ufbx is vendored and optional, off by default, on in the FreeType CI leg <span class="badge">PR #107</span></p>
-<p>ufbx is about 1.2 MB of C and noticeably slows a build, and most projects only need glTF, so it sits behind <code>N2ENGINE_MODEL_UFBX</code> (off by default), as FreeType does for text. It is <em>vendored</em> (<code>external/ufbx/</code>, the single-file release, unmodified) rather than fetched, like stb_image, cgltf and MikkTSpace and unlike FreeType: it is two files, so there is nothing to download, a configure with the option on needs no network, and the version is reviewed in the diff. CI turns it on in the existing <code>Debug, PhysX OFF, FreeType ON</code> leg, so there is no fourth job and both optional libraries are compiled and tested together; the other two legs build without it, which keeps the "option off" configuration honest. The importer registry (<code>ModelImporters.hpp</code>) means <code>Model</code>, <code>ResourceLoader</code> and the Lua bindings need no <code>#ifdef</code> and no compile definition: the answer comes from how the library was built.</p>
+<p>ufbx is about 1.2 MB of C and noticeably slows a build, and most projects only need glTF, so it sits behind <code>N2ENGINE_MODEL_UFBX</code> (off by default), as FreeType does for text. It is <em>vendored</em> (<code>external/ufbx/</code>, the single-file release, unmodified) rather than fetched, like stb_image, cgltf and MikkTSpace and unlike FreeType.</p>
+<p><strong>Gains:</strong> No download at configure time (two files, reviewed in the diff, the same version for everyone); a default build pays nothing for FBX it does not use; CI compiles and tests ufbx together with FreeType in the existing leg, so there is no fourth job, while the other two legs keep the option-off configuration honest. The importer registry (<code>ModelImporters.hpp</code>) means <code>Model</code>, <code>ResourceLoader</code> and the Lua bindings need no <code>#ifdef</code>.</p>
+<p><strong>Costs:</strong> About 1.2 MB of C in the repository (and in every clone), which a fetched dependency would not add; upgrading ufbx is a manual copy of two files rather than a changed tag; FBX and OBJ are not in a default build, so a project must turn the option on, and a <code>.meta</code> written by a build with ufbx cannot be used by one without it (the model is skipped with a warning). Only one CI leg tests it, so the option-on configuration is tested with PhysX off.</p>
 </div>
 
 <div class="callout note" id="design-ufbx-smooth-normals">
 <p class="callout-title">Design decision: missing normals are smooth for FBX and OBJ, flat only on request <span class="badge">PR #107</span></p>
-<p>The glTF rule for a primitive without normals is flat shading, which the glTF importer follows. FBX and OBJ describe smoothing explicitly (smoothing groups and edge flags), and a file with no normals at all is almost always one meant to be smooth, so <code>"ifMissing"</code> lets ufbx generate normals from that data instead. A flat look is still one setting away (<code>"always"</code>). The result is flagged <code>generatedNormals</code> in both cases, so generated tangents are rebuilt for it.</p>
+<p>The glTF rule for a primitive without normals is flat shading, which the glTF importer follows. FBX and OBJ describe smoothing explicitly, so for them <code>"ifMissing"</code> lets ufbx generate normals from that data.</p>
+<p><strong>Gains:</strong> A file with no normals is almost always meant to be smooth, and FBX and OBJ say how (smoothing groups, edge flags), so <code>"ifMissing"</code> gives a model that looks right without a setting; the generated normals are flagged <code>generatedNormals</code>, so tangents are rebuilt for them.</p>
+<p><strong>Costs:</strong> The same <code>generateNormals</code> value means flat for glTF and smooth for FBX/OBJ, so a project that mixes formats sees different looks for the same setting; a hard-edged model with no smoothing data and no normals comes out smooth and must ask for <code>"always"</code>, which gives flat normals everywhere (ignoring the file's own); <code>"always"</code> also welds less, as each face keeps its own normal where it differs.</p>
 </div>
 
 <div class="callout note" id="design-ufbx-world-space">
 <p class="callout-title">Design decision: the conversion is ufbx's, and tests compare world space <span class="badge">PR #107</span></p>
 <p>Axis and unit conversion is delegated to ufbx rather than redone here, because the correct handling of pre-rotations, pivots and mirrored nodes is the hard part of FBX and ufbx is built to get it right. Where ufbx puts the conversion (in node transforms or baked into vertices) is its choice, so the importer does not promise that a mesh's vertices are in the engine's axes, only that a node's world transform applied to them is. The tests therefore compare world-space positions, normals and bounds, never local ones, and the FBX cube is compared with the glTF cube that way.</p>
+</div>
+
+<div class="callout note" id="design-ufbx-metallic">
+<p class="callout-title">Design decision: a plain material is not metallic (metallic 0, where glTF's default is 1) <span class="badge">PR #107</span></p>
+<p><strong>Gains:</strong> An FBX or OBJ material with no metalness (Lambert, Phong, an OBJ <code>.mtl</code>) draws as the dielectric it is; with <code>pbrMaterials</code> on it does not turn into a mirror.</p>
+<p><strong>Costs:</strong> It differs from glTF, whose absent <code>metallicFactor</code> means 1, so one setting gives two defaults; a metal-looking FBX that stores its metalness only in a texture (which is ignored, see below) imports as non-metal.</p>
+</div>
+
+<div class="callout note" id="design-ufbx-colours">
+<p class="callout-title">Design decision: colours are taken as written, with no sRGB conversion <span class="badge">PR #107</span></p>
+<p><strong>Gains:</strong> No guessing: FBX and OBJ do not say which colour space their numbers are in, and importers disagree; what the file holds is what the material gets, and the result is predictable and the same on every machine.</p>
+<p><strong>Costs:</strong> Numeric colours in the engine are linear (<a href="#design-numeric-colours-linear">why</a>), so a diffuse colour an artist picked on screen in sRGB can look lighter than in the source program; the fix is to adjust the colour, or to bake it into a texture, which is decoded as sRGB.</p>
+</div>
+
+<div class="callout note" id="design-ufbx-ignored">
+<p class="callout-title">Design decision: unsupported textures and features are ignored with one warning each <span class="badge">PR #107</span></p>
+<p><strong>Gains:</strong> Most real FBX files still have meshes worth drawing, so a file is not refused for what it carries beyond them; each missing feature is named once in the log and in <code>Model::GetImportWarnings()</code>, and an importer that stays small has less code to get wrong.</p>
+<p><strong>Costs:</strong> Roughness, metalness and opacity textures are dropped (only their constant values are used; the engine reads one packed metallic-roughness texture, which FBX does not have), so a PBR-textured FBX loses its surface detail; skins draw in the bind pose, and blend shapes, animation, cameras, lights, curves and NURBS surfaces are not imported at all. Reading them is later work (skinning is planned in #3).</p>
+</div>
+
+<div class="callout note" id="design-ufbx-obj-assumptions">
+<p class="callout-title">Design decision: an OBJ is assumed right-handed, Y up, in metres <span class="badge">PR #107</span></p>
+<p><strong>Gains:</strong> An OBJ names neither axes nor units, so a fixed assumption gives a predictable result that matches glTF and the engine (and the <code>scale</code> setting still applies).</p>
+<p><strong>Costs:</strong> An OBJ exported Z up, or in centimetres or inches, arrives rotated or the wrong size and must be fixed with <code>scale</code> or by re-exporting; there is no per-file axis setting yet.</p>
+</div>
+
+<div class="callout note" id="design-ufbx-mtl">
+<p class="callout-title">Design decision: the importer reads the .mtl, and only the first mtllib <span class="badge">PR #107</span></p>
+<p><strong>Gains:</strong> ufbx is told not to open files itself, so every file read goes through the importer's size caps and the rule that a path must stay inside the model's folder: an <code>mtllib ../secret.mtl</code> is never read.</p>
+<p><strong>Costs:</strong> An OBJ that names several libraries gets only the first one that can be read (the whole text, then its first word), so materials from the others are missing (they appear by name with default values); a library outside the model's folder is skipped with a warning instead of followed.</p>
+</div>
+
+<div class="callout note" id="design-ufbx-memory-cap">
+<p class="callout-title">Design decision: ufbx may allocate 1 GiB, where the glTF importer's parse limit is 256 MiB <span class="badge">PR #107</span></p>
+<p><strong>Gains:</strong> ufbx builds the whole scene in memory (every element, array and index list), so a legitimate large FBX needs more room than glTF's JSON tokens; the limit still turns a hostile or corrupt file into a <code>TooLarge</code> error instead of an out-of-memory crash, and the file, vertex, index and image caps apply as for glTF.</p>
+<p><strong>Costs:</strong> The ceiling is four times the glTF one, so a hostile FBX can make a process use up to a gigabyte (twice, counting the temporary and the result allocators separately) before it is refused; a big real model near the limit is refused rather than loaded.</p>
+</div>
+
+<div class="callout note" id="design-ufbx-fixture">
+<p class="callout-title">Design decision: the test FBX is generated, not a Blender export (a real export is still outstanding) <span class="badge">PR #107</span></p>
+<p><strong>Gains:</strong> The committed <code>tests/assets/models/textured_cube.fbx</code> is ASCII text written by a script in the repository, so it is reproducible, reviewable, carries no third-party licence, and needs no Blender to regenerate; it is laid out as Blender lays out a Z-up, centimetre file, and is compared with the glTF cube in world space.</p>
+<p><strong>Costs:</strong> It proves ufbx reads <em>our</em> reading of the format, not what Blender, Maya or 3ds Max actually write (exporter quirks, binary FBX, embedded textures, PBR properties, multiple UV sets are not covered by a committed file); no binary FBX is committed at all. A self-authored real Blender export, with a test that runs the same checks on it, should be added beside it; that is still to do.</p>
 </div>
 
 <p class="src">Source: <code>assetimport/include/assetimport/UfbxImporter.hpp</code>, <code>ModelImporters.hpp</code>; <code>assetimport/src/assetimport/UfbxImporter.cpp</code>, <code>UfbxImplementation.c</code>, <code>ModelImporters.cpp</code>; <code>assetimport/CMakeLists.txt</code>; <code>external/ufbx/</code>; <code>engine/src/rendering/Model.cpp</code> &mdash; <code>RegisterLoader</code>, <code>Import</code>; <code>engine/src/io/ResourceLoader.cpp</code> &mdash; <code>ResourceTypeFor</code>; tests: <code>UfbxImporterTest.*</code>, <code>UfbxImporterObjTest.*</code>, <code>UfbxImporterConsistencyTest.*</code>, <code>ModelImportersTest.*</code>, <code>ModelFbxTest.*</code></p>
