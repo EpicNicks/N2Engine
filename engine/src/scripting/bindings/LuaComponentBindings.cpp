@@ -23,6 +23,7 @@
 #include "engine/example/renderers/CubeRenderer.hpp"
 #include "engine/example/renderers/QuadRenderer.hpp"
 #include "engine/example/renderers/SphereRenderer.hpp"
+#include <assetimport/ModelImporters.hpp>
 #include "engine/io/ResourcePath.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
@@ -136,6 +137,14 @@ namespace N2Engine::Scripting::Bindings
             throw std::runtime_error(std::format("Unknown component type '{}'. Known types: {}", typeName, known));
         }
 
+        /// Whether a (lower case) path names a model file: a built importer reads its extension
+        bool IsModelPath(const std::string &lowerPath)
+        {
+            const std::size_t dot = lowerPath.find_last_of('.');
+            return dot != std::string::npos &&
+                   AssetImport::FindModelImporter(std::string_view(lowerPath).substr(dot)) != nullptr;
+        }
+
         /// What scripts see as an asset's path: its res:// (or user://) path for a project asset, else `fallback`
         /// (the file it was loaded from, or "" for one made at runtime). A model's sub-asset is its model's path, '#'
         /// and its key: "res://models/robot.glb#mesh/Body".
@@ -155,7 +164,7 @@ namespace N2Engine::Scripting::Bindings
         /**
          * A sub-asset reference, "res://models/robot.glb#mesh/Body": the model file before the '#' is loaded (or
          * reused) and its sub-asset with the key after it returned (nullptr if there is none, or it isn't a T).
-         * nullopt for a reference with no '#' right after a ".glb" or ".gltf" (any case), which is an ordinary path
+         * nullopt for a reference with no '#' right after a model file extension (".glb", ".gltf", and ".fbx", ".obj" with ufbx built; any case), which is an ordinary path
          * (a file or folder name may contain '#').
          */
         template <typename T>
@@ -167,7 +176,7 @@ namespace N2Engine::Scripting::Bindings
                 std::string before = reference.substr(0, at);
                 std::ranges::transform(before, before.begin(),
                                        [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (before.ends_with(".glb") || before.ends_with(".gltf"))
+                if (IsModelPath(before))
                 {
                     hash = at;
                     break;

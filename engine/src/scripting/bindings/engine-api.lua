@@ -959,7 +959,7 @@ function Light:SetRange(range) end
 ---@return number
 function Light:GetRange() end
 
----3D model files (.glb, .gltf): see docs/meshes.html#models
+---3D model files (.glb, .gltf; .fbx and .obj when the engine is built with N2ENGINE_MODEL_UFBX): see docs/meshes.html#models
 Model = {}
 
 ---A new instance of a model's hierarchy: a root object (named after the file) with one child object per node,

@@ -34,6 +34,12 @@ target_compile_definitions(engine_tests PRIVATE
         N2_RENDERER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/renderer" # OpenGlShaderSourceTests reads the GLSL as text
 )
 
+# With the optional FBX/OBJ importer (N2ENGINE_MODEL_UFBX) the model tests also load the committed FBX; without it they
+# check that an .fbx is refused
+if (N2ENGINE_MODEL_UFBX)
+    target_compile_definitions(engine_tests PRIVATE N2ENGINE_MODEL_UFBX=1)
+endif()
+
 # tests/common has the glTF file builder the model tests share with tests/assetimport
 target_include_directories(engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/common)
 

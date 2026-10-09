@@ -1,5 +1,7 @@
 #include "engine/rendering/Model.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <exception>
@@ -10,6 +12,7 @@
 #include <utility>
 
 #include <assetimport/GltfImporter.hpp>
+#include <assetimport/ModelImporters.hpp>
 
 #include "engine/GameObjectScene.hpp" // GameObject's template members
 #include "engine/Logger.hpp"
@@ -288,7 +291,7 @@ namespace N2Engine::Rendering
         std::call_once(registered, []
         {
             IO::ResourceLoader::Instance().RegisterSubAssetParentType("Model");
-            for (const char *extension : {".gltf", ".glb"})
+            for (const std::string &extension : AssetImport::GetModelExtensions())
             {
                 IO::Resources::Instance().RegisterLoader(extension, LoadModelFromFile);
             }
@@ -297,11 +300,12 @@ namespace N2Engine::Rendering
 
     std::shared_ptr<Model> Model::LoadFromMemory(const std::span<const std::uint8_t> fileBytes,
                                                  const std::filesystem::path &baseDirectory,
-                                                 const ModelSettings &settings, const std::string_view name)
+                                                 const ModelSettings &settings, const std::string_view name,
+                                                 const std::string_view extension)
     {
         auto model = std::make_shared<Model>();
         model->_name = name.empty() ? std::string("Model") : std::string(name);
-        if (!model->Import(fileBytes, baseDirectory, settings, model->_name))
+        if (!model->Import(fileBytes, baseDirectory, settings, model->_name, extension))
         {
             return nullptr;
         }
@@ -322,14 +326,28 @@ namespace N2Engine::Rendering
         {
             _name = "Model";
         }
-        return Import(*bytes, path.parent_path(), SettingsFor(path), path.string());
+        return Import(*bytes, path.parent_path(), SettingsFor(path), path.string(), path.extension().string());
     }
 
     bool Model::Import(const std::span<const std::uint8_t> fileBytes, const std::filesystem::path &baseDirectory,
-                       const ModelSettings &settings, const std::string &debugName)
+                       const ModelSettings &settings, const std::string &debugName, const std::string_view extension)
     {
-        const AssetImport::GltfImporter importer;
-        auto imported = importer.Import(fileBytes, baseDirectory, ToImportSettings(settings));
+        // The importer for the file's extension; anything no built importer reads (no extension, a runtime buffer) is glTF
+        static const AssetImport::GltfImporter gltf;
+        const AssetImport::IModelImporter *importer = AssetImport::FindModelImporter(extension);
+        if (importer == nullptr)
+        {
+            std::string lower(extension);
+            std::ranges::transform(lower, lower.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (lower == ".fbx" || lower == ".obj")
+            {
+                Logger::Error(std::format("Cannot load model {}: this build has no FBX/OBJ importer (build with "
+                                          "N2ENGINE_MODEL_UFBX=ON)", debugName));
+                return false;
+            }
+            importer = &gltf;
+        }
+        auto imported = importer->Import(fileBytes, baseDirectory, ToImportSettings(settings));
         if (!imported)
         {
             Logger::Error(std::format("Cannot load model {}: {} ({})", debugName, imported.error().message,
