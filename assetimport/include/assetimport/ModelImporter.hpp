@@ -11,8 +11,8 @@
 #include "assetimport/ImportedScene.hpp"
 
 // The library-neutral seam between model files and the engine (#3 P3): an importer turns a file's bytes into an
-// ImportedScene. glTF 2.0 (GltfImporter, via cgltf) is the one implementation today; an optional FBX/OBJ importer
-// (ufbx) can follow behind the same interface.
+// ImportedScene. glTF 2.0 (GltfImporter, via cgltf) is always built; the optional FBX/OBJ importer (UfbxImporter,
+// via ufbx, N2ENGINE_MODEL_UFBX) sits behind the same interface (#3 P5). ModelImporters.hpp lists what was built.
 namespace N2Engine::AssetImport
 {
     // ===== Fixed caps (decision C on #3). Files over them are rejected before the memory is allocated. =====
@@ -42,6 +42,9 @@ namespace N2Engine::AssetImport
     inline constexpr std::size_t kMaxParseMemoryBytes = std::size_t{256} * 1024 * 1024;
     /// The most vertices or indices one imported mesh may have after triangulation: 64 M
     inline constexpr std::size_t kMaxMeshElements = std::size_t{1} << 26;
+    /// The most memory ufbx (the optional FBX/OBJ importer) may allocate, in its temporary and its result
+    /// allocators each: 1 GiB
+    inline constexpr std::size_t kMaxUfbxMemoryBytes = std::size_t{1024} * 1024 * 1024;
     /// How deep a node tree may go
     inline constexpr std::size_t kMaxNodeDepth = 256;
 

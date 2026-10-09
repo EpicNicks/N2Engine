@@ -82,7 +82,8 @@ namespace N2Engine::Rendering
     };
 
     /**
-     * A 3D model file (`"Model"`: .gltf with its .bin files and images, or .glb): a node hierarchy plus the meshes,
+     * A 3D model file (`"Model"`: .gltf with its .bin files and images, or .glb; and .fbx or .obj when the engine is
+     * built with N2ENGINE_MODEL_UFBX): a node hierarchy plus the meshes,
      * materials and textures inside the file, which are sub-assets. CPU data only, so it loads headless.
      *
      * Sub-assets are keyed by kind and name ("mesh/Body", "material/Paint", "texture/Albedo") when every name of
@@ -100,8 +101,9 @@ namespace N2Engine::Rendering
         Model() = default;
 
         /**
-         * A model from a file's bytes held in memory (glTF JSON or GLB), with external files (buffers, images)
-         * resolved inside `baseDirectory`. `name` names the root object Instantiate makes and the log messages.
+         * A model from a file's bytes held in memory, with external files (buffers, images) resolved inside
+         * `baseDirectory`. `extension` (".fbx", ".obj", ".glb", any case) picks the importer; empty, or one no built
+         * importer reads, means glTF JSON or GLB. `name` names the root object Instantiate makes and the log messages.
          * nullptr, with an error logged, if it can't be imported. It isn't a project file, so its meshes, materials
          * and textures are runtime assets, like Texture::Create's: random UUIDs, not marked as sub-assets, and a
          * saved reference to one (a scene, a .mat) doesn't resolve in a later run. Load project models through
@@ -110,7 +112,8 @@ namespace N2Engine::Rendering
         [[nodiscard]] static std::shared_ptr<Model> LoadFromMemory(std::span<const std::uint8_t> fileBytes,
                                                                    const std::filesystem::path &baseDirectory = {},
                                                                    const ModelSettings &settings = {},
-                                                                   std::string_view name = "Model");
+                                                                   std::string_view name = "Model",
+                                                                   std::string_view extension = {});
 
         /// The settings in a .meta customData object (its "model" member), on top of `defaults`. Missing keys keep
         /// the default; a key with the wrong type, an unknown value or an unknown name is ignored with a warning.
@@ -121,12 +124,12 @@ namespace N2Engine::Rendering
         [[nodiscard]] static std::vector<std::string> MakeSubAssetKeys(std::string_view kind,
                                                                        const std::vector<std::string> &names);
 
-        /// Registers the .gltf/.glb loader with Resources (and so ResourceLoader), and "Model" as a type with
+        /// Registers the .gltf/.glb loader (and .fbx/.obj with ufbx built) with Resources (and so ResourceLoader), and "Model" as a type with
         /// sub-assets. Model.cpp already does this at static initialisation, and ResourceLoader::Initialize calls it
         /// too; calling it again is harmless.
         static void RegisterLoader();
 
-        /// Loads a .gltf or .glb file, with settings from its .meta when ResourceLoader tracks it
+        /// Loads a .gltf, .glb (or .fbx, .obj) file, with settings from its .meta when ResourceLoader tracks it
         bool Load(const std::filesystem::path &path) override;
         /// What GetResourceType() returns, for code that needs it without an instance (asset metadata, a field's asset type)
         static constexpr std::string_view ResourceTypeName = "Model";
@@ -173,7 +176,7 @@ namespace N2Engine::Rendering
 
     private:
         bool Import(std::span<const std::uint8_t> fileBytes, const std::filesystem::path &baseDirectory,
-                    const ModelSettings &settings, const std::string &debugName);
+                    const ModelSettings &settings, const std::string &debugName, std::string_view extension);
         void Attach(GameObject &gameObject, std::size_t nodeIndex) const;
 
         bool _loaded = false;
@@ -192,6 +195,6 @@ namespace N2Engine::Rendering
         mutable std::optional<nlohmann::json> _prefab;
     };
 
-    /// The loader registered for .gltf and .glb
+    /// The loader registered for every model extension (.gltf and .glb, and .fbx and .obj with ufbx built)
     std::shared_ptr<Base::Asset> LoadModelFromFile(const std::filesystem::path &path);
 }

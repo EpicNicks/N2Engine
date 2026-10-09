@@ -9,6 +9,7 @@
 #include "engine/rendering/Texture.hpp"
 #include "engine/sceneManagement/SceneFile.hpp"
 #include "engine/text/Font.hpp"
+#include <assetimport/ModelImporters.hpp>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -70,7 +71,7 @@ namespace N2Engine::IO
                 return std::string(Text::Font::ResourceTypeName);
             if (ext == ".mat")
                 return std::string(Rendering::Material::ResourceTypeName);
-            if (ext == ".gltf" || ext == ".glb")
+            if (AssetImport::FindModelImporter(ext) != nullptr) // .gltf, .glb, and .fbx, .obj with ufbx built
                 return std::string(Rendering::Model::ResourceTypeName);
             if (ext == SceneFile::Extension)
                 return std::string(SceneFile::ResourceTypeName);
@@ -83,7 +84,7 @@ namespace N2Engine::IO
         // Font.cpp's, Texture.cpp's, Material.cpp's, Model.cpp's and SceneFile.cpp's own registration only runs if
         // something calls it (or, for the static registrars, the linker keeps those files, which a program that
         // names none of the types wouldn't); registering here (idempotent) makes .ttf/.otf, the image extensions,
-        // .mat, .gltf/.glb and .scene scan and load anyway. Done before the roots change, so a first registration
+        // .mat, the model extensions (.gltf/.glb, and .fbx/.obj with ufbx built) and .scene scan and load anyway. Done before the roots change, so a first registration
         // doesn't rescan anything.
         Text::Font::RegisterLoader();
         Rendering::Texture::RegisterLoader();
