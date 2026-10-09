@@ -526,8 +526,9 @@ TEST_F(EditorHistoryTest, UndoingADestroyPutsTheReferencesToTheObjectBack)
     EXPECT_EQ(Redo().label, "Delete Target");
     EXPECT_EQ(SceneJson(), after);
     EXPECT_TRUE(Get(holderEntity, holder).at("target").is_null());
-    EXPECT_TRUE(LastEventOfKind(server, "sceneChanged").value("entityIds", json::array()).size() == 2u)
-        << "redoing a destroy lists the objects it destroyed";
+    EXPECT_EQ(LastEventOfKind(server, "sceneChanged").value("entityIds", json::array()),
+              (json::array({target, child, holderEntity})))
+        << "redoing a destroy lists the objects it destroyed, and the one whose reference it cleared";
 }
 
 TEST_F(EditorHistoryTest, UndoingADestroyKeepsTheSceneNameUuidAndEditMode)
@@ -684,6 +685,78 @@ TEST_F(EditorHistoryTest, RemoveComponentIsUndoneAndRedoneWithTheReferencesToIt)
     EXPECT_EQ(Redo().label, std::string("Remove ") + HolderType);
     EXPECT_EQ(SceneJson(), after);
     EXPECT_TRUE(Get(secondEntity, second).at("peer").is_null());
+}
+
+TEST_F(EditorHistoryTest, RemoveComponentPushesSceneChangedWithTheObjectsWhoseReferencesItCleared)
+{
+    const std::string firstEntity = Create("First");
+    const std::string secondEntity = Create("Second");
+    const std::string thirdEntity = Create("Third");
+    const std::string first = AddHolder(firstEntity);
+    const std::string second = AddHolder(secondEntity);
+    AddHolder(thirdEntity);
+    ASSERT_EQ(SetFields(secondEntity, second, json{{"peer", first}}).type, ComponentDataType);
+
+    ASSERT_EQ(RemoveComponent(firstEntity, first).type, OkType);
+    const json removed = LastEventOfKind(server, "sceneChanged");
+    ASSERT_TRUE(removed.contains("entityIds"));
+    EXPECT_EQ(removed.at("entityIds"), (json::array({firstEntity, secondEntity}))) << "the object it was on, and the holder of the reference";
+    EXPECT_FALSE(removed.contains("full"));
+
+    // Redo clears the reference again, and says so the same way
+    Undo();
+    Redo();
+    const json redone = LastEventOfKind(server, "sceneChanged");
+    ASSERT_TRUE(redone.contains("entityIds"));
+    EXPECT_EQ(redone.at("entityIds"), (json::array({firstEntity, secondEntity})));
+}
+
+TEST_F(EditorHistoryTest, AHolderWithSeveralReferencesIsListedOnce)
+{
+    const std::string firstEntity = Create("First");
+    const std::string secondEntity = Create("Second");
+    const std::string first = AddHolder(firstEntity);
+    const std::string secondA = AddHolder(secondEntity);
+    const std::string secondB = AddHolder(secondEntity);
+    ASSERT_EQ(SetFields(secondEntity, secondA, json{{"peer", first}}).type, ComponentDataType);
+    ASSERT_EQ(SetFields(secondEntity, secondB, json{{"peer", first}}).type, ComponentDataType);
+    ASSERT_EQ(RemoveComponent(firstEntity, first).type, OkType);
+    EXPECT_EQ(LastEventOfKind(server, "sceneChanged").at("entityIds"), (json::array({firstEntity, secondEntity})));
+}
+
+TEST_F(EditorHistoryTest, RemovingAComponentNothingReferencesListsOnlyItsObject)
+{
+    const std::string firstEntity = Create("First");
+    const std::string secondEntity = Create("Second");
+    const std::string first = AddHolder(firstEntity);
+    AddHolder(secondEntity);
+
+    ASSERT_EQ(RemoveComponent(firstEntity, first).type, OkType);
+    EXPECT_EQ(LastEventOfKind(server, "sceneChanged").at("entityIds"), (json::array({firstEntity})));
+}
+
+TEST_F(EditorHistoryTest, DestroyEntityPushesSceneChangedWithTheObjectsWhoseReferencesItCleared)
+{
+    const std::string firstEntity = Create("First");
+    const std::string secondEntity = Create("Second");
+    const std::string thirdEntity = Create("Third");
+    const std::string first = AddHolder(firstEntity);
+    const std::string second = AddHolder(secondEntity);
+    AddHolder(thirdEntity);
+    ASSERT_EQ(SetFields(secondEntity, second, json{{"peer", first}}).type, ComponentDataType);
+
+    ASSERT_EQ(Destroy(firstEntity).type, OkType);
+    // The change is announced first, and the holders are listed by a second event
+    const std::vector<json> events = EventsOfKind(server, "sceneChanged");
+    ASSERT_GE(events.size(), 2u);
+    EXPECT_EQ(events[events.size() - 2].at("entityIds"), (json::array({firstEntity})));
+    EXPECT_EQ(events.back().at("entityIds"), (json::array({secondEntity})));
+
+    Undo();
+    Redo();
+    const json redone = LastEventOfKind(server, "sceneChanged");
+    ASSERT_TRUE(redone.contains("entityIds"));
+    EXPECT_EQ(redone.at("entityIds"), (json::array({firstEntity, secondEntity})));
 }
 
 TEST_F(EditorHistoryTest, SetComponentFieldsIsUndoneAndRedone)
@@ -989,6 +1062,113 @@ TEST_F(EditorHistoryTest, AnEmptyGroupMakesNoStep)
     EXPECT_EQ(EndGroup().type, OkType);
     EXPECT_TRUE(History().entries.empty());
     EXPECT_EQ(EventsOfKind(server, "historyChanged").size(), historyEvents + 2) << "opened and closed";
+}
+
+TEST_F(EditorHistoryTest, AGroupWhoseWritesCancelOutMakesNoStepAndKeepsTheRedoSteps)
+{
+    const std::string a = Create("A");
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    Create("B");
+    Undo();
+    ASSERT_EQ(History().entries.size(), 3u);
+    const json before = SceneJson();
+    const size_t historyEvents = EventsOfKind(server, "historyChanged").size();
+
+    // A gizmo drag, then Esc writes the first value back
+    ASSERT_EQ(BeginGroup("Move").type, OkType);
+    ASSERT_EQ(SetLocal(a, {5.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetLocal(a, {9.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetProperties(a, json{{"tag", "T"}}).type, OkType);
+    ASSERT_EQ(SetProperties(a, json{{"tag", "Untagged"}}).type, OkType);
+    ASSERT_EQ(EndGroup().type, OkType);
+
+    EXPECT_EQ(SceneJson(), before);
+    EXPECT_EQ(History().entries.size(), 3u) << "no step for it";
+    EXPECT_EQ(History().cursor, 2u);
+    EXPECT_TRUE(LastEventOfKind(server, "historyChanged").at("canRedo").get<bool>()) << "the redo step is still there";
+    EXPECT_EQ(EventsOfKind(server, "historyChanged").size(), historyEvents + 2) << "opened and closed";
+    EXPECT_EQ(Redo().label, "Create B");
+}
+
+TEST_F(EditorHistoryTest, AGroupOfFieldWritesThatCancelOutMakesNoStep)
+{
+    const std::string entity = Create("A");
+    const std::string component = AddHolder(entity);
+    ASSERT_EQ(SetFields(entity, component, json{{"count", 7}}).type, ComponentDataType);
+    const size_t steps = History().entries.size();
+    const json before = SceneJson();
+
+    ASSERT_EQ(BeginGroup("Type").type, OkType);
+    ASSERT_EQ(SetFields(entity, component, json{{"count", 3}}).type, ComponentDataType);
+    ASSERT_EQ(SetFields(entity, component, json{{"count", 7}}).type, ComponentDataType);
+    ASSERT_EQ(EndGroup().type, OkType);
+
+    EXPECT_EQ(History().entries.size(), steps);
+    EXPECT_EQ(SceneJson(), before);
+}
+
+TEST_F(EditorHistoryTest, ADragOfSeveralObjectsThatEndsWhereItStartedMakesNoStep)
+{
+    const std::string a = Create("A");
+    const std::string b = Create("B");
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetLocal(b, {2.0f, 0.0f, 0.0f}).type, OkType);
+    const size_t steps = History().entries.size();
+
+    ASSERT_EQ(BeginGroup("Drag selection").type, OkType);
+    for (const float x : {3.0f, 4.0f})
+    {
+        ASSERT_EQ(SetLocal(a, {x, 0.0f, 0.0f}).type, OkType);
+        ASSERT_EQ(SetLocal(b, {x + 1.0f, 0.0f, 0.0f}).type, OkType);
+    }
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetLocal(b, {2.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(EndGroup().type, OkType);
+    EXPECT_EQ(History().entries.size(), steps);
+
+    // One of the two left somewhere else is a step
+    ASSERT_EQ(BeginGroup("Drag selection").type, OkType);
+    ASSERT_EQ(SetLocal(a, {5.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetLocal(b, {6.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetLocal(b, {2.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(EndGroup().type, OkType);
+    EXPECT_EQ(History().entries.size(), steps + 1);
+    EXPECT_EQ(Undo().label, "Drag selection");
+    EXPECT_EQ(Entity(a).at("transform").at("position").at("x").get<float>(), 1.0f);
+}
+
+TEST_F(EditorHistoryTest, AGroupLeftOpenThatCancelledOutMakesNoStepWhenItIsClosed)
+{
+    const std::string a = Create("A");
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    const size_t steps = History().entries.size();
+    BeginGroup("Abandoned");
+    SetLocal(a, {5.0f, 0.0f, 0.0f});
+    SetLocal(a, {1.0f, 0.0f, 0.0f});
+
+    const Frame hello = Execute(server, CommandType::Hello, Strings({"test", std::string(ProtocolVersion), ""}));
+    ASSERT_EQ(hello.type, ServerInfoType) << hello.Text();
+    EXPECT_FALSE(server.GetHistory().InGroup());
+    EXPECT_EQ(History().entries.size(), steps);
+    EXPECT_TRUE(LastEventOfKind(server, "historyChanged").at("canUndo").get<bool>());
+}
+
+TEST_F(EditorHistoryTest, AGroupKeepsTheOpsThatChangedSomethingAndDropsTheOnesThatDidNot)
+{
+    const std::string a = Create("A");
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    const json before = SceneJson();
+
+    ASSERT_EQ(BeginGroup("Edit").type, OkType);
+    ASSERT_EQ(SetLocal(a, {5.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetProperties(a, json{{"tag", "Moved"}}).type, OkType);
+    ASSERT_EQ(EndGroup().type, OkType);
+
+    EXPECT_EQ(History().entries.size(), 3u);
+    EXPECT_EQ(Undo().label, "Edit");
+    EXPECT_EQ(SceneJson(), before);
 }
 
 TEST_F(EditorHistoryTest, EndingAGroupThatIsntOpenIsAnError)
@@ -1332,6 +1512,56 @@ TEST_F(EditorHistoryProjectTest, SavingKeepsTheHistoryAndUndoingBackToTheSavedSt
     const EditResultData forward = Redo();
     EXPECT_EQ(forward.revision, forward.savedRevision) << "and forward again";
     EXPECT_TRUE(forward.canRedo);
+}
+
+TEST_F(EditorHistoryProjectTest, AGroupWhoseWritesCancelOutLeavesTheSceneAsSavedAsItWas)
+{
+    Open("res://scenes/Main.scene");
+    const std::string a = Create("A");
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    Save();
+    ASSERT_EQ(OpenSceneInfo().revision, OpenSceneInfo().savedRevision);
+
+    BeginGroup("Move");
+    ASSERT_EQ(SetLocal(a, {5.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    EXPECT_NE(OpenSceneInfo().revision, OpenSceneInfo().savedRevision) << "the writes moved the revision";
+    ASSERT_EQ(EndGroup().type, OkType);
+
+    EXPECT_EQ(OpenSceneInfo().revision, OpenSceneInfo().savedRevision) << "the scene is the saved one again";
+    const json event = LastEventOfKind(server, "sceneChanged");
+    EXPECT_EQ(event.at("savedRevision"), event.at("revision"));
+    EXPECT_EQ(History().entries.size(), 2u);
+}
+
+TEST_F(EditorHistoryProjectTest, AGroupWhoseWritesCancelOutDoesNotSaveAnUnsavedScene)
+{
+    Open("res://scenes/Main.scene");
+    const std::string a = Create("A");
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+
+    BeginGroup("Move");
+    ASSERT_EQ(SetLocal(a, {5.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(EndGroup().type, OkType);
+
+    EXPECT_NE(OpenSceneInfo().revision, OpenSceneInfo().savedRevision) << "the edits before the group are unsaved";
+}
+
+TEST_F(EditorHistoryProjectTest, ASaveInsideAGroupThatThenCancelsOutLeavesTheSceneUnsaved)
+{
+    Open("res://scenes/Main.scene");
+    const std::string a = Create("A");
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+
+    BeginGroup("Move");
+    ASSERT_EQ(SetLocal(a, {5.0f, 0.0f, 0.0f}).type, OkType);
+    Save();
+    ASSERT_EQ(SetLocal(a, {1.0f, 0.0f, 0.0f}).type, OkType);
+    ASSERT_EQ(EndGroup().type, OkType);
+
+    // What was saved is the scene with the object at 5: the scene now is not it
+    EXPECT_NE(OpenSceneInfo().revision, OpenSceneInfo().savedRevision);
 }
 
 TEST_F(EditorHistoryProjectTest, ANewEditAfterUndoingPastTheSavedStateLosesIt)

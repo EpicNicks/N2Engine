@@ -41,6 +41,7 @@ namespace N2Engine::Editor
     {
         into.redo = std::move(later.redo);
         into.redoBytes = later.redoBytes;
+        into.redoState = std::move(later.redoState);
     }
 
     EditHistory::Recorded EditHistory::Record(std::string label, EditOp op, const Clock::time_point now)
@@ -191,6 +192,12 @@ namespace N2Engine::Editor
         if (ops.empty())
         {
             return GroupEnd::Empty;
+        }
+        // What the group did and undid again is nothing to undo, and it must not clear the redo steps either
+        std::erase_if(ops, [](const EditOp &op) { return op.IsNoOp(); });
+        if (ops.empty())
+        {
+            return GroupEnd::NoChange;
         }
 
         Step step;
