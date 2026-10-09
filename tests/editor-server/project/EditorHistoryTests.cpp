@@ -526,8 +526,9 @@ TEST_F(EditorHistoryTest, UndoingADestroyPutsTheReferencesToTheObjectBack)
     EXPECT_EQ(Redo().label, "Delete Target");
     EXPECT_EQ(SceneJson(), after);
     EXPECT_TRUE(Get(holderEntity, holder).at("target").is_null());
-    EXPECT_TRUE(LastEventOfKind(server, "sceneChanged").value("entityIds", json::array()).size() == 2u)
-        << "redoing a destroy lists the objects it destroyed";
+    EXPECT_EQ(LastEventOfKind(server, "sceneChanged").value("entityIds", json::array()),
+              (json::array({target, child, holderEntity})))
+        << "redoing a destroy lists the objects it destroyed, and the one whose reference it cleared";
 }
 
 TEST_F(EditorHistoryTest, UndoingADestroyKeepsTheSceneNameUuidAndEditMode)
