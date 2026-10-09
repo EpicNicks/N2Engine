@@ -963,7 +963,8 @@ TEST(UfbxImporterObjTest, AMaterialLibraryOutsideTheFolderIsNotRead)
     EXPECT_TRUE(HasWarning(scene, "material library"));
     for (const ImportedMaterial &material : scene.materials)
     {
-        EXPECT_NE(material.name, "Secret") << "the library outside the model's folder was read";
+        // usemtl makes a material of that name even without its library; the library's Kd (1, 0, 0) must not be in it
+        EXPECT_GT(material.baseColor[1], 0.5f) << "the library outside the model's folder was read";
     }
 }
 
