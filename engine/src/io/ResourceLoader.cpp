@@ -771,6 +771,15 @@ namespace N2Engine::IO
             if (!HasCurrentSubAssetIndex(meta) && !sourcePath.empty() &&
                 std::filesystem::exists(sourcePath, existsError))
             {
+                if (!_loaders.contains(LowerExtension(sourcePath)))
+                {
+                    // A model whose format this build can't read (an .fbx or .obj .meta from a build with ufbx, in one
+                    // without it): skipped, said once, instead of attempting a load that can only fail
+                    _subAssetParentsTried.insert(path);
+                    Logger::Warn(std::format("Skipping model '{}': this build has no importer for its format "
+                                             "(FBX and OBJ need N2ENGINE_MODEL_UFBX)", path.ToString()));
+                    continue;
+                }
                 candidates.push_back(path);
             }
         }

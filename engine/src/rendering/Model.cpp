@@ -1,5 +1,7 @@
 #include "engine/rendering/Model.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <exception>
@@ -335,6 +337,14 @@ namespace N2Engine::Rendering
         const AssetImport::IModelImporter *importer = AssetImport::FindModelImporter(extension);
         if (importer == nullptr)
         {
+            std::string lower(extension);
+            std::ranges::transform(lower, lower.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (lower == ".fbx" || lower == ".obj")
+            {
+                Logger::Error(std::format("Cannot load model {}: this build has no FBX/OBJ importer (build with "
+                                          "N2ENGINE_MODEL_UFBX=ON)", debugName));
+                return false;
+            }
             importer = &gltf;
         }
         auto imported = importer->Import(fileBytes, baseDirectory, ToImportSettings(settings));

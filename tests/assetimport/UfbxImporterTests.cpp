@@ -128,6 +128,8 @@ namespace
     {
         /// FBX axis settings: y up, +z front (FBX's default), or z up with -y front (Blender's and Maya's z up)
         bool zUp = false;
+        /// CoordAxisSign: -1 makes the file left-handed (the DirectX preset's x runs the other way)
+        int coordSign = 1;
         /// UnitScaleFactor: the unit's size in centimetres (100 is metres, 1 is centimetres)
         double unitScaleFactor = 100.0;
         std::vector<double> positions;
@@ -184,7 +186,8 @@ namespace
             out << "\t\tP: \"UpAxis\", \"int\", \"Integer\", \"\",1\n\t\tP: \"UpAxisSign\", \"int\", \"Integer\", \"\",1\n"
                    "\t\tP: \"FrontAxis\", \"int\", \"Integer\", \"\",2\n\t\tP: \"FrontAxisSign\", \"int\", \"Integer\", \"\",1\n";
         }
-        out << "\t\tP: \"CoordAxis\", \"int\", \"Integer\", \"\",0\n\t\tP: \"CoordAxisSign\", \"int\", \"Integer\", \"\",1\n";
+        out << "\t\tP: \"CoordAxis\", \"int\", \"Integer\", \"\",0\n\t\tP: \"CoordAxisSign\", \"int\", \"Integer\", \"\"," << spec.coordSign
+            << "\n";
         out << "\t\tP: \"UnitScaleFactor\", \"double\", \"Number\", \"\"," << spec.unitScaleFactor << "\n";
         out << "\t\tP: \"OriginalUnitScaleFactor\", \"double\", \"Number\", \"\"," << spec.unitScaleFactor << "\n";
         out << "\t}\n}\n\nObjects:  {\n";
@@ -545,6 +548,73 @@ TEST(UfbxImporterTest, ControlPointAttributesWeldTheSameWay)
     EXPECT_EQ(scene.meshes[0].indices.size(), 6u);
 }
 
+TEST(UfbxImporterTest, CornersWeldByValueNotByAttributeIndex)
+{
+    // Two triangles sharing an edge, with Blender's layout: one normal and one UV per polygon vertex (Direct), so the
+    // shared corners have different attribute indices and equal values
+    FbxSpec spec;
+    spec.positions = {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
+    spec.polygonIndices = {0, 1, -3, 0, 2, -4};
+    spec.normals = {0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    spec.uvs = {0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1};
+    const ImportedScene scene = ImportOrFail(ToBytes(MakeFbx(spec)));
+    ExpectWellFormed(scene);
+    ASSERT_EQ(scene.meshes.size(), 1u);
+    EXPECT_EQ(scene.meshes[0].indices.size(), 6u);
+    EXPECT_EQ(scene.meshes[0].vertices.size(), 4u) << "the two shared corners weld";
+
+    // A shared corner with a different normal does not weld
+    FbxSpec hard = spec;
+    hard.normals = {0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0};
+    const ImportedScene creased = ImportOrFail(ToBytes(MakeFbx(hard)));
+    ASSERT_EQ(creased.meshes.size(), 1u);
+    EXPECT_EQ(creased.meshes[0].vertices.size(), 6u) << "different normals keep the corners apart";
+}
+
+TEST(UfbxImporterTest, ALeftHandedFileIsMirroredAndKeepsItsFacesOutward)
+{
+    // CoordAxisSign -1: the file's +x is the target's -x. A triangle with the file's own normal +z
+    FbxSpec spec;
+    spec.coordSign = -1;
+    spec.positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    spec.polygonIndices = {0, 1, -3};
+    spec.normals = {0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const ImportedScene scene = ImportOrFail(ToBytes(MakeFbx(spec)));
+    ExpectWellFormed(scene);
+    ASSERT_EQ(scene.meshes.size(), 1u);
+    const ImportedMesh &mesh = scene.meshes[0];
+    ASSERT_EQ(mesh.indices.size(), 3u);
+    const std::size_t thing = NodeNamed(scene, "Thing");
+    const std::vector<int> parents = ParentsOf(scene);
+
+    std::array<Vec3, 3> corners;
+    std::array<Vec3, 3> normals;
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+        const ImportedVertex &v = mesh.vertices[mesh.indices[i]];
+        corners[i] = ToWorld(scene, parents, static_cast<int>(thing), {v.position[0], v.position[1], v.position[2]});
+        normals[i] = DirectionToWorld(scene, parents, static_cast<int>(thing), {v.normal[0], v.normal[1], v.normal[2]});
+    }
+    // The file's (1, 0, 0) is at world x = -1: a mirror of the file's x, not a point reflection (y and z unchanged)
+    const auto at = [&](const double x, const double y) {
+        return std::ranges::any_of(corners, [&](const Vec3 &c) {
+            return std::abs(c.x - x) < 1e-4 && std::abs(c.y - y) < 1e-4 && std::abs(c.z) < 1e-4;
+        });
+    };
+    EXPECT_TRUE(at(0, 0));
+    EXPECT_TRUE(at(-1, 0)) << "the file's +x runs to world -x";
+    EXPECT_TRUE(at(0, 1));
+    // The normal keeps its z (+1), and the triangle's winding agrees with it: front faces stay outward
+    for (const Vec3 &n : normals)
+    {
+        EXPECT_NEAR(n.z, 1.0, 1e-4);
+    }
+    const Vec3 e1{corners[1].x - corners[0].x, corners[1].y - corners[0].y, corners[1].z - corners[0].z};
+    const Vec3 e2{corners[2].x - corners[0].x, corners[2].y - corners[0].y, corners[2].z - corners[0].z};
+    const double geometricZ = e1.x * e2.y - e1.y * e2.x;
+    EXPECT_GT(geometricZ, 0.0) << "counter-clockwise from +z, like the normal";
+}
+
 TEST(UfbxImporterTest, NormalsAreKeptNormalisedGeneratedWhenMissingAndFlatOnRequest)
 {
     // The file's normals, tilted and not unit length
@@ -561,13 +631,13 @@ TEST(UfbxImporterTest, NormalsAreKeptNormalisedGeneratedWhenMissingAndFlatOnRequ
         }
     }
     {
-        // Always: the file's are ignored and every triangle gets its own flat ones (no welding)
+        // Always: the file's are ignored and every triangle gets its own flat ones (equal ones still weld)
         ModelImportSettings always;
         always.generateNormals = NormalGeneration::Always;
         const ImportedScene scene = ImportOrFail(ToBytes(MakeFbx(tilted)), always);
         ASSERT_EQ(scene.meshes.size(), 1u);
         EXPECT_TRUE(scene.meshes[0].generatedNormals);
-        EXPECT_EQ(scene.meshes[0].vertices.size(), 6u);
+        EXPECT_EQ(scene.meshes[0].vertices.size(), 4u) << "the quad's two triangles share a flat normal";
         for (const ImportedVertex &vertex : scene.meshes[0].vertices)
         {
             EXPECT_NEAR(vertex.normal[0], 0.0f, 1e-5f);
@@ -992,12 +1062,43 @@ TEST(UfbxImporterErrorTest, EmptyInputAndGarbageAreErrorsNotCrashes)
     }
 }
 
+TEST(UfbxImporterErrorTest, ABinaryFbxHeaderIsAParseErrorNotMissingGeometry)
+{
+    // "Kaydara FBX Binary  \0", 0x1A, 0x00, then the version: the file is an FBX, so ufbx's reason is the error
+    Bytes header = ToBytes(std::string("Kaydara FBX Binary  ", 20));
+    header.insert(header.end(), {0, 0x1A, 0, 0xE8, 0x1C, 0, 0});
+    for (const std::size_t extra : {std::size_t{0}, std::size_t{1}, std::size_t{13}, std::size_t{40}})
+    {
+        Bytes bytes = header;
+        for (std::size_t i = 0; i < extra; ++i)
+        {
+            bytes.push_back(static_cast<std::uint8_t>(i * 37 + 5));
+        }
+        const auto result = Import(bytes);
+        if (!result.has_value())
+        {
+            EXPECT_EQ(result.error().code, ModelImportErrorCode::ParseFailed) << extra;
+            EXPECT_EQ(result.error().message.find("no geometry"), std::string::npos) << result.error().message;
+            EXPECT_NE(result.error().message.find("ufbx"), std::string::npos) << result.error().message;
+        }
+        else
+        {
+            EXPECT_TRUE(result->meshes.empty()) << extra;
+        }
+    }
+    // The bare magic is cut short: an error
+    const auto cut = Import(Bytes(header.begin(), header.begin() + 24));
+    ASSERT_FALSE(cut.has_value());
+    EXPECT_EQ(cut.error().code, ModelImportErrorCode::ParseFailed);
+    EXPECT_EQ(cut.error().message.find("no geometry"), std::string::npos) << cut.error().message;
+}
+
 TEST(UfbxImporterErrorTest, AFileCutShortAtEveryByteNeverCrashesAndNeverGivesBadIndices)
 {
     const Bytes fbx = ReadBytes(ModelsDirectory() / "textured_cube.fbx");
     ASSERT_FALSE(fbx.empty());
     ASSERT_TRUE(Import(fbx).has_value());
-    for (std::size_t length = 0; length < fbx.size(); length += 7)
+    for (std::size_t length = 0; length < fbx.size(); length += 1)
     {
         const Bytes cut(fbx.begin(), fbx.begin() + static_cast<std::ptrdiff_t>(length));
         const auto result = Import(cut);

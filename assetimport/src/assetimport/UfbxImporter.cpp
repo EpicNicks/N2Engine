@@ -213,24 +213,54 @@ namespace N2Engine::AssetImport
             std::size_t imageBytes = 0;
         };
 
+        /// A vertex's values as bit patterns (the position, normal, texture coordinate, colour and tangent a vertex has),
+        /// the key vertices are welded by: two corners weld when everything they would write is identical, whatever
+        /// indices the file gave their attributes (Blender writes one normal per polygon corner, so equal normals sit
+        /// at different indices)
         struct VertexKey
         {
-            std::array<std::uint32_t, 4> parts{};
-            bool operator==(const VertexKey &other) const { return parts == other.parts; }
+            std::array<std::uint32_t, 20> words{};
+            bool operator==(const VertexKey &other) const { return words == other.words; }
         };
 
         struct VertexKeyHash
         {
             std::size_t operator()(const VertexKey &key) const
             {
-                std::size_t hash = 0xcbf29ce484222325ULL;
-                for (const std::uint32_t part : key.parts)
+                std::uint64_t hash = 0xcbf29ce484222325ULL;
+                for (const std::uint32_t word : key.words)
                 {
-                    hash ^= part + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+                    hash = (hash ^ word) * 0x100000001b3ULL;
                 }
-                return hash;
+                return static_cast<std::size_t>(hash);
             }
         };
+
+        std::uint32_t Bits(const float value)
+        {
+            // -0 and +0 are the same value
+            const float normalised = value == 0.0f ? 0.0f : value;
+            std::uint32_t bits = 0;
+            std::memcpy(&bits, &normalised, sizeof(bits));
+            return bits;
+        }
+
+        VertexKey KeyOf(const ImportedVertex &vertex)
+        {
+            VertexKey key;
+            std::size_t at = 0;
+            for (const float v : vertex.position)
+                key.words[at++] = Bits(v);
+            for (const float v : vertex.normal)
+                key.words[at++] = Bits(v);
+            for (const float v : vertex.texCoord)
+                key.words[at++] = Bits(v);
+            for (const float v : vertex.color)
+                key.words[at++] = Bits(v);
+            for (const float v : vertex.tangent)
+                key.words[at++] = Bits(v);
+            return key;
+        }
 
         struct Context
         {
@@ -243,11 +273,13 @@ namespace N2Engine::AssetImport
             std::map<const ufbx_texture *, std::int32_t> imageOf;
         };
 
-        ModelImportError OverBudget(const char *what)
+        /// Over the vertex limits (`vertices`: kMaxMeshElements per mesh, kMaxSceneVertices in all) or the index limits
+        ModelImportError OverBudget(const bool vertices)
         {
             return ModelImportError{ModelImportErrorCode::TooLarge,
-                                    std::format("the model has more {} than the {} vertex / {} index limits allow", what,
-                                                kMaxSceneVertices, kMaxSceneIndices)};
+                                    std::format("the model has more {} than the limits allow ({} per mesh, {} in all)",
+                                                vertices ? "vertices" : "indices", kMaxMeshElements,
+                                                vertices ? kMaxSceneVertices : kMaxSceneIndices)};
         }
 
         // ===== Images and materials =====
@@ -563,7 +595,7 @@ namespace N2Engine::AssetImport
             context.budget.vertices += result.verticesAdded;
             if (context.budget.vertices > kMaxSceneVertices)
             {
-                return OverBudget("vertices");
+                return OverBudget(true);
             }
             if (result.verticesWritten > 0)
             {
@@ -588,6 +620,11 @@ namespace N2Engine::AssetImport
                                         std::format("mesh '{}' is over the {}-element limit", label, kMaxAccessorElements)};
             }
 
+            if (source.uv_sets.count > 1)
+            {
+                context.warnings.Add("extra UV sets are ignored (only the first is read)");
+            }
+
             const bool flat = context.settings.generateNormals == NormalGeneration::Always;
             const bool useFileNormals = !flat && source.vertex_normal.exists;
             const bool useFileTangents = context.settings.generateTangents != TangentGeneration::Always &&
@@ -609,25 +646,10 @@ namespace N2Engine::AssetImport
             const auto emitVertex = [&](const std::size_t corner, const std::optional<std::array<float, 3>> &flatNormal)
                 -> std::expected<std::uint32_t, ModelImportError>
             {
-                VertexKey key;
-                key.parts = {AttributeIndex(source.vertex_position, corner),
-                             flatNormal ? kNone : AttributeIndex(source.vertex_normal, corner),
-                             AttributeIndex(source.vertex_uv, corner), AttributeIndex(source.vertex_color, corner)};
-                if (!flatNormal)
-                {
-                    if (const auto found = welded.find(key); found != welded.end())
-                    {
-                        return found->second;
-                    }
-                }
-                if (mesh.vertices.size() >= vertexRoom)
-                {
-                    return std::unexpected(OverBudget("vertices"));
-                }
                 ImportedVertex vertex;
-                if (key.parts[0] != kNone)
+                if (const std::uint32_t at = AttributeIndex(source.vertex_position, corner); at != kNone)
                 {
-                    const ufbx_vec3 &p = source.vertex_position.values.data[key.parts[0]];
+                    const ufbx_vec3 &p = source.vertex_position.values.data[at];
                     vertex.position[0] = F(p.x);
                     vertex.position[1] = F(p.y);
                     vertex.position[2] = F(p.z);
@@ -638,9 +660,9 @@ namespace N2Engine::AssetImport
                     vertex.normal[1] = (*flatNormal)[1];
                     vertex.normal[2] = (*flatNormal)[2];
                 }
-                else if (useFileNormals && key.parts[1] != kNone)
+                else if (const std::uint32_t at = AttributeIndex(source.vertex_normal, corner); useFileNormals && at != kNone)
                 {
-                    const ufbx_vec3 &n = source.vertex_normal.values.data[key.parts[1]];
+                    const ufbx_vec3 &n = source.vertex_normal.values.data[at];
                     std::array<float, 3> normal{F(n.x), F(n.y), F(n.z)};
                     if (Normalise(normal))
                     {
@@ -649,15 +671,15 @@ namespace N2Engine::AssetImport
                         vertex.normal[2] = normal[2];
                     }
                 }
-                if (key.parts[2] != kNone)
+                if (const std::uint32_t at = AttributeIndex(source.vertex_uv, corner); at != kNone)
                 {
-                    const ufbx_vec2 &uv = source.vertex_uv.values.data[key.parts[2]];
+                    const ufbx_vec2 &uv = source.vertex_uv.values.data[at];
                     vertex.texCoord[0] = F(uv.x);
                     vertex.texCoord[1] = F(uv.y);
                 }
-                if (key.parts[3] != kNone)
+                if (const std::uint32_t at = AttributeIndex(source.vertex_color, corner); at != kNone)
                 {
-                    const ufbx_vec4 &c = source.vertex_color.values.data[key.parts[3]];
+                    const ufbx_vec4 &c = source.vertex_color.values.data[at];
                     for (int i = 0; i < 4; ++i)
                     {
                         const float value = F(c.v[i]);
@@ -684,12 +706,19 @@ namespace N2Engine::AssetImport
                         }
                     }
                 }
+                // Welded by value: corners that would write the same vertex share one
+                const VertexKey key = KeyOf(vertex);
+                if (const auto found = welded.find(key); found != welded.end())
+                {
+                    return found->second;
+                }
+                if (mesh.vertices.size() >= vertexRoom)
+                {
+                    return std::unexpected(OverBudget(true));
+                }
                 const auto index = static_cast<std::uint32_t>(mesh.vertices.size());
                 mesh.vertices.push_back(vertex);
-                if (!flatNormal)
-                {
-                    welded.emplace(key, index);
-                }
+                welded.emplace(key, index);
                 return index;
             };
 
@@ -735,7 +764,7 @@ namespace N2Engine::AssetImport
                     {
                         if (indexTotal + 3 > indexRoom)
                         {
-                            return OverBudget("indices");
+                            return OverBudget(false);
                         }
                         const std::uint32_t *corners = &triangulated[static_cast<std::size_t>(t) * 3];
                         std::optional<std::array<float, 3>> faceNormal;
@@ -837,6 +866,10 @@ namespace N2Engine::AssetImport
             options.generate_missing_normals = settings.generateNormals == NormalGeneration::IfMissing;
             // To the engine's space: right-handed, y up, metres (times the scale setting)
             options.target_axes = ufbx_axes_right_handed_y_up;
+            // A left-handed file (axes whose handedness differs from the target's) is mirrored across x, which ufbx
+            // does to the geometry and the nodes together, and its winding is reversed to match: without a mirror
+            // axis ufbx would leave the reflection in the axis matrix and the faces inside out
+            options.handedness_conversion_axis = UFBX_MIRROR_AXIS_X;
             options.target_unit_meters = static_cast<ufbx_real>(1.0 / scale);
             options.space_conversion = UFBX_SPACE_CONVERSION_MODIFY_GEOMETRY;
             options.geometry_transform_handling = UFBX_GEOMETRY_TRANSFORM_HANDLING_MODIFY_GEOMETRY;
@@ -859,13 +892,27 @@ namespace N2Engine::AssetImport
                     }
                     else
                     {
-                        const fs::path path = ResolveModelUri(baseDirectory, PercentDecode(NormaliseSeparators(library)));
-                        std::string error;
-                        auto read = path.empty() ? std::optional<std::vector<std::uint8_t>>{}
-                                                 : ReadCapped(path, kMaxMtlBytes, error);
-                        if (path.empty())
+                        // "mtllib a.mtl b.mtl" names several libraries (or one with a space in its name): the whole
+                        // text first, then its first word; ufbx takes one library
+                        std::vector<std::string> names = {library};
+                        if (const std::size_t space = library.find_first_of(" \t"); space != std::string::npos)
                         {
-                            error = "it is not inside the model's folder";
+                            names.push_back(library.substr(0, space));
+                        }
+                        std::string error = "it is not inside the model's folder";
+                        std::optional<std::vector<std::uint8_t>> read;
+                        for (const std::string &name : names)
+                        {
+                            const fs::path path = ResolveModelUri(baseDirectory, PercentDecode(NormaliseSeparators(name)));
+                            if (path.empty())
+                            {
+                                continue;
+                            }
+                            read = ReadCapped(path, kMaxMtlBytes, error);
+                            if (read)
+                            {
+                                break;
+                            }
                         }
                         if (read)
                         {
