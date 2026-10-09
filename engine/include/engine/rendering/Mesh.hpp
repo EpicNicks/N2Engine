@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <math/UUID.hpp>
@@ -114,6 +115,22 @@ namespace N2Engine::Rendering
         /// Goes up by one on every change; 1 once made
         [[nodiscard]] std::uint64_t GetVersion() const { return _version; }
         [[nodiscard]] bool IsBuiltin() const { return _builtin; }
+
+        /**
+         * A CPU-side structure derived from the geometry (the picking BVH), kept with the mesh so it is built once
+         * and dropped with the mesh. nullptr when none was set for the current version: SetData makes any earlier one
+         * stale. Not thread safe (picking is on the main thread); const because it is a cache, not part of the asset.
+         */
+        [[nodiscard]] std::shared_ptr<const void> GetCpuCache() const
+        {
+            return _cpuCacheVersion == _version ? _cpuCache : nullptr;
+        }
+        /// Keeps `cache` as the CPU cache of the current version
+        void SetCpuCache(std::shared_ptr<const void> cache) const
+        {
+            _cpuCache = std::move(cache);
+            _cpuCacheVersion = _version;
+        }
         /// A name for messages: the built-in's name, else the resource path, else "mesh"
         [[nodiscard]] std::string GetDebugName() const;
 
@@ -125,6 +142,8 @@ namespace N2Engine::Rendering
         std::vector<Submesh> _submeshes;
         BoundingBox _bounds;
         std::uint64_t _version = 0;
+        mutable std::shared_ptr<const void> _cpuCache;
+        mutable std::uint64_t _cpuCacheVersion = 0;
         bool _builtin = false;
         std::string _builtinName;
     };

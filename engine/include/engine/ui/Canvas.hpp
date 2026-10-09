@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 
 #include <nlohmann/json.hpp>
@@ -16,6 +17,8 @@
 
 namespace N2Engine::UI
 {
+    struct UIDrawItem;
+
     /// How a canvas is drawn and hit (Unity's Canvas.renderMode, without Screen Space - Camera)
     enum class CanvasRenderMode : std::uint8_t
     {
@@ -106,6 +109,9 @@ namespace N2Engine::UI
         /// A world-space root canvas: the box around its rect and the rects of its graphics (which draw even
         /// outside it), in the world. nullopt for any other canvas (an overlay canvas isn't in the world).
         [[nodiscard]] std::optional<BoundingBox> GetWorldBounds() const override;
+        /// GetWorldBounds from a layout the caller already has (UISystem::CollectWorldCanvasGraphics of this canvas),
+        /// so a caller that needs both does not lay the canvas out twice. The same box GetWorldBounds returns.
+        [[nodiscard]] std::optional<BoundingBox> ComputeWorldBounds(std::span<const UIDrawItem> graphics) const;
         [[nodiscard]] RenderQueueKey GetRenderQueue() const override;
         [[nodiscard]] bool DrawsInQueue(RenderQueue queue) const override;
         /// RenderInQueue in the Transparent queue with RenderState::Transparent(), as Scene::Render would

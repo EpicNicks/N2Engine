@@ -1,11 +1,15 @@
 #include "engine/picking/ScenePicking.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <span>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -24,9 +28,39 @@
 
 namespace N2Engine::Picking
 {
+    struct LayoutCache::Impl
+    {
+        // Node-based, so a reference to a layout stays valid as others are added
+        std::unordered_map<const UI::Canvas *, std::vector<UI::UIDrawItem>> layouts;
+    };
+
+    LayoutCache::LayoutCache() : _impl(std::make_unique<Impl>()) {}
+    LayoutCache::~LayoutCache() = default;
+
     namespace
     {
         using Matrix4 = Math::Matrix<float, 4, 4>;
+
+        /// The layout of a world canvas, made on first ask and shared after
+        const std::vector<UI::UIDrawItem> &LaidOut(LayoutCache &cache, const UI::Canvas &canvas)
+        {
+            auto &layouts = cache.GetImpl().layouts;
+            if (const auto found = layouts.find(&canvas); found != layouts.end())
+            {
+                return found->second;
+            }
+            return layouts.emplace(&canvas, UI::UISystem::CollectWorldCanvasGraphics(canvas)).first->second;
+        }
+
+        /// IRenderable::GetWorldBounds, but a canvas takes its bounds from the shared layout
+        std::optional<BoundingBox> WorldBoundsOf(const IRenderable &renderable, LayoutCache &cache)
+        {
+            if (const auto *canvas = dynamic_cast<const UI::Canvas *>(&renderable))
+            {
+                return canvas->ComputeWorldBounds(LaidOut(cache, *canvas));
+            }
+            return renderable.GetWorldBounds();
+        }
 
         std::optional<float> BoxEntry(const Math::Vector3 &origin, const Math::Vector3 &direction,
                                       const BoundingBox &box, const float maxDistance)
@@ -165,6 +199,8 @@ namespace N2Engine::Picking
             return gameObject.GetComponent<UI::RectTransform>() != nullptr || gameObject.GetComponent<UI::Canvas>() != nullptr;
         }
 
+        using CanvasGraphics = std::vector<UI::UIDrawItem>;
+
         /// What an exact test found
         struct ExactHit
         {
@@ -237,11 +273,11 @@ namespace N2Engine::Picking
 
         /// A world-space canvas: the topmost graphic under the ray (any graphic, raycast target or not: the editor
         /// picks what it sees), or a miss
-        std::function<std::optional<ExactHit>(float)> CanvasTest(const UI::Canvas &canvas,
-                                                                 std::vector<UI::UIDrawItem> graphics,
+        std::function<std::optional<ExactHit>(float)> CanvasTest(const UI::Canvas &canvas, const CanvasGraphics &graphics,
                                                                  const Math::Ray &ray)
         {
-            return [items = std::move(graphics),
+            // `graphics` lives in the pick's LayoutCache, which outlives the candidates
+            return [&items = graphics,
                     canvasToWorld = canvas.GetCanvasToWorldMatrix(), ray](const float limit)
                 -> std::optional<ExactHit>
             {
@@ -262,7 +298,7 @@ namespace N2Engine::Picking
         }
 
         void CollectCandidates(GameObject &gameObject, const Math::Ray &ray, const PickOptions &options,
-                               std::vector<Candidate> &out)
+                               LayoutCache &layouts, std::vector<Candidate> &out)
         {
             if (!options.includeInactive && !gameObject.IsActiveInHierarchy())
             {
@@ -276,7 +312,7 @@ namespace N2Engine::Picking
                 {
                     continue;
                 }
-                const std::optional<BoundingBox> bounds = renderable->GetWorldBounds();
+                const std::optional<BoundingBox> bounds = WorldBoundsOf(*renderable, layouts);
                 if (!bounds || !Finite(*bounds))
                 {
                     continue;
@@ -292,7 +328,7 @@ namespace N2Engine::Picking
                 const auto *canvas = dynamic_cast<const UI::Canvas *>(renderable);
                 out.push_back(Candidate{*entry, 0,
                                         canvas != nullptr
-                                            ? CanvasTest(*canvas, UI::UISystem::CollectWorldCanvasGraphics(*canvas), ray)
+                                            ? CanvasTest(*canvas, LaidOut(layouts, *canvas), ray)
                                             : ExactTestFor(*renderable, ray, *bounds)});
             }
 
@@ -318,7 +354,7 @@ namespace N2Engine::Picking
             {
                 if (child)
                 {
-                    CollectCandidates(*child, ray, options, out);
+                    CollectCandidates(*child, ray, options, layouts, out);
                 }
             }
         }
@@ -350,7 +386,7 @@ namespace N2Engine::Picking
 
         /// The bounds of the shapes on `gameObject` and under it. `isRoot` is the object asked about.
         void AccumulateBounds(const GameObject &gameObject, const bool isRoot, const bool rootActive,
-                              std::optional<BoundingBox> &into, std::vector<const UI::Canvas *> &laidOut)
+                              std::optional<BoundingBox> &into, LayoutCache &layouts)
         {
             // Descendants that are switched off aren't drawn (and neither is what is under them)
             if (!isRoot && !gameObject.IsActive())
@@ -363,7 +399,7 @@ namespace N2Engine::Picking
                 {
                     continue;
                 }
-                if (const std::optional<BoundingBox> bounds = renderable->GetWorldBounds(); bounds && Finite(*bounds))
+                if (const std::optional<BoundingBox> bounds = WorldBoundsOf(*renderable, layouts); bounds && Finite(*bounds))
                 {
                     Extend(into, *bounds);
                 }
@@ -376,11 +412,7 @@ namespace N2Engine::Picking
             {
                 if (const UI::Canvas *canvas = WorldCanvasAbove(gameObject); canvas != nullptr && canvas->IsActive())
                 {
-                    if (std::ranges::find(laidOut, canvas) == laidOut.end())
-                    {
-                        (void)UI::UISystem::CollectWorldCanvasGraphics(*canvas); // resolves every rect under it
-                        laidOut.push_back(canvas);
-                    }
+                    (void)LaidOut(layouts, *canvas); // resolves every rect under it, once
                     const UI::Rect &rect = rectTransform->GetRect();
                     if (rect.HasArea())
                     {
@@ -399,7 +431,7 @@ namespace N2Engine::Picking
             {
                 if (child)
                 {
-                    AccumulateBounds(*child, false, rootActive, into, laidOut);
+                    AccumulateBounds(*child, false, rootActive, into, layouts);
                 }
             }
         }
@@ -463,8 +495,266 @@ namespace N2Engine::Picking
         return t;
     }
 
+    namespace
+    {
+        /// The triangles of a mesh in a bounding volume hierarchy, per submesh (so the submesh boxes still come first,
+        /// as in RaycastMeshLinear). Built from the mesh space vertices and kept with the mesh until its data changes.
+        /// A node's box is transformed by the model while walking: a conservative world box, so no inverse is needed.
+        struct MeshBvh
+        {
+            using Triangle = std::array<std::uint32_t, 3>;
+
+            struct Node
+            {
+                BoundingBox box;
+                /// A leaf (count > 0) holds triangles [first, first + count); an inner node has its left child at the
+                /// next index and its right child at `right`
+                std::uint32_t first = 0;
+                std::uint32_t count = 0;
+                std::uint32_t right = 0;
+            };
+
+            struct Range
+            {
+                BoundingBox bounds;
+                std::uint32_t root = 0;
+                bool hasRoot = false;
+                /// Triangles with a vertex that isn't finite have no box to sort by: they are always tested
+                std::uint32_t looseFirst = 0;
+                std::uint32_t looseCount = 0;
+            };
+
+            std::vector<Node> nodes;
+            std::vector<Triangle> triangles;
+            std::vector<Triangle> loose;
+            std::vector<Range> ranges;
+        };
+
+        constexpr std::size_t BvhLeafSize = 4;
+        constexpr std::size_t BvhStackSize = 64; // a tree split at the median is about log2(n) deep
+
+        struct BvhItem
+        {
+            BoundingBox box;
+            Math::Vector3 centroid;
+            MeshBvh::Triangle triangle;
+        };
+
+        std::uint32_t BuildNode(MeshBvh &bvh, std::vector<BvhItem> &items, const std::size_t begin, const std::size_t end)
+        {
+            const auto index = static_cast<std::uint32_t>(bvh.nodes.size());
+            bvh.nodes.emplace_back();
+
+            std::optional<BoundingBox> box;
+            std::optional<BoundingBox> centroids;
+            for (std::size_t i = begin; i < end; ++i)
+            {
+                Extend(box, items[i].box);
+                Extend(centroids, BoundingBox{items[i].centroid, items[i].centroid});
+            }
+            bvh.nodes[index].box = *box;
+
+            if (end - begin <= BvhLeafSize)
+            {
+                bvh.nodes[index].first = static_cast<std::uint32_t>(bvh.triangles.size());
+                bvh.nodes[index].count = static_cast<std::uint32_t>(end - begin);
+                for (std::size_t i = begin; i < end; ++i)
+                {
+                    bvh.triangles.push_back(items[i].triangle);
+                }
+                return index;
+            }
+
+            int axis = 0;
+            float widest = -1.0f;
+            for (int a = 0; a < 3; ++a)
+            {
+                const float extent = centroids->max[a] - centroids->min[a];
+                if (extent > widest)
+                {
+                    widest = extent;
+                    axis = a;
+                }
+            }
+            const std::size_t middle = begin + (end - begin) / 2;
+            std::nth_element(items.begin() + static_cast<std::ptrdiff_t>(begin),
+                             items.begin() + static_cast<std::ptrdiff_t>(middle),
+                             items.begin() + static_cast<std::ptrdiff_t>(end),
+                             [axis](const BvhItem &a, const BvhItem &b) { return a.centroid[axis] < b.centroid[axis]; });
+            BuildNode(bvh, items, begin, middle); // the left child is the next node
+            const std::uint32_t right = BuildNode(bvh, items, middle, end);
+            bvh.nodes[index].right = right;
+            return index;
+        }
+
+        std::shared_ptr<const MeshBvh> BuildMeshBvh(const Rendering::Mesh &mesh)
+        {
+            auto bvh = std::make_shared<MeshBvh>();
+            const auto &vertices = mesh.GetVertices();
+            const auto &indices = mesh.GetIndices();
+
+            struct Source
+            {
+                std::size_t first;
+                std::size_t count;
+                BoundingBox bounds;
+            };
+            std::vector<Source> sources;
+            for (const Rendering::Submesh &submesh : mesh.GetSubmeshes())
+            {
+                sources.push_back(Source{submesh.firstIndex, submesh.indexCount, submesh.bounds});
+            }
+            if (sources.empty())
+            {
+                sources.push_back(Source{0, indices.size(), mesh.GetBounds()});
+            }
+
+            for (const Source &source : sources)
+            {
+                MeshBvh::Range range;
+                range.bounds = source.bounds;
+                range.looseFirst = static_cast<std::uint32_t>(bvh->loose.size());
+                std::vector<BvhItem> items;
+                const std::size_t end = std::min(source.first + source.count, indices.size());
+                for (std::size_t i = source.first; i + 3 <= end; i += 3)
+                {
+                    const MeshBvh::Triangle triangle{indices[i], indices[i + 1], indices[i + 2]};
+                    if (triangle[0] >= vertices.size() || triangle[1] >= vertices.size() ||
+                        triangle[2] >= vertices.size())
+                    {
+                        continue;
+                    }
+                    const Math::Vector3 p0 = VertexPosition(vertices[triangle[0]]);
+                    const Math::Vector3 p1 = VertexPosition(vertices[triangle[1]]);
+                    const Math::Vector3 p2 = VertexPosition(vertices[triangle[2]]);
+                    std::optional<BoundingBox> box;
+                    Extend(box, BoundingBox{p0, p0});
+                    Extend(box, BoundingBox{p1, p1});
+                    Extend(box, BoundingBox{p2, p2});
+                    if (!Finite(*box))
+                    {
+                        bvh->loose.push_back(triangle);
+                        continue;
+                    }
+                    items.push_back(BvhItem{*box, Math::Vector3{(p0.x + p1.x + p2.x) / 3.0f, (p0.y + p1.y + p2.y) / 3.0f, (p0.z + p1.z + p2.z) / 3.0f}, triangle});
+                }
+                range.looseCount = static_cast<std::uint32_t>(bvh->loose.size()) - range.looseFirst;
+                if (!items.empty())
+                {
+                    range.root = BuildNode(*bvh, items, 0, items.size());
+                    range.hasRoot = true;
+                }
+                bvh->ranges.push_back(range);
+            }
+            return bvh;
+        }
+
+        std::shared_ptr<const MeshBvh> BvhOf(const Rendering::Mesh &mesh)
+        {
+            if (const std::shared_ptr<const void> cached = mesh.GetCpuCache())
+            {
+                return std::static_pointer_cast<const MeshBvh>(cached);
+            }
+            std::shared_ptr<const MeshBvh> bvh = BuildMeshBvh(mesh);
+            mesh.SetCpuCache(bvh);
+            return bvh;
+        }
+    }
+
     std::optional<float> RaycastMesh(const Rendering::Mesh &mesh, const Math::Matrix<float, 4, 4> &model,
                                      const Math::Ray &ray, const float maxDistance)
+    {
+        if (!FiniteRay(ray))
+        {
+            return std::nullopt;
+        }
+        const std::shared_ptr<const MeshBvh> bvh = BvhOf(mesh);
+        const auto &vertices = mesh.GetVertices();
+
+        std::optional<float> best;
+        float limit = maxDistance;
+        const auto test = [&](const MeshBvh::Triangle &triangle)
+        {
+            const std::optional<float> t =
+                TriangleHit(ray.origin, ray.direction, model.TransformPoint(VertexPosition(vertices[triangle[0]])),
+                            model.TransformPoint(VertexPosition(vertices[triangle[1]])),
+                            model.TransformPoint(VertexPosition(vertices[triangle[2]])));
+            if (t && *t <= limit)
+            {
+                best = t;
+                limit = *t; // only nearer ones from here
+            }
+        };
+        const auto entryOf = [&](const BoundingBox &box)
+        { return BoxEntry(ray.origin, ray.direction, Padded(box.Transformed(model)), limit); };
+
+        struct Pending
+        {
+            std::uint32_t node;
+            float entry;
+        };
+        std::array<Pending, BvhStackSize> stack{};
+        for (const MeshBvh::Range &range : bvh->ranges)
+        {
+            // In world space throughout: no inverse of the model, which fails for a flat or tiny one
+            if (!entryOf(range.bounds))
+            {
+                continue;
+            }
+            for (std::uint32_t i = 0; i < range.looseCount; ++i)
+            {
+                test(bvh->loose[range.looseFirst + i]);
+            }
+            if (!range.hasRoot)
+            {
+                continue;
+            }
+            std::size_t top = 0;
+            stack[top++] = Pending{range.root, 0.0f};
+            while (top > 0)
+            {
+                const Pending pending = stack[--top];
+                if (pending.entry > limit)
+                {
+                    continue; // found something nearer since this was pushed
+                }
+                const MeshBvh::Node &node = bvh->nodes[pending.node];
+                if (node.count > 0)
+                {
+                    for (std::uint32_t i = 0; i < node.count; ++i)
+                    {
+                        test(bvh->triangles[node.first + i]);
+                    }
+                    continue;
+                }
+                const std::uint32_t left = pending.node + 1;
+                const std::uint32_t right = node.right;
+                const std::optional<float> leftEntry = entryOf(bvh->nodes[left].box);
+                const std::optional<float> rightEntry = entryOf(bvh->nodes[right].box);
+                // The nearer child is popped first
+                if (leftEntry && rightEntry && *rightEntry < *leftEntry)
+                {
+                    stack[top++] = Pending{left, *leftEntry};
+                    stack[top++] = Pending{right, *rightEntry};
+                }
+                else
+                {
+                    if (rightEntry)
+                    {
+                        stack[top++] = Pending{right, *rightEntry};
+                    }
+                    if (leftEntry)
+                    {
+                        stack[top++] = Pending{left, *leftEntry};
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    std::optional<float> RaycastMeshLinear(const Rendering::Mesh &mesh, const Math::Matrix<float, 4, 4> &model,
+                                           const Math::Ray &ray, const float maxDistance)
     {
         if (!FiniteRay(ray))
         {
@@ -526,11 +816,12 @@ namespace N2Engine::Picking
     PickHit PickGameObject(const Scene &scene, const Math::Ray &ray, const PickOptions &options)
     {
         std::vector<Candidate> candidates;
+        LayoutCache layouts; // each canvas laid out once for this pick
         for (const auto &root : scene.GetRootGameObjects())
         {
             if (root)
             {
-                CollectCandidates(*root, ray, options, candidates);
+                CollectCandidates(*root, ray, options, layouts, candidates);
             }
         }
         // Nearest box first (ties keep hierarchy order)
@@ -570,9 +861,14 @@ namespace N2Engine::Picking
 
     std::optional<BoundingBox> GetGameObjectBounds(const GameObject &gameObject)
     {
+        LayoutCache layouts;
+        return GetGameObjectBounds(gameObject, layouts);
+    }
+
+    std::optional<BoundingBox> GetGameObjectBounds(const GameObject &gameObject, LayoutCache &layouts)
+    {
         std::optional<BoundingBox> bounds;
-        std::vector<const UI::Canvas *> laidOut;
-        AccumulateBounds(gameObject, true, gameObject.IsActiveInHierarchy(), bounds, laidOut);
+        AccumulateBounds(gameObject, true, gameObject.IsActiveInHierarchy(), bounds, layouts);
         if (bounds)
         {
             return bounds;

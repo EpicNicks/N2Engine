@@ -1,6 +1,7 @@
 #pragma once
 
 #include <limits>
+#include <memory>
 #include <optional>
 
 #include <math/Matrix.hpp>
@@ -65,6 +66,30 @@ namespace N2Engine::Picking
     [[nodiscard]] PickHit PickGameObject(const Scene &scene, const Math::Ray &ray, const PickOptions &options = {});
 
     /**
+     * The layouts of world-space canvases, kept for the calls that are given the same cache. Laying a canvas out is
+     * the costly part of asking about its bounds, and every UI element under a canvas needs the layout of its
+     * canvas: share one LayoutCache between the GetGameObjectBounds calls of one request so each canvas is laid
+     * out once, not once per object. PickGameObject uses one of its own for each pick.
+     *
+     * A cache is only right while the scene does not change (no object added, moved, resized or switched, no
+     * component changed): make one per request and drop it after. A new one is always empty.
+     */
+    class LayoutCache
+    {
+    public:
+        LayoutCache();
+        ~LayoutCache();
+        LayoutCache(const LayoutCache &) = delete;
+        LayoutCache &operator=(const LayoutCache &) = delete;
+
+        struct Impl;
+        [[nodiscard]] Impl &GetImpl() { return *_impl; }
+
+    private:
+        std::unique_ptr<Impl> _impl;
+    };
+
+    /**
      * The box, in world space, around an object for a selection box and "frame selected": the union of the
      * GetWorldBounds of the renderables on the object and on everything under it, plus the rect of each UI element
      * of a world-space canvas. Inactive descendants (and their subtrees) don't count, and the object itself counts
@@ -72,6 +97,8 @@ namespace N2Engine::Picking
      * pick sphere; nullopt for an object without a transform and without bounds below it.
      */
     [[nodiscard]] std::optional<BoundingBox> GetGameObjectBounds(const GameObject &gameObject);
+    /// The same, laying each canvas out at most once for every call given `cache` (see LayoutCache)
+    [[nodiscard]] std::optional<BoundingBox> GetGameObjectBounds(const GameObject &gameObject, LayoutCache &cache);
 
     /// The pick sphere's box for an object at `position`
     [[nodiscard]] BoundingBox PickSphereBounds(const Math::Vector3 &position);
@@ -87,9 +114,20 @@ namespace N2Engine::Picking
     [[nodiscard]] std::optional<float> RaycastSphere(const Math::Ray &ray, const Math::Vector3 &center, float radius,
                                                      float maxDistance = std::numeric_limits<float>::infinity());
 
-    /// The nearest triangle of the mesh, drawn with `model` (mesh space to world), under the ray, front or back
-    /// face. nullopt for a miss or a model that can't be inverted (a zero scale).
+    /**
+     * The nearest triangle of the mesh, drawn with `model` (mesh space to world), under the ray, front or back
+     * face. nullopt for a miss. It walks a bounding volume hierarchy of the mesh's triangles, built on the first
+     * call for a mesh and kept with it (Mesh::GetCpuCache) until the mesh's data changes, so the cost of a pick is
+     * about the log of the triangle count. The triangles are still tested in world space (no inverse of `model`, so a
+     * flat or zero-scale model works), and the answer is exactly RaycastMeshLinear's.
+     */
     [[nodiscard]] std::optional<float> RaycastMesh(const Rendering::Mesh &mesh, const Math::Matrix<float, 4, 4> &model,
                                                    const Math::Ray &ray,
                                                    float maxDistance = std::numeric_limits<float>::infinity());
+
+    /// RaycastMesh by testing every triangle (of each submesh whose box the ray enters): the reference the BVH
+    /// must agree with, and what the tests compare it to
+    [[nodiscard]] std::optional<float> RaycastMeshLinear(const Rendering::Mesh &mesh,
+                                                         const Math::Matrix<float, 4, 4> &model, const Math::Ray &ray,
+                                                         float maxDistance = std::numeric_limits<float>::infinity());
 }
