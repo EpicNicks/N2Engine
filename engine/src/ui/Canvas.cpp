@@ -120,6 +120,15 @@ namespace N2Engine::UI
         {
             return std::nullopt;
         }
+        return ComputeWorldBounds(UISystem::CollectWorldCanvasGraphics(*this));
+    }
+
+    std::optional<BoundingBox> Canvas::ComputeWorldBounds(const std::span<const UIDrawItem> graphics) const
+    {
+        if (!IsWorldSpace() || !IsRootCanvas())
+        {
+            return std::nullopt;
+        }
         // The canvas rect, and the rects of the graphics that draw (in canvas space, y up)
         const Math::Vector2 size = GetSize();
         bool any = false;
@@ -140,7 +149,7 @@ namespace N2Engine::UI
             any = true;
         };
         cover(Rect{0.0f, 0.0f, size.x, size.y});
-        for (const UIDrawItem &item : UISystem::CollectWorldCanvasGraphics(*this))
+        for (const UIDrawItem &item : graphics)
         {
             cover(item.rect);
         }

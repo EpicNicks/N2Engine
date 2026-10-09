@@ -2630,6 +2630,7 @@ namespace N2Engine::Editor
 
         nlohmann::json bounds = nlohmann::json::array();
         std::unordered_set<std::string> answered;
+        Picking::LayoutCache layouts; // one layout per canvas for the whole request, not one per id
         for (const nlohmann::json &id : cmd.entityIds)
         {
             // An id that names no object (a stale one) is left out
@@ -2643,7 +2644,7 @@ namespace N2Engine::Editor
             {
                 continue;
             }
-            if (const std::optional<BoundingBox> box = Picking::GetGameObjectBounds(*entity))
+            if (const std::optional<BoundingBox> box = Picking::GetGameObjectBounds(*entity, layouts))
             {
                 bounds.push_back(nlohmann::json{{"id", std::move(canonical)}, {"min", Vec3Json(box->min)},
                                                 {"max", Vec3Json(box->max)}});

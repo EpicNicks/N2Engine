@@ -6,6 +6,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <typeinfo>
+#include <utility>
 #include <vector>
 
 #include <math/UUID.hpp>
@@ -114,6 +116,32 @@ namespace N2Engine::Rendering
         /// Goes up by one on every change; 1 once made
         [[nodiscard]] std::uint64_t GetVersion() const { return _version; }
         [[nodiscard]] bool IsBuiltin() const { return _builtin; }
+
+        /**
+         * A CPU-side structure derived from the geometry (the picking BVH), kept with the mesh so it is built once
+         * and dropped with the mesh. nullptr when none was set for the current version: SetData makes any earlier one
+         * stale. Not thread safe (picking is on the main thread); const because it is a cache, not part of the asset.
+         */
+        template <typename T>
+        [[nodiscard]] std::shared_ptr<const T> GetCpuCache() const
+        {
+            // The slot remembers the type it was filled with: a different T (or a stale version) reads as empty
+            if (_cpuCacheVersion != _version || _cpuCacheType == nullptr || *_cpuCacheType != typeid(T))
+            {
+                return nullptr;
+            }
+            return std::static_pointer_cast<const T>(_cpuCache);
+        }
+        /// Keeps `cache` as the CPU cache of the current version, replacing whatever the slot held
+        template <typename T>
+        void SetCpuCache(std::shared_ptr<const T> cache) const
+        {
+            _cpuCache = std::static_pointer_cast<const void>(std::move(cache));
+            _cpuCacheType = &typeid(T);
+            _cpuCacheVersion = _version;
+        }
+        /// Whether the slot holds a cache for the current version (of any type)
+        [[nodiscard]] bool HasCpuCache() const { return _cpuCache != nullptr && _cpuCacheVersion == _version; }
         /// A name for messages: the built-in's name, else the resource path, else "mesh"
         [[nodiscard]] std::string GetDebugName() const;
 
@@ -125,6 +153,9 @@ namespace N2Engine::Rendering
         std::vector<Submesh> _submeshes;
         BoundingBox _bounds;
         std::uint64_t _version = 0;
+        mutable std::shared_ptr<const void> _cpuCache;
+        mutable std::uint64_t _cpuCacheVersion = 0;
+        mutable const std::type_info *_cpuCacheType = nullptr;
         bool _builtin = false;
         std::string _builtinName;
     };
