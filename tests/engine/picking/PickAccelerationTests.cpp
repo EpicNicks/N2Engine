@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
-#include <numbers>
 #include <optional>
 #include <string>
 #include <vector>
@@ -19,7 +18,6 @@
 
 #include "engine/Camera.hpp"
 #include "engine/GameObjectScene.hpp"
-#include "engine/IRenderable.hpp"
 #include "engine/Positionable.hpp"
 #include "engine/picking/ScenePicking.hpp"
 #include "engine/rendering/Mesh.hpp"
@@ -74,13 +72,14 @@ namespace
     }
 
     /// `count` small random triangles scattered in a box of half-size `spread`, in two submeshes
-    std::shared_ptr<Rendering::Mesh> MakeSoup(const std::uint32_t seed, const std::size_t count, const float spread)
+    std::shared_ptr<Rendering::Mesh> MakeSoup(const std::uint32_t seed, const std::size_t count, const float spread,
+                                              const Vector3 &offset = Vector3(0.0f, 0.0f, 0.0f))
     {
         Lcg random(seed);
         Renderer::Common::MeshData data;
         for (std::size_t i = 0; i < count; ++i)
         {
-            const Vector3 center = random.NextPoint(-spread, spread);
+            const Vector3 center = offset + random.NextPoint(-spread, spread);
             for (int corner = 0; corner < 3; ++corner)
             {
                 data.vertices.push_back(MakeVertex(center + random.NextPoint(-0.3f, 0.3f)));
@@ -221,13 +220,13 @@ TEST(PickBvhTest, ASetDataMakesTheCachedBvhStale)
     const auto before = Picking::RaycastMesh(*mesh, identity, ray);
     ASSERT_TRUE(before.has_value());
     EXPECT_NEAR(*before, 5.0f, 1e-4f);
-    EXPECT_NE(mesh->GetCpuCache(), nullptr) << "the first pick built the BVH and left it with the mesh";
+    EXPECT_TRUE(mesh->HasCpuCache()) << "the first pick built the BVH and left it with the mesh";
     EXPECT_EQ(Picking::RaycastMesh(*mesh, identity, ray), before) << "the second pick reuses it";
 
     const std::uint64_t version = mesh->GetVersion();
     ASSERT_TRUE(mesh->SetData(MakeTriangleAt(2.0f)));
     EXPECT_GT(mesh->GetVersion(), version);
-    EXPECT_EQ(mesh->GetCpuCache(), nullptr) << "new geometry: the old BVH is not served";
+    EXPECT_FALSE(mesh->HasCpuCache()) << "new geometry: the old BVH is not served";
 
     const auto after = Picking::RaycastMesh(*mesh, identity, ray);
     ASSERT_TRUE(after.has_value());
@@ -252,6 +251,95 @@ TEST(PickBvhTest, TwoMeshesDoNotShareABvh)
     ASSERT_TRUE(hitB.has_value());
     EXPECT_NEAR(*hitA, 5.0f, 1e-4f);
     EXPECT_NEAR(*hitB, 8.0f, 1e-4f);
+}
+
+TEST(PickBvhTest, ATypedSlotServesOnlyTheTypeItHolds)
+{
+    auto mesh = Rendering::Mesh::Create(MakeTriangleAt(0.0f));
+    ASSERT_NE(mesh, nullptr);
+    EXPECT_FALSE(mesh->HasCpuCache());
+    mesh->SetCpuCache(std::make_shared<const int>(7));
+    EXPECT_TRUE(mesh->HasCpuCache());
+    ASSERT_NE(mesh->GetCpuCache<int>(), nullptr);
+    EXPECT_EQ(*mesh->GetCpuCache<int>(), 7);
+    EXPECT_EQ(mesh->GetCpuCache<double>(), nullptr) << "another type reads as empty, never reinterpreted";
+}
+
+TEST(PickBvhTest, AMeshAuthoredFarFromTheOriginUnderACancellingTranslationAnswersAsTheLinearScanDoes)
+{
+    // Vertices near (1e5, 1e5, 1e5), brought back to the origin by the model: the transform adds terms of 1e5 to get
+    // a result near 0, so its rounding is far larger than the result's size suggests
+    const Vector3 farOrigin(100000.0f, 100000.0f, 100000.0f);
+    const auto soup = MakeSoup(61u, 600, 2.0f, farOrigin);
+    ASSERT_NE(soup, nullptr);
+    ExpectSameAsLinear(*soup, ModelOf(Vector3(-100000.0f, -100000.0f, -100000.0f), Quaternion::Identity,
+                                      Vector3(1.0f, 1.0f, 1.0f)),
+                       800, 62u, 2.0f, "far and cancelled");
+    ExpectSameAsLinear(*soup, ModelOf(Vector3(-100000.0f, -100000.0f, -100000.0f),
+                                      Quaternion::FromEulerAngles(0.3f, 0.6f, 0.2f), Vector3(1.0f, 2.0f, 1.0f)),
+                       800, 63u, 2.0f, "far, cancelled and rotated");
+}
+
+TEST(PickBvhTest, ManyIdenticalTrianglesAnswerAsTheLinearScanDoes)
+{
+    // Every centroid equal: the split cannot separate them by position, and must still end in leaves
+    Renderer::Common::MeshData data;
+    for (int i = 0; i < 300; ++i)
+    {
+        const auto base = static_cast<std::uint32_t>(data.vertices.size());
+        data.vertices.push_back(MakeVertex(Vector3(-1.0f, -1.0f, 0.0f)));
+        data.vertices.push_back(MakeVertex(Vector3(1.0f, -1.0f, 0.0f)));
+        data.vertices.push_back(MakeVertex(Vector3(0.0f, 1.0f, 0.0f)));
+        data.indices.insert(data.indices.end(), {base, base + 1, base + 2});
+    }
+    const auto stacked = Rendering::Mesh::Create(std::move(data));
+    ASSERT_NE(stacked, nullptr);
+    const Matrix4 identity = Matrix4::identity();
+    const Ray ray(Vector3(0.0f, 0.0f, 5.0f), Vector3(0.0f, 0.0f, -1.0f));
+    const auto fast = Picking::RaycastMesh(*stacked, identity, ray);
+    ASSERT_TRUE(fast.has_value());
+    EXPECT_EQ(fast, Picking::RaycastMeshLinear(*stacked, identity, ray));
+    EXPECT_FALSE(Picking::RaycastMesh(*stacked, identity, Ray(Vector3(3.0f, 0.0f, 5.0f), Vector3(0.0f, 0.0f, -1.0f)))
+                     .has_value());
+}
+
+TEST(PickBvhTest, TrianglesWithNonFiniteVerticesAreStillTestedLikeTheLinearScan)
+{
+    Renderer::Common::MeshData data = MakeSoup(71u, 100, 2.0f)->GetMeshData();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    // Triangles with a NaN vertex, not first (so the mesh box stays finite)
+    for (const Vector3 &bad : {Vector3(nan, 0.0f, 0.0f), Vector3(0.0f, nan, 1.0f)})
+    {
+        const auto base = static_cast<std::uint32_t>(data.vertices.size());
+        data.vertices.push_back(MakeVertex(Vector3(0.0f, 0.0f, 0.0f)));
+        data.vertices.push_back(MakeVertex(Vector3(1.0f, 0.0f, 0.0f)));
+        data.vertices.push_back(MakeVertex(bad));
+        data.indices.insert(data.indices.end(), {base, base + 1, base + 2});
+    }
+    const auto mesh = Rendering::Mesh::Create(std::move(data));
+    ASSERT_NE(mesh, nullptr);
+    ExpectSameAsLinear(*mesh, Matrix4::identity(), 400, 72u, 2.0f, "non-finite vertices");
+}
+
+TEST(PickBvhTest, TheWalkTestsAFewTrianglesOfAMeshOfManyNotAllOfThem)
+{
+    constexpr std::size_t count = 20000;
+    const auto soup = MakeSoup(81u, count, 20.0f);
+    ASSERT_NE(soup, nullptr);
+    const Matrix4 identity = Matrix4::identity();
+    (void)Picking::RaycastMesh(*soup, identity, Ray(Vector3(0.0f, 0.0f, 50.0f), Vector3(0.0f, 0.0f, -1.0f))); // builds it
+
+    Lcg random(82u);
+    constexpr int rays = 60;
+    Picking::GetPickStats() = {};
+    for (int i = 0; i < rays; ++i)
+    {
+        (void)Picking::RaycastMesh(*soup, identity, RandomRay(random, 60.0f, 20.0f));
+    }
+    const Picking::PickStats &stats = Picking::GetPickStats();
+    EXPECT_GT(stats.bvhNodesVisited, 0u);
+    EXPECT_LT(stats.bvhTrianglesTested / rays, count / 20) << "a pick should test a few triangles, not scan the mesh";
+    EXPECT_LT(stats.bvhNodesVisited / rays, count / 40) << "and visit a small part of the tree";
 }
 
 // ==================== PickGameObject over a changing scene ====================
@@ -365,6 +453,34 @@ TEST(PickAccelerationTest, PicksMatchTheLinearScanAsObjectsMoveAreAddedAndRemove
     ExpectPicksMatchReference(*scene, placed, 57u, "after the mesh's data changed");
 }
 
+TEST(PickAccelerationTest, AMeshSharedByTwoObjectsIsRebuiltForBothWhenItsDataChanges)
+{
+    auto scene = EditScene("PickAcceleration_Shared");
+    auto shared = Rendering::Mesh::Create(MakeTriangleAt(0.0f));
+    ASSERT_NE(shared, nullptr);
+    std::vector<Placed> placed;
+    placed.push_back(AddSoup(*scene, "Left", shared, Vector3(-3.0f, 0.0f, 0.0f)));
+    placed.push_back(AddSoup(*scene, "Right", shared, Vector3(3.0f, 0.0f, 0.0f)));
+    const Ray overLeft(Vector3(-3.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f));
+    const Ray overRight(Vector3(3.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f));
+    EXPECT_EQ(Picking::PickGameObject(*scene, overLeft).gameObject, placed[0].object.get());
+    EXPECT_EQ(Picking::PickGameObject(*scene, overRight).gameObject, placed[1].object.get());
+
+    // Moved away from both (the triangle is now at y 5 to 7): both miss, then both hit again where it is
+    Renderer::Common::MeshData up = MakeTriangleAt(0.0f);
+    for (auto &vertex : up.vertices)
+    {
+        vertex.position[1] += 6.0f;
+    }
+    ASSERT_TRUE(shared->SetData(std::move(up)));
+    EXPECT_EQ(Picking::PickGameObject(*scene, overLeft).gameObject, nullptr);
+    EXPECT_EQ(Picking::PickGameObject(*scene, overRight).gameObject, nullptr);
+    const Ray overLeftNow(Vector3(-3.0f, 6.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f));
+    const Ray overRightNow(Vector3(3.0f, 6.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f));
+    EXPECT_EQ(Picking::PickGameObject(*scene, overLeftNow).gameObject, placed[0].object.get());
+    EXPECT_EQ(Picking::PickGameObject(*scene, overRightNow).gameObject, placed[1].object.get());
+}
+
 // ==================== The canvas layout ====================
 
 namespace
@@ -446,6 +562,45 @@ TEST(PickLayoutCacheTest, EntityBoundsWithASharedCacheMatchThoseWithout)
     check("after the layout changed");
     canvas->GetPositionable()->SetPosition(Vector3(-4.0f, 0.0f, 0.0f));
     check("after the canvas moved");
+}
+
+TEST(PickLayoutCacheTest, ACanvasIsLaidOutOncePerPickAndOncePerBoundsRequest)
+{
+    auto scene = EditScene("PickLayout_Counts");
+    std::vector<GameObject::Ptr> objects;
+    for (int c = 0; c < 2; ++c)
+    {
+        auto canvas = UI::UISystem::CreateCanvas("Canvas" + std::to_string(c), UI::CanvasRenderMode::WorldSpace);
+        canvas->GetPositionable()->SetPosition(Vector3(static_cast<float>(c) * 3.0f, 0.0f, 0.0f));
+        scene->AddRootGameObject(canvas);
+        objects.push_back(canvas);
+        for (int i = 0; i < 6; ++i)
+        {
+            objects.push_back(AddPanel(canvas, "Panel", UI::Rect{static_cast<float>(i) * 10.0f, 0.0f, 8.0f, 30.0f}));
+        }
+    }
+    const Ray ray(Vector3(0.0f, 0.0f, 10.0f), Vector3(0.0f, 0.0f, -1.0f));
+
+    Picking::GetPickStats() = {};
+    (void)Picking::PickGameObject(*scene, ray);
+    EXPECT_EQ(Picking::GetPickStats().canvasLayouts, 2u) << "each of the two canvases once, not twice";
+
+    Picking::GetPickStats() = {};
+    {
+        Picking::LayoutCache shared;
+        for (const GameObject::Ptr &object : objects)
+        {
+            (void)Picking::GetGameObjectBounds(*object, shared);
+        }
+    }
+    EXPECT_EQ(Picking::GetPickStats().canvasLayouts, 2u) << "14 objects asked, one layout per canvas";
+
+    Picking::GetPickStats() = {};
+    for (const GameObject::Ptr &object : objects)
+    {
+        (void)Picking::GetGameObjectBounds(*object);
+    }
+    EXPECT_GE(Picking::GetPickStats().canvasLayouts, objects.size()) << "without a shared cache each call lays out";
 }
 
 TEST(PickLayoutCacheTest, PicksAcrossCanvasChangesMatchAFreshLayout)

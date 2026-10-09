@@ -34,6 +34,18 @@ namespace N2Engine::Picking
         std::unordered_map<const UI::Canvas *, std::vector<UI::UIDrawItem>> layouts;
     };
 
+    /// What the file's own helpers may reach of a LayoutCache
+    struct LayoutCacheAccess
+    {
+        static auto &Layouts(LayoutCache &cache) { return cache._impl->layouts; }
+    };
+
+    PickStats &GetPickStats()
+    {
+        static PickStats stats;
+        return stats;
+    }
+
     LayoutCache::LayoutCache() : _impl(std::make_unique<Impl>()) {}
     LayoutCache::~LayoutCache() = default;
 
@@ -44,11 +56,12 @@ namespace N2Engine::Picking
         /// The layout of a world canvas, made on first ask and shared after
         const std::vector<UI::UIDrawItem> &LaidOut(LayoutCache &cache, const UI::Canvas &canvas)
         {
-            auto &layouts = cache.GetImpl().layouts;
+            auto &layouts = LayoutCacheAccess::Layouts(cache);
             if (const auto found = layouts.find(&canvas); found != layouts.end())
             {
                 return found->second;
             }
+            ++GetPickStats().canvasLayouts;
             return layouts.emplace(&canvas, UI::UISystem::CollectWorldCanvasGraphics(canvas)).first->second;
         }
 
@@ -165,6 +178,32 @@ namespace N2Engine::Picking
             { return 1e-4f * std::max(1.0f, std::max(std::abs(lo), std::abs(hi))); };
             const Math::Vector3 e{pad(box.min.x, box.max.x), pad(box.min.y, box.max.y), pad(box.min.z, box.max.z)};
             return BoundingBox{box.min - e, box.max + e};
+        }
+
+        /// The world box of a mesh-space box under `model`, padded for the rounding of the transform of the triangle
+        /// vertices inside it. The error of TransformPoint grows with the size of the terms it adds (a vertex far
+        /// from the origin under a translation that brings it back), not with the result, so the pad is sized from
+        /// sum |m_ij| * |corner_j| + |t_i| as well as from the result's own magnitude.
+        BoundingBox TransformedPadded(const BoundingBox &local, const Matrix4 &model)
+        {
+            BoundingBox world = Padded(local.Transformed(model));
+            float reach[3];
+            for (int j = 0; j < 3; ++j)
+            {
+                reach[j] = std::max(std::abs(local.min[j]), std::abs(local.max[j]));
+            }
+            for (int i = 0; i < 3; ++i)
+            {
+                float terms = std::abs(model(i, 3));
+                for (int j = 0; j < 3; ++j)
+                {
+                    terms += std::abs(model(i, j)) * reach[j];
+                }
+                const float pad = 1e-4f * terms;
+                world.min[i] -= pad;
+                world.max[i] += pad;
+            }
+            return world;
         }
 
         void Extend(std::optional<BoundingBox> &into, const BoundingBox &box)
@@ -531,7 +570,10 @@ namespace N2Engine::Picking
         };
 
         constexpr std::size_t BvhLeafSize = 4;
-        constexpr std::size_t BvhStackSize = 64; // a tree split at the median is about log2(n) deep
+        constexpr std::size_t BvhStackSize = 64;
+        // Split at the median, a tree over at most 2^32 triangles is at most 32 deep, and the walk holds at most one
+        // pending sibling per level plus the one it is on
+        static_assert(BvhStackSize >= 32 + 2, "the walk's stack must cover the deepest tree");
 
         struct BvhItem
         {
@@ -651,9 +693,9 @@ namespace N2Engine::Picking
 
         std::shared_ptr<const MeshBvh> BvhOf(const Rendering::Mesh &mesh)
         {
-            if (const std::shared_ptr<const void> cached = mesh.GetCpuCache())
+            if (std::shared_ptr<const MeshBvh> cached = mesh.GetCpuCache<MeshBvh>())
             {
-                return std::static_pointer_cast<const MeshBvh>(cached);
+                return cached;
             }
             std::shared_ptr<const MeshBvh> bvh = BuildMeshBvh(mesh);
             mesh.SetCpuCache(bvh);
@@ -673,8 +715,10 @@ namespace N2Engine::Picking
 
         std::optional<float> best;
         float limit = maxDistance;
+        PickStats &stats = GetPickStats();
         const auto test = [&](const MeshBvh::Triangle &triangle)
         {
+            ++stats.bvhTrianglesTested;
             const std::optional<float> t =
                 TriangleHit(ray.origin, ray.direction, model.TransformPoint(VertexPosition(vertices[triangle[0]])),
                             model.TransformPoint(VertexPosition(vertices[triangle[1]])),
@@ -686,7 +730,7 @@ namespace N2Engine::Picking
             }
         };
         const auto entryOf = [&](const BoundingBox &box)
-        { return BoxEntry(ray.origin, ray.direction, Padded(box.Transformed(model)), limit); };
+        { return BoxEntry(ray.origin, ray.direction, TransformedPadded(box, model), limit); };
 
         struct Pending
         {
@@ -719,6 +763,7 @@ namespace N2Engine::Picking
                     continue; // found something nearer since this was pushed
                 }
                 const MeshBvh::Node &node = bvh->nodes[pending.node];
+                ++stats.bvhNodesVisited;
                 if (node.count > 0)
                 {
                     for (std::uint32_t i = 0; i < node.count; ++i)
@@ -785,7 +830,7 @@ namespace N2Engine::Picking
         for (const Range &range : ranges)
         {
             // In world space throughout: no inverse of the model, which fails for a flat or tiny one
-            if (!BoxEntry(ray.origin, ray.direction, Padded(range.bounds.Transformed(model)), limit))
+            if (!BoxEntry(ray.origin, ray.direction, TransformedPadded(range.bounds, model), limit))
             {
                 continue;
             }
@@ -815,8 +860,9 @@ namespace N2Engine::Picking
 
     PickHit PickGameObject(const Scene &scene, const Math::Ray &ray, const PickOptions &options)
     {
-        std::vector<Candidate> candidates;
+        // Declared first, so it outlives the candidates, whose canvas tests refer to its layouts
         LayoutCache layouts; // each canvas laid out once for this pick
+        std::vector<Candidate> candidates;
         for (const auto &root : scene.GetRootGameObjects())
         {
             if (root)

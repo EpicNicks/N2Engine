@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -82,12 +83,24 @@ namespace N2Engine::Picking
         LayoutCache(const LayoutCache &) = delete;
         LayoutCache &operator=(const LayoutCache &) = delete;
 
-        struct Impl;
-        [[nodiscard]] Impl &GetImpl() { return *_impl; }
-
     private:
+        struct Impl;
+        friend struct LayoutCacheAccess;
         std::unique_ptr<Impl> _impl;
     };
+
+    /// Counters of the work picking does, so a test can tell an acceleration structure that stopped pruning (or a
+    /// cache that stopped sharing) from one that works. Plain integers: picking is on the main thread.
+    struct PickStats
+    {
+        /// BVH nodes the mesh ray tests looked at
+        std::uint64_t bvhNodesVisited = 0;
+        /// Triangles the BVH walks tested exactly
+        std::uint64_t bvhTrianglesTested = 0;
+        /// World canvases laid out for a pick or a bounds request (a LayoutCache hit is not one)
+        std::uint64_t canvasLayouts = 0;
+    };
+    [[nodiscard]] PickStats &GetPickStats();
 
     /**
      * The box, in world space, around an object for a selection box and "frame selected": the union of the
