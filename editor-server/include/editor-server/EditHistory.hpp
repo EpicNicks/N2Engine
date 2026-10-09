@@ -48,9 +48,10 @@ namespace N2Engine::Editor
         /// The op sets a state that doesn't depend on any other op's, so inside a group it may be merged with an
         /// earlier op of the same key past ops of other keys (dragging a selection moves several objects every frame)
         bool commutes = false;
-        /// What the state was before the op and what it is after (a fingerprint: equal text, equal state; null when
-        /// the op can't tell). A group drops an op whose two are equal, as a gizmo drag cancelled by writing the
-        /// original value back is nothing to undo. A later op of the same key replaces redoState, as it does redo.
+        /// What the state was before the op and what it is after (a fingerprint: equal states give equal text; null
+        /// when the op can't tell. Where the text can't tell two states apart (a NaN's payload, invalid UTF-8 that is
+        /// replaced) the op's undo and redo apply the same text, so dropping it loses nothing). A group drops an op whose two are equal, as a gizmo
+        /// drag cancelled by writing the original value back is nothing to undo. A later op of the same key replaces redoState, as it does redo.
         std::shared_ptr<const std::string> undoState;
         std::shared_ptr<const std::string> redoState;
 

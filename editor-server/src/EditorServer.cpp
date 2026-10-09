@@ -815,7 +815,9 @@ namespace N2Engine::Editor
             }
         };
 
-        /// Text that is the same for two transforms exactly when SameAs says they are (a hexadecimal float is exact)
+        /// Text for a transform: equal text for equal numbers, which is all a group needs to drop an op. It is
+        /// conservative: +0 and -0 print differently, so that op is kept; two NaNs print alike, which only drops an
+        /// op that undo and redo would apply as the same text-equal state anyway.
         std::shared_ptr<const std::string> Fingerprint(const LocalTransformState &state)
         {
             return std::make_shared<const std::string>(std::format(
@@ -878,6 +880,8 @@ namespace N2Engine::Editor
             op.commutes = true;
             op.undoState = Fingerprint(before);
             op.redoState = Fingerprint(after);
+            op.undoBytes = op.undoState->size();
+            op.redoBytes = op.redoState->size();
             return op;
         }
 
@@ -919,7 +923,7 @@ namespace N2Engine::Editor
                                            : std::vector<std::string>{gameObject.GetUUID().ToString()});
         }
 
-        /// The same text for two states exactly when they are equal (the name and tag are sized, so none runs into the next)
+        /// Text for a state: equal states give equal text (the name and tag are sized, so none runs into the next)
         std::shared_ptr<const std::string> Fingerprint(const PropertiesState &state)
         {
             return std::make_shared<const std::string>(std::format("{}:{}:{}:{}:{}:{}", state.name.size(), state.name,
@@ -1047,8 +1051,15 @@ namespace N2Engine::Editor
                     {
                         continue;
                     }
-                    other->ForgetGameObjectsIf(objectProbe);
-                    other->ForgetComponentsIf(componentProbe);
+                    // Only the kind asked for: a pass over the members costs, and the other kind matches nothing
+                    if (isObject)
+                    {
+                        other->ForgetGameObjectsIf(objectProbe);
+                    }
+                    if (isComponent)
+                    {
+                        other->ForgetComponentsIf(componentProbe);
+                    }
                 }
                 if (held)
                 {
@@ -1059,7 +1070,9 @@ namespace N2Engine::Editor
         }
 
         /// The objects other than the one `component` is on whose references to it a removal will clear (none unless
-        /// the scene is opened for editing, the only one that clears them)
+        /// the scene is opened for editing, the only one that clears them). Asked through ForgetComponentsIf, which is
+        /// what a SerializableComponent's ForgetComponent does; a component that overrides ForgetComponent alone is
+        /// cleared by the removal but not listed (see the docs).
         std::vector<std::string> HoldersOfComponent(Scene &scene, const Component &component)
         {
             if (!scene.IsEditMode())
@@ -1083,7 +1096,8 @@ namespace N2Engine::Editor
             }
         }
 
-        /// Returns the objects outside the subtree that held a reference which was dropped, for the change event
+        /// Returns the objects that held a reference which was dropped, for the change event (the destroyed ones too,
+        /// if they held one: the caller lists those already)
         std::vector<std::string> ForgetDestroyed(Scene &scene, const GameObject &root)
         {
             std::unordered_set<const GameObject *> objects{&root};
@@ -1109,12 +1123,7 @@ namespace N2Engine::Editor
             {
                 return components.contains(candidate);
             };
-            std::vector<std::string> holders = ReferenceHolders(scene, removedObject, removedComponent, true);
-            // The objects that go are in the event already
-            const std::vector<std::string> destroyed = SubtreeIds(root);
-            const std::unordered_set<std::string> gone(destroyed.begin(), destroyed.end());
-            std::erase_if(holders, [&gone](const std::string &id) { return gone.contains(id); });
-            return holders;
+            return ReferenceHolders(scene, removedObject, removedComponent, true);
         }
 
         /// Destroys an object with everything under it, as DestroyEntity does
@@ -1377,7 +1386,8 @@ namespace N2Engine::Editor
             op.undoBytes = beforeState->size();
             op.redoBytes = afterState->size();
             op.coalesceKey = "fields:" + entityId + ":" + componentId + ":" + requestedKeys;
-            // The saved forms are the states: equal text, equal component
+            // The saved forms are the states. Equal text drops the op; that is safe even where the dump isn't exact
+            // (invalid UTF-8 is replaced): undo and redo both apply that same text, so they would set the same state
             op.undoState = beforeState;
             op.redoState = afterState;
             return op;
@@ -2940,14 +2950,20 @@ namespace N2Engine::Editor
                 const std::string label = Labelled("Delete", foundGameObject->GetName());
                 if (scene->DestroyGameObject(foundGameObject))
                 {
+                    // Marked first: a callback that throws still leaves the scene changed
+                    MarkSceneChanged(destroyedIds);
                     if (scene->IsEditMode())
                     {
                         // The objects are still there until they are purged: nothing may point at them afterwards.
-                        // The holders of those references changed too.
-                        AppendNewIds(destroyedIds, ForgetDestroyed(*scene, *foundGameObject));
+                        // The holders of those references changed too: a second event lists them.
+                        std::vector<std::string> holders = ForgetDestroyed(*scene, *foundGameObject);
+                        const std::unordered_set<std::string> listed(destroyedIds.begin(), destroyedIds.end());
+                        std::erase_if(holders, [&listed](const std::string &id) { return listed.contains(id); });
+                        if (!holders.empty())
+                        {
+                            PushSceneChanged(std::move(holders));
+                        }
                     }
-                    // Marked before the purge: a callback that throws there still leaves the scene changed
-                    MarkSceneChanged(std::move(destroyedIds));
                     entityDestroyed = true;
 
                     // Recorded before the purge, which can throw (a callback): the scene has changed either way. The
