@@ -275,9 +275,10 @@ TEST(PickBvhTest, AMeshAuthoredFarFromTheOriginUnderACancellingTranslationAnswer
     ExpectSameAsLinear(*soup, ModelOf(Vector3(-100000.0f, -100000.0f, -100000.0f), Quaternion::Identity,
                                       Vector3(1.0f, 1.0f, 1.0f)),
                        800, 62u, 2.0f, "far and cancelled");
-    ExpectSameAsLinear(*soup, ModelOf(Vector3(-100000.0f, -100000.0f, -100000.0f),
-                                      Quaternion::FromEulerAngles(0.3f, 0.6f, 0.2f), Vector3(1.0f, 2.0f, 1.0f)),
-                       800, 63u, 2.0f, "far, cancelled and rotated");
+    // Not exactly cancelling (a rotation is left out: it would swing the soup far from the origin, off the rays)
+    ExpectSameAsLinear(*soup, ModelOf(Vector3(-100000.5f, -99999.75f, -100000.25f), Quaternion::Identity,
+                                      Vector3(1.0f, 1.0f, 1.0f)),
+                       800, 63u, 2.0f, "far, nearly cancelled");
 }
 
 TEST(PickBvhTest, ManyIdenticalTrianglesAnswerAsTheLinearScanDoes)
