@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
@@ -814,6 +815,15 @@ namespace N2Engine::Editor
             }
         };
 
+        /// Text that is the same for two transforms exactly when SameAs says they are (a hexadecimal float is exact)
+        std::shared_ptr<const std::string> Fingerprint(const LocalTransformState &state)
+        {
+            return std::make_shared<const std::string>(std::format(
+                "{} {:a} {:a} {:a} {:a} {:a} {:a} {:a} {:a} {:a} {:a}", state.present, state.position.x, state.position.y,
+                state.position.z, state.rotation.GetX(), state.rotation.GetY(), state.rotation.GetZ(),
+                state.rotation.GetW(), state.scale.x, state.scale.y, state.scale.z));
+        }
+
         LocalTransformState LocalTransformOf(const GameObject &gameObject)
         {
             LocalTransformState state;
@@ -866,6 +876,8 @@ namespace N2Engine::Editor
             op.redo = [apply, after]() -> EditOutcome { return apply(after); };
             op.coalesceKey = "transform:" + entityId;
             op.commutes = true;
+            op.undoState = Fingerprint(before);
+            op.redoState = Fingerprint(after);
             return op;
         }
 
@@ -907,6 +919,13 @@ namespace N2Engine::Editor
                                            : std::vector<std::string>{gameObject.GetUUID().ToString()});
         }
 
+        /// The same text for two states exactly when they are equal (the name and tag are sized, so none runs into the next)
+        std::shared_ptr<const std::string> Fingerprint(const PropertiesState &state)
+        {
+            return std::make_shared<const std::string>(std::format("{}:{}:{}:{}:{}:{}", state.name.size(), state.name,
+                                                                    state.tag.size(), state.tag, state.layer, state.active));
+        }
+
         /// SetEntityProperties: `changed` names the properties it changed ("name", ...), so typing a name coalesces
         EditOp PropertiesOp(const std::string &entityId, const PropertiesState &before, const PropertiesState &after,
                             const std::string &changed)
@@ -926,6 +945,8 @@ namespace N2Engine::Editor
             op.undoBytes = before.name.size() + before.tag.size();
             op.redoBytes = after.name.size() + after.tag.size();
             op.coalesceKey = "properties:" + entityId + ":" + changed;
+            op.undoState = Fingerprint(before);
+            op.redoState = Fingerprint(after);
             return op;
         }
 
@@ -996,7 +1017,74 @@ namespace N2Engine::Editor
         /// scene hold, before they are destroyed. A reference is a raw pointer that nothing tracks, so the scene would be
         /// saved (the autosave does, after every edit) and shown with pointers to freed objects. Undoing a destroy puts
         /// the references back by loading the scene as it was, which resolves them again by UUID.
-        void ForgetDestroyed(Scene &scene, const GameObject &root)
+        /// The UUIDs of the objects whose components hold a reference `isObject` or `isComponent` says yes to (an empty
+        /// function says no to everything). With `clear` the references are dropped, as ForgetGameObjectsIf and
+        /// ForgetComponentsIf do; without, they are left as they are, which finds who a change that drops them itself
+        /// (RemoveComponent) will touch. `skip` is a component that isn't asked.
+        std::vector<std::string> ReferenceHolders(Scene &scene, const std::function<bool(const GameObject *)> &isObject,
+                                                  const std::function<bool(const Component *)> &isComponent,
+                                                  const bool clear, const Component *skip = nullptr)
+        {
+            std::vector<std::string> holders;
+            scene.TraverseAll([&](const std::shared_ptr<GameObject> &holder)
+            {
+                bool held = false;
+                const std::function<bool(const GameObject *)> objectProbe = [&](const GameObject *candidate)
+                {
+                    const bool matches = isObject && isObject(candidate);
+                    held = held || matches;
+                    return clear && matches;
+                };
+                const std::function<bool(const Component *)> componentProbe = [&](const Component *candidate)
+                {
+                    const bool matches = isComponent && isComponent(candidate);
+                    held = held || matches;
+                    return clear && matches;
+                };
+                for (const auto &other : holder->GetAllComponents())
+                {
+                    if (other.get() == skip)
+                    {
+                        continue;
+                    }
+                    other->ForgetGameObjectsIf(objectProbe);
+                    other->ForgetComponentsIf(componentProbe);
+                }
+                if (held)
+                {
+                    holders.push_back(holder->GetUUID().ToString());
+                }
+            });
+            return holders;
+        }
+
+        /// The objects other than the one `component` is on whose references to it a removal will clear (none unless
+        /// the scene is opened for editing, the only one that clears them)
+        std::vector<std::string> HoldersOfComponent(Scene &scene, const Component &component)
+        {
+            if (!scene.IsEditMode())
+            {
+                return {};
+            }
+            return ReferenceHolders(scene, {}, [&component](const Component *candidate) { return candidate == &component; },
+                                    false, &component);
+        }
+
+        /// Adds the ids in `more` that `ids` doesn't have
+        void AppendNewIds(std::vector<std::string> &ids, std::vector<std::string> more)
+        {
+            std::unordered_set<std::string> known(ids.begin(), ids.end());
+            for (std::string &id : more)
+            {
+                if (known.insert(id).second)
+                {
+                    ids.push_back(std::move(id));
+                }
+            }
+        }
+
+        /// Returns the objects outside the subtree that held a reference which was dropped, for the change event
+        std::vector<std::string> ForgetDestroyed(Scene &scene, const GameObject &root)
         {
             std::unordered_set<const GameObject *> objects{&root};
             std::unordered_set<const Component *> components;
@@ -1021,14 +1109,12 @@ namespace N2Engine::Editor
             {
                 return components.contains(candidate);
             };
-            scene.TraverseAll([&removedObject, &removedComponent](const std::shared_ptr<GameObject> &holder)
-            {
-                for (const auto &other : holder->GetAllComponents())
-                {
-                    other->ForgetGameObjectsIf(removedObject);
-                    other->ForgetComponentsIf(removedComponent);
-                }
-            });
+            std::vector<std::string> holders = ReferenceHolders(scene, removedObject, removedComponent, true);
+            // The objects that go are in the event already
+            const std::vector<std::string> destroyed = SubtreeIds(root);
+            const std::unordered_set<std::string> gone(destroyed.begin(), destroyed.end());
+            std::erase_if(holders, [&gone](const std::string &id) { return gone.contains(id); });
+            return holders;
         }
 
         /// Destroys an object with everything under it, as DestroyEntity does
@@ -1051,7 +1137,8 @@ namespace N2Engine::Editor
             }
             if ((*scene)->IsEditMode())
             {
-                ForgetDestroyed(**scene, **entity);
+                // The objects that held a reference to something destroyed lost it: their inspectors are stale too
+                AppendNewIds(ids, ForgetDestroyed(**scene, **entity));
             }
             (*scene)->ProcessDestroyed();
             return EffectFor(std::move(ids));
@@ -1138,11 +1225,17 @@ namespace N2Engine::Editor
             {
                 return std::unexpected(target.error());
             }
+            // Found before the removal clears what they hold
+            std::vector<std::string> ids{entityId};
+            if (const auto scene = LoadedScene(); scene)
+            {
+                AppendNewIds(ids, HoldersOfComponent(**scene, *target->component));
+            }
             if (!target->entity->RemoveComponent(target->component))
             {
                 return std::unexpected(std::string("The component couldn't be removed"));
             }
-            return EffectFor({entityId});
+            return EffectFor(std::move(ids));
         }
 
         /// Adds a component of a type, built from the saved form it had (its UUID included), to an object
@@ -1284,6 +1377,9 @@ namespace N2Engine::Editor
             op.undoBytes = beforeState->size();
             op.redoBytes = afterState->size();
             op.coalesceKey = "fields:" + entityId + ":" + componentId + ":" + requestedKeys;
+            // The saved forms are the states: equal text, equal component
+            op.undoState = beforeState;
+            op.redoState = afterState;
             return op;
         }
     }
@@ -2844,13 +2940,14 @@ namespace N2Engine::Editor
                 const std::string label = Labelled("Delete", foundGameObject->GetName());
                 if (scene->DestroyGameObject(foundGameObject))
                 {
-                    // Marked first: a callback that throws still leaves the scene changed
-                    MarkSceneChanged(std::move(destroyedIds));
                     if (scene->IsEditMode())
                     {
-                        // The objects are still there until they are purged: nothing may point at them afterwards
-                        ForgetDestroyed(*scene, *foundGameObject);
+                        // The objects are still there until they are purged: nothing may point at them afterwards.
+                        // The holders of those references changed too.
+                        AppendNewIds(destroyedIds, ForgetDestroyed(*scene, *foundGameObject));
                     }
+                    // Marked before the purge: a callback that throws there still leaves the scene changed
+                    MarkSceneChanged(std::move(destroyedIds));
                     entityDestroyed = true;
 
                     // Recorded before the purge, which can throw (a callback): the scene has changed either way. The
@@ -4005,13 +4102,16 @@ namespace N2Engine::Editor
         const std::string entityId = target->entity->GetUUID().ToString();
         const std::string componentId = target->component->GetUUID().ToString();
         const std::string label = Labelled("Remove", target->component->GetTypeName());
+        // The objects whose references to the component the removal clears are changed too: found before it does
+        std::vector<std::string> changedIds{entityId};
+        AppendNewIds(changedIds, HoldersOfComponent(*SceneManager::GetCurScene(), *target->component));
         if (!target->entity->RemoveComponent(target->component))
         {
             SendError(clientSocket, "The component couldn't be removed");
             return;
         }
 
-        MarkSceneChanged({entityId});
+        MarkSceneChanged(std::move(changedIds));
         if (snapshot != nullptr)
         {
             EditOp op;
@@ -5007,6 +5107,24 @@ namespace N2Engine::Editor
             NoteEditStepEnded();
             FlushAutosave();
         }
+        else if (ended == EditHistory::GroupEnd::NoChange)
+        {
+            NoteGroupWithoutChange();
+            FlushAutosave();
+        }
+    }
+
+    void EditorServer::NoteGroupWithoutChange()
+    {
+        // The group's writes each moved the scene revision, and the scene is what it was before them: it is as saved as
+        // it was (a state that was saved stays so, one that was not stays unsaved), and an autosave written for the
+        // writes is out of date. The event carries the saved revision.
+        if (_history.IsAtSavedState())
+        {
+            _savedRevision = _sceneRevision;
+        }
+        NoteEditStepEnded();
+        PushSceneChanged();
     }
 
     void EditorServer::UndoOrRedo(int clientSocket, const bool undo)
@@ -5106,13 +5224,18 @@ namespace N2Engine::Editor
             SendError(clientSocket, "No edit group is open");
             return;
         }
-        if (ended == EditHistory::GroupEnd::Committed || ended == EditHistory::GroupEnd::Empty)
+        if (ended == EditHistory::GroupEnd::Committed || ended == EditHistory::GroupEnd::Empty ||
+            ended == EditHistory::GroupEnd::NoChange)
         {
             PushHistoryChanged();
         }
         if (ended == EditHistory::GroupEnd::Committed)
         {
             NoteEditStepEnded();
+        }
+        else if (ended == EditHistory::GroupEnd::NoChange)
+        {
+            NoteGroupWithoutChange();
         }
 
         BufferWriter response;

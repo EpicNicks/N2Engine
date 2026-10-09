@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -49,6 +50,15 @@ namespace
         op.undoBytes = bytes;
         op.redoBytes = bytes;
         op.coalesceKey = std::move(key);
+        return op;
+    }
+
+    /// SetValue that can tell what it sets from what it replaces (a fingerprint of each value)
+    EditOp SetValueWithState(Doc &doc, const int before, const int after, std::string key)
+    {
+        EditOp op = SetValue(doc, before, after, std::move(key));
+        op.undoState = std::make_shared<const std::string>(std::to_string(before));
+        op.redoState = std::make_shared<const std::string>(std::to_string(after));
         return op;
     }
 
@@ -326,6 +336,60 @@ TEST(EditHistoryTest, AnEmptyGroupMakesNoStep)
     EXPECT_EQ(history.EndGroup(), EditHistory::GroupEnd::Empty);
     EXPECT_EQ(history.StepCount(), 0u);
     EXPECT_FALSE(history.CanUndo());
+}
+
+TEST(EditHistoryTest, AGroupWhoseWritesCancelOutMakesNoStepAndKeepsTheRedoSteps)
+{
+    EditHistory history;
+    Doc doc;
+    history.Record("one", SetValue(doc, 0, 1));
+    history.Record("two", SetOther(doc, 0, 2));
+    ASSERT_TRUE(history.Undo().has_value());
+    ASSERT_TRUE(history.CanRedo());
+
+    // A drag and its cancel: every write to one thing is merged into one op, from the first before to the last after
+    ASSERT_TRUE(history.BeginGroup("Drag"));
+    history.Record("x", SetValueWithState(doc, 1, 5, "value"));
+    history.Record("x", SetValueWithState(doc, 5, 9, "value"));
+    history.Record("x", SetValueWithState(doc, 9, 1, "value"));
+    EXPECT_EQ(history.EndGroup(), EditHistory::GroupEnd::NoChange);
+
+    EXPECT_FALSE(history.InGroup());
+    EXPECT_EQ(history.StepCount(), 2u);
+    EXPECT_EQ(history.Cursor(), 1u);
+    EXPECT_TRUE(history.CanRedo()) << "what was undone can still be redone";
+    EXPECT_EQ(history.UndoLabel(), "one");
+}
+
+TEST(EditHistoryTest, AGroupDropsOnlyTheOpsThatChangedNothing)
+{
+    EditHistory history;
+    Doc doc;
+    ASSERT_TRUE(history.BeginGroup("Mixed"));
+    history.Record("x", SetValueWithState(doc, 1, 5, "value"));
+    history.Record("x", SetValueWithState(doc, 5, 1, "value"));
+    history.Record("x", SetOther(doc, 0, 3, "other"));
+    EXPECT_EQ(history.EndGroup(), EditHistory::GroupEnd::Committed);
+    ASSERT_EQ(history.StepCount(), 1u);
+
+    doc.other = 3;
+    ASSERT_TRUE(history.Undo().has_value());
+    EXPECT_EQ(doc.other, 0);
+    EXPECT_EQ(doc.value, 0) << "the op that changed nothing didn't run: its undo would have set 1";
+}
+
+TEST(EditHistoryTest, AnOpWithoutAStateIsNeverDroppedAndANoOpGroupReportsNoChangeOnClose)
+{
+    EditHistory history;
+    Doc doc;
+    ASSERT_TRUE(history.BeginGroup("Same value, no fingerprint"));
+    history.Record("x", SetValue(doc, 1, 1, "value"));
+    EXPECT_EQ(history.EndGroup(), EditHistory::GroupEnd::Committed) << "an op that can't tell is kept";
+
+    ASSERT_TRUE(history.BeginGroup("Abandoned"));
+    history.Record("x", SetValueWithState(doc, 4, 4, "value"));
+    EXPECT_EQ(history.CloseGroups(), EditHistory::GroupEnd::NoChange);
+    EXPECT_EQ(history.StepCount(), 1u);
 }
 
 TEST(EditHistoryTest, EndingWithoutAGroupIsNotOpen)
