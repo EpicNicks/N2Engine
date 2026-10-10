@@ -446,8 +446,12 @@ TEST(SoftwareTextPassesGoldenTest, PassesBeyondTheSpreadAreClampedNotDrawnAsBoxe
     const Frame huge = scene.Render(WithPasses({Pass(Common::Color::Red, 3.0f, -3.0f, 3.0f, 3.0f)}));
     ExpectSameFace(plain, huge);
     EXPECT_EQ(OtherColours(huge, {Face, Red}), 0);
-    // A box over the whole quad area would cover far more than the glyphs' own area ever could
-    EXPECT_LT(huge.Count(Red), 4 * plain.Count(Face));
+    // The clamp gives exactly the widest pass the font allows, not a box over the glyph quads
+    const auto font = Text::Font::GetDefault();
+    ASSERT_NE(font, nullptr);
+    const float widest = Rendering::TextDrawing::MaxEffectEms(font->GetSdfFont().GetAtlas().GetSettings());
+    const Frame atMax = scene.Render(WithPasses({Pass(Common::Color::Red, 0.0f, 0.0f, widest)}));
+    EXPECT_EQ(huge.rgba, atMax.rgba);
 }
 
 // ============================================================================
