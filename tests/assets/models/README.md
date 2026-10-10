@@ -10,6 +10,24 @@ Models the engine tests load from disk. Every other glTF file the tests use is b
 
 All of them are this repository's own work, under its MIT licence: no third-party model is used.
 
+## Outstanding: a real Blender binary FBX
+
+No Blender-exported FBX is committed yet: `textured_cube.fbx` is generated ASCII, so it proves ufbx reads our reading of
+the format, not what Blender writes (exporter quirks, binary encoding, PBR properties, multiple UV sets). Only the
+repository owner can supply one, since it must come from a real Blender. When one is added:
+
+- Scene: the same cube as above (UV-mapped, two materials, nodes `Cube`, `Child`, `Mirrored`), so the existing
+  world-space comparison with `textured_cube.glb` applies unchanged.
+- Export: File > Export > FBX (`.fbx`), **binary** (the exporter's default), Apply Scalings "FBX All" or the default,
+  Forward -Z / Up Y left at the defaults, Apply Modifiers on, Path Mode "Copy" off (the texture is a file name, as in
+  the generated file), no animation, no armatures.
+- Record in this table: the Blender version, the exact export settings and the date, and name the file
+  `textured_cube_blender.fbx`.
+- Add tests beside `UfbxImporterTests.cpp` that run the same checks on it (meshes, materials, node transforms, axes
+  and units in world space), compiled only with `N2ENGINE_MODEL_UFBX`. The orchestrator item is
+  `fbx-blender-fixture` (set `approved` to true once the file is in the repo). Also update the "design decision"
+  callout in `docs/meshes.html` (the test FBX is generated, a real export is outstanding).
+
 `textured_cube.glb` stands in for the self-authored Blender export the design asks for (#3, decision 13), so the
 tests don't need Blender. A real Blender export of the same scene (File > Export > glTF 2.0, `.glb`, +Y Up, Apply
 Modifiers) should be added beside it later, with a test that runs the same checks on both.
