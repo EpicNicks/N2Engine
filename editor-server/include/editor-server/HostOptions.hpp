@@ -46,6 +46,11 @@ namespace N2Engine::Editor
         /// client's first Hello leaves nothing else to end the host, but its stdin pipe closes. Opt-in, since a
         /// launcher that closes or doesn't provide stdin would otherwise kill the host at once.
         bool exitOnStdinEof = false;
+        /// --tls: serve TLS on the editor port (EditorServer::EnableTls) with a self-signed certificate the host keeps in
+        /// the user's data folder, and print its SHA-256 fingerprint in the ready line for the client to pin. Needs a
+        /// host built with N2ENGINE_EDITOR_TLS (RunHost refuses it otherwise). It applies to this one process: a play
+        /// host a launcher starts (--play) is a separate process and stays plaintext on loopback.
+        bool tls = false;
         bool showHelp = false;
 
         /// --play <file>: start as a play host (#82, E9): instead of the startup scene, load the scene snapshot in this
@@ -131,6 +136,8 @@ namespace N2Engine::Editor
 
     /// The ready line, without the newline: "N2EditorHost ready port=<port>". Launchers match a whole line
     /// starting with ReadyLinePrefix followed by space-separated key=value fields; port is always present and
-    /// later fields may be appended, so a parser must ignore keys it doesn't know.
-    [[nodiscard]] std::string FormatReadyLine(int port);
+    /// later fields may be appended, so a parser must ignore keys it doesn't know. With a TLS fingerprint (the host
+    /// was started with --tls) the line is "N2EditorHost ready port=<port> tls=1 fingerprint=<64 lowercase hex digits,
+    /// no colons>": the SHA-256 of the certificate, which the client pins. Without one, the line is as before.
+    [[nodiscard]] std::string FormatReadyLine(int port, std::string_view tlsFingerprint = {});
 }

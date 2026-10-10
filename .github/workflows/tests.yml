@@ -44,7 +44,7 @@ jobs:
   windows:
     # Legs with the FreeType font backend or the ufbx FBX/OBJ importer say so in their name; the rest use stb_truetype and
     # glTF only
-    name: windows (${{ matrix.config }}, PhysX ${{ matrix.physx }}${{ matrix.freetype == 'ON' && ', FreeType ON' || '' }}${{ matrix.ufbx == 'ON' && ', ufbx ON' || '' }})
+    name: windows (${{ matrix.config }}, PhysX ${{ matrix.physx }}${{ matrix.freetype == 'ON' && ', FreeType ON' || '' }}${{ matrix.ufbx == 'ON' && ', ufbx ON' || '' }}${{ matrix.tls == 'ON' && ', TLS ON' || '' }})
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
@@ -55,20 +55,24 @@ jobs:
             physx: "ON"
             freetype: "OFF"
             ufbx: "OFF"
+            tls: "OFF"
           # OFF keeps the no-physics build compiling and running (the engine then has no physics backend).
           # This leg also builds the optional FreeType font backend, so the text tests run against both
           # stb_truetype and FreeType (and compare them) without a fourth full build. It builds the optional ufbx
-          # FBX/OBJ importer too, so the model tests read the committed FBX and compare it with the glTF cube.
+          # FBX/OBJ importer too, so the model tests read the committed FBX and compare it with the glTF cube. And the
+          # optional editor-host TLS (Mbed TLS, vendored), so the TLS tests and a --tls host smoke test run here.
           - config: Debug
             physx: "OFF"
             freetype: "ON"
             ufbx: "ON"
+            tls: "ON"
           # Release catches what Debug hides (NDEBUG, optimised SIMD paths) and confirms the forced sol2 safeties still hold in Release.
           # The PhysX release zip ships both debug/ and release/ libraries, so PhysX stays ON here.
           - config: Release
             physx: "ON"
             freetype: "OFF"
             ufbx: "OFF"
+            tls: "OFF"
 
     steps:
       - uses: actions/checkout@v7
@@ -89,7 +93,7 @@ jobs:
           key: physx-bin-${{ runner.os }}-v1
 
       - name: Configure
-        run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} # newest installed Visual Studio
+        run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} -DN2ENGINE_EDITOR_TLS=${{ matrix.tls }} # newest installed Visual Studio
 
       - name: Build
         run: cmake --build build --config ${{ matrix.config }} --parallel
@@ -603,6 +607,87 @@ jobs:
             Write-Host "----- host (no stdin flag) stdout -----"; Get-Content $logPathNoFlag -ErrorAction SilentlyContinue
             Write-Host "----- host (no stdin flag) stderr -----"; Get-Content $errPathNoFlag -ErrorAction SilentlyContinue
           }
+
+      # The real host with --tls (the TLS leg only; the unit tests cover the handshake and the gate): it makes its
+      # certificate in the user's data folder, prints it in the ready line, and a client that checks that fingerprint
+      # finishes a handshake, says Hello and gets ServerInfo. --exit-on-disconnect ends the host when the client leaves.
+      - name: Editor host TLS smoke test
+        if: matrix.tls == 'ON'
+        shell: pwsh
+        env:
+          N2_SMOKE_CONFIG: ${{ matrix.config }}
+        run: |
+          $exe = Resolve-Path "build/bin/$env:N2_SMOKE_CONFIG/N2EditorHost.exe"
+          $protocolVersion = (Get-Content editor-server/protocol/protocol.json -Raw | ConvertFrom-Json).version
+          $out = Join-Path $env:RUNNER_TEMP "tls-host.out"
+          $err = Join-Path $env:RUNNER_TEMP "tls-host.err"
+          $proc = Start-Process -FilePath $exe -PassThru -ArgumentList "--tls", "--port", "0", "--renderer", "software", "--exit-on-disconnect" `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+          $null = $proc.Handle
+
+          # The ready line, as a launcher reads it: port, tls=1 and the certificate's SHA-256 as 64 lowercase hex digits
+          $port = $null
+          $fingerprint = $null
+          $text = ""
+          for ($i = 0; $i -lt 240 -and -not $port; $i++) {
+            try {
+              $file = [System.IO.File]::Open($out, 'Open', 'Read', 'ReadWrite')
+              try { $text = [System.IO.StreamReader]::new($file).ReadToEnd() } finally { $file.Dispose() }
+            } catch { }
+            foreach ($line in ($text -split "`n")) {
+              if ($line.TrimEnd("`r") -match '^N2EditorHost ready port=(\d+) tls=1 fingerprint=([0-9a-f]{64})$') { $port = [int]$Matches[1]; $fingerprint = $Matches[2]; break }
+            }
+            if (-not $port) {
+              if ($proc.HasExited) { Get-Content $err -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "stderr: $_" }; throw "The --tls host exited (code $($proc.ExitCode)) before its ready line" }
+              Start-Sleep -Milliseconds 500
+            }
+          }
+          if (-not $port) { Write-Host $text; throw "The --tls host never printed a ready line with tls=1 and a fingerprint" }
+          Write-Host "TLS host ready on port $port, fingerprint $fingerprint"
+
+          # The certificate and key live in the user's data folder, not in the project or the repository
+          $identity = Join-Path $env:APPDATA "N2Engine/editor-tls"
+          foreach ($name in "host-cert.pem", "host-key.pem") {
+            if (-not (Test-Path (Join-Path $identity $name))) { throw "No $name in $identity" }
+          }
+          if ((Get-Content (Join-Path $identity "host-cert.pem") -Raw) -match "PRIVATE KEY") { throw "The certificate file holds a private key" }
+
+          # Accept any certificate in the handshake, then pin by comparing the fingerprint ourselves: the same trust-on-first-use
+          # check a client makes (a compiled callback, as a script block can't run on the TLS thread)
+          Add-Type -TypeDefinition 'public static class N2AcceptAnyCertificate { public static bool Check(object sender, System.Security.Cryptography.X509Certificates.X509Certificate certificate, System.Security.Cryptography.X509Certificates.X509Chain chain, System.Net.Security.SslPolicyErrors errors) { return true; } }'
+          $callback = [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], [N2AcceptAnyCertificate].GetMethod('Check'))
+          $client = [System.Net.Sockets.TcpClient]::new("127.0.0.1", $port)
+          $client.ReceiveTimeout = 20000
+          $ssl = [System.Net.Security.SslStream]::new($client.GetStream(), $false, $callback)
+          $ssl.AuthenticateAsClient("n2-editor-host")
+          $seen = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::HashData($ssl.RemoteCertificate.GetRawCertData())).Replace("-", "").ToLowerInvariant()
+          if ($seen -ne $fingerprint) { throw "The certificate the host presented ($seen) is not the one its ready line named ($fingerprint)" }
+          Write-Host "Handshake done ($($ssl.SslProtocol)); the fingerprint matches the ready line"
+
+          # Hello (0x04): clientName, protocolVersion, token as [uint32 byte count][UTF-8]; ServerInfo is 0x0B
+          function Get-StringBytes([string]$value) {
+            $utf8 = [Text.Encoding]::UTF8.GetBytes($value)
+            return ,[byte[]]([BitConverter]::GetBytes([uint32]$utf8.Length) + $utf8)
+          }
+          $payload = [byte[]]((Get-StringBytes "CI TLS smoke test") + (Get-StringBytes $protocolVersion) + (Get-StringBytes ""))
+          $request = [byte[]](@([byte]0x04) + [BitConverter]::GetBytes([uint32]$payload.Length) + $payload)
+          $ssl.Write($request, 0, $request.Length)
+          $ssl.Flush()
+          $header = New-Object byte[] 5
+          $offset = 0
+          while ($offset -lt 5) {
+            $read = $ssl.Read($header, $offset, 5 - $offset)
+            if ($read -le 0) { throw "The TLS connection closed before Hello was answered" }
+            $offset += $read
+          }
+          if ($header[0] -ne 0x0B) { throw ("Hello over TLS: expected ServerInfo (0x0B), got 0x{0:X2}" -f $header[0]) }
+          Write-Host "Hello over TLS answered with ServerInfo"
+
+          $ssl.Dispose()
+          $client.Close()
+          if (-not $proc.WaitForExit(30000)) { throw "The --tls host did not exit within 30s of its client leaving" }
+          if ($proc.ExitCode -ne 0) { throw ("The --tls host exited with code 0x{0:X8}" -f $proc.ExitCode) }
+          Write-Host "The --tls host exited cleanly when its client left"
 
       # What the Electron editor does for play mode, with the real binary on the software renderer (see the script's
       # header): an edit host writes a play snapshot (WritePlaySnapshot) of its unsaved scene, a second process
