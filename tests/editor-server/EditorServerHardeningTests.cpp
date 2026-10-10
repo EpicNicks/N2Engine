@@ -22,13 +22,6 @@
 
 // Last, as in EditorServer.cpp: <windows.h> macros (near, far, ...) must not reach the engine headers
 #include "TestSockets.hpp"
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#pragma comment(lib, "ws2_32.lib")
-#endif
 
 using namespace N2Engine;
 using namespace N2Engine::Editor;

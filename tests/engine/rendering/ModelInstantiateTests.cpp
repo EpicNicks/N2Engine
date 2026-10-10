@@ -95,7 +95,7 @@ TEST(ModelInstantiateTest, BuildsTheNodeHierarchyWithNamesAndLocalTransforms)
     ExpectVector(arm->GetPositionable()->GetLocalScale(), 2, 2, 2, "Arm scale");
     const Math::Quaternion rotation = arm->GetPositionable()->GetLocalRotation();
     const float s = std::sqrt(0.5f);
-    EXPECT_NEAR(std::abs(rotation.w * s + rotation.y * s), 1.0f, 1e-4f) << "90 degrees about y";
+    EXPECT_NEAR(std::abs(rotation.GetW() * s + rotation.GetY() * s), 1.0f, 1e-4f) << "90 degrees about y";
     // The arm's world position: the robot's plus its own
     ExpectVector(arm->GetPositionable()->GetPosition(), 1, 1, 0, "Arm world position");
 }
