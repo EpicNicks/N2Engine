@@ -21,6 +21,7 @@
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/Model.hpp"
 #include "engine/rendering/Texture.hpp"
+#include "engine/rendering/TextRenderer.hpp"
 #include "engine/sceneManagement/SceneFile.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
@@ -28,6 +29,7 @@
 #include "engine/serialization/FieldInfo.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/text/Font.hpp"
+#include "engine/ui/UIText.hpp"
 
 // The reflection API (#77, E5): the FieldInfo each RegisterMember builds from the member's type, the opt-in
 // FieldBuilder calls, N2_SERIALIZE_ENUM, the checks and clamping the inspector applies, SetEditorFields (which sets
@@ -983,4 +985,52 @@ TEST(ReflectionRegistryTest, AComponentMadeForAnotherObjectIsNotAdded)
     const auto other = GameObject::Create("Theirs");
     EXPECT_EQ(go->AddComponent(ComponentRegistry::Instance().Create("Light", *other)), nullptr);
     EXPECT_EQ(go->GetComponentCount(), 0u);
+}
+
+TEST(ReflectionTest, TheTextEffectPassesReportTheTextPassListTypeName)
+{
+    const auto go = GameObject::Create("Texts");
+    auto *renderer = go->AddComponent<Rendering::TextRenderer>();
+    auto *label = go->AddComponent<N2Engine::UI::UIText>();
+    ASSERT_NE(renderer, nullptr);
+    ASSERT_NE(label, nullptr);
+
+    const std::vector<FieldInfo> rendererFields = renderer->DescribeFields();
+    const std::vector<FieldInfo> labelFields = label->DescribeFields();
+    const FieldInfo *rendererPasses = Find(rendererFields, "_effectPasses");
+    const FieldInfo *labelPasses = Find(labelFields, "effectPasses");
+    ASSERT_NE(rendererPasses, nullptr);
+    ASSERT_NE(labelPasses, nullptr);
+    EXPECT_EQ(rendererPasses->kind, FieldKind::Json);
+    EXPECT_EQ(rendererPasses->typeName, "TextPass[]");
+    EXPECT_EQ(labelPasses->kind, FieldKind::Json);
+    EXPECT_EQ(labelPasses->typeName, "TextPass[]");
+    EXPECT_EQ(rendererPasses->ToJson()["typeName"], "TextPass[]");
+    EXPECT_EQ(rendererPasses->ToJson()["kind"], "Json");
+}
+
+TEST(ReflectionTest, TheTextEffectPassesStillRoundTripAsJson)
+{
+    const auto go = GameObject::Create("Texts");
+    auto *label = go->AddComponent<N2Engine::UI::UIText>();
+    ASSERT_NE(label, nullptr);
+
+    const json passes = json::array(
+        {json{{"color", {{"r", 1.0}, {"g", 0.0}, {"b", 0.0}, {"a", 1.0}}},
+              {"offset", {{"x", 0.25}, {"y", -0.5}}},
+              {"width", 0.125},
+              {"softness", 0.0},
+              {"order", -150}}});
+    label->Deserialize(json{{"effectPasses", passes}}, nullptr);
+    ASSERT_EQ(label->GetEffects().passes.size(), 1u);
+    EXPECT_EQ(label->GetEffects().passes[0].order, -150);
+    EXPECT_FLOAT_EQ(label->GetEffects().passes[0].width, 0.125f);
+
+    const json saved = label->Serialize();
+    ASSERT_TRUE(saved.contains("effectPasses"));
+    ASSERT_TRUE(saved["effectPasses"].is_array());
+    ASSERT_EQ(saved["effectPasses"].size(), 1u);
+    EXPECT_EQ(saved["effectPasses"][0]["order"], -150);
+    EXPECT_FLOAT_EQ(saved["effectPasses"][0]["width"].get<float>(), 0.125f);
+    EXPECT_FLOAT_EQ(saved["effectPasses"][0]["offset"]["x"].get<float>(), 0.25f);
 }

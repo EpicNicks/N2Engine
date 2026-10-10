@@ -56,3 +56,16 @@ namespace N2Engine::Text
                       { VerticalAlign::Baseline, "Baseline" }
                       })
 }
+
+namespace N2Engine
+{
+    /// The extra effect passes of a text: still the Json kind (a list of TextPass objects, above), but the type
+    /// name tells an editor to draw a pass list editor instead of a generic JSON box
+    template <>
+    struct FieldTraits<std::vector<Text::TextPass>>
+    {
+        static constexpr FieldKind kind = FieldKind::Json;
+        static std::string TypeName() { return "TextPass[]"; }
+        static std::vector<std::string> EnumOptions() { return {}; }
+    };
+}
