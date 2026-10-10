@@ -723,7 +723,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests
+        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
 
       - name: Test
         run: ctest --test-dir build --output-on-failure

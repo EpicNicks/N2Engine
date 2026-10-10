@@ -2,6 +2,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include <math/Matrix.hpp>
 

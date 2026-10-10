@@ -53,7 +53,9 @@ target_include_directories(glad PUBLIC ${CMAKE_SOURCE_DIR}/external/glad/include
 if(WIN32)
     set(VULKAN_PLATFORM_DEFINE "VK_USE_PLATFORM_WIN32_KHR")
 elseif(UNIX AND NOT APPLE)
-    set(VULKAN_PLATFORM_DEFINE "VK_USE_PLATFORM_XLIB_KHR")
+    # No platform define: the surface comes from glfwCreateWindowSurface, and VK_USE_PLATFORM_XLIB_KHR would pull
+    # <X11/Xlib.h> into vulkan.h, whose macros (None, Bool, Status, ...) break the engine's own names (CullMode::None)
+    set(VULKAN_PLATFORM_DEFINE "")
 elseif(APPLE)
     set(VULKAN_PLATFORM_DEFINE "VK_USE_PLATFORM_MACOS_MVK")
 endif()
