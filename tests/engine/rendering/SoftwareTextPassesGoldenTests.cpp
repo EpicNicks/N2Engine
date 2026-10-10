@@ -788,7 +788,7 @@ namespace
             ui->AddEffectPass(pass);
         }
 
-        const auto scene = Scene::Create(name);
+        auto scene = Scene::Create(name);
         scene->AddRootGameObject(object);
         scene->AddRootGameObject(uiObject);
         return scene;
