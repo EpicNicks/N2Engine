@@ -283,7 +283,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <tr><td><code>SetMaxWidth</code></td><td>0</td><td>Wrap width in world units; 0 or less never wraps</td></tr>
 <tr><td><code>SetLineSpacing</code></td><td>1</td><td>Multiplies the font's line height</td></tr>
 <tr><td><code>SetLetterSpacing</code></td><td>0</td><td>Extra space between glyphs, in ems; negative tightens</td></tr>
-<tr><td><code>SetEffects</code>, <code>SetOutline</code>, <code>SetShadow</code>, <code>SetSoftness</code> <span class="badge">PR #66</span></td><td>all off</td><td>Outline, shadow and edge softness, lengths in ems (<a href="#effects">Text effects</a>). <code>GetEffects()</code> returns them.</td></tr>
+<tr><td><code>SetEffects</code>, <code>SetOutline</code>, <code>SetShadow</code>, <code>SetSoftness</code> <span class="badge">PR #66</span></td><td>all off</td><td>Outline, shadow and edge softness, lengths in ems (<a href="#effects">Text effects</a>). <code>GetEffects()</code> returns them. <code>AddEffectPass</code> and <code>ClearEffectPasses</code> <span class="badge">PR #110</span> edit the <a href="#passes">pass list</a>.</td></tr>
 </tbody>
 </table>
 </div>
@@ -473,12 +473,35 @@ SceneManager.GetCurrentScene():AddRootGameObject(label)</code></pre>
 <p>The software renderer keeps its alpha-tested text (<a href="#design-sw-text-alpha-test">see above</a>). An outline is a second threshold and a shadow a second, offset sample, each choosing one opaque colour, tested face first. That is the image OpenGL draws at 50% coverage with opaque colours, which the golden tests can check exactly. Softness has no meaning without partial coverage, and moving the threshold instead would make the software glyphs a different size from OpenGL's, so it is ignored. Plain text keeps the old pixel path (a per-draw branch), which guarantees the existing images are unchanged.</p>
 </div>
 
+<h3 id="passes">Effect passes <span class="badge">PR #110</span></h3>
+<p>The effects are an ordered list of passes over the same glyph mesh, drawn back to front with the face last. Each pass is one colour with its own offset, width (the SDF threshold, moved outward from the glyph edge) and softness, all in ems:</p>
+<table>
+<tr><th>Order (back to front)</th><th>Pass</th><th>Comes from</th></tr>
+<tr><td>1</td><td>Shadow</td><td>the shadow settings (<code>SetShadow</code>), when the colour's alpha is above 0; its width is the outline's width</td></tr>
+<tr><td>2</td><td>Outline</td><td>the outline setting (<code>SetOutline</code>), when it has a width and a visible colour</td></tr>
+<tr><td>3 &hellip; n</td><td>Extra passes</td><td><code>TextEffects::passes</code>, in the order they were added (<code>AddEffectPass</code>); a pass with colour alpha 0 is skipped</td></tr>
+<tr><td>last</td><td>Face</td><td>the text colour, with the <code>SetSoftness</code> edge</td></tr>
+</table>
+<p>A pass with only a colour is a copy of the face; with an offset it is a shadow, with a width an outline, and with softness and no offset a glow. <code>UIText</code> and <code>TextRenderer</code> keep sharing <code>Rendering::TextDrawing</code>: <code>ResolvePasses</code> builds the list (clamped to the font's spread like every other effect, one warning per component type) and <code>DrawResources::Draw</code> draws it.</p>
+<p><strong>The single-effect API is the first entries of the list.</strong> A text that sets only the shadow, outline and softness settings (every scene and test from before) has no extra passes, and is drawn by the one shader draw it always was; that draw gives the same image as the same list written out as passes (<code>SoftwareTextPassesGoldenTest.TheShadowAndOutlineSettingsDrawAsTheirPassEquivalents</code>). Extra passes switch to one draw per pass.</p>
+<p><strong>On the software renderer</strong> effect passes do not write depth and keep the same 1e-5 depth bias as the outline and shadow (<a href="#effects-software">above</a>); only the face draw writes depth, so a pass never hides a face, its own or a neighbour's. Later passes overwrite earlier ones where they overlap, and the face overwrites them all.</p>
+<div class="callout note" id="design-effects-passes">
+<p class="callout-title">Design decision: a pass is a draw of the same mesh through the shadow uniforms <span class="badge">PR #110</span></p>
+<p>Each extra pass is one more <code>DrawMesh</code> of the cached glyph mesh, drawn with the text colour's alpha at 0 so only the shadow layer of the shader draws, with the pass's colour, offset, softness and an edge at <code>0.5 &minus; width</code>. That needs no new shader, uniform or renderer change, and the software renderer's alpha test and depth bias apply unchanged. The cost is that a pass can only grow the glyph, never shrink it (the threshold has no inward setting), and that it is a whole draw, so the list should stay short. A text without extra passes pays nothing.</p>
+</div>
+<div class="callout note" id="design-effects-order">
+<p class="callout-title">Design decision: the order is fixed, the extra passes go after the settings <span class="badge">PR #110</span></p>
+<p>The shadow and outline settings are always the first two passes, extra passes follow in list order, and the face is always last: an effect can never be drawn over the face. A fully free order would need the settings to be entries of the list too, and a settings-only text could then no longer be the single draw it was. The cost is that an extra pass cannot sit behind the settings shadow; use a shadow-like extra pass instead of the setting for that. Extra passes are also not saved with the scene (no new scene keys); set them from code or Lua when the object is created.</p>
+</div>
+<p><strong>Not verified on a GPU.</strong> The OpenGL shader is unchanged, and the multi-draw path (face alpha 0, shadow layer only, blended in list order) has only been checked on the software renderer, as OpenGL can't run in CI.</p>
+
 <h3 id="effects-lua">From Lua and scene files</h3>
 <p>Both components have the same methods in Lua:</p>
 <ul>
 <li><code>SetOutline(width, color)</code>; <code>GetOutline()</code> returns <code>width, color</code>.</li>
 <li><code>SetShadow(offsetX, offsetY, color[, softness])</code> (softness defaults to 0); <code>GetShadow()</code> returns <code>offsetX, offsetY, color, softness</code>. A colour with alpha 0 turns the shadow off.</li>
 <li><code>SetSoftness(softness)</code> and <code>GetSoftness()</code>.</li>
+<li><code>AddEffectPass(offsetX, offsetY, color[, width[, softness]])</code> adds an <a href="#passes">extra pass</a> <span class="badge">PR #110</span>; <code>ClearEffectPasses()</code> removes them (the settings stay); <code>GetEffectPassCount()</code>.</li>
 </ul>
 <pre class="lang-lua"><code>local text = label:AddComponent("TextRenderer")
 text:SetText("Game Over")
@@ -487,7 +510,7 @@ text:SetShadow(0.05, -0.05, Color.new(0, 0, 0, 0.6), 0.03) -- down-right, soft
 -- A glow: a shadow with no offset and a soft edge
 -- text:SetShadow(0, 0, Color.new(1, 0.8, 0.2, 1), 0.1)</code></pre>
 <p>Scene files save each field under its own key, so a scene saved before effects existed loads with every effect off. <code>TextRenderer</code> uses <code>_outlineWidth</code>, <code>_outlineColor</code>, <code>_shadowOffset</code> (<code>{x, y}</code>), <code>_shadowColor</code>, <code>_shadowSoftness</code> and <code>_softness</code>; <code>UIText</code> uses the same names without the underscore.</p>
-<p class="src">Source: <code>engine/include/engine/text/TextEffects.hpp</code>; <code>engine/src/rendering/TextDrawing.cpp</code> — <code>ResolveEffects</code>, <code>MaxEffectEms</code>, <code>DrawResources::Draw</code>; <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>CreateStandardShaders</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>RasterTri&lt;ShadeKind::Text&gt;</code>, <code>SnapshotMaterial</code>; tests: <code>TextEffectsTest.*</code> (<code>tests/engine/rendering/TextEffectsTests.cpp</code>), <code>SoftwareTextEffectsGoldenTest.*</code></p>
+<p class="src">Source: <code>engine/include/engine/text/TextEffects.hpp</code>; <code>engine/src/rendering/TextDrawing.cpp</code> — <code>ResolveEffects</code>, <code>MaxEffectEms</code>, <code>DrawResources::Draw</code>; <code>renderer/src/opengl/OpenGLRenderer.cpp</code> — <code>CreateStandardShaders</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>RasterTri&lt;ShadeKind::Text&gt;</code>, <code>SnapshotMaterial</code>; tests: <code>TextEffectsTest.*</code> (<code>tests/engine/rendering/TextEffectsTests.cpp</code>), <code>SoftwareTextEffectsGoldenTest.*</code>; passes: <code>ResolvePasses</code>, <code>DrawResources::DrawPasses</code>, <code>TextPassesTest.*</code> and <code>SoftwareTextPassesGoldenTest.*</code> (<code>tests/engine/rendering/SoftwareTextPassesGoldenTests.cpp</code>)</p>
 
 <div class="page-footer">
 <span>Describes master through PR #34.</span>
