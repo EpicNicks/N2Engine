@@ -134,6 +134,7 @@ namespace
         GameObject::Ptr _object;
         Rendering::TextRenderer *_text = nullptr;
         Camera _camera;
+        float _scale = 1.0f;
     };
 
     Text::TextPass Pass(const Common::Color &color, const float offsetX, const float offsetY, const float width = 0.0f,
