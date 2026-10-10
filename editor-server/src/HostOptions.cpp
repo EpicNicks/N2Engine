@@ -79,6 +79,11 @@ namespace N2Engine::Editor
                 options.exitOnStdinEof = true;
                 continue;
             }
+            if (arg == "--tls")
+            {
+                options.tls = true;
+                continue;
+            }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--renderer" || arg == "--token-env" || arg == "--create" ||
                                     arg == "--name" || arg == "--project-id" || arg == "--play";
@@ -252,9 +257,9 @@ Usage: N2EditorHost [options]
 Options:
   -p, --port <port>         Server port (default: 9999; 0 lets the OS pick a free one)
   --bind <ipv4 address>     Address to listen on (default: 127.0.0.1)
-                            WARNING: the access token isn't encrypted; any other address lets whoever
-                            can reach it (and, without --token-env, anyone at all) control this host,
-                            including deleting scene files
+                            WARNING: without --tls the access token isn't encrypted; any other address
+                            lets whoever can reach it (and, without --token-env, anyone at all) control
+                            this host, including deleting scene files
   --project <path>          Project folder, holding project.n2proj (see --create): res:// assets
                             load from <path>/assets, and its startup scene opens
   --renderer <name>         opengl (default: a hidden window, needs a GPU) or
@@ -267,6 +272,12 @@ Options:
   --exit-on-stdin-eof       Exit once stdin reaches end of file or can't be read (a launcher's pipe
                             closes when the launcher dies, even before any client connects). Leave it
                             off when stdin may be closed or absent: the host would exit at once
+  --tls                     Serve TLS (1.2 or newer) on the editor port. The host makes a self-signed
+                            certificate on first use and keeps it, with its key, in the user's data
+                            folder (outside any project). The ready line then has tls=1 and the
+                            certificate's SHA-256 fingerprint, for the client to pin. Needs a host
+                            built with N2ENGINE_EDITOR_TLS. Applies to this process only: a play host
+                            (--play) is another process, and stays plaintext
   --play <file>             Start as a play host: run the scene snapshot in <file> (what the
                             WritePlaySnapshot command writes; or a res:// .scene path in the project)
                             as a game instead of opening the startup scene. Pass the same --project
@@ -281,7 +292,8 @@ Options:
                             (default: a new random one); "from-path" keeps the UUIDs the folder's
                             assets had before projects had ids
   -h, --help                Show this help
-Once listening, prints the line "N2EditorHost ready port=<port>" to stdout.
+Once listening, prints the line "N2EditorHost ready port=<port>" to stdout (with --tls, then
+" tls=1 fingerprint=<64 hex digits>").
 With --create, prints "N2EditorHost created projectId=<uuid> startupScene=<res path>" instead.
 )";
     }
@@ -328,9 +340,14 @@ With --create, prints "N2EditorHost created projectId=<uuid> startupScene=<res p
         return std::move(*value);
     }
 
-    std::string FormatReadyLine(const int port)
+    std::string FormatReadyLine(const int port, const std::string_view tlsFingerprint)
     {
-        return std::format("{} port={}", ReadyLinePrefix, port);
+        std::string line = std::format("{} port={}", ReadyLinePrefix, port);
+        if (!tlsFingerprint.empty())
+        {
+            line += std::format(" tls=1 fingerprint={}", tlsFingerprint);
+        }
+        return line;
     }
 
     std::string FormatCreatedLine(const Math::UUID &projectId, const std::string_view startupScene)

@@ -26,6 +26,7 @@
 #include "engine/sceneManagement/SceneManager.hpp"
 
 #include "editor-server/EditorServer.hpp"
+#include "editor-server/EditorTls.hpp"
 
 namespace N2Engine::Editor
 {
@@ -141,6 +142,16 @@ namespace N2Engine::Editor
             accessToken = std::move(*token);
         }
 
+        // Before the engine starts, like the token: a host asked for TLS that can't serve it must not start. This is the
+        // refusal of a build without N2ENGINE_EDITOR_TLS too, so a launcher never gets a plaintext host it asked to be
+        // encrypted.
+        if (options.tls && !EditorTlsServer::IsAvailable())
+        {
+            std::println(stderr, "N2EditorHost --tls: this build has no TLS support (configure it with "
+                                 "-DN2ENGINE_EDITOR_TLS=ON)");
+            return 1;
+        }
+
         // The project folder must exist (ResourceLoader::Initialize would otherwise create it, for .import/) and hold
         // a valid project.n2proj of this engine's major version. Checked before the engine starts, so a launcher
         // pointed at the wrong folder gets one line on stderr and exit code 1.
@@ -193,6 +204,32 @@ namespace N2Engine::Editor
             // startup line is kept for a client that connects later (PollEvents from 0). Not broadcastUnbroadcastLogs:
             // a Debug build's console subscribes during Init and would take that backlog.
             EditorServer server;
+
+            // --tls: the certificate and key come from (or are made in) the user's data folder, never the project's.
+            // An error ends the host here, before the engine starts, with one line on stderr and exit code 1.
+            if (options.tls)
+            {
+                const std::filesystem::path tlsDirectory = EditorTlsServer::DefaultDirectory();
+                std::error_code tlsError;
+                if (!tlsDirectory.empty() && !projectDir.empty())
+                {
+                    // Belt and braces: the user's data folder is not meant to be inside a project, but a HOME or APPDATA
+                    // that points into one must not put the private key where a commit could pick it up
+                    const std::filesystem::path resolved = std::filesystem::weakly_canonical(tlsDirectory, tlsError);
+                    const std::filesystem::path relative = resolved.lexically_relative(projectDir);
+                    if (!tlsError && !relative.empty() && *relative.begin() != "..")
+                    {
+                        std::println(stderr, "N2EditorHost --tls: the certificate folder {} is inside the project",
+                                     tlsDirectory.string());
+                        return 1;
+                    }
+                }
+                if (const auto enabled = server.EnableTls(tlsDirectory); !enabled)
+                {
+                    std::println(stderr, "N2EditorHost --tls: {}", enabled.error());
+                    return 1;
+                }
+            }
 
             auto &app = Application::GetInstance();
             app.Init({
@@ -315,6 +352,11 @@ namespace N2Engine::Editor
                 // The variable's name only, never the token
                 Logger::Info("Clients must send Hello with the access token from " + options.tokenEnv);
             }
+            if (server.IsTlsEnabled())
+            {
+                // The fingerprint is public (it is in the ready line); the key and the token never reach a log
+                Logger::Info("Serving TLS; certificate SHA-256 " + server.TlsFingerprint());
+            }
             if (options.exitOnDisconnect)
             {
                 (void)server.SetStopOnDisconnect(true);
@@ -322,11 +364,26 @@ namespace N2Engine::Editor
             }
             if (options.bindAddress != EditorServer::DefaultBindAddress)
             {
-                Logger::Warn("Editor server bound to " + options.bindAddress +
-                             (accessToken.empty()
-                                  ? ": it has no authentication, so anything that can reach it can control this host"
-                                  : ": the access token isn't encrypted, so anything that can see the traffic can "
-                                    "take it"));
+                if (server.IsTlsEnabled())
+                {
+                    // Encrypted, but a client that doesn't check the certificate's fingerprint can be talked into
+                    // sending the token to someone else, and nothing here limits who may connect
+                    Logger::Warn("Editor server bound to " + options.bindAddress +
+                                 (accessToken.empty()
+                                      ? ": the traffic is encrypted (TLS) but it has no authentication, so anything that "
+                                        "can reach it can control this host"
+                                      : ": the traffic is encrypted (TLS), so a client that pins the certificate "
+                                        "fingerprint from the ready line keeps the access token private; one that "
+                                        "doesn't can be impersonated and give it away"));
+                }
+                else
+                {
+                    Logger::Warn("Editor server bound to " + options.bindAddress +
+                                 (accessToken.empty()
+                                      ? ": it has no authentication, so anything that can reach it can control this host"
+                                      : ": the access token isn't encrypted, so anything that can see the traffic can "
+                                        "take it"));
+                }
             }
             const bool serverStarted = server.Start(options.port, options.bindAddress);
             if (!serverStarted)
@@ -339,7 +396,7 @@ namespace N2Engine::Editor
                 // Straight to C stdout, as the Logger's console lines are (std::cout is redirected into the Logger,
                 // which would prefix a level), and flushed, since a piped stdout is fully buffered. The network
                 // thread posts its log lines to this thread, so no log line is written in the middle of this one.
-                std::println(stdout, "{}", FormatReadyLine(server.GetPort()));
+                std::println(stdout, "{}", FormatReadyLine(server.GetPort(), server.TlsFingerprint()));
                 std::fflush(stdout);
             }
 

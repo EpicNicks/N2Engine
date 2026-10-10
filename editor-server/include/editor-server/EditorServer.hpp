@@ -40,6 +40,9 @@ namespace N2Engine
 
 namespace N2Engine::Editor
 {
+    class EditorTlsServer;
+    class EditorTlsSession;
+
     /// The open scene, as OpenScene, NewScene, SaveSceneToFile and GetOpenScene report it (SceneInfo)
     struct OpenSceneInfo
     {
@@ -139,6 +142,20 @@ namespace N2Engine::Editor
         /// False, changing nothing, while the server is running.
         bool SetAccessToken(std::string token);
         [[nodiscard]] bool RequiresAccessToken() const { return !_accessToken.empty(); }
+
+        /**
+         * Before Start (the network thread uses it): serves TLS 1.2 or newer on the editor port instead of plaintext
+         * (--tls). Loads the self-signed certificate and key in `directory`, making them there on first use (see
+         * EditorTlsServer::Load). A TLS handshake runs right after each accept and must finish inside the Hello
+         * timeout, whether or not there is an access token; a connection whose handshake fails or stalls is closed and
+         * the server keeps accepting. The Hello and access-token rules and the pre-Hello payload cap are unchanged, and
+         * apply over TLS. An error (changing nothing) when TLS isn't built in (N2ENGINE_EDITOR_TLS), while running, or
+         * when the identity can't be loaded.
+         */
+        [[nodiscard]] std::expected<void, std::string> EnableTls(const std::filesystem::path &directory);
+        [[nodiscard]] bool IsTlsEnabled() const { return _tlsServer != nullptr; }
+        /// The certificate's SHA-256 as 64 lowercase hex digits (what a client pins); empty without TLS
+        [[nodiscard]] std::string TlsFingerprint() const;
 
         /// The engine version Hello reports (CMake's project version)
         [[nodiscard]] static std::string_view EngineVersion();
@@ -450,7 +467,9 @@ namespace N2Engine::Editor
         void ServerLoop(int listenSocket);
         /// Serves one connection until it closes. sessionOpened is set (and stays set) once the connection has a
         /// session: at once without an access token, at its first successful Hello with one.
-        void HandleClient(int clientSocket, bool &sessionOpened);
+        /// connectedAt: when the connection was accepted, which the Hello deadline counts from (the TLS handshake
+        /// comes first and shares it)
+        void HandleClient(int clientSocket, bool &sessionOpened, std::chrono::steady_clock::time_point connectedAt);
         void ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload);
         /// Network thread: the Logger isn't thread-safe, so log lines are posted to the main thread
         void PostLog(std::string message, bool isWarning = false);
@@ -601,6 +620,11 @@ namespace N2Engine::Editor
 
         // Network helpers
         bool Send(int socket, const void *data, size_t size);
+        /// Network thread: secures a just-accepted connection when TLS is on, by `deadline`; true when there is nothing
+        /// to do (no TLS) or the handshake succeeded. False (the reason logged) closes the connection.
+        bool BeginTls(int socket, std::chrono::steady_clock::time_point deadline);
+        /// Network thread: ends this connection's TLS session, if any, before its socket is closed
+        void EndTls();
         /// False on disconnect, error, a stopping server, or (when given) once the deadline has passed
         bool Receive(int socket, void *data, size_t size,
                      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
@@ -621,6 +645,11 @@ namespace N2Engine::Editor
         // Set before Start only, so both threads read it without a lock
         std::string _accessToken;
         std::chrono::milliseconds _helloTimeout{DefaultHelloTimeout};
+        // TLS: the identity is set before Start only. The session is the current connection's, made and used on the
+        // network thread only (one client at a time); it is declared after the identity, so it goes first.
+        std::unique_ptr<EditorTlsServer> _tlsServer;
+        std::unique_ptr<EditorTlsSession> _tlsSession;
+        int _tlsSessionSocket{-1};
         // Atomic: a client Shutdown clears _running on the network thread, so the setter's _running check alone
         // doesn't keep it from racing ServerLoop's read
         std::atomic<bool> _stopOnDisconnect{false};

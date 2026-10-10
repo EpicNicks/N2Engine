@@ -51,6 +51,7 @@
 #include "renderer/common/Renderer.hpp"
 
 #include "editor-server/EditorServer.hpp"
+#include "editor-server/EditorTls.hpp"
 #include "editor-server/Protocol.hpp"
 #include "editor-server/Commands.hpp"
 #include "editor-server/Serialization.hpp"
@@ -1587,6 +1588,26 @@ namespace N2Engine::Editor
         return true;
     }
 
+    std::expected<void, std::string> EditorServer::EnableTls(const std::filesystem::path &directory)
+    {
+        if (_running)
+        {
+            return std::unexpected("The editor server's TLS setting can't change while it is running");
+        }
+        auto loaded = EditorTlsServer::Load(directory);
+        if (!loaded)
+        {
+            return std::unexpected(loaded.error());
+        }
+        _tlsServer = std::move(*loaded);
+        return {};
+    }
+
+    std::string EditorServer::TlsFingerprint() const
+    {
+        return _tlsServer ? _tlsServer->Fingerprint() : std::string{};
+    }
+
     bool EditorServer::SetStopOnDisconnect(const bool stop)
     {
         if (_running)
@@ -1672,12 +1693,31 @@ namespace N2Engine::Editor
                 continue;
             }
 
+            // With TLS the connection is secured first, inside the Hello deadline (which counts from here). One that
+            // can't be is closed without ever counting as a client or a session, and the loop accepts the next.
+            const auto connectedAt = std::chrono::steady_clock::now();
+            bool secured = false;
+            try
+            {
+                secured = BeginTls(clientSocket, connectedAt + _helloTimeout);
+            }
+            catch (...)
+            {
+                PostLog("Dropping an editor connection after an unexpected error in its TLS handshake", true);
+            }
+            if (!secured)
+            {
+                EndTls();
+                CLOSE_SOCKET(clientSocket);
+                continue;
+            }
+
             PostLog("Editor connected");
             _clientConnected = true;
             bool sessionOpened = false;
             try
             {
-                HandleClient(clientSocket, sessionOpened);
+                HandleClient(clientSocket, sessionOpened, connectedAt);
             }
             catch (...)
             {
@@ -1685,6 +1725,7 @@ namespace N2Engine::Editor
                 PostLog("Dropping the editor connection after an unexpected error", true);
             }
 
+            EndTls();
             CLOSE_SOCKET(clientSocket);
             _clientConnected = false;
             PostLog("Editor disconnected");
@@ -1708,7 +1749,59 @@ namespace N2Engine::Editor
         }
     }
 
-    void EditorServer::HandleClient(int clientSocket, bool &sessionOpened)
+    bool EditorServer::BeginTls(const int socket, const std::chrono::steady_clock::time_point deadline)
+    {
+        if (!_tlsServer)
+        {
+            return true;
+        }
+        _tlsSession = _tlsServer->NewSession(socket);
+        if (!_tlsSession)
+        {
+            PostLog("Closing an editor connection: its TLS session couldn't be started", true);
+            return false;
+        }
+        _tlsSessionSocket = socket;
+
+        // Non-blocking steps, waiting on the socket between them (as every read and write here does), so a client that
+        // stalls costs this thread no more than the deadline and Stop() is still noticed
+        for (;;)
+        {
+            const TlsStep step = _tlsSession->Handshake();
+            if (step == TlsStep::Done)
+            {
+                return true;
+            }
+            if (step == TlsStep::Failed)
+            {
+                PostLog("Closing an editor connection: its TLS handshake failed: " + _tlsSession->LastError(), true);
+                return false;
+            }
+            if (!WaitUntilReady(socket, step == TlsStep::WantWrite, deadline))
+            {
+                if (_running)
+                {
+                    PostLog(std::format("Closing an editor connection: its TLS handshake didn't finish within {} ms",
+                                        _helloTimeout.count()),
+                            true);
+                }
+                return false;
+            }
+        }
+    }
+
+    void EditorServer::EndTls()
+    {
+        if (_tlsSession)
+        {
+            _tlsSession->Close();
+        }
+        _tlsSession.reset();
+        _tlsSessionSocket = NoSocket;
+    }
+
+    void EditorServer::HandleClient(int clientSocket, bool &sessionOpened,
+                                    const std::chrono::steady_clock::time_point connectedAt)
     {
         // This connection's session: whether its last Hello succeeded. A new connection starts without one, so a
         // client that reconnects must send Hello again.
@@ -1718,7 +1811,7 @@ namespace N2Engine::Editor
         const bool gated = !_accessToken.empty();
         // Without a token every connection is a session (for SetStopOnDisconnect); with one, from its first good Hello
         sessionOpened = !gated;
-        const auto helloDeadline = std::chrono::steady_clock::now() + _helloTimeout;
+        const auto helloDeadline = connectedAt + _helloTimeout;
         const auto deadline = [&]() -> std::optional<std::chrono::steady_clock::time_point>
         {
             if (gated && !helloAccepted)
@@ -6021,6 +6114,27 @@ namespace N2Engine::Editor
         size_t sent = 0;
         auto *bytes = static_cast<const char*>(data);
 
+        if (_tlsSession && socket == _tlsSessionSocket)
+        {
+            while (sent < size)
+            {
+                size_t count = 0;
+                switch (_tlsSession->Write(bytes + sent, size - sent, count))
+                {
+                case TlsStep::Done:
+                    sent += count;
+                    break;
+                case TlsStep::WantWrite: // the same bytes are offered again, as the library asks
+                    if (!WaitUntilReady(socket, true)) return false;
+                    break;
+                case TlsStep::WantRead: // only a renegotiation needs this, and it isn't enabled
+                case TlsStep::Failed:
+                    return false;
+                }
+            }
+            return true;
+        }
+
         while (sent < size)
         {
             if (!WaitUntilReady(socket, true)) return false;
@@ -6036,6 +6150,31 @@ namespace N2Engine::Editor
     {
         size_t received = 0;
         auto *bytes = static_cast<char*>(data);
+
+        if (_tlsSession && socket == _tlsSessionSocket)
+        {
+            while (received < size)
+            {
+                // Returns at once for bytes the TLS library has already decrypted (see WaitUntilReady), and otherwise
+                // when the socket has more of a record
+                if (!WaitUntilReady(socket, false, deadline)) return false;
+                size_t count = 0;
+                switch (_tlsSession->Read(bytes + received, size - received, count))
+                {
+                case TlsStep::Done:
+                    received += count;
+                    break;
+                case TlsStep::WantRead: // a partial record: wait for the rest
+                    break;
+                case TlsStep::WantWrite:
+                    if (!WaitUntilReady(socket, true, deadline)) return false;
+                    break;
+                case TlsStep::Failed:
+                    return false;
+                }
+            }
+            return true;
+        }
 
         while (received < size)
         {
@@ -6055,6 +6194,11 @@ namespace N2Engine::Editor
         {
             if (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline)
                 return false;
+
+            // Bytes the TLS library has already taken off the socket and decrypted are invisible to select(): without
+            // this a frame that arrived in the same record as the one before it would wait for more traffic
+            if (!forWrite && _tlsSession && sock == _tlsSessionSocket && _tlsSession->HasBufferedInput())
+                return true;
 
             fd_set set;
             FD_ZERO(&set);
