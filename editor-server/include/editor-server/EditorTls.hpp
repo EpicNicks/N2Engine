@@ -67,6 +67,10 @@ namespace N2Engine::Editor
         static constexpr const char *CertificateFileName = "host-cert.pem";
         static constexpr const char *KeyFileName = "host-key.pem";
 
+        /// The TLS library's one-time setup (thread-safety callbacks, then PSA crypto); safe to call repeatedly. The
+        /// tests' in-process client calls it before touching the library. False when it fails or TLS isn't built in.
+        [[nodiscard]] static bool InitializeLibrary();
+
         /// Whether this build has TLS (the N2ENGINE_EDITOR_TLS CMake option)
         [[nodiscard]] static bool IsAvailable();
 

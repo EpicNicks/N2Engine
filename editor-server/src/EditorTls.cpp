@@ -5,7 +5,10 @@
 #include <cstring>
 #include <format>
 #include <fstream>
+#include <chrono>
 #include <iterator>
+#include <mutex>
+#include <thread>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -40,6 +43,7 @@
 #include <mbedtls/platform_util.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/ssl.h>
+#include <mbedtls/threading.h>
 #include <mbedtls/x509_crt.h>
 #include <psa/crypto.h>
 
@@ -185,10 +189,39 @@ namespace N2Engine::Editor
             return TlsStep::Failed;
         }
 
-        /// The library's one-time setup (PSA crypto, which TLS 1.3 needs); the result is kept
+        // Mbed TLS threading callbacks (MBEDTLS_THREADING_ALT, see mbedtls-config/): a std::mutex per library mutex
+        void MutexInit(mbedtls_threading_mutex_t *mutex)
+        {
+            mutex->impl = new std::mutex();
+        }
+
+        void MutexFree(mbedtls_threading_mutex_t *mutex)
+        {
+            delete static_cast<std::mutex *>(mutex->impl);
+            mutex->impl = nullptr;
+        }
+
+        int MutexLock(mbedtls_threading_mutex_t *mutex)
+        {
+            static_cast<std::mutex *>(mutex->impl)->lock();
+            return 0;
+        }
+
+        int MutexUnlock(mbedtls_threading_mutex_t *mutex)
+        {
+            static_cast<std::mutex *>(mutex->impl)->unlock();
+            return 0;
+        }
+
+        /// The library's one-time setup: threading (enabled because the tests run a client and the server's network
+        /// thread in one process, and PSA's global key slots need it), then PSA crypto, which TLS 1.3 needs
         bool InitializeCrypto()
         {
-            static const bool ok = psa_crypto_init() == PSA_SUCCESS;
+            static const bool ok = []
+            {
+                mbedtls_threading_set_alt(MutexInit, MutexFree, MutexLock, MutexUnlock);
+                return psa_crypto_init() == PSA_SUCCESS;
+            }();
             return ok;
         }
 
@@ -220,13 +253,21 @@ namespace N2Engine::Editor
             return text;
         }
 
-        /// Writes `text` to a temporary file beside `path` and renames it over: a reader never sees half a file. On
-        /// POSIX the file is made owner-only before anything is written to it (on Windows it inherits the user's
-        /// profile folder, which only the user and administrators can read).
-        std::expected<void, std::string> WriteFile(const fs::path &path, const std::string_view text)
+        /// Publishes `text` as `path` only if `path` doesn't exist yet (true), or reports that it does (false), so the
+        /// loser of a race between two hosts never replaces the winner's file. The text goes to a uniquely named
+        /// temporary file first and is hard-linked into place (atomic, fails when the name is taken), so a reader never
+        /// sees half a file. On POSIX the file is made owner-only before anything is written to it (on Windows it
+        /// inherits the user's profile folder, which only the user and administrators can read).
+        std::expected<bool, std::string> WriteNewFile(const fs::path &path, const std::string_view text,
+                                                      mbedtls_ctr_drbg_context &random)
         {
+            unsigned char suffix[8];
+            if (mbedtls_ctr_drbg_random(&random, suffix, sizeof(suffix)) != 0)
+            {
+                return std::unexpected("Couldn't pick a temporary name for " + path.string());
+            }
             fs::path temporary = path;
-            temporary += ".tmp";
+            temporary += ".tmp-" + ToHex(suffix, sizeof(suffix));
             {
                 std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
                 if (!file)
@@ -242,17 +283,26 @@ namespace N2Engine::Editor
                 file.flush();
                 if (!file)
                 {
+                    file.close();
+                    std::error_code ignored;
+                    fs::remove(temporary, ignored);
                     return std::unexpected("Can't write " + path.string());
                 }
             }
             std::error_code error;
-            fs::rename(temporary, path, error);
-            if (error)
+            fs::create_hard_link(temporary, path, error);
+            const bool taken = error && fs::exists(path, error);
+            std::error_code ignored;
+            fs::remove(temporary, ignored);
+            if (taken)
             {
-                fs::remove(temporary, error);
+                return false;
+            }
+            if (!fs::exists(path, ignored))
+            {
                 return std::unexpected("Can't write " + path.string());
             }
-            return {};
+            return true;
         }
     }
 
@@ -383,6 +433,11 @@ namespace N2Engine::Editor
         }
     }
 
+    bool EditorTlsServer::InitializeLibrary()
+    {
+        return InitializeCrypto();
+    }
+
     bool EditorTlsServer::IsAvailable()
     {
         return true;
@@ -456,17 +511,29 @@ namespace N2Engine::Editor
 #ifndef _WIN32
             fs::permissions(directory, fs::perms::owner_all, fs::perm_options::replace, error);
 #endif
-            // The key first, and only the key is secret
-            auto written = WriteFile(keyPath, generated->keyPem);
+            // The key first, and only the key is secret. Neither file is ever replaced: when another host got there
+            // first it wins, and this one waits for the winner's certificate and uses that identity instead.
+            auto written = WriteNewFile(keyPath, generated->keyPem, impl->random);
             mbedtls_platform_zeroize(generated->keyPem.data(), generated->keyPem.size());
             if (!written)
             {
                 return std::unexpected(written.error());
             }
-            written = WriteFile(certificatePath, generated->certificatePem);
-            if (!written)
+            if (*written)
             {
-                return std::unexpected(written.error());
+                written = WriteNewFile(certificatePath, generated->certificatePem, impl->random);
+                if (!written)
+                {
+                    return std::unexpected(written.error());
+                }
+            }
+            else
+            {
+                const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                while (!fs::exists(certificatePath, error) && std::chrono::steady_clock::now() < end)
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
             }
         }
 
@@ -632,6 +699,11 @@ namespace N2Engine::Editor
     {
         std::string error = "this build has no TLS support";
     };
+
+    bool EditorTlsServer::InitializeLibrary()
+    {
+        return false;
+    }
 
     bool EditorTlsServer::IsAvailable()
     {

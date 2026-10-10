@@ -52,8 +52,12 @@ add_library(N2EditorServer STATIC
 if(N2ENGINE_EDITOR_TLS)
     target_include_directories(N2EditorServer PRIVATE
         ${CMAKE_SOURCE_DIR}/external/mbedtls/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/mbedtls-config
     )
-    target_compile_definitions(N2EditorServer PRIVATE N2ENGINE_EDITOR_TLS=1)
+    # Threading on (std::mutex callbacks, see mbedtls-config/): the library stays unmodified, the extra config is
+    # added with its user-config hook. The tests, which include the same headers, get the same definitions.
+    target_compile_definitions(N2EditorServer PRIVATE N2ENGINE_EDITOR_TLS=1
+        MBEDTLS_USER_CONFIG_FILE="n2_mbedtls_user_config.h")
     # Winsock for the sockets (already linked below) and BCrypt, which Mbed TLS takes its entropy from on Windows
     target_link_libraries(N2EditorServer PRIVATE $<$<PLATFORM_ID:Windows>:bcrypt>)
     message(STATUS "Editor host: TLS enabled (--tls; Mbed TLS, vendored)")

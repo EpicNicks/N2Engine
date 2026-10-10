@@ -88,7 +88,8 @@ namespace
 
     void EnsureCrypto()
     {
-        static const bool ok = psa_crypto_init() == PSA_SUCCESS;
+        // Same setup as the server (threading callbacks first): the client and the server thread share PSA's key slots
+        static const bool ok = EditorTlsServer::InitializeLibrary();
         ASSERT_TRUE(ok);
     }
 
