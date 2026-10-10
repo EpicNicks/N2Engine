@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <renderer/common/IMaterial.hpp>
 #include <renderer/common/IMesh.hpp>
@@ -76,6 +77,38 @@ namespace N2Engine::Rendering::TextDrawing
                                                 int atlasWidth, int atlasHeight);
 
     /**
+     * One effect pass in the units the text shader uses (a Text::TextPass, or the legacy shadow or outline
+     * as one): the shape's colour, its edge as a distance below 0.5 (the atlas value; 0 = the glyph edge),
+     * the edge ramp's half width in the same units, and the displacement in atlas uv (y-down).
+     */
+    struct PassUniforms
+    {
+        Common::Color color{0.0f, 0.0f, 0.0f, 0.0f};
+        float width = 0.0f;
+        float softness = 0.0f;
+        float offsetU = 0.0f;
+        float offsetV = 0.0f;
+    };
+
+    /// The passes of a Text::TextEffects, resolved for one atlas: the effect passes back to front, and the
+    /// face's own edge softness (the fill pass is always last)
+    struct ResolvedPasses
+    {
+        std::vector<PassUniforms> effectPasses;
+        float faceSoftness = 0.0f;
+        /// Whether a setting was reduced to fit the atlas spread
+        bool clamped = false;
+    };
+
+    /**
+     * The full pass list for `effects`: the shadow (when on), the outline (when on and visible), then each
+     * visible entry of effects.passes in order, all clamped to the spread as ResolveEffects does. The same
+     * shapes ResolveEffects gives the single-draw path, so the two draw the same image.
+     */
+    [[nodiscard]] ResolvedPasses ResolvePasses(const Text::TextEffects &effects, const Text::AtlasSettings &settings,
+                                               int atlasWidth, int atlasHeight);
+
+    /**
      * A text block's layout, laid out again only when an input changes. The text is compared in place and
      * copied only when the layout changes, so an unchanged block costs a string compare per frame.
      */
@@ -145,7 +178,10 @@ namespace N2Engine::Rendering::TextDrawing
          * uAlbedo, the effects as its effect uniforms (ResolveEffects; set on every draw, so the shared
          * text program never keeps another material's values), and the given model matrix (row-major)
          * and state. Effects reduced to fit the font's spread log one warning per process, naming
-         * `componentName`. Creates or updates the mesh, material
+         * `componentName`. Without extra passes (Text::TextEffects::passes) that is one draw of the mesh;
+         * with them, one draw per effect pass in order (the material's colour alpha 0, so only the pass's
+         * shape draws, through the shadow uniforms) and then the face, so only the last draw writes depth on
+         * the software renderer. Creates or updates the mesh, material
          * and atlas share as needed: the mesh is updated in place (IRenderer::UpdateMesh), or recreated
          * where the backend can't.
          *
@@ -161,6 +197,11 @@ namespace N2Engine::Rendering::TextDrawing
     private:
         bool EnsureAtlasTexture(const std::shared_ptr<Text::Font> &font);
         bool EnsureMesh(const Text::TextLayout &layout, std::uint64_t layoutVersion);
+        /// The draws of a text with extra passes: each effect pass, then the face (see Draw)
+        bool DrawPasses(const Text::TextEffects &effects, const Text::AtlasSettings &settings,
+                        const Text::FontAtlas &atlas, const Common::Color &color, const float *modelMatrix,
+                        const Renderer::Common::RenderState &state, std::string_view componentName);
+        static void WarnClamped(std::string_view componentName, const Text::AtlasSettings &settings);
 
         Renderer::Common::IRenderer *_renderer = nullptr;
         std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed

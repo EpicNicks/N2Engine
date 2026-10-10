@@ -1043,6 +1043,23 @@ function TextRenderer:SetSoftness(softness) end
 ---@return number
 function TextRenderer:GetSoftness() end
 
+---An extra effect pass: the glyph shape drawn in one colour behind the face, in front of the shadow, the outline
+---and the passes added before it. The shape is the glyph grown outward by `width`, moved by the offset. With only
+---an offset it is a shadow, with a width an outline, with softness and no offset a glow. Not saved with the scene;
+---each pass is one more draw, so keep the list short. Limited to the font's SDF spread like the other effects.
+---@param offsetX number ems, + right
+---@param offsetY number ems, + up
+---@param color Color a colour with alpha 0 draws nothing
+---@param width number|nil ems outward from the glyph edge (default 0)
+---@param softness number|nil how far its edge fades, in ems (default 0; ignored by the software renderer)
+function TextRenderer:AddEffectPass(offsetX, offsetY, color, width, softness) end
+
+---Removes every extra pass; the shadow, outline and softness settings stay.
+function TextRenderer:ClearEffectPasses() end
+
+---@return integer
+function TextRenderer:GetEffectPassCount() end
+
 ---Where the block sits relative to the object's origin. Unknown names raise an error and change nothing.
 ---@param horizontal HorizontalAlign default "Left"
 ---@param vertical VerticalAlign default "Top"
@@ -1269,6 +1286,23 @@ function UIText:GetShadow() end
 function UIText:SetSoftness(softness) end
 ---@return number
 function UIText:GetSoftness() end
+
+---An extra effect pass: the glyph shape drawn in one colour behind the face, in front of the shadow, the outline
+---and the passes added before it. The shape is the glyph grown outward by `width`, moved by the offset. With only
+---an offset it is a shadow, with a width an outline, with softness and no offset a glow. Not saved with the scene;
+---each pass is one more draw, so keep the list short. Limited to the font's SDF spread like the other effects.
+---@param offsetX number ems, + right
+---@param offsetY number ems, + up
+---@param color Color a colour with alpha 0 draws nothing
+---@param width number|nil ems outward from the glyph edge (default 0)
+---@param softness number|nil how far its edge fades, in ems (default 0; ignored by the software renderer)
+function UIText:AddEffectPass(offsetX, offsetY, color, width, softness) end
+
+---Removes every extra pass; the shadow, outline and softness settings stay.
+function UIText:ClearEffectPasses() end
+
+---@return integer
+function UIText:GetEffectPassCount() end
 
 ---Where the block sits inside the rect: Left/Center/Right against its left edge, centre and right edge;
 ---Top/Middle/Bottom against its top, centre and bottom; Baseline puts the first baseline on the rect's

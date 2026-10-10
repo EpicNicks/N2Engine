@@ -111,6 +111,69 @@ namespace N2Engine::Rendering::TextDrawing
         return out;
     }
 
+    ResolvedPasses ResolvePasses(const Text::TextEffects &effects, const Text::AtlasSettings &settings,
+                                 const int atlasWidth, const int atlasHeight)
+    {
+        ResolvedPasses out;
+        const EffectUniforms legacy = ResolveEffects(effects, settings, atlasWidth, atlasHeight);
+        out.clamped = legacy.clamped;
+        out.faceSoftness = legacy.softness;
+
+        // Back to front: the shadow, which includes the outline's width, then the outline over it
+        if (legacy.shadowColor.a > 0.0f)
+        {
+            out.effectPasses.push_back(PassUniforms{legacy.shadowColor, legacy.outline, legacy.shadowSoftness,
+                                                    legacy.shadowOffsetU, legacy.shadowOffsetV});
+        }
+        if (legacy.outline > 0.0f && legacy.outlineColor.a > 0.0f)
+        {
+            out.effectPasses.push_back(PassUniforms{legacy.outlineColor, legacy.outline, legacy.softness, 0.0f, 0.0f});
+        }
+
+        const float budget = MaxEffectEms(settings);
+        if (!(budget > 0.0f) || atlasWidth <= 0 || atlasHeight <= 0)
+        {
+            return out;
+        }
+        const float valuePerEm = 0.5f * settings.basePx / static_cast<float>(settings.spreadPx);
+        const auto clampLength = [&out](const float value, const float limit)
+        {
+            const float length = std::isfinite(value) ? std::max(value, 0.0f) : 0.0f;
+            if (length > limit)
+            {
+                out.clamped = true;
+                return limit;
+            }
+            return length;
+        };
+
+        for (const Text::TextPass &pass : effects.passes)
+        {
+            if (!pass.IsVisible())
+            {
+                continue;
+            }
+            const float width = clampLength(pass.width, budget);
+            const float softHalf = clampLength(pass.softness * 0.5f, budget - width);
+            const float offsetLimit = std::max(budget - width - softHalf, 0.0f);
+            const auto clampOffset = [&](const float value)
+            {
+                if (!std::isfinite(value))
+                {
+                    return 0.0f;
+                }
+                const float magnitude = clampLength(std::abs(value), offsetLimit);
+                return value < 0.0f ? -magnitude : magnitude;
+            };
+            const float offsetX = clampOffset(pass.offset.x);
+            const float offsetY = clampOffset(pass.offset.y);
+            out.effectPasses.push_back(PassUniforms{pass.color, width * valuePerEm, softHalf * valuePerEm,
+                                                    offsetX * settings.basePx / static_cast<float>(atlasWidth),
+                                                    -offsetY * settings.basePx / static_cast<float>(atlasHeight)});
+        }
+        return out;
+    }
+
     Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout)
     {
         Renderer::Common::MeshData data;
@@ -257,6 +320,55 @@ namespace N2Engine::Rendering::TextDrawing
         return true;
     }
 
+    void DrawResources::WarnClamped(const std::string_view componentName, const Text::AtlasSettings &settings)
+    {
+        if (FirstWarningFor(std::string(componentName) + " effects"))
+        {
+            Logger::Warn(std::format(
+                "{}: text effects were reduced to fit the font's SDF spread. Outline + softness / 2, and each shadow "
+                "offset + outline + shadowSoftness / 2, can be at most {} em with this font (spreadPx {} at basePx {}); "
+                "a larger spreadPx in the font's .meta allows more.",
+                componentName, MaxEffectEms(settings), settings.spreadPx, settings.basePx));
+        }
+    }
+
+    bool DrawResources::DrawPasses(const Text::TextEffects &effects, const Text::AtlasSettings &settings,
+                                   const Text::FontAtlas &atlas, const Common::Color &color, const float *modelMatrix,
+                                   const Renderer::Common::RenderState &state, const std::string_view componentName)
+    {
+        const ResolvedPasses resolved = ResolvePasses(effects, settings, atlas.GetWidth(), atlas.GetHeight());
+        if (resolved.clamped)
+        {
+            WarnClamped(componentName, settings);
+        }
+
+        // An effect pass is the shadow of a face that isn't drawn: the colour's alpha 0 leaves only the
+        // shadow shape, whose edge is 0.5 - uOutline, so the outline's own colour stays off. On the software
+        // renderer such a draw neither writes depth nor passes a face's (the 1e-5 bias).
+        for (const PassUniforms &pass : resolved.effectPasses)
+        {
+            _material->SetColor("uAlbedo", 0.0f, 0.0f, 0.0f, 0.0f);
+            _material->SetFloat("uOutline", pass.width);
+            _material->SetColor("uOutlineColor", 0.0f, 0.0f, 0.0f, 0.0f);
+            _material->SetFloat("uSoftness", 0.0f);
+            _material->SetColor("uShadowColor", pass.color.r, pass.color.g, pass.color.b, pass.color.a);
+            _material->SetVec2("uShadowOffset", pass.offsetU, pass.offsetV);
+            _material->SetFloat("uShadowSoftness", pass.softness);
+            _renderer->DrawMesh(_mesh, modelMatrix, _material, state);
+        }
+
+        // The face last, with every effect off
+        _material->SetColor("uAlbedo", color.r, color.g, color.b, color.a);
+        _material->SetFloat("uOutline", 0.0f);
+        _material->SetColor("uOutlineColor", 0.0f, 0.0f, 0.0f, 0.0f);
+        _material->SetFloat("uSoftness", resolved.faceSoftness);
+        _material->SetColor("uShadowColor", 0.0f, 0.0f, 0.0f, 0.0f);
+        _material->SetVec2("uShadowOffset", 0.0f, 0.0f);
+        _material->SetFloat("uShadowSoftness", 0.0f);
+        _renderer->DrawMesh(_mesh, modelMatrix, _material, state);
+        return true;
+    }
+
     bool DrawResources::Draw(const std::shared_ptr<Text::Font> &font, const Text::TextLayout &layout,
                              const std::uint64_t layoutVersion, const float *modelMatrix,
                              const Common::Color &color, const Text::TextEffects &effects,
@@ -305,14 +417,14 @@ namespace N2Engine::Rendering::TextDrawing
         // The effects, set on every draw: materials share the text program, which keeps the last values set
         const Text::FontAtlas &atlas = font->GetSdfFont().GetAtlas();
         const Text::AtlasSettings &atlasSettings = atlas.GetSettings();
-        const EffectUniforms fx = ResolveEffects(effects, atlasSettings, atlas.GetWidth(), atlas.GetHeight());
-        if (fx.clamped && FirstWarningFor(std::string(componentName) + " effects"))
+        if (effects.HasPasses())
         {
-            Logger::Warn(std::format(
-                "{}: text effects were reduced to fit the font's SDF spread. Outline + softness / 2, and each shadow "
-                "offset + outline + shadowSoftness / 2, can be at most {} em with this font (spreadPx {} at basePx {}); "
-                "a larger spreadPx in the font's .meta allows more.",
-                componentName, MaxEffectEms(atlasSettings), atlasSettings.spreadPx, atlasSettings.basePx));
+            return DrawPasses(effects, atlasSettings, atlas, color, modelMatrix, state, componentName);
+        }
+        const EffectUniforms fx = ResolveEffects(effects, atlasSettings, atlas.GetWidth(), atlas.GetHeight());
+        if (fx.clamped)
+        {
+            WarnClamped(componentName, atlasSettings);
         }
         _material->SetFloat("uOutline", fx.outline);
         _material->SetColor("uOutlineColor", fx.outlineColor.r, fx.outlineColor.g, fx.outlineColor.b,

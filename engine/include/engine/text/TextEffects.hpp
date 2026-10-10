@@ -1,11 +1,38 @@
 #pragma once
 
+#include <vector>
+
 #include <math/Vector2.hpp>
 
 #include "engine/common/Color.hpp"
 
 namespace N2Engine::Text
 {
+    /**
+     * One extra effect pass of TextEffects::passes: the glyph shape drawn again in one colour, behind the
+     * text's face. Lengths are in ems, like the rest of TextEffects.
+     *
+     * The shape is the face grown outward by `width` (the SDF threshold moved from the glyph edge to
+     * `width` ems outside it), moved by `offset`, with its edge fading over `softness`. A pass with only
+     * a colour is a copy of the face in that colour; with an offset it is a shadow, with a width an
+     * outline, with softness and no offset a glow.
+     *
+     * The pass is drawn only when its colour's alpha is above 0. Like the other effects it is reduced to
+     * fit the font's SDF spread (width + softness / 2 + |offset| <= 90% of it, per axis).
+     */
+    struct TextPass
+    {
+        Common::Color color{0.0f, 0.0f, 0.0f, 1.0f};
+        /// +x right, +y up
+        Math::Vector2 offset{0.0f, 0.0f};
+        /// How far outward from the glyph edge the shape reaches; 0 = the glyph's own outline. Not negative.
+        float width = 0.0f;
+        /// How far the shape's edge fades (0 = crisp)
+        float softness = 0.0f;
+
+        [[nodiscard]] bool IsVisible() const { return color.a > 0.0f; }
+    };
+
     /**
      * Outline, shadow and edge softness for SDF text (Rendering::TextRenderer and UI::UIText). Every length
      * is in ems (multiples of the font size), so an effect keeps its proportions at any size. The defaults
@@ -22,6 +49,12 @@ namespace N2Engine::Text
      *
      * The software renderer can't blend: it alpha-tests face, outline and shadow at their edges and
      * ignores both softness settings.
+     *
+     * Passes: the effects are an ordered list of passes over the glyph mesh, drawn back to front, the face
+     * last. The list is: the shadow (if on), the outline (if on), then `passes` in order, then the face.
+     * The shadow, outline and softness fields above are the first two entries and the face's softness, so
+     * a text that sets only them is drawn in one shader draw, as it always was; `passes` adds more. Each
+     * extra pass is one more draw of the same mesh, so keep the list short. See docs/text.html#passes.
      */
     struct TextEffects
     {
@@ -43,7 +76,22 @@ namespace N2Engine::Text
         /// How far the text's outer edges fade, in ems (0 = crisp, antialiased over one screen pixel)
         float softness = 0.0f;
 
+        /// Extra passes drawn after the shadow and outline and behind the face, first entry furthest back
+        std::vector<TextPass> passes;
+
         [[nodiscard]] bool HasOutline() const { return outlineWidth > 0.0f; }
         [[nodiscard]] bool HasShadow() const { return shadowColor.a > 0.0f; }
+        /// Whether any extra pass would draw
+        [[nodiscard]] bool HasPasses() const
+        {
+            for (const TextPass &pass : passes)
+            {
+                if (pass.IsVisible())
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
     };
 }
