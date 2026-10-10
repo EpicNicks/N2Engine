@@ -514,11 +514,39 @@ TEST(EditorTlsIdentityTest, OnlyOneOfTheTwoFilesIsAnErrorAndNothingIsReplaced)
     const std::string keyText = ReadFileText(keyFile);
 
     ASSERT_TRUE(fs::remove(certificateFile));
-    const auto lost = EditorTlsServer::Load(temp.Path());
+    const auto lost = EditorTlsServer::Load(temp.Path(), std::chrono::milliseconds(100));
     ASSERT_FALSE(lost.has_value());
     EXPECT_NE(lost.error().find("only one"), std::string::npos) << lost.error();
     EXPECT_FALSE(fs::exists(certificateFile)) << "a certificate is not quietly made beside a key";
     EXPECT_EQ(ReadFileText(keyFile), keyText) << "the key is never replaced";
+}
+
+TEST(EditorTlsIdentityTest, AKeyAloneIsWaitedOnAndUsedWhenTheCertificateAppears)
+{
+    TempDirectory temp;
+    {
+        auto made = EditorTlsServer::Load(temp.Path());
+        ASSERT_TRUE(made.has_value()) << made.error();
+    }
+    const fs::path certificateFile = temp.Path() / EditorTlsServer::CertificateFileName;
+    const fs::path keyFile = temp.Path() / EditorTlsServer::KeyFileName;
+    const std::string certificateText = ReadFileText(certificateFile);
+    const std::string keyText = ReadFileText(keyFile);
+    ASSERT_TRUE(fs::remove(certificateFile));
+
+    // Another host has published the key and is about to publish the certificate
+    std::thread publisher(
+        [&]
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            std::ofstream out(certificateFile, std::ios::binary);
+            out << certificateText;
+        });
+    const auto loaded = EditorTlsServer::Load(temp.Path(), std::chrono::seconds(10));
+    publisher.join();
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    EXPECT_EQ(ReadFileText(certificateFile), certificateText);
+    EXPECT_EQ(ReadFileText(keyFile), keyText) << "neither file is replaced";
 }
 
 TEST(EditorTlsIdentityTest, FilesThatAreNotACertificateAndKeyAreRefusedAndKept)

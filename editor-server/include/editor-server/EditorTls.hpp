@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <expected>
 #include <filesystem>
@@ -83,10 +84,13 @@ namespace N2Engine::Editor
          * Loads the certificate and key from `directory`, or makes and saves them when the directory has neither
          * (first use). An error when TLS isn't built in, when only one of the two files exists or either is invalid (a
          * key is never silently replaced: delete both to start over), or when a file can't be written. On POSIX the
-         * directory and key file are created owner-only.
+         * directory and key file are created owner-only. A key without its certificate is taken as another host
+         * still making the identity: Load waits up to `identityWait` for the certificate (as it does after losing the
+         * race to publish one) before reporting the half-made identity.
          */
         [[nodiscard]] static std::expected<std::unique_ptr<EditorTlsServer>, std::string>
-        Load(const std::filesystem::path &directory);
+        Load(const std::filesystem::path &directory,
+             std::chrono::milliseconds identityWait = std::chrono::seconds(10));
 
         ~EditorTlsServer();
         EditorTlsServer(const EditorTlsServer &) = delete;

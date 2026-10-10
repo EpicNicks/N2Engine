@@ -466,7 +466,8 @@ namespace N2Engine::Editor
         return _impl->fingerprint;
     }
 
-    std::expected<std::unique_ptr<EditorTlsServer>, std::string> EditorTlsServer::Load(const fs::path &directory)
+    std::expected<std::unique_ptr<EditorTlsServer>, std::string> EditorTlsServer::Load(const fs::path &directory,
+        std::chrono::milliseconds identityWait)
     {
         if (directory.empty())
         {
@@ -487,8 +488,18 @@ namespace N2Engine::Editor
         const fs::path certificatePath = directory / CertificateFileName;
         const fs::path keyPath = directory / KeyFileName;
         std::error_code error;
-        const bool hasCertificate = fs::exists(certificatePath, error);
+        bool hasCertificate = fs::exists(certificatePath, error);
         const bool hasKey = fs::exists(keyPath, error);
+        if (hasKey && !hasCertificate)
+        {
+            // Another host publishes the key first and the certificate a moment later, so a key alone may be creation
+            // in progress: wait for the certificate before treating it as a half-made identity
+            const auto end = std::chrono::steady_clock::now() + identityWait;
+            while (!(hasCertificate = fs::exists(certificatePath, error)) && std::chrono::steady_clock::now() < end)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        }
         if (hasCertificate != hasKey)
         {
             // Replacing one silently would change what clients have pinned, or leave a key that matches nothing
@@ -529,7 +540,7 @@ namespace N2Engine::Editor
             }
             else
             {
-                const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                const auto end = std::chrono::steady_clock::now() + identityWait;
                 while (!fs::exists(certificatePath, error) && std::chrono::steady_clock::now() < end)
                 {
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -715,7 +726,7 @@ namespace N2Engine::Editor
         return {};
     }
 
-    std::expected<std::unique_ptr<EditorTlsServer>, std::string> EditorTlsServer::Load(const std::filesystem::path &)
+    std::expected<std::unique_ptr<EditorTlsServer>, std::string> EditorTlsServer::Load(const std::filesystem::path &, std::chrono::milliseconds)
     {
         return std::unexpected("this build has no TLS support (configure with -DN2ENGINE_EDITOR_TLS=ON)");
     }
