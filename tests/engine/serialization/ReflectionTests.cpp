@@ -990,7 +990,7 @@ TEST(ReflectionRegistryTest, AComponentMadeForAnotherObjectIsNotAdded)
 TEST(ReflectionTest, TheTextEffectPassesReportTheTextPassListTypeName)
 {
     const auto go = GameObject::Create("Texts");
-    auto *renderer = go->AddComponent<TextRenderer>();
+    auto *renderer = go->AddComponent<Rendering::TextRenderer>();
     auto *label = go->AddComponent<N2Engine::UI::UIText>();
     ASSERT_NE(renderer, nullptr);
     ASSERT_NE(label, nullptr);
