@@ -119,21 +119,42 @@ namespace N2Engine::Rendering::TextDrawing
         out.clamped = legacy.clamped;
         out.faceSoftness = legacy.softness;
 
+        // The entries with their order, added settings first so that among equal orders they stay behind the
+        // extra passes added after them
+        struct Entry
+        {
+            int order;
+            PassUniforms pass;
+        };
+        std::vector<Entry> entries;
         // Back to front: the shadow, which includes the outline's width, then the outline over it
         if (legacy.shadowColor.a > 0.0f)
         {
-            out.effectPasses.push_back(PassUniforms{legacy.shadowColor, legacy.outline, legacy.shadowSoftness,
-                                                    legacy.shadowOffsetU, legacy.shadowOffsetV});
+            entries.push_back({Text::kShadowOrder, PassUniforms{legacy.shadowColor, legacy.outline,
+                                                                legacy.shadowSoftness, legacy.shadowOffsetU,
+                                                                legacy.shadowOffsetV}});
         }
         if (legacy.outline > 0.0f && legacy.outlineColor.a > 0.0f)
         {
-            out.effectPasses.push_back(PassUniforms{legacy.outlineColor, legacy.outline, legacy.softness, 0.0f, 0.0f});
+            entries.push_back({Text::kOutlineOrder,
+                               PassUniforms{legacy.outlineColor, legacy.outline, legacy.softness, 0.0f, 0.0f}});
         }
+
+        const auto finish = [&]()
+        {
+            std::ranges::stable_sort(entries, [](const Entry &a, const Entry &b) { return a.order < b.order; });
+            out.effectPasses.reserve(entries.size());
+            for (const Entry &entry : entries)
+            {
+                out.effectPasses.push_back(entry.pass);
+            }
+            return out;
+        };
 
         const float budget = MaxEffectEms(settings);
         if (!(budget > 0.0f) || atlasWidth <= 0 || atlasHeight <= 0)
         {
-            return out;
+            return finish();
         }
         const float valuePerEm = 0.5f * settings.basePx / static_cast<float>(settings.spreadPx);
         const auto clampLength = [&out](const float value, const float limit)
@@ -167,11 +188,18 @@ namespace N2Engine::Rendering::TextDrawing
             };
             const float offsetX = clampOffset(pass.offset.x);
             const float offsetY = clampOffset(pass.offset.y);
-            out.effectPasses.push_back(PassUniforms{pass.color, width * valuePerEm, softHalf * valuePerEm,
-                                                    offsetX * settings.basePx / static_cast<float>(atlasWidth),
-                                                    -offsetY * settings.basePx / static_cast<float>(atlasHeight)});
+            // Nothing draws in front of the face, so a higher order counts as the highest there is
+            int order = pass.order;
+            if (order > Text::kMaxPassOrder)
+            {
+                order = Text::kMaxPassOrder;
+                out.orderClamped = true;
+            }
+            entries.push_back({order, PassUniforms{pass.color, width * valuePerEm, softHalf * valuePerEm,
+                                                   offsetX * settings.basePx / static_cast<float>(atlasWidth),
+                                                   -offsetY * settings.basePx / static_cast<float>(atlasHeight)}});
         }
-        return out;
+        return finish();
     }
 
     Renderer::Common::MeshData BuildMesh(const Text::TextLayout &layout)
@@ -325,10 +353,22 @@ namespace N2Engine::Rendering::TextDrawing
         if (FirstWarningFor(std::string(componentName) + " effects"))
         {
             Logger::Warn(std::format(
-                "{}: text effects were reduced to fit the font's SDF spread. Outline + softness / 2, and each shadow "
-                "offset + outline + shadowSoftness / 2, can be at most {} em with this font (spreadPx {} at basePx {}); "
+                "{}: text effects were reduced to fit the font's SDF spread. Outline + softness / 2, each shadow "
+                "offset + outline + shadowSoftness / 2, and each extra effect pass's width + softness / 2 + each "
+                "offset (per axis), can be at most {} em with this font (spreadPx {} at basePx {}); "
                 "a larger spreadPx in the font's .meta allows more.",
                 componentName, MaxEffectEms(settings), settings.spreadPx, settings.basePx));
+        }
+    }
+
+    void DrawResources::WarnOrderClamped(const std::string_view componentName)
+    {
+        if (FirstWarningFor(std::string(componentName) + " pass order"))
+        {
+            Logger::Warn(std::format(
+                "{}: an extra text effect pass has an order above {}, which is drawn as {}: the face is drawn "
+                "after every pass, and passes in front of the face are not implemented.",
+                componentName, Text::kMaxPassOrder, Text::kMaxPassOrder));
         }
     }
 
@@ -340,6 +380,10 @@ namespace N2Engine::Rendering::TextDrawing
         if (resolved.clamped)
         {
             WarnClamped(componentName, settings);
+        }
+        if (resolved.orderClamped)
+        {
+            WarnOrderClamped(componentName);
         }
 
         // An effect pass is the shadow of a face that isn't drawn: the colour's alpha 0 leaves only the

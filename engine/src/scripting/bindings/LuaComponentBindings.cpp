@@ -565,10 +565,11 @@ namespace N2Engine::Scripting::Bindings
             "GetSoftness", [](const TextRendererRef &c) { return c.Pin()->GetEffects().softness; },
             // Extra effect passes (Text::TextPass), lengths in ems
             "AddEffectPass", [](const TextRendererRef &c, const float offsetX, const float offsetY, const Common::Color &color,
-                                const sol::optional<float> width, const sol::optional<float> softness)
+                                const sol::optional<float> width, const sol::optional<float> softness,
+                                const sol::optional<int> order)
             {
                 c.Pin()->AddEffectPass(Text::TextPass{color, Math::Vector2(offsetX, offsetY), width.value_or(0.0f),
-                                                      softness.value_or(0.0f)});
+                                                      softness.value_or(0.0f), order.value_or(0)});
             },
             "ClearEffectPasses", [](const TextRendererRef &c) { c.Pin()->ClearEffectPasses(); },
             "GetEffectPassCount", [](const TextRendererRef &c) { return static_cast<int>(c.Pin()->GetEffects().passes.size()); },

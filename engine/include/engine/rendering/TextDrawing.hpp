@@ -98,12 +98,18 @@ namespace N2Engine::Rendering::TextDrawing
         float faceSoftness = 0.0f;
         /// Whether a setting was reduced to fit the atlas spread
         bool clamped = false;
+        /// Whether a pass had an order above Text::kMaxPassOrder, which was counted as that
+        bool orderClamped = false;
     };
 
     /**
-     * The full pass list for `effects`: the shadow (when on), the outline (when on and visible), then each
-     * visible entry of effects.passes in order, all clamped to the spread as ResolveEffects does. The same
-     * shapes ResolveEffects gives the single-draw path, so the two draw the same image.
+     * The full pass list for `effects`, back to front: the shadow (when on, at Text::kShadowOrder), the
+     * outline (when on and visible, at Text::kOutlineOrder) and each visible entry of effects.passes (at its
+     * order, which counts as Text::kMaxPassOrder when higher), stable-sorted by order, all clamped to the
+     * spread as ResolveEffects does. The shapes are the ones ResolveEffects gives the single-draw path. The
+     * two draw the same image except where the effects of neighbouring glyphs overlap: the single draw
+     * draws glyph by glyph (a glyph's shadow, outline and face, then the next glyph's), a pass list draws
+     * each pass for every glyph before the next pass.
      */
     [[nodiscard]] ResolvedPasses ResolvePasses(const Text::TextEffects &effects, const Text::AtlasSettings &settings,
                                                int atlasWidth, int atlasHeight);
@@ -202,6 +208,7 @@ namespace N2Engine::Rendering::TextDrawing
                         const Text::FontAtlas &atlas, const Common::Color &color, const float *modelMatrix,
                         const Renderer::Common::RenderState &state, std::string_view componentName);
         static void WarnClamped(std::string_view componentName, const Text::AtlasSettings &settings);
+        static void WarnOrderClamped(std::string_view componentName);
 
         Renderer::Common::IRenderer *_renderer = nullptr;
         std::weak_ptr<const void> _rendererLifetime; // expired once _renderer is destroyed

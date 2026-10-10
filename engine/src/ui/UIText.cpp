@@ -25,6 +25,9 @@ namespace N2Engine::UI
         RegisterMember("shadowColor", _effects.shadowColor);
         RegisterMember("shadowSoftness", _effects.shadowSoftness);
         RegisterMember("softness", _effects.softness);
+        // The extra passes, a list of {color, offset, width, softness, order} (TextJson.hpp); a scene saved
+        // before they existed has none
+        RegisterMember("effectPasses", _effects.passes);
     }
 
     UIText::~UIText()

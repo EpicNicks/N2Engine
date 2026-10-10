@@ -3,18 +3,27 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <limits>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
+#include <math/Matrix.hpp>
 #include <math/Vector2.hpp>
 #include <math/Vector3.hpp>
+#include <renderer/common/RenderState.hpp>
 #include <renderer/software/SoftwareRenderer.hpp>
 #include <text/FontAtlas.hpp>
 #include <text/TextLayout.hpp>
 
 #include "engine/Camera.hpp"
 #include "engine/GameObjectScene.hpp"
+#include "engine/Logger.hpp"
 #include "engine/common/Color.hpp"
 #include "engine/rendering/TextDrawing.hpp"
 #include "engine/rendering/TextRenderer.hpp"
@@ -138,10 +147,35 @@ namespace
     };
 
     Text::TextPass Pass(const Common::Color &color, const float offsetX, const float offsetY, const float width = 0.0f,
-                        const float softness = 0.0f)
+                        const float softness = 0.0f, const int order = 0)
     {
-        return Text::TextPass{color, Math::Vector2(offsetX, offsetY), width, softness};
+        return Text::TextPass{color, Math::Vector2(offsetX, offsetY), width, softness, order};
     }
+
+    /// Counts the warnings whose text has `needle` in it while it is alive
+    class WarningCounter
+    {
+    public:
+        explicit WarningCounter(std::string needle) : _needle(std::move(needle))
+        {
+            _id = Logger::logEvent += [this](const std::string_view message, const Logger::LogLevel level)
+            {
+                if (level == Logger::LogLevel::Warn && message.find(_needle) != std::string_view::npos)
+                {
+                    ++count;
+                }
+            };
+        }
+        ~WarningCounter() { Logger::logEvent -= _id; }
+        WarningCounter(const WarningCounter &) = delete;
+        WarningCounter &operator=(const WarningCounter &) = delete;
+
+        int count = 0;
+
+    private:
+        std::string _needle;
+        std::size_t _id = 0;
+    };
 
     Text::TextEffects WithPasses(const std::vector<Text::TextPass> &passes)
     {
@@ -320,7 +354,9 @@ TEST(SoftwareTextPassesGoldenTest, TheShadowAndOutlineSettingsDrawAsTheirPassEqu
     ASSERT_GT(fromSettings.Count(Red), 0);
     ASSERT_GT(fromSettings.Count(Blue), 0);
 
-    // ...and the same list written out as passes (one draw each, then the face)
+    // ...and the same list written out as passes (one draw each, then the face). The two agree here because
+    // the glyphs are far enough apart that no glyph's effect reaches its neighbour's; where they do overlap
+    // the single draw goes glyph by glyph and the pass list pass by pass, so the images differ there.
     const Frame fromPasses = scene.Render(
         WithPasses({Pass(Common::Color::Red, 0.08f, -0.08f, 0.04f), Pass(Common::Color::Blue, 0.0f, 0.0f, 0.04f)}));
     EXPECT_EQ(fromPasses.rgba, fromSettings.rgba) << "mapping the settings onto the pass list changed the image";
@@ -485,6 +521,7 @@ TEST(TextPassesTest, LuaAddsAndClearsPasses)
 
             text_pass:AddEffectPass(0.02, -0.02, Color.new(1, 0, 0, 1), 0.03, 0.01)
             text_pass:AddEffectPass(0, 0, Color.new(0, 0, 1, 1))
+            text_pass:AddEffectPass(0.01, 0, Color.new(0, 1, 0, 1), 0.02, 0, -250)
             text_pass_count = text_pass:GetEffectPassCount()
 
             text_pass:SetOutline(0.02, Color.new(0, 1, 0, 1))
@@ -493,9 +530,396 @@ TEST(TextPassesTest, LuaAddsAndClearsPasses)
             local width = text_pass:GetOutline()
             text_pass_outline = width
         )");
-        EXPECT_EQ(lua["text_pass_count"].get<int>(), 2);
+        EXPECT_EQ(lua["text_pass_count"].get<int>(), 3);
         EXPECT_EQ(lua["text_pass_cleared"].get<int>(), 0);
         EXPECT_FLOAT_EQ(lua["text_pass_outline"].get<float>(), 0.02f) << "clearing the passes keeps the outline";
         run("text_pass_go = nil; text_pass = nil");
     }
+}
+
+// ============================================================================
+// Order
+// ============================================================================
+
+TEST(TextPassesTest, TheSettingsHaveFixedOrdersAndExtraPassesAreStableSortedByOrder)
+{
+    EXPECT_EQ(Text::kShadowOrder, -200);
+    EXPECT_EQ(Text::kOutlineOrder, -100);
+    EXPECT_EQ(Text::kMaxPassOrder, 0);
+    EXPECT_EQ(Text::TextPass{}.order, 0) << "the default order";
+
+    const Text::AtlasSettings settings;
+    Text::TextEffects effects;
+    effects.outlineWidth = 0.02f;
+    effects.outlineColor = Common::Color::Blue;
+    effects.shadowOffset = Math::Vector2(0.03f, -0.03f);
+    effects.shadowColor = Common::Color::Red;
+    // Colours tell the entries apart: green (-300), white (-150), yellow (-100, ties with the outline and
+    // was added later), cyan (0), magenta (0, added after cyan)
+    effects.passes = {Pass(Common::Color::Cyan, 0.0f, 0.0f, 0.01f, 0.0f, 0),
+                      Pass(Common::Color::Green, 0.0f, 0.0f, 0.01f, 0.0f, -300),
+                      Pass(Common::Color::White, 0.0f, 0.0f, 0.01f, 0.0f, -150),
+                      Pass(Common::Color::Yellow, 0.0f, 0.0f, 0.01f, 0.0f, -100),
+                      Pass(Common::Color::Magenta, 0.0f, 0.0f, 0.01f, 0.0f, 0)};
+
+    const ResolvedPasses resolved = ResolvePasses(effects, settings, 512, 256);
+    ASSERT_EQ(resolved.effectPasses.size(), 7u);
+    EXPECT_FALSE(resolved.orderClamped);
+    const std::vector<Common::Color> expected = {Common::Color::Green,   Common::Color::Red,     Common::Color::White,
+                                                 Common::Color::Blue,    Common::Color::Yellow,  Common::Color::Cyan,
+                                                 Common::Color::Magenta};
+    for (std::size_t i = 0; i < expected.size(); ++i)
+    {
+        const Common::Color &got = resolved.effectPasses[i].color;
+        EXPECT_TRUE(got.r == expected[i].r && got.g == expected[i].g && got.b == expected[i].b) << "entry " << i;
+    }
+}
+
+TEST(TextPassesTest, AnOrderAboveZeroCountsAsZero)
+{
+    const Text::AtlasSettings settings;
+    Text::TextEffects high;
+    high.outlineWidth = 0.02f;
+    high.outlineColor = Common::Color::Blue;
+    high.passes = {Pass(Common::Color::Red, 0.0f, 0.0f, 0.03f, 0.0f, 7), Pass(Common::Color::Green, 0.0f, 0.0f, 0.04f)};
+    const ResolvedPasses resolved = ResolvePasses(high, settings, 512, 256);
+    EXPECT_TRUE(resolved.orderClamped);
+
+    Text::TextEffects zero = high;
+    zero.passes[0].order = 0;
+    const ResolvedPasses same = ResolvePasses(zero, settings, 512, 256);
+    EXPECT_FALSE(same.orderClamped);
+    ASSERT_EQ(resolved.effectPasses.size(), same.effectPasses.size());
+    for (std::size_t i = 0; i < same.effectPasses.size(); ++i)
+    {
+        EXPECT_EQ(resolved.effectPasses[i].color.r, same.effectPasses[i].color.r) << i;
+        EXPECT_EQ(resolved.effectPasses[i].color.g, same.effectPasses[i].color.g) << i;
+        EXPECT_EQ(resolved.effectPasses[i].width, same.effectPasses[i].width) << i;
+    }
+
+    // A pass that doesn't draw doesn't count
+    Text::TextEffects hidden;
+    hidden.passes = {Pass(Common::Color{1.0f, 0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0.0f, 0.0f, 3)};
+    EXPECT_FALSE(ResolvePasses(hidden, settings, 512, 256).orderClamped);
+}
+
+TEST(TextPassesTest, TheOrderAndSpreadWarningsNameTheirCause)
+{
+    const auto font = Text::Font::GetDefault();
+    ASSERT_NE(font, nullptr);
+    const Text::TextLayout layout = font->Layout("Hi");
+    const auto model = Math::Matrix<float, 4, 4>::identity();
+
+    SoftwareRenderer renderer;
+    ASSERT_TRUE(renderer.Initialize(nullptr, 32, 32));
+    Rendering::TextDrawing::DrawResources resources;
+    resources.Bind(&renderer);
+    renderer.BeginFrame();
+
+    // Component names no other test draws with, so these are the first warnings for them in the process
+    constexpr std::string_view orderName = "TextPassOrderWarnTest";
+    constexpr std::string_view spreadName = "TextPassSpreadWarnTest";
+    WarningCounter orderWarnings{std::string(orderName)};
+    WarningCounter spreadWarnings{std::string(spreadName)};
+    WarningCounter namesPasses{"extra effect pass's width"};
+
+    const Text::TextEffects high = WithPasses({Pass(Common::Color::Red, 0.0f, 0.0f, 0.02f, 0.0f, 4)});
+    for (int i = 0; i < 3; ++i)
+    {
+        ASSERT_TRUE(resources.Draw(font, layout, 1, model.Data(), Common::Color::White, high,
+                                   Renderer::Common::RenderState::Transparent(), orderName));
+    }
+    EXPECT_EQ(orderWarnings.count, 1) << "one warning, however many draws";
+    EXPECT_EQ(spreadWarnings.count, 0);
+
+    // A text whose only clamped effect is an extra pass: the warning names the extra passes
+    const Text::TextEffects wide = WithPasses({Pass(Common::Color::Red, 3.0f, 0.0f, 3.0f)});
+    ASSERT_TRUE(resources.Draw(font, layout, 1, model.Data(), Common::Color::White, wide,
+                               Renderer::Common::RenderState::Transparent(), spreadName));
+    EXPECT_EQ(spreadWarnings.count, 1);
+    EXPECT_EQ(namesPasses.count, 1) << "the clamp warning doesn't mention extra passes";
+
+    renderer.EndFrame();
+    resources.Release(true);
+    renderer.Shutdown();
+}
+
+TEST(SoftwareTextPassesGoldenTest, APassBelowTheShadowSettingDrawsBehindIt)
+{
+    PassScene scene;
+    ASSERT_TRUE(scene.Ok());
+
+    Text::TextEffects shadowOnly;
+    shadowOnly.shadowOffset = Math::Vector2(0.04f, -0.04f);
+    shadowOnly.shadowColor = Common::Color::Blue;
+    const Frame shadowFrame = scene.Render(shadowOnly);
+    const Frame redFrame = scene.Render(WithPasses({Pass(Common::Color::Red, 0.0f, 0.0f, 0.05f)}));
+
+    const auto withRed = [&shadowOnly](const int order)
+    {
+        Text::TextEffects effects = shadowOnly;
+        effects.passes = {Pass(Common::Color::Red, 0.0f, 0.0f, 0.05f, 0.0f, order)};
+        return effects;
+    };
+    const Frame behind = scene.Render(withRed(-300));
+    const Frame inFront = scene.Render(withRed(0));
+    const Frame plain = scene.Render(Text::TextEffects{});
+    ExpectSameFace(plain, behind);
+    ExpectSameFace(plain, inFront);
+
+    // Where the shadow and the red pass both cover (the face doesn't): the one drawn later is on top
+    int overlap = 0;
+    int wrongBehind = 0;
+    int wrongFront = 0;
+    for (int y = 0; y < plain.height; ++y)
+    {
+        for (int x = 0; x < plain.width; ++x)
+        {
+            if (plain.At(x, y) == Face || shadowFrame.At(x, y) != Blue || redFrame.At(x, y) != Red)
+            {
+                continue;
+            }
+            ++overlap;
+            wrongBehind += behind.At(x, y) == Blue ? 0 : 1;
+            wrongFront += inFront.At(x, y) == Red ? 0 : 1;
+        }
+    }
+    EXPECT_GT(overlap, 0) << "the shapes never overlap, so the test shows nothing";
+    EXPECT_EQ(wrongBehind, 0) << "an order below the shadow's didn't draw behind it";
+    EXPECT_EQ(wrongFront, 0) << "the default order didn't draw in front of the shadow";
+}
+
+TEST(SoftwareTextPassesGoldenTest, APassBetweenTheShadowAndTheOutlineCoversOnlyTheShadow)
+{
+    PassScene scene;
+    ASSERT_TRUE(scene.Ok());
+
+    constexpr Rgb Green{0, 255, 0};
+    Text::TextEffects settings;
+    settings.shadowOffset = Math::Vector2(0.04f, -0.04f);
+    settings.shadowColor = Common::Color::Blue;
+    settings.outlineWidth = 0.03f;
+    settings.outlineColor = Common::Color::Green;
+    const Frame base = scene.Render(settings);
+    ASSERT_GT(base.Count(Blue), 0);
+    ASSERT_GT(base.Count(Green), 0);
+
+    Text::TextEffects mixed = settings;
+    mixed.passes = {Pass(Common::Color::Red, 0.0f, 0.0f, 0.06f, 0.0f, -150)};
+    const Frame frame = scene.Render(mixed);
+
+    // The outline is drawn after the red pass, so every outline pixel of the base image is still there;
+    // the red pass took over some of the shadow's
+    int outlineLost = 0;
+    int shadowCovered = 0;
+    for (int y = 0; y < base.height; ++y)
+    {
+        for (int x = 0; x < base.width; ++x)
+        {
+            outlineLost += (base.At(x, y) == Green && frame.At(x, y) != Green) ? 1 : 0;
+            shadowCovered += (base.At(x, y) == Blue && frame.At(x, y) == Red) ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(outlineLost, 0);
+    EXPECT_GT(shadowCovered, 0);
+}
+
+TEST(SoftwareTextPassesGoldenTest, AnOrderAboveZeroDrawsLikeOrderZero)
+{
+    PassScene scene;
+    ASSERT_TRUE(scene.Ok());
+
+    const Text::TextPass atZero = Pass(Common::Color::Red, 0.0f, 0.0f, 0.04f, 0.0f, 0);
+    Text::TextPass high = atZero;
+    high.order = 9;
+    const Frame zero = scene.Render(WithPasses({atZero}));
+    const Frame above = scene.Render(WithPasses({high}));
+    EXPECT_EQ(zero.rgba, above.rgba);
+    EXPECT_GT(above.Count(Red), 0);
+    EXPECT_GT(above.Count(Face), 0) << "the face is still drawn, and on top";
+}
+
+// ============================================================================
+// Saving
+// ============================================================================
+
+namespace
+{
+    std::vector<Text::TextPass> SomePasses()
+    {
+        return {Pass(Common::Color{0.25f, 0.5f, 0.75f, 1.0f}, 0.03f, -0.02f, 0.04f, 0.01f, -300),
+                Pass(Common::Color::Red, 0.0f, 0.0f, 0.02f, 0.0f, 0),
+                Pass(Common::Color{0.0f, 1.0f, 0.0f, 0.5f}, -0.01f, 0.01f, 0.0f, 0.05f, -150)};
+    }
+
+    void ExpectSamePasses(const std::vector<Text::TextPass> &actual, const std::vector<Text::TextPass> &expected)
+    {
+        ASSERT_EQ(actual.size(), expected.size());
+        for (std::size_t i = 0; i < expected.size(); ++i)
+        {
+            SCOPED_TRACE(i);
+            EXPECT_EQ(actual[i].color.r, expected[i].color.r);
+            EXPECT_EQ(actual[i].color.g, expected[i].color.g);
+            EXPECT_EQ(actual[i].color.b, expected[i].color.b);
+            EXPECT_EQ(actual[i].color.a, expected[i].color.a);
+            EXPECT_EQ(actual[i].offset.x, expected[i].offset.x);
+            EXPECT_EQ(actual[i].offset.y, expected[i].offset.y);
+            EXPECT_EQ(actual[i].width, expected[i].width);
+            EXPECT_EQ(actual[i].softness, expected[i].softness);
+            EXPECT_EQ(actual[i].order, expected[i].order);
+        }
+    }
+
+    /// A scene with a TextRenderer and a UIText that both have SomePasses, the first also a shadow setting
+    std::unique_ptr<Scene> SceneWithPasses(const std::string &name)
+    {
+        auto object = GameObject::Create("PassesSaved");
+        auto *text = object->AddComponent<Rendering::TextRenderer>();
+        text->SetText("Saved");
+        text->SetShadow(Math::Vector2(0.03f, -0.03f), Common::Color::Red);
+        for (const Text::TextPass &pass : SomePasses())
+        {
+            text->AddEffectPass(pass);
+        }
+        auto uiObject = GameObject::Create("PassesSavedUI");
+        auto *ui = uiObject->AddComponent<UI::UIText>();
+        for (const Text::TextPass &pass : SomePasses())
+        {
+            ui->AddEffectPass(pass);
+        }
+
+        const auto scene = Scene::Create(name);
+        scene->AddRootGameObject(object);
+        scene->AddRootGameObject(uiObject);
+        return scene;
+    }
+
+    void ExpectScenePasses(const std::unique_ptr<Scene> &scene)
+    {
+        ASSERT_NE(scene, nullptr);
+        const auto object = scene->FindGameObject("PassesSaved");
+        ASSERT_NE(object, nullptr);
+        const auto *text = object->GetComponent<Rendering::TextRenderer>();
+        ASSERT_NE(text, nullptr);
+        ExpectSamePasses(text->GetEffects().passes, SomePasses());
+        EXPECT_GT(text->GetEffects().shadowColor.a, 0.0f) << "the shadow setting is kept beside the passes";
+
+        const auto uiObject = scene->FindGameObject("PassesSavedUI");
+        ASSERT_NE(uiObject, nullptr);
+        const auto *ui = uiObject->GetComponent<UI::UIText>();
+        ASSERT_NE(ui, nullptr);
+        ExpectSamePasses(ui->GetEffects().passes, SomePasses());
+    }
+}
+
+TEST(TextPassesSaveTest, PassesSurviveASceneRoundTrip)
+{
+    const auto scene = SceneWithPasses("TextPasses_RoundTrip");
+    const nlohmann::json saved = scene->Serialize();
+    ExpectScenePasses(Scene::FromJSON(saved));
+
+    // One key per component, an array of objects with every field
+    const std::string dump = saved.dump();
+    EXPECT_NE(dump.find("\"_effectPasses\""), std::string::npos) << dump;
+    EXPECT_NE(dump.find("\"effectPasses\""), std::string::npos) << dump;
+    EXPECT_NE(dump.find("\"order\":-300"), std::string::npos) << dump;
+}
+
+TEST(TextPassesSaveTest, APlaySnapshotKeepsThePasses)
+{
+    // The play snapshot is the scene's Serialize text (EditorServer::WritePlaySnapshot), loaded again with
+    // Scene::FromJSON by the game that plays it
+    const auto scene = SceneWithPasses("TextPasses_Snapshot");
+    const std::string snapshotText = scene->Serialize().dump();
+    const nlohmann::json snapshot = nlohmann::json::parse(snapshotText);
+    ExpectScenePasses(Scene::FromJSON(snapshot));
+}
+
+TEST(TextPassesSaveTest, AComponentKeepsItsPassesWhenCopiedThroughItsJson)
+{
+    // Prefabs and duplicates are rebuilt from the object's JSON
+    auto object = GameObject::Create("PassesCopied");
+    auto *text = object->AddComponent<Rendering::TextRenderer>();
+    for (const Text::TextPass &pass : SomePasses())
+    {
+        text->AddEffectPass(pass);
+    }
+    const nlohmann::json json = text->Serialize();
+
+    auto copyObject = GameObject::Create("PassesCopy");
+    auto *copy = copyObject->AddComponent<Rendering::TextRenderer>();
+    copy->Deserialize(json);
+    ExpectSamePasses(copy->GetEffects().passes, SomePasses());
+
+    auto uiObject = GameObject::Create("PassesCopiedUI");
+    auto *ui = uiObject->AddComponent<UI::UIText>();
+    for (const Text::TextPass &pass : SomePasses())
+    {
+        ui->AddEffectPass(pass);
+    }
+    auto uiCopyObject = GameObject::Create("PassesCopyUI");
+    auto *uiCopy = uiCopyObject->AddComponent<UI::UIText>();
+    uiCopy->Deserialize(ui->Serialize());
+    ExpectSamePasses(uiCopy->GetEffects().passes, SomePasses());
+}
+
+TEST(TextPassesSaveTest, ASceneSavedWithoutPassesLoadsWithNone)
+{
+    const auto scene = SceneWithPasses("TextPasses_Old");
+    nlohmann::json old = scene->Serialize();
+    ASSERT_NE(old.dump().find("effectPasses"), std::string::npos);
+
+    // Remove the keys the way a scene saved before passes existed lacks them
+    const std::function<void(nlohmann::json &)> strip = [&strip](nlohmann::json &node)
+    {
+        if (node.is_object())
+        {
+            node.erase("_effectPasses");
+            node.erase("effectPasses");
+            for (auto &entry : node.items())
+            {
+                strip(entry.value());
+            }
+        }
+        else if (node.is_array())
+        {
+            for (auto &element : node)
+            {
+                strip(element);
+            }
+        }
+    };
+    strip(old);
+    EXPECT_EQ(old.dump().find("ffectPasses"), std::string::npos);
+
+    const auto loaded = Scene::FromJSON(old);
+    ASSERT_NE(loaded, nullptr);
+    const auto textObject = loaded->FindGameObject("PassesSaved");
+    ASSERT_NE(textObject, nullptr);
+    const auto *text = textObject->GetComponent<Rendering::TextRenderer>();
+    ASSERT_NE(text, nullptr);
+    EXPECT_TRUE(text->GetEffects().passes.empty());
+    EXPECT_GT(text->GetEffects().shadowColor.a, 0.0f) << "the other effect settings still load";
+    const auto uiObject = loaded->FindGameObject("PassesSavedUI");
+    ASSERT_NE(uiObject, nullptr);
+    const auto *ui = uiObject->GetComponent<UI::UIText>();
+    ASSERT_NE(ui, nullptr);
+    EXPECT_TRUE(ui->GetEffects().passes.empty());
+}
+
+TEST(TextPassesSaveTest, APassEntryMissingKeysLoadsDefaults)
+{
+    auto object = GameObject::Create("PassesPartial");
+    auto *text = object->AddComponent<Rendering::TextRenderer>();
+    nlohmann::json json = text->Serialize();
+    json["_effectPasses"] = nlohmann::json::array({nlohmann::json{{"width", 0.05f}}, nlohmann::json::object()});
+    text->Deserialize(json);
+
+    const std::vector<Text::TextPass> &passes = text->GetEffects().passes;
+    ASSERT_EQ(passes.size(), 2u);
+    EXPECT_EQ(passes[0].width, 0.05f);
+    EXPECT_EQ(passes[0].order, 0);
+    EXPECT_EQ(passes[0].offset.x, 0.0f);
+    EXPECT_EQ(passes[0].color.a, 1.0f) << "the default colour is opaque black, so the pass draws";
+    EXPECT_EQ(passes[1].width, 0.0f);
 }

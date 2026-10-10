@@ -1043,16 +1043,19 @@ function TextRenderer:SetSoftness(softness) end
 ---@return number
 function TextRenderer:GetSoftness() end
 
----An extra effect pass: the glyph shape drawn in one colour behind the face, in front of the shadow, the outline
----and the passes added before it. The shape is the glyph grown outward by `width`, moved by the offset. With only
----an offset it is a shadow, with a width an outline, with softness and no offset a glow. Not saved with the scene;
+---An extra effect pass: the glyph shape drawn in one colour behind the face, placed by its order (by default in
+---front of the shadow, the outline and the passes added before it). The shape is the glyph grown outward by `width`, moved by the offset. With only
+---an offset it is a shadow, with a width an outline, with softness and no offset a glow. Saved with the scene;
 ---each pass is one more draw, so keep the list short. Limited to the font's SDF spread like the other effects.
 ---@param offsetX number ems, + right
 ---@param offsetY number ems, + up
 ---@param color Color a colour with alpha 0 draws nothing
 ---@param width number|nil ems outward from the glyph edge (default 0)
 ---@param softness number|nil how far its edge fades, in ems (default 0; ignored by the software renderer)
-function TextRenderer:AddEffectPass(offsetX, offsetY, color, width, softness) end
+---@param order integer|nil where it sits in the back-to-front list (default 0; lower draws further back). The settings
+---shadow is at -200 and the settings outline at -100, so an order below -200 draws behind the shadow. The face is
+---drawn after every pass, so an order above 0 is not supported: it counts as 0, with one warning.
+function TextRenderer:AddEffectPass(offsetX, offsetY, color, width, softness, order) end
 
 ---Removes every extra pass; the shadow, outline and softness settings stay.
 function TextRenderer:ClearEffectPasses() end
@@ -1287,16 +1290,19 @@ function UIText:SetSoftness(softness) end
 ---@return number
 function UIText:GetSoftness() end
 
----An extra effect pass: the glyph shape drawn in one colour behind the face, in front of the shadow, the outline
----and the passes added before it. The shape is the glyph grown outward by `width`, moved by the offset. With only
----an offset it is a shadow, with a width an outline, with softness and no offset a glow. Not saved with the scene;
+---An extra effect pass: the glyph shape drawn in one colour behind the face, placed by its order (by default in
+---front of the shadow, the outline and the passes added before it). The shape is the glyph grown outward by `width`, moved by the offset. With only
+---an offset it is a shadow, with a width an outline, with softness and no offset a glow. Saved with the scene;
 ---each pass is one more draw, so keep the list short. Limited to the font's SDF spread like the other effects.
 ---@param offsetX number ems, + right
 ---@param offsetY number ems, + up
 ---@param color Color a colour with alpha 0 draws nothing
 ---@param width number|nil ems outward from the glyph edge (default 0)
 ---@param softness number|nil how far its edge fades, in ems (default 0; ignored by the software renderer)
-function UIText:AddEffectPass(offsetX, offsetY, color, width, softness) end
+---@param order integer|nil where it sits in the back-to-front list (default 0; lower draws further back). The settings
+---shadow is at -200 and the settings outline at -100, so an order below -200 draws behind the shadow. The face is
+---drawn after every pass, so an order above 0 is not supported: it counts as 0, with one warning.
+function UIText:AddEffectPass(offsetX, offsetY, color, width, softness, order) end
 
 ---Removes every extra pass; the shadow, outline and softness settings stay.
 function UIText:ClearEffectPasses() end

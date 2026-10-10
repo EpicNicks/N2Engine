@@ -19,6 +19,10 @@ namespace N2Engine::Text
      *
      * The pass is drawn only when its colour's alpha is above 0. Like the other effects it is reduced to
      * fit the font's SDF spread (width + softness / 2 + |offset| <= 90% of it, per axis).
+     *
+     * `order` places the pass in the back-to-front list (see TextEffects): lower draws further back, equal
+     * orders keep the order they were added in. The face is drawn after every pass, so an order above
+     * kMaxPassOrder (0) is not supported: it counts as 0, with one warning per component type.
      */
     struct TextPass
     {
@@ -29,9 +33,21 @@ namespace N2Engine::Text
         float width = 0.0f;
         /// How far the shape's edge fades (0 = crisp)
         float softness = 0.0f;
+        /// Where the pass sits in the list, back to front (stable by this): the settings shadow is at
+        /// kShadowOrder and the settings outline at kOutlineOrder, so a pass with a lower order draws behind
+        /// the shadow and the default 0 draws in front of both. Above kMaxPassOrder it counts as 0.
+        int order = 0;
 
         [[nodiscard]] bool IsVisible() const { return color.a > 0.0f; }
     };
+
+    /// The order of the TextEffects shadow setting in the pass list
+    inline constexpr int kShadowOrder = -200;
+    /// The order of the TextEffects outline setting in the pass list
+    inline constexpr int kOutlineOrder = -100;
+    /// The highest order a pass can have: every pass is drawn behind the face, which comes after order 0.
+    /// (Passes in front of the face are not implemented.)
+    inline constexpr int kMaxPassOrder = 0;
 
     /**
      * Outline, shadow and edge softness for SDF text (Rendering::TextRenderer and UI::UIText). Every length
@@ -51,10 +67,13 @@ namespace N2Engine::Text
      * ignores both softness settings.
      *
      * Passes: the effects are an ordered list of passes over the glyph mesh, drawn back to front, the face
-     * last. The list is: the shadow (if on), the outline (if on), then `passes` in order, then the face.
-     * The shadow, outline and softness fields above are the first two entries and the face's softness, so
-     * a text that sets only them is drawn in one shader draw, as it always was; `passes` adds more. Each
-     * extra pass is one more draw of the same mesh, so keep the list short. See docs/text.html#passes.
+     * last. The list is the shadow (if on, order kShadowOrder), the outline (if on, order kOutlineOrder) and
+     * every entry of `passes` (its own `order`, 0 by default), stable-sorted by order, then the face. The
+     * shadow, outline and softness fields above are the two settings entries and the face's softness, so a
+     * text that sets only them is drawn in one shader draw, as it always was; `passes` adds more. Each extra
+     * pass is one more draw of the same mesh, so keep the list short. See docs/text.html#passes.
+     *
+     * The extra passes are saved with the component (TextJson.hpp).
      */
     struct TextEffects
     {
@@ -76,7 +95,8 @@ namespace N2Engine::Text
         /// How far the text's outer edges fade, in ems (0 = crisp, antialiased over one screen pixel)
         float softness = 0.0f;
 
-        /// Extra passes drawn after the shadow and outline and behind the face, first entry furthest back
+        /// Extra passes, behind the face, placed by their `order` (the default 0 is in front of the shadow
+        /// and the outline settings); among equal orders the first entry is furthest back
         std::vector<TextPass> passes;
 
         [[nodiscard]] bool HasOutline() const { return outlineWidth > 0.0f; }
