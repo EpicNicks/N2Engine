@@ -15,6 +15,7 @@ time into the build tree).
 | stb_image 2.30 (nothings/stb commit `2c980bb`), with stb_image_write 1.16 for the tests only | `external/stb_image/` | MIT or public domain (Unlicense), at your choice |
 | cgltf 1.15 (jkuhlmann/cgltf tag `v1.15`, which bundles jsmn) | `external/cgltf/` | MIT (`external/cgltf/LICENSE`; jsmn is MIT too) |
 | ufbx 0.23.1 (ufbx/ufbx tag `v0.23.1`, single-file `ufbx.c` and `ufbx.h`; optional FBX and OBJ import, compiled only with `N2ENGINE_MODEL_UFBX`) | `external/ufbx/` | MIT or public domain (Unlicense), at your choice (`external/ufbx/LICENSE`) |
+| Mbed TLS 3.6.7 (Mbed-TLS/mbedtls tag `mbedtls-3.6.7`, the 3.6 long-term-support line, unmodified: `library/` and `include/` only; optional TLS for the editor host, compiled only with `N2ENGINE_EDITOR_TLS`) | `external/mbedtls/` | Apache-2.0 OR GPL-2.0-or-later, at your choice; this project uses it under Apache-2.0 (`external/mbedtls/LICENSE`) |
 | MikkTSpace (mmikk/MikkTSpace commit `3e895b4`, 2020-03-25; tangent generation for normal maps) | `external/mikktspace/` | zlib (`external/mikktspace/LICENSE`, and the notice at the top of both files) |
 | dr_libs (dr_wav, dr_flac, dr_mp3) | `external/dr_libs/` | Public domain (Unlicense) or MIT-0, at your choice |
 | Lua 5.4 | `external/lua/` | MIT |
