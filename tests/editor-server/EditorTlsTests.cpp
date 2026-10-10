@@ -539,8 +539,13 @@ TEST(EditorTlsIdentityTest, AKeyAloneIsWaitedOnAndUsedWhenTheCertificateAppears)
         [&]
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            std::ofstream out(certificateFile, std::ios::binary);
-            out << certificateText;
+            // Publish atomically (temp file, then rename) so Load never sees a partial certificate
+            const fs::path staged = certificateFile.parent_path() / "certificate.pem.staged";
+            {
+                std::ofstream out(staged, std::ios::binary);
+                out << certificateText;
+            }
+            fs::rename(staged, certificateFile);
         });
     const auto loaded = EditorTlsServer::Load(temp.Path(), std::chrono::seconds(10));
     publisher.join();
