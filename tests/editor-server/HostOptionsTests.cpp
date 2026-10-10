@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <editor-server/EditorServer.hpp>
+#include <editor-server/EditorTls.hpp>
 #include <editor-server/HostOptions.hpp>
 
 using namespace N2Engine::Editor;
@@ -429,4 +431,59 @@ TEST(HostOptionsTest, TheUsageNamesPlay)
     const std::string_view usage = HostUsage();
     EXPECT_NE(usage.find("--play"), std::string_view::npos);
     EXPECT_NE(usage.find("WritePlaySnapshot"), std::string_view::npos);
+}
+
+// ==================== --tls (editor TLS) ====================
+
+TEST(HostOptionsTest, TlsIsAFlagAndOffByDefault)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults) << defaults.error();
+    EXPECT_FALSE(defaults->tls);
+
+    // Not a value-taking option: the next argument is still parsed on its own
+    const auto parsed = ParseHostArguments({"--tls", "--port", "1234", "--bind", "0.0.0.0"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->tls);
+    EXPECT_EQ(parsed->port, 1234);
+    EXPECT_EQ(parsed->bindAddress, "0.0.0.0");
+
+    const auto last = ParseHostArguments({"--port", "1234", "--tls"});
+    ASSERT_TRUE(last) << last.error();
+    EXPECT_TRUE(last->tls);
+}
+
+TEST(HostOptionsTest, TheUsageNamesTls)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--tls"), std::string_view::npos);
+    EXPECT_NE(usage.find("fingerprint"), std::string_view::npos);
+    EXPECT_NE(usage.find("N2ENGINE_EDITOR_TLS"), std::string_view::npos);
+}
+
+TEST(HostOptionsTest, TheReadyLineOfATlsHostHasTheFingerprint)
+{
+    const std::string fingerprint(64, 'a');
+    EXPECT_EQ(FormatReadyLine(54321, fingerprint), "N2EditorHost ready port=54321 tls=1 fingerprint=" + fingerprint);
+    // Still starts with the prefix and the port, so a launcher that ignores unknown keys is unaffected
+    EXPECT_EQ(FormatReadyLine(54321, fingerprint).rfind("N2EditorHost ready port=54321 ", 0), 0u);
+    // No fingerprint, no TLS fields: the line a plaintext host prints is exactly as it was
+    EXPECT_EQ(FormatReadyLine(54321, {}), "N2EditorHost ready port=54321");
+}
+
+TEST(HostOptionsTest, ABuildWithoutTlsRefusesToServeIt)
+{
+#ifdef N2ENGINE_EDITOR_TLS
+    EXPECT_TRUE(EditorTlsServer::IsAvailable());
+#else
+    EXPECT_FALSE(EditorTlsServer::IsAvailable());
+
+    // The library-level refusal RunHost relies on: an error, and the server stays plaintext
+    EditorServer server;
+    const auto enabled = server.EnableTls(std::filesystem::temp_directory_path() / "n2-no-tls-build");
+    ASSERT_FALSE(enabled);
+    EXPECT_NE(enabled.error().find("no TLS support"), std::string::npos) << enabled.error();
+    EXPECT_FALSE(server.IsTlsEnabled());
+    EXPECT_TRUE(server.TlsFingerprint().empty());
+#endif
 }
