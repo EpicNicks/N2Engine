@@ -9,6 +9,8 @@ list(FILTER EDITOR_SERVER_TEST_SOURCES EXCLUDE REGEX "/GeneratedClientCheck\\.cp
 list(FILTER EDITOR_SERVER_TEST_SOURCES EXCLUDE REGEX "/project/")
 
 add_executable(editor_server_tests ${EDITOR_SERVER_TEST_SOURCES})
+# tests/common has the socket names the tests share between Windows and POSIX
+target_include_directories(editor_server_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/common)
 
 # The TLS tests (EditorTlsTests.cpp) are compiled only with the option: they act as the TLS client, so they include
 # Mbed TLS's headers (its code is in N2EditorServer). Without it that file is empty and the host tests only check that

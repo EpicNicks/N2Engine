@@ -699,3 +699,34 @@ jobs:
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
         run: ./tests/editor-server/PlaySmokeTest.ps1 -Config $env:N2_SMOKE_CONFIG
+
+  # The Linux build: the engine, renderer, editor host and unit tests on GCC 14 (the newest compiler ubuntu-24.04 ships
+  # with C++23 library support; Clang 18 is the other one it has). PhysX is OFF (no Linux binaries yet); FreeType, ufbx
+  # and TLS are ON so the optional backends compile here too. The host smoke test is a later change.
+  linux:
+    name: linux (Release, x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CC: gcc-14
+      CXX: g++-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3 \
+            libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+
+      - name: Build
+        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        env:
+          # Silent OpenAL output device; the runner has no sound card
+          ALSOFT_DRIVERS: "null"

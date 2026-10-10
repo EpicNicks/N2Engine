@@ -20,11 +20,8 @@
 #include <engine/Logger.hpp>
 #include <engine/sceneManagement/SceneManager.hpp>
 
-#ifdef _WIN32
 // Last, as in EditorServer.cpp: <windows.h> macros (near, far, ...) must not reach the engine headers
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
+#include "TestSockets.hpp"
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -587,7 +584,6 @@ TEST_F(DeleteSceneTest, DeleteSceneIsDisabledWithoutAScenesDirectory)
 
 // ==================== Over the socket ====================
 
-#ifdef _WIN32
 namespace
 {
     // A loopback client for a server started on an OS-chosen port
@@ -596,29 +592,18 @@ namespace
     public:
         explicit TestClient(int port)
         {
-            WSADATA wsaData;
-            _wsaStarted = WSAStartup(MAKEWORD(2, 2), &wsaData) == 0;
-
-            _socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-            if (_socket == INVALID_SOCKET)
+            _socket = N2TestSockets::OpenTcp();
+            if (_socket == N2TestSockets::InvalidHandle)
                 return;
 
-            DWORD timeoutMs = 10000; // a hung server fails the test instead of blocking it
-            setsockopt(_socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
-
-            sockaddr_in addr{};
-            addr.sin_family = AF_INET;
-            addr.sin_port = htons(static_cast<u_short>(port));
-            inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-            _connected = connect(_socket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
+            N2TestSockets::SetReceiveTimeout(_socket, 10000); // a hung server fails the test instead of blocking it
+            _connected = N2TestSockets::ConnectLoopback(_socket, port);
         }
 
         ~TestClient()
         {
-            if (_socket != INVALID_SOCKET)
-                closesocket(_socket);
-            if (_wsaStarted)
-                WSACleanup();
+            if (_socket != N2TestSockets::InvalidHandle)
+                N2TestSockets::Close(_socket);
         }
 
         TestClient(const TestClient &) = delete;
@@ -632,15 +617,12 @@ namespace
             w.WriteU8(static_cast<uint8_t>(type));
             w.WriteU32(declaredLength);
             w.WriteBytes(payload);
-            const int size = static_cast<int>(w.Size());
-            return send(_socket, reinterpret_cast<const char*>(w.Data().data()), size, 0) == size;
+            return N2TestSockets::SendAll(_socket, w.Data().data(), w.Size());
         }
 
         [[nodiscard]] size_t BytesAvailable() const
         {
-            u_long available = 0;
-            ioctlsocket(_socket, FIONREAD, &available);
-            return available;
+            return N2TestSockets::BytesAvailable(_socket);
         }
 
         /// The next response frame; nullopt if the connection closed or timed out first
@@ -660,21 +642,15 @@ namespace
         /// True once the server has closed (or reset) the connection; a receive timeout doesn't count
         bool IsClosedByServer()
         {
-            char byte = 0;
-            const int result = recv(_socket, &byte, 1, 0);
-            return result == 0 || (result < 0 && WSAGetLastError() != WSAETIMEDOUT);
+            std::uint8_t byte = 0;
+            const long long result = N2TestSockets::Receive(_socket, &byte, 1);
+            return result == 0 || (result < 0 && !N2TestSockets::LastErrorWasTimeout());
         }
 
         /// The address the server side of this connection is bound to
         [[nodiscard]] std::string PeerAddress() const
         {
-            sockaddr_in peer{};
-            int size = sizeof(peer);
-            if (getpeername(_socket, reinterpret_cast<sockaddr*>(&peer), &size) != 0)
-                return {};
-            char text[INET_ADDRSTRLEN] = {};
-            inet_ntop(AF_INET, &peer.sin_addr, text, sizeof(text));
-            return text;
+            return N2TestSockets::PeerAddress(_socket);
         }
 
     private:
@@ -683,8 +659,7 @@ namespace
             size_t received = 0;
             while (received < count)
             {
-                const int result = recv(_socket, reinterpret_cast<char*>(out + received),
-                                        static_cast<int>(count - received), 0);
+                const long long result = N2TestSockets::Receive(_socket, out + received, count - received);
                 if (result <= 0)
                     return false;
                 received += static_cast<size_t>(result);
@@ -692,9 +667,9 @@ namespace
             return true;
         }
 
-        bool _wsaStarted = false;
+        N2TestSockets::Runtime _runtime; // before the socket: Winsock must be started first and stopped last
         bool _connected = false;
-        SOCKET _socket = INVALID_SOCKET;
+        N2TestSockets::Handle _socket = N2TestSockets::InvalidHandle;
     };
 
     /// Stop() must return even with a client connected; aborts rather than hanging the test run
@@ -1137,4 +1112,3 @@ TEST(EditorServerSocketTest, WithAnAccessTokenOnlyAnAuthenticatedSessionStopsThe
     EXPECT_TRUE(WaitUntilStopped(server, std::chrono::seconds(10)));
     StopWithin(server, std::chrono::seconds(10));
 }
-#endif
