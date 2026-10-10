@@ -209,6 +209,16 @@ namespace N2Engine::Scripting::Bindings
             },
             "SetSoftness", Forward<UITextRef, &UI::UIText::SetSoftness>(),
             "GetSoftness", [](const UITextRef &c) { return c.Pin()->GetEffects().softness; },
+            // Extra effect passes (Text::TextPass), lengths in ems
+            "AddEffectPass", [](const UITextRef &c, const float offsetX, const float offsetY, const Common::Color &color,
+                                const sol::optional<float> width, const sol::optional<float> softness,
+                                const sol::optional<int> order)
+            {
+                c.Pin()->AddEffectPass(Text::TextPass{color, Math::Vector2(offsetX, offsetY), width.value_or(0.0f),
+                                                      softness.value_or(0.0f), order.value_or(0)});
+            },
+            "ClearEffectPasses", [](const UITextRef &c) { c.Pin()->ClearEffectPasses(); },
+            "GetEffectPassCount", [](const UITextRef &c) { return static_cast<int>(c.Pin()->GetEffects().passes.size()); },
             // Both names are checked before either is applied, so a bad one changes nothing
             "SetAlignment", [](const UITextRef &c, const std::string &horizontal, const std::string &vertical)
             {

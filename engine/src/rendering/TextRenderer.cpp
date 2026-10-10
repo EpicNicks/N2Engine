@@ -29,6 +29,9 @@ namespace N2Engine::Rendering
         RegisterMember("_shadowColor", _effects.shadowColor);
         RegisterMember("_shadowSoftness", _effects.shadowSoftness);
         RegisterMember("_softness", _effects.softness);
+        // The extra passes, a list of {color, offset, width, softness, order} (TextJson.hpp); a scene saved
+        // before they existed has none
+        RegisterMember("_effectPasses", _effects.passes);
     }
 
     TextRenderer::~TextRenderer()

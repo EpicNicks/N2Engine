@@ -100,6 +100,12 @@ namespace N2Engine::UI
         }
         /// How far the outer edges fade, in ems (0 = crisp)
         void SetSoftness(const float softness) { _effects.softness = softness; }
+        /// Adds an extra effect pass behind the face, placed by its order (Text::TextPass::order; the default 0
+        /// is in front of the shadow and the outline settings and of the passes added before it). Saved with
+        /// the scene.
+        void AddEffectPass(const Text::TextPass &pass) { _effects.passes.push_back(pass); }
+        /// Removes every extra pass (the shadow, outline and softness settings stay)
+        void ClearEffectPasses() { _effects.passes.clear(); }
 
         /// The layout options the current settings give in a rect of this width (it is the wrap width
         /// with wrap on)
