@@ -689,6 +689,21 @@ jobs:
           if ($proc.ExitCode -ne 0) { throw ("The --tls host exited with code 0x{0:X8}" -f $proc.ExitCode) }
           Write-Host "The --tls host exited cleanly when its client left"
 
+      # The same two smoke tests as Python (tests/smoke/editor_host_smoke.py, standard library only, the script the Linux
+      # leg runs too). Alongside the PowerShell steps above until they have run green here, then they replace them.
+      - name: Editor host smoke test (Python)
+        shell: pwsh
+        env:
+          N2_SMOKE_CONFIG: ${{ matrix.config }}
+        run: python tests/smoke/editor_host_smoke.py --scenario host --config $env:N2_SMOKE_CONFIG --exe "build/bin/$env:N2_SMOKE_CONFIG/N2EditorHost.exe"
+
+      - name: Editor host TLS smoke test (Python)
+        if: matrix.tls == 'ON'
+        shell: pwsh
+        env:
+          N2_SMOKE_CONFIG: ${{ matrix.config }}
+        run: python tests/smoke/editor_host_smoke.py --scenario tls --config $env:N2_SMOKE_CONFIG --exe "build/bin/$env:N2_SMOKE_CONFIG/N2EditorHost.exe"
+
       # What the Electron editor does for play mode, with the real binary on the software renderer (see the script's
       # header): an edit host writes a play snapshot (WritePlaySnapshot) of its unsaved scene, a second process
       # (N2EditorHost --play <snapshot> with the same --project and --renderer) plays it, and the test checks the script
@@ -704,7 +719,7 @@ jobs:
   # library (libstdc++ 14). Clang 18, ubuntu-24.04's own, cannot use libstdc++ 14's std::expected (it needs the C++20
   # concepts feature level Clang 19 added) and libc++ 18 has no std::generator or std::chrono::clock_cast, so Clang 20 is
   # installed. PhysX is OFF (no Linux binaries yet); FreeType, ufbx and TLS are ON so the optional backends compile here
-  # too. The host smoke test is a later change. This is the required Linux check.
+  # too. The editor host smoke tests run here too, the same Python script as on Windows. This is the required Linux check.
   linux:
     name: linux (Release, x86_64, Clang)
     runs-on: ubuntu-24.04
@@ -733,6 +748,18 @@ jobs:
         run: ctest --test-dir build --output-on-failure
         env:
           # Silent OpenAL output device; the runner has no sound card
+          ALSOFT_DRIVERS: "null"
+
+      # The real host, end to end (tests/smoke/editor_host_smoke.py, standard library only): create a project, serve it
+      # on the software renderer, and the --exit-on-* flags; then the --tls host, its certificate and key file mode.
+      - name: Editor host smoke test
+        run: python3 tests/smoke/editor_host_smoke.py --scenario host --config Release --exe build/bin/N2EditorHost
+        env:
+          ALSOFT_DRIVERS: "null"
+
+      - name: Editor host TLS smoke test
+        run: python3 tests/smoke/editor_host_smoke.py --scenario tls --config Release --exe build/bin/N2EditorHost
+        env:
           ALSOFT_DRIVERS: "null"
 
   # Informational only (continue-on-error, never required): GCC 14 builds the code but miscompiles sol2's bindings.
