@@ -12,6 +12,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "engine/Component.hpp"
 #include "engine/serialization/FieldInfo.hpp"
 
 namespace N2Engine
