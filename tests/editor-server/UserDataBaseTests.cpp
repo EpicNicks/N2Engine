@@ -86,8 +86,8 @@ TEST(UserDataBaseTest, WithoutAHomeItIsTheWorkingDirectoryMarkerAndTheTlsFolderI
 #ifdef _WIN32
 TEST(UserDataBaseTest, AppDataIsTheBase)
 {
-    const ScopedVariable home("APPDATA", std::string("C:\n2-test-appdata"));
-    EXPECT_EQ(IO::ProjectFile::UserDataBase(), fs::path("C:\n2-test-appdata") / "N2Engine");
+    const ScopedVariable home("APPDATA", std::string(R"(C:\n2-test-appdata)"));
+    EXPECT_EQ(IO::ProjectFile::UserDataBase(), fs::path(R"(C:\n2-test-appdata)") / "N2Engine");
 }
 #else
 TEST(UserDataBaseTest, XdgDataHomeWinsOverHome)
