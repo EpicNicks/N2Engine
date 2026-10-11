@@ -118,6 +118,7 @@ jobs:
         shell: pwsh
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
+          PYTHONDONTWRITEBYTECODE: "1"
         run: python tests/smoke/editor_host_smoke.py --scenario host --config $env:N2_SMOKE_CONFIG --exe "build/bin/$env:N2_SMOKE_CONFIG/N2EditorHost.exe"
 
       # The real host with --tls (the TLS leg only; the unit tests cover the handshake and the gate): it makes its
@@ -129,6 +130,7 @@ jobs:
         shell: pwsh
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
+          PYTHONDONTWRITEBYTECODE: "1"
         run: python tests/smoke/editor_host_smoke.py --scenario tls --config $env:N2_SMOKE_CONFIG --exe "build/bin/$env:N2_SMOKE_CONFIG/N2EditorHost.exe"
 
       # What the Electron editor does for play mode, with the real binary on the software renderer (see the script's
@@ -183,11 +185,13 @@ jobs:
         run: python3 tests/smoke/editor_host_smoke.py --scenario host --config Release --exe build/bin/N2EditorHost
         env:
           ALSOFT_DRIVERS: "null"
+          PYTHONDONTWRITEBYTECODE: "1"
 
       - name: Editor host TLS smoke test
         run: python3 tests/smoke/editor_host_smoke.py --scenario tls --config Release --exe build/bin/N2EditorHost
         env:
           ALSOFT_DRIVERS: "null"
+          PYTHONDONTWRITEBYTECODE: "1"
 
   # Informational only (continue-on-error, never required): GCC 14 builds the code but miscompiles sol2's bindings.
   # KNOWN OPEN BUG: sol2 names function-object metatables from __PRETTY_FUNCTION__, where GCC prints every lambda of one
