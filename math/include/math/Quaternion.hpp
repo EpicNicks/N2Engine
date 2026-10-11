@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cmath>
-#include <immintrin.h>
+#include "math/CpuInfo.hpp"
 #include "math/CpuInfo.hpp"
 #include "math/Matrix.hpp"
 
@@ -16,12 +16,6 @@
 #define TARGET_AVX2
 #define TARGET_FMA
 #define TARGET_SSE4_1
-#endif
-
-#ifdef _WIN32
-#include <intrin.h>
-#elif defined(__GNUC__) || defined(__clang__)
-#include <cpuid.h>
 #endif
 
 namespace N2Engine::Math
@@ -42,7 +36,7 @@ namespace N2Engine::Math
             {
                 float w, x, y, z;
             };
-            __m128 simd_data;
+            N2Engine::Math::SimdStorage simd_data;
         };
 #ifdef _MSC_VER
 #pragma warning(pop)
@@ -174,7 +168,14 @@ namespace N2Engine::Math
         {
             Quaternion result;
             // Conjugate: negate x, y, z components
+#ifdef N2_MATH_X86
             result.simd_data = _mm_xor_ps(simd_data, _mm_set_ps(-0.0f, -0.0f, -0.0f, 0.0f));
+#else
+            result.w = w;
+            result.x = -x;
+            result.y = -y;
+            result.z = -z;
+#endif
             return result;
         }
 
@@ -255,6 +256,7 @@ namespace N2Engine::Math
         inline static LengthFunc length_func = &LengthScalar;
         inline static NormalizeFunc normalize_func = &NormalizeScalar;
 
+#ifdef N2_MATH_X86
         // ===== SSE2 IMPLEMENTATIONS =====
         static Quaternion AddSSE2(const Quaternion &a, const Quaternion &b)
         {
@@ -344,6 +346,16 @@ namespace N2Engine::Math
             result.simd_data = _mm_add_ps(_mm_add_ps(_mm_add_ps(term_w, term_x), term_y), term_z);
             return result;
         }
+#else
+        // No SSE on this architecture: the scalar versions (the dispatch never picks the SSE tiers here)
+        static Quaternion AddSSE2(const Quaternion &a, const Quaternion &b) { return AddScalar(a, b); }
+        static Quaternion SubSSE2(const Quaternion &a, const Quaternion &b) { return SubScalar(a, b); }
+        static Quaternion ScalarMulSSE2(const Quaternion &q, float scalar) { return ScalarMulScalar(q, scalar); }
+        static float DotSSE2(const Quaternion &a, const Quaternion &b) { return DotScalar(a, b); }
+        static float LengthSSE2(const Quaternion &q) { return LengthScalar(q); }
+        static Quaternion NormalizeSSE2(const Quaternion &q) { return NormalizeScalar(q); }
+        static Quaternion MulSSE2(const Quaternion &a, const Quaternion &b) { return MulScalar(a, b); }
+#endif
 
         // ===== SSE4.1 IMPLEMENTATIONS =====
 #ifdef N2_MATH_SSE41

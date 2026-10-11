@@ -1,17 +1,38 @@
 #pragma once
 
+// The x86 SIMD code (SSE2, SSE4.1, AVX and CPUID) is compiled only for x86 targets. Other architectures (aarch64) run
+// the scalar implementations, which the SIMD ones must match within the test tolerances
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+#define N2_MATH_X86
+#endif
+
 // The SSE4.1 implementations are compiled when the build targets SSE4.1. MSVC never defines __SSE4_1__, but
 // /arch:AVX (which the math target builds with) implies it
 #if defined(__SSE4_1__) || defined(__AVX__)
 #define N2_MATH_SSE41
 #endif
 
+#ifdef N2_MATH_X86
+#include <immintrin.h>
 #ifdef _WIN32
 #include <intrin.h>
-#include <immintrin.h>
 #elif defined(__GNUC__) || defined(__clang__)
 #include <cpuid.h>
 #endif
+#endif
+
+namespace N2Engine::Math
+{
+    // The 128-bit storage the Vector3, Vector4 and Quaternion unions overlay on their floats
+#ifdef N2_MATH_X86
+    using SimdStorage = __m128;
+#else
+    struct alignas(16) SimdStorage
+    {
+        float lanes[4];
+    };
+#endif
+}
 
 namespace CPUInfo
 {
@@ -29,7 +50,9 @@ namespace CPUInfo
     // Only valid to call when CPUID reports OSXSAVE (xgetbv is undefined otherwise)
     inline bool OSSavesAVXState()
     {
-#ifdef _WIN32
+#ifndef N2_MATH_X86
+        return false;
+#elif defined(_WIN32)
         return (_xgetbv(0) & 0x6) == 0x6;
 #elif defined(__GNUC__) || defined(__clang__)
         unsigned int xcr0Low, xcr0High;
@@ -45,7 +68,9 @@ namespace CPUInfo
     {
         CPUFeatures features;
 
-#ifdef _WIN32
+#ifndef N2_MATH_X86
+        // No x86 features on this architecture
+#elif defined(_WIN32)
         int cpuInfo[4];
         __cpuid(cpuInfo, 0);
         int numIds = cpuInfo[0];

@@ -32,8 +32,8 @@ if(MSVC)
     target_compile_options(math PUBLIC 
         /arch:AVX         # Enables AVX (includes SSE2, SSE4.1)
     )
-else()
-    # GCC/Clang flags
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|X86_64|AMD64|amd64|x86|i[3-6]86)$")
+    # GCC/Clang flags (x86 only; other architectures such as aarch64 build the scalar implementations)
     target_compile_options(math PUBLIC 
         -msse2 
         -msse4.1 

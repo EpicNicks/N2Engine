@@ -15,18 +15,12 @@
 #endif
 
 #include <cmath>
-#include <immintrin.h>
+#include "math/CpuInfo.hpp"
 #include <numbers>
 #include <functional>
 #include "math/VectorN.hpp" // For VectorN compatibility
 #include "math/Constants.hpp"
 #include "math/CpuInfo.hpp"
-
-#ifdef _WIN32
-#include <intrin.h>
-#elif defined(__GNUC__) || defined(__clang__)
-#include <cpuid.h>
-#endif
 
 namespace N2Engine::Math
 {
@@ -48,7 +42,7 @@ namespace N2Engine::Math
                 float w; // padding for SIMD
             };
 
-            __m128 simd_data;
+            N2Engine::Math::SimdStorage simd_data;
         };
 #ifdef _MSC_VER
 #pragma warning(pop)
@@ -381,8 +375,15 @@ namespace N2Engine::Math
         [[nodiscard]] Vector3 Scale(const Vector3 &other) const
         {
             Vector3 result;
+#ifdef N2_MATH_X86
             result.simd_data = _mm_mul_ps(simd_data, other.simd_data);
             result.w = 0.0f; // Ensure padding remains 0
+#else
+            result.x = x * other.x;
+            result.y = y * other.y;
+            result.z = z * other.z;
+            result.w = 0.0f;
+#endif
             return result;
         }
 
@@ -663,6 +664,7 @@ namespace N2Engine::Math
         // The batch operations use their AVX versions only at the AVX tier
         inline static SIMDLevel simd_level = SIMDLevel::Scalar;
 
+#ifdef N2_MATH_X86
         // ===== SSE2 IMPLEMENTATIONS =====
         static Vector3 AddSSE2(const Vector3 &a, const Vector3 &b)
         {
@@ -783,6 +785,21 @@ namespace N2Engine::Math
             result.w = 0.0f;
             return result;
         }
+#else
+        // No SSE on this architecture: the scalar versions (the dispatch never picks the SSE tiers here)
+        static Vector3 AddSSE2(const Vector3 &a, const Vector3 &b) { return AddScalar(a, b); }
+        static Vector3 SubSSE2(const Vector3 &a, const Vector3 &b) { return SubScalar(a, b); }
+        static Vector3 ScalarMulSSE2(const Vector3 &v, float scalar) { return ScalarMulScalar(v, scalar); }
+        static Vector3 ScalarDivSSE2(const Vector3 &v, float scalar) { return ScalarDivScalar(v, scalar); }
+        static float DotSSE2(const Vector3 &a, const Vector3 &b) { return DotScalar(a, b); }
+        static Vector3 CrossSSE2(const Vector3 &a, const Vector3 &b) { return CrossScalar(a, b); }
+        static float LengthSSE2(const Vector3 &v) { return LengthScalar(v); }
+        static Vector3 NormalizeSSE2(const Vector3 &v) { return NormalizeScalar(v); }
+        static float DistanceSSE2(const Vector3 &a, const Vector3 &b) { return DistanceScalar(a, b); }
+        static Vector3 MinSSE2(const Vector3 &a, const Vector3 &b) { return MinScalar(a, b); }
+        static Vector3 MaxSSE2(const Vector3 &a, const Vector3 &b) { return MaxScalar(a, b); }
+        static Vector3 AbsSSE2(const Vector3 &v) { return AbsScalar(v); }
+#endif
 
         // Floor/Ceil/Round require SSE4.1, fallback to scalar for SSE2
         static Vector3 FloorSSE2(const Vector3 &v)
