@@ -32,7 +32,8 @@ RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/$(uname -m)-linux-gnu/14" \
         -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_PHYSX=OFF \
         -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON \
- && cmake --build build --parallel --target N2EditorHost \n && mkdir /openal-libs && cp -a build/lib/libopenal.so* /openal-libs/
+ && cmake --build build --parallel --target N2EditorHost \
+ && mkdir /openal-libs && cp -a build/lib/libopenal.so* /openal-libs/
 
 FROM ubuntu:24.04 AS runtime
 
