@@ -1,6 +1,8 @@
 # systemd unit for the N2Engine editor host. See docs/editor.html#linux-host for the whole setup.
 #
-#   1. Install the binary:   sudo install -D build/bin/N2EditorHost /opt/n2engine/bin/N2EditorHost
+#   1. Install the binary and the shared OpenAL library it links (its rpath is the build tree, which the service cannot see):
+#        sudo install -D build/bin/N2EditorHost /opt/n2engine/bin/N2EditorHost
+#        sudo install -d /opt/n2engine/lib && sudo cp -a build/lib/libopenal.so* /opt/n2engine/lib/
 #   2. Put the access token in a root-only file (systemd reads it as root, the host never sees the file):
 #        sudo install -d -m 0750 /etc/n2editorhost
 #        printf 'N2_EDITOR_TOKEN=%s\n' "$(openssl rand -hex 32)" | sudo install -m 0600 /dev/stdin /etc/n2editorhost/token.env
@@ -27,6 +29,7 @@ StateDirectoryMode=0700
 WorkingDirectory=/var/lib/n2engine
 Environment=XDG_DATA_HOME=/var/lib/n2engine
 Environment=ALSOFT_DRIVERS=null
+Environment=LD_LIBRARY_PATH=/opt/n2engine/lib
 EnvironmentFile=/etc/n2editorhost/token.env
 
 # Make the project on the first start (--create exits 2 when one is there already, so test first)

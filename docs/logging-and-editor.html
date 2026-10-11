@@ -692,13 +692,8 @@ $stream.Write($bytes, 0, $bytes.Length)
 <li><strong>A real cloud host has not been tried.</strong> The tests run a client and the host on loopback in one machine.</li>
 </ul>
 <div class="callout note" id="editor-linux-next">
-<p class="callout-title">Next: Linux</p>
-<p>The editor host currently <strong>builds and runs on Windows only</strong>, and a Linux host build is the next thing wanted: cloud hosts are Linux, so this TLS layer is of no use to a remote editor until the host runs there. The TLS layer is written to be platform-neutral so that work does not redo it: <code>EditorTls.cpp</code> keeps the few platform calls (the "would block" error codes, switching a socket to non-blocking mode, <code>send</code> and <code>recv</code>) in one small block with a POSIX branch beside the Windows one, and everything else (the certificate, the handshake, the session) is the same on both. The POSIX branch has never been compiled or run. What the socket code still needs:</p>
-<ul>
-<li><strong>Winsock names.</strong> <code>EditorServer.cpp</code> has a POSIX branch for the includes, <code>CLOSE_SOCKET</code> and the error code, but it has never been built. <code>WSAStartup</code> and <code>WSACleanup</code> (in <code>Start</code> and <code>Stop</code>), <code>WSAGetLastError</code>, <code>closesocket</code> and <code>SOCKET</code> are Winsock; the existing socket tests (the Windows-only part of <code>EditorServerHardeningTests.cpp</code>) use Winsock directly too.</li>
-<li><strong>Int sockets.</strong> The server keeps every socket as an <code>int</code> (<code>static_cast&lt;int&gt;(accept(...))</code>), which is right for POSIX file descriptors but narrows a Windows <code>SOCKET</code> (a pointer-sized handle that only happens to be small). The clean fix is one <code>NativeSocket</code> type through <code>Send</code>, <code>Receive</code>, <code>WaitUntilReady</code> and the TLS session.</li>
-<li><strong>The build.</strong> <code>ws2_32</code> and <code>bcrypt</code> are linked on Windows only (right: Mbed TLS takes its entropy from the OS on Linux); the MSVC runtime settings are Windows-only; PhysX binaries are fetched for Windows only today ("Linux PhysX binaries not yet configured. Disabling PhysX."), so a first Linux host runs without physics; and the CI matrix has no Linux build job (the <code>ubuntu-latest</code> job runs only the generators and the TypeScript codec tests).</li>
-</ul>
+<p class="callout-title">Linux <span class="badge">PR #117</span></p>
+<p>The host builds and runs on Linux (x86_64 and arm64) and CI builds it there, including the TLS layer with its POSIX socket branch and a TLS smoke test; how to run it as a service is in <a href="editor.html#linux-host">Running the host on Linux</a>. The host has not been tried against a real remote editor on a cloud machine.</p>
 </div>
 <div class="callout note" id="design-editor-tls-mbedtls">
 <p class="callout-title">Design decision: Mbed TLS, vendored and optional, instead of OpenSSL or Schannel <span class="badge">PR #112</span></p>
