@@ -699,3 +699,70 @@ jobs:
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
         run: ./tests/editor-server/PlaySmokeTest.ps1 -Config $env:N2_SMOKE_CONFIG
+
+  # The Linux build: the engine, renderer, editor host and unit tests with Clang 20 (apt.llvm.org) on the GCC 14 standard
+  # library (libstdc++ 14). Clang 18, ubuntu-24.04's own, cannot use libstdc++ 14's std::expected (it needs the C++20
+  # concepts feature level Clang 19 added) and libc++ 18 has no std::generator or std::chrono::clock_cast, so Clang 20 is
+  # installed. PhysX is OFF (no Linux binaries yet); FreeType, ufbx and TLS are ON so the optional backends compile here
+  # too. The host smoke test is a later change. This is the required Linux check.
+  linux:
+    name: linux (Release, x86_64, Clang)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CC: clang-20
+      CXX: clang++-20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo install -d -m 0755 /etc/apt/keyrings
+          sudo curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/keyrings/apt.llvm.org.asc
+          echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+
+      - name: Build
+        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        env:
+          # Silent OpenAL output device; the runner has no sound card
+          ALSOFT_DRIVERS: "null"
+
+  # Informational only (continue-on-error, never required): GCC 14 builds the code but miscompiles sol2's bindings.
+  # KNOWN OPEN BUG: sol2 names function-object metatables from __PRETTY_FUNCTION__, where GCC prints every lambda of one
+  # signature in one function as the same "<lambda(int)>", so 3 Lua tests fail (LuaLayerTest.NamesAndMasks,
+  # LuaPickingTest.MouseFunctionsWithoutAWindow, LuaPickingTest.RaycastBindingsHandleBadInput; e.g. Layers.MaskOf runs
+  # LayerToName). GCC-built hosts are not supported until that is fixed.
+  linux-gcc:
+    name: linux (Release, x86_64, GCC 14, informational - known sol2 bug)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    continue-on-error: true
+    env:
+      CC: gcc-14
+      CXX: g++-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3             libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+
+      - name: Build
+        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        env:
+          ALSOFT_DRIVERS: "null"

@@ -53,7 +53,7 @@ namespace
     {
         PolygonObject<T> result;
         result.gameObject = GameObject::Create(name);
-        result.renderer = result.gameObject->AddComponent<T>();
+        result.renderer = result.gameObject->template AddComponent<T>();
         return result;
     }
 

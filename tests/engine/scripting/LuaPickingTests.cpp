@@ -218,10 +218,10 @@ TEST_F(LuaPickingTest, CameraLookAtMatchesCpp)
 
     const Math::Quaternion rotation = scripted.GetRotation();
     const Math::Quaternion expectedRotation = expected.GetRotation();
-    EXPECT_NEAR(rotation.w, expectedRotation.w, 1e-4f);
-    EXPECT_NEAR(rotation.x, expectedRotation.x, 1e-4f);
-    EXPECT_NEAR(rotation.y, expectedRotation.y, 1e-4f);
-    EXPECT_NEAR(rotation.z, expectedRotation.z, 1e-4f);
+    EXPECT_NEAR(rotation.GetW(), expectedRotation.GetW(), 1e-4f);
+    EXPECT_NEAR(rotation.GetX(), expectedRotation.GetX(), 1e-4f);
+    EXPECT_NEAR(rotation.GetY(), expectedRotation.GetY(), 1e-4f);
+    EXPECT_NEAR(rotation.GetZ(), expectedRotation.GetZ(), 1e-4f);
 
     // The view direction, as scripts read it, points at the target
     const Math::Vector3 toTarget = (target - position).Normalized();

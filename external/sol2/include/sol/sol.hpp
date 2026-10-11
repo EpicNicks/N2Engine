@@ -6752,7 +6752,11 @@ namespace sol {
 			static_assert(std::is_constructible<T, Args&&...>::value, "T must be constructible with Args");
 
 			*this = nullopt;
-			this->construct(std::forward<Args>(args)...);
+			// N2Engine local patch (PR #113): upstream sol2 3.2.3 had "this->construct(std::forward<Args>(args)...);" here, but
+			// optional<T&> has no construct(), a hard error under Clang (never instantiated, so GCC/MSVC accept it). Re-apply
+			// this body if sol2 is updated and still has the call.
+			m_value = std::addressof(args...);
+			return *m_value;
 		}
 
 		/// Swaps this optional with the other.

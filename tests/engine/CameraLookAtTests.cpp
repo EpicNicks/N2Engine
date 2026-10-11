@@ -48,7 +48,7 @@ namespace
 
     bool IsFinite(const Math::Quaternion &q)
     {
-        return std::isfinite(q.w) && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z);
+        return std::isfinite(q.GetW()) && std::isfinite(q.GetX()) && std::isfinite(q.GetY()) && std::isfinite(q.GetZ());
     }
 
     Camera PerspectiveCamera(const Vector3 &position)
@@ -209,8 +209,8 @@ TEST(CameraLookAtTest, DegenerateCasesStayFinite)
         camera.SetRotation(turned);
         camera.LookAt(Vector3(1.0f, 2.0f, 3.0f));
         EXPECT_TRUE(IsFinite(camera.GetRotation()));
-        EXPECT_NEAR(camera.GetRotation().w, turned.w, Tolerance);
-        EXPECT_NEAR(camera.GetRotation().y, turned.y, Tolerance);
+        EXPECT_NEAR(camera.GetRotation().GetW(), turned.GetW(), Tolerance);
+        EXPECT_NEAR(camera.GetRotation().GetY(), turned.GetY(), Tolerance);
         EXPECT_TRUE(IsFinite(camera.GetViewMatrix()));
     }
 
