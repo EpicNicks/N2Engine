@@ -521,6 +521,11 @@ namespace N2Engine::Editor
             }
 #ifndef _WIN32
             fs::permissions(directory, fs::perms::owner_all, fs::perm_options::replace, error);
+            if (error)
+            {
+                // A key must not be written into a folder that couldn't be made owner-only
+                return std::unexpected("Can't restrict " + directory.string() + " to its owner");
+            }
 #endif
             // The key first, and only the key is secret. Neither file is ever replaced: when another host got there
             // first it wins, and this one waits for the winner's certificate and uses that identity instead.

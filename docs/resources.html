@@ -151,8 +151,8 @@
 <p>The root that <code>user://</code> resolves under is set by <code>ResourceLoader::Initialize(projectRoot, userDataRoot)</code> <span class="badge">PR #90</span>: <code>userDataRoot</code> when given (a project's own folder, <code>ProjectFile::UserDataPath()</code>, <code>%APPDATA%\N2Engine\&lt;name&gt;-&lt;id&gt;</code>; see <a href="editor.html#user-data">user:// per project</a>), otherwise the shared folder every project used before projects had ids (<code>ProjectFile::UserDataBase()</code>):</p>
 <ul>
 <li>Windows: <code>%APPDATA%\N2Engine</code> (read with <code>_dupenv_s</code>).</li>
-<li>Other platforms: <code>$HOME/.n2engine</code> (read with <code>std::getenv</code>; it used the MSVC-only <code>_dupenv_s</code> before #23).</li>
-<li>If the variable is unset: <code>"."</code>, the current directory.</li>
+<li>Other platforms: <code>$XDG_DATA_HOME/n2engine</code>, else <code>$HOME/.local/share/n2engine</code> <span class="badge">PR #114</span> (read with <code>std::getenv</code>; it was <code>$HOME/.n2engine</code> before #114, and anything already there is not moved). An empty or relative value counts as unset, as the XDG specification says.</li>
+<li>If none is usable (no <code>APPDATA</code> on Windows; neither variable on other platforms, as in a systemd service or a container): <code>"."</code>, the current directory. The editor host's TLS identity refuses this case, see <a href="logging-and-editor.html#editor-tls-no-home">no home folder</a>.</li>
 </ul>
 <p><code>Initialize</code> creates the directory, and <code>GetUserDataRoot()</code> returns it <span class="badge">PR #90</span>. The editor host and <code>lua_project</code> give a project its own folder; tests and plain folders get the shared one.</p>
 <p class="src">Source: <code>engine/src/io/ResourceLoader.cpp</code> — <code>ResourceLoader::Initialize</code>; <code>engine/src/io/ProjectFile.cpp</code> — <code>ProjectFile::UserDataBase</code>, <code>ProjectFile::UserDataPath</code>; tests: <code>ResourceLoaderProjectTest.UserPathsResolveUnderTheProjectsOwnFolder</code>, <code>ResourceLoaderProjectTest.TwoProjectsGetTwoUserFolders</code></p>
