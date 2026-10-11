@@ -700,23 +700,25 @@ jobs:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
         run: ./tests/editor-server/PlaySmokeTest.ps1 -Config $env:N2_SMOKE_CONFIG
 
-  # The Linux build: the engine, renderer, editor host and unit tests on GCC 14 (the newest compiler ubuntu-24.04 ships
-  # with C++23 library support; Clang 18 is the other one it has). PhysX is OFF (no Linux binaries yet); FreeType, ufbx
+  # The Linux build: the engine, renderer, editor host and unit tests on Clang 18 with libstdc++ 14 (both ship with
+  # ubuntu-24.04). Not GCC: sol2 names its function-object metatables from __PRETTY_FUNCTION__, where GCC prints every
+  # lambda of one signature in one function as the same "<lambda(int)>", so the Lua bindings call each other's lambdas
+  # (Layers.MaskOf ran LayerToName); Clang names a lambda by its source location. PhysX is OFF (no Linux binaries yet); FreeType, ufbx
   # and TLS are ON so the optional backends compile here too. The host smoke test is a later change.
   linux:
     name: linux (Release, x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      CC: gcc-14
-      CXX: g++-14
+      CC: clang-18
+      CXX: clang++-18
     steps:
       - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3 \
+          sudo apt-get install -y --no-install-recommends clang-18 g++-14 cmake ninja-build python3 \
             libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
 
       - name: Configure
@@ -726,7 +728,7 @@ jobs:
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure || (./build/bin/engine_tests --gtest_filter=LinuxDiag.* | grep DIAG; exit 1)
+        run: ctest --test-dir build --output-on-failure
         env:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
