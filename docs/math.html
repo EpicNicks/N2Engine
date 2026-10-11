@@ -63,13 +63,13 @@
 <div class="content">
 
 <h1>Math &amp; SIMD</h1>
-<p class="lead">The <code>math</code> static library: vector, quaternion and matrix types, scalar helpers, random numbers and UUIDs, plus the runtime SIMD dispatch that picks scalar or SSE/AVX implementations. This page covers conventions, what the SIMD paths guarantee relative to scalar code, and the known flaws.</p>
+<p class="lead">The <code>math</code> static library: vector, quaternion and matrix types, scalar helpers, random numbers and UUIDs, plus the runtime SIMD dispatch that picks scalar or SSE/AVX implementations (x86_64 only; aarch64 runs scalar code). This page covers conventions, what the SIMD paths guarantee relative to scalar code, and the known flaws.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
 <ol>
 <li><a href="#types">Types at a glance</a></li>
-<li><a href="#build">Build requirement: AVX</a></li>
+<li><a href="#build">Build requirement: AVX (x86_64)</a></li>
 <li><a href="#simd-dispatch">SIMD dispatch tiers</a></li>
 <li><a href="#correctness">Correctness relative to scalar</a></li>
 <li><a href="#vector3">Vector3</a></li>
@@ -91,11 +91,11 @@
 <table>
 <thead><tr><th>Type / header</th><th>Storage</th><th>SIMD</th></tr></thead>
 <tbody>
-<tr><td><code>Vector3</code></td><td><code>x, y, z</code> plus a padding lane <code>w</code>, in a 16-byte aligned union with <code>__m128</code></td><td>Runtime-dispatched (Scalar/SSE2/SSE4.1/AVX)</td></tr>
+<tr><td><code>Vector3</code></td><td><code>x, y, z</code> plus a padding lane <code>w</code>, in a 16-byte aligned union with <code>__m128</code> (a <code>float[4]</code> struct on aarch64)</td><td>Runtime-dispatched (Scalar/SSE2/SSE4.1/AVX)</td></tr>
 <tr><td><code>Quaternion</code></td><td><code>w, x, y, z</code> (in that lane order), 16-byte aligned</td><td>Runtime-dispatched</td></tr>
 <tr><td><code>Matrix&lt;float, 4, 4&gt;</code>, <code>Matrix&lt;float, 3, 3&gt;</code></td><td>Row-major <code>std::array</code>, 16-byte aligned (3&times;3 padded to 12 floats)</td><td>Runtime-dispatched</td></tr>
 <tr><td><code>Matrix&lt;T, M, N&gt;</code>, <code>Matrix&lt;float, 2, 2&gt;</code></td><td>Row-major <code>std::array</code></td><td>None</td></tr>
-<tr><td><code>Vector4</code></td><td><code>w, x, y, z</code>, 16-byte aligned <code>__m128</code> union</td><td>Runtime-dispatched (Scalar/SSE2/SSE4.1/AVX) <span class="badge">PR #30</span></td></tr>
+<tr><td><code>Vector4</code></td><td><code>w, x, y, z</code>, 16-byte aligned <code>__m128</code> union (a <code>float[4]</code> struct on aarch64)</td><td>Runtime-dispatched (Scalar/SSE2/SSE4.1/AVX) <span class="badge">PR #30</span></td></tr>
 <tr><td><code>Vector2</code></td><td><code>x, y</code></td><td>Scalar single operations; batch operations use AVX when compiled with it</td></tr>
 <tr><td><code>VectorN&lt;T, N&gt;</code></td><td><code>std::array&lt;T, N&gt;</code> (arithmetic <code>T</code>, <code>N &gt; 0</code>, checked by <code>static_assert</code>)</td><td>None</td></tr>
 <tr><td><code>Constants.hpp</code>, <code>Functions.hpp</code>, <code>Utils.hpp</code></td><td>Free functions and constants</td><td>&mdash;</td></tr>
@@ -106,11 +106,11 @@
 </div>
 <p>The engine binds <code>Vector2/3/4</code>, <code>Quaternion</code> and <code>Matrix4</code> to Lua; constants such as <code>Vector3.Zero</code> are returned as copies. See <a href="scripting-lua.html">Lua scripting</a>. Transform composition is described in <a href="transforms.html">Transforms</a>.</p>
 
-<h2 id="build">Build requirement: AVX <span class="badge">PR #27</span></h2>
-<p><code>math/CMakeLists.txt</code> compiles the library with <strong>PUBLIC</strong> <code>/arch:AVX</code> on MSVC and <code>-msse2 -msse4.1 -mavx</code> elsewhere. Because the option is PUBLIC, every target linking <code>math</code> (the engine, games, tests) is compiled for AVX, so the whole binary requires an AVX-capable CPU. The lower SIMD tiers select between algorithms; they are not a fallback for older hardware.</p>
+<h2 id="build">Build requirement: AVX on x86_64 <span class="badge">PR #27</span></h2>
+<p><code>math/CMakeLists.txt</code> compiles the library with <strong>PUBLIC</strong> <code>/arch:AVX</code> on MSVC and <code>-msse2 -msse4.1 -mavx</code> on other x86 targets (GCC/Clang on x86_64). Because the option is PUBLIC, every x86 target linking <code>math</code> (the engine, games, tests) is compiled for AVX, so the whole binary requires an AVX-capable CPU. On aarch64 no architecture flags are added: <code>CpuInfo.hpp</code> defines <code>N2_MATH_X86</code> only for x86 targets, the SSE2/SSE4.1/AVX code and CPUID are not compiled, <code>Vector3</code>, <code>Vector4</code> and <code>Quaternion</code> store their lanes in a 16-byte aligned <code>float[4]</code> struct (<code>SimdStorage</code>) instead of <code>__m128</code>, the SSE2 and SSE4.1 entry points are aliases of the scalar versions, and <code>DetectSIMDLevel</code> always returns <code>Scalar</code>. There is no NEON path, and the results are the scalar results. The lower SIMD tiers select between algorithms; they are not a fallback for older hardware.</p>
 <div class="callout note" id="design-simd-tiers">
 <p class="callout-title">Design decision: SIMD tiers are an algorithm choice, not a compatibility fallback</p>
-<p>The build targets AVX once, for every target, instead of producing per-CPU binaries or per-function target attributes. The compiler may then use AVX encodings anywhere, so the binary needs an AVX CPU whatever tier is selected. The runtime tiers exist so that each implementation (scalar, SSE2, SSE4.1, AVX) can be selected, tested against scalar in the same process, and benchmarked. That is why the default is scalar, why <code>SetSIMDLevel</code> can switch in either direction, and why every tier has a written contract: bit-exact for the rounding, sign and min/max operations, within a relative 1e-5 for the rest (see <a href="#correctness">Correctness relative to scalar</a>). Supporting pre-AVX CPUs would mean dropping the PUBLIC flag and isolating the AVX code, not selecting a lower tier.</p>
+<p>On x86_64 the build targets AVX once, for every target, instead of producing per-CPU binaries or per-function target attributes. The compiler may then use AVX encodings anywhere, so the binary needs an AVX CPU whatever tier is selected. The runtime tiers exist so that each implementation (scalar, SSE2, SSE4.1, AVX) can be selected, tested against scalar in the same process, and benchmarked. That is why the default is scalar, why <code>SetSIMDLevel</code> can switch in either direction, and why every tier has a written contract: bit-exact for the rounding, sign and min/max operations, within a relative 1e-5 for the rest (see <a href="#correctness">Correctness relative to scalar</a>). Supporting pre-AVX CPUs would mean dropping the PUBLIC flag and isolating the AVX code, not selecting a lower tier.</p>
 </div>
 <p>MSVC never defines <code>__SSE4_1__</code>, even with <code>/arch:AVX</code>. <code>CpuInfo.hpp</code> therefore defines <code>N2_MATH_SSE41</code> when either <code>__SSE4_1__</code> or <code>__AVX__</code> is defined, and the dispatched types compile their SSE4.1 implementations under that macro. Before PR #27 the SSE4.1 code was dead on MSVC.</p>
 <p class="src">Source: <code>math/CMakeLists.txt</code>; <code>math/include/math/CpuInfo.hpp</code>; <code>math/include/math/MathRegistrar.hpp</code> (doc comment on <code>SetSIMDLevel</code>)</p>
@@ -213,7 +213,7 @@ Vector3::DotBatch(a.data(), b.data(), dots.data(), a.size()); // caller sizes th
 </div>
 <ul>
 <li><strong>Vector4 is dispatched like Vector3</strong> <span class="badge">PR #30</span>. It has private scalar, SSE2 and SSE4.1 implementations behind static function pointers that default to scalar, so it runs scalar code until <code>InitializeSIMD</code> or <code>Math::SetSIMDLevel</code> is called (before PR #30 it always used SIMD chosen at compile time). <code>Vector4::SetSIMDLevel</code> clamps the tier like the other types. Batch operations use AVX only at the AVX tier. See the <a href="#tier-table">tier table</a>.</li>
-<li><strong>Vector2</strong> is plain scalar code for single operations. Its batch operations use AVX whenever the build defines <code>__AVX__</code> (which it always does), independent of the selected tier.</li>
+<li><strong>Vector2</strong> is plain scalar code for single operations. Its batch operations use AVX whenever the build defines <code>__AVX__</code> (which it always does on x86_64, never on aarch64), independent of the selected tier.</li>
 <li><strong>VectorN</strong> is a generic fixed-size vector. Initialiser-list or iterator-range construction with the wrong number of elements throws <code>std::invalid_argument</code>. <code>Normalized()</code> of an exactly zero vector returns zero. <code>operator==</code> is exact, unlike <code>Vector2/3/4</code>, which compare within 1e-5.</li>
 </ul>
 <div class="callout guarantee">
