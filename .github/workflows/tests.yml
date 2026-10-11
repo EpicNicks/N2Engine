@@ -270,3 +270,32 @@ jobs:
         run: ctest --test-dir build --output-on-failure
         env:
           ALSOFT_DRIVERS: "null"
+
+  # The container image (deploy/Dockerfile) on x86_64: builds it exactly as the Linux Clang job builds the host, checks the
+  # runtime image has every shared library (the Dockerfile's ldd step), makes a project in a volume, starts the container
+  # as its non-root user and waits for the TLS ready line. Not a required check. arm64 images are not built in CI.
+  docker:
+    name: docker (editor host image, x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the image
+        run: docker build -f deploy/Dockerfile -t n2editorhost .
+
+      - name: Run the host in the container
+        run: |
+          set -eu
+          docker volume create n2proj
+          docker run --rm -v n2proj:/project n2editorhost --create /project
+          docker run -d --name n2host -e N2_EDITOR_TOKEN=ci-only-token -v n2proj:/project -p 127.0.0.1:9999:9999 n2editorhost
+          for i in $(seq 1 60); do
+            if docker logs n2host 2>&1 | grep -Eq 'N2EditorHost ready port=9999 tls=1 fingerprint=[0-9a-f]{64}'; then
+              echo "ready"; docker exec n2host id -u; exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' n2host)" != "true" ]; then break; fi
+            sleep 1
+          done
+          docker logs n2host
+          exit 1

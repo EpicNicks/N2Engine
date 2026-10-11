@@ -1,0 +1,60 @@
+# systemd unit for the N2Engine editor host. See docs/editor.html#linux-host for the whole setup.
+#
+#   1. Install the binary:   sudo install -D build/bin/N2EditorHost /opt/n2engine/bin/N2EditorHost
+#   2. Put the access token in a root-only file (systemd reads it as root, the host never sees the file):
+#        sudo install -d -m 0750 /etc/n2editorhost
+#        printf 'N2_EDITOR_TOKEN=%s\n' "$(openssl rand -hex 32)" | sudo install -m 0600 /dev/stdin /etc/n2editorhost/token.env
+#   3. sudo cp deploy/n2editorhost.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#      sudo systemctl enable --now n2editorhost
+#   4. Reach it through an SSH tunnel (the host listens on 127.0.0.1 only):  ssh -L 9999:127.0.0.1:9999 <server>
+#      The TLS certificate fingerprint is in the journal:  journalctl -u n2editorhost | grep fingerprint
+#
+# Do not add --exit-on-stdin-eof: a service's stdin is /dev/null, so the host would exit as soon as it started.
+# The host takes no --bind here, so it stays on 127.0.0.1. To listen elsewhere add --bind <ipv4 address> and read the
+# firewall notes in the docs first.
+
+[Unit]
+Description=N2Engine editor host
+After=network.target
+
+[Service]
+Type=simple
+# A dynamic user with a state folder: /var/lib/n2engine (the project in project/, the TLS identity in n2engine/editor-tls/).
+# --tls refuses to start without a per-user data folder, which is what XDG_DATA_HOME is for.
+DynamicUser=yes
+StateDirectory=n2engine
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/n2engine
+Environment=XDG_DATA_HOME=/var/lib/n2engine
+Environment=ALSOFT_DRIVERS=null
+EnvironmentFile=/etc/n2editorhost/token.env
+
+# Make the project on the first start (--create exits 2 when one is there already, so test first)
+ExecStartPre=/bin/sh -c 'mkdir -p /var/lib/n2engine/project && { [ -e /var/lib/n2engine/project/project.n2proj ] || /opt/n2engine/bin/N2EditorHost --create /var/lib/n2engine/project; }'
+ExecStart=/opt/n2engine/bin/N2EditorHost --port 9999 --project /var/lib/n2engine/project --renderer software --tls --token-env N2_EDITOR_TOKEN
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
