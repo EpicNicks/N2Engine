@@ -2,7 +2,7 @@
 
 #include <array>
 #include <span>
-#include <immintrin.h>
+#include "math/CpuInfo.hpp"
 #include <stdexcept>
 #include <initializer_list>
 #include <format>
@@ -10,12 +10,6 @@
 #include <algorithm>
 #include <string>
 #include <iostream>
-
-#ifdef _WIN32
-#include <intrin.h>
-#elif defined(__GNUC__) || defined(__clang__)
-#include <cpuid.h>
-#endif
 
 #include "math/CpuInfo.hpp"
 #include "math/Vector3.hpp"
@@ -25,6 +19,7 @@ namespace N2Engine::Math
     // Helper for horizontal add in SSE2
     namespace detail
     {
+#ifdef N2_MATH_X86
         inline float horizontal_add_sse2(__m128 v)
         {
             __m128 shuf = _mm_shuffle_ps(v, v, _MM_SHUFFLE(2, 3, 0, 1));
@@ -33,6 +28,7 @@ namespace N2Engine::Math
             sums = _mm_add_ss(sums, shuf);
             return _mm_cvtss_f32(sums);
         }
+#endif
     }
 
     // ===== BASE TEMPLATE - Scalar implementation =====
@@ -551,6 +547,7 @@ namespace N2Engine::Math
             return result;
         }
 
+#ifdef N2_MATH_X86
         // ===== SSE2 IMPLEMENTATIONS =====
         static Matrix MultiplySSE2(const Matrix &a, const Matrix &b)
         {
@@ -684,6 +681,17 @@ namespace N2Engine::Math
             // For now, use scalar implementation (full SIMD inverse is very complex)
             return InverseScalar(m);
         }
+#else
+        // No SSE on this architecture: the scalar versions (the dispatch never picks the SSE tiers here)
+        static Matrix MultiplySSE2(const Matrix &a, const Matrix &b) { return MultiplyScalar(a, b); }
+        static Matrix AddSSE2(const Matrix &a, const Matrix &b) { return AddScalar(a, b); }
+        static Matrix SubSSE2(const Matrix &a, const Matrix &b) { return SubScalar(a, b); }
+        static Matrix ScalarMulSSE2(const Matrix &a, float scalar) { return ScalarMulScalar(a, scalar); }
+        static Vector3 TransformPointSSE2(const Matrix &m, const Vector3 &point) { return TransformPointScalar(m, point); }
+        static Matrix TransposeSSE2(const Matrix &m) { return TransposeScalar(m); }
+        static float DeterminantSSE2(const Matrix &m) { return DeterminantScalar(m); }
+        static Matrix InverseSSE2(const Matrix &m) { return InverseScalar(m); }
+#endif
 
         // ===== SSE4.1 IMPLEMENTATIONS =====
 #ifdef N2_MATH_SSE41
@@ -971,6 +979,7 @@ namespace N2Engine::Math
             return result;
         }
 
+#ifdef N2_MATH_X86
         // SSE2 implementations (partial SIMD for 3x3)
         static Matrix AddSSE2(const Matrix &a, const Matrix &b)
         {
@@ -1024,6 +1033,12 @@ namespace N2Engine::Math
             result.data[8] = a.data[8] * scalar;
             return result;
         }
+#else
+        // No SSE on this architecture: the scalar versions (the dispatch never picks the SSE tiers here)
+        static Matrix AddSSE2(const Matrix &a, const Matrix &b) { return AddScalar(a, b); }
+        static Matrix SubSSE2(const Matrix &a, const Matrix &b) { return SubScalar(a, b); }
+        static Matrix ScalarMulSSE2(const Matrix &a, float scalar) { return ScalarMulScalar(a, scalar); }
+#endif
 
         static Matrix MultiplySSE2(const Matrix &a, const Matrix &b)
         {

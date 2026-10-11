@@ -193,6 +193,52 @@ jobs:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
 
+  # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
+  # there and the scalar versions run. Not a required check yet.
+  linux-arm64:
+    name: linux (Release, arm64, Clang)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      CC: clang-20
+      CXX: clang++-20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo install -d -m 0755 /etc/apt/keyrings
+          sudo curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/keyrings/apt.llvm.org.asc
+          echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+
+      - name: Build
+        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        env:
+          # Silent OpenAL output device; the runner has no sound card
+          ALSOFT_DRIVERS: "null"
+
+      # The real host, end to end (tests/smoke/editor_host_smoke.py, standard library only): create a project, serve it
+      # on the software renderer, and the --exit-on-* flags; then the --tls host, its certificate and key file mode.
+      - name: Editor host smoke test
+        run: python3 tests/smoke/editor_host_smoke.py --scenario host --config Release --exe build/bin/N2EditorHost
+        env:
+          ALSOFT_DRIVERS: "null"
+          PYTHONDONTWRITEBYTECODE: "1"
+
+      - name: Editor host TLS smoke test
+        run: python3 tests/smoke/editor_host_smoke.py --scenario tls --config Release --exe build/bin/N2EditorHost
+        env:
+          ALSOFT_DRIVERS: "null"
+          PYTHONDONTWRITEBYTECODE: "1"
+
   # Informational only (continue-on-error, never required): GCC 14 builds the code but miscompiles sol2's bindings.
   # KNOWN OPEN BUG: sol2 names function-object metatables from __PRETTY_FUNCTION__, where GCC prints every lambda of one
   # signature in one function as the same "<lambda(int)>", so 3 Lua tests fail (LuaLayerTest.NamesAndMasks,

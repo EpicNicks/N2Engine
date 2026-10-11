@@ -19,7 +19,7 @@
 #include <functional>
 #include <vector>
 #include <span>
-#include <immintrin.h>
+#include "math/CpuInfo.hpp"
 #include "math/VectorN.hpp"
 #include "math/Constants.hpp"
 #include "math/CpuInfo.hpp"
@@ -43,7 +43,7 @@ namespace N2Engine::Math
                 float z;
             };
 
-            __m128 simd_data;
+            N2Engine::Math::SimdStorage simd_data;
         };
 #ifdef _MSC_VER
 #pragma warning(pop)
@@ -540,6 +540,7 @@ namespace N2Engine::Math
         // The batch operations use their AVX versions only at the AVX tier
         inline static SIMDLevel simd_level = SIMDLevel::Scalar;
 
+#ifdef N2_MATH_X86
         // ===== SSE2 IMPLEMENTATIONS =====
         static Vector4 AddSSE2(const Vector4 &a, const Vector4 &b)
         {
@@ -632,6 +633,20 @@ namespace N2Engine::Math
             result.simd_data = _mm_andnot_ps(_mm_set1_ps(-0.0f), v.simd_data);
             return result;
         }
+#else
+        // No SSE on this architecture: the scalar versions (the dispatch never picks the SSE tiers here)
+        static Vector4 AddSSE2(const Vector4 &a, const Vector4 &b) { return AddScalar(a, b); }
+        static Vector4 SubSSE2(const Vector4 &a, const Vector4 &b) { return SubScalar(a, b); }
+        static Vector4 ScalarMulSSE2(const Vector4 &v, float scalar) { return ScalarMulScalar(v, scalar); }
+        static Vector4 ScalarDivSSE2(const Vector4 &v, float scalar) { return ScalarDivScalar(v, scalar); }
+        static Vector4 ScaleSSE2(const Vector4 &a, const Vector4 &b) { return ScaleScalar(a, b); }
+        static float DotSSE2(const Vector4 &a, const Vector4 &b) { return DotScalar(a, b); }
+        static float LengthSSE2(const Vector4 &v) { return LengthScalar(v); }
+        static Vector4 NormalizeSSE2(const Vector4 &v) { return NormalizeScalar(v); }
+        static Vector4 MinSSE2(const Vector4 &a, const Vector4 &b) { return MinScalar(a, b); }
+        static Vector4 MaxSSE2(const Vector4 &a, const Vector4 &b) { return MaxScalar(a, b); }
+        static Vector4 AbsSSE2(const Vector4 &v) { return AbsScalar(v); }
+#endif
 
         // ===== SSE4.1 IMPLEMENTATIONS =====
 #ifdef N2_MATH_SSE41
