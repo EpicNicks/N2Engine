@@ -35,6 +35,12 @@ using namespace N2Engine::Editor::Protocol;
 // A client that vanishes while the host still has answers to write must cost the host that one connection and
 // nothing else. On Linux a write to a closed connection raises SIGPIPE, whose default action ends the process, so
 // there a regression ends this whole test program instead of failing one test.
+//
+// What this can and cannot show: no command has a large answer, so it pipelines many small requests, leaves them
+// unread and then resets or closes, hoping a later send hits the dead connection. It is a best-effort reproducer: it
+// does not prove a single send was cut short mid-frame, and if the kernel reports ECONNRESET on the first send after
+// the RST (no SIGPIPE) it passes even without MSG_NOSIGNAL and SIG_IGN. Whether it fails with the fix reverted is
+// still to be checked once a Linux CI leg exists.
 
 namespace
 {
@@ -149,10 +155,13 @@ namespace
         {
             Client client(server.GetPort());
             ASSERT_TRUE(client.IsConnected());
-            // Far more than one answer, so most of them are written after the client is gone
+            // Far more than one answer. The client never reads, so the answers pile up unread: first while it is
+            // connected (the host has writes pending against a peer that is not draining), then after it resets
             ASSERT_TRUE(client.SendRequests(400));
+            Drain(server, std::chrono::milliseconds(500));
             client.Close(abortive);
         }
+        // The host keeps writing answers to the connection that no longer exists
         Drain(server, std::chrono::milliseconds(1500));
 
         // Still alive, and still serving the next client
