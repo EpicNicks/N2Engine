@@ -32,7 +32,7 @@ RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/$(uname -m)-linux-gnu/14" \
         -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_PHYSX=OFF \
         -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON \
- && cmake --build build --parallel --target N2EditorHost
+ && cmake --build build --parallel --target N2EditorHost \n && mkdir /openal-libs && cp -a build/lib/libopenal.so* /openal-libs/
 
 FROM ubuntu:24.04 AS runtime
 
@@ -44,7 +44,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/bin/N2EditorHost /usr/local/bin/N2EditorHost
-RUN ldd /usr/local/bin/N2EditorHost | (! grep "not found")
+# OpenAL Soft is built as a shared library next to the host (the build tree is its rpath, which the image does not have)
+COPY --from=build /openal-libs/ /usr/local/lib/
+RUN ldconfig && ldd /usr/local/bin/N2EditorHost | (! grep "not found")
 
 # A non-root user. XDG_DATA_HOME is where the host keeps its TLS identity (<XDG_DATA_HOME>/n2engine/editor-tls); with
 # neither XDG_DATA_HOME nor HOME set, --tls refuses to start. Both folders are volumes, owned by the user, so a new
