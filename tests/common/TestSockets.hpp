@@ -80,6 +80,15 @@ namespace N2TestSockets
 #endif
     }
 
+    /// Makes the next Close reset the connection (RST) instead of closing it politely (FIN)
+    inline void AbortOnClose(Handle handle)
+    {
+        linger option{};
+        option.l_onoff = 1;
+        option.l_linger = 0;
+        setsockopt(handle, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char*>(&option), sizeof(option));
+    }
+
     /// A hung server fails a receive after this long instead of blocking the test
     inline void SetReceiveTimeout(Handle handle, int milliseconds)
     {
