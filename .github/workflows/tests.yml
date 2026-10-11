@@ -726,7 +726,7 @@ jobs:
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure || (./build/bin/engine_tests --gtest_filter=LinuxDiag.* | grep DIAG; exit 1)
         env:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
