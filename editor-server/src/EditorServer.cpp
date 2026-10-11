@@ -72,6 +72,7 @@ using NativeSocket = SOCKET;
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cerrno>
+#include <csignal>
 #define CLOSE_SOCKET close
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR_CODE errno
@@ -84,6 +85,13 @@ namespace N2Engine::Editor
 
     namespace
     {
+#ifdef MSG_NOSIGNAL
+        // A write to a connection the client already dropped is an error return, never a SIGPIPE that kills the host
+        constexpr int SendFlags = MSG_NOSIGNAL;
+#else
+        constexpr int SendFlags = 0;
+#endif
+
         // Sockets are kept as int (as before); an invalid SOCKET converts to -1
         constexpr int NoSocket = -1;
         // How often a waiting network thread checks whether the server is stopping
@@ -1443,6 +1451,12 @@ namespace N2Engine::Editor
         }
 #endif
         _socketsInitialized = true;
+
+#ifndef _WIN32
+        // Belt and braces for writes that don't pass MSG_NOSIGNAL (macOS has no such flag; a library's own writes):
+        // the default action for SIGPIPE would end the whole host
+        std::signal(SIGPIPE, SIG_IGN);
+#endif
 
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -6138,7 +6152,7 @@ namespace N2Engine::Editor
         while (sent < size)
         {
             if (!WaitUntilReady(socket, true)) return false;
-            int result = send(socket, bytes + sent, static_cast<int>(size - sent), 0);
+            int result = send(socket, bytes + sent, static_cast<int>(size - sent), SendFlags);
             if (result <= 0) return false;
             sent += result;
         }

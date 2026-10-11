@@ -79,8 +79,9 @@ namespace N2Engine::IO
          * folder; the old one is left as it is). base is UserDataBase() unless given (empty).
          */
         [[nodiscard]] std::filesystem::path UserDataPath(const std::filesystem::path &base = {}) const;
-        /// %APPDATA%/N2Engine on Windows, $HOME/.n2engine elsewhere ("." when neither is set): the folder every
-        /// project's user data folder is in, and what user:// meant before projects had their own
+        /// %APPDATA%/N2Engine on Windows; elsewhere $XDG_DATA_HOME/n2engine, else $HOME/.local/share/n2engine (an empty
+        /// or relative value counts as unset). "." when none of them is usable (a service or container with no HOME):
+        /// the folder every project's user data folder is in, and what user:// meant before projects had their own
         [[nodiscard]] static std::filesystem::path UserDataBase();
         /// A project name made safe as one folder name: letters, digits, '-', '_' and '.' kept, anything else
         /// (spaces, separators, non-ASCII) becomes '_', leading and trailing '.' and '_' dropped, at most 48

@@ -406,10 +406,29 @@ namespace N2Engine::IO
         std::free(appData);
         return std::filesystem::path(".");
 #else
-        if (const char *home = std::getenv("HOME"); home != nullptr)
+        // The XDG base directory rule: $XDG_DATA_HOME, else $HOME/.local/share. A value that is empty or not an
+        // absolute path is treated as unset (the spec says to ignore it), so a stray "data" never makes the data
+        // folder relative to wherever the process happens to run (systemd units and containers often have no HOME).
+        const auto absoluteVariable = [](const char *name) -> std::filesystem::path
         {
-            return std::filesystem::path(home) / ".n2engine";
+            const char *value = std::getenv(name);
+            if (value == nullptr || *value == '\0')
+            {
+                return {};
+            }
+            std::filesystem::path path(value);
+            return path.is_absolute() ? path : std::filesystem::path();
+        };
+        if (std::filesystem::path data = absoluteVariable("XDG_DATA_HOME"); !data.empty())
+        {
+            return data / "n2engine";
         }
+        if (std::filesystem::path home = absoluteVariable("HOME"); !home.empty())
+        {
+            return home / ".local" / "share" / "n2engine";
+        }
+        // Neither is usable: "." as on Windows without APPDATA. Callers that must never write into the working
+        // directory (the TLS identity) check for it and refuse instead
         return std::filesystem::path(".");
 #endif
     }
