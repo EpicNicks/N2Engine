@@ -227,7 +227,9 @@ TEST(CommandClassificationTest, TheReadListIsNotTheEditOnlyList)
         (void)commandClass;
         const uint8_t id = IdOf(spec.at("commands").at(name));
         if (EditorServer::IsEditOnlyCommand(id))
+        {
             EXPECT_FALSE(EditorServer::IsReadCommand(id)) << name << " writes project files, so it can't be a read";
+        }
     }
 }
 
@@ -260,8 +262,10 @@ TEST(ReadOnlyHostTest, EveryNonReadIsRefusedWithAReadableErrorForAClientThatDidN
     for (const bool sentHello : {false, true})
     {
         if (sentHello)
+        {
             ASSERT_EQ(Execute(server, CommandType::Hello, HelloPayload(false, false)).type,
                       static_cast<uint8_t>(ResponseType::ServerInfo));
+        }
 
         for (const auto &[name, command] : spec.at("commands").items())
         {
