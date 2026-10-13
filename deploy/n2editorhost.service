@@ -13,7 +13,8 @@
 #
 # Do not add --exit-on-stdin-eof: a service's stdin is /dev/null, so the host would exit as soon as it started.
 # The host takes no --bind here, so it stays on 127.0.0.1. To listen elsewhere add --bind <ipv4 address> and read the
-# firewall notes in the docs first.
+# firewall notes in the docs first. For a host that should only be looked at, add --read-only to ExecStart: it refuses
+# every command that changes anything (docs/logging-and-editor.html#read-only).
 
 [Unit]
 Description=N2Engine editor host

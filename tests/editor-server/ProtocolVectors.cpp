@@ -114,7 +114,8 @@ namespace ProtocolVectors
             {"Hello", [](BufferReader &r)
             {
                 const auto cmd = HelloCmd::Deserialize(r);
-                return json{{"clientName", cmd.clientName}, {"protocolVersion", cmd.protocolVersion}, {"token", cmd.token}};
+                return json{{"clientName", cmd.clientName}, {"protocolVersion", cmd.protocolVersion}, {"token", cmd.token},
+                            {"errorCodes", cmd.errorCodes}};
             }},
             {"PollEvents", [](BufferReader &r)
             {
@@ -258,6 +259,10 @@ namespace ProtocolVectors
         static const std::map<std::string, ResponseBuilder> builders = {
             {"Ok", [](BufferWriter &w, const json &) { WriteOk(w); }},
             {"Error", [](BufferWriter &w, const json &f) { WriteError(w, StringField(f, "message")); }},
+            {"ErrorCoded", [](BufferWriter &w, const json &f)
+            {
+                WriteErrorCoded(w, StringField(f, "message"), StringField(f, "code"));
+            }},
             {"FrameData", [](BufferWriter &w, const json &f)
             {
                 const std::vector<uint8_t> pixels = FromHex(StringField(f, "pixels"));
@@ -273,7 +278,7 @@ namespace ProtocolVectors
             {"ServerInfo", [](BufferWriter &w, const json &f)
             {
                 WriteServerInfo(w, StringField(f, "protocolVersion"), StringField(f, "engineVersion"),
-                                f.at("capabilities"), f.at("projectLoaded").get<bool>());
+                                f.at("capabilities"), f.at("projectLoaded").get<bool>(), f.at("readOnly").get<bool>());
             }},
             {"Events", [](BufferWriter &w, const json &f)
             {

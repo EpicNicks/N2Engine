@@ -84,6 +84,11 @@ namespace N2Engine::Editor
                 options.tls = true;
                 continue;
             }
+            if (arg == "--read-only")
+            {
+                options.readOnly = true;
+                continue;
+            }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--renderer" || arg == "--token-env" || arg == "--create" ||
                                     arg == "--name" || arg == "--project-id" || arg == "--play";
@@ -175,6 +180,15 @@ namespace N2Engine::Editor
         if (!options.createPath.empty() && !options.playScene.empty())
         {
             return std::unexpected("--create and --play can't be combined");
+        }
+        if (options.readOnly && !options.playScene.empty())
+        {
+            return std::unexpected("--read-only and --play can't be combined: a play host runs the game and the project's "
+                                   "Lua scripts, which is not read-only");
+        }
+        if (options.readOnly && !options.createPath.empty())
+        {
+            return std::unexpected("--read-only and --create can't be combined: --create writes a project");
         }
         if (options.createPath.empty() && (givenName || givenId))
         {
@@ -278,6 +292,12 @@ Options:
                             certificate's SHA-256 fingerprint, for the client to pin. Needs a host
                             built with N2ENGINE_EDITOR_TLS. Applies to this process only: a play host
                             (--play) is another process, and stays plaintext
+  --read-only               Serve reads only: every command that isn't a read (anything that changes the
+                            project, a scene, an asset or the game, and Shutdown) is refused with the
+                            readOnly error, and the connection stays open. Hello and the read commands
+                            work, with or without --token-env. Commands nobody has classified are refused.
+                            Can't be combined with --play (it runs the game and the project's Lua) or
+                            --create (it writes a project)
   --play <file>             Start as a play host: run the scene snapshot in <file> (what the
                             WritePlaySnapshot command writes; or a res:// .scene path in the project)
                             as a game instead of opening the startup scene. Pass the same --project

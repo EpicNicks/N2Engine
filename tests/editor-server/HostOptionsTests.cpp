@@ -453,6 +453,54 @@ TEST(HostOptionsTest, TlsIsAFlagAndOffByDefault)
     EXPECT_TRUE(last->tls);
 }
 
+// ==================== --read-only ====================
+
+TEST(HostOptionsTest, ReadOnlyIsAFlagAndOffByDefault)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults) << defaults.error();
+    EXPECT_FALSE(defaults->readOnly);
+
+    // Not a value-taking option: the next argument is still parsed on its own, and it goes with a token or without
+    const auto parsed = ParseHostArguments({"--read-only", "--port", "1234", "--token-env", "N2_TOKEN"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->readOnly);
+    EXPECT_EQ(parsed->port, 1234);
+    EXPECT_EQ(parsed->tokenEnv, "N2_TOKEN");
+
+    const auto last = ParseHostArguments({"--port", "1234", "--read-only"});
+    ASSERT_TRUE(last) << last.error();
+    EXPECT_TRUE(last->readOnly);
+}
+
+TEST(HostOptionsTest, ReadOnlyIsRejectedWithPlayAndWithCreate)
+{
+    // A play host runs the game and the project's Lua, which is not read-only, whatever the argument order
+    const auto play = ParseHostArguments({"--read-only", "--play", "snapshot.json"});
+    ASSERT_FALSE(play);
+    EXPECT_NE(play.error().find("--read-only and --play can't be combined"), std::string::npos) << play.error();
+    const auto playFirst = ParseHostArguments({"--play", "snapshot.json", "--port", "1234", "--read-only"});
+    ASSERT_FALSE(playFirst);
+    EXPECT_NE(playFirst.error().find("--read-only and --play"), std::string::npos) << playFirst.error();
+
+    // --create writes a project
+    const auto create = ParseHostArguments({"--create", "proj", "--read-only"});
+    ASSERT_FALSE(create);
+    EXPECT_NE(create.error().find("--read-only and --create can't be combined"), std::string::npos) << create.error();
+
+    // Each alone still parses
+    EXPECT_TRUE(ParseHostArguments({"--play", "snapshot.json"}));
+    EXPECT_TRUE(ParseHostArguments({"--create", "proj"}));
+    EXPECT_TRUE(ParseHostArguments({"--project", "proj", "--read-only"}));
+}
+
+TEST(HostOptionsTest, TheUsageNamesReadOnly)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--read-only"), std::string_view::npos);
+    EXPECT_NE(usage.find("readOnly"), std::string_view::npos);
+}
+
 TEST(HostOptionsTest, TheUsageNamesTls)
 {
     const std::string_view usage = HostUsage();

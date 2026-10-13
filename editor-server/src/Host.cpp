@@ -357,6 +357,11 @@ namespace N2Engine::Editor
                 // The fingerprint is public (it is in the ready line); the key and the token never reach a log
                 Logger::Info("Serving TLS; certificate SHA-256 " + server.TlsFingerprint());
             }
+            if (options.readOnly)
+            {
+                (void)server.SetReadOnly(true);
+                Logger::Info("Read-only host (--read-only): commands that change anything are refused");
+            }
             if (options.exitOnDisconnect)
             {
                 (void)server.SetStopOnDisconnect(true);

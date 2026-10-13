@@ -109,6 +109,59 @@ TEST(ProtocolVectorTest, ServerDeserializersReadTheVectorRequests)
     }
 }
 
+// A peer from before a message's optional trailing fields (protocol.json's optionalTrailing; the vectors' shortPayloads)
+// sends a payload that ends before them. The server's Hello deserializer reads such a request with the defaults
+// (an old client sends no errorCodes); for a response, the server's builder writes the short payload followed by exactly
+// the optional fields (a 1.10 host's ServerInfo has no readOnly), which is what a client's lenient decoder relies on.
+TEST(ProtocolVectorTest, ShortPayloadsOfOlderPeersDecodeWithTheDefaults)
+{
+    const json vectors = ProtocolVectors::Load().value("shortPayloads", json::array());
+    ASSERT_FALSE(vectors.empty());
+    bool sawRequest = false;
+    bool sawResponse = false;
+    for (const json &vector : vectors)
+    {
+        const std::vector<uint8_t> payload = ProtocolVectors::FromHex(vector.at("payload").get<std::string>());
+        if (vector.contains("request"))
+        {
+            sawRequest = true;
+            const std::string name = vector.at("request").get<std::string>();
+            const auto decoder = ProtocolVectors::RequestDecoders().find(name);
+            ASSERT_NE(decoder, ProtocolVectors::RequestDecoders().end()) << name;
+            BufferReader reader(payload);
+            json decoded;
+            ASSERT_NO_THROW(decoded = decoder->second(reader)) << name;
+            EXPECT_EQ(decoded, vector.at("fields")) << name << ": the server read " << decoded.dump();
+            EXPECT_EQ(reader.Remaining(), 0u) << name;
+        }
+        else
+        {
+            sawResponse = true;
+            const std::string name = vector.at("response").get<std::string>();
+            // The vector's fields hold the defaults of the missing fields: the builder writes the short payload, then
+            // those fields (one bool, false)
+            const std::vector<uint8_t> frame = ProtocolVectors::BuildResponse(name, vector);
+            ASSERT_EQ(frame.size(), 5u + payload.size() + 1u) << name;
+            const std::vector<uint8_t> built(frame.begin() + 5, frame.end());
+            std::vector<uint8_t> expected = payload;
+            expected.push_back(0);
+            EXPECT_EQ(ProtocolVectors::ToHex(built), ProtocolVectors::ToHex(expected)) << name;
+        }
+    }
+    EXPECT_TRUE(sawRequest);
+    EXPECT_TRUE(sawResponse);
+
+    // Hello as an old (1.10) client sends it: no errorCodes, so the host sends plain Errors
+    BufferWriter oldHello;
+    oldHello.WriteString("editor");
+    oldHello.WriteString("1.10.0");
+    oldHello.WriteString("");
+    BufferReader reader(oldHello.Data());
+    const HelloCmd cmd = HelloCmd::Deserialize(reader);
+    EXPECT_FALSE(cmd.errorCodes);
+    EXPECT_FALSE(reader.HasData());
+}
+
 // Each response vector's fields, written by the server's builder, give the vector's frame: byte for byte, except that
 // json fields are compared as parsed values (how JSON text is written, its key order or spacing, is free)
 TEST(ProtocolVectorTest, ServerBuildersWriteTheVectorResponses)

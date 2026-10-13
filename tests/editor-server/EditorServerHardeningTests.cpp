@@ -1105,3 +1105,174 @@ TEST(EditorServerSocketTest, WithAnAccessTokenOnlyAnAuthenticatedSessionStopsThe
     EXPECT_TRUE(WaitUntilStopped(server, std::chrono::seconds(10)));
     StopWithin(server, std::chrono::seconds(10));
 }
+
+// ==================== --read-only over a socket ====================
+// The refusals themselves are in ReadOnlyModeTests.cpp (ExecuteCommand, no socket). Here: Shutdown, which the network
+// thread answers itself, the connection staying usable after a refusal, ErrorCoded on the wire, and the access token.
+
+namespace
+{
+    /// Hello with the trailing errorCodes field (1.11.0)
+    std::vector<uint8_t> HelloPayloadWithCodes(const std::string &token, const bool errorCodes)
+    {
+        BufferWriter w;
+        w.WriteString("socket test");
+        w.WriteString(std::string{ProtocolVersion});
+        w.WriteString(token);
+        w.WriteBool(errorCodes);
+        return ToVector(w);
+    }
+
+    struct CodedError
+    {
+        std::string message;
+        std::string code;
+    };
+
+    CodedError DecodeCoded(const DecodedFrame &frame)
+    {
+        EXPECT_EQ(frame.type, static_cast<uint8_t>(ResponseType::ErrorCoded)) << frame.body;
+        const std::vector<uint8_t> bytes(frame.body.begin(), frame.body.end());
+        BufferReader r(bytes);
+        CodedError coded;
+        coded.message = r.ReadString();
+        coded.code = r.ReadString();
+        EXPECT_FALSE(r.HasData()) << "trailing bytes after ErrorCoded";
+        return coded;
+    }
+
+    constexpr uint8_t EntityListType = static_cast<uint8_t>(ResponseType::EntityList);
+
+    std::optional<DecodedFrame> SendShutdown(TestClient &client)
+    {
+        // Answered on the network thread: nothing needs draining
+        if (!client.SendRequest(CommandType::Shutdown, {}, 0))
+            return std::nullopt;
+        const auto response = client.ReadResponse();
+        if (!response.has_value())
+            return std::nullopt;
+        return Decode(*response);
+    }
+}
+
+TEST(EditorServerSocketTest, AReadOnlyHostRefusesShutdownAndKeepsServingTheConnection)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.SetReadOnly(true));
+    ASSERT_TRUE(server.Start(0));
+    TestClient client(server.GetPort());
+    ASSERT_TRUE(client.IsConnected());
+
+    // Without a Hello the client hasn't asked for codes: a plain Error that says why
+    auto shutdown = SendShutdown(client);
+    ASSERT_TRUE(shutdown.has_value());
+    EXPECT_EQ(shutdown->type, ErrorType);
+    EXPECT_EQ(shutdown->body, "read-only host: Shutdown is not allowed");
+    EXPECT_TRUE(server.IsRunning()) << "a refused Shutdown must not stop the host";
+
+    // The same connection goes on: Hello (asking for codes) says the host is read-only
+    auto response = Roundtrip(server, client, CommandType::Hello, HelloPayloadWithCodes("", true));
+    ASSERT_TRUE(response.has_value());
+    ASSERT_EQ(response->type, ServerInfoType) << response->body;
+    ASSERT_FALSE(response->body.empty());
+    EXPECT_EQ(static_cast<uint8_t>(response->body.back()), uint8_t{1}) << "ServerInfo.readOnly";
+
+    // Now Shutdown and a write are refused with the code
+    shutdown = SendShutdown(client);
+    ASSERT_TRUE(shutdown.has_value());
+    EXPECT_EQ(DecodeCoded(*shutdown).code, "readOnly");
+    EXPECT_TRUE(server.IsRunning());
+
+    response = Roundtrip(server, client, CommandType::CreateEntity, StringPayload("Cube"));
+    ASSERT_TRUE(response.has_value());
+    const CodedError coded = DecodeCoded(*response);
+    EXPECT_EQ(coded.code, "readOnly");
+    EXPECT_EQ(coded.message, "read-only host: CreateEntity is not allowed");
+
+    // Reads still work, after the refusals
+    response = Roundtrip(server, client, CommandType::GetAllEntities);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->type, EntityListType) << response->body;
+    EXPECT_TRUE(server.IsRunning());
+
+    StopWithin(server, std::chrono::seconds(10));
+}
+
+TEST(EditorServerSocketTest, AReadOnlyHostWithATokenRefusesAClientThatDidNotAskForCodesWithAReadableError)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.SetAccessToken("socket-token"));
+    ASSERT_TRUE(server.SetReadOnly(true));
+    ASSERT_TRUE(server.Start(0));
+
+    {
+        // The access-token gate is untouched: a command before Hello gets the Hello error, and the connection closes
+        TestClient early(server.GetPort());
+        ASSERT_TRUE(early.IsConnected());
+        ASSERT_TRUE(early.SendRequest(CommandType::DestroyEntity, NoSuchEntity, static_cast<uint32_t>(NoSuchEntity.size())));
+        const auto response = early.ReadResponse();
+        ASSERT_TRUE(response.has_value());
+        EXPECT_EQ(Decode(*response).body, EditorServer::HelloRequiredError);
+        EXPECT_TRUE(early.IsClosedByServer());
+    }
+
+    // A 1.10 client: Hello has three fields, and it never gets ErrorCoded
+    TestClient client(server.GetPort());
+    ASSERT_TRUE(client.IsConnected());
+    auto response = Roundtrip(server, client, CommandType::Hello, HelloPayload("socket-token"));
+    ASSERT_TRUE(response.has_value());
+    ASSERT_EQ(response->type, ServerInfoType) << response->body;
+
+    response = Roundtrip(server, client, CommandType::DestroyEntity, NoSuchEntity);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->type, ErrorType);
+    EXPECT_EQ(response->body, "read-only host: DestroyEntity is not allowed");
+
+    const auto shutdown = SendShutdown(client);
+    ASSERT_TRUE(shutdown.has_value());
+    EXPECT_EQ(shutdown->type, ErrorType);
+    EXPECT_EQ(shutdown->body, "read-only host: Shutdown is not allowed");
+    EXPECT_TRUE(server.IsRunning());
+
+    response = Roundtrip(server, client, CommandType::GetAllEntities);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->type, EntityListType) << response->body;
+
+    StopWithin(server, std::chrono::seconds(10));
+}
+
+TEST(EditorServerSocketTest, TheErrorCodesCapabilityBelongsToTheConnection)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.SetReadOnly(true));
+    ASSERT_TRUE(server.Start(0));
+    {
+        TestClient asked(server.GetPort());
+        ASSERT_TRUE(asked.IsConnected());
+        const auto hello = Roundtrip(server, asked, CommandType::Hello, HelloPayloadWithCodes("", true));
+        ASSERT_TRUE(hello.has_value());
+        ASSERT_EQ(hello->type, ServerInfoType) << hello->body;
+        const auto response = Roundtrip(server, asked, CommandType::DestroyEntity, NoSuchEntity);
+        ASSERT_TRUE(response.has_value());
+        EXPECT_EQ(DecodeCoded(*response).code, "readOnly");
+    }
+
+    // The next connection never said Hello, so it isn't a client that asked
+    TestClient other(server.GetPort());
+    ASSERT_TRUE(other.IsConnected());
+    const auto response = Roundtrip(server, other, CommandType::DestroyEntity, NoSuchEntity);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->type, ErrorType);
+    EXPECT_EQ(response->body, "read-only host: DestroyEntity is not allowed");
+
+    StopWithin(server, std::chrono::seconds(10));
+}
+
+TEST(EditorServerSocketTest, ReadOnlyCannotChangeWhileServing)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.Start(0));
+    EXPECT_FALSE(server.SetReadOnly(true));
+    EXPECT_FALSE(server.IsReadOnly());
+    StopWithin(server, std::chrono::seconds(10));
+}

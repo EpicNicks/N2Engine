@@ -117,6 +117,7 @@ namespace
         static const std::map<std::string, ResponseType> responses = {
             {"Ok", ResponseType::Ok},
             {"Error", ResponseType::Error},
+            {"ErrorCoded", ResponseType::ErrorCoded},
             {"FrameData", ResponseType::FrameData},
             {"CameraPosition", ResponseType::CameraPosition},
             {"EntityTransform", ResponseType::EntityTransform},
@@ -278,6 +279,9 @@ namespace
             if (declared.at("type").get<std::string>() == response && declared.contains("fields"))
                 return &declared.at("fields");
         }
+        // A response no command answers with: the host picks it (ErrorCoded)
+        if (spec.contains("extraResponses") && spec.at("extraResponses").contains(response))
+            return &spec.at("extraResponses").at(response).at("fields");
         return nullptr;
     }
 
@@ -450,6 +454,64 @@ TEST(ProtocolSpecTest, CommandDeserializersReadTheSpecFields)
         ++checked;
     }
     EXPECT_EQ(checked, ServerDeserializers().size()) << "a server deserializer has no request in the spec";
+}
+
+// protocol.json's optionalTrailing lists a message's last fields (added in a later minor version). A request whose
+// payload ends before them is what an older client sends: the server's deserializer must read it with the defaults
+// (every optional trailing request field has to go through ReadTrailing), and every listed field has to be a bool or
+// number, which the client generators decode as false or 0 when the payload ends
+TEST(ProtocolSpecTest, OptionalTrailingFieldsAreTheLastFieldsAndRequestsReadWithoutThem)
+{
+    const spec_json spec = LoadSpec();
+    ASSERT_TRUE(spec.contains("optionalTrailing"));
+    size_t requests = 0;
+    for (const auto &[message, optional] : spec.at("optionalTrailing").items())
+    {
+        ASSERT_FALSE(optional.empty()) << message;
+        const bool isRequest = message.ends_with("Request");
+        const std::string name = message.substr(0, message.size() - (isRequest ? 7 : 8));
+
+        spec_json fields;
+        if (isRequest)
+        {
+            ASSERT_TRUE(spec.at("commands").contains(name)) << message;
+            fields = spec.at("commands").at(name).at("request");
+        }
+        else
+        {
+            const spec_json *declared = FindResponseFields(spec, name);
+            ASSERT_NE(declared, nullptr) << message;
+            fields = *declared;
+        }
+
+        std::vector<std::string> names;
+        for (const auto &[field, type] : fields.items())
+            names.push_back(field);
+        ASSERT_GE(names.size(), optional.size()) << message;
+        for (size_t i = 0; i < optional.size(); ++i)
+        {
+            const std::string field = names[names.size() - optional.size() + i];
+            EXPECT_EQ(field, optional[i].get<std::string>()) << message << ": optionalTrailing must be the last fields in order";
+            const std::string type = fields.at(field).get<std::string>();
+            EXPECT_TRUE(type == "bool" || type == "uint8" || type == "uint32" || type == "int32" || type == "float32")
+                << message << "." << field << ": " << type;
+        }
+
+        if (!isRequest)
+            continue;
+        const auto it = ServerDeserializers().find(name);
+        ASSERT_NE(it, ServerDeserializers().end()) << name;
+        Protocol::BufferWriter payload;
+        for (size_t i = 0; i + optional.size() < names.size(); ++i)
+        {
+            ASSERT_TRUE(WriteField(payload, fields.at(names[i]).get<std::string>(), names[i])) << name << "." << names[i];
+        }
+        Protocol::BufferReader reader(payload.Data());
+        EXPECT_NO_THROW(it->second(reader)) << name << ": the server needs a field an older client doesn't send";
+        EXPECT_EQ(reader.Remaining(), 0u) << name;
+        ++requests;
+    }
+    EXPECT_GE(requests, 1u);
 }
 
 TEST(ProtocolSpecTest, CommandDeserializersKeepFieldValues)

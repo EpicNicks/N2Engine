@@ -463,6 +463,38 @@ namespace N2Engine::Editor
         /// The commands a play host answers with an Error: the ones that write project files or swap the scene
         [[nodiscard]] static bool IsEditOnlyCommand(uint8_t commandType);
 
+        // ==================== Read-only mode ====================
+
+        /// What a command does to the host. Read: answers from what the host holds and changes nothing a client could
+        /// save, run or lose. Write: changes the project, a scene, the game or an asset, or runs project code. Admin:
+        /// controls the host itself (Shutdown).
+        enum class CommandClass : uint8_t
+        {
+            Read,
+            Write,
+            Admin,
+        };
+
+        /// The class of a command id, or nullopt for an id nobody classified (every command of protocol.json is
+        /// classified: a test requires it, so a new command can't ship without a decision). Not IsEditOnlyCommand,
+        /// which is a play host's deny list of 13 file-writing commands.
+        [[nodiscard]] static std::optional<CommandClass> ClassifyCommand(uint8_t commandType);
+
+        /// An allow list with default deny: true only for a command classified Read. An id that is no command, or that
+        /// nobody classified, is not a read.
+        [[nodiscard]] static bool IsReadCommand(uint8_t commandType);
+
+        /// Before Start (the network thread reads it), like SetAccessToken (--read-only): the host answers every
+        /// command that is not a read, Shutdown included, with the readOnly error (ErrorCoded for a client that asked
+        /// for it in Hello, else an Error whose message says so) and keeps serving the connection. Hello and the reads
+        /// run as usual, with or without an access token. False, changing nothing, while the server is running.
+        bool SetReadOnly(bool readOnly);
+        [[nodiscard]] bool IsReadOnly() const { return _readOnly; }
+
+        /// The message of a refusal: "read-only host: <command> is not allowed" (the command's name, or its id for an
+        /// unknown one)
+        [[nodiscard]] static std::string ReadOnlyMessage(uint8_t commandType);
+
     private:
         void ServerLoop(int listenSocket);
         /// Serves one connection until it closes. sessionOpened is set (and stays set) once the connection has a
@@ -636,6 +668,8 @@ namespace N2Engine::Editor
         /// Handlers run on the main thread and don't touch the socket: this records the response frame,
         /// which ExecuteCommand returns for the network thread to send
         void SendResponse(int clientSocket, std::vector<uint8_t> data);
+        /// A refusal's frame: ErrorCoded with this code for a client that asked for it, else a plain Error
+        [[nodiscard]] std::vector<uint8_t> BuildDenial(std::string_view code, const std::string &message) const;
 
         std::atomic<bool> _running{false};
         std::thread _serverThread;
@@ -644,6 +678,10 @@ namespace N2Engine::Editor
         bool _socketsInitialized{false};
         // Set before Start only, so both threads read it without a lock
         std::string _accessToken;
+        bool _readOnly{false};
+        // Whether the current connection's Hello asked for ErrorCoded: set by HandleHello (main thread), reset when a
+        // connection starts and read by the network thread for Shutdown's refusal, so atomic
+        std::atomic<bool> _clientErrorCodes{false};
         std::chrono::milliseconds _helloTimeout{DefaultHelloTimeout};
         // TLS: the identity is set before Start only. The session is the current connection's, made and used on the
         // network thread only (one client at a time); it is declared after the identity, so it goes first.

@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.10.0";
+inline constexpr const char *ProtocolVersion = "1.11.0";
 
 enum class CommandType : uint8_t
 {
@@ -119,6 +119,7 @@ enum class ResponseType : uint8_t
     AssetCreated = 0xA3,
     PlaySnapshot = 0xB0,
     PlayState = 0xB1,
+    ErrorCoded = 0x1C,
 };
 
 // Custom types
@@ -162,6 +163,7 @@ struct HelloCmd
     std::string clientName;
     std::string protocolVersion;
     std::string token;
+    bool errorCodes; // optional trailing: the default (false or 0) when the payload ends before it
 };
 
 struct PollEventsCmd
@@ -434,6 +436,7 @@ struct ServerInfoData
     std::string engineVersion;
     std::string capabilities; // JSON: string[]
     bool projectLoaded;
+    bool readOnly; // optional trailing: the default (false or 0) when the payload ends before it
 };
 
 struct EventsData
@@ -621,6 +624,12 @@ struct PlayStateData
     std::string state;
     uint32_t frame;
     float time;
+};
+
+struct ErrorCodedData
+{
+    std::string message;
+    std::string code;
 };
 
 } // namespace N2Engine::Editor::Protocol

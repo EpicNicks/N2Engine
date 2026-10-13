@@ -47,6 +47,7 @@ function responseFields(name) {
   for (const command of Object.values(spec.commands)) {
     if (command.response.type === name) return command.response.fields ?? {}
   }
+  if (spec.extraResponses?.[name]) return spec.extraResponses[name].fields ?? {}
   throw new Error(`no response ${name} in protocol.json`)
 }
 
@@ -106,6 +107,32 @@ for (const vector of vectors.responseVariants ?? []) {
   })
 }
 
+// A peer from before a message's optional trailing fields (protocol.json's optionalTrailing) sends a payload that
+// ends before them: the decoder gives their defaults instead of throwing
+for (const vector of vectors.shortPayloads ?? []) {
+  const name = vector.request ?? vector.response
+  test(`short payload ${vector.request ? "request" : "response"} ${name}: decodes with the optional trailing fields defaulted`, () => {
+    const codec = vector.request ? protocol.RequestCodecs[name] : protocol.ResponseCodecs[name]
+    const fields = vector.request ? spec.commands[name].request : responseFields(name)
+    assert.deepEqual(fromCodecValues(fields, codec.decode(fromHex(vector.payload))), vector.fields)
+  })
+}
+
+test("a 1.10 ServerInfo (no readOnly) decodes with readOnly false, and a 1.10 Hello with errorCodes false", realProtocol, () => {
+  const info = { protocolVersion: "1.10.0", engineVersion: "0.1", capabilities: ["scene"], projectLoaded: true, readOnly: true }
+  const full = protocol.encodeServerInfoResponse(info)
+  const old = protocol.decodeServerInfoResponse(full.subarray(0, full.length - 1))
+  assert.deepEqual(old, { ...info, readOnly: false })
+  assert.deepEqual(protocol.decodeServerInfoResponse(full), info)
+  // Only the optional trailing field may be missing: a payload cut anywhere earlier is still malformed
+  assert.throws(() => protocol.decodeServerInfoResponse(full.subarray(0, full.length - 2)), RangeError)
+
+  const hello = { clientName: "editor", protocolVersion: "1.10.0", token: "t", errorCodes: true }
+  const helloFull = protocol.encodeHelloRequest(hello)
+  assert.deepEqual(protocol.decodeHelloRequest(helloFull.subarray(0, helloFull.length - 1)), { ...hello, errorCodes: false })
+  assert.deepEqual(protocol.decodeHelloRequest(helloFull), hello)
+})
+
 test("decoders read from a view with an offset (a Buffer slice) and ignore trailing bytes", realProtocol, () => {
   const vector = vectors.responses.find((v) => v.response === "EngineHealth")
   const padded = new Uint8Array(3 + vector.payload.length / 2 + 4)
@@ -115,7 +142,7 @@ test("decoders read from a view with an offset (a Buffer slice) and ignore trail
 })
 
 test("a string keeps a leading byte order mark (U+FEFF) through encode and decode", realProtocol, () => {
-  const value = { clientName: "\uFEFFeditor", protocolVersion: "1.0.0", token: "\uFEFF" }
+  const value = { clientName: "\uFEFFeditor", protocolVersion: "1.0.0", token: "\uFEFF", errorCodes: true }
   assert.deepEqual(protocol.decodeHelloRequest(protocol.encodeHelloRequest(value)), value)
   // An Error's message is decoded straight from the payload, as text
   const error = { message: "\uFEFFbad" }
@@ -125,7 +152,8 @@ test("a string keeps a leading byte order mark (U+FEFF) through encode and decod
 test("a truncated payload throws a RangeError", realProtocol, () => {
   const vector = vectors.requests.find((v) => v.command === "Hello")
   const payload = fromHex(vector.payload)
-  assert.throws(() => protocol.decodeHelloRequest(payload.subarray(0, payload.length - 1)), RangeError)
+  // Hello's last field (errorCodes) is optional trailing, so cutting one byte is an older client's payload; cutting into token is not
+  assert.throws(() => protocol.decodeHelloRequest(payload.subarray(0, payload.length - 2)), RangeError)
   assert.throws(() => protocol.decodeHelloRequest(new Uint8Array(0)), RangeError)
 })
 

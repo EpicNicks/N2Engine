@@ -1820,6 +1820,8 @@ namespace N2Engine::Editor
         // This connection's session: whether its last Hello succeeded. A new connection starts without one, so a
         // client that reconnects must send Hello again.
         bool helloAccepted = false;
+        // A new connection hasn't asked for ErrorCoded: its Hello does (HandleHello)
+        _clientErrorCodes = false;
         // With an access token, a connection that hasn't succeeded a Hello must not hold the (one-at-a-time) server:
         // it has until this deadline to do so, and is closed after a refused command or a failed Hello
         const bool gated = !_accessToken.empty();
@@ -1891,6 +1893,16 @@ namespace N2Engine::Editor
 
             if (static_cast<CommandType>(cmdType) == CommandType::Shutdown)
             {
+                // The one command answered here, so ProcessCommand's read-only gate never sees it: a read-only host
+                // refuses it the same way and keeps serving this connection
+                if (_readOnly)
+                {
+                    const std::vector<uint8_t> denial =
+                        BuildDenial(Protocol::ErrorCodeReadOnly, ReadOnlyMessage(cmdType));
+                    if (!Send(clientSocket, denial.data(), denial.size()))
+                        break;
+                    continue;
+                }
                 BufferWriter response;
                 WriteOk(response);
                 Send(clientSocket, response.Data().data(), response.Size());
@@ -2069,6 +2081,146 @@ namespace N2Engine::Editor
         return parent / relative.filename();
     }
 
+    namespace
+    {
+        struct CommandInfo
+        {
+            CommandType type;
+            std::string_view name;
+            EditorServer::CommandClass commandClass;
+        };
+
+        // Every command of protocol.json, classified explicitly (an allow list: see EditorServer::IsReadCommand).
+        // ProtocolSpecTests fails for a command of the spec that is missing here, and for one that is classified
+        // differently from the test's own copy of this table.
+        constexpr CommandInfo CommandTable[] = {
+        // Read: answers from what the host holds and changes nothing a client could save, run or lose (a view
+        // setting, the viewport size and the editor camera, belongs to the viewer, not to the project)
+        {CommandType::RenderFrame, "RenderFrame", EditorServer::CommandClass::Read},
+        {CommandType::SetViewportSize, "SetViewportSize", EditorServer::CommandClass::Read},
+        {CommandType::GetAudio, "GetAudio", EditorServer::CommandClass::Read},
+        {CommandType::Hello, "Hello", EditorServer::CommandClass::Read},
+        {CommandType::PollEvents, "PollEvents", EditorServer::CommandClass::Read},
+        {CommandType::RenderFrameIfChanged, "RenderFrameIfChanged", EditorServer::CommandClass::Read},
+        {CommandType::GetCameraPosition, "GetCameraPosition", EditorServer::CommandClass::Read},
+        {CommandType::SetEditorCamera, "SetEditorCamera", EditorServer::CommandClass::Read},
+        {CommandType::GetEditorCamera, "GetEditorCamera", EditorServer::CommandClass::Read},
+        {CommandType::PickEntity, "PickEntity", EditorServer::CommandClass::Read},
+        {CommandType::GetEntityBounds, "GetEntityBounds", EditorServer::CommandClass::Read},
+        {CommandType::GetCurrentScene, "GetCurrentScene", EditorServer::CommandClass::Read},
+        {CommandType::GetHierarchy, "GetHierarchy", EditorServer::CommandClass::Read},
+        {CommandType::GetOpenScene, "GetOpenScene", EditorServer::CommandClass::Read},
+        {CommandType::GetEntityTransform, "GetEntityTransform", EditorServer::CommandClass::Read},
+        {CommandType::GetAllEntities, "GetAllEntities", EditorServer::CommandClass::Read},
+        {CommandType::GetEntity, "GetEntity", EditorServer::CommandClass::Read},
+        {CommandType::ListAssets, "ListAssets", EditorServer::CommandClass::Read},
+        {CommandType::GetAssetInfo, "GetAssetInfo", EditorServer::CommandClass::Read},
+        {CommandType::ReadTextAsset, "ReadTextAsset", EditorServer::CommandClass::Read},
+        {CommandType::GetEngineHealth, "GetEngineHealth", EditorServer::CommandClass::Read},
+        {CommandType::GetComponentTypes, "GetComponentTypes", EditorServer::CommandClass::Read},
+        {CommandType::GetComponent, "GetComponent", EditorServer::CommandClass::Read},
+        {CommandType::GetLuaFields, "GetLuaFields", EditorServer::CommandClass::Read},
+        {CommandType::GetProjectInfo, "GetProjectInfo", EditorServer::CommandClass::Read},
+        {CommandType::GetHistory, "GetHistory", EditorServer::CommandClass::Read},
+        {CommandType::GetAutosave, "GetAutosave", EditorServer::CommandClass::Read},
+        {CommandType::GetPlayState, "GetPlayState", EditorServer::CommandClass::Read},
+        // Write: changes the project, a scene, the game or an asset, or runs project code (SendInput, SetPaused,
+        // Step and WritePlaySnapshot drive a play host's scripts)
+        {CommandType::SetCameraPosition, "SetCameraPosition", EditorServer::CommandClass::Write},
+        {CommandType::CreateScene, "CreateScene", EditorServer::CommandClass::Write},
+        {CommandType::LoadScene, "LoadScene", EditorServer::CommandClass::Write},
+        {CommandType::SaveScene, "SaveScene", EditorServer::CommandClass::Write},
+        {CommandType::DeleteScene, "DeleteScene", EditorServer::CommandClass::Write},
+        {CommandType::OpenScene, "OpenScene", EditorServer::CommandClass::Write},
+        {CommandType::SaveSceneToFile, "SaveSceneToFile", EditorServer::CommandClass::Write},
+        {CommandType::NewScene, "NewScene", EditorServer::CommandClass::Write},
+        {CommandType::CreateEntity, "CreateEntity", EditorServer::CommandClass::Write},
+        {CommandType::DestroyEntity, "DestroyEntity", EditorServer::CommandClass::Write},
+        {CommandType::SetEntityTransform, "SetEntityTransform", EditorServer::CommandClass::Write},
+        {CommandType::CreateEntityEx, "CreateEntityEx", EditorServer::CommandClass::Write},
+        {CommandType::SetEntityParent, "SetEntityParent", EditorServer::CommandClass::Write},
+        {CommandType::SetEntityProperties, "SetEntityProperties", EditorServer::CommandClass::Write},
+        {CommandType::DuplicateEntity, "DuplicateEntity", EditorServer::CommandClass::Write},
+        {CommandType::SetLocalTransform, "SetLocalTransform", EditorServer::CommandClass::Write},
+        {CommandType::CreateScript, "CreateScript", EditorServer::CommandClass::Write},
+        {CommandType::RescanAssets, "RescanAssets", EditorServer::CommandClass::Write},
+        {CommandType::SetImportSettings, "SetImportSettings", EditorServer::CommandClass::Write},
+        {CommandType::WriteTextAsset, "WriteTextAsset", EditorServer::CommandClass::Write},
+        {CommandType::CreateScriptAsset, "CreateScriptAsset", EditorServer::CommandClass::Write},
+        {CommandType::CreateFolder, "CreateFolder", EditorServer::CommandClass::Write},
+        {CommandType::AddComponent, "AddComponent", EditorServer::CommandClass::Write},
+        {CommandType::RemoveComponent, "RemoveComponent", EditorServer::CommandClass::Write},
+        {CommandType::SetComponentFields, "SetComponentFields", EditorServer::CommandClass::Write},
+        {CommandType::SetProjectSettings, "SetProjectSettings", EditorServer::CommandClass::Write},
+        {CommandType::SetStartupScene, "SetStartupScene", EditorServer::CommandClass::Write},
+        {CommandType::Undo, "Undo", EditorServer::CommandClass::Write},
+        {CommandType::Redo, "Redo", EditorServer::CommandClass::Write},
+        {CommandType::BeginEditGroup, "BeginEditGroup", EditorServer::CommandClass::Write},
+        {CommandType::EndEditGroup, "EndEditGroup", EditorServer::CommandClass::Write},
+        {CommandType::RestoreAutosave, "RestoreAutosave", EditorServer::CommandClass::Write},
+        {CommandType::DiscardAutosave, "DiscardAutosave", EditorServer::CommandClass::Write},
+        {CommandType::WritePlaySnapshot, "WritePlaySnapshot", EditorServer::CommandClass::Write},
+        {CommandType::SetPaused, "SetPaused", EditorServer::CommandClass::Write},
+        {CommandType::Step, "Step", EditorServer::CommandClass::Write},
+        {CommandType::SendInput, "SendInput", EditorServer::CommandClass::Write},
+        // Admin: controls the host itself
+        {CommandType::Shutdown, "Shutdown", EditorServer::CommandClass::Admin},
+        };
+
+        const CommandInfo *FindCommand(const uint8_t commandType)
+        {
+            for (const CommandInfo &info : CommandTable)
+            {
+                if (static_cast<uint8_t>(info.type) == commandType)
+                    return &info;
+            }
+            return nullptr;
+        }
+    }
+
+    std::optional<EditorServer::CommandClass> EditorServer::ClassifyCommand(const uint8_t commandType)
+    {
+        const CommandInfo *info = FindCommand(commandType);
+        if (info == nullptr)
+            return std::nullopt;
+        return info->commandClass;
+    }
+
+    bool EditorServer::IsReadCommand(const uint8_t commandType)
+    {
+        // Default deny: only a command classified as a read passes
+        const std::optional<CommandClass> commandClass = ClassifyCommand(commandType);
+        return commandClass.has_value() && *commandClass == CommandClass::Read;
+    }
+
+    std::string EditorServer::ReadOnlyMessage(const uint8_t commandType)
+    {
+        const CommandInfo *info = FindCommand(commandType);
+        const std::string name = info != nullptr ? std::string{info->name} : std::format("command 0x{:X}", commandType);
+        return std::format("read-only host: {} is not allowed", name);
+    }
+
+    std::vector<uint8_t> EditorServer::BuildDenial(const std::string_view code, const std::string &message) const
+    {
+        BufferWriter response;
+        if (_clientErrorCodes)
+            WriteErrorCoded(response, message, code);
+        else
+            WriteError(response, message);
+        return response.Release();
+    }
+
+    bool EditorServer::SetReadOnly(const bool readOnly)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's read-only mode can't change while it is running");
+            return false;
+        }
+        _readOnly = readOnly;
+        return true;
+    }
+
     bool EditorServer::IsPolledCommand(uint8_t commandType)
     {
         switch (static_cast<CommandType>(commandType))
@@ -2109,6 +2261,14 @@ namespace N2Engine::Editor
         // what matters themselves. A polled command's handler never logs per call (see IsPolledCommand); failures are
         // logged by ExecuteCommand.
         auto cmd = static_cast<CommandType>(commandType);
+
+        // A read-only host runs reads only. Default deny: IsReadCommand is an allow list, so a command nobody has
+        // classified (or an id that is no command) is refused here, before any handler reads its payload.
+        if (_readOnly && !IsReadCommand(commandType))
+        {
+            SendResponse(clientSocket, BuildDenial(Protocol::ErrorCodeReadOnly, ReadOnlyMessage(commandType)));
+            return;
+        }
 
         // A play host plays a snapshot: it never opens another scene or writes the project's files
         if (_playMode && IsEditOnlyCommand(commandType))
@@ -2372,8 +2532,10 @@ namespace N2Engine::Editor
         // A new session: a group the last one left open is ended, and the keys it held (a play host's) go up
         CloseEditGroups();
         _keys.ReleaseAll();
+        // Whether this connection gets ErrorCoded for a refused command (a later Hello on it replaces the value)
+        _clientErrorCodes = cmd.errorCodes;
         // A project is loaded when the host opened one (--project, SetProject)
-        WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), HasProject());
+        WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), HasProject(), _readOnly);
         SendResponse(clientSocket, response.Release());
     }
 

@@ -391,6 +391,7 @@ def encoder(function: str, type_name: str, fields: dict, protocol: dict, doc: st
     return lines
 
 def decoder(function: str, type_name: str, fields: dict, protocol: dict, doc: str) -> list:
+    optional = protocol_spec.optional_trailing(protocol, type_name)
     counts = protocol_spec.array_count_fields(fields, protocol)
     arrays = {array: count for count, array in counts.items()}
     parameter = "payload" if fields else "_payload"
@@ -400,7 +401,13 @@ def decoder(function: str, type_name: str, fields: dict, protocol: dict, doc: st
     else:
         lines.append("  const reader = new ProtocolReader(payload);")
         for field, ftype in fields.items():
-            lines.append(f"  const {field} = {read_expression(ftype, protocol, arrays.get(field, ''))};")
+            read = read_expression(ftype, protocol, arrays.get(field, ''))
+            if field in optional:
+                # Added in a later minor version: a payload from an older peer ends before it
+                default = "false" if ftype == "bool" else "0"
+                lines.append(f"  const {field} = reader.remaining > 0 ? {read} : {default};")
+            else:
+                lines.append(f"  const {field} = {read};")
         lines.append(f"  return {{ {', '.join(fields)} }};")
     lines.append("}")
     lines.append("")

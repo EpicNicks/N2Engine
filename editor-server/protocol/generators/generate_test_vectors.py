@@ -179,16 +179,41 @@ def build(protocol: dict) -> dict:
             "payload": encode_fields(declared[name], values, protocol).hex(),
         })
 
+    # The payload of a peer from before the optional trailing fields (protocol.json's optionalTrailing): it ends before
+    # them, and a reader decodes them as the zero default (false or 0)
+    short_payloads = []
+    messages = [("request", name, request, f"{name}Request")
+                for name, request in protocol_spec.commands_with_requests(protocol)]
+    messages += [("response", name, fields, f"{name}Response")
+                 for name, _, fields in protocol_spec.responses(protocol) if fields]
+    for kind, name, fields, message in messages:
+        optional = protocol_spec.optional_trailing(protocol, message)
+        if not optional:
+            continue
+        values = sample_fields(fields, protocol)
+        for field in optional:
+            values[field] = False if fields[field] == "bool" else 0
+        known = {field: raw for field, raw in fields.items() if field not in optional}
+        short_payloads.append({
+            kind: name,
+            "id": protocol["commands"][name]["id"] if kind == "request" else protocol["responses"][name],
+            "fields": values,
+            "payload": encode_fields(known, values, protocol).hex(),
+        })
+
     return {
         "description": "Golden vectors, generated from protocol.json by generators/generate_test_vectors.py - do not edit. "
                        "payload is the hex of the payload (no frame header) that fields encode to. "
                        "bytes fields are hex strings, mat4 16 numbers (column-major), json fields their parsed value "
                        "(encoded as compact JSON with sorted keys only so this file is deterministic: compare json "
-                       "fields as parsed values, never as bytes); Error's payload is its message's raw UTF-8 bytes.",
+                       "fields as parsed values, never as bytes); Error's payload is its message's raw UTF-8 bytes. "
+                       "shortPayloads are what a peer from before a message's optional trailing fields sends: the "
+                       "payload ends before them and fields holds what a reader decodes (their zero defaults).",
         "protocolVersion": protocol["version"],
         "requests": requests,
         "responses": responses,
         "responseVariants": variants,
+        "shortPayloads": short_payloads,
     }
 
 
