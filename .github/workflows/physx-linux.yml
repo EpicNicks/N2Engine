@@ -9,7 +9,7 @@ name: PhysX Linux
 #                       A pull_request run NEVER publishes.
 #
 # PhysX source
-#   https://github.com/NVIDIA-Omniverse/PhysX at tag 107.3-physx-5.6.1 (commit 5ca9f472105a90d70d957c243cb0ef36fe251a9f),
+#   https://github.com/NVIDIA-Omniverse/PhysX at tag 107.3-omni-and-physx-5.6.1 (commit 09ff24f3279b735e672ff27b155cbf49f6296f4d),
 #   which reports PhysX 5.6.1 (physx/include/foundation/PxPhysicsVersion.h), the version of the headers committed in
 #   external/PhysX/physx/include. The "Compare headers" step diffs the two trees and reports any difference.
 #
@@ -42,7 +42,7 @@ on:
     inputs:
       physx_tag:
         description: PhysX git tag to build
-        default: 107.3-physx-5.6.1
+        default: 107.3-omni-and-physx-5.6.1
       release_tag:
         description: Release tag on this repository that receives the assets (publish only)
         default: physx-dependencies-linux-5.6.1
@@ -59,7 +59,7 @@ permissions:
   contents: read
 
 env:
-  PHYSX_TAG: ${{ inputs.physx_tag || '107.3-physx-5.6.1' }}
+  PHYSX_TAG: ${{ inputs.physx_tag || '107.3-omni-and-physx-5.6.1' }}
   PHYSX_VERSION: 5.6.1
 
 jobs:
@@ -143,7 +143,7 @@ jobs:
           cp physx-src/LICENSE.md stage/LICENSE.md
           mkdir -p "stage/$REL"
           cp "$LIBDIR"/*.a "stage/$REL/"
-          tar -C stage -czf "${OUT}.tar.gz" .
+          tar -C stage --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - . | gzip -n -9 > "${OUT}.tar.gz"
           sha256sum "${OUT}.tar.gz" > "${OUT}.tar.gz.sha256"
           cat "${OUT}.tar.gz.sha256"
           {
@@ -251,4 +251,4 @@ jobs:
               --title "PhysX ${PHYSX_VERSION} for Linux (x86_64, aarch64)" \
               --notes "Static Release libraries of NVIDIA PhysX ${PHYSX_VERSION} built by the PhysX Linux workflow. See the archive LICENSE.md."
           fi
-          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*.tar.gz assets/*.tar.gz.sha256
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" assets/*.tar.gz assets/*.tar.gz.sha256
