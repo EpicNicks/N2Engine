@@ -64,7 +64,7 @@
 <div class="content">
 
 <h1>Math &amp; SIMD</h1>
-<p class="lead">The <code>math</code> static library: vector, quaternion and matrix types, scalar helpers, random numbers and UUIDs, plus the runtime SIMD dispatch that picks scalar or SSE/AVX implementations (x86_64 only; aarch64 runs scalar code). This page covers conventions, what the SIMD paths guarantee relative to scalar code, and the known flaws.</p>
+<p class="lead">The <code>math</code> static library: vector, quaternion and matrix types, scalar helpers, random numbers and UUIDs, plus the runtime SIMD dispatch that picks scalar or SSE/AVX implementations on x86_64, or scalar or NEON on aarch64 <span class="badge">PR #128</span>. This page covers conventions, what the SIMD paths guarantee relative to scalar code, and the known flaws.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -92,12 +92,12 @@
 <table>
 <thead><tr><th>Type / header</th><th>Storage</th><th>SIMD</th></tr></thead>
 <tbody>
-<tr><td><code>Vector3</code></td><td><code>x, y, z</code> plus a padding lane <code>w</code>, in a 16-byte aligned union with <code>__m128</code> (a <code>float[4]</code> struct on aarch64)</td><td>Runtime-dispatched (Scalar/SSE2/SSE4.1/AVX)</td></tr>
+<tr><td><code>Vector3</code></td><td><code>x, y, z</code> plus a padding lane <code>w</code>, in a 16-byte aligned union with <code>__m128</code> (a <code>float[4]</code> struct on aarch64)</td><td>Runtime-dispatched (Scalar/SSE2/SSE4.1/AVX on x86, Scalar/NEON on aarch64 <span class="badge">PR #128</span>)</td></tr>
 <tr><td><code>Quaternion</code></td><td><code>w, x, y, z</code> (in that lane order), 16-byte aligned</td><td>Runtime-dispatched</td></tr>
 <tr><td><code>Matrix&lt;float, 4, 4&gt;</code>, <code>Matrix&lt;float, 3, 3&gt;</code></td><td>Row-major <code>std::array</code>, 16-byte aligned (3&times;3 padded to 12 floats)</td><td>Runtime-dispatched</td></tr>
 <tr><td><code>Matrix&lt;T, M, N&gt;</code>, <code>Matrix&lt;float, 2, 2&gt;</code></td><td>Row-major <code>std::array</code></td><td>None</td></tr>
-<tr><td><code>Vector4</code></td><td><code>w, x, y, z</code>, 16-byte aligned <code>__m128</code> union (a <code>float[4]</code> struct on aarch64)</td><td>Runtime-dispatched (Scalar/SSE2/SSE4.1/AVX) <span class="badge">PR #30</span></td></tr>
-<tr><td><code>Vector2</code></td><td><code>x, y</code></td><td>Scalar single operations; batch operations use AVX when compiled with it</td></tr>
+<tr><td><code>Vector4</code></td><td><code>w, x, y, z</code>, 16-byte aligned <code>__m128</code> union (a <code>float[4]</code> struct on aarch64)</td><td>Runtime-dispatched (Scalar/SSE2/SSE4.1/AVX on x86, Scalar/NEON on aarch64 <span class="badge">PR #128</span>) <span class="badge">PR #30</span></td></tr>
+<tr><td><code>Vector2</code></td><td><code>x, y</code></td><td>Scalar single operations; batch operations use AVX when compiled with it, or NEON on aarch64 <span class="badge">PR #128</span></td></tr>
 <tr><td><code>VectorN&lt;T, N&gt;</code></td><td><code>std::array&lt;T, N&gt;</code> (arithmetic <code>T</code>, <code>N &gt; 0</code>, checked by <code>static_assert</code>)</td><td>None</td></tr>
 <tr><td><code>Constants.hpp</code>, <code>Functions.hpp</code>, <code>Utils.hpp</code></td><td>Free functions and constants</td><td>&mdash;</td></tr>
 <tr><td><code>Random.hpp</code>, <code>UUID.hpp</code></td><td>Global Mersenne Twister helpers; 16-byte UUID</td><td>&mdash;</td></tr>
@@ -108,7 +108,7 @@
 <p>The engine binds <code>Vector2/3/4</code>, <code>Quaternion</code> and <code>Matrix4</code> to Lua; constants such as <code>Vector3.Zero</code> are returned as copies. See <a href="scripting-lua.html">Lua scripting</a>. Transform composition is described in <a href="transforms.html">Transforms</a>.</p>
 
 <h2 id="build">Build requirement: AVX on x86_64 <span class="badge">PR #27</span></h2>
-<p><code>math/CMakeLists.txt</code> compiles the library with <strong>PUBLIC</strong> <code>/arch:AVX</code> on MSVC and <code>-msse2 -msse4.1 -mavx</code> on other x86 targets (GCC/Clang on x86_64). Because the option is PUBLIC, every x86 target linking <code>math</code> (the engine, games, tests) is compiled for AVX, so the whole binary requires an AVX-capable CPU. On aarch64 no architecture flags are added: <code>CpuInfo.hpp</code> defines <code>N2_MATH_X86</code> only for x86 targets, the SSE2/SSE4.1/AVX code and CPUID are not compiled, <code>Vector3</code>, <code>Vector4</code> and <code>Quaternion</code> store their lanes in a 16-byte aligned <code>float[4]</code> struct (<code>SimdStorage</code>) instead of <code>__m128</code>, the SSE2 and SSE4.1 entry points are aliases of the scalar versions, and <code>DetectSIMDLevel</code> always returns <code>Scalar</code>. There is no NEON path, and the results are the scalar results. The lower SIMD tiers select between algorithms; they are not a fallback for older hardware.</p>
+<p><code>math/CMakeLists.txt</code> compiles the library with <strong>PUBLIC</strong> <code>/arch:AVX</code> on MSVC and <code>-msse2 -msse4.1 -mavx</code> on other x86 targets (GCC/Clang on x86_64). Because the option is PUBLIC, every x86 target linking <code>math</code> (the engine, games, tests) is compiled for AVX, so the whole binary requires an AVX-capable CPU. On aarch64 no architecture flag is added (NEON is baseline there; see <a href="#neon">NEON on aarch64</a>): <code>CpuInfo.hpp</code> defines <code>N2_MATH_X86</code> only for x86 targets, the SSE2/SSE4.1/AVX code and CPUID are not compiled, <code>Vector3</code>, <code>Vector4</code> and <code>Quaternion</code> store their lanes in a 16-byte aligned <code>float[4]</code> struct (<code>SimdStorage</code>) instead of <code>__m128</code>, and the SSE2 and SSE4.1 entry points are aliases of the scalar versions. The lower SIMD tiers select between algorithms; they are not a fallback for older hardware.</p>
 <div class="callout note" id="design-simd-tiers">
 <p class="callout-title">Design decision: SIMD tiers are an algorithm choice, not a compatibility fallback</p>
 <p>On x86_64 the build targets AVX once, for every target, instead of producing per-CPU binaries or per-function target attributes. The compiler may then use AVX encodings anywhere, so the binary needs an AVX CPU whatever tier is selected. The runtime tiers exist so that each implementation (scalar, SSE2, SSE4.1, AVX) can be selected, tested against scalar in the same process, and benchmarked. That is why the default is scalar, why <code>SetSIMDLevel</code> can switch in either direction, and why every tier has a written contract: bit-exact for the rounding, sign and min/max operations, within a relative 1e-5 for the rest (see <a href="#correctness">Correctness relative to scalar</a>). Supporting pre-AVX CPUs would mean dropping the PUBLIC flag and isolating the AVX code, not selecting a lower tier.</p>
@@ -118,10 +118,11 @@
 
 <h2 id="simd-dispatch">SIMD dispatch tiers <span class="badge">PR #27</span></h2>
 <p><code>Vector3</code>, <code>Vector4</code> <span class="badge">PR #30</span>, <code>Quaternion</code>, <code>Matrix&lt;float,4,4&gt;</code> and <code>Matrix&lt;float,3,3&gt;</code> route their operations through static function pointers. The tier is a process-wide setting:</p>
-<pre class="lang-cpp"><code>enum class SIMDLevel { Scalar, SSE2, SSE41, AVX }; // lowest to highest
+<pre class="lang-cpp"><code>enum class SIMDLevel { Scalar, SSE2, SSE41, AVX, NEON }; // x86 tiers lowest to highest; NEON is aarch64
 
-SIMDLevel DetectSIMDLevel();               // highest tier this CPU and OS support
-SIMDLevel ClampSIMDLevel(SIMDLevel level); // min(level, DetectSIMDLevel())
+SIMDLevel DetectSIMDLevel();               // highest tier this target supports (NEON on aarch64)
+bool IsSIMDLevelSupported(SIMDLevel level);
+SIMDLevel ClampSIMDLevel(SIMDLevel level); // the tier SetSIMDLevel will really use
 void SetSIMDLevel(SIMDLevel level);        // switch all five types (clamped)
 void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), with a report on stdout
 </code></pre>
@@ -129,7 +130,7 @@ void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), w
 <li><strong>Default is scalar.</strong> Every function pointer is initialised to its scalar implementation, so all math works before any initialisation. (Before PR #24 the matrix pointers were null until <code>InitializeSIMD</code>, and early matrix math crashed.)</li>
 <li><strong>Application startup.</strong> <code>Application::Init</code> calls <code>Math::InitializeSIMD()</code> early, right after Lua initialisation, not first thing (anything that runs before it uses scalar code), so a running game uses the highest supported tier. Hosts and tests that never call <code>Application::Init</code> stay on scalar unless they call it themselves.</li>
 <li><strong>Re-callable.</strong> <code>SetSIMDLevel</code> can be called any number of times, in either direction. Each type resets every pointer to scalar first, then overrides what the chosen tier accelerates, so switching down fully restores the lower tier. It replaces the earlier one-way per-type <code>InitializeSIMD</code> and its <code>initialized</code> flag.</li>
-<li><strong>Clamped.</strong> A tier above what the CPU supports is silently lowered to the detected tier. Tests use <code>DetectSIMDLevel</code> to skip tiers the CPU cannot run, so they never silently test a lower tier.</li>
+<li><strong>Clamped.</strong> A tier above what the CPU supports is silently lowered to the detected tier. A tier of the other architecture family does not exist on the target and becomes <code>Scalar</code>: an x86 tier on aarch64, <code>NEON</code> on x86 <span class="badge">PR #128</span>. Tests use <code>IsSIMDLevelSupported</code> to skip tiers the target cannot run, so they never silently test a lower tier.</li>
 <li><strong>Not thread-safe.</strong> The tier is a set of plain static pointers. Change it only while no other thread is doing math.</li>
 </ul>
 
@@ -156,8 +157,37 @@ void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), w
 </div>
 <p class="src">Source: <code>Vector3::SetSIMDLevel</code> (<code>math/src/math/Vector3.cpp</code>), <code>Vector4::SetSIMDLevel</code> (<code>math/src/math/Vector4.cpp</code>), <code>Quaternion::SetSIMDLevel</code> (<code>Quaternion.cpp</code>), <code>Matrix&lt;float,4,4&gt;::SetSIMDLevel</code> and <code>Matrix&lt;float,3,3&gt;::SetSIMDLevel</code> (<code>Matrix.hpp</code>)</p>
 
+<h3 id="neon">NEON on aarch64 <span class="badge">PR #128</span></h3>
+<p>On aarch64 the dispatch has two tiers, <code>Scalar</code> and <code>NEON</code>. <code>CpuInfo.hpp</code> defines <code>N2_MATH_NEON</code> for GCC and Clang targeting aarch64 (<code>__aarch64__</code> with <code>__ARM_NEON</code>) and includes <code>&lt;arm_neon.h&gt;</code>. NEON (ASIMD) is baseline on aarch64, so there is no runtime detection: <code>DetectSIMDLevel</code> returns <code>NEON</code> and <code>InitializeSIMD</code> selects it, so a running game on aarch64 uses NEON. MSVC ARM64 (<code>_M_ARM64</code>, no <code>__aarch64__</code>) is not covered and stays scalar. <code>SetSIMDLevel(SIMDLevel::AVX)</code> (or SSE2 or SSE4.1) on aarch64 clamps to <code>Scalar</code>; <code>SetSIMDLevel(SIMDLevel::NEON)</code> on x86 does too.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Type</th><th>NEON</th></tr></thead>
+<tbody>
+<tr><td><code>Vector3</code></td><td>Add, Sub, scalar Mul/Div, Dot, Cross, Length, Normalize, Distance, Min, Max, Abs, Floor, Ceil, Round; batch: <code>AddBatch</code>, <code>SubBatch</code>, <code>ScalarMulBatch</code>, <code>CrossBatch</code> (one 128-bit register per vector), <code>DotBatch</code>, <code>NormalizeBatch</code> (four vectors per iteration, tail for <code>count % 4</code>)</td></tr>
+<tr><td><code>Vector4</code></td><td>Add, Sub, scalar Mul/Div, Scale, Dot, Length, Normalize, Min, Max, Abs, Floor, Ceil, Round; batch: <code>AddBatch</code>, <code>SubBatch</code>, <code>ScalarMulBatch</code>, <code>DotBatch</code>, <code>LengthBatch</code>, <code>NormalizeBatch</code> (the last three four vectors per iteration, tail for <code>count % 4</code>)</td></tr>
+<tr><td><code>Vector2</code></td><td>Batch operations only (<code>AddBatch</code>, <code>SubBatch</code>, <code>ScalarMulBatch</code>, <code>DotBatch</code>, <code>LengthBatch</code>, <code>NormalizeBatch</code>), two vectors per register; compile-time, not tier-dependent</td></tr>
+<tr><td><code>Quaternion</code>, <code>Matrix&lt;float,4,4&gt;</code>, <code>Matrix&lt;float,3,3&gt;</code></td><td>No NEON versions: they run their scalar implementations at the NEON tier</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>Storage.</strong> <code>SimdStorage</code> stays a <code>float[4]</code> struct on aarch64. The NEON code loads and stores through the <code>x, y, z, w</code> (Vector3) or <code>w, x, y, z</code> (Vector4) floats with <code>vld1q_f32</code>/<code>vst1q_f32</code>, which need no alignment. <code>Vector3</code> results get the padding lane forced to 0, like the scalar versions.</li>
+<li><strong>Min/Max.</strong> <code>vminq_f32</code>/<code>vmaxq_f32</code> propagate NaN and order -0 below +0, unlike <code>std::min</code>/<code>std::max</code>. The NEON versions compare and select (<code>(b &lt; a) ? b : a</code> and <code>(a &lt; b) ? b : a</code>) so they match scalar for ties, NaN and &plusmn;0.</li>
+<li><strong>Floor, Ceil, Round.</strong> <code>frintm</code>, <code>frintp</code> and <code>frinta</code> (<code>vrndmq_f32</code>, <code>vrndpq_f32</code>, <code>vrndaq_f32</code>) are exactly <code>std::floor</code>, <code>std::ceil</code> and <code>std::round</code> (halves away from zero, sign of zero kept, NaN and inf pass through), so unlike SSE2 these need no workaround.</li>
+<li><strong>Summation order.</strong> Dot uses the scalar order: <code>(x+y)+z</code> for Vector3, <code>(w+x)+(y+z)</code> for Vector4, one multiply then separate adds.</li>
+</ul>
+<div class="callout note" id="design-neon-fma">
+<p class="callout-title">Design decision: no fused multiply-add on aarch64 <span class="badge">PR #128</span></p>
+<p>Clang contracts <code>a * b + c</code> into one fused instruction by default on aarch64 (<code>-ffp-contract=on</code>), which x86 never does here (no <code>-mfma</code>). That would make the scalar implementations round differently from the NEON ones (which multiply and add as separate steps, mirroring the SSE code) and from x86, and would break the bit-exact comparisons. <code>math/CMakeLists.txt</code> therefore adds a PUBLIC <code>-ffp-contract=off</code> on aarch64 non-MSVC targets. It is PUBLIC because the scalar functions are inline in the headers and are compiled into every target that links <code>math</code>; they must all be the same code. The cost is the fused instruction in scalar code and in any engine code on aarch64 that links <code>math</code>.</p>
+</div>
+<div class="callout note" id="design-neon-enum">
+<p class="callout-title">Design decision: NEON is a separate enum value, not above AVX <span class="badge">PR #128</span></p>
+<p>The existing values keep their meaning and <code>NEON</code> is appended, so code that stores or compares them is unaffected. Because only one family exists on any target, <code>ClampSIMDLevel</code> no longer takes <code>min(requested, detected)</code>: a supported tier is kept, an x86 tier above the CPU's is lowered to the CPU's (as before), and a tier of the other family becomes <code>Scalar</code>.</p>
+</div>
+<p class="src">Source: <code>math/include/math/CpuInfo.hpp</code> — <code>N2_MATH_NEON</code>, <code>DetectSIMDLevel</code>, <code>IsSIMDLevelSupported</code>, <code>ClampSIMDLevel</code>; <code>math/include/math/Vector3.hpp</code>, <code>Vector4.hpp</code> — the <code>*NEON</code> functions; <code>math/src/math/Vector2.cpp</code>; <code>math/CMakeLists.txt</code>; tests: <code>SimdLevelTest</code>, <code>SimdLevels/SimdDispatchTest</code> (parameterised with <code>NEON</code> on aarch64, so the <code>linux (Release, arm64, Clang)</code> job runs it at the NEON tier)</p>
+
 <h2 id="correctness">Correctness relative to scalar <span class="badge">PR #27</span></h2>
-<p>Before PR #27, the SIMD paths a running game used gave wrong results (for example <code>(1,2,3)&middot;(4,5,6)</code> returned 44), while CI ran only scalar code. <code>tests/math/math_types/SimdDispatchTests.cpp</code> now runs every dispatched operation under SSE2, SSE41 and AVX and compares it with the scalar result, resetting to Scalar around every test.</p>
+<p>Before PR #27, the SIMD paths a running game used gave wrong results (for example <code>(1,2,3)&middot;(4,5,6)</code> returned 44), while CI ran only scalar code. <code>tests/math/math_types/SimdDispatchTests.cpp</code> now runs every dispatched operation under SSE2, SSE41 and AVX (NEON on aarch64 <span class="badge">PR #128</span>) and compares it with the scalar result, resetting to Scalar around every test. The NEON results meet the same tolerances as the x86 tiers; no tolerance was loosened.</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Operations</th><th>Agreement with scalar</th><th>Test</th></tr></thead>
@@ -165,6 +195,9 @@ void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), w
 <tr><td><code>Vector3</code> Floor, Ceil, Round, Abs, Min, Max</td><td><strong>Bit-exact</strong>, including the sign of zero, &plusmn;0.49999997, -0.5, 2<sup>23</sup>+1, &plusmn;1e10, &plusmn;inf and NaN in each lane (any NaN matches any NaN)</td><td><code>Vector3ExactOperations</code></td></tr>
 <tr><td><code>Vector3</code> Add, Sub, Negate, scalar Mul/Div, Dot, Cross, Length, LengthSquared, Normalized, Distance</td><td>Within a relative tolerance of 1e-5 (SIMD may sum in a different order or divide instead of multiplying by a reciprocal). Garbage in the padding lane does not leak into results.</td><td><code>Vector3Operations</code></td></tr>
 <tr><td><code>Vector3</code> batch operations (including the scalar tail)</td><td>Within tolerance</td><td><code>Vector3BatchOperations</code></td></tr>
+<tr><td><code>Vector3</code> and <code>Vector4</code> operations on zero, tiny, signed-zero, infinite and NaN inputs, and every batch for counts 0 to 31 at several start offsets, with sentinel elements after the output and in-place calls <span class="badge">PR #128</span></td><td>Within tolerance, NaN where scalar gives NaN, infinities exactly; near-zero vectors normalise to exactly <code>Zero</code>; the padding lane is 0; nothing is written past <code>count</code></td><td><code>Vector3EdgeCaseOperations</code>, <code>Vector4EdgeCaseOperations</code>, <code>Vector3BatchCountsAndOffsets</code>, <code>Vector4BatchCountsAndOffsets</code></td></tr>
+<tr><td><code>Vector2</code> batch operations <span class="badge">PR #128</span></td><td>Within tolerance for every count 0 to 11 at offsets 0 and 1 (the data is then 8 bytes past 16-byte alignment); nothing is written past <code>count</code></td><td><code>Vector2BatchTest.BatchesMatchScalarForEveryCountAndOffset</code></td></tr>
+<tr><td>The selected tier: <code>DetectSIMDLevel</code>, clamping, <code>GetSIMDLevel</code> after <code>SetSIMDLevel</code> and <code>InitializeSIMD</code> <span class="badge">PR #128</span></td><td>Asserted: NEON on aarch64, a lowered or Scalar tier for the other family</td><td><code>SimdLevelTest</code>, <code>SelectsRequestedLevel</code></td></tr>
 <tr><td><code>Vector4</code> Floor, Ceil, Round, Abs, Negate, Min, Max, Clamp <span class="badge">PR #30</span></td><td><strong>Bit-exact</strong> on the same kind of edge values, with NaN in each lane</td><td><code>Vector4ExactOperations</code></td></tr>
 <tr><td><code>Vector4</code> Add, Sub, Scale, Negate, scalar Mul/Div, Dot, Length, Normalized, Distance, Lerp, ClampMagnitude <span class="badge">PR #30</span></td><td>Within tolerance</td><td><code>Vector4Operations</code></td></tr>
 <tr><td><code>Vector4</code> batch operations <span class="badge">PR #30</span></td><td>Within tolerance on samples; <code>DotBatch</code>, <code>LengthBatch</code> and <code>NormalizeBatch</code> bit-exact on edge values (NaN and inf inputs give NaN where scalar does)</td><td><code>Vector4BatchOperations</code></td></tr>
@@ -182,7 +215,7 @@ void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), w
 </ul>
 <div class="callout guarantee">
 <p class="callout-title">Guarantee <span class="badge">PR #27</span></p>
-<p>Switching the SIMD tier never changes the result of <code>Vector3</code> Floor, Ceil, Round, Abs, Min or Max, or of <code>Vector4</code> Floor, Ceil, Round, Abs, Negate, Min, Max or Clamp <span class="badge">PR #30</span>, by even one bit, and changes every other dispatched <code>Vector3</code>, <code>Vector4</code>, <code>Quaternion</code> and float matrix operation by at most a relative 1e-5 (<code>SimdDispatchTest</code>, all tiers the CPU supports).</p>
+<p>Switching the SIMD tier (on aarch64, to NEON <span class="badge">PR #128</span>) never changes the result of <code>Vector3</code> Floor, Ceil, Round, Abs, Min or Max, or of <code>Vector4</code> Floor, Ceil, Round, Abs, Negate, Min, Max or Clamp <span class="badge">PR #30</span>, by even one bit, and changes every other dispatched <code>Vector3</code>, <code>Vector4</code>, <code>Quaternion</code> and float matrix operation by at most a relative 1e-5 (<code>SimdDispatchTest</code>, all tiers the CPU supports).</p>
 </div>
 <p class="src">Source: <code>math/include/math/Vector3.hpp</code> — <code>RoundSSE41</code>, <code>MinSSE2</code>, <code>MaxSSE2</code>, <code>NormalizeSSE2</code>, <code>NormalizeSSE41</code>, <code>DotSSE2</code>; <code>math/include/math/Quaternion.hpp</code> — <code>MulSSE2</code>, <code>NormalizeSSE41</code>; tests: <code>SimdDispatchTests.cpp</code></p>
 
@@ -198,7 +231,7 @@ void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), w
 <p class="src">Source: <code>math/include/math/Vector3.hpp</code>, <code>math/src/math/Vector3.cpp</code></p>
 
 <h2 id="batch">Batch operations</h2>
-<p><code>Vector3::AddBatch</code>, <code>DotBatch</code> and <code>NormalizeBatch</code> process two vectors per 256-bit register at the AVX tier, with a per-element tail loop for an odd count. <code>ScalarMulBatch</code> works differently at the AVX tier: it gathers 8 vectors per iteration into separate x, y and z registers (structure of arrays), multiplies them and scatters them back, with a per-element tail loop for the last <code>count % 8</code>. At lower tiers they loop over the dispatched single operation. <code>SubBatch</code>, <code>CrossBatch</code> and <code>TransformBatch</code> always loop. The batch functions read the selected tier (<code>simd_level</code>) rather than running CPUID on every call. <code>NormalizeBatch</code> turns near-zero vectors into <code>Zero</code>, like the scalar version (it used to produce NaN, and divided the second vector of each pair by the first one's length).</p>
+<p>On aarch64 the NEON batches are described <a href="#neon">above</a> <span class="badge">PR #128</span>. <code>Vector3::AddBatch</code>, <code>DotBatch</code> and <code>NormalizeBatch</code> process two vectors per 256-bit register at the AVX tier, with a per-element tail loop for an odd count. <code>ScalarMulBatch</code> works differently at the AVX tier: it gathers 8 vectors per iteration into separate x, y and z registers (structure of arrays), multiplies them and scatters them back, with a per-element tail loop for the last <code>count % 8</code>. At lower tiers they loop over the dispatched single operation. <code>SubBatch</code>, <code>CrossBatch</code> and <code>TransformBatch</code> always loop. The batch functions read the selected tier (<code>simd_level</code>) rather than running CPUID on every call. <code>NormalizeBatch</code> turns near-zero vectors into <code>Zero</code>, like the scalar version (it used to produce NaN, and divided the second vector of each pair by the first one's length).</p>
 <pre class="lang-cpp"><code>std::vector&lt;Vector3&gt; normals = LoadNormals();
 Vector3::NormalizeBatch(normals.data(), normals.size()); // AVX pairs at the AVX tier
 
@@ -214,7 +247,7 @@ Vector3::DotBatch(a.data(), b.data(), dots.data(), a.size()); // caller sizes th
 </div>
 <ul>
 <li><strong>Vector4 is dispatched like Vector3</strong> <span class="badge">PR #30</span>. It has private scalar, SSE2 and SSE4.1 implementations behind static function pointers that default to scalar, so it runs scalar code until <code>InitializeSIMD</code> or <code>Math::SetSIMDLevel</code> is called (before PR #30 it always used SIMD chosen at compile time). <code>Vector4::SetSIMDLevel</code> clamps the tier like the other types. Batch operations use AVX only at the AVX tier. See the <a href="#tier-table">tier table</a>.</li>
-<li><strong>Vector2</strong> is plain scalar code for single operations. Its batch operations use AVX whenever the build defines <code>__AVX__</code> (which it always does on x86_64, never on aarch64), independent of the selected tier.</li>
+<li><strong>Vector2</strong> is plain scalar code for single operations. Its batch operations use AVX whenever the build defines <code>__AVX__</code> (which it always does on x86_64, never on aarch64), independent of the selected tier. On aarch64 they use NEON whenever <code>N2_MATH_NEON</code> is defined, also independent of the tier <span class="badge">PR #128</span>.</li>
 <li><strong>VectorN</strong> is a generic fixed-size vector. Initialiser-list or iterator-range construction with the wrong number of elements throws <code>std::invalid_argument</code>. <code>Normalized()</code> of an exactly zero vector returns zero. <code>operator==</code> is exact, unlike <code>Vector2/3/4</code>, which compare within 1e-5.</li>
 </ul>
 <div class="callout guarantee">
