@@ -11,6 +11,7 @@
 
 namespace N2Engine::Physics
 {
+    class IParticleBackend;
     class Rigidbody;
     class ICollider;
     struct RaycastHit;
@@ -29,6 +30,11 @@ namespace N2Engine::Physics
         {
             return {GpuState::Disabled, "This physics backend has no GPU support"};
         }
+
+        /// The GPU particle backend, when this backend runs particles in its own (GPU) scene: nullptr by default and
+        /// whenever the GPU scene isn't up. A ParticleSystem with backend Auto or PhysX uses it when it is there and
+        /// falls back to the CPU backend otherwise. The backend belongs to this object and is valid until Shutdown.
+        [[nodiscard]] virtual IParticleBackend *GetParticleBackend() { return nullptr; }
 
         virtual bool Initialize() = 0;
         virtual void Update(float deltaTime) = 0;

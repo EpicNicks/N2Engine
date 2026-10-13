@@ -29,6 +29,9 @@ namespace Renderer::Common
         /// Alpha blending (SRC_ALPHA, ONE_MINUS_SRC_ALPHA). The software renderer has no blending and
         /// ignores this flag: every software draw is opaque.
         bool blend = false;
+        /// With blend: add the source (SRC_ALPHA, ONE) instead of mixing it with what is behind (fire, sparks).
+        /// The software renderer, which can't blend at all, ignores it too.
+        bool additive = false;
 
         /// The state the Opaque render queue draws with (the defaults): depth-tested and written, not blended.
         /// Opaque and alpha-mask (cutout) materials draw with it.

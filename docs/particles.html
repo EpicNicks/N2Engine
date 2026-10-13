@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Particles · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html" aria-current="page">Particles</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Particles</h1>
+<p class="lead">The <code>ParticleSystem</code> component emits small camera-facing quads that start at its object, fly under gravity and fade away. A simulation backend moves them (the CPU backend on every machine, headless hosts included; a PhysX GPU backend plugs into the same interface later) and the component draws them as one mesh per frame. This page covers the component, the backend seam and how one is chosen, the simulation rules, play mode, drawing and the Lua API <span class="badge">PR #125</span>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#quick-start">Quick start</a></li>
+<li><a href="#component">The ParticleSystem component</a></li>
+<li><a href="#backends">Backends and the seam</a></li>
+<li><a href="#simulation">Emission and simulation</a></li>
+<li><a href="#play-mode">Play mode, pause and saving</a></li>
+<li><a href="#rendering">Drawing</a></li>
+<li><a href="#health">The Particles health row</a></li>
+<li><a href="#lua">Lua</a></li>
+<li><a href="#tests">Tests and what is not verified</a></li>
+</ol>
+</div>
+
+<h2 id="quick-start">Quick start</h2>
+<p>Add the component to an object and play the scene. The defaults make a gently falling stream of white specks that fade out; everything else is a field.</p>
+<pre class="lang-lua"><code>local fx = GameObject.Create("Sparks")
+local ps = fx:AddComponent("ParticleSystem")
+ps:SetShape("Sphere")
+ps:SetShapeRadius(0.2)
+ps:SetSpeed(1, 3)
+ps:SetLifetime(0.5, 1.5)
+ps:SetStartColor(Color.new(1.0, 0.8, 0.2, 1.0))
+ps:SetEndColor(Color.new(1.0, 0.1, 0.0, 0.0))   -- alpha 0: fades out
+ps:SetBlendMode("Additive")
+SceneManager.GetCurrentScene():AddRootGameObject(fx)
+
+-- later
+ps:EmitBurst(40)   -- 40 particles now
+ps:Stop()          -- no new ones; the flying ones finish
+</code></pre>
+
+<h2 id="component">The ParticleSystem component <span class="badge">PR #125</span></h2>
+<p><code>ParticleSystem</code> is an <code>IRenderable</code> in the Transparent queue. All of its settings are public fields that the scene file saves and the editor's inspector shows (the editor needs no protocol change: <code>backend</code> is an ordinary enum field, listed by <code>GetComponentTypes</code> like any other). Particles themselves are runtime state and are never saved.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>backend</code></td><td><code>Auto</code></td><td><code>Auto</code>, <code>PhysX</code> or <code>CPU</code> (<a href="#backends">Backends</a>). Read when the system starts.</td></tr>
+<tr><td><code>playOnAwake</code></td><td>true</td><td>Emit as soon as the system starts.</td></tr>
+<tr><td><code>maxParticles</code></td><td>1000</td><td>The most particles alive at once, at most <code>ParticleSystem::kMaxParticlesLimit</code> (100000). Read when the system starts.</td></tr>
+<tr><td><code>seed</code></td><td>1</td><td>The same seed gives the same particles. Read when the system starts.</td></tr>
+<tr><td><code>emissionRate</code></td><td>20</td><td>Particles per second while playing.</td></tr>
+<tr><td><code>burstCount</code></td><td>0</td><td>Particles started at once by every <code>Play</code> (and by <code>playOnAwake</code>).</td></tr>
+<tr><td><code>shape</code>, <code>shapeRadius</code>, <code>coneAngle</code></td><td>Cone, 0, 25</td><td>Where particles start and which way they go (<a href="#simulation">Emission</a>).</td></tr>
+<tr><td><code>lifetimeMin</code>, <code>lifetimeMax</code></td><td>1, 2</td><td>Each particle's lifetime in seconds is picked from this range when it starts.</td></tr>
+<tr><td><code>speedMin</code>, <code>speedMax</code></td><td>2, 4</td><td>Each particle's start speed, world units per second, picked from this range.</td></tr>
+<tr><td><code>startSize</code>, <code>endSize</code></td><td>0.2, 0.05</td><td>The quad's edge in world units, at birth and at death; linear in between.</td></tr>
+<tr><td><code>startColor</code>, <code>endColor</code></td><td>white, white with alpha 0</td><td>The colour at birth and at death; linear in between.</td></tr>
+<tr><td><code>gravityScale</code></td><td>1</td><td>Multiplies the world gravity (the physics backend's, else (0, -9.81, 0)); 0 floats.</td></tr>
+<tr><td><code>drag</code></td><td>0</td><td>The share of the velocity lost per second.</td></tr>
+<tr><td><code>collideWithGround</code>, <code>groundHeight</code>, <code>bounce</code></td><td>false, 0, 0.3</td><td>Bounce off the plane y = groundHeight, keeping <code>bounce</code> of the speed. The only collision the CPU backend does.</td></tr>
+<tr><td><code>blendMode</code></td><td><code>Alpha</code></td><td><code>Alpha</code> or <code>Additive</code>.</td></tr>
+<tr><td><code>texture</code></td><td>none</td><td>Optional <code>Texture</code> on every quad; its alpha is multiplied by the particle's.</td></tr>
+</tbody>
+</table>
+</div>
+<p>C++ methods: <code>Play()</code>, <code>Stop()</code>, <code>Clear()</code>, <code>EmitBurst(n)</code>, <code>IsPlaying()</code>, <code>GetAliveCount()</code>, <code>GetParticles(out)</code> (world positions and age fractions) and <code>GetActiveBackendName()</code> (<code>"CPU"</code>, <code>"PhysX"</code>, or empty before the system has started).</p>
+<ul>
+<li><strong>Play</strong> starts the stream and emits <code>burstCount</code> particles once. <strong>Stop</strong> only stops emitting: the particles in flight finish their lives. <strong>Clear</strong> removes every particle and leaves the stream as it was. <strong>EmitBurst(n)</strong> starts <code>n</code> particles now whether or not the system is playing (zero or negative does nothing).</li>
+<li>A burst or <code>Play</code> asked for before the system has started (a script ran before the scene attached it) is remembered and emitted when it starts, once.</li>
+<li>Particles start at the object's position when they are emitted and are simulated in <strong>world space</strong>: moving the object moves where new particles start, not the ones already flying. The cone points along the object's local +Y axis, turned by its rotation.</li>
+</ul>
+<p class="src">Source: <code>engine/include/engine/rendering/ParticleSystem.hpp</code>, <code>engine/src/rendering/ParticleSystem.cpp</code>; tests: <code>ParticleSystemTest.*</code> (<code>tests/engine/particles/ParticleSystemTests.cpp</code>), <code>ReflectionRegistryTest.EveryBuiltinTypeIsDescribableAndItsFieldsAreItsSavedKeys</code></p>
+
+<h2 id="backends">Backends and the seam <span class="badge">PR #125</span></h2>
+<p>A <code>ParticleSystem</code> does not simulate anything itself: it emits (rate, shape, speed) and hands the new particles to an <code>IParticleBackend</code> (<code>engine/include/engine/physics/IParticleBackend.hpp</code>), which moves them and expires them. The interface has no PhysX or CUDA type in it. Its calls: <code>CreateSystem(desc)</code> returning a handle, <code>Spawn(handle, positions, velocities)</code>, <code>SetParams</code>, <code>Clear</code>, <code>Destroy</code>, <code>Step(dt)</code>, <code>GetAliveCount</code> and <code>CopyPositions(handle, out)</code>, which fills one <code>Vector4</code> per living particle: x, y, z the world position and w the age as a fraction of the lifetime (the drawing code turns that into size and colour).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Backend</th><th>Where it comes from</th><th>Runs on</th></tr></thead>
+<tbody>
+<tr><td><code>CpuParticleBackend</code></td><td>Created by each <code>ParticleSystem</code> that needs it (<code>engine/src/particles/CpuParticleBackend.cpp</code>)</td><td>Every machine: no PhysX, no GPU, no window. Stepped by the component once per fixed step.</td></tr>
+<tr><td>PhysX GPU backend</td><td><code>IPhysicsBackend::GetParticleBackend()</code>, which returns <code>nullptr</code> by default and for every backend that exists today</td><td>Not implemented yet: a later change adds it for the PhysX GPU scene (the probe from <a href="physics.html">Physics</a>, <code>physics.gpu</code>). It would step inside the physics scene, so its <code>Step</code> does nothing.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="selection">Choosing a backend</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>backend</code></th><th>The physics backend offers a GPU particle backend</th><th>It does not (physics.gpu off, no GPU, no PhysX, no physics backend)</th></tr></thead>
+<tbody>
+<tr><td><code>Auto</code></td><td>PhysX</td><td>CPU, no warning</td></tr>
+<tr><td><code>PhysX</code></td><td>PhysX</td><td>CPU, <strong>one warning</strong> per system naming the object and the GPU probe's reason</td></tr>
+<tr><td><code>CPU</code></td><td>CPU</td><td>CPU</td></tr>
+</tbody>
+</table>
+</div>
+<p>The choice is made once, when the component attaches (<code>Particles::SelectParticleBackend</code>); changing <code>backend</code> afterwards takes effect the next time the system starts. Because <code>physics.gpu</code> defaults to <code>off</code>, a default project always uses the CPU backend, so particles behave the same on every machine and on the headless host.</p>
+<div class="callout note" id="design-particles-seam">
+<p class="callout-title">Design decision: the CPU backend is a real backend, not a fallback path <span class="badge">PR #125</span></p>
+<p>The user asked for both a PhysX GPU simulation and a CPU one, selectable. So the CPU simulation implements the same <code>IParticleBackend</code> as the PhysX one will, and the component only ever talks to the interface. A <code>ParticleSystem</code> never cares which one it has, and a project that sets <code>backend</code> to <code>CPU</code> runs identically with or without a GPU. The physics backend is asked for its particle backend each time it is needed (never cached), so a component that outlives the physics backend goes inert instead of dangling. The component remembers which particle backend instance owns its handle: if the physics backend is replaced by another one, the stale handle is dropped and the system restarts empty on the CPU backend with one warning.</p>
+</div>
+
+<h2 id="simulation">Emission and simulation <span class="badge">PR #125</span></h2>
+<ul>
+<li><strong>Fixed step.</strong> <code>ParticleSystem::OnFixedUpdate</code> steps the backend by the scaled fixed timestep and then emits what the rate has accumulated, once per fixed step. The result depends on the timestep and the calls made, never on the frame rate. The fractional part of the rate carries over, so 7 particles per second at a 0.02 s step emits one every seventh step with no drift (<code>ParticleEmitter::Advance</code>); a single step emits at most 4096.</li>
+<li><strong>Shapes.</strong> <em>Cone</em>: from a disc of <code>shapeRadius</code> on the object's local XZ plane, in directions spread uniformly within <code>coneAngle</code> degrees (half angle) of local +Y. <em>Sphere</em>: from a random point inside a sphere of <code>shapeRadius</code>, moving straight away from its centre. Speeds come from <code>speedMin</code> to <code>speedMax</code>; an inverted range counts as its minimum.</li>
+<li><strong>Integration.</strong> Semi-implicit Euler per particle: velocity gets gravity, then drag, then the position moves. A particle that reaches its lifetime is removed by moving the last particle into its slot, so the order of particles changes as they die (the same way every run).</li>
+<li><strong>Determinism.</strong> The same seed and the same calls give the same particles: the generator (<code>ParticleRandom</code>) is integer-only, the simulation is plain float code in a fixed order, and the emitter and the backend have separate seeded streams. It is exact on one machine and build; floats are not promised to match bit for bit across compilers.</li>
+<li><strong>The cap.</strong> A system never holds more than <code>maxParticles</code> (limit 100000: a larger setting is lowered with a warning). Particles that don't fit are dropped, and the system logs <strong>one warning</strong> naming the object ("reached maxParticles"), not one per particle. <code>Clear</code> lets it warn again.</li>
+<li><strong>Collision.</strong> Only the optional ground plane. Particles do not collide with colliders or with each other, and the CPU backend never queries the physics world (so it behaves the same with no physics backend). Collision with rigid bodies is what the PhysX backend is for.</li>
+<li><strong>No per-step allocation.</strong> The backend's arrays, the spawn buffers and the position copy keep their capacity, so a steady system allocates nothing after it has grown.</li>
+</ul>
+<div class="callout note" id="design-particles-cpu-collision">
+<p class="callout-title">Design decision: the ground plane is the only CPU collision <span class="badge">PR #125</span></p>
+<p>A raycast per particle per step against the physics world is not cheap, needs a physics backend (the headless host and CI may have none) and would make the CPU backend depend on it. The plan allowed it only if cheap, so the CPU backend does a ground plane and nothing else; documented here and in the field's tooltip. Real collision comes with the PhysX backend.</p>
+</div>
+<p class="src">Source: <code>engine/src/particles/CpuParticleBackend.cpp</code>, <code>ParticleEmitter.cpp</code>, <code>ParticleRandom.hpp</code>; tests: <code>CpuParticleBackendTest.*</code>, <code>ParticleEmitterTest.*</code>, <code>ParticleRandomTest.*</code> (<code>tests/engine/particles/ParticleSimulationTests.cpp</code>)</p>
+
+<h2 id="play-mode">Play mode, pause and saving <span class="badge">PR #125</span></h2>
+<ul>
+<li><strong>Only while playing.</strong> The system starts in <code>OnAttach</code>, which a scene runs when it plays. A scene opened for editing never attaches its components, so nothing is simulated or drawn in edit mode (there is no editor preview).</li>
+<li><strong>Never saved.</strong> The scene file holds the fields above and nothing else; a reflection test pins that the saved keys are exactly the fields. A scene saved and loaded gives a system with the same settings and no particles.</li>
+<li><strong>Exit clears.</strong> Leaving play mode replaces the scene, which destroys its components: <code>OnDestroy</code> destroys the backend system and the GPU mesh, so nothing outlives play.</li>
+<li><strong>Pause freezes.</strong> A time scale of 0 runs no fixed step (<a href="application.html">Application</a>), so nothing is emitted or moved, and the frozen particles are still drawn.</li>
+</ul>
+
+<h2 id="rendering">Drawing <span class="badge">PR #125</span></h2>
+<ul>
+<li><strong>Billboards.</strong> Every frame the quads are rebuilt on the CPU from the backend's positions (<code>Particles::BuildBillboards</code>): 4 vertices and 6 indices a particle, facing the camera of the frame being drawn. <code>Scene::Render</code> makes its camera current for the duration of the draw (<code>Rendering::RenderCamera</code>), because <code>IRenderable::RenderInQueue</code> gets no camera. Drawn outside a <code>Scene::Render</code>, the quads face a default camera looking down -Z.</li>
+<li><strong>One mesh.</strong> The mesh is updated in place with <code>IRenderer::UpdateMesh</code> (recreated on a renderer that can't), the same way <a href="text.html#text-renderer"><code>TextRenderer</code></a> does. The rebuild of the vertices is the one per-frame cost beyond the simulation; the vertex and index vectors keep their capacity, and the indices are written only for quads the mesh did not have before. 100000 particles is 400000 vertices a frame.</li>
+<li><strong>State.</strong> The Transparent queue's state (blended, depth-tested, not writing depth) with culling off, in world space (identity model matrix), through the standard <em>unlit</em> shader: the particle's colour as the vertex colour times the optional texture. <code>Additive</code> blends with <code>(SRC_ALPHA, ONE)</code> on OpenGL (<code>RenderState::additive</code>).</li>
+<li><strong>Renderers.</strong> OpenGL and the software renderer draw particles. The software renderer cannot blend: quads are opaque there and <code>Additive</code> is drawn as <code>Alpha</code>; a fully transparent quad (alpha below 0.01) is skipped. The Vulkan renderer is still stubs (no meshes or materials), so nothing is drawn there and one warning is logged per process.</li>
+<li><strong>Bounds.</strong> A particle system reports no world bounds (<code>GetWorldBounds</code> is empty), so the editor picks its object by a small sphere around its position.</li>
+</ul>
+<div class="callout note" id="design-particles-billboards">
+<p class="callout-title">Design decision: CPU-built billboards through <code>UpdateMesh</code>, no new renderer API <span class="badge">PR #125</span></p>
+<p>Version 1 needs no change to the renderer interface: the particles are one dynamic mesh like a text block, which works on OpenGL and the software renderer today. Instanced or point-sprite drawing and CUDA-OpenGL interop are later optimisations (the cost ceiling is the CPU rebuild). The one renderer change is the <code>additive</code> flag on <code>RenderState</code>.</p>
+</div>
+<p class="src">Source: <code>engine/src/particles/ParticleBillboards.cpp</code>, <code>engine/include/engine/rendering/RenderCamera.hpp</code>, <code>ParticleSystem::RenderInQueue</code>; tests: <code>ParticleBillboardsTest.*</code>, <code>ParticleRendererTest.*</code> (<code>tests/engine/rendering/ParticleRendererTests.cpp</code>), <code>SoftwareParticlesGoldenTest.*</code></p>
+
+<h2 id="health">The Particles health row <span class="badge">PR #125</span></h2>
+<p>The <code>Particles</code> row of <a href="logging-and-editor.html">engine health</a> keeps the state the GPU probe gave it (<code>Disabled</code> with the reason when <code>physics.gpu</code> is off or no GPU works, <code>Running</code> when the GPU scene is up, <code>Failed</code> only for <code>physics.gpu=on</code> with a failed probe). Once <code>ParticleSystem</code> components are running, its detail also says which backends they use, for example <code>physics.gpu is off; ParticleSystems: 2 CPU</code>. With none running the row is exactly what the probe made. The editor protocol already carries the row as a generic <code>SubsystemStatus</code>, so nothing changes there.</p>
+<p class="src">Source: <code>Application::GetHealth</code>, <code>Particles::ParticleUsage</code>; tests: <code>ParticleHealthDetailTest.*</code>, <code>ParticleUsageTest.*</code>, <code>ParticleBackendSelectionTest.*</code></p>
+
+<h2 id="lua">Lua</h2>
+<p><code>go:AddComponent("ParticleSystem")</code> returns a handle with these methods (full annotations in <code>engine-api.lua</code>). Enum values are strings; an unknown name raises an error that lists the options and changes nothing. Getters that return several values (<code>GetLifetime</code>, <code>GetSpeed</code>, <code>GetSize</code>, <code>GetGround</code>) return them in the order the setter takes them.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Methods</th><th>What they do</th></tr></thead>
+<tbody>
+<tr><td><code>Play()</code>, <code>Stop()</code>, <code>Clear()</code>, <code>EmitBurst(n)</code>, <code>IsPlaying()</code></td><td>Control, as in <a href="#component">the component</a>.</td></tr>
+<tr><td><code>GetAliveCount()</code>, <code>GetActiveBackend()</code></td><td>Living particles; <code>"CPU"</code> or <code>"PhysX"</code>, nil until the system has started.</td></tr>
+<tr><td><code>SetBackend(name)</code> / <code>GetBackend()</code></td><td><code>"Auto"</code>, <code>"PhysX"</code> or <code>"CPU"</code> (what was asked for).</td></tr>
+<tr><td><code>SetPlayOnAwake</code>, <code>SetMaxParticles</code>, <code>SetSeed</code></td><td>With their getters. The last two are read when the system starts.</td></tr>
+<tr><td><code>SetEmissionRate</code>, <code>SetBurstCount</code>, <code>SetShape(name)</code>, <code>SetShapeRadius</code>, <code>SetConeAngle</code></td><td>Emission, with getters. Shapes: <code>"Cone"</code>, <code>"Sphere"</code>.</td></tr>
+<tr><td><code>SetLifetime(min, max)</code>, <code>SetSpeed(min, max)</code>, <code>SetSize(start, end)</code></td><td>Ranges and over-life values.</td></tr>
+<tr><td><code>SetStartColor(color)</code>, <code>SetEndColor(color)</code></td><td>Colours, with getters.</td></tr>
+<tr><td><code>SetGravityScale</code>, <code>SetDrag</code>, <code>SetGround(enabled, height, bounce)</code></td><td>Motion, with getters.</td></tr>
+<tr><td><code>SetBlendMode(name)</code>, <code>SetTexture(path)</code></td><td><code>"Alpha"</code> or <code>"Additive"</code>; an image file, or nil for none (a path that doesn't load is an error and keeps the old texture).</td></tr>
+</tbody>
+</table>
+</div>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>, <code>engine/src/scripting/bindings/engine-api.lua</code>; tests: <code>LuaParticleSystemTest.*</code></p>
+
+<h2 id="tests">Tests and what is not verified</h2>
+<ul>
+<li>Pure data tests with no window or renderer: the CPU backend (determinism, the cap, lifetimes, gravity, drag, the ground plane, bad parameters), the emitter, backend selection with a fake physics backend that offers a GPU particle backend, the billboard builder.</li>
+<li>Component tests: registration and reflection, save and load, play/stop/clear/burst, the cap warning, the fallback warning, a fake GPU backend through the seam, an outliving physics backend, pause.</li>
+<li>Drawing: a recording renderer (draw count, state, in-place updates, resource release) and golden images on the headless software renderer (colour, position, camera-facing, colour and size by age).</li>
+<li>A headless <code>Application::Tick</code> run with the software renderer and no physics backend, including drawing a frame and leaving the scene (<code>ParticleHeadlessTest.*</code>).</li>
+</ul>
+<div class="callout open-question">
+<p class="callout-title">Not verified in CI</p>
+<p>Particles drawn by the OpenGL renderer on a real GPU (CI has none; the OpenGL draw path is the same <code>UpdateMesh</code> and <code>DrawMesh</code> calls as text, plus the additive blend function). The Vulkan renderer, which is still stubs. The PhysX GPU backend itself is a later change.</p>
+</div>
+
+<div class="page-footer">
+<span>Describes master through PR #34.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

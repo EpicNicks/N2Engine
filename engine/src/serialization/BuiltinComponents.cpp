@@ -14,6 +14,7 @@
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
+#include "engine/rendering/ParticleSystem.hpp"
 #include "engine/rendering/TextRenderer.hpp"
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/ui/Button.hpp"
@@ -55,6 +56,7 @@ namespace N2Engine
         Add<Example::QuadRenderer>(registry, "QuadRenderer");
         Add<Rendering::MeshRenderer>(registry, "MeshRenderer");
         Add<Rendering::TextRenderer>(registry, "TextRenderer");
+        Add<Rendering::ParticleSystem>(registry, "ParticleSystem");
         Add<Scripting::LuaComponent>(registry, "LuaComponent");
         Add<UI::Canvas>(registry, "Canvas");
         Add<UI::RectTransform>(registry, "RectTransform");

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <ranges>
@@ -15,6 +16,9 @@
 #include <string_view>
 #include <tuple>
 #include <utility>
+#include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "engine/GameObjectScene.hpp"
 #include "engine/audio/AudioListener.hpp"
@@ -34,6 +38,7 @@
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
+#include "engine/rendering/ParticleSystem.hpp"
 #include "engine/rendering/Model.hpp"
 #include "engine/rendering/TextRenderer.hpp"
 #include "engine/rendering/Texture.hpp"
@@ -107,6 +112,7 @@ namespace N2Engine::Scripting::Bindings
                 {"QuadRenderer", MakeAccess<Example::QuadRenderer>()},
                 {"MeshRenderer", MakeAccess<Rendering::MeshRenderer>()},
                 {"TextRenderer", MakeAccess<Rendering::TextRenderer>()},
+                {"ParticleSystem", MakeAccess<Rendering::ParticleSystem>()},
                 {"Light", MakeAccess<Rendering::Light>()},
                 {"AudioSource", MakeAccess<Audio::AudioSource>()},
                 {"AudioListener", MakeAccess<Audio::AudioListener>()},
@@ -214,6 +220,31 @@ namespace N2Engine::Scripting::Bindings
             case Rendering::LightType::Directional:
             default: return "Directional";
             }
+        }
+
+        /// An enum value from its name (the names the scene file and the inspector use); an unknown name is an error
+        /// naming `caller` and the options
+        template <typename E>
+        E ParseEnumName(const std::string &name, const std::string_view caller)
+        {
+            const std::vector<std::string> options = FieldTraits<E>::EnumOptions();
+            const auto it = std::ranges::find(options, name);
+            if (it == options.end())
+            {
+                std::string expected;
+                for (const std::string &option : options)
+                {
+                    expected += expected.empty() ? option : ", " + option;
+                }
+                throw std::runtime_error(std::format("{}: unknown value '{}'. Expected one of: {}", caller, name, expected));
+            }
+            return static_cast<E>(std::distance(options.begin(), it));
+        }
+
+        template <typename E>
+        std::string EnumName(const E value)
+        {
+            return nlohmann::json(value).template get<std::string>();
         }
 
         /// A material slot's index from Lua (1-based) as a 0-based index; raises a Lua error below 1
@@ -639,6 +670,143 @@ namespace N2Engine::Scripting::Bindings
             // Point and spot lights: how far the light reaches, in world units
             "SetRange", [](const LightRef &c, const float range) { c.Pin()->range = range; },
             "GetRange", [](const LightRef &c) { return c.Pin()->range; }
+        );
+
+        // ===== ParticleSystem =====
+        // Emits and draws particles (see docs/particles.html). Particles exist only while the scene plays. Settings
+        // apply at once, except Backend, MaxParticles and Seed, which are read when the system starts (it attaches).
+        using ParticleSystemRef = ComponentRef<Rendering::ParticleSystem>;
+        BindComponentType<Rendering::ParticleSystem>(
+            lua, "ParticleSystem",
+            // Control: Play starts emitting (the rate, and the burst once); Stop stops emitting but lets the
+            // particles finish; Clear removes them all; EmitBurst(n) starts n particles now, playing or not
+            "Play", [](const ParticleSystemRef &c) { c.Pin()->Play(); },
+            "Stop", [](const ParticleSystemRef &c) { c.Pin()->Stop(); },
+            "Clear", [](const ParticleSystemRef &c) { c.Pin()->Clear(); },
+            "EmitBurst", [](const ParticleSystemRef &c, const int count) { c.Pin()->EmitBurst(count); },
+            "IsPlaying", [](const ParticleSystemRef &c) { return c.Pin()->IsPlaying(); },
+            // Living particles
+            "GetAliveCount", [](const ParticleSystemRef &c) { return static_cast<int>(c.Pin()->GetAliveCount()); },
+            // The backend that simulates this system: "CPU" or "PhysX"; nil until the system has started
+            "GetActiveBackend", [](const ParticleSystemRef &c) -> sol::optional<std::string>
+            {
+                const std::string_view name = c.Pin()->GetActiveBackendName();
+                if (name.empty())
+                {
+                    return sol::nullopt;
+                }
+                return std::string(name);
+            },
+            // "Auto", "PhysX" or "CPU"; an unknown name raises an error and changes nothing
+            "SetBackend", [](const ParticleSystemRef &c, const std::string &name)
+            {
+                c.Pin()->backend = ParseEnumName<Particles::ParticleBackend>(name, "ParticleSystem:SetBackend");
+            },
+            "GetBackend", [](const ParticleSystemRef &c) { return EnumName(c.Pin()->backend); },
+            "SetPlayOnAwake", [](const ParticleSystemRef &c, const bool value) { c.Pin()->playOnAwake = value; },
+            "GetPlayOnAwake", [](const ParticleSystemRef &c) { return c.Pin()->playOnAwake; },
+            "SetMaxParticles", [](const ParticleSystemRef &c, const int value) { c.Pin()->maxParticles = value; },
+            "GetMaxParticles", [](const ParticleSystemRef &c) { return c.Pin()->maxParticles; },
+            "SetSeed", [](const ParticleSystemRef &c, const int value) { c.Pin()->seed = value; },
+            "GetSeed", [](const ParticleSystemRef &c) { return c.Pin()->seed; },
+            // Emission: particles per second, the burst every Play starts, and the shape ("Cone" or "Sphere")
+            "SetEmissionRate", [](const ParticleSystemRef &c, const float value) { c.Pin()->emissionRate = value; },
+            "GetEmissionRate", [](const ParticleSystemRef &c) { return c.Pin()->emissionRate; },
+            "SetBurstCount", [](const ParticleSystemRef &c, const int value) { c.Pin()->burstCount = value; },
+            "GetBurstCount", [](const ParticleSystemRef &c) { return c.Pin()->burstCount; },
+            "SetShape", [](const ParticleSystemRef &c, const std::string &name)
+            {
+                c.Pin()->shape = ParseEnumName<Particles::EmitterShape>(name, "ParticleSystem:SetShape");
+            },
+            "GetShape", [](const ParticleSystemRef &c) { return EnumName(c.Pin()->shape); },
+            "SetShapeRadius", [](const ParticleSystemRef &c, const float value) { c.Pin()->shapeRadius = value; },
+            "GetShapeRadius", [](const ParticleSystemRef &c) { return c.Pin()->shapeRadius; },
+            "SetConeAngle", [](const ParticleSystemRef &c, const float value) { c.Pin()->coneAngle = value; },
+            "GetConeAngle", [](const ParticleSystemRef &c) { return c.Pin()->coneAngle; },
+            // Start values: lifetime in seconds and speed in world units per second, each a min and a max
+            "SetLifetime", [](const ParticleSystemRef &c, const float lo, const float hi)
+            {
+                const auto ps = c.Pin();
+                ps->lifetimeMin = lo;
+                ps->lifetimeMax = hi;
+            },
+            "GetLifetime", [](const ParticleSystemRef &c)
+            {
+                const auto ps = c.Pin();
+                return std::make_tuple(ps->lifetimeMin, ps->lifetimeMax);
+            },
+            "SetSpeed", [](const ParticleSystemRef &c, const float lo, const float hi)
+            {
+                const auto ps = c.Pin();
+                ps->speedMin = lo;
+                ps->speedMax = hi;
+            },
+            "GetSpeed", [](const ParticleSystemRef &c)
+            {
+                const auto ps = c.Pin();
+                return std::make_tuple(ps->speedMin, ps->speedMax);
+            },
+            // Over a particle's life: the quad's edge in world units, and its colour, from start to end
+            "SetSize", [](const ParticleSystemRef &c, const float start, const float end)
+            {
+                const auto ps = c.Pin();
+                ps->startSize = start;
+                ps->endSize = end;
+            },
+            "GetSize", [](const ParticleSystemRef &c)
+            {
+                const auto ps = c.Pin();
+                return std::make_tuple(ps->startSize, ps->endSize);
+            },
+            "SetStartColor", [](const ParticleSystemRef &c, const Common::Color &color) { c.Pin()->startColor = color; },
+            "GetStartColor", [](const ParticleSystemRef &c) { return Common::Color(c.Pin()->startColor); },
+            "SetEndColor", [](const ParticleSystemRef &c, const Common::Color &color) { c.Pin()->endColor = color; },
+            "GetEndColor", [](const ParticleSystemRef &c) { return Common::Color(c.Pin()->endColor); },
+            // Motion: a multiple of the world gravity, and the share of the velocity lost per second
+            "SetGravityScale", [](const ParticleSystemRef &c, const float value) { c.Pin()->gravityScale = value; },
+            "GetGravityScale", [](const ParticleSystemRef &c) { return c.Pin()->gravityScale; },
+            "SetDrag", [](const ParticleSystemRef &c, const float value) { c.Pin()->drag = value; },
+            "GetDrag", [](const ParticleSystemRef &c) { return c.Pin()->drag; },
+            // The ground plane y = height particles bounce off, keeping `bounce` (0 to 1) of their speed
+            "SetGround", [](const ParticleSystemRef &c, const bool enabled, const float height, const float bounce)
+            {
+                const auto ps = c.Pin();
+                ps->collideWithGround = enabled;
+                ps->groundHeight = height;
+                ps->bounce = bounce;
+            },
+            "GetGround", [](const ParticleSystemRef &c)
+            {
+                const auto ps = c.Pin();
+                return std::make_tuple(ps->collideWithGround, ps->groundHeight, ps->bounce);
+            },
+            // "Alpha" or "Additive"
+            "SetBlendMode", [](const ParticleSystemRef &c, const std::string &name)
+            {
+                c.Pin()->blendMode = ParseEnumName<Rendering::ParticleBlend>(name, "ParticleSystem:SetBlendMode");
+            },
+            "GetBlendMode", [](const ParticleSystemRef &c) { return EnumName(c.Pin()->blendMode); },
+            // An image file, e.g. "res://particles/spark.png"; nil draws plain colours. A path that doesn't load
+            // raises an error and keeps the current texture.
+            "SetTexture", [](const ParticleSystemRef &c, sol::optional<std::string> path)
+            {
+                const auto ps = c.Pin();
+                if (!path)
+                {
+                    ps->texture = nullptr;
+                    return;
+                }
+                ps->texture = LoadTextureOrThrow(*path, "ParticleSystem:SetTexture");
+            },
+            "GetTexture", [](const ParticleSystemRef &c) -> sol::optional<std::string>
+            {
+                const auto ps = c.Pin();
+                if (!ps->texture)
+                {
+                    return sol::nullopt;
+                }
+                return TexturePathForLua(*ps->texture);
+            }
         );
 
         using LuaComponentRef = ComponentRef<LuaComponent>;

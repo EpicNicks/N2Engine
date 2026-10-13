@@ -393,7 +393,7 @@ TEST_F(EditorInspectorTest, EveryRegisteredTypeIsListedSortedByNameWithItsDefaul
         EXPECT_FALSE(type.at("defaults").contains("uuid")) << names.back();
     }
     EXPECT_TRUE(std::is_sorted(names.begin(), names.end()));
-    for (const char *builtin : {"Light", "AudioSource", "Rigidbody", "MeshRenderer", "TextRenderer", "LuaComponent",
+    for (const char *builtin : {"Light", "AudioSource", "Rigidbody", "MeshRenderer", "TextRenderer", "ParticleSystem", "LuaComponent",
                                 "Canvas", "Button", ThingType})
     {
         EXPECT_NE(std::find(names.begin(), names.end(), builtin), names.end()) << builtin;

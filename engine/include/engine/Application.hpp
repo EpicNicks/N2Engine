@@ -34,7 +34,9 @@ namespace N2Engine
         std::unique_ptr<Camera> _mainCamera;
         std::unique_ptr<Physics::IPhysicsBackend> _3DphysicsBackend = nullptr;
         Input::PointerDispatcher _pointerDispatcher;
-        EngineHealth _health;
+        // mutable: GetHealth adds the live ParticleSystems to the Particles row's detail
+        mutable EngineHealth _health;
+        std::string _particlesBaseDetail; // the Particles row's detail as Init made it (the GPU probe's)
         bool _quitRequested = false;
         bool _initialized = false; // from Init until Shutdown
         // The fixed-step loop's catch-up time, carried from one Tick to the next
@@ -109,7 +111,9 @@ namespace N2Engine
         /// Replaces and destroys any existing backend; pass nullptr to remove it.
         void Set3DPhysicsBackend(std::unique_ptr<Physics::IPhysicsBackend> backend);
 
-        /// Subsystem states as of the end of Init
-        [[nodiscard]] const EngineHealth& GetHealth() const { return _health; }
+        /// Subsystem states as of the end of Init. The Particles row's state is the GPU probe's (see
+        /// Physics::MakeParticlesStatus); once ParticleSystems exist its detail also says which backends they use
+        /// ("ParticleSystems: 2 CPU"). With none, the row is exactly what Init made.
+        [[nodiscard]] const EngineHealth& GetHealth() const;
     };
 }

@@ -13,6 +13,7 @@
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/rendering/Light.hpp"
+#include "engine/rendering/RenderCamera.hpp"
 #include "engine/rendering/RenderSettings.hpp"
 #include "engine/Logger.hpp"
 #include "engine/Positionable.hpp"
@@ -94,6 +95,9 @@ void Scene::Render(Renderer::Common::IRenderer *renderer, const Camera &camera)
     {
         return;
     }
+
+    // Renderables that face the camera (particle billboards) read it from here: their draws get none
+    const Rendering::RenderCamera::Scope cameraScope(camera);
 
     // One traversal, in the order rendering has always used
     std::vector<IRenderable *> renderables;
