@@ -369,7 +369,8 @@ jobs:
           (cd assets && sha256sum -c *.sha256)
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "PhysX ${PHYSX_VERSION} for Windows (slim, x86_64)" \
-              --notes "Slim selection of the files the engine uses from the PhysX Windows bin.zip (original build recipe unknown). Source sha256 and the file list are in bin/win.x86_64.vc143.mt/MANIFEST.txt inside the archive."
+              --prerelease --latest=false \
+              --title "PhysX ${PHYSX_VERSION} for Windows (slim, x86_64; build dependency, not an engine release)" \
+              --notes "Build dependency, not an N2Engine release. Slim selection of the files the engine uses from the PhysX Windows bin.zip (original build recipe unknown). Source sha256 and the file list are in bin/win.x86_64.vc143.mt/MANIFEST.txt inside the archive."
           fi
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" assets/*.zip assets/*.zip.sha256
