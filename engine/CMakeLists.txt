@@ -50,6 +50,15 @@ if (N2ENGINE_PHYSX_AVAILABLE)
         target_link_directories(engine PUBLIC
             ${PHYSX_ROOT}/physx/bin/win.x86_64.vc143.mt/$<IF:$<CONFIG:Debug>,debug,release>
         )
+    elseif (UNIX AND NOT APPLE)
+        # Static Release-only libraries (full paths in PHYSX_LIBS, from the root CMakeLists.txt): every configuration
+        # links them. The PhysX headers insist on exactly one of NDEBUG, _DEBUG and PX_CHECKED, and the Release
+        # libraries are the NDEBUG flavour, so a configuration without NDEBUG of its own (Debug) defines it for the
+        # code that includes them. Never PX_CHECKED or PX_DEBUG.
+        target_link_directories(engine PUBLIC ${PHYSX_LIB_DIR})
+        target_compile_definitions(engine PUBLIC
+            $<$<NOT:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>>:NDEBUG>
+        )
     endif ()
 endif ()
 

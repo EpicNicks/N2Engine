@@ -21,7 +21,9 @@
 #include <extensions/PxRigidBodyExt.h>
 #include <PxQueryReport.h>
 
-#if __has_include(<pvd/PxPvd.h>)
+// The PhysX Visual Debugger connection is Windows-only: a Linux (server) build never opens the PVD socket, even though
+// the PVD SDK library is linked, so the backend has no PxPvd there
+#if defined(_WIN32) && __has_include(<pvd/PxPvd.h>)
 #include <pvd/PxPvd.h>
 #define N2ENGINE_PHYSX_HAS_PVD 1
 #else

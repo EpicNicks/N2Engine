@@ -147,8 +147,8 @@ jobs:
   # The Linux build: the engine, renderer, editor host and unit tests with Clang 20 (apt.llvm.org) on the GCC 14 standard
   # library (libstdc++ 14). Clang 18, ubuntu-24.04's own, cannot use libstdc++ 14's std::expected (it needs the C++20
   # concepts feature level Clang 19 added) and libc++ 18 has no std::generator or std::chrono::clock_cast, so Clang 20 is
-  # installed. PhysX is OFF (no Linux binaries yet); FreeType, ufbx and TLS are ON so the optional backends compile here
-  # too. The editor host smoke tests run here too, the same Python script as on Windows. This is the required Linux check.
+  # installed. PhysX is ON (the pinned static Linux archive, downloaded and hash-checked by CMake, cached per architecture);
+  # FreeType, ufbx and TLS are ON so the optional backends compile here too. The editor host smoke tests run here too, the same Python script as on Windows. This is the required Linux check.
   linux:
     name: linux (Release, x86_64, Clang)
     runs-on: ubuntu-24.04
@@ -167,8 +167,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
 
+      - name: Cache PhysX binaries
+        uses: actions/cache@v6
+        with:
+          path: external/PhysX/physx/bin
+          # The pinned version and hashes are in cmake/PhysXLinuxHashes.cmake; CMake checks the extracted archive's hash
+          # stamp, so a stale or foreign cache is re-downloaded, never trusted
+          key: physx-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/PhysXLinuxHashes.cmake') }}
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
 
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
@@ -182,7 +190,7 @@ jobs:
       # The real host, end to end (tests/smoke/editor_host_smoke.py, standard library only): create a project, serve it
       # on the software renderer, and the --exit-on-* flags; then the --tls host, its certificate and key file mode.
       - name: Editor host smoke test
-        run: python3 tests/smoke/editor_host_smoke.py --scenario host --config Release --exe build/bin/N2EditorHost
+        run: python3 tests/smoke/editor_host_smoke.py --scenario host --config Release --exe build/bin/N2EditorHost --expect-physics on
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
@@ -194,7 +202,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
 
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
-  # there and the scalar versions run. Not a required check yet.
+  # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.
   linux-arm64:
     name: linux (Release, arm64, Clang)
     runs-on: ubuntu-24.04-arm
@@ -213,8 +221,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
 
+      - name: Cache PhysX binaries
+        uses: actions/cache@v6
+        with:
+          path: external/PhysX/physx/bin
+          # The pinned version and hashes are in cmake/PhysXLinuxHashes.cmake; CMake checks the extracted archive's hash
+          # stamp, so a stale or foreign cache is re-downloaded, never trusted
+          key: physx-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/PhysXLinuxHashes.cmake') }}
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
 
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
@@ -228,7 +244,7 @@ jobs:
       # The real host, end to end (tests/smoke/editor_host_smoke.py, standard library only): create a project, serve it
       # on the software renderer, and the --exit-on-* flags; then the --tls host, its certificate and key file mode.
       - name: Editor host smoke test
-        run: python3 tests/smoke/editor_host_smoke.py --scenario host --config Release --exe build/bin/N2EditorHost
+        run: python3 tests/smoke/editor_host_smoke.py --scenario host --config Release --exe build/bin/N2EditorHost --expect-physics on
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
@@ -240,7 +256,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
 
   # The Linux build with GCC 14 (the distribution compiler): the same build, tests and editor host smoke tests as the Clang
-  # job, so a GCC-built host is checked too. Not a required check (branch protection decides). GCC prints every lambda of
+  # job (but with PhysX OFF, which keeps the no-physics Linux build compiling), so a GCC-built host is checked too. Not a required check (branch protection decides). GCC prints every lambda of
   # one signature in one function as the same name, which made sol2 share one metatable between them; the vendored sol2
   # carries a marked patch for that (see the "N2Engine local patch" in external/sol2/include/sol/sol.hpp).
   linux-gcc:
@@ -283,7 +299,7 @@ jobs:
 
   # The container image (deploy/Dockerfile) on x86_64: builds it exactly as the Linux Clang job builds the host, checks the
   # runtime image has every shared library (the Dockerfile's ldd step), makes a project in a volume, starts the container
-  # as its non-root user and waits for the TLS ready line. Not a required check. arm64 images are not built in CI.
+  # as its non-root user waits for the TLS ready line and checks that the host reports physics Running (PhysX is linked in statically). Not a required check. arm64 images are not built in CI.
   docker:
     name: docker (editor host image, x86_64)
     runs-on: ubuntu-24.04
@@ -302,7 +318,10 @@ jobs:
           docker run -d --name n2host -e N2_EDITOR_TOKEN=ci-only-token -v n2proj:/project -p 127.0.0.1:9999:9999 n2editorhost
           for i in $(seq 1 60); do
             if docker logs n2host 2>&1 | grep -Eq 'N2EditorHost ready port=9999 tls=1 fingerprint=[0-9a-f]{64}'; then
-              echo "ready"; docker exec n2host id -u; exit 0
+              echo "ready"; docker exec n2host id -u
+              # The host in the image has PhysX: its health must report physics Running (over the --tls port, with the token)
+              N2_ATTACH_TOKEN=ci-only-token PYTHONDONTWRITEBYTECODE=1 python3 tests/smoke/editor_host_smoke.py --scenario attach --port 9999 --tls --token-env N2_ATTACH_TOKEN --expect-physics on
+              exit 0
             fi
             if [ "$(docker inspect -f '{{.State.Running}}' n2host)" != "true" ]; then break; fi
             sleep 1
