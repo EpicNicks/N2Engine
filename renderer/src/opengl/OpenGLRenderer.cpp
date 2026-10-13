@@ -548,12 +548,12 @@ void OpenGLRenderer::ApplyRenderState(const Common::RenderState &state)
             glCullFace(state.cull == Common::CullMode::Front ? GL_FRONT : GL_BACK);
         }
     }
-    if (all || state.blend != m_appliedState.blend)
+    if (all || state.blend != m_appliedState.blend || state.additive != m_appliedState.additive)
     {
         if (state.blend)
         {
             glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBlendFunc(GL_SRC_ALPHA, state.additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
         }
         else
         {

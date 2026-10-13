@@ -803,7 +803,7 @@ function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
----"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "Light", "AudioSource", "AudioListener",
+---"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
@@ -958,6 +958,163 @@ function Light:SetRange(range) end
 
 ---@return number
 function Light:GetRange() end
+
+---Emits and draws particles: small camera-facing quads that start at the object, fly under gravity and fade away
+---(see docs/particles.html). Particles exist only while the scene plays, are never saved, and freeze while the time
+---scale is 0. Settings apply at once, except Backend, MaxParticles and Seed, which are read when the system starts.
+---@class ParticleSystem : Component
+ParticleSystem = {}
+
+---Starts emitting: the emission rate, and the burst once
+function ParticleSystem:Play() end
+
+---Stops emitting; the particles already flying finish their lives
+function ParticleSystem:Stop() end
+
+---Removes every particle
+function ParticleSystem:Clear() end
+
+---Starts `count` particles now, playing or not. Particles beyond maxParticles are dropped (one warning in the log).
+---@param count integer
+function ParticleSystem:EmitBurst(count) end
+
+---@return boolean
+function ParticleSystem:IsPlaying() end
+
+---@return integer living particles
+function ParticleSystem:GetAliveCount() end
+
+---The backend that simulates this system: "CPU", or "PhysX" when the GPU particle backend is in use
+---@return "CPU"|"PhysX"|nil nil until the system has started (the scene is playing)
+function ParticleSystem:GetActiveBackend() end
+
+---@param backend "Auto"|"PhysX"|"CPU" Auto: PhysX when the GPU physics scene is up, else CPU. PhysX falls back to CPU, with one warning, where there is no GPU backend. An unknown name raises an error.
+function ParticleSystem:SetBackend(backend) end
+
+---@return "Auto"|"PhysX"|"CPU" what was asked for (GetActiveBackend says what is used)
+function ParticleSystem:GetBackend() end
+
+---@param playOnAwake boolean emit as soon as the system starts (default true)
+function ParticleSystem:SetPlayOnAwake(playOnAwake) end
+
+---@return boolean
+function ParticleSystem:GetPlayOnAwake() end
+
+---@param maxParticles integer the most particles alive at once (default 1000, at most 100000); more are dropped
+function ParticleSystem:SetMaxParticles(maxParticles) end
+
+---@return integer
+function ParticleSystem:GetMaxParticles() end
+
+---@param seed integer the same seed gives the same particles (default 1)
+function ParticleSystem:SetSeed(seed) end
+
+---@return integer
+function ParticleSystem:GetSeed() end
+
+---@param rate number particles per second while playing (default 20)
+function ParticleSystem:SetEmissionRate(rate) end
+
+---@return number
+function ParticleSystem:GetEmissionRate() end
+
+---@param count integer particles started at once by every Play (default 0)
+function ParticleSystem:SetBurstCount(count) end
+
+---@return integer
+function ParticleSystem:GetBurstCount() end
+
+---@param shape "Cone"|"Sphere" a cone along the object's +Y axis, or a sphere (default Cone). An unknown name raises an error.
+function ParticleSystem:SetShape(shape) end
+
+---@return "Cone"|"Sphere"
+function ParticleSystem:GetShape() end
+
+---@param radius number the cone's base disc, or the sphere, in world units (default 0)
+function ParticleSystem:SetShapeRadius(radius) end
+
+---@return number
+function ParticleSystem:GetShapeRadius() end
+
+---@param angle number the cone's half angle in degrees (default 25)
+function ParticleSystem:SetConeAngle(angle) end
+
+---@return number
+function ParticleSystem:GetConeAngle() end
+
+---Each particle's lifetime is picked from this range when it starts
+---@param min number seconds (default 1)
+---@param max number seconds (default 2)
+function ParticleSystem:SetLifetime(min, max) end
+
+---@return number min
+---@return number max
+function ParticleSystem:GetLifetime() end
+
+---Each particle's start speed is picked from this range
+---@param min number world units per second (default 2)
+---@param max number world units per second (default 4)
+function ParticleSystem:SetSpeed(min, max) end
+
+---@return number min
+---@return number max
+function ParticleSystem:GetSpeed() end
+
+---A particle's quad edge goes from `start` to `end` over its life
+---@param start number world units (default 0.2)
+---@param end_ number world units (default 0.05)
+function ParticleSystem:SetSize(start, end_) end
+
+---@return number start
+---@return number end
+function ParticleSystem:GetSize() end
+
+---@param color Color the colour at birth (default white)
+function ParticleSystem:SetStartColor(color) end
+
+---@return Color
+function ParticleSystem:GetStartColor() end
+
+---@param color Color the colour at death; alpha 0 fades the particle out (default white, alpha 0)
+function ParticleSystem:SetEndColor(color) end
+
+---@return Color
+function ParticleSystem:GetEndColor() end
+
+---@param scale number multiplies the world gravity (default 1; 0 floats)
+function ParticleSystem:SetGravityScale(scale) end
+
+---@return number
+function ParticleSystem:GetGravityScale() end
+
+---@param drag number the share of the velocity lost per second (default 0)
+function ParticleSystem:SetDrag(drag) end
+
+---@return number
+function ParticleSystem:GetDrag() end
+
+---Particles bounce off the plane y = height (world space), the only collision the CPU backend does
+---@param enabled boolean default false
+---@param height number default 0
+---@param bounce number the share of its speed a particle keeps, 0 to 1 (default 0.3)
+function ParticleSystem:SetGround(enabled, height, bounce) end
+
+---@return boolean enabled
+---@return number height
+---@return number bounce
+function ParticleSystem:GetGround() end
+
+---@param mode "Alpha"|"Additive" Additive adds the particles to the picture (drawn as Alpha by the software renderer, which can't blend)
+function ParticleSystem:SetBlendMode(mode) end
+
+---@return "Alpha"|"Additive"
+function ParticleSystem:GetBlendMode() end
+
+---@param path string|nil an image file, e.g. "res://particles/spark.png"; nil draws plain colours. A path that doesn't load raises an error and keeps the current texture.
+function ParticleSystem:SetTexture(path) end
+
+---@return string|nil the texture's path, nil without one
+function ParticleSystem:GetTexture() end
 
 ---3D model files (.glb, .gltf; .fbx and .obj when the engine is built with N2ENGINE_MODEL_UFBX): see docs/meshes.html#models
 Model = {}
