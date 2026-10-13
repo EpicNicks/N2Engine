@@ -29,6 +29,14 @@
 #include <vector>
 
 using namespace physx;
+
+// The GPU probe talks to PhysX's CUDA entry points. Only Windows has a GPU library (PhysXGpu_64.dll ships in the
+// Windows PhysX package); the Linux static libraries are CPU-only, so there nothing CUDA-related is ever called.
+#if defined(_WIN32) && PX_SUPPORT_GPU_PHYSX
+#define N2ENGINE_PHYSX_GPU_PROBE 1
+#else
+#define N2ENGINE_PHYSX_GPU_PROBE 0
+#endif
 #endif
 
 namespace N2Engine::Physics
@@ -157,9 +165,55 @@ namespace N2Engine::Physics
         PhysXBackend::Shutdown();
     }
 
+    void PhysXBackend::FailGpu(const std::string &reason)
+    {
+        if (_cudaContextManager)
+        {
+            _cudaContextManager->release();
+            _cudaContextManager = nullptr;
+        }
+        // auto: no usable GPU is not an error; on: the project asked for it, so it is
+        const bool required = _gpuMode == GpuMode::On;
+        _gpuStatus = {required ? GpuState::Failed : GpuState::Unavailable, "GPU physics unavailable: " + reason};
+        Logger::Warn(std::format("physics.gpu={}: {}; using the CPU scene", ToString(_gpuMode), _gpuStatus.detail));
+    }
+
+    bool PhysXBackend::ProbeGpu()
+    {
+        if (_gpuMode == GpuMode::Off)
+        {
+            _gpuStatus = {GpuState::Disabled, "physics.gpu is off (the CPU scene)"};
+            return false;
+        }
+#if N2ENGINE_PHYSX_GPU_PROBE
+        const int ordinal = PxGetSuggestedCudaDeviceOrdinal(_errorCallback);
+        if (ordinal < 0)
+        {
+            FailGpu("no CUDA-capable NVIDIA GPU or driver found");
+            return false;
+        }
+        PxCudaContextManagerDesc desc;
+        desc.deviceOrdinal = ordinal;
+        _cudaContextManager = PxCreateCudaContextManager(*_foundation, desc);
+        if (!_cudaContextManager || !_cudaContextManager->contextIsValid())
+        {
+            FailGpu("the CUDA context could not be created (is PhysXGpu_64.dll next to the executable?)");
+            return false;
+        }
+        _gpuStatus = {GpuState::Ready, std::format("PhysX GPU dynamics on CUDA device {}", ordinal)};
+        return true;
+#else
+        // No GPU library in this build (Linux): never touch CUDA. Not a failure even for "on".
+        _gpuStatus = {GpuState::Unavailable, "GPU physics unavailable: this build has no PhysX GPU library (CPU-only)"};
+        Logger::Warn(std::format("physics.gpu={}: {}; using the CPU scene", ToString(_gpuMode), _gpuStatus.detail));
+        return false;
+#endif
+    }
+
     bool PhysXBackend::Initialize()
     {
         Logger::Info("Initializing PhysX Backend...");
+        _gpuStatus = {GpuState::Disabled, "physics.gpu is off (the CPU scene)"};
 
         // 1. Create foundation. The allocator and error callback are members so they outlive the
         // foundation: as function-local statics they were destroyed at exit before the backend released it.
@@ -198,22 +252,53 @@ namespace N2Engine::Physics
         // 4. Create default material
         _defaultMaterial = _physics->createMaterial(0.5f, 0.5f, 0.6f);
 
-        // 5. Create scene
-        PxSceneDesc sceneDesc(_physics->getTolerancesScale());
-        sceneDesc.gravity = PxVec3(0.0f, -9.81f, 0.0f);
-
+        // 5. Create scene. With physics.gpu off (the default) nothing GPU-related is touched; otherwise the scene
+        // is the GPU scene when the probe works and today's CPU scene when it does not.
         _dispatcher = PxDefaultCpuDispatcherCreate(4);
-        sceneDesc.cpuDispatcher = _dispatcher;
-        sceneDesc.filterShader = CollisionEventFilterShader;
 
-        // Set this backend as the simulation event callback
-        sceneDesc.simulationEventCallback = this;
+        const auto createScene = [this](const bool gpu) -> PxScene *
+        {
+            PxSceneDesc sceneDesc(_physics->getTolerancesScale());
+            sceneDesc.gravity = PxVec3(0.0f, -9.81f, 0.0f);
 
-        // PhysX 5 performance flags
-        sceneDesc.flags |= PxSceneFlag::eENABLE_PCM;
-        sceneDesc.flags |= PxSceneFlag::eENABLE_STABILIZATION;
+            sceneDesc.cpuDispatcher = _dispatcher;
+            sceneDesc.filterShader = CollisionEventFilterShader;
 
-        _scene = _physics->createScene(sceneDesc);
+            // Set this backend as the simulation event callback
+            sceneDesc.simulationEventCallback = this;
+
+            // PhysX 5 performance flags
+            sceneDesc.flags |= PxSceneFlag::eENABLE_PCM;
+            sceneDesc.flags |= PxSceneFlag::eENABLE_STABILIZATION;
+
+            if (gpu)
+            {
+                // GPU dynamics is a whole-scene switch (all rigid bodies move to the GPU pipeline) and cannot be
+                // changed after creation
+                sceneDesc.cudaContextManager = _cudaContextManager;
+                sceneDesc.flags |= PxSceneFlag::eENABLE_GPU_DYNAMICS;
+                sceneDesc.broadPhaseType = PxBroadPhaseType::eGPU;
+            }
+            return _physics->createScene(sceneDesc);
+        };
+
+        const bool gpuProbed = ProbeGpu();
+        _scene = createScene(gpuProbed);
+        if (_scene && gpuProbed && !_scene->getFlags().isSet(PxSceneFlag::eENABLE_GPU_DYNAMICS))
+        {
+            // PhysX fell back to software on its own: report that rather than a GPU scene that is not one
+            _scene->release();
+            _scene = nullptr;
+            FailGpu("PhysX did not keep GPU dynamics for the scene");
+        }
+        else if (!_scene && gpuProbed)
+        {
+            FailGpu("the GPU scene could not be created");
+        }
+        if (!_scene && gpuProbed)
+        {
+            _scene = createScene(false);
+        }
         if (!_scene)
         {
             Logger::Error("PxCreateScene failed!");
@@ -330,6 +415,11 @@ namespace N2Engine::Physics
             _defaultMaterial->release();
         if (_physics)
             _physics->release();
+        if (_cudaContextManager)
+        {
+            _cudaContextManager->release();
+            _cudaContextManager = nullptr;
+        }
 
 #if N2ENGINE_PHYSX_HAS_PVD
         if (_pvd)

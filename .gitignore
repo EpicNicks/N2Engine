@@ -25,6 +25,8 @@ Makefile
 !CMakeLists.txt
 # Checked-in CMake scripts (generated *.cmake files stay ignored)
 !text/cmake/*.cmake
+# Project CMake scripts directly under cmake/ (e.g. PhysXLinuxHashes.cmake)
+!cmake/*.cmake
 
 # Compiled files
 *.o

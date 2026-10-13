@@ -97,6 +97,8 @@ int main(int argc, char *argv[])
 
     Application &application = Application::GetInstance();
     application.Init({
+        // Init reads physics.gpu from here; the scene's GPU flag cannot change after it is built
+        .projectPath = projectDir.string(),
         .physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX,
         .renderBackend = renderBackend,
         .isHeadless = false,
