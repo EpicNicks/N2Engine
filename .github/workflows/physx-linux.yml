@@ -188,7 +188,8 @@ jobs:
               if (!p) { std::puts("PxCreatePhysics failed"); return 2; }
               PxSceneDesc d(p->getTolerancesScale());
               d.gravity = PxVec3(0, -9.81f, 0);
-              d.cpuDispatcher = PxDefaultCpuDispatcherCreate(1);
+              PxDefaultCpuDispatcher* cpu = PxDefaultCpuDispatcherCreate(1);
+              d.cpuDispatcher = cpu;
               d.filterShader = PxDefaultSimulationFilterShader;
               PxScene* s = p->createScene(d);
               PxMaterial* m = p->createMaterial(0.5f, 0.5f, 0.1f);
@@ -198,14 +199,14 @@ jobs:
               for (int i = 0; i < 30; ++i) { s->simulate(1.0f / 60.0f); s->fetchResults(true); }
               float y = b->getGlobalPose().p.y;
               std::printf("PhysX %d.%d.%d ok, body y after 0.5 s: %f\n", PX_PHYSICS_VERSION_MAJOR, PX_PHYSICS_VERSION_MINOR, PX_PHYSICS_VERSION_BUGFIX, y);
-              s->release(); m->release(); d.cpuDispatcher->release(); p->release(); f->release();
+              s->release(); m->release(); cpu->release(); p->release(); f->release();
               return y < 10.0f ? 0 : 3;
           }
           CPP
           LIBS="$(ls smoke/bin/*/release/*.a | tr '\n' ' ')"
           echo "Libraries: $LIBS"
           clang++-20 --gcc-install-dir=/usr/lib/gcc/${{ matrix.gnu_triple }}/14 -std=c++17 -O1 -DNDEBUG \
-            -I external/PhysX/physx/include smoke/main.cpp \
+            -isystem external/PhysX/physx/include smoke/main.cpp \
             -Wl,--start-group $LIBS -Wl,--end-group -lpthread -ldl -lrt -o smoke/smoke
           ./smoke/smoke
 
