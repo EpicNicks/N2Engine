@@ -69,6 +69,7 @@
 <p class="toc-title">On this page</p>
 <ol>
 <li><a href="#backends">Backends and build configuration</a></li>
+<li><a href="#gpu">GPU physics (physics.gpu)</a></li>
 <li><a href="#fixed-step">The fixed physics step</a></li>
 <li><a href="#body-creation">When bodies are created</a></li>
 <li><a href="#bodies-colliders">Bodies, colliders and shapes</a></li>
@@ -113,6 +114,7 @@
 </tbody>
 </table>
 </div>
+<p>Beside the Physics row the health has a <strong>Particles</strong> row <span class="badge">PR #122</span>: Disabled with a reason unless the GPU scene is up (see <a href="#gpu">GPU physics</a>).</p>
 <p>With a null backend the game keeps running. <code>Rigidbody::OnAttach</code> logs a warning ("Physics backend not available - Rigidbody disabled") and creates nothing; colliders silently skip attaching; raycasts return no hit; <code>FixedUpdate</code> still runs every fixed step. <code>PhysicsTests</code> compiles to nothing without PhysX, and CI builds both configurations.</p>
 <p class="src">Source: <code>CMakeLists.txt</code>, <code>engine/CMakeLists.txt</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>, <code>Application::PhysicsUpdate</code>; <code>engine/src/physics/Rigidbody.cpp</code> — <code>Rigidbody::OnAttach</code>. See also <a href="logging-and-editor.html">Logging, health &amp; editor</a>.</p>
 
@@ -120,6 +122,26 @@
 <p class="callout-title">Note</p>
 <p>Tests install a backend headlessly with <code>Application::Set3DPhysicsBackend(std::make_unique&lt;PhysXBackend&gt;())</code> after calling <code>Initialize()</code> themselves. <code>Application::Init</code> does not require a window (headless it continues and reports Failed health), but it tries to open a real window and audio device and clears the quit flag, which tests avoid. See <a href="testing.html">Testing &amp; CI</a>.</p>
 </div>
+
+<h2 id="gpu">GPU physics (physics.gpu) <span class="badge">PR #122</span></h2>
+<p>The project setting <code>physics.gpu</code> (in the <code>physics</code> block of <code>project.n2proj</code>, next to <code>fixedTimestep</code> and <code>gravity</code>) chooses whether the rigid-body scene may run on an NVIDIA GPU through PhysX GPU dynamics. It is the groundwork for GPU particles; on its own it adds no new feature.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Value</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>"off"</code> (default; also when the key is missing or null)</td><td>The CPU scene, exactly as before. <strong>No CUDA call is made at all</strong>: nothing is probed, no GPU library is loaded.</td></tr>
+<tr><td><code>"auto"</code></td><td>Probe the GPU. If it works the scene is the GPU scene; if not, a single warning is logged and the unchanged CPU scene is built (GPU state <em>Unavailable</em>).</td></tr>
+<tr><td><code>"on"</code></td><td>Same probe, but a failed probe is an error in the health row (GPU state <em>Failed</em>). The host still starts, with the CPU scene.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Values are case-insensitive. Any other value is refused with a project-settings warning and means <code>off</code>. The value is read from the project file by <code>Application::Init</code> before the physics backend is created (<code>ReadPhysicsGpuMode</code>), because the scene's GPU flag is fixed when the scene is created. <code>ApplyProjectSettings</code> only validates it, so changing it in a running editor host takes effect at the next start.</p>
+<h3 id="gpu-probe">The probe</h3>
+<p>Only with <code>auto</code> or <code>on</code>, and only in a Windows build with PhysX, <code>PhysXBackend::Initialize</code> calls <code>PxGetSuggestedCudaDeviceOrdinal</code> (negative means no usable GPU), <code>PxCreateCudaContextManager</code> and checks <code>contextIsValid()</code>. On success the scene is created with <code>eENABLE_GPU_DYNAMICS</code>, the GPU broad phase (<code>PxBroadPhaseType::eGPU</code>) and the CUDA context manager; if PhysX still does not keep GPU dynamics, or scene creation fails, the context is released and the CPU scene is built instead. The Windows package already contains <code>PhysXGpu_64.dll</code>; it is loaded by PhysX only inside these calls. The Linux PhysX libraries are CPU-only static libraries with no GPU library, so on Linux (and with PhysX OFF) <code>auto</code> and <code>on</code> both report <em>Unavailable</em> (never <em>Failed</em>) and never touch CUDA.</p>
+<p>The result is <code>IPhysicsBackend::GetGpuStatus()</code>, a <code>GpuStatus</code> of <code>Disabled | Unavailable | Ready | Failed</code> plus a detail string. It feeds the <strong>Particles</strong> row of the engine health (a generic <code>SubsystemStatus</code>, so the editor protocol is unchanged): <em>Disabled</em> and <em>Unavailable</em> are Disabled with the reason as the detail, <em>Ready</em> is Running, <em>Failed</em> is Failed. Lua gets <code>Physics.IsGpuAvailable()</code>, true only when the GPU scene is up.</p>
+<div class="callout note" id="design-gpu-default"><p class="callout-title">Design decision: GPU physics is off by default, as in Unity <span class="badge">PR #122</span></p><p>GPU dynamics is a whole-scene switch: when it is on, every rigid body moves to the GPU pipeline, with different performance and contact behaviour, reduced-coordinate articulations only, and more video memory. Because it cannot be changed after the scene exists and would make a project behave differently on a machine without an NVIDIA GPU, it is opt-in. Unity likewise runs rigid bodies on the CPU and keeps effect particles separate from the physics GPU path. A project with <code>physics.gpu</code> off behaves the same on every machine, including the headless host.</p></div>
+<p>Not verified: creating the real CUDA context and GPU scene (needs an NVIDIA GPU on Windows; CI has none and only exercises the disabled path and the CPU-only mapping).</p>
+<p class="src">Source: <code>engine/include/engine/physics/GpuStatus.hpp</code>; <code>engine/src/physics/physx/PhysXBackend.cpp</code> - <code>PhysXBackend::ProbeGpu</code>, <code>PhysXBackend::FailGpu</code>, <code>PhysXBackend::Initialize</code>; <code>engine/src/ProjectSettings.cpp</code> - <code>ReadPhysicsGpuMode</code>; <code>engine/src/Application.cpp</code> - <code>Application::Init</code>; tests: <code>tests/engine/physics/GpuProbeTests.cpp</code></p>
 
 <h2 id="fixed-step">The fixed physics step</h2>
 <p>Physics runs inside the fixed-step loop of <code>Application::Run</code>. Each frame adds the unscaled frame delta (clamped to 0.25 s) to an accumulator, processes the scene's attach queue once, then runs one fixed step per <code>Time::GetFixedUnscaledDeltaTime()</code> in the accumulator. Each fixed step with a backend is:</p>
@@ -527,6 +549,7 @@ const int count = Physics::Raycast::All(origin, direction, hits, 50.0f); // near
 <tbody>
 <tr><td><code>Physics.Raycast(origin, direction, maxDistance?, layerMask?)</code></td><td>The closest hit as a table, or <code>nil</code></td></tr>
 <tr><td><code>Physics.RaycastAll(origin, direction, maxDistance?, layerMask?)</code></td><td>An array of hit tables, nearest first; empty for no hits</td></tr>
+<tr><td><code>Physics.IsGpuAvailable()</code></td><td>true only when the GPU physics scene is up (<code>physics.gpu</code> auto or on, and the probe succeeded)</td></tr>
 </tbody>
 </table>
 </div>

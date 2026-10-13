@@ -11,6 +11,9 @@
 #include "engine/Logger.hpp"
 #include "engine/common/ScriptUtils.hpp"
 #include "engine/sceneManagement/Scene.hpp"
+#include "engine/ProjectSettings.hpp"
+#include "engine/io/ProjectFile.hpp"
+#include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/ui/UISystem.hpp"
@@ -151,10 +154,24 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
 
     Logger::Info("Camera initialized");
 
+    // physics.gpu comes from the project file here, not from ApplyProjectSettings (which runs after Init): the
+    // physics scene is built below and its GPU flag cannot change afterwards. No project, or no setting: off, and
+    // then no CUDA call is made at all. A bad value is reported by ApplyProjectSettings.
+    Physics::GpuMode gpuMode = Physics::GpuMode::Off;
+    if (!options.projectPath.empty())
+    {
+        if (const auto project = IO::ProjectFile::Load(options.projectPath))
+        {
+            gpuMode = ReadPhysicsGpuMode(project->settings);
+        }
+    }
+
 #ifdef N2ENGINE_PHYSX_ENABLED
     if (options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::PHYSX)
     {
         _3DphysicsBackend = std::make_unique<Physics::PhysXBackend>();
+        // Before Initialize: the scene's GPU flag is fixed when it is created
+        _3DphysicsBackend->SetGpuMode(gpuMode);
         if (!_3DphysicsBackend->Initialize())
         {
             Logger::Error("Failed to initialize PhysX backend!");
@@ -214,7 +231,17 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         audioStatus.detail = "Could not open an audio device (see log)";
     }
 
-    _health.subsystems = {windowStatus, rendererStatus, physicsStatus, audioStatus, scriptingStatus};
+    // The particle row follows the physics GPU probe: Disabled with the reason unless the GPU scene is up
+    const SubsystemStatus particlesStatus = Physics::MakeParticlesStatus(
+        _3DphysicsBackend
+            ? _3DphysicsBackend->GetGpuStatus()
+            : Physics::GpuStatus{gpuMode == Physics::GpuMode::Off ? Physics::GpuState::Disabled
+                                                                    : Physics::GpuState::Unavailable,
+                                 gpuMode == Physics::GpuMode::Off
+                                     ? "physics.gpu is off"
+                                     : "GPU physics unavailable: there is no physics backend (see Physics)"});
+
+    _health.subsystems = {windowStatus, rendererStatus, physicsStatus, particlesStatus, audioStatus, scriptingStatus};
     for (const SubsystemStatus &status : _health.subsystems)
     {
         if (status.state == SubsystemState::Failed)

@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include <math/Vector3.hpp>
+#include "engine/physics/GpuStatus.hpp"
 #include <renderer/common/SceneLighting.hpp>
 
 namespace N2Engine
@@ -20,7 +21,10 @@ namespace N2Engine
      *     input     must be {"actionMaps": {...}}; the window's InputSystem::Deserialize reads it (without an input
      *               system the shape is still checked, then nothing is applied)
      *     physics   {"fixedTimestep": seconds > 0, "gravity": {"x", "y", "z"}}: Time::SetFixedTimestep, and the
-     *               physics backend's gravity (skipped without a backend)
+     *               physics backend's gravity (skipped without a backend). "gpu": "off" | "auto" | "on" (default off,
+     *               case-insensitive; anything else is refused with a warning and means off) is read by
+     *               ReadPhysicsGpuMode before Application::Init, because the scene's GPU flag is fixed when it is
+     *               created; applying it afterwards only validates it (a change needs a restart)
      *     rendering {"colorSpace": "gamma" | "linear"}: Rendering::RenderSettings::SetColorSpace (case-insensitive;
      *               other keys in the block are left alone). A block without colorSpace, with it null, or (when
      *               `only` names rendering) removed, means the default, gamma. "forceShaderEncode": true makes
@@ -40,6 +44,14 @@ namespace N2Engine
      */
     [[nodiscard]] std::vector<std::string> ApplyProjectSettings(const nlohmann::json &settings,
                                                                 const std::optional<std::set<std::string>> &only = {});
+
+    /**
+     * physics.gpu from a project's settings object: Off when it is absent, null or not "off"/"auto"/"on"
+     * (case-insensitive). Host code calls it before Application::Init (the physics scene is built there).
+     * problems, when given, gets one message for an unknown value.
+     */
+    [[nodiscard]] Physics::GpuMode ReadPhysicsGpuMode(const nlohmann::json &settings,
+                                                      std::vector<std::string> *problems = nullptr);
 
     /**
      * The live state ApplyProjectSettings changes, taken before applying so it can be put back exactly (a block the

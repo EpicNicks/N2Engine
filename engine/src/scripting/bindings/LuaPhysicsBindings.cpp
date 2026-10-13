@@ -10,6 +10,8 @@
 #include "engine/physics/ICollider.hpp"
 #include "engine/physics/Raycast.hpp"
 #include "engine/Layers.hpp"
+#include "engine/Application.hpp"
+#include "engine/physics/IPhysicsBackend.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -189,6 +191,13 @@ namespace N2Engine::Scripting::Bindings
 
         // ===== Raycasts (global) =====
         lua["Physics"] = lua.create_table_with(
+            // Physics.IsGpuAvailable() -> true when the physics scene runs on the GPU (physics.gpu auto/on and the
+            // probe succeeded); false otherwise, including without a physics backend
+            "IsGpuAvailable", []() -> bool
+            {
+                const Physics::IPhysicsBackend *backend = Application::GetInstance().Get3DPhysicsBackend();
+                return backend != nullptr && backend->GetGpuStatus().state == Physics::GpuState::Ready;
+            },
             // Physics.Raycast(origin, direction, maxDistance?, layerMask?) -> the closest hit as a table
             // {point, normal, distance, gameObject, collider, rigidbody}, or nil
             "Raycast", [](const Math::Vector3 &origin, const Math::Vector3 &direction,

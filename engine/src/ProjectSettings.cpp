@@ -35,6 +35,8 @@ namespace N2Engine
                                                    timestep->dump()));
                 }
             }
+            // Validated here; the value itself is read before Init (ReadPhysicsGpuMode), so a change needs a restart
+            (void)ReadPhysicsGpuMode(nlohmann::json{{"physics", physics}}, &problems);
             if (const auto gravity = physics.find("gravity"); gravity != physics.end() && !gravity->is_null())
             {
                 const bool valid = gravity->is_object() && gravity->contains("x") && gravity->contains("y") &&
@@ -170,6 +172,36 @@ namespace N2Engine
             }
         }
         return problems;
+    }
+
+    Physics::GpuMode ReadPhysicsGpuMode(const nlohmann::json &settings, std::vector<std::string> *problems)
+    {
+        if (!settings.is_object())
+        {
+            return Physics::GpuMode::Off;
+        }
+        const auto block = settings.find("physics");
+        if (block == settings.end() || !block->is_object())
+        {
+            return Physics::GpuMode::Off;
+        }
+        const auto gpu = block->find("gpu");
+        if (gpu == block->end() || gpu->is_null())
+        {
+            return Physics::GpuMode::Off;
+        }
+        if (gpu->is_string())
+        {
+            if (const auto mode = Physics::ParseGpuMode(gpu->get<std::string>()))
+            {
+                return *mode;
+            }
+        }
+        if (problems)
+        {
+            problems->push_back(std::format("physics.gpu: {} is not \"off\", \"auto\" or \"on\"; using off", gpu->dump()));
+        }
+        return Physics::GpuMode::Off;
     }
 
     ProjectSettingsSnapshot ProjectSettingsSnapshot::Capture()
