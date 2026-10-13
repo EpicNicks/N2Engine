@@ -26,7 +26,7 @@ name: PhysX Windows slim
 #
 # Slim zip layout (extract at external/PhysX/physx, exactly like bin.zip)
 #   bin/win.x86_64.vc143.mt/{debug,release}/<files named by CMakeLists.txt>
-#   MANIFEST.txt, and the PhysX LICENSE file if bin.zip has one at its root
+#   bin/win.x86_64.vc143.mt/MANIFEST.txt, and the PhysX LICENSE file if bin.zip has one at its root
 
 on:
   workflow_dispatch:
@@ -54,7 +54,7 @@ env:
   SOURCE_URL: ${{ inputs.source_url || 'https://github.com/EpicNicks/N2Engine/releases/download/physx-dependencies/bin.zip' }}
   # Pin of the source zip. Empty until the first run prints the sha256 it computed (job summary, "Source zip" section);
   # the orchestrator then pins it here, and any later run whose download differs fails.
-  EXPECTED_SOURCE_SHA256: ""
+  EXPECTED_SOURCE_SHA256: "77eedc4ba568479ff8657c1a04d50c7ce2d2b2046ca277e7b77809776746d527"  # 1405731918 bytes, PR run 38426123539
 
 jobs:
   package:
@@ -158,10 +158,10 @@ jobs:
               sys.exit("a Gpu_static file was selected: " + str(bad))
           print("license files at the source root:", [i.filename for i in license_files] or "none")
 
-          # 3. Entries: the selected files plus a root LICENSE* if there is one, sorted, with MANIFEST.txt.
+          # 3. Entries: the selected files plus a root LICENSE* if there is one (moved into bin/<plat>/, which is git-ignored), sorted, with bin/<plat>/MANIFEST.txt.
           entries = dict(kept)
           for i in license_files:
-              entries[i.filename] = i
+              entries[PLAT + os.path.basename(i.filename)] = i
           data = {}
           for name, i in entries.items():
               with src.open(i) as f:
@@ -182,7 +182,7 @@ jobs:
           for name in sorted(data):
               lines.append("%12d  %s  %s" % (len(data[name]), hashlib.sha256(data[name]).hexdigest(), name))
           manifest = ("\n".join(lines) + "\n").encode("ascii")
-          data["MANIFEST.txt"] = manifest
+          data[PLAT + "MANIFEST.txt"] = manifest
 
           # 4. Deterministic zip: sorted entries, fixed mtime, fixed attributes, fixed compression level.
           zip_name = "physx-windows-x86_64-" + os.environ["PHYSX_VERSION"] + "-slim.zip"
@@ -224,7 +224,7 @@ jobs:
           PY
           ls -l out
           cat out/*.sha256
-          unzip -p out/physx-windows-x86_64-${PHYSX_VERSION}-slim.zip MANIFEST.txt | head -20
+          unzip -p out/physx-windows-x86_64-${PHYSX_VERSION}-slim.zip bin/win.x86_64.vc143.mt/MANIFEST.txt | head -20
 
       - name: Determinism check (a rewrite is byte-identical)
         run: |
@@ -370,6 +370,6 @@ jobs:
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "PhysX ${PHYSX_VERSION} for Windows (slim, x86_64)" \
-              --notes "Slim selection of the files the engine uses from the PhysX Windows bin.zip (original build recipe unknown). Source sha256 and the file list are in MANIFEST.txt inside the archive."
+              --notes "Slim selection of the files the engine uses from the PhysX Windows bin.zip (original build recipe unknown). Source sha256 and the file list are in bin/win.x86_64.vc143.mt/MANIFEST.txt inside the archive."
           fi
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" assets/*.zip assets/*.zip.sha256
