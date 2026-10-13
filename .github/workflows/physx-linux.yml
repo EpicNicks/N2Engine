@@ -241,6 +241,8 @@ jobs:
           pattern: physx-linux-*
           merge-multiple: true
 
+      # These archives are a build dependency, not an N2Engine release, so the release
+      # is created as a prerelease and never as the repo's latest release.
       - name: Upload to the release
         run: |
           set -euo pipefail
@@ -248,7 +250,8 @@ jobs:
           ls -l assets
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "PhysX ${PHYSX_VERSION} for Linux (x86_64, aarch64)" \
-              --notes "Static Release libraries of NVIDIA PhysX ${PHYSX_VERSION} built by the PhysX Linux workflow. See the archive LICENSE.md."
+              --prerelease --latest=false \
+              --title "PhysX ${PHYSX_VERSION} for Linux (build dependency, not an engine release)" \
+              --notes "Build dependency, not an N2Engine release. These are prebuilt static Release libraries of NVIDIA PhysX built by the PhysX Linux workflow and downloaded by the engine CMake with a pinned SHA256 (cmake/PhysXLinuxHashes.cmake); the archives carry the PhysX LICENSE.md."
           fi
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" assets/*.tar.gz assets/*.tar.gz.sha256
