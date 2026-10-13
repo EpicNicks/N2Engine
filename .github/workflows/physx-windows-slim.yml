@@ -1,0 +1,376 @@
+name: PhysX Windows slim
+
+# Builds a slim Windows PhysX archive from the existing release asset bin.zip (nothing is rebuilt: files are selected
+# from it), and proves the slim files link and load by building and testing the engine against them.
+#
+# Why: bin.zip is 1.34 GB compressed / 3.7 GB unpacked, mostly files the engine never uses: 144 PhysX snippet exes and
+# their PDBs, the *Gpu_static*.lib files, .map/.exp files and the checked/profile folders. Only the files the engine's
+# root CMakeLists.txt names are kept.
+#
+# Provenance: the original build recipe of bin.zip is not documented (the person who made it does not have it), so this
+# workflow does not claim to know how the binaries were built. It records the sha256 and size of the source zip in the job
+# summary and in MANIFEST.txt inside the slim zip, so what the slim zip was cut from is always identifiable.
+#
+# Triggers
+#   workflow_dispatch   inputs: source_url, release_tag, publish (default false)
+#   push of a tag       physx-windows-*  (publishes, to the release named by the release_tag default below)
+#   pull_request        only when this file changes: a dry run (package + verify). A pull_request run NEVER publishes.
+#
+# Jobs
+#   package   ubuntu-latest: no Windows-specific tool is needed to select files from a zip (Python's zipfile does it and
+#             writes the zip deterministically), and the Linux runner is quicker to start and to move 1.3 GB through.
+#   verify    windows-latest, Debug and Release: extracts the slim zip over a clean checkout's external/PhysX/physx, so
+#             bin.zip is never downloaded or cached in that job, configures the engine with PhysX ON, builds everything,
+#             runs ctest and the editor host smoke test with --expect-physics on.
+#   publish   only for a tag push or a manual run with publish=true. Only job with contents: write. No --clobber.
+#
+# Slim zip layout (extract at external/PhysX/physx, exactly like bin.zip)
+#   bin/win.x86_64.vc143.mt/{debug,release}/<files named by CMakeLists.txt>
+#   bin/win.x86_64.vc143.mt/MANIFEST.txt, and the PhysX LICENSE file if bin.zip has one at its root
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: URL of the full PhysX Windows bin.zip to cut the slim archive from
+        default: https://github.com/EpicNicks/N2Engine/releases/download/physx-dependencies/bin.zip
+      release_tag:
+        description: Release tag on this repository that receives the assets (publish only)
+        default: physx-dependencies-windows-5.6.1
+      publish:
+        description: Upload the archive to the release
+        type: boolean
+        default: false
+  push:
+    tags: ['physx-windows-*']
+  pull_request:
+    paths: ['.github/workflows/physx-windows-slim.yml']
+
+permissions:
+  contents: read
+
+env:
+  PHYSX_VERSION: 5.6.1
+  SOURCE_URL: ${{ inputs.source_url || 'https://github.com/EpicNicks/N2Engine/releases/download/physx-dependencies/bin.zip' }}
+  # Pin of the source zip. Empty until the first run prints the sha256 it computed (job summary, "Source zip" section);
+  # the orchestrator then pins it here, and any later run whose download differs fails.
+  EXPECTED_SOURCE_SHA256: "77eedc4ba568479ff8657c1a04d50c7ce2d2b2046ca277e7b77809776746d527"  # 1405731918 bytes, PR run 38426123539
+
+jobs:
+  package:
+    name: package (select files from bin.zip)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the source zip
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 10 -o source.zip "$SOURCE_URL"
+          size=$(stat -c %s source.zip)
+          sha=$(sha256sum source.zip | cut -d' ' -f1)
+          echo "source url: $SOURCE_URL"
+          echo "source size: $size bytes"
+          echo "source sha256: $sha"
+          {
+            echo "## Source zip"
+            echo ""
+            echo "- url: $SOURCE_URL"
+            echo "- size: $size bytes"
+            echo "- sha256: \`$sha\`"
+            echo "- pin this value in EXPECTED_SOURCE_SHA256 to make later runs fail on a different download"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$EXPECTED_SOURCE_SHA256" ] && [ "$sha" != "$EXPECTED_SOURCE_SHA256" ]; then
+            echo "::error::source zip sha256 $sha differs from the pinned $EXPECTED_SOURCE_SHA256"
+            exit 1
+          fi
+          echo "SOURCE_SHA256=$sha" >> "$GITHUB_ENV"
+          echo "SOURCE_SIZE=$size" >> "$GITHUB_ENV"
+
+      - name: Select the files and write the slim zip
+        run: |
+          set -euo pipefail
+          mkdir out
+          python3 - <<'PY'
+          import hashlib, os, re, sys, zipfile
+
+          # 1. The keep-list comes from the engine's own CMake, never from a guess: the library and DLL names the Windows
+          #    PhysX block lists (set(...) and list(APPEND ...) of PHYSX_LIBS and PHYSX_DLLS, which includes PhysXGpu_64).
+          text = open("CMakeLists.txt", encoding="utf-8").read()
+          start = text.index("elseif(WIN32)")
+          end = text.index("elseif(UNIX", start)
+          block = text[start:end]
+          libs, dlls = [], []
+          for m in re.finditer(r"(?:set|list)\(\s*(?:APPEND\s+)?(PHYSX_LIBS|PHYSX_DLLS)\s+([^)]*)\)", block):
+              target = libs if m.group(1) == "PHYSX_LIBS" else dlls
+              for tok in m.group(2).split():
+                  if "$" in tok or '"' in tok:
+                      continue
+                  if tok not in target:
+                      target.append(tok)
+          if not libs or not dlls:
+              sys.exit("could not parse PHYSX_LIBS / PHYSX_DLLS from CMakeLists.txt")
+          if "PhysXGpu_64" not in libs or "PhysXGpu_64.dll" not in dlls:
+              sys.exit("PhysXGpu_64 not found in the CMake lists; the GPU files must be kept")
+          # Every name is an import lib or static lib (NAME.lib), every dll its own file and its import lib (STEM.lib).
+          # The .pdb of each (if bin.zip has it) is kept too.
+          stems = list(libs) + [d[:-4] for d in dlls if d[:-4] not in libs]
+          required = {s + ".lib" for s in stems} | set(dlls)
+          optional = {s + ".pdb" for s in stems}
+          print("CMake libs :", " ".join(libs))
+          print("CMake dlls :", " ".join(dlls))
+          print("required   :", " ".join(sorted(required)))
+          print("optional   :", " ".join(sorted(optional)))
+
+          # 2. Select from the source zip (case-insensitive names, original layout kept, folders bin/<plat>/{debug,release}).
+          PLAT = "bin/win.x86_64.vc143.mt/"
+          src = zipfile.ZipFile("source.zip")
+          infos = [i for i in src.infolist() if not i.is_dir()]
+          src_unpacked = sum(i.file_size for i in infos)
+          pat = re.compile(r"^" + re.escape(PLAT) + r"(debug|release)/([^/]+)$")
+          want = {(c, n.lower()): n for c in ("debug", "release") for n in required | optional}
+          kept, dropped, license_files = {}, [], []
+          for i in infos:
+              name = i.filename.replace("\\", "/")
+              k = name.find(PLAT)
+              if k < 0:
+                  if "/" not in name and name.upper().startswith("LICENSE"):
+                      license_files.append(i)
+                  else:
+                      dropped.append(i)
+                  continue
+              rel = name[k:]
+              m = pat.match(rel)
+              if m and (m.group(1), m.group(2).lower()) in want:
+                  out_name = PLAT + m.group(1) + "/" + want[(m.group(1), m.group(2).lower())]
+                  if out_name in kept:
+                      sys.exit("duplicate entry for " + out_name)
+                  kept[out_name] = i
+              else:
+                  dropped.append(i)
+          missing = sorted(PLAT + c + "/" + n for c in ("debug", "release") for n in required
+                           if PLAT + c + "/" + n not in kept)
+          if missing:
+              sys.exit("required files missing from the source zip:\n  " + "\n  ".join(missing))
+          bad = [n for n in kept if "Gpu_static" in n]
+          if bad:
+              sys.exit("a Gpu_static file was selected: " + str(bad))
+          print("license files at the source root:", [i.filename for i in license_files] or "none")
+
+          # 3. Entries: the selected files plus a root LICENSE* if there is one (moved into bin/<plat>/, which is git-ignored), sorted, with bin/<plat>/MANIFEST.txt.
+          entries = dict(kept)
+          for i in license_files:
+              entries[PLAT + os.path.basename(i.filename)] = i
+          data = {}
+          for name, i in entries.items():
+              with src.open(i) as f:
+                  data[name] = f.read()
+          lines = [
+              "PhysX " + os.environ["PHYSX_VERSION"] + " Windows x86_64 (vc143, mt), slim selection",
+              "",
+              "Cut from the release asset bin.zip. The original build recipe of bin.zip is unknown (not documented by the",
+              "person who produced it); this archive only selects files from it and rebuilds nothing.",
+              "source url   : " + os.environ["SOURCE_URL"],
+              "source sha256: " + os.environ["SOURCE_SHA256"],
+              "source size  : " + os.environ["SOURCE_SIZE"] + " bytes",
+              "kept by      : the library and DLL names of the Windows PhysX block of CMakeLists.txt (libs: "
+              + " ".join(libs) + "; dlls: " + " ".join(dlls) + ")",
+              "",
+              "size (bytes)  sha256                                                            file",
+          ]
+          for name in sorted(data):
+              lines.append("%12d  %s  %s" % (len(data[name]), hashlib.sha256(data[name]).hexdigest(), name))
+          manifest = ("\n".join(lines) + "\n").encode("ascii")
+          data[PLAT + "MANIFEST.txt"] = manifest
+
+          # 4. Deterministic zip: sorted entries, fixed mtime, fixed attributes, fixed compression level.
+          zip_name = "physx-windows-x86_64-" + os.environ["PHYSX_VERSION"] + "-slim.zip"
+          with zipfile.ZipFile("out/" + zip_name, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+              for name in sorted(data):
+                  zi = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                  zi.compress_type = zipfile.ZIP_DEFLATED
+                  zi.create_system = 3
+                  zi.external_attr = 0o100644 << 16
+                  z.writestr(zi, data[name], compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+          zip_bytes = open("out/" + zip_name, "rb").read()
+          digest = hashlib.sha256(zip_bytes).hexdigest()
+          open("out/" + zip_name + ".sha256", "w", newline="\n").write(digest + "  " + zip_name + "\n")
+          slim_unpacked = sum(len(v) for v in data.values())
+
+          # 5. Report: file list and sizes, before and after.
+          mb = lambda n: "%.1f MB" % (n / 1048576.0)
+          report = [
+              "## Slim zip",
+              "",
+              "| | compressed | unpacked | files |",
+              "|---|---|---|---|",
+              "| bin.zip (source) | %s | %s | %d |" % (mb(int(os.environ["SOURCE_SIZE"])), mb(src_unpacked), len(infos)),
+              "| %s | %s | %s | %d |" % (zip_name, mb(len(zip_bytes)), mb(slim_unpacked), len(data)),
+              "",
+              "slim sha256: `%s`" % digest,
+              "",
+              "Dropped from the source: %d files, %s unpacked" % (len(dropped), mb(sum(i.file_size for i in dropped))),
+              "",
+              "Kept files:",
+              "",
+              "```",
+          ] + ["%12d  %s" % (len(data[n]), n) for n in sorted(data)] + ["```"]
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write("\n".join(report) + "\n")
+          print("\n".join(report))
+          print("dropped files (first 40 of %d):" % len(dropped))
+          for i in sorted(dropped, key=lambda x: x.filename)[:40]:
+              print("  %12d  %s" % (i.file_size, i.filename))
+          PY
+          ls -l out
+          cat out/*.sha256
+          unzip -p out/physx-windows-x86_64-${PHYSX_VERSION}-slim.zip bin/win.x86_64.vc143.mt/MANIFEST.txt | head -20
+
+      - name: Determinism check (a rewrite is byte-identical)
+        run: |
+          set -euo pipefail
+          # Rewrite the slim zip's entries with the same writer settings: the bytes must match the first zip, which
+          # shows that sorted entries, fixed mtimes and a fixed level make the archive reproducible.
+          python3 - <<'PY'
+          import hashlib, os, zipfile
+          name = "out/physx-windows-x86_64-" + os.environ["PHYSX_VERSION"] + "-slim.zip"
+          src = zipfile.ZipFile(name)
+          out = "again.zip"
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+              for n in sorted(src.namelist()):
+                  zi = zipfile.ZipInfo(n, date_time=(1980, 1, 1, 0, 0, 0))
+                  zi.compress_type = zipfile.ZIP_DEFLATED
+                  zi.create_system = 3
+                  zi.external_attr = 0o100644 << 16
+                  z.writestr(zi, src.read(n), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+          a = hashlib.sha256(open(name, "rb").read()).hexdigest()
+          b = hashlib.sha256(open(out, "rb").read()).hexdigest()
+          print(a, b)
+          raise SystemExit(0 if a == b else "zip is not reproducible")
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: physx-windows-slim
+          path: |
+            out/physx-windows-x86_64-${{ env.PHYSX_VERSION }}-slim.zip
+            out/physx-windows-x86_64-${{ env.PHYSX_VERSION }}-slim.zip.sha256
+          if-no-files-found: error
+
+  # The slim files instead of bin.zip: a clean checkout has no external/PhysX/physx/bin, so the slim zip is extracted
+  # there before the first configure and CMake finds debug/PhysX_64.dll and never downloads bin.zip. There is no PhysX
+  # cache step in this job, and the steps below fail if a download of bin.zip happened anyway.
+  verify:
+    name: verify (${{ matrix.config }}, PhysX ON, slim files)
+    needs: package
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          install_runtime: false
+          cache: true
+          stripdown: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: physx-windows-slim
+          path: slim
+
+      - name: Check the checksum and extract over external/PhysX/physx
+        shell: pwsh
+        run: |
+          $zip = (Get-ChildItem slim -Filter *.zip).FullName
+          $expected = (Get-Content "$zip.sha256" -Raw).Split(' ')[0].Trim()
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($expected -ne $actual) { throw "sha256 mismatch: $expected vs $actual" }
+          if (Test-Path external/PhysX/physx/bin) { throw "external/PhysX/physx/bin exists in a clean checkout" }
+          Expand-Archive -Path $zip -DestinationPath external/PhysX/physx
+          Get-ChildItem external/PhysX/physx/bin/win.x86_64.vc143.mt -Recurse -File |
+            ForEach-Object { '{0,12}  {1}' -f $_.Length, $_.FullName.Substring($PWD.Path.Length + 1) }
+          if (Test-Path external/PhysX/physx/bin/win.x86_64.vc143.mt/debug/PhysXGpu_64.dll) { 'GPU dll present' } else { throw 'PhysXGpu_64.dll missing (debug)' }
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON 2>&1 | Tee-Object -FilePath configure.log
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+          if (Select-String -Path configure.log -Pattern 'Downloading PhysX binaries') { throw 'CMake downloaded bin.zip: the slim files were not used' }
+          if (Test-Path build/PhysX_bins.zip) { throw 'bin.zip was downloaded' }
+          if (-not (Select-String -Path configure.log -Pattern 'PhysX GPU support enabled')) { throw 'the GPU files were not picked up' }
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.config }} --parallel
+
+      - name: PhysX DLLs sit next to the executables
+        shell: pwsh
+        env:
+          N2_CONFIG: ${{ matrix.config }}
+        run: |
+          $dlls = 'PhysX_64.dll','PhysXCommon_64.dll','PhysXFoundation_64.dll','PhysXCooking_64.dll','PhysXGpu_64.dll'
+          $sep = [regex]::Escape("\$($env:N2_CONFIG)\")
+          $exes = Get-ChildItem build -Recurse -Filter *.exe | Where-Object { $_.FullName -match $sep -and $_.Name -match 'tests|EditorHost' }
+          $exes | ForEach-Object { $_.FullName }
+          foreach ($e in $exes) {
+            foreach ($d in $dlls) {
+              if (-not (Test-Path (Join-Path $e.DirectoryName $d))) { Write-Host "::warning::$d not next to $($e.Name)" }
+            }
+          }
+          if (-not (Get-ChildItem build -Recurse -Filter PhysX_64.dll | Where-Object { $_.FullName -match $sep })) { throw 'PhysX_64.dll was not copied into the build output' }
+
+      - name: Test
+        run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure
+        env:
+          # Silent OpenAL output device; the runner has no sound card
+          ALSOFT_DRIVERS: "null"
+
+      # The real host loads the PhysX DLLs at runtime: its health must report physics Running
+      - name: Editor host smoke test (physics must run)
+        shell: pwsh
+        env:
+          N2_SMOKE_CONFIG: ${{ matrix.config }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tests/smoke/editor_host_smoke.py --scenario host --config $env:N2_SMOKE_CONFIG --exe "build/bin/$env:N2_SMOKE_CONFIG/N2EditorHost.exe" --expect-physics on
+
+      - name: Summary
+        shell: pwsh
+        run: |
+          "## verify (${{ matrix.config }})" >> $env:GITHUB_STEP_SUMMARY
+          "Configured, built and tested with PhysX ON from the slim zip only (no bin.zip download, no PhysX cache): cmake configure (GPU files detected), full build, PhysX DLLs next to the executables, ctest, and the editor host started with physics Running." >> $env:GITHUB_STEP_SUMMARY
+
+  # Only a tag push or a manual run with publish=true. Never on pull_request.
+  publish:
+    name: Publish release assets
+    needs: [package, verify]
+    if: startsWith(github.ref, 'refs/tags/physx-windows-') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag || 'physx-dependencies-windows-5.6.1' }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: physx-windows-slim
+          path: assets
+
+      - name: Upload to the release
+        run: |
+          set -euo pipefail
+          ls -l assets
+          (cd assets && sha256sum -c *.sha256)
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --prerelease --latest=false \
+              --title "PhysX ${PHYSX_VERSION} for Windows (slim, x86_64; build dependency, not an engine release)" \
+              --notes "Build dependency, not an N2Engine release. Slim selection of the files the engine uses from the PhysX Windows bin.zip (original build recipe unknown). Source sha256 and the file list are in bin/win.x86_64.vc143.mt/MANIFEST.txt inside the archive."
+          fi
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" assets/*.zip assets/*.zip.sha256
