@@ -1,5 +1,5 @@
 {
-  "version": "1.10.0",
+  "version": "1.11.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -16,7 +16,7 @@
       "<type>": "An entry of types: its fields in order, with no prefix.",
       "<type>[]": "Elements of <type> back to back, with no length prefix: their number is the uint32 field named count declared before the array."
     },
-    "errorPayload": "An Error response's payload is the message as raw UTF-8 bytes, not a string: the frame's length is the message's byte count.",
+    "errorPayload": "An Error response's payload is the message as raw UTF-8 bytes, not a string: the frame's length is the message's byte count. It has no room for a trailing field, so it never changed: a host that refuses a command for a reason a client can act on (errorCodes) answers ErrorCoded instead, but only to a client that asked for it in Hello (since 1.11.0).",
     "reservedIds": "Ids 0xC0 to 0xFE are reserved for server-pushed event frames: no command or response uses them.",
     "versioning": "version is major.minor.patch. The minor version goes up for new commands, new responses, new trailing request fields and new trailing response fields; anything else (a changed id, field order or type, a removed field) bumps the major version. Both directions must keep working within a major version: a server reads a trailing request field only when the payload has bytes left and otherwise uses a default, since a client of an older minor version doesn't send it (Commands.hpp: ReadTrailing); a client's decoders ignore response bytes after the fields they know, and a client relies on a response field added in a later minor version only once Hello has shown the server speaks that version. Hello refuses a client whose major version differs from the server's, and accepts any minor version with a warning when it differs."
   },
@@ -60,11 +60,12 @@
     },
     "Hello": {
       "id": "0x04",
-      "description": "Opens a session: the client's name, the protocol version it speaks (its PROTOCOL_VERSION) and the host's access token (empty when it has none). Error when the major versions differ, or when the host requires a token and this isn't it. Optional on a host without a token. On a host with one, every other command (Shutdown included) is refused with an Error until a Hello on the same connection succeeds, and a failed Hello ends the session. The session belongs to the connection: a client that reconnects sends Hello again. capabilities names optional features beyond what the version implies (none are defined yet); projectLoaded is whether the host has a project (was started with --project).",
+      "description": "Opens a session: the client's name, the protocol version it speaks (its PROTOCOL_VERSION) and the host's access token (empty when it has none). Error when the major versions differ, or when the host requires a token and this isn't it. Optional on a host without a token. On a host with one, every other command (Shutdown included) is refused with an Error until a Hello on the same connection succeeds, and a failed Hello ends the session. The session belongs to the connection: a client that reconnects sends Hello again. capabilities names optional features beyond what the version implies (none are defined yet); projectLoaded is whether the host has a project (was started with --project). Since 1.11.0: errorCodes (a trailing request field, false when absent) says the client understands ErrorCoded: the host answers a refused command with ErrorCoded (message and a stable code from errorCodes) to a client that sent true, and with a plain Error whose message says why to every other client, so a client of an older minor version keeps working and still shows the reason. The flag belongs to the connection, like the session: a later Hello on it replaces the value. readOnly (a trailing response field) is whether the host was started with --read-only: it answers every command that is not a read with the readOnly error (a client can show that and disable what would be refused). A read command is one the host classifies as a read: it changes nothing a client could save, run or lose (the host's own classification, which refuses a command it has not classified).",
       "request": {
         "clientName": "string",
         "protocolVersion": "string",
-        "token": "string"
+        "token": "string",
+        "errorCodes": "bool"
       },
       "response": {
         "type": "ServerInfo",
@@ -72,7 +73,8 @@
           "protocolVersion": "string",
           "engineVersion": "string",
           "capabilities": "json:string[]",
-          "projectLoaded": "bool"
+          "projectLoaded": "bool",
+          "readOnly": "bool"
         }
       }
     },
@@ -1029,6 +1031,20 @@
     "TextData": "0xA2",
     "AssetCreated": "0xA3",
     "PlaySnapshot": "0xB0",
-    "PlayState": "0xB1"
+    "PlayState": "0xB1",
+    "ErrorCoded": "0x1C"
+  },
+  "extraResponses": {
+    "ErrorCoded": {
+      "description": "A refused command's answer to a client that sent errorCodes true in Hello (since 1.11.0; any command may answer it instead of Error, and a client that didn't ask for it never gets it). message is the text an Error would carry; code is one of errorCodes, a stable word a client branches on (an unknown code is treated like a plain Error). A host keeps sending the same Error to a client that didn't ask, so nothing a 1.10 client reads changed.",
+      "fields": {
+        "message": "string",
+        "code": "string"
+      }
+    }
+  },
+  "errorCodes": {
+    "readOnly": "The host was started with --read-only and the command is not a read (it would change the project, the scene, the game, the assets or the host). Shutdown is refused too. The connection stays open and reads keep working.",
+    "forbidden": "Reserved for per-user roles (a later version): the user the connection says it is may not run the command. Hosts of this version never send it."
   }
 }

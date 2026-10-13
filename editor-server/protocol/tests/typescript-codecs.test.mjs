@@ -47,6 +47,7 @@ function responseFields(name) {
   for (const command of Object.values(spec.commands)) {
     if (command.response.type === name) return command.response.fields ?? {}
   }
+  if (spec.extraResponses?.[name]) return spec.extraResponses[name].fields ?? {}
   throw new Error(`no response ${name} in protocol.json`)
 }
 
@@ -115,7 +116,7 @@ test("decoders read from a view with an offset (a Buffer slice) and ignore trail
 })
 
 test("a string keeps a leading byte order mark (U+FEFF) through encode and decode", realProtocol, () => {
-  const value = { clientName: "\uFEFFeditor", protocolVersion: "1.0.0", token: "\uFEFF" }
+  const value = { clientName: "\uFEFFeditor", protocolVersion: "1.0.0", token: "\uFEFF", errorCodes: true }
   assert.deepEqual(protocol.decodeHelloRequest(protocol.encodeHelloRequest(value)), value)
   // An Error's message is decoded straight from the payload, as text
   const error = { message: "\uFEFFbad" }

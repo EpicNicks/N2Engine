@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.10.0";
+        public const string ProtocolVersion = "1.11.0";
     }
 
     public enum CommandType : byte
@@ -118,6 +118,7 @@ namespace N2Engine.Editor.Protocol
         AssetCreated = 0xA3,
         PlaySnapshot = 0xB0,
         PlayState = 0xB1,
+        ErrorCoded = 0x1C,
     }
 
     public struct Vec3
@@ -449,6 +450,7 @@ namespace N2Engine.Editor.Protocol
         public string ClientName;
         public string ProtocolVersion;
         public string Token;
+        public bool ErrorCodes;
     }
 
     public struct PollEventsRequest
@@ -727,6 +729,7 @@ namespace N2Engine.Editor.Protocol
         /// <summary>JSON text: string[]</summary>
         public string Capabilities;
         public bool ProjectLoaded;
+        public bool ReadOnly;
     }
 
     public struct EventsResponse
@@ -928,6 +931,12 @@ namespace N2Engine.Editor.Protocol
         public string State;
         public uint Frame;
         public float Time;
+    }
+
+    public struct ErrorCodedResponse
+    {
+        public string Message;
+        public string Code;
     }
 
 }

@@ -81,7 +81,8 @@ def json_key(key: str) -> tuple[str, bool]:
 
 def responses(protocol: dict) -> list[tuple[str, int, Optional[dict]]]:
     """Every response as (name, id, fields): Ok and Error first, then the rest in the order commands first
-    declare them. Fields are None for Ok and Error, which commands don't declare."""
+    declare them, then the extraResponses (no command answers with one: the host chooses it, as ErrorCoded).
+    Fields are None for Ok and Error, which commands don't declare."""
     ids = {name: int(value, 16) for name, value in protocol["responses"].items()}
     result = [(name, ids[name], None) for name in SPECIAL_RESPONSES]
     seen = set(SPECIAL_RESPONSES)
@@ -92,6 +93,10 @@ def responses(protocol: dict) -> list[tuple[str, int, Optional[dict]]]:
             continue
         seen.add(name)
         result.append((name, ids[name], response.get("fields", {})))
+    for name, extra in protocol.get("extraResponses", {}).items():
+        if name not in seen:
+            seen.add(name)
+            result.append((name, ids[name], extra.get("fields", {})))
     return result
 
 
@@ -188,6 +193,14 @@ def validate(protocol: dict) -> None:
             errors.append(f"command {name}: response {response['type']} is declared with other fields elsewhere")
         declared.setdefault(response["type"], fields)
 
+    extras = protocol.get("extraResponses", {})
+    for name, extra in extras.items():
+        if name in SPECIAL_RESPONSES or name in declared:
+            errors.append(f"extraResponses.{name}: a command already answers with it")
+        if name not in protocol["responses"]:
+            errors.append(f"extraResponses.{name}: no id in responses")
+        check_fields(extra.get("fields", {}), f"extraResponses.{name}")
+
     response_ids: dict[int, str] = {}
     for name, value in protocol["responses"].items():
         response_id = int(value, 16)
@@ -196,7 +209,7 @@ def validate(protocol: dict) -> None:
         if response_id in response_ids:
             errors.append(f"response {name}: id {value} is also {response_ids[response_id]}")
         response_ids[response_id] = name
-        if name not in SPECIAL_RESPONSES and name not in declared:
+        if name not in SPECIAL_RESPONSES and name not in declared and name not in extras:
             errors.append(f"response {name}: no command answers with it")
 
     if errors:
