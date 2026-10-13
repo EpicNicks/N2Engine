@@ -25,6 +25,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `audio.html` | Audio system, sources, one-shots, mixer groups, shutdown |
 | `text.html` | Font backends, SDF atlas, UTF-8 and text layout, the `Font` asset and default font, the `TextRenderer` component, the OpenGL and software text shaders, golden-image tests, the drawing code shared with UI text |
 | `ui.html` | Screen-space UI: canvases, `RectTransform` layout, `Image` (and its sprite), `UIText`, the UI pass, UI picking |
+| `particles.html` | The `ParticleSystem` component, the `IParticleBackend` seam and backend selection (`Auto`/`PhysX`/`CPU`), the CPU simulation, play-mode rules, billboard drawing, the Particles health row, Lua |
 | `meshes.html` | Texture assets and their import settings, the `assetimport` library, the UV convention, `GpuCache`; meshes, materials and models in later phases of #3 |
 | `resources.html` | Resource paths, `ResourceLoader`, `Resources` |
 | `serialization.html` | Scene/component JSON, references, failure handling |

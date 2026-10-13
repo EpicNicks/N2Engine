@@ -22,6 +22,7 @@ Behaviour reference for the engine (lifecycles, frame order, guarantees and edge
 - Screen-space UI: Canvas, RectTransform layout, Image, UIText and Button (state tints and an OnClick event)
 - Texture assets from PNG, JPEG, TGA and BMP files (stb_image), shown as UI Image sprites
 - Mesh and Material assets (`.mat` files), MeshRenderer with submeshes, and the built-in Cube/Sphere/Quad shapes on shared meshes
+- Particles: a `ParticleSystem` component with a CPU simulation that runs everywhere (headless included) and a seam for a PhysX GPU backend, drawn as camera-facing billboards ([`docs/particles.html`](docs/particles.html))
 - Unit testing with GoogleTest
 
 ## Objectives
