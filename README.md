@@ -79,7 +79,7 @@ Behaviour reference for the engine (lifecycles, frame order, guarantees and edge
     - Clang-Cl should be able to link with MSVC binaries
     - MinGW/GCC **not compatible with PhysX**
   - Linux: G++ 
-    - GCC 11
+    - GCC 11 **(not tested with PhysX: CI builds GCC with PhysX OFF, and the downloaded libraries are built with Clang)**
       - Install your distribution's package
         - Debian/Ubuntu: ```sudo apt install build-essential```
         - Arch: ```sudo pacman -S base-devel```
