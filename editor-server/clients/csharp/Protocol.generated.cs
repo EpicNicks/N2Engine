@@ -450,6 +450,7 @@ namespace N2Engine.Editor.Protocol
         public string ClientName;
         public string ProtocolVersion;
         public string Token;
+        /// <summary>Optional trailing: the default (false or 0) when the payload ends before it</summary>
         public bool ErrorCodes;
     }
 
@@ -729,6 +730,7 @@ namespace N2Engine.Editor.Protocol
         /// <summary>JSON text: string[]</summary>
         public string Capabilities;
         public bool ProjectLoaded;
+        /// <summary>Optional trailing: the default (false or 0) when the payload ends before it</summary>
         public bool ReadOnly;
     }
 

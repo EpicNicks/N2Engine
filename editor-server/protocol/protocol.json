@@ -18,7 +18,7 @@
     },
     "errorPayload": "An Error response's payload is the message as raw UTF-8 bytes, not a string: the frame's length is the message's byte count. It has no room for a trailing field, so it never changed: a host that refuses a command for a reason a client can act on (errorCodes) answers ErrorCoded instead, but only to a client that asked for it in Hello (since 1.11.0).",
     "reservedIds": "Ids 0xC0 to 0xFE are reserved for server-pushed event frames: no command or response uses them.",
-    "versioning": "version is major.minor.patch. The minor version goes up for new commands, new responses, new trailing request fields and new trailing response fields; anything else (a changed id, field order or type, a removed field) bumps the major version. Both directions must keep working within a major version: a server reads a trailing request field only when the payload has bytes left and otherwise uses a default, since a client of an older minor version doesn't send it (Commands.hpp: ReadTrailing); a client's decoders ignore response bytes after the fields they know, and a client relies on a response field added in a later minor version only once Hello has shown the server speaks that version. Hello refuses a client whose major version differs from the server's, and accepts any minor version with a warning when it differs."
+    "versioning": "version is major.minor.patch. The minor version goes up for new commands, new responses, new trailing request fields and new trailing response fields; anything else (a changed id, field order or type, a removed field) bumps the major version. Both directions must keep working within a major version: a server reads a trailing request field only when the payload has bytes left and otherwise uses a default, since a client of an older minor version doesn't send it (Commands.hpp: ReadTrailing); a client's decoders ignore response bytes after the fields they know, and the trailing fields listed in optionalTrailing (the last fields of a message, added in a later minor version; each a bool or number whose default is false or 0) are decoded as that default when the payload ends before them (a 1.11 client reading the ServerInfo of a 1.10 host gets readOnly false), so a decoder never throws on the shorter payload of an older peer; and a client relies on a response field added in a later minor version only once Hello has shown the server speaks that version. Hello refuses a client whose major version differs from the server's, and accepts any minor version with a warning when it differs."
   },
   "commands": {
     "RenderFrame": {
@@ -1042,6 +1042,10 @@
         "code": "string"
       }
     }
+  },
+  "optionalTrailing": {
+    "HelloRequest": ["errorCodes"],
+    "ServerInfoResponse": ["readOnly"]
   },
   "errorCodes": {
     "readOnly": "The host was started with --read-only and the command is not a read (it would change the project, the scene, the game, the assets or the host). Shutdown is refused too. The connection stays open and reads keep working.",

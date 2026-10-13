@@ -100,6 +100,17 @@ def responses(protocol: dict) -> list[tuple[str, int, Optional[dict]]]:
     return result
 
 
+# Primitives a trailing optional field may have: the default is the zero value (false, 0)
+OPTIONAL_TRAILING_TYPES = ("bool", "uint8", "uint32", "int32", "float32")
+
+
+def optional_trailing(protocol: dict, message: str) -> list[str]:
+    """The optional trailing fields of a message ("HelloRequest", "ServerInfoResponse"; protocol.json's
+    optionalTrailing): fields added in a later minor version, which a reader whose payload ends before them
+    decodes as the zero default (false, 0)"""
+    return protocol.get("optionalTrailing", {}).get(message, [])
+
+
 def commands_with_requests(protocol: dict) -> list[tuple[str, dict]]:
     return [(name, command["request"]) for name, command in protocol["commands"].items() if command["request"]]
 
@@ -211,6 +222,21 @@ def validate(protocol: dict) -> None:
         response_ids[response_id] = name
         if name not in SPECIAL_RESPONSES and name not in declared and name not in extras:
             errors.append(f"response {name}: no command answers with it")
+
+    messages = {f"{name}Request": command["request"] for name, command in protocol["commands"].items()}
+    messages.update({f"{name}Response": fields for name, _, fields in responses(protocol) if fields is not None})
+    for message, optional in protocol.get("optionalTrailing", {}).items():
+        fields = messages.get(message)
+        if fields is None:
+            errors.append(f"optionalTrailing.{message}: no such request or response")
+            continue
+        names = list(fields)
+        if not optional or names[len(names) - len(optional):] != optional:
+            errors.append(f"optionalTrailing.{message}: must list the message's last fields, in order")
+            continue
+        for name in optional:
+            if fields[name] not in OPTIONAL_TRAILING_TYPES:
+                errors.append(f"optionalTrailing.{message}.{name}: only {', '.join(OPTIONAL_TRAILING_TYPES)} can be optional")
 
     if errors:
         raise ValueError("protocol.json is invalid:\n  " + "\n  ".join(errors))

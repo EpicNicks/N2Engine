@@ -1110,7 +1110,7 @@ export function decodeHelloRequest(payload: Uint8Array): HelloRequest {
   const clientName = reader.string();
   const protocolVersion = reader.string();
   const token = reader.string();
-  const errorCodes = reader.bool();
+  const errorCodes = reader.remaining > 0 ? reader.bool() : false;
   return { clientName, protocolVersion, token, errorCodes };
 }
 
@@ -1855,7 +1855,7 @@ export function decodeServerInfoResponse(payload: Uint8Array): ServerInfoRespons
   const engineVersion = reader.string();
   const capabilities = reader.json() as string[];
   const projectLoaded = reader.bool();
-  const readOnly = reader.bool();
+  const readOnly = reader.remaining > 0 ? reader.bool() : false;
   return { protocolVersion, engineVersion, capabilities, projectLoaded, readOnly };
 }
 

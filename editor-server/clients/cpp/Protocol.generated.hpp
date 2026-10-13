@@ -163,7 +163,7 @@ struct HelloCmd
     std::string clientName;
     std::string protocolVersion;
     std::string token;
-    bool errorCodes;
+    bool errorCodes; // optional trailing: the default (false or 0) when the payload ends before it
 };
 
 struct PollEventsCmd
@@ -436,7 +436,7 @@ struct ServerInfoData
     std::string engineVersion;
     std::string capabilities; // JSON: string[]
     bool projectLoaded;
-    bool readOnly;
+    bool readOnly; // optional trailing: the default (false or 0) when the payload ends before it
 };
 
 struct EventsData

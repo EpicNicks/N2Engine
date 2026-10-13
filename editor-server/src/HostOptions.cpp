@@ -181,6 +181,15 @@ namespace N2Engine::Editor
         {
             return std::unexpected("--create and --play can't be combined");
         }
+        if (options.readOnly && !options.playScene.empty())
+        {
+            return std::unexpected("--read-only and --play can't be combined: a play host runs the game and the project's "
+                                   "Lua scripts, which is not read-only");
+        }
+        if (options.readOnly && !options.createPath.empty())
+        {
+            return std::unexpected("--read-only and --create can't be combined: --create writes a project");
+        }
         if (options.createPath.empty() && (givenName || givenId))
         {
             return std::unexpected(std::string(givenName ? "--name" : "--project-id") + " only goes with --create");
@@ -286,7 +295,9 @@ Options:
   --read-only               Serve reads only: every command that isn't a read (anything that changes the
                             project, a scene, an asset or the game, and Shutdown) is refused with the
                             readOnly error, and the connection stays open. Hello and the read commands
-                            work, with or without --token-env. Commands nobody has classified are refused
+                            work, with or without --token-env. Commands nobody has classified are refused.
+                            Can't be combined with --play (it runs the game and the project's Lua) or
+                            --create (it writes a project)
   --play <file>             Start as a play host: run the scene snapshot in <file> (what the
                             WritePlaySnapshot command writes; or a res:// .scene path in the project)
                             as a game instead of opening the startup scene. Pass the same --project

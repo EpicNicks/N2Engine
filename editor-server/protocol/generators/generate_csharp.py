@@ -58,12 +58,15 @@ def to_pascal_case(name: str) -> str:
     """Convert a name to PascalCase."""
     return ''.join(word[:1].upper() + word[1:] for word in name.split('_'))
 
-def field_lines(fields: dict, protocol: dict) -> list:
+def field_lines(fields: dict, protocol: dict, message: str = "") -> list:
     lines = []
+    optional = protocol_spec.optional_trailing(protocol, message)
     for field, ftype in fields.items():
         if ftype.startswith("json"):
             shape = ftype[len("json:"):] if ftype.startswith("json:") else "any JSON value"
             lines.append(f"        /// <summary>JSON text: {shape}</summary>")
+        if field in optional:
+            lines.append("        /// <summary>Optional trailing: the default (false or 0) when the payload ends before it</summary>")
         lines.append(f"        public {get_cs_type(ftype, protocol)} {to_pascal_case(field)};")
     return lines
 
@@ -133,7 +136,7 @@ def generate(output_path=None, protocol_path=None):
     for name, request in protocol_spec.commands_with_requests(protocol):
         lines.append(f"    public struct {name}Request")
         lines.append("    {")
-        lines.extend(field_lines(request, protocol))
+        lines.extend(field_lines(request, protocol, f"{name}Request"))
         lines.append("    }")
         lines.append("")
 
@@ -142,7 +145,7 @@ def generate(output_path=None, protocol_path=None):
         if fields:
             lines.append(f"    public struct {resp_type}Response")
             lines.append("    {")
-            lines.extend(field_lines(fields, protocol))
+            lines.extend(field_lines(fields, protocol, f"{resp_type}Response"))
             lines.append("    }")
             lines.append("")
 

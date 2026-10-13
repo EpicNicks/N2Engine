@@ -473,6 +473,27 @@ TEST(HostOptionsTest, ReadOnlyIsAFlagAndOffByDefault)
     EXPECT_TRUE(last->readOnly);
 }
 
+TEST(HostOptionsTest, ReadOnlyIsRejectedWithPlayAndWithCreate)
+{
+    // A play host runs the game and the project's Lua, which is not read-only, whatever the argument order
+    const auto play = ParseHostArguments({"--read-only", "--play", "snapshot.json"});
+    ASSERT_FALSE(play);
+    EXPECT_NE(play.error().find("--read-only and --play can't be combined"), std::string::npos) << play.error();
+    const auto playFirst = ParseHostArguments({"--play", "snapshot.json", "--port", "1234", "--read-only"});
+    ASSERT_FALSE(playFirst);
+    EXPECT_NE(playFirst.error().find("--read-only and --play"), std::string::npos) << playFirst.error();
+
+    // --create writes a project
+    const auto create = ParseHostArguments({"--create", "proj", "--read-only"});
+    ASSERT_FALSE(create);
+    EXPECT_NE(create.error().find("--read-only and --create can't be combined"), std::string::npos) << create.error();
+
+    // Each alone still parses
+    EXPECT_TRUE(ParseHostArguments({"--play", "snapshot.json"}));
+    EXPECT_TRUE(ParseHostArguments({"--create", "proj"}));
+    EXPECT_TRUE(ParseHostArguments({"--project", "proj", "--read-only"}));
+}
+
 TEST(HostOptionsTest, TheUsageNamesReadOnly)
 {
     const std::string_view usage = HostUsage();

@@ -49,10 +49,13 @@ def get_cpp_type(ftype: str, protocol: dict) -> str:
         return to_pascal_case(field_type.base)
     return TYPE_MAP[field_type.base]
 
-def field_lines(fields: dict, protocol: dict) -> list:
+def field_lines(fields: dict, protocol: dict, message: str = "") -> list:
     lines = []
+    optional = protocol_spec.optional_trailing(protocol, message)
     for field, ftype in fields.items():
         comment = f" // JSON: {ftype[len('json:'):] if ftype.startswith('json:') else 'any'}" if ftype.startswith("json") else ""
+        if field in optional:
+            comment = " // optional trailing: the default (false or 0) when the payload ends before it"
         lines.append(f"    {get_cpp_type(ftype, protocol)} {field};{comment}")
     return lines
 
@@ -114,7 +117,7 @@ def generate(output_path=None, protocol_path=None):
     for name, request in protocol_spec.commands_with_requests(protocol):
         lines.append(f"struct {name}Cmd")
         lines.append("{")
-        lines.extend(field_lines(request, protocol))
+        lines.extend(field_lines(request, protocol, f"{name}Request"))
         lines.append("};")
         lines.append("")
 
@@ -124,7 +127,7 @@ def generate(output_path=None, protocol_path=None):
         if fields:
             lines.append(f"struct {resp_type}Data")
             lines.append("{")
-            lines.extend(field_lines(fields, protocol))
+            lines.extend(field_lines(fields, protocol, f"{resp_type}Response"))
             lines.append("};")
             lines.append("")
 
