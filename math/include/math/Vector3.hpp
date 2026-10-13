@@ -903,8 +903,6 @@ namespace N2Engine::Math
 
         // ===== NEON IMPLEMENTATIONS (aarch64) =====
 #ifdef N2_MATH_NEON
-        static_assert(sizeof(Vector3) == 4 * sizeof(float));
-
         // Loads and stores go through the x, y, z, w floats: SimdStorage is a plain float[4] struct on this target.
         // vld1q and vst1q have no alignment requirement
         static float32x4_t LoadNEON(const Vector3 &v)
@@ -1307,6 +1305,11 @@ namespace N2Engine::Math
         }
 #endif
     };
+
+#ifdef N2_MATH_NEON
+    // The NEON batches walk arrays of Vector3 as four floats per element
+    static_assert(sizeof(Vector3) == 4 * sizeof(float));
+#endif
 
     // Non-member operators
     inline Vector3 operator*(float scalar, const Vector3 &v)
