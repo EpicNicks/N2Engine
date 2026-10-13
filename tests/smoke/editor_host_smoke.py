@@ -199,6 +199,10 @@ def check_physics(states, expect):
     else:
         check(physics in ("Running", "Disabled"), "Physics is neither Running nor Disabled: %s" % physics)
     say("Physics: %s (expected: %s)" % (physics, expect))
+    # physics.gpu defaults to off, so the Particles row is Disabled on every host the smoke test starts
+    particles = states.get("Particles")
+    check(particles == "Disabled", "Expected Particles to be Disabled (physics.gpu off), got: %s" % particles)
+    say("Particles: %s" % particles)
 
 
 def get_hierarchy(conn):

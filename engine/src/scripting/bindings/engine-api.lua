@@ -1615,6 +1615,10 @@ function Physics.Raycast(origin, direction, maxDistance, layerMask) end
 ---@return RaycastHit[]
 function Physics.RaycastAll(origin, direction, maxDistance, layerMask) end
 
+---True only when the GPU physics scene is up (physics.gpu is auto or on, and the CUDA probe succeeded).
+---@return boolean
+function Physics.IsGpuAvailable() end
+
 ---@class PhysicsMaterial
 ---@field staticFriction number Friction when not moving (0-1)
 ---@field dynamicFriction number Friction when sliding (0-1)
