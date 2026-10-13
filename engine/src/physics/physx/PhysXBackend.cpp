@@ -182,7 +182,7 @@ namespace N2Engine::Physics
             }
         }
 #else
-        Logger::Info("PhysX Visual Debugger not available (PVD headers not found)");
+        Logger::Info("PhysX Visual Debugger not used (Windows builds only)");
         physx::PxPvd *_pvd = nullptr; // Local variable for compatibility
 #endif
         // 3. Create physics SDK

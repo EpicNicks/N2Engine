@@ -4,7 +4,12 @@
 Runs the real N2EditorHost end to end. Scenarios:
   host  create a project, start the host on it and talk to it over its TCP protocol, then the exit flags
   tls   start a --tls host, check its identity files, pin its certificate, restart it and require the same one
-  all   both (the default)
+  attach  no host is started: connect to one that is already running (--port, --tls, --token-env) and check its health
+  all   host and tls (the default)
+
+--expect-physics on|off|any (default any) says whether the host under test was built with PhysX: on requires the
+Physics subsystem to be Running (the Linux PhysX legs and the Docker image), off requires Disabled, any (Windows legs
+and local runs) accepts either as long as it has not Failed.
 
   python tests/smoke/editor_host_smoke.py --exe build/bin/Debug/N2EditorHost.exe --config Debug
   python3 tests/smoke/editor_host_smoke.py --exe build/bin/N2EditorHost
@@ -183,6 +188,19 @@ def subsystem_states(payload):
     return states
 
 
+def check_physics(states, expect):
+    """The Physics subsystem of an EngineHealth map against --expect-physics (on, off or any)."""
+    physics = states.get("Physics")
+    check(physics is not None, "EngineHealth has no Physics subsystem: %s" % sorted(states))
+    if expect == "on":
+        check(physics == "Running", "Expected the PhysX backend to be running, Physics is: %s" % physics)
+    elif expect == "off":
+        check(physics == "Disabled", "Expected a build without physics (Disabled), Physics is: %s" % physics)
+    else:
+        check(physics in ("Running", "Disabled"), "Physics is neither Running nor Disabled: %s" % physics)
+    say("Physics: %s (expected: %s)" % (physics, expect))
+
+
 def get_hierarchy(conn):
     """GetHierarchy (0x28) answers Hierarchy (0x0F): the revision (uint32), then the nodes as json."""
     response = conn.expect(f.GET_HIERARCHY, b"", f.HIERARCHY, "GetHierarchy")
@@ -251,7 +269,7 @@ def scenario_create(hosts, work):
     return project, project_id
 
 
-def scenario_host(hosts, work, config, version):
+def scenario_host(hosts, work, config, version, expect_physics):
     project, project_id = scenario_create(hosts, work)
 
     # ---- Host 1: --renderer software, --token-env, --project ----
@@ -295,6 +313,7 @@ def scenario_host(hosts, work, config, version):
     states = subsystem_states(response)
     check(states.get("Renderer") == "Running", "The software renderer isn't running: %s" % states.get("Renderer"))
     check(states.get("Window") == "Disabled", "Expected no window (Disabled), got: %s" % states.get("Window"))
+    check_physics(states, expect_physics)
 
     # A frame: FrameData (0x02) is width, height (uint32), then width * height RGBA pixels, alpha 255
     width, height = 64, 48
@@ -506,23 +525,51 @@ def scenario_tls(hosts, version):
     say("The restarted --tls host reused the certificate")
 
 
+def scenario_attach(port, tls, token_env, version, expect_physics):
+    """Connects to a host somebody else started (the Docker image's, say), says Hello and checks its health."""
+    token = os.environ.get(token_env, "") if token_env else ""
+    conn = f.connect(port, tls=tls)
+    conn.expect(f.HELLO, f.hello_payload("CI smoke test", version, token), f.SERVER_INFO, "Hello")
+    response = conn.expect(f.GET_ENGINE_HEALTH, b"", f.ENGINE_HEALTH, "GetEngineHealth")
+    say("GetEngineHealth: healthy=%d" % response[0])
+    states = subsystem_states(response)
+    check_physics(states, expect_physics)
+    conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--exe", required=True, help="path to N2EditorHost (N2EditorHost.exe on Windows)")
+    parser.add_argument("--exe", help="path to N2EditorHost (N2EditorHost.exe on Windows); not used by --scenario attach")
     parser.add_argument("--config", default="Release", help="Debug or Release: Debug builds log to the console")
-    parser.add_argument("--scenario", choices=("host", "tls", "all"), default="all")
+    parser.add_argument("--scenario", choices=("host", "tls", "attach", "all"), default="all")
+    parser.add_argument("--expect-physics", choices=("on", "off", "any"), default="any",
+                        help="whether the host was built with PhysX: on needs Physics Running, off needs Disabled")
+    parser.add_argument("--port", type=int, help="attach: the running host's port")
+    parser.add_argument("--tls", action="store_true", help="attach: the host serves TLS")
+    parser.add_argument("--token-env", help="attach: the environment variable that holds the host's access token")
     parser.add_argument("--work-dir", help="folder for the project and the host logs (default: a new one under $RUNNER_TEMP or the system temp folder)")
     args = parser.parse_args()
 
+    version = protocol_version()
+    if args.scenario == "attach":
+        check(args.port, "--scenario attach needs --port")
+        try:
+            scenario_attach(args.port, args.tls, args.token_env, version, args.expect_physics)
+        except Exception as error:  # noqa: BLE001
+            say("SMOKE TEST FAILED: %s: %s" % (type(error).__name__, error))
+            return 1
+        say("Smoke test passed (attach)")
+        return 0
+
+    check(args.exe, "--exe is required")
     exe = Path(args.exe).resolve()
     check(exe.is_file(), "No editor host at %s" % exe)
     base = args.work_dir or os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
     work = Path(tempfile.mkdtemp(prefix="n2-smoke-", dir=base)).resolve()
-    version = protocol_version()
     hosts = Hosts(exe, work)
     try:
         if args.scenario in ("host", "all"):
-            scenario_host(hosts, work, args.config, version)
+            scenario_host(hosts, work, args.config, version, args.expect_physics)
         if args.scenario in ("tls", "all"):
             scenario_tls(hosts, version)
     except Exception as error:  # noqa: BLE001

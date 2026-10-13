@@ -50,6 +50,11 @@ if (N2ENGINE_PHYSX_AVAILABLE)
         target_link_directories(engine PUBLIC
             ${PHYSX_ROOT}/physx/bin/win.x86_64.vc143.mt/$<IF:$<CONFIG:Debug>,debug,release>
         )
+    elseif (UNIX AND NOT APPLE)
+        # Static Release-only libraries (full paths in PHYSX_LIBS, from the root CMakeLists.txt): every configuration
+        # links them. They are the NDEBUG flavour; the PhysX headers do not require NDEBUG on Linux (that check is
+        # Windows-only), and the engine never defines PX_CHECKED or PX_DEBUG.
+        target_link_directories(engine PUBLIC ${PHYSX_LIB_DIR})
     endif ()
 endif ()
 

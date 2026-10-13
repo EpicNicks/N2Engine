@@ -75,8 +75,115 @@ if(N2ENGINE_USE_PHYSX)
             message(STATUS "PhysX GPU support enabled")
         endif()
     elseif(UNIX AND NOT APPLE)
-        message(WARNING "Linux PhysX binaries not yet configured. Disabling PhysX.")
-        set(N2ENGINE_USE_PHYSX OFF)
+        # Static, Release-only libraries (also used by Debug and RelWithDebInfo builds), built from the PhysX tag the
+        # committed headers come from and pinned by SHA256 in cmake/PhysXLinuxHashes.cmake. Any failure below turns
+        # PhysX OFF: an archive whose hash does not match is never used.
+        include(${CMAKE_SOURCE_DIR}/cmake/PhysXLinuxHashes.cmake)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+            set(PHYSX_LINUX_ARCH x86_64)
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+            set(PHYSX_LINUX_ARCH aarch64)
+        else()
+            set(PHYSX_LINUX_ARCH "")
+            message(WARNING "No PhysX Linux binaries for ${CMAKE_SYSTEM_PROCESSOR}. Disabling PhysX.")
+            set(N2ENGINE_USE_PHYSX OFF)
+        endif()
+
+        if(PHYSX_LINUX_ARCH)
+            set(PHYSX_ROOT "${CMAKE_SOURCE_DIR}/external/PhysX")
+            set(PHYSX_INCLUDE_DIR ${PHYSX_ROOT}/physx/include)
+            set(PHYSX_LIB_DIR ${PHYSX_ROOT}/physx/bin/linux.${PHYSX_LINUX_ARCH}/release)
+            set(PHYSX_LINUX_SHA256 "${PHYSX_LINUX_SHA256_${PHYSX_LINUX_ARCH}}")
+            set(PHYSX_LINUX_ARCHIVE_NAME "physx-linux-${PHYSX_LINUX_ARCH}-${PHYSX_LINUX_VERSION}.tar.gz")
+            set(PHYSX_LINUX_ARCHIVE "${CMAKE_BINARY_DIR}/${PHYSX_LINUX_ARCHIVE_NAME}")
+            set(PHYSX_LINUX_URL "https://github.com/EpicNicks/N2Engine/releases/download/${PHYSX_LINUX_RELEASE_TAG}/${PHYSX_LINUX_ARCHIVE_NAME}")
+            # Written after a verified extraction (inside bin/, so a CI cache of bin/ carries it): the libraries are
+            # reused only when it names the pinned hash
+            set(PHYSX_LINUX_STAMP "${PHYSX_LIB_DIR}/.archive-sha256")
+
+            set(PHYSX_LINUX_LIB_NAMES
+                    PhysX_static_64
+                    PhysXCommon_static_64
+                    PhysXFoundation_static_64
+                    PhysXCooking_static_64
+                    PhysXExtensions_static_64
+                    PhysXPvdSDK_static_64
+                    PhysXCharacterKinematic_static_64
+                    PhysXVehicle2_static_64
+            )
+            set(PHYSX_LINUX_LIB_FILES "")
+            foreach(lib IN LISTS PHYSX_LINUX_LIB_NAMES)
+                list(APPEND PHYSX_LINUX_LIB_FILES "${PHYSX_LIB_DIR}/lib${lib}.a")
+            endforeach()
+
+            set(PHYSX_LINUX_PRESENT ON)
+            foreach(file IN LISTS PHYSX_LINUX_LIB_FILES)
+                if(NOT EXISTS "${file}")
+                    set(PHYSX_LINUX_PRESENT OFF)
+                endif()
+            endforeach()
+            set(PHYSX_LINUX_STAMP_OK OFF)
+            if(PHYSX_LINUX_PRESENT AND EXISTS "${PHYSX_LINUX_STAMP}")
+                file(READ "${PHYSX_LINUX_STAMP}" PHYSX_LINUX_STAMP_TEXT)
+                string(STRIP "${PHYSX_LINUX_STAMP_TEXT}" PHYSX_LINUX_STAMP_TEXT)
+                if(PHYSX_LINUX_STAMP_TEXT STREQUAL PHYSX_LINUX_SHA256)
+                    set(PHYSX_LINUX_STAMP_OK ON)
+                endif()
+            endif()
+
+            if(PHYSX_LINUX_STAMP_OK)
+                set(N2ENGINE_PHYSX_AVAILABLE ON)
+            else()
+                message(STATUS "Downloading PhysX Linux binaries (${PHYSX_LINUX_ARCHIVE_NAME})...")
+                # No EXPECTED_HASH: it makes a failed download or a mismatch a hard CMake error, and the plan is to
+                # fall back to PhysX OFF. The hash is checked below, before anything is extracted.
+                file(DOWNLOAD "${PHYSX_LINUX_URL}" "${PHYSX_LINUX_ARCHIVE}"
+                        SHOW_PROGRESS STATUS DOWNLOAD_STATUS TIMEOUT 600)
+                list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
+                list(GET DOWNLOAD_STATUS 1 STATUS_MESSAGE)
+                set(PHYSX_LINUX_ARCHIVE_SHA256 "")
+                if(STATUS_CODE EQUAL 0)
+                    file(SHA256 "${PHYSX_LINUX_ARCHIVE}" PHYSX_LINUX_ARCHIVE_SHA256)
+                endif()
+                if(NOT STATUS_CODE EQUAL 0)
+                    file(REMOVE "${PHYSX_LINUX_ARCHIVE}")
+                    message(WARNING "Failed to download PhysX Linux binaries: ${STATUS_MESSAGE}. Disabling PhysX.")
+                    set(N2ENGINE_USE_PHYSX OFF)
+                elseif(NOT PHYSX_LINUX_ARCHIVE_SHA256 STREQUAL PHYSX_LINUX_SHA256)
+                    file(REMOVE "${PHYSX_LINUX_ARCHIVE}")
+                    message(WARNING "The PhysX Linux archive's SHA256 (${PHYSX_LINUX_ARCHIVE_SHA256}) does not match the pinned one (${PHYSX_LINUX_SHA256}). Disabling PhysX.")
+                    set(N2ENGINE_USE_PHYSX OFF)
+                else()
+                    file(REMOVE_RECURSE "${PHYSX_LIB_DIR}")
+                    file(ARCHIVE_EXTRACT INPUT "${PHYSX_LINUX_ARCHIVE}" DESTINATION "${PHYSX_ROOT}/physx")
+                    file(REMOVE "${PHYSX_LINUX_ARCHIVE}")
+                    # Keep the archive's licence next to the libraries (bin/ is ignored), not as an untracked file in the tree
+                    if(EXISTS "${PHYSX_ROOT}/physx/LICENSE.md")
+                        file(RENAME "${PHYSX_ROOT}/physx/LICENSE.md" "${PHYSX_LIB_DIR}/LICENSE.md")
+                    endif()
+                    set(PHYSX_LINUX_PRESENT ON)
+                    foreach(file IN LISTS PHYSX_LINUX_LIB_FILES)
+                        if(NOT EXISTS "${file}")
+                            set(PHYSX_LINUX_PRESENT OFF)
+                            message(WARNING "The PhysX Linux archive has no ${file}. Disabling PhysX.")
+                        endif()
+                    endforeach()
+                    if(PHYSX_LINUX_PRESENT)
+                        file(WRITE "${PHYSX_LINUX_STAMP}" "${PHYSX_LINUX_SHA256}\n")
+                        set(N2ENGINE_PHYSX_AVAILABLE ON)
+                    else()
+                        set(N2ENGINE_USE_PHYSX OFF)
+                    endif()
+                endif()
+            endif()
+
+            if(N2ENGINE_PHYSX_AVAILABLE)
+                # The libraries reference each other in cycles, so they go in one link group (full paths: the order
+                # inside the group does not matter, the group and the system libraries after it do)
+                set(PHYSX_LIBS -Wl,--start-group ${PHYSX_LINUX_LIB_FILES} -Wl,--end-group pthread dl rt)
+                set(PHYSX_DLLS "")
+            endif()
+        endif()
     endif()
 endif()
 

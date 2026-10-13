@@ -59,6 +59,8 @@ Behaviour reference for the engine (lifecycles, frame order, guarantees and edge
     - Gentoo: ```emerge dev-build/cmake```
 - Building PhysX
   - CMake should download the binaries this project uses for PhysX
+    - Windows: the prebuilt DLLs and libraries
+    - Linux (x86_64 and aarch64): static Release libraries, downloaded from this repository's `physx-dependencies-linux-5.6.1` release and checked against the SHA256 pinned in `cmake/PhysXLinuxHashes.cmake` (PhysX is turned off with a warning if the check fails)
   - if you wish to build your own binaries you will need:
     - [Cuda SDK](https://developer.nvidia.com/cuda-toolkit-archive) (version 12.X, 13 was unsupported at last build)
     - [Nvidia PhysX SDK](https://github.com/NVIDIA-Omniverse/PhysX/releases/tag/107.3-omni-and-physx-5.6.1)
@@ -77,12 +79,12 @@ Behaviour reference for the engine (lifecycles, frame order, guarantees and edge
     - Clang-Cl should be able to link with MSVC binaries
     - MinGW/GCC **not compatible with PhysX**
   - Linux: G++ 
-    - GCC 11 **(WILL NEED TO BUILD PHYSX YOURSELF)**
+    - GCC 11 **(not tested with PhysX: CI builds GCC with PhysX OFF, and the downloaded libraries are built with Clang)**
       - Install your distribution's package
         - Debian/Ubuntu: ```sudo apt install build-essential```
         - Arch: ```sudo pacman -S base-devel```
         - Gentoo: you already have it
-    - Clang **(WILL NEED TO BUILD PHYSX YOURSELF)**
+    - Clang
       - Install your distribution's package
         - Debian/Ubuntu ```sudo apt install clang```
         - Arch: ```sudo pacman -Syu clang```

@@ -8,7 +8,9 @@
 #
 # The build steps are the ones of the "linux (Release, x86_64, Clang)" CI job: Clang 20 from apt.llvm.org on the
 # libstdc++ 14 headers (--gcc-install-dir). GCC-built hosts also work (the GCC 14 CI leg runs the same tests and smoke
-# tests). PhysX is OFF on Linux (no binaries yet); on arm64 the math library runs its scalar code (no NEON).
+# tests). PhysX is ON: CMake downloads the pinned static archive for the architecture (SHA256-checked, from this
+# repository's releases) and links it into the host, so the runtime image needs nothing extra for physics. On arm64 the
+# math library runs its scalar code (no NEON).
 
 FROM ubuntu:24.04 AS build
 
@@ -30,7 +32,7 @@ COPY . .
 ENV CC=clang-20 CXX=clang++-20
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/$(uname -m)-linux-gnu/14" \
-        -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_PHYSX=OFF \
+        -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_PHYSX=ON \
         -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON \
  && cmake --build build --parallel --target N2EditorHost \
  && mkdir /openal-libs && cp -a build/lib/libopenal.so* /openal-libs/
