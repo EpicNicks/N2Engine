@@ -89,8 +89,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: external/PhysX/physx/bin
-          # Not keyed per config: the downloaded zip holds the debug/ and release/ folders together
-          key: physx-bin-${{ runner.os }}-v1
+          # Not keyed per config: the downloaded zip holds the debug/ and release/ folders together. The pinned
+          # version and hash are in cmake/PhysXWindowsHashes.cmake; CMake checks the stamp in the extracted tree.
+          key: physx-bin-${{ runner.os }}-${{ hashFiles('cmake/PhysXWindowsHashes.cmake') }}
 
       - name: Configure
         run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} -DN2ENGINE_EDITOR_TLS=${{ matrix.tls }} # newest installed Visual Studio

@@ -31,7 +31,7 @@ time into the build tree).
 |---|---|---|
 | GLFW 3.4 | `FetchContent` in `renderer/CMakeLists.txt` | zlib/libpng |
 | OpenAL Soft 1.24.0 | `FetchContent` in the root `CMakeLists.txt` | GNU LGPL (see its `COPYING`); ship it in a form that lets users replace it, such as its DLL |
-| NVIDIA PhysX (binaries) | Downloaded from this repository's `physx-dependencies` release (Windows) or `physx-dependencies-linux-5.6.1` release (Linux: static libraries built from the PhysX 107.3-omni-and-physx-5.6.1 tag, SHA256 pinned in `cmake/PhysXLinuxHashes.cmake`; each archive carries PhysX's `LICENSE.md`) into `external/PhysX/` when `N2ENGINE_USE_PHYSX` is ON | BSD 3-Clause |
+| NVIDIA PhysX (binaries) | Downloaded from this repository's `physx-dependencies-windows-5.6.1` release (Windows: the slim `physx-windows-x86_64-5.6.1-slim.zip`, derived from the original `bin.zip` whose build recipe is unknown, SHA256 pinned in `cmake/PhysXWindowsHashes.cmake`) or `physx-dependencies-linux-5.6.1` release (Linux: static libraries built from the PhysX 107.3-omni-and-physx-5.6.1 tag, SHA256 pinned in `cmake/PhysXLinuxHashes.cmake`; each archive carries PhysX's `LICENSE.md`) into `external/PhysX/` when `N2ENGINE_USE_PHYSX` is ON | BSD 3-Clause |
 | FreeType 2.13.3 (optional) | `FetchContent` in `text/CMakeLists.txt` when `N2ENGINE_TEXT_FREETYPE` is ON | FreeType License (FTL); credit below |
 | GoogleTest 1.17.0 (tests only, not shipped) | `FetchContent` in the root `CMakeLists.txt` when `N2ENGINE_BUILD_TESTS` is ON | BSD 3-Clause |
 
