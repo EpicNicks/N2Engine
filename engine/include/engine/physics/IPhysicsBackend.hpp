@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
 
@@ -19,6 +20,15 @@ namespace N2Engine::Physics
     {
     public:
         virtual ~IPhysicsBackend() = default;
+
+        /// physics.gpu: call before Initialize (the scene is built there and its GPU flag is immutable). A backend
+        /// without GPU support ignores it.
+        virtual void SetGpuMode(GpuMode) {}
+        /// What Initialize made of the GPU request. Disabled for a backend that never asks.
+        [[nodiscard]] virtual GpuStatus GetGpuStatus() const
+        {
+            return {GpuState::Disabled, "This physics backend has no GPU support"};
+        }
 
         virtual bool Initialize() = 0;
         virtual void Update(float deltaTime) = 0;

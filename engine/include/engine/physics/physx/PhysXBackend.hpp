@@ -34,6 +34,11 @@ namespace physx
 }
 #endif
 
+namespace physx
+{
+    class PxCudaContextManager;
+}
+
 #endif
 
 namespace N2Engine
@@ -56,6 +61,9 @@ namespace N2Engine::Physics
     public:
         PhysXBackend();
         ~PhysXBackend() override;
+
+        void SetGpuMode(GpuMode mode) override { _gpuMode = mode; }
+        [[nodiscard]] GpuStatus GetGpuStatus() const override { return _gpuStatus; }
 
         bool Initialize() override;
         void Update(float deltaTime) override;
@@ -184,6 +192,12 @@ namespace N2Engine::Physics
             float maxDistance,
             uint32_t layerMask) override;
 
+    private:
+        // Outside the PhysX guard so the inline GetGpuStatus compiles without PhysX too
+        GpuMode _gpuMode = GpuMode::Off;
+        GpuStatus _gpuStatus{GpuState::Disabled, "physics.gpu is off"};
+
+    public:
 #ifdef N2ENGINE_PHYSX_ENABLED
         void onConstraintBreak(physx::PxConstraintInfo* constraints, physx::PxU32 count) override;
         void onWake(physx::PxActor** actors, physx::PxU32 count) override;
@@ -208,6 +222,13 @@ namespace N2Engine::Physics
         physx::PxScene* _scene = nullptr;
         physx::PxMaterial* _defaultMaterial = nullptr;
         physx::PxDefaultCpuDispatcher* _dispatcher = nullptr;
+        physx::PxCudaContextManager* _cudaContextManager = nullptr; // only with physics.gpu auto/on and a working probe
+
+        /// With physics.gpu auto/on: creates the CUDA context manager (true when the GPU scene can be built) and
+        /// sets _gpuStatus. With off it does nothing, and makes no CUDA call.
+        bool ProbeGpu();
+        /// Drops the CUDA context, sets Failed (physics.gpu=on) or Unavailable (auto) and logs one warning
+        void FailGpu(const std::string& reason);
 
 #if N2ENGINE_PHYSX_HAS_PVD
         physx::PxPvd* _pvd = nullptr;
