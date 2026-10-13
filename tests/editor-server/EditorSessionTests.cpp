@@ -63,6 +63,7 @@ namespace
         std::string engineVersion;
         nlohmann::json capabilities;
         bool projectLoaded = false;
+        bool readOnly = false;
     };
 
     ServerInfo DecodeServerInfo(const Frame &frame)
@@ -73,6 +74,7 @@ namespace
         info.engineVersion = r.ReadString();
         info.capabilities = ReadJson(r);
         info.projectLoaded = r.ReadBool();
+        info.readOnly = r.ReadBool();
         EXPECT_FALSE(r.HasData()) << "trailing bytes after ServerInfo";
         return info;
     }
@@ -99,6 +101,7 @@ TEST(EditorSessionTest, HelloAnswersWithTheServersVersionsAndCapabilities)
     EXPECT_TRUE(ParseProtocolVersion(info.engineVersion).has_value()) << info.engineVersion;
     EXPECT_EQ(info.capabilities, nlohmann::json::array()) << "no optional features are defined yet";
     EXPECT_FALSE(info.projectLoaded) << "a server without SetProject has no project";
+    EXPECT_FALSE(info.readOnly) << "a server without SetReadOnly serves writes";
 }
 
 TEST(EditorSessionTest, HelloAcceptsAnyMinorAndPatchVersionOfTheSameMajor)

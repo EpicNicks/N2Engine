@@ -453,6 +453,33 @@ TEST(HostOptionsTest, TlsIsAFlagAndOffByDefault)
     EXPECT_TRUE(last->tls);
 }
 
+// ==================== --read-only ====================
+
+TEST(HostOptionsTest, ReadOnlyIsAFlagAndOffByDefault)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults) << defaults.error();
+    EXPECT_FALSE(defaults->readOnly);
+
+    // Not a value-taking option: the next argument is still parsed on its own, and it goes with a token or without
+    const auto parsed = ParseHostArguments({"--read-only", "--port", "1234", "--token-env", "N2_TOKEN"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->readOnly);
+    EXPECT_EQ(parsed->port, 1234);
+    EXPECT_EQ(parsed->tokenEnv, "N2_TOKEN");
+
+    const auto last = ParseHostArguments({"--port", "1234", "--read-only"});
+    ASSERT_TRUE(last) << last.error();
+    EXPECT_TRUE(last->readOnly);
+}
+
+TEST(HostOptionsTest, TheUsageNamesReadOnly)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--read-only"), std::string_view::npos);
+    EXPECT_NE(usage.find("readOnly"), std::string_view::npos);
+}
+
 TEST(HostOptionsTest, TheUsageNamesTls)
 {
     const std::string_view usage = HostUsage();

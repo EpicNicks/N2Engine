@@ -117,6 +117,7 @@ namespace
         static const std::map<std::string, ResponseType> responses = {
             {"Ok", ResponseType::Ok},
             {"Error", ResponseType::Error},
+            {"ErrorCoded", ResponseType::ErrorCoded},
             {"FrameData", ResponseType::FrameData},
             {"CameraPosition", ResponseType::CameraPosition},
             {"EntityTransform", ResponseType::EntityTransform},
@@ -278,6 +279,9 @@ namespace
             if (declared.at("type").get<std::string>() == response && declared.contains("fields"))
                 return &declared.at("fields");
         }
+        // A response no command answers with: the host picks it (ErrorCoded)
+        if (spec.contains("extraResponses") && spec.at("extraResponses").contains(response))
+            return &spec.at("extraResponses").at(response).at("fields");
         return nullptr;
     }
 

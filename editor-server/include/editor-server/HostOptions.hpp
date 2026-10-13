@@ -51,6 +51,9 @@ namespace N2Engine::Editor
         /// host built with N2ENGINE_EDITOR_TLS (RunHost refuses it otherwise). It applies to this one process: a play
         /// host a launcher starts (--play) is a separate process and stays plaintext on loopback.
         bool tls = false;
+        /// --read-only: the host answers every command that isn't a read (EditorServer::IsReadCommand; Shutdown included)
+        /// with the readOnly error, and keeps serving. Works with or without --token-env.
+        bool readOnly = false;
         bool showHelp = false;
 
         /// --play <file>: start as a play host (#82, E9): instead of the startup scene, load the scene snapshot in this

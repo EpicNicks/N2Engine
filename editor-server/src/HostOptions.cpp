@@ -84,6 +84,11 @@ namespace N2Engine::Editor
                 options.tls = true;
                 continue;
             }
+            if (arg == "--read-only")
+            {
+                options.readOnly = true;
+                continue;
+            }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--renderer" || arg == "--token-env" || arg == "--create" ||
                                     arg == "--name" || arg == "--project-id" || arg == "--play";
@@ -278,6 +283,10 @@ Options:
                             certificate's SHA-256 fingerprint, for the client to pin. Needs a host
                             built with N2ENGINE_EDITOR_TLS. Applies to this process only: a play host
                             (--play) is another process, and stays plaintext
+  --read-only               Serve reads only: every command that isn't a read (anything that changes the
+                            project, a scene, an asset or the game, and Shutdown) is refused with the
+                            readOnly error, and the connection stays open. Hello and the read commands
+                            work, with or without --token-env. Commands nobody has classified are refused
   --play <file>             Start as a play host: run the scene snapshot in <file> (what the
                             WritePlaySnapshot command writes; or a res:// .scene path in the project)
                             as a game instead of opening the startup scene. Pass the same --project

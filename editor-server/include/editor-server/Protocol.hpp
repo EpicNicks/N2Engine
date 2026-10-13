@@ -11,7 +11,7 @@ namespace N2Engine::Editor
 {
     /// The version of protocol.json this server implements (ProtocolSpecTest pins the two equal). Hello compares the
     /// client's with it: the same major version is compatible, whatever the minor and patch versions.
-    inline constexpr std::string_view ProtocolVersion = "1.10.0";
+    inline constexpr std::string_view ProtocolVersion = "1.11.0";
 
     struct ProtocolVersionNumber
     {
@@ -152,6 +152,7 @@ namespace N2Engine::Editor
         EditorCamera = 0x19,
         PickResult = 0x1A,
         Bounds = 0x1B,
+        ErrorCoded = 0x1C,
         AssetList = 0xA0,
         AssetDetail = 0xA1,
         TextData = 0xA2,

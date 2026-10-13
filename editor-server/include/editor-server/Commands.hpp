@@ -190,11 +190,16 @@ namespace N2Engine::Editor::Protocol
         std::string protocolVersion;
         /// The host's access token, or empty
         std::string token;
+        /// Since 1.11.0, a trailing field (false when the client doesn't send it): the client understands ErrorCoded, so
+        /// the host answers a refused command with it instead of a plain Error
+        bool errorCodes = false;
 
         static HelloCmd Deserialize(BufferReader &r)
         {
             // Braced initialisation evaluates left to right, so the fields are read in order
-            return {r.ReadString(), r.ReadString(), r.ReadString()};
+            HelloCmd cmd{r.ReadString(), r.ReadString(), r.ReadString(), false};
+            cmd.errorCodes = ReadTrailing(r, &BufferReader::ReadBool, false);
+            return cmd;
         }
     };
 
@@ -779,6 +784,23 @@ namespace N2Engine::Editor::Protocol
         for (char c : msg) w.WriteU8(static_cast<uint8_t>(c));
     }
 
+    /// The stable codes of ErrorCoded (protocol.json's errorCodes): a client branches on them
+    inline constexpr std::string_view ErrorCodeReadOnly = "readOnly";
+    inline constexpr std::string_view ErrorCodeForbidden = "forbidden";
+
+    /// ErrorCoded (since 1.11.0), sent only to a client that asked for it with Hello's errorCodes: the message an Error
+    /// would carry, then a code. Unlike Error's, its payload is two length-prefixed strings.
+    inline void WriteErrorCoded(BufferWriter &w, std::string_view message, std::string_view code)
+    {
+        BufferWriter payload;
+        payload.WriteString(std::string{message});
+        payload.WriteString(std::string{code});
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::ErrorCoded));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
     inline void WriteCameraPosition(BufferWriter &w, float x, float y, float z)
     {
         w.WriteU8(static_cast<uint8_t>(ResponseType::CameraPosition));
@@ -1038,16 +1060,17 @@ namespace N2Engine::Editor::Protocol
         w.WriteBytes(payload.Data());
     }
 
-    /// Hello's response: the server's protocol and engine versions, its optional features (a JSON array of names) and
-    /// whether it has a project
+    /// Hello's response: the server's protocol and engine versions, its optional features (a JSON array of names),
+    /// whether it has a project and, since 1.11.0, whether it is read-only (--read-only)
     inline void WriteServerInfo(BufferWriter &w, std::string_view protocolVersion, std::string_view engineVersion,
-                                const nlohmann::json &capabilities, bool projectLoaded)
+                                const nlohmann::json &capabilities, bool projectLoaded, bool readOnly)
     {
         BufferWriter payload;
         payload.WriteString(std::string{protocolVersion});
         payload.WriteString(std::string{engineVersion});
         WriteJson(payload, capabilities);
         payload.WriteBool(projectLoaded);
+        payload.WriteBool(readOnly);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::ServerInfo));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));

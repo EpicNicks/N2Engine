@@ -297,8 +297,9 @@ def scenario_host(hosts, work, config, version, expect_physics):
     payload = conn.expect(f.HELLO, f.hello_payload("CI smoke test", version, token), f.SERVER_INFO, "Hello with the token")
     server_version = f.Reader(payload).string()
     check(server_version == version, "Hello: the host speaks protocol %s, protocol.json is %s" % (server_version, version))
-    # The last byte is projectLoaded: this host was started with --project
-    check(payload[-1] == 1, "Hello: the host reports no project loaded")
+    # The last two bytes are projectLoaded (this host was started with --project) and, since 1.11.0, readOnly (it wasn't)
+    check(payload[-2] == 1, "Hello: the host reports no project loaded")
+    check(payload[-1] == 0, "Hello: the host reports it is read-only")
     say("Hello: protocol %s, project loaded" % server_version)
 
     # The event ring kept the startup lines: RunHost constructs the server before Application::Init, so lines Init
