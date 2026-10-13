@@ -13,6 +13,7 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/io/ProjectFile.hpp"
+#include "engine/particles/ParticleBackendSelection.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -242,6 +243,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
                                      : "GPU physics unavailable: there is no physics backend (see Physics)"});
 
     _health.subsystems = {windowStatus, rendererStatus, physicsStatus, particlesStatus, audioStatus, scriptingStatus};
+    _particlesBaseDetail = particlesStatus.detail;
     for (const SubsystemStatus &status : _health.subsystems)
     {
         if (status.state == SubsystemState::Failed)
@@ -461,6 +463,18 @@ void Application::PhysicsUpdate(const Scene &scene) const
     {
         scene.FixedUpdate();
     }
+}
+
+const EngineHealth& Application::GetHealth() const
+{
+    // The row's state stays the GPU probe's (Disabled, Running, Failed); its detail names the backends the live
+    // ParticleSystems use. Without any it is what Init made.
+    if (auto it = std::ranges::find(_health.subsystems, std::string_view("Particles"), &SubsystemStatus::name);
+        it != _health.subsystems.end())
+    {
+        it->detail = Particles::ParticleUsage::Compose(_particlesBaseDetail);
+    }
+    return _health;
 }
 
 Physics::IPhysicsBackend* Application::Get3DPhysicsBackend() const
