@@ -7,8 +7,8 @@
 # Run it: see docs/editor.html#linux-host (a project volume, a token, a loopback-only published port).
 #
 # The build steps are the ones of the "linux (Release, x86_64, Clang)" CI job: Clang 20 from apt.llvm.org on the
-# libstdc++ 14 headers (--gcc-install-dir). GCC-built hosts are unsupported until the sol2 same-signature-lambda bug is
-# fixed. PhysX is OFF on Linux (no binaries yet); on arm64 the math library runs its scalar code (no NEON).
+# libstdc++ 14 headers (--gcc-install-dir). GCC-built hosts also work (the GCC 14 CI leg runs the same tests and smoke
+# tests). PhysX is OFF on Linux (no binaries yet); on arm64 the math library runs its scalar code (no NEON).
 
 FROM ubuntu:24.04 AS build
 
