@@ -23,8 +23,12 @@ name: PhysX Linux
 #
 # Package (physx-linux-<arch>-5.6.1.tar.gz, plus physx-linux-<arch>-5.6.1.tar.gz.sha256)
 #   LICENSE.md                                  PhysX's BSD-3 licence (binary redistribution needs it)
-#   bin/<dir>/release/lib*.a                    <dir> is what PhysX produces (see the Package step summary); extract at
+#   bin/<dir>/release/lib*.a                    <dir> is linux.x86_64 or linux.aarch64 (what PhysX produces); extract at
 #                                               external/PhysX/physx, like the Windows bin.zip
+#   Libraries (the same eight on both arches; SceneQuery, LowLevel*, SimulationController etc. are folded into PhysX_static):
+#       libPhysX_static_64.a  libPhysXCommon_static_64.a  libPhysXFoundation_static_64.a  libPhysXCooking_static_64.a
+#       libPhysXExtensions_static_64.a  libPhysXPvdSDK_static_64.a  libPhysXCharacterKinematic_static_64.a
+#       libPhysXVehicle2_static_64.a
 #   The exact library list and the link order are printed by the "Package" step and written to the job summary. Link ALL
 #   the archives inside one group, then the system libraries:
 #       -Wl,--start-group bin/<dir>/release/*.a -Wl,--end-group -lpthread -ldl -lrt
