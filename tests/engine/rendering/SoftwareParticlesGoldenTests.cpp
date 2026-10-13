@@ -112,16 +112,16 @@ namespace
     }
 
     /// A scene holding one object with a started CPU ParticleSystem that has no stream: tests burst into it
-    struct Setup
+    struct FxScene
     {
         std::unique_ptr<Scene> scene;
         GameObject::Ptr object;
         Rendering::ParticleSystem *system = nullptr;
     };
 
-    Setup MakeSetup(const std::string &name)
+    FxScene MakeFxScene(const std::string &name)
     {
-        Setup setup;
+        FxScene setup;
         setup.scene = Scene::Create(name);
         setup.object = GameObject::Create(name + "_Object");
         setup.system = setup.object->AddComponent<Rendering::ParticleSystem>();
@@ -145,7 +145,7 @@ TEST(SoftwareParticlesGoldenTest, AParticleDrawsAsASolidSquareOfItsColourAtItsPo
 {
     SoftwareRenderer renderer;
     ASSERT_TRUE(renderer.Initialize(nullptr, kSize, kSize));
-    Setup fx = MakeSetup("SoftwareParticles_One");
+    FxScene fx = MakeFxScene("SoftwareParticles_One");
     fx.system->startSize = 1.0f;
     fx.system->endSize = 1.0f;
     fx.object->GetPositionable()->SetPosition(Math::Vector3(0.5f, -0.5f, 0.0f));
@@ -186,7 +186,7 @@ TEST(SoftwareParticlesGoldenTest, NoParticlesLeaveTheFrameUntouched)
 {
     SoftwareRenderer renderer;
     ASSERT_TRUE(renderer.Initialize(nullptr, kSize, kSize));
-    Setup fx = MakeSetup("SoftwareParticles_None");
+    FxScene fx = MakeFxScene("SoftwareParticles_None");
     const Frame frame = Draw(*fx.scene, MakeCamera(), renderer);
     EXPECT_EQ(CoverageExcept(frame, Black).count, 0);
     renderer.Shutdown();
@@ -196,7 +196,7 @@ TEST(SoftwareParticlesGoldenTest, TheInkLiesWhereTheParticlesAre)
 {
     SoftwareRenderer renderer;
     ASSERT_TRUE(renderer.Initialize(nullptr, kSize, kSize));
-    Setup fx = MakeSetup("SoftwareParticles_Sphere");
+    FxScene fx = MakeFxScene("SoftwareParticles_Sphere");
     fx.system->shape = Particles::EmitterShape::Sphere;
     fx.system->shapeRadius = 1.0f;
     fx.system->startSize = 0.5f;
@@ -234,7 +234,7 @@ TEST(SoftwareParticlesGoldenTest, AParticleFacesTheCameraWhateverWayItIsTurned)
 {
     SoftwareRenderer renderer;
     ASSERT_TRUE(renderer.Initialize(nullptr, kSize, kSize));
-    Setup fx = MakeSetup("SoftwareParticles_Facing");
+    FxScene fx = MakeFxScene("SoftwareParticles_Facing");
     fx.system->startSize = 1.0f;
     fx.system->endSize = 1.0f;
     fx.system->EmitBurst(1);
@@ -262,7 +262,7 @@ TEST(SoftwareParticlesGoldenTest, ColourAndSizeFollowTheParticlesAge)
 {
     SoftwareRenderer renderer;
     ASSERT_TRUE(renderer.Initialize(nullptr, kSize, kSize));
-    Setup fx = MakeSetup("SoftwareParticles_Age");
+    FxScene fx = MakeFxScene("SoftwareParticles_Age");
     Time::SetTimeScale(1.0f);
     ASSERT_TRUE(Time::SetFixedTimestep(0.02));
     fx.system->lifetimeMin = 1.0f;
@@ -307,7 +307,7 @@ TEST(SoftwareParticlesGoldenTest, AFullyFadedParticleIsNotDrawn)
 {
     SoftwareRenderer renderer;
     ASSERT_TRUE(renderer.Initialize(nullptr, kSize, kSize));
-    Setup fx = MakeSetup("SoftwareParticles_Faded");
+    FxScene fx = MakeFxScene("SoftwareParticles_Faded");
     fx.system->startColor = Common::Color(1.0f, 0.0f, 0.0f, 0.0f); // alpha 0 from the start
     fx.system->endColor = Common::Color(1.0f, 0.0f, 0.0f, 0.0f);
     fx.system->EmitBurst(5);
