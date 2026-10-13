@@ -1,0 +1,249 @@
+name: PhysX Linux
+
+# Builds NVIDIA PhysX 5.6.1 (CPU only, static, Release) for Linux x86_64 and aarch64 and packages it for the engine.
+#
+# Triggers
+#   workflow_dispatch   inputs: physx_tag, release_tag, publish (default false)
+#   push of a tag       physx-linux-*  (always publishes, to the release named by the release_tag default below)
+#   pull_request        only when this file changes: a dry run that builds, packages and smoke-tests both archives.
+#                       A pull_request run NEVER publishes.
+#
+# PhysX source
+#   https://github.com/NVIDIA-Omniverse/PhysX at tag 107.3-physx-5.6.1 (commit 5ca9f472105a90d70d957c243cb0ef36fe251a9f),
+#   which reports PhysX 5.6.1 (physx/include/foundation/PxPhysicsVersion.h), the version of the headers committed in
+#   external/PhysX/physx/include. The "Compare headers" step diffs the two trees and reports any difference.
+#
+# How it is built (no packman)
+#   cmake is called directly on physx/compiler/public, which is what buildtools/cmake_generate_projects.py does for the
+#   linux-clang-cpu-only / linux-aarch64-clang-cpu-only presets, minus packman: -DTARGET_BUILD_PLATFORM=linux,
+#   -DPX_OUTPUT_ARCH=x86 (x86_64) or arm (aarch64), -DPX_GENERATE_STATIC_LIBRARIES=True, snippets and samples off, GPU
+#   off, PVD runtime (OmniPVD) off. Release only (-DCMAKE_BUILD_TYPE=release, lowercase as PhysX expects).
+#   Clang 20 + libstdc++ 14, the same toolchain as the `linux (Release, x86_64, Clang)` job in tests.yml. PhysX's own
+#   -Werror is removed from the checked-out PhysX tree only (never from this repo) and -w silences the -Weverything noise.
+#
+# Package (physx-linux-<arch>-5.6.1.tar.gz, plus physx-linux-<arch>-5.6.1.tar.gz.sha256)
+#   LICENSE.md                                  PhysX's BSD-3 licence (binary redistribution needs it)
+#   bin/<dir>/release/lib*.a                    <dir> is what PhysX produces (see the Package step summary); extract at
+#                                               external/PhysX/physx, like the Windows bin.zip
+#   The exact library list and the link order are printed by the "Package" step and written to the job summary. Link ALL
+#   the archives inside one group, then the system libraries:
+#       -Wl,--start-group bin/<dir>/release/*.a -Wl,--end-group -lpthread -ldl -lrt
+#   (the "Smoke test" step links exactly that way, with the committed headers, against the extracted package).
+#
+# Publishing: only the `publish` job uploads to the GitHub release `physx-dependencies-linux-5.6.1` on this repository,
+# and only for a tag push or a manual run with publish=true. It is the only job with contents: write.
+
+on:
+  workflow_dispatch:
+    inputs:
+      physx_tag:
+        description: PhysX git tag to build
+        default: 107.3-physx-5.6.1
+      release_tag:
+        description: Release tag on this repository that receives the assets (publish only)
+        default: physx-dependencies-linux-5.6.1
+      publish:
+        description: Upload the archives to the release
+        type: boolean
+        default: false
+  push:
+    tags: ['physx-linux-*']
+  pull_request:
+    paths: ['.github/workflows/physx-linux.yml']
+
+permissions:
+  contents: read
+
+env:
+  PHYSX_TAG: ${{ inputs.physx_tag || '107.3-physx-5.6.1' }}
+  PHYSX_VERSION: 5.6.1
+
+jobs:
+  build:
+    name: PhysX 5.6.1 (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            gnu_triple: x86_64-linux-gnu
+            px_arch: x86
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            gnu_triple: aarch64-linux-gnu
+            px_arch: arm
+    env:
+      CC: clang-20
+      CXX: clang++-20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo install -d -m 0755 /etc/apt/keyrings
+          sudo curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/keyrings/apt.llvm.org.asc
+          echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3 file binutils
+
+      - name: Fetch PhysX
+        run: |
+          git ls-remote --tags https://github.com/NVIDIA-Omniverse/PhysX "refs/tags/${PHYSX_TAG}*"
+          git clone --depth 1 --branch "${PHYSX_TAG}" https://github.com/NVIDIA-Omniverse/PhysX physx-src
+          git -C physx-src rev-parse HEAD
+          grep -n "PX_PHYSICS_VERSION_M" physx-src/physx/include/foundation/PxPhysicsVersion.h
+
+      - name: Compare headers with the committed ones
+        run: |
+          # Any difference is reported, never hidden; the build proceeds either way.
+          if diff -r -q external/PhysX/physx/include physx-src/physx/include > header-diff.txt; then
+            echo "Committed headers are identical to the PhysX ${PHYSX_TAG} headers." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Committed external/PhysX/physx/include differs from PhysX ${PHYSX_TAG}"
+            { echo '### Header differences (committed vs PhysX source tag)'; echo '```'; cat header-diff.txt; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Remove -Werror from the PhysX tree (this checkout only)
+        run: |
+          sed -i 's/ -Werror//g' physx-src/physx/source/compiler/cmake/linux/CMakeLists.txt
+          grep -n "Werror" physx-src/physx/source/compiler/cmake/linux/CMakeLists.txt || echo "no -Werror left"
+
+      - name: Configure
+        run: |
+          PX="$PWD/physx-src/physx"
+          cmake -S "$PX/compiler/public" -B physx-build -G Ninja --no-warn-unused-cli \
+            -DCMAKE_BUILD_TYPE=release \
+            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+            "-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/${{ matrix.gnu_triple }}/14 -w" \
+            -DTARGET_BUILD_PLATFORM=linux -DPX_OUTPUT_ARCH=${{ matrix.px_arch }} \
+            -DPHYSX_ROOT_DIR="$PX" -DPX_OUTPUT_LIB_DIR="$PX" -DPX_OUTPUT_BIN_DIR="$PX" \
+            -DPX_GENERATE_STATIC_LIBRARIES=True -DPX_BUILDSNIPPETS=False -DPX_BUILDPUBLICSAMPLES=False \
+            -DPX_BUILDPVDRUNTIME=False -DPX_GENERATE_GPU_PROJECTS=False -DPX_GENERATE_GPU_PROJECTS_ONLY=False
+
+      - name: Build
+        run: cmake --build physx-build --parallel
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          OUT="physx-linux-${{ matrix.arch }}-${PHYSX_VERSION}"
+          LIBDIR="$(find physx-src/physx/bin -type d -name release | head -n 1)"
+          test -n "$LIBDIR"
+          REL="${LIBDIR#physx-src/physx/}"
+          echo "PhysX output directory: $REL"
+          ls -l "$LIBDIR"
+          mkdir -p stage
+          cp physx-src/LICENSE.md stage/LICENSE.md
+          mkdir -p "stage/$REL"
+          cp "$LIBDIR"/*.a "stage/$REL/"
+          tar -C stage -czf "${OUT}.tar.gz" .
+          sha256sum "${OUT}.tar.gz" > "${OUT}.tar.gz.sha256"
+          cat "${OUT}.tar.gz.sha256"
+          {
+            echo "### ${{ matrix.arch }}: ${OUT}.tar.gz"
+            echo "PhysX tag ${PHYSX_TAG} ($(git -C physx-src rev-parse HEAD)), layout: ${REL}/*.a"
+            echo '```'
+            ls -l "stage/$REL"
+            cat "${OUT}.tar.gz.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify architecture
+        run: |
+          set -euo pipefail
+          mkdir -p arch-check
+          cd arch-check
+          for lib in ../stage/bin/*/release/*.a; do
+            member="$(ar t "$lib" | head -n 1)"
+            ar x "$lib" "$member"
+            desc="$(file -b "$member")"
+            echo "$(basename "$lib"): $member: $desc"
+            case "${{ matrix.arch }}" in
+              x86_64)  echo "$desc" | grep -q "x86-64" ;;
+              aarch64) echo "$desc" | grep -q "aarch64" ;;
+            esac
+            rm -f "$member"
+          done
+          nm -A --defined-only ../stage/bin/*/release/*.a 2>/dev/null | grep -E " T .*(PxCreateFoundation|PxCreatePhysics)" | head -n 3 || true
+
+      - name: Smoke test (compile, link and run against the package)
+        run: |
+          set -euo pipefail
+          rm -rf smoke
+          mkdir smoke
+          tar -C smoke -xzf "physx-linux-${{ matrix.arch }}-${PHYSX_VERSION}.tar.gz"
+          cat > smoke/main.cpp <<'CPP'
+          #include <PxPhysicsAPI.h>
+          #include <cstdio>
+          using namespace physx;
+          int main() {
+              static PxDefaultAllocator alloc;
+              static PxDefaultErrorCallback err;
+              PxFoundation* f = PxCreateFoundation(PX_PHYSICS_VERSION, alloc, err);
+              if (!f) { std::puts("PxCreateFoundation failed"); return 1; }
+              PxPhysics* p = PxCreatePhysics(PX_PHYSICS_VERSION, *f, PxTolerancesScale(), false, nullptr);
+              if (!p) { std::puts("PxCreatePhysics failed"); return 2; }
+              PxSceneDesc d(p->getTolerancesScale());
+              d.gravity = PxVec3(0, -9.81f, 0);
+              d.cpuDispatcher = PxDefaultCpuDispatcherCreate(1);
+              d.filterShader = PxDefaultSimulationFilterShader;
+              PxScene* s = p->createScene(d);
+              PxMaterial* m = p->createMaterial(0.5f, 0.5f, 0.1f);
+              PxRigidDynamic* b = p->createRigidDynamic(PxTransform(PxVec3(0, 10, 0)));
+              PxRigidActorExt::createExclusiveShape(*b, PxSphereGeometry(1.0f), *m);
+              s->addActor(*b);
+              for (int i = 0; i < 30; ++i) { s->simulate(1.0f / 60.0f); s->fetchResults(true); }
+              float y = b->getGlobalPose().p.y;
+              std::printf("PhysX %d.%d.%d ok, body y after 0.5 s: %f\n", PX_PHYSICS_VERSION_MAJOR, PX_PHYSICS_VERSION_MINOR, PX_PHYSICS_VERSION_BUGFIX, y);
+              s->release(); m->release(); d.cpuDispatcher->release(); p->release(); f->release();
+              return y < 10.0f ? 0 : 3;
+          }
+          CPP
+          LIBS="$(ls smoke/bin/*/release/*.a | tr '\n' ' ')"
+          echo "Libraries: $LIBS"
+          clang++-20 --gcc-install-dir=/usr/lib/gcc/${{ matrix.gnu_triple }}/14 -std=c++17 -O1 -DNDEBUG \
+            -I external/PhysX/physx/include smoke/main.cpp \
+            -Wl,--start-group $LIBS -Wl,--end-group -lpthread -ldl -lrt -o smoke/smoke
+          ./smoke/smoke
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: physx-linux-${{ matrix.arch }}
+          path: |
+            physx-linux-${{ matrix.arch }}-${{ env.PHYSX_VERSION }}.tar.gz
+            physx-linux-${{ matrix.arch }}-${{ env.PHYSX_VERSION }}.tar.gz.sha256
+            header-diff.txt
+          if-no-files-found: error
+
+  # Only a tag push or a manual run with publish=true. Never on pull_request.
+  publish:
+    name: Publish release assets
+    needs: build
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag || 'physx-dependencies-linux-5.6.1' }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          pattern: physx-linux-*
+          merge-multiple: true
+
+      - name: Upload to the release
+        run: |
+          set -euo pipefail
+          rm -f assets/header-diff.txt
+          ls -l assets
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "PhysX ${PHYSX_VERSION} for Linux (x86_64, aarch64)" \
+              --notes "Static Release libraries of NVIDIA PhysX ${PHYSX_VERSION} built by the PhysX Linux workflow. See the archive LICENSE.md."
+          fi
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*.tar.gz assets/*.tar.gz.sha256
