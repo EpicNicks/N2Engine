@@ -37,6 +37,9 @@ void N2Engine::Math::InitializeSIMD()
     HAS_SUPPORT("AVX", HAS_AVX)
     HAS_SUPPORT("SSE4.1", HAS_SSE41)
     HAS_SUPPORT("SSE2", HAS_SSE2)
+#ifdef N2_MATH_NEON
+    std::cout << "NEON: Yes (aarch64 baseline)\n";
+#endif
 
     CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
 
@@ -46,7 +49,7 @@ void N2Engine::Math::InitializeSIMD()
     std::cout << "AVX2: " << (features.avx2 ? "Yes" : "No") << "\n";
 
     const SIMDLevel level = DetectSIMDLevel();
-    constexpr const char *levelNames[] = {"Scalar", "SSE2", "SSE4.1", "AVX"};
+    constexpr const char *levelNames[] = {"Scalar", "SSE2", "SSE4.1", "AVX", "NEON"};
     std::cout << "Math SIMD level: " << levelNames[static_cast<int>(level)] << "\n";
 
     SetSIMDLevel(level);

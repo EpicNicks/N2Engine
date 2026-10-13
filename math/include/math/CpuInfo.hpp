@@ -1,9 +1,15 @@
 #pragma once
 
-// The x86 SIMD code (SSE2, SSE4.1, AVX and CPUID) is compiled only for x86 targets. Other architectures (aarch64) run
-// the scalar implementations, which the SIMD ones must match within the test tolerances
+// The x86 SIMD code (SSE2, SSE4.1, AVX and CPUID) is compiled only for x86 targets. aarch64 compiles the NEON code
+// instead (NEON is baseline there, so there is no runtime detection). Both must match the scalar implementations
+// within the test tolerances. Other architectures run the scalar implementations
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 #define N2_MATH_X86
+#endif
+
+// <arm_neon.h> intrinsics, for GCC and Clang targeting aarch64 (MSVC ARM64 defines _M_ARM64 only and stays scalar)
+#if defined(__aarch64__) && defined(__ARM_NEON) && !defined(N2_MATH_X86)
+#define N2_MATH_NEON
 #endif
 
 // The SSE4.1 implementations are compiled when the build targets SSE4.1. MSVC never defines __SSE4_1__, but
@@ -19,6 +25,10 @@
 #elif defined(__GNUC__) || defined(__clang__)
 #include <cpuid.h>
 #endif
+#endif
+
+#ifdef N2_MATH_NEON
+#include <arm_neon.h>
 #endif
 
 namespace N2Engine::Math
@@ -116,19 +126,25 @@ namespace CPUInfo
 
 namespace N2Engine::Math
 {
-    // Instruction set tiers the math types can dispatch to, lowest to highest. Each tier also uses
-    // everything below it
+    // Instruction set tiers the math types can dispatch to. Scalar, SSE2, SSE41 and AVX are the x86 tiers, lowest to
+    // highest, each also using everything below it. NEON is the aarch64 tier: it is not above or below the x86 tiers,
+    // since only one family exists on any target
     enum class SIMDLevel
     {
         Scalar,
         SSE2,
         SSE41,
-        AVX
+        AVX,
+        NEON
     };
 
-    // The highest tier this CPU (and OS, for AVX) supports. Detected once, since SetSIMDLevel checks it on every call
+    // The highest tier this CPU (and OS, for AVX) supports: NEON on aarch64, which needs no detection. Detected once
+    // on x86, since SetSIMDLevel checks it on every call
     inline SIMDLevel DetectSIMDLevel()
     {
+#ifdef N2_MATH_NEON
+        return SIMDLevel::NEON;
+#else
         static const SIMDLevel level = []
         {
             const CPUInfo::CPUFeatures features = CPUInfo::DetectCPUFeatures();
@@ -141,12 +157,31 @@ namespace N2Engine::Math
             return SIMDLevel::Scalar;
         }();
         return level;
+#endif
     }
 
-    // A requested tier, lowered to the highest one this CPU supports
+    // Whether this target can run the tier (Scalar always can)
+    inline bool IsSIMDLevelSupported(const SIMDLevel level)
+    {
+        if (level == SIMDLevel::Scalar)
+            return true;
+#ifdef N2_MATH_NEON
+        return level == SIMDLevel::NEON;
+#else
+        return level != SIMDLevel::NEON && level <= DetectSIMDLevel();
+#endif
+    }
+
+    // A requested tier, lowered to the highest one this target supports. On x86 a tier above the CPU's is lowered to
+    // the CPU's. A tier of the other family (an x86 tier on aarch64, NEON on x86) does not exist here and becomes Scalar
     inline SIMDLevel ClampSIMDLevel(const SIMDLevel requested)
     {
-        const SIMDLevel supported = DetectSIMDLevel();
-        return requested < supported ? requested : supported;
+        if (IsSIMDLevelSupported(requested))
+            return requested;
+#ifdef N2_MATH_NEON
+        return SIMDLevel::Scalar;
+#else
+        return requested == SIMDLevel::NEON ? SIMDLevel::Scalar : DetectSIMDLevel();
+#endif
     }
 }

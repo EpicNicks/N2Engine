@@ -38,6 +38,26 @@ void Vector3::SetSIMDLevel(const SIMDLevel requested)
     if (level == SIMDLevel::Scalar)
         return;
 
+#ifdef N2_MATH_NEON
+    // aarch64: the only non-scalar tier is NEON, and it accelerates every operation
+    add_func = &AddNEON;
+    sub_func = &SubNEON;
+    scalar_mul_func = &ScalarMulNEON;
+    scalar_div_func = &ScalarDivNEON;
+    dot_func = &DotNEON;
+    cross_func = &CrossNEON;
+    length_func = &LengthNEON;
+    normalize_func = &NormalizeNEON;
+    distance_func = &DistanceNEON;
+    min_func = &MinNEON;
+    max_func = &MaxNEON;
+    floor_func = &FloorNEON;
+    ceil_func = &CeilNEON;
+    round_func = &RoundNEON;
+    abs_func = &AbsNEON;
+    return;
+#endif
+
     // Floor/Ceil/Round have no SSE2 versions (they need SSE4.1's round instruction)
     add_func = &AddSSE2;
     sub_func = &SubSSE2;
@@ -72,6 +92,13 @@ template class std::vector<Vector3>;
 
 void Vector3::AddBatch(const Vector3 *a, const Vector3 *b, Vector3 *result, size_t count)
 {
+#ifdef N2_MATH_NEON
+    if (simd_level == SIMDLevel::NEON)
+    {
+        AddBatchNEON(a, b, result, count);
+        return;
+    }
+#endif
 #ifdef __AVX__
     if (simd_level == SIMDLevel::AVX)
     {
@@ -88,6 +115,13 @@ void Vector3::AddBatch(const Vector3 *a, const Vector3 *b, Vector3 *result, size
 
 void Vector3::SubBatch(const Vector3 *a, const Vector3 *b, Vector3 *result, size_t count)
 {
+#ifdef N2_MATH_NEON
+    if (simd_level == SIMDLevel::NEON)
+    {
+        SubBatchNEON(a, b, result, count);
+        return;
+    }
+#endif
     // Similar to AddBatch but with subtraction
     for (size_t i = 0; i < count; ++i)
     {
@@ -97,6 +131,13 @@ void Vector3::SubBatch(const Vector3 *a, const Vector3 *b, Vector3 *result, size
 
 void Vector3::ScalarMulBatch(const Vector3 *input, Vector3 *output, float scalar, size_t count)
 {
+#ifdef N2_MATH_NEON
+    if (simd_level == SIMDLevel::NEON)
+    {
+        ScalarMulBatchNEON(input, output, scalar, count);
+        return;
+    }
+#endif
 #ifdef __AVX__
     if (simd_level == SIMDLevel::AVX)
     {
@@ -112,6 +153,13 @@ void Vector3::ScalarMulBatch(const Vector3 *input, Vector3 *output, float scalar
 
 void Vector3::DotBatch(const Vector3 *a, const Vector3 *b, float *result, size_t count)
 {
+#ifdef N2_MATH_NEON
+    if (simd_level == SIMDLevel::NEON)
+    {
+        DotBatchNEON(a, b, result, count);
+        return;
+    }
+#endif
 #ifdef __AVX__
     if (simd_level == SIMDLevel::AVX)
     {
@@ -127,6 +175,13 @@ void Vector3::DotBatch(const Vector3 *a, const Vector3 *b, float *result, size_t
 
 void Vector3::NormalizeBatch(Vector3 *vectors, size_t count)
 {
+#ifdef N2_MATH_NEON
+    if (simd_level == SIMDLevel::NEON)
+    {
+        NormalizeBatchNEON(vectors, count);
+        return;
+    }
+#endif
 #ifdef __AVX__
     if (simd_level == SIMDLevel::AVX)
     {
@@ -142,6 +197,13 @@ void Vector3::NormalizeBatch(Vector3 *vectors, size_t count)
 
 void Vector3::CrossBatch(const Vector3 *a, const Vector3 *b, Vector3 *result, size_t count)
 {
+#ifdef N2_MATH_NEON
+    if (simd_level == SIMDLevel::NEON)
+    {
+        CrossBatchNEON(a, b, result, count);
+        return;
+    }
+#endif
     // Cross product is complex for AVX, so use SSE for now
     for (size_t i = 0; i < count; ++i)
     {

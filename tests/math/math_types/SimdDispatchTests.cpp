@@ -39,6 +39,8 @@ namespace
             return "SSE41";
         case SIMDLevel::AVX:
             return "AVX";
+        case SIMDLevel::NEON:
+            return "NEON";
         }
         return "Unknown";
     }
@@ -109,6 +111,89 @@ namespace
         for (size_t i = 0; i < 4; ++i)
             ExpectIdentical(actual[i], expected[i], what + "[" + std::to_string(i) + "]");
     }
+
+    // Like ExpectClose, but NaN must meet NaN and an infinity must match exactly: EXPECT_NEAR fails on both. The
+    // scale only counts the finite components, since an infinite one would make every tolerance infinite
+    void ExpectCloseOrSpecial(const float actual, const float expected, const std::string &what, const float scale = 1.0f)
+    {
+        if (std::isnan(expected) || std::isinf(expected))
+            ExpectIdentical(actual, expected, what);
+        else
+            ExpectClose(actual, expected, what, scale);
+    }
+
+    float FiniteScale(const std::initializer_list<float> values)
+    {
+        float scale = 0.0f;
+        for (const float value : values)
+        {
+            if (std::isfinite(value))
+                scale = std::max(scale, std::abs(value));
+        }
+        return scale;
+    }
+
+    void ExpectCloseOrSpecial(const Vector3 &actual, const Vector3 &expected, const std::string &what)
+    {
+        const float scale = FiniteScale({expected.x, expected.y, expected.z});
+        for (size_t i = 0; i < 3; ++i)
+            ExpectCloseOrSpecial(actual[i], expected[i], what + "[" + std::to_string(i) + "]", scale);
+    }
+
+    void ExpectCloseOrSpecial(const Vector4 &actual, const Vector4 &expected, const std::string &what)
+    {
+        const float scale = FiniteScale({expected.w, expected.x, expected.y, expected.z});
+        for (size_t i = 0; i < 4; ++i)
+            ExpectCloseOrSpecial(actual[i], expected[i], what + "[" + std::to_string(i) + "]", scale);
+    }
+
+    // Restores the default (scalar) dispatch even when an assertion fails and returns early
+    struct ScalarDispatchGuard
+    {
+        ~ScalarDispatchGuard()
+        {
+            SetSIMDLevel(SIMDLevel::Scalar);
+        }
+    };
+
+    // Deterministic, varied values with garbage in Vector3's padding lane
+    std::vector<Vector3> VectorPool3(const size_t size)
+    {
+        std::vector<Vector3> pool;
+        for (size_t i = 0; i < size; ++i)
+        {
+            const float f = static_cast<float>(i);
+            Vector3 v(std::sin(f * 1.3f) * 10.0f, std::cos(f * 0.7f) * 5.0f, f * 0.25f - 3.0f);
+            v.w = 100.0f + f;
+            pool.push_back(v);
+        }
+        pool[3] = Vector3(0.0f, 0.0f, 0.0f);
+        pool[9] = Vector3(1e-6f, -1e-6f, 1e-6f);
+        pool[11] = Vector3(-0.0f, -0.0f, -0.0f);
+        return pool;
+    }
+
+    std::vector<Vector4> VectorPool4(const size_t size)
+    {
+        std::vector<Vector4> pool;
+        for (size_t i = 0; i < size; ++i)
+        {
+            const float f = static_cast<float>(i);
+            pool.emplace_back(std::sin(f * 1.3f) * 10.0f, std::cos(f * 0.7f) * 5.0f, f * 0.25f - 3.0f, std::sin(f) - 0.5f);
+        }
+        pool[3] = Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+        pool[9] = Vector4(1e-6f, -1e-6f, 1e-6f, -1e-6f);
+        pool[11] = Vector4(-0.0f, -0.0f, -0.0f, -0.0f);
+        return pool;
+    }
+
+    constexpr size_t BATCH_POOL_SIZE = 64;
+
+    // Counts around the NEON four-vector and the AVX two- and eight-vector batch widths, including none
+    constexpr size_t BATCH_COUNTS[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 15, 16, 17, 31};
+
+    // Input arrays start at these element offsets into the pool, so they do not start at the pool's first element
+    constexpr size_t BATCH_OFFSETS[] = {0, 1, 3};
 
     template <typename T>
     void ExpectIdentical(const std::vector<T> &actual, const std::vector<T> &expected, const std::string &what)
@@ -250,7 +335,7 @@ protected:
     {
         SetSIMDLevel(SIMDLevel::Scalar);
         // SetSIMDLevel would clamp an unsupported tier, so the test would silently cover a lower one
-        if (DetectSIMDLevel() < GetParam())
+        if (!IsSIMDLevelSupported(GetParam()))
             GTEST_SKIP() << "CPU does not support " << LevelName(GetParam());
     }
 
@@ -276,6 +361,15 @@ protected:
         ExpectClose(actual, expected, what);
     }
 
+    // For inputs with NaN and infinities, where ExpectClose cannot compare
+    template <typename F>
+    void ExpectSimilarToScalar(F compute, const std::string &what)
+    {
+        const auto expected = Under(SIMDLevel::Scalar, compute);
+        const auto actual = Under(GetParam(), compute);
+        ExpectCloseOrSpecial(actual, expected, what);
+    }
+
     template <typename F>
     void ExpectIdenticalToScalar(F compute, const std::string &what)
     {
@@ -284,6 +378,15 @@ protected:
         ExpectIdentical(actual, expected, what);
     }
 };
+
+TEST_P(SimdDispatchTest, SelectsRequestedLevel)
+{
+    // The tests below only cover the tier they name if the dispatch really switched to it
+    SetSIMDLevel(GetParam());
+    EXPECT_EQ(Vector3::GetSIMDLevel(), GetParam());
+    EXPECT_EQ(Vector4::GetSIMDLevel(), GetParam());
+    EXPECT_EQ(ClampSIMDLevel(GetParam()), GetParam());
+}
 
 TEST_P(SimdDispatchTest, KnownValues)
 {
@@ -433,6 +536,196 @@ TEST_P(SimdDispatchTest, Vector3BatchOperations)
         Vector3::NormalizeBatch(result.data(), result.size());
         return result;
     }, "NormalizeBatch");
+}
+
+TEST_P(SimdDispatchTest, Vector3EdgeCaseOperations)
+{
+    // Zero, signed zeros, a vector below the normalize threshold, infinities and NaN in each lane. Whatever the scalar
+    // code gives (NaN included) the tier must give too
+    std::vector<Vector3> samples = EdgeCaseVectors();
+    samples.emplace_back(0.0f, 0.0f, 0.0f);
+    samples.emplace_back(-0.0f, -0.0f, -0.0f);
+    samples.emplace_back(1e-6f, -1e-6f, 1e-6f);
+    samples.emplace_back(1e-30f, 0.0f, -1e-30f);
+    samples.emplace_back(3.0f, 4.0f, 12.0f);
+
+    for (size_t i = 0; i < samples.size(); ++i)
+    {
+        const Vector3 &a = samples[i];
+        const std::string at = " a=" + std::to_string(i);
+
+        ExpectSimilarToScalar([&] { return -a; }, "Negate" + at);
+        ExpectSimilarToScalar([&] { return a * 2.5f; }, "ScalarMul" + at);
+        ExpectSimilarToScalar([&] { return a.Length(); }, "Length" + at);
+        ExpectSimilarToScalar([&] { return a.Normalized(); }, "Normalized" + at);
+
+        for (size_t j = 0; j < samples.size(); ++j)
+        {
+            const Vector3 &b = samples[j];
+            const std::string ab = at + " b=" + std::to_string(j);
+
+            ExpectSimilarToScalar([&] { return a + b; }, "Add" + ab);
+            ExpectSimilarToScalar([&] { return a - b; }, "Sub" + ab);
+            ExpectSimilarToScalar([&] { return a.Dot(b); }, "Dot" + ab);
+            ExpectSimilarToScalar([&] { return a.Cross(b); }, "Cross" + ab);
+            ExpectSimilarToScalar([&] { return a.Distance(b); }, "Distance" + ab);
+        }
+    }
+
+    // Short, zero and negative-zero vectors normalize to exactly Zero
+    SetSIMDLevel(GetParam());
+    ExpectIdentical(Vector3(0.0f, 0.0f, 0.0f).Normalized(), Vector3::Zero, "Normalized zero");
+    ExpectIdentical(Vector3(-0.0f, -0.0f, -0.0f).Normalized(), Vector3::Zero, "Normalized negative zero");
+    ExpectIdentical(Vector3(1e-6f, -1e-6f, 1e-6f).Normalized(), Vector3::Zero, "Normalized tiny");
+    ExpectIdentical(Vector3(1.0f, 2.0f, 3.0f).Cross(Vector3(1.0f, 2.0f, 3.0f)), Vector3::Zero, "Cross self");
+    ExpectIdentical(Vector3(1.0f, 0.0f, 0.0f).Cross(Vector3(0.0f, 1.0f, 0.0f)), Vector3(0.0f, 0.0f, 1.0f), "Cross x y");
+
+    // The padding lane is zero in every result, whatever the inputs hold there
+    Vector3 padded(1.0f, 2.0f, 3.0f);
+    padded.w = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_EQ((padded + padded).w, 0.0f);
+    EXPECT_EQ((padded * 2.0f).w, 0.0f);
+    EXPECT_EQ(padded.Cross(padded).w, 0.0f);
+    EXPECT_EQ(padded.Normalized().w, 0.0f);
+    EXPECT_EQ(Vector3::Min(padded, padded).w, 0.0f);
+    EXPECT_EQ(padded.Round().w, 0.0f);
+    EXPECT_FLOAT_EQ(padded.Dot(padded), 14.0f);
+}
+
+TEST_P(SimdDispatchTest, Vector4EdgeCaseOperations)
+{
+    std::vector<Vector4> samples = EdgeCaseVectors4();
+    samples.emplace_back(0.0f, 0.0f, 0.0f, 0.0f);
+    samples.emplace_back(-0.0f, -0.0f, -0.0f, -0.0f);
+    samples.emplace_back(1e-6f, -1e-6f, 1e-6f, 1e-6f);
+    samples.emplace_back(1e-30f, 0.0f, -1e-30f, 0.0f);
+
+    for (size_t i = 0; i < samples.size(); ++i)
+    {
+        const Vector4 &a = samples[i];
+        const std::string at = " a=" + std::to_string(i);
+
+        ExpectSimilarToScalar([&] { return a * 2.5f; }, "ScalarMul" + at);
+        ExpectSimilarToScalar([&] { return a.Length(); }, "Length" + at);
+        ExpectSimilarToScalar([&] { return a.Normalized(); }, "Normalized" + at);
+
+        for (size_t j = 0; j < samples.size(); ++j)
+        {
+            const Vector4 &b = samples[j];
+            const std::string ab = at + " b=" + std::to_string(j);
+
+            ExpectSimilarToScalar([&] { return a + b; }, "Add" + ab);
+            ExpectSimilarToScalar([&] { return a - b; }, "Sub" + ab);
+            ExpectSimilarToScalar([&] { return a.Scale(b); }, "Scale" + ab);
+            ExpectSimilarToScalar([&] { return a.Dot(b); }, "Dot" + ab);
+        }
+    }
+
+    SetSIMDLevel(GetParam());
+    ExpectIdentical(Vector4(0.0f, 0.0f, 0.0f, 0.0f).Normalized(), Vector4::Zero, "Normalized zero");
+    ExpectIdentical(Vector4(-0.0f, -0.0f, -0.0f, -0.0f).Normalized(), Vector4::Zero, "Normalized negative zero");
+    ExpectIdentical(Vector4(1e-6f, -1e-6f, 1e-6f, 1e-6f).Normalized(), Vector4::Zero, "Normalized tiny");
+}
+
+TEST_P(SimdDispatchTest, Vector3BatchCountsAndOffsets)
+{
+    // Every count around the batch widths, on arrays that start part-way into the pool, with two sentinel elements
+    // after the last result that must stay untouched (the scalar run leaves them, so any write shows as a mismatch)
+    const std::vector<Vector3> pool = VectorPool3(BATCH_POOL_SIZE);
+    const Vector3 sentinel(99.0f, 98.0f, 97.0f);
+
+    for (const size_t count : BATCH_COUNTS)
+    {
+        for (const size_t offset : BATCH_OFFSETS)
+        {
+            const Vector3 *a = pool.data() + offset;
+            const Vector3 *b = pool.data() + 20 + offset;
+            const std::string at = " count=" + std::to_string(count) + " offset=" + std::to_string(offset);
+
+            const auto vectorResult = [&](auto batch) {
+                std::vector<Vector3> result(count + 2, sentinel);
+                batch(result.data());
+                return result;
+            };
+
+            ExpectMatchesScalar([&] { return vectorResult([&](Vector3 *out) { Vector3::AddBatch(a, b, out, count); }); }, "AddBatch" + at);
+            ExpectMatchesScalar([&] { return vectorResult([&](Vector3 *out) { Vector3::SubBatch(a, b, out, count); }); }, "SubBatch" + at);
+            ExpectMatchesScalar([&] { return vectorResult([&](Vector3 *out) { Vector3::CrossBatch(a, b, out, count); }); }, "CrossBatch" + at);
+            ExpectMatchesScalar([&] { return vectorResult([&](Vector3 *out) { Vector3::ScalarMulBatch(a, out, 0.75f, count); }); }, "ScalarMulBatch" + at);
+            ExpectMatchesScalar([&] {
+                std::vector<float> result(count + 2, -5.0f);
+                Vector3::DotBatch(a, b, result.data(), count);
+                return result;
+            }, "DotBatch" + at);
+
+            // In place: the output is the input
+            ExpectMatchesScalar([&] {
+                std::vector<Vector3> result(a, a + count);
+                result.insert(result.end(), 2, sentinel);
+                Vector3::NormalizeBatch(result.data(), count);
+                return result;
+            }, "NormalizeBatch" + at);
+            ExpectMatchesScalar([&] {
+                std::vector<Vector3> result(a, a + count);
+                result.insert(result.end(), 2, sentinel);
+                Vector3::AddBatch(result.data(), b, result.data(), count);
+                return result;
+            }, "AddBatch in place" + at);
+            ExpectMatchesScalar([&] {
+                std::vector<Vector3> result(a, a + count);
+                result.insert(result.end(), 2, sentinel);
+                Vector3::ScalarMulBatch(result.data(), result.data(), -2.5f, count);
+                return result;
+            }, "ScalarMulBatch in place" + at);
+        }
+    }
+}
+
+TEST_P(SimdDispatchTest, Vector4BatchCountsAndOffsets)
+{
+    const std::vector<Vector4> pool = VectorPool4(BATCH_POOL_SIZE);
+    const Vector4 sentinel(99.0f, 98.0f, 97.0f, 96.0f);
+
+    for (const size_t count : BATCH_COUNTS)
+    {
+        for (const size_t offset : BATCH_OFFSETS)
+        {
+            const Vector4 *a = pool.data() + offset;
+            const Vector4 *b = pool.data() + 20 + offset;
+            const std::string at = " count=" + std::to_string(count) + " offset=" + std::to_string(offset);
+
+            const auto vectorResult = [&](auto batch) {
+                std::vector<Vector4> result(count + 2, sentinel);
+                batch(result.data());
+                return result;
+            };
+            const auto floatResult = [&](auto batch) {
+                std::vector<float> result(count + 2, -5.0f);
+                batch(result.data());
+                return result;
+            };
+
+            ExpectMatchesScalar([&] { return vectorResult([&](Vector4 *out) { Vector4::AddBatch(a, b, out, count); }); }, "AddBatch" + at);
+            ExpectMatchesScalar([&] { return vectorResult([&](Vector4 *out) { Vector4::SubBatch(a, b, out, count); }); }, "SubBatch" + at);
+            ExpectMatchesScalar([&] { return vectorResult([&](Vector4 *out) { Vector4::ScalarMulBatch(a, out, 0.75f, count); }); }, "ScalarMulBatch" + at);
+            ExpectMatchesScalar([&] { return floatResult([&](float *out) { Vector4::DotBatch(a, b, out, count); }); }, "DotBatch" + at);
+            ExpectMatchesScalar([&] { return floatResult([&](float *out) { Vector4::LengthBatch(a, out, count); }); }, "LengthBatch" + at);
+
+            // In place: the output is the input
+            ExpectMatchesScalar([&] {
+                std::vector<Vector4> result(a, a + count);
+                result.insert(result.end(), 2, sentinel);
+                Vector4::NormalizeBatch(result.data(), count);
+                return result;
+            }, "NormalizeBatch" + at);
+            ExpectMatchesScalar([&] {
+                std::vector<Vector4> result(a, a + count);
+                result.insert(result.end(), 2, sentinel);
+                Vector4::AddBatch(result.data(), b, result.data(), count);
+                return result;
+            }, "AddBatch in place" + at);
+        }
+    }
 }
 
 TEST_P(SimdDispatchTest, Vector4Operations)
@@ -614,9 +907,74 @@ TEST_P(SimdDispatchTest, Matrix3Operations)
     }
 }
 
+// The tiers this target can have: the x86 tiers on x86, NEON on aarch64 (the other family's tiers are clamped to
+// scalar there, and a test for them would silently cover scalar)
+#ifdef N2_MATH_NEON
+INSTANTIATE_TEST_SUITE_P(SimdLevels, SimdDispatchTest,
+                         ::testing::Values(SIMDLevel::NEON),
+                         [](const ::testing::TestParamInfo<SIMDLevel> &info) { return LevelName(info.param); });
+#else
 INSTANTIATE_TEST_SUITE_P(SimdLevels, SimdDispatchTest,
                          ::testing::Values(SIMDLevel::SSE2, SIMDLevel::SSE41, SIMDLevel::AVX),
                          [](const ::testing::TestParamInfo<SIMDLevel> &info) { return LevelName(info.param); });
+#endif
+
+// ============================================================================
+// Tier selection and clamping
+// ============================================================================
+
+TEST(SimdLevelTest, DetectedLevelMatchesTheTarget)
+{
+#ifdef N2_MATH_NEON
+    // NEON is baseline on aarch64, so the arm64 CI job runs every SimdLevels test below at the NEON tier
+    EXPECT_EQ(DetectSIMDLevel(), SIMDLevel::NEON);
+    EXPECT_TRUE(IsSIMDLevelSupported(SIMDLevel::NEON));
+    EXPECT_FALSE(IsSIMDLevelSupported(SIMDLevel::SSE2));
+    EXPECT_FALSE(IsSIMDLevelSupported(SIMDLevel::SSE41));
+    EXPECT_FALSE(IsSIMDLevelSupported(SIMDLevel::AVX));
+#else
+    EXPECT_NE(DetectSIMDLevel(), SIMDLevel::NEON);
+    EXPECT_FALSE(IsSIMDLevelSupported(SIMDLevel::NEON));
+#endif
+    EXPECT_TRUE(IsSIMDLevelSupported(SIMDLevel::Scalar));
+    EXPECT_TRUE(IsSIMDLevelSupported(DetectSIMDLevel()));
+}
+
+TEST(SimdLevelTest, ClampLowersToWhatTheTargetSupports)
+{
+    EXPECT_EQ(ClampSIMDLevel(SIMDLevel::Scalar), SIMDLevel::Scalar);
+#ifdef N2_MATH_NEON
+    EXPECT_EQ(ClampSIMDLevel(SIMDLevel::NEON), SIMDLevel::NEON);
+    // The x86 tiers do not exist on aarch64
+    EXPECT_EQ(ClampSIMDLevel(SIMDLevel::SSE2), SIMDLevel::Scalar);
+    EXPECT_EQ(ClampSIMDLevel(SIMDLevel::SSE41), SIMDLevel::Scalar);
+    EXPECT_EQ(ClampSIMDLevel(SIMDLevel::AVX), SIMDLevel::Scalar);
+#else
+    // NEON does not exist on x86; a request above the CPU's tier lowers to the CPU's
+    EXPECT_EQ(ClampSIMDLevel(SIMDLevel::NEON), SIMDLevel::Scalar);
+    EXPECT_EQ(ClampSIMDLevel(SIMDLevel::AVX), DetectSIMDLevel());
+    EXPECT_EQ(ClampSIMDLevel(DetectSIMDLevel()), DetectSIMDLevel());
+#endif
+}
+
+TEST(SimdLevelTest, SetSIMDLevelAppliesTheClampedTier)
+{
+    const ScalarDispatchGuard guard;
+    for (const SIMDLevel requested : {SIMDLevel::Scalar, SIMDLevel::SSE2, SIMDLevel::SSE41, SIMDLevel::AVX, SIMDLevel::NEON})
+    {
+        SetSIMDLevel(requested);
+        EXPECT_EQ(Vector3::GetSIMDLevel(), ClampSIMDLevel(requested)) << LevelName(requested);
+        EXPECT_EQ(Vector4::GetSIMDLevel(), ClampSIMDLevel(requested)) << LevelName(requested);
+    }
+}
+
+TEST(SimdLevelTest, InitializeSIMDSelectsTheDetectedTier)
+{
+    const ScalarDispatchGuard guard;
+    InitializeSIMD();
+    EXPECT_EQ(Vector3::GetSIMDLevel(), DetectSIMDLevel());
+    EXPECT_EQ(Vector4::GetSIMDLevel(), DetectSIMDLevel());
+}
 
 // ============================================================================
 // Vector2 batch normalization (compile-time AVX, no runtime dispatch)
@@ -678,6 +1036,75 @@ TEST(Vector2BatchTest, NormalizeBatchHandlesShortCounts)
         {
             EXPECT_NEAR(batch[i].x, 0.6f, 1e-6f) << "count " << count << " index " << i;
             EXPECT_NEAR(batch[i].y, -0.8f, 1e-6f) << "count " << count << " index " << i;
+        }
+    }
+}
+
+// Every count around the batch widths (two per NEON register, four per AVX register), for the batches the tests above
+// do not cover. Starting at element 1 puts the data at 8 bytes past 16-byte alignment (Vector2 only needs 4)
+TEST(Vector2BatchTest, BatchesMatchScalarForEveryCountAndOffset)
+{
+    std::vector<Vector2> pool;
+    for (size_t i = 0; i < 40; ++i)
+    {
+        const float f = static_cast<float>(i);
+        pool.emplace_back(std::sin(f * 1.7f) * 8.0f, std::cos(f * 0.9f) * 3.0f - 1.0f);
+    }
+    pool[2] = Vector2(0.0f, 0.0f);
+    pool[5] = Vector2(1e-6f, -1e-6f);
+    pool[7] = Vector2(-0.0f, -0.0f);
+
+    const Vector2 sentinel(99.0f, 98.0f);
+    for (size_t count = 0; count <= 11; ++count)
+    {
+        for (const size_t offset : {size_t{0}, size_t{1}})
+        {
+            const Vector2 *a = pool.data() + offset;
+            const Vector2 *b = pool.data() + 15 + offset;
+            const std::string at = " count=" + std::to_string(count) + " offset=" + std::to_string(offset);
+
+            std::vector<Vector2> sum(count + 2, sentinel), difference(count + 2, sentinel), scaled(count + 2, sentinel);
+            std::vector<float> dots(count + 2, -5.0f), lengths(count + 2, -5.0f);
+            Vector2::AddBatch(a, b, sum.data(), count);
+            Vector2::SubBatch(a, b, difference.data(), count);
+            Vector2::ScalarMulBatch(a, scaled.data(), -1.5f, count);
+            Vector2::DotBatch(a, b, dots.data(), count);
+            Vector2::LengthBatch(a, lengths.data(), count);
+
+            std::vector<Vector2> normalized(a, a + count);
+            normalized.insert(normalized.end(), 2, sentinel);
+            Vector2::NormalizeBatch(normalized.data(), count);
+
+            for (size_t i = 0; i < count + 2; ++i)
+            {
+                const std::string where = at + " index=" + std::to_string(i);
+                if (i >= count)
+                {
+                    // Past the last element nothing is written
+                    EXPECT_EQ(sum[i].x, sentinel.x) << where;
+                    EXPECT_EQ(difference[i].y, sentinel.y) << where;
+                    EXPECT_EQ(scaled[i].x, sentinel.x) << where;
+                    EXPECT_EQ(dots[i], -5.0f) << where;
+                    EXPECT_EQ(lengths[i], -5.0f) << where;
+                    EXPECT_EQ(normalized[i].x, sentinel.x) << where;
+                    continue;
+                }
+
+                const Vector2 expectedSum = a[i] + b[i];
+                const Vector2 expectedDifference = a[i] - b[i];
+                const Vector2 expectedScaled = a[i] * -1.5f;
+                const Vector2 expectedNormalized = a[i].Normalized();
+                ExpectClose(sum[i].x, expectedSum.x, "Add x" + where);
+                ExpectClose(sum[i].y, expectedSum.y, "Add y" + where);
+                ExpectClose(difference[i].x, expectedDifference.x, "Sub x" + where);
+                ExpectClose(difference[i].y, expectedDifference.y, "Sub y" + where);
+                ExpectClose(scaled[i].x, expectedScaled.x, "ScalarMul x" + where);
+                ExpectClose(scaled[i].y, expectedScaled.y, "ScalarMul y" + where);
+                ExpectClose(dots[i], a[i].Dot(b[i]), "Dot" + where);
+                ExpectClose(lengths[i], a[i].Length(), "Length" + where);
+                ExpectClose(normalized[i].x, expectedNormalized.x, "Normalize x" + where);
+                ExpectClose(normalized[i].y, expectedNormalized.y, "Normalize y" + where);
+            }
         }
     }
 }
