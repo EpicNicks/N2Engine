@@ -239,16 +239,14 @@ jobs:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
 
-  # Informational only (continue-on-error, never required): GCC 14 builds the code but miscompiles sol2's bindings.
-  # KNOWN OPEN BUG: sol2 names function-object metatables from __PRETTY_FUNCTION__, where GCC prints every lambda of one
-  # signature in one function as the same "<lambda(int)>", so 3 Lua tests fail (LuaLayerTest.NamesAndMasks,
-  # LuaPickingTest.MouseFunctionsWithoutAWindow, LuaPickingTest.RaycastBindingsHandleBadInput; e.g. Layers.MaskOf runs
-  # LayerToName). GCC-built hosts are not supported until that is fixed.
+  # The Linux build with GCC 14 (the distribution compiler): the same build, tests and editor host smoke tests as the Clang
+  # job, so a GCC-built host is checked too. Not a required check (branch protection decides). GCC prints every lambda of
+  # one signature in one function as the same name, which made sol2 share one metatable between them; the vendored sol2
+  # carries a marked patch for that (see the "N2Engine local patch" in external/sol2/include/sol/sol.hpp).
   linux-gcc:
-    name: linux (Release, x86_64, GCC 14, informational - known sol2 bug)
+    name: linux (Release, x86_64, GCC 14)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    continue-on-error: true
     env:
       CC: gcc-14
       CXX: g++-14
@@ -270,6 +268,18 @@ jobs:
         run: ctest --test-dir build --output-on-failure
         env:
           ALSOFT_DRIVERS: "null"
+
+      - name: Editor host smoke test
+        run: python3 tests/smoke/editor_host_smoke.py --scenario host --config Release --exe build/bin/N2EditorHost
+        env:
+          ALSOFT_DRIVERS: "null"
+          PYTHONDONTWRITEBYTECODE: "1"
+
+      - name: Editor host TLS smoke test
+        run: python3 tests/smoke/editor_host_smoke.py --scenario tls --config Release --exe build/bin/N2EditorHost
+        env:
+          ALSOFT_DRIVERS: "null"
+          PYTHONDONTWRITEBYTECODE: "1"
 
   # The container image (deploy/Dockerfile) on x86_64: builds it exactly as the Linux Clang job builds the host, checks the
   # runtime image has every shared library (the Dockerfile's ldd step), makes a project in a volume, starts the container
