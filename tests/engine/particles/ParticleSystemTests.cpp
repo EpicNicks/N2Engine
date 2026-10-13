@@ -586,6 +586,40 @@ TEST_F(ParticleSystemTest, ASystemOutlivingItsPhysicsBackendIsInertNotACrash)
     EXPECT_NO_THROW(system->OnDestroy());
 }
 
+TEST_F(ParticleSystemTest, AReplacedPhysicsBackendMakesAPhysXSystemRestartOnTheCpuWithOneWarning)
+{
+    Application::GetInstance().Set3DPhysicsBackend(std::make_unique<TestSupport::FakePhysicsBackend>(true));
+    const int gpuBefore = Particles::ParticleUsage::GetCount(true);
+    const int cpuBefore = Particles::ParticleUsage::GetCount(false);
+
+    ParticleSystem *system = Make();
+    system->OnAttach();
+    ASSERT_EQ(system->GetActiveBackendName(), "PhysX");
+    Step(system, 5);
+    ASSERT_GT(system->GetAliveCount(), 0u);
+    EXPECT_EQ(Particles::ParticleUsage::GetCount(true), gpuBefore + 1);
+
+    // The replacement has a particle backend of its own; the old handle must not reach it
+    auto second = std::make_unique<TestSupport::FakePhysicsBackend>(true);
+    TestSupport::FakePhysicsBackend *secondPtr = second.get();
+    Application::GetInstance().Set3DPhysicsBackend(std::move(second));
+
+    WarningCapture warnings;
+    Step(system, 5);
+
+    EXPECT_EQ(system->GetActiveBackendName(), "CPU");
+    EXPECT_EQ(secondPtr->gpu.created, 0);
+    EXPECT_EQ(secondPtr->gpu.destroyed, 0);
+    EXPECT_EQ(Particles::ParticleUsage::GetCount(true), gpuBefore);
+    EXPECT_EQ(Particles::ParticleUsage::GetCount(false), cpuBefore + 1);
+    EXPECT_GT(system->GetAliveCount(), 0u);
+    EXPECT_EQ(warnings.Count("physics backend changed"), 1);
+
+    system->OnDestroy();
+    EXPECT_EQ(secondPtr->gpu.destroyed, 0);
+    EXPECT_EQ(Particles::ParticleUsage::GetCount(false), cpuBefore);
+}
+
 // ---------------------------------------------------------------- physics and pause
 
 TEST_F(ParticleSystemTest, GravityIsTheWorldGravityTimesTheScale)

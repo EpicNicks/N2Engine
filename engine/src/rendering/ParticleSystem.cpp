@@ -26,11 +26,20 @@ namespace N2Engine::Rendering
         // The backend's own random stream differs from the emitter's, so a lifetime never mirrors a speed
         constexpr std::uint32_t kBackendSeedMix = 0x5BD1E995u;
 
-        // One warning per process for a renderer that can't draw particles, not one per frame or per system
-        bool FirstRenderWarning()
+        enum class RenderWarning
         {
-            static bool warned = false;
-            return !std::exchange(warned, true);
+            NoUnlitShader,
+            MaterialFailed,
+            MeshFailed,
+            Count
+        };
+
+        // One warning per process and kind for a renderer that can't draw particles, not one per frame or per system;
+        // each kind has its own flag so one failure never hides another
+        bool FirstRenderWarning(const RenderWarning kind)
+        {
+            static bool warned[static_cast<std::size_t>(RenderWarning::Count)] = {};
+            return !std::exchange(warned[static_cast<std::size_t>(kind)], true);
         }
     }
 
@@ -92,7 +101,9 @@ namespace N2Engine::Rendering
         {
             if (auto *physics = Application::GetInstance().Get3DPhysicsBackend())
             {
-                return physics->GetParticleBackend();
+                // Only the instance that made the handle knows it; a replacement backend has other systems
+                auto *gpu = physics->GetParticleBackend();
+                return gpu == _gpuOwner ? gpu : nullptr;
             }
         }
         return nullptr;
@@ -178,6 +189,7 @@ namespace N2Engine::Rendering
         if (selection.gpu)
         {
             _usingGpu = true;
+            _gpuOwner = selection.gpu;
             _handle = selection.gpu->CreateSystem(desc);
         }
         else
@@ -223,6 +235,40 @@ namespace N2Engine::Rendering
         _handle = Physics::kInvalidParticleSystem;
         _cpuBackend.reset();
         _usingGpu = false;
+        _gpuOwner = nullptr;
+    }
+
+    bool ParticleSystem::RecoverFromReplacedBackend()
+    {
+        // With no physics backend at all the system stays inert (documented); only a replacement is recovered from
+        if (!_usingGpu || _handle == Physics::kInvalidParticleSystem || !Application::GetInstance().Get3DPhysicsBackend() ||
+            Backend())
+        {
+            return false;
+        }
+        // The physics backend was replaced or removed: the handle belonged to the old one, which owns (or already
+        // freed) its particles, so it isn't destroyed here. The system restarts empty on the CPU backend.
+        Logger::Warn(std::format("ParticleSystem on '{}': the physics backend changed, so the PhysX system is dropped "
+                                 "and the system continues on the CPU (its particles are lost)",
+                                 GetGameObject().GetName()));
+        Particles::ParticleUsage::Remove(true);
+        _usingGpu = false;
+        _gpuOwner = nullptr;
+
+        Physics::ParticleSystemDesc desc;
+        desc.maxParticles = static_cast<std::uint32_t>(std::clamp(maxParticles, 0, kMaxParticlesLimit));
+        desc.seed = static_cast<std::uint32_t>(seed) ^ kBackendSeedMix;
+        desc.params = BuildParams();
+        _cpuBackend = std::make_unique<Particles::CpuParticleBackend>();
+        _handle = _cpuBackend->CreateSystem(desc);
+        if (_handle == Physics::kInvalidParticleSystem)
+        {
+            _cpuBackend.reset();
+            return true;
+        }
+        Particles::ParticleUsage::Add(false);
+        _warnedFull = false;
+        return true;
     }
 
     void ParticleSystem::OnDestroy()
@@ -233,6 +279,7 @@ namespace N2Engine::Rendering
 
     void ParticleSystem::OnFixedUpdate()
     {
+        RecoverFromReplacedBackend();
         auto *sim = Backend();
         if (!sim || _handle == Physics::kInvalidParticleSystem)
         {
@@ -411,7 +458,7 @@ namespace N2Engine::Rendering
         Renderer::Common::IShader *shader = renderer->GetStandardUnlitShader();
         if (!shader)
         {
-            if (FirstRenderWarning())
+            if (FirstRenderWarning(RenderWarning::NoUnlitShader))
             {
                 Logger::Warn(std::format("ParticleSystem: the {} has no unlit shader, so particles aren't drawn",
                                          renderer->GetRendererName()));
@@ -439,7 +486,7 @@ namespace N2Engine::Rendering
             _material = renderer->CreateMaterial(shader, _textureHandle.GetTexture());
             if (!_material)
             {
-                if (FirstRenderWarning())
+                if (FirstRenderWarning(RenderWarning::MaterialFailed))
                 {
                     Logger::Warn(std::format("ParticleSystem: the {} can't create the particle material, so particles "
                                              "aren't drawn", renderer->GetRendererName()));
@@ -469,7 +516,7 @@ namespace N2Engine::Rendering
             _mesh = renderer->CreateMesh(_meshData);
             if (!_mesh)
             {
-                if (FirstRenderWarning())
+                if (FirstRenderWarning(RenderWarning::MeshFailed))
                 {
                     Logger::Warn(std::format("ParticleSystem: the {} can't create the particle mesh, so particles "
                                              "aren't drawn", renderer->GetRendererName()));

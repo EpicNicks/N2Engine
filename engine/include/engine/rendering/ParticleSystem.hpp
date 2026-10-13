@@ -171,6 +171,9 @@ namespace N2Engine::Rendering
 
     private:
         void ReleaseSystem();
+        /// A PhysX-backed system whose physics backend was replaced drops its stale handle and restarts on the CPU
+        /// backend with one warning; true when it did
+        bool RecoverFromReplacedBackend();
         /// The backend simulating this system: the CPU one this component owns, or the physics backend's GPU one,
         /// asked for each time (it goes away with the physics backend); nullptr when there is none
         [[nodiscard]] Physics::IParticleBackend *Backend() const;
@@ -185,6 +188,7 @@ namespace N2Engine::Rendering
         std::unique_ptr<Particles::CpuParticleBackend> _cpuBackend; // owned when the CPU backend is the one in use
         Physics::ParticleSystemHandle _handle = Physics::kInvalidParticleSystem;
         bool _usingGpu = false;
+        Physics::IParticleBackend *_gpuOwner = nullptr; // the particle backend instance _handle belongs to; identity only
         Particles::ParticleEmitter _emitter;
         bool _playing = false;
         int _pendingBurst = 0; // asked for before the system started
