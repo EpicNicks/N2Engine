@@ -8927,6 +8927,7 @@ extern "C" {
 }
 #endif // MinGW is on some stuff
 #include <locale>
+#include <typeinfo>
 
 namespace sol { namespace detail {
 	inline constexpr std::array<string_view, 9> removals { { "{anonymous}",
@@ -8975,7 +8976,19 @@ namespace sol { namespace detail {
 
 	template <typename T, class seperator_mark = int>
 	inline std::string ctti_get_type_name() {
+#if defined(__GNUC__) && !defined(__clang__)
+		// N2Engine local patch (GCC lambda metatable collision): upstream sol2 3.2.3 returns the __PRETTY_FUNCTION__ name
+		// as is, but real GCC prints every lambda of one signature inside one function as the same "<lambda(int)>", so two
+		// such lambdas bound to Lua shared one metatable and Lua called the wrong one. For a name that mentions a lambda
+		// the compiler's unique mangled name (typeid) is appended. Clang and MSVC already print distinct lambda names and
+		// take the unchanged path below. Re-apply this block if sol2 is updated and still has the collision.
+		std::string name = ctti_get_type_name_from_sig(__PRETTY_FUNCTION__);
+		if (name.find("lambda(") != std::string::npos)
+			name.append("#").append(typeid(T).name());
+		return name;
+#else
 		return ctti_get_type_name_from_sig(__PRETTY_FUNCTION__);
+#endif
 	}
 #elif SOL_IS_ON(SOL_COMPILER_VCXX)
 	inline std::string ctti_get_type_name_from_sig(std::string name) {
