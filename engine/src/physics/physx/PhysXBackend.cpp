@@ -1,4 +1,7 @@
 #include "engine/physics/physx/PhysXBackend.hpp"
+#include "engine/particles/PbdParticleBackend.hpp"
+#include "engine/physics/physx/PhysXGpuSupport.hpp" // N2ENGINE_PHYSX_GPU_PROBE
+#include "engine/physics/physx/PhysXPbdDriver.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/ICollider.hpp"
 #include "engine/GameObject.hpp"
@@ -30,13 +33,6 @@
 
 using namespace physx;
 
-// The GPU probe talks to PhysX's CUDA entry points. Only Windows has a GPU library (PhysXGpu_64.dll ships in the
-// Windows PhysX package); the Linux static libraries are CPU-only, so there nothing CUDA-related is ever called.
-#if defined(_WIN32) && PX_SUPPORT_GPU_PHYSX
-#define N2ENGINE_PHYSX_GPU_PROBE 1
-#else
-#define N2ENGINE_PHYSX_GPU_PROBE 0
-#endif
 #endif
 
 namespace N2Engine::Physics
@@ -178,6 +174,37 @@ namespace N2Engine::Physics
         Logger::Warn(std::format("physics.gpu={}: {}; using the CPU scene", ToString(_gpuMode), _gpuStatus.detail));
     }
 
+    void PhysXBackend::FailParticles(const std::string &reason)
+    {
+        if (_particles)
+        {
+            // Its systems go; the ParticleSystems that used them see the backend gone and restart on the CPU
+            _particles->ReleaseAll();
+        }
+        // auto: no usable GPU particles is not an error; on: the project asked for the GPU, so it is
+        const bool required = _gpuMode == GpuMode::On;
+        _gpuStatus = {required ? GpuState::Failed : GpuState::Unavailable, "GPU particles unavailable: " + reason};
+        Logger::Warn(std::format("physics.gpu={}: {}; particle systems use the CPU backend", ToString(_gpuMode),
+                                 _gpuStatus.detail));
+    }
+
+    void PhysXBackend::PollParticleFailure()
+    {
+        if (_particles && _particles->HasFailed())
+        {
+            // The backend logged its own failure; this makes the status say so too (once: the backend is dropped)
+            const std::string reason = _particles->GetFailureReason();
+            FailParticles(reason);
+            _particles.reset();
+        }
+    }
+
+    IParticleBackend *PhysXBackend::GetParticleBackend()
+    {
+        PollParticleFailure();
+        return _particles.get();
+    }
+
     bool PhysXBackend::ProbeGpu()
     {
         if (_gpuMode == GpuMode::Off)
@@ -200,7 +227,8 @@ namespace N2Engine::Physics
             FailGpu("the CUDA context could not be created (is PhysXGpu_64.dll next to the executable?)");
             return false;
         }
-        _gpuStatus = {GpuState::Ready, std::format("PhysX GPU dynamics on CUDA device {}", ordinal)};
+        _gpuStatus = {GpuState::Ready,
+                      std::format("PhysX GPU: {} (CUDA device {})", _cudaContextManager->getDeviceName(), ordinal)};
         return true;
 #else
         // No GPU library in this build (Linux): never touch CUDA. Not a failure even for "on".
@@ -306,6 +334,17 @@ namespace N2Engine::Physics
             return false;
         }
 
+#if N2ENGINE_PHYSX_GPU_PROBE
+        // A GPU scene can simulate PBD particles: the backend over the real driver, which makes no CUDA call until
+        // the first particle system is created
+        if (_gpuStatus.state == GpuState::Ready && _cudaContextManager &&
+            _scene->getFlags().isSet(PxSceneFlag::eENABLE_GPU_DYNAMICS))
+        {
+            _particles = std::make_unique<Particles::PbdParticleBackend>(
+                std::make_unique<PhysXPbdDriver>(*_physics, *_scene, *_cudaContextManager));
+        }
+#endif
+
         // Setup PVD scene
         if (_pvd)
         {
@@ -340,6 +379,12 @@ namespace N2Engine::Physics
 
         _scene->simulate(deltaTime);
         _scene->fetchResults(true);
+        if (_particles)
+        {
+            // The scene stepped the PBD particles: read them back, age them, drop the dead
+            _particles->OnSceneStepped(deltaTime);
+            PollParticleFailure();
+        }
 
         if (!_refiltering.empty())
         {
@@ -406,6 +451,9 @@ namespace N2Engine::Physics
         _deferredLost.clear();
         _pendingRefilter.clear();
         _refiltering.clear();
+
+        // The particle systems are actors of the scene and own GPU memory: they go before the scene and the CUDA context
+        _particles.reset();
 
         if (_scene)
             _scene->release();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <new>
 #include <span>
 #include <string>
 #include <string_view>
@@ -20,9 +21,16 @@ namespace N2Engine::TestSupport
     class FakeGpuParticleBackend final : public Physics::IParticleBackend
     {
     public:
+        // The inner simulation issues the handles, so it takes this backend's generation
+        FakeGpuParticleBackend() : _inner(GetGeneration()) {}
+
         [[nodiscard]] std::string_view GetName() const override { return "PhysX"; }
         [[nodiscard]] Physics::ParticleSystemHandle CreateSystem(const Physics::ParticleSystemDesc &desc) override
         {
+            if (refuseCreate)
+            {
+                return Physics::kInvalidParticleSystem;
+            }
             ++created;
             return _inner.CreateSystem(desc);
         }
@@ -53,6 +61,8 @@ namespace N2Engine::TestSupport
 
         int created = 0;
         int destroyed = 0;
+        /// CreateSystem fails, as when the GPU is out of memory
+        bool refuseCreate = false;
 
     private:
         Particles::CpuParticleBackend _inner;
@@ -74,6 +84,14 @@ namespace N2Engine::TestSupport
         }
 
         FakeGpuParticleBackend gpu;
+
+        /// Destroys the GPU particle backend and constructs a new one in the same place: the same address, a new
+        /// backend (and so a new generation). What an allocator can do when a backend is replaced.
+        void RecreateGpu()
+        {
+            gpu.~FakeGpuParticleBackend();
+            new (&gpu) FakeGpuParticleBackend();
+        }
         Math::Vector3 gravity{0.0f, -9.81f, 0.0f};
 
         bool Initialize() override { return true; }

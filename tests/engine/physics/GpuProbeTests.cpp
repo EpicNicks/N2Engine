@@ -135,7 +135,10 @@ TEST(GpuProbeTest, BackendDefaultsToDisabledAndKeepsTheCpuScene)
     EXPECT_EQ(status.state, GpuState::Disabled);
     EXPECT_FALSE(status.detail.empty());
     EXPECT_EQ(MakeParticlesStatus(status).state, SubsystemState::Disabled);
+    // physics.gpu off is today's CPU scene: no CUDA context, and no PhysX particle backend to offer
+    EXPECT_EQ(backend.GetParticleBackend(), nullptr);
     backend.Shutdown();
+    EXPECT_EQ(backend.GetParticleBackend(), nullptr);
 }
 
 TEST(GpuProbeTest, ExplicitOffBehavesTheSame)
@@ -144,6 +147,7 @@ TEST(GpuProbeTest, ExplicitOffBehavesTheSame)
     backend.SetGpuMode(GpuMode::Off);
     ASSERT_TRUE(backend.Initialize());
     EXPECT_EQ(backend.GetGpuStatus().state, GpuState::Disabled);
+    EXPECT_EQ(backend.GetParticleBackend(), nullptr);
     backend.Shutdown();
 }
 
@@ -159,6 +163,7 @@ TEST(GpuProbeTest, CpuOnlyBuildsReportUnavailableNotFailed)
         ASSERT_TRUE(backend.Initialize());
         EXPECT_EQ(backend.GetGpuStatus().state, GpuState::Unavailable) << ToString(mode);
         EXPECT_EQ(MakeParticlesStatus(backend.GetGpuStatus()).state, SubsystemState::Disabled);
+        EXPECT_EQ(backend.GetParticleBackend(), nullptr) << "no GPU library: no PhysX particle backend";
         backend.Shutdown();
     }
 }

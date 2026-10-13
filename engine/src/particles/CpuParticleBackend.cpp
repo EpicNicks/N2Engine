@@ -54,7 +54,7 @@ namespace N2Engine::Particles
 
     Physics::ParticleSystemHandle CpuParticleBackend::CreateSystem(const Physics::ParticleSystemDesc &desc)
     {
-        const Physics::ParticleSystemHandle handle = _nextHandle++;
+        const Physics::ParticleSystemHandle handle = Physics::MakeParticleHandle(GetGeneration(), _nextIndex++);
         System &system = _systems[handle];
         system.maxParticles = std::min(desc.maxParticles, kMaxParticlesLimit);
         system.params = Sanitized(desc.params);
