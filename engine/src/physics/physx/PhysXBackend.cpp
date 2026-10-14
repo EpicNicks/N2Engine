@@ -227,8 +227,9 @@ namespace N2Engine::Physics
             FailGpu("the CUDA context could not be created (is PhysXGpu_64.dll next to the executable?)");
             return false;
         }
+        const char *deviceName = _cudaContextManager->getDeviceName();
         _gpuStatus = {GpuState::Ready,
-                      std::format("PhysX GPU: {} (CUDA device {})", _cudaContextManager->getDeviceName(), ordinal)};
+                      std::format("PhysX GPU: {} (CUDA device {})", deviceName ? deviceName : "unknown", ordinal)};
         return true;
 #else
         // No GPU library in this build (Linux): never touch CUDA. Not a failure even for "on".
@@ -381,6 +382,8 @@ namespace N2Engine::Physics
         _scene->fetchResults(true);
         if (_particles)
         {
+            // Synchronise the PBD solver's stream before touching its buffers (as every PhysX PBD snippet does)
+            _scene->fetchResultsParticleSystem();
             // The scene stepped the PBD particles: read them back, age them, drop the dead
             _particles->OnSceneStepped(deltaTime);
             PollParticleFailure();
