@@ -27,8 +27,8 @@
 // makes NEW buffers and retires the old ones; DestroyMesh and DestroyTexture retire the whole resource. Retired objects
 // go on the list of a frame slot (RetireSlot) and are freed by BeginFrame right after it has waited for that slot's
 // fence (FlushRetired); Shutdown frees whatever is left after waiting for the device to go idle. The exception is when
-no frame is open and every frame fence is signalled (CanFreeRetiredNow): nothing can use the object, so it is freed
-at once and does not pile up while no frames run.
+// no frame is open and every frame fence is signalled (CanFreeRetiredNow): nothing can use the object, so it is freed
+// at once and does not pile up while no frames run.
 
 using namespace Renderer::Vulkan;
 using Renderer::Common::IMesh;
