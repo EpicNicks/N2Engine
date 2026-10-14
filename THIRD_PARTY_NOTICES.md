@@ -19,6 +19,7 @@ time into the build tree).
 | MikkTSpace (mmikk/MikkTSpace commit `3e895b4`, 2020-03-25; tangent generation for normal maps) | `external/mikktspace/` | zlib (`external/mikktspace/LICENSE`, and the notice at the top of both files) |
 | dr_libs (dr_wav, dr_flac, dr_mp3) | `external/dr_libs/` | Public domain (Unlicense) or MIT-0, at your choice |
 | Lua 5.4 | `external/lua/` | MIT |
+| VulkanMemoryAllocator 3.4.0 (GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator tag `v3.4.0`, commit `3aa9212`, unmodified: the single header `vk_mem_alloc.h` and `LICENSE.txt`; GPU memory for the Vulkan renderer, compiled only with `N2ENGINE_RENDERER_VULKAN`) | `external/VulkanMemoryAllocator/` | MIT (`external/VulkanMemoryAllocator/LICENSE.txt`) |
 | sol2 | `external/sol2/` | MIT |
 | nlohmann/json | `external/nlohmann/` | MIT |
 | TinySHA1 | `external/TinySHA1/` | ISC-style permissive licence (in the header) |

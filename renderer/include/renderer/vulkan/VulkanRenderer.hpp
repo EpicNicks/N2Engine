@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -88,16 +89,37 @@ namespace Renderer
             Failed,                // anything else: a bug or a resource failure
         };
 
-        struct DebugState; // the messenger's counters, shared with the callback (defined in the .cpp)
+        /// What a test can ask about a texture (GetTextureInfoForTest); `valid` is false for a pointer this renderer
+        /// did not make (or already destroyed)
+        struct TextureInfoForTest
+        {
+            bool valid = false;
+            VkFormat format = VK_FORMAT_UNDEFINED; // the image's format (3 channels are stored as RGBA8)
+            uint32_t width = 0;
+            uint32_t height = 0;
+            uint32_t channels = 0; // as given to CreateTexture
+            uint32_t mipLevels = 0;
+            VkFilter filter = VK_FILTER_NEAREST; // min and mag filter of the sampler
+            VkSamplerMipmapMode mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT; // U, V and W
+            VkSampler sampler = VK_NULL_HANDLE; // the cached sampler (shared between textures with equal options)
+            VkComponentMapping swizzle{};       // the image view's: 1 channel (r,0,0,1), 2 channels (r,g,0,1)
+        };
+
+        struct DebugState;    // the messenger's counters, shared with the callback (defined in the .cpp)
+        struct ResourceState; // meshes, textures, samplers, the VMA allocator and the deletion queues (private header)
 
         /**
-         * The Vulkan backend, stage 0 of #43: initialisation, an offscreen colour and depth target, a frame that
-         * clears it, readback, resizing and shutdown. It renders ONLY offscreen (R8G8B8A8_UNORM colour, a depth
-         * target), with or without a window: there is no surface or swapchain yet, so Present puts nothing on a
-         * window (stage F). Initialize(nullptr, w, h) works with no window and no display.
+         * The Vulkan backend, stages 0 and A of #43: initialisation, an offscreen colour and depth target, a frame that
+         * clears it, readback, resizing and shutdown (stage 0), and meshes and textures (stage A: GPU memory from
+         * VulkanMemoryAllocator, staging uploads, samplers, blit mipmaps, deferred deletion). It renders ONLY
+         * offscreen (R8G8B8A8_UNORM colour, a depth target), with or without a window: there is no surface or
+         * swapchain yet, so Present puts nothing on a window (stage F). Initialize(nullptr, w, h) works with no
+         * window and no display.
          *
-         * Everything that would draw (meshes, textures, materials, shaders, draws, lighting) is a stub that logs
-         * once and returns nullptr/false. All public methods may be called from any thread (one mutex).
+         * Meshes and textures work but nothing draws them yet: materials, shaders, draws and lighting are stubs that
+         * log once and return nullptr/false (stages B-E). All public methods may be called from any thread (one
+         * mutex).
          */
         class VulkanRenderer : public Renderer::Common::IRenderer
         {
@@ -128,15 +150,31 @@ namespace Renderer
             /// stderr the first time, once per renderer, whether or not there is a window
             void Present() override;
 
-            // Resources: stubs until stages A-E (#43); each logs once and returns nullptr/false
+            // Meshes and textures (stage A). Uploads are synchronous (a queue stall per call) and work inside or
+            // outside a frame. Destroying, or replacing through UpdateMesh, never frees GPU memory a frame in flight
+            // may read: it is freed when that frame's slot comes round again (deferred deletion).
+            /// A device-local vertex buffer (64-byte Vertex) and uint32 index buffer. nullptr for no vertices, or when
+            /// the renderer is not initialized or the allocation fails. A mesh with vertices and no indices has an
+            /// index count of 0 and no index buffer
             Common::IMesh* CreateMesh(const Common::MeshData& meshData) override;
+            /// Ignores nullptr and any pointer this renderer did not make (another renderer's, another backend's, a
+            /// fake): only meshes in this renderer's registry are destroyed
             void DestroyMesh(Common::IMesh* mesh) override;
 
+            /// CreateTexture with TextureOptions::Default()
             Common::ITexture*
             CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels) override;
+            /// 1 channel: R8 (samples (r,0,0,1)); 2: R8G8 ((r,g,0,1)); 3: expanded to RGBA8 with alpha 255; 4: RGBA8.
+            /// srgb picks R8G8B8A8_SRGB for 3 and 4 channels (as OpenGL does; 1 and 2 channels ignore it) and falls
+            /// back to UNORM when the device cannot sample it. Rows are tightly packed. A full mip chain (vkCmdBlitImage)
+            /// only when the format supports linear blits, else one level. nullptr for null data, a zero size,
+            /// channels outside 1-4, a size over the device's limit, or an uninitialized renderer
             Common::ITexture* CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels,
                                             const Common::TextureOptions& options) override;
+            /// Ignores nullptr and pointers this renderer did not make, like DestroyMesh
             void DestroyTexture(Common::ITexture* texture) override;
+            /// Keeps the same IMesh* and gives it NEW buffers (the old ones are retired, never written). False, with
+            /// the mesh unchanged, for nullptr, a pointer this renderer did not make, or data with no vertices
             bool UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData) override;
 
             Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
@@ -202,6 +240,23 @@ namespace Renderer
             [[nodiscard]] uint32_t GetRenderWidth() const;
             [[nodiscard]] uint32_t GetRenderHeight() const;
 
+            // Test hooks for stage A: nothing draws until stage B, so these are how a test proves what was uploaded
+            /// Format, size, mip count and sampler of a texture this renderer made
+            [[nodiscard]] TextureInfoForTest GetTextureInfoForTest(const Common::ITexture* texture) const;
+            /// Copies mip level `mipLevel` of a texture into `bytes`, tightly packed in the image's format (RGBA8 for 3
+            /// and 4 channels, R8, R8G8). False for a pointer that is not this renderer's or a level that does not exist
+            bool ReadTextureForTest(const Common::ITexture* texture, uint32_t mipLevel, std::vector<uint8_t>& bytes,
+                                    uint32_t* levelWidth = nullptr, uint32_t* levelHeight = nullptr);
+            /// Copies a mesh's vertex and index buffers back. False for a pointer that is not this renderer's
+            bool ReadMeshForTest(const Common::IMesh* mesh, Common::MeshData& out);
+            /// Live VMA allocations: 2 per mesh with indices (1 without), 1 per texture, plus anything retired and
+            /// not yet freed. Returns to its baseline once every frame slot has been flushed
+            [[nodiscard]] uint32_t GetLiveAllocationCountForTest() const;
+            [[nodiscard]] uint32_t GetLiveMeshCountForTest() const;
+            [[nodiscard]] uint32_t GetLiveTextureCountForTest() const;
+            /// Buffers and images waiting for a frame slot's fence (deferred deletion)
+            [[nodiscard]] uint32_t GetPendingDeletionCountForTest() const;
+
         private:
             static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -219,6 +274,8 @@ namespace Renderer
             bool SetupDebugMessenger();
             bool PickPhysicalDevice();
             bool CreateLogicalDevice();
+            bool CreateAllocator();
+            void DestroyAllocator();
             bool CreateCommandPool();
             bool CreateFrameResources();
             bool CreateRenderPass();
@@ -237,9 +294,20 @@ namespace Renderer
             /// Records `record` into a one-time command buffer, submits it and waits for the queue to go idle
             template <typename Recorder>
             bool SubmitOneTime(Recorder&& record) const;
+            /// SubmitOneTime for the resource code in another translation unit
+            bool SubmitOneTimeFn(const std::function<void(VkCommandBuffer)>& record) const;
+
+            /// The frame slot whose fence guards what is retired now (see VulkanResources.cpp)
+            [[nodiscard]] uint32_t RetireSlot() const;
+            /// Frees what was retired into `slot`; called once that slot's fence has been waited for
+            void FlushRetired(uint32_t slot);
+            /// Device idle: frees every retired and every still-live mesh and texture and the samplers
+            void DestroyAllResources();
             bool ClearTargetToBlack();
             void AbandonOpenFrame();
             void LogUnsupportedOnce(const char* what) const;
+            /// Logs `message` to stderr the first time, once per renderer
+            void LogOnce(const std::string& message) const;
 
             [[nodiscard]] bool WantsValidation(bool& required) const;
 
@@ -280,6 +348,8 @@ namespace Renderer
             bool _targetFixed = false; // SetRenderTargetSize set the size: Resize and OnResize are ignored
             uint32_t _requestedWidth = 0; // the last size asked for through Initialize, Resize or OnResize
             uint32_t _requestedHeight = 0;
+
+            std::unique_ptr<ResourceState> _resources; // never null; its allocator is null until Initialize made one
 
             InitStatus _initStatus = InitStatus::NotInitialized;
             std::string _initMessage;
