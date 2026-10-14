@@ -458,8 +458,8 @@ TEST(ProtocolSpecTest, CommandDeserializersReadTheSpecFields)
 
 // protocol.json's optionalTrailing lists a message's last fields (added in a later minor version). A request whose
 // payload ends before them is what an older client sends: the server's deserializer must read it with the defaults
-// (every optional trailing request field has to go through ReadTrailing), and every listed field has to be a bool or
-// number, which the client generators decode as false or 0 when the payload ends
+// (every optional trailing request field has to go through ReadTrailing), and every listed field has to be a bool,
+// a number or a string, which the client generators decode as false, 0 or "" when the payload ends
 TEST(ProtocolSpecTest, OptionalTrailingFieldsAreTheLastFieldsAndRequestsReadWithoutThem)
 {
     const spec_json spec = LoadSpec();
@@ -493,7 +493,8 @@ TEST(ProtocolSpecTest, OptionalTrailingFieldsAreTheLastFieldsAndRequestsReadWith
             const std::string field = names[names.size() - optional.size() + i];
             EXPECT_EQ(field, optional[i].get<std::string>()) << message << ": optionalTrailing must be the last fields in order";
             const std::string type = fields.at(field).get<std::string>();
-            EXPECT_TRUE(type == "bool" || type == "uint8" || type == "uint32" || type == "int32" || type == "float32")
+            EXPECT_TRUE(type == "bool" || type == "uint8" || type == "uint32" || type == "int32" || type == "float32" ||
+                        type == "string")
                 << message << "." << field << ": " << type;
         }
 

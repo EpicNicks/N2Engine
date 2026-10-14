@@ -64,6 +64,8 @@ namespace
         nlohmann::json capabilities;
         bool projectLoaded = false;
         bool readOnly = false;
+        std::string user;
+        std::string role;
     };
 
     ServerInfo DecodeServerInfo(const Frame &frame)
@@ -75,6 +77,8 @@ namespace
         info.capabilities = ReadJson(r);
         info.projectLoaded = r.ReadBool();
         info.readOnly = r.ReadBool();
+        info.user = r.ReadString();
+        info.role = r.ReadString();
         EXPECT_FALSE(r.HasData()) << "trailing bytes after ServerInfo";
         return info;
     }
@@ -102,6 +106,8 @@ TEST(EditorSessionTest, HelloAnswersWithTheServersVersionsAndCapabilities)
     EXPECT_EQ(info.capabilities, nlohmann::json::array()) << "no optional features are defined yet";
     EXPECT_FALSE(info.projectLoaded) << "a server without SetProject has no project";
     EXPECT_FALSE(info.readOnly) << "a server without SetReadOnly serves writes";
+    EXPECT_EQ(info.user, "") << "a server without authentication names nobody";
+    EXPECT_EQ(info.role, "admin") << "and gives everyone every right";
 }
 
 TEST(EditorSessionTest, HelloAcceptsAnyMinorAndPatchVersionOfTheSameMajor)

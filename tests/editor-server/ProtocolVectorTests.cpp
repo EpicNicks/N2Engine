@@ -111,8 +111,9 @@ TEST(ProtocolVectorTest, ServerDeserializersReadTheVectorRequests)
 
 // A peer from before a message's optional trailing fields (protocol.json's optionalTrailing; the vectors' shortPayloads)
 // sends a payload that ends before them. The server's Hello deserializer reads such a request with the defaults
-// (an old client sends no errorCodes); for a response, the server's builder writes the short payload followed by exactly
-// the optional fields (a 1.10 host's ServerInfo has no readOnly), which is what a client's lenient decoder relies on.
+// (a 1.10 client sends no errorCodes and no user, a 1.11 one no user); for a response, the server's builder writes the
+// short payload followed by exactly the omitted fields (a 1.11 host's ServerInfo has no user or role, a 1.10 host's no
+// readOnly either), which is what a client's lenient decoder relies on.
 TEST(ProtocolVectorTest, ShortPayloadsOfOlderPeersDecodeWithTheDefaults)
 {
     const json vectors = ProtocolVectors::Load().value("shortPayloads", json::array());
@@ -138,20 +139,27 @@ TEST(ProtocolVectorTest, ShortPayloadsOfOlderPeersDecodeWithTheDefaults)
         {
             sawResponse = true;
             const std::string name = vector.at("response").get<std::string>();
-            // The vector's fields hold the defaults of the missing fields: the builder writes the short payload, then
-            // those fields (one bool, false)
-            const std::vector<uint8_t> frame = ProtocolVectors::BuildResponse(name, vector);
-            ASSERT_EQ(frame.size(), 5u + payload.size() + 1u) << name;
-            const std::vector<uint8_t> built(frame.begin() + 5, frame.end());
+            // The vector's fields hold the defaults of the omitted fields: the builder writes the short payload, then
+            // those fields at their defaults (a bool is one zero byte, a string a zero length)
             std::vector<uint8_t> expected = payload;
-            expected.push_back(0);
+            ASSERT_TRUE(vector.contains("omitted") && !vector.at("omitted").empty()) << name;
+            for (const json &field : vector.at("omitted"))
+            {
+                const json &value = vector.at("fields").at(field.get<std::string>());
+                ASSERT_TRUE(value.is_boolean() || value.is_string()) << name << "." << field;
+                EXPECT_TRUE(value == false || value == "") << name << "." << field << ": a default";
+                expected.insert(expected.end(), value.is_boolean() ? 1u : 4u, uint8_t{0});
+            }
+            const std::vector<uint8_t> frame = ProtocolVectors::BuildResponse(name, vector);
+            ASSERT_EQ(frame.size(), 5u + expected.size()) << name;
+            const std::vector<uint8_t> built(frame.begin() + 5, frame.end());
             EXPECT_EQ(ProtocolVectors::ToHex(built), ProtocolVectors::ToHex(expected)) << name;
         }
     }
     EXPECT_TRUE(sawRequest);
     EXPECT_TRUE(sawResponse);
 
-    // Hello as an old (1.10) client sends it: no errorCodes, so the host sends plain Errors
+    // Hello as an old (1.10) client sends it: no errorCodes, so the host sends plain Errors, and no user
     BufferWriter oldHello;
     oldHello.WriteString("editor");
     oldHello.WriteString("1.10.0");
@@ -159,7 +167,34 @@ TEST(ProtocolVectorTest, ShortPayloadsOfOlderPeersDecodeWithTheDefaults)
     BufferReader reader(oldHello.Data());
     const HelloCmd cmd = HelloCmd::Deserialize(reader);
     EXPECT_FALSE(cmd.errorCodes);
+    EXPECT_EQ(cmd.user, "");
     EXPECT_FALSE(reader.HasData());
+
+    // A 1.11 client sends errorCodes but no user: the user is empty, which a tokens-file host reads as "match the token
+    // across every entry"
+    BufferWriter helloWithCodes;
+    helloWithCodes.WriteString("editor");
+    helloWithCodes.WriteString("1.11.0");
+    helloWithCodes.WriteString("token");
+    helloWithCodes.WriteBool(true);
+    BufferReader codesReader(helloWithCodes.Data());
+    const HelloCmd withCodes = HelloCmd::Deserialize(codesReader);
+    EXPECT_TRUE(withCodes.errorCodes);
+    EXPECT_EQ(withCodes.user, "");
+    EXPECT_FALSE(codesReader.HasData());
+
+    // A 1.12 client names its user
+    BufferWriter helloWithUser;
+    helloWithUser.WriteString("editor");
+    helloWithUser.WriteString("1.12.0");
+    helloWithUser.WriteString("token");
+    helloWithUser.WriteBool(false);
+    helloWithUser.WriteString("alice");
+    BufferReader userReader(helloWithUser.Data());
+    const HelloCmd withUser = HelloCmd::Deserialize(userReader);
+    EXPECT_FALSE(withUser.errorCodes);
+    EXPECT_EQ(withUser.user, "alice");
+    EXPECT_FALSE(userReader.HasData());
 }
 
 // Each response vector's fields, written by the server's builder, give the vector's frame: byte for byte, except that

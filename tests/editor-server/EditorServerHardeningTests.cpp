@@ -1174,8 +1174,16 @@ TEST(EditorServerSocketTest, AReadOnlyHostRefusesShutdownAndKeepsServingTheConne
     auto response = Roundtrip(server, client, CommandType::Hello, HelloPayloadWithCodes("", true));
     ASSERT_TRUE(response.has_value());
     ASSERT_EQ(response->type, ServerInfoType) << response->body;
-    ASSERT_FALSE(response->body.empty());
-    EXPECT_EQ(static_cast<uint8_t>(response->body.back()), uint8_t{1}) << "ServerInfo.readOnly";
+    {
+        // protocolVersion, engineVersion, capabilities, projectLoaded, then readOnly (the user and role follow it)
+        const std::vector<uint8_t> infoBytes(response->body.begin(), response->body.end());
+        BufferReader info(infoBytes);
+        (void)info.ReadString();
+        (void)info.ReadString();
+        (void)ReadJson(info);
+        (void)info.ReadBool();
+        EXPECT_TRUE(info.ReadBool()) << "ServerInfo.readOnly";
+    }
 
     // Now Shutdown and a write are refused with the code
     shutdown = SendShutdown(client);
