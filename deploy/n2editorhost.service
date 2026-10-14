@@ -11,8 +11,13 @@
 #   4. Reach it through an SSH tunnel (the host listens on 127.0.0.1 only):  ssh -L 9999:127.0.0.1:9999 <server>
 #      The TLS certificate fingerprint is in the journal:  journalctl -u n2editorhost | grep fingerprint
 #
+# More than one person, or roles (admin, editor, viewer)? Use deploy/n2editorhost-tokens.service instead: per-user tokens in a
+# file (--tokens-file; it cannot be combined with --token-env), with a static user so the file can be mode 0600 and reloaded.
+#
 # Do not add --exit-on-stdin-eof: a service's stdin is /dev/null, so the host would exit as soon as it started.
-# The host takes no --bind here, so it stays on 127.0.0.1. To listen elsewhere add --bind <ipv4 address> and read the
+# The host takes no --bind here, so it stays on 127.0.0.1. Behind the SSH tunnel or proxy every peer is 127.0.0.1, so the
+# failed-Hello rate limiting is one shared backoff for loopback (10 failures in a minute), not a per-address ban
+# (docs/logging-and-editor.html#rate-limit-loopback). To listen elsewhere add --bind <ipv4 address> and read the
 # firewall notes in the docs first. For a host that should only be looked at, add --read-only to ExecStart: it refuses
 # every command that changes anything (docs/logging-and-editor.html#read-only).
 

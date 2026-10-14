@@ -329,3 +329,47 @@ jobs:
           done
           docker logs n2host
           exit 1
+
+      # The tokens-file mode of docs/editor.html#exposed-host: --new-token in the container, the file bind-mounted read-only
+      # and owned by the container user (uid 10001) with mode 0400 (the default secret mode, 0444, must be refused), a
+      # Hello with the token, and a revocation (the file rewritten in place, the token then refused on the next connection; SIGHUP is not exercised).
+      # Docker secrets and systemd are not run here.
+      - name: Run the host in the container with a tokens file
+        run: |
+          set -eu
+          docker rm -f n2host
+          made="$(docker run --rm n2editorhost --new-token alice admin)"
+          token="$(printf '%s\n' "$made" | sed -n 's/^token: //p')"
+          entry="$(printf '%s\n' "$made" | grep '^{"user"')"
+          test -n "$token" && test -n "$entry"
+          mkdir tokens
+          printf '[\n%s\n]\n' "$entry" > tokens/tokens.json
+          sudo chown 10001:10001 tokens/tokens.json
+          sudo chmod 0444 tokens/tokens.json
+          # 0444: the host must refuse it and the container must exit non-zero
+          if docker run --rm -v "$PWD/tokens/tokens.json:/run/secrets/n2_tokens:ro" -v n2proj:/project n2editorhost                --bind 0.0.0.0 --port 9999 --project /project --renderer software --tls --tokens-file /run/secrets/n2_tokens > refused.log 2>&1; then
+            cat refused.log; echo "a 0444 tokens file was accepted"; exit 1
+          fi
+          cat refused.log
+          grep -q 'accessible to its group or to others' refused.log
+          sudo chmod 0400 tokens/tokens.json
+          docker run -d --name n2tokens -v "$PWD/tokens/tokens.json:/run/secrets/n2_tokens:ro" -v n2proj:/project -p 127.0.0.1:9998:9999 n2editorhost             --bind 0.0.0.0 --port 9999 --project /project --renderer software --tls --tokens-file /run/secrets/n2_tokens
+          for i in $(seq 1 60); do
+            if docker logs n2tokens 2>&1 | grep -Eq 'N2EditorHost ready port=9999 tls=1 fingerprint=[0-9a-f]{64}'; then
+              # Hello with alice's token (matched across the file's entries; no --token-env involved in the host)
+              N2_ATTACH_TOKEN="$token" PYTHONDONTWRITEBYTECODE=1 python3 tests/smoke/editor_host_smoke.py --scenario attach --port 9998 --tls --token-env N2_ATTACH_TOKEN --expect-physics on
+              N2_ATTACH_TOKEN="$token" PYTHONDONTWRITEBYTECODE=1 python3 tests/smoke/editor_host_smoke.py --scenario attach --port 9998 --tls --token-env N2_ATTACH_TOKEN --expect-physics on
+              # Revoke everyone by rewriting the file in place (a bind-mounted single file keeps its inode); the next connection re-stats the file and refuses the token. SIGHUP is not tested: the host is PID 1 here, and the kernel drops a signal without a handler
+              sudo sh -c 'printf "\n[]\n" > tokens/tokens.json'
+              if N2_ATTACH_TOKEN="$token" PYTHONDONTWRITEBYTECODE=1 python3 tests/smoke/editor_host_smoke.py --scenario attach --port 9998 --tls --token-env N2_ATTACH_TOKEN > revoked.log 2>&1; then
+                cat revoked.log; echo "a revoked token was accepted"; exit 1
+              fi
+              cat revoked.log
+              grep -q 'SMOKE TEST FAILED: .*Hello' revoked.log
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' n2tokens)" != "true" ]; then break; fi
+            sleep 1
+          done
+          docker logs n2tokens
+          exit 1

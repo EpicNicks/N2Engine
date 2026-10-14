@@ -1,0 +1,98 @@
+# systemd unit for the N2Engine editor host with PER-USER TOKENS (--tokens-file). The single-token unit is
+# n2editorhost.service (simpler, DynamicUser); the two are alternatives, not a pair: install one of them.
+# See docs/editor.html#exposed-host for the whole recipe (roles, rotating, what is not covered).
+#
+# A static user, not DynamicUser: the host refuses a tokens file that its group or others can read or write, so the file
+# has to be mode 0600 and owned by the user the service runs as. A dynamic user has a different uid on each start and no
+# name to chown to in advance, and SIGHUP reload and live rotation need the host to be able to read the file again while
+# it runs. (LoadCredential= is not used: a credential is a copy made at start, so it would not see a rewrite.)
+#
+#   1. Install the binary and the shared OpenAL library it links (its rpath is the build tree, which the service cannot see):
+#        sudo install -D build/bin/N2EditorHost /opt/n2engine/bin/N2EditorHost
+#        sudo install -d /opt/n2engine/lib && sudo cp -a build/lib/libopenal.so* /opt/n2engine/lib/
+#   2. Once: make the service user, and the folder for the tokens file (the user needs to enter it, nobody else does):
+#        sudo useradd --system --no-create-home --shell /usr/sbin/nologin n2editor
+#        sudo install -d -o root -g n2editor -m 0750 /etc/n2editorhost
+#      The unit's StateDirectory=n2engine makes /var/lib/n2engine, owned by n2editor, for the project (project/) and the TLS
+#      identity (n2engine/editor-tls/). A project kept anywhere else must be writable by n2editor, and the path added to
+#      ReadWritePaths= below (ProtectSystem=strict makes the rest of the file system read-only to the service).
+#   3. Make a token per person, one command each (it prints the token ONCE, and the entry to put in the file):
+#        /opt/n2engine/bin/N2EditorHost --new-token alice admin
+#        /opt/n2engine/bin/N2EditorHost --new-token bob editor
+#      Roles: admin (everything, Shutdown included), editor (changes the project, no Shutdown), viewer (reads only).
+#   4. Write the file: a JSON array of the entries, owned by n2editor, mode 0600 (the host refuses any other mode, at start
+#      and on every reload). Write the array to a scratch file (hashes only, no tokens in it), then install it:
+#        [
+#          {"user":"alice","role":"admin","hash":"sha256:<64 hex digits from --new-token>"},
+#          {"user":"bob","role":"editor","hash":"sha256:<64 hex digits from --new-token>"}
+#        ]
+#        sudo install -o n2editor -g n2editor -m 0600 tokens.json /etc/n2editorhost/tokens.json && rm tokens.json
+#   5. sudo cp deploy/n2editorhost-tokens.service /etc/systemd/system/n2editorhost.service && sudo systemctl daemon-reload
+#      sudo systemctl enable --now n2editorhost
+#   6. Reach it through an SSH tunnel (the host listens on 127.0.0.1 only):  ssh -L 9999:127.0.0.1:9999 <server>
+#      The TLS certificate fingerprint is in the journal:  journalctl -u n2editorhost | grep fingerprint
+#
+# Rotate or revoke: change the entries and install the file again (the scratch file and the install command of step 4), then
+#        sudo systemctl reload n2editorhost        # ExecReload below: SIGHUP; the next connection would notice anyway
+#   An editor that saves by replacing the file (sed -i, most editors run under sudo) leaves it owned by root: the reload then fails,
+#   the host keeps the OLD tokens (it logs "Couldn't reload the tokens file ...", but a Release host only lets a connected
+#   client read its log lines, so nothing shows in the journal). Put the owner and mode back:
+#        sudo chown n2editor:n2editor /etc/n2editorhost/tokens.json && sudo chmod 0600 /etc/n2editorhost/tokens.json
+#   A reload that succeeds closes the connection of a user it removed. Test a revocation by connecting with the revoked token.
+#
+# Do not add --exit-on-stdin-eof: a service's stdin is /dev/null, so the host would exit as soon as it started.
+# The host takes no --bind here, so it stays on 127.0.0.1. Behind the SSH tunnel every peer is 127.0.0.1, so the failed-Hello
+# rate limiting is one shared backoff for loopback and a per-user one (docs/logging-and-editor.html#rate-limit-loopback), not
+# a per-person ban. To listen elsewhere add --bind <ipv4 address> and read the firewall notes in the docs first: the
+# allow-list of addresses is the primary control. For a host that should only be looked at, add --read-only to ExecStart
+# (docs/logging-and-editor.html#read-only).
+
+[Unit]
+Description=N2Engine editor host (per-user tokens)
+After=network.target
+
+[Service]
+Type=simple
+User=n2editor
+Group=n2editor
+# /var/lib/n2engine, owned by n2editor: the project in project/, the TLS identity in n2engine/editor-tls/.
+# --tls refuses to start without a per-user data folder, which is what XDG_DATA_HOME is for.
+StateDirectory=n2engine
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/n2engine
+Environment=XDG_DATA_HOME=/var/lib/n2engine
+Environment=ALSOFT_DRIVERS=null
+Environment=LD_LIBRARY_PATH=/opt/n2engine/lib
+#ReadWritePaths=/srv/n2projects
+
+# Make the project on the first start (--create exits 2 when one is there already, so test first)
+ExecStartPre=/bin/sh -c 'mkdir -p /var/lib/n2engine/project && { [ -e /var/lib/n2engine/project/project.n2proj ] || /opt/n2engine/bin/N2EditorHost --create /var/lib/n2engine/project; }'
+ExecStart=/opt/n2engine/bin/N2EditorHost --port 9999 --project /var/lib/n2engine/project --renderer software --tls --tokens-file /etc/n2editorhost/tokens.json
+# SIGHUP makes the host re-read the tokens file (its handler is installed only with --tokens-file): systemctl reload n2editorhost
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
