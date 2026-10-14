@@ -332,7 +332,7 @@ jobs:
 
       # The tokens-file mode of docs/editor.html#exposed-host: --new-token in the container, the file bind-mounted read-only
       # and owned by the container user (uid 10001) with mode 0400 (the default secret mode, 0444, must be refused), a
-      # Hello with the token, a SIGHUP the host survives, and a revocation (the file rewritten in place, the token then refused).
+      # Hello with the token, and a revocation (the file rewritten in place, the token then refused on the next connection; SIGHUP is not exercised).
       # Docker secrets and systemd are not run here.
       - name: Run the host in the container with a tokens file
         run: |
@@ -358,19 +358,14 @@ jobs:
             if docker logs n2tokens 2>&1 | grep -Eq 'N2EditorHost ready port=9999 tls=1 fingerprint=[0-9a-f]{64}'; then
               # Hello with alice's token (matched across the file's entries; no --token-env involved in the host)
               N2_ATTACH_TOKEN="$token" PYTHONDONTWRITEBYTECODE=1 python3 tests/smoke/editor_host_smoke.py --scenario attach --port 9998 --tls --token-env N2_ATTACH_TOKEN --expect-physics on
-              # SIGHUP must not end the process (its default action does: the host installs a handler only with --tokens-file)
-              docker kill -s HUP n2tokens
-              sleep 2
-              test "$(docker inspect -f '{{.State.Running}}' n2tokens)" = "true"
               N2_ATTACH_TOKEN="$token" PYTHONDONTWRITEBYTECODE=1 python3 tests/smoke/editor_host_smoke.py --scenario attach --port 9998 --tls --token-env N2_ATTACH_TOKEN --expect-physics on
-              # Revoke everyone by rewriting the file in place (a bind-mounted single file keeps its inode), reload, and the token is refused
+              # Revoke everyone by rewriting the file in place (a bind-mounted single file keeps its inode); the next connection re-stats the file and refuses the token. SIGHUP is not tested: the host is PID 1 here, and the kernel drops a signal without a handler
               sudo sh -c 'printf "\n[]\n" > tokens/tokens.json'
-              docker kill -s HUP n2tokens
-              sleep 2
               if N2_ATTACH_TOKEN="$token" PYTHONDONTWRITEBYTECODE=1 python3 tests/smoke/editor_host_smoke.py --scenario attach --port 9998 --tls --token-env N2_ATTACH_TOKEN > revoked.log 2>&1; then
                 cat revoked.log; echo "a revoked token was accepted"; exit 1
               fi
               cat revoked.log
+              grep -q 'SMOKE TEST FAILED: .*Hello' revoked.log
               exit 0
             fi
             if [ "$(docker inspect -f '{{.State.Running}}' n2tokens)" != "true" ]; then break; fi
