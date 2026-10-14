@@ -2492,7 +2492,8 @@ namespace N2Engine::Editor
         const size_t rowBytes = width > 0 ? static_cast<size_t>(width) * 4 : 0;
         const size_t rows = height > 0 ? static_cast<size_t>(height) : 0;
         // resize, not assign: every live backend writes the whole frame, so zeroing ~3.7 MB per 1280x720 frame
-        // would be wasted. New bytes are zero, so a backend that writes nothing (Vulkan's stub) gives black.
+        // would be wasted. New bytes are zero, so a backend that writes nothing gives black (Vulkan renders and reads
+        // back its offscreen target, but until stages A-E of #43 it draws nothing: its frames are the clear colour).
         pixels.resize(rowBytes * rows);
         if (pixels.empty())
         {

@@ -209,6 +209,66 @@ TEST_F(VulkanTest, InitializesHeadlessWithAnOkStatusAndADevice)
     EXPECT_STREQ(R().GetRendererName(), "Vulkan Renderer");
 }
 
+TEST_F(VulkanTest, ValidationCanaryTheDebugMessengerReallyCountsErrorsAndKeepsTheirText)
+{
+    // Proves the zero-errors assertion of every other test can fail: a synthetic message goes through the SAME debug
+    // messenger the validation layer reports through, and must be counted and kept
+    ASSERT_EQ(R().GetValidationStats().errors, 0u);
+    ASSERT_EQ(R().GetValidationStats().warnings, 0u);
+
+    ASSERT_TRUE(R().SubmitDebugMessageForTest(true, "n2-canary-error-message"));
+    const auto afterError = R().GetValidationStats();
+    EXPECT_EQ(afterError.errors, 1u);
+    EXPECT_EQ(afterError.warnings, 0u);
+    bool errorKept = false;
+    for (const auto& message : R().GetValidationMessages())
+    {
+        errorKept = errorKept || message.find("n2-canary-error-message") != std::string::npos;
+    }
+    EXPECT_TRUE(errorKept) << "the error text was not retained";
+
+    ASSERT_TRUE(R().SubmitDebugMessageForTest(false, "n2-canary-warning-message"));
+    const auto afterWarning = R().GetValidationStats();
+    EXPECT_EQ(afterWarning.errors, 1u);
+    EXPECT_EQ(afterWarning.warnings, 1u);
+
+    // The counters reset, so this test's own TearDown (zero errors, zero warnings) passes
+    R().ResetValidationStats();
+    EXPECT_EQ(R().GetValidationStats().errors, 0u);
+    EXPECT_EQ(R().GetValidationStats().warnings, 0u);
+    EXPECT_TRUE(R().GetValidationMessages().empty());
+}
+
+TEST_F(VulkanTest, PresentWarnsOncePerRendererThatThereIsNoSwapchainYet)
+{
+    VulkanRenderer& renderer = NewRenderer();
+    ASSERT_TRUE(renderer.Initialize(nullptr, 4, 4)) << renderer.GetInitMessage();
+
+    const auto countWarnings = [](const std::string& output)
+    {
+        const std::string needle = "swapchain/present is not implemented yet (stage F)";
+        int count = 0;
+        for (std::size_t at = output.find(needle); at != std::string::npos; at = output.find(needle, at + 1))
+        {
+            ++count;
+        }
+        return count;
+    };
+
+    ::testing::internal::CaptureStderr();
+    renderer.Present();
+    renderer.Present();
+    renderer.Present();
+    EXPECT_EQ(countWarnings(::testing::internal::GetCapturedStderr()), 1);
+
+    // A re-initialized renderer is a new one: it warns again, once
+    ASSERT_TRUE(renderer.Initialize(nullptr, 4, 4)) << renderer.GetInitMessage();
+    ::testing::internal::CaptureStderr();
+    renderer.Present();
+    renderer.Present();
+    EXPECT_EQ(countWarnings(::testing::internal::GetCapturedStderr()), 1);
+}
+
 TEST_P(VulkanSizeTest, ClearColourReadsBackExactlyWhenInitializedAtTheSize)
 {
     const Size size = GetParam();

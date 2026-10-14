@@ -124,7 +124,8 @@ namespace Renderer
 
             void BeginFrame() override;
             void EndFrame() override;
-            /// Headless: nothing to present (the frame is only readable through ReadFramebuffer) until stage F
+            /// Nothing to present until stage F (the frame is only readable through ReadFramebuffer): logs a warning to
+            /// stderr the first time, once per renderer, whether or not there is a window
             void Present() override;
 
             // Resources: stubs until stages A-E (#43); each logs once and returns nullptr/false
@@ -189,6 +190,12 @@ namespace Renderer
             [[nodiscard]] ValidationStats GetValidationStats() const;
             /// The first messages the validation layer reported (errors and warnings), up to 32
             [[nodiscard]] std::vector<std::string> GetValidationMessages() const;
+            /// Zeroes the counters and forgets the stored messages (tests that provoke a message on purpose)
+            void ResetValidationStats();
+            /// Test hook: sends a synthetic message through the debug messenger (vkSubmitDebugUtilsMessageEXT), the
+            /// path the validation layer reports through, so a test can prove the counters really count. False when
+            /// there is no messenger (not initialized, or validation off)
+            bool SubmitDebugMessageForTest(bool asError, const std::string& text);
             [[nodiscard]] std::string GetDeviceName() const;
             [[nodiscard]] VkPhysicalDeviceType GetDeviceType() const;
             /// The size of the offscreen target; 0 x 0 when there is none

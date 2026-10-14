@@ -222,6 +222,41 @@ std::vector<std::string> VulkanRenderer::GetValidationMessages() const
     return _debug->messages;
 }
 
+void VulkanRenderer::ResetValidationStats()
+{
+    std::lock_guard lock(_debug->mutex);
+    _debug->stats = {};
+    _debug->messages.clear();
+}
+
+bool VulkanRenderer::SubmitDebugMessageForTest(bool asError, const std::string& text)
+{
+    PFN_vkSubmitDebugUtilsMessageEXT submit = nullptr;
+    VkInstance instance = VK_NULL_HANDLE;
+    {
+        std::lock_guard lock(_mutex);
+        if (_instance == VK_NULL_HANDLE || !_validationEnabled || _debugMessenger == VK_NULL_HANDLE)
+        {
+            return false;
+        }
+        instance = _instance;
+        submit = reinterpret_cast<PFN_vkSubmitDebugUtilsMessageEXT>(
+            vkGetInstanceProcAddr(instance, "vkSubmitDebugUtilsMessageEXT"));
+    }
+    if (submit == nullptr)
+    {
+        return false;
+    }
+    VkDebugUtilsMessengerCallbackDataEXT data{};
+    data.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CALLBACK_DATA_EXT;
+    data.pMessageIdName = "N2EngineTestMessage";
+    data.pMessage = text.c_str();
+    // The same messenger (and so the same callback and counters) the validation layer reports through
+    submit(instance, asError ? VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT : VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
+           VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT, &data);
+    return true;
+}
+
 std::string VulkanRenderer::GetDeviceName() const
 {
     std::lock_guard lock(_mutex);
@@ -1243,7 +1278,19 @@ void VulkanRenderer::EndFrame()
 
 void VulkanRenderer::Present()
 {
-    // No swapchain yet (stage F of #43): a frame is only ever read back. Nothing to do, and nothing was promised
+    // No swapchain yet (stage F of #43): a frame is only ever read back, so there is nothing to present. Say so once per
+    // renderer (windowed or not), because with a window the user would otherwise just see it stay blank
+    {
+        std::lock_guard lock(_mutex);
+        if (_warnedWindow)
+        {
+            return;
+        }
+        _warnedWindow = true;
+    }
+    std::cerr << "Vulkan renderer: Vulkan swapchain/present is not implemented yet (stage F): frames render offscreen "
+                 "and the window stays blank"
+              << std::endl;
 }
 
 void VulkanRenderer::ReadFramebuffer(std::uint8_t* buffer, int width, int height) const
