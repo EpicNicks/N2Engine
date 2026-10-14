@@ -137,19 +137,12 @@ namespace N2Engine::Math
             // Multiply: ax*bx, ay*by, ...
             __m256 mul = _mm256_mul_ps(a_vec, b_vec);
 
-            // Horizontal add pairs: (ax*bx + ay*by), (a1x*b1x + a1y*b1y), ...
+            // hadd works per 128-bit half: lanes 0,1 = dot0,dot1 (4,5 = dot2,dot3); lanes 2,3 (6,7) repeat them
             __m256 hadd1 = _mm256_hadd_ps(mul, mul);
-            // hadd1 now contains: [dot0, dot0, dot1, dot1, dot2, dot2, dot3, dot3]
 
-            // Extract results
-            // We need to extract lane 0, 2, 4, 6 from the result
-            alignas(32) float temp[8];
-            _mm256_store_ps(temp, hadd1);
-
-            result[i] = temp[0];
-            result[i + 1] = temp[2];
-            result[i + 2] = temp[4];
-            result[i + 3] = temp[6];
+            // movelh takes the low pair of each half: [lane0, lane1, lane4, lane5] = dot0..dot3
+            __m128 dots = _mm_movelh_ps(_mm256_castps256_ps128(hadd1), _mm256_extractf128_ps(hadd1, 1));
+            _mm_storeu_ps(result + i, dots);
         }
 
         for (; i < count; ++i)
@@ -188,19 +181,12 @@ namespace N2Engine::Math
             // Square: x*x, y*y, ...
             __m256 squared = _mm256_mul_ps(v, v);
 
-            // Horizontal add pairs: (x*x + y*y), ...
+            // hadd works per 128-bit half: lanes 0,1 = len0,len1 (4,5 = len2,len3); lanes 2,3 (6,7) repeat them
             __m256 hadd1 = _mm256_hadd_ps(squared, squared);
 
-            // Square root
-            __m256 lengths = _mm256_sqrt_ps(hadd1);
-
-            alignas(32) float temp[8];
-            _mm256_store_ps(temp, lengths);
-
-            result[i] = temp[0];
-            result[i + 1] = temp[2];
-            result[i + 2] = temp[4];
-            result[i + 3] = temp[6];
+            // movelh takes the low pair of each half: [lane0, lane1, lane4, lane5] = squared lengths 0..3
+            __m128 sums = _mm_movelh_ps(_mm256_castps256_ps128(hadd1), _mm256_extractf128_ps(hadd1, 1));
+            _mm_storeu_ps(result + i, _mm_sqrt_ps(sums));
         }
 
         for (; i < count; ++i)
