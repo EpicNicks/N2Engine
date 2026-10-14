@@ -22,7 +22,7 @@ RUN apt-get update \
  && echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" > /etc/apt/sources.list.d/llvm.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3 \
-        libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev \
+        libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

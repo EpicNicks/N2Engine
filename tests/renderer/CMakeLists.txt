@@ -4,6 +4,11 @@ file(GLOB_RECURSE RENDERER_TEST_SOURCES
         "*.cxx"
 )
 
+# The Vulkan tests need the Vulkan backend (N2ENGINE_RENDERER_VULKAN)
+if(NOT N2ENGINE_RENDERER_VULKAN)
+    list(FILTER RENDERER_TEST_SOURCES EXCLUDE REGEX "/vulkan/")
+endif()
+
 add_executable(renderer_tests ${RENDERER_TEST_SOURCES})
 
 target_link_libraries(renderer_tests

@@ -1,7 +1,7 @@
 include(FetchContent)
 
 # Help CMake find Vulkan on Windows if VULKAN_SDK isn't set
-if(WIN32 AND NOT DEFINED ENV{VULKAN_SDK})
+if(N2ENGINE_RENDERER_VULKAN AND WIN32 AND NOT DEFINED ENV{VULKAN_SDK})
     file(GLOB VULKAN_SDK_DIRS "C:/VulkanSDK/*")
     if(VULKAN_SDK_DIRS)
         list(GET VULKAN_SDK_DIRS -1 VULKAN_SDK_PATH)
@@ -17,6 +17,11 @@ file(GLOB_RECURSE RENDERER_SOURCES
     "src/*.cxx"
 )
 
+# Without the Vulkan backend its sources are not built (and nothing includes its headers: see RendererConfig.hpp)
+if(NOT N2ENGINE_RENDERER_VULKAN)
+    list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/vulkan/")
+endif()
+
 # Only create library if we have source files
 if(RENDERER_SOURCES)
     add_library(renderer STATIC ${RENDERER_SOURCES})
@@ -25,7 +30,9 @@ else()
 endif()
 
 # Find graphics APIs
-find_package(Vulkan REQUIRED)
+if(N2ENGINE_RENDERER_VULKAN)
+    find_package(Vulkan REQUIRED)
+endif()
 find_package(OpenGL REQUIRED)
 
 # Configure GLFW
@@ -67,17 +74,25 @@ target_include_directories(renderer
         ${CMAKE_SOURCE_DIR}/external/glad/include
     PRIVATE
     src
-        ${Vulkan_INCLUDE_DIRS}
         MathCore::math
 )
+if(N2ENGINE_RENDERER_VULKAN)
+    target_include_directories(renderer PRIVATE ${Vulkan_INCLUDE_DIRS})
+endif()
 
 # Compile definitions
 target_compile_definitions(renderer PRIVATE 
     GLFW_INCLUDE_NONE
-    GLFW_INCLUDE_VULKAN
-    ${VULKAN_PLATFORM_DEFINE}
     NOMINMAX # remove windows min and max macros from polluting the <algorithm> function
 )
+if(N2ENGINE_RENDERER_VULKAN)
+    target_compile_definitions(renderer PRIVATE
+        GLFW_INCLUDE_VULKAN
+        ${VULKAN_PLATFORM_DEFINE}
+    )
+endif()
+# 1 or 0 for everything that links the renderer (renderer/common/RendererConfig.hpp)
+target_compile_definitions(renderer PUBLIC N2ENGINE_RENDERER_VULKAN=$<BOOL:${N2ENGINE_RENDERER_VULKAN}>)
 
 # Link libraries
 target_link_libraries(renderer
@@ -85,9 +100,11 @@ target_link_libraries(renderer
         glad
         glfw
         OpenGL::GL
-        Vulkan::Vulkan
         MathCore::math
 )
+if(N2ENGINE_RENDERER_VULKAN)
+    target_link_libraries(renderer PUBLIC Vulkan::Vulkan)
+endif()
 
 # Set standard
 set_target_properties(renderer PROPERTIES
