@@ -123,6 +123,7 @@ namespace N2Engine::Physics
 
         body.tets = mesh.tets;
         body.restVolume.resize(body.tets.size());
+        body.flipped.assign(body.tets.size(), 0);
         std::vector<std::pair<std::uint32_t, std::uint32_t>> pairs;
         pairs.reserve(body.tets.size() * 6);
         for (std::size_t t = 0; t < body.tets.size(); ++t)
@@ -140,7 +141,10 @@ namespace N2Engine::Physics
             if (volume < 0.0f)
             {
                 // A mirrored transform turned it inside out: swap two corners so every tetrahedron is positive
+                // (the embedding's weights stay in the mesh's original corner order, so the tetrahedron is flagged
+                // and CopySurfacePositions swaps the weights of corners 2 and 3 to match)
                 std::swap(tet[2], tet[3]);
+                body.flipped[t] = 1;
                 volume = -volume;
             }
             body.restVolume[t] = volume >= kMinTetVolume ? volume : 0.0f;
@@ -426,12 +430,14 @@ namespace N2Engine::Physics
         {
             const auto &tet = body->tets[e.tet];
             float x = 0.0f, y = 0.0f, z = 0.0f;
+            const bool flipped = body->flipped[e.tet] != 0;
             for (int c = 0; c < 4; ++c)
             {
                 const V3 &p = body->position[tet[c]];
-                x += e.weights[c] * p.x;
-                y += e.weights[c] * p.y;
-                z += e.weights[c] * p.z;
+                const float weight = e.weights[flipped && c >= 2 ? 5 - c : c]; // corners 2 and 3 were swapped
+                x += weight * p.x;
+                y += weight * p.y;
+                z += weight * p.z;
             }
             out.emplace_back(x, y, z);
         }

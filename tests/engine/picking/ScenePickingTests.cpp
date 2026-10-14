@@ -6,6 +6,7 @@
 #include <numbers>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include <math/Matrix.hpp>
 #include <math/Quaternion.hpp>
@@ -249,6 +250,32 @@ TEST(WorldBoundsTest, AMeshRendererNeedsAMesh)
     renderer->SetMesh(Rendering::Mesh::GetBuiltin(Rendering::BuiltinMesh::Cube));
     object->GetPositionable()->SetPosition(Vector3(0.0f, 5.0f, 0.0f));
     ExpectBox(renderer->GetWorldBounds(), Vector3(-0.5f, 4.5f, -0.5f), Vector3(0.5f, 5.5f, 0.5f), "mesh");
+}
+
+TEST(PickGameObjectTest, AMeshRendererWithADeformedMeshIsPickedWhereItIsDrawn)
+{
+    auto scene = EditScene("Deformed");
+    auto object = GameObject::Create("Soft");
+    auto *renderer = object->AddComponent<Rendering::MeshRenderer>();
+    renderer->SetMesh(Rendering::Mesh::GetBuiltin(Rendering::BuiltinMesh::Cube));
+    scene->AddRootGameObject(object);
+
+    // The runtime copy, moved 5 along x in mesh space (as a soft body's deformed mesh follows its simulated nodes)
+    Renderer::Common::MeshData data = Rendering::Mesh::GetBuiltin(Rendering::BuiltinMesh::Cube)->GetMeshData();
+    for (auto &vertex : data.vertices)
+    {
+        vertex.position[0] += 5.0f;
+    }
+    auto deformed = Rendering::Mesh::Create(std::move(data));
+    ASSERT_NE(deformed, nullptr);
+    renderer->SetDeformedMesh(deformed);
+
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(5.0f, 0.0f)).gameObject, object.get()) << "at the drawn location";
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(0.0f, 0.0f)).gameObject, nullptr) << "not at the rest location";
+
+    renderer->ClearDeformedMesh();
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(0.0f, 0.0f)).gameObject, object.get());
+    EXPECT_EQ(Picking::PickGameObject(*scene, Down(5.0f, 0.0f)).gameObject, nullptr);
 }
 
 TEST(WorldBoundsTest, TextIsItsLaidOutRectangleInTheObjectsPlane)

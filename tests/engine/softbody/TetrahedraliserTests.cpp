@@ -386,6 +386,33 @@ TEST_F(TetCacheTest, ASetDataOrAnotherResolutionMisses)
     EXPECT_TRUE(cache.GetOrBuild(mesh, 4).cacheHit);
 }
 
+TEST_F(TetCacheTest, ResolutionsOfOneMeshVersionCoexistAndANewVersionEvictsTheOldOnes)
+{
+    TetCache &cache = TetCache::Instance();
+    const std::shared_ptr<Mesh> mesh = TestSupport::MakeBoxMesh();
+    const TetResult at4 = cache.GetOrBuild(mesh, 4);
+    const TetResult at6 = cache.GetOrBuild(mesh, 6);
+    ASSERT_TRUE(at4.Ok() && at6.Ok());
+    EXPECT_EQ(cache.Size(), 2u);
+    EXPECT_TRUE(cache.GetOrBuild(mesh, 4).cacheHit) << "building resolution 6 kept resolution 4";
+    EXPECT_TRUE(cache.GetOrBuild(mesh, 6).cacheHit);
+
+    // A new version of the mesh drops every entry of the old one
+    ASSERT_TRUE(mesh->SetData(TestSupport::MakeWeldedBox(2.0f, 1.0f, 1.0f)));
+    ASSERT_TRUE(cache.GetOrBuild(mesh, 4).Ok());
+    EXPECT_EQ(cache.Size(), 1u);
+    EXPECT_FALSE(cache.GetOrBuild(mesh, 6).cacheHit);
+    EXPECT_EQ(cache.Size(), 2u);
+
+    // Other meshes' entries are left alone
+    const std::shared_ptr<Mesh> other = TestSupport::MakeBoxMesh();
+    ASSERT_TRUE(cache.GetOrBuild(other, 4).Ok());
+    ASSERT_TRUE(mesh->SetData(TestSupport::MakeWeldedBox(3.0f, 1.0f, 1.0f)));
+    ASSERT_TRUE(cache.GetOrBuild(mesh, 4).Ok());
+    EXPECT_TRUE(cache.GetOrBuild(other, 4).cacheHit);
+    EXPECT_EQ(cache.Size(), 2u);
+}
+
 TEST_F(TetCacheTest, AnotherMeshWithTheSameDataIsItsOwnEntry)
 {
     TetCache &cache = TetCache::Instance();

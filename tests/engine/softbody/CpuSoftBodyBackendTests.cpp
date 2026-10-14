@@ -120,6 +120,45 @@ TEST(CpuSoftBodyBackendTest, TheTransformScalesAndAMirroredOneKeepsEveryVolumePo
     EXPECT_NEAR(backend.GetVolume(flipped), 1.0f, 0.05f);
 }
 
+TEST(CpuSoftBodyBackendTest, MirroredTransformsStillSkinTheRenderVerticesAtTheirTransformedRestPositions)
+{
+    const float scales[2][3] = {{-1.0f, 1.0f, 1.0f}, {-1.0f, 1.0f, -2.0f}};
+    for (const auto &scale : scales)
+    {
+        CpuSoftBodyBackend backend;
+        SoftBodyDesc desc = MakeBoxDesc(3);
+        desc.localToWorld[0] = scale[0];
+        desc.localToWorld[5] = scale[1];
+        desc.localToWorld[10] = scale[2];
+        desc.localToWorld[3] = 1.0f;
+        desc.localToWorld[7] = 2.0f;
+        desc.localToWorld[11] = 3.0f;
+        const SoftBodyHandle handle = backend.CreateBody(desc);
+        ASSERT_NE(handle, kInvalidSoftBody);
+
+        std::vector<Math::Vector3> surface;
+        backend.CopySurfacePositions(handle, surface);
+        const TetMeshData &mesh = *desc.tetMesh;
+        ASSERT_EQ(surface.size(), mesh.surfaceEmbedding.size());
+        ASSERT_FALSE(surface.empty());
+        for (std::size_t i = 0; i < surface.size(); ++i)
+        {
+            const TetEmbedding &e = mesh.surfaceEmbedding[i];
+            Math::Vector3 local(0.0f, 0.0f, 0.0f);
+            for (int c = 0; c < 4; ++c)
+            {
+                const Math::Vector3 &p = mesh.positions[mesh.tets[e.tet][c]];
+                local.x += e.weights[c] * p.x;
+                local.y += e.weights[c] * p.y;
+                local.z += e.weights[c] * p.z;
+            }
+            EXPECT_NEAR(surface[i].x, scale[0] * local.x + 1.0f, 1e-4f) << "vertex " << i;
+            EXPECT_NEAR(surface[i].y, scale[1] * local.y + 2.0f, 1e-4f) << "vertex " << i;
+            EXPECT_NEAR(surface[i].z, scale[2] * local.z + 3.0f, 1e-4f) << "vertex " << i;
+        }
+    }
+}
+
 TEST(CpuSoftBodyBackendTest, FallsUnderGravity)
 {
     CpuSoftBodyBackend backend;

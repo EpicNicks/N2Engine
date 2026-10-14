@@ -592,12 +592,12 @@ namespace N2Engine::SoftBodies
         result = Tetrahedralise(*mesh, settings);
         if (result.Ok())
         {
+            // An older version of this mesh is stale for good; other resolutions of this version stay cached
+            std::erase_if(_entries, [&](const Entry &entry) { return entry.version != version && entry.mesh.lock() == mesh; });
             if (_entries.size() >= kMaxEntries)
             {
                 _entries.erase(_entries.begin());
             }
-            // An older version of this mesh is stale for good
-            std::erase_if(_entries, [&](const Entry &entry) { return entry.mesh.lock() == mesh; });
             _entries.push_back(Entry{mesh, version, requested, result.mesh});
         }
         return result;

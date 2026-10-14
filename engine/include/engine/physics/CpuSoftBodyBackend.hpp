@@ -98,6 +98,7 @@ namespace N2Engine::Physics
             SoftBodyParams params;
             std::shared_ptr<const TetMeshData> mesh;
             std::vector<std::array<std::uint32_t, 4>> tets; // positively oriented in world space
+            std::vector<std::uint8_t> flipped;              // per tetrahedron: corners 2 and 3 were swapped (mirrored transform)
             std::vector<float> restVolume;                  // per tetrahedron; 0 for a degenerate one (no constraint)
             std::vector<Edge> edges;                        // unique, sorted by node pair
             std::vector<V3> rest;                           // the world-space rest shape
