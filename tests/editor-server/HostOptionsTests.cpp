@@ -4,10 +4,12 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <editor-server/EditorServer.hpp>
 #include <editor-server/EditorTls.hpp>
+#include <editor-server/Host.hpp>
 #include <editor-server/HostOptions.hpp>
 
 using namespace N2Engine::Editor;
@@ -534,4 +536,131 @@ TEST(HostOptionsTest, ABuildWithoutTlsRefusesToServeIt)
     EXPECT_FALSE(server.IsTlsEnabled());
     EXPECT_TRUE(server.TlsFingerprint().empty());
 #endif
+}
+
+// ==================== --tokens-file and --new-token ====================
+
+TEST(HostOptionsTest, TokensFileTakesAPathAndIsOffByDefault)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults) << defaults.error();
+    EXPECT_TRUE(defaults->tokensFile.empty());
+    EXPECT_TRUE(defaults->newTokenUser.empty());
+
+    const auto parsed = ParseHostArguments({"--tokens-file", "/etc/n2editorhost/tokens.json", "--port", "1234"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ(parsed->tokensFile, "/etc/n2editorhost/tokens.json");
+    EXPECT_EQ(parsed->port, 1234);
+    EXPECT_TRUE(parsed->tokenEnv.empty());
+
+    // It goes with --read-only and --tls: the file says who, those say what and how
+    const auto together = ParseHostArguments({"--tokens-file", "tokens.json", "--read-only", "--tls"});
+    ASSERT_TRUE(together) << together.error();
+    EXPECT_TRUE(together->readOnly);
+    EXPECT_TRUE(together->tls);
+}
+
+TEST(HostOptionsTest, TokensFileMissingItsValueIsAnError)
+{
+    for (const std::vector<std::string> &args : {std::vector<std::string>{"--tokens-file"},
+                                                 std::vector<std::string>{"--tokens-file", "--tls"},
+                                                 std::vector<std::string>{"--tokens-file", ""}})
+    {
+        const auto parsed = ParseHostArguments(args);
+        ASSERT_FALSE(parsed) << args.size();
+        EXPECT_NE(parsed.error().find("--tokens-file is missing a value"), std::string::npos) << parsed.error();
+    }
+}
+
+TEST(HostOptionsTest, TokensFileAndTokenEnvCantBeCombined)
+{
+    // One host has one kind of token, whatever the argument order: a file with --token-env would leave it unclear which
+    // of them gates Hello
+    for (const std::vector<std::string> &args :
+         {std::vector<std::string>{"--tokens-file", "tokens.json", "--token-env", "N2_TOKEN"},
+          std::vector<std::string>{"--token-env", "N2_TOKEN", "--tokens-file", "tokens.json"}})
+    {
+        const auto parsed = ParseHostArguments(args);
+        ASSERT_FALSE(parsed);
+        EXPECT_NE(parsed.error().find("--tokens-file and --token-env can't be combined"), std::string::npos)
+            << parsed.error();
+    }
+    EXPECT_TRUE(ParseHostArguments({"--token-env", "N2_TOKEN"}));
+    EXPECT_TRUE(ParseHostArguments({"--tokens-file", "tokens.json"}));
+}
+
+TEST(HostOptionsTest, NewTokenTakesAUserAndARole)
+{
+    for (const auto &[role, expected] : {std::pair{"admin", TokenRole::Admin}, std::pair{"editor", TokenRole::Editor},
+                                         std::pair{"viewer", TokenRole::Viewer}})
+    {
+        const auto parsed = ParseHostArguments({"--new-token", "alice", role});
+        ASSERT_TRUE(parsed) << parsed.error();
+        EXPECT_EQ(parsed->newTokenUser, "alice");
+        EXPECT_EQ(parsed->newTokenRole, expected);
+    }
+    // Other options around it still parse
+    const auto parsed = ParseHostArguments({"--port", "1234", "--new-token", "ci-runner", "viewer", "--read-only"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ(parsed->newTokenUser, "ci-runner");
+    EXPECT_EQ(parsed->port, 1234);
+}
+
+TEST(HostOptionsTest, NewTokenNeedsAValidUserAndRole)
+{
+    // Too few values, or an option where a value should be
+    for (const std::vector<std::string> &args : {std::vector<std::string>{"--new-token"},
+                                                 std::vector<std::string>{"--new-token", "alice"},
+                                                 std::vector<std::string>{"--new-token", "alice", "--tls"},
+                                                 std::vector<std::string>{"--new-token", "--tls", "editor"}})
+    {
+        const auto parsed = ParseHostArguments(args);
+        ASSERT_FALSE(parsed) << args.size();
+        EXPECT_NE(parsed.error().find("--new-token needs a user and a role"), std::string::npos) << parsed.error();
+    }
+    const auto badUser = ParseHostArguments({"--new-token", "al ice", "editor"});
+    ASSERT_FALSE(badUser);
+    EXPECT_NE(badUser.error().find("--new-token: the user"), std::string::npos) << badUser.error();
+    const auto badRole = ParseHostArguments({"--new-token", "alice", "root"});
+    ASSERT_FALSE(badRole);
+    EXPECT_NE(badRole.error().find("--new-token: the role must be admin, editor or viewer"), std::string::npos)
+        << badRole.error();
+    EXPECT_FALSE(ParseHostArguments({"--new-token", "alice", "Admin"}));
+}
+
+TEST(HostOptionsTest, NewTokenAndCreateCantBeCombined)
+{
+    const auto parsed = ParseHostArguments({"--new-token", "alice", "admin", "--create", "proj"});
+    ASSERT_FALSE(parsed);
+    EXPECT_NE(parsed.error().find("--new-token and --create can't be combined"), std::string::npos) << parsed.error();
+}
+
+TEST(HostOptionsTest, TheUsageNamesTheTokenOptions)
+{
+    const std::string_view usage = HostUsage();
+    for (const std::string_view text : {"--tokens-file <path>", "--new-token <user> <role>", "viewer", "editor", "admin",
+                                        "sha256:", "SIGHUP", "chmod 600", "N2ENGINE_EDITOR_TLS"})
+    {
+        EXPECT_NE(usage.find(text), std::string_view::npos) << text;
+    }
+}
+
+TEST(HostOptionsTest, ABuildWithoutTlsRefusesATokensFileAndCantMakeATokenButATlsBuildCan)
+{
+    HostOptions tokens;
+    tokens.tokensFile = (std::filesystem::temp_directory_path() / "n2-no-such-tokens.json").string();
+    HostOptions newToken;
+    newToken.newTokenUser = "alice";
+    newToken.newTokenRole = TokenRole::Editor;
+
+    if (EditorTlsServer::IsAvailable())
+    {
+        // A host with a tokens file starts the engine, which this test doesn't: only the token maker runs here
+        EXPECT_EQ(RunHost(newToken), 0);
+        return;
+    }
+    // Before the engine starts, with one line on stderr: a host asked for per-user tokens it can't check must not start
+    EXPECT_EQ(RunHost(tokens), 1);
+    EXPECT_EQ(RunHost(newToken), 1);
+    EXPECT_EQ(RunNewToken(newToken), 1);
 }

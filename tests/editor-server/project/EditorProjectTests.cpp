@@ -612,10 +612,17 @@ TEST_F(EditorProjectTest, HelloReportsTheProject)
     hello.WriteString("");
     const Frame response = Execute(server, CommandType::Hello, hello.Release());
     ASSERT_EQ(response.type, static_cast<uint8_t>(ResponseType::ServerInfo));
-    ASSERT_GE(response.payload.size(), 2u);
-    // projectLoaded, then (since 1.11.0) readOnly: this host serves writes
-    EXPECT_EQ(response.payload[response.payload.size() - 2], uint8_t{1}) << "projectLoaded";
-    EXPECT_EQ(response.payload.back(), uint8_t{0}) << "readOnly is the last field";
+    // protocolVersion, engineVersion, capabilities, projectLoaded, then (since 1.11.0) readOnly and (since 1.12.0) the
+    // user and role: this host serves writes and has no authentication, so nobody is named and the role is admin
+    BufferReader r(response.payload);
+    (void)r.ReadString();
+    (void)r.ReadString();
+    (void)ReadJson(r);
+    EXPECT_TRUE(r.ReadBool()) << "projectLoaded";
+    EXPECT_FALSE(r.ReadBool()) << "readOnly";
+    EXPECT_EQ(r.ReadString(), "") << "user";
+    EXPECT_EQ(r.ReadString(), "admin") << "role";
+    EXPECT_FALSE(r.HasData());
 }
 
 TEST_F(EditorProjectTest, SetProjectSettingsMergesAppliesAndSaves)

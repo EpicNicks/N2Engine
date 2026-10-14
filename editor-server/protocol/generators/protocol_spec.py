@@ -100,14 +100,23 @@ def responses(protocol: dict) -> list[tuple[str, int, Optional[dict]]]:
     return result
 
 
-# Primitives a trailing optional field may have: the default is the zero value (false, 0)
-OPTIONAL_TRAILING_TYPES = ("bool", "uint8", "uint32", "int32", "float32")
+# Types a trailing optional field may have: the default is the zero value (false, 0, or the empty string)
+OPTIONAL_TRAILING_TYPES = ("bool", "uint8", "uint32", "int32", "float32", "string")
+
+
+def optional_default(raw: str):
+    """The value a reader decodes an optional trailing field of this type as when the payload ends before it"""
+    if raw == "bool":
+        return False
+    if raw == "string":
+        return ""
+    return 0
 
 
 def optional_trailing(protocol: dict, message: str) -> list[str]:
     """The optional trailing fields of a message ("HelloRequest", "ServerInfoResponse"; protocol.json's
     optionalTrailing): fields added in a later minor version, which a reader whose payload ends before them
-    decodes as the zero default (false, 0)"""
+    decodes as the zero default (false, 0, or the empty string)"""
     return protocol.get("optionalTrailing", {}).get(message, [])
 
 

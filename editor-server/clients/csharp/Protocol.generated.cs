@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.11.0";
+        public const string ProtocolVersion = "1.12.0";
     }
 
     public enum CommandType : byte
@@ -450,8 +450,10 @@ namespace N2Engine.Editor.Protocol
         public string ClientName;
         public string ProtocolVersion;
         public string Token;
-        /// <summary>Optional trailing: the default (false or 0) when the payload ends before it</summary>
+        /// <summary>Optional trailing: the default (false, 0 or empty) when the payload ends before it</summary>
         public bool ErrorCodes;
+        /// <summary>Optional trailing: the default (false, 0 or empty) when the payload ends before it</summary>
+        public string User;
     }
 
     public struct PollEventsRequest
@@ -730,8 +732,12 @@ namespace N2Engine.Editor.Protocol
         /// <summary>JSON text: string[]</summary>
         public string Capabilities;
         public bool ProjectLoaded;
-        /// <summary>Optional trailing: the default (false or 0) when the payload ends before it</summary>
+        /// <summary>Optional trailing: the default (false, 0 or empty) when the payload ends before it</summary>
         public bool ReadOnly;
+        /// <summary>Optional trailing: the default (false, 0 or empty) when the payload ends before it</summary>
+        public string User;
+        /// <summary>Optional trailing: the default (false, 0 or empty) when the payload ends before it</summary>
+        public string Role;
     }
 
     public struct EventsResponse

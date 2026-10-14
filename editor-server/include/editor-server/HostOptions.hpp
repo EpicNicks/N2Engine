@@ -12,6 +12,8 @@
 
 #include <math/UUID.hpp>
 
+#include "editor-server/TokenTable.hpp"
+
 namespace N2Engine::Editor
 {
     /// The renderer --renderer chooses
@@ -39,6 +41,14 @@ namespace N2Engine::Editor
         /// The environment variable holding the access token (ReadAccessToken), so the token itself never appears on
         /// a command line. Empty: the host has no access token, and Hello is optional.
         std::string tokenEnv;
+        /// --tokens-file: a JSON file of per-user tokens (TokenTable; EditorServer::SetTokensFile): every connection
+        /// must send Hello with a user's token and gets that user's role. Needs a host built with N2ENGINE_EDITOR_TLS
+        /// (RunHost refuses it otherwise, for the SHA-256 of the hashes). Can't be combined with tokenEnv. Empty: none.
+        std::string tokensFile;
+        /// --new-token <user> <role>: make a token for this user (RunNewToken), print it and the entry to add to the
+        /// tokens file, and exit; the host isn't started. Empty user: not asked for.
+        std::string newTokenUser;
+        TokenRole newTokenRole = TokenRole::Viewer;
         /// Stop once a client's session ends (EditorServer::SetStopOnDisconnect), so a host whose launcher has gone
         /// doesn't keep running
         bool exitOnDisconnect = false;
@@ -98,8 +108,9 @@ namespace N2Engine::Editor
 
     /// The arguments after the program name. -h/--help anywhere wins: the result is the defaults with showHelp
     /// set, whatever else is there. Otherwise an option missing its value (none follows, or the next argument
-    /// starts with "--"), an invalid port, renderer or --project-id, --create together with --project, and --name or
-    /// --project-id without --create are errors (the message names the option); unknown arguments are ignored.
+    /// starts with "--"), an invalid port, renderer or --project-id, --create together with --project, --name or
+    /// --project-id without --create, --tokens-file together with --token-env, and --new-token with an invalid user
+    /// or role (it takes two values) are errors (the message names the option); unknown arguments are ignored.
     [[nodiscard]] std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args);
 
     /// Reads up to `size` bytes into `buffer`; returns the count read, 0 at end of file, and a negative number on error

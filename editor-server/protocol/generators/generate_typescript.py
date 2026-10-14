@@ -404,7 +404,7 @@ def decoder(function: str, type_name: str, fields: dict, protocol: dict, doc: st
             read = read_expression(ftype, protocol, arrays.get(field, ''))
             if field in optional:
                 # Added in a later minor version: a payload from an older peer ends before it
-                default = "false" if ftype == "bool" else "0"
+                default = {"bool": "false", "string": '""'}.get(ftype, "0")
                 lines.append(f"  const {field} = reader.remaining > 0 ? {read} : {default};")
             else:
                 lines.append(f"  const {field} = {read};")

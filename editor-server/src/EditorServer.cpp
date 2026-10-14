@@ -1587,8 +1587,205 @@ namespace N2Engine::Editor
             Logger::Warn("The editor server's access token can't change while it is running");
             return false;
         }
+        if (!_tokensFile.empty())
+        {
+            Logger::Warn("The editor server has a tokens file, which can't be combined with a single access token");
+            return false;
+        }
         _accessToken = std::move(token);
         return true;
+    }
+
+    std::expected<void, std::string> EditorServer::SetTokensFile(const std::filesystem::path &path)
+    {
+        if (_running)
+        {
+            return std::unexpected("the tokens file can't change while the server is running");
+        }
+        if (!_accessToken.empty())
+        {
+            return std::unexpected("a tokens file and a single access token (--token-env) can't be combined");
+        }
+        if (!EditorTlsServer::IsAvailable())
+        {
+            return std::unexpected("a tokens file needs a build with the TLS library, which supplies the SHA-256 of the "
+                                   "token hashes (configure it with -DN2ENGINE_EDITOR_TLS=ON)");
+        }
+        if (path.empty())
+        {
+            return std::unexpected("the tokens file has no path");
+        }
+
+        std::error_code error;
+        std::filesystem::path absolute = std::filesystem::absolute(path, error);
+        if (error)
+        {
+            absolute = path;
+        }
+        // Looked at before it is read, so a write that lands in between makes the next check see a changed file
+        const TokensFileSignature signature = StatTokensFile(absolute);
+        auto table = LoadTokensFile(absolute);
+        if (!table)
+        {
+            return std::unexpected(table.error());
+        }
+        {
+            const std::lock_guard lock(_tokensMutex);
+            _tokens = std::make_shared<const TokenTable>(std::move(*table));
+        }
+        _tokensFile = std::move(absolute);
+        _tokensLoaded = signature;
+        _tokensRejected.reset();
+        return {};
+    }
+
+    std::shared_ptr<const TokenTable> EditorServer::CurrentTokens() const
+    {
+        const std::lock_guard lock(_tokensMutex);
+        return _tokens;
+    }
+
+    std::optional<EditorServer::ConnectionIdentity> EditorServer::Authenticate(const std::string_view token,
+                                                                                const std::string_view user) const
+    {
+        ConnectionIdentity identity;
+        if (!_tokensFile.empty())
+        {
+            const std::optional<TokenHash> digest = HashToken(token);
+            const std::shared_ptr<const TokenTable> tokens = CurrentTokens();
+            if (!digest || !tokens)
+            {
+                return std::nullopt;
+            }
+            // No user named (a client from before 1.12.0): the token is matched across every entry
+            const std::optional<TokenEntry> match =
+                tokens->Authenticate(*digest, user.empty() ? std::nullopt : std::optional<std::string_view>(user));
+            if (!match)
+            {
+                return std::nullopt;
+            }
+            identity.authenticated = true;
+            identity.user = match->user;
+            identity.role = match->role;
+            identity.hash = match->hash;
+            identity.fromTokensFile = true;
+            return identity;
+        }
+        if (!_accessToken.empty())
+        {
+            if (!TokensMatch(_accessToken, token))
+            {
+                return std::nullopt;
+            }
+            // --token-env: one synthetic user with every right
+            identity.authenticated = true;
+            identity.user = std::string(LegacyTokenUser);
+            identity.role = TokenRole::Admin;
+            return identity;
+        }
+        return identity;
+    }
+
+    EditorServer::ConnectionIdentity EditorServer::CurrentIdentity() const
+    {
+        const std::lock_guard lock(_identityMutex);
+        return _identity;
+    }
+
+    void EditorServer::SetIdentity(ConnectionIdentity identity)
+    {
+        const std::lock_guard lock(_identityMutex);
+        _identity = std::move(identity);
+    }
+
+    void EditorServer::ClearIdentity()
+    {
+        const std::lock_guard lock(_identityMutex);
+        _identity = ConnectionIdentity{};
+    }
+
+    void EditorServer::ReloadTokens(const bool force)
+    {
+        if (_tokensFile.empty())
+        {
+            return;
+        }
+        // The signature before the read: a write that lands during it changes the file past this signature, so the next
+        // check reloads again instead of trusting a half-seen state
+        const TokensFileSignature signature = StatTokensFile(_tokensFile);
+        if (!force && (signature == _tokensLoaded || (_tokensRejected.has_value() && signature == *_tokensRejected)))
+        {
+            return;
+        }
+
+        auto table = LoadTokensFile(_tokensFile);
+        if (!table)
+        {
+            // Not tried again until the file changes (or a reload is asked for), so a bad file isn't a warning per connection
+            _tokensRejected = signature;
+            PostLog("Couldn't reload the tokens file, so the previous tokens stay in force: " + table.error(), true);
+            return;
+        }
+        const size_t users = table->Size();
+        {
+            const std::lock_guard lock(_tokensMutex);
+            _tokens = std::make_shared<const TokenTable>(std::move(*table));
+        }
+        _tokensLoaded = signature;
+        _tokensRejected.reset();
+        PostLog(std::format("Reloaded the tokens file: {} user(s)", users));
+        CheckIdentityAgainstTokens();
+    }
+
+    void EditorServer::CheckIdentityAgainstTokens()
+    {
+        const ConnectionIdentity identity = CurrentIdentity();
+        if (!identity.fromTokensFile)
+        {
+            return;
+        }
+        const std::shared_ptr<const TokenTable> tokens = CurrentTokens();
+        const TokenEntry *entry = tokens ? tokens->Find(identity.user) : nullptr;
+        if (entry != nullptr && entry->role == identity.role && TokenHashesEqual(entry->hash, identity.hash))
+        {
+            return;
+        }
+        _closeConnection.store(true);
+        PostLog(std::format("Closing the connection of user={} role={}: the reloaded tokens file no longer grants it",
+                            identity.user, TokenRoleName(identity.role)),
+                true);
+    }
+
+    void EditorServer::ServiceTokens()
+    {
+        if (_tokensReloadRequested.exchange(false))
+        {
+            ReloadTokens(true);
+        }
+    }
+
+    bool EditorServer::RoleAllows(const TokenRole role, const uint8_t commandType)
+    {
+        if (role == TokenRole::Admin)
+        {
+            return true;
+        }
+        // Default deny: a command nobody classified is an admin's alone
+        const std::optional<CommandClass> commandClass = ClassifyCommand(commandType);
+        if (!commandClass.has_value())
+        {
+            return false;
+        }
+        if (role == TokenRole::Editor)
+        {
+            return *commandClass != CommandClass::Admin;
+        }
+        return *commandClass == CommandClass::Read;
+    }
+
+    std::string EditorServer::RoleDeniedMessage(const TokenRole role, const uint8_t commandType)
+    {
+        return std::format("forbidden: role {} is not allowed to run {}", TokenRoleName(role), CommandName(commandType));
     }
 
     bool EditorServer::SetHelloTimeout(std::chrono::milliseconds timeout)
@@ -1726,6 +1923,12 @@ namespace N2Engine::Editor
                 continue;
             }
 
+            // A new connection has no identity (its Hello gives it one). The tokens file is looked at before that Hello,
+            // so a token revoked since the last connection can't be used.
+            _closeConnection.store(false);
+            ClearIdentity();
+            ReloadTokens(false);
+
             PostLog("Editor connected");
             _clientConnected = true;
             bool sessionOpened = false;
@@ -1742,6 +1945,8 @@ namespace N2Engine::Editor
             EndTls();
             CLOSE_SOCKET(clientSocket);
             _clientConnected = false;
+            ClearIdentity();
+            _closeConnection.store(false);
             PostLog("Editor disconnected");
             // A group it left open becomes a step (queued: the history is main-thread state)
             (void)_commands.Enqueue([this]
@@ -1824,7 +2029,7 @@ namespace N2Engine::Editor
         _clientErrorCodes = false;
         // With an access token, a connection that hasn't succeeded a Hello must not hold the (one-at-a-time) server:
         // it has until this deadline to do so, and is closed after a refused command or a failed Hello
-        const bool gated = !_accessToken.empty();
+        const bool gated = RequiresAccessToken();
         // Without a token every connection is a session (for SetStopOnDisconnect); with one, from its first good Hello
         sessionOpened = !gated;
         const auto helloDeadline = connectedAt + _helloTimeout;
@@ -1846,6 +2051,11 @@ namespace N2Engine::Editor
 
         while (_running)
         {
+            // A reload of the tokens file took this connection's rights away (CheckIdentityAgainstTokens): it ends here,
+            // and in any wait below (WaitUntilReady)
+            if (_closeConnection.load())
+                break;
+
             // Read command header: [type: 1 byte][length: 4 bytes]
             uint8_t cmdType;
             uint32_t payloadLength;
@@ -1893,8 +2103,8 @@ namespace N2Engine::Editor
 
             if (static_cast<CommandType>(cmdType) == CommandType::Shutdown)
             {
-                // The one command answered here, so ProcessCommand's read-only gate never sees it: a read-only host
-                // refuses it the same way and keeps serving this connection
+                // The one command answered here, so ProcessCommand's gates never see it: a read-only host, and a role that
+                // may not Shutdown, refuse it the same way and keep serving this connection
                 if (_readOnly)
                 {
                     const std::vector<uint8_t> denial =
@@ -1902,6 +2112,23 @@ namespace N2Engine::Editor
                     if (!Send(clientSocket, denial.data(), denial.size()))
                         break;
                     continue;
+                }
+                if (gated)
+                {
+                    const ConnectionIdentity identity = CurrentIdentity();
+                    if (!RoleAllows(identity.role, cmdType))
+                    {
+                        PostLog(std::format("audit: denied user={} role={} command={}", identity.user,
+                                            TokenRoleName(identity.role), CommandName(cmdType)),
+                                true);
+                        const std::vector<uint8_t> denial =
+                            BuildDenial(Protocol::ErrorCodeForbidden, RoleDeniedMessage(identity.role, cmdType));
+                        if (!Send(clientSocket, denial.data(), denial.size()))
+                            break;
+                        continue;
+                    }
+                    PostLog(std::format("audit: user={} role={} command={}", identity.user, TokenRoleName(identity.role),
+                                        CommandName(cmdType)));
                 }
                 BufferWriter response;
                 WriteOk(response);
@@ -2193,11 +2420,15 @@ namespace N2Engine::Editor
         return commandClass.has_value() && *commandClass == CommandClass::Read;
     }
 
-    std::string EditorServer::ReadOnlyMessage(const uint8_t commandType)
+    std::string EditorServer::CommandName(const uint8_t commandType)
     {
         const CommandInfo *info = FindCommand(commandType);
-        const std::string name = info != nullptr ? std::string{info->name} : std::format("command 0x{:X}", commandType);
-        return std::format("read-only host: {} is not allowed", name);
+        return info != nullptr ? std::string{info->name} : std::format("command 0x{:X}", commandType);
+    }
+
+    std::string EditorServer::ReadOnlyMessage(const uint8_t commandType)
+    {
+        return std::format("read-only host: {} is not allowed", CommandName(commandType));
     }
 
     std::vector<uint8_t> EditorServer::BuildDenial(const std::string_view code, const std::string &message) const
@@ -2262,6 +2493,23 @@ namespace N2Engine::Editor
         // logged by ExecuteCommand.
         auto cmd = static_cast<CommandType>(commandType);
 
+        // A host with authentication knows who is asking from the connection's Hello, and the role bound there limits
+        // what runs
+        const bool hasRoles = RequiresAccessToken();
+        ConnectionIdentity identity;
+        if (hasRoles)
+        {
+            identity = CurrentIdentity();
+            if (!identity.authenticated && cmd != CommandType::Hello)
+            {
+                // The network thread never lets this through; it is for a caller that reaches the command another way
+                BufferWriter response;
+                WriteError(response, HelloRequiredError);
+                SendResponse(clientSocket, response.Release());
+                return;
+            }
+        }
+
         // A read-only host runs reads only. Default deny: IsReadCommand is an allow list, so a command nobody has
         // classified (or an id that is no command) is refused here, before any handler reads its payload.
         if (_readOnly && !IsReadCommand(commandType))
@@ -2270,11 +2518,33 @@ namespace N2Engine::Editor
             return;
         }
 
+        // A role may run only what its class of commands allows (default deny, as the read-only gate above)
+        if (hasRoles && !RoleAllows(identity.role, commandType))
+        {
+            Logger::Warn(std::format("audit: denied user={} role={} command={}", identity.user,
+                                     TokenRoleName(identity.role), CommandName(commandType)));
+            SendResponse(clientSocket,
+                         BuildDenial(Protocol::ErrorCodeForbidden, RoleDeniedMessage(identity.role, commandType)));
+            return;
+        }
+
         // A play host plays a snapshot: it never opens another scene or writes the project's files
         if (_playMode && IsEditOnlyCommand(commandType))
         {
             SendError(clientSocket, "Not available in a play host: it plays a snapshot and never changes the project's files");
             return;
+        }
+
+        // Who changed what: one line per command that writes, naming the user. A polled command stays silent (its handler
+        // never logs per call, see IsPolledCommand), and a read is nothing to account for.
+        if (hasRoles && !IsPolledCommand(commandType))
+        {
+            const std::optional<CommandClass> commandClass = ClassifyCommand(commandType);
+            if (commandClass.has_value() && *commandClass != CommandClass::Read)
+            {
+                Logger::Info(std::format("audit: user={} role={} command={}", identity.user, TokenRoleName(identity.role),
+                                         CommandName(commandType)));
+            }
         }
 
         switch (cmd)
@@ -2491,16 +2761,31 @@ namespace N2Engine::Editor
         // Client-supplied text only reaches the log, or the Error, sanitised and shortened; the token never does
         const std::string clientName = SanitizeForLog(cmd.clientName);
         const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
+        const std::string claimedUser = SanitizeForLog(cmd.user, MaxTokenUserLength);
         BufferWriter response;
 
-        // The token first, so a client without it learns nothing else
-        if (!_accessToken.empty() && !TokensMatch(_accessToken, cmd.token))
+        // The token first, so a client without it learns nothing else. A wrong user and a wrong token are the same
+        // answer, and the log holds the user the client claimed, never the token or its hash.
+        ConnectionIdentity identity;
+        if (RequiresAccessToken())
         {
-            Logger::Warn("Refused Hello from editor client '" + clientName + "': wrong access token");
-            WriteError(response, "Invalid access token");
-            SendResponse(clientSocket, response.Release());
-            return;
+            const std::optional<ConnectionIdentity> matched = Authenticate(cmd.token, cmd.user);
+            if (!matched)
+            {
+                Logger::Warn(std::format("Refused Hello from editor client '{}' (user={} role=none): wrong access token",
+                                         clientName, claimedUser.empty() ? "-" : claimedUser));
+                WriteError(response, "Invalid access token");
+                SendResponse(clientSocket, response.Release());
+                return;
+            }
+            identity = *matched;
         }
+        // user=<u> role=<r> on every line about this Hello, once the token says who it is (a host without
+        // authentication has nobody to name)
+        const std::string who =
+            identity.authenticated ? std::format("user={} role={}", identity.user, TokenRoleName(identity.role)) : std::string{};
+        const std::string whoInParentheses = who.empty() ? std::string{} : " (" + who + ")";
+        const std::string whoAtEnd = who.empty() ? std::string{} : " " + who;
 
         const auto clientVersion = ParseProtocolVersion(cmd.protocolVersion);
         const auto serverVersion = ParseProtocolVersion(ProtocolVersion);
@@ -2513,7 +2798,7 @@ namespace N2Engine::Editor
                                   "must match)", ProtocolVersion, clientVersionText)
                     : std::format("Invalid protocol version '{}' (expected major.minor.patch; this server speaks {})",
                                   clientVersionText, ProtocolVersion);
-            Logger::Warn("Refused Hello from editor client '" + clientName + "': " + message);
+            Logger::Warn("Refused Hello from editor client '" + clientName + "'" + whoInParentheses + ": " + message);
             WriteError(response, message);
             SendResponse(clientSocket, response.Release());
             return;
@@ -2523,19 +2808,24 @@ namespace N2Engine::Editor
         {
             // Compatible, but one side has commands the other doesn't: those fail with "Unknown command"
             Logger::Warn(std::format("Editor client '{}' said Hello with protocol {}, this server speaks {}: commands "
-                                     "only one of them knows will fail", clientName, clientVersionText, ProtocolVersion));
+                                     "only one of them knows will fail{}", clientName, clientVersionText, ProtocolVersion,
+                                     whoAtEnd));
         }
         else
         {
-            Logger::Info(std::format("Editor client '{}' said Hello (protocol {})", clientName, clientVersionText));
+            Logger::Info(std::format("Editor client '{}' said Hello (protocol {}){}", clientName, clientVersionText,
+                                     whoAtEnd));
         }
         // A new session: a group the last one left open is ended, and the keys it held (a play host's) go up
         CloseEditGroups();
         _keys.ReleaseAll();
         // Whether this connection gets ErrorCoded for a refused command (a later Hello on it replaces the value)
         _clientErrorCodes = cmd.errorCodes;
+        // The user and role bind to the connection here, for as long as it lasts (a later Hello on it replaces them)
+        SetIdentity(identity);
         // A project is loaded when the host opened one (--project, SetProject)
-        WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), HasProject(), _readOnly);
+        WriteServerInfo(response, ProtocolVersion, EngineVersion(), Capabilities(), HasProject(), _readOnly, identity.user,
+                        TokenRoleName(identity.role));
         SendResponse(clientSocket, response.Release());
     }
 
@@ -6368,6 +6658,12 @@ namespace N2Engine::Editor
         const auto nativeSocket = static_cast<NativeSocket>(sock);
         while (_running)
         {
+            // Everything the network thread waits on goes through here, so this is where it notices a SIGHUP (the tokens
+            // file re-read) and where a connection whose rights were revoked ends
+            ServiceTokens();
+            if (_closeConnection.load())
+                return false;
+
             if (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline)
                 return false;
 

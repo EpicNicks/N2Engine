@@ -443,6 +443,35 @@ namespace N2Engine::Editor
         return true;
     }
 
+    bool EditorTlsServer::Sha256(const std::string_view data, std::array<unsigned char, 32> &digest)
+    {
+        return mbedtls_sha256(reinterpret_cast<const unsigned char *>(data.data()), data.size(), digest.data(), 0) == 0;
+    }
+
+    bool EditorTlsServer::RandomBytes(unsigned char *out, const size_t count)
+    {
+        if (!InitializeCrypto())
+        {
+            return false;
+        }
+        mbedtls_entropy_context entropy;
+        mbedtls_ctr_drbg_context random;
+        mbedtls_entropy_init(&entropy);
+        mbedtls_ctr_drbg_init(&random);
+        bool ok = mbedtls_ctr_drbg_seed(&random, mbedtls_entropy_func, &entropy, nullptr, 0) == 0;
+        size_t done = 0;
+        while (ok && done < count)
+        {
+            const size_t step = std::min<size_t>(count - done, MBEDTLS_CTR_DRBG_MAX_REQUEST);
+            ok = mbedtls_ctr_drbg_random(&random, out + done, step) == 0;
+            done += step;
+        }
+        // Frees (and zeroizes) the generator's state, which the bytes came from
+        mbedtls_ctr_drbg_free(&random);
+        mbedtls_entropy_free(&entropy);
+        return ok;
+    }
+
     fs::path EditorTlsServer::DefaultDirectory()
     {
         const fs::path base = IO::ProjectFile::UserDataBase();
@@ -722,6 +751,16 @@ namespace N2Engine::Editor
     }
 
     bool EditorTlsServer::IsAvailable()
+    {
+        return false;
+    }
+
+    bool EditorTlsServer::Sha256(std::string_view, std::array<unsigned char, 32> &)
+    {
+        return false;
+    }
+
+    bool EditorTlsServer::RandomBytes(unsigned char *, size_t)
     {
         return false;
     }

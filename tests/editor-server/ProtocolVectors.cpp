@@ -115,7 +115,7 @@ namespace ProtocolVectors
             {
                 const auto cmd = HelloCmd::Deserialize(r);
                 return json{{"clientName", cmd.clientName}, {"protocolVersion", cmd.protocolVersion}, {"token", cmd.token},
-                            {"errorCodes", cmd.errorCodes}};
+                            {"errorCodes", cmd.errorCodes}, {"user", cmd.user}};
             }},
             {"PollEvents", [](BufferReader &r)
             {
@@ -278,7 +278,8 @@ namespace ProtocolVectors
             {"ServerInfo", [](BufferWriter &w, const json &f)
             {
                 WriteServerInfo(w, StringField(f, "protocolVersion"), StringField(f, "engineVersion"),
-                                f.at("capabilities"), f.at("projectLoaded").get<bool>(), f.at("readOnly").get<bool>());
+                                f.at("capabilities"), f.at("projectLoaded").get<bool>(), f.at("readOnly").get<bool>(),
+                                StringField(f, "user"), StringField(f, "role"));
             }},
             {"Events", [](BufferWriter &w, const json &f)
             {
