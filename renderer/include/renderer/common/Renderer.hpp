@@ -48,7 +48,7 @@ namespace Renderer::Common
      *   depth-writing state, so it can be reordered. It has no blending: RenderState::blend is ignored.
      *   Its text shader alpha-tests and writes depth wherever a draw depth-tests (see
      *   GetStandardTextShader); text is still ordered by its submitted (Transparent) state.
-     * - VulkanRenderer does not draw yet (#43).
+     * - VulkanRenderer does not draw yet (#43): it clears its offscreen target each frame and nothing more.
      */
     class IRenderer
     {
@@ -194,7 +194,8 @@ namespace Renderer::Common
          *   target while SetRenderTargetSize is in effect, otherwise the window's back buffer).
          * - Software: the CPU colour buffer, waiting for the frame in flight first, resampled (nearest) to
          *   width x height (a plain copy when that is the renderer's size).
-         * - Vulkan: writes nothing (#43).
+         * - Vulkan: the offscreen colour image of the last frame (all black before the first), resampled
+         *   (nearest) to width x height when that is not the target's size; writes nothing when not initialized.
          * Callers that want the top row first (the editor's FrameData) flip it with FlipRows (FrameRows.hpp).
          */
         virtual void ReadFramebuffer(std::uint8_t *buffer, int width, int height) const = 0;
@@ -212,6 +213,9 @@ namespace Renderer::Common
          * - Software and the default body: Resize(width, height), since the frame is already offscreen (the CPU
          *   colour buffer); true for any non-zero size. A later Resize or OnResize changes it again, so a host
          *   that sets this stops forwarding window resizes (Window::SetRenderSize does).
+         * - Vulkan: recreates its offscreen colour and depth targets at that size (it always renders offscreen);
+         *   Resize and OnResize are then ignored. False over the device's size limit or when allocation fails (the
+         *   old target is gone; frames are skipped until a call succeeds).
          */
         [[nodiscard]] virtual bool SetRenderTargetSize(uint32_t width, uint32_t height)
         {

@@ -19,6 +19,9 @@ endif()
 
 option(N2ENGINE_BUILD_TESTS "Build unit tests" ON)
 option(N2ENGINE_USE_PHYSX "Use PhysX physics backend" ON)
+# OFF compiles the Vulkan renderer out: the build then needs no Vulkan headers or loader, and --renderer vulkan / the
+# VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
+option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
 
 # == PhysX setup ==
 set(N2ENGINE_PHYSX_AVAILABLE OFF)

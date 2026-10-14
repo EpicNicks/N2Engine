@@ -1,11 +1,13 @@
 #pragma once
 
-#include <vector>
-#include <optional>
-#include <unordered_map>
-#include <string>
 #include <array>
+#include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <string>
+#include <vector>
 
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
@@ -20,39 +22,6 @@ namespace Renderer
 {
     namespace Vulkan
     {
-        struct QueueFamilyIndices
-        {
-            std::optional<uint32_t> graphicsFamily;
-            std::optional<uint32_t> presentFamily;
-
-            bool IsComplete() const
-            {
-                return graphicsFamily.has_value() && presentFamily.has_value();
-            }
-        };
-
-        struct SwapChainSupportDetails
-        {
-            VkSurfaceCapabilitiesKHR capabilities;
-            std::vector<VkSurfaceFormatKHR> formats;
-            std::vector<VkPresentModeKHR> presentModes;
-        };
-
-        struct UniformBufferObject
-        {
-            alignas(16) float model[16];
-            alignas(16) float view[16];
-            alignas(16) float proj[16];
-        };
-
-        struct VulkanBuffer
-        {
-            VkBuffer buffer = VK_NULL_HANDLE;
-            VkDeviceMemory memory = VK_NULL_HANDLE;
-            VkDeviceSize size = 0;
-            void* mapped = nullptr;
-        };
-
         struct GPUInfo
         {
             VkPhysicalDevice device;
@@ -67,40 +36,104 @@ namespace Renderer
             VkPhysicalDeviceLimits limits;
         };
 
-        // Forward declarations for Vulkan implementations
-        class VulkanMesh;
-        class VulkanTexture;
-        class VulkanMaterial;
-        class VulkanShader;
+        /// A buffer and its memory; `mapped` is non-null while the memory stays mapped (the readback buffer)
+        struct VulkanBuffer
+        {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkDeviceSize size = 0;
+            void* mapped = nullptr;
+            bool coherent = true; // false: invalidate the mapped range before the host reads it
+        };
 
+        /// An image with its memory and a view of it
+        struct VulkanImage
+        {
+            VkImage image = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkImageView view = VK_NULL_HANDLE;
+        };
+
+        /// Whether the Khronos validation layer is loaded. Default: off in Release builds, on in Debug builds when
+        /// the layer is installed (a missing layer then only logs a warning); the environment variable
+        /// N2_VULKAN_VALIDATION=1 turns it on and =0 off for a renderer left at Default. Enabled demands the layer:
+        /// Initialize fails with InitStatus::ValidationUnavailable when it is missing.
+        enum class ValidationMode
+        {
+            Default,
+            Enabled,
+            Disabled,
+        };
+
+        /// What the debug messenger has counted since the renderer object was created (not reset by Shutdown or
+        /// Initialize, so one number covers a whole test)
+        struct ValidationStats
+        {
+            uint32_t errors = 0;        // every error, of any type (a leaked object at destroy is one)
+            uint32_t warnings = 0;      // warnings of the validation and performance types
+            uint32_t otherWarnings = 0; // general warnings (loader and driver chatter), logged only
+        };
+
+        /// Why the last Initialize ended as it did. The first three are about the machine, not the code: a test
+        /// without a Vulkan device skips on them.
+        enum class InitStatus
+        {
+            NotInitialized,
+            Ok,
+            NoVulkanRuntime,       // the loader found no usable driver (vkCreateInstance: incompatible driver)
+            NoSuitableDevice,      // no physical device has a graphics queue and the formats the targets need
+            ValidationUnavailable, // validation was demanded but the layer (or VK_EXT_debug_utils) is missing
+            Failed,                // anything else: a bug or a resource failure
+        };
+
+        struct DebugState; // the messenger's counters, shared with the callback (defined in the .cpp)
+
+        /**
+         * The Vulkan backend, stage 0 of #43: initialisation, an offscreen colour and depth target, a frame that
+         * clears it, readback, resizing and shutdown. It renders ONLY offscreen (R8G8B8A8_UNORM colour, a depth
+         * target), with or without a window: there is no surface or swapchain yet, so Present puts nothing on a
+         * window (stage F). Initialize(nullptr, w, h) works with no window and no display.
+         *
+         * Everything that would draw (meshes, textures, materials, shaders, draws, lighting) is a stub that logs
+         * once and returns nullptr/false. All public methods may be called from any thread (one mutex).
+         */
         class VulkanRenderer : public Renderer::Common::IRenderer
         {
         public:
             VulkanRenderer();
             ~VulkanRenderer() override;
 
-            // IRenderer implementation
+            VulkanRenderer(const VulkanRenderer&) = delete;
+            VulkanRenderer& operator=(const VulkanRenderer&) = delete;
+
+            /// Before Initialize. See ValidationMode
+            void SetValidationMode(ValidationMode mode);
+
+            /// Creates the instance, device and an offscreen target of width x height (both non-zero; the window
+            /// handle is accepted and not used yet). Returns false and leaves nothing allocated on any failure; see
+            /// GetInitStatus. Initializing a renderer that is already initialized shuts it down first.
             bool Initialize(GLFWwindow* windowHandle, uint32_t width, uint32_t height) override;
+            /// Destroys every Vulkan object and expires the lifetime token. Safe to call twice, or without Initialize
             void Shutdown() override;
+            /// Sets the size of the offscreen target, unless SetRenderTargetSize fixed it (then ignored)
             void Resize(uint32_t width, uint32_t height) override;
+            /// The colour the next BeginFrame clears to; between BeginFrame and EndFrame it also clears the frame so far
             void Clear(float r, float g, float b, float a) override;
 
             void BeginFrame() override;
             void EndFrame() override;
+            /// Headless: nothing to present (the frame is only readable through ReadFramebuffer) until stage F
             void Present() override;
 
-            // Resource management - updated to use interface pointers
+            // Resources: stubs until stages A-E (#43); each logs once and returns nullptr/false
             Common::IMesh* CreateMesh(const Common::MeshData& meshData) override;
             void DestroyMesh(Common::IMesh* mesh) override;
 
             Common::ITexture*
             CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels) override;
-            // Accepts the options and ignores them, like the overload without them: this backend creates
-            // no textures yet (#43)
             Common::ITexture* CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels,
                                             const Common::TextureOptions& options) override;
             void DestroyTexture(Common::ITexture* texture) override;
-            // Stub: there are no Vulkan meshes to update yet (#43), so this always returns false
             bool UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData) override;
 
             Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
@@ -117,166 +150,134 @@ namespace Renderer
                                      const N2Engine::Math::Vector3& cameraPosition) override;
 
             using Common::IRenderer::DrawMesh; // the default-state overload
-            // Accepts the per-draw RenderState and ignores it: this backend draws nothing yet (#43)
+            // Draws nothing yet (stages B-D): logs once
             void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
                           const Common::RenderState& state) override;
-            // Accepts a submesh's index range and ignores it, like the overload above (#43)
             void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
                           const Common::RenderState& state, const Common::IndexRange& range) override;
             void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
+            /// Like Resize, from a window's framebuffer-size callback
             void OnResize(int width, int height) override;
 
             void SetWireframe(bool enabled) override;
             [[nodiscard]] const char* GetRendererName() const override { return "Vulkan Renderer"; }
 
+            // GPU selection: stage F
             std::vector<GPUInfo> GetCompatibleGPUs();
             bool SelectGPU(VkPhysicalDevice device);
             VkPhysicalDevice GetRecommendedGPU(const std::vector<GPUInfo>& gpus);
 
             [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
+            /// RGBA8, bottom row first, of the last frame (all black before the first). A size other than the
+            /// target's is resampled, nearest, as the software renderer does. Writes nothing when not initialized or
+            /// the target is gone.
             void ReadFramebuffer(std::uint8_t* buffer, int width, int height) const override;
+            /// Recreates the offscreen target at width x height and keeps it at that size (Resize and OnResize then
+            /// do nothing). False for a zero dimension (nothing changes), one over the device's limit, an
+            /// uninitialized renderer, or an allocation failure (then the old target is gone and frames are skipped
+            /// until a later call succeeds). The same size again keeps the target.
+            [[nodiscard]] bool SetRenderTargetSize(uint32_t width, uint32_t height) override;
+
+            // State for tests and diagnostics
+            [[nodiscard]] InitStatus GetInitStatus() const;
+            /// The reason of the last failed Initialize, or empty
+            [[nodiscard]] std::string GetInitMessage() const;
+            [[nodiscard]] bool IsValidationEnabled() const;
+            [[nodiscard]] ValidationStats GetValidationStats() const;
+            /// The first messages the validation layer reported (errors and warnings), up to 32
+            [[nodiscard]] std::vector<std::string> GetValidationMessages() const;
+            [[nodiscard]] std::string GetDeviceName() const;
+            [[nodiscard]] VkPhysicalDeviceType GetDeviceType() const;
+            /// The size of the offscreen target; 0 x 0 when there is none
+            [[nodiscard]] uint32_t GetRenderWidth() const;
+            [[nodiscard]] uint32_t GetRenderHeight() const;
 
         private:
-            // Initialization
+            static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+
+            struct FrameResources
+            {
+                VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+                VkFence fence = VK_NULL_HANDLE; // signalled while the frame's submission is not pending
+            };
+
+            // Everything below with "Locked" in a comment runs with _mutex held
+            bool Fail(InitStatus status, const std::string& message);
+            void ShutdownLocked();
+
             bool CreateInstance();
             bool SetupDebugMessenger();
-            bool CreateSurface(GLFWwindow* windowHandle);
             bool PickPhysicalDevice();
-            uint32_t ScoreDevice(VkPhysicalDevice device);
             bool CreateLogicalDevice();
-            bool CreateSwapChain();
-            bool CreateImageViews();
-            bool CreateRenderPass();
-            bool CreateDescriptorSetLayout();
-            bool CreateGraphicsPipeline();
             bool CreateCommandPool();
-            bool CreateDepthResources();
-            bool CreateFramebuffers();
-            bool CreateUniformBuffers();
-            bool CreateDescriptorPool();
-            bool CreateCommandBuffers();
-            bool CreateSyncObjects();
+            bool CreateFrameResources();
+            bool CreateRenderPass();
+            bool CreateTargets(uint32_t width, uint32_t height);
+            void DestroyTargets();
+            bool RecreateTargets(uint32_t width, uint32_t height);
 
-            // Helper functions
-            QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device);
-            SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice device);
-            VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
-            VkPresentModeKHR ChooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes);
-            VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
-            bool IsDeviceSuitable(VkPhysicalDevice device);
-            bool CheckDeviceExtensionSupport(VkPhysicalDevice device);
-            std::vector<const char*> GetRequiredExtensions();
-            bool CheckValidationLayerSupport();
+            bool CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,
+                             VkImageAspectFlags aspect, VulkanImage& out);
+            void DestroyImage(VulkanImage& image);
+            bool CreateReadbackBuffer(VkDeviceSize size);
+            void DestroyReadbackBuffer();
+            bool AllocateMemory(const VkMemoryRequirements& requirements, VkMemoryPropertyFlags required,
+                                VkDeviceMemory& memory, VkMemoryPropertyFlags* chosenFlags = nullptr) const;
 
-            // Resource management
-            bool CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
-                              VkBuffer& buffer, VkDeviceMemory& bufferMemory);
-            void CopyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
-            uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+            /// Records `record` into a one-time command buffer, submits it and waits for the queue to go idle
+            template <typename Recorder>
+            bool SubmitOneTime(Recorder&& record) const;
+            bool ClearTargetToBlack();
+            void AbandonOpenFrame();
+            void LogUnsupportedOnce(const char* what) const;
 
-            // Texture helpers
-            bool CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling,
-                             VkImageUsageFlags usage, VkMemoryPropertyFlags properties,
-                             VkImage& image, VkDeviceMemory& imageMemory);
-            VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
-            void TransitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout,
-                                       VkImageLayout newLayout);
-            void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
-            VkFormat FindDepthFormat();
-            VkFormat FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling,
-                                         VkFormatFeatureFlags features);
-            bool HasStencilComponent(VkFormat format);
-
-            // Command buffer helpers
-            VkCommandBuffer BeginSingleTimeCommands();
-            void EndSingleTimeCommands(VkCommandBuffer commandBuffer);
-
-            // Cleanup
-            void CleanupSwapChain();
-            void RecreateSwapChain();
-
-            // Debug callback
-            static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
-                VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-                VkDebugUtilsMessageTypeFlagsEXT messageType,
-                const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-                void* pUserData);
+            [[nodiscard]] bool WantsValidation(bool& required) const;
 
         private:
-            // Core Vulkan objects
+            mutable std::mutex _mutex;
+            mutable std::mutex _logMutex;
+            mutable std::set<std::string> _loggedUnsupported;
+
+            // Instance, device
+            ValidationMode _validationMode = ValidationMode::Default;
+            bool _validationEnabled = false;
+            std::shared_ptr<DebugState> _debug;
             VkInstance _instance = VK_NULL_HANDLE;
             VkDebugUtilsMessengerEXT _debugMessenger = VK_NULL_HANDLE;
-            VkSurfaceKHR _surface = VK_NULL_HANDLE;
             VkPhysicalDevice _physicalDevice = VK_NULL_HANDLE;
+            VkPhysicalDeviceProperties _deviceProperties{};
             VkDevice _device = VK_NULL_HANDLE;
+            uint32_t _graphicsFamily = 0;
             VkQueue _graphicsQueue = VK_NULL_HANDLE;
-            VkQueue _presentQueue = VK_NULL_HANDLE;
+            VkFormat _depthFormat = VK_FORMAT_UNDEFINED;
+            static constexpr VkFormat ColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
-            // Swap chain
-            VkSwapchainKHR _swapChain = VK_NULL_HANDLE;
-            std::vector<VkImage> _swapChainImages;
-            VkFormat _swapChainImageFormat;
-            VkExtent2D _swapChainExtent;
-            std::vector<VkImageView> _swapChainImageViews;
-            std::vector<VkFramebuffer> _swapChainFramebuffers;
-
-            // Pipeline
-            VkRenderPass _renderPass = VK_NULL_HANDLE;
-            VkDescriptorSetLayout _descriptorSetLayout = VK_NULL_HANDLE;
-            VkPipelineLayout _pipelineLayout = VK_NULL_HANDLE;
-            VkPipeline _graphicsPipeline = VK_NULL_HANDLE;
-
-            // Command pools and buffers
+            // Commands and frames in flight
             VkCommandPool _commandPool = VK_NULL_HANDLE;
-            std::vector<VkCommandBuffer> _commandBuffers;
-
-            // Synchronization
-            std::vector<VkSemaphore> _imageAvailableSemaphores;
-            std::vector<VkSemaphore> _renderFinishedSemaphores;
-            std::vector<VkFence> _inFlightFences;
-
-            // Uniform buffers
-            std::vector<VulkanBuffer> _uniformBuffers;
-            std::vector<VkDescriptorSet> _descriptorSets;
-            VkDescriptorPool _descriptorPool = VK_NULL_HANDLE;
-
-            // Depth buffer
-            VkImage _depthImage = VK_NULL_HANDLE;
-            VkDeviceMemory _depthImageMemory = VK_NULL_HANDLE;
-            VkImageView _depthImageView = VK_NULL_HANDLE;
-
-            // Resource storage doesn't exist yet
-            // std::unordered_map<Common::IShader *, std::shared_ptr<VulkanShader>> _shaderPrograms;
-            // std::unordered_map<Common::IMesh *, std::unique_ptr<VulkanMesh>> _meshes;
-            // std::unordered_map<Common::ITexture *, std::unique_ptr<VulkanTexture>> _textures;
-            // std::unordered_map<Common::IMaterial *, std::unique_ptr<VulkanMaterial>> _materials;
-
-            // Standard shaders
-            Common::IShader* _standardUnlitShader = nullptr;
-            Common::IShader* _standardLitShader = nullptr;
-
-            // Frame state
+            std::array<FrameResources, MAX_FRAMES_IN_FLIGHT> _frames{};
             uint32_t _currentFrame = 0;
-            uint32_t _imageIndex = 0;
-            bool _framebufferResized = false;
+            bool _frameOpen = false; // BeginFrame recorded the frame's commands and EndFrame has not submitted them
+            bool _deviceLost = false;
 
-            // View/projection matrices
-            UniformBufferObject _ubo{};
+            // The offscreen target
+            VkRenderPass _renderPass = VK_NULL_HANDLE;
+            VulkanImage _color;
+            VulkanImage _depth;
+            VkFramebuffer _framebuffer = VK_NULL_HANDLE;
+            VulkanBuffer _readback;
+            uint32_t _targetWidth = 0;
+            uint32_t _targetHeight = 0;
+            bool _targetFixed = false; // SetRenderTargetSize set the size: Resize and OnResize are ignored
+            uint32_t _requestedWidth = 0; // the last size asked for through Initialize, Resize or OnResize
+            uint32_t _requestedHeight = 0;
+
+            InitStatus _initStatus = InitStatus::NotInitialized;
+            std::string _initMessage;
+            bool _initialized = false;
+            bool _warnedWindow = false;
 
             float _clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-
-            // Constants
-            static const int MAX_FRAMES_IN_FLIGHT = 2;
-            static const bool ENABLE_VALIDATION_LAYERS = true;
-
-            const std::vector<const char*> _validationLayers = {
-                "VK_LAYER_KHRONOS_validation"
-            };
-
-            const std::vector<const char*> _deviceExtensions = {
-                VK_KHR_SWAPCHAIN_EXTENSION_NAME
-            };
         };
     }
 }
