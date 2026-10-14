@@ -366,7 +366,8 @@ namespace N2Engine::Math
         static void SetSIMDLevel(const SIMDLevel requested)
         {
             const SIMDLevel level = ClampSIMDLevel(requested);
-            if (level == SIMDLevel::Scalar)
+            // Matrix has no NEON versions yet: on aarch64 (the NEON tier) it stays on the scalar implementations
+            if (level == SIMDLevel::Scalar || level == SIMDLevel::NEON)
             {
                 multiply_func = &MultiplyScalar;
                 add_func = &AddScalar;
@@ -898,7 +899,9 @@ namespace N2Engine::Math
         // Selects the implementation tier the operations dispatch to; see Math::SetSIMDLevel
         static void SetSIMDLevel(const SIMDLevel requested)
         {
-            if (ClampSIMDLevel(requested) != SIMDLevel::Scalar)
+            // No NEON versions yet: the NEON tier stays on the scalar implementations
+            const SIMDLevel level = ClampSIMDLevel(requested);
+            if (level != SIMDLevel::Scalar && level != SIMDLevel::NEON)
             {
                 multiply_func = &MultiplySSE2;
                 add_func = &AddSSE2;

@@ -37,6 +37,25 @@ namespace N2Engine::Math
         if (level == SIMDLevel::Scalar)
             return;
 
+#ifdef N2_MATH_NEON
+        // aarch64: the only non-scalar tier is NEON, and it accelerates every operation
+        add_func = &AddNEON;
+        sub_func = &SubNEON;
+        scalar_mul_func = &ScalarMulNEON;
+        scalar_div_func = &ScalarDivNEON;
+        scale_func = &ScaleNEON;
+        dot_func = &DotNEON;
+        length_func = &LengthNEON;
+        normalize_func = &NormalizeNEON;
+        min_func = &MinNEON;
+        max_func = &MaxNEON;
+        floor_func = &FloorNEON;
+        ceil_func = &CeilNEON;
+        round_func = &RoundNEON;
+        abs_func = &AbsNEON;
+        return;
+#endif
+
         // Floor/Ceil/Round have no SSE2 versions (they need SSE4.1's round instruction)
         add_func = &AddSSE2;
         sub_func = &SubSSE2;
@@ -69,6 +88,13 @@ namespace N2Engine::Math
 
     void Vector4::AddBatch(const Vector4 *a, const Vector4 *b, Vector4 *result, size_t count)
     {
+#ifdef N2_MATH_NEON
+        if (simd_level == SIMDLevel::NEON)
+        {
+            AddBatchNEON(a, b, result, count);
+            return;
+        }
+#endif
         size_t i = 0;
 #ifdef __AVX__
         if (simd_level == SIMDLevel::AVX)
@@ -93,6 +119,13 @@ namespace N2Engine::Math
 
     void Vector4::SubBatch(const Vector4 *a, const Vector4 *b, Vector4 *result, size_t count)
     {
+#ifdef N2_MATH_NEON
+        if (simd_level == SIMDLevel::NEON)
+        {
+            SubBatchNEON(a, b, result, count);
+            return;
+        }
+#endif
         size_t i = 0;
 #ifdef __AVX__
         if (simd_level == SIMDLevel::AVX)
@@ -117,6 +150,13 @@ namespace N2Engine::Math
 
     void Vector4::ScalarMulBatch(const Vector4 *input, Vector4 *output, float scalar, size_t count)
     {
+#ifdef N2_MATH_NEON
+        if (simd_level == SIMDLevel::NEON)
+        {
+            ScalarMulBatchNEON(input, output, scalar, count);
+            return;
+        }
+#endif
         size_t i = 0;
 #ifdef __AVX__
         if (simd_level == SIMDLevel::AVX)
@@ -140,6 +180,13 @@ namespace N2Engine::Math
 
     void Vector4::DotBatch(const Vector4 *a, const Vector4 *b, float *result, size_t count)
     {
+#ifdef N2_MATH_NEON
+        if (simd_level == SIMDLevel::NEON)
+        {
+            DotBatchNEON(a, b, result, count);
+            return;
+        }
+#endif
         size_t i = 0;
 #ifdef __AVX__
         if (simd_level == SIMDLevel::AVX)
@@ -171,6 +218,13 @@ namespace N2Engine::Math
 
     void Vector4::LengthBatch(const Vector4 *vectors, float *result, size_t count)
     {
+#ifdef N2_MATH_NEON
+        if (simd_level == SIMDLevel::NEON)
+        {
+            LengthBatchNEON(vectors, result, count);
+            return;
+        }
+#endif
         size_t i = 0;
 #ifdef __AVX__
         if (simd_level == SIMDLevel::AVX)
@@ -201,6 +255,13 @@ namespace N2Engine::Math
 
     void Vector4::NormalizeBatch(Vector4 *vectors, size_t count)
     {
+#ifdef N2_MATH_NEON
+        if (simd_level == SIMDLevel::NEON)
+        {
+            NormalizeBatchNEON(vectors, count);
+            return;
+        }
+#endif
         size_t i = 0;
 #ifdef __AVX__
         if (simd_level == SIMDLevel::AVX)

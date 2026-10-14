@@ -406,6 +406,9 @@ namespace N2Engine::Math
         // Selects the implementation tier the operations dispatch to; see Math::SetSIMDLevel
         static void SetSIMDLevel(SIMDLevel level);
 
+        // The tier SetSIMDLevel selected (after clamping)
+        [[nodiscard]] static SIMDLevel GetSIMDLevel() { return simd_level; }
+
         // ===== BATCH OPERATIONS =====
 
         // Raw pointer interface (zero overhead, maximum flexibility). The pointers must address contiguous Vector4s:
@@ -714,6 +717,195 @@ namespace N2Engine::Math
         static Vector4 FloorSSE41(const Vector4 &v) { return FloorScalar(v); }
         static Vector4 CeilSSE41(const Vector4 &v) { return CeilScalar(v); }
         static Vector4 RoundSSE41(const Vector4 &v) { return RoundScalar(v); }
+#endif
+
+        // ===== NEON IMPLEMENTATIONS (aarch64) =====
+#ifdef N2_MATH_NEON
+        // Loads and stores go through the w, x, y, z floats: SimdStorage is a plain float[4] struct on this target.
+        // vld1q and vst1q have no alignment requirement
+        static float32x4_t LoadNEON(const Vector4 &v)
+        {
+            return vld1q_f32(&v.w);
+        }
+
+        static Vector4 StoreNEON(const float32x4_t lanes)
+        {
+            Vector4 result;
+            vst1q_f32(&result.w, lanes);
+            return result;
+        }
+
+        static Vector4 AddNEON(const Vector4 &a, const Vector4 &b)
+        {
+            return StoreNEON(vaddq_f32(LoadNEON(a), LoadNEON(b)));
+        }
+
+        static Vector4 SubNEON(const Vector4 &a, const Vector4 &b)
+        {
+            return StoreNEON(vsubq_f32(LoadNEON(a), LoadNEON(b)));
+        }
+
+        static Vector4 ScalarMulNEON(const Vector4 &v, const float scalar)
+        {
+            return StoreNEON(vmulq_f32(LoadNEON(v), vdupq_n_f32(scalar)));
+        }
+
+        static Vector4 ScalarDivNEON(const Vector4 &v, const float scalar)
+        {
+            if (std::abs(scalar) < Constants::EPSILON)
+            {
+                return Zero;
+            }
+            return StoreNEON(vdivq_f32(LoadNEON(v), vdupq_n_f32(scalar)));
+        }
+
+        static Vector4 ScaleNEON(const Vector4 &a, const Vector4 &b)
+        {
+            return StoreNEON(vmulq_f32(LoadNEON(a), LoadNEON(b)));
+        }
+
+        static float DotNEON(const Vector4 &a, const Vector4 &b)
+        {
+            // (w*w' + x*x') + (y*y' + z*z'), like DotScalar: the pairwise add leaves w+x and y+z in lanes 0 and 1
+            const float32x4_t product = vmulq_f32(LoadNEON(a), LoadNEON(b));
+            const float32x4_t pairs = vpaddq_f32(product, product);
+            return vgetq_lane_f32(pairs, 0) + vgetq_lane_f32(pairs, 1);
+        }
+
+        static float LengthNEON(const Vector4 &v)
+        {
+            return std::sqrt(DotNEON(v, v));
+        }
+
+        static Vector4 NormalizeNEON(const Vector4 &v)
+        {
+            // A real sqrt and divide, like the SSE versions
+            const float length = LengthNEON(v);
+            if (length < Constants::EPSILON)
+            {
+                return Zero;
+            }
+            return StoreNEON(vdivq_f32(LoadNEON(v), vdupq_n_f32(length)));
+        }
+
+        static Vector4 MinNEON(const Vector4 &a, const Vector4 &b)
+        {
+            // vminq_f32 propagates NaN and orders -0 below +0, unlike std::min(a, b), which is (b < a) ? b : a.
+            // Compare and select, so ties and NaN give a
+            const float32x4_t va = LoadNEON(a);
+            const float32x4_t vb = LoadNEON(b);
+            return StoreNEON(vbslq_f32(vcltq_f32(vb, va), vb, va));
+        }
+
+        static Vector4 MaxNEON(const Vector4 &a, const Vector4 &b)
+        {
+            // std::max(a, b) is (a < b) ? b : a
+            const float32x4_t va = LoadNEON(a);
+            const float32x4_t vb = LoadNEON(b);
+            return StoreNEON(vbslq_f32(vcltq_f32(va, vb), vb, va));
+        }
+
+        static Vector4 AbsNEON(const Vector4 &v)
+        {
+            return StoreNEON(vabsq_f32(LoadNEON(v)));
+        }
+
+        static Vector4 FloorNEON(const Vector4 &v)
+        {
+            return StoreNEON(vrndmq_f32(LoadNEON(v)));
+        }
+
+        static Vector4 CeilNEON(const Vector4 &v)
+        {
+            return StoreNEON(vrndpq_f32(LoadNEON(v)));
+        }
+
+        static Vector4 RoundNEON(const Vector4 &v)
+        {
+            // frinta rounds halfway cases away from zero like std::round, keeps the sign of zero and passes
+            // NaN and infinities through
+            return StoreNEON(vrndaq_f32(LoadNEON(v)));
+        }
+
+        // Batch operations. Each vector is one 128-bit register, so Add, Sub and ScalarMul loop with no tail. Dot,
+        // Length and Normalize take four vectors at a time (vld4q splits them into w, x, y, z registers) with a
+        // single-vector tail for the last count % 4, summing in the same order as DotNEON
+        static void AddBatchNEON(const Vector4 *a, const Vector4 *b, Vector4 *result, const size_t count)
+        {
+            for (size_t i = 0; i < count; ++i)
+                result[i] = AddNEON(a[i], b[i]);
+        }
+
+        static void SubBatchNEON(const Vector4 *a, const Vector4 *b, Vector4 *result, const size_t count)
+        {
+            for (size_t i = 0; i < count; ++i)
+                result[i] = SubNEON(a[i], b[i]);
+        }
+
+        static void ScalarMulBatchNEON(const Vector4 *input, Vector4 *output, const float scalar, const size_t count)
+        {
+            for (size_t i = 0; i < count; ++i)
+                output[i] = ScalarMulNEON(input[i], scalar);
+        }
+
+        static float32x4_t DotPlanesNEON(const float32x4x4_t &a, const float32x4x4_t &b)
+        {
+            return vaddq_f32(vaddq_f32(vmulq_f32(a.val[0], b.val[0]), vmulq_f32(a.val[1], b.val[1])),
+                             vaddq_f32(vmulq_f32(a.val[2], b.val[2]), vmulq_f32(a.val[3], b.val[3])));
+        }
+
+        static void DotBatchNEON(const Vector4 *a, const Vector4 *b, float *result, const size_t count)
+        {
+            size_t i = 0;
+            for (; i + 4 <= count; i += 4)
+                vst1q_f32(result + i, DotPlanesNEON(vld4q_f32(&a[i].w), vld4q_f32(&b[i].w)));
+
+            for (; i < count; ++i)
+                result[i] = DotNEON(a[i], b[i]);
+        }
+
+        static void LengthBatchNEON(const Vector4 *vectors, float *result, const size_t count)
+        {
+            size_t i = 0;
+            for (; i + 4 <= count; i += 4)
+            {
+                const float32x4x4_t v = vld4q_f32(&vectors[i].w);
+                vst1q_f32(result + i, vsqrtq_f32(DotPlanesNEON(v, v)));
+            }
+
+            for (; i < count; ++i)
+                result[i] = LengthNEON(vectors[i]);
+        }
+
+        static void NormalizeBatchNEON(Vector4 *vectors, const size_t count)
+        {
+            const float32x4_t epsilon = vdupq_n_f32(Constants::EPSILON);
+
+            size_t i = 0;
+            for (; i + 4 <= count; i += 4)
+            {
+                const float32x4x4_t v = vld4q_f32(&vectors[i].w);
+                const float32x4_t length = vsqrtq_f32(DotPlanesNEON(v, v));
+
+                // Ordered compare, false for NaN: a near-zero vector becomes Zero and a NaN one stays NaN, like
+                // NormalizeNEON
+                const uint32x4_t too_short = vcltq_f32(length, epsilon);
+
+                float32x4x4_t normalized;
+                normalized.val[0] = vreinterpretq_f32_u32(
+                    vbicq_u32(vreinterpretq_u32_f32(vdivq_f32(v.val[0], length)), too_short));
+                normalized.val[1] = vreinterpretq_f32_u32(
+                    vbicq_u32(vreinterpretq_u32_f32(vdivq_f32(v.val[1], length)), too_short));
+                normalized.val[2] = vreinterpretq_f32_u32(
+                    vbicq_u32(vreinterpretq_u32_f32(vdivq_f32(v.val[2], length)), too_short));
+                normalized.val[3] = vreinterpretq_f32_u32(
+                    vbicq_u32(vreinterpretq_u32_f32(vdivq_f32(v.val[3], length)), too_short));
+                vst4q_f32(&vectors[i].w, normalized);
+            }
+
+            for (; i < count; ++i)
+                vectors[i] = NormalizeNEON(vectors[i]);
+        }
 #endif
     };
 
