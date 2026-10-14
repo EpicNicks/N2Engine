@@ -39,6 +39,15 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|X86_64|AMD64|amd64|x86|i[3-6]86)
         -msse4.1 
         -mavx
     )
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|AARCH64|arm64|ARM64)$")
+    # aarch64 (NEON is baseline, so no architecture flag): turn off fused multiply-add contraction. Clang contracts
+    # a * b + c in scalar code into one rounding by default on this target, which x86 (no -mfma) never does, so the
+    # scalar implementations would differ in the last bit from the NEON ones (which multiply and add separately) and
+    # from the x86 results. PUBLIC for the same reason as the x86 flags: the inline scalar functions in the headers
+    # are compiled into every target that links math, and must all be the same code
+    target_compile_options(math PUBLIC
+        -ffp-contract=off
+    )
 endif()
 
 # Add any necessary libraries

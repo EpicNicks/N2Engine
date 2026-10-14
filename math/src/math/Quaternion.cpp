@@ -252,7 +252,8 @@ bool Quaternion::IsIdentity(const float tolerance) const
 void Quaternion::SetSIMDLevel(const SIMDLevel requested)
 {
     const SIMDLevel level = ClampSIMDLevel(requested);
-    if (level == SIMDLevel::Scalar)
+    // Quaternion has no NEON versions yet: on aarch64 (the NEON tier) it stays on the scalar implementations
+    if (level == SIMDLevel::Scalar || level == SIMDLevel::NEON)
     {
         add_func = &AddScalar;
         sub_func = &SubScalar;

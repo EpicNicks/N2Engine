@@ -1,4 +1,5 @@
 #include "math/Vector2.hpp"
+#include "math/CpuInfo.hpp"
 
 #ifdef __AVX__
 #include <immintrin.h>
@@ -37,6 +38,14 @@ namespace N2Engine::Math
         {
             result[i] = a[i] + b[i];
         }
+#elif defined(N2_MATH_NEON)
+        // Two Vector2s per 128-bit register (x0, y0, x1, y1), then a scalar tail for an odd count
+        size_t i = 0;
+        for (; i + 2 <= count; i += 2)
+            vst1q_f32(&result[i].x, vaddq_f32(vld1q_f32(&a[i].x), vld1q_f32(&b[i].x)));
+
+        for (; i < count; ++i)
+            result[i] = a[i] + b[i];
 #else
         // Fallback to scalar operations
         for (size_t i = 0; i < count; ++i)
@@ -65,6 +74,13 @@ namespace N2Engine::Math
         {
             result[i] = a[i] - b[i];
         }
+#elif defined(N2_MATH_NEON)
+        size_t i = 0;
+        for (; i + 2 <= count; i += 2)
+            vst1q_f32(&result[i].x, vsubq_f32(vld1q_f32(&a[i].x), vld1q_f32(&b[i].x)));
+
+        for (; i < count; ++i)
+            result[i] = a[i] - b[i];
 #else
         for (size_t i = 0; i < count; ++i)
         {
@@ -90,6 +106,14 @@ namespace N2Engine::Math
         {
             output[i] = input[i] * scalar;
         }
+#elif defined(N2_MATH_NEON)
+        size_t i = 0;
+        const float32x4_t scalar_vec = vdupq_n_f32(scalar);
+        for (; i + 2 <= count; i += 2)
+            vst1q_f32(&output[i].x, vmulq_f32(vld1q_f32(&input[i].x), scalar_vec));
+
+        for (; i < count; ++i)
+            output[i] = input[i] * scalar;
 #else
         for (size_t i = 0; i < count; ++i)
         {
@@ -132,6 +156,17 @@ namespace N2Engine::Math
         {
             result[i] = a[i].Dot(b[i]);
         }
+#elif defined(N2_MATH_NEON)
+        size_t i = 0;
+        for (; i + 2 <= count; i += 2)
+        {
+            // The pairwise add leaves x*x' + y*y' of each vector in lanes 0 and 1
+            const float32x4_t product = vmulq_f32(vld1q_f32(&a[i].x), vld1q_f32(&b[i].x));
+            vst1_f32(result + i, vget_low_f32(vpaddq_f32(product, product)));
+        }
+
+        for (; i < count; ++i)
+            result[i] = a[i].Dot(b[i]);
 #else
         for (size_t i = 0; i < count; ++i)
         {
@@ -172,6 +207,17 @@ namespace N2Engine::Math
         {
             result[i] = vectors[i].Length();
         }
+#elif defined(N2_MATH_NEON)
+        size_t i = 0;
+        for (; i + 2 <= count; i += 2)
+        {
+            const float32x4_t v = vld1q_f32(&vectors[i].x);
+            const float32x4_t squared = vmulq_f32(v, v);
+            vst1_f32(result + i, vget_low_f32(vsqrtq_f32(vpaddq_f32(squared, squared))));
+        }
+
+        for (; i < count; ++i)
+            result[i] = vectors[i].Length();
 #else
         for (size_t i = 0; i < count; ++i)
         {
@@ -214,6 +260,27 @@ namespace N2Engine::Math
         {
             vectors[i] = vectors[i].Normalized();
         }
+#elif defined(N2_MATH_NEON)
+        size_t i = 0;
+        const float32x4_t epsilon = vdupq_n_f32(Constants::EPSILON);
+
+        for (; i + 2 <= count; i += 2)
+        {
+            const float32x4_t v = vld1q_f32(&vectors[i].x);
+
+            // Each vector's squared length, duplicated into both of its lanes (l0, l0, l1, l1)
+            const float32x4_t squared = vmulq_f32(v, v);
+            const float32x4_t pairs = vpaddq_f32(squared, squared);
+            const float32x4_t length = vsqrtq_f32(vzip1q_f32(pairs, pairs));
+            const float32x4_t normalized = vdivq_f32(v, length);
+
+            // Ordered compare, false for NaN: a NaN vector stays NaN and a near-zero one becomes Zero
+            const uint32x4_t too_short = vcltq_f32(length, epsilon);
+            vst1q_f32(&vectors[i].x, vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(normalized), too_short)));
+        }
+
+        for (; i < count; ++i)
+            vectors[i] = vectors[i].Normalized();
 #else
         for (size_t i = 0; i < count; ++i)
         {
