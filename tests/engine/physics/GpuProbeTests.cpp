@@ -11,12 +11,14 @@
 #include <nlohmann/json.hpp>
 
 #include "../particles/FakePbdDriver.hpp"
+#include "../particles/FakePhysicsBackend.hpp"
 #include "engine/Application.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Health.hpp"
 #include "engine/Logger.hpp"
 #include "engine/Time.hpp"
 #include "engine/physics/IParticleBackend.hpp"
+#include "engine/physics/ISoftBodyBackend.hpp"
 #include "engine/rendering/ParticleSystem.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/physics/GpuStatus.hpp"
@@ -129,6 +131,67 @@ TEST(ParticlesStatusTest, OnlyAFailedProbeMakesTheEngineUnhealthy)
     }
     const EngineHealth failed{.subsystems = {MakeParticlesStatus({GpuState::Failed, "x"})}};
     EXPECT_FALSE(failed.IsHealthy());
+}
+
+TEST(SoftBodiesStatusTest, MapsEachGpuStateToAHealthRowLikeParticles)
+{
+    for (const GpuState state : {GpuState::Disabled, GpuState::Unavailable, GpuState::Ready, GpuState::Failed})
+    {
+        const SubsystemStatus soft = MakeSoftBodiesStatus({state, "detail"});
+        const SubsystemStatus particles = MakeParticlesStatus({state, "detail"});
+        EXPECT_EQ(soft.name, "SoftBodies");
+        EXPECT_EQ(particles.name, "Particles");
+        EXPECT_EQ(soft.state, particles.state) << ToString(state);
+        EXPECT_EQ(soft.detail, "detail");
+    }
+    EXPECT_EQ(MakeSoftBodiesStatus({GpuState::Disabled, "x"}).state, SubsystemState::Disabled);
+    EXPECT_EQ(MakeSoftBodiesStatus({GpuState::Unavailable, "x"}).state, SubsystemState::Disabled);
+    EXPECT_EQ(MakeSoftBodiesStatus({GpuState::Ready, "x"}).state, SubsystemState::Running);
+    EXPECT_EQ(MakeSoftBodiesStatus({GpuState::Failed, "x"}).state, SubsystemState::Failed);
+}
+
+TEST(GpuFeatureStatusTest, AFeatureFailureOnlyShowsOnAReadyScene)
+{
+    const GpuStatus failure{GpuState::Failed, "feature failed"};
+    // Without a failure the scene status is the feature's, whatever it is
+    for (const GpuState state : {GpuState::Disabled, GpuState::Unavailable, GpuState::Ready, GpuState::Failed})
+    {
+        const GpuStatus scene{state, "scene"};
+        const GpuStatus none = ComposeFeatureGpuStatus(scene, std::nullopt);
+        EXPECT_EQ(none.state, state);
+        EXPECT_EQ(none.detail, "scene");
+        // A scene that is not Ready keeps its own reason (the feature could not have run anyway)
+        const GpuStatus with = ComposeFeatureGpuStatus(scene, failure);
+        EXPECT_EQ(with.state, state == GpuState::Ready ? GpuState::Failed : state) << ToString(state);
+        EXPECT_EQ(with.detail, state == GpuState::Ready ? "feature failed" : "scene");
+    }
+}
+
+TEST(GpuFeatureStatusTest, SoftBodiesAreNeverReadyWithoutABackend)
+{
+    const GpuStatus none = ComposeSoftBodiesGpuStatus({GpuState::Ready, "PhysX GPU: x"}, std::nullopt, false);
+    EXPECT_EQ(none.state, GpuState::Unavailable);
+    EXPECT_NE(none.detail.find("no PhysX soft-body backend"), std::string::npos) << none.detail;
+    EXPECT_EQ(ComposeSoftBodiesGpuStatus({GpuState::Ready, "PhysX GPU: x"}, std::nullopt, true).state, GpuState::Ready);
+    EXPECT_EQ(ComposeSoftBodiesGpuStatus({GpuState::Disabled, "physics.gpu is off"}, std::nullopt, false).detail,
+              "physics.gpu is off");
+}
+
+TEST(SoftBodySeamTest, ABackendHasNoSoftBodyBackendByDefault)
+{
+    TestSupport::FakePhysicsBackend fake(true, {GpuState::Ready, "PhysX GPU: fake"});
+    IPhysicsBackend &backend = fake;
+    EXPECT_EQ(backend.GetSoftBodyBackend(), nullptr);
+    // The default soft-body status is the scene's, except that a Ready scene is not Ready for a feature that is not
+    // there; the particle status is the scene's
+    EXPECT_EQ(backend.GetParticlesGpuStatus().state, GpuState::Ready);
+    EXPECT_EQ(backend.GetSoftBodiesGpuStatus().state, GpuState::Unavailable);
+    EXPECT_EQ(MakeSoftBodiesStatus(backend.GetSoftBodiesGpuStatus()).state, SubsystemState::Disabled);
+
+    TestSupport::FakePhysicsBackend off(false, {GpuState::Disabled, "physics.gpu is off (the CPU scene)"});
+    const SubsystemStatus row = MakeSoftBodiesStatus(off.GetSoftBodiesGpuStatus());
+    EXPECT_EQ(row.state, SubsystemState::Disabled);
+    EXPECT_EQ(row.detail, "physics.gpu is off (the CPU scene)");
 }
 
 #ifdef N2ENGINE_PHYSX_ENABLED
@@ -264,9 +327,11 @@ TEST(PhysicsBackendParticleFailureTest, ADriverFailureDropsTheBackendAndChangesT
         particles->Spawn(handle, std::span<const Math::Vector3>(&at, 1), std::span<const Math::Vector3>(&velocity, 1));
 
         // The next look at the backend notices the failure: it is dropped, the status changes, one warning
+        const SubsystemStatus softBefore = MakeSoftBodiesStatus(rig.backend->GetSoftBodiesGpuStatus());
         EXPECT_EQ(rig.backend->GetParticleBackend(), nullptr) << ToString(c.mode);
         EXPECT_EQ(rig.backend->GetParticleBackend(), nullptr);
-        const GpuStatus status = rig.backend->GetGpuStatus();
+        // The particles' own status carries the failure
+        const GpuStatus status = rig.backend->GetParticlesGpuStatus();
         EXPECT_EQ(status.state, c.state) << ToString(c.mode);
         EXPECT_NE(status.detail.find("GPU particles unavailable"), std::string::npos) << status.detail;
         // The health row Application::GetHealth re-reads is this mapping of the status
@@ -274,8 +339,91 @@ TEST(PhysicsBackendParticleFailureTest, ADriverFailureDropsTheBackendAndChangesT
         EXPECT_EQ(row.state, c.row);
         EXPECT_EQ((EngineHealth{.subsystems = {row}}).IsHealthy(), c.healthy);
         EXPECT_EQ(warnings.Count("GPU particles unavailable"), 1) << "logged once, not on every look";
+        // The scene status is not rewritten (Physics.IsGpuAvailable follows it), and the SoftBodies row is unchanged
+        EXPECT_EQ(rig.backend->GetGpuStatus().state, GpuState::Ready) << ToString(c.mode);
+        const SubsystemStatus softAfter = MakeSoftBodiesStatus(rig.backend->GetSoftBodiesGpuStatus());
+        EXPECT_EQ(softAfter.state, softBefore.state);
+        EXPECT_EQ(softAfter.detail, softBefore.detail);
+        EXPECT_EQ(softAfter.state, SubsystemState::Disabled);
+        // Installing a fresh driver after the failure restores the Particles row
+        ASSERT_TRUE(rig.backend->InstallParticleDriverForTesting(std::make_unique<TestSupport::FakePbdDriver>()));
+        EXPECT_NE(rig.backend->GetParticleBackend(), nullptr) << ToString(c.mode);
+        EXPECT_EQ(rig.backend->GetParticlesGpuStatus().state, GpuState::Ready) << ToString(c.mode);
         rig.backend->Shutdown();
     }
+}
+
+TEST(PhysicsBackendSoftBodyFailureTest, AReadyGpuSceneHasNoSoftBodyBackendYet)
+{
+    InjectedBackend rig(GpuMode::Auto);
+    ASSERT_TRUE(rig.ready);
+    EXPECT_EQ(rig.backend->GetSoftBodyBackend(), nullptr);
+    // The SoftBodies row is Disabled even with a Ready scene (it never says Running for a missing feature)
+    const SubsystemStatus row = MakeSoftBodiesStatus(rig.backend->GetSoftBodiesGpuStatus());
+    EXPECT_EQ(row.name, "SoftBodies");
+    EXPECT_EQ(row.state, SubsystemState::Disabled);
+    EXPECT_NE(row.detail.find("no PhysX soft-body backend"), std::string::npos) << row.detail;
+    EXPECT_TRUE((EngineHealth{.subsystems = {row}}).IsHealthy());
+    rig.backend->Shutdown();
+}
+
+TEST(PhysicsBackendSoftBodyFailureTest, ASoftBodyFailureNeverFlipsTheParticlesRowOrTheScene)
+{
+    struct Case
+    {
+        GpuMode mode;
+        GpuState state;
+        SubsystemState row;
+        bool healthy;
+    };
+    for (const Case c : {Case{GpuMode::Auto, GpuState::Unavailable, SubsystemState::Disabled, true},
+                         Case{GpuMode::On, GpuState::Failed, SubsystemState::Failed, false}})
+    {
+        InjectedBackend rig(c.mode);
+        ASSERT_TRUE(rig.ready);
+        IParticleBackend *particles = rig.backend->GetParticleBackend();
+        ASSERT_NE(particles, nullptr);
+        const GpuStatus sceneBefore = rig.backend->GetGpuStatus();
+        const SubsystemStatus particlesBefore = MakeParticlesStatus(rig.backend->GetParticlesGpuStatus());
+        ASSERT_EQ(particlesBefore.state, SubsystemState::Running);
+
+        WarningCapture warnings;
+        rig.backend->FailSoftBodies("out of memory");
+
+        const GpuStatus soft = rig.backend->GetSoftBodiesGpuStatus();
+        EXPECT_EQ(soft.state, c.state) << ToString(c.mode);
+        EXPECT_NE(soft.detail.find("GPU soft bodies unavailable: out of memory"), std::string::npos) << soft.detail;
+        const SubsystemStatus row = MakeSoftBodiesStatus(soft);
+        EXPECT_EQ(row.state, c.row);
+        EXPECT_EQ((EngineHealth{.subsystems = {row}}).IsHealthy(), c.healthy);
+        EXPECT_EQ(warnings.Count("GPU soft bodies unavailable"), 1);
+        EXPECT_EQ(warnings.Count("GPU particles unavailable"), 0);
+
+        // The scene, Physics.IsGpuAvailable's status, and the Particles row did not move; the particle backend lives
+        EXPECT_EQ(rig.backend->GetGpuStatus().state, sceneBefore.state);
+        EXPECT_EQ(rig.backend->GetGpuStatus().detail, sceneBefore.detail);
+        const SubsystemStatus particlesAfter = MakeParticlesStatus(rig.backend->GetParticlesGpuStatus());
+        EXPECT_EQ(particlesAfter.state, SubsystemState::Running);
+        EXPECT_EQ(particlesAfter.detail, particlesBefore.detail);
+        EXPECT_EQ(rig.backend->GetParticleBackend(), particles);
+        rig.backend->Shutdown();
+    }
+}
+
+TEST(PhysicsBackendSoftBodyFailureTest, InitializeClearsTheFailures)
+{
+    InjectedBackend rig(GpuMode::Auto);
+    ASSERT_TRUE(rig.ready);
+    rig.backend->FailSoftBodies("x");
+    ASSERT_NE(rig.backend->GetSoftBodiesGpuStatus().detail.find("GPU soft bodies unavailable"), std::string::npos);
+    rig.backend->Shutdown();
+
+    rig.backend->SetGpuMode(GpuMode::Off);
+    ASSERT_TRUE(rig.backend->Initialize());
+    EXPECT_EQ(rig.backend->GetSoftBodiesGpuStatus().state, GpuState::Disabled);
+    EXPECT_EQ(rig.backend->GetSoftBodiesGpuStatus().detail, "physics.gpu is off (the CPU scene)");
+    EXPECT_EQ(rig.backend->GetParticlesGpuStatus().detail, "physics.gpu is off (the CPU scene)");
+    rig.backend->Shutdown();
 }
 
 namespace
@@ -340,7 +488,8 @@ TEST_F(ParticleFallbackTest, AGpuFailureRestartsTheSystemOnTheCpuWithOneWarning)
 
     EXPECT_EQ(system->GetActiveBackendName(), "CPU") << "restarted on the CPU";
     EXPECT_EQ(physics->GetParticleBackend(), nullptr);
-    EXPECT_EQ(physics->GetGpuStatus().state, GpuState::Unavailable);
+    EXPECT_EQ(physics->GetParticlesGpuStatus().state, GpuState::Unavailable);
+    EXPECT_EQ(physics->GetGpuStatus().state, GpuState::Ready) << "the scene is still up";
     EXPECT_EQ(warnings.Count("GPU particles unavailable"), 1);
     EXPECT_EQ(warnings.Count("physics backend changed"), 1);
 
@@ -351,6 +500,19 @@ TEST_F(ParticleFallbackTest, AGpuFailureRestartsTheSystemOnTheCpuWithOneWarning)
     EXPECT_GT(system->GetAliveCount(), 0u) << "it simulates on the CPU";
     EXPECT_EQ(warnings.Count("GPU particles unavailable"), 1);
     system->OnDestroy();
+}
+
+TEST(GpuProbeTest, SoftBodiesRowIsDisabledWithTheSceneReasonWhenGpuIsOff)
+{
+    PhysXBackend backend;
+    backend.SetGpuMode(GpuMode::Off);
+    ASSERT_TRUE(backend.Initialize());
+    EXPECT_EQ(backend.GetSoftBodyBackend(), nullptr);
+    const SubsystemStatus soft = MakeSoftBodiesStatus(backend.GetSoftBodiesGpuStatus());
+    EXPECT_EQ(soft.state, SubsystemState::Disabled);
+    EXPECT_EQ(soft.detail, "physics.gpu is off (the CPU scene)");
+    EXPECT_EQ(MakeParticlesStatus(backend.GetParticlesGpuStatus()).detail, soft.detail);
+    backend.Shutdown();
 }
 
 #ifndef _WIN32
@@ -366,6 +528,12 @@ TEST(GpuProbeTest, CpuOnlyBuildsReportUnavailableNotFailed)
         EXPECT_EQ(backend.GetGpuStatus().state, GpuState::Unavailable) << ToString(mode);
         EXPECT_EQ(MakeParticlesStatus(backend.GetGpuStatus()).state, SubsystemState::Disabled);
         EXPECT_EQ(backend.GetParticleBackend(), nullptr) << "no GPU library: no PhysX particle backend";
+        EXPECT_EQ(backend.GetSoftBodyBackend(), nullptr);
+        const SubsystemStatus soft = MakeSoftBodiesStatus(backend.GetSoftBodiesGpuStatus());
+        EXPECT_EQ(soft.name, "SoftBodies");
+        EXPECT_EQ(soft.state, SubsystemState::Disabled) << ToString(mode);
+        EXPECT_EQ(soft.detail, backend.GetGpuStatus().detail) << "the reason is the scene's";
+        EXPECT_NE(soft.detail.find("no PhysX GPU library"), std::string::npos) << soft.detail;
         backend.Shutdown();
     }
 }
@@ -381,6 +549,43 @@ namespace
         static void SetUpTestSuite() { ASSERT_TRUE(Scripting::LuaRuntime::Instance().Initialize()); }
     };
 }
+
+#ifdef N2ENGINE_PHYSX_ENABLED
+TEST_F(LuaGpuTest, IsGpuAvailableFollowsTheSceneNotTheParticleFeature)
+{
+    InjectedBackend rig(GpuMode::Auto);
+    ASSERT_TRUE(rig.ready);
+    PhysXBackend *physics = rig.backend.get();
+    Application::GetInstance().Set3DPhysicsBackend(std::move(rig.backend));
+    sol::state &lua = Scripting::LuaRuntime::Instance().GetState();
+    const auto isAvailable = [&lua]
+    {
+        const sol::protected_function_result result =
+            lua.safe_script("return Physics.IsGpuAvailable()", sol::script_pass_on_error);
+        EXPECT_TRUE(result.valid());
+        return result.valid() && result.get<bool>();
+    };
+    EXPECT_TRUE(isAvailable()) << "a Ready GPU scene";
+
+    // Neither feature's failure takes the GPU scene away
+    physics->FailSoftBodies("x");
+    EXPECT_TRUE(isAvailable());
+    IParticleBackend *particles = physics->GetParticleBackend();
+    ASSERT_NE(particles, nullptr);
+    ParticleSystemDesc desc;
+    desc.maxParticles = 16;
+    const ParticleSystemHandle handle = particles->CreateSystem(desc);
+    ASSERT_NE(handle, kInvalidParticleSystem);
+    rig.driver->failUpload = true;
+    const Math::Vector3 at(0.0f, 1.0f, 0.0f);
+    const Math::Vector3 velocity(0.0f, 0.0f, 0.0f);
+    particles->Spawn(handle, std::span<const Math::Vector3>(&at, 1), std::span<const Math::Vector3>(&velocity, 1));
+    EXPECT_EQ(physics->GetParticleBackend(), nullptr) << "the particle backend gave up";
+    EXPECT_EQ(physics->GetParticlesGpuStatus().state, GpuState::Unavailable);
+    EXPECT_TRUE(isAvailable());
+    Application::GetInstance().Set3DPhysicsBackend(nullptr);
+}
+#endif
 
 TEST_F(LuaGpuTest, IsGpuAvailableIsFalseWithoutAGpuScene)
 {

@@ -165,7 +165,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p class="src">Source: <code>engine/src/Application.cpp</code> — <code>Application::Init</code>, <code>Application::Shutdown</code> (<code>_initialized</code>)</p>
 
 <h2 id="health">Subsystem health</h2>
-<p><code>Init</code> returns an <code>EngineHealth</code>: a list of <code>SubsystemStatus{name, state, detail}</code> in the fixed order <strong>Window, Renderer, Physics, Particles, Audio, Scripting</strong>. <code>GetHealth()</code> returns the same report later (as of the end of the last Init), except that the Particles row's detail is refreshed with the live ParticleSystem counts on every call. Before any Init the list is empty, which counts as healthy.</p>
+<p><code>Init</code> returns an <code>EngineHealth</code>: a list of <code>SubsystemStatus{name, state, detail}</code> in the fixed order <strong>Window, Renderer, Physics, Particles, SoftBodies, Audio, Scripting</strong> <span class="badge">PR #138</span>. <code>GetHealth()</code> returns the same report later (as of the end of the last Init), except that the Particles and SoftBodies rows follow the physics backend's per-feature GPU status as it is now (<a href="physics.html#gpu-features">GPU features</a>) and the Particles row's detail is refreshed with the live ParticleSystem counts on every call. Before any Init the list is empty, which counts as healthy.</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>State</th><th>Meaning</th><th>Counts as failure?</th></tr></thead>
