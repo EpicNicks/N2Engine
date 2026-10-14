@@ -1395,7 +1395,7 @@ bool VulkanRenderer::SetRenderTargetSize(uint32_t width, uint32_t height)
 // Stubs: stages A-F of #43. Each fails loudly (a log, once) and cleanly (nullptr/false/nothing), never crashes.
 // ---------------------------------------------------------------------------------------------------------------------
 
-Common::IMesh* VulkanRenderer::CreateMesh(const Common::MeshData& meshData)
+Renderer::Common::IMesh* VulkanRenderer::CreateMesh(const Common::MeshData& meshData)
 {
     static_cast<void>(meshData);
     LogUnsupportedOnce("CreateMesh");
@@ -1407,7 +1407,7 @@ void VulkanRenderer::DestroyMesh(Common::IMesh* mesh)
     static_cast<void>(mesh); // this renderer made none
 }
 
-Common::ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t width, uint32_t height,
+Renderer::Common::ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t width, uint32_t height,
                                                 uint32_t channels)
 {
     static_cast<void>(data);
@@ -1418,7 +1418,7 @@ Common::ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t wi
     return nullptr;
 }
 
-Common::ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t width, uint32_t height,
+Renderer::Common::ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t width, uint32_t height,
                                                 uint32_t channels, const Common::TextureOptions& options)
 {
     static_cast<void>(options);
@@ -1438,12 +1438,12 @@ bool VulkanRenderer::UpdateMesh(Common::IMesh* mesh, const Common::MeshData& mes
     return false;
 }
 
-Common::IMaterial* VulkanRenderer::CreateMaterial(Common::IShader* shader)
+Renderer::Common::IMaterial* VulkanRenderer::CreateMaterial(Common::IShader* shader)
 {
     return CreateMaterial(shader, nullptr);
 }
 
-Common::IMaterial* VulkanRenderer::CreateMaterial(Common::IShader* shader, Common::ITexture* texture)
+Renderer::Common::IMaterial* VulkanRenderer::CreateMaterial(Common::IShader* shader, Common::ITexture* texture)
 {
     static_cast<void>(shader);
     static_cast<void>(texture);
@@ -1456,7 +1456,7 @@ void VulkanRenderer::DestroyMaterial(Common::IMaterial* material)
     static_cast<void>(material);
 }
 
-Common::IShader* VulkanRenderer::CreateShaderProgram(const char* vertexSource, const char* fragmentSource)
+Renderer::Common::IShader* VulkanRenderer::CreateShaderProgram(const char* vertexSource, const char* fragmentSource)
 {
     static_cast<void>(vertexSource);
     static_cast<void>(fragmentSource);
@@ -1481,13 +1481,13 @@ bool VulkanRenderer::IsValidShader(Common::IShader* shader) const
     return false;
 }
 
-Common::IShader* VulkanRenderer::GetStandardUnlitShader() const
+Renderer::Common::IShader* VulkanRenderer::GetStandardUnlitShader() const
 {
     LogUnsupportedOnce("GetStandardUnlitShader");
     return nullptr;
 }
 
-Common::IShader* VulkanRenderer::GetStandardLitShader() const
+Renderer::Common::IShader* VulkanRenderer::GetStandardLitShader() const
 {
     LogUnsupportedOnce("GetStandardLitShader");
     return nullptr;
