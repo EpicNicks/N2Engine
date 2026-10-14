@@ -1,4 +1,9 @@
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <functional>
 #include <random>
+#include <thread>
 #include <sstream>
 #include <iomanip>
 #include <TinySHA1/TinySHA1.hpp>
@@ -79,12 +84,41 @@ std::optional<UUID> UUID::FromString(const std::string &str)
     return uuid;
 }
 
+namespace
+{
+    // One generator per thread, seeded once on the thread's first call. The seed mixes several random_device words with
+    // a high-resolution time stamp, the thread id and an address (ASLR), so a random_device that returns a constant
+    // (a broken RDSEED) still gives distinct streams in different threads and runs. Not cryptographically secure.
+    std::mt19937_64 MakeThreadGenerator()
+    {
+        std::random_device rd;
+        std::array<std::uint32_t, 12> words{};
+        for (std::size_t i = 0; i < 8; ++i)
+        {
+            words[i] = rd();
+        }
+
+        const auto ticks = static_cast<std::uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+        const auto threadHash = static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+        static int anchor = 0;
+        const auto address = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(&anchor)) ^
+                             static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(&words));
+
+        words[8] = static_cast<std::uint32_t>(ticks);
+        words[9] = static_cast<std::uint32_t>(ticks >> 32) ^ static_cast<std::uint32_t>(address >> 32);
+        words[10] = static_cast<std::uint32_t>(threadHash) ^ static_cast<std::uint32_t>(address);
+        words[11] = static_cast<std::uint32_t>(threadHash >> 32);
+
+        std::seed_seq seq(words.begin(), words.end());
+        return std::mt19937_64(seq);
+    }
+}
+
 UUID UUID::Random()
 {
     UUID uuid = ZERO;
 
-    std::random_device rd;
-    std::mt19937_64 gen(rd());
+    thread_local std::mt19937_64 gen = MakeThreadGenerator();
     std::uniform_int_distribution<uint64_t> dis;
 
     const uint64_t high = dis(gen);
