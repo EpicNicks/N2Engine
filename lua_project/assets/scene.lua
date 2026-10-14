@@ -11,8 +11,14 @@
 --   6 glTF model    models/smoke_robot.gltf (lua_project/tools/make_smoke_assets.py) instantiated twice
 --   7 Screen UI     a screen-space Canvas on the right of the window (shown only here, or with U): a sprite Image,
 --                   UIText alignment and wrapping, Buttons with a counter
+-- and three demo stations after them, on keys 8, 9 and 0 (scripts/DemoStations.lua):
+--   8 Particles     a water fountain, a sand burst and a smoke column, with the active backend on each sign
+--   9 World canvas  a world-space panel whose buttons sit behind a trigger volume and behind a solid collider
+--  10 Text passes   TextRenderer:AddEffectPass: outline, shadow, glow, and pass order before and after
 
 local Stations = require("scripts.SmokeStations")
+local DemoStations = require("scripts.DemoStations")
+local Emitters = require("scripts.ParticleEmitters")
 
 local scene = SceneManager.GetCurrentScene()
 if scene == nil then
@@ -42,9 +48,17 @@ local actions = {
     ["Toggle HUD"] = {
         { type = "KeyboardButton", key = "H" },
     },
+    -- The particle station (scripts/ParticleStation.lua)
+    ["Particles Burst"] = { { type = "KeyboardButton", key = "B" } },
+    ["Particles Toggle"] = { { type = "KeyboardButton", key = "P" } },
+    ["Particles Clear"] = { { type = "KeyboardButton", key = "C" } },
+    ["Particles Backend"] = { { type = "KeyboardButton", key = "K" } },
 }
 for index = 1, #Stations do
     actions["Station " .. index] = { { type = "KeyboardButton", key = "Key" .. index } }
+end
+for index, station in ipairs(DemoStations) do
+    actions["Demo Station " .. index] = { { type = "KeyboardButton", key = station.key } }
 end
 local controls = Input.CreateActionMap("Main Controls", actions)
 if controls ~= nil then
@@ -421,6 +435,138 @@ do
         { size = 12, color = CAPTION }), 10, 404, 280, 60)
 end
 
+-- ===== Demo stations 8-0 (scripts/DemoStations.lua): particles, world canvas vs colliders, text effect passes =====
+
+-- A demo station's title sign, "8  Name", at the top-left of its view
+local function DemoTitle(index, position)
+    local label = tostring(#Stations + index) -- the 8th station on key 8, the 10th on key 0
+    WorldText("Demo " .. label .. " Title", label .. "  " .. DemoStations[index].name, position, 0.45, Color.White)
+end
+
+-- ===== Demo station 8: particles (ParticleSystem; scripts/ParticleEmitters.lua, ParticleStation.lua) =====
+
+do
+    local x0 = Emitters.CENTER_X
+    DemoTitle(1, Vector3(x0 - 8.0, 6.9, 0.0))
+    -- What the keys do and which backend is asked for; ParticleStation.lua rewrites it
+    WorldText("Particles Info", "B burst   P play / stop   C clear   K backend: Auto, CPU, PhysX",
+        Vector3(x0 - 8.0, 6.2, 0.0), 0.2, CAPTION)
+    ColouredCube("Particles Ground", Color.new(0.35, 0.35, 0.4, 1.0),
+        Vector3(x0, Emitters.GROUND_Y - 0.17, 0.0), Vector3(17.0, 0.3, 3.0))
+
+    for _, spec in ipairs(Emitters.Specs) do
+        local title = WorldText("Particles Title " .. spec.key, spec.key .. "\n" .. spec.detail,
+            Vector3(x0 + spec.x, 4.6, 0.0), 0.3, Color.White)
+        title:SetAlignment("Center", "Top")
+        local status = WorldText("Particles Status " .. spec.key, "asked: Auto\nrunning: starting\nalive: 0",
+            Vector3(x0 + spec.x, 3.5, 0.0), 0.2, CAPTION)
+        status:SetAlignment("Center", "Top")
+        local emitter, ps = Emitters.Create(spec, Emitters.BACKENDS[1], true)
+        table.insert(roots, emitter)
+    end
+end
+
+-- ===== Demo station 9: a world canvas with a trigger and a solid collider in front of its buttons =====
+
+local triggerDemoClicks = { A = 0, B = 0 }
+do
+    local cx, cy = 150.0, 0.3
+    local canvas = UI.CreateCanvas("Trigger Demo Canvas", "WorldSpace") -- scale 0.01: 600 x 400 is 6 x 4 units
+    canvas:GetComponent("Canvas"):SetSize(Vector2(600, 400))
+    canvas:GetPositionable():SetPosition(Vector3(cx, cy, 0.0))
+    table.insert(roots, canvas)
+
+    local background = Panel(canvas, "Trigger Demo Background", Color.new(0.1, 0.25, 0.55, 0.75))
+    background:GetComponent("RectTransform"):StretchToParent()
+    Layout(Label(canvas, "Trigger Demo Title", "9  World canvas and colliders", { size = 34, h = "Center" }), 20, 16,
+        560, 48)
+
+    -- A button, a counter under it, and `triggerDemoClicks[id]` counting its clicks
+    local function ClickTarget(id, x, label, color)
+        local buttonObject, button = TintedButton(canvas, "Trigger Demo " .. id .. " Button", label, color, 24)
+        Layout(buttonObject, x, 90, 260, 70)
+        local counter, counterText = Label(canvas, "Trigger Demo " .. id .. " Counter", "Clicks: 0",
+            { size = 24, h = "Center", v = "Middle", wrap = false })
+        Layout(counter, x, 168, 260, 36)
+        button:AddOnClick(function()
+            triggerDemoClicks[id] = triggerDemoClicks[id] + 1
+            counterText:SetText("Clicks: " .. triggerDemoClicks[id])
+        end)
+    end
+    ClickTarget("A", 30, "A: trigger in front", Color.new(1.0, 0.6, 0.15, 1.0))
+    ClickTarget("B", 310, "B: solid block in front", Color.new(0.35, 0.8, 0.45, 1.0))
+
+    Layout(Label(canvas, "Trigger Demo Caption", "The pointer's ray is tested against the colliders in front of the "
+        .. "panel. A trigger volume (the yellow frame) never blocks it: A counts clicks. A solid collider (the green "
+        .. "block) does: the click lands on the block and B stays at 0.", { size = 20 }), 30, 225, 540, 165)
+
+    -- Button centres in the world: the canvas is centred on (cx, cy), 6 x 4 units, with 100 canvas px to the unit
+    local aX, bX, buttonY = cx - 3.0 + 1.6, cx - 3.0 + 4.4, cy + 2.0 - 1.25
+
+    -- A: a trigger box 0.5 to 1.5 in front of the panel, drawn as a yellow frame
+    local trigger = Place(GameObject.Create("Trigger Demo Volume"), Vector3(aX, buttonY, 1.0))
+    local triggerBox = trigger:AddComponent("BoxCollider")
+    triggerBox:SetSize(Vector3(3.0, 1.1, 1.0))
+    triggerBox:SetIsTrigger(true)
+    table.insert(roots, trigger)
+    local frame = Color.Yellow
+    ColouredCube("Trigger Demo Frame Top", frame, Vector3(aX, buttonY + 0.55, 1.0), Vector3(3.0, 0.06, 0.06))
+    ColouredCube("Trigger Demo Frame Bottom", frame, Vector3(aX, buttonY - 0.55, 1.0), Vector3(3.0, 0.06, 0.06))
+    ColouredCube("Trigger Demo Frame Left", frame, Vector3(aX - 1.5, buttonY, 1.0), Vector3(0.06, 1.1, 0.06))
+    ColouredCube("Trigger Demo Frame Right", frame, Vector3(aX + 1.5, buttonY, 1.0), Vector3(0.06, 1.1, 0.06))
+
+    -- B: a solid block just in front of the panel (a collider without a Rigidbody doesn't move)
+    local blockSize = Vector3(2.8, 0.9, 0.4)
+    local block = Place(GameObject.Create("Trigger Demo Block"), Vector3(bX, buttonY, 0.8))
+    block:AddComponent("CubeRenderer"):SetColor(Color.new(0.2, 0.65, 0.3, 1.0))
+    block:GetComponent("CubeRenderer"):SetSize(blockSize)
+    block:AddComponent("BoxCollider"):SetSize(blockSize)
+    table.insert(roots, block)
+end
+
+-- ===== Demo station 10: text effect passes (TextRenderer:AddEffectPass) =====
+
+do
+    local board = GameObject.Create("Passes Board")
+    local boardRenderer = board:AddComponent("QuadRenderer")
+    boardRenderer:SetColor(Color.new(0.5, 0.5, 0.55, 1.0))
+    boardRenderer:SetSize(Vector3(12.4, 8.9, 1.0))
+    Place(board, Vector3(180.0, 0.45, -0.05))
+    table.insert(roots, board)
+
+    local x = 174.2
+    DemoTitle(3, Vector3(x, 4.5, 0.0))
+
+    -- A sample word and, to its right, what its passes do
+    local function Row(name, y, caption)
+        local renderer = WorldText("Pass " .. name, name, Vector3(x, y, 0.0), 0.6)
+        WorldText("Pass " .. name .. " Caption", caption, Vector3(179.4, y - 0.05, 0.0), 0.17, DARK_CAPTION, 5.6)
+        return renderer
+    end
+
+    Row("Outline", 3.5, "AddEffectPass(0, 0, red, 0.08): a width and no offset is an outline."):AddEffectPass(0.0,
+        0.0, Color.Red, 0.08)
+    Row("Shadow", 2.35, "(0.08, -0.08, black): an offset and no width is a hard shadow."):AddEffectPass(0.08, -0.08,
+        Color.Black)
+    Row("Glow", 1.2, "(0, 0, cyan, 0, 0.12): softness and no offset is a glow (OpenGL; hard on software)."):
+        AddEffectPass(0.0, 0.0, Color.Cyan, 0.0, 0.12)
+
+    -- The same two passes twice: a narrow yellow ring and a wide red one
+    local before = Row("Before", 0.05, "Narrow yellow added first, wide red second: later passes draw in front, so "
+        .. "the red hides the yellow.")
+    before:AddEffectPass(0.0, 0.0, Color.Yellow, 0.05)
+    before:AddEffectPass(0.0, 0.0, Color.Red, 0.11)
+    local after = Row("After", -1.1, "The same two passes with orders: red -10, yellow 0. Lower orders draw further "
+        .. "back, so the yellow is in front again.")
+    after:AddEffectPass(0.0, 0.0, Color.Yellow, 0.05, 0.0, 0)
+    after:AddEffectPass(0.0, 0.0, Color.Red, 0.11, 0.0, -10)
+
+    local behind = Row("Behind", -2.25, "The settings shadow sits at order -200: a red pass at -300 draws behind it, "
+        .. "peeking out past the black.")
+    behind:SetShadow(0.08, -0.08, Color.Black)
+    behind:AddEffectPass(0.16, -0.16, Color.Red, 0.03, 0.0, -300)
+end
+
 -- ===== HUD: the current station and what to look for (scripts/SmokeHud.lua) =====
 
 do
@@ -437,7 +583,7 @@ do
     rect:SetSizeDelta(Vector2(580, 112))
 
     Layout(Label(background, "HUD Title", "", { size = 18, wrap = false }), 10, 4, 560, 22)
-    Layout(Label(background, "HUD Keys", "Keys 1-7: stations   WASD: move   Arrows: look   U: UI panel   "
+    Layout(Label(background, "HUD Keys", "Keys 1-7, 8-0: stations   WASD: move   Arrows: look   U: UI panel   "
         .. "H: this HUD   Esc: quit", { size = 12, color = Color.new(0.8, 0.8, 0.85, 1.0), wrap = false }),
         10, 28, 560, 16)
     Layout(Label(background, "HUD Caption", "", { size = 12, color = CAPTION }), 10, 46, 560, 62)
@@ -450,6 +596,11 @@ end
 local cameraController = GameObject.Create("Camera Controller")
 cameraController:AddComponent("LuaComponent"):SetScript("res://scripts/CameraController.lua")
 table.insert(roots, cameraController)
+
+-- Behind the particle signs and emitters above: it finds them by name and rebuilds the emitters on a backend change
+local particleStation = GameObject.Create("Particle Station")
+particleStation:AddComponent("LuaComponent"):SetScript("res://scripts/ParticleStation.lua")
+table.insert(roots, particleStation)
 
 local quitHandler = GameObject.Create("Quit Handler")
 quitHandler:AddComponent("LuaComponent"):SetScript("res://scripts/QuitHandler.lua")

@@ -1,9 +1,11 @@
 -- The smoke test's heads-up display (on the "Smoke HUD" canvas, bottom-left): which station the camera is at and
 -- what to look for there, also written to the log in case text doesn't draw. Keys 1-7 ("Station N") change station,
 -- as in CameraController.lua, and show the screen-space UI panel only at the station that tests it; U ("Toggle UI
--- Panel") shows or hides the panel anyway, and H ("Toggle HUD") the HUD.
+-- Panel") shows or hides the panel anyway, and H ("Toggle HUD") the HUD. Keys 8, 9 and 0 ("Demo Station N") show
+-- the demo stations (DemoStations.lua), headed "Demo N/3" so the smoke test stays "Station N/7".
 
 local Stations = require("scripts.SmokeStations")
+local DemoStations = require("scripts.DemoStations")
 
 local SmokeHud = {}
 SmokeHud.__index = SmokeHud
@@ -32,6 +34,9 @@ function SmokeHud:OnAttach()
     for index = 1, #(Stations or {}) do
         OnStarted(controls, "Station " .. index, function() self:ShowStation(index) end)
     end
+    for index = 1, #(DemoStations or {}) do
+        OnStarted(controls, "Demo Station " .. index, function() self:ShowDemoStation(index) end)
+    end
     OnStarted(controls, "Toggle UI Panel", function() self:TogglePanel() end)
     OnStarted(controls, "Toggle HUD", function() self:ToggleHud() end)
 end
@@ -59,6 +64,28 @@ function SmokeHud:ShowStation(index)
     local panel = self:Panel()
     if panel ~= nil then
         panel:SetActive(station.uiPanel == true)
+    end
+    Debug.Log("GPU smoke test, " .. heading .. ". Look for: " .. station.look)
+end
+
+-- Like ShowStation, for the demo stations (which have no screen-space panel)
+function SmokeHud:ShowDemoStation(index)
+    local station = DemoStations and DemoStations[index]
+    if station == nil then
+        return
+    end
+    local heading = string.format("Demo %d/%d: %s", index, #DemoStations, station.name)
+    local title = self:Text("HUD Title")
+    if title ~= nil then
+        title:SetText(heading)
+    end
+    local caption = self:Text("HUD Caption")
+    if caption ~= nil then
+        caption:SetText(station.look)
+    end
+    local panel = self:Panel()
+    if panel ~= nil then
+        panel:SetActive(false)
     end
     Debug.Log("GPU smoke test, " .. heading .. ". Look for: " .. station.look)
 end
