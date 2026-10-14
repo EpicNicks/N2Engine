@@ -357,8 +357,9 @@ TEST(ReadOnlyHostTest, HelloSaysTheHostIsReadOnly)
         ASSERT_TRUE(server.SetReadOnly(readOnly));
         const Frame info = Execute(server, CommandType::Hello, HelloPayload(false));
         ASSERT_EQ(info.type, static_cast<uint8_t>(ResponseType::ServerInfo));
-        ASSERT_FALSE(info.payload.empty());
-        EXPECT_EQ(info.payload.back(), readOnly ? uint8_t{1} : uint8_t{0}) << "readOnly is ServerInfo's last field";
+        // readOnly, then the empty user (4 bytes) and the role "admin" (4 + 5 bytes) of a host with no tokens file
+        ASSERT_GE(info.payload.size(), 14u);
+        EXPECT_EQ(info.payload[info.payload.size() - 14], readOnly ? uint8_t{1} : uint8_t{0}) << "ServerInfo.readOnly";
     }
 }
 
