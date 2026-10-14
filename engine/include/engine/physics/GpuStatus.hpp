@@ -87,12 +87,38 @@ namespace N2Engine::Physics
         return std::nullopt;
     }
 
-    /// The "Particles" health row for a GPU status. Disabled and Unavailable are both Disabled (deliberately off
-    /// or not possible here: not a failure); only Ready is Running; only Failed (physics.gpu=on with a failed
-    /// probe) is Failed.
-    [[nodiscard]] inline SubsystemStatus MakeParticlesStatus(const GpuStatus &gpu)
+    /// A GPU feature's status: the scene's (the probe) unless the scene is Ready and the feature has failed, in
+    /// which case the feature's own failure. Each feature (particles, soft bodies) keeps its own failure, so one
+    /// feature failing never changes what another reports; the scene status itself is never rewritten by a feature.
+    [[nodiscard]] inline GpuStatus ComposeFeatureGpuStatus(const GpuStatus &scene, const std::optional<GpuStatus> &failure)
     {
-        SubsystemStatus status{.name = "Particles"};
+        if (scene.state == GpuState::Ready && failure.has_value())
+        {
+            return *failure;
+        }
+        return scene;
+    }
+
+    /// The soft-body status: ComposeFeatureGpuStatus, and while the scene is Ready but there is no GPU soft-body
+    /// backend (`hasBackend` false: none exists yet) Unavailable, so the row never says Running for a feature that
+    /// is not there.
+    [[nodiscard]] inline GpuStatus ComposeSoftBodiesGpuStatus(const GpuStatus &scene, const std::optional<GpuStatus> &failure,
+                                                              const bool hasBackend)
+    {
+        GpuStatus status = ComposeFeatureGpuStatus(scene, failure);
+        if (status.state == GpuState::Ready && !hasBackend)
+        {
+            status = {GpuState::Unavailable, "GPU soft bodies unavailable: no PhysX soft-body backend in this build"};
+        }
+        return status;
+    }
+
+    /// A feature's health row for a GPU status. Disabled and Unavailable are both Disabled (deliberately off
+    /// or not possible here: not a failure); only Ready is Running; only Failed (physics.gpu=on with a failed
+    /// probe or feature) is Failed.
+    [[nodiscard]] inline SubsystemStatus MakeGpuFeatureStatus(const std::string_view name, const GpuStatus &gpu)
+    {
+        SubsystemStatus status{.name = std::string(name)};
         switch (gpu.state)
         {
         case GpuState::Ready:
@@ -108,5 +134,17 @@ namespace N2Engine::Physics
         }
         status.detail = gpu.detail;
         return status;
+    }
+
+    /// The "Particles" health row for a GPU status (see MakeGpuFeatureStatus)
+    [[nodiscard]] inline SubsystemStatus MakeParticlesStatus(const GpuStatus &gpu)
+    {
+        return MakeGpuFeatureStatus("Particles", gpu);
+    }
+
+    /// The "SoftBodies" health row for a GPU status (see MakeGpuFeatureStatus)
+    [[nodiscard]] inline SubsystemStatus MakeSoftBodiesStatus(const GpuStatus &gpu)
+    {
+        return MakeGpuFeatureStatus("SoftBodies", gpu);
     }
 }

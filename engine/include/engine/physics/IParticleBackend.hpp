@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -10,6 +9,7 @@
 #include <math/Vector3.hpp>
 #include <math/Vector4.hpp>
 
+#include "engine/physics/BackendHandle.hpp"
 #include "engine/physics/ParticleMaterial.hpp"
 
 namespace N2Engine::Physics
@@ -21,33 +21,38 @@ namespace N2Engine::Physics
      * system's index in that backend). Every backend object takes a new generation from a process-wide counter
      * when it is constructed, so a backend that was replaced or recreated, even at the same address as the old
      * one, does not know the handles of its predecessor: they fail its generation check and are ignored, instead
-     * of naming one of the new backend's systems.
+     * of naming one of the new backend's systems. The helper is shared with the other feature backends
+     * (BackendHandle.hpp); the names below are this feature's.
      */
-    using ParticleSystemHandle = std::uint64_t;
-    inline constexpr ParticleSystemHandle kInvalidParticleSystem = 0;
+    using ParticleSystemHandle = BackendHandle;
+    inline constexpr ParticleSystemHandle kInvalidParticleSystem = kInvalidBackendHandle;
+
+    namespace Detail
+    {
+        struct ParticleGenerationTag;
+    }
 
     [[nodiscard]] constexpr ParticleSystemHandle MakeParticleHandle(const std::uint32_t generation,
                                                                     const std::uint32_t index)
     {
-        return (static_cast<ParticleSystemHandle>(generation) << 32) | index;
+        return MakeBackendHandle(generation, index);
     }
 
     [[nodiscard]] constexpr std::uint32_t ParticleHandleGeneration(const ParticleSystemHandle handle)
     {
-        return static_cast<std::uint32_t>(handle >> 32);
+        return BackendHandleGeneration(handle);
     }
 
     [[nodiscard]] constexpr std::uint32_t ParticleHandleIndex(const ParticleSystemHandle handle)
     {
-        return static_cast<std::uint32_t>(handle & 0xFFFFFFFFu);
+        return BackendHandleIndex(handle);
     }
 
     /// The next backend generation: 1, 2, 3, ... for the life of the process (0 is never issued, so a handle of
     /// generation 0 belongs to no backend)
     [[nodiscard]] inline std::uint32_t NextParticleBackendGeneration()
     {
-        static std::atomic<std::uint32_t> counter{0};
-        return counter.fetch_add(1) + 1;
+        return NextBackendGeneration<Detail::ParticleGenerationTag>();
     }
 
     /// The simulation settings a backend can change at any time (SetParams). Emission (when and where particles
@@ -102,7 +107,7 @@ namespace N2Engine::Physics
         /// whether the system still exists.
         [[nodiscard]] bool OwnsHandle(const ParticleSystemHandle handle) const
         {
-            return handle != kInvalidParticleSystem && ParticleHandleGeneration(handle) == _generation;
+            return BackendHandleOwnedBy(_generation, handle);
         }
 
         /// "CPU" or "PhysX": what health and logs call the backend
