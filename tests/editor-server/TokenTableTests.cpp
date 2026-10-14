@@ -352,7 +352,7 @@ TEST(TokenTableTest, TheLastEntryAndTheFirstBothMatch)
 
 // ==================== The file ====================
 
-TEST(TokensFileTest, LoadsAFileOfUsers)
+TEST(TokensFileLoadTest, LoadsAFileOfUsers)
 {
     TempFolder folder;
     const fs::path file = folder.Path() / "tokens.json";
@@ -364,7 +364,7 @@ TEST(TokensFileTest, LoadsAFileOfUsers)
     EXPECT_EQ(table->Size(), 1u);
 }
 
-TEST(TokensFileTest, AMissingFileOrAFolderIsAnErrorNamingIt)
+TEST(TokensFileLoadTest, AMissingFileOrAFolderIsAnErrorNamingIt)
 {
     TempFolder folder;
     const auto missing = LoadTokensFile(folder.Path() / "nope.json");
@@ -375,7 +375,7 @@ TEST(TokensFileTest, AMissingFileOrAFolderIsAnErrorNamingIt)
     ASSERT_FALSE(directory);
 }
 
-TEST(TokensFileTest, AMalformedFileIsAnErrorNamingTheFileAndTheEntry)
+TEST(TokensFileLoadTest, AMalformedFileIsAnErrorNamingTheFileAndTheEntry)
 {
     TempFolder folder;
     const fs::path file = folder.Path() / "tokens.json";
@@ -387,7 +387,7 @@ TEST(TokensFileTest, AMalformedFileIsAnErrorNamingTheFileAndTheEntry)
     EXPECT_NE(table.error().find("entry 2 (bob)"), std::string::npos) << table.error();
 }
 
-TEST(TokensFileTest, AFileLargerThanTheLimitIsRefusedUnread)
+TEST(TokensFileLoadTest, AFileLargerThanTheLimitIsRefusedUnread)
 {
     TempFolder folder;
     const fs::path file = folder.Path() / "tokens.json";
@@ -398,7 +398,7 @@ TEST(TokensFileTest, AFileLargerThanTheLimitIsRefusedUnread)
     EXPECT_NE(table.error().find("larger than"), std::string::npos) << table.error();
 }
 
-TEST(TokensFileTest, OnPosixAFileItsGroupOrOthersCanAccessIsRefused)
+TEST(TokensFileLoadTest, OnPosixAFileItsGroupOrOthersCanAccessIsRefused)
 {
 #ifdef _WIN32
     GTEST_SKIP() << "file permissions aren't checked on Windows (ACLs)";
@@ -427,7 +427,7 @@ TEST(TokensFileTest, OnPosixAFileItsGroupOrOthersCanAccessIsRefused)
 #endif
 }
 
-TEST(TokensFileTest, TheSignatureChangesWhenTheFileIsRewritten)
+TEST(TokensFileLoadTest, TheSignatureChangesWhenTheFileIsRewritten)
 {
     TempFolder folder;
     const fs::path file = folder.Path() / "tokens.json";

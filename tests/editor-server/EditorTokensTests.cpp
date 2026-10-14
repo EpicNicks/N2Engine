@@ -413,7 +413,7 @@ namespace
     }
 
     /// A server with a tokens file of these users, in a folder of its own
-    class TokensFileTest : public ::testing::Test
+    class TokensServerTest : public ::testing::Test
     {
     protected:
         void SetUp() override
@@ -658,7 +658,7 @@ TEST(TokensFileServerTest, WithoutTheTlsLibraryATokensFileIsAStartupError)
     EXPECT_FALSE(server.RequiresAccessToken());
 }
 
-TEST_F(TokensFileTest, TheFileMustLoadBeforeTheServerStarts)
+TEST_F(TokensServerTest, TheFileMustLoadBeforeTheServerStarts)
 {
     EditorServer server;
     const auto missing = server.SetTokensFile(_folder->Path() / "missing.json");
@@ -690,7 +690,7 @@ TEST_F(TokensFileTest, TheFileMustLoadBeforeTheServerStarts)
     StopWithin(server, std::chrono::seconds(10));
 }
 
-TEST_F(TokensFileTest, AFileItsGroupOrOthersCanReadIsRefusedOnPosix)
+TEST_F(TokensServerTest, AFileItsGroupOrOthersCanReadIsRefusedOnPosix)
 {
 #ifdef _WIN32
     GTEST_SKIP() << "file permissions aren't checked on Windows (ACLs)";
@@ -711,7 +711,7 @@ TEST_F(TokensFileTest, AFileItsGroupOrOthersCanReadIsRefusedOnPosix)
 
 // ==================== Hello with a tokens file ====================
 
-TEST_F(TokensFileTest, HelloBindsTheMatchedUsersRoleAndReportsIt)
+TEST_F(TokensServerTest, HelloBindsTheMatchedUsersRoleAndReportsIt)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -730,7 +730,7 @@ TEST_F(TokensFileTest, HelloBindsTheMatchedUsersRoleAndReportsIt)
     }
 }
 
-TEST_F(TokensFileTest, AWrongTokenOrAWrongUserIsRefusedTheSameWay)
+TEST_F(TokensServerTest, AWrongTokenOrAWrongUserIsRefusedTheSameWay)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -764,7 +764,7 @@ TEST_F(TokensFileTest, AWrongTokenOrAWrongUserIsRefusedTheSameWay)
               Execute(server, CommandType::Hello, HelloPayload("not-a-token", true, "alice")).Text());
 }
 
-TEST_F(TokensFileTest, TheTokenIsCheckedBeforeTheVersion)
+TEST_F(TokensServerTest, TheTokenIsCheckedBeforeTheVersion)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -777,7 +777,7 @@ TEST_F(TokensFileTest, TheTokenIsCheckedBeforeTheVersion)
     EXPECT_EQ(response.Text(), "Invalid access token");
 }
 
-TEST_F(TokensFileTest, ACommandBeforeAHelloOrAfterAFailedOneIsRefused)
+TEST_F(TokensServerTest, ACommandBeforeAHelloOrAfterAFailedOneIsRefused)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -790,7 +790,7 @@ TEST_F(TokensFileTest, ACommandBeforeAHelloOrAfterAFailedOneIsRefused)
 
 // ==================== What each role may run ====================
 
-TEST_F(TokensFileTest, AViewerIsRefusedEveryCommandThatIsNotAReadWithTheForbiddenCode)
+TEST_F(TokensServerTest, AViewerIsRefusedEveryCommandThatIsNotAReadWithTheForbiddenCode)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -820,7 +820,7 @@ TEST_F(TokensFileTest, AViewerIsRefusedEveryCommandThatIsNotAReadWithTheForbidde
     }
 }
 
-TEST_F(TokensFileTest, AViewerMayNotPlay)
+TEST_F(TokensServerTest, AViewerMayNotPlay)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -836,7 +836,7 @@ TEST_F(TokensFileTest, AViewerMayNotPlay)
     EXPECT_FALSE(IsForbidden(Execute(server, CommandType::GetPlayState)));
 }
 
-TEST_F(TokensFileTest, ARefusalIsAPlainErrorForAClientThatDidNotAskForCodes)
+TEST_F(TokensServerTest, ARefusalIsAPlainErrorForAClientThatDidNotAskForCodes)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -847,7 +847,7 @@ TEST_F(TokensFileTest, ARefusalIsAPlainErrorForAClientThatDidNotAskForCodes)
     EXPECT_EQ(response.Text(), "forbidden: role viewer is not allowed to run CreateEntity");
 }
 
-TEST_F(TokensFileTest, AnEditorMayWriteAndMayNotShutDown)
+TEST_F(TokensServerTest, AnEditorMayWriteAndMayNotShutDown)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -866,7 +866,7 @@ TEST_F(TokensFileTest, AnEditorMayWriteAndMayNotShutDown)
     EXPECT_EQ(coded.message, "forbidden: role editor is not allowed to run Shutdown");
 }
 
-TEST_F(TokensFileTest, AnAdminIsRefusedNothing)
+TEST_F(TokensServerTest, AnAdminIsRefusedNothing)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -881,7 +881,7 @@ TEST_F(TokensFileTest, AnAdminIsRefusedNothing)
     EXPECT_FALSE(IsForbidden(unknown));
 }
 
-TEST_F(TokensFileTest, TheRoleIsTheConnectionsAndAnotherHelloReplacesIt)
+TEST_F(TokensServerTest, TheRoleIsTheConnectionsAndAnotherHelloReplacesIt)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -896,7 +896,7 @@ TEST_F(TokensFileTest, TheRoleIsTheConnectionsAndAnotherHelloReplacesIt)
     EXPECT_EQ(Execute(server, CommandType::Hello, HelloPayload("not-a-token", true, "bob")).type, ErrorType);
 }
 
-TEST_F(TokensFileTest, ReadOnlyStillAppliesOnTopOfTheRoles)
+TEST_F(TokensServerTest, ReadOnlyStillAppliesOnTopOfTheRoles)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -911,7 +911,7 @@ TEST_F(TokensFileTest, ReadOnlyStillAppliesOnTopOfTheRoles)
 
 // ==================== Log lines ====================
 
-TEST_F(TokensFileTest, HelloAndTheAuditLogNameTheUserAndNeverTheTokenOrItsHash)
+TEST_F(TokensServerTest, HelloAndTheAuditLogNameTheUserAndNeverTheTokenOrItsHash)
 {
     LogCapture log;
     {
@@ -975,7 +975,7 @@ TEST_F(TokensFileTest, HelloAndTheAuditLogNameTheUserAndNeverTheTokenOrItsHash)
 
 // ==================== Over a socket: Shutdown, the user field, revocation ====================
 
-TEST_F(TokensFileTest, ShutdownIsAnAdminsAloneOverASocketAndARefusalKeepsTheConnection)
+TEST_F(TokensServerTest, ShutdownIsAnAdminsAloneOverASocketAndARefusalKeepsTheConnection)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -1013,7 +1013,7 @@ TEST_F(TokensFileTest, ShutdownIsAnAdminsAloneOverASocketAndARefusalKeepsTheConn
     StopWithin(server, std::chrono::seconds(10));
 }
 
-TEST_F(TokensFileTest, AFailedHelloOverASocketClosesTheConnection)
+TEST_F(TokensServerTest, AFailedHelloOverASocketClosesTheConnection)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -1040,7 +1040,7 @@ TEST_F(TokensFileTest, AFailedHelloOverASocketClosesTheConnection)
     StopWithin(server, std::chrono::seconds(10));
 }
 
-TEST_F(TokensFileTest, RevokingAUserByRewritingTheFileTakesEffectOnTheNextConnection)
+TEST_F(TokensServerTest, RevokingAUserByRewritingTheFileTakesEffectOnTheNextConnection)
 {
     LogCapture log;
     EditorServer server;
@@ -1097,7 +1097,7 @@ TEST_F(TokensFileTest, RevokingAUserByRewritingTheFileTakesEffectOnTheNextConnec
     StopWithin(server, std::chrono::seconds(10));
 }
 
-TEST_F(TokensFileTest, ARoleChangeByRewritingTheFileTakesEffectOnTheNextConnection)
+TEST_F(TokensServerTest, ARoleChangeByRewritingTheFileTakesEffectOnTheNextConnection)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -1123,7 +1123,7 @@ TEST_F(TokensFileTest, ARoleChangeByRewritingTheFileTakesEffectOnTheNextConnecti
     StopWithin(server, std::chrono::seconds(10));
 }
 
-TEST_F(TokensFileTest, AReloadThatRemovesTheOpenConnectionsUserClosesIt)
+TEST_F(TokensServerTest, AReloadThatRemovesTheOpenConnectionsUserClosesIt)
 {
     LogCapture log;
     EditorServer server;
@@ -1153,7 +1153,7 @@ TEST_F(TokensFileTest, AReloadThatRemovesTheOpenConnectionsUserClosesIt)
     StopWithin(server, std::chrono::seconds(10));
 }
 
-TEST_F(TokensFileTest, AReloadThatChangesTheOpenConnectionsRoleOrTokenClosesIt)
+TEST_F(TokensServerTest, AReloadThatChangesTheOpenConnectionsRoleOrTokenClosesIt)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetTokensFile(File()));
@@ -1184,7 +1184,7 @@ TEST_F(TokensFileTest, AReloadThatChangesTheOpenConnectionsRoleOrTokenClosesIt)
     StopWithin(server, std::chrono::seconds(10));
 }
 
-TEST_F(TokensFileTest, AReloadThatDoesNotTouchTheOpenConnectionsUserLeavesItOpen)
+TEST_F(TokensServerTest, AReloadThatDoesNotTouchTheOpenConnectionsUserLeavesItOpen)
 {
     LogCapture log;
     EditorServer server;
@@ -1209,7 +1209,7 @@ TEST_F(TokensFileTest, AReloadThatDoesNotTouchTheOpenConnectionsUserLeavesItOpen
     StopWithin(server, std::chrono::seconds(10));
 }
 
-TEST_F(TokensFileTest, AFailedReloadKeepsThePreviousTokensAndWarns)
+TEST_F(TokensServerTest, AFailedReloadKeepsThePreviousTokensAndWarns)
 {
     LogCapture log;
     EditorServer server;
@@ -1260,7 +1260,7 @@ TEST_F(TokensFileTest, AFailedReloadKeepsThePreviousTokensAndWarns)
     StopWithin(server, std::chrono::seconds(10));
 }
 
-TEST_F(TokensFileTest, AReloadOfAFileTheOthersCanReadIsRefusedOnPosix)
+TEST_F(TokensServerTest, AReloadOfAFileTheOthersCanReadIsRefusedOnPosix)
 {
 #ifdef _WIN32
     GTEST_SKIP() << "file permissions aren't checked on Windows (ACLs)";
