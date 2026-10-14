@@ -1,5 +1,7 @@
 #include "editor-server/HostOptions.hpp"
 
+#include "editor-server/LogSink.hpp"
+
 #include <charconv>
 #include <cstdlib>
 #include <format>
@@ -120,7 +122,8 @@ namespace N2Engine::Editor
             }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--renderer" || arg == "--token-env" || arg == "--tokens-file" ||
-                                    arg == "--create" || arg == "--name" || arg == "--project-id" || arg == "--play";
+                                    arg == "--create" || arg == "--name" || arg == "--project-id" || arg == "--play" ||
+                                    arg == "--log-level" || arg == "--log-file";
             if (!takesValue)
             {
                 continue; // unknown arguments are ignored
@@ -171,6 +174,24 @@ namespace N2Engine::Editor
             else if (arg == "--play")
             {
                 options.playScene = value;
+            }
+            else if (arg == "--log-level")
+            {
+                const std::optional<Logger::LogLevel> level = ParseLogLevel(value);
+                if (!level)
+                {
+                    return std::unexpected("Invalid log level: " + value + " (expected info, warn or error)");
+                }
+                options.logLevel = *level;
+            }
+            else if (arg == "--log-file")
+            {
+                // An empty path would otherwise mean "no file" and silently drop the trail the flag asked for
+                if (value.empty())
+                {
+                    return std::unexpected("--log-file is missing a value");
+                }
+                options.logFile = value;
             }
             else if (arg == "--create")
             {
@@ -363,6 +384,12 @@ Options:
                             5 min; its connections are closed at once, before any TLS handshake), loopback
                             as a whole is backed off after 10 failures in a minute, and with --tokens-file a
                             user that fails 3 Hellos is backed off for up to 30 s. For test rigs only
+  --log-level <level>       The least severe level written to stderr (and --log-file): info (the default),
+                            warn or error. Every line is "<UTC time> <LEVEL> <message>", one per event,
+                            in every build type; the audit, rate-limit and tokens-reload lines are Info or Warn
+  --log-file <path>         Also append those lines to this file (created with mode 0600 on POSIX; an
+                            existing file keeps its mode). A path that can't be opened ends the host at start.
+                            No rotation: logrotate with copytruncate, or restart the host
   --play <file>             Start as a play host: run the scene snapshot in <file> (what the
                             WritePlaySnapshot command writes; or a res:// .scene path in the project)
                             as a game instead of opening the startup scene. Pass the same --project

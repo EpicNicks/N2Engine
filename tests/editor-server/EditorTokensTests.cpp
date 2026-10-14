@@ -938,7 +938,8 @@ TEST_F(TokensServerTest, HelloAndTheAuditLogNameTheUserAndNeverTheTokenOrItsHash
     }
 
     const std::vector<std::string> lines = log.Lines();
-    EXPECT_TRUE(log.Has("Refused Hello from editor client 'tokens test' (user=mallory role=none): wrong access token"));
+    EXPECT_TRUE(log.Has("Refused Hello from editor client 'tokens test' (user=? role=none): wrong access token"))
+        << "a name the tokens table doesn't have is never logged";
     EXPECT_TRUE(log.Has("Refused Hello from editor client 'tokens test' (user=bob role=none): wrong access token"));
     EXPECT_TRUE(log.Has("said Hello (protocol " + std::string{ProtocolVersion} + ") user=bob role=editor"));
     EXPECT_TRUE(log.Has("said Hello (protocol " + std::string{ProtocolVersion} + ") user=carol role=viewer"));

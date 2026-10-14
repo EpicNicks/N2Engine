@@ -31,12 +31,14 @@
 #      sudo systemctl enable --now n2editorhost
 #   6. Reach it through an SSH tunnel (the host listens on 127.0.0.1 only):  ssh -L 9999:127.0.0.1:9999 <server>
 #      The TLS certificate fingerprint is in the journal:  journalctl -u n2editorhost | grep fingerprint
+#      So is the host's log, one timestamped line per Hello, per write ("audit: user=..."), per refusal and per ban:
+#        journalctl -u n2editorhost -f      (--log-file <path> on ExecStart adds a file; docs/logging-and-editor.html#host-log)
 #
 # Rotate or revoke: change the entries and install the file again (the scratch file and the install command of step 4), then
 #        sudo systemctl reload n2editorhost        # ExecReload below: SIGHUP; the next connection would notice anyway
 #   An editor that saves by replacing the file (sed -i, most editors run under sudo) leaves it owned by root: the reload then fails,
-#   the host keeps the OLD tokens (it logs "Couldn't reload the tokens file ...", but a Release host only lets a connected
-#   client read its log lines, so nothing shows in the journal). Put the owner and mode back:
+#   the host keeps the OLD tokens (it logs "Couldn't reload the tokens file ..." as a WARN line:
+#   journalctl -u n2editorhost | grep 'tokens file'). Put the owner and mode back:
 #        sudo chown n2editor:n2editor /etc/n2editorhost/tokens.json && sudo chmod 0600 /etc/n2editorhost/tokens.json
 #   A reload that succeeds closes the connection of a user it removed. Test a revocation by connecting with the revoked token.
 #

@@ -27,6 +27,7 @@
 
 #include "editor-server/EditorServer.hpp"
 #include "editor-server/EditorTls.hpp"
+#include "editor-server/LogSink.hpp"
 
 namespace N2Engine::Editor
 {
@@ -170,6 +171,30 @@ namespace N2Engine::Editor
         {
             return RunNewToken(options);
         }
+
+        // The log sink: every Logger line at or above --log-level, one timestamped line each, on stderr (the journal, `docker
+        // logs`) and in --log-file, in every build type (a Release build has no console subscriber of its own). Before
+        // anything below logs, so a startup line is kept. A --log-file that can't be opened ends the host here, with one
+        // line on stderr and exit code 1, so an audit trail that was asked for is never silently missing. Destroyed when
+        // RunHost returns, after its last line.
+        std::vector<LogOutput> logOutputs;
+        logOutputs.push_back(StderrLogOutput());
+        if (!options.logFile.empty())
+        {
+            auto fileOutput = OpenLogFileOutput(options.logFile);
+            if (!fileOutput)
+            {
+                std::println(stderr, "N2EditorHost {}", fileOutput.error());
+                return 1;
+            }
+            logOutputs.push_back(std::move(*fileOutput));
+        }
+#ifdef SIGPIPE
+        // A stderr (or a pipe behind it) whose reader has gone is a failed write the sink ignores, never a signal that ends
+        // the host (the editor server does the same when it starts, which is after the first lines are written)
+        std::signal(SIGPIPE, SIG_IGN);
+#endif
+        const LogSink logSink(options.logLevel, std::move(logOutputs));
 
         // Before the engine starts (and Lua with it): the variable is removed from the environment once read. On
         // stderr, as the Logger has no console output until Application::Init (and none in Release).
