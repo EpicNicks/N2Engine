@@ -155,7 +155,7 @@ TEST_F(SoftBodyHeadlessTest, ADrawnFrameShowsTheDeformedBodyThroughTheOverride)
     ASSERT_NE(runtime, nullptr);
 
     // The renderer drew the runtime copy, not the saved mesh
-    const GpuCache::Handle &drawn = _renderer->GetDrawResources().GetMeshHandle();
+    const Rendering::GpuCache::Handle &drawn = _renderer->GetDrawResources().GetMeshHandle();
     EXPECT_EQ(drawn.GetSource(), static_cast<const void *>(runtime.get()));
 
     TickSteps(25, true);

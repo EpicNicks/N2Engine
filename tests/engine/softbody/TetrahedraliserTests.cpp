@@ -27,7 +27,7 @@ using Rendering::Mesh;
 
 namespace
 {
-    TetResult Run(const Renderer::Common::MeshData &data, const int resolution)
+    TetResult RunTet(const Renderer::Common::MeshData &data, const int resolution)
     {
         TetSettings settings;
         settings.resolution = resolution;
@@ -45,7 +45,7 @@ namespace
             {
                 ASSERT_LT(node, mesh.positions.size());
             }
-            EXPECT_GT(TetVolume6(mesh, t), 0.0) << "tetrahedron " << t << " is inside out or flat";
+            EXPECT_GT(TestSupport::TetVolume6(mesh, t), 0.0) << "tetrahedron " << t << " is inside out or flat";
         }
         ASSERT_EQ(mesh.surfaceEmbedding.size(), source.vertices.size());
         for (std::size_t i = 0; i < source.vertices.size(); ++i)
@@ -100,7 +100,7 @@ namespace
 TEST(TetrahedraliserTest, ABoxGetsFiveTetrahedraPerVoxelAndTheirVolumeIsTheBoxes)
 {
     const Renderer::Common::MeshData box = TestSupport::MakeWeldedBox(1.0f, 1.0f, 1.0f);
-    const TetResult result = Run(box, 4);
+    const TetResult result = RunTet(box, 4);
     ASSERT_TRUE(result.Ok()) << result.error;
     EXPECT_TRUE(result.error.empty());
     EXPECT_FALSE(result.cacheHit);
@@ -115,7 +115,7 @@ TEST(TetrahedraliserTest, ABoxGetsFiveTetrahedraPerVoxelAndTheirVolumeIsTheBoxes
 
 TEST(TetrahedraliserTest, NeighbouringVoxelsMeetOnMatchingFaces)
 {
-    const TetResult result = Run(TestSupport::MakeWeldedBox(1.0f, 1.0f, 1.0f), 4);
+    const TetResult result = RunTet(TestSupport::MakeWeldedBox(1.0f, 1.0f, 1.0f), 4);
     ASSERT_TRUE(result.Ok()) << result.error;
     int boundary = 0;
     for (const auto &[face, count] : FaceCounts(*result.mesh))
@@ -134,7 +134,7 @@ TEST(TetrahedraliserTest, NeighbouringVoxelsMeetOnMatchingFaces)
 TEST(TetrahedraliserTest, ABoxThatIsNotACubeGetsCubicVoxelsAlongItsLongestAxis)
 {
     const Renderer::Common::MeshData box = TestSupport::MakeWeldedBox(2.0f, 1.0f, 0.5f);
-    const TetResult result = Run(box, 8);
+    const TetResult result = RunTet(box, 8);
     ASSERT_TRUE(result.Ok()) << result.error;
     EXPECT_NEAR(result.mesh->voxelSize, 0.25f, 1e-6f) << "2 units over 8 voxels";
     EXPECT_EQ(result.mesh->tets.size(), 5u * 8 * 4 * 2);
@@ -145,7 +145,7 @@ TEST(TetrahedraliserTest, ABoxThatIsNotACubeGetsCubicVoxelsAlongItsLongestAxis)
 TEST(TetrahedraliserTest, ASphereIsAnApproximationThatStillEmbedsEveryVertex)
 {
     Renderer::Common::MeshData sphere = Mesh::MakeSphere();
-    const TetResult result = Run(sphere, 10);
+    const TetResult result = RunTet(sphere, 10);
     ASSERT_TRUE(result.Ok()) << result.error;
     ExpectWellFormed(*result.mesh, sphere);
     const double volume = TestSupport::TotalVolume(*result.mesh);
@@ -162,7 +162,7 @@ TEST(TetrahedraliserTest, ASeamedCubeMovesItsDuplicatesTogether)
     // The built-in cube has 24 vertices: 4 per face, so every corner is 3 vertices with different normals
     const Renderer::Common::MeshData cube = Mesh::MakeCube();
     ASSERT_EQ(cube.vertices.size(), 24u);
-    const TetResult result = Run(cube, 5);
+    const TetResult result = RunTet(cube, 5);
     ASSERT_TRUE(result.Ok()) << result.error;
     EXPECT_EQ(result.mesh->weldedVertexCount, 8u);
     ExpectWellFormed(*result.mesh, cube);
@@ -195,21 +195,21 @@ TEST(TetrahedraliserTest, ASeamedCubeMovesItsDuplicatesTogether)
 TEST(TetrahedraliserTest, TheResolutionChangesTheTetrahedronCount)
 {
     const Renderer::Common::MeshData box = TestSupport::MakeWeldedBox(1.0f, 1.0f, 1.0f);
-    const TetResult coarse = Run(box, 4);
-    const TetResult fine = Run(box, 8);
+    const TetResult coarse = RunTet(box, 4);
+    const TetResult fine = RunTet(box, 8);
     ASSERT_TRUE(coarse.Ok() && fine.Ok());
     EXPECT_EQ(coarse.mesh->tets.size(), 5u * 64);
     EXPECT_EQ(fine.mesh->tets.size(), 5u * 512);
     EXPECT_GT(fine.mesh->tets.size(), coarse.mesh->tets.size());
 
     const Renderer::Common::MeshData sphere = Mesh::MakeSphere();
-    EXPECT_GT(Run(sphere, 12).mesh->tets.size(), Run(sphere, 6).mesh->tets.size());
+    EXPECT_GT(RunTet(sphere, 12).mesh->tets.size(), RunTet(sphere, 6).mesh->tets.size());
 }
 
 TEST(TetrahedraliserTest, TheResolutionIsClampedToItsRange)
 {
     const Renderer::Common::MeshData box = TestSupport::MakeWeldedBox(1.0f, 1.0f, 1.0f);
-    const TetResult tiny = Run(box, -5);
+    const TetResult tiny = RunTet(box, -5);
     ASSERT_TRUE(tiny.Ok());
     EXPECT_EQ(tiny.mesh->resolution, Physics::kMinTetResolution);
     EXPECT_EQ(tiny.mesh->tets.size(), 5u * 2 * 2 * 2);
@@ -219,7 +219,7 @@ TEST(TetrahedraliserTest, ABodyOverTheTetrahedronCapGetsALowerResolutionNotAnErr
 {
     const Renderer::Common::MeshData box = TestSupport::MakeWeldedBox(1.0f, 1.0f, 1.0f);
     // 32 voxels along each side would be 163840 tetrahedra
-    const TetResult capped = Run(box, Physics::kMaxTetResolution);
+    const TetResult capped = RunTet(box, Physics::kMaxTetResolution);
     ASSERT_TRUE(capped.Ok()) << capped.error;
     EXPECT_LE(capped.mesh->tets.size(), Physics::kMaxTetsPerBody);
     EXPECT_LT(capped.mesh->resolution, Physics::kMaxTetResolution);
@@ -243,14 +243,14 @@ TEST(TetrahedraliserTest, ABodyOverTheTetrahedronCapGetsALowerResolutionNotAnErr
 TEST(TetrahedraliserTest, ASmallHoleInTheSurfaceDoesNotLoseTheBody)
 {
     Renderer::Common::MeshData box = TestSupport::MakeWeldedBox(1.0f, 1.0f, 1.0f);
-    const TetResult closed = Run(box, 6);
+    const TetResult closed = RunTet(box, 6);
     ASSERT_TRUE(closed.Ok());
 
     // Delete the two triangles of one face: the +x ray of an inside voxel still crosses the opposite face, the +y and
     // +z rays cross theirs, and two of three still say inside
     ASSERT_EQ(box.indices.size(), 36u);
     box.indices.erase(box.indices.begin() + 6, box.indices.begin() + 12);
-    const TetResult holed = Run(box, 6);
+    const TetResult holed = RunTet(box, 6);
     ASSERT_TRUE(holed.Ok()) << holed.error;
     EXPECT_EQ(holed.mesh->tets.size(), closed.mesh->tets.size());
     ExpectWellFormed(*holed.mesh, box);
@@ -301,8 +301,8 @@ TEST(TetrahedraliserTest, DegenerateInputFailsCleanly)
 TEST(TetrahedraliserTest, TheSameMeshGivesTheSameBodyEveryTime)
 {
     const Renderer::Common::MeshData sphere = Mesh::MakeSphere();
-    const TetResult a = Run(sphere, 8);
-    const TetResult b = Run(sphere, 8);
+    const TetResult a = RunTet(sphere, 8);
+    const TetResult b = RunTet(sphere, 8);
     ASSERT_TRUE(a.Ok() && b.Ok());
     ASSERT_EQ(a.mesh->tets.size(), b.mesh->tets.size());
     EXPECT_EQ(a.mesh->tets, b.mesh->tets);
