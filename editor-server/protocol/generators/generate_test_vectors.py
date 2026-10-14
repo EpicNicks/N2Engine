@@ -180,7 +180,7 @@ def build(protocol: dict) -> dict:
         })
 
     # The payload of a peer from before the optional trailing fields (protocol.json's optionalTrailing): it ends before
-    # them, and a reader decodes them as the zero default (false or 0)
+    # them, and a reader decodes them as the zero default (false, 0 or the empty string)
     short_payloads = []
     messages = [("request", name, request, f"{name}Request")
                 for name, request in protocol_spec.commands_with_requests(protocol)]
@@ -190,16 +190,21 @@ def build(protocol: dict) -> dict:
         optional = protocol_spec.optional_trailing(protocol, message)
         if not optional:
             continue
-        values = sample_fields(fields, protocol)
-        for field in optional:
-            values[field] = False if fields[field] == "bool" else 0
-        known = {field: raw for field, raw in fields.items() if field not in optional}
-        short_payloads.append({
-            kind: name,
-            "id": protocol["commands"][name]["id"] if kind == "request" else protocol["responses"][name],
-            "fields": values,
-            "payload": encode_fields(known, values, protocol).hex(),
-        })
+        # One vector per older minor version: the payload ends before the last `count` optional fields, so a peer that
+        # knows only some of them (a 1.11 client sends errorCodes, not user) is covered too
+        for count in range(len(optional), 0, -1):
+            omitted = optional[len(optional) - count:]
+            values = sample_fields(fields, protocol)
+            for field in omitted:
+                values[field] = protocol_spec.optional_default(fields[field])
+            known = {field: raw for field, raw in fields.items() if field not in omitted}
+            short_payloads.append({
+                kind: name,
+                "id": protocol["commands"][name]["id"] if kind == "request" else protocol["responses"][name],
+                "omitted": omitted,
+                "fields": values,
+                "payload": encode_fields(known, values, protocol).hex(),
+            })
 
     return {
         "description": "Golden vectors, generated from protocol.json by generators/generate_test_vectors.py - do not edit. "
@@ -208,7 +213,8 @@ def build(protocol: dict) -> dict:
                        "(encoded as compact JSON with sorted keys only so this file is deterministic: compare json "
                        "fields as parsed values, never as bytes); Error's payload is its message's raw UTF-8 bytes. "
                        "shortPayloads are what a peer from before a message's optional trailing fields sends: the "
-                       "payload ends before them and fields holds what a reader decodes (their zero defaults).",
+                       "payload ends before the omitted fields (the last one to all of the message's optional ones) and "
+                       "fields holds what a reader decodes (the omitted ones at their zero defaults: false, 0 or the empty string).",
         "protocolVersion": protocol["version"],
         "requests": requests,
         "responses": responses,

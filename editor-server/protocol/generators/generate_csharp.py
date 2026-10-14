@@ -66,7 +66,7 @@ def field_lines(fields: dict, protocol: dict, message: str = "") -> list:
             shape = ftype[len("json:"):] if ftype.startswith("json:") else "any JSON value"
             lines.append(f"        /// <summary>JSON text: {shape}</summary>")
         if field in optional:
-            lines.append("        /// <summary>Optional trailing: the default (false or 0) when the payload ends before it</summary>")
+            lines.append("        /// <summary>Optional trailing: the default (false, 0 or empty) when the payload ends before it</summary>")
         lines.append(f"        public {get_cs_type(ftype, protocol)} {to_pascal_case(field)};")
     return lines
 
