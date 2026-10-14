@@ -299,6 +299,9 @@ namespace Renderer
 
             /// The frame slot whose fence guards what is retired now (see VulkanResources.cpp)
             [[nodiscard]] uint32_t RetireSlot() const;
+            /// True when no frame is open and every frame fence is signalled, so the GPU cannot be using anything retired
+            /// now and it can be freed at once instead of queued (see VulkanResources.cpp)
+            [[nodiscard]] bool CanFreeRetiredNow() const;
             /// Frees what was retired into `slot`; called once that slot's fence has been waited for
             void FlushRetired(uint32_t slot);
             /// Device idle: frees every retired and every still-live mesh and texture and the samplers

@@ -26,7 +26,9 @@
 // Deferred deletion: a buffer or image the GPU may still read is never destroyed or overwritten at once. UpdateMesh
 // makes NEW buffers and retires the old ones; DestroyMesh and DestroyTexture retire the whole resource. Retired objects
 // go on the list of a frame slot (RetireSlot) and are freed by BeginFrame right after it has waited for that slot's
-// fence (FlushRetired); Shutdown frees whatever is left after waiting for the device to go idle.
+// fence (FlushRetired); Shutdown frees whatever is left after waiting for the device to go idle. The exception is when
+no frame is open and every frame fence is signalled (CanFreeRetiredNow): nothing can use the object, so it is freed
+at once and does not pile up while no frames run.
 
 using namespace Renderer::Vulkan;
 using Renderer::Common::IMesh;
@@ -302,6 +304,23 @@ namespace
         resource.allocation = allocation;
         return resource;
     }
+
+    // Frees `items` now when `freeNow`, else queues them on `slot`'s list for FlushRetired
+    void Dispose(ResourceState& state, VkDevice device, bool freeNow, uint32_t slot, std::vector<RetiredResource>& items)
+    {
+        for (RetiredResource& item : items)
+        {
+            if (freeNow)
+            {
+                DestroyRetired(device, state.allocator, item);
+            }
+            else
+            {
+                state.retired[slot].push_back(item);
+            }
+        }
+        items.clear();
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -339,6 +358,28 @@ uint32_t VulkanRenderer::RetireSlot() const
     // A frame being recorded may use what is retired now, and it signals the fence of _currentFrame; with no frame open
     // the newest frame that can use it is the one submitted last, which used the previous slot
     return _frameOpen ? _currentFrame : (_currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+bool VulkanRenderer::CanFreeRetiredNow() const
+{
+    // Free at once only when the GPU provably cannot touch the object: no frame is being recorded (it could reference
+    // the object and is submitted later), and every frame fence is signalled (a fence is reset only by EndFrame right
+    // before the submit that signals it again, so a signalled fence means that slot's frame has finished). The queue is
+    // single and in-order, and UpdateMesh's synchronous upload has already waited for the queue to go idle, so after it
+    // the fences are signalled too. Any doubt (an unsignalled fence, a query error such as a lost device) keeps the
+    // deferred path, which waits for the slot's fence in BeginFrame before freeing.
+    if (_frameOpen)
+    {
+        return false;
+    }
+    for (const FrameResources& frame : _frames)
+    {
+        if (frame.fence == VK_NULL_HANDLE || vkGetFenceStatus(_device, frame.fence) != VK_SUCCESS)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 void VulkanRenderer::FlushRetired(uint32_t slot)
@@ -445,13 +486,14 @@ void VulkanRenderer::DestroyMesh(IMesh* mesh)
         return; // not this renderer's (or already destroyed, or the renderer was shut down)
     }
 
-    // A frame in flight may still read the buffers: free them once that frame has finished
-    std::vector<RetiredResource>& list = _resources->retired[RetireSlot()];
-    list.push_back(RetiredBuffer(it->second->vertexBuffer, it->second->vertexAllocation));
+    // A frame in flight may still read the buffers: free them once that frame has finished (at once if none can)
+    std::vector<RetiredResource> items;
+    items.push_back(RetiredBuffer(it->second->vertexBuffer, it->second->vertexAllocation));
     if (it->second->indexBuffer != VK_NULL_HANDLE)
     {
-        list.push_back(RetiredBuffer(it->second->indexBuffer, it->second->indexAllocation));
+        items.push_back(RetiredBuffer(it->second->indexBuffer, it->second->indexAllocation));
     }
+    Dispose(*_resources, _device, CanFreeRetiredNow(), RetireSlot(), items);
     _resources->meshes.erase(it);
 }
 
@@ -481,12 +523,13 @@ bool VulkanRenderer::UpdateMesh(IMesh* mesh, const MeshData& meshData)
     }
 
     VulkanMesh& target = *it->second;
-    std::vector<RetiredResource>& list = _resources->retired[RetireSlot()];
-    list.push_back(RetiredBuffer(target.vertexBuffer, target.vertexAllocation));
+    std::vector<RetiredResource> items;
+    items.push_back(RetiredBuffer(target.vertexBuffer, target.vertexAllocation));
     if (target.indexBuffer != VK_NULL_HANDLE)
     {
-        list.push_back(RetiredBuffer(target.indexBuffer, target.indexAllocation));
+        items.push_back(RetiredBuffer(target.indexBuffer, target.indexAllocation));
     }
+    Dispose(*_resources, _device, CanFreeRetiredNow(), RetireSlot(), items);
     target.vertexBuffer = gpu.vertex.buffer;
     target.vertexAllocation = gpu.vertex.allocation;
     target.indexBuffer = gpu.index.buffer;
@@ -800,7 +843,8 @@ void VulkanRenderer::DestroyTexture(ITexture* texture)
     resource.view = it->second->view;
     resource.image = it->second->image;
     resource.allocation = it->second->allocation;
-    _resources->retired[RetireSlot()].push_back(resource); // the sampler stays in the cache
+    std::vector<RetiredResource> items{resource}; // the sampler stays in the cache
+    Dispose(*_resources, _device, CanFreeRetiredNow(), RetireSlot(), items);
     _resources->textures.erase(it);
 }
 

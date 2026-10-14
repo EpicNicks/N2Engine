@@ -804,33 +804,71 @@ TEST_F(VulkanResourceTest, DestroyTextureInsideAnOpenFrameDefersTheFreeToo)
     EXPECT_EQ(R().GetLiveAllocationCountForTest(), 0u);
 }
 
-TEST_F(VulkanResourceTest, WhatIsRetiredAfterASubmittedFrameOutlivesTheNextFrameBecauseTheSubmittedOneMayStillRunIt)
+TEST_F(VulkanResourceTest, UpdateMeshAfterASubmittedFrameFreesAtOnceBecauseTheUploadIdledTheQueue)
 {
     IMesh* mesh = R().CreateMesh(MakeMesh(3, 3, 1));
     ASSERT_NE(mesh, nullptr);
-    Frame(R()); // frame 0 (slot 0) is submitted; the next frame uses slot 1
+    Frame(R()); // frame 0 is submitted and may still be running
 
-    // Outside a frame the newest frame that may use the buffers is frame 0, whose fence is slot 0's
+    // The synchronous upload waits for the queue to go idle, so no frame is in flight and no frame is open: the old
+    // buffers are freed immediately
     ASSERT_TRUE(R().UpdateMesh(mesh, MakeMesh(4, 6, 2)));
-    EXPECT_EQ(R().GetPendingDeletionCountForTest(), 2u);
-    R().BeginFrame(); // frame 1, slot 1: frame 0 may still be running
-    EXPECT_EQ(R().GetPendingDeletionCountForTest(), 2u);
-    R().EndFrame();
-    R().BeginFrame(); // frame 2, slot 0: frame 0 is done
     EXPECT_EQ(R().GetPendingDeletionCountForTest(), 0u);
-    R().EndFrame();
     EXPECT_EQ(R().GetLiveAllocationCountForTest(), 2u);
 }
 
-TEST_F(VulkanResourceTest, UpdateMeshBeforeAnyFrameIsFreedByTheSecondFrame)
+TEST_F(VulkanResourceTest, UpdateMeshInsideAnOpenFrameStillDefersEvenThoughTheUploadIdledTheQueue)
+{
+    IMesh* mesh = R().CreateMesh(MakeMesh(3, 3, 1));
+    ASSERT_NE(mesh, nullptr);
+    R().BeginFrame(); // the open frame's commands may reference the old buffers
+    ASSERT_TRUE(R().UpdateMesh(mesh, MakeMesh(4, 6, 2)));
+    EXPECT_EQ(R().GetPendingDeletionCountForTest(), 2u);
+    EXPECT_EQ(R().GetLiveAllocationCountForTest(), 4u);
+    R().EndFrame();
+    Frame(R());
+    Frame(R());
+    EXPECT_EQ(R().GetPendingDeletionCountForTest(), 0u);
+    EXPECT_EQ(R().GetLiveAllocationCountForTest(), 2u);
+}
+
+TEST_F(VulkanResourceTest, ManyUpdatesAndDestroysBeforeAnyFrameDoNotAccumulateRetiredObjects)
+{
+    IMesh* mesh = R().CreateMesh(MakeMesh(4, 6, 1));
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_EQ(R().GetLiveAllocationCountForTest(), 2u);
+
+    for (int i = 0; i < 10000; ++i)
+    {
+        ASSERT_TRUE(R().UpdateMesh(mesh, MakeMesh(4 + static_cast<std::size_t>(i % 5), 6, i)));
+        if (i % 1000 == 0)
+        {
+            ASSERT_EQ(R().GetPendingDeletionCountForTest(), 0u) << "update " << i;
+            ASSERT_EQ(R().GetLiveAllocationCountForTest(), 2u) << "update " << i;
+        }
+    }
+    EXPECT_EQ(R().GetPendingDeletionCountForTest(), 0u);
+    EXPECT_EQ(R().GetLiveAllocationCountForTest(), 2u);
+
+    const std::vector<std::uint8_t> pixels = Pattern(4, 4, 4);
+    for (int i = 0; i < 200; ++i)
+    {
+        IMesh* extra = R().CreateMesh(MakeMesh(3, 3, i));
+        ITexture* texture = R().CreateTexture(pixels.data(), 4, 4, 4);
+        ASSERT_NE(extra, nullptr);
+        ASSERT_NE(texture, nullptr);
+        R().DestroyMesh(extra);
+        R().DestroyTexture(texture);
+    }
+    EXPECT_EQ(R().GetPendingDeletionCountForTest(), 0u);
+    EXPECT_EQ(R().GetLiveAllocationCountForTest(), 2u);
+}
+
+TEST_F(VulkanResourceTest, UpdateMeshBeforeAnyFrameIsFreedAtOnce)
 {
     IMesh* mesh = R().CreateMesh(MakeMesh(3, 3, 1));
     ASSERT_NE(mesh, nullptr);
     ASSERT_TRUE(R().UpdateMesh(mesh, MakeMesh(3, 3, 2)));
-    EXPECT_EQ(R().GetPendingDeletionCountForTest(), 2u);
-    Frame(R());
-    Frame(R());
-    Frame(R());
     EXPECT_EQ(R().GetPendingDeletionCountForTest(), 0u);
     EXPECT_EQ(R().GetLiveAllocationCountForTest(), 2u);
 }
