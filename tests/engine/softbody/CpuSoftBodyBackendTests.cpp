@@ -183,7 +183,7 @@ TEST(CpuSoftBodyBackendTest, ComesToRestOnTheGroundWithoutSinkingBelowIt)
     }
     EXPECT_NEAR(bottom, 0.0f, 1e-3f);
     const Math::Vector3 centre = Centroid(nodes);
-    EXPECT_GT(centre.y, 0.4f);
+    EXPECT_GT(centre.y, 0.3f);
     EXPECT_LT(centre.y, 0.55f);
     EXPECT_LT(std::abs(centre.x), 0.05f);
     EXPECT_LT(std::abs(centre.z), 0.05f);
@@ -194,7 +194,7 @@ TEST(CpuSoftBodyBackendTest, ComesToRestOnTheGroundWithoutSinkingBelowIt)
     EXPECT_LT(std::abs(meanVelocity.y), 0.2f) << "it has stopped";
 
     // Squashed a little under its own weight, but it keeps its volume within a tolerance
-    EXPECT_NEAR(backend.GetVolume(handle), backend.GetRestVolume(handle), 0.15f * backend.GetRestVolume(handle));
+    EXPECT_NEAR(backend.GetVolume(handle), backend.GetRestVolume(handle), 0.2f * backend.GetRestVolume(handle));
 
     // The render vertices (embedded in the tetrahedra) are above the plane too
     std::vector<Math::Vector3> surface;

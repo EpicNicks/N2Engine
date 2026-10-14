@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
@@ -108,7 +109,8 @@ namespace
             return Math::Vector3(static_cast<float>(x / n), static_cast<float>(y / n), static_cast<float>(z / n));
         }
 
-        std::vector<Rig> _rigs;
+        // A deque: Make returns a reference that later calls to Make must not invalidate
+        std::deque<Rig> _rigs;
     };
 
     /// Saves one root object in a scene and loads the scene back, as SceneManager does
