@@ -15,6 +15,10 @@ endif()
 
 if(MSVC)
     add_compile_options(/MP)
+    # The MSVC STL's temporary buffer for stable_sort/stable_partition/inplace_merge uses std::aligned_storage, and newer
+    # toolsets static_assert on an over-aligned element type (our math types are alignas(16)) unless this is defined.
+    # Everything is built in one tree with one STL, so the layout change is harmless. Also true for clang-cl (MSVC STL).
+    add_compile_definitions(_ENABLE_EXTENDED_ALIGNED_STORAGE)
 endif()
 
 option(N2ENGINE_BUILD_TESTS "Build unit tests" ON)
