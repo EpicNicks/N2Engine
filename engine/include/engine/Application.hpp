@@ -111,9 +111,11 @@ namespace N2Engine
         /// Replaces and destroys any existing backend; pass nullptr to remove it.
         void Set3DPhysicsBackend(std::unique_ptr<Physics::IPhysicsBackend> backend);
 
-        /// Subsystem states as of the end of Init. The Particles row's state is the GPU probe's (see
-        /// Physics::MakeParticlesStatus); once ParticleSystems exist its detail also says which backends they use
-        /// ("ParticleSystems: 2 CPU"). With none, the row is exactly what Init made.
+        /// Subsystem states as of the end of Init. The Particles row's state is the GPU probe's with the particle
+        /// feature's own failure on top (see Physics::MakeParticlesStatus); once ParticleSystems exist its detail
+        /// also says which backends they use ("ParticleSystems: 2 CPU"). With none, the row is exactly what Init
+        /// made. The SoftBodies row (Physics::MakeSoftBodiesStatus) is built the same way from its own failure
+        /// state: a particle failure never changes it and the reverse.
         [[nodiscard]] const EngineHealth& GetHealth() const;
     };
 }

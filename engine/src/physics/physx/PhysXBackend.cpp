@@ -182,10 +182,22 @@ namespace N2Engine::Physics
             _particles->ReleaseAll();
         }
         // auto: no usable GPU particles is not an error; on: the project asked for the GPU, so it is
+        // The failure is the particles', not the scene's: _gpuStatus (and so Physics.IsGpuAvailable and the other
+        // features) stay as the probe left them
         const bool required = _gpuMode == GpuMode::On;
-        _gpuStatus = {required ? GpuState::Failed : GpuState::Unavailable, "GPU particles unavailable: " + reason};
+        _particlesFailure = GpuStatus{required ? GpuState::Failed : GpuState::Unavailable,
+                                      "GPU particles unavailable: " + reason};
         Logger::Warn(std::format("physics.gpu={}: {}; particle systems use the CPU backend", ToString(_gpuMode),
-                                 _gpuStatus.detail));
+                                 _particlesFailure->detail));
+    }
+
+    void PhysXBackend::FailSoftBodies(const std::string &reason)
+    {
+        const bool required = _gpuMode == GpuMode::On;
+        _softBodiesFailure = GpuStatus{required ? GpuState::Failed : GpuState::Unavailable,
+                                       "GPU soft bodies unavailable: " + reason};
+        Logger::Warn(std::format("physics.gpu={}: {}; soft bodies use the CPU backend", ToString(_gpuMode),
+                                 _softBodiesFailure->detail));
     }
 
     void PhysXBackend::PollParticleFailure()
@@ -214,6 +226,7 @@ namespace N2Engine::Physics
         const std::string device = driver->GetDeviceName();
         _particles = std::make_unique<Particles::PbdParticleBackend>(std::move(driver));
         _gpuStatus = {GpuState::Ready, "PhysX GPU: " + device};
+        _particlesFailure.reset();
         return true;
     }
 
@@ -265,6 +278,8 @@ namespace N2Engine::Physics
     {
         Logger::Info("Initializing PhysX Backend...");
         _gpuStatus = {GpuState::Disabled, "physics.gpu is off (the CPU scene)"};
+        _particlesFailure.reset();
+        _softBodiesFailure.reset();
 
         // 1. Create foundation. The allocator and error callback are members so they outlive the
         // foundation: as function-local statics they were destroyed at exit before the backend released it.

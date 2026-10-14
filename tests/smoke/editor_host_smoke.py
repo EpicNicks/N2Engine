@@ -203,6 +203,9 @@ def check_physics(states, expect):
     particles = states.get("Particles")
     check(particles == "Disabled", "Expected Particles to be Disabled (physics.gpu off), got: %s" % particles)
     say("Particles: %s" % particles)
+    soft = states.get("SoftBodies")
+    check(soft == "Disabled", "Expected SoftBodies to be Disabled (physics.gpu off), got: %s" % soft)
+    say("SoftBodies: %s" % soft)
 
 
 def get_hierarchy(conn):
