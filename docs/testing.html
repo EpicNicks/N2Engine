@@ -398,10 +398,12 @@ build/bin/Debug/lua_project.exe --renderer opengl
 <thead><tr><th>Input</th><th>Does</th></tr></thead>
 <tbody>
 <tr><td><kbd>1</kbd> to <kbd>7</kbd></td><td>Jump to a station, looking straight ahead (it starts at 1)</td></tr>
+<tr><td><kbd>8</kbd> <kbd>9</kbd> <kbd>0</kbd></td><td>Jump to a demo station <span class="badge">PR #137</span> (<a href="#gpu-smoke-demo">Demo stations</a>)</td></tr>
+<tr><td><kbd>B</kbd> <kbd>P</kbd> <kbd>C</kbd> <kbd>K</kbd></td><td>At the particle station (8): burst, play or stop, clear, cycle the requested backend</td></tr>
 <tr><td><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>, arrow keys</td><td>Fly and look around (a gamepad's sticks too)</td></tr>
 <tr><td><kbd>U</kbd></td><td>Show or hide the screen-space UI panel on the right of the window. Changing station shows it at station 7 and hides it everywhere else.</td></tr>
 <tr><td><kbd>H</kbd></td><td>Hide or show the HUD</td></tr>
-<tr><td>Mouse</td><td>Hover, press and click the buttons on the UI panel and on station 4</td></tr>
+<tr><td>Mouse</td><td>Hover, press and click the buttons on the UI panel, on station 4 and on station 9</td></tr>
 <tr><td><kbd>Esc</kbd></td><td>Quit</td></tr>
 </tbody>
 </table>
@@ -428,6 +430,30 @@ build/bin/Debug/lua_project.exe --renderer opengl
 <p class="callout-title">Note</p>
 <p>On the software renderer (<code>--renderer software</code>) some of this is different by design, not a failure: it can't blend, so the world canvas and UI panels are opaque and the blended quad draws opaque (without writing depth); text is alpha-tested, with hard edges, so the glow and softness don't show; and textures have no mipmaps, so distant ones shimmer. See <a href="text.html">Text</a>, <a href="ui.html">UI</a> and <a href="meshes.html">Meshes</a>.</p>
 </div>
+
+<h3 id="gpu-smoke-demo">Demo stations <span class="badge">PR #137</span></h3>
+<p>Three more stations follow the seven, on keys <kbd>8</kbd>, <kbd>9</kbd> and <kbd>0</kbd>: demos of the particle system, of world-space canvases against colliders and of multi-pass text effects. They are built in the same scene (<code>scene.lua</code> builds the objects, <code>scripts/DemoStations.lua</code> lists the stations) and the HUD names them <code>Demo 1/3</code> to <code>Demo 3/3</code>, so the smoke test above keeps its seven stations and its <code>Station N/7</code> headings. They sit further along the x axis (120, 150 and 180), past the glTF station.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Station</th><th>Correct</th></tr></thead>
+<tbody>
+<tr><td><kbd>8</kbd></td><td>Particles: three <code>ParticleSystem</code>s on a grey ground, a blue water fountain (continuous), a sand burst (it lands and lies on the ground) and a grey smoke column (rises, grows and fades)</td><td>Each emitter has a sign with the backend it <em>asked for</em>, the backend that is <em>running</em> and its live particle count. <kbd>B</kbd> starts a burst in all three, <kbd>P</kbd> stops or restarts the fountain and the smoke (the particles in flight finish), <kbd>C</kbd> removes every particle, <kbd>K</kbd> cycles the requested backend Auto, CPU, PhysX. The keys work only while the camera is at the station.</td></tr>
+<tr><td><kbd>9</kbd></td><td>World canvas and colliders <span class="badge">PR #67</span>: a blue world-space panel with button A, behind a yellow trigger volume, and button B, behind a solid green block</td><td>Hover darkens a button and holding darkens it more. A still counts its clicks: a trigger collider never blocks a world canvas. B stays at 0: the solid collider is hit first, so the click lands on the block, not the panel.</td></tr>
+<tr><td><kbd>0</kbd></td><td>Text effect passes: <code>TextRenderer:AddEffectPass</code> on the grey board</td><td>An outline, a hard shadow and a glow, each from one pass; the same narrow yellow and wide red passes twice, first in the order they were added (the red in front hides the yellow) and then with <code>order</code> red -10, yellow 0 (the yellow in front again); and a red pass at order -300 peeking out behind the black settings shadow (order -200). The glow is a soft halo on OpenGL and hard on the software renderer.</td></tr>
+</tbody>
+</table>
+</div>
+<h4>Particles: CPU and GPU</h4>
+<ul>
+<li><strong>The CPU backend runs everywhere</strong>, with or without a GPU, so the station always works and every sign says <code>running: CPU</code> by default. <code>Auto</code> picks PhysX when the physics backend offers a GPU particle backend and the CPU otherwise; <code>CPU</code> always runs on the CPU; <code>PhysX</code> asks for the GPU one and falls back to the CPU, with one warning in the log per emitter, where there is none. The sign says so: <code>running: CPU (PhysX asked: fell back)</code>, and the info sign at the top of the station says it too. Pressing <kbd>K</kbd> replaces the three emitters, because a system reads its backend only when it starts.</li>
+<li><strong>The PhysX GPU backend</strong> needs a Windows PC with an NVIDIA GPU, a build with PhysX, the project setting <code>physics.gpu</code> set to <code>auto</code> or <code>on</code> <span class="badge">PR #129</span>. <code>lua_project</code> passes its project folder to <code>Application::Init</code>, which reads <code>physics.gpu</code> from <code>project.n2proj</code>, so the demo enables it like any project: edit <code>lua_project/project.n2proj</code> so that <code>"settings"</code> holds <code>{ "physics": { "gpu": "auto" } }</code> (the default, off, is not changed in the repository) and restart. The info sign shows <code>Physics.IsGpuAvailable()</code>; when it says <code>true</code>, <code>Auto</code> and <code>PhysX</code> should show <code>running: PhysX GPU</code> and compare against <code>CPU</code> with <kbd>K</kbd>.</li>
+<li><strong>Water, sand and smoke</strong> set <code>pbdMaterial</code> (<code>Water</code>, <code>Sand</code>, <code>Smoke</code>, the PBD preset the PhysX backend uses: water flows and pools, sand piles up, smoke drifts) and are also tuned with the fields the CPU backend reads (emission rate, cone, speed, lifetime, size, colours, gravity scale, drag, the ground plane); the CPU backend ignores <code>pbdMaterial</code>, the PhysX backend ignores the ground plane (it collides with the scene's colliders, so the demo's floor must be a collider). Particles are billboards on the OpenGL and software renderers only: the Vulkan renderer draws nothing for them today (<a href="particles.html#rendering">Particles</a>). The software renderer cannot blend, so the water and the smoke are opaque there.</li>
+</ul>
+<div class="callout note" id="design-demo-stations">
+<p class="callout-title">Design decision: the demo stations are a second list, not stations 8 to 10 <span class="badge">PR #137</span></p>
+<p>The smoke test is a checklist with a fixed length, and <code>LuaProjectSceneTest.SmokeHudShowsTheFirstStation</code> pins its heading (<code>Station 1/7</code>). Appending to <code>SmokeStations.lua</code> would have changed that count for a demo, so the demo stations have their own list and their own keys (8, 9, 0) and the existing seven are untouched. The cost is one more list for <code>CameraController.lua</code> and <code>SmokeHud.lua</code> to read.</p>
+</div>
+<p class="src">Source: <code>lua_project/assets/scene.lua</code> (the demo stations section); <code>lua_project/assets/scripts/DemoStations.lua</code>, <code>ParticleEmitters.lua</code>, <code>ParticleStation.lua</code>; tests: <code>LuaProjectSceneTest</code> builds the stations headless; the keys and the pixels need a person.</p>
 
 <h3 id="gpu-smoke-editor">The editor viewport</h3>
 <p>The editor host renders off screen on OpenGL, into a framebuffer of the client's viewport size, and sends each frame as RGBA, top row first (<a href="logging-and-editor.html#viewport-frames">viewport frames</a>) <span class="badge">PR #85</span>. Nothing in CI draws through that path, so it is checked separately, with the editor host and the Electron editor client (<a href="https://github.com/EpicNicks/N2Engine-Electron-Frontend">EpicNicks/N2Engine-Electron-Frontend</a>) and <code>lua_project/scenes/viewport_check.scene</code>, a scene that looks different upside down, mirrored or with red and blue swapped:</p>

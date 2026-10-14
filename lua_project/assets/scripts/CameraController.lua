@@ -1,9 +1,11 @@
 -- Fly camera: "Camera Move" moves relative to where the camera faces, "Camera Rotate" turns and looks.
 -- Port of test_project/src/CameraController.cpp.
 -- "Station 1" ... "Station N" (keys 1-7 in scene.lua) jump to the smoke test's stations (SmokeStations.lua), looking
--- straight down -Z; it starts at station 1.
+-- straight down -Z; it starts at station 1. "Demo Station 1" ... "Demo Station 3" (keys 8, 9, 0) jump to the demo
+-- stations (DemoStations.lua) the same way.
 
 local Stations = require("scripts.SmokeStations")
+local DemoStations = require("scripts.DemoStations")
 
 local CameraController = {}
 CameraController.__index = CameraController
@@ -43,11 +45,23 @@ function CameraController:OnAttach()
             end)
         end
     end
+
+    for index = 1, #(DemoStations or {}) do
+        local station = controls:Get("Demo Station " .. index)
+        if station ~= nil then
+            station:Subscribe(function(action)
+                if action:GetPhase() == ActionPhase.Started then
+                    self:GoToStation(index, DemoStations)
+                end
+            end)
+        end
+    end
 end
 
--- Puts the camera at station `index`'s viewpoint, looking down -Z. Nothing without a camera or such a station.
-function CameraController:GoToStation(index)
-    local station = Stations and Stations[index]
+-- Puts the camera at station `index`'s viewpoint (of `list`, the smoke test's stations by default), looking down -Z.
+-- Nothing without a camera or such a station.
+function CameraController:GoToStation(index, list)
+    local station = (list or Stations or {})[index]
     local camera = Camera.Main()
     if station == nil or camera == nil then
         return
