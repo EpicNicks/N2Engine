@@ -203,7 +203,10 @@ TEST_F(SoftBodyHeadlessTest, ABodyWithAGroundPlaneStaysAboveItWhileTheSceneRuns)
 {
     _body->collideWithGround = true;
     _body->groundHeight = -5.6f; // 5 m below the object (at y = 0), so the body falls about a second before it lands
-    TickSteps(300);
+    for (int i = 0; i < 300; ++i)
+    {
+        TickSteps(1); // a tick catches up at most 0.25 s of fixed steps, so one step at a time
+    }
     const std::shared_ptr<Mesh> runtime = _body->GetRuntimeMesh();
     ASSERT_NE(runtime, nullptr);
     for (const auto &vertex : runtime->GetVertices())
