@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soft bodies · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html" aria-current="page">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Soft bodies</h1>
+<p class="lead">The <code>SoftBody</code> component makes the <code>MeshRenderer</code> on its object squash and wobble under gravity. The engine tetrahedralises the mesh's surface into a voxel body when play starts, a simulation backend moves it (today the engine's CPU backend, on every machine, headless hosts included; a PhysX GPU backend follows in a later stage) and the component feeds the deformed vertices back to the renderer through a runtime-only mesh override. This page covers the component, how a body is built from a mesh, the CPU solver and its limits, backend selection, play mode, drawing and the Lua API <span class="badge">PR #143</span>.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#quick-start">Quick start</a></li>
+<li><a href="#component">The SoftBody component</a></li>
+<li><a href="#backends">Backends and the seam</a></li>
+<li><a href="#tets">Making a tetrahedral body</a></li>
+<li><a href="#cpu-solver">The CPU solver and its limits</a></li>
+<li><a href="#play-mode">Play mode, pause and saving</a></li>
+<li><a href="#rendering">Drawing</a></li>
+<li><a href="#health">The SoftBodies health row</a></li>
+<li><a href="#lua">Lua</a></li>
+<li><a href="#decisions">Design decisions</a></li>
+<li><a href="#tests">Tests and what is not verified</a></li>
+</ol>
+</div>
+
+<h2 id="quick-start">Quick start</h2>
+<p>Put a <code>SoftBody</code> next to a <code>MeshRenderer</code> and play the scene. The mesh should be a closed surface (a sphere, a cube, a character's body); a flat quad has no volume and the component says so and does nothing.</p>
+<pre class="lang-lua"><code>local blob = GameObject.Create("Blob")
+local mr = blob:AddComponent("MeshRenderer")
+mr:SetMesh("Sphere")                    -- or the path of a model's mesh
+local sb = blob:AddComponent("SoftBody")
+sb:SetResolution(10)                    -- voxels along the longest axis
+sb:SetStiffness(30000)                  -- Young's modulus in pascals: a soft gel
+sb:SetGround(true, 0)                   -- rest on the plane y = 0
+blob:GetPositionable():SetPosition(Vector3(0, 3, 0))
+SceneManager.GetCurrentScene():AddRootGameObject(blob)
+
+-- later
+sb:AddVelocity(Vector3(2, 4, 0))        -- a push
+sb:Reset()                              -- back to the rest shape at the current pose
+</code></pre>
+
+<h2 id="component">The SoftBody component <span class="badge">PR #143</span></h2>
+<p><code>Physics::SoftBody</code> (<code>engine/include/engine/physics/SoftBody.hpp</code>) is an ordinary component, not an <code>IRenderable</code>: it draws nothing itself. All of its settings are public fields that the scene file saves and the editor's inspector shows (no editor protocol change: the fields come from <code>GetComponentTypes</code> like any other, and <code>backend</code> is an enum field). The deformation is runtime state and is never saved.</p>
+<h3 id="requirements">Requirements</h3>
+<ul>
+<li>A <strong><code>MeshRenderer</code> with a mesh on the same GameObject.</strong> Without one (or with an empty mesh slot) the SoftBody is inert and logs <strong>one warning</strong> when it starts.</li>
+<li><strong>No <code>Rigidbody</code> on the same GameObject.</strong> A rigid body moves the object while the soft body deforms its mesh, so the combination is refused: inert, one warning.</li>
+<li>A mesh the tetrahedraliser accepts: at least one real triangle and some thickness (<a href="#tets">Making a tetrahedral body</a>). Otherwise inert, one warning that says why.</li>
+</ul>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Default</th><th>Range, unit</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>backend</code></td><td><code>Auto</code></td><td><code>Auto</code>, <code>PhysX</code>, <code>CPU</code></td><td>Which simulation to ask for (<a href="#backends">Backends</a>). Read when the body starts.</td></tr>
+<tr><td><code>resolution</code></td><td>10</td><td>2 to 32 voxels along the longest axis</td><td>How finely the mesh is voxelised: more is a finer, slower body. Read when the body starts. Clamped to the range with one warning; lowered, with one warning, when the body would have more than 20000 tetrahedra.</td></tr>
+<tr><td><code>density</code></td><td>1000</td><td>0.001 to 1e7 kg/m&sup3;</td><td>Mass per unit volume (water is 1000). The object's scale counts: a body scaled by 2 has 8 times the volume and mass.</td></tr>
+<tr><td><code>stiffness</code></td><td>100000</td><td>1 to 1e11 Pa</td><td>Young's modulus: how hard the body resists being deformed (a soft gel 1e4, rubber about 1e6). The CPU backend maps it to its constraint compliances (<a href="#cpu-solver">the mapping</a>).</td></tr>
+<tr><td><code>poisson</code></td><td>0.3</td><td>0 to 0.49</td><td>Poisson's ratio: how much the body keeps its volume when squashed. 0.49 is nearly incompressible, 0 lets it shrink freely.</td></tr>
+<tr><td><code>damping</code></td><td>0.1</td><td>0 to 1000 per second</td><td>Velocity decay: how quickly the wobble dies out (0 never does).</td></tr>
+<tr><td><code>friction</code></td><td>0.5</td><td>0 to 1</td><td>Coulomb friction against the ground plane.</td></tr>
+<tr><td><code>solverIterations</code></td><td>2</td><td>1 to 32</td><td>Gauss-Seidel iterations in each of the CPU backend's 4 sub-steps (so 8 passes per fixed step by default): more is stiffer and slower.</td></tr>
+<tr><td><code>collideWithGround</code>, <code>groundHeight</code></td><td>false, 0</td><td>world units</td><td>Rest on the plane y = <code>groundHeight</code>. The only collision the CPU backend does.</td></tr>
+<tr><td><code>materialModel</code></td><td><code>CoRotational</code></td><td><code>CoRotational</code>, <code>NeoHookean</code></td><td><strong>Used only by the PhysX backend</strong> (a later stage); the CPU backend ignores it. Saved and shown in the inspector so scenes made now keep working then.</td></tr>
+<tr><td><code>selfCollision</code></td><td>false</td><td>bool</td><td><strong>Used only by the PhysX backend</strong>; the CPU backend has no self collision.</td></tr>
+</tbody>
+</table>
+</div>
+<p>There is no pin setting (<a href="#design-softbody-no-pinning">no pinning in v1</a>) and no asset field: the mesh is the <code>MeshRenderer</code>'s. C++ methods: <code>AddVelocity(v)</code>, <code>Reset()</code>, <code>GetActiveBackendName()</code> (<code>"CPU"</code>, <code>"PhysX"</code>, or empty when inert or before the body started), <code>BuildParams()</code>, <code>GetTetMesh()</code> and <code>GetRuntimeMesh()</code>.</p>
+<p class="src">Source: <code>engine/include/engine/physics/SoftBody.hpp</code>, <code>engine/src/physics/SoftBody.cpp</code>; tests: <code>SoftBodyComponentTest.*</code> (<code>tests/engine/softbody/SoftBodyComponentTests.cpp</code>), <code>ReflectionRegistryTest.EveryBuiltinTypeIsDescribableAndItsFieldsAreItsSavedKeys</code></p>
+
+<h2 id="backends">Backends and the seam <span class="badge">PR #143</span></h2>
+<p>A body is simulated by an <code>ISoftBodyBackend</code> (<a href="physics.html#gpu-softbody-seam">the seam</a> <span class="badge">PR #138</span>). The component only ever talks to the interface. <span class="badge">PR #143</span> adds to it <code>AddVelocity(handle, v)</code> and the data a backend needs in <code>SoftBodyDesc</code>: the shared tetrahedral mesh with the render-vertex embedding, the mesh-to-world transform (a 3&times;4 matrix) and the parameters (now including gravity and the ground plane).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Backend</th><th>Where it comes from</th><th>Runs on</th></tr></thead>
+<tbody>
+<tr><td><code>CpuSoftBodyBackend</code></td><td>Created by each <code>SoftBody</code> that needs it (<code>engine/src/physics/CpuSoftBodyBackend.cpp</code>)</td><td>Every machine: no PhysX, no GPU, no window. Stepped by the component once per fixed step.</td></tr>
+<tr><td>PhysX GPU backend</td><td><code>IPhysicsBackend::GetSoftBodyBackend()</code>, which returns <code>nullptr</code> by default and for <code>PhysXBackend</code> until the PhysX backend exists (a later stage, which needs a GPU to verify)</td><td>An NVIDIA GPU with <code>physics.gpu</code> <code>auto</code> or <code>on</code>. <strong>Not available yet.</strong></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="selection">Choosing a backend</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>backend</code></th><th>The physics backend offers a GPU soft-body backend</th><th>It does not (every build today)</th></tr></thead>
+<tbody>
+<tr><td><code>Auto</code></td><td>PhysX</td><td>CPU, no warning</td></tr>
+<tr><td><code>PhysX</code></td><td>PhysX</td><td>CPU, <strong>one warning</strong> per body naming the object and the GPU status's reason</td></tr>
+<tr><td><code>CPU</code></td><td>CPU</td><td>CPU</td></tr>
+</tbody>
+</table>
+</div>
+<p>This is exactly <a href="particles.html#selection">the particles' selection</a> (<code>SoftBodies::SelectSoftBodyBackend</code>). The choice is made once, when the component attaches; changing <code>backend</code> afterwards takes effect the next time the body starts (<code>Reset()</code> starts it again). Because the physics backend never has a soft-body backend yet, every body runs on the CPU, and the code path for a GPU backend is tested with a fake. The same generation rules as particles apply: a body on a GPU backend that is replaced or recreated (its handle's generation no longer matches, <a href="particles.html#design-particles-generation">handles carry the generation of their backend</a>) restarts at rest on the CPU backend with one warning, and with the physics backend removed entirely it is inert, not a crash. A GPU backend that refuses to create a body makes the body start on the CPU with one warning.</p>
+<p class="src">Source: <code>engine/include/engine/softbody/SoftBodyBackendSelection.hpp</code>; tests: <code>SoftBodySelectionTest.*</code>, <code>SoftBodyComponentTest.AutoAndPhysXUseTheGpuBackendTheSceneOffersAndCpuStillWins</code>, <code>SoftBodyComponentTest.AReplacedPhysicsBackendMakesAPhysXBodyRestartOnTheCpuWithOneWarning</code>, <code>SoftBodyComponentTest.ARecreatedGpuBackendAtTheSameAddressStillInvalidatesTheOldHandle</code></p>
+
+<h2 id="tets">Making a tetrahedral body <span class="badge">PR #143</span></h2>
+<p><code>SoftBodies::Tetrahedralise</code> (<code>engine/include/engine/softbody/Tetrahedraliser.hpp</code>) turns the <code>MeshRenderer</code>'s mesh into a <code>TetMeshData</code>: node positions, tetrahedra (four node indices each) and an embedding of every render vertex. It is pure engine code with no PhysX, compiled and tested in every build.</p>
+<ol>
+<li><strong>Weld.</strong> Imported meshes split vertices at UV and normal seams (a cube has 24 vertices, a UV sphere has a duplicated seam column and one vertex per pole per column). Vertices within 1e-5 of the bounding box's diagonal are one position, and triangles that collapse are dropped. Fewer than one real triangle is an error.</li>
+<li><strong>Voxelise.</strong> A grid of cubic voxels, <code>resolution</code> along the longest axis of the bounding box and centred on it. A voxel is <em>inside</em> when at least two of three ray-parity tests agree: from the voxel's centre a ray along +x, +y and +z each crosses the surface an odd number of times. The majority vote is the tolerance to holes: a crack or a missing triangle that fools one direction is outvoted. The rays are shifted by a small fraction of a voxel so they never run along an edge shared by two triangles. A voxel that holds a welded vertex is inside too, so every vertex lies in some tetrahedron (a thin fin still gets voxels). The mesh needs thickness: an extent under 1e-5 of the longest is "flat" and an error.</li>
+<li><strong>Tetrahedra.</strong> 5 per inside voxel (a central tetrahedron and four at the corners). The split alternates with the parity of the voxel's (i + j + k) so that the diagonals on a shared face agree and the mesh <em>conforms</em>; every tetrahedron is ordered to have a positive volume.</li>
+<li><strong>Embed.</strong> Every <em>original</em> (unwelded) render vertex gets a tetrahedron and four barycentric weights that sum to 1 and reproduce its rest position exactly. The embedding is computed once per welded position and copied to the duplicates, so seam duplicates move together and never tear apart.</li>
+</ol>
+<p>The body is a voxel approximation: its outline is blocky, and a render vertex rides on the tetrahedron it sits in, so it follows the body's motion but a coarse body deforms a detailed mesh coarsely. Raise <code>resolution</code> for a finer body.</p>
+<h3 id="tet-caps">Caps</h3>
+<p><code>resolution</code> is clamped to 2 to 32, and a body may have at most <code>Physics::kMaxTetsPerBody</code> (20000) tetrahedra: the tetrahedraliser lowers the resolution until it fits (a 32-voxel unit box would be 163840 tetrahedra and becomes 15 voxels), and the component logs one warning. The CPU backend refuses a body above the cap. 20000 tetrahedra is already more than a single thread solves at 60 Hz; <a href="#cpu-solver">a few thousand is the practical size</a>.</p>
+<h3 id="tet-cache">The in-memory cache</h3>
+<p>Tetrahedralising a large mesh is the slow part of starting a body, so results are kept: <code>SoftBodies::TetCache</code> is keyed by the <code>Mesh</code> object, its <code>Mesh::GetVersion()</code> and the requested resolution, so a second body on the same mesh and entering play again are cache hits, while <code>Mesh::SetData</code> or another resolution misses. It holds meshes weakly (an entry whose mesh is gone never matches) and keeps at most 32 entries. It deliberately does <strong>not</strong> use <code>Mesh::SetCpuCache</code>: that slot holds one object per mesh (the picking BVH), and a second type would evict it. Tetrahedra are generated at attach, which is play start; <strong>a large mesh can stall entering play</strong> until its body is built (not measured: <a href="#tests">Not verified</a>).</p>
+<p class="src">Source: <code>engine/include/engine/softbody/Tetrahedraliser.hpp</code>, <code>engine/src/softbody/Tetrahedraliser.cpp</code>, <code>engine/include/engine/physics/TetMeshData.hpp</code>; tests: <code>TetrahedraliserTest.*</code>, <code>TetCacheTest.*</code> (<code>tests/engine/softbody/TetrahedraliserTests.cpp</code>)</p>
+
+<h2 id="cpu-solver">The CPU solver and its limits <span class="badge">PR #143</span></h2>
+<p><code>Physics::CpuSoftBodyBackend</code> is position-based dynamics in its extended form (XPBD) on the body's tetrahedra. Constraints: one <strong>distance</strong> constraint per unique edge (resists shear and stretch) and one <strong>volume</strong> constraint per tetrahedron (resists compression). XPBD gives each constraint a compliance (the inverse of a stiffness), which is what makes the result independent of the time step and iteration count, unlike plain PBD. The compliances come from <code>stiffness</code> (Young's modulus <var>E</var>, Pa) and <code>poisson</code> (&nu;), the way a linear elastic solid would:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Quantity</th><th>Formula</th><th>Units</th></tr></thead>
+<tbody>
+<tr><td>Shear modulus <var>G</var></td><td><var>E</var> / (2 (1 + &nu;))</td><td>Pa</td></tr>
+<tr><td>Bulk modulus <var>K</var></td><td><var>E</var> / (3 (1 &minus; 2&nu;)) (&nu; is clamped to at most 0.49)</td><td>Pa</td></tr>
+<tr><td>Edge compliance</td><td>&alpha; = 1 / (<var>G</var> &middot; <var>L</var><sub>0</sub>), with the edge's rest length <var>L</var><sub>0</sub></td><td>m/N</td></tr>
+<tr><td>Volume compliance</td><td>&alpha; = <var>V</var><sub>0</sub> / <var>K</var>, with the tetrahedron's rest volume <var>V</var><sub>0</sub></td><td>m&sup5;/N</td></tr>
+<tr><td>Solver compliance</td><td>&alpha;&#771; = &alpha; / <var>h</var>&sup2; for the sub-step <var>h</var></td><td></td></tr>
+</tbody>
+</table>
+</div>
+<p>The mapping is a heuristic, not an FEM discretisation: a larger <code>stiffness</code> gives a stiffer body and a larger <code>poisson</code> a more incompressible one, but the numbers are not PhysX's, so the same field values do not look the same on the CPU and on the future GPU backend.</p>
+<ul>
+<li><strong>Time stepping.</strong> Each fixed step (<code>Step(dt)</code>, once per <code>OnFixedUpdate</code>) runs 4 fixed sub-steps of <code>dt / 4</code>. A sub-step integrates gravity and the velocity decay (<code>v /= 1 + damping &middot; h</code>), moves the nodes, runs <code>solverIterations</code> Gauss-Seidel iterations (all edges, then all tetrahedra, in index order, each with its accumulated Lagrange multiplier), keeps every node above the ground plane and derives the velocities from the motion. A body is the same at any frame rate; a different fixed step is a different simulation.</li>
+<li><strong>Mass.</strong> A node's mass is a quarter of the density times the volume of every tetrahedron around it, so scaling the object's transform changes the mass.</li>
+<li><strong>Ground.</strong> With <code>collideWithGround</code> a node below the plane y = <code>groundHeight</code> is put on it (inelastic: it does not bounce) and its tangential motion that sub-step is reduced by <code>friction</code> times the penetration depth (Coulomb friction in PBD). A render vertex is embedded in the tetrahedra, so it never goes below the plane either.</li>
+<li><strong>Determinism.</strong> Plain float code in a fixed order, a single thread, no hash-ordered iteration and no dependence on time or addresses: the same bodies stepped with the same <code>dt</code> and calls give bitwise-equal positions <em>within one build</em> (not across compilers or architectures).</li>
+<li><strong>Safety.</strong> Non-finite parameters are replaced by defaults, a bad <code>dt</code> is ignored, and a body whose positions turn non-finite restarts from its rest shape instead of reaching the renderer. Handles are <a href="physics.html#gpu-softbody-seam">generation-counted</a>.</li>
+</ul>
+<h3 id="cpu-limits">Limits</h3>
+<ul>
+<li><strong>Ground plane only.</strong> No collision with colliders or other bodies, and <strong>no self collision</strong> (a body can fold through itself).</li>
+<li><strong>No two-way coupling.</strong> A soft body does not push <code>Rigidbody</code>s and they do not push it; the CPU backend never queries the physics world.</li>
+<li><strong>Single threaded</strong>, and slow at size: <strong>a few thousand tetrahedra per body</strong> is what one thread solves at 60 Hz; the cap is 20000, above that nothing is accepted. A scene's cost is the sum of its bodies'.</li>
+<li><strong>CPU and PhysX differ.</strong> A different solver and different parameter meanings: an <code>Auto</code> project can look different on a GPU machine with <code>physics.gpu</code> on once the PhysX backend exists. <code>backend = CPU</code> is the same everywhere.</li>
+<li>No pinning or attachments, and no tetrahedral mesh import (<a href="#design-softbody-no-pinning">no pinning in v1</a>).</li>
+</ul>
+<p class="src">Source: <code>engine/include/engine/physics/CpuSoftBodyBackend.hpp</code>, <code>engine/src/physics/CpuSoftBodyBackend.cpp</code>; tests: <code>CpuSoftBodyBackendTest.*</code> (<code>tests/engine/softbody/CpuSoftBodyBackendTests.cpp</code>)</p>
+
+<h2 id="play-mode">Play mode, pause and saving <span class="badge">PR #143</span></h2>
+<p>The same rules as <a href="particles.html#play-mode">particles</a>:</p>
+<ul>
+<li>The body exists <strong>only while the scene is playing</strong>. A scene opened for editing never attaches its components, so nothing is simulated and the editor shows the <strong>undeformed mesh</strong>; <code>MeshRenderer</code>'s saved mesh is never changed.</li>
+<li>The body is built when the component attaches (play starts) and <code>OnFixedUpdate</code> steps it once per fixed step.</li>
+<li>The deformation is <strong>never saved</strong>: <code>SoftBody</code> saves only its fields and the <code>MeshRenderer</code> saves exactly what it saved before.</li>
+<li>Leaving play mode destroys the body with the snapshot scene; <code>OnDestroy</code> releases the backend's body and clears the mesh override.</li>
+<li><strong>Pausing</strong> (time scale 0) freezes it: no fixed step runs, the picture stays, frames still draw.</li>
+<li>The simulation is in <strong>world space</strong>: moving the GameObject in play does not drag the body. Each update converts the body's vertices into the object's local space with its <em>current</em> inverse transform, so the body stays where the simulation put it. <code>Reset()</code> restarts the body at the object's current pose.</li>
+</ul>
+
+<h2 id="rendering">Drawing <span class="badge">PR #143</span></h2>
+<p>A SoftBody draws nothing itself. It owns a <strong>runtime copy of the mesh</strong> (same vertex count, indices and submeshes) and hands it to the sibling <code>MeshRenderer</code> through <code>MeshRenderer::SetDeformedMesh</code>, a runtime-only override: while it is set the renderer draws, bounds and queues the copy instead of its mesh. After each step the body writes the embedded positions (skinned from the tetrahedra, then converted to local space) and <strong>area-weighted normals</strong> recomputed from the triangles into the copy and calls <code>Mesh::SetData</code>, which bumps the version so <code>GpuCache</code> re-uploads the GPU mesh in place (<code>IRenderer::UpdateMesh</code>). There are no renderer changes: the OpenGL and software renderers draw it like any mesh, and the Vulkan renderer draws nothing for meshes (as for every mesh until the Vulkan stage that adds them).</p>
+<ul>
+<li><strong>The override is never serialized.</strong> It is not a registered field, <code>MeshRenderer</code> saves the same <code>"_mesh"</code> and <code>"_materials"</code> as ever, and <code>GetMesh()</code> (which picking and scripts read) still returns the saved mesh. It is cleared when the SoftBody is destroyed or removed and when the <code>MeshRenderer</code> is destroyed. <strong>Picking during play still hits the saved, undeformed mesh.</strong></li>
+<li><strong>Tangents stay the rest ones</strong>, so a normal map is slightly off under large deformation; texture coordinates, vertex colours, submeshes and materials are unchanged.</li>
+<li>Each step costs a copy of the vertices, the normal pass, the mesh's validation and bounds, and a 64-byte-per-vertex upload: a 10000-vertex mesh uploads 640 KB per frame. Drive a decimated mesh for large models.</li>
+<li>Replacing the <code>MeshRenderer</code>'s mesh while the body runs does not change what the body drives; <code>Reset()</code> rebuilds from the new mesh.</li>
+</ul>
+<p class="src">Source: <code>engine/include/engine/rendering/MeshRenderer.hpp</code> (<code>SetDeformedMesh</code>, <code>ClearDeformedMesh</code>, <code>GetDrawnMesh</code>), <code>engine/src/physics/SoftBody.cpp</code> (<code>UpdateRuntimeMesh</code>); tests: <code>SoftBodyComponentTest.*</code>, <code>SoftBodyHeadlessTest.ADrawnFrameShowsTheDeformedBodyThroughTheOverride</code></p>
+
+<h2 id="health">The SoftBodies health row <span class="badge">PR #143</span></h2>
+<p>The row's <em>state</em> is unchanged (<a href="physics.html#gpu-softbodies-row">the SoftBodies row</a>): it comes from <code>GetSoftBodiesGpuStatus()</code> and is Disabled everywhere today, in CI and wherever <code>physics.gpu</code> is off. Its <em>detail</em> now also names the backends the live <code>SoftBody</code> components use, like the Particles row: <code>SoftBodies: 1 CPU</code> or <code>SoftBodies: 2 CPU, 1 PhysX</code>, appended after the status's own detail with <code>"; "</code>. With no bodies the row is exactly what <code>Application::Init</code> made, and the usage is also shown with no physics backend at all (every body then runs on the CPU). <code>Running "PhysX GPU: &lt;device&gt;"</code> arrives only with the PhysX backend. The editor needs nothing: <code>SubsystemStatus</code> is generic.</p>
+<p class="src">Source: <code>engine/include/engine/softbody/SoftBodyBackendSelection.hpp</code> (<code>SoftBodyUsage</code>), <code>engine/src/Application.cpp</code> (<code>GetHealth</code>); tests: <code>SoftBodyUsageTest.*</code>; <code>tests/smoke/editor_host_smoke.py</code> asserts the row</p>
+
+<h2 id="lua">Lua <span class="badge">PR #143</span></h2>
+<p><code>go:AddComponent("SoftBody")</code> returns a typed handle (<code>engine-api.lua</code> has the stubs):</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Method</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>AddVelocity(v)</code></td><td>Adds a velocity (world units per second) to the whole body; nothing before it started.</td></tr>
+<tr><td><code>Reset()</code></td><td>Back to the rest shape at the object's current pose, at rest. Restarts the body, so the backend is chosen again.</td></tr>
+<tr><td><code>GetActiveBackendName()</code></td><td><code>"CPU"</code>, <code>"PhysX"</code>, or <code>""</code> when the body is inert or hasn't started.</td></tr>
+<tr><td><code>Set/GetBackend</code></td><td><code>"Auto"</code>, <code>"PhysX"</code> or <code>"CPU"</code>; an unknown name is an error that lists the options and changes nothing. Read when the body starts.</td></tr>
+<tr><td><code>Set/GetResolution</code>, <code>Set/GetDensity</code>, <code>Set/GetStiffness</code>, <code>Set/GetPoisson</code>, <code>Set/GetDamping</code>, <code>Set/GetFriction</code>, <code>Set/GetSolverIterations</code></td><td>The fields; everything but the resolution applies at once.</td></tr>
+<tr><td><code>SetGround(enabled, height)</code>, <code>GetGround()</code></td><td><code>collideWithGround</code> and <code>groundHeight</code>.</td></tr>
+<tr><td><code>Set/GetMaterialModel</code>, <code>Set/GetSelfCollision</code></td><td>The PhysX-only settings (<code>"CoRotational"</code> or <code>"NeoHookean"</code>).</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>MeshRenderer:GetMesh()</code> still names the saved mesh while a body runs; <code>MeshRenderer:GetBounds()</code> follows the drawn (deformed) mesh.</p>
+<p class="src">Source: <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code> (<code>SoftBody</code>), <code>engine-api.lua</code>; tests: <code>LuaSoftBodyTest.*</code> (<code>tests/engine/scripting/LuaSoftBodyTests.cpp</code>)</p>
+
+<h2 id="decisions">Design decisions</h2>
+<div class="callout note" id="design-softbody-cpu-fallback">
+<p class="callout-title">Design decision: a real CPU backend with the engine's own tetrahedraliser <span class="badge">PR #143</span></p>
+<p>Decided by the user on 2026-10-14. PhysX 5.6.1 soft bodies are GPU-only, and <code>physics.gpu</code> is off by default, so without a CPU path most projects would see nothing. The CPU simulation implements the same <code>ISoftBodyBackend</code> the PhysX one will, and the tetrahedraliser is engine code rather than <code>PxTetMaker</code>, so a soft body works in a build with PhysX off, on Linux and arm64, and in CI. The PhysX backend will cook its own (conforming) tetrahedral mesh; the two backends' meshes differ, and so does their behaviour.</p>
+</div>
+<div class="callout note" id="design-softbody-tets-at-play">
+<p class="callout-title">Design decision: tetrahedra from the surface at play start, cached in memory <span class="badge">PR #143</span></p>
+<p>Decided by the user on 2026-10-14: tetrahedra are generated from the mesh surface when play starts, with an in-memory cache, not at import into <code>.meta</code> or a sidecar and not authored. The cost is a possible stall entering play for a large mesh; if it matters, import-time caching or tetrahedral mesh import is a later stage. The cache is the soft-body code's own, never <code>Mesh::SetCpuCache</code>.</p>
+</div>
+<div class="callout note" id="design-softbody-auto">
+<p class="callout-title">Design decision: <code>backend = Auto</code>, <code>physics.gpu</code> stays off <span class="badge">PR #143</span></p>
+<p>Decided by the user on 2026-10-14, consistent with particles: <code>Auto</code> is the default and means the CPU unless the project turns GPU physics on and the GPU works, and <code>physics.gpu</code> stays <code>off</code> by default. Today every body runs on the CPU either way.</p>
+</div>
+<div class="callout note" id="design-softbody-override">
+<p class="callout-title">Design decision: the body drives a sibling MeshRenderer through a runtime-only override <span class="badge">PR #143</span></p>
+<p>Decided by the user on 2026-10-14, instead of a second renderable with its own mesh and material fields. A SoftBody that drew by itself would need all of <code>MeshRenderer</code>'s material, submesh, lighting and shadow handling again. With the override the renderer is unchanged: materials, submeshes, lights and shadows all work, and an object is a soft body by adding a component. The override is never serialized, so the scene file and the editor never see the deformed mesh.</p>
+</div>
+<div class="callout note" id="design-softbody-no-pinning">
+<p class="callout-title">Design decision: no pinning in v1 <span class="badge">PR #143</span></p>
+<p>Decided by the user on 2026-10-14: version 1 bodies only fall and squash, with no pinned vertices, attachments to a <code>Rigidbody</code> or collision with colliders. Those are later stages, so the fields have no pin settings.</p>
+</div>
+<div class="callout note" id="design-softbody-parity-vote">
+<p class="callout-title">Design decision: ray parity with a majority vote, plus the voxels that hold a vertex <span class="badge">PR #143</span></p>
+<p>The plan left the inside test to the implementation (ray parity or generalised winding number). Parity along three axes with a two-of-three vote was chosen: it costs one pass over the triangles per axis (the rays are binned by voxel column), where a winding number is a sum over every triangle for every voxel, and it tolerates a small hole. It does not handle a mesh that is badly open or self-intersecting everywhere, and it adds the voxels that hold a vertex so that every vertex is embedded inside a tetrahedron even for thin parts.</p>
+</div>
+
+<h2 id="tests">Tests and what is not verified</h2>
+<p>All of this runs in <code>engine_tests</code> on every CI leg, including the PhysX-off ones: see <a href="testing.html">Testing &amp; CI</a> for the files.</p>
+<div class="callout open-question">
+<p class="callout-title">Not verified in CI</p>
+<p>The visual quality and the parameter tuning of the CPU solver on real imported meshes (seamed, non-manifold, thousands of vertices): the tests use boxes, a UV sphere and the built-in cube. Performance with large meshes: the stall while the tetrahedra are built at play start, and the per-step <code>SetData</code> and upload cost. How the editor's frontend shows the component and the health row (the frontend is not built or tested here). Everything GPU: the PhysX backend (a later stage) does not exist yet.</p>
+</div>
+
+<div class="page-footer">
+<span>Describes master through PR #143.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

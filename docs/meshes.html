@@ -39,6 +39,7 @@
 <li><a href="ui.html">UI</a></li>
 <li><a href="meshes.html" aria-current="page">Meshes, models &amp; textures</a></li>
 <li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
 <li><a href="resources.html">Resources &amp; paths</a></li>
 <li><a href="serialization.html">Serialization</a></li>
 <li><a href="math.html">Math &amp; SIMD</a></li>
@@ -340,7 +341,8 @@ auto terrain = Rendering::Mesh::Create(std::move(data), {
 <li><strong>Queues.</strong> A submesh with a <code>Blend</code> material draws in the Transparent queue (blended, sorted back to front by the object's position); the others in the Opaque queue, unblended. A renderer with both kinds draws in both (<code>DrawsInQueue</code>, see <a href="application.html#render">the render queue</a>), each submesh once, in its own queue. <code>GetRenderQueue()</code> is Opaque unless every submesh blends.</li>
 <li><strong>Culling.</strong> Back faces are culled, except with a double-sided material (cull <code>None</code>). A <strong>mirrored</strong> world matrix (a negative determinant, such as a scale of &minus;1 on one axis, common in Blender scenes) culls <strong>front</strong> faces instead, because both backends tell front faces by their winding on screen and mirroring reverses it.</li>
 <li><strong>GPU resources.</strong> Shares from <code>GpuCache</code> (one mesh and one material per renderer and asset), held with the renderer's lifetime token in a <code>MeshDrawing::DrawResources</code>, which the built-in shapes use too. A renderer that is destroyed, shut down or replaced at the same address is never called. <code>OnDestroy</code> releases the shares; <code>Render(nullptr)</code> does nothing.</li>
-<li><strong>Bounds.</strong> <code>GetBounds()</code> is the mesh's box in its own space (nullopt without a mesh).</li>
+<li><strong>Bounds.</strong> <code>GetBounds()</code> is the mesh's box in its own space (nullopt without a mesh); with a runtime override set, the override's.</li>
+<li><strong>Runtime mesh override</strong> <span class="badge">PR #143</span>. <code>SetDeformedMesh(mesh)</code>, <code>ClearDeformedMesh()</code>, <code>GetDeformedMesh()</code> and <code>GetDrawnMesh()</code> (the override when set, else the mesh). While an override is set the renderer draws, bounds and queues it instead of its mesh; a <a href="soft-bodies.html"><code>SoftBody</code></a> sets one to show its deformed copy of the mesh. It is <strong>runtime only and never serialized</strong>: it is not a registered field, <code>"_mesh"</code> is untouched, and <code>GetMesh()</code> (what picking and scripts read) still returns the saved mesh. It should have the mesh's submeshes (the materials are the renderer's, by submesh index). It is dropped by <code>ClearDeformedMesh</code> and in <code>OnDestroy</code>, and the SoftBody clears it when it is destroyed or removed.</li>
 <li><strong>Saved</strong> as <code>"_mesh"</code> (the mesh's UUID; built-ins by their fixed UUIDs) and <code>"_materials"</code> (a list of material UUIDs, <code>null</code> for an empty slot, through <a href="serialization.html#asset-ref-list"><code>RegisterAssetRefList</code></a>).</li>
 </ul>
 <pre class="lang-cpp"><code>auto crate = GameObject::Create("Crate");

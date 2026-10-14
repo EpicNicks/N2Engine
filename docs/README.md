@@ -26,6 +26,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `text.html` | Font backends, SDF atlas, UTF-8 and text layout, the `Font` asset and default font, the `TextRenderer` component, the OpenGL and software text shaders, golden-image tests, the drawing code shared with UI text |
 | `ui.html` | Screen-space UI: canvases, `RectTransform` layout, `Image` (and its sprite), `UIText`, the UI pass, UI picking |
 | `particles.html` | The `ParticleSystem` component, the `IParticleBackend` seam and backend selection (`Auto`/`PhysX`/`CPU`), the PhysX GPU (PBD) backend, its driver seam, presets and limits, generation-counted handles, the CPU simulation, play-mode rules, billboard drawing, the Particles health row, Lua, running the GPU test |
+| `soft-bodies.html` | The `SoftBody` component, the voxel tetrahedraliser and its cache, the CPU XPBD backend and its limits, backend selection (`Auto`/`PhysX`/`CPU`, no PhysX backend yet), the runtime mesh override, the SoftBodies health usage, Lua |
 | `gpu-particles-checklist.html` | What to run by hand on a Windows GPU PC to check the PhysX particle backend (build, the GPU test, a scene, expected output) |
 | `meshes.html` | Texture assets and their import settings, the `assetimport` library, the UV convention, `GpuCache`; meshes, materials and models in later phases of #3 |
 | `resources.html` | Resource paths, `ResourceLoader`, `Resources` |
