@@ -220,6 +220,7 @@ ps:Stop()          -- no new ones; the flying ones finish
 </tbody>
 </table>
 </div>
+<p>A runnable example is the particle demo station of <code>lua_project</code> <span class="badge">PR #137</span> (key <kbd>8</kbd>: <a href="testing.html#gpu-smoke-demo">Demo stations</a>): a fountain, a sand burst and a smoke column, with signs showing <code>GetBackend()</code>, <code>GetActiveBackend()</code> and <code>GetAliveCount()</code> live, and a key that cycles <code>SetBackend</code> to compare CPU and PhysX.</p>
 <p class="src">Source: <code>engine/src/scripting/bindings/LuaComponentBindings.cpp</code>, <code>engine/src/scripting/bindings/engine-api.lua</code>; tests: <code>LuaParticleSystemTest.*</code></p>
 
 <h2 id="tests">Tests and what is not verified</h2>
