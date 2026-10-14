@@ -9,10 +9,12 @@
 #include <string>
 #include <vector>
 
+// Renderer.hpp first: it includes glad, which must come before GLFW's header (that one pulls in GL itself otherwise)
+#include "renderer/common/Renderer.hpp"
+
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
 
-#include "renderer/common/Renderer.hpp"
 #include "renderer/common/IShader.hpp"
 #include "renderer/common/IMesh.hpp"
 #include "renderer/common/ITexture.hpp"
