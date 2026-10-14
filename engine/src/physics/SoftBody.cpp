@@ -231,7 +231,7 @@ namespace N2Engine::Physics
             return false;
         }
         renderer->SetDeformedMesh(_runtimeMesh);
-        SoftBodyUsage::Add(_usingGpu);
+        SoftBodies::SoftBodyUsage::Add(_usingGpu);
         return true;
     }
 
@@ -246,7 +246,7 @@ namespace N2Engine::Physics
             // A body that never got as far as drawing counts nowhere (Start counts it last)
             if (_runtimeMesh)
             {
-                SoftBodyUsage::Remove(_usingGpu);
+                SoftBodies::SoftBodyUsage::Remove(_usingGpu);
             }
         }
         if (touchRenderer && _runtimeMesh)
@@ -277,7 +277,7 @@ namespace N2Engine::Physics
         // freed) its body, so it isn't destroyed here. The body restarts at rest on the CPU backend.
         Logger::Warn(std::format("SoftBody on '{}': the physics backend changed, so the PhysX body is dropped and the "
                                  "body continues on the CPU (it restarts at rest)", GetGameObject().GetName()));
-        SoftBodyUsage::Remove(true);
+        SoftBodies::SoftBodyUsage::Remove(true);
         _usingGpu = false;
         _cpuBackend = std::make_unique<CpuSoftBodyBackend>();
         _handle = _cpuBackend->CreateBody(BuildDesc());
@@ -293,7 +293,7 @@ namespace N2Engine::Physics
             _runtimeMesh.reset();
             return true;
         }
-        SoftBodyUsage::Add(false);
+        SoftBodies::SoftBodyUsage::Add(false);
         return true;
     }
 

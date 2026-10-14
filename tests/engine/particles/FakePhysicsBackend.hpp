@@ -11,11 +11,66 @@
 #include <math/Vector3.hpp>
 
 #include "engine/particles/CpuParticleBackend.hpp"
+#include "engine/physics/CpuSoftBodyBackend.hpp"
 #include "engine/physics/IParticleBackend.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
+#include "engine/physics/ISoftBodyBackend.hpp"
 
 namespace N2Engine::TestSupport
 {
+    /// A stand-in for the PhysX GPU soft-body backend: the engine's CPU simulation under the name "PhysX", counting
+    /// the calls the component makes, so tests can tell that the seam (not the component's own CPU backend) is used
+    class FakeGpuSoftBodyBackend final : public Physics::ISoftBodyBackend
+    {
+    public:
+        // The inner simulation issues the handles, so it takes this backend's generation
+        FakeGpuSoftBodyBackend() : _inner(GetGeneration()) {}
+
+        [[nodiscard]] std::string_view GetName() const override { return "PhysX"; }
+        [[nodiscard]] Physics::SoftBodyHandle CreateBody(const Physics::SoftBodyDesc &desc) override
+        {
+            if (refuseCreate)
+            {
+                return Physics::kInvalidSoftBody;
+            }
+            ++created;
+            return _inner.CreateBody(desc);
+        }
+        void Destroy(const Physics::SoftBodyHandle handle) override
+        {
+            ++destroyed;
+            _inner.Destroy(handle);
+        }
+        void SetParams(const Physics::SoftBodyHandle handle, const Physics::SoftBodyParams &params) override
+        {
+            _inner.SetParams(handle, params);
+        }
+        void AddVelocity(const Physics::SoftBodyHandle handle, const Math::Vector3 &velocity) override
+        {
+            ++velocityAdded;
+            _inner.AddVelocity(handle, velocity);
+        }
+        void Step(const float dt) override
+        {
+            ++steps;
+            _inner.Step(dt);
+        }
+        void CopySurfacePositions(const Physics::SoftBodyHandle handle, std::vector<Math::Vector3> &out) const override
+        {
+            _inner.CopySurfacePositions(handle, out);
+        }
+
+        int created = 0;
+        int destroyed = 0;
+        int steps = 0;
+        int velocityAdded = 0;
+        /// CreateBody fails, as when the GPU is out of memory
+        bool refuseCreate = false;
+
+    private:
+        Physics::CpuSoftBodyBackend _inner;
+    };
+
     /// A stand-in for the PhysX GPU particle backend: the engine's CPU simulation under the name "PhysX", counting
     /// the calls the component makes, so tests can tell that the seam (not the component's own CPU backend) is used
     class FakeGpuParticleBackend final : public Physics::IParticleBackend
@@ -82,8 +137,26 @@ namespace N2Engine::TestSupport
         {
             return _withGpuParticles ? &gpu : nullptr;
         }
+        [[nodiscard]] Physics::ISoftBodyBackend *GetSoftBodyBackend() override
+        {
+            return withGpuSoftBodies ? &softGpu : nullptr;
+        }
+        [[nodiscard]] Physics::GpuStatus GetSoftBodiesGpuStatus() const override
+        {
+            return Physics::ComposeSoftBodiesGpuStatus(GetGpuStatus(), std::nullopt, withGpuSoftBodies);
+        }
 
         FakeGpuParticleBackend gpu;
+        /// Offers softGpu as the GPU soft-body backend (none by default, as every real backend until the PhysX one)
+        bool withGpuSoftBodies = false;
+        FakeGpuSoftBodyBackend softGpu;
+
+        /// Destroys the GPU soft-body backend and constructs a new one in the same place (see RecreateGpu)
+        void RecreateSoftGpu()
+        {
+            softGpu.~FakeGpuSoftBodyBackend();
+            new (&softGpu) FakeGpuSoftBodyBackend();
+        }
 
         /// Destroys the GPU particle backend and constructs a new one in the same place: the same address, a new
         /// backend (and so a new generation). What an allocator can do when a backend is replaced.

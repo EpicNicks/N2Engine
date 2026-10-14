@@ -56,20 +56,70 @@ namespace N2Engine::SoftBodies
 
         Welded Weld(const std::span<const Renderer::Common::Vertex> vertices, const double tolerance)
         {
+            // Positions closer than `tolerance` (on every axis) are one. A grid of cells four tolerances wide finds
+            // them: a vertex looks in its own cell and, for each axis, in the neighbour on the side it is within a
+            // tolerance of (a plain rounding of the position would split two equal positions that straddle a rounding
+            // boundary).
             Welded welded;
             welded.remap.resize(vertices.size());
-            std::map<std::array<std::int64_t, 3>, std::uint32_t> known;
+            const double cellSize = tolerance * 4.0;
+            std::map<std::array<std::int64_t, 3>, std::vector<std::uint32_t>> cells;
             for (std::size_t i = 0; i < vertices.size(); ++i)
             {
                 const Vec3 p{vertices[i].position[0], vertices[i].position[1], vertices[i].position[2]};
-                const std::array<std::int64_t, 3> key{std::llround(p[0] / tolerance), std::llround(p[1] / tolerance),
-                                                      std::llround(p[2] / tolerance)};
-                const auto [it, inserted] = known.try_emplace(key, static_cast<std::uint32_t>(welded.positions.size()));
-                if (inserted)
+                std::array<std::int64_t, 3> cell{};
+                std::array<std::array<std::int64_t, 2>, 3> look{};
+                std::array<int, 3> lookCount{};
+                for (int a = 0; a < 3; ++a)
                 {
-                    welded.positions.push_back(p);
+                    const double scaled = p[a] / cellSize;
+                    const double base = std::floor(scaled);
+                    cell[a] = static_cast<std::int64_t>(base);
+                    const double fraction = scaled - base;
+                    look[a][0] = cell[a];
+                    lookCount[a] = 1;
+                    if (fraction < 0.25)
+                    {
+                        look[a][lookCount[a]++] = cell[a] - 1;
+                    }
+                    else if (fraction > 0.75)
+                    {
+                        look[a][lookCount[a]++] = cell[a] + 1;
+                    }
                 }
-                welded.remap[i] = it->second;
+
+                std::int64_t found = -1;
+                for (int ix = 0; ix < lookCount[0] && found < 0; ++ix)
+                {
+                    for (int iy = 0; iy < lookCount[1] && found < 0; ++iy)
+                    {
+                        for (int iz = 0; iz < lookCount[2] && found < 0; ++iz)
+                        {
+                            const auto it = cells.find(std::array<std::int64_t, 3>{look[0][ix], look[1][iy], look[2][iz]});
+                            if (it == cells.end())
+                            {
+                                continue;
+                            }
+                            for (const std::uint32_t candidate : it->second)
+                            {
+                                const Vec3 &q = welded.positions[candidate];
+                                if (std::abs(q[0] - p[0]) <= tolerance && std::abs(q[1] - p[1]) <= tolerance &&
+                                    std::abs(q[2] - p[2]) <= tolerance)
+                                {
+                                    found = candidate;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (found < 0)
+                {
+                    found = static_cast<std::int64_t>(welded.positions.size());
+                    welded.positions.push_back(p);
+                    cells[cell].push_back(static_cast<std::uint32_t>(found));
+                }
+                welded.remap[i] = static_cast<std::uint32_t>(found);
             }
             return welded;
         }
