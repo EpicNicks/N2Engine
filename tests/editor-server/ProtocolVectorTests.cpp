@@ -147,7 +147,8 @@ TEST(ProtocolVectorTest, ShortPayloadsOfOlderPeersDecodeWithTheDefaults)
             {
                 const json &value = vector.at("fields").at(field.get<std::string>());
                 ASSERT_TRUE(value.is_boolean() || value.is_string()) << name << "." << field;
-                EXPECT_TRUE(value == false || value == "") << name << "." << field << ": a default";
+                EXPECT_TRUE(value.is_boolean() ? !value.get<bool>() : value.get<std::string>().empty())
+                    << name << "." << field << ": a default";
                 expected.insert(expected.end(), value.is_boolean() ? 1u : 4u, uint8_t{0});
             }
             const std::vector<uint8_t> frame = ProtocolVectors::BuildResponse(name, vector);
