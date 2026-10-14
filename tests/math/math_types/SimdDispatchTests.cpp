@@ -1102,17 +1102,50 @@ TEST(Vector2BatchTest, BatchesMatchScalarForEveryCountAndOffset)
                 ExpectClose(difference[i].y, expectedDifference.y, "Sub y" + where);
                 ExpectClose(scaled[i].x, expectedScaled.x, "ScalarMul x" + where);
                 ExpectClose(scaled[i].y, expectedScaled.y, "ScalarMul y" + where);
-#ifndef __AVX__
-                // Not checked where the AVX batches are compiled: Vector2::DotBatch and LengthBatch read lanes 0, 2,
-                // 4, 6 of the horizontal add, but a 256-bit hadd puts the four results in lanes 0, 1, 4, 5, so the
-                // second and fourth of every group of four are wrong (the first and third are duplicated). That is
-                // an existing x86 bug (issue #131), outside this change; NEON does them right
                 ExpectClose(dots[i], a[i].Dot(b[i]), "Dot" + where);
                 ExpectClose(lengths[i], a[i].Length(), "Length" + where);
-#endif
                 ExpectClose(normalized[i].x, expectedNormalized.x, "Normalize x" + where);
                 ExpectClose(normalized[i].y, expectedNormalized.y, "Normalize y" + where);
             }
+        }
+    }
+}
+
+// Dot and Length batches with a different, exactly representable value in every element (so a result read from the
+// wrong lane cannot match by accident), compared with closed-form values, for counts 1..17 at four start offsets
+TEST(Vector2BatchTest, DotAndLengthBatchHaveDistinctPerElementResults)
+{
+    constexpr size_t kPool = 40;
+    std::vector<Vector2> a, b;
+    for (size_t i = 0; i < kPool; ++i)
+    {
+        // a = (i+1, 2i+1), b = (3, i+2): dot = 3(i+1) + (2i+1)(i+2), distinct and growing with i
+        a.emplace_back(static_cast<float>(i + 1), static_cast<float>(2 * i + 1));
+        b.emplace_back(3.0f, static_cast<float>(i + 2));
+    }
+
+    for (size_t count = 1; count <= 17; ++count)
+    {
+        for (size_t offset = 0; offset <= 3; ++offset)
+        {
+            const std::string at = " count=" + std::to_string(count) + " offset=" + std::to_string(offset);
+            std::vector<float> dots(count + 1, -5.0f), lengths(count + 1, -5.0f);
+            Vector2::DotBatch(a.data() + offset, b.data() + offset, dots.data(), count);
+            Vector2::LengthBatch(a.data() + offset, lengths.data(), count);
+
+            for (size_t i = 0; i < count; ++i)
+            {
+                const float n = static_cast<float>(offset + i);
+                const float expectedDot = 3.0f * (n + 1.0f) + (2.0f * n + 1.0f) * (n + 2.0f);
+                const float expectedLength = std::sqrt((n + 1.0f) * (n + 1.0f) + (2.0f * n + 1.0f) * (2.0f * n + 1.0f));
+                const std::string where = at + " index=" + std::to_string(i);
+                ExpectClose(dots[i], expectedDot, "Dot" + where);
+                ExpectClose(lengths[i], expectedLength, "Length" + where);
+                ExpectClose(dots[i], a[offset + i].Dot(b[offset + i]), "Dot vs scalar" + where);
+                ExpectClose(lengths[i], a[offset + i].Length(), "Length vs scalar" + where);
+            }
+            EXPECT_EQ(dots[count], -5.0f) << "Dot wrote past the end" << at;
+            EXPECT_EQ(lengths[count], -5.0f) << "Length wrote past the end" << at;
         }
     }
 }

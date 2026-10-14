@@ -396,10 +396,6 @@ assert(parsed &amp;&amp; *parsed == id);
 <p>Before, the AVX path used the 12-bit <code>_mm256_rsqrt_ps</code> approximation and broadcast the lengths to the wrong lanes: all four vectors of a block were scaled by vector 0's length, and the near-zero mask was in the wrong lanes too. The tail used <code>Normalize</code>, which turns NaN into zero.</p>
 <p>Tests: <code>Vector2BatchTest.NormalizeBatchMatchesNormalized</code>, <code>Vector2BatchTest.NormalizeBatchZeroAndNaN</code>, <code>Vector2BatchTest.NormalizeBatchHandlesShortCounts</code>.</p>
 </div>
-<div class="callout warning" id="flaw-vector2-dotbatch">
-<p class="callout-title">Known flaw: Vector2 DotBatch and LengthBatch are wrong at the AVX tier <span class="badge">PR #128</span></p>
-<p>Found by the new <code>Vector2BatchTest.BatchesMatchScalarForEveryCountAndOffset</code>, not fixed in PR #128 (x86 code was out of scope); tracked as <a href="https://github.com/EpicNicks/N2Engine/issues/131">issue #131</a>. <code>Vector2::DotBatch</code> and <code>LengthBatch</code> (<code>math/src/math/Vector2.cpp</code>, compiled when <code>__AVX__</code> is defined: every x86 build) compute four results per iteration with <code>_mm256_hadd_ps(v, v)</code>, which leaves them in lanes 0, 1, 4 and 5, but read lanes 0, 2, 4 and 6. For <code>count &gt;= 4</code> the second result of each group of four is a copy of the first and the fourth a copy of the third; the tail (<code>count % 4</code>) is right. The NEON versions are right. The test compares these two functions only where AVX is not compiled.</p>
-</div>
 <div class="callout note">
 <p class="callout-title">Note</p>
 <p><code>InitializeSIMD</code> prints its report with <code>std::cout</code>, not the engine logger. Its "compiler support" lines test <code>__SSE4_1__</code> and <code>__SSE2__</code>, neither of which MSVC defines, so on MSVC both print "No" even though the SSE2 code is compiled in and the SSE4.1 code is compiled in through <code>N2_MATH_SSE41</code>. The "Math SIMD level" line is the one that reflects what runs.</p>
