@@ -205,6 +205,28 @@ namespace N2Engine::Physics
         return _particles.get();
     }
 
+    bool PhysXBackend::InstallParticleDriverForTesting(std::unique_ptr<Particles::IPbdDriver> driver)
+    {
+        if (!_scene || _particles || !driver)
+        {
+            return false;
+        }
+        const std::string device = driver->GetDeviceName();
+        _particles = std::make_unique<Particles::PbdParticleBackend>(std::move(driver));
+        _gpuStatus = {GpuState::Ready, "PhysX GPU: " + device};
+        return true;
+    }
+
+    bool PhysXBackend::SceneUsesGpuDynamics() const
+    {
+        return _scene && _scene->getFlags().isSet(PxSceneFlag::eENABLE_GPU_DYNAMICS);
+    }
+
+    bool PhysXBackend::SceneUsesGpuBroadPhase() const
+    {
+        return _scene && _scene->getBroadPhaseType() == PxBroadPhaseType::eGPU;
+    }
+
     bool PhysXBackend::ProbeGpu()
     {
         if (_gpuMode == GpuMode::Off)
