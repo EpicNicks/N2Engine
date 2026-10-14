@@ -150,7 +150,7 @@ function ParticleStation:OnUpdate()
     local fellBack = false
     for _, item in ipairs(self:Items()) do
         local active = item.ps:GetActiveBackend()
-        if asked == "PhysX" and active ~= "PhysX" then
+        if asked == "PhysX" and active ~= nil and active ~= "PhysX" then
             fellBack = true
         end
         local text = string.format("asked: %s\nrunning: %s\nalive: %d", asked, Running(asked, active),

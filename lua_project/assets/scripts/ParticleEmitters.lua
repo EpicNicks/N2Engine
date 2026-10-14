@@ -1,7 +1,7 @@
 -- The particle station's emitters (scene.lua builds them, ParticleStation.lua rebuilds them when the backend changes:
 -- the backend is read when a system starts, so a new backend means a new system). Water, sand and smoke are tuned
--- with the ParticleSystem fields that exist (rate, shape, speed, size, colour, gravity scale, drag, the ground plane);
--- there is no preset field, so each "preset" here is a set of those.
+-- with the ParticleSystem fields (rate, shape, speed, size, colour, gravity scale, drag, the ground plane) for the CPU
+-- backend, and with pbdMaterial (Water, Sand, Smoke: the PBD preset the PhysX GPU backend uses; the CPU ignores it).
 
 local Emitters = {}
 
@@ -19,6 +19,7 @@ Emitters.Specs = {
         continuous = true,
         burst = 120,
         configure = function(ps)
+            ps:SetPbdMaterial("Water")
             ps:SetShape("Cone")
             ps:SetShapeRadius(0.15)
             ps:SetConeAngle(10.0)
@@ -42,6 +43,7 @@ Emitters.Specs = {
         continuous = false,
         burst = 400,
         configure = function(ps)
+            ps:SetPbdMaterial("Sand")
             ps:SetShape("Cone")
             ps:SetShapeRadius(0.3)
             ps:SetConeAngle(40.0)
@@ -65,6 +67,7 @@ Emitters.Specs = {
         continuous = true,
         burst = 40,
         configure = function(ps)
+            ps:SetPbdMaterial("Smoke")
             ps:SetShape("Cone")
             ps:SetShapeRadius(0.3)
             ps:SetConeAngle(8.0)

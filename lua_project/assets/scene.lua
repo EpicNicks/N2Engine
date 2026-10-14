@@ -451,8 +451,10 @@ do
     -- What the keys do and which backend is asked for; ParticleStation.lua rewrites it
     WorldText("Particles Info", "B burst   P play / stop   C clear   K backend: Auto, CPU, PhysX",
         Vector3(x0 - 8.0, 6.2, 0.0), 0.2, CAPTION)
-    ColouredCube("Particles Ground", Color.new(0.35, 0.35, 0.4, 1.0),
+    local ground = ColouredCube("Particles Ground", Color.new(0.35, 0.35, 0.4, 1.0),
         Vector3(x0, Emitters.GROUND_Y - 0.17, 0.0), Vector3(17.0, 0.3, 3.0))
+    -- The PhysX backend ignores the ground plane field: its particles collide with the scene's colliders
+    ground:AddComponent("BoxCollider"):SetSize(Vector3(17.0, 0.3, 3.0))
 
     for _, spec in ipairs(Emitters.Specs) do
         local title = WorldText("Particles Title " .. spec.key, spec.key .. "\n" .. spec.detail,
