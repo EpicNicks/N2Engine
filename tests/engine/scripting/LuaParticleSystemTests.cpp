@@ -190,6 +190,20 @@ TEST_F(LuaParticleSystemTest, TheDefaultsAreWhatTheComponentHas)
     EXPECT_TRUE(Eval<bool>("lua_ps:GetTexture() == nil"));
 }
 
+TEST_F(LuaParticleSystemTest, ThePbdMaterialPresetCanBeSetAndRead)
+{
+    Run(R"(
+        lua_fx = GameObject.Create("LuaFx")
+        lua_ps = lua_fx:AddComponent("ParticleSystem")
+    )");
+    EXPECT_EQ(Eval<std::string>("lua_ps:GetPbdMaterial()"), "Water");
+    Run(R"(lua_ps:SetPbdMaterial("Sand"))");
+    EXPECT_EQ(Eval<std::string>("lua_ps:GetPbdMaterial()"), "Sand");
+    const std::string error = RunExpectingError(R"(lua_ps:SetPbdMaterial("Lava"))");
+    EXPECT_NE(error.find("Water, Sand, Smoke"), std::string::npos) << error;
+    EXPECT_EQ(Eval<std::string>("lua_ps:GetPbdMaterial()"), "Sand");
+}
+
 TEST_F(LuaParticleSystemTest, AnUnknownEnumNameIsAnErrorThatListsTheOptionsAndChangesNothing)
 {
     Run(R"(

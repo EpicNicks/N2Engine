@@ -179,6 +179,32 @@ protected:
 };
 
 // ============================================================================
+// physics.gpu=off: the CPU scene, as before the GPU particle work
+// ============================================================================
+
+TEST_F(PhysicsTest, GpuOffSceneHasNoGpuFlagsNoCudaContextAndTheCpuBroadPhase)
+{
+    PhysXBackend &physx = static_cast<PhysXBackend &>(Backend());
+    // The suite's backend never had a GPU mode set, so it is off: the scene PhysXBackend built has no GPU dynamics,
+    // the CPU broad phase and no CUDA context manager
+    EXPECT_EQ(physx.GetGpuStatus().state, GpuState::Disabled);
+    EXPECT_FALSE(physx.SceneUsesGpuDynamics());
+    EXPECT_FALSE(physx.SceneUsesGpuBroadPhase());
+    EXPECT_FALSE(physx.HasCudaContextManager());
+    EXPECT_EQ(physx.GetParticleBackend(), nullptr);
+
+    // And a rigid body falls and collides as ever: it lands on the floor (top at y = 0.5) with its radius above it
+    SpawnFloor();
+    const auto ball = SpawnBall("OffBall", Vector3(0.0f, 3.0f, 0.0f));
+    Step(1);
+    const float start = ball->GetPositionable()->GetPosition().y;
+    Step(120);
+    const float landed = ball->GetPositionable()->GetPosition().y;
+    EXPECT_LT(landed, start) << "the ball never fell";
+    EXPECT_NEAR(landed, 1.0f, 0.1f) << "the ball did not come to rest on the floor";
+}
+
+// ============================================================================
 // Collision and trigger events
 // ============================================================================
 

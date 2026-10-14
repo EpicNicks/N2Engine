@@ -47,6 +47,12 @@ namespace N2Engine
     class Component;
 }
 
+namespace N2Engine::Particles
+{
+    class PbdParticleBackend;
+    class IPbdDriver;
+}
+
 namespace N2Engine::Physics
 {
     class ICollider;
@@ -199,6 +205,23 @@ namespace N2Engine::Physics
 
     public:
 #ifdef N2ENGINE_PHYSX_ENABLED
+        /// The PhysX PBD particle backend: only with a GPU scene (physics.gpu auto/on, a working probe, a build with
+        /// the GPU library) and until the GPU refuses a particle system or transfer; nullptr otherwise (the
+        /// ParticleSystems then use the CPU backend). It is created with the scene and destroyed in Shutdown.
+        [[nodiscard]] IParticleBackend* GetParticleBackend() override;
+
+        /// Test seam, not used by the engine: puts a particle backend over `driver` (a fake in the tests) in place
+        /// of the one a real GPU scene would create, and reports the GPU as Ready, so the failure chain
+        /// (PollParticleFailure / FailParticles) can run without a GPU. Needs an initialised backend that has no
+        /// particle backend yet; returns false (and does nothing) otherwise.
+        bool InstallParticleDriverForTesting(std::unique_ptr<Particles::IPbdDriver> driver);
+        /// For tests: the scene has eENABLE_GPU_DYNAMICS set
+        [[nodiscard]] bool SceneUsesGpuDynamics() const;
+        /// For tests: the scene's broad phase is the GPU one
+        [[nodiscard]] bool SceneUsesGpuBroadPhase() const;
+        /// For tests: a CUDA context manager exists (physics.gpu auto/on with a working probe)
+        [[nodiscard]] bool HasCudaContextManager() const { return _cudaContextManager != nullptr; }
+
         void onConstraintBreak(physx::PxConstraintInfo* constraints, physx::PxU32 count) override;
         void onWake(physx::PxActor** actors, physx::PxU32 count) override;
         void onSleep(physx::PxActor** actors, physx::PxU32 count) override;
@@ -229,6 +252,13 @@ namespace N2Engine::Physics
         bool ProbeGpu();
         /// Drops the CUDA context, sets Failed (physics.gpu=on) or Unavailable (auto) and logs one warning
         void FailGpu(const std::string& reason);
+
+        std::unique_ptr<Particles::PbdParticleBackend> _particles; // only on a GPU scene
+        /// The particle backend stopped working (or never could): drops its systems, sets the status to Failed
+        /// (physics.gpu=on) or Unavailable (auto) and logs one warning. The GPU scene itself keeps running.
+        void FailParticles(const std::string& reason);
+        /// Drops the particle backend (once) if it has failed, as FailParticles
+        void PollParticleFailure();
 
 #if N2ENGINE_PHYSX_HAS_PVD
         physx::PxPvd* _pvd = nullptr;

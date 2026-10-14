@@ -994,6 +994,12 @@ function ParticleSystem:SetBackend(backend) end
 ---@return "Auto"|"PhysX"|"CPU" what was asked for (GetActiveBackend says what is used)
 function ParticleSystem:GetBackend() end
 
+---@param material "Water"|"Sand"|"Smoke" what the particles are made of on the PhysX backend (a PBD material preset: Water flows and pools, Sand piles up, Smoke drifts); the CPU backend ignores it. Read when the system starts. An unknown name raises an error.
+function ParticleSystem:SetPbdMaterial(material) end
+
+---@return "Water"|"Sand"|"Smoke"
+function ParticleSystem:GetPbdMaterial() end
+
 ---@param playOnAwake boolean emit as soon as the system starts (default true)
 function ParticleSystem:SetPlayOnAwake(playOnAwake) end
 

@@ -467,12 +467,20 @@ void Application::PhysicsUpdate(const Scene &scene) const
 
 const EngineHealth& Application::GetHealth() const
 {
-    // The row's state stays the GPU probe's (Disabled, Running, Failed); its detail names the backends the live
-    // ParticleSystems use. Without any it is what Init made.
+    // The row's state is the physics backend's GPU status as it is now (Disabled, Running, Failed): a GPU that
+    // stopped working for particles after Init (the PhysX backend gave up on its GPU particle backend) shows here.
+    // Its detail names the backends the live ParticleSystems use; without any it is the status's own detail.
     if (auto it = std::ranges::find(_health.subsystems, std::string_view("Particles"), &SubsystemStatus::name);
         it != _health.subsystems.end())
     {
-        it->detail = Particles::ParticleUsage::Compose(_particlesBaseDetail);
+        std::string baseDetail = _particlesBaseDetail;
+        if (_3DphysicsBackend)
+        {
+            const SubsystemStatus current = Physics::MakeParticlesStatus(_3DphysicsBackend->GetGpuStatus());
+            it->state = current.state;
+            baseDetail = current.detail;
+        }
+        it->detail = Particles::ParticleUsage::Compose(baseDetail);
     }
     return _health;
 }

@@ -34,6 +34,10 @@ namespace N2Engine::Particles
         /// A system asking for more than this many particles gets this many (the desc is clamped, not refused)
         static constexpr std::uint32_t kMaxParticlesLimit = 1000000;
 
+        CpuParticleBackend() = default;
+        /// A backend whose handles carry `generation` (for a wrapper that is itself the backend; see IParticleBackend)
+        explicit CpuParticleBackend(const std::uint32_t generation) : Physics::IParticleBackend(generation) {}
+
         [[nodiscard]] std::string_view GetName() const override { return "CPU"; }
 
         [[nodiscard]] Physics::ParticleSystemHandle CreateSystem(const Physics::ParticleSystemDesc &desc) override;
@@ -67,6 +71,6 @@ namespace N2Engine::Particles
         static Physics::ParticleParams Sanitized(Physics::ParticleParams params);
 
         std::unordered_map<Physics::ParticleSystemHandle, System> _systems;
-        Physics::ParticleSystemHandle _nextHandle = 1;
+        std::uint32_t _nextIndex = 1;
     };
 }

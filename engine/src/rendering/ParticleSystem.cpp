@@ -53,6 +53,8 @@ namespace N2Engine::Rendering
         RegisterMember(NAMEOF(maxParticles), maxParticles).Range(0.0, kMaxParticlesLimit)
             .Tooltip("The most particles alive at once; more are dropped. Read when the system starts.");
         RegisterMember(NAMEOF(seed), seed).Tooltip("The same seed gives the same particles. Read when the system starts.");
+        RegisterMember(NAMEOF(pbdMaterial), pbdMaterial)
+            .Tooltip("What the particles are made of on the PhysX backend: Water flows and pools, Sand piles up, Smoke drifts. The CPU backend ignores it. Read when the system starts.");
 
         RegisterMember(NAMEOF(emissionRate), emissionRate).Range(0.0, 100000.0).Tooltip("Particles per second while playing");
         RegisterMember(NAMEOF(burstCount), burstCount).Range(0.0, kMaxParticlesLimit)
@@ -101,9 +103,10 @@ namespace N2Engine::Rendering
         {
             if (auto *physics = Application::GetInstance().Get3DPhysicsBackend())
             {
-                // Only the instance that made the handle knows it; a replacement backend has other systems
+                // Only the backend that issued the handle knows it: the handle carries that backend's generation,
+                // so a replaced or recreated backend (even one at the same address) is not it, and has other systems
                 auto *gpu = physics->GetParticleBackend();
-                return gpu == _gpuOwner ? gpu : nullptr;
+                return gpu && gpu->OwnsHandle(_handle) ? gpu : nullptr;
             }
         }
         return nullptr;
@@ -184,17 +187,32 @@ namespace N2Engine::Rendering
         }
         desc.maxParticles = static_cast<std::uint32_t>(std::clamp(maxParticles, 0, kMaxParticlesLimit));
         desc.seed = static_cast<std::uint32_t>(seed) ^ kBackendSeedMix;
+        desc.material = pbdMaterial;
         desc.params = BuildParams();
 
+        _usingGpu = false;
         if (selection.gpu)
         {
-            _usingGpu = true;
-            _gpuOwner = selection.gpu;
             _handle = selection.gpu->CreateSystem(desc);
+            if (_handle != Physics::kInvalidParticleSystem)
+            {
+                _usingGpu = true;
+            }
+            else
+            {
+                // The GPU refused (out of memory, no GPU library, ...): the system starts on the CPU backend instead,
+                // and the physics backend, which learns of the failure from its particle backend, stops offering
+                // the GPU one
+                Logger::Warn(std::format("ParticleSystem on '{}': the PhysX backend couldn't create the system; "
+                                         "using the CPU backend", GetGameObject().GetName()));
+                if (auto *physics = Application::GetInstance().Get3DPhysicsBackend())
+                {
+                    static_cast<void>(physics->GetParticleBackend());
+                }
+            }
         }
-        else
+        if (!_usingGpu)
         {
-            _usingGpu = false;
             _cpuBackend = std::make_unique<Particles::CpuParticleBackend>();
             _handle = _cpuBackend->CreateSystem(desc);
         }
@@ -235,7 +253,6 @@ namespace N2Engine::Rendering
         _handle = Physics::kInvalidParticleSystem;
         _cpuBackend.reset();
         _usingGpu = false;
-        _gpuOwner = nullptr;
     }
 
     bool ParticleSystem::RecoverFromReplacedBackend()
@@ -253,11 +270,11 @@ namespace N2Engine::Rendering
                                  GetGameObject().GetName()));
         Particles::ParticleUsage::Remove(true);
         _usingGpu = false;
-        _gpuOwner = nullptr;
 
         Physics::ParticleSystemDesc desc;
         desc.maxParticles = static_cast<std::uint32_t>(std::clamp(maxParticles, 0, kMaxParticlesLimit));
         desc.seed = static_cast<std::uint32_t>(seed) ^ kBackendSeedMix;
+        desc.material = pbdMaterial;
         desc.params = BuildParams();
         _cpuBackend = std::make_unique<Particles::CpuParticleBackend>();
         _handle = _cpuBackend->CreateSystem(desc);
