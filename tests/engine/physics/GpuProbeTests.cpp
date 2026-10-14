@@ -345,6 +345,10 @@ TEST(PhysicsBackendParticleFailureTest, ADriverFailureDropsTheBackendAndChangesT
         EXPECT_EQ(softAfter.state, softBefore.state);
         EXPECT_EQ(softAfter.detail, softBefore.detail);
         EXPECT_EQ(softAfter.state, SubsystemState::Disabled);
+        // Installing a fresh driver after the failure restores the Particles row
+        ASSERT_TRUE(rig.backend->InstallParticleDriverForTesting(std::make_unique<TestSupport::FakePbdDriver>()));
+        EXPECT_NE(rig.backend->GetParticleBackend(), nullptr) << ToString(c.mode);
+        EXPECT_EQ(rig.backend->GetParticlesGpuStatus().state, GpuState::Ready) << ToString(c.mode);
         rig.backend->Shutdown();
     }
 }

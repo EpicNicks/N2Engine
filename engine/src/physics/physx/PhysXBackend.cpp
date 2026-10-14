@@ -226,6 +226,7 @@ namespace N2Engine::Physics
         const std::string device = driver->GetDeviceName();
         _particles = std::make_unique<Particles::PbdParticleBackend>(std::move(driver));
         _gpuStatus = {GpuState::Ready, "PhysX GPU: " + device};
+        _particlesFailure.reset();
         return true;
     }
 
