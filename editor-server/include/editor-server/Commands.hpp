@@ -193,12 +193,17 @@ namespace N2Engine::Editor::Protocol
         /// Since 1.11.0, a trailing field (false when the client doesn't send it): the client understands ErrorCoded, so
         /// the host answers a refused command with it instead of a plain Error
         bool errorCodes = false;
+        /// Since 1.12.0, a trailing field (empty when the client doesn't send it, which is also how a client says it
+        /// has no user): the user whose token this is, for a host with a tokens file. A client that sends it must send
+        /// errorCodes first.
+        std::string user;
 
         static HelloCmd Deserialize(BufferReader &r)
         {
             // Braced initialisation evaluates left to right, so the fields are read in order
-            HelloCmd cmd{r.ReadString(), r.ReadString(), r.ReadString(), false};
+            HelloCmd cmd{r.ReadString(), r.ReadString(), r.ReadString(), false, {}};
             cmd.errorCodes = ReadTrailing(r, &BufferReader::ReadBool, false);
+            cmd.user = ReadTrailing(r, &BufferReader::ReadString, std::string{});
             return cmd;
         }
     };
@@ -786,6 +791,7 @@ namespace N2Engine::Editor::Protocol
 
     /// The stable codes of ErrorCoded (protocol.json's errorCodes): a client branches on them
     inline constexpr std::string_view ErrorCodeReadOnly = "readOnly";
+    /// Since 1.12.0: the role bound to the connection may not run the command (a host with a tokens file)
     inline constexpr std::string_view ErrorCodeForbidden = "forbidden";
 
     /// ErrorCoded (since 1.11.0), sent only to a client that asked for it with Hello's errorCodes: the message an Error
@@ -1061,9 +1067,11 @@ namespace N2Engine::Editor::Protocol
     }
 
     /// Hello's response: the server's protocol and engine versions, its optional features (a JSON array of names),
-    /// whether it has a project and, since 1.11.0, whether it is read-only (--read-only)
+    /// whether it has a project, since 1.11.0 whether it is read-only (--read-only) and, since 1.12.0, the user and role
+    /// bound to the connection (empty user and the role "admin" on a host that has no tokens file)
     inline void WriteServerInfo(BufferWriter &w, std::string_view protocolVersion, std::string_view engineVersion,
-                                const nlohmann::json &capabilities, bool projectLoaded, bool readOnly)
+                                const nlohmann::json &capabilities, bool projectLoaded, bool readOnly,
+                                std::string_view user, std::string_view role)
     {
         BufferWriter payload;
         payload.WriteString(std::string{protocolVersion});
@@ -1071,6 +1079,8 @@ namespace N2Engine::Editor::Protocol
         WriteJson(payload, capabilities);
         payload.WriteBool(projectLoaded);
         payload.WriteBool(readOnly);
+        payload.WriteString(std::string{user});
+        payload.WriteString(std::string{role});
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::ServerInfo));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));

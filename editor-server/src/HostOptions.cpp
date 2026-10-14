@@ -89,9 +89,33 @@ namespace N2Engine::Editor
                 options.readOnly = true;
                 continue;
             }
+            if (arg == "--new-token")
+            {
+                // Two values: "--new-token alice editor". A value starting with "--" is the next option.
+                if (i + 2 >= args.size() || args[i + 1].starts_with("--") || args[i + 2].starts_with("--"))
+                {
+                    return std::unexpected("--new-token needs a user and a role (admin, editor or viewer)");
+                }
+                const std::string &user = args[++i];
+                const std::string &roleText = args[++i];
+                if (!IsValidTokenUserName(user))
+                {
+                    return std::unexpected(std::format("--new-token: the user must be 1 to {} characters of "
+                                                       "A-Z a-z 0-9 . _ @ -",
+                                                       MaxTokenUserLength));
+                }
+                const std::optional<TokenRole> role = ParseTokenRole(roleText);
+                if (!role)
+                {
+                    return std::unexpected("--new-token: the role must be admin, editor or viewer");
+                }
+                options.newTokenUser = user;
+                options.newTokenRole = *role;
+                continue;
+            }
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
-                                    arg == "--renderer" || arg == "--token-env" || arg == "--create" ||
-                                    arg == "--name" || arg == "--project-id" || arg == "--play";
+                                    arg == "--renderer" || arg == "--token-env" || arg == "--tokens-file" ||
+                                    arg == "--create" || arg == "--name" || arg == "--project-id" || arg == "--play";
             if (!takesValue)
             {
                 continue; // unknown arguments are ignored
@@ -129,6 +153,15 @@ namespace N2Engine::Editor
             {
                 // The variable's name; the token is read from it at startup (ReadAccessToken), not here
                 options.tokenEnv = value;
+            }
+            else if (arg == "--tokens-file")
+            {
+                // An empty path would otherwise mean "no tokens file" and leave the host open
+                if (value.empty())
+                {
+                    return std::unexpected("--tokens-file is missing a value");
+                }
+                options.tokensFile = value;
             }
             else if (arg == "--play")
             {
@@ -180,6 +213,15 @@ namespace N2Engine::Editor
         if (!options.createPath.empty() && !options.playScene.empty())
         {
             return std::unexpected("--create and --play can't be combined");
+        }
+        if (!options.tokensFile.empty() && !options.tokenEnv.empty())
+        {
+            return std::unexpected("--tokens-file and --token-env can't be combined: one host has one kind of token "
+                                   "(--token-env is a single admin token, --tokens-file one token per user)");
+        }
+        if (!options.newTokenUser.empty() && !options.createPath.empty())
+        {
+            return std::unexpected("--new-token and --create can't be combined");
         }
         if (options.readOnly && !options.playScene.empty())
         {
@@ -280,7 +322,20 @@ Options:
                             software (no window at all; renders without a GPU or display)
   --token-env <variable>    Read the access token from this environment variable (then removed
                             from the host's environment): every connection must send Hello with it
-                            before any other command
+                            before any other command. One token, one user ("token") with every right;
+                            for one token per user and roles, see --tokens-file
+  --tokens-file <path>      Per-user tokens: a JSON array of {"user", "role", "hash"} entries (role:
+                            admin, editor or viewer; hash: "sha256:" and 64 lowercase hex digits, made by
+                            --new-token). Every connection must send Hello with a user's token and gets
+                            that user's role: a viewer reads only (and can't play), an editor changes
+                            the project but can't Shutdown, an admin can do anything. The file is
+                            re-read on each new connection (and on SIGHUP on POSIX), so a user can be
+                            revoked without a restart. Needs a host built with N2ENGINE_EDITOR_TLS (for
+                            SHA-256); on POSIX the file must not be accessible to group or others
+                            (chmod 600). Can't be combined with --token-env
+  --new-token <user> <role> Make a token for this user (A-Z a-z 0-9 . _ @ -, up to 64 characters) and
+                            role, print it ONCE with the entry to add to the --tokens-file file, and
+                            exit. The token is 256 random bits; the file keeps only its hash
   --exit-on-disconnect      Exit once a client's session ends (its connection closes after a
                             successful Hello, or with no token, after it connected)
   --exit-on-stdin-eof       Exit once stdin reaches end of file or can't be read (a launcher's pipe

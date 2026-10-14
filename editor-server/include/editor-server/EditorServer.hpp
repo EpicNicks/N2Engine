@@ -7,6 +7,7 @@
 #include <functional>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <thread>
 #include <utility>
@@ -27,6 +28,7 @@
 #include "editor-server/EditorCamera.hpp"
 #include "editor-server/EventRing.hpp"
 #include "editor-server/FrameTracker.hpp"
+#include "editor-server/TokenTable.hpp"
 
 namespace Renderer::Common
 {
@@ -140,8 +142,35 @@ namespace N2Engine::Editor
         /// Before Start (the network thread reads it): a non-empty token makes every connection send Hello with this
         /// token before any other command. Empty (the default) leaves Hello optional and accepts any token in it.
         /// False, changing nothing, while the server is running.
+        /// Not with a tokens file (SetTokensFile): the two are exclusive, so this then returns false and changes nothing.
         bool SetAccessToken(std::string token);
-        [[nodiscard]] bool RequiresAccessToken() const { return !_accessToken.empty(); }
+        /// Whether Hello must carry a token: the single access token, or a tokens file
+        [[nodiscard]] bool RequiresAccessToken() const { return !_accessToken.empty() || !_tokensFile.empty(); }
+
+        // ==================== Per-user tokens ====================
+
+        /**
+         * Before Start (the network thread uses it): per-user tokens from a JSON file (see TokenTable): a connection must
+         * Hello with the token of one of its users and gets that user's role (admin, editor or viewer) for as long as it
+         * lasts. Loads the file now. An error, changing nothing, when this build has no TLS library (the tokens are
+         * SHA-256 hashes: N2ENGINE_EDITOR_TLS), when SetAccessToken has been used (they are exclusive), while running,
+         * or when the file can't be loaded (LoadTokensFile: missing, readable by group or others on POSIX, malformed).
+         *
+         * The file is checked again, on the network thread, whenever a connection is accepted: if its size or
+         * modification time changed it is reloaded, and so it is when RequestTokensReload is called (the host does so on
+         * SIGHUP). A reload that fails keeps the previous tokens and logs a warning. A reload that removes the user of
+         * the open connection, or changes its role or token, closes that connection.
+         */
+        [[nodiscard]] std::expected<void, std::string> SetTokensFile(const std::filesystem::path &path);
+        [[nodiscard]] bool HasTokensFile() const { return !_tokensFile.empty(); }
+        /// Any thread, and safe in a signal handler (it only sets a flag): the network thread re-reads the tokens file
+        /// (whatever its signature) within about 100 ms
+        void RequestTokensReload() { _tokensReloadRequested.store(true); }
+        /// Whether a role may run a command: an admin any, an editor any but those of the Admin class, a viewer only
+        /// the Read class. Default deny: a command nobody classified is only for an admin.
+        [[nodiscard]] static bool RoleAllows(TokenRole role, uint8_t commandType);
+        /// The refusal of a role: "forbidden: role <role> is not allowed to run <command>"
+        [[nodiscard]] static std::string RoleDeniedMessage(TokenRole role, uint8_t commandType);
 
         /**
          * Before Start (the network thread uses it): serves TLS 1.2 or newer on the editor port instead of plaintext
@@ -494,6 +523,8 @@ namespace N2Engine::Editor
         /// The message of a refusal: "read-only host: <command> is not allowed" (the command's name, or its id for an
         /// unknown one)
         [[nodiscard]] static std::string ReadOnlyMessage(uint8_t commandType);
+        /// A command's name (as protocol.json spells it), or "command 0x<id>" for an id that is no command
+        [[nodiscard]] static std::string CommandName(uint8_t commandType);
 
     private:
         void ServerLoop(int listenSocket);
@@ -671,6 +702,33 @@ namespace N2Engine::Editor
         /// A refusal's frame: ErrorCoded with this code for a client that asked for it, else a plain Error
         [[nodiscard]] std::vector<uint8_t> BuildDenial(std::string_view code, const std::string &message) const;
 
+        /// Who the current connection is, as Hello decided: its user and role. On a host with no authentication nobody
+        /// is named and the role is admin.
+        struct ConnectionIdentity
+        {
+            /// Whether a Hello bound this identity (a host with authentication); false on a host without it
+            bool authenticated = false;
+            std::string user;
+            TokenRole role = TokenRole::Admin;
+            /// The token's hash for an identity from the tokens file, so a reload that rotates the token ends the connection
+            TokenHash hash{};
+            bool fromTokensFile = false;
+        };
+        /// The identity Hello would give a client with this token (and user, when it names one); nullopt when it doesn't
+        /// match. Needs no authentication on a host without a token: that is an unauthenticated identity.
+        [[nodiscard]] std::optional<ConnectionIdentity> Authenticate(std::string_view token, std::string_view user) const;
+        [[nodiscard]] ConnectionIdentity CurrentIdentity() const;
+        void SetIdentity(ConnectionIdentity identity);
+        void ClearIdentity();
+        /// Network thread: re-reads the tokens file when `force` or when its signature changed, and swaps the table in
+        void ReloadTokens(bool force);
+        /// Network thread: ends the open connection when its user no longer has the role and token it was given
+        void CheckIdentityAgainstTokens();
+        /// Network thread: ServiceTokens runs the reload a signal asked for; called wherever the thread waits
+        void ServiceTokens();
+        /// The tokens as of now (never null when there is a tokens file)
+        [[nodiscard]] std::shared_ptr<const TokenTable> CurrentTokens() const;
+
         std::atomic<bool> _running{false};
         std::thread _serverThread;
         int _listenSocket{-1};
@@ -679,6 +737,19 @@ namespace N2Engine::Editor
         // Set before Start only, so both threads read it without a lock
         std::string _accessToken;
         bool _readOnly{false};
+        // The tokens file (set before Start only), its tokens, and what the network thread knows of the file. The table
+        // is replaced whole under the mutex, by the network thread; Hello (the main thread) takes a copy of the pointer.
+        std::filesystem::path _tokensFile;
+        mutable std::mutex _tokensMutex;
+        std::shared_ptr<const TokenTable> _tokens;
+        TokensFileSignature _tokensLoaded;
+        std::optional<TokensFileSignature> _tokensRejected;
+        std::atomic<bool> _tokensReloadRequested{false};
+        // The current connection's identity, written by Hello (main thread) and read by the network thread
+        mutable std::mutex _identityMutex;
+        ConnectionIdentity _identity;
+        // Set by the network thread when a reload took the connection's rights away: its waits fail, which ends it
+        std::atomic<bool> _closeConnection{false};
         // Whether the current connection's Hello asked for ErrorCoded: set by HandleHello (main thread), reset when a
         // connection starts and read by the network thread for Shutdown's refusal, so atomic
         std::atomic<bool> _clientErrorCodes{false};
