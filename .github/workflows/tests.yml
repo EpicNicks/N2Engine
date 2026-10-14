@@ -166,7 +166,18 @@ jobs:
           sudo curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/keyrings/apt.llvm.org.asc
           echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+
+      # The runners have no GPU: Mesa lavapipe (mesa-vulkan-drivers) is the Vulkan driver, so renderer_tests really run the
+      # Vulkan renderer, with the Khronos validation layer (vulkan-validationlayers) on. Its ICD file is
+      # lvp_icd.<arch>.json on older Mesa and lvp_icd.json on newer: pin whichever is installed (so the loader can't pick
+      # anything else), and fail here, not in the tests, when there is none.
+      - name: Select the lavapipe Vulkan driver
+        run: |
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          test -n "$icd"
+          echo "Using $icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
 
       - name: Cache PhysX binaries
         uses: actions/cache@v6
@@ -185,6 +196,10 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
         env:
+          # A missing Vulkan device or validation layer fails the Vulkan renderer tests instead of skipping them, and the
+          # device must be a CPU device (lavapipe), so a green run means they executed
+          N2_REQUIRE_VULKAN: "1"
+          N2_VULKAN_EXPECT_CPU_DEVICE: "1"
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
 
@@ -220,7 +235,18 @@ jobs:
           sudo curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/keyrings/apt.llvm.org.asc
           echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+
+      # The runners have no GPU: Mesa lavapipe (mesa-vulkan-drivers) is the Vulkan driver, so renderer_tests really run the
+      # Vulkan renderer, with the Khronos validation layer (vulkan-validationlayers) on. Its ICD file is
+      # lvp_icd.<arch>.json on older Mesa and lvp_icd.json on newer: pin whichever is installed (so the loader can't pick
+      # anything else), and fail here, not in the tests, when there is none.
+      - name: Select the lavapipe Vulkan driver
+        run: |
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          test -n "$icd"
+          echo "Using $icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
 
       - name: Cache PhysX binaries
         uses: actions/cache@v6
@@ -239,6 +265,10 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
         env:
+          # A missing Vulkan device or validation layer fails the Vulkan renderer tests instead of skipping them, and the
+          # device must be a CPU device (lavapipe), so a green run means they executed
+          N2_REQUIRE_VULKAN: "1"
+          N2_VULKAN_EXPECT_CPU_DEVICE: "1"
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
 
@@ -273,10 +303,13 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3             libvulkan-dev libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3             libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+
+      # The one leg built with the Vulkan renderer compiled out (N2ENGINE_RENDERER_VULKAN=OFF): it installs no Vulkan
+      # headers, loader or driver, so it proves the OFF configuration needs none, and the Vulkan tests do not exist here.
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF
 
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0

@@ -4,7 +4,10 @@
 #include <string>
 
 #include <renderer/opengl/OpenGLRenderer.hpp>
+#include <renderer/common/RendererConfig.hpp>
+#if N2ENGINE_RENDERER_VULKAN
 #include <renderer/vulkan/VulkanRenderer.hpp>
+#endif
 #include <renderer/software/SoftwareRenderer.hpp>
 #include <math/VectorN.hpp>
 

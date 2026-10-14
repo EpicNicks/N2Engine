@@ -349,8 +349,9 @@ namespace N2Engine::Editor
         /// RenderFrame's pixels: reads the renderer's last frame (IRenderer::ReadFramebuffer, RGBA bottom row
         /// first on every backend) into `pixels` as width x height RGBA8 with the top row first and alpha 255,
         /// what FrameData carries. `pixels` is resized to width * height * 4 bytes (empty unless both are
-        /// positive), not cleared: a backend that writes nothing (Vulkan's stub) leaves what was there, made
-        /// opaque (black for a buffer only ever used for such a backend, as new bytes are zero).
+        /// positive), not cleared: a backend that writes nothing leaves what was there, made opaque (black for a
+        /// buffer only ever used for such a backend, as new bytes are zero). Vulkan's readback is real (its
+        /// offscreen target), but it draws nothing until stages A-E of #43, so its frames are the clear colour.
         static void ReadFrame(const Renderer::Common::IRenderer &renderer, int width, int height,
                               std::vector<uint8_t> &pixels);
         /// The Error SetViewportSize and RenderFrame answer when the renderer can't render at the viewport size
