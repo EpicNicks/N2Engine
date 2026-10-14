@@ -803,7 +803,7 @@ function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
 ---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
----"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem", "Light", "AudioSource", "AudioListener",
+---"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
 ---@return Component
@@ -1121,6 +1121,94 @@ function ParticleSystem:SetTexture(path) end
 
 ---@return string|nil the texture's path, nil without one
 function ParticleSystem:GetTexture() end
+
+---Makes the MeshRenderer on the same object a soft body that squashes and wobbles under gravity (see
+---docs/soft-bodies.html). Needs a MeshRenderer with a mesh and no Rigidbody on the object. The body exists only while
+---the scene plays, is never saved, and freezes while the time scale is 0. Settings apply at once, except Backend and
+---Resolution, which are read when the body starts; Reset restarts it.
+---@class SoftBody : Component
+SoftBody = {}
+
+---Adds a velocity to the whole body; does nothing before it started
+---@param velocity Vector3 world units per second
+function SoftBody:AddVelocity(velocity) end
+
+---Puts the body back to its rest shape at the object's current pose, at rest (it restarts, so the backend is chosen again)
+function SoftBody:Reset() end
+
+---@return string name "CPU" or "PhysX": the backend simulating the body; "" when it is inert (no MeshRenderer, a Rigidbody, a mesh that can't be tetrahedralised) or hasn't started
+function SoftBody:GetActiveBackendName() end
+
+---@param backend "Auto"|"PhysX"|"CPU" Auto: the PhysX GPU backend when there is one, else CPU. Read when the body starts. An unknown name raises an error.
+function SoftBody:SetBackend(backend) end
+
+---@return "Auto"|"PhysX"|"CPU"
+function SoftBody:GetBackend() end
+
+---@param resolution integer voxels along the longest axis of the mesh, 2 to 32 (default 10). Read when the body starts.
+function SoftBody:SetResolution(resolution) end
+
+---@return integer
+function SoftBody:GetResolution() end
+
+---@param density number mass per unit volume in kg/m^3 (default 1000)
+function SoftBody:SetDensity(density) end
+
+---@return number
+function SoftBody:GetDensity() end
+
+---@param stiffness number Young's modulus in pascals (default 100000; rubber is about 1e6)
+function SoftBody:SetStiffness(stiffness) end
+
+---@return number
+function SoftBody:GetStiffness() end
+
+---@param poisson number Poisson's ratio, 0 to 0.49: how much the body keeps its volume (default 0.3)
+function SoftBody:SetPoisson(poisson) end
+
+---@return number
+function SoftBody:GetPoisson() end
+
+---@param damping number velocity decay in 1/s (default 0.1)
+function SoftBody:SetDamping(damping) end
+
+---@return number
+function SoftBody:GetDamping() end
+
+---@param friction number friction against the ground, 0 to 1 (default 0.5)
+function SoftBody:SetFriction(friction) end
+
+---@return number
+function SoftBody:GetFriction() end
+
+---@param iterations integer solver iterations in each of the CPU backend's 4 sub-steps (default 2)
+function SoftBody:SetSolverIterations(iterations) end
+
+---@return integer
+function SoftBody:GetSolverIterations() end
+
+---The body rests on the plane y = height (world space), the only collision the CPU backend does
+---@param enabled boolean default false
+---@param height number default 0
+function SoftBody:SetGround(enabled, height) end
+
+---@return boolean enabled
+---@return number height
+function SoftBody:GetGround() end
+
+---Used only by the PhysX backend (a later stage); the CPU backend ignores it
+---@param model "CoRotational"|"NeoHookean"
+function SoftBody:SetMaterialModel(model) end
+
+---@return "CoRotational"|"NeoHookean"
+function SoftBody:GetMaterialModel() end
+
+---Used only by the PhysX backend (a later stage); the CPU backend ignores it
+---@param enabled boolean
+function SoftBody:SetSelfCollision(enabled) end
+
+---@return boolean
+function SoftBody:GetSelfCollision() end
 
 ---3D model files (.glb, .gltf; .fbx and .obj when the engine is built with N2ENGINE_MODEL_UFBX): see docs/meshes.html#models
 Model = {}

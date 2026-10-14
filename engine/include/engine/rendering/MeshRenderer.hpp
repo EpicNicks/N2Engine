@@ -67,6 +67,19 @@ namespace N2Engine::Rendering
         void SetMesh(std::shared_ptr<Mesh> mesh) { _mesh = std::move(mesh); }
         [[nodiscard]] const std::shared_ptr<Mesh> &GetMesh() const { return _mesh; }
 
+        /**
+         * A runtime-only stand-in for the mesh: while set, the renderer draws (and bounds, and queues) it instead of
+         * the mesh. A SoftBody sets one each play session to show its deformed copy of the mesh. It is NEVER
+         * serialized (the saved `_mesh` is untouched, and so is what GetMesh returns, which picking and scripts
+         * read), it should have the mesh's submeshes (the materials are the renderer's, by submesh index), and the
+         * component drops it in OnDestroy. Not part of the editor's fields.
+         */
+        void SetDeformedMesh(std::shared_ptr<Mesh> mesh) { _deformed = std::move(mesh); }
+        void ClearDeformedMesh() { _deformed.reset(); }
+        [[nodiscard]] const std::shared_ptr<Mesh> &GetDeformedMesh() const { return _deformed; }
+        /// What is drawn: the deformed mesh when one is set, else the mesh
+        [[nodiscard]] const std::shared_ptr<Mesh> &GetDrawnMesh() const { return _deformed ? _deformed : _mesh; }
+
         /// The number of material slots that draw: the mesh's submesh count (0 without a mesh)
         [[nodiscard]] std::size_t GetMaterialCount() const;
         /// Slot `index` (0-based): its material, or nullptr for an empty slot (drawn with Material::GetDefault())
@@ -89,6 +102,7 @@ namespace N2Engine::Rendering
 
     private:
         std::shared_ptr<Mesh> _mesh;                    // serialized as "_mesh"
+        std::shared_ptr<Mesh> _deformed;                // runtime only: never registered, so never serialized
         std::vector<std::shared_ptr<Material>> _materials; // serialized as "_materials"
         MeshDrawing::DrawResources _resources;
     };

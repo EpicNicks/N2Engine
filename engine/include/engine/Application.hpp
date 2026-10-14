@@ -37,6 +37,7 @@ namespace N2Engine
         // mutable: GetHealth adds the live ParticleSystems to the Particles row's detail
         mutable EngineHealth _health;
         std::string _particlesBaseDetail; // the Particles row's detail as Init made it (the GPU probe's)
+        std::string _softBodiesBaseDetail; // the same for the SoftBodies row
         bool _quitRequested = false;
         bool _initialized = false; // from Init until Shutdown
         // The fixed-step loop's catch-up time, carried from one Tick to the next

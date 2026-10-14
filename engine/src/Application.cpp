@@ -16,6 +16,7 @@
 #include "engine/particles/ParticleBackendSelection.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
+#include "engine/softbody/SoftBodyBackendSelection.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/ui/UISystem.hpp"
 
@@ -247,6 +248,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     _health.subsystems = {windowStatus,    rendererStatus, physicsStatus, particlesStatus,
                           softBodiesStatus, audioStatus,   scriptingStatus};
     _particlesBaseDetail = particlesStatus.detail;
+    _softBodiesBaseDetail = softBodiesStatus.detail;
     for (const SubsystemStatus &status : _health.subsystems)
     {
         if (status.state == SubsystemState::Failed)
@@ -486,12 +488,19 @@ const EngineHealth& Application::GetHealth() const
         }
         it->detail = Particles::ParticleUsage::Compose(baseDetail);
     }
+    // The SoftBodies detail names the backends the live SoftBody components use (without any it is the status's own
+    // detail, so the row is what Init made), also with no physics backend (every body then runs on the CPU).
     if (auto it = std::ranges::find(_health.subsystems, std::string_view("SoftBodies"), &SubsystemStatus::name);
-        it != _health.subsystems.end() && _3DphysicsBackend)
+        it != _health.subsystems.end())
     {
-        const SubsystemStatus current = Physics::MakeSoftBodiesStatus(_3DphysicsBackend->GetSoftBodiesGpuStatus());
-        it->state = current.state;
-        it->detail = current.detail;
+        std::string baseDetail = _softBodiesBaseDetail;
+        if (_3DphysicsBackend)
+        {
+            const SubsystemStatus current = Physics::MakeSoftBodiesStatus(_3DphysicsBackend->GetSoftBodiesGpuStatus());
+            it->state = current.state;
+            baseDetail = current.detail;
+        }
+        it->detail = SoftBodies::SoftBodyUsage::Compose(baseDetail);
     }
     return _health;
 }
