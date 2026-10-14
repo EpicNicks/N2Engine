@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Particles · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>GPU particles checklist <span class="badge">PR #129</span></h1>
+<p class="lead">What to run by hand on a Windows PC with an NVIDIA GPU to check the PhysX PBD particle backend, which CI cannot run. Nothing here needs more than the repository and a build with PhysX ON. Report which steps pass, and the text of any warning or crash.</p>
+
+<div class="callout open-question">
+<p class="callout-title">Hardware rule</p>
+<p>The PhysX GPU backend is not merged until this checklist and the GPU test have been run on a real GPU PC and their results reported.</p>
+</div>
+
+<h2 id="requirements">Requirements</h2>
+<ul>
+<li>Windows 10 or 11 x64, an NVIDIA GPU of compute capability 7.0 or newer (GeForce RTX 20 series, GTX 16 series or later) and a driver recent enough for CUDA 12.8 (about 570 or newer).</li>
+<li>Visual Studio with the C++ workload and CMake. The PhysX package for Windows includes <code>PhysXGpu_64.dll</code>; the build copies it next to the executables.</li>
+</ul>
+
+<h2 id="build">1. Build with PhysX ON</h2>
+<pre class="lang-shell"><code>cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON
+cmake --build build --config Release --parallel --target engine_tests lua_project</code></pre>
+<ul>
+<li>Expected: the configure output says <code>PhysX GPU support enabled</code>, and <code>build\bin\Release</code> holds <code>engine_tests.exe</code>, <code>lua_project.exe</code> and <code>PhysXGpu_64.dll</code>.</li>
+<li>If the configure output says PhysX is unavailable, the build has no GPU backend and every step below will skip or fall back: fix that first.</li>
+</ul>
+
+<h2 id="gpu-test">2. Run the GPU test</h2>
+<pre class="lang-shell"><code>build\bin\Release\engine_tests.exe --gtest_filter=PhysXGpuParticlesGoldenTest.*</code></pre>
+<ul>
+<li>Expected: a line <code>[  GPU     ] PhysX GPU: &lt;your card&gt; (CUDA device 0)</code> and <code>[       OK ] PhysXGpuParticlesGoldenTest.SpawnedParticlesFallRespectTheCapAndReleaseCleanly</code>.</li>
+<li><code>[  SKIPPED ]</code> means the test could not run; its message says why (no CUDA device, the GPU scene did not come up, <code>PhysXGpu_64.dll</code> missing). That is a failed step here, not a pass.</li>
+<li>Any crash, hang or a CUDA error printed during the run is a failure, including at the end, when the backend shuts down with a particle system still alive.</li>
+<li>Also run the whole executable once (<code>engine_tests.exe</code>, no filter) and note whether anything else fails.</li>
+</ul>
+
+<h2 id="scene">3. Run a scene with a PhysX particle system</h2>
+<p>This uses the existing <code>lua_project</code> scene (station 1 has a static floor at y = -5). Make two small temporary edits, and revert them afterwards.</p>
+<ol>
+<li>In <code>lua_project/project.n2proj</code> set the physics setting: <code>"settings": { "physics": { "gpu": "on" } }</code>.</li>
+<li>In <code>lua_project/assets/scene.lua</code>, after the floor is created (the <code>for _, gameObject in ipairs({ cube, sphere, floor })</code> loop), add:
+<pre class="lang-lua"><code>local fountain = GameObject.Create("GpuFountain")
+fountain:CreatePositionable()
+fountain:GetPositionable():SetPosition(Vector3(6.0, 4.0, 0.0))
+local ps = fountain:AddComponent("ParticleSystem")
+ps:SetBackend("PhysX")
+ps:SetPbdMaterial("Water")      -- try "Sand" and "Smoke" in later runs
+ps:SetMaxParticles(5000)
+ps:SetEmissionRate(400)
+ps:SetShape("Cone")
+ps:SetShapeRadius(0.3)
+ps:SetConeAngle(10)
+ps:SetSpeed(1, 2)
+ps:SetLifetime(8, 10)
+ps:SetSize(0.12, 0.12)
+ps:SetStartColor(Color.new(0.3, 0.6, 1.0, 1.0))
+ps:SetEndColor(Color.new(0.3, 0.6, 1.0, 1.0))
+table.insert(roots, fountain)</code></pre></li>
+<li>Run it with the OpenGL renderer: <code>build\bin\Release\lua_project.exe --renderer opengl</code> (the camera starts at station 1; keys 1 to 7 move between stations).</li>
+</ol>
+<p>Expected:</p>
+<ul>
+<li>The log has no warning mentioning <code>PhysX GPU</code> or <code>couldn't create the system</code>. One line from the probe is fine. If a warning says the GPU backend was switched off, copy it.</li>
+<li>Blue particles stream from a point to the right of the cube and fall onto the grey floor, where they pile up and spread as a liquid (water preset) instead of passing through it. The count grows to a few thousand and stays there (<code>maxParticles</code>) while old ones expire after 8 to 10 seconds.</li>
+<li>The cube and the sphere still fall and settle as in the checklist for station 1 (the whole scene now runs on the GPU pipeline, so small differences in how they come to rest are expected).</li>
+<li>Frame rate stays interactive (note the number; thousands of particles should not stall).</li>
+<li>Close the window with Escape: the process exits promptly and cleanly, with no crash and no hang.</li>
+</ul>
+
+<h2 id="presets">4. Presets and fallback (optional, short)</h2>
+<ul>
+<li>Change <code>SetPbdMaterial</code> to <code>"Sand"</code>, then <code>"Smoke"</code>, and rerun: sand should pile into a heap and stop flowing, smoke should drift and spread. These presets are untuned guesses, so say what looks wrong.</li>
+<li>Set <code>"gpu": "off"</code> (or remove the setting) and rerun: the particle system, still asking for <code>PhysX</code>, must fall back to the CPU backend with one warning, draw particles that fall through the floor (the CPU backend has no collision with it), and nothing else about the scene changes.</li>
+<li>Run with <code>"gpu": "auto"</code>: the same as <code>"on"</code> when the GPU works.</li>
+</ul>
+
+<h2 id="revert">5. Revert the edits</h2>
+<p>Restore <code>lua_project/project.n2proj</code> and <code>lua_project/assets/scene.lua</code> (<code>git checkout -- lua_project</code>).</p>
+
+<h2 id="report">What to report</h2>
+<ul>
+<li>The GPU name and driver version, and the lines printed by step 2.</li>
+<li>For step 3: whether the particles appeared and landed on the floor, the particle count and frame rate you saw, any warning in the log, and how the exit went.</li>
+<li>Anything that looks wrong in the presets (step 4).</li>
+</ul>
+<p>Background: <a href="particles.html#physx-backend">The PhysX GPU backend</a>, <a href="particles.html#gpu-test">Running the GPU test</a>, <a href="physics.html#gpu-particles">GPU particles</a>.</p>
+
+<div class="page-footer">
+<span>Describes the PhysX GPU backend of PR #129.</span>
+<a href="particles.html">Back to Particles</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

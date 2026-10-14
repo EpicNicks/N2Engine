@@ -620,6 +620,85 @@ TEST_F(ParticleSystemTest, AReplacedPhysicsBackendMakesAPhysXSystemRestartOnTheC
     EXPECT_EQ(Particles::ParticleUsage::GetCount(false), cpuBefore);
 }
 
+TEST_F(ParticleSystemTest, ARecreatedGpuBackendAtTheSameAddressStillInvalidatesTheOldHandle)
+{
+    auto fake = std::make_unique<TestSupport::FakePhysicsBackend>(true);
+    TestSupport::FakePhysicsBackend *physics = fake.get();
+    Application::GetInstance().Set3DPhysicsBackend(std::move(fake));
+    const int gpuBefore = Particles::ParticleUsage::GetCount(true);
+
+    ParticleSystem *system = Make("Recreated");
+    system->OnAttach();
+    ASSERT_EQ(system->GetActiveBackendName(), "PhysX");
+    Step(system, 5);
+    ASSERT_GT(system->GetAliveCount(), 0u);
+
+    // The very same address now holds a different backend: the old address-only guard would have taken it for the
+    // backend that issued the handle, and the handle (index 1 in both) would have named the new backend's first system
+    const Physics::IParticleBackend *before = physics->GetParticleBackend();
+    const std::uint32_t generationBefore = before->GetGeneration();
+    physics->RecreateGpu();
+    ASSERT_EQ(physics->GetParticleBackend(), before) << "the test needs the same address";
+    EXPECT_NE(physics->GetParticleBackend()->GetGeneration(), generationBefore);
+
+    // A second system on the new backend takes the new backend's first handle index
+    ParticleSystem *other = Make("Other");
+    other->OnAttach();
+    ASSERT_EQ(other->GetActiveBackendName(), "PhysX");
+    Step(other, 10);
+    const std::size_t otherAlive = other->GetAliveCount();
+    ASSERT_GT(otherAlive, 0u);
+
+    WarningCapture warnings;
+    Step(system, 5);
+    EXPECT_EQ(system->GetActiveBackendName(), "CPU") << "restarted on the CPU, not attached to the new backend";
+    EXPECT_EQ(warnings.Count("physics backend changed"), 1);
+    EXPECT_EQ(physics->gpu.destroyed, 0) << "the old handle never reached the new backend";
+    EXPECT_GE(other->GetAliveCount(), otherAlive) << "the other system is untouched";
+    EXPECT_EQ(Particles::ParticleUsage::GetCount(true), gpuBefore + 1);
+
+    system->OnDestroy();
+    EXPECT_EQ(physics->gpu.destroyed, 0);
+    other->OnDestroy();
+    EXPECT_EQ(physics->gpu.destroyed, 1);
+}
+
+TEST_F(ParticleSystemTest, AGpuBackendThatRefusesTheSystemFallsBackToTheCpuWithOneWarning)
+{
+    auto fake = std::make_unique<TestSupport::FakePhysicsBackend>(true);
+    fake->gpu.refuseCreate = true;
+    TestSupport::FakePhysicsBackend *physics = fake.get();
+    Application::GetInstance().Set3DPhysicsBackend(std::move(fake));
+    const int gpuBefore = Particles::ParticleUsage::GetCount(true);
+    const int cpuBefore = Particles::ParticleUsage::GetCount(false);
+
+    WarningCapture warnings;
+    ParticleSystem *system = Make("Refused");
+    system->backend = Particles::ParticleBackend::PhysX;
+    system->OnAttach();
+    EXPECT_EQ(system->GetActiveBackendName(), "CPU");
+    EXPECT_EQ(warnings.Count("couldn't create the system"), 1);
+    EXPECT_EQ(physics->gpu.created, 0);
+    EXPECT_EQ(Particles::ParticleUsage::GetCount(true), gpuBefore);
+    EXPECT_EQ(Particles::ParticleUsage::GetCount(false), cpuBefore + 1);
+
+    Step(system, 25);
+    EXPECT_GT(system->GetAliveCount(), 0u) << "it simulates on the CPU";
+    system->OnDestroy();
+}
+
+TEST_F(ParticleSystemTest, ThePbdMaterialIsAnOrdinarySavedFieldThatDefaultsToWater)
+{
+    const std::optional<ComponentSchema> schema = ComponentRegistry::Instance().Describe("ParticleSystem");
+    ASSERT_TRUE(schema.has_value());
+    const auto it = std::ranges::find(schema->fields, std::string("pbdMaterial"), &FieldInfo::name);
+    ASSERT_NE(it, schema->fields.end());
+    EXPECT_EQ(it->kind, FieldKind::Enum);
+    EXPECT_EQ(it->enumOptions, (std::vector<std::string>{"Water", "Sand", "Smoke"}));
+    EXPECT_EQ(schema->defaults.at("pbdMaterial"), "Water");
+    EXPECT_EQ(Make()->pbdMaterial, Physics::ParticleMaterial::Water);
+}
+
 // ---------------------------------------------------------------- physics and pause
 
 TEST_F(ParticleSystemTest, GravityIsTheWorldGravityTimesTheScale)

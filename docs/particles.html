@@ -64,7 +64,7 @@
 <div class="content">
 
 <h1>Particles</h1>
-<p class="lead">The <code>ParticleSystem</code> component emits small camera-facing quads that start at its object, fly under gravity and fade away. A simulation backend moves them (the CPU backend on every machine, headless hosts included; a PhysX GPU backend plugs into the same interface later) and the component draws them as one mesh per frame. This page covers the component, the backend seam and how one is chosen, the simulation rules, play mode, drawing and the Lua API <span class="badge">PR #125</span>.</p>
+<p class="lead">The <code>ParticleSystem</code> component emits small camera-facing quads that start at its object, fly under gravity and fade away. A simulation backend moves them (the CPU backend on every machine, headless hosts included, or the PhysX GPU backend where the project enables GPU physics and an NVIDIA GPU works) and the component draws them as one mesh per frame. This page covers the component, the backend seam and how one is chosen, the PhysX GPU backend and its limits, the simulation rules, play mode, drawing and the Lua API <span class="badge">PR #125</span> <span class="badge">PR #129</span>.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -72,6 +72,8 @@
 <li><a href="#quick-start">Quick start</a></li>
 <li><a href="#component">The ParticleSystem component</a></li>
 <li><a href="#backends">Backends and the seam</a></li>
+<li><a href="#physx-backend">The PhysX GPU backend</a></li>
+<li><a href="#gpu-test">Running the GPU test</a></li>
 <li><a href="#simulation">Emission and simulation</a></li>
 <li><a href="#play-mode">Play mode, pause and saving</a></li>
 <li><a href="#rendering">Drawing</a></li>
@@ -109,6 +111,7 @@ ps:Stop()          -- no new ones; the flying ones finish
 <tr><td><code>playOnAwake</code></td><td>true</td><td>Emit as soon as the system starts.</td></tr>
 <tr><td><code>maxParticles</code></td><td>1000</td><td>The most particles alive at once, at most <code>ParticleSystem::kMaxParticlesLimit</code> (100000). Read when the system starts.</td></tr>
 <tr><td><code>seed</code></td><td>1</td><td>The same seed gives the same particles. Read when the system starts.</td></tr>
+<tr><td><code>pbdMaterial</code> <span class="badge">PR #129</span></td><td><code>Water</code></td><td><code>Water</code>, <code>Sand</code> or <code>Smoke</code>: the PBD material preset the PhysX backend uses (<a href="#pbd-presets">presets</a>). The CPU backend ignores it. Read when the system starts.</td></tr>
 <tr><td><code>emissionRate</code></td><td>20</td><td>Particles per second while playing.</td></tr>
 <tr><td><code>burstCount</code></td><td>0</td><td>Particles started at once by every <code>Play</code> (and by <code>playOnAwake</code>).</td></tr>
 <tr><td><code>shape</code>, <code>shapeRadius</code>, <code>coneAngle</code></td><td>Cone, 0, 25</td><td>Where particles start and which way they go (<a href="#simulation">Emission</a>).</td></tr>
@@ -139,7 +142,7 @@ ps:Stop()          -- no new ones; the flying ones finish
 <thead><tr><th>Backend</th><th>Where it comes from</th><th>Runs on</th></tr></thead>
 <tbody>
 <tr><td><code>CpuParticleBackend</code></td><td>Created by each <code>ParticleSystem</code> that needs it (<code>engine/src/particles/CpuParticleBackend.cpp</code>)</td><td>Every machine: no PhysX, no GPU, no window. Stepped by the component once per fixed step.</td></tr>
-<tr><td>PhysX GPU backend</td><td><code>IPhysicsBackend::GetParticleBackend()</code>, which returns <code>nullptr</code> by default and for every backend that exists today</td><td>Not implemented yet: a later change adds it for the PhysX GPU scene (the probe from <a href="physics.html">Physics</a>, <code>physics.gpu</code>). It would step inside the physics scene, so its <code>Step</code> does nothing.</td></tr>
+<tr><td>PhysX GPU backend <span class="badge">PR #129</span></td><td><code>IPhysicsBackend::GetParticleBackend()</code>, which returns <code>nullptr</code> by default; <code>PhysXBackend</code> returns its <code>PbdParticleBackend</code> when the GPU scene is up (<code>physics.gpu</code> auto or on, the probe Ready, a build with the GPU library: Windows) and until the GPU refuses it</td><td>An NVIDIA GPU, through PhysX PBD particles. It steps inside the physics scene, so its <code>Step</code> does nothing (<a href="#physx-backend">details</a>).</td></tr>
 </tbody>
 </table>
 </div>
@@ -157,8 +160,63 @@ ps:Stop()          -- no new ones; the flying ones finish
 <p>The choice is made once, when the component attaches (<code>Particles::SelectParticleBackend</code>); changing <code>backend</code> afterwards takes effect the next time the system starts. Because <code>physics.gpu</code> defaults to <code>off</code>, a default project always uses the CPU backend, so particles behave the same on every machine and on the headless host.</p>
 <div class="callout note" id="design-particles-seam">
 <p class="callout-title">Design decision: the CPU backend is a real backend, not a fallback path <span class="badge">PR #125</span></p>
-<p>The user asked for both a PhysX GPU simulation and a CPU one, selectable. So the CPU simulation implements the same <code>IParticleBackend</code> as the PhysX one will, and the component only ever talks to the interface. A <code>ParticleSystem</code> never cares which one it has, and a project that sets <code>backend</code> to <code>CPU</code> runs identically with or without a GPU. The physics backend is asked for its particle backend each time it is needed (never cached), so a component that outlives the physics backend goes inert instead of dangling. The component remembers which particle backend instance owns its handle: if the physics backend is replaced by another one, the stale handle is dropped and the system restarts empty on the CPU backend with one warning.</p>
+<p>The user asked for both a PhysX GPU simulation and a CPU one, selectable. So the CPU simulation implements the same <code>IParticleBackend</code> as the PhysX one will, and the component only ever talks to the interface. A <code>ParticleSystem</code> never cares which one it has, and a project that sets <code>backend</code> to <code>CPU</code> runs identically with or without a GPU. The physics backend is asked for its particle backend each time it is needed (never cached), so a component that outlives the physics backend goes inert instead of dangling. If the physics backend is replaced by another one, the stale handle is dropped and the system restarts empty on the CPU backend with one warning (<a href="#design-particles-generation">generation-counted handles</a>).</p>
 </div>
+<div class="callout note" id="design-particles-generation">
+<p class="callout-title">Design decision: handles carry the generation of the backend that issued them <span class="badge">PR #129</span></p>
+<p>PR #125 recognised a stale handle by comparing the particle backend's <em>address</em>, which a freed and reallocated backend can share. A <code>ParticleSystemHandle</code> is now a 64-bit value: the upper 32 bits are the <strong>generation</strong> of the backend that issued it, the lower 32 the system's index. Every <code>IParticleBackend</code> object takes the next number from a process-wide counter (never 0) when it is constructed, and every backend (CPU and PhysX) looks a handle up only if its generation matches, so a handle of a replaced or recreated backend, even one constructed at the same address, is ignored instead of naming one of the new backend's systems (both would have the same index). The component asks <code>IParticleBackend::OwnsHandle</code> instead of comparing pointers. The documented behaviour is unchanged: a replaced physics backend restarts the system on the CPU with one warning; with the physics backend removed entirely the system is inert. A wrapper that hands out another backend's handles constructs it with its own generation (<code>CpuParticleBackend(generation)</code>, used by the test fake).</p>
+<p class="src">Source: <code>engine/include/engine/physics/IParticleBackend.hpp</code>, <code>ParticleSystem::Backend</code>; tests: <code>PbdParticleBackendTest.ABackendRecreatedAtTheSameAddressDoesNotKnowTheOldHandles</code>, <code>PbdParticleBackendTest.AHandleOfAnotherBackendIsIgnored*</code>, <code>ParticleSystemTest.ARecreatedGpuBackendAtTheSameAddressStillInvalidatesTheOldHandle</code></p>
+</div>
+
+<h2 id="physx-backend">The PhysX GPU backend <span class="badge">PR #129</span></h2>
+<p>The backend is split in two so that nearly all of it is tested in CI without a GPU. <code>PbdParticleBackend</code> (<code>engine/src/particles/PbdParticleBackend.cpp</code>) holds the logic; it talks only to an <code>IPbdDriver</code> (<code>engine/include/engine/particles/PbdDriver.hpp</code>), a thin layer with no PhysX types: create a PBD system (material, particle system, buffer, phase), a host mirror of the buffer, <code>Upload</code>, <code>ReadBack</code>, <code>SetMaterial</code>, the scene gravity and the device name. <code>PhysXPbdDriver</code> (<code>engine/src/physics/physx/PhysXPbdDriver.cpp</code>) is the one implementation and the only place a CUDA context, a PBD system or a device pointer appears. It is compiled only where the GPU library is (Windows with PhysX ON; <code>N2ENGINE_PHYSX_GPU_PROBE</code>), and never on Linux, whose PhysX libraries are CPU-only.</p>
+<ul>
+<li><strong>Slots.</strong> One PBD particle system, material and particle buffer per <code>ParticleSystem</code>, with room for <code>maxParticles</code>. Slots 0 to count-1 are the living particles. A system of 0 particles exists without a GPU system and accepts nothing.</li>
+<li><strong>Emission.</strong> <code>Spawn</code> writes the new particles after the last slot of the pinned host arrays (position and inverse mass, velocity, phase), capped at <code>maxParticles</code> (it returns how many fit), then <code>Upload</code> copies the arrays to the device buffer under the scoped CUDA lock, sets the active count and raises the update flags. PhysX has no emitter: this is how particles are made.</li>
+<li><strong>The scene steps them.</strong> The physics scene simulates the particles, so <code>Step(dt)</code> does nothing. After every <code>simulate</code> and <code>fetchResults</code>, <code>PhysXBackend::Update</code> calls <code>PbdParticleBackend::OnSceneStepped(dt)</code>: it copies positions and velocities back to the host mirror (scoped CUDA lock), ages every particle by <code>dt</code>, removes the ones past their lifetime by moving the last living particle into the slot (the CPU backend's rule), and uploads the compacted arrays when anything died. <code>CopyPositions</code> and <code>GetAliveCount</code> read the mirror only (one <code>Vector4</code> per particle, w the age fraction) and feed the same billboard path as the CPU backend.</li>
+<li><strong>Ageing runs on the host</strong> because PhysX particles have no lifetime. Each particle's lifetime is picked from <code>[lifetimeMin, lifetimeMax]</code> when it spawns, from the system's seed.</li>
+<li><strong>Parameters.</strong> <code>SetParams</code> (every fixed step) changes the material only when it differs: the PBD gravity scale is the part of the wanted gravity along the scene's gravity (never negative; a scene without gravity gives 0), and <code>drag</code> is added to the preset's damping. <code>collideWithGround</code>, <code>groundHeight</code> and <code>bounce</code> are ignored: PhysX particles collide with the scene's colliders.</li>
+<li><strong>Clear / Stop / Destroy.</strong> <code>Clear</code> empties the system and sets the active count to 0; <code>Stop</code> only stops emission, as on the CPU. <code>Destroy</code> releases the buffer, the system (removed from the scene), the material and the pinned memory; so does leaving play mode, and shutting the physics backend down releases every system before the scene and the CUDA context.</li>
+<li><strong>Soft failure.</strong> If the driver refuses a system (no GPU library, out of GPU memory) or a transfer fails, the backend logs <strong>one warning</strong>, does nothing more with the GPU, and the physics backend drops it: <code>GetParticleBackend()</code> returns <code>nullptr</code>, the Particles health row becomes Disabled (<code>Failed</code> with <code>physics.gpu=on</code>) with the reason, and the systems that used it restart on the CPU backend (one warning each). A system whose creation is refused starts on the CPU at once. The rigid-body GPU scene keeps running.</li>
+</ul>
+<h3 id="pbd-presets">Material presets</h3>
+<p>Each <code>pbdMaterial</code> is a set of <code>PxPhysics::createPBDMaterial</code> parameters plus the particle spacing and density that size the solver's offsets and the particle mass. A particle's mass is density times spacing cubed.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Preset</th><th>Behaviour</th><th>Material (friction / damping / viscosity / vorticity / surface tension / cohesion)</th><th>Spacing, density, phase</th></tr></thead>
+<tbody>
+<tr><td><code>Water</code></td><td>Flows, pools, splashes</td><td>0.05 / 0.05 / 0.001 / 0.5 / 0.005 / 0.01</td><td>0.1, 1000, fluid + self collide</td></tr>
+<tr><td><code>Sand</code></td><td>Piles up</td><td>0.6 / 0.1 / 0 / 0 / 0 / 0</td><td>0.08, 1600, self collide</td></tr>
+<tr><td><code>Smoke</code></td><td>Drifts</td><td>0 / 0.8 / 0.01 / 0.2 / 0 / 0</td><td>0.2, 100, fluid + self collide</td></tr>
+</tbody>
+</table>
+</div>
+<p>These are starting values taken from PhysX's PBF snippet and the behaviour each material should have; they have <strong>not been tuned on a GPU</strong>. Particle spacing is not the billboard size: <code>startSize</code> and <code>endSize</code> only size the quads.</p>
+<h3 id="gpu-limits">Limits and notes</h3>
+<ul>
+<li><strong>Hardware.</strong> An NVIDIA GPU (compute capability 7.0 or newer) with a driver recent enough for the PhysX 5.6.1 GPU library (CUDA 12.8 class), on Windows, with <code>PhysXGpu_64.dll</code> next to the executable. AMD, Intel and macOS have no PhysX GPU, and Linux has no GPU library yet (a later change); there the CPU backend is used.</li>
+<li><strong>Whole-scene GPU dynamics.</strong> PBD particles need a GPU scene, and a GPU scene moves every rigid body to the GPU pipeline (see <a href="physics.html#gpu">GPU physics</a>). That is why <code>physics.gpu</code> is off by default.</li>
+<li><strong>Video memory.</strong> Each <code>ParticleSystem</code> allocates a PBD system and a buffer for its full <code>maxParticles</code> (positions, velocities and phases: 36 bytes a particle on the device, the same again in pinned host memory) on top of the GPU scene's own memory. 100000 particles is a few megabytes of buffer; the solver's working memory is the larger part and was not measured.</li>
+<li><strong>Host copy.</strong> Positions come back to the host every step (16 bytes a particle, velocities too) and the billboards are built on the CPU, as for the CPU backend. A step that expires or spawns particles also uploads the arrays again.</li>
+<li><strong>Cap.</strong> <code>maxParticles</code> is at most 100000 per system, and a spawn beyond room is dropped with the one "reached maxParticles" warning.</li>
+<li><strong>Gravity.</strong> Only gravity along the scene's gravity direction can be made.</li>
+</ul>
+<div class="callout note" id="design-particles-pbd-driver">
+<p class="callout-title">Design decision: a thin driver seam under the PhysX backend <span class="badge">PR #129</span></p>
+<p>Nothing that needs a CUDA context can run in CI, so all logic that can be tested without one (slots, the cap, emission, ageing and compaction, presets, handles, failure) lives in <code>PbdParticleBackend</code> against <code>IPbdDriver</code>, and the tests run it against a fake driver with a fake device (<code>FakePbdDriver</code>) on every leg. The real driver is a mechanical translation of the interface into PhysX calls; it is compiled on the Windows legs and run only by the GPU test. Positions are read back to the host, not shared through CUDA-OpenGL interop, so the backend works for the OpenGL, software and any later renderer with no extra driver libraries (the proposal's recommendation; interop stays a later optimisation).</p>
+</div>
+<div class="callout note" id="design-particles-pbd-host-age">
+<p class="callout-title">Design decision: ageing and compaction on the host, the host mirror always current <span class="badge">PR #129</span></p>
+<p>PhysX particles have no lifetime and no emitter. The backend ages them on the host and, when some die, writes the compacted state back; it reads the device state into the mirror after every scene step, so a later spawn never uploads stale positions over particles that have moved. The cost is a device-to-host copy per step per live system and a full upload on steps where particles spawn or die. That was chosen over partial copies for simplicity; it can be optimised once there is a measurement.</p>
+</div>
+
+<h2 id="gpu-test">Running the GPU test <span class="badge">PR #129</span></h2>
+<p>The GPU golden test <code>PhysXGpuParticlesGoldenTest.SpawnedParticlesFallRespectTheCapAndReleaseCleanly</code> (<code>tests/engine/physics/PhysXGpuParticlesTests.cpp</code>) is part of <code>engine_tests</code> and so registered with ctest, but it is <strong>skipped</strong> (<code>GTEST_SKIP</code> with the reason) unless all of these hold: a Windows build with PhysX and its GPU library, not a GitHub Actions run (<code>GITHUB_ACTIONS</code> is not set), <code>PxGetSuggestedCudaDeviceOrdinal() &gt;= 0</code>, and a GPU scene that actually came up. It reports "skipped" on every CI leg and does its work on a PC with an NVIDIA GPU.</p>
+<pre class="lang-shell"><code>cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON
+cmake --build build --config Release --parallel --target engine_tests
+build\bin\Release\engine_tests.exe --gtest_filter=PhysXGpuParticlesGoldenTest.*</code></pre>
+<p>Expected on a working GPU: a line <code>[  GPU     ] PhysX GPU: &lt;your card&gt; (CUDA device 0)</code>, then <code>[       OK ]</code>. The test creates a water system of 100 particles and offers 125 (the cap: 100 fit, then 0 more), checks all 100 exist and are finite, steps the scene for half a second with no colliders and checks the cloud fell between 0.5 and 3 metres, creates a sand system whose particles live 0.1 s and checks all are gone after 0.2 s, that <code>Clear</code> and <code>Destroy</code> work and that a destroyed handle is dead, then shuts the backend down with a system still alive (it must not crash or hang) and starts a second backend that does not know the old handle. A run that prints <code>[  SKIPPED ]</code> says why (no GPU, no <code>PhysXGpu_64.dll</code>, ...). The full hand-run list, including a scene with a PhysX particle system, is <a href="gpu-particles-checklist.html">the GPU particles checklist</a>.</p>
+
 
 <h2 id="simulation">Emission and simulation <span class="badge">PR #125</span></h2>
 <ul>
@@ -199,7 +257,7 @@ ps:Stop()          -- no new ones; the flying ones finish
 <p class="src">Source: <code>engine/src/particles/ParticleBillboards.cpp</code>, <code>engine/include/engine/rendering/RenderCamera.hpp</code>, <code>ParticleSystem::RenderInQueue</code>; tests: <code>ParticleBillboardsTest.*</code>, <code>ParticleRendererTest.*</code> (<code>tests/engine/rendering/ParticleRendererTests.cpp</code>), <code>SoftwareParticlesGoldenTest.*</code></p>
 
 <h2 id="health">The Particles health row <span class="badge">PR #125</span></h2>
-<p>The <code>Particles</code> row of <a href="logging-and-editor.html">engine health</a> keeps the state the GPU probe gave it (<code>Disabled</code> with the reason when <code>physics.gpu</code> is off or no GPU works, <code>Running</code> when the GPU scene is up, <code>Failed</code> only for <code>physics.gpu=on</code> with a failed probe). Once <code>ParticleSystem</code> components are running, its detail also says which backends they use, for example <code>physics.gpu is off; ParticleSystems: 2 CPU</code>. With none running the row is exactly what the probe made. The editor protocol already carries the row as a generic <code>SubsystemStatus</code>, so nothing changes there.</p>
+<p>The <code>Particles</code> row of <a href="logging-and-editor.html">engine health</a> follows the physics backend's GPU status (<code>Disabled</code> with the reason when <code>physics.gpu</code> is off or no GPU works, <code>Running</code> with the detail <code>PhysX GPU: &lt;device&gt; (CUDA device N)</code> when the GPU scene and its particle backend are up, <code>Failed</code> only for <code>physics.gpu=on</code> with a failed probe or particle backend) <span class="badge">PR #129</span>; it is read again when health is asked for, so a GPU that stops working for particles shows as Disabled. Once <code>ParticleSystem</code> components are running, its detail also says which backends they use, for example <code>physics.gpu is off; ParticleSystems: 2 CPU</code>. With none running the row is exactly what the probe made. The editor protocol already carries the row as a generic <code>SubsystemStatus</code>, so nothing changes there.</p>
 <p class="src">Source: <code>Application::GetHealth</code>, <code>Particles::ParticleUsage</code>; tests: <code>ParticleHealthDetailTest.*</code>, <code>ParticleUsageTest.*</code>, <code>ParticleBackendSelectionTest.*</code></p>
 
 <h2 id="lua">Lua</h2>
@@ -211,6 +269,7 @@ ps:Stop()          -- no new ones; the flying ones finish
 <tr><td><code>Play()</code>, <code>Stop()</code>, <code>Clear()</code>, <code>EmitBurst(n)</code>, <code>IsPlaying()</code></td><td>Control, as in <a href="#component">the component</a>.</td></tr>
 <tr><td><code>GetAliveCount()</code>, <code>GetActiveBackend()</code></td><td>Living particles; <code>"CPU"</code> or <code>"PhysX"</code>, nil until the system has started.</td></tr>
 <tr><td><code>SetBackend(name)</code> / <code>GetBackend()</code></td><td><code>"Auto"</code>, <code>"PhysX"</code> or <code>"CPU"</code> (what was asked for).</td></tr>
+<tr><td><code>SetPbdMaterial(name)</code> / <code>GetPbdMaterial()</code> <span class="badge">PR #129</span></td><td><code>"Water"</code>, <code>"Sand"</code> or <code>"Smoke"</code>: the PhysX backend's material preset, read when the system starts.</td></tr>
 <tr><td><code>SetPlayOnAwake</code>, <code>SetMaxParticles</code>, <code>SetSeed</code></td><td>With their getters. The last two are read when the system starts.</td></tr>
 <tr><td><code>SetEmissionRate</code>, <code>SetBurstCount</code>, <code>SetShape(name)</code>, <code>SetShapeRadius</code>, <code>SetConeAngle</code></td><td>Emission, with getters. Shapes: <code>"Cone"</code>, <code>"Sphere"</code>.</td></tr>
 <tr><td><code>SetLifetime(min, max)</code>, <code>SetSpeed(min, max)</code>, <code>SetSize(start, end)</code></td><td>Ranges and over-life values.</td></tr>
@@ -229,14 +288,16 @@ ps:Stop()          -- no new ones; the flying ones finish
 <li>Component tests: registration and reflection, save and load, play/stop/clear/burst, the cap warning, the fallback warning, a fake GPU backend through the seam, an outliving physics backend, pause.</li>
 <li>Drawing: a recording renderer (draw count, state, in-place updates, resource release) and golden images on the headless software renderer (colour, position, camera-facing, colour and size by age).</li>
 <li>A headless <code>Application::Tick</code> run with the software renderer and no physics backend, including drawing a frame and leaving the scene (<code>ParticleHeadlessTest.*</code>).</li>
+<li>The PhysX backend's logic against a fake driver and fake device, on every leg <span class="badge">PR #129</span> (<code>PbdParticleBackendTest.*</code>, <code>tests/engine/particles/PbdParticleBackendTests.cpp</code>): creation and the preset's material, spawn into the mirror and its upload, the cap and a burst larger than it, read-back after a step, spawning after a step not reverting the living, ageing and swap-last compaction, expiry making room, Clear and Destroy, the presets and the gravity and drag mapping, <code>SetParams</code> changing the material only when it differs, generation-counted handles (two backends, a recreated backend at the same address, the CPU backend's handles), and the soft failure paths (refused system, failed upload, failed read-back, a too small mirror). Component tests cover a recreated backend at the same address, a refused system falling back to the CPU, and the <code>pbdMaterial</code> field.</li>
 </ul>
 <div class="callout open-question">
 <p class="callout-title">Not verified in CI</p>
-<p>Particles drawn by the OpenGL renderer on a real GPU (CI has none; the OpenGL draw path is the same <code>UpdateMesh</code> and <code>DrawMesh</code> calls as text, plus the additive blend function). The Vulkan renderer, which is still stubs. The PhysX GPU backend itself is a later change.</p>
+<p>Particles drawn by the OpenGL renderer on a real GPU (CI has none; the OpenGL draw path is the same <code>UpdateMesh</code> and <code>DrawMesh</code> calls as text, plus the additive blend function). The Vulkan renderer, which is still stubs.</p>
+<p>Everything in the real PhysX driver, which needs a CUDA context: it is compiled on the Windows legs but never run in CI. In particular, from memory of PhysX 5.6.1 and not confirmed by a run: that the buffer's position, velocity and phase pointers are device pointers that a plain host-to-device copy plus <code>raiseFlags</code> updates; that the solver keeps particles in buffer order (the host ages by slot); that <code>setNbActiveParticles</code> and the flags may be set between steps; the order the buffer, system, scene actor and material are released in; the solver offsets and maximum velocity, copied from the PBF snippet's pattern; and that the presets look like water, sand and smoke at all. The GPU test and the <a href="gpu-particles-checklist.html">checklist</a> are what check them, on a PC with a GPU.</p>
 </div>
 
 <div class="page-footer">
-<span>Describes master through PR #34.</span>
+<span>Describes master through PR #34, with the PhysX GPU backend of PR #129.</span>
 <a href="index.html">Back to overview</a>
 </div>
 

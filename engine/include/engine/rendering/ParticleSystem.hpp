@@ -50,8 +50,12 @@ namespace N2Engine::Rendering
      * away. See docs/particles.html.
      *
      * Simulation: a ParticleSystem gets its particles simulated by an IParticleBackend, chosen by `backend`
-     * when the component attaches (Auto, PhysX or CPU, see Particles::SelectParticleBackend). Today that is the
-     * CPU backend everywhere: Auto uses it quietly, PhysX uses it with one warning. The emitter (rate, burst,
+     * when the component attaches (Auto, PhysX or CPU, see Particles::SelectParticleBackend). That is the CPU
+     * backend unless the physics backend has a PhysX GPU particle backend (physics.gpu is auto or on and the GPU
+     * works): Auto then uses the GPU one and otherwise the CPU one quietly, PhysX the GPU one and otherwise the CPU one
+     * with one warning. A system on the GPU backend whose backend is replaced or recreated (its handle's generation
+     * no longer matches the backend's) restarts on the CPU with one warning; with the physics backend removed
+     * entirely it is inert. The emitter (rate, burst,
      * shape, speed) lives in the component and runs in OnFixedUpdate, once per fixed step, so a system emits and
      * moves the same particles whatever the frame rate; the same seed gives the same particles. Particles are
      * simulated in world space: moving the object moves where new ones start, not those already flying.
@@ -128,6 +132,9 @@ namespace N2Engine::Rendering
         int maxParticles = 1000;
         /// Seeds the random choices: the same seed gives the same particles
         int seed = 1;
+        /// What the particles are made of on the PhysX backend (water, sand or smoke: a set of PBD material
+        /// parameters); the CPU backend ignores it. Read when the system starts.
+        Physics::ParticleMaterial pbdMaterial = Physics::ParticleMaterial::Water;
 
         // Emission
         /// Particles per second while playing
@@ -188,7 +195,6 @@ namespace N2Engine::Rendering
         std::unique_ptr<Particles::CpuParticleBackend> _cpuBackend; // owned when the CPU backend is the one in use
         Physics::ParticleSystemHandle _handle = Physics::kInvalidParticleSystem;
         bool _usingGpu = false;
-        Physics::IParticleBackend *_gpuOwner = nullptr; // the particle backend instance _handle belongs to; identity only
         Particles::ParticleEmitter _emitter;
         bool _playing = false;
         int _pendingBurst = 0; // asked for before the system started
