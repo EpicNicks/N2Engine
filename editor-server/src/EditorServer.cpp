@@ -2995,8 +2995,10 @@ namespace N2Engine::Editor
         const std::string clientName = SanitizeForLog(cmd.clientName);
         const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
         // Only a well formed user name is logged: the field is client text, and a client that put its token (or anything
-        // else) there must not see it in a durable log
-        const std::string claimedUser = IsValidTokenUserName(cmd.user) ? cmd.user : std::string{};
+        // else) there must not see it in a durable log. A token can be a well formed name too (a generated one is 64 hex
+        // digits), so a user field that is the token the Hello carries is never logged either.
+        const std::string claimedUser =
+            IsValidTokenUserName(cmd.user) && cmd.user != cmd.token ? cmd.user : std::string{};
         const std::string peerSuffix = PeerSuffix();
         _helloTokenRefused = false;
         BufferWriter response;
