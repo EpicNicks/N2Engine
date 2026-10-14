@@ -26,7 +26,7 @@ namespace N2Engine::Particles
         if (requested == ParticleBackend::PhysX)
         {
             selection.fellBack = true;
-            const std::string detail = physics ? physics->GetGpuStatus().detail : "there is no physics backend";
+            const std::string detail = physics ? physics->GetParticlesGpuStatus().detail : "there is no physics backend";
             selection.reason = std::format(
                 "ParticleSystem backend is PhysX, but no PhysX GPU particle backend is available ({}); "
                 "using the CPU backend",

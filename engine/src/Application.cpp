@@ -232,17 +232,20 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         audioStatus.detail = "Could not open an audio device (see log)";
     }
 
-    // The particle row follows the physics GPU probe: Disabled with the reason unless the GPU scene is up
+    // The Particles and SoftBodies rows follow the physics GPU probe: Disabled with the reason unless the GPU scene
+    // is up (and, for each, its own feature has not failed)
+    const Physics::GpuStatus noBackendGpu{gpuMode == Physics::GpuMode::Off ? Physics::GpuState::Disabled
+                                                                           : Physics::GpuState::Unavailable,
+                                          gpuMode == Physics::GpuMode::Off
+                                              ? "physics.gpu is off"
+                                              : "GPU physics unavailable: there is no physics backend (see Physics)"};
     const SubsystemStatus particlesStatus = Physics::MakeParticlesStatus(
-        _3DphysicsBackend
-            ? _3DphysicsBackend->GetGpuStatus()
-            : Physics::GpuStatus{gpuMode == Physics::GpuMode::Off ? Physics::GpuState::Disabled
-                                                                    : Physics::GpuState::Unavailable,
-                                 gpuMode == Physics::GpuMode::Off
-                                     ? "physics.gpu is off"
-                                     : "GPU physics unavailable: there is no physics backend (see Physics)"});
+        _3DphysicsBackend ? _3DphysicsBackend->GetParticlesGpuStatus() : noBackendGpu);
+    const SubsystemStatus softBodiesStatus = Physics::MakeSoftBodiesStatus(
+        _3DphysicsBackend ? _3DphysicsBackend->GetSoftBodiesGpuStatus() : noBackendGpu);
 
-    _health.subsystems = {windowStatus, rendererStatus, physicsStatus, particlesStatus, audioStatus, scriptingStatus};
+    _health.subsystems = {windowStatus,    rendererStatus, physicsStatus, particlesStatus,
+                          softBodiesStatus, audioStatus,   scriptingStatus};
     _particlesBaseDetail = particlesStatus.detail;
     for (const SubsystemStatus &status : _health.subsystems)
     {
@@ -467,20 +470,28 @@ void Application::PhysicsUpdate(const Scene &scene) const
 
 const EngineHealth& Application::GetHealth() const
 {
-    // The row's state is the physics backend's GPU status as it is now (Disabled, Running, Failed): a GPU that
-    // stopped working for particles after Init (the PhysX backend gave up on its GPU particle backend) shows here.
-    // Its detail names the backends the live ParticleSystems use; without any it is the status's own detail.
+    // Each row's state is the physics backend's status for that feature as it is now (Disabled, Running, Failed):
+    // a GPU that stopped working for particles after Init (the PhysX backend gave up on its GPU particle backend)
+    // shows on the Particles row and only there; the SoftBodies row has its own failure state.
+    // The Particles detail names the backends the live ParticleSystems use; without any it is the status's own detail.
     if (auto it = std::ranges::find(_health.subsystems, std::string_view("Particles"), &SubsystemStatus::name);
         it != _health.subsystems.end())
     {
         std::string baseDetail = _particlesBaseDetail;
         if (_3DphysicsBackend)
         {
-            const SubsystemStatus current = Physics::MakeParticlesStatus(_3DphysicsBackend->GetGpuStatus());
+            const SubsystemStatus current = Physics::MakeParticlesStatus(_3DphysicsBackend->GetParticlesGpuStatus());
             it->state = current.state;
             baseDetail = current.detail;
         }
         it->detail = Particles::ParticleUsage::Compose(baseDetail);
+    }
+    if (auto it = std::ranges::find(_health.subsystems, std::string_view("SoftBodies"), &SubsystemStatus::name);
+        it != _health.subsystems.end() && _3DphysicsBackend)
+    {
+        const SubsystemStatus current = Physics::MakeSoftBodiesStatus(_3DphysicsBackend->GetSoftBodiesGpuStatus());
+        it->state = current.state;
+        it->detail = current.detail;
     }
     return _health;
 }

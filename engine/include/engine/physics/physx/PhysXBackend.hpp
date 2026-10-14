@@ -7,6 +7,7 @@
 #include <functional>
 #include <algorithm>
 #include <memory>
+#include <optional>
 
 #ifdef N2ENGINE_PHYSX_ENABLED
 #include <PxSimulationEventCallback.h>
@@ -69,7 +70,20 @@ namespace N2Engine::Physics
         ~PhysXBackend() override;
 
         void SetGpuMode(GpuMode mode) override { _gpuMode = mode; }
+        /// The scene (probe) status only: a particle or soft-body failure is kept apart (below), so this stays Ready
+        /// while the GPU scene runs and Physics.IsGpuAvailable does not flip when one feature gives up
         [[nodiscard]] GpuStatus GetGpuStatus() const override { return _gpuStatus; }
+        /// The scene status, or this feature's own failure when the scene is Ready (see ComposeFeatureGpuStatus)
+        [[nodiscard]] GpuStatus GetParticlesGpuStatus() const override
+        {
+            return ComposeFeatureGpuStatus(_gpuStatus, _particlesFailure);
+        }
+        /// As GetParticlesGpuStatus, for soft bodies. There is no PhysX soft-body backend yet, so a Ready scene
+        /// reports Unavailable here (see ComposeSoftBodiesGpuStatus).
+        [[nodiscard]] GpuStatus GetSoftBodiesGpuStatus() const override
+        {
+            return ComposeSoftBodiesGpuStatus(_gpuStatus, _softBodiesFailure, false);
+        }
 
         bool Initialize() override;
         void Update(float deltaTime) override;
@@ -202,6 +216,11 @@ namespace N2Engine::Physics
         // Outside the PhysX guard so the inline GetGpuStatus compiles without PhysX too
         GpuMode _gpuMode = GpuMode::Off;
         GpuStatus _gpuStatus{GpuState::Disabled, "physics.gpu is off"};
+        // Per-feature failure state, apart from the scene status above: set when a feature that runs in the GPU
+        // scene gives up (Failed with physics.gpu=on, else Unavailable), cleared by Initialize. The feature's health
+        // row is the scene status with its own failure on top; no feature's failure touches another's or the scene's.
+        std::optional<GpuStatus> _particlesFailure;
+        std::optional<GpuStatus> _softBodiesFailure;
 
     public:
 #ifdef N2ENGINE_PHYSX_ENABLED
@@ -215,6 +234,11 @@ namespace N2Engine::Physics
         /// (PollParticleFailure / FailParticles) can run without a GPU. Needs an initialised backend that has no
         /// particle backend yet; returns false (and does nothing) otherwise.
         bool InstallParticleDriverForTesting(std::unique_ptr<Particles::IPbdDriver> driver);
+        /// Records that the soft-body feature stopped working (or never could): Failed (physics.gpu=on) or
+        /// Unavailable (auto) on the SoftBodies status only, one warning. The scene status, the particle backend and
+        /// the Particles row are untouched. The PhysX soft-body backend (a later stage) calls it when its GPU work
+        /// fails; the tests call it directly, as there is no such backend yet.
+        void FailSoftBodies(const std::string& reason);
         /// For tests: the scene has eENABLE_GPU_DYNAMICS set
         [[nodiscard]] bool SceneUsesGpuDynamics() const;
         /// For tests: the scene's broad phase is the GPU one
@@ -254,8 +278,9 @@ namespace N2Engine::Physics
         void FailGpu(const std::string& reason);
 
         std::unique_ptr<Particles::PbdParticleBackend> _particles; // only on a GPU scene
-        /// The particle backend stopped working (or never could): drops its systems, sets the status to Failed
-        /// (physics.gpu=on) or Unavailable (auto) and logs one warning. The GPU scene itself keeps running.
+        /// The particle backend stopped working (or never could): drops its systems, sets the PARTICLES failure
+        /// (Failed with physics.gpu=on, Unavailable with auto) and logs one warning. The scene status and the
+        /// GPU scene itself keep going.
         void FailParticles(const std::string& reason);
         /// Drops the particle backend (once) if it has failed, as FailParticles
         void PollParticleFailure();

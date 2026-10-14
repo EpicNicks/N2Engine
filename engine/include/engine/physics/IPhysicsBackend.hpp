@@ -12,6 +12,7 @@
 namespace N2Engine::Physics
 {
     class IParticleBackend;
+    class ISoftBodyBackend;
     class Rigidbody;
     class ICollider;
     struct RaycastHit;
@@ -25,16 +26,33 @@ namespace N2Engine::Physics
         /// physics.gpu: call before Initialize (the scene is built there and its GPU flag is immutable). A backend
         /// without GPU support ignores it.
         virtual void SetGpuMode(GpuMode) {}
-        /// What Initialize made of the GPU request. Disabled for a backend that never asks.
+        /// What Initialize made of the GPU request: the SCENE (and probe) status, Disabled for a backend that never
+        /// asks. It does not change when a feature that runs in the GPU scene (particles, soft bodies) fails, so
+        /// Physics.IsGpuAvailable reflects the scene only; a feature's own status is GetParticlesGpuStatus and
+        /// GetSoftBodiesGpuStatus.
         [[nodiscard]] virtual GpuStatus GetGpuStatus() const
         {
             return {GpuState::Disabled, "This physics backend has no GPU support"};
+        }
+        /// The scene status with the GPU particle backend's own failure on top (see GpuStatus.hpp); the status the
+        /// Particles health row shows. A particle failure never changes the soft-body status.
+        [[nodiscard]] virtual GpuStatus GetParticlesGpuStatus() const { return GetGpuStatus(); }
+        /// The scene status with the GPU soft-body backend's own failure on top; the status the SoftBodies health
+        /// row shows. A soft-body failure never changes the particle status.
+        [[nodiscard]] virtual GpuStatus GetSoftBodiesGpuStatus() const
+        {
+            return ComposeSoftBodiesGpuStatus(GetGpuStatus(), std::nullopt, false);
         }
 
         /// The GPU particle backend, when this backend runs particles in its own (GPU) scene: nullptr by default and
         /// whenever the GPU scene isn't up. A ParticleSystem with backend Auto or PhysX uses it when it is there and
         /// falls back to the CPU backend otherwise. The backend belongs to this object and is valid until Shutdown.
         [[nodiscard]] virtual IParticleBackend *GetParticleBackend() { return nullptr; }
+
+        /// The GPU soft-body backend, when this backend simulates soft bodies in its own (GPU) scene: nullptr by
+        /// default and for every backend until the PhysX one exists. A SoftBody component then uses its CPU backend.
+        /// The backend belongs to this object and is valid until Shutdown.
+        [[nodiscard]] virtual ISoftBodyBackend *GetSoftBodyBackend() { return nullptr; }
 
         virtual bool Initialize() = 0;
         virtual void Update(float deltaTime) = 0;
