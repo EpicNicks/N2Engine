@@ -803,6 +803,10 @@ namespace N2Engine::Editor
         PeerAddress _peer;
         /// Network thread: one line for each backoff a failed Hello started
         void LogRateLimitOutcome(const RateLimiter::FailureOutcome &outcome, std::string_view user);
+        /// What a log line may say of the user a Hello CLAIMED (client text, never trust it into a durable log): the name
+        /// when it is a user of the CURRENT tokens table, "?" for any other name, "-" when nothing is claimed or the host
+        /// has no named users (--token-env, no authentication). The one place every such log line goes through.
+        [[nodiscard]] std::string LoggableClaimedUser(std::string_view claimed) const;
         // Whether the last Hello (run on the main thread) was refused for its token, as opposed to its version or its
         // shape: the network thread clears it before queueing a Hello and reads it once the command's future is ready
         std::atomic<bool> _helloTokenRefused{false};

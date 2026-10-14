@@ -179,6 +179,19 @@ namespace N2Engine::Editor
             }
             else
             {
+                if ((info.st_mode & (S_IRGRP | S_IROTH)) != 0)
+                {
+                    // An existing file keeps its mode (the operator's choice), but the audit lines name users and
+                    // peers: say so once, on the stream the host logs to. No change of behaviour otherwise.
+                    const int64_t now = SystemClockUnixMilliseconds();
+                    const std::string warning = FormatLogLine(
+                        now, Logger::LogLevel::Warn,
+                        std::format("--log-file: {} is readable by group or others (mode {:04o}); its lines name users "
+                                    "and peers, so chmod it to 0600",
+                                    path, static_cast<unsigned>(info.st_mode & 0777)));
+                    (void)std::fprintf(stderr, "%s\n", warning.c_str());
+                    (void)std::fflush(stderr);
+                }
                 raw = ::fdopen(fd, "a");
                 if (raw == nullptr)
                 {

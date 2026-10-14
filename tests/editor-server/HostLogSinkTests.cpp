@@ -373,6 +373,41 @@ TEST(LogFileTest, ANewFileIsPrivateOnPosixAndAnExistingOneKeepsItsMode)
 #endif
 }
 
+TEST(LogFileTest, AnExistingFileThatGroupOrOthersCanReadIsWarnedAboutOnStderr)
+{
+#ifdef _WIN32
+    GTEST_SKIP() << "file permissions aren't checked on Windows (ACLs)";
+#else
+    const TempFolder folder;
+    const fs::path readable = folder.Path() / "open.log";
+    {
+        std::ofstream(readable) << "old line\n";
+    }
+    fs::permissions(readable, fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read | fs::perms::others_read,
+                    fs::perm_options::replace);
+    testing::internal::CaptureStderr();
+    {
+        auto output = OpenLogFileOutput(readable.string());
+        ASSERT_TRUE(output.has_value()) << output.error();
+    }
+    const std::string warned = testing::internal::GetCapturedStderr();
+    EXPECT_NE(warned.find(" WARN --log-file: " + readable.string() + " is readable by group or others (mode 0644)"),
+              std::string::npos)
+        << warned;
+    EXPECT_EQ(fs::status(readable).permissions() & fs::perms::others_read, fs::perms::others_read)
+        << "the mode is still the operator's choice";
+
+    // A private file, and a file this made, say nothing
+    const fs::path priv = folder.Path() / "private.log";
+    testing::internal::CaptureStderr();
+    {
+        auto output = OpenLogFileOutput(priv.string());
+        ASSERT_TRUE(output.has_value()) << output.error();
+    }
+    EXPECT_EQ(testing::internal::GetCapturedStderr(), "");
+#endif
+}
+
 TEST(LogFileTest, APathThatCannotBeOpenedIsRefusedWithTheReason)
 {
     const TempFolder folder;
@@ -819,6 +854,78 @@ TEST(LogSinkServerTest, ATokensFileHostLogsTheUserAndTheReloadAndNeitherTokenNor
     std::vector<std::string> secrets;
     AddSecretsOf(secrets, FakeToken);
     AddSecretsOf(secrets, alice->token);
+    secrets.emplace_back("FAKE-TOKEN");
+    host.ExpectNoSecrets(secrets);
+}
+
+TEST(LogSinkServerTest, ATokenEnvHostNeverLogsAClaimedUser)
+{
+    SinkHost host;
+    ASSERT_TRUE(host.server.SetAccessToken(RealToken));
+    ASSERT_TRUE(host.server.Start(0));
+
+    // No named users: whatever the client claims, even a well formed name, is user=-
+    ASSERT_TRUE(host.Hello(FakeToken, std::string("alice")).has_value());
+    ASSERT_TRUE(host.Hello(FakeToken, std::string("mallory")).has_value());
+    EXPECT_EQ(host.captured.Count("Refused Hello"), 2u);
+    EXPECT_EQ(host.captured.Count("(user=- role=none)"), 2u);
+    EXPECT_FALSE(host.captured.Has("user=alice"));
+    EXPECT_FALSE(host.captured.Has("user=mallory"));
+}
+
+TEST(LogSinkServerTest, ATokensFileHostLogsOnlyKnownUsersByNameAndNeverATokenPastedInTheUserField)
+{
+    if (!EditorTlsServer::IsAvailable())
+    {
+        GTEST_SKIP() << "a tokens file needs the TLS library's SHA-256 (N2ENGINE_EDITOR_TLS)";
+    }
+    const TempFolder folder;
+    const fs::path file = folder.Path() / "tokens.json";
+    const auto alice = GenerateToken("alice", TokenRole::Admin);
+    ASSERT_TRUE(alice.has_value()) << alice.error();
+    {
+        std::ofstream out(file, std::ios::binary);
+        out << "[\n" << alice->entryLine << "\n]\n";
+    }
+#ifndef _WIN32
+    fs::permissions(file, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
+#endif
+    // Another well formed secret (64 hex digits, a valid user name) that isn't the token of the same Hello
+    const std::string otherSecret(64, 'b');
+
+    SinkHost host;
+    ASSERT_TRUE(host.server.SetTokensFile(file.string()));
+    ASSERT_TRUE(host.server.Start(0));
+
+    // Three refused Hellos whose user field is a real token: the third starts a backoff for that name, whose line
+    // must not repeat it either
+    for (int i = 0; i < 3; ++i)
+    {
+        const auto refused = host.Hello(FakeToken, alice->token);
+        ASSERT_TRUE(refused.has_value()) << i;
+        EXPECT_EQ(refused->type, ErrorType) << i;
+    }
+    ASSERT_TRUE(PumpUntilCaptured(host.server, host.captured, "Rate limit: user=? is backed off for"));
+
+    // A different valid-looking secret in the user field, and a name that is just not in the table
+    host.Advance(std::chrono::minutes(10));
+    ASSERT_TRUE(host.Hello(FakeToken, otherSecret).has_value());
+    host.Advance(std::chrono::minutes(10));
+    ASSERT_TRUE(host.Hello(alice->token, alice->token).has_value());
+    host.Advance(std::chrono::minutes(10));
+    ASSERT_TRUE(host.Hello(FakeToken, std::string("mallory")).has_value());
+    host.Advance(std::chrono::minutes(10));
+    EXPECT_EQ(host.captured.Count("Refused Hello from editor client 'sink test' (user=? role=none)"), 6u);
+    EXPECT_FALSE(host.captured.Has("user=mallory"));
+
+    // A known user is still named
+    ASSERT_TRUE(host.Hello(FakeToken, std::string("alice")).has_value());
+    EXPECT_TRUE(host.captured.Has("Refused Hello from editor client 'sink test' (user=alice role=none)"));
+
+    std::vector<std::string> secrets;
+    AddSecretsOf(secrets, FakeToken);
+    AddSecretsOf(secrets, alice->token);
+    AddSecretsOf(secrets, otherSecret);
     secrets.emplace_back("FAKE-TOKEN");
     host.ExpectNoSecrets(secrets);
 }

@@ -1908,6 +1908,20 @@ namespace N2Engine::Editor
         _peerText = std::move(text);
     }
 
+    std::string EditorServer::LoggableClaimedUser(const std::string_view claimed) const
+    {
+        if (claimed.empty() || !HasTokensFile())
+        {
+            return "-";
+        }
+        const std::shared_ptr<const TokenTable> tokens = CurrentTokens();
+        if (tokens && tokens->Find(claimed) != nullptr)
+        {
+            return std::string{claimed};
+        }
+        return "?";
+    }
+
     void EditorServer::LogRateLimitOutcome(const RateLimiter::FailureOutcome &outcome, const std::string_view user)
     {
         // One line per backoff that starts, never per refused connection; no token, only the peer and the user's name
@@ -1929,7 +1943,7 @@ namespace N2Engine::Editor
         {
             PostLog(std::format("Rate limit: user={} is backed off for {} ms after {} failed Hellos naming it, from any "
                                 "address; a Hello naming it is refused until then (last from peer={})",
-                                user, outcome.user->duration.count(), outcome.user->failures,
+                                LoggableClaimedUser(user), outcome.user->duration.count(), outcome.user->failures,
                                 _peer.ToString()),
                     true);
         }
@@ -2994,11 +3008,10 @@ namespace N2Engine::Editor
         // Client-supplied text only reaches the log, or the Error, sanitised and shortened; the token never does
         const std::string clientName = SanitizeForLog(cmd.clientName);
         const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
-        // Only a well formed user name is logged: the field is client text, and a client that put its token (or anything
-        // else) there must not see it in a durable log. A token can be a well formed name too (a generated one is 64 hex
-        // digits), so a user field that is the token the Hello carries is never logged either.
-        const std::string claimedUser =
-            IsValidTokenUserName(cmd.user) && cmd.user != cmd.token ? cmd.user : std::string{};
+        // The claimed user is client text, and a client that put its token (a generated one is a well formed user name
+        // too) or anything else there must not see it in a durable log: it is logged only when it is a user of the
+        // current tokens table, else as user=? (user=- without named users)
+        const std::string claimedUser = LoggableClaimedUser(cmd.user);
         const std::string peerSuffix = PeerSuffix();
         _helloTokenRefused = false;
         BufferWriter response;
@@ -3013,7 +3026,7 @@ namespace N2Engine::Editor
             {
                 _helloTokenRefused = true;
                 Logger::Warn(std::format("Refused Hello from editor client '{}' (user={} role=none): wrong access token{}",
-                                         clientName, claimedUser.empty() ? "-" : claimedUser, peerSuffix));
+                                         clientName, claimedUser, peerSuffix));
                 WriteError(response, "Invalid access token");
                 SendResponse(clientSocket, response.Release());
                 return;
