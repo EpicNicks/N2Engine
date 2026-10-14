@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -96,6 +97,62 @@ namespace N2Engine::Editor
         constexpr int NoSocket = -1;
         // How often a waiting network thread checks whether the server is stopping
         constexpr long PollIntervalMicroseconds = 100 * 1000;
+
+        /// The TCP peer of an accepted socket (getpeername), whichever family the listener produced; Unknown when it
+        /// fails (the peer may already have gone) or isn't IP
+        PeerAddress ReadSocketPeer(const int socket)
+        {
+            sockaddr_storage storage{};
+            socklen_t size = sizeof(storage);
+            if (getpeername(socket, reinterpret_cast<sockaddr *>(&storage), &size) != 0)
+            {
+                return {};
+            }
+            if (storage.ss_family == AF_INET && static_cast<size_t>(size) >= sizeof(sockaddr_in))
+            {
+                sockaddr_in address{};
+                std::memcpy(&address, &storage, sizeof(address));
+                uint8_t bytes[4];
+                std::memcpy(bytes, &address.sin_addr, sizeof(bytes));
+                return PeerAddress::IPv4(bytes[0], bytes[1], bytes[2], bytes[3]);
+            }
+            if (storage.ss_family == AF_INET6 && static_cast<size_t>(size) >= sizeof(sockaddr_in6))
+            {
+                sockaddr_in6 address{};
+                std::memcpy(&address, &storage, sizeof(address));
+                std::array<uint8_t, 16> bytes{};
+                std::memcpy(bytes.data(), &address.sin6_addr, bytes.size());
+                return PeerAddress::IPv6(bytes);
+            }
+            return {};
+        }
+
+        /// The user a Hello payload names, when that is a valid user name (anything else can't be a user of a tokens
+        /// file, so it is nothing to key a backoff on); nullopt for a payload that doesn't parse
+        std::optional<std::string> UserNamedByHello(const std::vector<uint8_t> &payload)
+        {
+            try
+            {
+                BufferReader reader(payload);
+                HelloCmd cmd = HelloCmd::Deserialize(reader);
+                if (IsValidTokenUserName(cmd.user))
+                {
+                    return std::move(cmd.user);
+                }
+            }
+            catch (...)
+            {
+                // A malformed Hello is refused by its handler; it names nobody here
+            }
+            return std::nullopt;
+        }
+
+        /// What a rate-limit line calls a peer: all of loopback is one subject
+        std::string RateLimitSubject(const PeerAddress &peer)
+        {
+            return peer.IsLoopback() ? std::format("loopback (peer={})", peer.ToString())
+                                     : std::format("peer={}", peer.ToString());
+        }
 
         /// A path as UTF-8 text for the wire (string() would throw for characters the code page lacks)
         std::string Utf8(const std::filesystem::path &path)
@@ -1505,6 +1562,13 @@ namespace N2Engine::Editor
                     ? ntohs(boundAddr.sin_port)
                     : port;
 
+        // Every run starts with empty tables; a host with no access token has no failed Hellos, so no limiter
+        _rateLimiter.reset();
+        if (IsRateLimiting())
+        {
+            _rateLimiter.emplace(_rateLimitPolicy, _rateLimitClock);
+        }
+
         _commands.Reopen();
         _running = true;
         _serverThread = std::thread(&EditorServer::ServerLoop, this, _listenSocket);
@@ -1788,6 +1852,89 @@ namespace N2Engine::Editor
         return std::format("forbidden: role {} is not allowed to run {}", TokenRoleName(role), CommandName(commandType));
     }
 
+    bool EditorServer::SetRateLimiting(const bool enabled)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's rate limiting can't change while it is running");
+            return false;
+        }
+        _rateLimiting = enabled;
+        return true;
+    }
+
+    bool EditorServer::SetRateLimitPolicy(const RateLimitPolicy &policy)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's rate limit policy can't change while it is running");
+            return false;
+        }
+        _rateLimitPolicy = policy;
+        return true;
+    }
+
+    bool EditorServer::SetRateLimitClock(RateLimiter::Clock clock)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's rate limit clock can't change while it is running");
+            return false;
+        }
+        _rateLimitClock = std::move(clock);
+        return true;
+    }
+
+    bool EditorServer::SetPeerAddressProvider(PeerAddressProvider provider)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's peer address provider can't change while it is running");
+            return false;
+        }
+        _peerAddressProvider = std::move(provider);
+        return true;
+    }
+
+    std::string EditorServer::PeerSuffix() const
+    {
+        const std::lock_guard lock(_peerMutex);
+        return _peerText.empty() ? std::string{} : " peer=" + _peerText;
+    }
+
+    void EditorServer::SetPeerText(std::string text)
+    {
+        const std::lock_guard lock(_peerMutex);
+        _peerText = std::move(text);
+    }
+
+    void EditorServer::LogRateLimitOutcome(const RateLimiter::FailureOutcome &outcome, const std::string_view user)
+    {
+        // One line per backoff that starts, never per refused connection; no token, only the peer and the user's name
+        if (outcome.address.has_value())
+        {
+            PostLog(std::format("Rate limit: {} is backed off for {} ms after {} failed Hellos; its connections are "
+                                "closed until then", RateLimitSubject(_peer), outcome.address->duration.count(),
+                                outcome.address->failures),
+                    true);
+        }
+        if (outcome.loopback.has_value())
+        {
+            PostLog(std::format("Rate limit: all of loopback is backed off for {} ms after burst {} of failed Hellos "
+                                "(the last from peer={}); its connections are closed until then",
+                                outcome.loopback->duration.count(), outcome.loopback->failures, _peer.ToString()),
+                    true);
+        }
+        if (outcome.user.has_value())
+        {
+            PostLog(std::format("Rate limit: user={} is backed off for {} ms after {} failed Hellos naming it, from any "
+                                "address; a Hello naming it is refused until then (last from peer={})",
+                                user, outcome.user->duration.count(), outcome.user->failures,
+                                _peer.ToString()),
+                    true);
+        }
+    }
+
     bool EditorServer::SetHelloTimeout(std::chrono::milliseconds timeout)
     {
         if (_running || timeout <= std::chrono::milliseconds::zero())
@@ -1885,9 +2032,16 @@ namespace N2Engine::Editor
 
     void EditorServer::ServerLoop(int listenSocket)
     {
+        // A connection closed for its peer's backoff is not worth a line (nor the "Waiting" line it would bring back):
+        // the backoff's start was logged once
+        bool quiet = false;
         while (_running)
         {
-            PostLog("Waiting for editor connection...");
+            if (!quiet)
+            {
+                PostLog("Waiting for editor connection...");
+            }
+            quiet = false;
 
             int clientSocket = NoSocket;
             if (WaitUntilReady(listenSocket, false))
@@ -1904,13 +2058,47 @@ namespace N2Engine::Editor
                 continue;
             }
 
+            // Who connected, before anything costly. A peer that is backed off for failed Hellos is closed right here: no
+            // TLS handshake, no Hello, nothing read from it. One with failures on record gets the shorter budget.
+            _peer = PeerAddress{};
+            try
+            {
+                _peer = _peerAddressProvider ? _peerAddressProvider(clientSocket) : ReadSocketPeer(clientSocket);
+            }
+            catch (...)
+            {
+                // An address nobody could read is Unknown, which is a peer like any other
+            }
+            const std::string peerText = _peer.ToString();
+            std::chrono::milliseconds helloBudget = _helloTimeout;
+            if (_rateLimiter.has_value())
+            {
+                const RateLimiter::Admission admission = _rateLimiter->AdmitConnection(_peer);
+                if (!admission.allowed)
+                {
+                    ++_rateLimitedConnections;
+                    CLOSE_SOCKET(clientSocket);
+                    quiet = true;
+                    continue;
+                }
+                if (admission.suppressed > 0)
+                {
+                    PostLog(std::format("Rate limit: {} may connect again; {} connection(s) were closed during its backoff",
+                                        RateLimitSubject(_peer), admission.suppressed));
+                }
+                if (admission.priorOffender)
+                {
+                    helloBudget = std::min(helloBudget, _rateLimiter->Policy().priorOffenderBudget);
+                }
+            }
+
             // With TLS the connection is secured first, inside the Hello deadline (which counts from here). One that
             // can't be is closed without ever counting as a client or a session, and the loop accepts the next.
             const auto connectedAt = std::chrono::steady_clock::now();
             bool secured = false;
             try
             {
-                secured = BeginTls(clientSocket, connectedAt + _helloTimeout);
+                secured = BeginTls(clientSocket, connectedAt + helloBudget, helloBudget);
             }
             catch (...)
             {
@@ -1929,12 +2117,13 @@ namespace N2Engine::Editor
             ClearIdentity();
             ReloadTokens(false);
 
-            PostLog("Editor connected");
+            SetPeerText(peerText);
+            PostLog("Editor connected peer=" + peerText);
             _clientConnected = true;
             bool sessionOpened = false;
             try
             {
-                HandleClient(clientSocket, sessionOpened, connectedAt);
+                HandleClient(clientSocket, sessionOpened, connectedAt, helloBudget);
             }
             catch (...)
             {
@@ -1947,7 +2136,8 @@ namespace N2Engine::Editor
             _clientConnected = false;
             ClearIdentity();
             _closeConnection.store(false);
-            PostLog("Editor disconnected");
+            PostLog("Editor disconnected peer=" + peerText);
+            SetPeerText({});
             // A group it left open becomes a step (queued: the history is main-thread state)
             (void)_commands.Enqueue([this]
             {
@@ -1968,7 +2158,8 @@ namespace N2Engine::Editor
         }
     }
 
-    bool EditorServer::BeginTls(const int socket, const std::chrono::steady_clock::time_point deadline)
+    bool EditorServer::BeginTls(const int socket, const std::chrono::steady_clock::time_point deadline,
+                                const std::chrono::milliseconds budget)
     {
         if (!_tlsServer)
         {
@@ -1977,7 +2168,7 @@ namespace N2Engine::Editor
         _tlsSession = _tlsServer->NewSession(socket);
         if (!_tlsSession)
         {
-            PostLog("Closing an editor connection: its TLS session couldn't be started", true);
+            PostLog("Closing an editor connection: its TLS session couldn't be started peer=" + _peer.ToString(), true);
             return false;
         }
         _tlsSessionSocket = socket;
@@ -1993,15 +2184,17 @@ namespace N2Engine::Editor
             }
             if (step == TlsStep::Failed)
             {
-                PostLog("Closing an editor connection: its TLS handshake failed: " + _tlsSession->LastError(), true);
+                PostLog("Closing an editor connection: its TLS handshake failed: " + _tlsSession->LastError() +
+                            " peer=" + _peer.ToString(),
+                        true);
                 return false;
             }
             if (!WaitUntilReady(socket, step == TlsStep::WantWrite, deadline))
             {
                 if (_running)
                 {
-                    PostLog(std::format("Closing an editor connection: its TLS handshake didn't finish within {} ms",
-                                        _helloTimeout.count()),
+                    PostLog(std::format("Closing an editor connection: its TLS handshake didn't finish within {} ms peer={}",
+                                        budget.count(), _peer.ToString()),
                             true);
                 }
                 return false;
@@ -2020,7 +2213,8 @@ namespace N2Engine::Editor
     }
 
     void EditorServer::HandleClient(int clientSocket, bool &sessionOpened,
-                                    const std::chrono::steady_clock::time_point connectedAt)
+                                    const std::chrono::steady_clock::time_point connectedAt,
+                                    const std::chrono::milliseconds helloBudget)
     {
         // This connection's session: whether its last Hello succeeded. A new connection starts without one, so a
         // client that reconnects must send Hello again.
@@ -2032,7 +2226,7 @@ namespace N2Engine::Editor
         const bool gated = RequiresAccessToken();
         // Without a token every connection is a session (for SetStopOnDisconnect); with one, from its first good Hello
         sessionOpened = !gated;
-        const auto helloDeadline = connectedAt + _helloTimeout;
+        const auto helloDeadline = connectedAt + helloBudget;
         const auto deadline = [&]() -> std::optional<std::chrono::steady_clock::time_point>
         {
             if (gated && !helloAccepted)
@@ -2041,12 +2235,12 @@ namespace N2Engine::Editor
         };
         const auto closeUnauthorized = [this](const std::string &reason)
         {
-            PostLog("Closing an editor connection that hasn't sent a successful Hello: " + reason, true);
+            PostLog("Closing an editor connection that hasn't sent a successful Hello: " + reason + PeerSuffix(), true);
         };
         const auto logIfHelloTimedOut = [&]
         {
             if (deadline().has_value() && _running && std::chrono::steady_clock::now() >= helloDeadline)
-                closeUnauthorized(std::format("no Hello within {} ms", _helloTimeout.count()));
+                closeUnauthorized(std::format("no Hello within {} ms", helloBudget.count()));
         };
 
         while (_running)
@@ -2118,8 +2312,8 @@ namespace N2Engine::Editor
                     const ConnectionIdentity identity = CurrentIdentity();
                     if (!RoleAllows(identity.role, cmdType))
                     {
-                        PostLog(std::format("audit: denied user={} role={} command={}", identity.user,
-                                            TokenRoleName(identity.role), CommandName(cmdType)),
+                        PostLog(std::format("audit: denied user={} role={} command={}{}", identity.user,
+                                            TokenRoleName(identity.role), CommandName(cmdType), PeerSuffix()),
                                 true);
                         const std::vector<uint8_t> denial =
                             BuildDenial(Protocol::ErrorCodeForbidden, RoleDeniedMessage(identity.role, cmdType));
@@ -2127,8 +2321,8 @@ namespace N2Engine::Editor
                             break;
                         continue;
                     }
-                    PostLog(std::format("audit: user={} role={} command={}", identity.user, TokenRoleName(identity.role),
-                                        CommandName(cmdType)));
+                    PostLog(std::format("audit: user={} role={} command={}{}", identity.user, TokenRoleName(identity.role),
+                                        CommandName(cmdType), PeerSuffix()));
                 }
                 BufferWriter response;
                 WriteOk(response);
@@ -2143,6 +2337,28 @@ namespace N2Engine::Editor
                 });
                 _running = false;
                 break;
+            }
+
+            // A Hello on a host that counts failed ones: who it names is read here, on the network thread, which keeps the
+            // limiter's state its own. A user that is backed off is refused before its token is looked at.
+            const bool isHello = static_cast<CommandType>(cmdType) == CommandType::Hello;
+            const bool rateLimited = gated && isHello && _rateLimiter.has_value();
+            std::optional<std::string> helloUser;
+            if (rateLimited && HasTokensFile())
+            {
+                helloUser = UserNamedByHello(payload);
+                if (helloUser.has_value() && _rateLimiter->IsUserBackedOff(*helloUser))
+                {
+                    BufferWriter response;
+                    WriteError(response, RateLimitedError);
+                    Send(clientSocket, response.Data().data(), response.Size());
+                    break;
+                }
+            }
+
+            if (isHello)
+            {
+                _helloTokenRefused = false;
             }
 
             // Everything else touches engine state, so it runs on the main thread (see ProcessCommands)
@@ -2160,11 +2376,28 @@ namespace N2Engine::Editor
             }
 
             // The session follows the connection's last Hello: a refused one (wrong token or version) ends it
-            const bool isHello = static_cast<CommandType>(cmdType) == CommandType::Hello;
             if (isHello)
             {
                 helloAccepted = !response.empty() && response[0] == static_cast<uint8_t>(ResponseType::ServerInfo);
                 sessionOpened = sessionOpened || helloAccepted;
+            }
+            // The outcome is counted before the answer is sent, so a client that sees the refusal and connects again
+            // meets the backoff it earned
+            if (rateLimited)
+            {
+                if (helloAccepted)
+                {
+                    const ConnectionIdentity identity = CurrentIdentity();
+                    _rateLimiter->RecordSuccess(_peer, HasTokensFile() && !identity.user.empty()
+                                                           ? std::optional<std::string_view>(identity.user)
+                                                           : std::nullopt);
+                }
+                else if (_helloTokenRefused)
+                {
+                    const std::optional<std::string_view> named =
+                        helloUser.has_value() ? std::optional<std::string_view>(*helloUser) : std::nullopt;
+                    LogRateLimitOutcome(_rateLimiter->RecordFailure(_peer, named), helloUser.value_or(std::string{}));
+                }
             }
 
             if (!Send(clientSocket, response.data(), response.size()))
@@ -2521,8 +2754,8 @@ namespace N2Engine::Editor
         // A role may run only what its class of commands allows (default deny, as the read-only gate above)
         if (hasRoles && !RoleAllows(identity.role, commandType))
         {
-            Logger::Warn(std::format("audit: denied user={} role={} command={}", identity.user,
-                                     TokenRoleName(identity.role), CommandName(commandType)));
+            Logger::Warn(std::format("audit: denied user={} role={} command={}{}", identity.user,
+                                     TokenRoleName(identity.role), CommandName(commandType), PeerSuffix()));
             SendResponse(clientSocket,
                          BuildDenial(Protocol::ErrorCodeForbidden, RoleDeniedMessage(identity.role, commandType)));
             return;
@@ -2542,8 +2775,8 @@ namespace N2Engine::Editor
             const std::optional<CommandClass> commandClass = ClassifyCommand(commandType);
             if (commandClass.has_value() && *commandClass != CommandClass::Read)
             {
-                Logger::Info(std::format("audit: user={} role={} command={}", identity.user, TokenRoleName(identity.role),
-                                         CommandName(commandType)));
+                Logger::Info(std::format("audit: user={} role={} command={}{}", identity.user, TokenRoleName(identity.role),
+                                         CommandName(commandType), PeerSuffix()));
             }
         }
 
@@ -2762,6 +2995,8 @@ namespace N2Engine::Editor
         const std::string clientName = SanitizeForLog(cmd.clientName);
         const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
         const std::string claimedUser = SanitizeForLog(cmd.user, MaxTokenUserLength);
+        const std::string peerSuffix = PeerSuffix();
+        _helloTokenRefused = false;
         BufferWriter response;
 
         // The token first, so a client without it learns nothing else. A wrong user and a wrong token are the same
@@ -2772,8 +3007,9 @@ namespace N2Engine::Editor
             const std::optional<ConnectionIdentity> matched = Authenticate(cmd.token, cmd.user);
             if (!matched)
             {
-                Logger::Warn(std::format("Refused Hello from editor client '{}' (user={} role=none): wrong access token",
-                                         clientName, claimedUser.empty() ? "-" : claimedUser));
+                _helloTokenRefused = true;
+                Logger::Warn(std::format("Refused Hello from editor client '{}' (user={} role=none): wrong access token{}",
+                                         clientName, claimedUser.empty() ? "-" : claimedUser, peerSuffix));
                 WriteError(response, "Invalid access token");
                 SendResponse(clientSocket, response.Release());
                 return;
@@ -2798,7 +3034,8 @@ namespace N2Engine::Editor
                                   "must match)", ProtocolVersion, clientVersionText)
                     : std::format("Invalid protocol version '{}' (expected major.minor.patch; this server speaks {})",
                                   clientVersionText, ProtocolVersion);
-            Logger::Warn("Refused Hello from editor client '" + clientName + "'" + whoInParentheses + ": " + message);
+            Logger::Warn("Refused Hello from editor client '" + clientName + "'" + whoInParentheses + ": " + message +
+                         peerSuffix);
             WriteError(response, message);
             SendResponse(clientSocket, response.Release());
             return;
@@ -2808,13 +3045,13 @@ namespace N2Engine::Editor
         {
             // Compatible, but one side has commands the other doesn't: those fail with "Unknown command"
             Logger::Warn(std::format("Editor client '{}' said Hello with protocol {}, this server speaks {}: commands "
-                                     "only one of them knows will fail{}", clientName, clientVersionText, ProtocolVersion,
-                                     whoAtEnd));
+                                     "only one of them knows will fail{}{}", clientName, clientVersionText, ProtocolVersion,
+                                     whoAtEnd, peerSuffix));
         }
         else
         {
-            Logger::Info(std::format("Editor client '{}' said Hello (protocol {}){}", clientName, clientVersionText,
-                                     whoAtEnd));
+            Logger::Info(std::format("Editor client '{}' said Hello (protocol {}){}{}", clientName, clientVersionText,
+                                     whoAtEnd, peerSuffix));
         }
         // A new session: a group the last one left open is ended, and the keys it held (a play host's) go up
         CloseEditGroups();

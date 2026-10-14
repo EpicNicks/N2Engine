@@ -425,6 +425,21 @@ namespace N2Engine::Editor
                 // The fingerprint is public (it is in the ready line); the key and the token never reach a log
                 Logger::Info("Serving TLS; certificate SHA-256 " + server.TlsFingerprint());
             }
+            if (options.noRateLimit)
+            {
+                (void)server.SetRateLimiting(false);
+                if (server.RequiresAccessToken())
+                {
+                    Logger::Warn("Failed-Hello rate limiting is off (--no-rate-limit): wrong tokens can be tried as fast "
+                                 "as the host can answer, and each costs it up to the Hello timeout");
+                }
+            }
+            else if (server.RequiresAccessToken())
+            {
+                Logger::Info("Failed-Hello rate limiting is on: an address that fails 3 Hellos is backed off (1 s, doubling "
+                             "to 5 min) and closed at accept; loopback shares one backoff; users in a tokens file have one "
+                             "of up to 30 s");
+            }
             if (options.readOnly)
             {
                 (void)server.SetReadOnly(true);

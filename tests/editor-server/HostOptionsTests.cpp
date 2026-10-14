@@ -455,6 +455,27 @@ TEST(HostOptionsTest, TlsIsAFlagAndOffByDefault)
     EXPECT_TRUE(last->tls);
 }
 
+// ==================== --no-rate-limit ====================
+
+TEST(HostOptionsTest, NoRateLimitIsAFlagAndOffByDefault)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults) << defaults.error();
+    EXPECT_FALSE(defaults->noRateLimit) << "rate limiting is on unless it is turned off";
+
+    const auto parsed = ParseHostArguments({"--no-rate-limit", "--port", "1234", "--token-env", "N2_TOKEN"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->noRateLimit);
+    EXPECT_EQ(parsed->port, 1234);
+    EXPECT_EQ(parsed->tokenEnv, "N2_TOKEN");
+
+    const auto last = ParseHostArguments({"--port", "1234", "--no-rate-limit"});
+    ASSERT_TRUE(last) << last.error();
+    EXPECT_TRUE(last->noRateLimit);
+
+    EXPECT_NE(HostUsage().find("--no-rate-limit"), std::string_view::npos);
+}
+
 // ==================== --read-only ====================
 
 TEST(HostOptionsTest, ReadOnlyIsAFlagAndOffByDefault)

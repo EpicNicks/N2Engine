@@ -28,6 +28,7 @@
 #include "editor-server/EditorCamera.hpp"
 #include "editor-server/EventRing.hpp"
 #include "editor-server/FrameTracker.hpp"
+#include "editor-server/RateLimiter.hpp"
 #include "editor-server/TokenTable.hpp"
 
 namespace Renderer::Common
@@ -203,6 +204,34 @@ namespace N2Engine::Editor
         /// Before Start, like SetAccessToken; false, changing nothing, while running (or for a non-positive timeout)
         bool SetHelloTimeout(std::chrono::milliseconds timeout);
         [[nodiscard]] std::chrono::milliseconds GetHelloTimeout() const { return _helloTimeout; }
+
+        // ==================== Failed-Hello rate limiting ====================
+
+        /**
+         * A host with an access token (SetAccessToken, SetTokensFile) backs off a peer that sends failed Hellos (see
+         * RateLimiter for the rules): a backed-off address is accepted and closed at once, before its TLS handshake, and
+         * an address with failures on record gets a shorter handshake-and-Hello budget. Loopback peers are exempt from
+         * per-address backoff but share one global one, and (with a tokens file) a backoff per user named in Hello keeps
+         * failures from anywhere off that user. On by default; a host without an access token has no failed Hellos, so
+         * nothing is tracked and nothing changes. All of this state is the network thread's.
+         *
+         * Each setter is before Start, like SetAccessToken: false, changing nothing, while running.
+         */
+        bool SetRateLimiting(bool enabled);
+        /// Whether a failed Hello is counted: rate limiting is on and the host has an access token
+        [[nodiscard]] bool IsRateLimiting() const { return _rateLimiting && RequiresAccessToken(); }
+        /// The thresholds and backoffs (RateLimitPolicy's defaults are the ones documented); mostly for tests
+        bool SetRateLimitPolicy(const RateLimitPolicy &policy);
+        /// The time the rate limiter reads (the real steady clock when unset), so a test can move it without sleeping
+        bool SetRateLimitClock(RateLimiter::Clock clock);
+        /// How the network thread learns who connected: given the accepted socket, the TCP peer's address. The default
+        /// is getpeername; a test sets one to give connections made on loopback other addresses.
+        using PeerAddressProvider = std::function<PeerAddress(int socket)>;
+        bool SetPeerAddressProvider(PeerAddressProvider provider);
+        /// Connections closed at accept because their peer was backed off (any thread), since the server was built
+        [[nodiscard]] uint64_t RateLimitedConnections() const { return _rateLimitedConnections.load(); }
+        /// What a Hello naming a backed-off user is answered with (a plain Error: the protocol has no code for it)
+        static constexpr const char *RateLimitedError = "Too many failed attempts: try again later";
 
         /// Before Start, like SetAccessToken (false, changing nothing, while running): when set, the server stops (as
         /// on a Shutdown command, so IsRunning() turns false) once a client's session ends, i.e. its connection
@@ -532,7 +561,8 @@ namespace N2Engine::Editor
         /// session: at once without an access token, at its first successful Hello with one.
         /// connectedAt: when the connection was accepted, which the Hello deadline counts from (the TLS handshake
         /// comes first and shares it)
-        void HandleClient(int clientSocket, bool &sessionOpened, std::chrono::steady_clock::time_point connectedAt);
+        void HandleClient(int clientSocket, bool &sessionOpened, std::chrono::steady_clock::time_point connectedAt,
+                          std::chrono::milliseconds helloBudget);
         void ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload);
         /// Network thread: the Logger isn't thread-safe, so log lines are posted to the main thread
         void PostLog(std::string message, bool isWarning = false);
@@ -685,7 +715,7 @@ namespace N2Engine::Editor
         bool Send(int socket, const void *data, size_t size);
         /// Network thread: secures a just-accepted connection when TLS is on, by `deadline`; true when there is nothing
         /// to do (no TLS) or the handshake succeeded. False (the reason logged) closes the connection.
-        bool BeginTls(int socket, std::chrono::steady_clock::time_point deadline);
+        bool BeginTls(int socket, std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds budget);
         /// Network thread: ends this connection's TLS session, if any, before its socket is closed
         void EndTls();
         /// False on disconnect, error, a stopping server, or (when given) once the deadline has passed
@@ -754,6 +784,28 @@ namespace N2Engine::Editor
         // connection starts and read by the network thread for Shutdown's refusal, so atomic
         std::atomic<bool> _clientErrorCodes{false};
         std::chrono::milliseconds _helloTimeout{DefaultHelloTimeout};
+        // Rate limiting: the settings are set before Start only. The limiter is made by Start (so every run begins with
+        // empty tables) and used by the network thread only, so it has no lock.
+        bool _rateLimiting{true};
+        RateLimitPolicy _rateLimitPolicy;
+        RateLimiter::Clock _rateLimitClock;
+        PeerAddressProvider _peerAddressProvider;
+        std::optional<RateLimiter> _rateLimiter;
+        std::atomic<uint64_t> _rateLimitedConnections{0};
+        // The current connection's peer as text (empty when there is none, as for a command run without a socket), set by
+        // the network thread and read by the handlers' log lines on the main thread
+        mutable std::mutex _peerMutex;
+        std::string _peerText;
+        /// " peer=<address>" for a log line about the current connection, or nothing
+        [[nodiscard]] std::string PeerSuffix() const;
+        void SetPeerText(std::string text);
+        /// Network thread: the current connection's peer
+        PeerAddress _peer;
+        /// Network thread: one line for each backoff a failed Hello started
+        void LogRateLimitOutcome(const RateLimiter::FailureOutcome &outcome, std::string_view user);
+        // Whether the last Hello (run on the main thread) was refused for its token, as opposed to its version or its
+        // shape: the network thread clears it before queueing a Hello and reads it once the command's future is ready
+        std::atomic<bool> _helloTokenRefused{false};
         // TLS: the identity is set before Start only. The session is the current connection's, made and used on the
         // network thread only (one client at a time); it is declared after the identity, so it goes first.
         std::unique_ptr<EditorTlsServer> _tlsServer;

@@ -64,6 +64,10 @@ namespace N2Engine::Editor
         /// --read-only: the host answers every command that isn't a read (EditorServer::IsReadCommand; Shutdown included)
         /// with the readOnly error, and keeps serving. Works with or without --token-env.
         bool readOnly = false;
+        /// --no-rate-limit: turns off the failed-Hello rate limiting (EditorServer::SetRateLimiting) that a host with
+        /// an access token has by default; for test rigs that fail Hellos on purpose. It changes nothing on a host
+        /// without a token, which has no failed Hellos to count.
+        bool noRateLimit = false;
         bool showHelp = false;
 
         /// --play <file>: start as a play host (#82, E9): instead of the startup scene, load the scene snapshot in this
