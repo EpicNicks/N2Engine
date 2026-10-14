@@ -1,5 +1,5 @@
 {
-  "version": "1.11.0",
+  "version": "1.12.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -18,7 +18,7 @@
     },
     "errorPayload": "An Error response's payload is the message as raw UTF-8 bytes, not a string: the frame's length is the message's byte count. It has no room for a trailing field, so it never changed: a host that refuses a command for a reason a client can act on (errorCodes) answers ErrorCoded instead, but only to a client that asked for it in Hello (since 1.11.0).",
     "reservedIds": "Ids 0xC0 to 0xFE are reserved for server-pushed event frames: no command or response uses them.",
-    "versioning": "version is major.minor.patch. The minor version goes up for new commands, new responses, new trailing request fields and new trailing response fields; anything else (a changed id, field order or type, a removed field) bumps the major version. Both directions must keep working within a major version: a server reads a trailing request field only when the payload has bytes left and otherwise uses a default, since a client of an older minor version doesn't send it (Commands.hpp: ReadTrailing); a client's decoders ignore response bytes after the fields they know, and the trailing fields listed in optionalTrailing (the last fields of a message, added in a later minor version; each a bool or number whose default is false or 0) are decoded as that default when the payload ends before them (a 1.11 client reading the ServerInfo of a 1.10 host gets readOnly false), so a decoder never throws on the shorter payload of an older peer; and a client relies on a response field added in a later minor version only once Hello has shown the server speaks that version. Hello refuses a client whose major version differs from the server's, and accepts any minor version with a warning when it differs."
+    "versioning": "version is major.minor.patch. The minor version goes up for new commands, new responses, new trailing request fields and new trailing response fields; anything else (a changed id, field order or type, a removed field) bumps the major version. Both directions must keep working within a major version: a server reads a trailing request field only when the payload has bytes left and otherwise uses a default, since a client of an older minor version doesn't send it (Commands.hpp: ReadTrailing); a client's decoders ignore response bytes after the fields they know, and the trailing fields listed in optionalTrailing (the last fields of a message, added in a later minor version; each a bool or number whose default is false or 0, or a string whose default is empty) are decoded as that default when the payload ends before them (a 1.12 client reading the ServerInfo of a 1.10 host gets readOnly false and an empty user and role), so a decoder never throws on the shorter payload of an older peer; and a client relies on a response field added in a later minor version only once Hello has shown the server speaks that version. Hello refuses a client whose major version differs from the server's, and accepts any minor version with a warning when it differs."
   },
   "commands": {
     "RenderFrame": {
@@ -60,12 +60,13 @@
     },
     "Hello": {
       "id": "0x04",
-      "description": "Opens a session: the client's name, the protocol version it speaks (its PROTOCOL_VERSION) and the host's access token (empty when it has none). Error when the major versions differ, or when the host requires a token and this isn't it. Optional on a host without a token. On a host with one, every other command (Shutdown included) is refused with an Error until a Hello on the same connection succeeds, and a failed Hello ends the session. The session belongs to the connection: a client that reconnects sends Hello again. capabilities names optional features beyond what the version implies (none are defined yet); projectLoaded is whether the host has a project (was started with --project). Since 1.11.0: errorCodes (a trailing request field, false when absent) says the client understands ErrorCoded: the host answers a refused command with ErrorCoded (message and a stable code from errorCodes) to a client that sent true, and with a plain Error whose message says why to every other client, so a client of an older minor version keeps working and still shows the reason. The flag belongs to the connection, like the session: a later Hello on it replaces the value. readOnly (a trailing response field) is whether the host was started with --read-only: it answers every command that is not a read with the readOnly error (a client can show that and disable what would be refused). A read command is one the host classifies as a read: it changes nothing a client could save, run or lose (the host's own classification, which refuses a command it has not classified).",
+      "description": "Opens a session: the client's name, the protocol version it speaks (its PROTOCOL_VERSION) and the host's access token (empty when it has none). Error when the major versions differ, or when the host requires a token and this isn't it. Optional on a host without a token. On a host with one, every other command (Shutdown included) is refused with an Error until a Hello on the same connection succeeds, and a failed Hello ends the session. The session belongs to the connection: a client that reconnects sends Hello again. capabilities names optional features beyond what the version implies (none are defined yet); projectLoaded is whether the host has a project (was started with --project). Since 1.11.0: errorCodes (a trailing request field, false when absent) says the client understands ErrorCoded: the host answers a refused command with ErrorCoded (message and a stable code from errorCodes) to a client that sent true, and with a plain Error whose message says why to every other client, so a client of an older minor version keeps working and still shows the reason. The flag belongs to the connection, like the session: a later Hello on it replaces the value. readOnly (a trailing response field) is whether the host was started with --read-only: it answers every command that is not a read with the readOnly error (a client can show that and disable what would be refused). A read command is one the host classifies as a read: it changes nothing a client could save, run or lose (the host's own classification, which refuses a command it has not classified). Since 1.12.0: user (a trailing request field, empty when absent) names the user whose token this is, for a host started with --tokens-file: only that user's entry is considered, and an empty user matches the token against every entry (a client of an older minor version sends none). A host with one token (--token-env) or none ignores it. A wrong user and a wrong token are the same Error (Invalid access token). A host with a tokens file binds the matched user and its role (admin, editor or viewer) to the connection; user and role (trailing response fields, empty strings from an older host) report them. A host with no tokens file answers an empty user and the role admin (--token-env: the user token and the role admin), so role is always one of the three. A command the role may not run is refused with the forbidden code (ErrorCoded for a client that asked for it in Hello, else an Error whose message says why), and the connection stays open: a viewer may run reads only and may not play (SendInput, WritePlaySnapshot, SetPaused and Step are refused), an editor everything except Shutdown, an admin everything. The host re-reads its tokens file without a restart and closes the connection of a user whose entry was removed or changed.",
       "request": {
         "clientName": "string",
         "protocolVersion": "string",
         "token": "string",
-        "errorCodes": "bool"
+        "errorCodes": "bool",
+        "user": "string"
       },
       "response": {
         "type": "ServerInfo",
@@ -74,7 +75,9 @@
           "engineVersion": "string",
           "capabilities": "json:string[]",
           "projectLoaded": "bool",
-          "readOnly": "bool"
+          "readOnly": "bool",
+          "user": "string",
+          "role": "string"
         }
       }
     },
@@ -1044,11 +1047,11 @@
     }
   },
   "optionalTrailing": {
-    "HelloRequest": ["errorCodes"],
-    "ServerInfoResponse": ["readOnly"]
+    "HelloRequest": ["errorCodes", "user"],
+    "ServerInfoResponse": ["readOnly", "user", "role"]
   },
   "errorCodes": {
     "readOnly": "The host was started with --read-only and the command is not a read (it would change the project, the scene, the game, the assets or the host). Shutdown is refused too. The connection stays open and reads keep working.",
-    "forbidden": "Reserved for per-user roles (a later version): the user the connection says it is may not run the command. Hosts of this version never send it."
+    "forbidden": "The role bound to the connection at Hello (a host started with --tokens-file; since 1.12.0) may not run the command: a viewer may only read and may not play, an editor may not Shutdown. The connection stays open and the commands its role allows keep working."
   }
 }

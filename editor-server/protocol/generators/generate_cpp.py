@@ -55,7 +55,7 @@ def field_lines(fields: dict, protocol: dict, message: str = "") -> list:
     for field, ftype in fields.items():
         comment = f" // JSON: {ftype[len('json:'):] if ftype.startswith('json:') else 'any'}" if ftype.startswith("json") else ""
         if field in optional:
-            comment = " // optional trailing: the default (false or 0) when the payload ends before it"
+            comment = " // optional trailing: the default (false, 0 or empty) when the payload ends before it"
         lines.append(f"    {get_cpp_type(ftype, protocol)} {field};{comment}")
     return lines
 

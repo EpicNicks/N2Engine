@@ -27,12 +27,15 @@
 
 #include "editor-server/EditorServer.hpp"
 #include "editor-server/EditorTls.hpp"
+#include "editor-server/LogSink.hpp"
 
 namespace N2Engine::Editor
 {
     namespace
     {
         std::atomic<bool> g_running{true};
+        // SIGHUP (POSIX, with a tokens file): the main loop passes it on to the server, which reloads on its network thread
+        std::atomic<bool> g_reloadTokens{false};
 
         void SignalHandler(int signal)
         {
@@ -42,17 +45,32 @@ namespace N2Engine::Editor
             {
                 g_running = false;
             }
+#ifdef SIGHUP
+            else if (signal == SIGHUP)
+            {
+                g_reloadTokens = true;
+            }
+#endif
         }
 
-        /// Installs SignalHandler for SIGINT and SIGTERM, and puts back whatever was there before when it goes out of
-        /// scope, so RunHost leaves a game's own host (or a test) with the handlers it had
+        /// Installs SignalHandler for SIGINT and SIGTERM (and, where there is one and `reloadOnHangup` is set, SIGHUP:
+        /// without a tokens file a hangup keeps its default, which ends the process), and puts back whatever was there
+        /// before when it goes out of scope, so RunHost leaves a game's own host (or a test) with the handlers it had
         class SignalHandlersScope
         {
         public:
-            SignalHandlersScope()
+            explicit SignalHandlersScope(const bool reloadOnHangup = false)
                 : _previousInterrupt(std::signal(SIGINT, SignalHandler)),
                   _previousTerminate(std::signal(SIGTERM, SignalHandler))
             {
+#ifdef SIGHUP
+                if (reloadOnHangup)
+                {
+                    _previousHangup = std::signal(SIGHUP, SignalHandler);
+                }
+#else
+                (void)reloadOnHangup;
+#endif
             }
 
             ~SignalHandlersScope()
@@ -65,6 +83,12 @@ namespace N2Engine::Editor
                 {
                     std::signal(SIGTERM, _previousTerminate);
                 }
+#ifdef SIGHUP
+                if (_previousHangup.has_value() && *_previousHangup != SIG_ERR)
+                {
+                    std::signal(SIGHUP, *_previousHangup);
+                }
+#endif
             }
 
             SignalHandlersScope(const SignalHandlersScope &) = delete;
@@ -74,6 +98,8 @@ namespace N2Engine::Editor
             using Handler = decltype(SIG_DFL);
             Handler _previousInterrupt;
             Handler _previousTerminate;
+            // Only when SIGHUP was taken over
+            std::optional<Handler> _previousHangup;
         };
 
         Config::ApplicationOptions::RenderBackend ToRenderBackend(const HostRenderer renderer)
@@ -104,6 +130,20 @@ namespace N2Engine::Editor
         return 0;
     }
 
+    int RunNewToken(const HostOptions &options)
+    {
+        // No engine: nothing but the token and the entry reaches stdout, and a failure one line on stderr
+        const auto made = GenerateToken(options.newTokenUser, options.newTokenRole);
+        if (!made)
+        {
+            std::println(stderr, "N2EditorHost --new-token: {}", made.error());
+            return 1;
+        }
+        std::print(stdout, "{}", FormatNewTokenOutput(options.newTokenUser, options.newTokenRole, *made));
+        std::fflush(stdout);
+        return 0;
+    }
+
     int RunHost(int argc, char *argv[])
     {
         const auto parsed = ParseHostArguments(argc > 1 ? std::vector<std::string>(argv + 1, argv + argc)
@@ -127,6 +167,34 @@ namespace N2Engine::Editor
         {
             return RunCreate(options);
         }
+        if (!options.newTokenUser.empty())
+        {
+            return RunNewToken(options);
+        }
+
+        // The log sink: every Logger line at or above --log-level, one timestamped line each, on stderr (the journal, `docker
+        // logs`) and in --log-file, in every build type (a Release build has no console subscriber of its own). Before
+        // anything below logs, so a startup line is kept. A --log-file that can't be opened ends the host here, with one
+        // line on stderr and exit code 1, so an audit trail that was asked for is never silently missing. Destroyed when
+        // RunHost returns, after its last line.
+        std::vector<LogOutput> logOutputs;
+        logOutputs.push_back(StderrLogOutput());
+        if (!options.logFile.empty())
+        {
+            auto fileOutput = OpenLogFileOutput(options.logFile);
+            if (!fileOutput)
+            {
+                std::println(stderr, "N2EditorHost {}", fileOutput.error());
+                return 1;
+            }
+            logOutputs.push_back(std::move(*fileOutput));
+        }
+#ifdef SIGPIPE
+        // A stderr (or a pipe behind it) whose reader has gone is a failed write the sink ignores, never a signal that ends
+        // the host (the editor server does the same when it starts, which is after the first lines are written)
+        std::signal(SIGPIPE, SIG_IGN);
+#endif
+        const LogSink logSink(options.logLevel, std::move(logOutputs));
 
         // Before the engine starts (and Lua with it): the variable is removed from the environment once read. On
         // stderr, as the Logger has no console output until Application::Init (and none in Release).
@@ -140,6 +208,15 @@ namespace N2Engine::Editor
                 return 1;
             }
             accessToken = std::move(*token);
+        }
+
+        // A tokens file needs the TLS library for its SHA-256: a host asked for per-user tokens that it can't check must
+        // not start (and so must not fall back to an open one). The file itself is loaded below, with the server.
+        if (!options.tokensFile.empty() && !EditorTlsServer::IsAvailable())
+        {
+            std::println(stderr, "N2EditorHost --tokens-file: this build has no TLS library, which supplies the SHA-256 "
+                                 "of the token hashes (configure it with -DN2ENGINE_EDITOR_TLS=ON)");
+            return 1;
         }
 
         // Before the engine starts, like the token: a host asked for TLS that can't serve it must not start. This is the
@@ -194,7 +271,7 @@ namespace N2Engine::Editor
 
         g_running = true;
         // Restored on every return below, the exception path included
-        const SignalHandlersScope signalHandlers;
+        const SignalHandlersScope signalHandlers(!options.tokensFile.empty());
 
         try
         {
@@ -227,6 +304,17 @@ namespace N2Engine::Editor
                 if (const auto enabled = server.EnableTls(tlsDirectory); !enabled)
                 {
                     std::println(stderr, "N2EditorHost --tls: {}", enabled.error());
+                    return 1;
+                }
+            }
+
+            // --tokens-file: loaded (and checked: private on POSIX, well formed) before the engine starts, like the token. An
+            // error ends the host here with one line on stderr and exit code 1; it never says anything of the tokens.
+            if (!options.tokensFile.empty())
+            {
+                if (const auto loaded = server.SetTokensFile(options.tokensFile); !loaded)
+                {
+                    std::println(stderr, "N2EditorHost --tokens-file: {}", loaded.error());
                     return 1;
                 }
             }
@@ -352,10 +440,30 @@ namespace N2Engine::Editor
                 // The variable's name only, never the token
                 Logger::Info("Clients must send Hello with the access token from " + options.tokenEnv);
             }
+            if (server.HasTokensFile())
+            {
+                // The path only: never a token, and a hash is in the file, not here
+                Logger::Info("Clients must send Hello with the token of a user in the tokens file " + options.tokensFile);
+            }
             if (server.IsTlsEnabled())
             {
                 // The fingerprint is public (it is in the ready line); the key and the token never reach a log
                 Logger::Info("Serving TLS; certificate SHA-256 " + server.TlsFingerprint());
+            }
+            if (options.noRateLimit)
+            {
+                (void)server.SetRateLimiting(false);
+                if (server.RequiresAccessToken())
+                {
+                    Logger::Warn("Failed-Hello rate limiting is off (--no-rate-limit): wrong tokens can be tried as fast "
+                                 "as the host can answer, and each costs it up to the Hello timeout");
+                }
+            }
+            else if (server.RequiresAccessToken())
+            {
+                Logger::Info("Failed-Hello rate limiting is on: an address that fails 3 Hellos is backed off (1 s, doubling "
+                             "to 5 min) and closed at accept; loopback shares one backoff; users in a tokens file have one "
+                             "of up to 30 s");
             }
             if (options.readOnly)
             {
@@ -374,7 +482,7 @@ namespace N2Engine::Editor
                     // Encrypted, but a client that doesn't check the certificate's fingerprint can be talked into
                     // sending the token to someone else, and nothing here limits who may connect
                     Logger::Warn("Editor server bound to " + options.bindAddress +
-                                 (accessToken.empty()
+                                 (!server.RequiresAccessToken()
                                       ? ": the traffic is encrypted (TLS) but it has no authentication, so anything that "
                                         "can reach it can control this host"
                                       : ": the traffic is encrypted (TLS), so a client that pins the certificate "
@@ -384,7 +492,7 @@ namespace N2Engine::Editor
                 else
                 {
                     Logger::Warn("Editor server bound to " + options.bindAddress +
-                                 (accessToken.empty()
+                                 (!server.RequiresAccessToken()
                                       ? ": it has no authentication, so anything that can reach it can control this host"
                                       : ": the access token isn't encrypted, so anything that can see the traffic can "
                                         "take it"));
@@ -430,6 +538,12 @@ namespace N2Engine::Editor
             while (g_running && server.IsRunning() && !app.IsQuitRequested() &&
                    (!window.IsValid() || !window.ShouldClose()) && (!stdinClosed || !stdinClosed->load()))
             {
+                // A SIGHUP: the server's network thread re-reads the tokens file (this only sets its flag)
+                if (g_reloadTokens.exchange(false))
+                {
+                    server.RequestTokensReload();
+                }
+
                 if (server.IsPlayMode())
                 {
                     // A play host: a game frame (Application::Tick polls the window's events and updates the input itself),

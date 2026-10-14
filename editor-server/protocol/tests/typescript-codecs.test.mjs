@@ -118,19 +118,27 @@ for (const vector of vectors.shortPayloads ?? []) {
   })
 }
 
-test("a 1.10 ServerInfo (no readOnly) decodes with readOnly false, and a 1.10 Hello with errorCodes false", realProtocol, () => {
-  const info = { protocolVersion: "1.10.0", engineVersion: "0.1", capabilities: ["scene"], projectLoaded: true, readOnly: true }
+test("a 1.10 or 1.11 ServerInfo and Hello decode with the optional trailing fields defaulted", realProtocol, () => {
+  const info = { protocolVersion: "1.12.0", engineVersion: "0.1", capabilities: ["scene"], projectLoaded: true, readOnly: true, user: "alice", role: "editor" }
   const full = protocol.encodeServerInfoResponse(info)
-  const old = protocol.decodeServerInfoResponse(full.subarray(0, full.length - 1))
-  assert.deepEqual(old, { ...info, readOnly: false })
   assert.deepEqual(protocol.decodeServerInfoResponse(full), info)
-  // Only the optional trailing field may be missing: a payload cut anywhere earlier is still malformed
+  // With empty user and role the two trailing strings are 4 zero bytes each: a 1.11 host's ServerInfo ends before them, a
+  // 1.10 host's before readOnly as well
+  const bare = protocol.encodeServerInfoResponse({ ...info, user: "", role: "" })
+  assert.deepEqual(protocol.decodeServerInfoResponse(bare.subarray(0, bare.length - 8)), { ...info, user: "", role: "" })
+  assert.deepEqual(protocol.decodeServerInfoResponse(bare.subarray(0, bare.length - 9)), { ...info, readOnly: false, user: "", role: "" })
+  // Only the optional trailing fields may be missing: a payload cut anywhere earlier is still malformed
+  assert.throws(() => protocol.decodeServerInfoResponse(bare.subarray(0, bare.length - 10)), RangeError)
+  // ... and a string cut short is malformed, not defaulted
   assert.throws(() => protocol.decodeServerInfoResponse(full.subarray(0, full.length - 2)), RangeError)
 
-  const hello = { clientName: "editor", protocolVersion: "1.10.0", token: "t", errorCodes: true }
+  const hello = { clientName: "editor", protocolVersion: "1.12.0", token: "t", errorCodes: true, user: "alice" }
   const helloFull = protocol.encodeHelloRequest(hello)
-  assert.deepEqual(protocol.decodeHelloRequest(helloFull.subarray(0, helloFull.length - 1)), { ...hello, errorCodes: false })
   assert.deepEqual(protocol.decodeHelloRequest(helloFull), hello)
+  const helloBare = protocol.encodeHelloRequest({ ...hello, user: "" })
+  // A 1.11 client sends no user; a 1.10 client sends no errorCodes either
+  assert.deepEqual(protocol.decodeHelloRequest(helloBare.subarray(0, helloBare.length - 4)), { ...hello, user: "" })
+  assert.deepEqual(protocol.decodeHelloRequest(helloBare.subarray(0, helloBare.length - 5)), { ...hello, errorCodes: false, user: "" })
 })
 
 test("decoders read from a view with an offset (a Buffer slice) and ignore trailing bytes", realProtocol, () => {
@@ -142,7 +150,7 @@ test("decoders read from a view with an offset (a Buffer slice) and ignore trail
 })
 
 test("a string keeps a leading byte order mark (U+FEFF) through encode and decode", realProtocol, () => {
-  const value = { clientName: "\uFEFFeditor", protocolVersion: "1.0.0", token: "\uFEFF", errorCodes: true }
+  const value = { clientName: "\uFEFFeditor", protocolVersion: "1.0.0", token: "\uFEFF", errorCodes: true, user: "\uFEFFalice" }
   assert.deepEqual(protocol.decodeHelloRequest(protocol.encodeHelloRequest(value)), value)
   // An Error's message is decoded straight from the payload, as text
   const error = { message: "\uFEFFbad" }
@@ -152,8 +160,13 @@ test("a string keeps a leading byte order mark (U+FEFF) through encode and decod
 test("a truncated payload throws a RangeError", realProtocol, () => {
   const vector = vectors.requests.find((v) => v.command === "Hello")
   const payload = fromHex(vector.payload)
-  // Hello's last field (errorCodes) is optional trailing, so cutting one byte is an older client's payload; cutting into token is not
+  // Hello's last fields (errorCodes, user) are optional trailing, so cutting them whole is an older client's payload;
+  // cutting into the user string, or into token, is not
   assert.throws(() => protocol.decodeHelloRequest(payload.subarray(0, payload.length - 2)), RangeError)
+  const userBytes = new TextEncoder().encode(vector.fields.user).length
+  const tokenEnd = payload.length - 1 - 4 - userBytes
+  assert.deepEqual(protocol.decodeHelloRequest(payload.subarray(0, tokenEnd)).errorCodes, false)
+  assert.throws(() => protocol.decodeHelloRequest(payload.subarray(0, tokenEnd - 2)), RangeError)
   assert.throws(() => protocol.decodeHelloRequest(new Uint8Array(0)), RangeError)
 })
 

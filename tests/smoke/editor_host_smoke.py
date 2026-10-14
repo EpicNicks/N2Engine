@@ -295,12 +295,22 @@ def scenario_host(hosts, work, config, version, expect_physics):
 
     conn = f.connect(port)
     payload = conn.expect(f.HELLO, f.hello_payload("CI smoke test", version, token), f.SERVER_INFO, "Hello with the token")
-    server_version = f.Reader(payload).string()
+    # ServerInfo: protocolVersion, engineVersion, capabilities (JSON text), projectLoaded (this host was started with
+    # --project), readOnly (since 1.11.0; it wasn't) and, since 1.12.0, the user and role bound to the connection (the
+    # host has one --token-env token: the user "token", an admin)
+    reader = f.Reader(payload)
+    server_version = reader.string()
     check(server_version == version, "Hello: the host speaks protocol %s, protocol.json is %s" % (server_version, version))
-    # The last two bytes are projectLoaded (this host was started with --project) and, since 1.11.0, readOnly (it wasn't)
-    check(payload[-2] == 1, "Hello: the host reports no project loaded")
-    check(payload[-1] == 0, "Hello: the host reports it is read-only")
-    say("Hello: protocol %s, project loaded" % server_version)
+    reader.string()  # engineVersion
+    reader.string()  # capabilities
+    project_loaded, read_only = payload[reader.offset], payload[reader.offset + 1]
+    reader.offset += 2
+    check(project_loaded == 1, "Hello: the host reports no project loaded")
+    check(read_only == 0, "Hello: the host reports it is read-only")
+    user, role = reader.string(), reader.string()
+    check(user == "token" and role == "admin", "Hello: the host names user %r role %r, not token and admin" % (user, role))
+    check(reader.remaining() == 0, "Hello: ServerInfo has %d bytes after the role" % reader.remaining())
+    say("Hello: protocol %s, project loaded, user %s (%s)" % (server_version, user, role))
 
     # The event ring kept the startup lines: RunHost constructs the server before Application::Init, so lines Init
     # logs itself are there. PollEvents (0x05): epoch, afterSeq, maxEvents (uint32 each); Events (0x0C): epoch,

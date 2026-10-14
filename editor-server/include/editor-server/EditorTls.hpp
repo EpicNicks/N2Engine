@@ -1,11 +1,13 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <expected>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace N2Engine::Editor
 {
@@ -74,6 +76,15 @@ namespace N2Engine::Editor
 
         /// Whether this build has TLS (the N2ENGINE_EDITOR_TLS CMake option)
         [[nodiscard]] static bool IsAvailable();
+
+        /// SHA-256 of `data` into `digest`. False (`digest` unspecified) when TLS isn't built in or the library fails.
+        /// The per-user tokens (--tokens-file) are hashed with it, which is why they need a build with the TLS library.
+        [[nodiscard]] static bool Sha256(std::string_view data, std::array<unsigned char, 32> &digest);
+
+        /// Fills `out` with `count` random bytes from the TLS library's generator, seeded from the operating system's
+        /// entropy source (--new-token's tokens). False (`out` unspecified) when TLS isn't built in or the generator
+        /// fails.
+        [[nodiscard]] static bool RandomBytes(unsigned char *out, size_t count);
 
         /// Where the host keeps its identity: <ProjectFile::UserDataBase()>/editor-tls, beside the per-project user
         /// data folders and never inside a project. Empty when the user has no data folder (UserDataBase fell back to
