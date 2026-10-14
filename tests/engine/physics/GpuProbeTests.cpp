@@ -260,7 +260,8 @@ TEST(PhysicsBackendParticleFailureTest, ADriverFailureDropsTheBackendAndChangesT
         WarningCapture warnings;
         rig.driver->failUpload = true;
         const Math::Vector3 at(0.0f, 1.0f, 0.0f);
-        particles->Spawn(handle, std::span<const Math::Vector3>(&at, 1), {});
+        const Math::Vector3 velocity(0.0f, 0.0f, 0.0f);
+        particles->Spawn(handle, std::span<const Math::Vector3>(&at, 1), std::span<const Math::Vector3>(&velocity, 1));
 
         // The next look at the backend notices the failure: it is dropped, the status changes, one warning
         EXPECT_EQ(rig.backend->GetParticleBackend(), nullptr) << ToString(c.mode);
