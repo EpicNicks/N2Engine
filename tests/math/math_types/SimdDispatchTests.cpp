@@ -925,8 +925,10 @@ INSTANTIATE_TEST_SUITE_P(SimdLevels, SimdDispatchTest,
 
 TEST(SimdLevelTest, DetectedLevelMatchesTheTarget)
 {
-#ifdef N2_MATH_NEON
-    // NEON is baseline on aarch64, so the arm64 CI job runs every SimdLevels test below at the NEON tier
+#if defined(__aarch64__) && !defined(_MSC_VER)
+    // Keyed on the architecture, not on N2_MATH_NEON (the macro that enables NEON), so NEON silently disabled on an
+    // aarch64 Clang/GCC build fails here instead of the SimdLevels suite skipping. NEON is baseline on aarch64, so the
+    // arm64 CI job runs every SimdLevels test below at the NEON tier
     EXPECT_EQ(DetectSIMDLevel(), SIMDLevel::NEON);
     EXPECT_TRUE(IsSIMDLevelSupported(SIMDLevel::NEON));
     EXPECT_FALSE(IsSIMDLevelSupported(SIMDLevel::SSE2));
@@ -1104,7 +1106,7 @@ TEST(Vector2BatchTest, BatchesMatchScalarForEveryCountAndOffset)
                 // Not checked where the AVX batches are compiled: Vector2::DotBatch and LengthBatch read lanes 0, 2,
                 // 4, 6 of the horizontal add, but a 256-bit hadd puts the four results in lanes 0, 1, 4, 5, so the
                 // second and fourth of every group of four are wrong (the first and third are duplicated). That is
-                // an existing x86 bug, outside this change; NEON does them right
+                // an existing x86 bug (issue #131), outside this change; NEON does them right
                 ExpectClose(dots[i], a[i].Dot(b[i]), "Dot" + where);
                 ExpectClose(lengths[i], a[i].Length(), "Length" + where);
 #endif
