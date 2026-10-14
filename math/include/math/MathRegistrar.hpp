@@ -20,12 +20,15 @@ namespace N2Engine
         void InitializeSIMD();
 
         /**
-         * Switches every SIMD-dispatching type to the given tier, lowered to what the CPU supports. Until the first
+         * Switches every SIMD-dispatching type to the given tier, lowered to what the target supports (Scalar for a
+         * tier of the other architecture family: an x86 tier on aarch64, NEON on x86). Until the first
          * call (or InitializeSIMD) they use the scalar implementations. Tests use this to run the same math under
          * each tier, restoring Scalar after.
          *
          * The math target builds with PUBLIC /arch:AVX (-mavx elsewhere), so the whole binary already requires an
-         * AVX CPU: the lower tiers choose between algorithms, they are not a fallback for older hardware
+         * AVX CPU: the lower tiers choose between algorithms, they are not a fallback for older hardware. On aarch64
+         * the only non-scalar tier is NEON, which is baseline there; Vector2 (batches), Vector3 and Vector4 have NEON
+         * versions, Quaternion and the matrices stay scalar
          */
         void SetSIMDLevel(SIMDLevel level);
     }
