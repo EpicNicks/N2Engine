@@ -40,8 +40,8 @@ namespace N2Engine::Particles
     /**
      * Picks the backend for `requested`. `physics` is the application's physics backend, which may be null (none
      * built, or it failed to start). The PhysX GPU particle backend exists only when physics->GetParticleBackend()
-     * returns one; today no physics backend does, so every selection is the CPU backend, and Auto is silent about
-     * it while PhysX falls back with a reason.
+     * returns one (the PhysX backend does when its GPU scene is up and the GPU still works), else the selection is
+     * the CPU backend, and Auto is silent about it while PhysX falls back with a reason.
      */
     [[nodiscard]] BackendSelection SelectParticleBackend(ParticleBackend requested, Physics::IPhysicsBackend *physics);
 

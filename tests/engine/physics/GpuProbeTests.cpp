@@ -3,13 +3,21 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
+#include "../particles/FakePbdDriver.hpp"
 #include "engine/Application.hpp"
+#include "engine/GameObjectScene.hpp"
 #include "engine/Health.hpp"
+#include "engine/Logger.hpp"
+#include "engine/Time.hpp"
+#include "engine/physics/IParticleBackend.hpp"
+#include "engine/rendering/ParticleSystem.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
@@ -135,7 +143,10 @@ TEST(GpuProbeTest, BackendDefaultsToDisabledAndKeepsTheCpuScene)
     EXPECT_EQ(status.state, GpuState::Disabled);
     EXPECT_FALSE(status.detail.empty());
     EXPECT_EQ(MakeParticlesStatus(status).state, SubsystemState::Disabled);
+    // physics.gpu off is today's CPU scene: no CUDA context, and no PhysX particle backend to offer
+    EXPECT_EQ(backend.GetParticleBackend(), nullptr);
     backend.Shutdown();
+    EXPECT_EQ(backend.GetParticleBackend(), nullptr);
 }
 
 TEST(GpuProbeTest, ExplicitOffBehavesTheSame)
@@ -144,7 +155,202 @@ TEST(GpuProbeTest, ExplicitOffBehavesTheSame)
     backend.SetGpuMode(GpuMode::Off);
     ASSERT_TRUE(backend.Initialize());
     EXPECT_EQ(backend.GetGpuStatus().state, GpuState::Disabled);
+    EXPECT_EQ(backend.GetParticleBackend(), nullptr);
     backend.Shutdown();
+}
+
+namespace
+{
+    /// Collects the warnings logged while it lives
+    class WarningCapture
+    {
+    public:
+        WarningCapture()
+        {
+            _id = Logger::logEvent += [this](const std::string_view message, const Logger::LogLevel level)
+            {
+                if (level == Logger::LogLevel::Warn)
+                {
+                    warnings.emplace_back(message);
+                }
+            };
+        }
+        ~WarningCapture() { Logger::logEvent -= _id; }
+        WarningCapture(const WarningCapture &) = delete;
+        WarningCapture &operator=(const WarningCapture &) = delete;
+
+        [[nodiscard]] int Count(const std::string &text) const
+        {
+            int n = 0;
+            for (const std::string &w : warnings)
+            {
+                n += w.find(text) != std::string::npos ? 1 : 0;
+            }
+            return n;
+        }
+
+        std::vector<std::string> warnings;
+
+    private:
+        std::size_t _id = 0;
+    };
+
+    /// A physics backend that is initialised with physics.gpu off (no CUDA call on any machine), then given a
+    /// particle backend over a fake driver and told which GPU mode the project asked for: the state a real GPU scene
+    /// would be in, reached without a GPU through the test seam. The fake is owned by the particle backend, so the
+    /// pointer to it is only good while that backend lives.
+    struct InjectedBackend
+    {
+        explicit InjectedBackend(const GpuMode mode)
+        {
+            backend = std::make_unique<PhysXBackend>();
+            backend->SetGpuMode(GpuMode::Off);
+            if (!backend->Initialize())
+            {
+                return;
+            }
+            backend->SetGpuMode(mode); // only read again when a failure is recorded
+            auto fake = std::make_unique<TestSupport::FakePbdDriver>();
+            driver = fake.get();
+            ready = backend->InstallParticleDriverForTesting(std::move(fake));
+        }
+
+        std::unique_ptr<PhysXBackend> backend;
+        TestSupport::FakePbdDriver *driver = nullptr;
+        bool ready = false;
+    };
+}
+
+TEST(PhysicsBackendParticleFailureTest, TheSeamMakesAReadyGpuWithAParticleBackend)
+{
+    InjectedBackend rig(GpuMode::Auto);
+    ASSERT_TRUE(rig.ready);
+    EXPECT_EQ(rig.backend->GetGpuStatus().state, GpuState::Ready);
+    EXPECT_EQ(MakeParticlesStatus(rig.backend->GetGpuStatus()).state, SubsystemState::Running);
+    EXPECT_NE(rig.backend->GetParticleBackend(), nullptr);
+    // One particle backend per scene
+    EXPECT_FALSE(rig.backend->InstallParticleDriverForTesting(std::make_unique<TestSupport::FakePbdDriver>()));
+    rig.backend->Shutdown();
+}
+
+TEST(PhysicsBackendParticleFailureTest, ADriverFailureDropsTheBackendAndChangesTheStatusOnce)
+{
+    struct Case
+    {
+        GpuMode mode;
+        GpuState state;
+        SubsystemState row;
+        bool healthy;
+    };
+    // auto: no usable GPU particles is not an error; on: the project asked for the GPU, so it is
+    for (const Case c : {Case{GpuMode::Auto, GpuState::Unavailable, SubsystemState::Disabled, true},
+                         Case{GpuMode::On, GpuState::Failed, SubsystemState::Failed, false}})
+    {
+        InjectedBackend rig(c.mode);
+        ASSERT_TRUE(rig.ready);
+        IParticleBackend *particles = rig.backend->GetParticleBackend();
+        ASSERT_NE(particles, nullptr);
+
+        ParticleSystemDesc desc;
+        desc.maxParticles = 16;
+        const ParticleSystemHandle handle = particles->CreateSystem(desc);
+        ASSERT_NE(handle, kInvalidParticleSystem);
+        EXPECT_EQ(rig.backend->GetGpuStatus().state, GpuState::Ready);
+
+        WarningCapture warnings;
+        rig.driver->failUpload = true;
+        const Math::Vector3 at(0.0f, 1.0f, 0.0f);
+        const Math::Vector3 velocity(0.0f, 0.0f, 0.0f);
+        particles->Spawn(handle, std::span<const Math::Vector3>(&at, 1), std::span<const Math::Vector3>(&velocity, 1));
+
+        // The next look at the backend notices the failure: it is dropped, the status changes, one warning
+        EXPECT_EQ(rig.backend->GetParticleBackend(), nullptr) << ToString(c.mode);
+        EXPECT_EQ(rig.backend->GetParticleBackend(), nullptr);
+        const GpuStatus status = rig.backend->GetGpuStatus();
+        EXPECT_EQ(status.state, c.state) << ToString(c.mode);
+        EXPECT_NE(status.detail.find("GPU particles unavailable"), std::string::npos) << status.detail;
+        // The health row Application::GetHealth re-reads is this mapping of the status
+        const SubsystemStatus row = MakeParticlesStatus(status);
+        EXPECT_EQ(row.state, c.row);
+        EXPECT_EQ((EngineHealth{.subsystems = {row}}).IsHealthy(), c.healthy);
+        EXPECT_EQ(warnings.Count("GPU particles unavailable"), 1) << "logged once, not on every look";
+        rig.backend->Shutdown();
+    }
+}
+
+namespace
+{
+    class ParticleFallbackTest : public ::testing::Test
+    {
+    protected:
+        void SetUp() override
+        {
+            Application::GetInstance().Set3DPhysicsBackend(nullptr);
+            Time::SetTimeScale(1.0f);
+            ASSERT_TRUE(Time::SetFixedTimestep(0.02));
+        }
+
+        void TearDown() override
+        {
+            _object.reset();
+            Application::GetInstance().Set3DPhysicsBackend(nullptr);
+        }
+
+        Rendering::ParticleSystem *Make()
+        {
+            _object = GameObject::Create("FailChain");
+            auto *system = _object->AddComponent<Rendering::ParticleSystem>();
+            system->emissionRate = 50.0f;
+            system->lifetimeMin = 10.0f;
+            system->lifetimeMax = 10.0f;
+            system->shapeRadius = 0.0f;
+            return system;
+        }
+
+        GameObject::Ptr _object;
+    };
+}
+
+TEST_F(ParticleFallbackTest, AGpuFailureRestartsTheSystemOnTheCpuWithOneWarning)
+{
+    InjectedBackend rig(GpuMode::Auto);
+    ASSERT_TRUE(rig.ready);
+    PhysXBackend *physics = rig.backend.get();
+    TestSupport::FakePbdDriver *driver = rig.driver;
+    Application::GetInstance().Set3DPhysicsBackend(std::move(rig.backend));
+
+    Rendering::ParticleSystem *system = Make();
+    system->OnAttach();
+    ASSERT_EQ(system->GetActiveBackendName(), "PhysX");
+    for (int i = 0; i < 5; ++i)
+    {
+        system->OnFixedUpdate();
+    }
+    ASSERT_GT(system->GetAliveCount(), 0u);
+    ASSERT_EQ(driver->systems.size(), 1u);
+
+    // The GPU refuses the next transfer, which the next emission makes (the driver dies with the particle backend,
+    // so it is not touched again)
+    WarningCapture warnings;
+    driver->failUpload = true;
+    for (int i = 0; i < 5; ++i)
+    {
+        system->OnFixedUpdate();
+    }
+
+    EXPECT_EQ(system->GetActiveBackendName(), "CPU") << "restarted on the CPU";
+    EXPECT_EQ(physics->GetParticleBackend(), nullptr);
+    EXPECT_EQ(physics->GetGpuStatus().state, GpuState::Unavailable);
+    EXPECT_EQ(warnings.Count("GPU particles unavailable"), 1);
+    EXPECT_EQ(warnings.Count("physics backend changed"), 1);
+
+    for (int i = 0; i < 10; ++i)
+    {
+        system->OnFixedUpdate();
+    }
+    EXPECT_GT(system->GetAliveCount(), 0u) << "it simulates on the CPU";
+    EXPECT_EQ(warnings.Count("GPU particles unavailable"), 1);
+    system->OnDestroy();
 }
 
 #ifndef _WIN32
@@ -159,6 +365,7 @@ TEST(GpuProbeTest, CpuOnlyBuildsReportUnavailableNotFailed)
         ASSERT_TRUE(backend.Initialize());
         EXPECT_EQ(backend.GetGpuStatus().state, GpuState::Unavailable) << ToString(mode);
         EXPECT_EQ(MakeParticlesStatus(backend.GetGpuStatus()).state, SubsystemState::Disabled);
+        EXPECT_EQ(backend.GetParticleBackend(), nullptr) << "no GPU library: no PhysX particle backend";
         backend.Shutdown();
     }
 }

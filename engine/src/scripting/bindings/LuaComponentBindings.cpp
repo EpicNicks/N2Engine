@@ -703,6 +703,12 @@ namespace N2Engine::Scripting::Bindings
                 c.Pin()->backend = ParseEnumName<Particles::ParticleBackend>(name, "ParticleSystem:SetBackend");
             },
             "GetBackend", [](const ParticleSystemRef &c) { return EnumName(c.Pin()->backend); },
+            // The PhysX backend's material preset: "Water", "Sand" or "Smoke" (read when the system starts)
+            "SetPbdMaterial", [](const ParticleSystemRef &c, const std::string &name)
+            {
+                c.Pin()->pbdMaterial = ParseEnumName<Physics::ParticleMaterial>(name, "ParticleSystem:SetPbdMaterial");
+            },
+            "GetPbdMaterial", [](const ParticleSystemRef &c) { return EnumName(c.Pin()->pbdMaterial); },
             "SetPlayOnAwake", [](const ParticleSystemRef &c, const bool value) { c.Pin()->playOnAwake = value; },
             "GetPlayOnAwake", [](const ParticleSystemRef &c) { return c.Pin()->playOnAwake; },
             "SetMaxParticles", [](const ParticleSystemRef &c, const int value) { c.Pin()->maxParticles = value; },
