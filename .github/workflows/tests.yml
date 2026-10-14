@@ -322,6 +322,11 @@ jobs:
               echo "ready"; docker exec n2host id -u
               # The host in the image has PhysX: its health must report physics Running (over the --tls port, with the token)
               N2_ATTACH_TOKEN=ci-only-token PYTHONDONTWRITEBYTECODE=1 python3 tests/smoke/editor_host_smoke.py --scenario attach --port 9999 --tls --token-env N2_ATTACH_TOKEN --expect-physics on
+              # The Release host's log lines reach stderr, so `docker logs` has them: one timestamped line for the Hello just made
+              # (the line is written before the Hello is answered), and nothing of the token in any line
+              docker logs n2host > host.log 2>&1
+              grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z (INFO|WARN) Editor client .* said Hello .* user=token role=admin peer=' host.log || { cat host.log; echo "no timestamped Hello line in docker logs"; exit 1; }
+              if grep -q 'ci-only-token' host.log; then cat host.log; echo "the token reached docker logs"; exit 1; fi
               exit 0
             fi
             if [ "$(docker inspect -f '{{.State.Running}}' n2host)" != "true" ]; then break; fi
@@ -366,6 +371,18 @@ jobs:
               fi
               cat revoked.log
               grep -q 'SMOKE TEST FAILED: .*Hello' revoked.log
+              # The refusal and the reload are in `docker logs` (stderr), and neither the token nor its hash is
+              hash="$(printf '%s' "$entry" | sed -n 's/.*sha256:\([0-9a-f]*\).*/\1/p')"
+              test -n "$hash"
+              for j in $(seq 1 10); do
+                docker logs n2tokens > tokens-host.log 2>&1
+                if grep -Eq '^[0-9T:.Z-]+ WARN Refused Hello from editor client .* role=none\): wrong access token peer=' tokens-host.log \
+                   && grep -Eq '^[0-9T:.Z-]+ INFO Reloaded the tokens file: 0 user\(s\)' tokens-host.log; then break; fi
+                sleep 1
+              done
+              grep -Eq '^[0-9T:.Z-]+ WARN Refused Hello from editor client .* role=none\): wrong access token peer=' tokens-host.log || { cat tokens-host.log; echo "no refused-Hello line in docker logs"; exit 1; }
+              grep -Eq '^[0-9T:.Z-]+ INFO Reloaded the tokens file: 0 user\(s\)' tokens-host.log || { cat tokens-host.log; echo "no reload line in docker logs"; exit 1; }
+              if grep -q -e "$token" -e "$hash" tokens-host.log; then cat tokens-host.log; echo "a token or its hash reached docker logs"; exit 1; fi
               exit 0
             fi
             if [ "$(docker inspect -f '{{.State.Running}}' n2tokens)" != "true" ]; then break; fi

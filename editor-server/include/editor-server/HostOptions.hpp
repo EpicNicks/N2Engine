@@ -13,6 +13,7 @@
 #include <math/UUID.hpp>
 
 #include "editor-server/TokenTable.hpp"
+#include "engine/Logger.hpp"
 
 namespace N2Engine::Editor
 {
@@ -68,6 +69,12 @@ namespace N2Engine::Editor
         /// an access token has by default; for test rigs that fail Hellos on purpose. It changes nothing on a host
         /// without a token, which has no failed Hellos to count.
         bool noRateLimit = false;
+        /// --log-level <info|warn|error>: the least severe level the host's log sink (LogSink; stderr, and --log-file) writes.
+        /// Info by default. The Logger has no Debug level, and polled commands never log, so Info is quiet while idle.
+        Logger::LogLevel logLevel = Logger::LogLevel::Info;
+        /// --log-file <path>: also append the sink's lines to this file (OpenLogFileOutput; created 0600 on POSIX). RunHost
+        /// refuses a path it can't open before the engine starts. Empty: stderr only.
+        std::string logFile;
         bool showHelp = false;
 
         /// --play <file>: start as a play host (#82, E9): instead of the startup scene, load the scene snapshot in this

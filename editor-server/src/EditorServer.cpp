@@ -1908,6 +1908,20 @@ namespace N2Engine::Editor
         _peerText = std::move(text);
     }
 
+    std::string EditorServer::LoggableClaimedUser(const std::string_view claimed) const
+    {
+        if (claimed.empty() || !HasTokensFile())
+        {
+            return "-";
+        }
+        const std::shared_ptr<const TokenTable> tokens = CurrentTokens();
+        if (tokens && tokens->Find(claimed) != nullptr)
+        {
+            return std::string{claimed};
+        }
+        return "?";
+    }
+
     void EditorServer::LogRateLimitOutcome(const RateLimiter::FailureOutcome &outcome, const std::string_view user)
     {
         // One line per backoff that starts, never per refused connection; no token, only the peer and the user's name
@@ -1929,7 +1943,7 @@ namespace N2Engine::Editor
         {
             PostLog(std::format("Rate limit: user={} is backed off for {} ms after {} failed Hellos naming it, from any "
                                 "address; a Hello naming it is refused until then (last from peer={})",
-                                user, outcome.user->duration.count(), outcome.user->failures,
+                                LoggableClaimedUser(user), outcome.user->duration.count(), outcome.user->failures,
                                 _peer.ToString()),
                     true);
         }
@@ -2994,7 +3008,10 @@ namespace N2Engine::Editor
         // Client-supplied text only reaches the log, or the Error, sanitised and shortened; the token never does
         const std::string clientName = SanitizeForLog(cmd.clientName);
         const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
-        const std::string claimedUser = SanitizeForLog(cmd.user, MaxTokenUserLength);
+        // The claimed user is client text, and a client that put its token (a generated one is a well formed user name
+        // too) or anything else there must not see it in a durable log: it is logged only when it is a user of the
+        // current tokens table, else as user=? (user=- without named users)
+        const std::string claimedUser = LoggableClaimedUser(cmd.user);
         const std::string peerSuffix = PeerSuffix();
         _helloTokenRefused = false;
         BufferWriter response;
@@ -3009,7 +3026,7 @@ namespace N2Engine::Editor
             {
                 _helloTokenRefused = true;
                 Logger::Warn(std::format("Refused Hello from editor client '{}' (user={} role=none): wrong access token{}",
-                                         clientName, claimedUser.empty() ? "-" : claimedUser, peerSuffix));
+                                         clientName, claimedUser, peerSuffix));
                 WriteError(response, "Invalid access token");
                 SendResponse(clientSocket, response.Release());
                 return;
@@ -3510,7 +3527,7 @@ namespace N2Engine::Editor
             SceneManager::AddScene(std::move(newScene), false);
 
             WriteSceneData(response, sceneJsonString);
-            Logger::Info("Created scene: " + cmd.name);
+            Logger::Info("Created scene: " + SanitizeForLog(cmd.name));
         }
         catch (const std::exception &e)
         {
@@ -3526,7 +3543,7 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         const std::string sceneJsonString = LoadSceneCmd::Deserialize(reader).sceneJson;
 
-        Logger::Info("Loading scene from scene data: " + sceneJsonString.substr(0, 200));
+        Logger::Info("Loading scene from scene data: " + SanitizeForLog(sceneJsonString, 200));
 
         // Non-throwing parse: the JSON comes from the client
         nlohmann::json sceneJson = nlohmann::json::parse(sceneJsonString, nullptr, false);
@@ -3622,7 +3639,7 @@ namespace N2Engine::Editor
             }
             else if (!sceneFile.has_value())
             {
-                Logger::Warn("Rejected DeleteScene outside the scenes directory: " + cmd.sceneName);
+                Logger::Warn("Rejected DeleteScene outside the scenes directory: " + SanitizeForLog(cmd.sceneName));
                 WriteError(response, "Not a scene file in the project's scenes directory: " + cmd.sceneName);
             }
             else if (loadedScene != nullptr && sceneFile->stem() == std::filesystem::path(loadedScene->sceneName))
@@ -3636,7 +3653,7 @@ namespace N2Engine::Editor
                 // narrow string can throw for names the code page can't represent.
                 // Only the file is removed. Scenes in SceneManager aren't tied to files (the editor loads
                 // them by sending JSON), so a stored scene that happens to share the name is left alone.
-                Logger::Info("Deleting scene file: " + cmd.sceneName);
+                Logger::Info("Deleting scene file: " + SanitizeForLog(cmd.sceneName));
                 std::filesystem::remove(*sceneFile);
                 WriteOk(response);
             }
@@ -5071,7 +5088,7 @@ namespace N2Engine::Editor
         {
             std::string scriptTemplate = Scripting::MakeLuaScriptTemplate(cmd.name);
             WriteScriptData(response, scriptTemplate);
-            Logger::Info("Generated script template for: " + cmd.name);
+            Logger::Info("Generated script template for: " + SanitizeForLog(cmd.name));
         }
         catch (const std::exception &e)
         {

@@ -10,6 +10,8 @@
 #      sudo systemctl enable --now n2editorhost
 #   4. Reach it through an SSH tunnel (the host listens on 127.0.0.1 only):  ssh -L 9999:127.0.0.1:9999 <server>
 #      The TLS certificate fingerprint is in the journal:  journalctl -u n2editorhost | grep fingerprint
+#      So is the host's log, one timestamped line per Hello, per write ("audit: user=..."), per refusal and per ban:
+#        journalctl -u n2editorhost -f      (--log-file <path> on ExecStart adds a file; docs/logging-and-editor.html#host-log)
 #
 # More than one person, or roles (admin, editor, viewer)? Use deploy/n2editorhost-tokens.service instead: per-user tokens in a
 # file (--tokens-file; it cannot be combined with --token-env), with a static user so the file can be mode 0600 and reloaded.
