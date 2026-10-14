@@ -89,6 +89,11 @@ namespace N2Engine::Editor
                 options.readOnly = true;
                 continue;
             }
+            if (arg == "--no-rate-limit")
+            {
+                options.noRateLimit = true;
+                continue;
+            }
             if (arg == "--new-token")
             {
                 // Two values: "--new-token alice editor". A value starting with "--" is the next option.
@@ -353,6 +358,11 @@ Options:
                             work, with or without --token-env. Commands nobody has classified are refused.
                             Can't be combined with --play (it runs the game and the project's Lua) or
                             --create (it writes a project)
+  --no-rate-limit           Turn off the failed-Hello rate limiting. By default, with --token-env or
+                            --tokens-file, an address that fails 3 Hellos is backed off (1 s, doubling to
+                            5 min; its connections are closed at once, before any TLS handshake), loopback
+                            as a whole is backed off after 10 failures in a minute, and with --tokens-file a
+                            user that fails 3 Hellos is backed off for up to 30 s. For test rigs only
   --play <file>             Start as a play host: run the scene snapshot in <file> (what the
                             WritePlaySnapshot command writes; or a res:// .scene path in the project)
                             as a game instead of opening the startup scene. Pass the same --project
