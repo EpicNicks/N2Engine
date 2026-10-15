@@ -66,7 +66,7 @@
 <div class="content">
 
 <h1>Web build</h1>
-<p class="lead">N2Engine can be configured with Emscripten to build for WebAssembly. This is <strong>stage 0</strong> of <a href="https://github.com/EpicNicks/N2Engine/issues/155">issue #155</a> <span class="badge">PR #NNN</span>: the toolchain, the build profiles, a size report and a CI job that builds the <code>math</code> and <code>text</code> libraries and runs their unit tests under node. There is no web player yet; this page says what exists, how to build it, and what does not.</p>
+<p class="lead">N2Engine can be configured with Emscripten to build for WebAssembly. This is <strong>stage 0</strong> of <a href="https://github.com/EpicNicks/N2Engine/issues/155">issue #155</a> <span class="badge">PR #163</span>: the toolchain, the build profiles, a size report and a CI job that builds the <code>math</code> and <code>text</code> libraries and runs their unit tests under node. There is no web player yet; this page says what exists, how to build it, and what does not.</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -130,7 +130,7 @@ bash scripts/web-size-report.sh build-web/bin</code></pre>
 </div>
 <p>Two source-level changes were needed. The <code>math</code> target takes no <code>-msse4.1</code>/<code>-mavx</code> flags on the web (Emscripten reports its processor as x86, but its compiler defines no x86 macros), so <code>CpuInfo.hpp</code> selects the scalar implementations, the same ones used on any architecture without a SIMD tier. And three tests in <code>tests/math/UUIDRandomTests.cpp</code> that start <code>std::thread</code>s skip themselves in a build without threads (<code>GTEST_SKIP</code> under <code>__EMSCRIPTEN__</code> without <code>__EMSCRIPTEN_PTHREADS__</code>); the single-threaded generation test still runs.</p>
 <div class="callout note" id="design-web-reduced-set">
-<p class="callout-title">Design decision: stage 0 builds math and text only <span class="badge">PR #NNN</span></p>
+<p class="callout-title">Design decision: stage 0 builds math and text only <span class="badge">PR #163</span></p>
 <p>The engine core cannot be built for the web without changing its sources (see the table above), and stage 0 is limited to the toolchain, the profiles, the size report and the CI leg. Building the two CPU-only libraries proves the toolchain, the flags and the node test runner end to end, with nothing that needs a decision about windows, threads or files. Each later stage adds targets by removing a row from the exclusion table.</p>
 </div>
 
@@ -173,7 +173,7 @@ cmake -S . -B build-web -DN2ENGINE_WEB_BUDGET_TOTAL_GZIP=2000000 &amp;&amp; cmak
 <p>No budget is set at stage 0 (the CI step only reports). Brotli sizes and time to first frame are not measured yet.</p>
 
 <h2 id="ci">CI</h2>
-<p>The job <code>web (Emscripten, dev profile, node tests)</code> in <code>.github/workflows/tests.yml</code> <span class="badge">PR #NNN</span> installs emsdk 4.0.10, configures the dev profile with <code>emcmake</code>, configures (only) the <code>size</code> and <code>speed</code> profiles without tests, builds <code>math_tests</code> and <code>text_tests</code>, runs <code>ctest</code> (node runs each test), and reports the artifact sizes in the job summary. It is not a required check; it follows the other build jobs: <code>needs: changes</code> and the same docs-only <code>if</code>, ccache is not used, and it uploads nothing. See <a href="testing.html#ci">Testing &amp; CI</a>.</p>
+<p>The job <code>web (Emscripten, dev profile, node tests)</code> in <code>.github/workflows/tests.yml</code> <span class="badge">PR #163</span> installs emsdk 4.0.10, configures the dev profile with <code>emcmake</code>, configures (only) the <code>size</code> and <code>speed</code> profiles without tests, builds <code>math_tests</code> and <code>text_tests</code>, runs <code>ctest</code> (node runs each test), and reports the artifact sizes in the job summary. It is not a required check; it follows the other build jobs: <code>needs: changes</code> and the same docs-only <code>if</code>, ccache is not used, and it uploads nothing. See <a href="testing.html#ci">Testing &amp; CI</a>.</p>
 
 <h2 id="not-done">What is not done yet</h2>
 <p>The stages are from issue #155; only stage 0 exists.</p>
