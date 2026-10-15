@@ -349,7 +349,7 @@ const auto layout = font-&gt;Layout("Hello, world", options);
 <tbody>
 <tr><td>OpenGL</td><td>Drawn with the SDF shader above, blended.</td></tr>
 <tr><td>Software <span class="badge">PR #51</span></td><td>Drawn with the <a href="#text-shader-software">alpha-tested software text shader</a>: hard edges, opaque, writing depth. Works headless, which the <a href="#text-golden">golden-image tests</a> use.</td></tr>
-<tr><td>Vulkan</td><td>Not drawn: the backend draws nothing yet (<a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>), and has no text shader.</td></tr>
+<tr><td>Vulkan</td><td>Not drawn: it has no text shader yet (stage E of <a href="https://github.com/EpicNicks/N2Engine/issues/43">#43</a>; the GLSL port is already compiled and pipeline-checked, <a href="application.html#vulkan-renderer">stage B</a> <span class="badge">PR #144</span>), so <code>GetStandardTextShader()</code> is null.</td></tr>
 </tbody>
 </table>
 </div>

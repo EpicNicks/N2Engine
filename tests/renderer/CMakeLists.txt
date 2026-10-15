@@ -26,6 +26,11 @@ set_target_properties(renderer_tests PROPERTIES
         CXX_EXTENSIONS OFF
 )
 
+# The Vulkan shader parity test reads the GLSL under renderer/shaders/vulkan/ as text (no device needed)
+target_compile_definitions(renderer_tests PRIVATE
+        N2_RENDERER_SOURCE_DIR="${CMAKE_SOURCE_DIR}/renderer"
+)
+
 if (MSVC)
     target_compile_options(renderer_tests PRIVATE /W4)
 else()
