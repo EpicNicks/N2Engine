@@ -288,6 +288,22 @@ TEST_F(LuaBudgetTest, PcallAndXpcallCannotSwallowTheBudget)
     ASSERT_TRUE(ordinary.valid());
     EXPECT_FALSE(ordinary[0].get<bool>());
     EXPECT_EQ(ordinary[1].get<std::string>(), "plain");
+
+    // ...and xpcall still hands ordinary errors to the script's handler (it is kept only from the budget error, which
+    // Lua would hand it inside the count hook, where nothing counts its instructions)
+    const sol::protected_function_result handled = Run(
+        "return xpcall(error, function(message) return 'handled: ' .. message end, 'plain')");
+    ASSERT_TRUE(handled.valid()) << ErrorOf(handled);
+    EXPECT_FALSE(handled[0].get<bool>());
+    EXPECT_EQ(handled[1].get<std::string>(), "handled: plain");
+
+    // A handler whose own instructions run out of budget (after an ordinary error) is stopped too
+    Lua()["budget_handler_after"] = false;
+    const sol::protected_function_result handlerLoop = Run(
+        "xpcall(error, function(message) while true do end end, 'plain') budget_handler_after = true");
+    EXPECT_FALSE(handlerLoop.valid());
+    EXPECT_NE(ErrorOf(handlerLoop).find("instruction budget"), std::string::npos) << ErrorOf(handlerLoop);
+    EXPECT_FALSE(Lua()["budget_handler_after"].get<bool>());
 }
 
 TEST_F(LuaBudgetTest, AMemoryBombIsAbortedAndTheStateStaysUsable)

@@ -203,7 +203,23 @@ namespace N2Engine::Scripting
                 return ok, ...
             end
             pcall = function(...) return check(rawPcall(...)) end
-            xpcall = function(...) return check(rawXpcall(...)) end
+            -- Lua calls a message handler where the error is raised, before unwinding. The budget error is raised in
+            -- the count hook, and the VM runs hooks with hooks off (luaD_hook clears allowhook until the hook
+            -- returns), so a script's handler called there would run uncounted: `xpcall(f, function() while true do
+            -- end end)` would never end. The script's handler is therefore never handed a budget error; this small
+            -- wrapper (which runs a few instructions and calls no script code for it) hands it on unchanged.
+            local isFunction = type
+            xpcall = function(f, handler, ...)
+                if isFunction(handler) ~= "function" then
+                    return check(rawXpcall(f, handler, ...)) -- xpcall's own argument error
+                end
+                return check(rawXpcall(f, function(message)
+                    if isBudgetError(message) then
+                        return message
+                    end
+                    return handler(message)
+                end, ...))
+            end
 
             -- The VM runs a __gc finalizer with its debug hooks off, so the instruction budget cannot see into it:
             -- scripts get no finalizers. (Lua registers one only if __gc is in the metatable at setmetatable.)
