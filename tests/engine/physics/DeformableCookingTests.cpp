@@ -25,6 +25,7 @@
 #include "engine/physics/TetMeshData.hpp"
 #include "engine/physics/physx/DeformableCooking.hpp"
 #include "engine/rendering/Mesh.hpp"
+#include "engine/softbody/DeformableDriver.hpp"
 #include "engine/softbody/TetSkinning.hpp"
 #include "engine/softbody/Tetrahedraliser.hpp"
 
