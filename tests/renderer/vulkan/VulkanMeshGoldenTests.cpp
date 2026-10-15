@@ -27,6 +27,7 @@
 #include "engine/rendering/MeshRenderer.hpp"
 #include "engine/rendering/Texture.hpp"
 
+#include "BlendReference.hpp"
 #include "CrossBackendDiff.hpp"
 #include "VulkanTestFixture.hpp"
 
@@ -36,8 +37,9 @@
 // no window, the offscreen target) and read back. A textured cube must show its texture upright on the faces the camera
 // sees (so a flipped UV, a swapped axis or a wrong winding fails), a cutout material must leave holes, a double-sided quad
 // must show from behind and a single-sided one must not, and two submeshes must show their two materials, and (stage C) a
-// lit face toward the light must be brighter than one edge-on to it. The blended "mixed" part of the two-submesh test is
-// stage D's.
+// lit face toward the light must be brighter than one edge-on to it. The two-submesh test's blended "mixed" part (stage D)
+// has a Vulkan expectation of its own: the software renderer cannot blend, so that frame is compared with it on the opaque
+// half only (BlendReference.hpp).
 //
 // Every scene is also rendered on a headless SoftwareRenderer and the two frames are compared pixel by pixel (the cross
 // backend diff, CrossBackendDiff.hpp): the unlit scenes are nearest-sampled, so the software renderer is exact and the
@@ -426,5 +428,65 @@ TEST_F(VulkanMeshGoldenTest, TwoSubmeshesShowTheirTwoMaterials)
     EXPECT_GT(red, 300);
     EXPECT_NEAR(red, green, red / 10) << "two halves of one size";
 
-    // The software test also draws a mixed opaque and blended mesh here: that part waits for blending (stage D of #43)
+    // The mixed opaque and blended mesh of the software test: submesh 0 red, submesh 1 an Unlit green of alpha 0.5 with
+    // AlphaMode::Blend, which the Transparent queue draws blended. The software renderer cannot blend and draws that half
+    // opaque green (its test keeps kGreen); Vulkan blends like OpenGL: the left half is exactly kRed, the right half is
+    // half green over the black clear colour, (0, 128, 0) within one unit. So this scene is NOT compared with the software
+    // frame as a whole: the left half (the opaque part, with a 2-pixel border around the seam) is compared strictly, and
+    // the blended half is checked against GL's equation at its interior pixels (BlendReference.hpp).
+    const auto buildMixed = [&mesh](Scene& scene)
+    {
+        auto* renderer = AddMesh(scene, "Mixed", mesh);
+        renderer->SetMaterial(0, Unlit(Common::Color::Red));
+        auto glass = Unlit(Common::Color{0.0f, 1.0f, 0.0f, 0.5f});
+        glass->SetAlphaMode(AlphaMode::Blend);
+        renderer->SetMaterial(1, glass);
+    };
+    const Camera camera = CameraAt(Math::Vector3(0.0f, 0.0f, 3.0f));
+    const Frame mixed = RenderOn(R(), buildMixed, camera);
+    const Frame mixedSoftware = RenderOnSoftware(buildMixed, camera);
+    EXPECT_EQ(mixed.At(Size / 2 - 8, row), kRed) << "submesh 0, left: opaque";
+    const Rgb glassPixel = mixed.At(Size / 2 + 8, row);
+    const int expectedGreen = VulkanTesting::Blend::BlendChannel(255, 0, 0.5, false);
+    EXPECT_EQ(glassPixel.r, 0);
+    EXPECT_NEAR(glassPixel.g, expectedGreen, 1) << "submesh 1, right: 0.5 green over black, not the software kGreen";
+    EXPECT_EQ(glassPixel.b, 0);
+    EXPECT_EQ(mixed.Count(kGreen), 0) << "no pixel is the opaque green";
+    EXPECT_EQ(mixedSoftware.At(Size / 2 + 8, row), kGreen) << "the software renderer draws it opaque";
+    const int blendedPixels = [&mixed]
+    {
+        int count = 0;
+        for (int y = 0; y < Size; ++y)
+        {
+            for (int x = 0; x < Size; ++x)
+            {
+                const Rgb p = mixed.At(x, y);
+                count += (p.r == 0 && p.b == 0 && p.g >= expectedGreen - 1 && p.g <= expectedGreen + 1) ? 1 : 0;
+            }
+        }
+        return count;
+    }();
+    EXPECT_NEAR(blendedPixels, mixed.Count(kRed), mixed.Count(kRed) / 10) << "two halves of one size";
+
+    // The opaque part against the software frame, strictly (the blended half is left out, with its seam)
+    const std::vector<bool> blendedHalf = VulkanTesting::Blend::Dilate(
+        VulkanTesting::Blend::CoveredPixels(
+            [&]
+            {
+                // A flat render of the right half only: submesh 1 with a flat opaque material, on the software renderer
+                return RenderOnSoftware([&mesh](Scene& scene)
+                {
+                    auto* renderer = AddMesh(scene, "RightHalf", mesh);
+                    renderer->SetMaterial(0, Unlit(Common::Color::Black));
+                    renderer->SetMaterial(1, Unlit(Common::Color::Green));
+                }, camera).AsImage();
+            }(),
+            {0, 0, 0}),
+        Size, Size, 2);
+    VulkanTesting::Diff::Options options;
+    options.ignore = &blendedHalf;
+    EXPECT_TRUE(VulkanTesting::Diff::Agree(mixed.AsImage(), mixedSoftware.AsImage(), options));
+    const std::string described = VulkanTesting::Diff::Compare(mixed.AsImage(), mixedSoftware.AsImage(), options).Describe();
+    std::cout << "[ cross-diff ] mixed opaque and blended submeshes (opaque part, strict): " << described << std::endl;
+    VulkanTesting::Diff::RecordedLines().push_back("mesh golden, mixed opaque and blended (opaque part): " + described);
 }

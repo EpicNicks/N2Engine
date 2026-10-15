@@ -11,9 +11,11 @@
 #include "VulkanDraw.hpp"
 #include "VulkanResources.hpp"
 
-// Stages B and C of the Vulkan backend (#43): the three built-in shaders (unlit, lit, text; unlit and lit are handed out
+// Stages B, C and D of the Vulkan backend (#43): the three built-in shaders (unlit, lit, text; unlit and lit are handed out
 // and drawn with so far, text is stage E), materials, the pipeline layout and cache, the per-draw uniform ring, descriptor
-// sets, scene lighting, and DrawMesh / IndexRange / DrawObjects.
+// sets, scene lighting, and DrawMesh / IndexRange / DrawObjects, with blending (stage D) exactly as OpenGL's ApplyRenderState:
+// blend -> SRC_ALPHA / ONE_MINUS_SRC_ALPHA (additive: SRC_ALPHA / ONE) for colour AND alpha, depth write only while the draw also
+// depth-tests, and additive without blend an opaque draw.
 //
 // Shaders: GLSL 450 under renderer/shaders/vulkan/, compiled to SPIR-V by glslangValidator or glslc when the renderer is
 // BUILT (renderer/CMakeLists.txt) and embedded as generated headers; nothing generated is committed. Without either tool
@@ -47,7 +49,9 @@
 // same wait. Nothing a pending frame may read is ever rewritten.
 //
 // Pipelines are cached by (shader, RenderState, wireframe) and made lazily on first use, under the renderer's lock, with
-// a dynamic viewport and scissor so resizing the target never invalidates them. Clip space: the vertex shaders remap z from
+// a dynamic viewport and scissor so resizing the target never invalidates them. Draws reach the target in submission order
+// (the renderer never reorders), and SetViewProjection mid-frame (the UI pass after the scene) affects only the draws after it:
+// each draw copies the matrices current when it was recorded into its own ring block. Clip space: the vertex shaders remap z from
 // OpenGL's -w..w to Vulkan's 0..w, and BeginFrame's viewport has a negative height so y stays up as in GL; the image is then
 // upright as in GL, so GL's counter-clockwise front faces stay VK_FRONT_FACE_COUNTER_CLOCKWISE.
 
@@ -764,7 +768,7 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, con
     key.depthWrite = state.depthWrite;
     key.cull = static_cast<std::uint8_t>(state.cull);
     key.blend = state.blend;
-    key.additive = state.additive;
+    key.additive = state.blend && state.additive; // GL: additive without blend is an opaque draw, so it shares the opaque pipeline
     key.wireframe = wireframe;
     const std::uint32_t packed = key.Pack();
     if (const auto it = draw.pipelines.find(packed); it != draw.pipelines.end())
@@ -846,9 +850,24 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, con
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
-    // Blending is stage D: blend and additive are part of the key already, but every pipeline writes opaque for now
+    // Blending exactly as OpenGL's ApplyRenderState: glBlendFunc(GL_SRC_ALPHA, additive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA) sets
+    // the SAME factors for colour and alpha, equation ADD, so the target's alpha is blended too. Additive only counts with blend.
     VkPipelineColorBlendAttachmentState attachment{};
-    attachment.blendEnable = VK_FALSE;
+    if (state.blend)
+    {
+        const VkBlendFactor destinationFactor = state.additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        attachment.blendEnable = VK_TRUE;
+        attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        attachment.dstColorBlendFactor = destinationFactor;
+        attachment.colorBlendOp = VK_BLEND_OP_ADD;
+        attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        attachment.dstAlphaBlendFactor = destinationFactor;
+        attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
+    else
+    {
+        attachment.blendEnable = VK_FALSE;
+    }
     attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
         VK_COLOR_COMPONENT_A_BIT;
     VkPipelineColorBlendStateCreateInfo colorBlend{};
@@ -1256,10 +1275,6 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     }
     const VulkanMaterial& vulkanMaterial = *materialIt->second;
 
-    if (state.blend)
-    {
-        LogOnce("blending is not implemented yet (stage D of #43): blended draws are drawn opaque");
-    }
     const VkPipeline pipeline = GetPipelineLocked(vulkanMaterial.kind, state, draw.wireframe);
     if (pipeline == VK_NULL_HANDLE)
     {

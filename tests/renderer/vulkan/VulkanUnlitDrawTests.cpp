@@ -328,18 +328,38 @@ TEST_F(VulkanDrawTest, TheDefaultStateCullsBackFacesAndDepthTestsAndWritesAsTheO
     EXPECT_EQ(back.Count(kRed), 0);
 }
 
-TEST_F(VulkanDrawTest, ABlendedDrawIsDrawnOpaqueUntilStageD)
+TEST_F(VulkanDrawTest, ABlendedDrawBlendsWithWhatIsBehindItAsOnGL)
 {
-    // Blending is stage D of #43: blend and additive are accepted, drawn as opaque (and logged once)
+    // Stage D of #43 replaced stage B's "a blended draw is drawn opaque": a half-alpha red quad over the black clear colour
+    // is half red (SRC_ALPHA, ONE_MINUS_SRC_ALPHA: 0.5 * 255 = 127.5, within one unit), an additive one adds half of its
+    // colour, and without blend the same quad replaces what is behind it. (VulkanBlendTests.cpp has the full set.)
     IMaterial* halfRed = Colour(1.0f, 0.0f, 0.0f, 0.5f);
     IMesh* quad = MakeMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
     ASSERT_NE(quad, nullptr);
     RenderState additive = RenderState::Transparent();
     additive.additive = true;
+    const auto isHalfRed = [](const Frame& frame)
+    {
+        for (int y = 0; y < Size; ++y)
+        {
+            for (int x = 0; x < Size; ++x)
+            {
+                const Rgb p = frame.At(x, y);
+                if (p.r < 127 || p.r > 128 || p.g != 0 || p.b != 0)
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
     const Frame blended = RenderFrame([&] { R().DrawMesh(quad, Identity, halfRed, RenderState::Transparent()); });
-    EXPECT_EQ(blended.Count(kRed), Size * Size);
+    EXPECT_TRUE(isHalfRed(blended));
+    EXPECT_EQ(blended.Count(kRed), 0) << "not drawn opaque";
     const Frame added = RenderFrame([&] { R().DrawMesh(quad, Identity, halfRed, additive); });
-    EXPECT_EQ(added.Count(kRed), Size * Size);
+    EXPECT_TRUE(isHalfRed(added)) << "additive over black: half of the red";
+    const Frame opaque = RenderFrame([&] { R().DrawMesh(quad, Identity, halfRed, RenderState::Opaque()); });
+    EXPECT_EQ(opaque.Count(kRed), Size * Size) << "without blend the alpha is ignored";
 }
 
 // ============================================================================
