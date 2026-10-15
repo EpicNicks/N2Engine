@@ -1,14 +1,19 @@
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 
 #include <nlohmann/json.hpp>
 
 #include "engine/GameObjectScene.hpp"
+#include "engine/sceneManagement/SceneFile.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
+#include "engine/serialization/JsonLimits.hpp"
+#include "DeepSceneJson.hpp"
 
 using namespace N2Engine;
 
@@ -225,4 +230,70 @@ TEST(SceneStorageTest, UpdateSceneRefusesADuplicateName)
     EXPECT_EQ(SceneManager::GetSceneIndex("SceneStorage_NameB"), indexB);
     EXPECT_TRUE(SceneManager::HasScene("SceneStorage_NameB"));
     EXPECT_FALSE(SceneManager::HasScene("SceneStorage_NoSuchName"));
+}
+
+// ============================================================================
+// Scene files nested too deep (JsonLimits.hpp): refused before they are parsed
+// ============================================================================
+
+namespace
+{
+    // A scene file with this text in the temp folder, removed when it goes out of scope
+    class TempSceneFile
+    {
+    public:
+        explicit TempSceneFile(const std::string &text)
+            : _path(std::filesystem::temp_directory_path() /
+                    ("n2_scene_depth_" + std::to_string(++counter) + ".scene"))
+        {
+            std::ofstream file(_path, std::ios::binary);
+            file << text;
+        }
+        ~TempSceneFile()
+        {
+            std::error_code error;
+            std::filesystem::remove(_path, error);
+        }
+        TempSceneFile(const TempSceneFile &) = delete;
+        TempSceneFile &operator=(const TempSceneFile &) = delete;
+
+        [[nodiscard]] const std::filesystem::path &Path() const { return _path; }
+
+    private:
+        static inline int counter = 0;
+        std::filesystem::path _path;
+    };
+}
+
+TEST(SceneStorageTest, SceneFileLoadKeepsTheDeepestAllowedSceneAndRefusesOnePastIt)
+{
+    {
+        const TempSceneFile file(TestJson::SceneText(JsonLimits::MaxHierarchyDepth - 1));
+        SceneFile loaded;
+        ASSERT_TRUE(loaded.Load(file.Path()));
+        EXPECT_EQ(loaded.GetSceneName(), "Deep");
+        EXPECT_NE(Scene::FromJSON(loaded.GetData(), true), nullptr);
+    }
+    {
+        // 2 levels of JSON per GameObject: this text is past the JSON cap, so it is refused before it is parsed
+        const TempSceneFile file(TestJson::SceneText(JsonLimits::MaxSceneJsonDepth));
+        SceneFile loaded;
+        EXPECT_FALSE(loaded.Load(file.Path()));
+        EXPECT_TRUE(loaded.GetData().empty()) << "a refused file leaves the data as it was";
+    }
+    {
+        // within the JSON cap but past the hierarchy cap: the file loads as data and the scene is refused
+        const TempSceneFile file(TestJson::SceneText(JsonLimits::MaxHierarchyDepth + 1));
+        SceneFile loaded;
+        ASSERT_TRUE(loaded.Load(file.Path()));
+        EXPECT_EQ(Scene::FromJSON(loaded.GetData(), true), nullptr);
+    }
+}
+
+TEST(SceneStorageTest, SceneFileLoadRefusesAHundredThousandLevelChain)
+{
+    const TempSceneFile file(TestJson::SceneText(100000));
+    SceneFile loaded;
+    EXPECT_FALSE(loaded.Load(file.Path()));
+    EXPECT_TRUE(loaded.GetData().empty());
 }
