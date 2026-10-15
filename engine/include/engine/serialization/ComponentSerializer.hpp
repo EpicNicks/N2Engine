@@ -16,6 +16,7 @@
 #include "engine/Logger.hpp"
 
 #include "engine/serialization/FieldInfo.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -159,14 +160,28 @@ namespace N2Engine
                 // Serialize lambda
                 [&member, name](nlohmann::json &j)
                 {
-                    j[name] = member;
+                    if constexpr (std::is_same_v<T, nlohmann::json>)
+                    {
+                        j[name] = JsonLimits::IterativeCopy(member); // JSON data can nest deep: no recursive copy
+                    }
+                    else
+                    {
+                        j[name] = member;
+                    }
                 },
                 // Deserialize lambda
                 [&member, name](const nlohmann::json &j, ReferenceResolver *resolver)
                 {
                     if (j.contains(name))
                     {
-                        member = j[name].get<T>();
+                        if constexpr (std::is_same_v<T, nlohmann::json>)
+                        {
+                            member = JsonLimits::IterativeCopy(j[name]);
+                        }
+                        else
+                        {
+                            member = j[name].get<T>();
+                        }
                     }
                 },
                 MakeFieldInfo<T>(name));
@@ -435,7 +450,9 @@ namespace N2Engine
                     const nlohmann::json &array = j[name];
                     if (!array.is_array())
                     {
-                        Logger::Warn(std::format("Asset list '{}' isn't an array: {}", name, array.dump()));
+                        // Dumped without recursion: it is scene data, which can nest as deep as the scene cap
+                        Logger::Warn(std::format("Asset list '{}' isn't an array: {}", name,
+                                                 JsonLimits::IterativeDump(array)));
                         return;
                     }
                     assetRefs.reserve(array.size());

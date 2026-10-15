@@ -10,6 +10,7 @@
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/Camera.hpp"
 #include "engine/IRenderable.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/rendering/Light.hpp"
@@ -723,7 +724,7 @@ json Scene::Serialize() const
     {
         roots.push_back(root->Serialize());
     }
-    j["rootGameObjects"] = roots;
+    j["rootGameObjects"] = std::move(roots); // moved: copying the tree would recurse once per JSON level
 
     return j;
 }
@@ -757,11 +758,18 @@ void Scene::Deserialize(const json &j)
 
 std::unique_ptr<Scene> Scene::FromJSON(const nlohmann::json &j, bool validate)
 {
+    // Data deeper than a scene may nest is refused before anything walks it (the error below dumps it, and
+    // Deserialize and the component loaders recurse over it). A value built from text is walked without recursion.
+    if (JsonLimits::SceneValueTooDeep(j))
+    {
+        Logger::Error("Failed to load scene: " + JsonLimits::SceneJsonTooDeepMessage());
+        return nullptr;
+    }
     if (validate)
     {
         if (!j.contains("name") || !j.contains("rootGameObjects") || !j["rootGameObjects"].is_array())
         {
-            Logger::Error("Invalid scene json provided, missing name or rootGameObjects\n" + j.dump());
+            Logger::Error("Invalid scene json provided, missing name or rootGameObjects\n" + JsonLimits::IterativeDump(j));
             return nullptr;
         }
         // GameObjects being invalid will error if the Component type is not present in the resolver
