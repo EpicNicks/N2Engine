@@ -820,7 +820,7 @@ jobs:
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
-          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests
+          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests -- -k 0
 
       # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
       - name: Test under node
