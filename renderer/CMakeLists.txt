@@ -78,6 +78,9 @@ target_include_directories(renderer
 )
 if(N2ENGINE_RENDERER_VULKAN)
     target_include_directories(renderer PRIVATE ${Vulkan_INCLUDE_DIRS})
+    # AMD VulkanMemoryAllocator (MIT, one vendored header): PRIVATE, so no public header and no dependant sees it, and
+    # SYSTEM, so its own warnings stay out of our build. Only renderer/src/vulkan/ includes it (VulkanVma.hpp)
+    target_include_directories(renderer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/external/VulkanMemoryAllocator)
 endif()
 
 # Compile definitions
