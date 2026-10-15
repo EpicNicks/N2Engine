@@ -39,7 +39,8 @@
 // must show from behind and a single-sided one must not, and two submeshes must show their two materials, and (stage C) a
 // lit face toward the light must be brighter than one edge-on to it. The two-submesh test's blended "mixed" part (stage D)
 // has a Vulkan expectation of its own: the software renderer cannot blend, so that frame is compared with it on the opaque
-// half only (BlendReference.hpp).
+// half only (BlendReference.hpp). A Vulkan-only scene (stage D) proves that the Transparent queue reaches the target back to
+// front through Scene::Render: two overlapping half-alpha quads, compared with the CPU composite of their software layers.
 //
 // Every scene is also rendered on a headless SoftwareRenderer and the two frames are compared pixel by pixel (the cross
 // backend diff, CrossBackendDiff.hpp): the unlit scenes are nearest-sampled, so the software renderer is exact and the
@@ -489,4 +490,114 @@ TEST_F(VulkanMeshGoldenTest, TwoSubmeshesShowTheirTwoMaterials)
     const std::string described = VulkanTesting::Diff::Compare(mixed.AsImage(), mixedSoftware.AsImage(), options).Describe();
     std::cout << "[ cross-diff ] mixed opaque and blended submeshes (opaque part, strict): " << described << std::endl;
     VulkanTesting::Diff::RecordedLines().push_back("mesh golden, mixed opaque and blended (opaque part): " + described);
+}
+
+TEST_F(VulkanMeshGoldenTest, TheTransparentQueueReachesTheTargetBackToFrontWhateverTheHierarchyOrder)
+{
+    // Two half-alpha unlit quads (AlphaMode::Blend, so both are drawn by Scene::Render's Transparent queue with
+    // RenderState::Transparent()) that overlap on screen, at different depths. The one added to the scene FIRST is the
+    // NEAR one, so hierarchy order is the opposite of back to front: only Scene::Render's sort by depth draws the far one
+    // first. Neither writes depth, so the order of the draws alone decides the overlap: far then near gives
+    // a_near * near + (1 - a_near) * (a_far * far + (1 - a_far) * black), the other order a different colour.
+    //
+    // The reference is the GL-semantics composite of BlendReference.hpp, never a single software frame (the software
+    // renderer cannot blend): each quad rendered OPAQUE and alone on the software renderer gives its colour and coverage,
+    // and the two layers are blended on the CPU, far then near, over the software frame of the empty scene. The Vulkan
+    // frame must match it strictly (2/255 per channel, every pixel: unlit and flat, as the other strict scenes), and must
+    // NOT match the composite in the hierarchy order. Then the depths are swapped (same hierarchy order, same colours):
+    // the other quad is drawn first now, and the frame follows.
+    using VulkanTesting::Blend::Layer;
+    const Camera camera = CameraAt(Math::Vector3(0.0f, 0.0f, 3.0f));
+    // The near quad (z = 1, 2 units from the camera) spans about x 3..41 and y 13..51 on screen; the far one (z = 0,
+    // 3 units) about x 26..51 and y 19..45: they overlap around x 26..41, y 19..45
+    const Math::Vector3 nearLeft(-0.25f, 0.0f, 1.0f);
+    const Math::Vector3 farRight(0.25f, 0.0f, 0.0f);
+    const auto halfAlpha = [](const Common::Color& colour)
+    {
+        auto material = Unlit(Common::Color{colour.r, colour.g, colour.b, 0.5f});
+        material->SetAlphaMode(AlphaMode::Blend);
+        return material;
+    };
+    // Red at `redAt` added first, blue at `blueAt` added second
+    const auto scene = [&halfAlpha](const Math::Vector3 redAt, const Math::Vector3 blueAt)
+    {
+        return [&halfAlpha, redAt, blueAt](Scene& s)
+        {
+            AddMesh(s, "Red", Mesh::GetBuiltin(BuiltinMesh::Quad), redAt)->SetMaterial(0, halfAlpha(Common::Color::Red));
+            AddMesh(s, "Blue", Mesh::GetBuiltin(BuiltinMesh::Quad), blueAt)->SetMaterial(0, halfAlpha(Common::Color::Blue));
+        };
+    };
+    // One quad drawn opaque and alone on the software renderer: a layer of the composite
+    const auto layer = [&camera](const Common::Color& colour, const Math::Vector3 at)
+    {
+        const Frame flat = RenderOnSoftware([&colour, at](Scene& s)
+        {
+            AddMesh(s, "Layer", Mesh::GetBuiltin(BuiltinMesh::Quad), at)->SetMaterial(0, Unlit(colour));
+        }, camera);
+        Layer result;
+        result.colour = flat.AsImage();
+        result.covered = VulkanTesting::Blend::CoveredPixels(result.colour, {0, 0, 0});
+        result.alpha = 0.5;
+        return result;
+    };
+    const VulkanTesting::Diff::Image empty = RenderOnSoftware([](Scene&) {}, camera).AsImage();
+    constexpr int overlapX = 34;
+    constexpr int overlapY = 32;
+
+    const auto check = [&](const Math::Vector3 redAt, const Math::Vector3 blueAt, const bool redIsFar, const std::string& what)
+    {
+        const Frame vulkan = RenderOn(R(), scene(redAt, blueAt), camera);
+        const Layer red = layer(Common::Color::Red, redAt);
+        const Layer blue = layer(Common::Color::Blue, blueAt);
+        const VulkanTesting::Diff::Image backToFront =
+            VulkanTesting::Blend::Composite(empty, redIsFar ? std::vector<Layer>{red, blue} : std::vector<Layer>{blue, red});
+        const VulkanTesting::Diff::Image hierarchyOrder = VulkanTesting::Blend::Composite(empty, std::vector<Layer>{red, blue});
+        const VulkanTesting::Diff::Image frontToBack =
+            VulkanTesting::Blend::Composite(empty, redIsFar ? std::vector<Layer>{blue, red} : std::vector<Layer>{red, blue});
+
+        // Both quads cover the overlap pixel (the scene means what it says)
+        const std::size_t overlap = static_cast<std::size_t>(overlapY) * static_cast<std::size_t>(Size) +
+            static_cast<std::size_t>(overlapX);
+        EXPECT_TRUE(overlap < red.covered.size() && overlap < blue.covered.size() && red.covered[overlap] &&
+                    blue.covered[overlap])
+            << what;
+
+        const VulkanTesting::Diff::Options strict{};
+        EXPECT_TRUE(VulkanTesting::Diff::Agree(vulkan.AsImage(), backToFront, strict)) << what << ": back to front";
+        EXPECT_FALSE(VulkanTesting::Diff::Agree(vulkan.AsImage(), frontToBack, strict))
+            << what << ": not front to back (the order matters in this scene)";
+        if (!redIsFar)
+        {
+            // The hierarchy order (red first) is front to back here
+            EXPECT_FALSE(VulkanTesting::Diff::Agree(vulkan.AsImage(), hierarchyOrder, strict)) << what << ": not hierarchy order";
+        }
+        const std::string described = VulkanTesting::Diff::Compare(vulkan.AsImage(), backToFront, strict).Describe();
+        std::cout << "[ cross-diff ] transparent queue back to front, " << what << " (strict, GL composite): " << described
+                  << std::endl;
+        VulkanTesting::Diff::RecordedLines().push_back("mesh golden, transparent queue back to front, " + what + ": " +
+                                                       described);
+
+        // The overlap's colour, from GL's equation: the far quad over black, then the near quad over that
+        const Rgb nearColour = redIsFar ? kBlue : kRed;
+        const Rgb farColour = redIsFar ? kRed : kBlue;
+        const auto over = [](const Rgb source, const Rgb destination)
+        {
+            return Rgb{VulkanTesting::Blend::BlendChannel(source.r, destination.r, 0.5, false),
+                       VulkanTesting::Blend::BlendChannel(source.g, destination.g, 0.5, false),
+                       VulkanTesting::Blend::BlendChannel(source.b, destination.b, 0.5, false)};
+        };
+        const Rgb expected = over(nearColour, over(farColour, kBlack));
+        const Rgb got = vulkan.At(overlapX, overlapY);
+        EXPECT_NEAR(got.r, expected.r, 2) << what;
+        EXPECT_NEAR(got.g, expected.g, 2) << what;
+        EXPECT_NEAR(got.b, expected.b, 2) << what;
+        return got;
+    };
+
+    // Red near (added first), blue far: blue is drawn first, red over it: about (128, 0, 64) in the overlap
+    const Rgb redNear = check(nearLeft, farRight, false, "red near, blue far");
+    EXPECT_GT(redNear.r, redNear.b + 40) << "the near red is on top";
+    // The depths swapped, the hierarchy order kept: red is drawn first now, blue over it: about (64, 0, 128)
+    const Rgb redFar = check(farRight, nearLeft, true, "red far, blue near");
+    EXPECT_GT(redFar.b, redFar.r + 40) << "the near blue is on top";
 }

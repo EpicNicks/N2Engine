@@ -607,42 +607,62 @@ TEST_F(VulkanBlendTest, AScenePassAndAUiPassInOneFrameNeitherMovesTheOther)
 
 TEST_F(VulkanBlendTest, ManyViewProjectionChangesInOneFramePastOneRingChunkEachDrawKeepsItsOwn)
 {
-    // Four places and four colours; every draw sets its own view first, so a draw that took the wrong matrices (a stale
-    // ring block, the previous chunk's, the next draw's) lands in the wrong place
+    // One draw per pixel: draw i covers ONLY pixel (i % 64, i / 64), and only because of its own view (a translation that
+    // moves a one-pixel quad from pixel (0, 0) to its cell), set just before it. No two draws share a pixel, so nothing is
+    // hidden by depth or by a later draw: if any draw took the wrong matrices (a stale ring block, the previous chunk's, the
+    // next draw's, the first draw's), its own pixel stays the clear colour and another pixel shows the wrong colour. The
+    // 4096 draws per frame span several ring chunks (192 bytes of matrices plus the material block per draw, the first chunk
+    // 256 KiB), so draws in the later chunks are checked pixel by pixel like those in the first. The colour of draw i is
+    // (i + i / 64) % 4, so every pixel differs from its four neighbours (a draw moved by one cell shows the wrong colour too).
+    constexpr int kDraws = Size * Size;
     IMaterial* materials[4] = {Colour(1.0f, 0.0f, 0.0f), Colour(0.0f, 1.0f, 0.0f), Colour(0.0f, 0.0f, 1.0f),
                                Colour(1.0f, 1.0f, 0.0f)};
-    IMesh* quad = MakeMesh(Quad(-0.125f, -0.125f, 0.125f, 0.125f, 0.0f)); // 8 x 8 pixels
-    float views[4][16];
-    for (int k = 0; k < 4; ++k)
-    {
-        Translation(views[k], -0.75f + 0.5f * static_cast<float>(k), 0.0f, 0.0f); // centres at pixels 8, 24, 40, 56
-    }
+    const Rgb colours[4] = {kRed, kGreen, kBlue, kYellow};
+    const float cell = 2.0f / static_cast<float>(Size); // one pixel in NDC (identity projection)
+    IMesh* pixel = MakeMesh(Quad(-1.0f, -1.0f, -1.0f + cell, -1.0f + cell, 0.0f)); // pixel (0, 0) exactly
+    ASSERT_NE(pixel, nullptr);
+    // No depth: the order of submission alone decides, and no pixel is drawn twice anyway
+    RenderState noDepth;
+    noDepth.depthTest = false;
+    noDepth.depthWrite = false;
     const std::uint32_t chunksBefore = R().GetRingChunkCountForTest();
 
     for (int frameNumber = 0; frameNumber < 3; ++frameNumber)
     {
         R().BeginFrame();
         R().SetViewProjection(Identity, Identity);
-        for (int i = 0; i < 5000; ++i)
+        for (int i = 0; i < kDraws; ++i)
         {
-            const int k = i % 4;
-            R().SetViewProjection(views[k], Identity);
-            R().DrawMesh(quad, Identity, materials[k]);
+            // The renderer copies the matrices at SetViewProjection, so a view on the stack is enough
+            float view[16];
+            Translation(view, cell * static_cast<float>(i % Size), cell * static_cast<float>(i / Size), 0.0f);
+            R().SetViewProjection(view, Identity);
+            R().DrawMesh(pixel, Identity, materials[(i + i / Size) % 4], noDepth);
         }
         R().EndFrame();
         const Frame frame = ReadFrame();
-        const Rgb colours[4] = {kRed, kGreen, kBlue, kYellow};
-        for (int k = 0; k < 4; ++k)
+        int wrong = 0;
+        for (int i = 0; i < kDraws; ++i)
         {
-            const Coverage c = CoverageOf(frame, colours[k]);
-            EXPECT_EQ(c.count, 64) << "frame " << frameNumber << ", place " << k;
-            EXPECT_EQ(c.minX, 4 + 16 * k) << "frame " << frameNumber << ", place " << k;
-            EXPECT_EQ(c.maxX, 11 + 16 * k);
-            EXPECT_EQ(c.minY, 28);
-            EXPECT_EQ(c.maxY, 35);
+            const int x = i % Size;
+            const int y = i / Size;
+            const Rgb expected = colours[(i + i / Size) % 4];
+            if (frame.At(x, y) != expected)
+            {
+                // Report the first few only; the count says how many draws went astray
+                if (++wrong <= 8)
+                {
+                    ADD_FAILURE() << "frame " << frameNumber << ", draw " << i << ": pixel (" << x << "," << y << ") is ("
+                                  << int(frame.At(x, y).r) << "," << int(frame.At(x, y).g) << ","
+                                  << int(frame.At(x, y).b) << "), expected (" << int(expected.r) << ","
+                                  << int(expected.g) << "," << int(expected.b) << ")";
+                }
+            }
         }
+        EXPECT_EQ(wrong, 0) << "frame " << frameNumber << ": draws whose pixel is not their own colour";
     }
-    EXPECT_GE(R().GetRingChunkCountForTest(), chunksBefore + 1) << "the 5000 draws spanned more than one chunk";
+    EXPECT_GE(R().GetRingChunkCountForTest(), chunksBefore + 2)
+        << "the 4096 draws of a frame spanned at least three ring chunks";
 }
 
 // ============================================================================
