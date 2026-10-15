@@ -433,9 +433,9 @@ Options:
                             5 min; its connections are closed at once, before any TLS handshake), loopback
                             as a whole is backed off after 10 failures in a minute, and with --tokens-file a
                             user that fails 3 Hellos is backed off for up to 30 s. A connection that never
-                            finishes a Hello (idle for the 2 s Hello budget, closed early, a failed or
-                            stalled TLS handshake) counts as a failure for its address too, but not for
-                            loopback. For test rigs only
+                            finishes a Hello (idle for the 2 s Hello budget, closed early, a failed TLS
+                            handshake or one not done within its own 5 s) counts as a failure for its
+                            address too, but not for loopback. For test rigs only
   --idle-timeout <seconds>  Close a connection that has sent no request for this long once it is a session
                             (after its Hello with a token; from the start without one). Every request,
                             polled ones included, restarts it. Default: 300 (5 minutes); 0 turns it off.

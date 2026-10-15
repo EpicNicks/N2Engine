@@ -1984,6 +1984,18 @@ namespace N2Engine::Editor
         return true;
     }
 
+    bool EditorServer::SetTlsHandshakeTimeout(const std::chrono::milliseconds timeout)
+    {
+        if (_running || timeout <= std::chrono::milliseconds::zero())
+        {
+            Logger::Warn("The editor server's TLS handshake timeout can't change while it is running, or be zero or "
+                         "negative");
+            return false;
+        }
+        _tlsHandshakeTimeout = timeout;
+        return true;
+    }
+
     bool EditorServer::SetIdleTimeout(const std::chrono::milliseconds timeout)
     {
         if (_running || timeout < std::chrono::milliseconds::zero())
@@ -2200,6 +2212,7 @@ namespace N2Engine::Editor
             }
             const std::string peerText = _peer.ToString();
             std::chrono::milliseconds helloBudget = _helloTimeout;
+            std::chrono::milliseconds handshakeBudget = _tlsHandshakeTimeout;
             if (_rateLimiter.has_value())
             {
                 const RateLimiter::Admission admission = _rateLimiter->AdmitConnection(_peer);
@@ -2218,16 +2231,18 @@ namespace N2Engine::Editor
                 if (admission.priorOffender)
                 {
                     helloBudget = std::min(helloBudget, _rateLimiter->Policy().priorOffenderBudget);
+                    handshakeBudget = std::min(handshakeBudget, _rateLimiter->Policy().priorOffenderBudget);
                 }
             }
 
-            // With TLS the connection is secured first, inside the Hello deadline (which counts from here). One that
-            // can't be is closed without ever counting as a client or a session, and the loop accepts the next.
-            const auto connectedAt = ConnectionNow();
+            // With TLS the connection is secured first, inside its own handshake deadline (which counts from here: an
+            // unoptimised build's handshake can take longer than the Hello budget). One that can't be is closed without
+            // ever counting as a client or a session, and the loop accepts the next.
+            const auto acceptedAt = ConnectionNow();
             bool secured = false;
             try
             {
-                secured = BeginTls(clientSocket, connectedAt + helloBudget, helloBudget);
+                secured = BeginTls(clientSocket, acceptedAt + handshakeBudget, handshakeBudget);
             }
             catch (...)
             {
@@ -2245,6 +2260,9 @@ namespace N2Engine::Editor
                 CLOSE_SOCKET(clientSocket);
                 continue;
             }
+            // The Hello budget (and, without a token, the session) starts once the connection is ready for it: at
+            // accept without TLS, at the end of the handshake with it
+            const auto connectedAt = _tlsSession ? ConnectionNow() : acceptedAt;
 
             // A new connection has no identity (its Hello gives it one). The tokens file is looked at before that Hello,
             // so a token revoked since the last connection can't be used.

@@ -88,11 +88,13 @@ namespace N2Engine::Editor
         /// Failed Hellos naming one user before that user is backed off (then doubling, capped at `userMaxBackoff`)
         uint32_t userFreeFailures = 2;
         std::chrono::milliseconds userMaxBackoff{30 * 1000};
-        /// The TLS handshake and Hello budget of an address with failures on record: the shorter of this and the host's
-        /// own budget (EditorServer::DefaultHelloTimeout, 2 s). It equals that default, so by default the distinction no
-        /// longer applies: a legitimate user who mistyped a token still needs the full 2 s for the retry over a slow
-        /// link, and the pre-Hello failures this limiter now counts back every offender off anyway. An operator who
-        /// raises the host's budget gets this shorter one for addresses on record.
+        /// The TLS handshake budget and the Hello budget of an address with failures on record: each is the shorter of
+        /// this and the host's own (EditorServer::DefaultTlsHandshakeTimeout, 5 s; DefaultHelloTimeout, 2 s). For the
+        /// Hello it equals the default, so by default the distinction no longer applies there: a legitimate user who
+        /// mistyped a token still needs the full 2 s for the retry over a slow link, and the pre-Hello failures this
+        /// limiter now counts back every offender off anyway. The handshake is cut from 5 s to 2 s, as it was before the
+        /// two budgets were split. An operator who raises the host's budgets gets this shorter one for addresses on
+        /// record.
         std::chrono::milliseconds priorOffenderBudget{2000};
     };
 

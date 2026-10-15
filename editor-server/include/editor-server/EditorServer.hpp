@@ -199,14 +199,24 @@ namespace N2Engine::Editor
         /// The Error a server with an access token answers any other command with before a successful Hello
         static constexpr const char *HelloRequiredError =
             "Not authorized: this host requires Hello with its access token before any other command";
-        /// How long a connection has, from being accepted, to finish its TLS handshake and (with an access token) send a
-        /// successful Hello. 2 s: the server serves one connection at a time, so this is the longest a peer that says
-        /// nothing can hold it (a host with a token also counts each such connection as a failure for the peer's address,
-        /// see Failed-Hello rate limiting).
+        /// How long a connection has, with an access token, to send a successful Hello: from being accepted without TLS,
+        /// from the end of its TLS handshake with it (the handshake has its own budget, below). 2 s: the server serves
+        /// one connection at a time, so this is the longest a peer that says nothing can hold it after connecting (a
+        /// host with a token also counts each such connection as a failure for the peer's address, see Failed-Hello
+        /// rate limiting).
         static constexpr std::chrono::milliseconds DefaultHelloTimeout{2000};
         /// Before Start, like SetAccessToken; false, changing nothing, while running (or for a non-positive timeout)
         bool SetHelloTimeout(std::chrono::milliseconds timeout);
         [[nodiscard]] std::chrono::milliseconds GetHelloTimeout() const { return _helloTimeout; }
+        /// How long a connection has, from being accepted, to finish its TLS handshake (TLS hosts only, with or without
+        /// an access token). 5 s, what the handshake had before the Hello budget was cut to 2 s: an unoptimised (Debug)
+        /// build's handshake can take over 2 s on a slow machine for a legitimate client. A handshake that fails or runs
+        /// out of time is a failed Hello for the peer's address, like a Hello that never comes. A peer can so hold the
+        /// server for up to this plus the Hello budget (7 s by default) per connection.
+        static constexpr std::chrono::milliseconds DefaultTlsHandshakeTimeout{5000};
+        /// Before Start, like SetHelloTimeout; false, changing nothing, while running (or for a non-positive timeout)
+        bool SetTlsHandshakeTimeout(std::chrono::milliseconds timeout);
+        [[nodiscard]] std::chrono::milliseconds GetTlsHandshakeTimeout() const { return _tlsHandshakeTimeout; }
 
         // ==================== Connection deadlines ====================
 
@@ -232,7 +242,7 @@ namespace N2Engine::Editor
         bool SetMaxSessionAge(std::chrono::milliseconds age);
         [[nodiscard]] std::chrono::milliseconds GetMaxSessionAge() const { return _maxSessionAge; }
 
-        /// The time every connection deadline above (and the Hello one) reads: the real steady clock when unset, so a
+        /// The time every connection deadline above (and the TLS handshake and Hello ones) reads: the real steady clock when unset, so a
         /// test can move it without sleeping. The rate limiter's clock (SetRateLimitClock) is separate. A deadline is
         /// noticed within one poll interval (0.1 s of real time) of the clock passing it.
         using ConnectionClock = std::function<std::chrono::steady_clock::time_point()>;
@@ -600,8 +610,8 @@ namespace N2Engine::Editor
         void ServerLoop(int listenSocket);
         /// Serves one connection until it closes. sessionOpened is set (and stays set) once the connection has a
         /// session: at once without an access token, at its first successful Hello with one.
-        /// connectedAt: when the connection was accepted, which the Hello deadline counts from (the TLS handshake
-        /// comes first and shares it)
+        /// connectedAt: when the connection was ready for its Hello, which the Hello deadline counts from: when it was
+        /// accepted without TLS, when its TLS handshake finished with it (the handshake has its own budget)
         void HandleClient(int clientSocket, bool &sessionOpened, std::chrono::steady_clock::time_point connectedAt,
                           std::chrono::milliseconds helloBudget);
         void ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload);
@@ -831,6 +841,7 @@ namespace N2Engine::Editor
         // connection starts and read by the network thread for Shutdown's refusal, so atomic
         std::atomic<bool> _clientErrorCodes{false};
         std::chrono::milliseconds _helloTimeout{DefaultHelloTimeout};
+        std::chrono::milliseconds _tlsHandshakeTimeout{DefaultTlsHandshakeTimeout};
         // Connection deadlines: set before Start only, so the network thread reads them without a lock
         std::chrono::milliseconds _idleTimeout{DefaultIdleTimeout};
         std::chrono::milliseconds _writeTimeout{DefaultWriteTimeout};

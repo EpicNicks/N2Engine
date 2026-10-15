@@ -890,6 +890,8 @@ TEST(ConnectionDeadlineTest, TheSettingsHaveLimitsAndCantChangeWhileServing)
 {
     EditorServer probe;
     EXPECT_EQ(probe.GetHelloTimeout(), 2000ms);
+    EXPECT_EQ(probe.GetTlsHandshakeTimeout(), 5000ms) << "the handshake keeps its own, longer budget";
+    EXPECT_EQ(EditorServer::DefaultTlsHandshakeTimeout, 5000ms);
     EXPECT_EQ(probe.GetIdleTimeout(), 5min);
     EXPECT_EQ(probe.GetWriteTimeout(), 30s);
     EXPECT_EQ(probe.GetMaxSessionAge(), 0ms) << "no maximum session age by default";
@@ -902,15 +904,20 @@ TEST(ConnectionDeadlineTest, TheSettingsHaveLimitsAndCantChangeWhileServing)
     EXPECT_TRUE(probe.SetWriteTimeout(1ms));
     EXPECT_FALSE(probe.SetMaxSessionAge(-1ms));
     EXPECT_TRUE(probe.SetMaxSessionAge(0ms)) << "zero is off";
+    EXPECT_FALSE(probe.SetTlsHandshakeTimeout(0ms)) << "a handshake must always have a deadline";
+    EXPECT_FALSE(probe.SetTlsHandshakeTimeout(-1ms));
+    EXPECT_TRUE(probe.SetTlsHandshakeTimeout(1ms));
 
     Rig rig;
     ASSERT_TRUE(rig.started);
     EXPECT_FALSE(rig.server.SetIdleTimeout(1s));
     EXPECT_FALSE(rig.server.SetWriteTimeout(1s));
     EXPECT_FALSE(rig.server.SetMaxSessionAge(1s));
+    EXPECT_FALSE(rig.server.SetTlsHandshakeTimeout(1s));
     EXPECT_FALSE(rig.server.SetConnectionClock({}));
     EXPECT_FALSE(rig.server.SetAcceptedSocketHook({}));
     EXPECT_EQ(rig.server.GetIdleTimeout(), EditorServer::DefaultIdleTimeout);
     EXPECT_EQ(rig.server.GetWriteTimeout(), EditorServer::DefaultWriteTimeout);
     EXPECT_EQ(rig.server.GetMaxSessionAge(), 0ms);
+    EXPECT_EQ(rig.server.GetTlsHandshakeTimeout(), EditorServer::DefaultTlsHandshakeTimeout);
 }
