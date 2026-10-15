@@ -71,6 +71,10 @@ namespace N2Engine::Editor
         /// host built with N2ENGINE_EDITOR_TLS (RunHost refuses it otherwise). It applies to this one process: a play
         /// host a launcher starts (--play) is a separate process and stays plaintext on loopback.
         bool tls = false;
+        /// --insecure-bind: accept a non-loopback --bind without a token and --tls. Without it ParseHostArguments
+        /// refuses such a bind when the host would serve (S3, audit F5); with it the host starts and logs the old
+        /// warnings, which still describe the risk.
+        bool insecureBind = false;
         /// --read-only: the host answers every command that isn't a read (EditorServer::IsReadCommand; Shutdown included)
         /// with the readOnly error, and keeps serving. Works with or without --token-env.
         bool readOnly = false;
@@ -134,6 +138,12 @@ namespace N2Engine::Editor
     /// A whole number in [min, max] written in decimal digits only (no sign, whitespace, exponent or trailing text)
     [[nodiscard]] std::optional<int> ParseWholeNumber(std::string_view text, int min, int max);
 
+    /// True for a dotted-quad IPv4 address in 127.0.0.0/8 (four decimal fields of 1 to 3 digits, no leading zero,
+    /// each at most 255, nothing else). Anything that does not parse is false (so it counts as non-loopback): the
+    /// server's inet_pton rejects whatever this rejects and more, and "localhost", an empty string, IPv6 and
+    /// trailing text are all false.
+    [[nodiscard]] bool IsLoopbackBindAddress(std::string_view text);
+
     /// "opengl" or "software" (exactly; no other spelling)
     [[nodiscard]] std::optional<HostRenderer> ParseRenderer(std::string_view text);
 
@@ -142,6 +152,8 @@ namespace N2Engine::Editor
     /// starts with "--"), an invalid port, renderer or --project-id, --create together with --project, --name or
     /// --project-id without --create, --tokens-file together with --token-env, and --new-token with an invalid user
     /// or role (it takes two values) are errors (the message names the option); unknown arguments are ignored.
+    /// A host that would serve (not --create, --new-token or --help) with a non-loopback --bind (IsLoopbackBindAddress)
+    /// is an error unless it has a token (--token-env or --tokens-file) and --tls, or --insecure-bind is given.
     [[nodiscard]] std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args);
 
     /// Reads up to `size` bytes into `buffer`; returns the count read, 0 at end of file, and a negative number on error

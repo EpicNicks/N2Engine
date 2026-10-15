@@ -78,7 +78,7 @@ TEST(HostOptionsTest, ParsesEveryOption)
 {
     const auto parsed = ParseHostArguments({"--port", "0", "--bind", "0.0.0.0", "--project", "C:/Games/My Game",
                                             "--renderer", "software", "--token-env", "N2_EDITOR_TOKEN",
-                                            "--exit-on-disconnect", "--exit-on-stdin-eof"});
+                                            "--exit-on-disconnect", "--exit-on-stdin-eof", "--tls"});
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_EQ(parsed->port, 0);
     EXPECT_EQ(parsed->bindAddress, "0.0.0.0");
@@ -445,7 +445,9 @@ TEST(HostOptionsTest, TlsIsAFlagAndOffByDefault)
     EXPECT_FALSE(defaults->tls);
 
     // Not a value-taking option: the next argument is still parsed on its own
-    const auto parsed = ParseHostArguments({"--tls", "--port", "1234", "--bind", "0.0.0.0"});
+    // A non-loopback bind needs a token with --tls (or --insecure-bind), so this one has a token
+    const auto parsed =
+        ParseHostArguments({"--tls", "--port", "1234", "--bind", "0.0.0.0", "--token-env", "N2_EDITOR_TOKEN"});
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_TRUE(parsed->tls);
     EXPECT_EQ(parsed->port, 1234);
@@ -799,4 +801,197 @@ TEST(HostOptionsTest, ABuildWithoutTlsRefusesATokensFileAndCantMakeATokenButATls
     EXPECT_EQ(RunHost(tokens), 1);
     EXPECT_EQ(RunHost(newToken), 1);
     EXPECT_EQ(RunNewToken(newToken), 1);
+}
+
+// ==================== --insecure-bind and the fail-closed non-loopback bind (S3, audit F5) ====================
+
+namespace
+{
+    constexpr const char *NonLoopbackBinds[] = {"0.0.0.0", "192.0.2.10"};
+
+    [[nodiscard]] std::vector<std::string> BindArgs(const std::string &address, const std::vector<std::string> &more)
+    {
+        std::vector<std::string> args = {"--bind", address};
+        args.insert(args.end(), more.begin(), more.end());
+        return args;
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithNoTokenAndNoTlsIsRefused)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {}));
+        ASSERT_FALSE(parsed) << address;
+        EXPECT_NE(parsed.error().find(address), std::string::npos);
+        EXPECT_NE(parsed.error().find("missing an access token and --tls"), std::string::npos) << parsed.error();
+        EXPECT_NE(parsed.error().find("--insecure-bind"), std::string::npos);
+        EXPECT_NE(parsed.error().find("--token-env or --tokens-file"), std::string::npos);
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithATokenEnvButNoTlsIsRefused)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--token-env", "N2_EDITOR_TOKEN"}));
+        ASSERT_FALSE(parsed) << address;
+        EXPECT_NE(parsed.error().find("missing --tls"), std::string::npos) << parsed.error();
+        EXPECT_NE(parsed.error().find("--insecure-bind"), std::string::npos);
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithATokensFileButNoTlsIsRefused)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--tokens-file", "tokens.json"}));
+        ASSERT_FALSE(parsed) << address;
+        EXPECT_NE(parsed.error().find("missing --tls"), std::string::npos) << parsed.error();
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithTlsButNoTokenIsRefused)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--tls"}));
+        ASSERT_FALSE(parsed) << address;
+        EXPECT_NE(parsed.error().find("missing an access token:"), std::string::npos) << parsed.error();
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithTlsAndATokenEnvIsAccepted)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--tls", "--token-env", "N2_EDITOR_TOKEN"}));
+        ASSERT_TRUE(parsed) << address << ": " << parsed.error();
+        EXPECT_EQ(parsed->bindAddress, address);
+        EXPECT_FALSE(parsed->insecureBind);
+    }
+}
+
+TEST(HostOptionsTest, NonLoopbackBindWithTlsAndATokensFileIsAccepted)
+{
+    for (const char *address : NonLoopbackBinds)
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {"--tokens-file", "tokens.json", "--tls"}));
+        ASSERT_TRUE(parsed) << address << ": " << parsed.error();
+    }
+}
+
+TEST(HostOptionsTest, InsecureBindAcceptsEveryRefusedCombination)
+{
+    const std::vector<std::vector<std::string>> refused = {
+        {}, {"--token-env", "N2_EDITOR_TOKEN"}, {"--tokens-file", "tokens.json"}, {"--tls"}};
+    for (const char *address : NonLoopbackBinds)
+    {
+        for (const auto &more : refused)
+        {
+            auto args = BindArgs(address, more);
+            ASSERT_FALSE(ParseHostArguments(args)) << address;
+            // After the other options or before them: the order doesn't matter
+            args.push_back("--insecure-bind");
+            const auto after = ParseHostArguments(args);
+            ASSERT_TRUE(after) << address << ": " << after.error();
+            EXPECT_TRUE(after->insecureBind);
+            args.pop_back();
+            args.insert(args.begin(), "--insecure-bind");
+            EXPECT_TRUE(ParseHostArguments(args));
+        }
+    }
+}
+
+TEST(HostOptionsTest, InsecureBindIsAFlagThatTakesNoValue)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults);
+    EXPECT_FALSE(defaults->insecureBind);
+
+    const auto parsed = ParseHostArguments({"--insecure-bind", "--port", "1234", "--bind", "0.0.0.0"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->insecureBind);
+    EXPECT_EQ(parsed->port, 1234);
+    EXPECT_EQ(parsed->bindAddress, "0.0.0.0");
+
+    // The last argument too: nothing is swallowed as its value
+    const auto last = ParseHostArguments({"--bind", "0.0.0.0", "--insecure-bind"});
+    ASSERT_TRUE(last) << last.error();
+    EXPECT_EQ(last->bindAddress, "0.0.0.0");
+}
+
+TEST(HostOptionsTest, ThePlayHostWithANonLoopbackBindNeedsInsecureBind)
+{
+    // A play host is always plaintext, so the rule refuses it; there is no separate --play rule
+    for (const char *address : NonLoopbackBinds)
+    {
+        EXPECT_FALSE(ParseHostArguments(BindArgs(address, {"--play", "scene.json"}))) << address;
+        EXPECT_FALSE(ParseHostArguments(BindArgs(address, {"--play", "scene.json", "--token-env", "T"}))) << address;
+        const auto allowed = ParseHostArguments(BindArgs(address, {"--play", "scene.json", "--insecure-bind"}));
+        ASSERT_TRUE(allowed) << address << ": " << allowed.error();
+        EXPECT_EQ(allowed->playScene, "scene.json");
+    }
+    EXPECT_TRUE(ParseHostArguments({"--play", "scene.json"}));
+}
+
+TEST(HostOptionsTest, LoopbackBindsNeedNeitherATokenNorTls)
+{
+    EXPECT_TRUE(ParseHostArguments({}));
+    for (const char *address : {"127.0.0.1", "127.1.2.3", "127.255.255.255"})
+    {
+        const auto parsed = ParseHostArguments(BindArgs(address, {}));
+        ASSERT_TRUE(parsed) << address << ": " << parsed.error();
+        EXPECT_FALSE(parsed->insecureBind);
+    }
+}
+
+TEST(HostOptionsTest, CreateNewTokenAndHelpAreNotRefusedForANonLoopbackBind)
+{
+    // None of them serves
+    EXPECT_TRUE(ParseHostArguments(BindArgs("0.0.0.0", {"--create", "C:/Games/New"})));
+    EXPECT_TRUE(ParseHostArguments(BindArgs("0.0.0.0", {"--new-token", "alice", "editor"})));
+    const auto help = ParseHostArguments(BindArgs("0.0.0.0", {"--help"}));
+    ASSERT_TRUE(help);
+    EXPECT_TRUE(help->showHelp);
+}
+
+TEST(HostOptionsTest, AnUnparsableBindAddressFollowsTheNonLoopbackRule)
+{
+    // Start still rejects these; here none of them may pass as loopback
+    for (const char *address : {"", "localhost", "127.0.0.1 ", "127.0.0.1.", "127.0.0.1x", "127.0.0", "127.0.0.0.1",
+                                "0127.0.0.1", "127.00.0.1", "127.0.0.256", "::1", "-127.0.0.1", "0x7f.0.0.1",
+                                "2130706433", "127.0.0.1/8", "1.127.0.1", "0.0.0.0"})
+    {
+        EXPECT_FALSE(IsLoopbackBindAddress(address)) << '"' << address << '"';
+        EXPECT_FALSE(ParseHostArguments(BindArgs(address, {}))) << '"' << address << '"';
+        EXPECT_TRUE(ParseHostArguments(BindArgs(address, {"--insecure-bind"}))) << '"' << address << '"';
+    }
+    EXPECT_TRUE(IsLoopbackBindAddress("127.0.0.1"));
+    EXPECT_TRUE(IsLoopbackBindAddress("127.1.2.3"));
+    EXPECT_TRUE(IsLoopbackBindAddress("127.0.0.0"));
+}
+
+TEST(HostOptionsTest, TheLastBindIsTheOneJudged)
+{
+    EXPECT_FALSE(ParseHostArguments({"--bind", "127.0.0.1", "--bind", "0.0.0.0"}));
+    EXPECT_TRUE(ParseHostArguments({"--bind", "0.0.0.0", "--bind", "127.0.0.1"}));
+}
+
+TEST(HostOptionsTest, RunHostExitsOneForARefusedBindBeforeTheEngineStarts)
+{
+    // The real entry point: the refusal is exit code 1 and returns at once (a host that got past it would start the
+    // engine and serve, so this test would hang)
+    char program[] = "N2EditorHost";
+    char bind[] = "--bind";
+    char address[] = "0.0.0.0";
+    char *argv[] = {program, bind, address, nullptr};
+    EXPECT_EQ(RunHost(3, argv), 1);
+}
+
+TEST(HostOptionsTest, TheUsageNamesInsecureBind)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--insecure-bind"), std::string_view::npos);
+    EXPECT_NE(usage.find("127.0.0.0/8"), std::string_view::npos);
 }

@@ -1256,3 +1256,135 @@ TEST(VulkanShaderParityTest, EveryDefaultTheOpenGlRendererGivesAnUnlitMaterialIs
         EXPECT_TRUE(entry.name == "uAlbedo" || seen.contains(std::string(entry.name))) << entry.name;
     }
 }
+
+// ====================================================================================================================
+// The text shader (stage E of #43): what OpenGL gives a text material, what the engine's text drawing sets, and the maths
+// ====================================================================================================================
+
+TEST(VulkanShaderParityTest, EveryDefaultTheOpenGlRendererGivesATextMaterialIsInTheTableWithTheSameValueAndType)
+{
+    const std::string renderer = ReadFile("src/opengl/OpenGLRenderer.cpp");
+    const std::string region =
+        StripComments(Region(renderer, "else if (shader == m_standardTextShader)", "m_materials.try_emplace"));
+    ASSERT_FALSE(region.empty());
+
+    std::set<std::string> seen;
+    const std::regex setting(R"re(material->Set(Int|Float|Vec2|Vec3|Vec4)\(\s*"(u[A-Za-z]+)"\s*,([^;]*)\);)re");
+    for (auto it = std::sregex_iterator(region.begin(), region.end(), setting); it != std::sregex_iterator(); ++it)
+    {
+        const Vk::UniformType type = TypeOfSetter((*it)[1].str());
+        const std::string name = (*it)[2].str();
+        const Vk::Uniform* entry = Vk::FindMaterialUniform(Vk::BuiltInShader::Text, name);
+        ASSERT_NE(entry, nullptr) << "the text table has no entry for the default " << name;
+        EXPECT_EQ(entry->type, type) << name << ": GL's setter and the table's type agree";
+        seen.insert(name);
+
+        const std::span<const Vk::MaterialDefault> defaults = Vk::kTextMaterialDefaults;
+        const auto entryDefault = std::find_if(defaults.begin(), defaults.end(),
+                                               [&](const Vk::MaterialDefault& candidate) { return candidate.name == name; });
+        ASSERT_NE(entryDefault, defaults.end()) << "no default value in the table for " << name;
+        const std::vector<float> numbers = NumbersIn((*it)[3].str());
+        const std::size_t components = ComponentCount(type);
+        ASSERT_EQ(numbers.size(), components) << name << ": " << (*it)[3].str();
+        for (std::size_t i = 0; i < components; ++i)
+        {
+            EXPECT_FLOAT_EQ(entryDefault->values[i], numbers[i]) << name << " component " << i << " (GL's default)";
+        }
+    }
+    // The six effect uniforms, every one of them, as GL sets them for a text material
+    for (const char* name : {"uOutline", "uOutlineColor", "uSoftness", "uShadowColor", "uShadowOffset", "uShadowSoftness"})
+    {
+        EXPECT_TRUE(seen.contains(name)) << "GL's CreateMaterial does not set " << name << " for the text shader";
+    }
+    // The table's defaults are exactly GL's, plus uAlbedo (OpenGLMaterial's constructor: white)
+    for (const Vk::MaterialDefault& entry : Vk::kTextMaterialDefaults)
+    {
+        if (entry.name == "uAlbedo")
+        {
+            for (const float value : entry.values)
+            {
+                EXPECT_FLOAT_EQ(value, 1.0f);
+            }
+            continue;
+        }
+        EXPECT_TRUE(seen.contains(std::string(entry.name))) << "GL's CreateMaterial does not set " << entry.name;
+    }
+    // Every text material member has a default
+    for (const Vk::Uniform& uniform : Vk::kTextMaterial)
+    {
+        EXPECT_TRUE(seen.contains(std::string(uniform.name)) || uniform.name == "uAlbedo")
+            << "GL gives " << uniform.name << " no default";
+    }
+    EXPECT_EQ(Vk::kTextMaterial.size(), Vk::kTextMaterialDefaults.size());
+}
+
+TEST(VulkanShaderParityTest, EveryUniformTheEnginesTextDrawingSetsIsInTheTextTableWithTheSameType)
+{
+    // engine/src/rendering/TextDrawing.cpp sets the text material's values for every draw (the face, and each effect pass)
+    const std::string drawing = StripComments(ReadFile("../engine/src/rendering/TextDrawing.cpp"));
+    ASSERT_FALSE(drawing.empty()) << "N2_RENDERER_SOURCE_DIR is " << N2_RENDERER_SOURCE_DIR;
+
+    std::map<std::string, Vk::UniformType> set;
+    const std::regex setting(R"re(_material->Set(Float|Vec2|Vec3|Vec4|Color|Int)\(\s*"(u[A-Za-z]+)")re");
+    for (auto it = std::sregex_iterator(drawing.begin(), drawing.end(), setting); it != std::sregex_iterator(); ++it)
+    {
+        const std::string setter = (*it)[1].str();
+        set[(*it)[2].str()] = setter == "Color" ? Vk::UniformType::Vec4 : TypeOfSetter(setter);
+    }
+    ASSERT_GE(set.size(), 7u);
+    for (const auto& [name, type] : set)
+    {
+        const Vk::Uniform* entry = Vk::FindMaterialUniform(Vk::BuiltInShader::Text, name);
+        ASSERT_NE(entry, nullptr) << "TextDrawing sets " << name << ", which the text table lacks";
+        EXPECT_EQ(entry->type, type) << name << ": the engine's setter and the table's type agree";
+    }
+    for (const char* name : {"uAlbedo", "uOutline", "uOutlineColor", "uSoftness", "uShadowColor", "uShadowOffset",
+                             "uShadowSoftness"})
+    {
+        EXPECT_TRUE(set.contains(name)) << "TextDrawing no longer sets " << name;
+    }
+    // ...and nothing else: every text table entry is one the engine sets
+    for (const Vk::Uniform& uniform : Vk::kTextMaterial)
+    {
+        EXPECT_TRUE(set.contains(std::string(uniform.name))) << uniform.name << " is in the table but never set by the engine";
+    }
+}
+
+TEST(VulkanShaderParityTest, TheTextPortIsTheGlShadersMathsLineForLine)
+{
+    // From the `over` helper to the end of main: the same statements in the same order, comments and layout aside. The
+    // declarations above it differ by design (a std140 block with a binding instead of loose uniforms, in/out locations)
+    const std::string vulkan = StripComments(ReadFile("shaders/vulkan/text.frag"));
+    const std::string gl = StripComments(GlShaderSource(ReadFile("src/opengl/OpenGLRenderer.cpp"), "textFrag"));
+    ASSERT_FALSE(vulkan.empty());
+    ASSERT_FALSE(gl.empty());
+    const auto fromOver = [](const std::string& source)
+    {
+        const std::size_t at = source.find("vec4 over(");
+        return at == std::string::npos ? std::string{} : Normalised(source.substr(at));
+    };
+    const std::string vulkanMaths = fromOver(vulkan);
+    const std::string glMaths = fromOver(gl);
+    ASSERT_FALSE(vulkanMaths.empty());
+    ASSERT_FALSE(glMaths.empty());
+    EXPECT_EQ(vulkanMaths, glMaths) << "text.frag's maths differs from GL's textFrag";
+
+    // The constants the shader depends on, in both: the iso-line 0.5, the minimum ramp 1e-4, the discard below alpha 0.01,
+    // the smoothstep bounds, and the `over` order (the face over the outline, that over the shadow)
+    for (const char* needle :
+         {"0.5 * fwidth(sdf)", "1e-4", "smoothstep(0.5 - edgeWidth, 0.5 + edgeWidth, sdf)", "if (result.a < 0.01) {",
+          "float outlineEdge = 0.5 - uOutline;",
+          "result = over(result, vec4(uOutlineColor.rgb, uOutlineColor.a * outlineCoverage));",
+          "result = over(result, vec4(uShadowColor.rgb, uShadowColor.a * shadowCoverage));",
+          "smoothstep(max(outlineEdge - edgeWidth, 0.0), outlineEdge + edgeWidth, sdf)",
+          "texture(uTexture, fragTexCoord - uShadowOffset).r"})
+    {
+        EXPECT_TRUE(Contains(vulkan, needle)) << "Vulkan: " << needle;
+        EXPECT_TRUE(Contains(gl, needle)) << "GL: " << needle;
+    }
+    // The outline is composited before the shadow (so the shadow ends up under both)
+    ASSERT_NE(vulkanMaths.find("uOutlineColor.rgb"), std::string::npos);
+    ASSERT_NE(glMaths.find("uOutlineColor.rgb"), std::string::npos);
+    EXPECT_LT(vulkanMaths.find("uOutlineColor.rgb"), vulkanMaths.find("uShadowColor.rgb"));
+    EXPECT_LT(glMaths.find("uOutlineColor.rgb"), glMaths.find("uShadowColor.rgb"));
+}

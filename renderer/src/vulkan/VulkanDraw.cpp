@@ -11,9 +11,8 @@
 #include "VulkanDraw.hpp"
 #include "VulkanResources.hpp"
 
-// Stages B, C and D of the Vulkan backend (#43): the three built-in shaders (unlit, lit, text; unlit and lit are handed out
-// and drawn with so far, text is stage E), materials, the pipeline layout and cache, the per-draw uniform ring, descriptor
-// sets, scene lighting, and DrawMesh / IndexRange / DrawObjects, with blending (stage D) exactly as OpenGL's ApplyRenderState:
+// Stages B, C, D and E of the Vulkan backend (#43): the three built-in shaders (unlit, lit, text), materials, the pipeline
+// layout and cache, the per-draw uniform ring, descriptor sets, scene lighting, and DrawMesh / IndexRange / DrawObjects, with blending (stage D) exactly as OpenGL's ApplyRenderState:
 // blend -> SRC_ALPHA / ONE_MINUS_SRC_ALPHA (additive: SRC_ALPHA / ONE) for colour AND alpha, depth write only while the draw also
 // depth-tests, and additive without blend an opaque draw.
 //
@@ -26,7 +25,8 @@
 //                         binding 1 Lighting (UNIFORM_BUFFER_DYNAMIC: a copy of the scene lighting block in the ring, below)
 //   set 1 (the material): binding 0 Material block (UNIFORM_BUFFER_DYNAMIC, an offset per draw in the ring),
 //                         bindings 1-5 COMBINED_IMAGE_SAMPLER (the base texture, then the AuxTexture slots in enum order;
-//                         an absent texture is a renderer-owned 1x1 default)
+//                         an absent texture is a renderer-owned 1x1 default; the text shader's base sampler (its atlas)
+//                         defaults to (0,0,0,0) instead of white)
 // One pipeline layout serves all three shaders.
 //
 // SCENE LIGHTING (stage C). UpdateSceneLighting builds the 752-byte std140 block (VulkanLighting.hpp) into a CPU copy and
@@ -47,6 +47,15 @@
 // of draws works; chunks persist and the slot's frame starts again from the first chunk. Slot S's chunks are written only
 // after BeginFrame waited for slot S's fence. The descriptor sets come from per-slot pools that BeginFrame resets after the
 // same wait. Nothing a pending frame may read is ever rewritten.
+//
+// TEXT (stage E). The text shader is a port of OpenGL's: antialiased over one pixel with fwidth, blended per the draw's
+// RenderState (the engine draws text in the Transparent queue: no depth write), outline and shadow composited under the
+// face in one draw, discard below alpha 0.01 (no colour, no depth). A material's effect values are snapshotted into the
+// ring at every DrawMesh, so the multi-pass effects (one material and mesh, the uniforms changed between DrawMesh calls,
+// the face last) draw each pass with its own values within one frame. ATLAS-LESS TEXT: OpenGL binds the base texture only
+// when it is valid and so draws nothing without one; here the base sampler of a text material whose atlas is absent or was
+// destroyed gets a renderer-owned 1x1 (0,0,0,0) texture (DrawState::textBaseDefault), so sdf is 0, coverage 0 and the
+// fragment is discarded: nothing is drawn, colour or depth.
 //
 // Pipelines are cached by (shader, RenderState, wireframe) and made lazily on first use, under the renderer's lock, with
 // a dynamic viewport and scissor so resizing the target never invalidates them. Draws reach the target in submission order
@@ -507,6 +516,16 @@ bool VulkanRenderer::CreateDrawResources()
             }
             ++draw.internalAllocations;
         }
+        // The text shader's base sampler default: (0,0,0,0), so an atlas-less (or destroyed-atlas) text draw reads sdf 0 and
+        // is discarded, as OpenGL (which binds nothing for it) draws nothing. The white default above would give sdf 1 and
+        // fill the whole quad
+        static constexpr std::uint8_t transparent[4] = {0, 0, 0, 0};
+        draw.textBaseDefault = MakeTextureLocked(transparent, 1, 1, 4, options);
+        if (!draw.textBaseDefault)
+        {
+            return Fail(InitStatus::Failed, "could not make the text default texture");
+        }
+        ++draw.internalAllocations;
     }
 
     for (FrameDrawState& frame : draw.frames)
@@ -572,11 +591,11 @@ void VulkanRenderer::DestroyDrawResources()
                 vkDestroyShaderModule(_device, shader->fragmentModule, nullptr);
             }
         }
-        for (const std::unique_ptr<VulkanTexture>& texture : draw.defaults)
+        const auto destroyDefault = [&](const std::unique_ptr<VulkanTexture>& texture)
         {
             if (!texture)
             {
-                continue;
+                return;
             }
             if (texture->view != VK_NULL_HANDLE)
             {
@@ -586,7 +605,12 @@ void VulkanRenderer::DestroyDrawResources()
             {
                 vmaDestroyImage(_resources->allocator, texture->image, texture->allocation);
             }
+        };
+        for (const std::unique_ptr<VulkanTexture>& texture : draw.defaults)
+        {
+            destroyDefault(texture);
         }
+        destroyDefault(draw.textBaseDefault);
     }
     _draw = std::make_unique<DrawState>(); // the materials (CPU objects) go too: Shutdown frees every live one
 }
@@ -1092,6 +1116,24 @@ IShader* VulkanRenderer::GetStandardLitShader() const
     return nullptr;
 }
 
+IShader* VulkanRenderer::GetStandardTextShader() const
+{
+    {
+        std::lock_guard lock(_mutex);
+        if (const VulkanShader* shader = _draw->shaders[ShaderIndex(BuiltInShader::Text)].get();
+            shader != nullptr && shader->IsValid())
+        {
+            return const_cast<VulkanShader*>(shader);
+        }
+    }
+    if (!HasBuiltInShaders())
+    {
+        LogOnce("the built-in shaders were not compiled into this build (neither glslangValidator nor glslc was found when "
+                "CMake configured the renderer): the text shader is not available and nothing will draw");
+    }
+    return nullptr;
+}
+
 IMaterial* VulkanRenderer::CreateMaterial(IShader* shader)
 {
     return CreateMaterial(shader, nullptr);
@@ -1108,10 +1150,9 @@ IMaterial* VulkanRenderer::CreateMaterial(IShader* shader, ITexture* texture)
     {
         return nullptr;
     }
-    // Unlit and lit have materials; the text shader's are stage E. A foreign shader is only compared with the built-ins,
-    // never dereferenced
+    // All three built-ins have materials. A foreign shader is only compared with the built-ins, never dereferenced
     const VulkanShader* chosen = nullptr;
-    for (const BuiltInShader candidate : {BuiltInShader::Unlit, BuiltInShader::Lit})
+    for (const BuiltInShader candidate : {BuiltInShader::Unlit, BuiltInShader::Lit, BuiltInShader::Text})
     {
         const VulkanShader* builtIn = _draw->shaders[ShaderIndex(candidate)].get();
         if (builtIn != nullptr && builtIn->IsValid() && shader == builtIn)
@@ -1121,8 +1162,7 @@ IMaterial* VulkanRenderer::CreateMaterial(IShader* shader, ITexture* texture)
     }
     if (chosen == nullptr)
     {
-        LogOnce("CreateMaterial: only materials of the unlit and lit built-in shaders exist so far (text: stage E of #43); "
-                "returning null");
+        LogOnce("CreateMaterial: only materials of this renderer's built-in shaders (unlit, lit, text) exist; returning null");
         return nullptr;
     }
 
@@ -1301,7 +1341,8 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
         }
         if (texture == nullptr || texture->view == VK_NULL_HANDLE || texture->sampler == VK_NULL_HANDLE)
         {
-            texture = draw.defaults[i].get();
+            // The text shader's atlas is its base sampler, and an absent one must read sdf 0 (draw nothing), not white
+            texture = (i == 0 && vulkanMaterial.kind == BuiltInShader::Text) ? draw.textBaseDefault.get() : draw.defaults[i].get();
         }
         if (texture == nullptr)
         {

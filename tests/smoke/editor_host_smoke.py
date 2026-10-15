@@ -271,6 +271,14 @@ def scenario_create(hosts, work):
     check("N2EditorHost ready" not in not_project.stdout.decode("utf-8", "replace"),
           "--project on a plain folder printed a ready line")
 
+    # A non-loopback --bind with no token and no --tls is refused before the engine starts (exit 1, S3 / audit F5)
+    open_bind = hosts.run(["--bind", "0.0.0.0", "--port", "0", "--project", str(project)])
+    err = open_bind.stderr.decode("utf-8", "replace")
+    say("--bind 0.0.0.0 with no token and no --tls (exit %d): %s" % (open_bind.returncode, err))
+    check(open_bind.returncode == 1, "--bind 0.0.0.0 with no token and no --tls exited with %d, expected 1" % open_bind.returncode)
+    check("--insecure-bind" in err and "0.0.0.0" in err, "The --bind refusal didn't name the address and --insecure-bind")
+    check("N2EditorHost ready" not in open_bind.stdout.decode("utf-8", "replace"), "The refused --bind printed a ready line")
+
     # One more asset: the host's ResourceLoader writes its .meta under .import/ at startup
     (project / "assets" / "startup.mat").write_text("{}")
     return project, project_id

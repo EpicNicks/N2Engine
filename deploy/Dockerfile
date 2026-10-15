@@ -64,7 +64,8 @@ WORKDIR /project
 
 # Inside a container the host must listen on 0.0.0.0 for a published port to reach it; keep that port on the Docker
 # host's loopback (-p 127.0.0.1:9999:9999) and put an SSH tunnel or a TLS proxy in front. Without N2_EDITOR_TOKEN set
-# (docker run -e N2_EDITOR_TOKEN, or --env-file) the host refuses to start rather than run without authentication.
+# (docker run -e N2_EDITOR_TOKEN, or --env-file) the host refuses to start rather than run without authentication. A
+# non-loopback --bind without a token and --tls is refused too (--insecure-bind overrides that; the image never uses it).
 # More than one person: per-user tokens in a file instead (docs/editor.html#exposed-host). The file must be owned by the
 # container user n2 (uid 10001) and mode 0400 or 0600: the host refuses one its group or others can read, and a Docker
 # secret's default mode (0444) is that. Replace the whole command, since arguments after the image name replace CMD:

@@ -4,7 +4,7 @@
 // single-channel SDF atlas: the glyph edge is at 0.5 (128 in the atlas bytes), inside is higher. The coverage ramps from 0
 // to 1 across about one screen pixel around the edge, measured with fwidth, and the atlas is read through .r. Effects
 // (outline, shadow, softness) are material values that are all 0 when off. Compiled and pipeline-checked in stage B of
-// #43; text is turned on in stage E.
+// #43 and drawn since stage E.
 layout(set = 1, binding = 0, std140) uniform Material {
     vec4 uAlbedo;
     // Effects (TextDrawing::EffectUniforms), all 0 when off: distances are in atlas value units

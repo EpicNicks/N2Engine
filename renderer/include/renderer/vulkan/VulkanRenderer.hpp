@@ -114,17 +114,17 @@ namespace Renderer
         class VulkanTexture;  // a texture (private header)
 
         /**
-         * The Vulkan backend, stages 0, A and B of #43: initialisation, an offscreen colour and depth target, a frame that
+         * The Vulkan backend, stages 0, A, B, C, D and E of #43: initialisation, an offscreen colour and depth target, a frame that
          * clears it, readback, resizing and shutdown (stage 0); meshes and textures (stage A: GPU memory from
          * VulkanMemoryAllocator, staging uploads, samplers, blit mipmaps, deferred deletion); and the built-in shaders,
-         * the pipeline layout and cache, and unlit drawing (stage B); lit and PBR materials and the scene lighting (stage C). It renders ONLY offscreen (R8G8B8A8_UNORM colour,
+         * the pipeline layout and cache, and unlit drawing (stage B); lit and PBR materials and the scene lighting (stage C); blending, dynamic meshes and the UI pass (stage D); and the SDF text shader (stage E). It renders ONLY offscreen (R8G8B8A8_UNORM colour,
          * a depth target), with or without a window: there is no surface or swapchain yet, so Present puts nothing on a
          * window (stage F). Initialize(nullptr, w, h) works with no window and no display.
          *
-         * What draws: the unlit and lit built-in shaders (GetStandardUnlitShader, GetStandardLitShader: lit is Blinn-Phong
+         * What draws: the unlit, lit and text built-in shaders (GetStandardUnlitShader, GetStandardLitShader, GetStandardTextShader: lit is Blinn-Phong
          * or PBR with emissive, occlusion, normal and metallic-roughness maps and up to 2 directional, 8 point and 4 spot
          * lights from UpdateSceneLighting) with DrawMesh, IndexRange and DrawObjects, with the depth, depth write and cull
-         * state of every RenderState and wireframe. Blend and additive draw as on OpenGL (SRC_ALPHA / ONE_MINUS_SRC_ALPHA, additive SRC_ALPHA / ONE, the same factors for alpha, additive only with blend; stage D); draws stay in submission order and depth write is off whenever the draw's depthWrite or depthTest is off. Still to come: text (E) and a window (F). The shaders are the three built-ins only (custom
+         * state of every RenderState and wireframe. Blend and additive draw as on OpenGL (SRC_ALPHA / ONE_MINUS_SRC_ALPHA, additive SRC_ALPHA / ONE, the same factors for alpha, additive only with blend; stage D); draws stay in submission order and depth write is off whenever the draw's depthWrite or depthTest is off. Text is the OpenGL shader's port: antialiased over one pixel and blended per the draw's state, outline, softness and shadow composited under the face, multi-pass effects through the per-draw material snapshot, no atlas (or a destroyed one) draws nothing. Still to come: a window (F). The shaders are the three built-ins only (custom
          * GLSL is not supported: CreateShaderProgram returns nullptr), compiled to SPIR-V when the renderer is built (see
          * HasBuiltInShaders). All public methods may be called from any thread (one mutex).
          */
@@ -190,14 +190,16 @@ namespace Renderer
             /// the mesh unchanged, for nullptr, a pointer this renderer did not make, or data with no vertices
             bool UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData) override;
 
-            /// A material of the unlit or lit built-in shader (GetStandardUnlitShader, GetStandardLitShader): the OpenGL
-            /// defaults (uAlbedo white, uHasTexture 1 with a texture, uAlphaCutoff 0; lit also uMetallic 0, uSmoothness 0.5,
+            /// A material of a built-in shader (GetStandardUnlitShader, GetStandardLitShader, GetStandardTextShader): the
+            /// OpenGL defaults (uAlbedo white, uHasTexture 1 with a texture, uAlphaCutoff 0; text: uAlbedo white and the six
+            /// effect uniforms 0 (uOutline, uOutlineColor, uSoftness, uShadowColor, uShadowOffset, uShadowSoftness), its
+            /// texture is the SDF atlas and without one (or with a destroyed one) it draws nothing; lit also uMetallic 0, uSmoothness 0.5,
             /// uEmissive 0, the uHas*Texture flags 0, uOcclusionStrength 1, uNormalScale 1, uPbr 0), values set by name (the
             /// names of the shader's material block; any other name, or the wrong type, is logged once and ignored), the
             /// base texture and the AuxTexture slots (an absent or destroyed one is a renderer-owned 1x1 default: white
             /// base, black emissive, white occlusion, flat normal, white metallic-roughness). DrawMesh takes a
             /// snapshot of its values and textures, so a change after a draw does not affect that draw. nullptr for
-            /// a null shader, one this renderer did not make, or the text built-in (stage E): the unlit and lit ones work
+            /// a null shader or one this renderer did not make
             Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
             Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture) override;
             /// Ignores nullptr and any pointer this renderer did not make; Shutdown frees the rest
@@ -258,6 +260,9 @@ namespace Renderer
             /// The lit built-in (Blinn-Phong or PBR with emissive, occlusion, normal and metallic-roughness maps); nullptr when
             /// the build has no shaders (HasBuiltInShaders), logged once
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
+            /// The SDF text built-in (a port of OpenGL's: antialiased, blended, outline/softness/shadow composited under
+            /// the face); nullptr when the build has no shaders (HasBuiltInShaders), logged once
+            [[nodiscard]] Common::IShader* GetStandardTextShader() const override;
             /// RGBA8, bottom row first, of the last frame (all black before the first). A size other than the
             /// target's is resampled, nearest, as the software renderer does. Writes nothing when not initialized or
             /// the target is gone.
@@ -306,8 +311,8 @@ namespace Renderer
             [[nodiscard]] uint32_t GetPendingDeletionCountForTest() const;
 
             // Test hooks for stage B
-            /// One of the three built-ins whether or not it is handed out (the text one is not yet): so a test can check it is
-            /// refused as the shader of a material. nullptr without shaders or before Initialize
+            /// One of the three built-ins whether or not it is handed out (all three are handed out when the build has shaders): so a test can check a
+            /// shader is valid. nullptr without shaders or before Initialize
             [[nodiscard]] Common::IShader* GetBuiltInShaderForTest(ShaderInterface::BuiltInShader shader) const;
             /// Makes (or finds) the pipeline for (shader, state, wireframe) now, as a draw would. False when there is no
             /// shader, or wireframe is asked for and the device cannot do it
