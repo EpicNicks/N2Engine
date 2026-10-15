@@ -1,4 +1,5 @@
 #include "engine/serialization/FieldInfo.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -309,7 +310,7 @@ namespace N2Engine
     {
         if (!value.is_number())
         {
-            return value;
+            return JsonLimits::IterativeCopy(value); // not a number: it can be data nested deep
         }
         // An Int is written as an integer, whatever the client's number looked like (3.0 is 3)
         const bool wholeFloat = field.kind == FieldKind::Int && value.is_number_float();
