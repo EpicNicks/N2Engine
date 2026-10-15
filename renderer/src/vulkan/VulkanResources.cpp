@@ -8,6 +8,7 @@
 
 #include "renderer/vulkan/VulkanRenderer.hpp"
 
+#include "VulkanDraw.hpp"
 #include "VulkanResources.hpp"
 
 // Stage A of the Vulkan backend (#43): meshes, textures, samplers, staging uploads, blit mipmaps and deferred deletion.
@@ -560,6 +561,19 @@ ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t width, uin
     {
         return nullptr;
     }
+    std::unique_ptr<VulkanTexture> texture = MakeTextureLocked(data, width, height, channels, options);
+    if (!texture)
+    {
+        return nullptr;
+    }
+    ITexture* raw = texture.get();
+    _resources->textures.emplace(raw, std::move(texture));
+    return raw;
+}
+
+std::unique_ptr<VulkanTexture> VulkanRenderer::MakeTextureLocked(const uint8_t* data, uint32_t width, uint32_t height,
+                                                                 uint32_t channels, const TextureOptions& options)
+{
     const VkPhysicalDeviceLimits& limits = _deviceProperties.limits;
     if (width > limits.maxImageDimension2D || height > limits.maxImageDimension2D)
     {
@@ -821,9 +835,7 @@ ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t width, uin
     texture->channels = channels;
     texture->mipLevels = mipLevels;
     texture->options = options;
-    ITexture* raw = texture.get();
-    _resources->textures.emplace(raw, std::move(texture));
-    return raw;
+    return texture;
 }
 
 void VulkanRenderer::DestroyTexture(ITexture* texture)
@@ -1049,7 +1061,11 @@ uint32_t VulkanRenderer::GetLiveAllocationCountForTest() const
     }
     VmaTotalStatistics statistics{};
     vmaCalculateStatistics(_resources->allocator, &statistics);
-    return statistics.total.statistics.allocationCount;
+    // The renderer's own allocations (the uniform rings, the lighting buffer, the 1x1 default textures: stage B) are not
+    // the caller's, so they stay out of this count
+    const uint32_t total = statistics.total.statistics.allocationCount;
+    const uint32_t internal = _draw->internalAllocations;
+    return total > internal ? total - internal : 0;
 }
 
 uint32_t VulkanRenderer::GetLiveMeshCountForTest() const

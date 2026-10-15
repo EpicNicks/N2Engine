@@ -20,6 +20,8 @@
 #include "renderer/common/IMesh.hpp"
 #include "renderer/common/ITexture.hpp"
 #include "renderer/common/IMaterial.hpp"
+#include "renderer/common/RenderState.hpp"
+#include "renderer/vulkan/VulkanShaderInterface.hpp"
 
 namespace Renderer
 {
@@ -108,18 +110,22 @@ namespace Renderer
 
         struct DebugState;    // the messenger's counters, shared with the callback (defined in the .cpp)
         struct ResourceState; // meshes, textures, samplers, the VMA allocator and the deletion queues (private header)
+        struct DrawState;     // shaders, materials, the pipeline layout and cache, the uniform rings (private header)
+        class VulkanTexture;  // a texture (private header)
 
         /**
-         * The Vulkan backend, stages 0 and A of #43: initialisation, an offscreen colour and depth target, a frame that
-         * clears it, readback, resizing and shutdown (stage 0), and meshes and textures (stage A: GPU memory from
-         * VulkanMemoryAllocator, staging uploads, samplers, blit mipmaps, deferred deletion). It renders ONLY
-         * offscreen (R8G8B8A8_UNORM colour, a depth target), with or without a window: there is no surface or
-         * swapchain yet, so Present puts nothing on a window (stage F). Initialize(nullptr, w, h) works with no
-         * window and no display.
+         * The Vulkan backend, stages 0, A and B of #43: initialisation, an offscreen colour and depth target, a frame that
+         * clears it, readback, resizing and shutdown (stage 0); meshes and textures (stage A: GPU memory from
+         * VulkanMemoryAllocator, staging uploads, samplers, blit mipmaps, deferred deletion); and the built-in shaders,
+         * the pipeline layout and cache, and unlit drawing (stage B). It renders ONLY offscreen (R8G8B8A8_UNORM colour,
+         * a depth target), with or without a window: there is no surface or swapchain yet, so Present puts nothing on a
+         * window (stage F). Initialize(nullptr, w, h) works with no window and no display.
          *
-         * Meshes and textures work but nothing draws them yet: materials, shaders, draws and lighting are stubs that
-         * log once and return nullptr/false (stages B-E). All public methods may be called from any thread (one
-         * mutex).
+         * What draws: the unlit built-in shader (GetStandardUnlitShader) with DrawMesh, IndexRange and DrawObjects, with
+         * the depth, depth write and cull state of every RenderState and wireframe. Still to come: lit shading and
+         * lighting (stage C), blending (D), text (E) and a window (F). The shaders are the three built-ins only (custom
+         * GLSL is not supported: CreateShaderProgram returns nullptr), compiled to SPIR-V when the renderer is built (see
+         * HasBuiltInShaders). All public methods may be called from any thread (one mutex).
          */
         class VulkanRenderer : public Renderer::Common::IRenderer
         {
@@ -132,6 +138,12 @@ namespace Renderer
 
             /// Before Initialize. See ValidationMode
             void SetValidationMode(ValidationMode mode);
+
+            /// Whether this build holds the compiled built-in shaders. False when neither glslangValidator nor glslc
+            /// was found when CMake configured the renderer (the build still succeeds, with a warning): the renderer
+            /// then initializes and clears and reads back as usual but draws nothing, and GetStandardUnlitShader
+            /// returns nullptr
+            [[nodiscard]] static bool HasBuiltInShaders();
 
             /// Creates the instance, device and an offscreen target of width x height (both non-zero; the window
             /// handle is accepted and not used yet). Returns false and leaves nothing allocated on any failure; see
@@ -177,29 +189,52 @@ namespace Renderer
             /// the mesh unchanged, for nullptr, a pointer this renderer did not make, or data with no vertices
             bool UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData) override;
 
+            /// A material of the unlit built-in shader (GetStandardUnlitShader): the OpenGL defaults (uAlbedo white,
+            /// uHasTexture 1 with a texture, uAlphaCutoff 0), values set by name (uAlbedo, uHasTexture, uAlphaCutoff; any
+            /// other name is logged once and ignored), the base texture and the AuxTexture slots. DrawMesh takes a
+            /// snapshot of its values and textures, so a change after a draw does not affect that draw. nullptr for
+            /// a null shader, one this renderer did not make, or any shader but the unlit built-in (lit: stage C, text: E)
             Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
             Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture) override;
+            /// Ignores nullptr and any pointer this renderer did not make; Shutdown frees the rest
             void DestroyMaterial(Common::IMaterial* material) override;
 
+            /// Custom GLSL is not supported in v1: logs one warning and returns nullptr. The shaders are the built-ins
             Common::IShader* CreateShaderProgram(const char* vertexSource, const char* fragmentSource) override;
+            /// A no-op: a draw takes its shader from its material
             void UseShaderProgram(Common::IShader* shader) override;
+            /// Always false: the built-in shaders belong to the renderer and are never destroyed by a caller
             bool DestroyShaderProgram(Common::IShader* shader) override;
+            /// True only for this renderer's built-in shaders
             bool IsValidShader(Common::IShader* shader) const override;
 
+            /// The row-major view and projection of the draws that follow (until the next call): each draw copies the
+            /// values current when it is made. Null arguments are ignored. Identity until set
             void SetViewProjection(const float* view, const float* projection) override;
             void UpdateSceneLighting(const Common::SceneLightingData& lighting,
                                      const N2Engine::Math::Vector3& cameraPosition) override;
 
             using Common::IRenderer::DrawMesh; // the default-state overload
-            // Draws nothing yet (stages B-D): logs once
+            /// Draws the whole index buffer with the material's shader (unlit only so far) and this draw's depth test,
+            /// depth write and cull state; blend and additive are accepted and drawn opaque until stage D (logged
+            /// once). The draw is recorded into the open frame, in submission order, and takes a snapshot of the
+            /// material's values and of the view and projection. It is ignored (nothing drawn, no error) outside
+            /// BeginFrame..EndFrame, for a null or foreign mesh, material or model matrix, for a mesh without indices
+            /// (stage A gives it no index buffer), and when the build has no shaders (HasBuiltInShaders)
             void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
                           const Common::RenderState& state) override;
+            /// Draws the indices [range.first, range.first + range.count), as OpenGL does: NOTHING for a count of 0 or a
+            /// range that is not inside the mesh's indices (the software renderer clips such a range to the mesh
+            /// instead)
             void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
                           const Common::RenderState& state, const Common::IndexRange& range) override;
+            /// DrawMesh of each object's mesh, transform.model, material and state, in order
             void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
             /// Like Resize, from a window's framebuffer-size callback
             void OnResize(int width, int height) override;
 
+            /// Draws that follow are drawn as lines (a wireframe pipeline per shader and state) when the device supports
+            /// fillModeNonSolid; otherwise ignored, with one log line
             void SetWireframe(bool enabled) override;
             [[nodiscard]] const char* GetRendererName() const override { return "Vulkan Renderer"; }
 
@@ -208,7 +243,9 @@ namespace Renderer
             bool SelectGPU(VkPhysicalDevice device);
             VkPhysicalDevice GetRecommendedGPU(const std::vector<GPUInfo>& gpus);
 
+            /// The unlit built-in; nullptr when the build has no shaders (HasBuiltInShaders), logged once
             [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
+            /// nullptr until stage C (the lit shader is built and pipeline-checked, but not handed out)
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
             /// RGBA8, bottom row first, of the last frame (all black before the first). A size other than the
             /// target's is resampled, nearest, as the software renderer does. Writes nothing when not initialized or
@@ -257,6 +294,22 @@ namespace Renderer
             /// Buffers and images waiting for a frame slot's fence (deferred deletion)
             [[nodiscard]] uint32_t GetPendingDeletionCountForTest() const;
 
+            // Test hooks for stage B
+            /// One of the three built-ins whether or not it is handed out (the lit and text ones are not yet): so a test can
+            /// check they are refused as the shader of a material. nullptr without shaders or before Initialize
+            [[nodiscard]] Common::IShader* GetBuiltInShaderForTest(ShaderInterface::BuiltInShader shader) const;
+            /// Makes (or finds) the pipeline for (shader, state, wireframe) now, as a draw would. False when there is no
+            /// shader, or wireframe is asked for and the device cannot do it
+            bool CreatePipelineForTest(ShaderInterface::BuiltInShader shader, const Common::RenderState& state,
+                                       bool wireframe);
+            /// The pipelines made so far (one per distinct (shader, RenderState, wireframe) used)
+            [[nodiscard]] uint32_t GetPipelineCountForTest() const;
+            /// Whether wireframe drawing (fillModeNonSolid) is available on this device
+            [[nodiscard]] bool IsWireframeSupportedForTest() const;
+            [[nodiscard]] uint32_t GetLiveMaterialCountForTest() const;
+            /// The uniform ring buffers the frame slots hold (they grow when a frame needs more room)
+            [[nodiscard]] uint32_t GetRingChunkCountForTest() const;
+
         private:
             static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -279,6 +332,22 @@ namespace Renderer
             bool CreateCommandPool();
             bool CreateFrameResources();
             bool CreateRenderPass();
+            // Stage B (VulkanDraw.cpp)
+            bool CreateDrawResources();
+            void DestroyDrawResources();
+            void BeginDrawFrame(uint32_t slot);
+            void EndDrawFrame(uint32_t slot);
+            VkPipeline GetPipelineLocked(ShaderInterface::BuiltInShader shader, const Common::RenderState& state,
+                                         bool wireframe);
+            bool AddRingChunk(uint32_t slot, VkDeviceSize minimumSize);
+            bool AllocateRing(uint32_t slot, VkDeviceSize bytes, std::size_t& chunkIndex, VkDeviceSize& offset);
+            VkDescriptorSet AllocateSet(uint32_t slot, VkDescriptorSetLayout layout);
+            void DrawLocked(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
+                            const Common::RenderState& state, uint32_t first, uint32_t count, bool wholeMesh);
+            /// The texture-making part of CreateTexture, without registering it (CreateTexture registers it; the
+            /// default textures are kept by the draw state). Runs with _mutex held
+            std::unique_ptr<VulkanTexture> MakeTextureLocked(const uint8_t* data, uint32_t width, uint32_t height,
+                                                             uint32_t channels, const Common::TextureOptions& options);
             bool CreateTargets(uint32_t width, uint32_t height);
             void DestroyTargets();
             bool RecreateTargets(uint32_t width, uint32_t height);
@@ -353,6 +422,7 @@ namespace Renderer
             uint32_t _requestedHeight = 0;
 
             std::unique_ptr<ResourceState> _resources; // never null; its allocator is null until Initialize made one
+            std::unique_ptr<DrawState> _draw;          // never null; empty until Initialize made the layouts (stage B)
 
             InitStatus _initStatus = InitStatus::NotInitialized;
             std::string _initMessage;
