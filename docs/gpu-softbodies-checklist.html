@@ -98,7 +98,8 @@ cmake --build build --config Release --parallel --target engine_tests lua_projec
 </ul>
 
 <h2 id="scene">3. Run a scene with a PhysX soft body</h2>
-<p>This uses the existing <code>lua_project</code> scene (station 1 has a static floor whose top is at y = -4.5; there is no soft-body station yet, so you add one). Make two small temporary edits, and revert them afterwards. Run it once with <code>physics.gpu</code> <code>on</code>, then with <code>auto</code>.</p>
+<p>This uses the existing <code>lua_project</code> scene (station 1 has a static floor whose top is at y = -4.5; the scene also has a soft-body demo station, see the note below). Make two small temporary edits, and revert them afterwards. Run it once with <code>physics.gpu</code> <code>on</code>, then with <code>auto</code>.</p>
+<p>Alternative: <code>lua_project</code> already has a soft-body station (demo station 11, key <kbd>-</kbd>, <code>lua_project/assets/scripts/SoftBodyStation.lua</code>) with bodies of three stiffnesses, two dampings and a robot body. Set <code>physics.gpu</code> in <code>project.n2proj</code> as in step 1, fly the camera to the station, and use <kbd>R</kbd> (drop every body again), <kbd>J</kbd> (cycle the requested backend Auto, CPU, PhysX) and <kbd>V</kbd> (push every body up); a body's sign says <code>PhysX GPU</code> when the GPU backend runs it. The snippet below is the self-contained alternative that does not depend on that station.</p>
 <ol>
 <li>In <code>lua_project/project.n2proj</code> set the physics setting: <code>"settings": { "physics": { "gpu": "on" } }</code>.</li>
 <li>In <code>lua_project/assets/scene.lua</code>, after the floor is created (the <code>for _, gameObject in ipairs({ cube, sphere, floor })</code> loop), add:

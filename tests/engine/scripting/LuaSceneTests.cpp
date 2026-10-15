@@ -25,6 +25,7 @@
 #include "engine/io/Resources.hpp"
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/Rigidbody.hpp"
+#include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/Material.hpp"
@@ -366,6 +367,7 @@ TEST_F(LuaProjectSceneTest, BehaviourScriptsLoad)
              std::pair{"Quit Handler", "res://scripts/QuitHandler.lua"},
              std::pair{"Smoke HUD", "res://scripts/SmokeHud.lua"},
              std::pair{"Particle Station", "res://scripts/ParticleStation.lua"},
+             std::pair{"Soft Body Station", "res://scripts/SoftBodyStation.lua"},
              std::pair{"Material Textured Cube", "res://scripts/Spin.lua"},
              std::pair{"Robot Spinning", "res://scripts/Spin.lua"},
          })
@@ -613,6 +615,31 @@ TEST_F(LuaProjectSceneTest, SmokeHudShowsTheFirstStation)
     ASSERT_NE(panel, nullptr);
     EXPECT_FALSE(panel->IsActive()) << "the UI panel shows only at its own station";
     EXPECT_FALSE(UITextOf(Find("HUD Caption")).empty());
+}
+
+// The soft-body station: every body is a MeshRenderer with a SoftBody and no Rigidbody, resting on the plane at the
+// floor's top for the CPU backend, and the floor has a static collider for the PhysX backend
+TEST_F(LuaProjectSceneTest, SoftBodyStationBodiesStandOnAFloorWithAStaticCollider)
+{
+    const auto floor = Find("Soft Bodies Floor");
+    ASSERT_NE(floor, nullptr);
+    auto *collider = floor->GetComponent<Physics::BoxCollider>();
+    ASSERT_NE(collider, nullptr);
+    EXPECT_EQ(floor->GetComponent<Physics::Rigidbody>(), nullptr) << "the floor should be static";
+    const float floorTop = floor->GetPositionable()->GetPosition().y + collider->GetSize().y * 0.5f;
+
+    for (const char *key : {"Soft Cube", "Medium Cube", "Stiff Cube", "Low Damping", "High Damping", "Robot"})
+    {
+        const auto go = Find(std::string("Soft Body ") + key);
+        ASSERT_NE(go, nullptr) << key;
+        EXPECT_NE(go->GetComponent<Rendering::MeshRenderer>(), nullptr) << key;
+        EXPECT_EQ(go->GetComponent<Physics::Rigidbody>(), nullptr) << key;
+        auto *body = go->GetComponent<Physics::SoftBody>();
+        ASSERT_NE(body, nullptr) << key;
+        EXPECT_TRUE(body->collideWithGround) << key;
+        EXPECT_FLOAT_EQ(body->groundHeight, floorTop) << key;
+        EXPECT_NE(Find(std::string("Soft Body Status ") + key), nullptr) << key;
+    }
 }
 
 // Every asset under lua_project/assets loads: each .mat with the texture it names, each image, and each model with
