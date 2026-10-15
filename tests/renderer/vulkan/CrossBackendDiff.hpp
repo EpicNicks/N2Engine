@@ -81,6 +81,10 @@ namespace VulkanTesting::Diff
         std::array<std::uint8_t, 3> background{0, 0, 0}; // the clear colour, for coverageEdges
         double maxExcludedFraction = 1.0;   // the most of the image that may be left out as edges (1: no cap)
         bool compareAlpha = false;
+        // Pixels to leave out of the comparison (counted as excluded): one flag per pixel, row 0 at the bottom, the image's
+        // size. The blended scenes use it to compare the OPAQUE parts of a frame with the software frame (BlendReference.hpp)
+        // and leave out what a blended draw covers, which the software renderer cannot draw. nullptr: nothing is ignored.
+        const std::vector<bool>* ignore = nullptr;
     };
 
     /// The proposal's lit rule: mean error <= 2/255, <= 1% of the compared pixels over 8/255, a 1-pixel border around
@@ -263,12 +267,18 @@ namespace VulkanTesting::Diff
             result.sizesDiffer = true; // a coverage mask that is not the image's size
             return result;
         }
+        if (options.ignore != nullptr && options.ignore->size() != edges.size())
+        {
+            result.sizesDiffer = true; // an ignore mask that is not the image's size
+            return result;
+        }
         long long errorSum = 0;
         for (int y = 0; y < a.height; ++y)
         {
             for (int x = 0; x < a.width; ++x)
             {
-                if (edges[Detail::Index(x, y, a.width)])
+                if (edges[Detail::Index(x, y, a.width)] ||
+                    (options.ignore != nullptr && (*options.ignore)[Detail::Index(x, y, a.width)]))
                 {
                     ++result.excluded;
                     continue;

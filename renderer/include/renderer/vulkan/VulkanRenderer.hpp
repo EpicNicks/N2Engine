@@ -124,7 +124,7 @@ namespace Renderer
          * What draws: the unlit and lit built-in shaders (GetStandardUnlitShader, GetStandardLitShader: lit is Blinn-Phong
          * or PBR with emissive, occlusion, normal and metallic-roughness maps and up to 2 directional, 8 point and 4 spot
          * lights from UpdateSceneLighting) with DrawMesh, IndexRange and DrawObjects, with the depth, depth write and cull
-         * state of every RenderState and wireframe. Still to come: blending (D), text (E) and a window (F). The shaders are the three built-ins only (custom
+         * state of every RenderState and wireframe. Blend and additive draw as on OpenGL (SRC_ALPHA / ONE_MINUS_SRC_ALPHA, additive SRC_ALPHA / ONE, the same factors for alpha, additive only with blend; stage D); draws stay in submission order and depth write is off whenever the draw's depthWrite or depthTest is off. Still to come: text (E) and a window (F). The shaders are the three built-ins only (custom
          * GLSL is not supported: CreateShaderProgram returns nullptr), compiled to SPIR-V when the renderer is built (see
          * HasBuiltInShaders). All public methods may be called from any thread (one mutex).
          */
@@ -226,8 +226,8 @@ namespace Renderer
 
             using Common::IRenderer::DrawMesh; // the default-state overload
             /// Draws the whole index buffer with the material's shader (unlit or lit) and this draw's depth test,
-            /// depth write and cull state; blend and additive are accepted and drawn opaque until stage D (logged
-            /// once). The draw is recorded into the open frame, in submission order, and takes a snapshot of the
+            /// depth write and cull state; blend and additive blend as OpenGL does (additive only together with
+            /// blend). The draw is recorded into the open frame, in submission order, and takes a snapshot of the
             /// material's values and of the view and projection. It is ignored (nothing drawn, no error) outside
             /// BeginFrame..EndFrame, for a null or foreign mesh, material or model matrix, for a mesh without indices
             /// (stage A gives it no index buffer), and when the build has no shaders (HasBuiltInShaders)
