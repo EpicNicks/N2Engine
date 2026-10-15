@@ -71,6 +71,13 @@ namespace N2Engine::Physics
         ~PhysXBackend() override;
 
         void SetGpuMode(GpuMode mode) override { _gpuMode = mode; }
+        /// physics.deterministic: the scene gets PxSceneFlag::eENABLE_ENHANCED_DETERMINISM and the CPU dispatcher has
+        /// 0 worker threads (tasks run on the thread that calls Update). Not supported by GPU dynamics, so with
+        /// physics.gpu auto/on the GPU probe is skipped with one warning and the scene is the CPU scene.
+        void SetDeterministic(bool deterministic) override { _deterministic = deterministic; }
+        /// For tests: the dispatcher worker-thread count to use instead of the one SetDeterministic implies (4 by
+        /// default, 0 when deterministic). Call before Initialize.
+        void SetWorkerThreadsForTesting(std::optional<unsigned> threads) { _workerThreadsOverride = threads; }
         /// The scene (probe) status only: a particle or soft-body failure is kept apart (below), so this stays Ready
         /// while the GPU scene runs and Physics.IsGpuAvailable does not flip when one feature gives up
         [[nodiscard]] GpuStatus GetGpuStatus() const override { return _gpuStatus; }
@@ -220,6 +227,8 @@ namespace N2Engine::Physics
     private:
         // Outside the PhysX guard so the inline GetGpuStatus compiles without PhysX too
         GpuMode _gpuMode = GpuMode::Off;
+        bool _deterministic = false;
+        std::optional<unsigned> _workerThreadsOverride;
         GpuStatus _gpuStatus{GpuState::Disabled, "physics.gpu is off"};
         // Per-feature failure state, apart from the scene status above: set when a feature that runs in the GPU
         // scene gives up (Failed with physics.gpu=on, else Unavailable), cleared by Initialize. The feature's health
@@ -248,6 +257,10 @@ namespace N2Engine::Physics
         void FailSoftBodies(const std::string& reason);
         /// For tests: the scene has eENABLE_GPU_DYNAMICS set
         [[nodiscard]] bool SceneUsesGpuDynamics() const;
+        /// For tests: the scene has eENABLE_ENHANCED_DETERMINISM set
+        [[nodiscard]] bool SceneUsesEnhancedDeterminism() const;
+        /// For tests: the CPU dispatcher's worker-thread count (0 when there is none)
+        [[nodiscard]] unsigned DispatcherWorkerCount() const;
         /// For tests: the scene's broad phase is the GPU one
         [[nodiscard]] bool SceneUsesGpuBroadPhase() const;
         /// For tests: a CUDA context manager exists (physics.gpu auto/on with a working probe)

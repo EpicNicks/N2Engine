@@ -187,9 +187,11 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     // physics scene is built below and its GPU flag cannot change afterwards. No project, or no setting: off, and
     // then no CUDA call is made at all. A bad value is reported by ApplyProjectSettings.
     Physics::GpuMode gpuMode = Physics::GpuMode::Off;
+    bool deterministicPhysics = false; // physics.deterministic, read here for the same reason
     if (project)
     {
         gpuMode = ReadPhysicsGpuMode(project->settings);
+        deterministicPhysics = ReadPhysicsDeterministic(project->settings);
     }
 
 #ifdef N2ENGINE_PHYSX_ENABLED
@@ -198,6 +200,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         _3DphysicsBackend = std::make_unique<Physics::PhysXBackend>();
         // Before Initialize: the scene's GPU flag is fixed when it is created
         _3DphysicsBackend->SetGpuMode(gpuMode);
+        _3DphysicsBackend->SetDeterministic(deterministicPhysics);
         if (!_3DphysicsBackend->Initialize())
         {
             Logger::Error("Failed to initialize PhysX backend!");
