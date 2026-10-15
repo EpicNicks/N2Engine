@@ -350,9 +350,11 @@ namespace VulkanTesting::Ink
         {
             *numbers = measured;
         }
-        const std::string described = measured.diff.Describe() + "; ink area " + std::to_string(measured.vulkanArea) +
-            " px against the software's " + std::to_string(measured.softwareInk) + " (ratio " +
-            std::to_string(measured.areaRatio) + "), edge border " + std::to_string(rule.edgeBorder) + ", " +
+        const std::string area = rule.checkArea
+            ? "; ink area " + std::to_string(measured.vulkanArea) + " px against the software's " +
+                std::to_string(measured.softwareInk) + " (ratio " + std::to_string(measured.areaRatio) + ")"
+            : std::string("; no single ink colour here, the layers' areas are compared by the caller");
+        const std::string described = measured.diff.Describe() + area + ", edge border " + std::to_string(rule.edgeBorder) + ", " +
             std::to_string(measured.interiorCompared) + " ink pixels compared away from the edges";
         std::cout << "[ cross-diff ] " << label << " (antialiased, strict): " << described << std::endl;
         Diff::RecordedLines().push_back(label + " (antialiased, strict): " + described);
