@@ -334,26 +334,22 @@ TEST_F(VulkanDrawTest, ARendererInitializedAgainStartsCleanAndDrawsAgain)
     EXPECT_EQ(R().GetPipelineCountForTest(), 1u);
 }
 
-TEST_F(VulkanDrawTest, LitIsHandedOutTextIsNotAndAllPipelinesAreMade)
+TEST_F(VulkanDrawTest, LitAndTextAreHandedOutAndAllPipelinesAreMade)
 {
-    // Stage C hands out the lit shader (unlit since stage B); the text shader is stage E's: it exists and its pipelines are
-    // made, but GetStandardTextShader stays null and a material of it is refused
+    // Stage C hands out the lit shader (unlit since stage B) and stage E the text shader: each is the renderer's built-in,
+    // valid, has materials, and its pipelines are made
     EXPECT_NE(R().GetStandardLitShader(), nullptr);
     EXPECT_EQ(R().GetStandardLitShader(), R().GetBuiltInShaderForTest(BuiltInShader::Lit));
-    EXPECT_EQ(R().GetStandardTextShader(), nullptr);
+    EXPECT_NE(R().GetStandardTextShader(), nullptr);
+    EXPECT_EQ(R().GetStandardTextShader(), R().GetBuiltInShaderForTest(BuiltInShader::Text));
     for (const BuiltInShader shader : {BuiltInShader::Lit, BuiltInShader::Text})
     {
         Renderer::Common::IShader* builtIn = R().GetBuiltInShaderForTest(shader);
         ASSERT_NE(builtIn, nullptr);
         EXPECT_TRUE(R().IsValidShader(builtIn));
-        if (shader == BuiltInShader::Lit)
-        {
-            EXPECT_NE(R().CreateMaterial(builtIn), nullptr);
-        }
-        else
-        {
-            EXPECT_EQ(R().CreateMaterial(builtIn), nullptr) << "no text material yet (stage E)";
-        }
+        EXPECT_FALSE(R().DestroyShaderProgram(builtIn)) << "the built-ins belong to the renderer";
+        EXPECT_TRUE(R().IsValidShader(builtIn));
+        EXPECT_NE(R().CreateMaterial(builtIn), nullptr);
         EXPECT_TRUE(R().CreatePipelineForTest(shader, RenderState{}, false));
     }
 }
