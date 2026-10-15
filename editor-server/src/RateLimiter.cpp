@@ -299,6 +299,15 @@ namespace N2Engine::Editor
         return outcome;
     }
 
+    RateLimiter::FailureOutcome RateLimiter::RecordUnfinishedHello(const PeerAddress &peer)
+    {
+        if (peer.IsLoopback())
+        {
+            return {};
+        }
+        return RecordFailure(peer, std::nullopt);
+    }
+
     void RateLimiter::RecordSuccess(const PeerAddress &peer, const std::optional<std::string_view> user)
     {
         if (!peer.IsLoopback())

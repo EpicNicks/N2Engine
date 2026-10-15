@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -474,6 +475,120 @@ TEST(HostOptionsTest, NoRateLimitIsAFlagAndOffByDefault)
     EXPECT_TRUE(last->noRateLimit);
 
     EXPECT_NE(HostUsage().find("--no-rate-limit"), std::string_view::npos);
+}
+
+// ==================== --idle-timeout, --write-timeout, --max-session ====================
+
+TEST(HostOptionsTest, ConnectionLimitsDefaultToTheServersDefaults)
+{
+    const auto parsed = ParseHostArguments({});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ(parsed->idleTimeoutSeconds, 300);
+    EXPECT_EQ(parsed->writeTimeoutSeconds, 30);
+    EXPECT_EQ(parsed->maxSessionMinutes, 0) << "no maximum session age unless asked for";
+    // HostOptions spells the defaults out (to keep EditorServer.hpp out of its header); they must stay the server's
+    EXPECT_EQ(std::chrono::seconds(parsed->idleTimeoutSeconds), EditorServer::DefaultIdleTimeout);
+    EXPECT_EQ(std::chrono::seconds(parsed->writeTimeoutSeconds), EditorServer::DefaultWriteTimeout);
+    EXPECT_EQ(std::chrono::seconds(HostOptions::DefaultIdleTimeoutSeconds), EditorServer::DefaultIdleTimeout);
+    EXPECT_EQ(std::chrono::seconds(HostOptions::DefaultWriteTimeoutSeconds), EditorServer::DefaultWriteTimeout);
+}
+
+TEST(HostOptionsTest, ParseWholeNumberTakesDigitsInsideTheRangeAndNothingElse)
+{
+    EXPECT_EQ(ParseWholeNumber("0", 0, 10), 0);
+    EXPECT_EQ(ParseWholeNumber("10", 0, 10), 10);
+    EXPECT_EQ(ParseWholeNumber("007", 0, 10), 7);
+    EXPECT_FALSE(ParseWholeNumber("11", 0, 10));
+    EXPECT_FALSE(ParseWholeNumber("0", 1, 10)) << "below the minimum";
+    for (const char *bad : {"", "-1", "-0", "+5", " 5", "5 ", "5x", "1.5", "1e3", "0x5", "abc", "99999999999"})
+    {
+        EXPECT_FALSE(ParseWholeNumber(bad, 0, 1000000)) << "'" << bad << "'";
+    }
+}
+
+TEST(HostOptionsTest, IdleTimeoutTakesWholeSecondsAndZeroTurnsItOff)
+{
+    const auto five = ParseHostArguments({"--idle-timeout", "5"});
+    ASSERT_TRUE(five) << five.error();
+    EXPECT_EQ(five->idleTimeoutSeconds, 5);
+
+    const auto off = ParseHostArguments({"--idle-timeout", "0", "--port", "1234"});
+    ASSERT_TRUE(off) << off.error();
+    EXPECT_EQ(off->idleTimeoutSeconds, 0);
+    EXPECT_EQ(off->port, 1234);
+
+    const auto biggest = ParseHostArguments({"--idle-timeout", std::to_string(HostOptions::MaxIdleTimeoutSeconds)});
+    ASSERT_TRUE(biggest) << biggest.error();
+    EXPECT_EQ(biggest->idleTimeoutSeconds, HostOptions::MaxIdleTimeoutSeconds);
+
+    const auto later = ParseHostArguments({"--idle-timeout", "5", "--idle-timeout", "9"});
+    ASSERT_TRUE(later) << later.error();
+    EXPECT_EQ(later->idleTimeoutSeconds, 9);
+}
+
+TEST(HostOptionsTest, WriteTimeoutTakesWholeSecondsOfAtLeastOne)
+{
+    const auto ten = ParseHostArguments({"--write-timeout", "10"});
+    ASSERT_TRUE(ten) << ten.error();
+    EXPECT_EQ(ten->writeTimeoutSeconds, 10);
+
+    const auto one = ParseHostArguments({"--write-timeout", "1"});
+    ASSERT_TRUE(one) << one.error();
+    EXPECT_EQ(one->writeTimeoutSeconds, 1);
+
+    // A write with no deadline is what the flag exists to prevent: there is no 0 for "off"
+    const auto zero = ParseHostArguments({"--write-timeout", "0"});
+    ASSERT_FALSE(zero);
+    EXPECT_NE(zero.error().find("--write-timeout"), std::string::npos) << zero.error();
+}
+
+TEST(HostOptionsTest, MaxSessionTakesWholeMinutesAndZeroIsOff)
+{
+    const auto hour = ParseHostArguments({"--max-session", "60"});
+    ASSERT_TRUE(hour) << hour.error();
+    EXPECT_EQ(hour->maxSessionMinutes, 60);
+
+    const auto off = ParseHostArguments({"--max-session", "0"});
+    ASSERT_TRUE(off) << off.error();
+    EXPECT_EQ(off->maxSessionMinutes, 0);
+}
+
+TEST(HostOptionsTest, ConnectionLimitsRefuseGarbageNegativeAndTooLargeValues)
+{
+    const std::vector<std::pair<std::string, int>> flags{{"--idle-timeout", HostOptions::MaxIdleTimeoutSeconds},
+                                                         {"--write-timeout", HostOptions::MaxWriteTimeoutSeconds},
+                                                         {"--max-session", HostOptions::MaxSessionMinutesLimit}};
+    for (const auto &[flag, largest] : flags)
+    {
+        for (const std::string &bad : {std::string{"abc"}, std::string{"-1"}, std::string{"-0"}, std::string{"+5"},
+                                       std::string{"1.5"}, std::string{" 5"}, std::string{"5 "}, std::string{"1e3"},
+                                       std::string{""}, std::string{"99999999999"}, std::to_string(largest + 1)})
+        {
+            const auto parsed = ParseHostArguments({flag, bad});
+            ASSERT_FALSE(parsed) << flag << " " << bad;
+            EXPECT_NE(parsed.error().find(flag), std::string::npos) << parsed.error();
+        }
+
+        const auto missing = ParseHostArguments({flag});
+        ASSERT_FALSE(missing) << flag;
+        EXPECT_EQ(missing.error(), flag + " is missing a value");
+
+        // Another option is not its value
+        const auto swallowed = ParseHostArguments({flag, "--port", "0"});
+        ASSERT_FALSE(swallowed) << flag;
+        EXPECT_EQ(swallowed.error(), flag + " is missing a value");
+    }
+}
+
+TEST(HostOptionsTest, TheUsageNamesTheConnectionLimits)
+{
+    const std::string_view usage = HostUsage();
+    for (const char *option : {"--idle-timeout", "--write-timeout", "--max-session"})
+    {
+        EXPECT_NE(usage.find(option), std::string_view::npos) << option;
+    }
+    EXPECT_NE(usage.find("Default: 300"), std::string_view::npos) << "the idle default is documented";
+    EXPECT_NE(usage.find("Default: 30;"), std::string_view::npos) << "the write default is documented";
 }
 
 // ==================== --read-only ====================

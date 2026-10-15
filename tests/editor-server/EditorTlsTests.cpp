@@ -38,6 +38,8 @@
 #include <mbedtls/x509_crt.h>
 #include <psa/crypto.h>
 
+#include "TestSockets.hpp"
+
 using namespace N2Engine;
 using namespace N2Engine::Editor;
 using namespace N2Engine::Editor::Protocol;
@@ -247,6 +249,12 @@ namespace
 
         [[nodiscard]] bool IsConnected() const { return _connected; }
 
+        /// A small receive buffer (after connecting): a client that then never reads stalls the sender after a few KiB
+        void ShrinkReceiveBuffer(int bytes)
+        {
+            N2TestSockets::SetReceiveBuffer(static_cast<N2TestSockets::Handle>(_net.fd), bytes);
+        }
+
         /// 0 when the handshake completed, otherwise the library's error
         int Handshake()
         {
@@ -405,13 +413,15 @@ namespace
     {
         explicit TlsServerFixture(const std::string &token = "",
                                   std::chrono::milliseconds helloTimeout = EditorServer::DefaultHelloTimeout,
-                                  bool stopOnDisconnect = false)
+                                  bool stopOnDisconnect = false,
+                                  std::chrono::milliseconds handshakeTimeout = EditorServer::DefaultTlsHandshakeTimeout)
         {
             if (!token.empty())
             {
                 EXPECT_TRUE(server.SetAccessToken(token));
             }
             EXPECT_TRUE(server.SetHelloTimeout(helloTimeout));
+            EXPECT_TRUE(server.SetTlsHandshakeTimeout(handshakeTimeout));
             if (stopOnDisconnect)
             {
                 EXPECT_TRUE(server.SetStopOnDisconnect(true));
@@ -795,8 +805,9 @@ TEST(EditorTlsServerTest, GarbageInPlaceOfAHandshakeClosesTheConnectionAndTheSer
 
 TEST(EditorTlsServerTest, AStalledHandshakeIsClosedAtTheDeadlineAndTheServerKeepsAccepting)
 {
-    // With no token: the handshake deadline is the Hello timeout whether or not Hello is required
-    TlsServerFixture host("", std::chrono::milliseconds(600));
+    // With no token: the handshake has its own deadline whether or not Hello is required (600 ms here, so the test
+    // waits on real time only briefly)
+    TlsServerFixture host("", std::chrono::milliseconds(600), false, std::chrono::milliseconds(600));
     ASSERT_TRUE(host.started);
 
     const auto begin = std::chrono::steady_clock::now();
@@ -952,6 +963,225 @@ TEST(EditorTlsServerTest, NothingLogsTheTokenOrTheKey)
         EXPECT_EQ(line.find("PRIVATE KEY"), std::string::npos) << line;
         EXPECT_EQ(line.find(keyBody), std::string::npos) << line;
     }
+}
+
+TEST(EditorTlsServerTest, AHandshakeThatNeverFinishesCountsAsAFailedHelloForItsAddressUntilItIsBackedOff)
+{
+    // Audit F1: a peer that connects and stalls the TLS handshake holds the one-at-a-time server for the whole handshake
+    // budget (5 s, its own: not the 2 s Hello budget). Each such connection is a failed Hello for its address, so after
+    // three of them the address is closed at accept. Time is injected: the connection clock is what the handshake
+    // deadline reads, so nothing here waits for 5 s. Counting the clock's reads tells the test when the server has read
+    // the time a step set (a deadline it found passed would close the connection instead of reading again).
+    TempDirectory directory;
+    std::atomic<int64_t> connectionMs{1000};
+    std::atomic<int> clockReads{0};
+    EditorServer server;
+    ASSERT_TRUE(server.SetAccessToken(TestToken));
+    ASSERT_TRUE(server.SetConnectionClock(
+        [&connectionMs, &clockReads]
+        {
+            ++clockReads;
+            return std::chrono::steady_clock::time_point(std::chrono::milliseconds(connectionMs.load()));
+        }));
+    // A fixed time for the rate limiter, so the backoff it starts doesn't run out while the test is slow
+    ASSERT_TRUE(server.SetRateLimitClock([] { return std::chrono::steady_clock::time_point(std::chrono::milliseconds(1000)); }));
+    ASSERT_TRUE(server.SetPeerAddressProvider([](int) { return PeerAddress::IPv4(203, 0, 113, 9); }));
+    const auto enabled = server.EnableTls(directory.Path());
+    ASSERT_TRUE(enabled.has_value()) << (enabled ? "" : enabled.error());
+    ASSERT_TRUE(server.Start(0));
+
+    // True once the server has read the clock twice more: the second read began after the caller's step, and found
+    // no deadline passed
+    const auto serverCheckedTheTime = [&clockReads]
+    {
+        const int from = clockReads.load();
+        return WaitFor([&clockReads, from] { return clockReads.load() >= from + 2; });
+    };
+
+    // One that sends nothing, one that starts a TLS record and stops, and one that is not TLS at all
+    for (int kind = 0; kind < 3; ++kind)
+    {
+        const int readsBefore = clockReads.load();
+        PlainConnection peer(server.GetPort());
+        ASSERT_TRUE(peer.IsConnected());
+        if (kind == 1)
+        {
+            const uint8_t start[3] = {0x16, 0x03, 0x01};
+            ASSERT_TRUE(peer.Send(start, sizeof(start)));
+        }
+        else if (kind == 2)
+        {
+            const std::string text = "GET / HTTP/1.1\r\n\r\n";
+            ASSERT_TRUE(peer.Send(text.data(), text.size()));
+        }
+        if (kind < 2)
+        {
+            // The server has read the clock for this connection's accept: its handshake deadline counts from here.
+            // The first connection has the full 5 s; the second comes from an address with a failure on record, whose
+            // handshake budget is the prior-offender one (2 s).
+            ASSERT_TRUE(WaitFor([&clockReads, readsBefore] { return clockReads.load() > readsBefore; })) << kind;
+            const int64_t budgetMs = kind == 0 ? 5000 : 2000;
+            connectionMs += budgetMs - 100;
+            ASSERT_TRUE(serverCheckedTheTime()) << kind;
+            EXPECT_FALSE(peer.DrainUntilClosed(std::chrono::milliseconds(50)))
+                << "connection " << kind << " was closed before its handshake budget ran out";
+            connectionMs += 200;
+            EXPECT_TRUE(peer.DrainUntilClosed(std::chrono::seconds(5)))
+                << "connection " << kind << " was not closed when its handshake budget ran out";
+            continue;
+        }
+        // Not TLS at all: the handshake fails as soon as it is read. A step of 6 s also passes any budget, should it
+        // stall instead.
+        bool closed = false;
+        for (int attempt = 0; attempt < 100 && !closed; ++attempt)
+        {
+            closed = peer.DrainUntilClosed(std::chrono::milliseconds(10));
+            if (!closed)
+                connectionMs += 6000;
+        }
+        ASSERT_TRUE(closed) << "connection " << kind << " was never closed";
+    }
+    EXPECT_EQ(server.RateLimitedConnections(), 0u) << "none of the three was refused at accept";
+
+    // The third failure started the backoff, so this one is closed at accept (the clock is not moved: a connection that
+    // was served would be held until its budget ran out)
+    {
+        PlainConnection peer(server.GetPort());
+        ASSERT_TRUE(peer.IsConnected());
+        EXPECT_TRUE(peer.DrainUntilClosed(std::chrono::seconds(5)));
+    }
+    EXPECT_EQ(server.RateLimitedConnections(), 1u);
+
+    server.Stop();
+}
+
+TEST(EditorTlsServerTest, ATlsClientThatNeverReadsCantBlockTheServerPastTheWriteDeadline)
+{
+    // The TLS WantWrite branch of Send: the response is larger than the buffers on both sides and the client reads none
+    // of it. The write deadline is on the injected connection clock, so nothing waits 30 s.
+    LogCapture capture;
+    TempDirectory directory;
+    std::atomic<int64_t> connectionMs{1000};
+    EditorServer server;
+    ASSERT_TRUE(server.SetConnectionClock(
+        [&connectionMs] { return std::chrono::steady_clock::time_point(std::chrono::milliseconds(connectionMs.load())); }));
+    ASSERT_TRUE(server.SetIdleTimeout(std::chrono::milliseconds(0))); // only the write deadline is under test
+    ASSERT_TRUE(server.SetAcceptedSocketHook([](int socket)
+                                             { N2TestSockets::SetSendBuffer(static_cast<N2TestSockets::Handle>(socket), 4096); }));
+    const auto enabled = server.EnableTls(directory.Path());
+    ASSERT_TRUE(enabled.has_value()) << (enabled ? "" : enabled.error());
+    ASSERT_TRUE(server.Start(0));
+    {
+        MainLoop loop(server);
+
+        TlsClient client(server.GetPort());
+        ASSERT_TRUE(client.IsConnected());
+        client.ShrinkReceiveBuffer(4096);
+        ASSERT_EQ(client.Handshake(), 0);
+
+        // CreateScript answers with a template holding the name about ten times: ~160 KB for a 16 KiB name. Many of them
+        // go in at once and none is read.
+        BufferWriter name;
+        name.WriteString(std::string(16 * 1024, 'n'));
+        const std::vector<uint8_t> request = Frame(CommandType::CreateScript, name.Release());
+        for (int i = 0; i < 12; ++i)
+        {
+            ASSERT_TRUE(client.Send(request)) << i;
+        }
+
+        const auto stalled = [&]
+        {
+            connectionMs += 31000;
+            for (const std::string &line : capture.Lines())
+            {
+                if (line.find("no write progress") != std::string::npos)
+                    return true;
+            }
+            return false;
+        };
+        EXPECT_TRUE(WaitFor(stalled)) << "the server never gave up on the client that isn't reading";
+    }
+
+    // The server is free again: a second client connects and is answered
+    {
+        MainLoop loop(server);
+        TlsClient next(server.GetPort());
+        ASSERT_TRUE(next.IsConnected());
+        ASSERT_EQ(next.Handshake(), 0);
+        const auto hello = next.Roundtrip(Frame(CommandType::Hello, HelloPayload("")));
+        ASSERT_TRUE(hello.has_value());
+        EXPECT_EQ(hello->type, ServerInfoType);
+    }
+    server.Stop();
+}
+
+TEST(EditorTlsServerTest, ASlowHandshakeHasItsOwnFiveSecondsAndTheHelloBudgetStartsWhenItEnds)
+{
+    // Found by CI: an unoptimised (Debug) build's handshake on a slow runner took over 2 s, and a legitimate client was
+    // cut off when the handshake shared the 2 s Hello budget. The handshake has its own budget (5 s), and the Hello
+    // budget (2 s) counts from the end of the handshake. Time is injected, as above.
+    LogCapture capture;
+    TempDirectory directory;
+    std::atomic<int64_t> connectionMs{1000};
+    std::atomic<int> clockReads{0};
+    EditorServer server;
+    ASSERT_TRUE(server.SetAccessToken(TestToken));
+    ASSERT_TRUE(server.SetConnectionClock(
+        [&connectionMs, &clockReads]
+        {
+            ++clockReads;
+            return std::chrono::steady_clock::time_point(std::chrono::milliseconds(connectionMs.load()));
+        }));
+    const auto enabled = server.EnableTls(directory.Path());
+    ASSERT_TRUE(enabled.has_value()) << (enabled ? "" : enabled.error());
+    ASSERT_TRUE(server.Start(0));
+
+    const auto countLines = [&capture](const std::string &text)
+    {
+        size_t count = 0;
+        for (const std::string &line : capture.Lines())
+        {
+            if (line.find(text) != std::string::npos)
+                ++count;
+        }
+        return count;
+    };
+    {
+        MainLoop loop(server);
+        {
+            const int readsBefore = clockReads.load();
+            TlsClient client(server.GetPort());
+            ASSERT_TRUE(client.IsConnected());
+            // The server has read the clock for the accept: the handshake deadline counts from here
+            ASSERT_TRUE(WaitFor([&clockReads, readsBefore] { return clockReads.load() > readsBefore; }));
+            // 3.5 s pass before the client starts its handshake: past the 2 s Hello budget, inside the handshake's 5 s.
+            // Two more reads of the clock: the server saw the new time and went on waiting.
+            connectionMs += 3500;
+            const int readsAtStep = clockReads.load();
+            ASSERT_TRUE(WaitFor([&clockReads, readsAtStep] { return clockReads.load() >= readsAtStep + 2; }));
+            ASSERT_EQ(client.Handshake(), 0) << "the handshake was cut off before its own budget ran out";
+
+            // The server logs the connection once it has read the end-of-handshake time the Hello budget counts from.
+            // 1.9 s later (5.4 s after the accept, past any budget counted from it) the Hello is still in time.
+            ASSERT_TRUE(WaitFor([&] { return countLines("Editor connected peer=") == 1; }));
+            connectionMs += 1900;
+            const auto hello = client.Roundtrip(Frame(CommandType::Hello, HelloPayload(TestToken)));
+            ASSERT_TRUE(hello.has_value());
+            EXPECT_EQ(hello->type, ServerInfoType);
+        }
+        {
+            // One that finishes its handshake at once and then says nothing is closed 2 s after the handshake
+            TlsClient idle(server.GetPort());
+            ASSERT_TRUE(idle.IsConnected());
+            ASSERT_EQ(idle.Handshake(), 0);
+            ASSERT_TRUE(WaitFor([&] { return countLines("Editor connected peer=") == 2; }));
+            connectionMs += 2100;
+            EXPECT_TRUE(idle.IsClosedByServer());
+        }
+        EXPECT_TRUE(WaitFor([&] { return countLines("no Hello within 2000 ms") == 1; }));
+    }
+    EXPECT_EQ(countLines("TLS handshake didn't finish"), 0u);
+    server.Stop();
 }
 
 #else // !N2ENGINE_EDITOR_TLS

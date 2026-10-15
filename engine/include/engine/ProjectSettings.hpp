@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <math/MathRegistrar.hpp>
 #include <math/Vector3.hpp>
 #include "engine/physics/GpuStatus.hpp"
 #include <renderer/common/SceneLighting.hpp>
@@ -28,6 +29,10 @@ namespace N2Engine
      *               "deterministic": true | false (default false; a non-boolean is refused and means false) asks the
      *               physics backend for its reproducible-replay configuration (PhysX: enhanced determinism and 0
      *               worker threads); read by ReadPhysicsDeterministic before Application::Init like gpu
+     *     math      {"simdTier": "auto" | "scalar" | "sse2" | "sse4.1" | "avx" | "neon"} (default auto, case-insensitive;
+     *               anything else is refused with a warning and means auto). Read by ReadMathSimdTier before
+     *               Application::Init selects the math tier, so applying it afterwards only validates it (a change
+     *               needs a restart)
      *     rendering {"colorSpace": "gamma" | "linear"}: Rendering::RenderSettings::SetColorSpace (case-insensitive;
      *               other keys in the block are left alone). A block without colorSpace, with it null, or (when
      *               `only` names rendering) removed, means the default, gamma. "forceShaderEncode": true makes
@@ -63,6 +68,14 @@ namespace N2Engine
      */
     [[nodiscard]] bool ReadPhysicsDeterministic(const nlohmann::json &settings,
                                                 std::vector<std::string> *problems = nullptr);
+
+    /**
+     * math.simdTier from a project's settings object: Auto when it is absent, null or not a known tier name
+     * (see Math::ParseSIMDTierRequest). Application::Init calls it before the math tier is chosen, so before any
+     * scene loads. problems, when given, gets one message for an unknown value.
+     */
+    [[nodiscard]] Math::SIMDTierRequest ReadMathSimdTier(const nlohmann::json &settings,
+                                                         std::vector<std::string> *problems = nullptr);
 
     /**
      * The live state ApplyProjectSettings changes, taken before applying so it can be put back exactly (a block the

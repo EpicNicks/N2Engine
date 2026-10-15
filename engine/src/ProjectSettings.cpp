@@ -161,6 +161,16 @@ namespace N2Engine
             }
         });
         apply("physics", [&](const nlohmann::json &physics) { ApplyPhysics(physics, problems); });
+        // Validated only: the tier is chosen once, by Application::Init (ReadMathSimdTier), so a change needs a restart
+        apply("math", [&](const nlohmann::json &math)
+        {
+            if (!math.is_object())
+            {
+                problems.emplace_back("math: not an object");
+                return;
+            }
+            (void)ReadMathSimdTier(nlohmann::json{{"math", math}}, &problems);
+        });
         apply("rendering", [&](const nlohmann::json &rendering) { ApplyRendering(rendering, problems); });
         // A patch that removed the whole block (only names it, and it is gone): back to the default too
         if (only && only->contains("rendering"))
@@ -230,6 +240,38 @@ namespace N2Engine
             problems->push_back(std::format("physics.deterministic: {} is not true or false; using false", value->dump()));
         }
         return false;
+    }
+
+    Math::SIMDTierRequest ReadMathSimdTier(const nlohmann::json &settings, std::vector<std::string> *problems)
+    {
+        if (!settings.is_object())
+        {
+            return Math::SIMDTierRequest::Auto;
+        }
+        const auto block = settings.find("math");
+        if (block == settings.end() || !block->is_object())
+        {
+            return Math::SIMDTierRequest::Auto;
+        }
+        const auto tier = block->find("simdTier");
+        if (tier == block->end() || tier->is_null())
+        {
+            return Math::SIMDTierRequest::Auto;
+        }
+        if (tier->is_string())
+        {
+            if (const auto request = Math::ParseSIMDTierRequest(tier->get<std::string>()))
+            {
+                return *request;
+            }
+        }
+        if (problems)
+        {
+            problems->push_back(std::format(
+                "math.simdTier: {} is not \"auto\", \"scalar\", \"sse2\", \"sse4.1\", \"avx\" or \"neon\"; using auto",
+                tier->dump()));
+        }
+        return Math::SIMDTierRequest::Auto;
     }
 
     ProjectSettingsSnapshot ProjectSettingsSnapshot::Capture()

@@ -30,6 +30,11 @@ namespace N2Engine::Editor
      *  - per user: failed Hellos that name a user are counted against that name wherever they come from (the only
      *    handle on an attacker behind a tunnel), with a SHORT cap (`userMaxBackoff`) so an attacker can't keep a real
      *    user out for long. A success of that user clears it.
+     * A connection that ends without a successful Hello, and without a wrong-token Hello (which is counted as such), is a
+     * failure too: it timed out, closed early, sent another command or an oversized frame, or failed its TLS handshake
+     * (RecordUnfinishedHello). Per address only: loopback's global counter is NOT fed by it, since behind a tunnel or
+     * a proxy every peer is loopback and a mere connect would then make the lockout above cheap. Loopback relies on the
+     * short pre-Hello budget instead.
      * No trusted-proxy support: the peer address is the TCP peer, never a header or a PROXY line.
      */
 
@@ -83,7 +88,13 @@ namespace N2Engine::Editor
         /// Failed Hellos naming one user before that user is backed off (then doubling, capped at `userMaxBackoff`)
         uint32_t userFreeFailures = 2;
         std::chrono::milliseconds userMaxBackoff{30 * 1000};
-        /// The TLS handshake and Hello budget of an address with failures on record (shorter than the normal one)
+        /// The TLS handshake budget and the Hello budget of an address with failures on record: each is the shorter of
+        /// this and the host's own (EditorServer::DefaultTlsHandshakeTimeout, 5 s; DefaultHelloTimeout, 2 s). For the
+        /// Hello it equals the default, so by default the distinction no longer applies there: a legitimate user who
+        /// mistyped a token still needs the full 2 s for the retry over a slow link, and the pre-Hello failures this
+        /// limiter now counts back every offender off anyway. The handshake is cut from 5 s to 2 s, as it was before the
+        /// two budgets were split. An operator who raises the host's budgets gets this shorter one for addresses on
+        /// record.
         std::chrono::milliseconds priorOffenderBudget{2000};
     };
 
@@ -133,6 +144,10 @@ namespace N2Engine::Editor
 
         /// A Hello with a wrong token. `user` is the user it named, when it named a valid one on a host with a tokens file.
         FailureOutcome RecordFailure(const PeerAddress &peer, std::optional<std::string_view> user);
+        /// A connection that ended without a successful Hello (and was not counted as a wrong-token one): a failure for
+        /// its address, naming no user, so the same backoff, one log line per backoff and suppressed count apply.
+        /// Loopback is exempt (nothing is recorded, an empty outcome): see above.
+        FailureOutcome RecordUnfinishedHello(const PeerAddress &peer);
         /// A Hello that succeeded: clears the address and the user. Loopback's global counter is left (see above).
         void RecordSuccess(const PeerAddress &peer, std::optional<std::string_view> user);
 
