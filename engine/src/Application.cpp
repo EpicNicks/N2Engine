@@ -120,15 +120,12 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
             project = std::move(*loaded);
         }
     }
+    // A bad value is reported by ApplyProjectSettings (the hosts call it after Init), as for physics.gpu, so it is
+    // warned once, not twice
     Math::SIMDTierRequest simdRequest = Math::SIMDTierRequest::Auto;
     if (project)
     {
-        std::vector<std::string> simdProblems;
-        simdRequest = ReadMathSimdTier(project->settings, &simdProblems);
-        for (const std::string &problem : simdProblems)
-        {
-            Logger::Warn("Project settings: " + problem);
-        }
+        simdRequest = ReadMathSimdTier(project->settings);
     }
     const Math::SIMDLevel simdLevel = Math::InitializeSIMD(simdRequest);
     if (const auto wanted = Math::ToSIMDLevel(simdRequest); wanted && *wanted != simdLevel)

@@ -116,6 +116,13 @@ namespace
         return {v.x * inv, v.y * inv, v.z * inv};
     }
 
+    // ScalarDivScalar multiplies by the reciprocal (the SSE and NEON tiers divide)
+    Vector3 RefScalarDiv(const Vector3 &v, const float scalar)
+    {
+        const float inv = 1.0f / scalar;
+        return {v.x * inv, v.y * inv, v.z * inv};
+    }
+
     float RefDot(const Quaternion &a, const Quaternion &b)
     {
         return a.GetW() * b.GetW() + a.GetX() * b.GetX() + a.GetY() * b.GetY() + a.GetZ() * b.GetZ();
@@ -257,8 +264,11 @@ TEST(SimdTierSettingTest, ForcedScalarVector3MatchesTheReferenceBitForBit)
             ExpectBitEqual(a - b, Vector3(a.x - b.x, a.y - b.y, a.z - b.z), at + " Sub");
             ExpectBitEqual(a.Dot(b), RefDot(a, b), at + " Dot");
             ExpectBitEqual(a.Cross(b), RefCross(a, b), at + " Cross");
+            ExpectBitEqual(a.Distance(b), RefLength(Vector3(a.x - b.x, a.y - b.y, a.z - b.z)),
+                           at + " Distance");
         }
         ExpectBitEqual(a * 0.3f, Vector3(a.x * 0.3f, a.y * 0.3f, a.z * 0.3f), at + " ScalarMul");
+        ExpectBitEqual(a / 0.7f, RefScalarDiv(a, 0.7f), at + " ScalarDiv");
     }
 }
 
