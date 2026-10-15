@@ -25,6 +25,11 @@
 //   N2_REQUIRE_VULKAN=1            no device / no validation layer is a failure, not a skip
 //   N2_VULKAN_EXPECT_CPU_DEVICE=1  the device must be a CPU (software) device, as lavapipe is: proves the CI pinned it
 //   N2_VULKAN_VALIDATION is ignored here (the tests set ValidationMode::Enabled themselves)
+//
+// The draw tests (stage B of #43) also need the built-in shaders, which the renderer's CMake compiles to SPIR-V when it
+// is built (glslangValidator or glslc). A build that found neither has none: N2_REQUIRE_BUILT_IN_SHADERS() skips a draw
+// test there, with the reason, unless N2_REQUIRE_VULKAN=1 (the Linux CI legs), where it is a failure, so those legs can
+// never pass by silently skipping every draw.
 
 namespace VulkanTesting
 {
@@ -115,6 +120,15 @@ namespace VulkanTesting
 
     inline const Rgba Black{0, 0, 0, 0};
 
+    /// Why a test that needs the built-in shaders cannot run here, or empty when it can
+    inline std::string MissingShadersReason()
+    {
+        return VulkanRenderer::HasBuiltInShaders()
+            ? std::string()
+            : std::string("this build has no compiled Vulkan shaders (neither glslangValidator nor glslc was found when "
+                          "CMake configured the renderer)");
+    }
+
     class VulkanTest : public ::testing::Test
     {
     protected:
@@ -189,3 +203,19 @@ namespace VulkanTesting
         VulkanRenderer* _primary = nullptr;
     };
 }
+
+/// Put at the top of a test (or a fixture's SetUp) that draws: skips it where the build has no compiled shaders, fails it
+/// under N2_REQUIRE_VULKAN=1
+#define N2_REQUIRE_BUILT_IN_SHADERS()                                                                                  \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (!::Renderer::Vulkan::VulkanRenderer::HasBuiltInShaders())                                                  \
+        {                                                                                                              \
+            if (::VulkanTesting::Env("N2_REQUIRE_VULKAN") == "1")                                                      \
+            {                                                                                                          \
+                FAIL() << "N2_REQUIRE_VULKAN=1 but " << ::VulkanTesting::MissingShadersReason();                       \
+            }                                                                                                          \
+            GTEST_SKIP() << ::VulkanTesting::MissingShadersReason();                                                   \
+        }                                                                                                              \
+    } while (false)
+
