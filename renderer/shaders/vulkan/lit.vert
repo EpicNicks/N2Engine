@@ -1,7 +1,7 @@
 #version 450
 
-// The Vulkan port of OpenGLRenderer.cpp's litVert (GLSL 330). Compiled and pipeline-checked in stage B of #43; lit
-// drawing is turned on in stage C.
+// The Vulkan port of OpenGLRenderer.cpp's litVert (GLSL 330). Compiled and pipeline-checked in stage B of #43; drawn
+// since stage C.
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aTexCoord;

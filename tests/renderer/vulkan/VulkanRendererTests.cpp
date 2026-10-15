@@ -409,9 +409,10 @@ TEST_F(VulkanTest, FrameCallsOutOfOrderAreHarmless)
 
 TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
 {
-    // Stage B of #43 made the unlit shader, unlit materials and draws work (see VulkanUnlitDrawTests.cpp); what is
-    // still to come (lit: stage C, text: stage E, custom GLSL: not in v1) returns null/false and logs once, and a frame
-    // still renders. Meshes and textures (stage A) work: see VulkanResourceTests.cpp
+    // Stage B of #43 made the unlit shader, unlit materials and draws work (see VulkanUnlitDrawTests.cpp) and stage C the
+    // lit shader and lit materials (VulkanLightingTests.cpp); what is still to come (text: stage E, custom GLSL: not in v1)
+    // returns null/false and logs once, and a frame still renders. Meshes and textures (stage A) work: see
+    // VulkanResourceTests.cpp
     Renderer::Common::MeshData mesh;
     mesh.vertices.resize(3);
     mesh.indices = {0, 1, 2};
@@ -428,14 +429,13 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
     EXPECT_EQ(R().CreateMaterial(nullptr), nullptr);
     EXPECT_EQ(R().CreateMaterial(nullptr, nullptr), nullptr);
     EXPECT_EQ(R().CreateShaderProgram("void main(){}", "void main(){}"), nullptr);
-    EXPECT_EQ(R().GetStandardLitShader(), nullptr);
     EXPECT_EQ(R().GetStandardTextShader(), nullptr);
     EXPECT_FALSE(R().IsValidShader(nullptr));
     EXPECT_FALSE(R().DestroyShaderProgram(nullptr));
     R().UseShaderProgram(nullptr);
 
-    // The unlit built-in works (when the build holds the compiled shaders); the lit and text ones exist but are not handed
-    // out, and a material of any shader but the unlit one is refused
+    // The unlit and lit built-ins work (when the build holds the compiled shaders); the text one exists but is not handed
+    // out, and a material of it is refused
     if (VulkanRenderer::HasBuiltInShaders())
     {
         Renderer::Common::IShader* const unlit = R().GetStandardUnlitShader();
@@ -444,12 +444,21 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
         EXPECT_FALSE(R().DestroyShaderProgram(unlit)) << "the built-ins belong to the renderer";
         EXPECT_TRUE(R().IsValidShader(unlit));
         EXPECT_FALSE(unlit->LoadFromStrings("void main(){}", "void main(){}")) << "no custom GLSL in v1";
-        for (const auto which : {Renderer::Vulkan::ShaderInterface::BuiltInShader::Lit,
-                                 Renderer::Vulkan::ShaderInterface::BuiltInShader::Text})
+        Renderer::Common::IShader* const lit = R().GetStandardLitShader();
+        ASSERT_NE(lit, nullptr) << "stage C hands out the lit shader";
+        EXPECT_NE(lit, unlit);
+        EXPECT_EQ(lit, R().GetBuiltInShaderForTest(Renderer::Vulkan::ShaderInterface::BuiltInShader::Lit));
+        EXPECT_TRUE(R().IsValidShader(lit));
+        EXPECT_FALSE(R().DestroyShaderProgram(lit)) << "the built-ins belong to the renderer";
+        EXPECT_TRUE(R().IsValidShader(lit));
+        EXPECT_FALSE(lit->LoadFromStrings("void main(){}", "void main(){}")) << "no custom GLSL in v1";
+        EXPECT_NE(R().CreateMaterial(lit), nullptr);
+        EXPECT_NE(R().CreateMaterial(lit, plainTexture), nullptr);
         {
-            Renderer::Common::IShader* const refused = R().GetBuiltInShaderForTest(which);
+            Renderer::Common::IShader* const refused =
+                R().GetBuiltInShaderForTest(Renderer::Vulkan::ShaderInterface::BuiltInShader::Text);
             ASSERT_NE(refused, nullptr);
-            EXPECT_EQ(R().CreateMaterial(refused), nullptr);
+            EXPECT_EQ(R().CreateMaterial(refused), nullptr) << "text materials are stage E";
             EXPECT_EQ(R().CreateMaterial(refused, plainTexture), nullptr);
         }
         // Another renderer's shader is not this one's
@@ -465,6 +474,7 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
     else
     {
         EXPECT_EQ(R().GetStandardUnlitShader(), nullptr) << "no compiled shaders in this build";
+        EXPECT_EQ(R().GetStandardLitShader(), nullptr) << "no compiled shaders in this build";
     }
     R().DestroyMesh(nullptr);
     R().DestroyTexture(nullptr);
