@@ -499,7 +499,9 @@ namespace N2Engine::Editor
             }
             if (options.bindAddress != EditorServer::DefaultBindAddress)
             {
-                if (options.insecureBind)
+                // Only when the flag actually overrode the rule (non-loopback and not token + TLS)
+                if (options.insecureBind && !IsLoopbackBindAddress(options.bindAddress) &&
+                    !(server.RequiresAccessToken() && server.IsTlsEnabled()))
                 {
                     Logger::Warn("--insecure-bind was given: " + options.bindAddress +
                                  " is not a loopback address and the host would otherwise have refused to start "
