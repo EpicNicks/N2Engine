@@ -1,8 +1,8 @@
 #version 450
 
 // The Vulkan port of OpenGLRenderer.cpp's litFrag (GLSL 330): the same maths and constants (the PBR part is the software
-// renderer's LightingMath.hpp line for line). Compiled and pipeline-checked in stage B of #43; lit drawing is turned on in
-// stage C.
+// renderer's LightingMath.hpp line for line). Compiled and pipeline-checked in stage B of #43; drawn since stage C (the
+// lighting block is filled by UpdateSceneLighting, see VulkanLighting.hpp).
 //
 // Every uniform is a member of one of two blocks (GLSL 450 for Vulkan has no loose uniforms), declared without an
 // instance name so the shader body is the GL one. A bool becomes an int (a bool is not allowed in a block): 0 or 1.
