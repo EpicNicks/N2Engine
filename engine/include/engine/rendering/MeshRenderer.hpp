@@ -70,9 +70,10 @@ namespace N2Engine::Rendering
         /**
          * A runtime-only stand-in for the mesh: while set, the renderer draws (and bounds, and queues) it instead of
          * the mesh. A SoftBody sets one each play session to show its deformed copy of the mesh. It is NEVER
-         * serialized (the saved `_mesh` is untouched, and so is what GetMesh returns, which picking and scripts
-         * read), it should have the mesh's submeshes (the materials are the renderer's, by submesh index), and the
-         * component drops it in OnDestroy. Not part of the editor's fields.
+         * serialized (the saved `_mesh` is untouched, and so is what GetMesh returns: the rest mesh that scripts and
+         * serialization see). Picking follows the drawn mesh: ScenePicking raycasts the deformed one while it is set.
+         * It should have the mesh's submeshes (the materials are the renderer's, by submesh index), and the component
+         * drops it in OnDestroy. Not part of the editor's fields.
          */
         void SetDeformedMesh(std::shared_ptr<Mesh> mesh) { _deformed = std::move(mesh); }
         void ClearDeformedMesh() { _deformed.reset(); }

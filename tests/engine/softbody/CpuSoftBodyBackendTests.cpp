@@ -122,7 +122,9 @@ TEST(CpuSoftBodyBackendTest, TheTransformScalesAndAMirroredOneKeepsEveryVolumePo
 
 TEST(CpuSoftBodyBackendTest, MirroredTransformsStillSkinTheRenderVerticesAtTheirTransformedRestPositions)
 {
-    const float scales[2][3] = {{-1.0f, 1.0f, 1.0f}, {-1.0f, 1.0f, -2.0f}};
+    // Mirrored (negative determinant, the flipped path) = an odd number of negative axes: (-1,1,1), (1,-1,1) and
+    // (-1,-1,-1). (-1,1,-2) has two, so its determinant is positive and it is not mirrored.
+    const float scales[4][3] = {{-1.0f, 1.0f, 1.0f}, {-1.0f, 1.0f, -2.0f}, {1.0f, -1.0f, 1.0f}, {-1.0f, -1.0f, -1.0f}};
     for (const auto &scale : scales)
     {
         CpuSoftBodyBackend backend;
