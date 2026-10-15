@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,6 +27,9 @@
 
 namespace Renderer::Vulkan
 {
+    /// The one log line when wireframe was asked for and the device cannot do it (it is then drawn solid)
+    inline constexpr const char* kWireframeIgnoredMessage = "wireframe ignored: fillModeNonSolid not supported";
+
     /// One of the three built-in shaders: a vertex and a fragment module made from the SPIR-V compiled at build time.
     /// There is no custom GLSL in v1, so LoadFromStrings fails and the Set* calls (a shader holds no values here, the
     /// material does) do nothing.
@@ -62,9 +66,13 @@ namespace Renderer::Vulkan
     {
     public:
         using Warn = std::function<void(const std::string&)>;
+        /// The renderer's id for a texture (0 for a pointer that is not a live texture of the renderer). Taken when a
+        /// texture is set, so a later texture made at the same address is told apart from the one that was set. It takes
+        /// only a leaf lock, never the renderer's, so it may be called from any thread
+        using TextureIdOf = std::function<std::uint64_t(const Common::ITexture*)>;
 
         VulkanMaterial(ShaderInterface::BuiltInShader shaderKind, Common::IShader* owner, Common::ITexture* baseTexture,
-                       Warn warn);
+                       Warn warn, TextureIdOf textureIdOf);
 
         void SetInt(const std::string& name, int value) override;
         void SetFloat(const std::string& name, float value) override;
@@ -84,11 +92,13 @@ namespace Renderer::Vulkan
         [[nodiscard]] bool IsValid() const override { return shader != nullptr; }
 
         /// What a draw takes: the block bytes and the five textures (base, then AuxTexture order), under the lock.
-        /// The texture pointers are only compared by the caller, never dereferenced
+        /// The texture pointers are only compared by the caller, never dereferenced; textureIds holds the id each
+        /// texture had when it was set (0: none, or not a live texture then)
         struct Snapshot
         {
             std::array<std::uint8_t, ShaderInterface::kMaterialBlockRange> block{};
             std::array<const Common::ITexture*, ShaderInterface::kSamplerCount> textures{};
+            std::array<std::uint64_t, ShaderInterface::kSamplerCount> textureIds{};
         };
         [[nodiscard]] Snapshot TakeSnapshot() const;
 
@@ -104,9 +114,12 @@ namespace Renderer::Vulkan
         mutable std::mutex _mutex;
         Common::IShader* shader;
         Warn _warn;
+        TextureIdOf _textureIdOf;
         std::array<std::uint8_t, ShaderInterface::kMaterialBlockRange> _block{};
         Common::ITexture* _texture = nullptr;
+        std::uint64_t _textureId = 0;
         std::array<Common::ITexture*, 4> _aux{};
+        std::array<std::uint64_t, 4> _auxIds{};
     };
 
     /// A piece of the per-draw uniform ring: a host-visible, persistently mapped uniform buffer. The draws of a frame
@@ -165,6 +178,19 @@ namespace Renderer::Vulkan
 
         std::unordered_map<const Common::IMaterial*, std::unique_ptr<VulkanMaterial>> materials;
         std::map<std::uint32_t, VkPipeline> pipelines;
+        // Keys whose vkCreateGraphicsPipelines failed (a driver that rejects a combination): remembered so the failure is
+        // logged once and later draws with the key are skipped without retrying. Bounded by the key space (a few
+        // hundred combinations), like the cache itself
+        std::set<std::uint32_t> failedPipelines;
+        std::uint32_t pipelineCreateAttempts = 0;
+        bool failPipelineCreationForTest = false;
+
+        // Texture ids: a counter that never repeats, so a texture made at the address of a destroyed one is a different
+        // texture. The map is its own leaf lock (never held with another lock taken inside it) so a material can ask
+        // for an id from any thread
+        std::mutex textureIdMutex;
+        std::unordered_map<const Common::ITexture*, std::uint64_t> textureIds;
+        std::uint64_t nextTextureId = 1;
 
         // 1x1 textures for the absent ones (base, emissive, occlusion, normal, metallic-roughness)
         std::array<std::unique_ptr<VulkanTexture>, ShaderInterface::kSamplerCount> defaults;
@@ -184,5 +210,6 @@ namespace Renderer::Vulkan
         float projection[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         bool wireframe = false;
         bool wireframeSupported = false;
+        bool wireframeUnavailableForTest = false; // makes Initialize treat fillModeNonSolid as missing
     };
 }

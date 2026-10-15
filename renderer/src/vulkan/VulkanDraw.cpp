@@ -171,9 +171,11 @@ namespace
 // VulkanMaterial
 // ---------------------------------------------------------------------------------------------------------------------
 
-VulkanMaterial::VulkanMaterial(const BuiltInShader shaderKind, IShader* owner, ITexture* baseTexture, Warn warn)
-    : kind(shaderKind), shader(owner), _warn(std::move(warn)), _texture(baseTexture)
+VulkanMaterial::VulkanMaterial(const BuiltInShader shaderKind, IShader* owner, ITexture* baseTexture, Warn warn,
+                               TextureIdOf textureIdOf)
+    : kind(shaderKind), shader(owner), _warn(std::move(warn)), _textureIdOf(std::move(textureIdOf)), _texture(baseTexture)
 {
+    _textureId = (_textureIdOf && baseTexture != nullptr) ? _textureIdOf(baseTexture) : 0;
     // The OpenGL defaults: OpenGLMaterial's constructor sets uAlbedo white, OpenGLRenderer::CreateMaterial sets
     // uHasTexture (a texture was given) and uAlphaCutoff 0 (the zero-filled block already holds that)
     const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -296,16 +298,21 @@ void VulkanMaterial::SetColor(const std::string& name, const float r, const floa
 
 void VulkanMaterial::SetTexture(ITexture* texture)
 {
+    // The id is asked for before this material's lock is taken (the resolver takes its own leaf lock)
+    const std::uint64_t id = (_textureIdOf && texture != nullptr) ? _textureIdOf(texture) : 0;
     std::lock_guard lock(_mutex);
     _texture = texture;
+    _textureId = id;
 }
 
 void VulkanMaterial::SetAuxTexture(const Common::AuxTexture which, ITexture* texture)
 {
+    const std::uint64_t id = (_textureIdOf && texture != nullptr) ? _textureIdOf(texture) : 0;
     std::lock_guard lock(_mutex);
     if (const auto slot = static_cast<std::size_t>(which); slot < _aux.size())
     {
         _aux[slot] = texture;
+        _auxIds[slot] = id;
     }
 }
 
@@ -328,9 +335,11 @@ VulkanMaterial::Snapshot VulkanMaterial::TakeSnapshot() const
     Snapshot snapshot;
     snapshot.block = _block;
     snapshot.textures[0] = _texture;
+    snapshot.textureIds[0] = _textureId;
     for (std::size_t i = 0; i < _aux.size(); ++i)
     {
         snapshot.textures[1 + i] = _aux[i];
+        snapshot.textureIds[1 + i] = _auxIds[i];
     }
     return snapshot;
 }
@@ -750,6 +759,10 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, con
     {
         return it->second;
     }
+    if (draw.failedPipelines.count(packed) != 0)
+    {
+        return VK_NULL_HANDLE; // this key failed before (logged once): skipped without retrying
+    }
 
     std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -854,10 +867,17 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, con
     info.subpass = 0;
 
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
+    ++draw.pipelineCreateAttempts;
+    const VkResult result = draw.failPipelineCreationForTest
+        ? VK_ERROR_INITIALIZATION_FAILED
+        : vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
     if (result != VK_SUCCESS)
     {
-        std::cerr << "Vulkan renderer: vkCreateGraphicsPipelines failed (result " << result << ")" << std::endl;
+        // Remember the failure (a negative cache entry) so every later draw with this key skips quietly instead of
+        // retrying and logging again; one line per key
+        draw.failedPipelines.insert(packed);
+        LogOnce("vkCreateGraphicsPipelines failed (result " + std::to_string(static_cast<int>(result)) +
+                ") for pipeline key " + std::to_string(packed) + ": draws with that state are skipped");
         return VK_NULL_HANDLE;
     }
     draw.pipelines.emplace(packed, pipeline);
@@ -884,6 +904,41 @@ bool VulkanRenderer::IsWireframeSupportedForTest() const
 {
     std::lock_guard lock(_mutex);
     return _draw->wireframeSupported;
+}
+
+void VulkanRenderer::SetWireframeUnavailableForTest(const bool unavailable)
+{
+    std::lock_guard lock(_mutex);
+    _draw->wireframeUnavailableForTest = unavailable;
+    if (_initialized && unavailable)
+    {
+        _draw->wireframeSupported = false;
+    }
+}
+
+void VulkanRenderer::SetFailPipelineCreationForTest(const bool fail)
+{
+    std::lock_guard lock(_mutex);
+    _draw->failPipelineCreationForTest = fail;
+}
+
+uint32_t VulkanRenderer::GetPipelineCreateAttemptCountForTest() const
+{
+    std::lock_guard lock(_mutex);
+    return _draw->pipelineCreateAttempts;
+}
+
+uint64_t VulkanRenderer::GetTextureIdForTest(const ITexture* texture) const
+{
+    std::lock_guard lock(_mutex);
+    return TextureIdLocked(texture);
+}
+
+uint64_t VulkanRenderer::TextureIdLocked(const ITexture* texture) const
+{
+    std::lock_guard idLock(_draw->textureIdMutex);
+    const auto it = _draw->textureIds.find(texture);
+    return it != _draw->textureIds.end() ? it->second : 0;
 }
 
 uint32_t VulkanRenderer::GetLiveMaterialCountForTest() const
@@ -1001,8 +1056,15 @@ IMaterial* VulkanRenderer::CreateMaterial(IShader* shader, ITexture* texture)
         return nullptr;
     }
 
+    DrawState* const draw = _draw.get(); // the materials die with it, so it outlives them
     auto material = std::make_unique<VulkanMaterial>(
-        BuiltInShader::Unlit, shader, texture, [this](const std::string& message) { LogOnce(message); });
+        BuiltInShader::Unlit, shader, texture, [this](const std::string& message) { LogOnce(message); },
+        [draw](const ITexture* candidate) -> std::uint64_t
+        {
+            std::lock_guard idLock(draw->textureIdMutex);
+            const auto found = draw->textureIds.find(candidate);
+            return found != draw->textureIds.end() ? found->second : 0;
+        });
     IMaterial* raw = material.get();
     _draw->materials.emplace(raw, std::move(material));
     return raw;
@@ -1040,9 +1102,10 @@ void VulkanRenderer::SetViewProjection(const float* view, const float* projectio
 void VulkanRenderer::SetWireframe(const bool enabled)
 {
     std::lock_guard lock(_mutex);
+    // Before Initialize the device's features are not known yet: the request is kept and Initialize checks it
     if (enabled && _initialized && !_draw->wireframeSupported)
     {
-        LogOnce("wireframe drawing needs fillModeNonSolid, which this device does not have: SetWireframe is ignored");
+        LogOnce(kWireframeIgnoredMessage);
         _draw->wireframe = false;
         return;
     }
@@ -1129,7 +1192,11 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
         const VulkanTexture* texture = nullptr;
         if (snapshot.textures[i] != nullptr)
         {
-            if (const auto it = _resources->textures.find(snapshot.textures[i]); it != _resources->textures.end())
+            // Registered AND the same texture that was set: an id from the counter never repeats, so a texture made at the
+            // address of a destroyed one is not taken for it (the slot gets the default, like any destroyed texture)
+            if (const auto it = _resources->textures.find(snapshot.textures[i]);
+                it != _resources->textures.end() && snapshot.textureIds[i] != 0 &&
+                TextureIdLocked(snapshot.textures[i]) == snapshot.textureIds[i])
             {
                 texture = it->second.get();
             }

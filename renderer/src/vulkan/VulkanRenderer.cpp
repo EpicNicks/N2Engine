@@ -642,7 +642,14 @@ bool VulkanRenderer::CreateLogicalDevice()
     vkGetPhysicalDeviceFeatures(_physicalDevice, &supported);
     VkPhysicalDeviceFeatures features{};
     features.fillModeNonSolid = supported.fillModeNonSolid;
-    _draw->wireframeSupported = supported.fillModeNonSolid == VK_TRUE;
+    _draw->wireframeSupported = supported.fillModeNonSolid == VK_TRUE && !_draw->wireframeUnavailableForTest;
+    if (_draw->wireframe && !_draw->wireframeSupported)
+    {
+        // SetWireframe(true) came before Initialize, when the feature was not known: treat it as off, as SetWireframe
+        // does after Initialize (draws are solid)
+        LogOnce(kWireframeIgnoredMessage);
+        _draw->wireframe = false;
+    }
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

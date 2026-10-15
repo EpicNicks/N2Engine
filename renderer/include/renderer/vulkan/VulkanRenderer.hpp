@@ -309,6 +309,15 @@ namespace Renderer
             [[nodiscard]] uint32_t GetLiveMaterialCountForTest() const;
             /// The uniform ring buffers the frame slots hold (they grow when a frame needs more room)
             [[nodiscard]] uint32_t GetRingChunkCountForTest() const;
+            /// Makes Initialize treat fillModeNonSolid as missing (call before Initialize; after it, wireframe support is
+            /// switched off at once), so the feature-absent path can be tested on a device that has the feature
+            void SetWireframeUnavailableForTest(bool unavailable);
+            /// Makes every vkCreateGraphicsPipelines fail (without calling the driver) while set
+            void SetFailPipelineCreationForTest(bool fail);
+            /// How many times a pipeline was actually attempted (a cache hit or a remembered failure is not an attempt)
+            [[nodiscard]] uint32_t GetPipelineCreateAttemptCountForTest() const;
+            /// The id of a live texture (unique for the renderer's lifetime, never reused); 0 for any other pointer
+            [[nodiscard]] uint64_t GetTextureIdForTest(const Common::ITexture* texture) const;
 
         private:
             static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
@@ -380,6 +389,8 @@ namespace Renderer
             void LogUnsupportedOnce(const char* what) const;
             /// Logs `message` to stderr the first time, once per renderer
             void LogOnce(const std::string& message) const;
+            /// The id of a live texture, 0 for another pointer. Takes the id map's own lock only
+            [[nodiscard]] uint64_t TextureIdLocked(const Common::ITexture* texture) const;
 
             [[nodiscard]] bool WantsValidation(bool& required) const;
 

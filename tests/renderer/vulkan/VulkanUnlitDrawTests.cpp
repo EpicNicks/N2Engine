@@ -2,6 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include <math/Vector2.hpp>
@@ -65,6 +68,45 @@ namespace
             Vertex{{0.0f, 0.8f, 0.0f}, {0, 0, 1}, {0.5f, 1}, {1, 1, 1, 1}},
         };
         data.indices = counterClockwise ? std::vector<std::uint32_t>{0, 1, 2} : std::vector<std::uint32_t>{0, 2, 1};
+        return data;
+    }
+
+    /// Captures what is written to std::cerr (where the renderer logs) while it lives
+    class CerrCapture
+    {
+    public:
+        CerrCapture() : _old(std::cerr.rdbuf(_buffer.rdbuf())) {}
+        ~CerrCapture() { std::cerr.rdbuf(_old); }
+        CerrCapture(const CerrCapture&) = delete;
+        CerrCapture& operator=(const CerrCapture&) = delete;
+
+        [[nodiscard]] std::string Text() const { return _buffer.str(); }
+
+    private:
+        std::ostringstream _buffer;
+        std::streambuf* _old;
+    };
+
+    int CountOccurrences(const std::string& text, const std::string& needle)
+    {
+        int count = 0;
+        for (std::size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size()))
+        {
+            ++count;
+        }
+        return count;
+    }
+
+    /// A triangle that fills a good part of the frame (its interior is empty when drawn as an outline)
+    MeshData BigTriangle()
+    {
+        MeshData data;
+        data.vertices = {
+            Vertex{{-0.9f, -0.9f, 0.0f}, {0, 0, 1}, {0, 0}, {1, 1, 1, 1}},
+            Vertex{{0.9f, -0.9f, 0.0f}, {0, 0, 1}, {1, 0}, {1, 1, 1, 1}},
+            Vertex{{0.0f, 0.9f, 0.0f}, {0, 0, 1}, {0.5f, 1}, {1, 1, 1, 1}},
+        };
+        data.indices = {0, 1, 2};
         return data;
     }
 
@@ -993,4 +1035,184 @@ TEST_F(VulkanDrawTest, ADrawIsKeptWhenTheTargetIsResizedBeforeTheNextFrameAndPip
     }
     EXPECT_EQ(count, 16 * 24) << "a quad of half the frame in each direction";
     EXPECT_EQ(R().GetPipelineCountForTest(), pipelines) << "the viewport is dynamic: no new pipeline for a new size";
+}
+
+// ============================================================================
+// Review fixes: wireframe asked for before Initialize, a failing pipeline, a recycled texture address
+// ============================================================================
+
+namespace
+{
+    /// One red unlit draw of BigTriangle on a renderer of its own, read back
+    Frame DrawBigTriangle(VulkanRenderer& renderer)
+    {
+        IMesh* mesh = renderer.CreateMesh(BigTriangle());
+        IMaterial* material = renderer.CreateMaterial(renderer.GetStandardUnlitShader());
+        EXPECT_NE(mesh, nullptr);
+        EXPECT_NE(material, nullptr);
+        if (material != nullptr)
+        {
+            material->SetColor("uAlbedo", 1.0f, 0.0f, 0.0f, 1.0f);
+        }
+        renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
+        renderer.BeginFrame();
+        renderer.SetViewProjection(Identity, Identity);
+        renderer.DrawMesh(mesh, Identity, material);
+        renderer.EndFrame();
+        Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Size) * Size * 4), Size, Size};
+        renderer.ReadFramebuffer(frame.rgba.data(), Size, Size);
+        return frame;
+    }
+}
+
+TEST_F(VulkanDrawTest, WireframeAskedForBeforeInitializeBehavesLikeAskedForAfterIt)
+{
+    VulkanRenderer& before = NewRenderer();
+    before.SetWireframe(true);
+    if (!before.Initialize(nullptr, 8, 8))
+    {
+        HandleInitFailure(before);
+        return;
+    }
+    ASSERT_TRUE(before.SetRenderTargetSize(Size, Size));
+    VulkanRenderer& after = NewRenderer();
+    if (!after.Initialize(nullptr, 8, 8))
+    {
+        HandleInitFailure(after);
+        return;
+    }
+    ASSERT_TRUE(after.SetRenderTargetSize(Size, Size));
+    after.SetWireframe(true);
+
+    const Frame beforeFrame = DrawBigTriangle(before);
+    const Frame afterFrame = DrawBigTriangle(after);
+    EXPECT_TRUE(beforeFrame == afterFrame) << "SetWireframe(true) before Initialize must act as it does after";
+    if (before.IsWireframeSupportedForTest())
+    {
+        // Honoured: the outline, not silently dropped draws and not a filled triangle
+        EXPECT_GT(beforeFrame.Count(kRed), 50);
+        EXPECT_EQ(beforeFrame.At(Size / 2, 20), kBlack) << "the interior is the background";
+    }
+    else
+    {
+        EXPECT_EQ(beforeFrame.At(Size / 2, 20), kRed) << "wireframe is off: the triangle is solid";
+    }
+}
+
+TEST_F(VulkanDrawTest, WireframeAskedForBeforeInitializeOnADeviceWithoutTheFeatureDrawsSolidAndLogsOnce)
+{
+    VulkanRenderer& renderer = NewRenderer();
+    renderer.SetWireframeUnavailableForTest(true); // the device may well have fillModeNonSolid (lavapipe does)
+    renderer.SetWireframe(true);
+
+    const CerrCapture capture;
+    if (!renderer.Initialize(nullptr, 8, 8))
+    {
+        HandleInitFailure(renderer);
+        return;
+    }
+    ASSERT_TRUE(renderer.SetRenderTargetSize(Size, Size));
+    EXPECT_FALSE(renderer.IsWireframeSupportedForTest());
+
+    const Frame frame = DrawBigTriangle(renderer);
+    EXPECT_EQ(frame.At(Size / 2, 20), kRed) << "the draw is solid, not dropped";
+    EXPECT_GT(frame.Count(kRed), 1500);
+    renderer.SetWireframe(true); // after Initialize too: still ignored, still the one line
+    EXPECT_EQ(DrawBigTriangle(renderer).At(Size / 2, 20), kRed);
+    EXPECT_EQ(CountOccurrences(capture.Text(), "wireframe ignored: fillModeNonSolid not supported"), 1)
+        << capture.Text();
+}
+
+TEST_F(VulkanDrawTest, APipelineThatCannotBeMadeIsRememberedLoggedOncePerKeyAndItsDrawsAreSkipped)
+{
+    IMaterial* red = Colour(1.0f, 0.0f, 0.0f);
+    IMesh* quad = MakeMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
+    ASSERT_NE(red, nullptr);
+    ASSERT_NE(quad, nullptr);
+    const std::string failure = "vkCreateGraphicsPipelines failed";
+
+    R().SetFailPipelineCreationForTest(true);
+    {
+        const CerrCapture capture;
+        const Frame frame = RenderFrame([&]
+        {
+            for (int i = 0; i < 200; ++i)
+            {
+                R().DrawMesh(quad, Identity, red);
+            }
+        });
+        EXPECT_EQ(frame.Count(kBlack), Size * Size) << "nothing is drawn with a pipeline that failed";
+        EXPECT_EQ(R().GetPipelineCreateAttemptCountForTest(), 1u) << "tried once, then remembered";
+        EXPECT_EQ(CountOccurrences(capture.Text(), failure), 1) << capture.Text();
+
+        // Another key fails once too; the first stays quiet
+        Renderer::Common::RenderState noDepth;
+        noDepth.depthTest = false;
+        RenderFrame([&]
+        {
+            for (int i = 0; i < 50; ++i)
+            {
+                R().DrawMesh(quad, Identity, red, noDepth);
+                R().DrawMesh(quad, Identity, red);
+            }
+        });
+        EXPECT_EQ(R().GetPipelineCreateAttemptCountForTest(), 2u);
+        EXPECT_EQ(CountOccurrences(capture.Text(), failure), 2) << capture.Text();
+    }
+
+    // The failure is remembered even once creation would work again; a key never tried still draws
+    R().SetFailPipelineCreationForTest(false);
+    EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, red); }).Count(kBlack), Size * Size);
+    Renderer::Common::RenderState noWrite;
+    noWrite.depthWrite = false;
+    EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, red, noWrite); }).Count(kRed), Size * Size);
+}
+
+TEST_F(VulkanDrawTest, ATextureCreatedAtTheAddressOfADestroyedOneIsNotDrawnInItsPlace)
+{
+    const std::uint8_t redTexel[4] = {255, 0, 0, 255};
+    const std::uint8_t blueTexel[4] = {0, 0, 255, 255};
+    ITexture* a = R().CreateTexture(redTexel, 1, 1, 4, Nearest());
+    ASSERT_NE(a, nullptr);
+    IMaterial* material = R().CreateMaterial(_unlit);
+    ASSERT_NE(material, nullptr);
+    IMesh* quad = MakeMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
+    ASSERT_NE(quad, nullptr);
+    material->SetTexture(a);
+    EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, material); }).Count(kRed), Size * Size);
+
+    const std::uint64_t oldId = R().GetTextureIdForTest(a);
+    EXPECT_NE(oldId, 0u);
+    R().DestroyTexture(a);
+    EXPECT_EQ(R().GetTextureIdForTest(a), 0u) << "a destroyed texture has no id";
+
+    // Make textures until one lands on the old address (the allocator often hands it straight back); either way every
+    // new texture has an id that is not the old one
+    std::vector<ITexture*> made;
+    ITexture* b = nullptr;
+    for (int attempt = 0; attempt < 64 && b != a; ++attempt)
+    {
+        b = R().CreateTexture(blueTexel, 1, 1, 4, Nearest());
+        ASSERT_NE(b, nullptr);
+        made.push_back(b);
+        EXPECT_NE(R().GetTextureIdForTest(b), oldId);
+        EXPECT_NE(R().GetTextureIdForTest(b), 0u);
+    }
+    if (b != a)
+    {
+        std::cout << "[ note ] the address was not reused here; only the ids were checked" << std::endl;
+    }
+
+    // The material still names the destroyed texture, so it draws the 1x1 white default, not the new texture
+    EXPECT_EQ(material->GetTexture(), a);
+    const Frame frame = RenderFrame([&] { R().DrawMesh(quad, Identity, material); });
+    EXPECT_EQ(frame.Count(kWhite), Size * Size) << "the default, not the blue texture made later (nor the destroyed red one)";
+
+    // Setting the new texture afterwards draws it
+    material->SetTexture(made.back());
+    EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, material); }).Count(kBlue), Size * Size);
+    for (ITexture* texture : made)
+    {
+        R().DestroyTexture(texture);
+    }
 }

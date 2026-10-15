@@ -567,6 +567,11 @@ ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t width, uin
         return nullptr;
     }
     ITexture* raw = texture.get();
+    {
+        // A new id from a counter that never repeats: the address may be one a destroyed texture had
+        std::lock_guard idLock(_draw->textureIdMutex);
+        _draw->textureIds[raw] = _draw->nextTextureId++;
+    }
     _resources->textures.emplace(raw, std::move(texture));
     return raw;
 }
@@ -858,6 +863,10 @@ void VulkanRenderer::DestroyTexture(ITexture* texture)
     std::vector<RetiredResource> items{resource}; // the sampler stays in the cache
     Dispose(*_resources, _device, CanFreeRetiredNow(), RetireSlot(), items);
     _resources->textures.erase(it);
+    {
+        std::lock_guard idLock(_draw->textureIdMutex);
+        _draw->textureIds.erase(texture);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
