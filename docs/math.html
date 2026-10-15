@@ -73,6 +73,9 @@
 <li><a href="#types">Types at a glance</a></li>
 <li><a href="#build">Build requirement: AVX (x86_64)</a></li>
 <li><a href="#simd-dispatch">SIMD dispatch tiers</a></li>
+<li><a href="#tier-setting">Choosing the tier: math.simdTier</a></li>
+<li><a href="#tier-bit-differences">Which operations differ bit-wise across tiers</a></li>
+<li><a href="#strict-fp">Strict floating-point build</a></li>
 <li><a href="#correctness">Correctness relative to scalar</a></li>
 <li><a href="#vector3">Vector3</a></li>
 <li><a href="#batch">Batch operations</a></li>
@@ -126,10 +129,11 @@ bool IsSIMDLevelSupported(SIMDLevel level);
 SIMDLevel ClampSIMDLevel(SIMDLevel level); // the tier SetSIMDLevel will really use
 void SetSIMDLevel(SIMDLevel level);        // switch all five types (clamped)
 void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), with a report on stdout
+SIMDLevel InitializeSIMD(SIMDTierRequest); // Auto, or a named tier (lowered if unsupported); returns the tier used
 </code></pre>
 <ul>
 <li><strong>Default is scalar.</strong> Every function pointer is initialised to its scalar implementation, so all math works before any initialisation. (Before PR #24 the matrix pointers were null until <code>InitializeSIMD</code>, and early matrix math crashed.)</li>
-<li><strong>Application startup.</strong> <code>Application::Init</code> calls <code>Math::InitializeSIMD()</code> early, right after Lua initialisation, not first thing (anything that runs before it uses scalar code), so a running game uses the highest supported tier. Hosts and tests that never call <code>Application::Init</code> stay on scalar unless they call it themselves.</li>
+<li><strong>Application startup.</strong> <code>Application::Init</code> calls <code>Math::InitializeSIMD()</code> early, right after Lua initialisation, not first thing (anything that runs before it uses scalar code), so a running game uses the highest supported tier, unless the project forces one (<a href="#tier-setting"><code>math.simdTier</code></a> <span class="badge">PR #162</span>). Hosts and tests that never call <code>Application::Init</code> stay on scalar unless they call it themselves.</li>
 <li><strong>Re-callable.</strong> <code>SetSIMDLevel</code> can be called any number of times, in either direction. Each type resets every pointer to scalar first, then overrides what the chosen tier accelerates, so switching down fully restores the lower tier. It replaces the earlier one-way per-type <code>InitializeSIMD</code> and its <code>initialized</code> flag.</li>
 <li><strong>Clamped.</strong> A tier above what the CPU supports is silently lowered to the detected tier. A tier of the other architecture family does not exist on the target and becomes <code>Scalar</code>: an x86 tier on aarch64, <code>NEON</code> on x86 <span class="badge">PR #128</span>. Tests use <code>IsSIMDLevelSupported</code> to skip tiers the target cannot run, so they never silently test a lower tier.</li>
 <li><strong>Not thread-safe.</strong> The tier is a set of plain static pointers. Change it only while no other thread is doing math.</li>
@@ -186,6 +190,61 @@ void InitializeSIMD();                     // SetSIMDLevel(DetectSIMDLevel()), w
 <p>The existing values keep their meaning and <code>NEON</code> is appended, so code that stores or compares them is unaffected. Because only one family exists on any target, <code>ClampSIMDLevel</code> no longer takes <code>min(requested, detected)</code>: a supported tier is kept, an x86 tier above the CPU's is lowered to the CPU's (as before), and a tier of the other family becomes <code>Scalar</code>.</p>
 </div>
 <p class="src">Source: <code>math/include/math/CpuInfo.hpp</code> — <code>N2_MATH_NEON</code>, <code>DetectSIMDLevel</code>, <code>IsSIMDLevelSupported</code>, <code>ClampSIMDLevel</code>; <code>math/include/math/Vector3.hpp</code>, <code>Vector4.hpp</code> — the <code>*NEON</code> functions; <code>math/src/math/Vector2.cpp</code>; <code>math/CMakeLists.txt</code>; tests: <code>SimdLevelTest</code>, <code>SimdLevels/SimdDispatchTest</code> (parameterised with <code>NEON</code> on aarch64, so the <code>linux (Release, arm64, Clang)</code> job runs it at the NEON tier)</p>
+
+<h2 id="tier-setting">Choosing the tier: math.simdTier <span class="badge">PR #162</span></h2>
+<p>By default <code>Application::Init</code> picks the highest tier the CPU supports (Auto). On x86 that is almost always AVX, on aarch64 NEON, so two machines of different families run different algorithms for the same call. A project can name the tier instead, in <code>project.n2proj</code>:</p>
+<pre class="lang-json"><code>{ "settings": { "math": { "simdTier": "scalar" } } }</code></pre>
+<ul>
+<li><strong>Values</strong>: <code>"auto"</code> (default, also when the key or block is absent or <code>null</code>), <code>"scalar"</code>, <code>"sse2"</code>, <code>"sse4.1"</code> (or <code>"sse41"</code>), <code>"avx"</code>, <code>"neon"</code>; case-insensitive. Anything else is logged as a warning ("Project settings: math.simdTier: ... using auto") and means <code>auto</code>.</li>
+<li><strong>Applied before any scene load.</strong> <code>Application::Init</code> loads the project file once, reads <code>math.simdTier</code> (<code>ReadMathSimdTier</code>) and calls <code>Math::InitializeSIMD(request)</code> in the place the old argument-less call was, before the window, physics, audio and every scene. The same load supplies <code>physics.gpu</code>. Without <code>projectPath</code> (or without a readable project) the request is Auto, exactly the old behaviour.</li>
+<li><strong>Logged.</strong> The startup log has one line, <code>Math SIMD tier: AVX (auto-detected)</code> or <code>Math SIMD tier: Scalar (forced by math.simdTier)</code>; the SIMD report on stdout also names the tier and says when it was lowered.</li>
+<li><strong>Restart needed.</strong> <code>ApplyProjectSettings</code> only validates the <code>math</code> block (a bad value is refused in an editor <code>SetProjectSettings</code>); the tier is chosen once, at <code>Init</code>, like <code>physics.gpu</code>.</li>
+</ul>
+<div class="callout note" id="design-simd-tier-clamp">
+<p class="callout-title">Design decision: a tier the machine lacks is lowered with a warning, not refused <span class="badge">PR #162</span></p>
+<p>Forcing <code>avx</code> on a CPU without it, or <code>neon</code> on x86 (<code>sse2</code>/<code>sse4.1</code>/<code>avx</code> on aarch64), applies the existing <code>ClampSIMDLevel</code> rule and logs <code>math.simdTier AVX is not supported on this CPU/architecture; using ... instead</code>. A project therefore never fails to start because of the setting, and a game still runs on hardware older than the machine that authored the project. The cost: a later deterministic mode that needs one specific tier must check the tier actually in use, not trust the setting. <code>Scalar</code> exists on every target, so forcing it is never lowered. (The x86 binaries already require AVX, so in practice only the other-family case and pre-AVX hosts hit this.)</p>
+</div>
+<p class="src">Source: <code>math/include/math/MathRegistrar.hpp</code> — <code>SIMDTierRequest</code>, <code>ParseSIMDTierRequest</code>, <code>InitializeSIMD(SIMDTierRequest)</code>; <code>engine/src/ProjectSettings.cpp</code> — <code>ReadMathSimdTier</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; tests: <code>SimdTierSettingTest</code> (math_tests), <code>MathSimdSettingTest</code> (engine_tests)</p>
+
+<h2 id="tier-bit-differences">Which operations differ bit-wise across tiers <span class="badge">PR #162</span></h2>
+<p>The tiers are only guaranteed to agree within a relative 1e-5 (see <a href="#correctness">below</a>). For reproducible runs (replays, a later lockstep mode) the tier must be the same on every machine; <code>"scalar"</code> is the reference. Read from the code at this commit, the operations whose result can differ in the last bits between Scalar and another tier are:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Operation</th><th>Scalar</th><th>Other tiers</th></tr></thead>
+<tbody>
+<tr><td><code>Quaternion::Dot</code>, and <code>Length</code>/<code>Normalized</code> through it</td><td><code>((w*w' + x*x') + y*y') + z*z'</code></td><td>SSE2: pairwise sum of the four products (<code>DotSSE2</code>); SSE4.1 and AVX (AVX reuses the SSE4.1 quaternion code): <code>_mm_dp_ps</code> (<code>DotSSE41</code>, the summation order is the instruction's)</td></tr>
+<tr><td><code>Vector3::Normalized</code> (and <code>Normalize</code>)</td><td>multiplies by <code>1 / length</code> (<code>NormalizeScalar</code>)</td><td>SSE2/SSE4.1/AVX and NEON: divides by <code>length</code> (<code>_mm_div_ps</code>, <code>vdivq_f32</code>)</td></tr>
+<tr><td><code>Quaternion::Normalized</code></td><td>multiplies by <code>1 / length</code></td><td>SSE2, SSE4.1 and AVX: divides by <code>length</code></td></tr>
+<tr><td><code>Vector3</code> scalar division on NEON</td><td>multiplies by <code>1 / scalar</code></td><td>NEON divides (<code>ScalarDivNEON</code>); the SSE tiers use the scalar version</td></tr>
+<tr><td><code>Vector3::Length</code>/<code>Distance</code> at SSE4.1</td><td><code>sqrt(x*x + y*y + z*z)</code></td><td><code>_mm_dp_ps</code> with mask <code>0x71</code>, then <code>sqrt</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Not a difference: <code>Vector3::Dot</code> is <code>(x + y) + z</code> in every tier read (scalar, SSE2, NEON); <code>Vector4</code> scalar normalise divides, as its SIMD versions do; Min/Max/Floor/Ceil/Round/Abs are bit-exact by contract. This list is not exhaustive for the AVX batch paths and the matrices, which were not audited. The tier implementations are untouched in this item: making every tier bit-identical to scalar (and testing it by exact equality) is a later stage of the determinism plan (<a href="https://github.com/EpicNicks/N2Engine/issues/157">#157</a>).</p>
+<p class="src">Source: <code>math/include/math/Quaternion.hpp</code> — <code>DotScalar</code>, <code>DotSSE2</code>, <code>DotSSE41</code>, <code>NormalizeScalar</code>, <code>NormalizeSSE2</code>; <code>math/include/math/Vector3.hpp</code> — <code>NormalizeScalar</code>, <code>NormalizeSSE2</code>, <code>NormalizeSSE41</code>, <code>NormalizeNEON</code>, <code>ScalarDivNEON</code>; test: <code>SimdTierSettingTest.ForcedScalar*</code> (forced Scalar equals the scalar reference bit for bit)</p>
+
+<h2 id="strict-fp">Strict floating-point build <span class="badge">PR #162</span></h2>
+<p>Same source, same float operations: the CMake option <code>N2ENGINE_STRICT_FP</code> (default <code>OFF</code>, so no default build changes) applies one floating-point profile to <strong>every</strong> target, third-party ones included:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Compiler</th><th>Flags added when ON</th></tr></thead>
+<tbody>
+<tr><td>GCC, Clang (Linux, macOS, MinGW)</td><td><code>-ffp-contract=off</code>. GCC's C++ default is <code>fast</code> and Clang's is <code>on</code>: either may fuse <code>a*b + c</code> into one rounding as soon as a target has an FMA instruction. The x86 flags (<code>-msse2 -msse4.1 -mavx</code>) have none, and aarch64 already had the flag on <code>math</code>; the option extends it to all targets.</td></tr>
+<tr><td>MSVC (<code>cl</code>)</td><td><code>/fp:precise</code>, explicit (it is also the default). Never <code>/fp:contract</code> or <code>/fp:fast</code>.</td></tr>
+<tr><td>clang-cl</td><td><code>/fp:precise</code> and <code>-ffp-contract=off</code> (clang-cl contracts under <code>/fp:precise</code> otherwise)</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong>Forbidden flags.</strong> Configuring with <code>N2ENGINE_STRICT_FP=ON</code> fails (<code>FATAL_ERROR</code>) if <code>-ffast-math</code>, <code>-Ofast</code>, <code>-march=native</code>, <code>-mtune=native</code>, <code>/fp:fast</code> or <code>/fp:contract</code> appears in <code>CMAKE_C_FLAGS</code>, <code>CMAKE_CXX_FLAGS</code> or a per-configuration variant. None of them is used by the repository's own CMake files.</li>
+<li><strong>Define and query.</strong> Every target gets <code>N2_STRICT_FP</code>; <code>Math::IsStrictFp()</code> (<code>math/MathRegistrar.hpp</code>) reports whether the math library was built that way. It is the hook for a later startup check ("a deterministic mode needs the strict profile"); nothing in the engine acts on it yet.</li>
+<li><strong>CI.</strong> The <code>linux (Release, x86_64, GCC 14)</code> leg configures with <code>-DN2ENGINE_STRICT_FP=ON</code> (no job renamed), so the flag is compiled and the whole test suite runs with it, including <code>SimdTierSettingTest.IsStrictFpReportsTheCompiledProfile</code>. The MSVC and clang-cl branches are not exercised by any leg.</li>
+</ul>
+<div class="callout note" id="design-strict-fp">
+<p class="callout-title">Design decision: a build profile, not a determinism guarantee <span class="badge">PR #162</span></p>
+<p>The profile removes one source of difference (contraction and fast-math reordering) but does not make results equal across compilers or architectures: the libm functions (<code>sin</code>, <code>cos</code>, <code>atan2</code>, ...) still differ between C libraries, the SIMD tiers still differ as listed <a href="#tier-bit-differences">above</a>, Debug and Release can still differ, and PhysX is a prebuilt binary with its own flags. It applies to all targets (not only <code>math</code> or aarch64) because the inline math in the headers is compiled into every target that includes them, and they must all be the same code. It is OFF by default so existing builds are unchanged.</p>
+</div>
+<p class="src">Source: <code>CMakeLists.txt</code> — <code>N2ENGINE_STRICT_FP</code>; <code>math/src/math/MathRegistrar.cpp</code> — <code>IsStrictFp</code>; <code>.github/workflows/tests.yml</code> — the GCC 14 Configure step</p>
 
 <h2 id="correctness">Correctness relative to scalar <span class="badge">PR #27</span></h2>
 <p>Before PR #27, the SIMD paths a running game used gave wrong results (for example <code>(1,2,3)&middot;(4,5,6)</code> returned 44), while CI ran only scalar code. <code>tests/math/math_types/SimdDispatchTests.cpp</code> now runs every dispatched operation under SSE2, SSE41 and AVX (NEON on aarch64 <span class="badge">PR #128</span>) and compares it with the scalar result, resetting to Scalar around every test. The NEON results meet the same tolerances as the x86 tiers; no tolerance was loosened.</p>
