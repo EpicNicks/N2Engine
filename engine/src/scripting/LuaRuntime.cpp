@@ -33,6 +33,9 @@ namespace N2Engine::Scripting
 
     namespace Detail
     {
+        // LuaPanicRepair.cpp (it reads Lua's internal thread state, so it is kept to a file of its own)
+        void RepairThreadAfterPanic(lua_State *L);
+
         struct LuaGuardState
         {
             // Memory: what the allocator counts and refuses
@@ -45,7 +48,6 @@ namespace N2Engine::Scripting
             std::uint64_t step = HookGranularity; // instructions the installed hook counts per call
             bool exhausted = false;               // the budget ran out in this entry: the hook raises on every instruction
             int depth = 0;                        // LuaBudgetScopes open
-            bool panicked = false;                // an error reached the panic function (none of our calls was protecting)
             lua_State *state = nullptr;
 
             void Arm()
@@ -70,10 +72,12 @@ namespace N2Engine::Scripting
             }
 
             // Lua calls this for an error raised outside every protected call (an unprotected table access that hit
-            // a script's metamethod, or a failed allocation): sol turns it into a C++ exception
+            // a script's metamethod, or a failed allocation): sol turns it into a C++ exception. Lua has already
+            // reset the thread (no call is running any more), but not three of its fields; they are repaired here,
+            // before the exception leaves, and nothing else touches the thread (its stack is the caller's)
             static int Panic(lua_State *L)
             {
-                Of(L)->panicked = true;
+                RepairThreadAfterPanic(L);
                 return sol::default_at_panic(L);
             }
 
@@ -262,13 +266,9 @@ namespace N2Engine::Scripting
         _guard->depth = outerDepth;
         if (outerDepth == 0)
         {
-            // The panic path leaves the thread reset but its C-call counter raised (about 200 panics would end in
-            // "C stack overflow" for good): no Lua call is running now, so the counter can start from zero again
-            if (_guard->panicked)
-            {
-                _guard->panicked = false;
-                lua_closethread(_guard->state, nullptr);
-            }
+            // (No lua_closethread here for a panic: Panic repairs the thread. Resetting the thread here wiped the stack
+            // under a result the caller still held, such as the one RunSource returns, or under a Lua call still running
+            // when the outermost scope was opened by a binding a script called.)
             // Back to a full budget, so C++ that touches Lua outside any scope never meets the exhausted one
             _guard->Arm();
         }

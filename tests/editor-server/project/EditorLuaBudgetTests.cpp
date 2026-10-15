@@ -28,6 +28,8 @@
 #include <engine/scripting/LuaScript.hpp>
 #include <math/UUID.hpp>
 
+#include "HangWatchdog.hpp"
+
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
 using namespace N2Engine::Editor;
@@ -75,6 +77,9 @@ namespace
     protected:
         void SetUp() override
         {
+            // The scripts here loop or allocate until the limits stop them: if those are broken, the program ends
+            // naming the test instead of spinning until the CI job's limit
+            _watchdog = std::make_unique<N2Engine::Tests::HangWatchdog>();
             const auto *info = ::testing::UnitTest::GetInstance()->current_test_info();
             _base = fs::temp_directory_path() / "n2-editor-lua-budget-test" / info->name();
             std::error_code error;
@@ -105,6 +110,7 @@ namespace
             Application::GetInstance().ResetQuitRequest();
             std::error_code error;
             fs::remove_all(_base.parent_path(), error);
+            _watchdog.reset();
         }
 
         void WriteAsset(const std::string &relative, const std::string &text)
@@ -154,6 +160,7 @@ namespace
         IO::ProjectFile _project;
         LuaLimits _savedLimits;
         EditorServer server;
+        std::unique_ptr<N2Engine::Tests::HangWatchdog> _watchdog;
     };
 }
 

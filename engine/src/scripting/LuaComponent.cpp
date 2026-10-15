@@ -63,7 +63,7 @@ namespace N2Engine::Scripting
     bool LuaComponent::GuardedAccess(const std::function<void()> &body)
     {
         // A Lua protected call, so an error in a metamethod (or the budget) is a return value here: never a panic
-        // (which would leave the count hook disabled) and never a jump over this function's frames
+        // (a C++ exception thrown through Lua's C frames) and never a jump over this function's frames
         std::string error;
         if (LuaRuntime::Instance().ProtectedCall(body, error))
         {

@@ -24,6 +24,8 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
 
+#include "HangWatchdog.hpp"
+
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
 namespace fs = std::filesystem;
@@ -127,9 +129,13 @@ protected:
     std::vector<std::pair<std::string, Logger::LogLevel>> _logs;
     std::size_t _logSubscription = 0;
     Input::InputAction _action{"BudgetTest"};
+    // Every test here runs a loop that only the budget stops: if the budget is broken, the program ends naming the
+    // test instead of spinning until the CI job's limit
+    std::unique_ptr<Tests::HangWatchdog> _watchdog;
 
     void SetUp() override
     {
+        _watchdog = std::make_unique<Tests::HangWatchdog>();
         _saved = Runtime().GetLimits();
         Runtime().SetLimits({TestBudget, Runtime().GetMemoryUsed() + 16 * MiB});
         _logSubscription = Logger::logEvent += [this](const std::string_view message, const Logger::LogLevel level)
@@ -147,6 +153,7 @@ protected:
         Lua()["budget_action"] = sol::lua_nil;
         Application::SetScriptQuitAllowed(true);
         Application::GetInstance().ResetQuitRequest();
+        _watchdog.reset();
     }
 
     static sol::protected_function_result Run(const std::string &source)
@@ -391,6 +398,31 @@ TEST_F(LuaBudgetTest, ALoopInAMetamethodTheEngineReadsIsAbortedWithoutLeavingThe
     const sol::protected_function_result spin = Run("while true do end");
     ASSERT_FALSE(spin.valid());
     EXPECT_NE(ErrorOf(spin).find("instruction budget"), std::string::npos);
+}
+
+TEST_F(LuaBudgetTest, TheBudgetErrorOnThePanicPathLeavesTheHookAndTheStateWorking)
+{
+    // An unprotected call (lua_call, no pcall anywhere): the count hook's error reaches the panic function, which sol
+    // turns into a C++ exception. Lua leaves the thread's hook flag off after an error raised inside a hook unless a
+    // protected call restores it, so without the repair in the panic function no later loop would ever be stopped.
+    // Hundreds of them must not wear out the C-call counter either ("C stack overflow").
+    Lua().script("budget_unprotected = function() while true do end end");
+    sol::unsafe_function unprotected = Lua()["budget_unprotected"];
+    for (int attempt = 0; attempt < 250; ++attempt)
+    {
+        EXPECT_ANY_THROW(unprotected());
+    }
+    Lua()["budget_unprotected"] = sol::lua_nil;
+
+    const sol::protected_function_result normal = Run("local t = {} for i = 1, 100 do t[i] = i end return #t");
+    ASSERT_TRUE(normal.valid()) << ErrorOf(normal);
+    EXPECT_EQ(normal[0].get<int>(), 100);
+
+    // The result above is still held: the next entry must not touch the stack under it
+    const sol::protected_function_result spin = Run("while true do end");
+    ASSERT_FALSE(spin.valid());
+    EXPECT_NE(ErrorOf(spin).find("instruction budget"), std::string::npos) << ErrorOf(spin);
+    EXPECT_EQ(normal[0].get<int>(), 100);
 }
 
 TEST_F(LuaBudgetTest, ScriptsCannotSetAFinalizerBecauseTheVmRunsItWithTheHookOff)

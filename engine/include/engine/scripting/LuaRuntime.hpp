@@ -71,7 +71,7 @@ namespace N2Engine::Scripting
         [[nodiscard]] static bool IsLimitError(std::string_view message);
         /// Runs C++ code that touches script tables (a table access can reach a script's metamethods) inside a Lua
         /// protected call (a budget scope too), so a Lua error, the budget or a failed allocation never goes down
-        /// the panic path (which leaves the hook disabled) or jumps over the caller's C++ frames.
+        /// the panic path (a C++ exception thrown through Lua's C frames) or jumps over the caller's C++ frames.
         /// Keep the body to the access itself: a Lua error abandons it without running its destructors.
         /// @returns false with the error text in `error` if the body raised a Lua error or threw
         bool ProtectedCall(const std::function<void()>& body, std::string& error);
