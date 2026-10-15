@@ -1,6 +1,9 @@
 #include <string>
 #include <memory>
 #include <algorithm>
+#include <format>
+#include <optional>
+#include <vector>
 
 #include <math/MathRegistrar.hpp>
 
@@ -107,7 +110,31 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         scriptingStatus.detail = "Lua bindings failed to register (see log)";
     }
 
-    Math::InitializeSIMD();
+    // The project file is read once here: math.simdTier must be applied before anything else runs (and so before any
+    // scene loads), and physics.gpu is read from the same file below. No project, or no setting: auto, as before.
+    std::optional<IO::ProjectFile> project;
+    if (!options.projectPath.empty())
+    {
+        if (auto loaded = IO::ProjectFile::Load(options.projectPath))
+        {
+            project = std::move(*loaded);
+        }
+    }
+    // A bad value is reported by ApplyProjectSettings (the hosts call it after Init), as for physics.gpu, so it is
+    // warned once, not twice
+    Math::SIMDTierRequest simdRequest = Math::SIMDTierRequest::Auto;
+    if (project)
+    {
+        simdRequest = ReadMathSimdTier(project->settings);
+    }
+    const Math::SIMDLevel simdLevel = Math::InitializeSIMD(simdRequest);
+    if (const auto wanted = Math::ToSIMDLevel(simdRequest); wanted && *wanted != simdLevel)
+    {
+        Logger::Warn(std::format("math.simdTier {} is not supported on this CPU/architecture; using {} instead",
+                                 Math::SIMDLevelName(*wanted), Math::SIMDLevelName(simdLevel)));
+    }
+    Logger::Info(std::format("Math SIMD tier: {} ({})", Math::SIMDLevelName(simdLevel),
+                             simdRequest == Math::SIMDTierRequest::Auto ? "auto-detected" : "forced by math.simdTier"));
     Time::Init();
     // A project's rendering settings belong to that project: a second Init in the same process starts from the defaults
     Rendering::RenderSettings::SetColorSpace(Rendering::ColorSpace::Gamma);
@@ -160,12 +187,9 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     // physics scene is built below and its GPU flag cannot change afterwards. No project, or no setting: off, and
     // then no CUDA call is made at all. A bad value is reported by ApplyProjectSettings.
     Physics::GpuMode gpuMode = Physics::GpuMode::Off;
-    if (!options.projectPath.empty())
+    if (project)
     {
-        if (const auto project = IO::ProjectFile::Load(options.projectPath))
-        {
-            gpuMode = ReadPhysicsGpuMode(project->settings);
-        }
+        gpuMode = ReadPhysicsGpuMode(project->settings);
     }
 
 #ifdef N2ENGINE_PHYSX_ENABLED

@@ -6,7 +6,10 @@
 #include "math/Matrix.hpp"
 #include "math/CpuInfo.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <string>
 
 #ifdef __AVX__
 #define HAS_AVX true
@@ -32,6 +35,81 @@
 
 void N2Engine::Math::InitializeSIMD()
 {
+    (void)InitializeSIMD(SIMDTierRequest::Auto);
+}
+
+std::optional<N2Engine::Math::SIMDTierRequest> N2Engine::Math::ParseSIMDTierRequest(const std::string_view text)
+{
+    std::string lower;
+    lower.reserve(text.size());
+    for (const char c : text)
+    {
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    if (lower == "auto")
+        return SIMDTierRequest::Auto;
+    if (lower == "scalar")
+        return SIMDTierRequest::Scalar;
+    if (lower == "sse2")
+        return SIMDTierRequest::SSE2;
+    if (lower == "sse4.1" || lower == "sse41")
+        return SIMDTierRequest::SSE41;
+    if (lower == "avx")
+        return SIMDTierRequest::AVX;
+    if (lower == "neon")
+        return SIMDTierRequest::NEON;
+    return std::nullopt;
+}
+
+std::optional<N2Engine::Math::SIMDLevel> N2Engine::Math::ToSIMDLevel(const SIMDTierRequest request)
+{
+    switch (request)
+    {
+    case SIMDTierRequest::Auto:
+        return std::nullopt;
+    case SIMDTierRequest::Scalar:
+        return SIMDLevel::Scalar;
+    case SIMDTierRequest::SSE2:
+        return SIMDLevel::SSE2;
+    case SIMDTierRequest::SSE41:
+        return SIMDLevel::SSE41;
+    case SIMDTierRequest::AVX:
+        return SIMDLevel::AVX;
+    case SIMDTierRequest::NEON:
+        return SIMDLevel::NEON;
+    }
+    return std::nullopt;
+}
+
+const char *N2Engine::Math::SIMDLevelName(const SIMDLevel level)
+{
+    switch (level)
+    {
+    case SIMDLevel::Scalar:
+        return "Scalar";
+    case SIMDLevel::SSE2:
+        return "SSE2";
+    case SIMDLevel::SSE41:
+        return "SSE4.1";
+    case SIMDLevel::AVX:
+        return "AVX";
+    case SIMDLevel::NEON:
+        return "NEON";
+    }
+    return "Unknown";
+}
+
+bool N2Engine::Math::IsStrictFp()
+{
+#ifdef N2_STRICT_FP
+    return true;
+#else
+    return false;
+#endif
+}
+
+N2Engine::Math::SIMDLevel N2Engine::Math::InitializeSIMD(const SIMDTierRequest request)
+{
     std::cout << "----------INITIALIZE SIMD BEGIN----------" << std::endl;
 
     HAS_SUPPORT("AVX", HAS_AVX)
@@ -48,13 +126,20 @@ void N2Engine::Math::InitializeSIMD()
     std::cout << "AVX: " << (features.avx ? "Yes" : "No") << "\n";
     std::cout << "AVX2: " << (features.avx2 ? "Yes" : "No") << "\n";
 
-    const SIMDLevel level = DetectSIMDLevel();
-    constexpr const char *levelNames[] = {"Scalar", "SSE2", "SSE4.1", "AVX", "NEON"};
-    std::cout << "Math SIMD level: " << levelNames[static_cast<int>(level)] << "\n";
+    // Auto: the detected tier. A named tier is lowered to what this target supports (never refused)
+    const std::optional<SIMDLevel> requested = ToSIMDLevel(request);
+    const SIMDLevel level = requested ? ClampSIMDLevel(*requested) : DetectSIMDLevel();
+    std::cout << "Math SIMD level: " << SIMDLevelName(level);
+    if (requested)
+    {
+        std::cout << " (requested " << SIMDLevelName(*requested) << (level == *requested ? "" : ", lowered") << ")";
+    }
+    std::cout << "\n";
 
     SetSIMDLevel(level);
 
     std::cout << "----------INITIALIZE SIMD END------------" << std::endl;
+    return level;
 }
 
 void N2Engine::Math::SetSIMDLevel(const SIMDLevel level)

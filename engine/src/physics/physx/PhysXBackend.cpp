@@ -1029,29 +1029,52 @@ namespace N2Engine::Physics
 
     void PhysXBackend::RefreshCollisionMatrix()
     {
-        // Only shapes whose row actually changed, grouped by actor for resetFiltering
-        std::unordered_map<PxRigidActor *, std::vector<PxShape *>> changed;
-        for (const auto &shapes : _colliderShapes | std::views::values)
+        // Only shapes whose row actually changed, grouped by actor for resetFiltering. Bodies are visited
+        // by handle index and each body's colliders in attach order (never by the colliders' addresses), so
+        // the order resetFiltering is called in is the same for the same create/destroy sequence.
+        std::vector<std::pair<PxRigidActor *, std::vector<PxShape *>>> changedByActor;
+        for (const BodyData &body : _bodies)
         {
-            for (PxShape *shape : shapes)
+            if (!body.actor)
             {
-                PxFilterData filter = shape->getSimulationFilterData();
-                // word0 is the layer's bit, so its index is the layer
-                const uint32_t collidesWith = filter.word0 != 0 ? Layers::CollisionMaskFor(std::countr_zero(filter.word0)) : 0u;
-                if (filter.word1 == collidesWith)
+                continue;
+            }
+            std::vector<PxShape *> changed;
+            for (const ICollider *collider : body.colliders)
+            {
+                const auto shapes = _colliderShapes.find(const_cast<ICollider *>(collider));
+                if (shapes == _colliderShapes.end())
                 {
                     continue;
                 }
-                filter.word1 = collidesWith;
-                shape->setSimulationFilterData(filter);
-                if (PxRigidActor *actor = shape->getActor())
+                for (PxShape *shape : shapes->second)
                 {
-                    changed[actor].push_back(shape);
+                    PxFilterData filter = shape->getSimulationFilterData();
+                    // word0 is the layer's bit, so its index is the layer
+                    const uint32_t collidesWith = filter.word0 != 0 ? Layers::CollisionMaskFor(std::countr_zero(filter.word0)) : 0u;
+                    if (filter.word1 == collidesWith)
+                    {
+                        continue;
+                    }
+                    filter.word1 = collidesWith;
+                    shape->setSimulationFilterData(filter);
+                    if (shape->getActor() == body.actor)
+                    {
+                        changed.push_back(shape);
+                    }
                 }
+            }
+            if (!changed.empty())
+            {
+                if (_refilterObserver)
+                {
+                    _refilterObserver(body.colliders.front()->GetGameObject());
+                }
+                changedByActor.emplace_back(body.actor, std::move(changed));
             }
         }
 
-        for (auto &[actor, shapes] : changed)
+        for (auto &[actor, shapes] : changedByActor)
         {
             RefilterShapes(*actor, shapes);
         }
