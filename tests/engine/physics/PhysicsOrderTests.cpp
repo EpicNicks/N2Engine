@@ -44,24 +44,15 @@ namespace
 class PhysicsOrderTest : public ::testing::Test
 {
 protected:
-    static void SetUpTestSuite()
+    Scene *_scene = nullptr;
+
+    // A fresh backend per test: handle indices come from a free list, so a shared backend would hand the next
+    // test's bodies recycled (descending) indices and the creation-order expectations would not hold.
+    void SetUp() override
     {
         auto backend = std::make_unique<PhysXBackend>();
         ASSERT_TRUE(backend->Initialize());
         Application::GetInstance().Set3DPhysicsBackend(std::move(backend));
-    }
-
-    static void TearDownTestSuite()
-    {
-        SceneManager::AddScene(Scene::Create("PhysicsOrderTest_Teardown"), true);
-        SceneManager::ProcessAnyPendingSceneChange();
-        Application::GetInstance().Set3DPhysicsBackend(nullptr);
-    }
-
-    Scene *_scene = nullptr;
-
-    void SetUp() override
-    {
         Layers::ResetToDefaults();
         SceneManager::AddScene(Scene::Create(std::string("PhysicsOrder_") +
                                              ::testing::UnitTest::GetInstance()->current_test_info()->name()), true);
@@ -74,6 +65,9 @@ protected:
     {
         static_cast<PhysXBackend &>(Backend()).SetRefilterObserver({});
         Layers::ResetToDefaults();
+        SceneManager::AddScene(Scene::Create("PhysicsOrderTest_Teardown"), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+        Application::GetInstance().Set3DPhysicsBackend(nullptr);
     }
 
     static IPhysicsBackend &Backend() { return *Application::GetInstance().Get3DPhysicsBackend(); }
