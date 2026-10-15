@@ -96,11 +96,13 @@ jobs:
         run: python3 editor-server/protocol/tests/run_tests.py
 
   windows:
+    # A matrix job skipped by a job-level if reports ONE skipped check with an unexpanded name, not the three leg names, so
+    # this job always runs and each step skips itself on a docs-only pull request (the legs keep their names and report success
+    # after a few seconds on a runner).
     # Legs with the FreeType font backend or the ufbx FBX/OBJ importer say so in their name; the rest use stb_truetype and
     # glTF only
     name: windows (${{ matrix.config }}, PhysX ${{ matrix.physx }}${{ matrix.freetype == 'ON' && ', FreeType ON' || '' }}${{ matrix.ufbx == 'ON' && ', ufbx ON' || '' }}${{ matrix.tls == 'ON' && ', TLS ON' || '' }})
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
@@ -132,8 +134,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.docs_only != 'true'
 
       - name: Install Vulkan SDK
+        if: needs.changes.outputs.docs_only != 'true'
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
           install_runtime: false
@@ -141,7 +145,7 @@ jobs:
           stripdown: true
 
       - name: Cache PhysX binaries
-        if: matrix.physx == 'ON'
+        if: needs.changes.outputs.docs_only != 'true' && (matrix.physx == 'ON')
         uses: actions/cache@v6
         with:
           path: external/PhysX/physx/bin
@@ -150,12 +154,15 @@ jobs:
           key: physx-bin-${{ runner.os }}-${{ hashFiles('cmake/PhysXWindowsHashes.cmake') }}
 
       - name: Configure
+        if: needs.changes.outputs.docs_only != 'true'
         run: cmake -S . -B build -A x64 -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} -DN2ENGINE_EDITOR_TLS=${{ matrix.tls }} # newest installed Visual Studio
 
       - name: Build
+        if: needs.changes.outputs.docs_only != 'true'
         run: cmake --build build --config ${{ matrix.config }} --parallel
 
       - name: Test
+        if: needs.changes.outputs.docs_only != 'true'
         run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure
         env:
           # Silent OpenAL output device; the runner has no sound card
@@ -172,6 +179,7 @@ jobs:
       # open; one without the flag must keep running when its stdin is at end of file. A non-zero exit code catches
       # crashes during shutdown or static destruction.
       - name: Editor host smoke test
+        if: needs.changes.outputs.docs_only != 'true'
         shell: pwsh
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
@@ -183,7 +191,7 @@ jobs:
       # finishes a handshake, says Hello and gets ServerInfo; a restarted host presents the same certificate.
       # --exit-on-disconnect ends the host when the client leaves.
       - name: Editor host TLS smoke test
-        if: matrix.tls == 'ON'
+        if: needs.changes.outputs.docs_only != 'true' && (matrix.tls == 'ON')
         shell: pwsh
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
@@ -196,6 +204,7 @@ jobs:
       # ran, frames advance beside a busy client, pause, step, input, RenderFrame and Shutdown, that the edit host and its
       # scene file are untouched, and that --exit-on-disconnect and a missing snapshot end the child as documented.
       - name: Play child smoke test
+        if: needs.changes.outputs.docs_only != 'true'
         shell: pwsh
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
