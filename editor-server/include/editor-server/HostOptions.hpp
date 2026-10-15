@@ -30,6 +30,15 @@ namespace N2Engine::Editor
     struct HostOptions
     {
         static constexpr int DefaultPort = 9999;
+        /// EditorServer::DefaultIdleTimeout / DefaultWriteTimeout in seconds, spelled out like bindAddress;
+        /// HostOptionsTest.NoArgumentsGiveTheDefaults pins them equal
+        static constexpr int DefaultIdleTimeoutSeconds = 300;
+        static constexpr int DefaultWriteTimeoutSeconds = 30;
+        /// The largest value --idle-timeout, --write-timeout (seconds) and --max-session (minutes) take: a day, an hour
+        /// and a year. A bigger number is a typo for "never", which --idle-timeout 0 and --max-session 0 already say.
+        static constexpr int MaxIdleTimeoutSeconds = 24 * 60 * 60;
+        static constexpr int MaxWriteTimeoutSeconds = 60 * 60;
+        static constexpr int MaxSessionMinutesLimit = 365 * 24 * 60;
 
         /// 0 lets the OS pick a free port; the ready line reports the one it picked
         int port = DefaultPort;
@@ -69,6 +78,14 @@ namespace N2Engine::Editor
         /// an access token has by default; for test rigs that fail Hellos on purpose. It changes nothing on a host
         /// without a token, which has no failed Hellos to count.
         bool noRateLimit = false;
+        /// --idle-timeout <seconds>: close a connection that has sent no request for this long once it is a session
+        /// (EditorServer::SetIdleTimeout). 0 turns it off, for test rigs and debugging.
+        int idleTimeoutSeconds = DefaultIdleTimeoutSeconds;
+        /// --write-timeout <seconds>: close a connection whose response makes no write progress for this long
+        /// (EditorServer::SetWriteTimeout); at least 1
+        int writeTimeoutSeconds = DefaultWriteTimeoutSeconds;
+        /// --max-session <minutes>: close a session older than this (EditorServer::SetMaxSessionAge). 0, the default, is off.
+        int maxSessionMinutes = 0;
         /// --log-level <info|warn|error>: the least severe level the host's log sink (LogSink; stderr, and --log-file) writes.
         /// Info by default. The Logger has no Debug level, and polled commands never log, so Info is quiet while idle.
         Logger::LogLevel logLevel = Logger::LogLevel::Info;
@@ -113,6 +130,9 @@ namespace N2Engine::Editor
     /// A decimal port in [0, 65535], nothing else (no sign, whitespace or trailing text). 0 means "any free
     /// port" (EditorServer::Start(0)).
     [[nodiscard]] std::optional<int> ParsePort(std::string_view text);
+
+    /// A whole number in [min, max] written in decimal digits only (no sign, whitespace, exponent or trailing text)
+    [[nodiscard]] std::optional<int> ParseWholeNumber(std::string_view text, int min, int max);
 
     /// "opengl" or "software" (exactly; no other spelling)
     [[nodiscard]] std::optional<HostRenderer> ParseRenderer(std::string_view text);

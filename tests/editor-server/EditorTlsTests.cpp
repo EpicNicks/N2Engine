@@ -954,6 +954,63 @@ TEST(EditorTlsServerTest, NothingLogsTheTokenOrTheKey)
     }
 }
 
+TEST(EditorTlsServerTest, AHandshakeThatNeverFinishesCountsAsAFailedHelloForItsAddressUntilItIsBackedOff)
+{
+    // Audit F1: a peer that connects and stalls the TLS handshake holds the one-at-a-time server for the whole budget.
+    // Each such connection is a failed Hello for its address, so after three of them the address is closed at accept.
+    // Time is injected: the connection clock is what the handshake deadline reads, so nothing here waits for 2 s.
+    TempDirectory directory;
+    std::atomic<int64_t> connectionMs{1000};
+    EditorServer server;
+    ASSERT_TRUE(server.SetAccessToken(TestToken));
+    ASSERT_TRUE(server.SetConnectionClock(
+        [&connectionMs] { return std::chrono::steady_clock::time_point(std::chrono::milliseconds(connectionMs.load())); }));
+    // A fixed time for the rate limiter, so the backoff it starts doesn't run out while the test is slow
+    ASSERT_TRUE(server.SetRateLimitClock([] { return std::chrono::steady_clock::time_point(std::chrono::milliseconds(1000)); }));
+    ASSERT_TRUE(server.SetPeerAddressProvider([](int) { return PeerAddress::IPv4(203, 0, 113, 9); }));
+    const auto enabled = server.EnableTls(directory.Path());
+    ASSERT_TRUE(enabled.has_value()) << (enabled ? "" : enabled.error());
+    ASSERT_TRUE(server.Start(0));
+
+    // One that sends nothing, one that starts a TLS record and stops, and one that is not TLS at all
+    for (int kind = 0; kind < 3; ++kind)
+    {
+        PlainConnection peer(server.GetPort());
+        ASSERT_TRUE(peer.IsConnected());
+        if (kind == 1)
+        {
+            const uint8_t start[3] = {0x16, 0x03, 0x01};
+            ASSERT_TRUE(peer.Send(start, sizeof(start)));
+        }
+        else if (kind == 2)
+        {
+            const std::string text = "GET / HTTP/1.1\r\n\r\n";
+            ASSERT_TRUE(peer.Send(text.data(), text.size()));
+        }
+        // The budget is 2 s of connection time: a step of 3 s passes it. A step taken before the server has read the
+        // clock for this connection is made up by the next one.
+        bool closed = false;
+        for (int attempt = 0; attempt < 100 && !closed; ++attempt)
+        {
+            connectionMs += 3000;
+            closed = peer.DrainUntilClosed(std::chrono::milliseconds(10));
+        }
+        ASSERT_TRUE(closed) << "connection " << kind << " was never closed";
+    }
+    EXPECT_EQ(server.RateLimitedConnections(), 0u) << "none of the three was refused at accept";
+
+    // The third failure started the backoff, so this one is closed at accept (the clock is not moved: a connection that
+    // was served would be held until its budget ran out)
+    {
+        PlainConnection peer(server.GetPort());
+        ASSERT_TRUE(peer.IsConnected());
+        EXPECT_TRUE(peer.DrainUntilClosed(std::chrono::seconds(5)));
+    }
+    EXPECT_EQ(server.RateLimitedConnections(), 1u);
+
+    server.Stop();
+}
+
 #else // !N2ENGINE_EDITOR_TLS
 
 // Without the option there is no TLS to test: an empty program part (HostOptionsTests.cpp checks the refusal)

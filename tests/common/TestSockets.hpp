@@ -103,6 +103,19 @@ namespace N2TestSockets
 #endif
     }
 
+    /// A small receive buffer: call it before connect, so the TCP window the connection starts with is small too. A peer
+    /// that never reads then stalls the sender after a few KiB.
+    inline void SetReceiveBuffer(Handle handle, int bytes)
+    {
+        setsockopt(handle, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&bytes), sizeof(bytes));
+    }
+
+    /// A small send buffer (on an accepted socket, from a test hook)
+    inline void SetSendBuffer(Handle handle, int bytes)
+    {
+        setsockopt(handle, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&bytes), sizeof(bytes));
+    }
+
     inline bool ConnectLoopback(Handle handle, int port)
     {
         sockaddr_in addr{};

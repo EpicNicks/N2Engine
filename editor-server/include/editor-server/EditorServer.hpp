@@ -199,11 +199,48 @@ namespace N2Engine::Editor
         /// The Error a server with an access token answers any other command with before a successful Hello
         static constexpr const char *HelloRequiredError =
             "Not authorized: this host requires Hello with its access token before any other command";
-        /// How long a server with an access token waits, from accepting a connection, for a Hello to succeed on it
-        static constexpr std::chrono::milliseconds DefaultHelloTimeout{5000};
+        /// How long a connection has, from being accepted, to finish its TLS handshake and (with an access token) send a
+        /// successful Hello. 2 s: the server serves one connection at a time, so this is the longest a peer that says
+        /// nothing can hold it (a host with a token also counts each such connection as a failure for the peer's address,
+        /// see Failed-Hello rate limiting).
+        static constexpr std::chrono::milliseconds DefaultHelloTimeout{2000};
         /// Before Start, like SetAccessToken; false, changing nothing, while running (or for a non-positive timeout)
         bool SetHelloTimeout(std::chrono::milliseconds timeout);
         [[nodiscard]] std::chrono::milliseconds GetHelloTimeout() const { return _helloTimeout; }
+
+        // ==================== Connection deadlines ====================
+
+        /**
+         * What keeps one connection from holding the (one-at-a-time) server for ever. Besides the pre-Hello budget above:
+         *  - idle timeout: once the connection is a session (at once without an access token, at its first good Hello with
+         *    one), it is closed when no complete request has arrived for this long. Every request resets it, polled ones
+         *    included, so a client that polls (the editor does) is never idle. Zero turns it off.
+         *  - write timeout: a response that makes no progress being written (the client isn't reading) for this long
+         *    closes the connection. Progress restarts it, so a slow client that does read a large frame isn't cut off.
+         *  - maximum session age: a session older than this is closed, whatever it does. Zero (the default) is off.
+         * Each close logs one line naming the reason and the peer. Setters are before Start, like SetHelloTimeout.
+         */
+        static constexpr std::chrono::milliseconds DefaultIdleTimeout{5 * 60 * 1000};
+        static constexpr std::chrono::milliseconds DefaultWriteTimeout{30 * 1000};
+        /// Zero turns the idle deadline off; false, changing nothing, while running or for a negative timeout
+        bool SetIdleTimeout(std::chrono::milliseconds timeout);
+        [[nodiscard]] std::chrono::milliseconds GetIdleTimeout() const { return _idleTimeout; }
+        /// Positive only (a write with no deadline is what this exists to prevent); false, changing nothing, otherwise
+        bool SetWriteTimeout(std::chrono::milliseconds timeout);
+        [[nodiscard]] std::chrono::milliseconds GetWriteTimeout() const { return _writeTimeout; }
+        /// Zero (off) by default; false, changing nothing, while running or for a negative age
+        bool SetMaxSessionAge(std::chrono::milliseconds age);
+        [[nodiscard]] std::chrono::milliseconds GetMaxSessionAge() const { return _maxSessionAge; }
+
+        /// The time every connection deadline above (and the Hello one) reads: the real steady clock when unset, so a
+        /// test can move it without sleeping. The rate limiter's clock (SetRateLimitClock) is separate. A deadline is
+        /// noticed within one poll interval (0.1 s of real time) of the clock passing it.
+        using ConnectionClock = std::function<std::chrono::steady_clock::time_point()>;
+        bool SetConnectionClock(ConnectionClock clock);
+        /// Called on the network thread with each accepted socket, before anything is read from it; for tests (a small
+        /// send buffer, say). Not for production use.
+        using AcceptedSocketHook = std::function<void(int socket)>;
+        bool SetAcceptedSocketHook(AcceptedSocketHook hook);
 
         // ==================== Failed-Hello rate limiting ====================
 
@@ -212,8 +249,11 @@ namespace N2Engine::Editor
          * RateLimiter for the rules): a backed-off address is accepted and closed at once, before its TLS handshake, and
          * an address with failures on record gets a shorter handshake-and-Hello budget. Loopback peers are exempt from
          * per-address backoff but share one global one, and (with a tokens file) a backoff per user named in Hello keeps
-         * failures from anywhere off that user. On by default; a host without an access token has no failed Hellos, so
-         * nothing is tracked and nothing changes. All of this state is the network thread's.
+         * failures from anywhere off that user. A connection that ends without a successful Hello is a failure too (it
+         * timed out, closed early, sent another command or an oversized frame, or failed its TLS handshake), for its
+         * address only: loopback is exempt from that, and it never feeds loopback's global backoff. On by default; a host
+         * without an access token has no failed Hellos, so nothing is tracked and nothing changes. All of this state is
+         * the network thread's.
          *
          * Each setter is before Start, like SetAccessToken: false, changing nothing, while running.
          */
@@ -719,6 +759,12 @@ namespace N2Engine::Editor
         bool BeginTls(int socket, std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds budget);
         /// Network thread: ends this connection's TLS session, if any, before its socket is closed
         void EndTls();
+        /// The connection clock's time (the real steady clock when none is set)
+        [[nodiscard]] std::chrono::steady_clock::time_point ConnectionNow() const;
+        /// Network thread: counts the current connection as a failed Hello for its address (the limiter's
+        /// RecordUnfinishedHello: loopback is exempt) and logs a backoff it starts. For a connection that ended without a
+        /// successful Hello and without a Hello the token check already counted. A host without a limiter does nothing.
+        void CountUnfinishedHello();
         /// False on disconnect, error, a stopping server, or (when given) once the deadline has passed
         bool Receive(int socket, void *data, size_t size,
                      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
@@ -785,6 +831,12 @@ namespace N2Engine::Editor
         // connection starts and read by the network thread for Shutdown's refusal, so atomic
         std::atomic<bool> _clientErrorCodes{false};
         std::chrono::milliseconds _helloTimeout{DefaultHelloTimeout};
+        // Connection deadlines: set before Start only, so the network thread reads them without a lock
+        std::chrono::milliseconds _idleTimeout{DefaultIdleTimeout};
+        std::chrono::milliseconds _writeTimeout{DefaultWriteTimeout};
+        std::chrono::milliseconds _maxSessionAge{0};
+        ConnectionClock _connectionClock;
+        AcceptedSocketHook _acceptedSocketHook;
         // Rate limiting: the settings are set before Start only. The limiter is made by Start (so every run begins with
         // empty tables) and used by the network thread only, so it has no lock.
         bool _rateLimiting{true};

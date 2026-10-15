@@ -1960,6 +1960,82 @@ namespace N2Engine::Editor
         return true;
     }
 
+    bool EditorServer::SetIdleTimeout(const std::chrono::milliseconds timeout)
+    {
+        if (_running || timeout < std::chrono::milliseconds::zero())
+        {
+            Logger::Warn("The editor server's idle timeout can't change while it is running, or be negative");
+            return false;
+        }
+        _idleTimeout = timeout;
+        return true;
+    }
+
+    bool EditorServer::SetWriteTimeout(const std::chrono::milliseconds timeout)
+    {
+        if (_running || timeout <= std::chrono::milliseconds::zero())
+        {
+            Logger::Warn("The editor server's write timeout can't change while it is running, or be zero or negative");
+            return false;
+        }
+        _writeTimeout = timeout;
+        return true;
+    }
+
+    bool EditorServer::SetMaxSessionAge(const std::chrono::milliseconds age)
+    {
+        if (_running || age < std::chrono::milliseconds::zero())
+        {
+            Logger::Warn("The editor server's maximum session age can't change while it is running, or be negative");
+            return false;
+        }
+        _maxSessionAge = age;
+        return true;
+    }
+
+    bool EditorServer::SetConnectionClock(ConnectionClock clock)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's connection clock can't change while it is running");
+            return false;
+        }
+        _connectionClock = std::move(clock);
+        return true;
+    }
+
+    bool EditorServer::SetAcceptedSocketHook(AcceptedSocketHook hook)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's accepted-socket hook can't change while it is running");
+            return false;
+        }
+        _acceptedSocketHook = std::move(hook);
+        return true;
+    }
+
+    std::chrono::steady_clock::time_point EditorServer::ConnectionNow() const
+    {
+        return _connectionClock ? _connectionClock() : std::chrono::steady_clock::now();
+    }
+
+    void EditorServer::CountUnfinishedHello()
+    {
+        if (!_rateLimiter.has_value())
+        {
+            return;
+        }
+        try
+        {
+            LogRateLimitOutcome(_rateLimiter->RecordUnfinishedHello(_peer), {});
+        }
+        catch (...)
+        {
+            // A table that can't grow is not worth ending the connection loop for
+        }
+    }
+
     std::expected<void, std::string> EditorServer::EnableTls(const std::filesystem::path &directory)
     {
         if (_running)
@@ -2072,6 +2148,11 @@ namespace N2Engine::Editor
                 continue;
             }
 
+            if (_acceptedSocketHook)
+            {
+                _acceptedSocketHook(clientSocket);
+            }
+
             // Who connected, before anything costly. A peer that is backed off for failed Hellos is closed right here: no
             // TLS handshake, no Hello, nothing read from it. One with failures on record gets the shorter budget.
             _peer = PeerAddress{};
@@ -2108,7 +2189,7 @@ namespace N2Engine::Editor
 
             // With TLS the connection is secured first, inside the Hello deadline (which counts from here). One that
             // can't be is closed without ever counting as a client or a session, and the loop accepts the next.
-            const auto connectedAt = std::chrono::steady_clock::now();
+            const auto connectedAt = ConnectionNow();
             bool secured = false;
             try
             {
@@ -2120,6 +2201,12 @@ namespace N2Engine::Editor
             }
             if (!secured)
             {
+                // A handshake that failed or stalled is a connection that never got to Hello: a failure for its address
+                // (a stopping server's own abort is not the peer's doing)
+                if (_running)
+                {
+                    CountUnfinishedHello();
+                }
                 EndTls();
                 CLOSE_SOCKET(clientSocket);
                 continue;
@@ -2241,21 +2328,90 @@ namespace N2Engine::Editor
         // Without a token every connection is a session (for SetStopOnDisconnect); with one, from its first good Hello
         sessionOpened = !gated;
         const auto helloDeadline = connectedAt + helloBudget;
-        const auto deadline = [&]() -> std::optional<std::chrono::steady_clock::time_point>
+        // After that the session has the idle and maximum-age deadlines (0 is off for both). The age counts from the
+        // session's start: accept without a token, the first good Hello with one (a later Hello doesn't restart it).
+        // A connection is idle from when it starts waiting for its next request, so the time a command takes to run
+        // and its response to send isn't the client's.
+        auto sessionStart = connectedAt;
+        auto idleSince = connectedAt;
+        // Whether a Hello was run on this connection: a wrong token was counted when it was refused, and a refusal for
+        // anything else (the protocol version, a user in backoff) is not a failure of the peer's address
+        bool helloRun = false;
+
+        enum class Limit : uint8_t
+        {
+            Hello,
+            Idle,
+            Session,
+        };
+        struct WaitLimit
+        {
+            std::chrono::steady_clock::time_point at;
+            Limit which;
+        };
+        const auto currentLimit = [&]() -> std::optional<WaitLimit>
         {
             if (gated && !helloAccepted)
-                return helloDeadline;
-            return std::nullopt;
+                return WaitLimit{helloDeadline, Limit::Hello};
+            std::optional<WaitLimit> found;
+            if (_idleTimeout > std::chrono::milliseconds::zero())
+                found = WaitLimit{idleSince + _idleTimeout, Limit::Idle};
+            if (_maxSessionAge > std::chrono::milliseconds::zero())
+            {
+                const auto end = sessionStart + _maxSessionAge;
+                if (!found.has_value() || end < found->at)
+                    found = WaitLimit{end, Limit::Session};
+            }
+            return found;
         };
         const auto closeUnauthorized = [this](const std::string &reason)
         {
             PostLog("Closing an editor connection that hasn't sent a successful Hello: " + reason + PeerSuffix(), true);
         };
-        const auto logIfHelloTimedOut = [&]
+        // A read that failed at a deadline says which one (once: the connection closes right after); a peer that closed
+        // or an error isn't a deadline, whatever the clock says a moment later
+        const auto logIfLimitPassed = [&](const std::optional<WaitLimit> &waitedOn)
         {
-            if (deadline().has_value() && _running && std::chrono::steady_clock::now() >= helloDeadline)
+            if (!waitedOn.has_value() || !_running || ConnectionNow() < waitedOn->at)
+                return;
+            switch (waitedOn->which)
+            {
+            case Limit::Hello:
                 closeUnauthorized(std::format("no Hello within {} ms", helloBudget.count()));
+                break;
+            case Limit::Idle:
+                PostLog(std::format("Closing an editor connection: no request for {} ms (the idle timeout){}",
+                                    _idleTimeout.count(), PeerSuffix()),
+                        true);
+                break;
+            case Limit::Session:
+                PostLog(std::format("Closing an editor connection: its session reached the maximum age of {} ms{}",
+                                    _maxSessionAge.count(), PeerSuffix()),
+                        true);
+                break;
+            }
         };
+
+        // However this connection ends, one that never got a Hello through (and wasn't counted for a wrong token) is a
+        // failed Hello for its address: it held the server for its budget, closed early, sent another command or an
+        // oversized frame. Runs on every way out of this function, an exception included.
+        class CountAtExit
+        {
+        public:
+            explicit CountAtExit(std::function<void()> action) : _action(std::move(action)) {}
+            ~CountAtExit() { _action(); }
+            CountAtExit(const CountAtExit &) = delete;
+            CountAtExit &operator=(const CountAtExit &) = delete;
+
+        private:
+            std::function<void()> _action;
+        };
+        const CountAtExit countUnfinishedHello(
+            [&]
+            {
+                if (gated && !helloAccepted && !helloRun && _running)
+                    CountUnfinishedHello();
+            });
 
         while (_running)
         {
@@ -2264,20 +2420,25 @@ namespace N2Engine::Editor
             if (_closeConnection.load())
                 break;
 
+            idleSince = ConnectionNow();
+            const std::optional<WaitLimit> waitedOn = currentLimit();
+            const std::optional<std::chrono::steady_clock::time_point> deadline =
+                waitedOn.has_value() ? std::optional<std::chrono::steady_clock::time_point>(waitedOn->at) : std::nullopt;
+            const bool beforeHello = gated && !helloAccepted;
+
             // Read command header: [type: 1 byte][length: 4 bytes]
             uint8_t cmdType;
             uint32_t payloadLength;
-            if (!Receive(clientSocket, &cmdType, 1, deadline()) ||
-                !Receive(clientSocket, &payloadLength, sizeof(payloadLength), deadline()))
+            if (!Receive(clientSocket, &cmdType, 1, deadline) ||
+                !Receive(clientSocket, &payloadLength, sizeof(payloadLength), deadline))
             {
-                logIfHelloTimedOut();
+                logIfLimitPassed(waitedOn);
                 break;
             }
 
             // The length is client-supplied, so check it before allocating. The oversized payload is
             // still in the stream, so the connection can't be resynchronized and is closed. Before a Hello on a
             // gated connection, a payload bigger than any Hello needs is refused the same way.
-            const bool beforeHello = deadline().has_value();
             const uint32_t limit = beforeHello ? MaxPayloadBytesBeforeHello : MaxPayloadBytes;
             if (payloadLength > limit)
             {
@@ -2292,9 +2453,9 @@ namespace N2Engine::Editor
 
             // Read payload
             std::vector<uint8_t> payload(payloadLength);
-            if (payloadLength > 0 && !Receive(clientSocket, payload.data(), payloadLength, deadline()))
+            if (payloadLength > 0 && !Receive(clientSocket, payload.data(), payloadLength, deadline))
             {
-                logIfHelloTimedOut();
+                logIfLimitPassed(waitedOn);
                 break;
             }
 
@@ -2363,6 +2524,7 @@ namespace N2Engine::Editor
                 helloUser = UserNamedByHello(payload);
                 if (helloUser.has_value() && _rateLimiter->IsUserBackedOff(*helloUser))
                 {
+                    helloRun = true; // refused for the user's backoff, not counted against this address
                     BufferWriter response;
                     WriteError(response, RateLimitedError);
                     Send(clientSocket, response.Data().data(), response.Size());
@@ -2373,6 +2535,7 @@ namespace N2Engine::Editor
             if (isHello)
             {
                 _helloTokenRefused = false;
+                helloRun = true;
             }
 
             // Everything else touches engine state, so it runs on the main thread (see ProcessCommands)
@@ -2393,6 +2556,10 @@ namespace N2Engine::Editor
             if (isHello)
             {
                 helloAccepted = !response.empty() && response[0] == static_cast<uint8_t>(ResponseType::ServerInfo);
+                if (helloAccepted && !sessionOpened)
+                {
+                    sessionStart = ConnectionNow();
+                }
                 sessionOpened = sessionOpened || helloAccepted;
             }
             // The outcome is counted before the answer is sent, so a client that sees the refusal and connects again
@@ -6835,6 +7002,22 @@ namespace N2Engine::Editor
         size_t sent = 0;
         auto *bytes = static_cast<const char*>(data);
 
+        // A client that stops reading must not hold the server for ever: the write fails when it makes no progress for the
+        // write timeout. Progress (bytes written, or the socket becoming writable again) restarts the wait, so a slow
+        // client that does read a large frame is not cut off. The one log line per close is written here.
+        auto deadline = ConnectionNow() + _writeTimeout;
+        const auto restart = [&] { deadline = ConnectionNow() + _writeTimeout; };
+        const auto logIfStalled = [&]
+        {
+            if (_running && !_closeConnection.load() && ConnectionNow() >= deadline)
+            {
+                PostLog(std::format("Closing an editor connection: no write progress for {} ms (the write timeout), the "
+                                    "client isn't reading{}",
+                                    _writeTimeout.count(), PeerSuffix()),
+                        true);
+            }
+        };
+
         if (_tlsSession && socket == _tlsSessionSocket)
         {
             while (sent < size)
@@ -6844,9 +7027,15 @@ namespace N2Engine::Editor
                 {
                 case TlsStep::Done:
                     sent += count;
+                    if (count > 0) restart();
                     break;
                 case TlsStep::WantWrite: // the same bytes are offered again, as the library asks
-                    if (!WaitUntilReady(socket, true)) return false;
+                    if (!WaitUntilReady(socket, true, deadline))
+                    {
+                        logIfStalled();
+                        return false;
+                    }
+                    restart(); // writable again: the client took some of what was queued
                     break;
                 case TlsStep::WantRead: // only a renegotiation needs this, and it isn't enabled
                 case TlsStep::Failed:
@@ -6858,10 +7047,15 @@ namespace N2Engine::Editor
 
         while (sent < size)
         {
-            if (!WaitUntilReady(socket, true)) return false;
+            if (!WaitUntilReady(socket, true, deadline))
+            {
+                logIfStalled();
+                return false;
+            }
             int result = send(socket, bytes + sent, static_cast<int>(size - sent), SendFlags);
             if (result <= 0) return false;
             sent += result;
+            restart();
         }
         return true;
     }
@@ -6919,7 +7113,7 @@ namespace N2Engine::Editor
             if (_closeConnection.load())
                 return false;
 
-            if (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline)
+            if (deadline.has_value() && ConnectionNow() >= *deadline)
                 return false;
 
             // Bytes the TLS library has already taken off the socket and decrypted are invisible to select(): without
