@@ -11,7 +11,7 @@ file(GLOB_RECURSE TEXT_SOURCES
 option(N2ENGINE_TEXT_FREETYPE "Build the optional FreeType font backend (fetched with FetchContent)" OFF)
 if(N2ENGINE_PLATFORM_WEB AND N2ENGINE_TEXT_FREETYPE)
     message(WARNING "Web: the FreeType backend is not built at stage 0 (it is fetched at configure time); using stb_truetype only")
-    set(N2ENGINE_TEXT_FREETYPE OFF)
+    set(N2ENGINE_TEXT_FREETYPE OFF CACHE BOOL "Build the optional FreeType font backend (fetched with FetchContent)" FORCE)
 endif()
 if(NOT N2ENGINE_TEXT_FREETYPE)
     list(FILTER TEXT_SOURCES EXCLUDE REGEX ".*/FreeTypeBackend\\.cpp$")
