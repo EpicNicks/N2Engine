@@ -19,7 +19,8 @@
 # Do not add --exit-on-stdin-eof: a service's stdin is /dev/null, so the host would exit as soon as it started.
 # The host takes no --bind here, so it stays on 127.0.0.1. Behind the SSH tunnel or proxy every peer is 127.0.0.1, so the
 # failed-Hello rate limiting is one shared backoff for loopback (10 failures in a minute), not a per-address ban
-# (docs/logging-and-editor.html#rate-limit-loopback). To listen elsewhere add --bind <ipv4 address> and read the
+# (docs/logging-and-editor.html#rate-limit-loopback). To listen elsewhere add --bind <ipv4 address> (the host then refuses to start
+# unless it also has --tls and a token, as this unit does, or --insecure-bind) and read the
 # firewall notes in the docs first. For a host that should only be looked at, add --read-only to ExecStart: it refuses
 # every command that changes anything (docs/logging-and-editor.html#read-only).
 
