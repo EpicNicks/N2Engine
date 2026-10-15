@@ -385,6 +385,23 @@ TEST_F(LuaBudgetTest, ALoopInAMetamethodTheEngineReadsIsAbortedWithoutLeavingThe
     const sol::protected_function_result normal = Run("local t = {} for i = 1, 100 do t[i] = i end return #t");
     ASSERT_TRUE(normal.valid()) << ErrorOf(normal);
     EXPECT_EQ(normal[0].get<int>(), 100);
+
+    // The count hook is still alive: a loop is still aborted (an error that went down the panic path used to leave
+    // the hook disabled for good)
+    const sol::protected_function_result spin = Run("while true do end");
+    ASSERT_FALSE(spin.valid());
+    EXPECT_NE(ErrorOf(spin).find("instruction budget"), std::string::npos);
+}
+
+TEST_F(LuaBudgetTest, ScriptsCannotSetAFinalizerBecauseTheVmRunsItWithTheHookOff)
+{
+    const sol::protected_function_result gc = Run("setmetatable({}, {__gc = function() while true do end end})");
+    ASSERT_FALSE(gc.valid());
+    EXPECT_NE(ErrorOf(gc).find("__gc"), std::string::npos);
+
+    const sol::protected_function_result plain = Run("return getmetatable(setmetatable({}, {__index = {a = 1}})).__index.a");
+    ASSERT_TRUE(plain.valid()) << ErrorOf(plain);
+    EXPECT_EQ(plain[0].get<int>(), 1);
 }
 
 TEST_F(LuaBudgetTest, QuitFromLuaIsRefusedOnAnEditorHostAndLoggedOnce)

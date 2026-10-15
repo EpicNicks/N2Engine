@@ -199,6 +199,16 @@ namespace N2Engine::Scripting
             end
             pcall = function(...) return check(rawPcall(...)) end
             xpcall = function(...) return check(rawXpcall(...)) end
+
+            -- The VM runs a __gc finalizer with its debug hooks off, so the instruction budget cannot see into it:
+            -- scripts get no finalizers. (Lua registers one only if __gc is in the metatable at setmetatable.)
+            local rawSetmetatable, rawGet, typeOf = setmetatable, rawget, type
+            setmetatable = function(t, mt)
+                if typeOf(mt) == "table" and rawGet(mt, "__gc") ~= nil then
+                    error("__gc metamethods are not available to scripts", 2)
+                end
+                return rawSetmetatable(t, mt)
+            end
         )");
     }
 
@@ -244,9 +254,13 @@ namespace N2Engine::Scripting
         }
     }
 
-    void LuaRuntime::EndEntry()
+    void LuaRuntime::EndEntry(const int outerDepth)
     {
-        if (--_guard->depth == 0)
+        // Restore the depth the scope found, not "one less": an error raised under a Lua protected call jumps over the
+        // C++ frames in between (Lua is C), so scopes opened inside it never ran their destructors. Counting them down
+        // one by one would leave the depth raised for good and the budget never refilled.
+        _guard->depth = outerDepth;
+        if (outerDepth == 0)
         {
             // The panic path leaves the thread reset but its C-call counter raised (about 200 panics would end in
             // "C stack overflow" for good): no Lua call is running now, so the counter can start from zero again
@@ -261,13 +275,64 @@ namespace N2Engine::Scripting
     }
 
     LuaBudgetScope::LuaBudgetScope()
+        : _outerDepth(LuaRuntime::Instance()._guard->depth)
     {
         LuaRuntime::Instance().BeginEntry();
     }
 
     LuaBudgetScope::~LuaBudgetScope()
     {
-        LuaRuntime::Instance().EndEntry();
+        LuaRuntime::Instance().EndEntry(_outerDepth);
+    }
+
+    namespace
+    {
+        struct ProtectedBody
+        {
+            const std::function<void()> *body;
+            std::string error;
+        };
+
+        int ProtectedTrampoline(lua_State *L)
+        {
+            auto *call = static_cast<ProtectedBody *>(lua_touserdata(L, 1));
+            try
+            {
+                (*call->body)();
+            }
+            catch (const std::exception &e)
+            {
+                call->error = e.what();
+            }
+            catch (...)
+            {
+                call->error = "unknown error";
+            }
+            return 0;
+        }
+    }
+
+    bool LuaRuntime::ProtectedCall(const std::function<void()> &body, std::string &error)
+    {
+        const LuaBudgetScope budget;
+        lua_State *L = _lua.lua_state();
+        ProtectedBody call{&body, {}};
+        lua_pushcfunction(L, &ProtectedTrampoline);
+        lua_pushlightuserdata(L, &call);
+        const int status = lua_pcall(L, 1, 0, 0);
+        if (status != LUA_OK)
+        {
+            const char *message = lua_tostring(L, -1);
+            error = message != nullptr ? message : (status == LUA_ERRMEM ? std::string(MemoryErrorText) : "script error");
+            lua_pop(L, 1);
+            return false;
+        }
+        if (!call.error.empty())
+        {
+            error = std::move(call.error);
+            return false;
+        }
+        return true;
     }
 
     sol::protected_function_result LuaRuntime::RunSource(const std::string_view source, const std::string &chunkName)
@@ -452,6 +517,8 @@ namespace N2Engine::Scripting
 
     void LuaRuntime::ReloadModule(const IO::ResourcePath &path, LuaScript *script)
     {
+        // The module run and every component's reload callback share one budget
+        const LuaBudgetScope budget;
         std::string moduleName = PathToModuleName(path);
 
         _loadedModules.erase(moduleName);

@@ -69,6 +69,12 @@ namespace N2Engine::Scripting
         /// True if the error text is one the budget or the cap raises ("script exceeded its instruction budget",
         /// "not enough memory"): what a caller of a protected call checks to fault a component instead of retrying it
         [[nodiscard]] static bool IsLimitError(std::string_view message);
+        /// Runs C++ code that touches script tables (a table access can reach a script's metamethods) inside a Lua
+        /// protected call (a budget scope too), so a Lua error, the budget or a failed allocation never goes down
+        /// the panic path (which leaves the hook disabled) or jumps over the caller's C++ frames.
+        /// Keep the body to the access itself: a Lua error abandons it without running its destructors.
+        /// @returns false with the error text in `error` if the body raised a Lua error or threw
+        bool ProtectedCall(const std::function<void()>& body, std::string& error);
         /// True the first time it is asked about a key: limit errors of chunks that run outside a component are
         /// logged once per chunk name
         bool ShouldLogLimitError(const std::string& key);
@@ -99,7 +105,7 @@ namespace N2Engine::Scripting
     private:
         friend class LuaBudgetScope;
         void BeginEntry();
-        void EndEntry();
+        void EndEntry(int outerDepth);
         // Not public: destroying the state while components still hold sol::table/sol::function
         // references into it left them dangling. Nothing calls it; the runtime lives for the process.
         static void Destroy();
@@ -113,6 +119,8 @@ namespace N2Engine::Scripting
     /// Every C++ -> Lua entry of the engine opens one.
     class LuaBudgetScope
     {
+        int _outerDepth;
+
     public:
         LuaBudgetScope();
         ~LuaBudgetScope();

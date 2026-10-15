@@ -61,17 +61,15 @@ namespace N2Engine::Scripting
 
     bool LuaComponent::GuardedAccess(const std::function<void()> &body)
     {
-        const LuaBudgetScope budget;
-        try
+        // A Lua protected call, so an error in a metamethod (or the budget) is a return value here: never a panic
+        // (which would leave the count hook disabled) and never a jump over this function's frames
+        std::string error;
+        if (LuaRuntime::Instance().ProtectedCall(body, error))
         {
-            body();
             return true;
         }
-        catch (const std::exception &e)
-        {
-            ReportScriptError("access", e.what());
-            return false;
-        }
+        ReportScriptError("access", error);
+        return false;
     }
 
     bool LuaComponent::HasMethod(const char *methodName)
@@ -99,8 +97,12 @@ namespace N2Engine::Scripting
 
         try
         {
-            // Reading the method can run the script's __index, outside a protected call
-            sol::protected_function func = _scriptInstance[methodName];
+            // Reading the method can run the script's __index: do it in a protected call
+            sol::protected_function func;
+            if (!GuardedAccess([&] { func = _scriptInstance[methodName].get<sol::protected_function>(); }))
+            {
+                return;
+            }
             auto result = func(_scriptInstance, std::forward<Args>(args)...);
 
             if (!result.valid())
@@ -192,6 +194,14 @@ namespace N2Engine::Scripting
         else
         {
             Logger::Error("Script must return a table");
+            return sol::table{};
+        }
+
+        // The VM runs a __gc finalizer with its debug hooks off, so the budget could not stop a looping one
+        if (const sol::type gcType = scriptClass.raw_get<sol::object>("__gc").get_type();
+            gcType != sol::type::lua_nil && gcType != sol::type::none)
+        {
+            Logger::Error(std::format("Script {} defines __gc, which scripts may not use", _scriptPath.ToString()));
             return sol::table{};
         }
 
@@ -312,7 +322,8 @@ namespace N2Engine::Scripting
         if (!from.valid() || !_scriptInstance.valid())
             return;
 
-        const LuaBudgetScope budget;
+        GuardedAccess([&]
+        {
         for (auto &[fieldName, value] : _scriptData.items())
         {
             if (value.is_object() && value.contains("$ref"))
@@ -320,6 +331,7 @@ namespace N2Engine::Scripting
                 _scriptInstance[fieldName] = from.get<sol::object>(fieldName);
             }
         }
+        });
     }
 
     void LuaComponent::ExtractSerializableFields()
@@ -327,7 +339,8 @@ namespace N2Engine::Scripting
         if (!_scriptInstance.valid())
             return;
 
-        const LuaBudgetScope budget;
+        GuardedAccess([&]
+        {
         sol::optional<sol::table> fieldsTable = _scriptInstance["SerializableFields"];
         if (!fieldsTable)
             return;
@@ -370,6 +383,7 @@ namespace N2Engine::Scripting
                 }
             }
         }
+        });
     }
 
     void LuaComponent::InjectFieldsIntoScript()
@@ -377,7 +391,8 @@ namespace N2Engine::Scripting
         if (!_scriptInstance.valid())
             return;
 
-        const LuaBudgetScope budget; // assigning into the instance can run the script's __newindex
+        GuardedAccess([&]
+        {
         for (auto &[key, value] : _scriptData.items())
         {
             if (value.is_number_float())
@@ -399,6 +414,7 @@ namespace N2Engine::Scripting
                 _scriptInstance[key] = Math::Vector3{component("x"), component("y"), component("z")};
             }
         }
+        });
     }
 
     void LuaComponent::CacheLifecycleMethods()
@@ -706,7 +722,8 @@ namespace N2Engine::Scripting
         if (!_scriptInstance.valid())
             return;
 
-        const LuaBudgetScope budget;
+        GuardedAccess([&]
+        {
         sol::optional<sol::table> fieldsTable = _scriptInstance["SerializableFields"];
         if (!fieldsTable)
             return;
@@ -773,6 +790,7 @@ namespace N2Engine::Scripting
                 }
             }
         }
+        });
     }
 
     bool LuaComponent::IsComponentType(const std::string &type) const
@@ -802,8 +820,19 @@ namespace N2Engine::Scripting
             return fields;
         }
         const LuaBudgetScope budget;
-        sol::optional<sol::table> declared = instance["SerializableFields"];
-        if (!declared)
+        // Reading a field of the script's tables can run its metamethods: each read is a Lua protected call
+        const auto guarded = [this](const std::function<void()> &body)
+        {
+            std::string error;
+            if (LuaRuntime::Instance().ProtectedCall(body, error))
+            {
+                return true;
+            }
+            Logger::Warn(std::format("Lua error reading the fields of {}: {}", _scriptPath.ToString(), error));
+            return false;
+        };
+        sol::optional<sol::table> declared;
+        if (!guarded([&] { declared = instance["SerializableFields"].get<sol::optional<sol::table>>(); }) || !declared)
         {
             return fields;
         }
@@ -827,8 +856,11 @@ namespace N2Engine::Scripting
             if (value.is<sol::table>())
             {
                 const sol::table definition = value.as<sol::table>();
-                declaredType = definition.get_or<std::string>("type", "");
-                defaultValue = definition.get<sol::object>("default");
+                guarded([&]
+                {
+                    declaredType = definition.get_or<std::string>("type", "");
+                    defaultValue = definition.get<sol::object>("default");
+                });
             }
 
             if (declaredType == "GameObject")
@@ -992,8 +1024,7 @@ namespace N2Engine::Scripting
 
         if (_scriptInstance.valid())
         {
-            const LuaBudgetScope budget;
-            _scriptInstance[fieldName] = value;
+            GuardedAccess([&] { _scriptInstance[fieldName] = value; });
         }
     }
 
