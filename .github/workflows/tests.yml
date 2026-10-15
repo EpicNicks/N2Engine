@@ -224,6 +224,12 @@ jobs:
     env:
       CC: clang-20
       CXX: clang++-20
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
     steps:
       - uses: actions/checkout@v7
 
@@ -233,7 +239,7 @@ jobs:
           sudo curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/keyrings/apt.llvm.org.asc
           echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev ccache
 
       # The runners have no GPU: Mesa lavapipe (mesa-vulkan-drivers) is the Vulkan driver, so renderer_tests really run the
       # Vulkan renderer, with the Khronos validation layer (vulkan-validationlayers) on. Its ICD file is
@@ -254,8 +260,27 @@ jobs:
           # stamp, so a stale or foreign cache is re-downloaded, never trusted
           key: physx-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/PhysXLinuxHashes.cmake') }}
 
+      # ccache: PRs only restore the cache that master pushes saved (a PR's own cache would not be readable by other PRs
+      # and would evict it); the cache is per leg and compiler, so the legs never share one. A miss or a failure here
+      # only means a cold build.
+      - name: Restore ccache
+        id: ccache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-linux-x86_64-clang20-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-linux-x86_64-clang20-
+
+      - name: Reset ccache statistics
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
@@ -283,6 +308,30 @@ jobs:
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
+
+      # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
+      - name: ccache statistics
+        if: "!cancelled()"
+        continue-on-error: true
+        run: |
+          {
+            echo "### ccache (linux-x86_64-clang20)"
+            echo "restored cache: ${{ steps.ccache-restore.outputs.cache-matched-key || 'none (cold build)' }}"
+            echo '```'
+            ccache -s
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache -s
+
+      # Only a push to master saves (never a pull request, never workflow_dispatch); master runs are never cancelled, so a
+      # partial cache from a cancelled run cannot be saved. Entries are immutable, so the key carries the run id.
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-linux-x86_64-clang20-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The same Linux build and tests on arm64 (ubuntu-24.04-arm, aarch64): the math library's x86 SIMD paths are compiled out
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.
@@ -295,6 +344,12 @@ jobs:
     env:
       CC: clang-20
       CXX: clang++-20
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
     steps:
       - uses: actions/checkout@v7
 
@@ -304,7 +359,7 @@ jobs:
           sudo curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/keyrings/apt.llvm.org.asc
           echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends clang-20 libstdc++-14-dev cmake ninja-build python3             libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers glslang-tools libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev ccache
 
       # The runners have no GPU: Mesa lavapipe (mesa-vulkan-drivers) is the Vulkan driver, so renderer_tests really run the
       # Vulkan renderer, with the Khronos validation layer (vulkan-validationlayers) on. Its ICD file is
@@ -325,8 +380,27 @@ jobs:
           # stamp, so a stale or foreign cache is re-downloaded, never trusted
           key: physx-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/PhysXLinuxHashes.cmake') }}
 
+      # ccache: PRs only restore the cache that master pushes saved (a PR's own cache would not be readable by other PRs
+      # and would evict it); the cache is per leg and compiler, so the legs never share one. A miss or a failure here
+      # only means a cold build.
+      - name: Restore ccache
+        id: ccache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-linux-arm64-clang20-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-linux-arm64-clang20-
+
+      - name: Reset ccache statistics
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
@@ -354,6 +428,30 @@ jobs:
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
+
+      # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
+      - name: ccache statistics
+        if: "!cancelled()"
+        continue-on-error: true
+        run: |
+          {
+            echo "### ccache (linux-arm64-clang20)"
+            echo "restored cache: ${{ steps.ccache-restore.outputs.cache-matched-key || 'none (cold build)' }}"
+            echo '```'
+            ccache -s
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache -s
+
+      # Only a push to master saves (never a pull request, never workflow_dispatch); master runs are never cancelled, so a
+      # partial cache from a cancelled run cannot be saved. Entries are immutable, so the key carries the run id.
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-linux-arm64-clang20-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The Linux build with GCC 14 (the distribution compiler): the same build, tests and editor host smoke tests as the Clang
   # job (but with PhysX OFF, which keeps the no-physics Linux build compiling), so a GCC-built host is checked too. Not a required check (branch protection decides). GCC prints every lambda of
@@ -368,19 +466,44 @@ jobs:
     env:
       CC: gcc-14
       CXX: g++-14
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
     steps:
       - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3             libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3             libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev ccache
 
       # The one leg built with the Vulkan renderer compiled out (N2ENGINE_RENDERER_VULKAN=OFF): it installs no Vulkan
       # headers, loader or driver, so it proves the OFF configuration needs none, and the Vulkan tests do not exist here.
 
+      # ccache: PRs only restore the cache that master pushes saved (a PR's own cache would not be readable by other PRs
+      # and would evict it); the cache is per leg and compiler, so the legs never share one. A miss or a failure here
+      # only means a cold build.
+      - name: Restore ccache
+        id: ccache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-linux-x86_64-gcc14-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-linux-x86_64-gcc14-
+
+      - name: Reset ccache statistics
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
@@ -401,6 +524,30 @@ jobs:
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
+
+      # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
+      - name: ccache statistics
+        if: "!cancelled()"
+        continue-on-error: true
+        run: |
+          {
+            echo "### ccache (linux-x86_64-gcc14)"
+            echo "restored cache: ${{ steps.ccache-restore.outputs.cache-matched-key || 'none (cold build)' }}"
+            echo '```'
+            ccache -s
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache -s
+
+      # Only a push to master saves (never a pull request, never workflow_dispatch); master runs are never cancelled, so a
+      # partial cache from a cancelled run cannot be saved. Entries are immutable, so the key carries the run id.
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-linux-x86_64-gcc14-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The container image (deploy/Dockerfile) on x86_64: builds it exactly as the Linux Clang job builds the host, checks the
   # runtime image has every shared library (the Dockerfile's ldd step), makes a project in a volume, starts the container
