@@ -30,8 +30,10 @@
 // COVERAGE EDGES. Rasterisation tie rules differ between backends (a pixel centre exactly on a triangle edge may fall on
 // either side), so the pixels on the edge of what is drawn are left out: `edgeBorder` 1 leaves out the pixels on both sides
 // of an edge (the proposal's 1-pixel border), 2 also the ring around them, and so on.
-//   - `coverageEdges` (the LIT definition): a pixel is COVERED in an image when its colour is not `background` (the clear
-//     colour). An edge pixel is one whose covered-ness differs from a neighbour's (8-neighbourhood) in either image, or
+//   - `coverageEdges` (the LIT definition): a pixel is COVERED in an image when its COVERAGE MASK's colour is not
+//     `background` (the clear colour). The mask is a flat unlit render of the same geometry (Options::coverageA/B), so a
+//     lit surface that one backend shades black and the other lights is a real difference that is compared and fails, not
+//     an 'edge' that is left out. An edge pixel is one whose covered-ness differs from a neighbour's (8-neighbourhood) in either image, or
 //     differs between the two images. This depends on coverage only, never on shading, so a smoothly shaded surface is not
 //     taken for an edge (the old definition marked every pixel that differed from any neighbour, which in a lit scene is
 //     nearly every covered pixel). The one blind spot is a covered pixel that is exactly the background colour (a surface in
@@ -69,6 +71,13 @@ namespace VulkanTesting::Diff
         double maxFractionOverSecond = 0.0; // lit mode: the share of compared pixels allowed over `secondThreshold`
         double maxMeanError = 0.0;          // > 0 selects the LIT mode: the mean of the per-pixel largest channel difference
         bool coverageEdges = false;         // edges from coverage (pixel != background), not from any colour difference
+    // The COVERAGE MASKS of the two images (lit mode): the same geometry, state and camera drawn with a flat unlit colour on
+    // each backend, so what is covered is known without any shading. nullptr: the compared image itself serves as its own
+    // mask, which is only right where the image is flat-coloured (the harness tests, the unlit-material model golden).
+    // Lit scenes MUST pass masks: with the lit image as its own mask a lit object drawn black on one backend would count
+    // as 'not covered' there and be left out instead of failing.
+    const Image* coverageA = nullptr; // the mask of the first image given to Compare/Agree
+    const Image* coverageB = nullptr; // the mask of the second
         std::array<std::uint8_t, 3> background{0, 0, 0}; // the clear colour, for coverageEdges
         double maxExcludedFraction = 1.0;   // the most of the image that may be left out as edges (1: no cap)
         bool compareAlpha = false;
@@ -148,9 +157,16 @@ namespace VulkanTesting::Diff
         }
     }
 
-    /// The pixels on a coverage edge (see the header comment), grown by `options.edgeBorder - 1` pixels
-    inline std::vector<bool> CoverageEdges(const Image& a, const Image& b, const Options& options)
+    /// The pixels on a coverage edge (see the header comment), grown by `options.edgeBorder - 1` pixels. With
+    /// `options.coverageA/B` set, coverage is read from those masks, never from the shaded images.
+    inline std::vector<bool> CoverageEdges(const Image& imageA, const Image& imageB, const Options& options)
     {
+        const Image& a = options.coverageEdges && options.coverageA != nullptr ? *options.coverageA : imageA;
+        const Image& b = options.coverageEdges && options.coverageB != nullptr ? *options.coverageB : imageB;
+        if (a.width != imageA.width || a.height != imageA.height || b.width != imageA.width || b.height != imageA.height)
+        {
+            return std::vector<bool>(); // a mask of the wrong size: Compare reports it
+        }
         const std::size_t count = static_cast<std::size_t>(a.width) * static_cast<std::size_t>(a.height);
         std::vector<bool> edges(count, false);
         if (options.edgeBorder <= 0)
@@ -242,6 +258,11 @@ namespace VulkanTesting::Diff
         }
         result.totalPixels = a.width * a.height;
         const std::vector<bool> edges = CoverageEdges(a, b, options);
+        if (edges.size() != static_cast<std::size_t>(a.width) * static_cast<std::size_t>(a.height))
+        {
+            result.sizesDiffer = true; // a coverage mask that is not the image's size
+            return result;
+        }
         long long errorSum = 0;
         for (int y = 0; y < a.height; ++y)
         {
@@ -276,7 +297,7 @@ namespace VulkanTesting::Diff
         const Result result = Compare(vulkan, software, options);
         if (result.sizesDiffer)
         {
-            return ::testing::AssertionFailure() << "the images are not the same size";
+            return ::testing::AssertionFailure() << "the images (or a coverage mask) are not the same size";
         }
         if (options.maxMeanError <= 0.0 && options.maxFractionOverSecond > 0.0)
         {

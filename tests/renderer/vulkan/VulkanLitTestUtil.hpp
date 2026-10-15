@@ -178,6 +178,7 @@ namespace VulkanTesting::Lit
             mirroredTangentMesh = MakeMesh(Quad(true, -1.0f));
             lit = MakeMaterial(_vulkan.GetStandardLitShader(), _software.GetStandardLitShader());
             unlit = MakeMaterial(_vulkan.GetStandardUnlitShader(), _software.GetStandardUnlitShader());
+            _mask = MakeMaterial(_vulkan.GetStandardUnlitShader(), _software.GetStandardUnlitShader()); // never modified: white
         }
 
         ~LitScene() { _software.Shutdown(); }
@@ -228,7 +229,15 @@ namespace VulkanTesting::Lit
             const Frame vulkan = DrawOn(_vulkan, lighting, material.vulkan, drawn.vulkan, model, state, camera, projection);
             const Frame software = DrawOn(_software, lighting, material.software, drawn.software, model, state, camera, projection);
             ++_draws;
-            const Diff::Options options = Diff::Lit();
+            // The coverage masks: the same geometry, model, state and camera drawn flat white with the unlit material on each
+            // backend, so the edge exclusion depends on what is covered and never on the lighting
+            const Frame vulkanMask = DrawOn(_vulkan, lighting, _mask.vulkan, drawn.vulkan, model, state, camera, projection);
+            const Frame softwareMask = DrawOn(_software, lighting, _mask.software, drawn.software, model, state, camera, projection);
+            const Diff::Image maskA = vulkanMask.AsImage();
+            const Diff::Image maskB = softwareMask.AsImage();
+            Diff::Options options = Diff::Lit();
+            options.coverageA = &maskA;
+            options.coverageB = &maskB;
             const Diff::Result result = Diff::Compare(vulkan.AsImage(), software.AsImage(), options);
             const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
             std::cout << "[ cross-diff ] " << info->test_suite_name() << "." << info->name() << " draw " << _draws << ": "
@@ -271,6 +280,7 @@ namespace VulkanTesting::Lit
 
         VulkanRenderer& _vulkan;
         SoftwareRenderer _software;
+        DualMaterial _mask; // the flat white unlit material of the coverage masks
         int _draws = 0;
     };
 

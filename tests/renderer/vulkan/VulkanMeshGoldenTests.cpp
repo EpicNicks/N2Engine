@@ -227,11 +227,31 @@ namespace
         /// The scene on Vulkan, with the cross-backend comparison against the software renderer. `options` are the diff's
         /// (the default: the proposal's strict 2/255 per channel, every pixel)
         Frame Render(const std::function<void(Scene&)>& build, const Camera& camera, const std::string& what,
-                     const VulkanTesting::Diff::Options& options = {},
-                     const Renderer::Common::SceneLightingData* lighting = nullptr)
+                     VulkanTesting::Diff::Options options = {},
+                     const Renderer::Common::SceneLightingData* lighting = nullptr,
+                     const std::function<void(Scene&)>& maskBuild = nullptr)
         {
             const Frame vulkan = RenderOn(R(), build, camera, lighting);
             const Frame software = RenderOnSoftware(build, camera, lighting);
+            // A lit comparison takes its coverage edges from the same geometry drawn flat unlit (`maskBuild`) on each
+            // backend, never from the lit pixels
+            Frame vulkanMask;
+            Frame softwareMask;
+            VulkanTesting::Diff::Image maskA;
+            VulkanTesting::Diff::Image maskB;
+            if (maskBuild)
+            {
+                vulkanMask = RenderOn(R(), maskBuild, camera, nullptr);
+                softwareMask = RenderOnSoftware(maskBuild, camera, nullptr);
+                maskA = vulkanMask.AsImage();
+                maskB = softwareMask.AsImage();
+                options.coverageA = &maskA;
+                options.coverageB = &maskB;
+            }
+            else
+            {
+                EXPECT_EQ(options.maxMeanError, 0.0) << what << ": a lit comparison needs a coverage mask scene";
+            }
             EXPECT_TRUE(VulkanTesting::Diff::Agree(vulkan.AsImage(), software.AsImage(), options)) << what;
             // The measured numbers, for the log (the PR body quotes them)
             const std::string described = VulkanTesting::Diff::Compare(vulkan.AsImage(), software.AsImage(), options).Describe();
@@ -282,7 +302,10 @@ TEST_F(VulkanMeshGoldenTest, ALitFaceTowardTheLightIsBrighterThanOneAwayFromIt)
 
     // Lit (MeshRenderer's default material), against the software renderer with the lit criterion
     const Frame lit = Render([](Scene& scene) { AddMesh(scene, "LitCube", Mesh::GetBuiltin(BuiltinMesh::Cube)); }, camera,
-                             "lit cube", VulkanTesting::Diff::Lit(), &lighting);
+                             "lit cube", VulkanTesting::Diff::Lit(), &lighting, [](Scene& scene)
+    {
+        AddMesh(scene, "MaskCube", Mesh::GetBuiltin(BuiltinMesh::Cube))->SetMaterial(0, Unlit(Common::Color::White));
+    });
     const Rgb litFront = lit.At(frontX, row);
     const Rgb litRight = lit.At(rightX, row);
     EXPECT_GT(litFront.Sum(), litRight.Sum() + 300) << "toward the light vs edge-on to it";

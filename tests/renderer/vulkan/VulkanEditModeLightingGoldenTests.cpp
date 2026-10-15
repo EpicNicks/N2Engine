@@ -17,7 +17,9 @@
 #include "engine/Camera.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Positionable.hpp"
+#include "engine/common/Color.hpp"
 #include "engine/rendering/Light.hpp"
+#include "engine/rendering/Material.hpp"
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
 
@@ -59,7 +61,9 @@ namespace
 
     /// A lit cube, and whatever `build` adds, drawn as Application::Render draws a scene (the lighting from the scene's
     /// CollectLighting) on `renderer` (already initialized at Size x Size)
-    Frame RenderOn(Renderer::Common::IRenderer& renderer, const bool editMode, const std::function<void(Scene&)>& build)
+    /// `flatMask`: the cube drawn flat white with the unlit material (the coverage mask of the lit comparison)
+    Frame RenderOn(Renderer::Common::IRenderer& renderer, const bool editMode, const std::function<void(Scene&)>& build,
+                   const bool flatMask = false)
     {
         renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
         Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Size) * Size * 4)};
@@ -72,7 +76,14 @@ namespace
             auto scene = Scene::Create("EditModeLightingGolden");
             scene->SetEditMode(editMode);
             auto cube = GameObject::Create("Cube");
-            cube->AddComponent<MeshRenderer>()->SetMesh(Mesh::GetBuiltin(BuiltinMesh::Cube));
+            auto* cubeRenderer = cube->AddComponent<MeshRenderer>();
+            cubeRenderer->SetMesh(Mesh::GetBuiltin(BuiltinMesh::Cube));
+            if (flatMask)
+            {
+                auto flat = Rendering::Material::Create(Rendering::ShadingModel::Unlit);
+                flat->SetBaseColor(Common::Color::White);
+                cubeRenderer->SetMaterial(0, flat);
+            }
             scene->AddRootGameObject(cube);
             build(*scene);
 
@@ -126,7 +137,17 @@ namespace
             EXPECT_TRUE(software.Initialize(nullptr, Size, Size));
             const Frame reference = RenderOn(software, editMode, build);
             software.Shutdown();
-            const VulkanTesting::Diff::Options options = VulkanTesting::Diff::Lit();
+            // The coverage masks: the cube drawn flat unlit on each backend
+            const Frame vulkanMask = RenderOn(R(), editMode, build, true);
+            SoftwareRenderer softwareForMask;
+            EXPECT_TRUE(softwareForMask.Initialize(nullptr, Size, Size));
+            const Frame referenceMask = RenderOn(softwareForMask, editMode, build, true);
+            softwareForMask.Shutdown();
+            const VulkanTesting::Diff::Image maskA = vulkanMask.AsImage();
+            const VulkanTesting::Diff::Image maskB = referenceMask.AsImage();
+            VulkanTesting::Diff::Options options = VulkanTesting::Diff::Lit();
+            options.coverageA = &maskA;
+            options.coverageB = &maskB;
             EXPECT_TRUE(VulkanTesting::Diff::Agree(vulkan.AsImage(), reference.AsImage(), options)) << what;
             const std::string described = VulkanTesting::Diff::Compare(vulkan.AsImage(), reference.AsImage(), options).Describe();
             std::cout << "[ cross-diff ] edit-mode lighting, " << what << ": " << described << std::endl;

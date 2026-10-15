@@ -297,3 +297,63 @@ TEST(CrossBackendDiffTest, ResultDescribesTheMeanError)
     EXPECT_EQ(result.worstX, 3);
     EXPECT_EQ(result.worstY, 3);
 }
+
+TEST(CrossBackendDiffTest, ALitObjectDrawnBlackOnOneBackendFailsInsteadOfBeingLeftOutAsAnEdge)
+{
+    // A 16 x 16 lit object on a black clear. The coverage mask (flat unlit geometry) is the same on both backends; the
+    // second image shades the whole object black. Judged by its own pixels that object would count as 'not covered' there
+    // and be left out; judged by the mask it is a real difference
+    Image lit = Flat(0, 0, 0);
+    Image mask = Flat(0, 0, 0);
+    for (int y = 20; y < 36; ++y)
+    {
+        for (int x = 20; x < 36; ++x)
+        {
+            Set(lit, x, y, 150, 140, 130);
+            Set(mask, x, y, 255, 255, 255);
+        }
+    }
+    const Image black = Flat(0, 0, 0);
+
+    Options options = Lit();
+    options.coverageA = &mask;
+    options.coverageB = &mask;
+    const Result result = Compare(lit, black, options);
+    EXPECT_GT(result.maxDifference, 100) << "the interior of the object is compared";
+    EXPECT_GT(result.overSecond, 100);
+    EXPECT_FALSE(Agree(lit, black, options)) << result.Describe();
+
+    // The same pair with the images as their own masks: the vacuous pass the masks exist to prevent
+    Options byImages = Lit();
+    EXPECT_GT(Compare(lit, black, byImages).excluded, result.excluded) << "the old rule leaves the object out";
+
+    // A genuine tie-rule difference (the masks themselves differ by a pixel) is still left out
+    Image shifted = mask;
+    for (int y = 20; y < 36; ++y)
+    {
+        Set(shifted, 20, y, 0, 0, 0);
+        Set(shifted, 36, y, 255, 255, 255);
+    }
+    Image litShifted = lit;
+    for (int y = 20; y < 36; ++y)
+    {
+        Set(litShifted, 20, y, 0, 0, 0);
+        Set(litShifted, 36, y, 150, 140, 130);
+    }
+    Options tie = Lit();
+    tie.coverageA = &mask;
+    tie.coverageB = &shifted;
+    EXPECT_TRUE(Agree(lit, litShifted, tie)) << Compare(lit, litShifted, tie).Describe();
+}
+
+TEST(CrossBackendDiffTest, ACoverageMaskOfTheWrongSizeFails)
+{
+    const Image a = Flat(1, 2, 3);
+    Image small = Flat(0, 0, 0);
+    small.width = W / 2;
+    small.rgba.resize(static_cast<std::size_t>(small.width) * H * 4);
+    Options options = Lit();
+    options.coverageA = &small;
+    options.coverageB = &a;
+    EXPECT_FALSE(Agree(a, a, options));
+}

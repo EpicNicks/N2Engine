@@ -181,7 +181,12 @@ TEST_F(VulkanModelGoldenTest, AnInstantiatedModelCoversItsBoundsShowsBothMateria
     ASSERT_TRUE(software.Initialize(nullptr, Size, Size));
     const Frame reference = RenderModelOn(software, *model);
     software.Shutdown();
-    const VulkanTesting::Diff::Options options = VulkanTesting::Diff::Lit();
+    // Both materials are flat unlit colours, so each frame is its own coverage mask (nothing here is shaded)
+    const VulkanTesting::Diff::Image vulkanImage = frame.AsImage();
+    const VulkanTesting::Diff::Image softwareImage = reference.AsImage();
+    VulkanTesting::Diff::Options options = VulkanTesting::Diff::Lit();
+    options.coverageA = &vulkanImage;
+    options.coverageB = &softwareImage;
     EXPECT_TRUE(VulkanTesting::Diff::Agree(frame.AsImage(), reference.AsImage(), options));
     const std::string described = VulkanTesting::Diff::Compare(frame.AsImage(), reference.AsImage(), options).Describe();
     std::cout << "[ cross-diff ] model golden: " << described << std::endl;
