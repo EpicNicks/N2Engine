@@ -240,8 +240,28 @@ namespace N2Engine::Physics
         return _scene && _scene->getBroadPhaseType() == PxBroadPhaseType::eGPU;
     }
 
+    bool PhysXBackend::SceneUsesEnhancedDeterminism() const
+    {
+        return _scene && _scene->getFlags().isSet(PxSceneFlag::eENABLE_ENHANCED_DETERMINISM);
+    }
+
+    unsigned PhysXBackend::DispatcherWorkerCount() const
+    {
+        return _dispatcher ? _dispatcher->getWorkerCount() : 0u;
+    }
+
     bool PhysXBackend::ProbeGpu()
     {
+        if (_deterministic && _gpuMode != GpuMode::Off)
+        {
+            // PxSceneFlag::eENABLE_ENHANCED_DETERMINISM is not supported on GPU, so the request that was made
+            // explicitly (physics.deterministic) wins: no CUDA call, the CPU scene
+            _gpuStatus = {GpuState::Disabled, "physics.deterministic is on and GPU dynamics does not support enhanced "
+                                              "determinism (the CPU scene)"};
+            Logger::Warn(std::format("physics.gpu={} with physics.deterministic: {}", ToString(_gpuMode),
+                                     _gpuStatus.detail));
+            return false;
+        }
         if (_gpuMode == GpuMode::Off)
         {
             _gpuStatus = {GpuState::Disabled, "physics.gpu is off (the CPU scene)"};
@@ -320,7 +340,9 @@ namespace N2Engine::Physics
 
         // 5. Create scene. With physics.gpu off (the default) nothing GPU-related is touched; otherwise the scene
         // is the GPU scene when the probe works and today's CPU scene when it does not.
-        _dispatcher = PxDefaultCpuDispatcherCreate(4);
+        // physics.deterministic: no worker threads, so every task runs on the thread that calls simulate()
+        const unsigned workerThreads = _workerThreadsOverride.value_or(_deterministic ? 0u : 4u);
+        _dispatcher = PxDefaultCpuDispatcherCreate(workerThreads);
 
         const auto createScene = [this](const bool gpu) -> PxScene *
         {
@@ -336,6 +358,12 @@ namespace N2Engine::Physics
             // PhysX 5 performance flags
             sceneDesc.flags |= PxSceneFlag::eENABLE_PCM;
             sceneDesc.flags |= PxSceneFlag::eENABLE_STABILIZATION;
+            if (_deterministic && !gpu)
+            {
+                // Results independent of additional, non-interacting actors (PxSceneDesc.h); needs a consistent
+                // insertion order in a new scene, costs performance, not supported on GPU
+                sceneDesc.flags |= PxSceneFlag::eENABLE_ENHANCED_DETERMINISM;
+            }
 
             if (gpu)
             {

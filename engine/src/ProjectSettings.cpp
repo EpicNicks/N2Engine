@@ -37,6 +37,7 @@ namespace N2Engine
             }
             // Validated here; the value itself is read before Init (ReadPhysicsGpuMode), so a change needs a restart
             (void)ReadPhysicsGpuMode(nlohmann::json{{"physics", physics}}, &problems);
+            (void)ReadPhysicsDeterministic(nlohmann::json{{"physics", physics}}, &problems);
             if (const auto gravity = physics.find("gravity"); gravity != physics.end() && !gravity->is_null())
             {
                 const bool valid = gravity->is_object() && gravity->contains("x") && gravity->contains("y") &&
@@ -202,6 +203,33 @@ namespace N2Engine
             problems->push_back(std::format("physics.gpu: {} is not \"off\", \"auto\" or \"on\"; using off", gpu->dump()));
         }
         return Physics::GpuMode::Off;
+    }
+
+    bool ReadPhysicsDeterministic(const nlohmann::json &settings, std::vector<std::string> *problems)
+    {
+        if (!settings.is_object())
+        {
+            return false;
+        }
+        const auto block = settings.find("physics");
+        if (block == settings.end() || !block->is_object())
+        {
+            return false;
+        }
+        const auto value = block->find("deterministic");
+        if (value == block->end() || value->is_null())
+        {
+            return false;
+        }
+        if (value->is_boolean())
+        {
+            return value->get<bool>();
+        }
+        if (problems)
+        {
+            problems->push_back(std::format("physics.deterministic: {} is not true or false; using false", value->dump()));
+        }
+        return false;
     }
 
     ProjectSettingsSnapshot ProjectSettingsSnapshot::Capture()

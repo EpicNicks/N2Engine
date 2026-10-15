@@ -24,7 +24,10 @@ namespace N2Engine
      *               physics backend's gravity (skipped without a backend). "gpu": "off" | "auto" | "on" (default off,
      *               case-insensitive; anything else is refused with a warning and means off) is read by
      *               ReadPhysicsGpuMode before Application::Init, because the scene's GPU flag is fixed when it is
-     *               created; applying it afterwards only validates it (a change needs a restart)
+     *               created; applying it afterwards only validates it (a change needs a restart).
+     *               "deterministic": true | false (default false; a non-boolean is refused and means false) asks the
+     *               physics backend for its reproducible-replay configuration (PhysX: enhanced determinism and 0
+     *               worker threads); read by ReadPhysicsDeterministic before Application::Init like gpu
      *     rendering {"colorSpace": "gamma" | "linear"}: Rendering::RenderSettings::SetColorSpace (case-insensitive;
      *               other keys in the block are left alone). A block without colorSpace, with it null, or (when
      *               `only` names rendering) removed, means the default, gamma. "forceShaderEncode": true makes
@@ -52,6 +55,14 @@ namespace N2Engine
      */
     [[nodiscard]] Physics::GpuMode ReadPhysicsGpuMode(const nlohmann::json &settings,
                                                       std::vector<std::string> *problems = nullptr);
+
+    /**
+     * physics.deterministic from a project's settings object: false when it is absent, null or not a boolean.
+     * Host code calls it before Application::Init (the physics scene is built there).
+     * problems, when given, gets one message for a value that is not a boolean.
+     */
+    [[nodiscard]] bool ReadPhysicsDeterministic(const nlohmann::json &settings,
+                                                std::vector<std::string> *problems = nullptr);
 
     /**
      * The live state ApplyProjectSettings changes, taken before applying so it can be put back exactly (a block the

@@ -26,6 +26,10 @@ namespace N2Engine::Physics
         /// physics.gpu: call before Initialize (the scene is built there and its GPU flag is immutable). A backend
         /// without GPU support ignores it.
         virtual void SetGpuMode(GpuMode) {}
+        /// physics.deterministic: call before Initialize (the scene's flags are immutable once it exists). Asks for
+        /// the backend's reproducible-replay configuration; a backend without one ignores it. Default off, and off
+        /// changes nothing.
+        virtual void SetDeterministic(bool) {}
         /// What Initialize made of the GPU request: the SCENE (and probe) status, Disabled for a backend that never
         /// asks. It does not change when a feature that runs in the GPU scene (particles, soft bodies) fails, so
         /// Physics.IsGpuAvailable reflects the scene only; a feature's own status is GetParticlesGpuStatus and
