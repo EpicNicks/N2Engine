@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web build · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html" aria-current="page">Web build</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Web build</h1>
+<p class="lead">N2Engine can be configured with Emscripten to build for WebAssembly. This is <strong>stage 0</strong> of <a href="https://github.com/EpicNicks/N2Engine/issues/155">issue #155</a> <span class="badge">PR #163</span>: the toolchain, the build profiles, a size report and a CI job that builds the <code>math</code> and <code>text</code> libraries and runs their unit tests under node. There is no web player yet; this page says what exists, how to build it, and what does not.</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#goal">Goal and decisions already taken</a></li>
+<li><a href="#toolchain">Toolchain and pinned version</a></li>
+<li><a href="#build">Building locally</a></li>
+<li><a href="#target-set">The reduced target set and what is excluded</a></li>
+<li><a href="#profiles">Build profiles</a></li>
+<li><a href="#output-contract">Output contract</a></li>
+<li><a href="#size-report">The size report and budgets</a></li>
+<li><a href="#ci">CI</a></li>
+<li><a href="#not-done">What is not done yet</a></li>
+<li><a href="#unverified">Verified and unverified</a></li>
+</ol>
+</div>
+
+<h2 id="goal">Goal and decisions already taken</h2>
+<p>The aim is a web <em>player</em> (not the editor) whose output is plain static files that any host can serve. These decisions were taken by the maintainer on 2026-10-15 in issue #155 and this work builds on them:</p>
+<ul>
+<li>Player only. The software renderer comes first, WebGPU later; WebGL2 is not a target.</li>
+<li>The baseline build is single-threaded and needs no special response headers, in particular no cross-origin isolation (COOP/COEP). A threaded build is a possible later second file.</li>
+<li>The profiles <code>dev</code>, <code>size</code> and <code>speed</code> are part of the build from the start, not added later.</li>
+<li>The output must not depend on the host's MIME types or compression.</li>
+</ul>
+
+<h2 id="toolchain">Toolchain and pinned version</h2>
+<p>The toolchain is <a href="https://emscripten.org/">Emscripten</a>, used through CMake's own Emscripten toolchain file (<code>emcmake cmake</code>). CMake detects it (<code>EMSCRIPTEN</code> is set, or <code>CMAKE_SYSTEM_NAME</code> is <code>Emscripten</code>) and the root <code>CMakeLists.txt</code> sets the derived variable <code>N2ENGINE_PLATFORM_WEB</code> to <code>ON</code>, includes <code>cmake/N2EngineWeb.cmake</code>, and compiles every target with <code>-DN2ENGINE_PLATFORM_WEB=1</code>. On every other configuration the variable is <code>OFF</code> and nothing else changes: no native option, target, source list or flag differs.</p>
+<p>The version is pinned to <strong>Emscripten 4.0.10</strong> (the <code>EMSCRIPTEN_VERSION</code> variable in the CI job), installed with the official <a href="https://github.com/emscripten-core/emsdk">emsdk</a> and not through a third-party action. Pinning keeps an upstream release from changing the build with no change in this repository; the 4.0 series was chosen for its recent LLVM and libc++ (the engine is C++23). Emscripten 4.0.10 was built and tested by the CI job, see <a href="#unverified">Verified and unverified</a>. Changing the pin means changing it in <code>.github/workflows/tests.yml</code> and here.</p>
+
+<h2 id="build">Building locally</h2>
+<p>Install and activate the pinned SDK once (Linux or macOS shell; on Windows use <code>emsdk.bat</code> and <code>emsdk_env.bat</code>), then configure with <code>emcmake</code> and build with CMake as usual. You need CMake 3.25 or newer and Ninja (or another generator).</p>
+<pre class="lang-shell"><code>git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+./emsdk install 4.0.10
+./emsdk activate 4.0.10
+source ./emsdk_env.sh          # puts emcc, emcmake and the SDK's node on PATH (per shell)
+
+cd /path/to/N2Engine
+emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev
+cmake --build build-web --target math_tests text_tests
+ctest --test-dir build-web --output-on-failure
+bash scripts/web-size-report.sh build-web/bin</code></pre>
+<p>Each test is built as <code>build-web/bin/&lt;name&gt;.js</code> plus a <code>.wasm</code>. CMake's Emscripten toolchain sets <code>CMAKE_CROSSCOMPILING_EMULATOR</code> to node, so <code>ctest</code> runs them with node; you can also run <code>node build-web/bin/math_tests.js</code> directly. A configure that is not under <code>emcmake</code> is a native configure and is unchanged.</p>
+
+<h2 id="target-set">The reduced target set and what is excluded</h2>
+<p>At stage 0 the web configuration builds the <code>math</code> and <code>text</code> libraries, their test executables (<code>math_tests</code>, <code>text_tests</code>), googletest (fetched), and the <code>web-size-report</code> target. Everything else is not added to the build when <code>N2ENGINE_PLATFORM_WEB</code> is <code>ON</code>, and the configure prints a <code>Web:</code> status line saying so.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Excluded</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><code>engine/</code> (the engine core)</td><td>It links the renderer (GLFW, OpenGL, Vulkan, software) and OpenAL unconditionally and uses <code>std::filesystem</code>, <code>std::thread</code> and <code>std::mutex</code> in many files. Building it needs source changes (a window and input backend, a single-threaded fallback, a virtual filesystem decision) that are outside stage 0, which allows only small <code>#ifdef</code> guards. It is stage 1.</td></tr>
+<tr><td><code>renderer/</code> (window, GLFW, OpenGL, Vulkan, software renderer)</td><td>GLFW and OpenGL context creation do not exist on the web as they do natively, and the software renderer's <code>RenderThread</code> needs threads. The Vulkan renderer is forced off (<code>N2ENGINE_RENDERER_VULKAN</code> is set <code>OFF</code>) because there is no Vulkan in a browser.</td></tr>
+<tr><td>OpenAL (fetched with FetchContent)</td><td>The web uses Emscripten's own OpenAL on top of WebAudio, a later stage. The native fetch is skipped.</td></tr>
+<tr><td>PhysX</td><td><code>N2ENGINE_USE_PHYSX</code> is set <code>OFF</code>: the downloaded binaries are native, and PhysX on WebAssembly is tracked in <a href="https://github.com/EpicNicks/N2Engine/issues/156">#156</a>.</td></tr>
+<tr><td>FreeType (<code>N2ENGINE_TEXT_FREETYPE</code>)</td><td>It is fetched at configure time. Asking for it on the web gives a warning and the option is set <code>OFF</code>; the text library uses stb_truetype only.</td></tr>
+<tr><td><code>lua</code> and <code>assetimport/</code></td><td>Plain C and C++ that are expected to compile, but nothing built at stage 0 uses them (the engine is excluded), and their tests read files. They are the first candidates for stage 1.</td></tr>
+<tr><td><code>editor-server/</code> (the editor host, raw sockets, Mbed TLS), <code>test_project/</code>, <code>lua_project/</code></td><td>The editor host is not part of a player; the two projects need the engine and a window.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Two source-level changes were needed. The <code>math</code> target takes no <code>-msse4.1</code>/<code>-mavx</code> flags on the web (Emscripten reports its processor as x86, but its compiler defines no x86 macros), so <code>CpuInfo.hpp</code> selects the scalar implementations, the same ones used on any architecture without a SIMD tier. And three tests in <code>tests/math/UUIDRandomTests.cpp</code> that start <code>std::thread</code>s skip themselves in a build without threads (<code>GTEST_SKIP</code> under <code>__EMSCRIPTEN__</code> without <code>__EMSCRIPTEN_PTHREADS__</code>); the single-threaded generation test still runs.</p>
+<div class="callout note" id="design-web-reduced-set">
+<p class="callout-title">Design decision: stage 0 builds math and text only <span class="badge">PR #163</span></p>
+<p>The engine core cannot be built for the web without changing its sources (see the table above), and stage 0 is limited to the toolchain, the profiles, the size report and the CI leg. Building the two CPU-only libraries proves the toolchain, the flags and the node test runner end to end, with nothing that needs a decision about windows, threads or files. Each later stage adds targets by removing a row from the exclusion table.</p>
+</div>
+
+<h2 id="profiles">Build profiles</h2>
+<p><code>N2ENGINE_WEB_PROFILE</code> is a cache variable with the values <code>dev</code> (the default), <code>size</code> and <code>speed</code>; anything else is a configure error. It exists only in web configurations. The flags are applied to every target (compile and link) in <code>cmake/N2EngineWeb.cmake</code>, because LTO needs every object built with it. Every profile also links with <code>-sALLOW_MEMORY_GROWTH=1</code> (Emscripten's default heap is a fixed 16 MB) and <code>-sSTACK_SIZE=1048576</code> (its default stack is 64 KB). The unit tests add <code>-sEXIT_RUNTIME=1</code> so node exits with the test result.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Profile</th><th>Flags</th><th>Meant for</th></tr></thead>
+<tbody>
+<tr><td><code>dev</code></td><td><code>-O1 -g</code>, no LTO</td><td>Fast builds and links, DWARF debug info. The only profile built and tested in CI.</td></tr>
+<tr><td><code>size</code></td><td><code>-Oz -flto</code>, link <code>-Oz -flto -sASSERTIONS=0</code>; no <code>-g</code>, so no debug info or names section; emcc runs <code>wasm-opt -Oz</code> at this level</td><td>The smallest download. Exceptions and RTTI stay on: the engine is not known to build without them, so trimming them is a later, measured step.</td></tr>
+<tr><td><code>speed</code></td><td><code>-O3 -flto</code>, link <code>-O3 -flto -sASSERTIONS=0</code></td><td>The fastest code.</td></tr>
+</tbody>
+</table>
+</div>
+<p>The Emscripten defaults for C++ exceptions apply (a thrown exception that nothing in the wasm can catch is not caught): the stage 0 libraries throw only from a few <code>Matrix</code> argument checks and no test depends on catching one.</p>
+
+<h2 id="output-contract">Output contract</h2>
+<p>This is the contract every later stage keeps; stage 0 produces test executables only, but the build is set up for it:</p>
+<ul>
+<li>A folder of static files: <code>.html</code>, <code>.js</code>, <code>.wasm</code> and later an asset pack. No server logic.</li>
+<li>Relative URLs only, so the folder works from any path or subdomain.</li>
+<li>No special response headers. The baseline is single-threaded and does not use <code>SharedArrayBuffer</code>, so it does not need cross-origin isolation and can run in an iframe on another site.</li>
+<li>MIME-agnostic and compression-agnostic: it must still load when a host serves <code>.wasm</code> with a wrong type (the loader falls back from streaming instantiation to an <code>ArrayBuffer</code>) and when the host does not compress. Precompressed <code>.br</code>/<code>.gz</code> copies are an addition for the <code>size</code> profile, never a requirement. Not implemented yet: stage 3.</li>
+</ul>
+
+<h2 id="size-report">The size report and budgets</h2>
+<p><code>scripts/web-size-report.sh [dir]</code> (default <code>build/bin</code>) lists every <code>.wasm</code> and <code>.js</code> file under the directory with its raw and <code>gzip -9</code> size, prints a table, and appends it to the GitHub job summary when <code>GITHUB_STEP_SUMMARY</code> is set. It fails (exit 1) only for a budget that is set and exceeded, and with exit 1 if it finds no files. Budgets are in bytes and come from environment variables, or from CMake cache variables when you use the <code>web-size-report</code> target:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Variable (environment and CMake)</th><th>Budget for</th></tr></thead>
+<tbody>
+<tr><td><code>N2ENGINE_WEB_BUDGET_WASM_GZIP</code></td><td>The gzip size of any one <code>.wasm</code> file.</td></tr>
+<tr><td><code>N2ENGINE_WEB_BUDGET_TOTAL_GZIP</code></td><td>The gzip size of all <code>.wasm</code> and <code>.js</code> files together.</td></tr>
+</tbody>
+</table>
+</div>
+<pre class="lang-shell"><code>N2ENGINE_WEB_BUDGET_WASM_GZIP=1500000 bash scripts/web-size-report.sh build-web/bin
+cmake -S . -B build-web -DN2ENGINE_WEB_BUDGET_TOTAL_GZIP=2000000 &amp;&amp; cmake --build build-web --target web-size-report</code></pre>
+<p>No budget is set at stage 0 (the CI step only reports). Brotli sizes and time to first frame are not measured yet.</p>
+
+<h2 id="ci">CI</h2>
+<p>The job <code>web (Emscripten, dev profile, node tests)</code> in <code>.github/workflows/tests.yml</code> <span class="badge">PR #163</span> installs emsdk 4.0.10, configures the dev profile with <code>emcmake</code>, configures (only) the <code>size</code> and <code>speed</code> profiles without tests, builds <code>math_tests</code> and <code>text_tests</code>, runs <code>ctest</code> (node runs each test), and reports the artifact sizes in the job summary. It is not a required check; it follows the other build jobs: <code>needs: changes</code> and the same docs-only <code>if</code>, ccache is not used, and it uploads nothing. See <a href="testing.html#ci">Testing &amp; CI</a>.</p>
+
+<h2 id="not-done">What is not done yet</h2>
+<p>The stages are from issue #155; only stage 0 exists.</p>
+<ol class="steps">
+<li><strong>Stage 0 (this page):</strong> toolchain, profiles, size report, CI leg for math and text.</li>
+<li>Stage 1: the headless engine core in WebAssembly (scene loading, Lua, software-renderer goldens under node). Needs the engine's threads, filesystem and renderer dependencies sorted out.</li>
+<li>Stage 2: the software renderer on a canvas, with window and input. The first playable web build.</li>
+<li>Stage 3: asset packing and async loading, the shell page, size and load-time budgets enforced in CI, precompressed outputs.</li>
+<li>Stage 4: audio through Emscripten's OpenAL.</li>
+<li>Stage 5: PhysX (or another physics) on WebAssembly.</li>
+<li>Stage 6: the optional threaded build, chosen by <code>crossOriginIsolated</code>.</li>
+<li>Stage 7: the WebGPU backend.</li>
+</ol>
+
+<h2 id="unverified">Verified and unverified</h2>
+<div class="callout note">
+<p class="callout-title">Verified by the first CI run of the web job <span class="badge">PR #163</span></p>
+<p>Emscripten 4.0.10 builds the C++23 code of <code>math</code>, <code>text</code> and googletest (without pthreads) with the <code>dev</code> profile; CMake's Emscripten toolchain runs the tests under node and ctest sees their exit code; <code>math_tests</code> (91 tests passed, the SSE2, SSE4.1 and AVX dispatch tests and the three threaded UUID tests skipped) and <code>text_tests</code> (72 passed) pass; the <code>size</code> and <code>speed</code> profiles configure; the size report lists the four artifacts (the dev-profile test executables are 9 MB and 12 MB of <code>.wasm</code> with debug info, which is not a size result).</p>
+</div>
+<div class="callout open-question">
+<p class="callout-title">Open question</p>
+<p>Not verified: that the <code>size</code> and <code>speed</code> flags build and link (they are only configured in CI, and a configure does not compile with <code>add_compile_options</code> flags); real sizes under <code>size</code>; browser behaviour (nothing here runs in a browser); and whether the engine core can be added with small guards (believed not, see the exclusion table).</p>
+</div>
+
+<div class="page-footer">
+<span>Describes master through PR #34.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>

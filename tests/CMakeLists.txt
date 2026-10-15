@@ -1,6 +1,12 @@
+if(N2ENGINE_PLATFORM_WEB)
+    # The tests run under node: exit the runtime when main returns so ctest sees the exit code and the output is flushed
+    add_link_options(-sEXIT_RUNTIME=1)
+endif()
 add_subdirectory(math)
 add_subdirectory(text)
+if(NOT N2ENGINE_PLATFORM_WEB)
 add_subdirectory(assetimport)
 add_subdirectory(engine)
 add_subdirectory(renderer)
 add_subdirectory(editor-server)
+endif()

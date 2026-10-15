@@ -27,7 +27,11 @@ set_target_properties(math PROPERTIES
     CXX_EXTENSIONS OFF
 )
 
-if(MSVC)
+if(N2ENGINE_PLATFORM_WEB)
+    # WebAssembly: no architecture flags. Emscripten reports CMAKE_SYSTEM_PROCESSOR as x86, but -msse4.1/-mavx would
+    # need -msimd128 and the wasm SIMD mapping; the target defines neither __x86_64__ nor __aarch64__, so CpuInfo.hpp
+    # selects the scalar implementations (the same ones aarch64 falls back to for anything it has no NEON code for)
+elseif(MSVC)
     # MSVC flags for SSE/AVX
     target_compile_options(math PUBLIC 
         /arch:AVX         # Enables AVX (includes SSE2, SSE4.1)
