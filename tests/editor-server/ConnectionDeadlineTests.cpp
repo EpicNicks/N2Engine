@@ -227,8 +227,7 @@ namespace
         std::string text;
         for (const std::string &line : log.Lines())
         {
-            text += line.substr(0, 200) + "
-";
+            text += line.substr(0, 200) + "\n";
         }
         return text;
     }
@@ -786,11 +785,18 @@ TEST(ConnectionDeadlineTest, AClientThatNeverReadsCantBlockTheServerPastTheWrite
     TestClient client(rig.server.GetPort(), 4096);
     ASSERT_TRUE(client.IsConnected());
 
-    // CreateScript answers with a script template that holds the name about ten times: a 1 MiB name asks for a ~10 MiB
-    // response, far more than the two small buffers hold. The client never reads it.
+    // CreateScript answers with a script template that holds the name about ten times, so a 16 KiB name asks for a
+    // ~160 KB response, far more than the two small buffers hold. Three requests go in at once, which is what makes this
+    // hold on Windows too: its first non-blocking send is accepted whole however large, and only the second finds the
+    // unread first one in the way. The client never reads any of it.
+    constexpr size_t NameBytes = 16 * 1024;
     BufferWriter name;
-    name.WriteString(std::string(1024 * 1024, 'n'));
-    ASSERT_TRUE(client.SendRequest(CommandType::CreateScript, name.Release()));
+    name.WriteString(std::string(NameBytes, 'n'));
+    const std::vector<uint8_t> request = name.Release();
+    for (int i = 0; i < 3; ++i)
+    {
+        ASSERT_TRUE(client.SendRequest(CommandType::CreateScript, request)) << i;
+    }
 
     // The main loop runs the command first
     ASSERT_TRUE(PumpUntilLogged(rig.server, log, "Generated script template")) << DumpLines(log);
@@ -804,8 +810,7 @@ TEST(ConnectionDeadlineTest, AClientThatNeverReadsCantBlockTheServerPastTheWrite
         rig.server.ProcessCommands(10ms);
     }
     ASSERT_TRUE(log.Has("no write progress for 30000 ms (the write timeout), the client isn't reading peer=203.0.113.7"))
-        << "bytes waiting at the client: " << client.BytesAvailable() << "
-" << DumpLines(log);
+        << "bytes waiting at the client: " << client.BytesAvailable() << "\n" << DumpLines(log);
     EXPECT_EQ(log.Count("no write progress"), 1u);
 
     // What the client can still read is cut short, and then the connection is closed
@@ -817,7 +822,7 @@ TEST(ConnectionDeadlineTest, AClientThatNeverReadsCantBlockTheServerPastTheWrite
         total += last;
     }
     EXPECT_TRUE(last == 0 || !N2TestSockets::LastErrorWasTimeout()) << "the server closed the connection";
-    EXPECT_LT(total, 5 * 1024 * 1024) << "not the whole response";
+    EXPECT_LT(total, static_cast<long long>(3 * 10 * NameBytes)) << "not all three responses";
 
     // The server is free: a second client connects and gets ServerInfo
     TestClient next(rig.server.GetPort());
