@@ -9,6 +9,9 @@
 #                  device opens and no extension is present, so the audio system reports itself disabled, as it does on
 #                  a machine with no sound card. Stage 4 replaces it with WebAudio.
 #   OpenGL::GL     an empty interface target (the web has no OpenGL library to link; glad's loader is never called).
+#   n2_web_cxx_compat  an include directory with a <generator> header: libc++ (Emscripten) has no std::generator yet,
+#                  and the engine's coroutines are std::generator<ICoroutineWait>. The header defers to the toolchain's
+#                  own <generator> when there is one. The engine links this target on the web.
 #
 # The headers are downloaded at configure time (archives of the same tags the native build uses) and only their include
 # directories are used: SOURCE_SUBDIR names a directory that does not exist, so FetchContent does not add the other
@@ -35,3 +38,6 @@ target_include_directories(openal_web SYSTEM PUBLIC "${n2_openal_headers_SOURCE_
 add_library(OpenAL::OpenAL ALIAS openal_web)
 
 add_library(OpenGL::GL INTERFACE IMPORTED GLOBAL)
+
+add_library(n2_web_cxx_compat INTERFACE)
+target_include_directories(n2_web_cxx_compat SYSTEM INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")

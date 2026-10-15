@@ -1,0 +1,179 @@
+// Web (Emscripten) only: a <generator> for standard libraries that do not have one.
+//
+// std::generator is C++23, and libc++ (what Emscripten ships) does not implement it yet, while libstdc++ (the native
+// Linux builds) and the MSVC STL do. The engine's coroutines are std::generator<ICoroutineWait>
+// (engine/scheduling/Coroutine.hpp), so the web build needs one. When the toolchain's own <generator> exists this header
+// includes it and defines nothing, so a later Emscripten that has it takes over with no change here.
+//
+// This is the part of std::generator the engine uses: a move-only single-pass range of yielded values, with the
+// promise's co_yield (by rvalue, by const lvalue copy), the exception rethrow on resume, and the iterator and the
+// default_sentinel. Not implemented: the allocator parameter, a value type different from the reference type, and
+// co_yield std::ranges::elements_of (nested generators). Using one of those is a compile error, not a silent difference.
+#pragma once
+
+#if __has_include_next(<generator>)
+#include_next <generator>
+#else
+
+#include <concepts>
+#include <coroutine>
+#include <cstddef>
+#include <exception>
+#include <iterator>
+#include <memory>
+#include <type_traits>
+#include <utility>
+
+namespace std
+{
+    template <class Ref, class V = void, class Allocator = void>
+    class generator
+    {
+        static_assert(is_void_v<V>, "this <generator> replacement does not support a separate value type");
+        static_assert(is_void_v<Allocator>, "this <generator> replacement does not support an allocator");
+
+        using value_t = remove_cvref_t<Ref>;
+        using reference = conditional_t<is_reference_v<Ref>, Ref, Ref &&>;
+        using yielded = conditional_t<is_reference_v<reference>, reference, const reference &>;
+
+    public:
+        class promise_type
+        {
+        public:
+            generator get_return_object() noexcept
+            {
+                return generator{coroutine_handle<promise_type>::from_promise(*this)};
+            }
+
+            suspend_always initial_suspend() const noexcept { return {}; }
+            suspend_always final_suspend() const noexcept { return {}; }
+
+            suspend_always yield_value(yielded value) noexcept
+            {
+                _value = addressof(value);
+                return {};
+            }
+
+            // co_yield of an lvalue when the generator yields by rvalue: the value is copied into the awaiter, which
+            // lives in the coroutine frame until the next resume
+            auto yield_value(const remove_reference_t<yielded> &lvalue)
+                requires is_rvalue_reference_v<yielded> && constructible_from<remove_cvref_t<yielded>, const remove_reference_t<yielded> &>
+            {
+                struct CopyAwaiter
+                {
+                    remove_cvref_t<yielded> value;
+                    promise_type *promise;
+
+                    bool await_ready() const noexcept { return false; }
+                    void await_suspend(coroutine_handle<promise_type>) noexcept { promise->_value = addressof(value); }
+                    void await_resume() const noexcept {}
+                };
+                return CopyAwaiter{lvalue, this};
+            }
+
+            template <class U>
+            void await_transform(U &&) = delete; // no co_await inside a generator
+
+            void return_void() const noexcept {}
+
+            void unhandled_exception() { _exception = current_exception(); }
+
+            void RethrowIfFailed()
+            {
+                if (_exception)
+                {
+                    rethrow_exception(std::exchange(_exception, nullptr));
+                }
+            }
+
+            reference Value() const noexcept { return static_cast<reference>(*_value); }
+
+        private:
+            add_pointer_t<yielded> _value = nullptr;
+            exception_ptr _exception;
+        };
+
+        class iterator
+        {
+        public:
+            using value_type = value_t;
+            using difference_type = ptrdiff_t;
+
+            iterator() noexcept = default;
+            iterator(iterator &&other) noexcept : _handle(std::exchange(other._handle, {})) {}
+            iterator &operator=(iterator &&other) noexcept
+            {
+                _handle = std::exchange(other._handle, {});
+                return *this;
+            }
+
+            reference operator*() const noexcept { return _handle.promise().Value(); }
+
+            iterator &operator++()
+            {
+                _handle.resume();
+                if (_handle.done())
+                {
+                    _handle.promise().RethrowIfFailed();
+                }
+                return *this;
+            }
+
+            void operator++(int) { ++*this; }
+
+            friend bool operator==(const iterator &it, default_sentinel_t) noexcept { return it._handle.done(); }
+
+        private:
+            friend class generator;
+            explicit iterator(coroutine_handle<promise_type> handle) noexcept : _handle(handle) {}
+
+            coroutine_handle<promise_type> _handle;
+        };
+
+        generator(generator &&other) noexcept : _handle(std::exchange(other._handle, {})) {}
+
+        generator &operator=(generator &&other) noexcept
+        {
+            if (this != addressof(other))
+            {
+                Destroy();
+                _handle = std::exchange(other._handle, {});
+            }
+            return *this;
+        }
+
+        generator(const generator &) = delete;
+        generator &operator=(const generator &) = delete;
+
+        ~generator() { Destroy(); }
+
+        // Runs the body to its first yield. May be called once, like std::generator's
+        iterator begin()
+        {
+            _handle.resume();
+            if (_handle.done())
+            {
+                _handle.promise().RethrowIfFailed();
+            }
+            return iterator{_handle};
+        }
+
+        default_sentinel_t end() const noexcept { return default_sentinel; }
+
+    private:
+        explicit generator(coroutine_handle<promise_type> handle) noexcept : _handle(handle) {}
+
+        void Destroy() noexcept
+        {
+            if (_handle)
+            {
+                _handle.destroy();
+                _handle = {};
+            }
+        }
+
+        coroutine_handle<promise_type> _handle;
+    };
+}
+
+#endif
