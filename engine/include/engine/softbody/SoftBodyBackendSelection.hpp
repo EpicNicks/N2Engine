@@ -40,8 +40,8 @@ namespace N2Engine::SoftBodies
     /**
      * Picks the backend for `requested`, with the semantics of Particles::SelectParticleBackend. `physics` is the
      * application's physics backend, which may be null (none built, or it failed to start). The PhysX GPU soft-body
-     * backend exists only when physics->GetSoftBodyBackend() returns one (no backend does yet; the PhysX one arrives
-     * with the GPU stage), else the selection is the CPU backend, and Auto is silent about it while PhysX falls
+     * backend exists only when physics->GetSoftBodyBackend() returns one (the PhysX physics backend returns its
+     * DeformableSoftBodyBackend when the GPU scene is up and has not failed), else the selection is the CPU backend, and Auto is silent about it while PhysX falls
      * back with a reason.
      */
     [[nodiscard]] SoftBodyBackendSelection SelectSoftBodyBackend(SoftBodyBackend requested,
