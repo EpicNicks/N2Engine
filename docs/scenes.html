@@ -346,6 +346,7 @@ assert(boss-&gt;GetScene() == SceneManager::GetCurScene());
 </tbody>
 </table>
 </div>
+<p>Scene data is checked for depth before it is built: JSON nested more than 1088 levels, or a hierarchy more than 512 GameObject levels deep, fails the load like any malformed scene <span class="badge">PR #152</span>; see <a href="serialization.html#design-depth-caps">the depth caps</a>.</p>
 
 <h3 id="process-pending">ProcessAnyPendingSceneChange</h3>
 <ul>

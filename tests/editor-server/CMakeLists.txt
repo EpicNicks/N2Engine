@@ -70,6 +70,8 @@ if (MSVC)
 else()
     target_compile_options(editor_project_tests PRIVATE -Wall -Wextra)
 endif()
+# tests/common has the deep scene JSON builder (EditorSceneDepthTests)
+target_include_directories(editor_project_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/common)
 add_test(NAME editor_project_tests COMMAND editor_project_tests)
 
 # The generated C++ client compiles (an object library nothing links: it is never part of a program)

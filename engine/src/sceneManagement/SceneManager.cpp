@@ -5,6 +5,7 @@
 #include "engine/Logger.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/sceneManagement/Scene.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 
 using namespace N2Engine;
 
@@ -276,7 +277,9 @@ void SceneManager::UpdateScene(int sceneIndex, nlohmann::json &newSceneData)
             Logger::Error("SceneManager::UpdateScene - another stored scene is already named: " + newName);
             return;
         }
-        instance._scenes[sceneIndex] = StoredScene{.name = std::move(newName), .data = newSceneData};
+        // Copied without recursion: scene data can be as deep as JsonLimits::MaxSceneJsonDepth
+        instance._scenes[sceneIndex] =
+            StoredScene{.name = std::move(newName), .data = JsonLimits::IterativeCopy(newSceneData)};
         if (instance._sceneChange._pendingSceneIndex == sceneIndex)
         {
             // A load already pending for this scene builds from the new data, not an older instance.
