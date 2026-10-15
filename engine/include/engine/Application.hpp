@@ -100,6 +100,8 @@ namespace N2Engine
         /// shuts down). Safe to call from components and Lua.
         static void Quit();
         [[nodiscard]] bool IsQuitRequested() const { return _quitRequested; }
+        /// Forgets a quit request (Init does too). For tests, which share one Application for the whole process.
+        void ResetQuitRequest() { _quitRequested = false; }
 
         /// Whether Lua's Application.Quit() does anything. It does in a game (the default) and in the editor's --play
         /// child, which is a game; the editor host that edits (N2EditorHost without --play) clears it, because a script
