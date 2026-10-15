@@ -39,6 +39,22 @@ namespace N2Engine::Editor
         return value;
     }
 
+    std::optional<int> ParseWholeNumber(const std::string_view text, const int min, const int max)
+    {
+        // from_chars takes a leading '-' (and "-0"); these are durations, which have no sign
+        if (text.empty() || text.front() < '0' || text.front() > '9')
+        {
+            return std::nullopt;
+        }
+        int value = 0;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (error != std::errc{} || end != text.data() + text.size() || value < min || value > max)
+        {
+            return std::nullopt;
+        }
+        return value;
+    }
+
     std::optional<HostRenderer> ParseRenderer(const std::string_view text)
     {
         if (text == "opengl")
@@ -123,7 +139,8 @@ namespace N2Engine::Editor
             const bool takesValue = arg == "-p" || arg == "--port" || arg == "--bind" || arg == "--project" ||
                                     arg == "--renderer" || arg == "--token-env" || arg == "--tokens-file" ||
                                     arg == "--create" || arg == "--name" || arg == "--project-id" || arg == "--play" ||
-                                    arg == "--log-level" || arg == "--log-file";
+                                    arg == "--log-level" || arg == "--log-file" || arg == "--idle-timeout" ||
+                                    arg == "--write-timeout" || arg == "--max-session";
             if (!takesValue)
             {
                 continue; // unknown arguments are ignored
@@ -174,6 +191,38 @@ namespace N2Engine::Editor
             else if (arg == "--play")
             {
                 options.playScene = value;
+            }
+            else if (arg == "--idle-timeout")
+            {
+                const std::optional<int> seconds = ParseWholeNumber(value, 0, HostOptions::MaxIdleTimeoutSeconds);
+                if (!seconds)
+                {
+                    return std::unexpected(std::format("Invalid --idle-timeout: {} (expected whole seconds from 0 to {}; "
+                                                       "0 turns it off)",
+                                                       value, HostOptions::MaxIdleTimeoutSeconds));
+                }
+                options.idleTimeoutSeconds = *seconds;
+            }
+            else if (arg == "--write-timeout")
+            {
+                const std::optional<int> seconds = ParseWholeNumber(value, 1, HostOptions::MaxWriteTimeoutSeconds);
+                if (!seconds)
+                {
+                    return std::unexpected(std::format("Invalid --write-timeout: {} (expected whole seconds from 1 to {})",
+                                                       value, HostOptions::MaxWriteTimeoutSeconds));
+                }
+                options.writeTimeoutSeconds = *seconds;
+            }
+            else if (arg == "--max-session")
+            {
+                const std::optional<int> minutes = ParseWholeNumber(value, 0, HostOptions::MaxSessionMinutesLimit);
+                if (!minutes)
+                {
+                    return std::unexpected(std::format("Invalid --max-session: {} (expected whole minutes from 0 to {}; "
+                                                       "0 is off)",
+                                                       value, HostOptions::MaxSessionMinutesLimit));
+                }
+                options.maxSessionMinutes = *minutes;
             }
             else if (arg == "--log-level")
             {
@@ -383,7 +432,18 @@ Options:
                             --tokens-file, an address that fails 3 Hellos is backed off (1 s, doubling to
                             5 min; its connections are closed at once, before any TLS handshake), loopback
                             as a whole is backed off after 10 failures in a minute, and with --tokens-file a
-                            user that fails 3 Hellos is backed off for up to 30 s. For test rigs only
+                            user that fails 3 Hellos is backed off for up to 30 s. A connection that never
+                            finishes a Hello (idle for the 2 s Hello budget, closed early, a failed TLS
+                            handshake or one not done within its own 5 s) counts as a failure for its
+                            address too, but not for loopback. For test rigs only
+  --idle-timeout <seconds>  Close a connection that has sent no request for this long once it is a session
+                            (after its Hello with a token; from the start without one). Every request,
+                            polled ones included, restarts it. Default: 300 (5 minutes); 0 turns it off.
+                            Without it one idle client keeps the host from everyone else
+  --write-timeout <seconds> Close a connection when a response makes no write progress for this long (the
+                            client isn't reading). Progress restarts it, so a slow reader isn't cut off.
+                            Default: 30; at least 1
+  --max-session <minutes>   Close a session older than this, whatever it does. Default: off (0)
   --log-level <level>       The least severe level written to stderr (and --log-file): info (the default),
                             warn or error. Every line is "<UTC time> <LEVEL> <message>", one per event,
                             in every build type; the audit, rate-limit and tokens-reload lines are Info or Warn

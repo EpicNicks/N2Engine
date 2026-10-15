@@ -48,8 +48,8 @@ namespace Renderer::Common
      *   depth-writing state, so it can be reordered. It has no blending: RenderState::blend is ignored.
      *   Its text shader alpha-tests and writes depth wherever a draw depth-tests (see
      *   GetStandardTextShader); text is still ordered by its submitted (Transparent) state.
-     * - VulkanRenderer renders into its own offscreen target and draws in submission order, like OpenGL (#43). So far
-     *   (stage B) it draws the unlit shader's materials only; lit shading, blending and text are still to come.
+     * - VulkanRenderer renders into its own offscreen target and draws in submission order, like OpenGL (#43). It
+     *   draws the unlit and lit shaders' materials with OpenGL's blending (stages B-D); text is still to come.
      */
     class IRenderer
     {

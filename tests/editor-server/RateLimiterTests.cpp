@@ -570,6 +570,60 @@ TEST(RateLimiterTest, AUserBackoffIsNotAFailureAndDoesNotChangeTheAddress)
 
 // ==================== Policy ====================
 
+// ==================== A connection that never finished a Hello ====================
+
+TEST(RateLimiterTest, AnUnfinishedHelloCountsLikeAFailedHelloForItsAddress)
+{
+    FakeClock clock;
+    RateLimiter limiter({}, clock.Get());
+
+    // Two are free, the third starts the same 1 s backoff a wrong token would, naming no user
+    EXPECT_FALSE(limiter.RecordUnfinishedHello(Attacker).address.has_value());
+    EXPECT_FALSE(limiter.RecordUnfinishedHello(Attacker).address.has_value());
+    const auto third = limiter.RecordUnfinishedHello(Attacker);
+    ASSERT_TRUE(third.address.has_value());
+    EXPECT_EQ(third.address->duration, milliseconds(1000));
+    EXPECT_EQ(third.address->failures, 3u);
+    EXPECT_FALSE(third.loopback.has_value());
+    EXPECT_FALSE(third.user.has_value());
+    EXPECT_EQ(limiter.UserCount(), 0u);
+
+    EXPECT_FALSE(limiter.AdmitConnection(Attacker).allowed);
+    EXPECT_TRUE(limiter.AdmitConnection(OtherPeer).allowed);
+
+    // And it adds to what wrong tokens did: one more failure of either kind doubles the backoff
+    clock.Advance(milliseconds(1000));
+    const auto wrongToken = limiter.RecordFailure(Attacker, std::nullopt);
+    ASSERT_TRUE(wrongToken.address.has_value());
+    EXPECT_EQ(wrongToken.address->duration, milliseconds(2000));
+    EXPECT_EQ(wrongToken.address->failures, 4u);
+}
+
+TEST(RateLimiterTest, AnUnfinishedHelloFromLoopbackIsNotRecordedAtAll)
+{
+    FakeClock clock;
+    RateLimiter limiter({}, clock.Get());
+
+    // Behind a tunnel or a proxy every peer is loopback: a mere connect must not feed the global backoff (it would make
+    // the lockout of every user a matter of opening sockets), so nothing is recorded however many there are
+    for (int i = 0; i < 50; ++i)
+    {
+        const auto outcome = limiter.RecordUnfinishedHello(i % 2 == 0 ? Loopback : PeerAddress::IPv4(127, 7, 7, 7));
+        EXPECT_FALSE(outcome.address.has_value());
+        EXPECT_FALSE(outcome.loopback.has_value());
+        EXPECT_FALSE(outcome.user.has_value());
+    }
+    EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
+    EXPECT_EQ(limiter.AddressCount(), 0u);
+
+    // ... and the wrong-token rule for loopback is as it was: ten in a minute
+    Fail(limiter, Loopback, 9);
+    EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
+    const auto tenth = limiter.RecordFailure(Loopback, std::nullopt);
+    ASSERT_TRUE(tenth.loopback.has_value());
+    EXPECT_FALSE(limiter.AdmitConnection(Loopback).allowed);
+}
+
 TEST(RateLimiterTest, ThePolicyIsTheDocumentedOne)
 {
     const RateLimitPolicy policy;

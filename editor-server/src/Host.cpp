@@ -465,9 +465,31 @@ namespace N2Engine::Editor
             }
             else if (server.RequiresAccessToken())
             {
-                Logger::Info("Failed-Hello rate limiting is on: an address that fails 3 Hellos is backed off (1 s, doubling "
-                             "to 5 min) and closed at accept; loopback shares one backoff; users in a tokens file have one "
-                             "of up to 30 s");
+                Logger::Info("Failed-Hello rate limiting is on: an address that fails 3 Hellos, or connects and never "
+                             "finishes one, is backed off (1 s, doubling to 5 min) and closed at accept; loopback shares "
+                             "one backoff for wrong tokens only; users in a tokens file have one of up to 30 s");
+            }
+            // The deadlines that keep one connection from holding the one-at-a-time server (the pre-Hello budget is
+            // EditorServer::DefaultHelloTimeout, 2 s, from the end of the TLS handshake, which has its own
+            // DefaultTlsHandshakeTimeout, 5 s; neither is a flag)
+            (void)server.SetIdleTimeout(std::chrono::seconds(options.idleTimeoutSeconds));
+            (void)server.SetWriteTimeout(std::chrono::seconds(options.writeTimeoutSeconds));
+            (void)server.SetMaxSessionAge(std::chrono::minutes(options.maxSessionMinutes));
+            Logger::Info(std::format("Connection limits: {}{} to say Hello, idle timeout {}, write timeout {} s, "
+                                     "maximum session {}",
+                                     options.tls ? std::format("{} ms for the TLS handshake, then ",
+                                                               server.GetTlsHandshakeTimeout().count())
+                                                 : std::string(),
+                                     std::format("{} ms", server.GetHelloTimeout().count()),
+                                     options.idleTimeoutSeconds > 0 ? std::format("{} s", options.idleTimeoutSeconds)
+                                                                    : std::string("off"),
+                                     options.writeTimeoutSeconds,
+                                     options.maxSessionMinutes > 0 ? std::format("{} min", options.maxSessionMinutes)
+                                                                   : std::string("off")));
+            if (options.idleTimeoutSeconds == 0)
+            {
+                Logger::Warn("The idle timeout is off (--idle-timeout 0): a client that connects and goes quiet keeps "
+                             "every other client out until it disconnects");
             }
             if (options.readOnly)
             {
