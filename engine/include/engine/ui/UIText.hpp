@@ -37,7 +37,7 @@ namespace N2Engine::UI
      * changes only the model matrix. The mesh is rebuilt (updated in place) only when the text, font, size,
      * alignment, spacing, wrapping or, with wrap on, the rect's width changes. Each font's atlas is one
      * texture per renderer, shared with every TextRenderer and UIText using that font there. Where the text
-     * shader is null (Vulkan until #43) nothing is drawn and one warning is logged per process.
+     * shader is null (a renderer or a build without it) nothing is drawn and one warning is logged per process.
      */
     class UIText final : public UIGraphic
     {
