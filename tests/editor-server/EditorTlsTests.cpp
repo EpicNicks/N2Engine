@@ -38,6 +38,8 @@
 #include <mbedtls/x509_crt.h>
 #include <psa/crypto.h>
 
+#include "TestSockets.hpp"
+
 using namespace N2Engine;
 using namespace N2Engine::Editor;
 using namespace N2Engine::Editor::Protocol;
@@ -246,6 +248,12 @@ namespace
         TlsClient &operator=(const TlsClient &) = delete;
 
         [[nodiscard]] bool IsConnected() const { return _connected; }
+
+        /// A small receive buffer (after connecting): a client that then never reads stalls the sender after a few KiB
+        void ShrinkReceiveBuffer(int bytes)
+        {
+            N2TestSockets::SetReceiveBuffer(static_cast<N2TestSockets::Handle>(_net.fd), bytes);
+        }
 
         /// 0 when the handshake completed, otherwise the library's error
         int Handshake()
@@ -1008,6 +1016,66 @@ TEST(EditorTlsServerTest, AHandshakeThatNeverFinishesCountsAsAFailedHelloForItsA
     }
     EXPECT_EQ(server.RateLimitedConnections(), 1u);
 
+    server.Stop();
+}
+
+TEST(EditorTlsServerTest, ATlsClientThatNeverReadsCantBlockTheServerPastTheWriteDeadline)
+{
+    // The TLS WantWrite branch of Send: the response is larger than the buffers on both sides and the client reads none
+    // of it. The write deadline is on the injected connection clock, so nothing waits 30 s.
+    LogCapture capture;
+    TempDirectory directory;
+    std::atomic<int64_t> connectionMs{1000};
+    EditorServer server;
+    ASSERT_TRUE(server.SetConnectionClock(
+        [&connectionMs] { return std::chrono::steady_clock::time_point(std::chrono::milliseconds(connectionMs.load())); }));
+    ASSERT_TRUE(server.SetIdleTimeout(std::chrono::milliseconds(0))); // only the write deadline is under test
+    ASSERT_TRUE(server.SetAcceptedSocketHook([](int socket)
+                                             { N2TestSockets::SetSendBuffer(static_cast<N2TestSockets::Handle>(socket), 4096); }));
+    const auto enabled = server.EnableTls(directory.Path());
+    ASSERT_TRUE(enabled.has_value()) << (enabled ? "" : enabled.error());
+    ASSERT_TRUE(server.Start(0));
+    {
+        MainLoop loop(server);
+
+        TlsClient client(server.GetPort());
+        ASSERT_TRUE(client.IsConnected());
+        client.ShrinkReceiveBuffer(4096);
+        ASSERT_EQ(client.Handshake(), 0);
+
+        // CreateScript answers with a template holding the name about ten times: ~160 KB for a 16 KiB name. Many of them
+        // go in at once and none is read.
+        BufferWriter name;
+        name.WriteString(std::string(16 * 1024, 'n'));
+        const std::vector<uint8_t> request = Frame(CommandType::CreateScript, name.Release());
+        for (int i = 0; i < 12; ++i)
+        {
+            ASSERT_TRUE(client.Send(request)) << i;
+        }
+
+        const auto stalled = [&]
+        {
+            connectionMs += 31000;
+            for (const std::string &line : capture.Lines())
+            {
+                if (line.find("no write progress") != std::string::npos)
+                    return true;
+            }
+            return false;
+        };
+        EXPECT_TRUE(WaitFor(stalled)) << "the server never gave up on the client that isn't reading";
+    }
+
+    // The server is free again: a second client connects and is answered
+    {
+        MainLoop loop(server);
+        TlsClient next(server.GetPort());
+        ASSERT_TRUE(next.IsConnected());
+        ASSERT_EQ(next.Handshake(), 0);
+        const auto hello = next.Roundtrip(Frame(CommandType::Hello, HelloPayload("")));
+        ASSERT_TRUE(hello.has_value());
+        EXPECT_EQ(hello->type, ServerInfoType);
+    }
     server.Stop();
 }
 

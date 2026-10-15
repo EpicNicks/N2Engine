@@ -863,6 +863,8 @@ namespace N2Engine::Editor
         // Whether the last Hello (run on the main thread) was refused for its token, as opposed to its version or its
         // shape: the network thread clears it before queueing a Hello and reads it once the command's future is ready
         std::atomic<bool> _helloTokenRefused{false};
+        // Whether the last Hello was refused only for its protocol version (the token was right): not counted
+        std::atomic<bool> _helloVersionRefused{false};
         // TLS: the identity is set before Start only. The session is the current connection's, made and used on the
         // network thread only (one client at a time); it is declared after the identity, so it goes first.
         std::unique_ptr<EditorTlsServer> _tlsServer;

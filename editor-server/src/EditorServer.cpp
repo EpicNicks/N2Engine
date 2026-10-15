@@ -2569,7 +2569,7 @@ namespace N2Engine::Editor
             if (isHello)
             {
                 _helloTokenRefused = false;
-                helloRun = true;
+                _helloVersionRefused = false;
             }
 
             // Everything else touches engine state, so it runs on the main thread (see ProcessCommands)
@@ -2609,9 +2609,21 @@ namespace N2Engine::Editor
                 }
                 else if (_helloTokenRefused)
                 {
+                    helloRun = true;
                     const std::optional<std::string_view> named =
                         helloUser.has_value() ? std::optional<std::string_view>(*helloUser) : std::nullopt;
                     LogRateLimitOutcome(_rateLimiter->RecordFailure(_peer, named), helloUser.value_or(std::string{}));
+                }
+                else if (_helloVersionRefused)
+                {
+                    helloRun = true; // a good token, an old client: not a failure of the address
+                }
+                else
+                {
+                    // Refused for anything else (a Hello that wouldn't even parse): it held the thread and proved
+                    // nothing, so it counts like an unfinished one, before its answer is sent
+                    helloRun = true;
+                    CountUnfinishedHello();
                 }
             }
 
@@ -3216,6 +3228,7 @@ namespace N2Engine::Editor
         const std::string claimedUser = LoggableClaimedUser(cmd.user);
         const std::string peerSuffix = PeerSuffix();
         _helloTokenRefused = false;
+        _helloVersionRefused = false;
         BufferWriter response;
 
         // The token first, so a client without it learns nothing else. A wrong user and a wrong token are the same
@@ -3253,6 +3266,7 @@ namespace N2Engine::Editor
                                   "must match)", ProtocolVersion, clientVersionText)
                     : std::format("Invalid protocol version '{}' (expected major.minor.patch; this server speaks {})",
                                   clientVersionText, ProtocolVersion);
+            _helloVersionRefused = true;
             Logger::Warn("Refused Hello from editor client '" + clientName + "'" + whoInParentheses + ": " + message +
                          peerSuffix);
             WriteError(response, message);
