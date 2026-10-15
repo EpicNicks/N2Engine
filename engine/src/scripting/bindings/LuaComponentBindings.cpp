@@ -32,6 +32,7 @@
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/Rigidbody.hpp"
+#include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/rendering/Light.hpp"
@@ -113,6 +114,7 @@ namespace N2Engine::Scripting::Bindings
                 {"MeshRenderer", MakeAccess<Rendering::MeshRenderer>()},
                 {"TextRenderer", MakeAccess<Rendering::TextRenderer>()},
                 {"ParticleSystem", MakeAccess<Rendering::ParticleSystem>()},
+                {"SoftBody", MakeAccess<Physics::SoftBody>()},
                 {"Light", MakeAccess<Rendering::Light>()},
                 {"AudioSource", MakeAccess<Audio::AudioSource>()},
                 {"AudioListener", MakeAccess<Audio::AudioListener>()},
@@ -813,6 +815,61 @@ namespace N2Engine::Scripting::Bindings
                 }
                 return TexturePathForLua(*ps->texture);
             }
+        );
+
+        // ===== SoftBody =====
+        // Makes the MeshRenderer on the same object squash and wobble (see docs/soft-bodies.html). The body exists
+        // only while the scene plays. Settings apply at once, except Backend and Resolution, which are read when the
+        // body starts (it attaches); Reset restarts it.
+        using SoftBodyRef = ComponentRef<Physics::SoftBody>;
+        BindComponentType<Physics::SoftBody>(
+            lua, "SoftBody",
+            // Adds a velocity (world units per second) to the whole body
+            "AddVelocity", [](const SoftBodyRef &c, const Math::Vector3 &velocity) { c.Pin()->AddVelocity(velocity); },
+            // Back to the rest shape at the object's current pose, at rest
+            "Reset", [](const SoftBodyRef &c) { c.Pin()->Reset(); },
+            // The backend that simulates this body: "CPU" or "PhysX"; "" when it is inert or hasn't started
+            "GetActiveBackendName", [](const SoftBodyRef &c) { return std::string(c.Pin()->GetActiveBackendName()); },
+            // "Auto", "PhysX" or "CPU"; an unknown name raises an error and changes nothing
+            "SetBackend", [](const SoftBodyRef &c, const std::string &name)
+            {
+                c.Pin()->backend = ParseEnumName<SoftBodies::SoftBodyBackend>(name, "SoftBody:SetBackend");
+            },
+            "GetBackend", [](const SoftBodyRef &c) { return EnumName(c.Pin()->backend); },
+            "SetResolution", [](const SoftBodyRef &c, const int value) { c.Pin()->resolution = value; },
+            "GetResolution", [](const SoftBodyRef &c) { return c.Pin()->resolution; },
+            "SetDensity", [](const SoftBodyRef &c, const float value) { c.Pin()->density = value; },
+            "GetDensity", [](const SoftBodyRef &c) { return c.Pin()->density; },
+            "SetStiffness", [](const SoftBodyRef &c, const float value) { c.Pin()->stiffness = value; },
+            "GetStiffness", [](const SoftBodyRef &c) { return c.Pin()->stiffness; },
+            "SetPoisson", [](const SoftBodyRef &c, const float value) { c.Pin()->poisson = value; },
+            "GetPoisson", [](const SoftBodyRef &c) { return c.Pin()->poisson; },
+            "SetDamping", [](const SoftBodyRef &c, const float value) { c.Pin()->damping = value; },
+            "GetDamping", [](const SoftBodyRef &c) { return c.Pin()->damping; },
+            "SetFriction", [](const SoftBodyRef &c, const float value) { c.Pin()->friction = value; },
+            "GetFriction", [](const SoftBodyRef &c) { return c.Pin()->friction; },
+            "SetSolverIterations", [](const SoftBodyRef &c, const int value) { c.Pin()->solverIterations = value; },
+            "GetSolverIterations", [](const SoftBodyRef &c) { return c.Pin()->solverIterations; },
+            "SetGround", [](const SoftBodyRef &c, const bool enabled, const float height)
+            {
+                const auto body = c.Pin();
+                body->collideWithGround = enabled;
+                body->groundHeight = height;
+            },
+            "GetGround", [](const SoftBodyRef &c)
+            {
+                const auto body = c.Pin();
+                return std::make_tuple(body->collideWithGround, body->groundHeight);
+            },
+            // The PhysX backend's settings ("CoRotational" or "NeoHookean", and self collision); the CPU backend
+            // ignores them
+            "SetMaterialModel", [](const SoftBodyRef &c, const std::string &name)
+            {
+                c.Pin()->materialModel = ParseEnumName<Physics::SoftMaterialModel>(name, "SoftBody:SetMaterialModel");
+            },
+            "GetMaterialModel", [](const SoftBodyRef &c) { return EnumName(c.Pin()->materialModel); },
+            "SetSelfCollision", [](const SoftBodyRef &c, const bool value) { c.Pin()->selfCollision = value; },
+            "GetSelfCollision", [](const SoftBodyRef &c) { return c.Pin()->selfCollision; }
         );
 
         using LuaComponentRef = ComponentRef<LuaComponent>;

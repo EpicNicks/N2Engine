@@ -730,7 +730,7 @@ TEST(ReflectionRegistryTest, EveryBuiltinTypeIsDescribableAndItsFieldsAreItsSave
 {
     const std::vector<std::string> builtins = {
         "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "Light", "AudioSource", "AudioListener",
-        "CubeRenderer", "SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem",
+        "CubeRenderer", "SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody",
         "LuaComponent", "Canvas", "RectTransform", "Image", "UIText", "Button"};
     auto &registry = ComponentRegistry::Instance();
 

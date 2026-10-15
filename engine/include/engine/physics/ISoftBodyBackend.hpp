@@ -2,12 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string_view>
 #include <vector>
 
 #include <math/Vector3.hpp>
 
 #include "engine/physics/BackendHandle.hpp"
+#include "engine/physics/TetMeshData.hpp"
 
 namespace N2Engine::Physics
 {
@@ -47,13 +49,22 @@ namespace N2Engine::Physics
         float damping = 0.01f;
         float friction = 0.5f;
         std::uint32_t solverIterations = 8;
+        /// World gravity (the CPU backend applies it; a GPU backend simulates inside the physics scene, which has its own)
+        Math::Vector3 gravity{0.0f, -9.81f, 0.0f};
+        /// The body collides with the plane y = groundHeight (world space). The only collision the CPU backend does.
+        bool groundEnabled = false;
+        float groundHeight = 0.0f;
     };
 
-    /// What CreateBody takes. The tetrahedral mesh and the render-vertex embedding join it with the component, in
-    /// the stage that adds them; the seam only needs the parameters to be created and addressed.
+    /// What CreateBody takes: the tetrahedral mesh with the render-vertex embedding (shared, never changed; a
+    /// backend refuses a null one), where the body sits, and its parameters
     struct SoftBodyDesc
     {
         SoftBodyParams params;
+        std::shared_ptr<const TetMeshData> tetMesh;
+        /// The mesh's local space to world space: the top three rows of the 4x4 matrix, row-major (translation in
+        /// elements 3, 7 and 11). The body starts at its rest shape under this transform.
+        float localToWorld[12] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
     };
 
     /**
@@ -87,6 +98,13 @@ namespace N2Engine::Physics
         [[nodiscard]] virtual SoftBodyHandle CreateBody(const SoftBodyDesc &desc) = 0;
         virtual void Destroy(SoftBodyHandle handle) = 0;
         virtual void SetParams(SoftBodyHandle handle, const SoftBodyParams &params) = 0;
+        /// Adds `velocity` (world units per second) to every node of the body: a push for scripts. Ignored for an
+        /// unknown handle. A backend that can't do it keeps the default, which does nothing.
+        virtual void AddVelocity(SoftBodyHandle handle, const Math::Vector3 &velocity)
+        {
+            static_cast<void>(handle);
+            static_cast<void>(velocity);
+        }
 
         /**
          * Advances the simulation by `dt` seconds. A CPU backend does its work here, and its owner calls this once

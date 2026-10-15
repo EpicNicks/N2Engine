@@ -11,6 +11,7 @@
 #include "engine/physics/BoxCollider.hpp"
 #include "engine/physics/CapsuleCollider.hpp"
 #include "engine/physics/Rigidbody.hpp"
+#include "engine/physics/SoftBody.hpp"
 #include "engine/physics/SphereCollider.hpp"
 #include "engine/rendering/Light.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
@@ -57,6 +58,7 @@ namespace N2Engine
         Add<Rendering::MeshRenderer>(registry, "MeshRenderer");
         Add<Rendering::TextRenderer>(registry, "TextRenderer");
         Add<Rendering::ParticleSystem>(registry, "ParticleSystem");
+        Add<Physics::SoftBody>(registry, "SoftBody");
         Add<Scripting::LuaComponent>(registry, "LuaComponent");
         Add<UI::Canvas>(registry, "Canvas");
         Add<UI::RectTransform>(registry, "RectTransform");
