@@ -14,8 +14,10 @@ namespace N2Engine::JsonLimits
     /// The deepest GameObject hierarchy a scene or prefab may have, the root being level 1. GameObject::Deserialize
     /// refuses a deeper one, and a reparent that would make one is refused. A model's node tree can be as deep as the
     /// importers allow (kMaxNodeDepth, 256 levels) and is placed under a few parents of a scene, so the cap must stay
-    /// at least a margin above that; it is also what keeps the recursive walks of a loaded tree (Serialize, SetScene,
-    /// Find, prefab instantiate) inside a 1 MiB stack (MSVC Debug), which the tests prove.
+    /// at least a margin above that. It is also what keeps the recursive walks of a loaded tree (Deserialize, Serialize,
+    /// SetScene, Find), one small frame per GameObject level, inside a 1 MiB stack (MSVC Debug), which the tests prove.
+    /// nlohmann's dump and copy recurse once per JSON level with far bigger frames, so scene JSON is dumped and copied
+    /// with IterativeDump and IterativeCopy (below), whose stack use does not grow with the depth.
     inline constexpr std::size_t MaxHierarchyDepth = 512;
 
     /// The deepest nesting scene, prefab and snapshot JSON text may have: every GameObject level is two JSON levels
@@ -102,5 +104,128 @@ namespace N2Engine::JsonLimits
     inline bool SceneValueTooDeep(const nlohmann::json &value)
     {
         return NestingDepth(value) > MaxSceneJsonDepth;
+    }
+
+    /// value.dump(indent, indentChar, ensureAscii, errorHandler), byte for byte, without recursion. nlohmann's own
+    /// dump calls itself once per nesting level (about 2 KB of stack each in an MSVC Debug build), so scene JSON at the
+    /// hierarchy cap would overflow a 1 MiB stack; this one keeps the open arrays and objects on the heap. Scalars,
+    /// empty containers and object keys are still written by nlohmann's serializer (none of them nests), so number
+    /// formatting, string escaping and the error handler behave exactly as in dump. Use it for scene, prefab and
+    /// snapshot JSON, and for anything else that can be as deep.
+    inline std::string IterativeDump(const nlohmann::json &value, const int indent = -1, const char indentChar = ' ',
+                                     const bool ensureAscii = false,
+                                     const nlohmann::json::error_handler_t errorHandler =
+                                         nlohmann::json::error_handler_t::strict)
+    {
+        std::string out;
+        nlohmann::detail::serializer<nlohmann::json> leaves(nlohmann::detail::output_adapter<char, std::string>(out),
+                                                            indentChar, errorHandler);
+        const bool pretty = indent >= 0;
+        const unsigned int step = pretty ? static_cast<unsigned int>(indent) : 0u;
+
+        // An open array or object: the next element to write, and the indent of its closing bracket
+        struct Open
+        {
+            const nlohmann::json *container;
+            nlohmann::json::const_iterator next;
+            unsigned int indent;
+            bool first;
+        };
+        std::vector<Open> open;
+
+        // Opens a non-empty container (the stack holds it until it closes); writes anything else whole
+        const auto begin = [&](const nlohmann::json &item, const unsigned int currentIndent)
+        {
+            if (item.is_structured() && !item.empty())
+            {
+                out += item.is_object() ? '{' : '[';
+                if (pretty)
+                    out += '\n';
+                open.push_back(Open{&item, item.cbegin(), currentIndent, true});
+            }
+            else
+            {
+                leaves.dump(item, pretty, ensureAscii, step, currentIndent);
+            }
+        };
+
+        begin(value, 0);
+        while (!open.empty())
+        {
+            Open &top = open.back();
+            if (top.next == top.container->cend())
+            {
+                if (pretty)
+                {
+                    out += '\n';
+                    out.append(top.indent, indentChar);
+                }
+                out += top.container->is_object() ? '}' : ']';
+                open.pop_back();
+                continue;
+            }
+            if (!top.first)
+                out += pretty ? ",\n" : ",";
+            top.first = false;
+            const unsigned int childIndent = top.indent + step;
+            if (pretty)
+                out.append(childIndent, indentChar);
+            if (top.container->is_object())
+            {
+                // The key as dump writes it: a JSON string, escaped by the same serializer
+                leaves.dump(nlohmann::json(top.next.key()), false, ensureAscii, 0);
+                out += pretty ? ": " : ":";
+            }
+            const nlohmann::json &child = *top.next;
+            ++top.next;
+            begin(child, childIndent); // may grow `open`, so `top` is not used after this
+        }
+        return out;
+    }
+
+    /// A deep copy of value (equal to it under ==), made without recursion: nlohmann's copy constructor calls itself
+    /// once per nesting level, as its dump does. Use it wherever scene, prefab or snapshot JSON is copied.
+    inline nlohmann::json IterativeCopy(const nlohmann::json &value)
+    {
+        // A scalar or an empty container copies without recursion; a non-empty container starts empty and is filled
+        const auto shell = [](const nlohmann::json &item)
+        {
+            return item.is_structured() && !item.empty() ? nlohmann::json(item.type()) : nlohmann::json(item);
+        };
+
+        nlohmann::json copy = shell(value);
+        // Pairs of (source, its copy) whose elements are still to be copied. A copy's address is stable once pushed:
+        // object elements are map nodes, and an array's elements are all added before any of them is pushed.
+        std::vector<std::pair<const nlohmann::json *, nlohmann::json *>> pending;
+        if (value.is_structured() && !value.empty())
+            pending.emplace_back(&value, &copy);
+        while (!pending.empty())
+        {
+            const auto [source, target] = pending.back();
+            pending.pop_back();
+            if (source->is_object())
+            {
+                for (auto item = source->cbegin(); item != source->cend(); ++item)
+                {
+                    nlohmann::json &element = ((*target)[item.key()] = shell(item.value()));
+                    if (item->is_structured() && !item->empty())
+                        pending.emplace_back(&item.value(), &element);
+                }
+            }
+            else
+            {
+                auto &elements = target->get_ref<nlohmann::json::array_t &>();
+                elements.reserve(source->size());
+                for (const nlohmann::json &item : *source)
+                    elements.push_back(shell(item));
+                for (std::size_t index = 0; index < elements.size(); ++index)
+                {
+                    const nlohmann::json &item = (*source)[index];
+                    if (item.is_structured() && !item.empty())
+                        pending.emplace_back(&item, &elements[index]);
+                }
+            }
+        }
+        return copy;
     }
 }

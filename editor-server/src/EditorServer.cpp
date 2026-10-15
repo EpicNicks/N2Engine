@@ -195,10 +195,11 @@ namespace N2Engine::Editor
             return std::move(text).str();
         }
 
-        /// A scene's JSON as its file holds it: indented by 2, ending in a newline (diffs well under version control)
+        /// A scene's JSON as its file holds it: indented by 2, ending in a newline (diffs well under version control).
+        /// Dumped without recursion (the same text as nlohmann's dump): a scene can nest as deep as its cap.
         std::string SceneFileText(const nlohmann::json &scene)
         {
-            return scene.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+            return JsonLimits::IterativeDump(scene, 2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
         }
 
         // ==================== Assets ====================
@@ -839,11 +840,12 @@ namespace N2Engine::Editor
         }
 
         /// JSON kept as text in a step: a parsed nlohmann::json costs several times its text, which the history's byte
-        /// limit would not see, so a step holds the text (as a snapshot does) and parses it when it runs
+        /// limit would not see, so a step holds the text (as a snapshot does) and parses it when it runs. Dumped
+        /// without recursion: a step can hold a whole subtree, as deep as the hierarchy cap.
         std::shared_ptr<const std::string> DumpJson(const nlohmann::json &value)
         {
             return std::make_shared<const std::string>(
-                value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+                JsonLimits::IterativeDump(value, -1, ' ', false, nlohmann::json::error_handler_t::replace));
         }
 
         std::expected<nlohmann::json, std::string> ParseStored(const std::string &text)
@@ -1407,7 +1409,7 @@ namespace N2Engine::Editor
             resolver.SetFallback(&sceneReferences);
             // Deserialize sets the active flag without telling the component (OnActiveFlagChanged), which SetActive does
             // as SetComponentFields did: so the flag is taken out of what is deserialised and set after it
-            nlohmann::json withoutActive = state;
+            nlohmann::json withoutActive = JsonLimits::IterativeCopy(state); // component data can nest deep
             std::optional<bool> active;
             if (withoutActive.is_object())
             {
@@ -3631,8 +3633,9 @@ namespace N2Engine::Editor
         nlohmann::json sceneJson = SceneManager::GetCurSceneRef().Serialize();
         SceneManager::UpdateScene(SceneManager::GetCurSceneIndex(), sceneJson);
 
-        // dump(): passing the json itself converted it to a string, which throws for an object
-        WriteSceneData(response, sceneJson.dump());
+        // dump(): passing the json itself converted it to a string, which throws for an object. Without recursion, as
+        // the scene can nest as deep as its cap.
+        WriteSceneData(response, JsonLimits::IterativeDump(sceneJson));
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
@@ -3703,7 +3706,7 @@ namespace N2Engine::Editor
             Scene &scene = SceneManager::GetCurSceneRef();
             nlohmann::json sceneJson = scene.Serialize();
 
-            WriteSceneData(response, sceneJson.dump());
+            WriteSceneData(response, JsonLimits::IterativeDump(sceneJson)); // the scene can nest as deep as its cap
             SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
         }
         catch (const std::exception &e)
@@ -5879,7 +5882,8 @@ namespace N2Engine::Editor
 
     std::string EditorServer::SnapshotScene(const Scene &scene)
     {
-        return scene.Serialize().dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        // Without recursion: the scene can nest as deep as its cap
+        return JsonLimits::IterativeDump(scene.Serialize(), -1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     EditOutcome EditorServer::RestoreSceneSnapshot(const std::string &snapshot)

@@ -724,7 +724,7 @@ json Scene::Serialize() const
     {
         roots.push_back(root->Serialize());
     }
-    j["rootGameObjects"] = roots;
+    j["rootGameObjects"] = std::move(roots); // moved: copying the tree would recurse once per JSON level
 
     return j;
 }
@@ -769,7 +769,7 @@ std::unique_ptr<Scene> Scene::FromJSON(const nlohmann::json &j, bool validate)
     {
         if (!j.contains("name") || !j.contains("rootGameObjects") || !j["rootGameObjects"].is_array())
         {
-            Logger::Error("Invalid scene json provided, missing name or rootGameObjects\n" + j.dump());
+            Logger::Error("Invalid scene json provided, missing name or rootGameObjects\n" + JsonLimits::IterativeDump(j));
             return nullptr;
         }
         // GameObjects being invalid will error if the Component type is not present in the resolver

@@ -959,9 +959,10 @@ json GameObject::SerializeSelf() const
         json compJson;
         compJson["type"] = component->GetTypeName();
         compJson["data"] = component->Serialize();
-        components.push_back(compJson);
+        components.push_back(std::move(compJson));
     }
-    j["components"] = components;
+    // Moved, not copied: a copy recurses once per JSON level, and a component's data can nest deep
+    j["components"] = std::move(components);
 
     return j;
 }

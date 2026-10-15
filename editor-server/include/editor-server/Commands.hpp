@@ -83,10 +83,12 @@ namespace N2Engine::Editor::Protocol
     }
 
     /// json: a string holding the value's compact JSON text (keys sorted, as nlohmann::json keeps them). Invalid
-    /// UTF-8 in a string value is replaced (U+FFFD) rather than throwing.
+    /// UTF-8 in a string value is replaced (U+FFFD) rather than throwing. Dumped without recursion (the same text as
+    /// nlohmann's dump): a response can carry component data, which can nest as deep as scene JSON may.
     inline void WriteJson(BufferWriter &w, const nlohmann::json &value)
     {
-        w.WriteString(value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+        w.WriteString(N2Engine::JsonLimits::IterativeDump(value, -1, ' ', false,
+                                                          nlohmann::json::error_handler_t::replace));
     }
 
     /// Throws nlohmann::json::parse_error for text that isn't JSON (ExecuteCommand turns it into an Error response)

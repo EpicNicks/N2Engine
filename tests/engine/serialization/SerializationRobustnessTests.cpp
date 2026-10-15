@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -544,7 +546,8 @@ TEST(SceneDepthTest, JsonTextAtTheCapIsKeptAndOnePastItIsRefusedBeforeParsing)
 TEST(SceneDepthTest, HierarchyJustUnderTheCapDeserializesSerializesAndDumps)
 {
     // The stack this runs on is the smallest the tests meet (MSVC Debug, 1 MiB for the main thread): Deserialize,
-    // Serialize, dump, and the walks over the tree must all fit it at the deepest allowed tree
+    // Serialize, the iterative dump and copy, and the walks over the tree must all fit it at the deepest allowed tree.
+    // (nlohmann's own recursive dump and copy do not: they overflow it at about 256 and 448 GameObject levels.)
     for (const std::size_t levels : {MaxHierarchyDepth - 1, MaxHierarchyDepth})
     {
         const json data = json::parse(TestJson::ChainText(levels));
@@ -555,10 +558,16 @@ TEST(SceneDepthTest, HierarchyJustUnderTheCapDeserializesSerializesAndDumps)
         EXPECT_EQ(root->GetChildrenRecursive().size(), levels - 1);
 
         const json saved = root->Serialize();
-        const std::string text = saved.dump();
+        const std::string text = JsonLimits::IterativeDump(saved);
         EXPECT_EQ(JsonLimits::NestingDepth(json::parse(text)), 2 * levels);
         EXPECT_FALSE(JsonLimits::SceneJsonTooDeep(text));
         EXPECT_EQ(ChainLevels(GameObject::Deserialize(json::parse(text))), levels) << "it loads again from its own text";
+
+        // as a scene file holds it (indented), and copied as SceneManager and InstantiatePrefab copy it
+        const std::string indented = JsonLimits::IterativeDump(saved, 2);
+        EXPECT_EQ(JsonLimits::IterativeDump(json::parse(indented)), text);
+        const json copy = JsonLimits::IterativeCopy(saved);
+        EXPECT_EQ(JsonLimits::IterativeDump(copy), text);
     }
 }
 
@@ -583,7 +592,7 @@ TEST(SceneDepthTest, SceneFromJsonLoadsTheDeepestAllowedSceneAndRefusesOnePastIt
     ASSERT_EQ(allowed->GetRootGameObjectCount(), 1u);
     EXPECT_EQ(ChainLevels(allowed->GetRootGameObjects().front()), MaxHierarchyDepth);
     EXPECT_NE(allowed->FindGameObject("leaf"), nullptr);
-    EXPECT_FALSE(allowed->Serialize().dump().empty());
+    EXPECT_FALSE(JsonLimits::IterativeDump(allowed->Serialize()).empty());
 
     EXPECT_EQ(Scene::FromJSON(json::parse(TestJson::SceneText(MaxHierarchyDepth + 1)), true), nullptr);
     EXPECT_EQ(Scene::FromJSON(json::parse(TestJson::SceneText(MaxHierarchyDepth + 1)), false), nullptr);
@@ -670,7 +679,154 @@ TEST(SceneDepthTest, ASerializedDeepestTreeStaysUnderTheTextCap)
     const GameObject::Ptr root = BuiltChain(MaxHierarchyDepth, &deepest);
     const auto scene = Scene::Create("Deepest");
     scene->AddRootGameObject(root);
-    const std::string text = scene->Serialize().dump();
+    const std::string text = JsonLimits::IterativeDump(scene->Serialize());
     EXPECT_FALSE(JsonLimits::SceneJsonTooDeep(text));
     EXPECT_LE(JsonLimits::NestingDepth(json::parse(text)), MaxSceneJsonDepth - 60);
+}
+
+// ============================================================================
+// IterativeDump and IterativeCopy (JsonLimits.hpp): nlohmann's dump and copy, without recursion
+// ============================================================================
+
+namespace
+{
+    // Every kind of value dump writes differently: escapes, UTF-8, every number type, empty containers, odd keys
+    json VariedJson()
+    {
+        json value = json::object();
+        value["string"] = "quote \" backslash \\ slash / newline \n tab \t cr \r bs \b ff \f ctrl \x01 \x1f"
+                          " del \x7f"; // split: "\x1fde" would be one hex escape
+        value["unicode"] = "caf\xC3\xA9 \xE2\x82\xAC \xF0\x9F\x98\x80";
+        value["int"] = -42;
+        value["intMin"] = std::numeric_limits<std::int64_t>::min();
+        value["intMax"] = std::numeric_limits<std::int64_t>::max();
+        value["uint"] = std::numeric_limits<std::uint64_t>::max();
+        value["zero"] = 0;
+        value["float"] = 3.14159;
+        value["third"] = 1.0 / 3.0;
+        value["small"] = 1e-300;
+        value["big"] = 1.5e300;
+        value["negativeZero"] = -0.0;
+        value["wholeFloat"] = 2.0;
+        value["nan"] = std::numeric_limits<double>::quiet_NaN();
+        value["infinity"] = std::numeric_limits<double>::infinity();
+        value["true"] = true;
+        value["false"] = false;
+        value["null"] = nullptr;
+        value["emptyArray"] = json::array();
+        value["emptyObject"] = json::object();
+        value[""] = "an empty key";
+        value["key \"with\" escapes\n\xC3\xA9"] = 1;
+        value["array"] = json::array({1, "two", 3.5, nullptr, json::array(), json::object(),
+                                      json::array({json::array({json::object({{"k", "v"}})})})});
+        value["nested"] = {{"a", {{"b", {{"c", json::array({true, false})}}}}}};
+        // a mixed chain of arrays and objects, moderately deep (nlohmann's own dump and copy are fine at this depth)
+        json chain = "bottom";
+        for (int level = 0; level < 40; ++level)
+        {
+            chain = level % 2 == 0 ? json::array({std::move(chain), level})
+                                   : json::object({{"level", level}, {"next", std::move(chain)}});
+        }
+        value["chain"] = std::move(chain);
+        return value;
+    }
+}
+
+TEST(JsonIterativeTest, DumpIsByteForByteNlohmannDump)
+{
+    const json value = VariedJson();
+    for (const int indent : {-1, 0, 1, 2, 4})
+    {
+        for (const bool ascii : {false, true})
+        {
+            EXPECT_EQ(JsonLimits::IterativeDump(value, indent, ' ', ascii), value.dump(indent, ' ', ascii))
+                << "indent " << indent << ", ensure_ascii " << ascii;
+        }
+    }
+    EXPECT_EQ(JsonLimits::IterativeDump(value, 1, '\t'), value.dump(1, '\t'));
+    EXPECT_EQ(JsonLimits::IterativeDump(value), value.dump()) << "the defaults are dump's";
+}
+
+TEST(JsonIterativeTest, DumpOfScalarsAndEmptyContainersIsNlohmannDump)
+{
+    const json values[] = {json(5), json(-5), json(5u), json(0.5), json("text"), json(true), json(nullptr),
+                           json::array(), json::object(), json::array({json::array()}), json::object({{"k", json::object()}})};
+    for (const json &value : values)
+    {
+        for (const int indent : {-1, 4})
+        {
+            EXPECT_EQ(JsonLimits::IterativeDump(value, indent), value.dump(indent)) << value.dump();
+        }
+    }
+}
+
+TEST(JsonIterativeTest, DumpHandlesInvalidUtf8AsDumpDoes)
+{
+    json value = json::object();
+    value["bad"] = "bad \xFF byte";
+    value["bad \xFE key"] = json::array({"\xC3"});
+    for (const int indent : {-1, 4})
+    {
+        EXPECT_THROW((void)JsonLimits::IterativeDump(value, indent), json::type_error);
+        for (const auto handler : {json::error_handler_t::replace, json::error_handler_t::ignore})
+        {
+            EXPECT_EQ(JsonLimits::IterativeDump(value, indent, ' ', false, handler), value.dump(indent, ' ', false, handler));
+            EXPECT_EQ(JsonLimits::IterativeDump(value, indent, ' ', true, handler), value.dump(indent, ' ', true, handler));
+        }
+    }
+}
+
+TEST(JsonIterativeTest, CopyIsADeepCopyThatKeepsEveryType)
+{
+    const json value = VariedJson();
+    json copy = JsonLimits::IterativeCopy(value);
+    // equal under == (NaN is never equal to itself, so it is compared apart)
+    json copyWithoutNan = copy;
+    json valueWithoutNan = value;
+    copyWithoutNan.erase("nan");
+    valueWithoutNan.erase("nan");
+    EXPECT_EQ(copyWithoutNan, valueWithoutNan);
+    EXPECT_TRUE(copy["nan"].is_number_float() && std::isnan(copy["nan"].get<double>()));
+    EXPECT_EQ(copy.dump(), value.dump()) << "the same text, so the same number types (2.0 stays a float)";
+    EXPECT_TRUE(copy["uint"].is_number_unsigned());
+    EXPECT_TRUE(copy["int"].is_number_integer() && !copy["int"].is_number_unsigned());
+    EXPECT_TRUE(copy["wholeFloat"].is_number_float());
+
+    // deep: changing the copy leaves the original as it was
+    copy["nested"]["a"]["b"]["c"][0] = "changed";
+    copy["array"][6][0][0]["k"] = 7;
+    EXPECT_EQ(value["nested"]["a"]["b"]["c"][0], json(true));
+    EXPECT_EQ(value["array"][6][0][0]["k"], json("v"));
+
+    for (const json &scalar : {json(5), json("s"), json(nullptr), json::array(), json::object(), json(1.5)})
+    {
+        EXPECT_EQ(JsonLimits::IterativeCopy(scalar).dump(), scalar.dump());
+    }
+}
+
+TEST(JsonIterativeTest, DumpAndCopyAtTheTextCapAndFarPastItUseNoRecursion)
+{
+    // at the JSON nesting cap: the text dumps back to itself, and a copy too
+    {
+        const std::string text = TestJson::NestedArrays(MaxSceneJsonDepth);
+        const json value = json::parse(text);
+        EXPECT_EQ(JsonLimits::IterativeDump(value), text);
+        EXPECT_EQ(JsonLimits::IterativeDump(JsonLimits::IterativeCopy(value)), text);
+        EXPECT_FALSE(JsonLimits::IterativeDump(value, 4).empty());
+    }
+    // a scene at the hierarchy cap, objects and arrays alternating: dump, parse again and dump give the same text
+    {
+        const json scene = json::parse(TestJson::SceneText(MaxHierarchyDepth));
+        const std::string text = JsonLimits::IterativeDump(scene);
+        EXPECT_EQ(JsonLimits::IterativeDump(json::parse(text)), text);
+        EXPECT_EQ(JsonLimits::IterativeDump(JsonLimits::IterativeCopy(scene)), text);
+        EXPECT_EQ(JsonLimits::IterativeDump(json::parse(JsonLimits::IterativeDump(scene, 2))), text);
+    }
+    // 100 000 levels, far deeper than any recursion would survive: the heap holds the open containers
+    {
+        const std::string text = TestJson::NestedArrays(100000);
+        const json value = json::parse(text);
+        EXPECT_EQ(JsonLimits::IterativeDump(value), text);
+        EXPECT_EQ(JsonLimits::IterativeDump(JsonLimits::IterativeCopy(value)), text);
+    }
 }

@@ -16,6 +16,7 @@
 #include "engine/Logger.hpp"
 
 #include "engine/serialization/FieldInfo.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/io/ResourceLoader.hpp"
@@ -435,7 +436,9 @@ namespace N2Engine
                     const nlohmann::json &array = j[name];
                     if (!array.is_array())
                     {
-                        Logger::Warn(std::format("Asset list '{}' isn't an array: {}", name, array.dump()));
+                        // Dumped without recursion: it is scene data, which can nest as deep as the scene cap
+                        Logger::Warn(std::format("Asset list '{}' isn't an array: {}", name,
+                                                 JsonLimits::IterativeDump(array)));
                         return;
                     }
                     assetRefs.reserve(array.size());
