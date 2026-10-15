@@ -35,7 +35,8 @@
 //    runs, the hash of the final state (to compare Windows and Linux by hand), and what changing the CPU worker
 //    thread count or the enhanced-determinism flag does (the vendor headers promise neither). Lines start with
 //    "[DETERMINISM]". ctest hides the output of a passing test, so run engine_tests directly (or ctest -V) and
-//    look at that prefix; the lines are also appended to $GITHUB_STEP_SUMMARY when it is set.
+//    look at that prefix (CI's "PhysX determinism numbers" step does, with --gtest_filter='*PhysXDeterminism*');
+//    the lines are also appended to $GITHUB_STEP_SUMMARY when it is set.
 //
 // A build without PhysX (N2ENGINE_USE_PHYSX=OFF) has nothing to run.
 
@@ -149,15 +150,15 @@ namespace
         }
     }
 
-    enum class Scene { FreeFall, BoxStack, Pile };
+    enum class SceneKind { FreeFall, BoxStack, Pile };
 
-    const char *Name(const Scene scene)
+    const char *Name(const SceneKind scene)
     {
         switch (scene)
         {
-        case Scene::FreeFall: return "free fall (1 sphere)";
-        case Scene::BoxStack: return "box stack (10 boxes)";
-        case Scene::Pile: return "pile (100 mixed bodies)";
+        case SceneKind::FreeFall: return "free fall (1 sphere)";
+        case SceneKind::BoxStack: return "box stack (10 boxes)";
+        case SceneKind::Pile: return "pile (100 mixed bodies)";
         }
         return "?";
     }
@@ -184,7 +185,7 @@ namespace
         int perturbBody = -1;                  // index into the dynamic bodies: +1 ulp on its initial x
     };
 
-    struct Run
+    struct SimRun
     {
         std::uint64_t finalHash = 0;      // the state after the last step
         std::uint64_t trajectoryHash = 0; // every step's state folded in
@@ -211,7 +212,7 @@ namespace
     }
 
     // Insertion order is part of the scene: ground first, then the dynamic bodies in a fixed order
-    std::vector<PhysicsBodyHandle> Build(PhysXBackend &backend, const Scene scene, const int perturbBody)
+    std::vector<PhysicsBodyHandle> Build(PhysXBackend &backend, const SceneKind scene, const int perturbBody)
     {
         const PhysicsMaterial material{};
         const Quaternion identity;
@@ -240,10 +241,10 @@ namespace
 
         switch (scene)
         {
-        case Scene::FreeFall:
+        case SceneKind::FreeFall:
             addBody(Vector3(0.0f, 10.0f, 0.0f), 1, Vector3(1.0f, 0.0f, 0.5f), Vector3(0.0f, 0.0f, 0.0f));
             break;
-        case Scene::BoxStack:
+        case SceneKind::BoxStack:
             for (int i = 0; i < 10; ++i)
             {
                 // a small alternating offset, so the stack is not perfectly aligned
@@ -251,7 +252,7 @@ namespace
                         0, Vector3::Zero, Vector3::Zero);
             }
             break;
-        case Scene::Pile:
+        case SceneKind::Pile:
         {
             Lcg lcg;
             for (int i = 0; i < 100; ++i)
@@ -272,9 +273,9 @@ namespace
     }
 
     // A fresh backend (a fresh PhysX foundation, SDK and scene) for each run
-    Run Simulate(const Scene scene, const Options &options)
+    SimRun Simulate(const SceneKind scene, const Options &options)
     {
-        Run run;
+        SimRun run;
         PhysXBackend backend;
         backend.SetDeterministic(options.deterministic);
         backend.SetWorkerThreadsForTesting(options.workerThreads);
@@ -321,7 +322,7 @@ namespace
         int bitIdenticalSteps = 0; // steps before the first bit-level difference in position
     };
 
-    Divergence Compare(const Run &a, const Run &b)
+    Divergence Compare(const SimRun &a, const SimRun &b)
     {
         Divergence result;
         bool differs = false;
@@ -458,15 +459,15 @@ TEST(PhysXDeterminismOptionTest, WithGpuOffThereIsNoWarning)
 
 // ===== Same-binary determinism (asserted) =====
 
-class PhysXDeterminismRunTest : public ::testing::TestWithParam<Scene>
+class PhysXDeterminismRunTest : public ::testing::TestWithParam<SceneKind>
 {
 };
 
 TEST_P(PhysXDeterminismRunTest, TwoFreshScenesEndBitIdentical)
 {
-    const Scene scene = GetParam();
-    const Run first = Simulate(scene, {});
-    const Run second = Simulate(scene, {});
+    const SceneKind scene = GetParam();
+    const SimRun first = Simulate(scene, {});
+    const SimRun second = Simulate(scene, {});
     ASSERT_TRUE(first.deterministicFlag);
     ASSERT_TRUE(second.deterministicFlag);
     ASSERT_EQ(first.workers, 0u);
@@ -492,14 +493,14 @@ TEST_P(PhysXDeterminismRunTest, TwoFreshScenesEndBitIdentical)
 }
 
 INSTANTIATE_TEST_SUITE_P(Scenes, PhysXDeterminismRunTest,
-                         ::testing::Values(Scene::FreeFall, Scene::BoxStack, Scene::Pile),
-                         [](const ::testing::TestParamInfo<Scene> &info)
+                         ::testing::Values(SceneKind::FreeFall, SceneKind::BoxStack, SceneKind::Pile),
+                         [](const ::testing::TestParamInfo<SceneKind> &info)
                          {
                              switch (info.param)
                              {
-                             case Scene::FreeFall: return std::string("FreeFall");
-                             case Scene::BoxStack: return std::string("BoxStack");
-                             case Scene::Pile: return std::string("Pile");
+                             case SceneKind::FreeFall: return std::string("FreeFall");
+                             case SceneKind::BoxStack: return std::string("BoxStack");
+                             case SceneKind::Pile: return std::string("Pile");
                              }
                              return std::string("Unknown");
                          });
@@ -512,9 +513,9 @@ TEST(PhysXDeterminismReportTest, OneUlpDivergenceAndOptionExperiments)
 {
     Report(std::string("one-ulp experiment: dt=1/60, ") + std::to_string(kSteps) +
            " steps, enhanced determinism on, 0 worker threads; one body's initial x moved by +1 ulp");
-    for (const Scene scene : {Scene::FreeFall, Scene::BoxStack, Scene::Pile})
+    for (const SceneKind scene : {SceneKind::FreeFall, SceneKind::BoxStack, SceneKind::Pile})
     {
-        const Run baseline = Simulate(scene, {});
+        const SimRun baseline = Simulate(scene, {});
         ASSERT_EQ(baseline.positions.size(), static_cast<std::size_t>(kSteps));
         const int bodyCount = static_cast<int>(baseline.positions.front().size());
 
@@ -528,7 +529,7 @@ TEST(PhysXDeterminismReportTest, OneUlpDivergenceAndOptionExperiments)
         {
             Options options;
             options.perturbBody = body;
-            const Run perturbedRun = Simulate(scene, options);
+            const SimRun perturbedRun = Simulate(scene, options);
             const Divergence d = Compare(baseline, perturbedRun);
             Report(std::string("scene=") + Name(scene) + " perturbed-body=" + std::to_string(body) +
                    " bit-identical-steps=" + std::to_string(d.bitIdenticalSteps) +
@@ -540,7 +541,7 @@ TEST(PhysXDeterminismReportTest, OneUlpDivergenceAndOptionExperiments)
         // The option set to 4 worker threads (the flag stays on), and the flag off with the default 4 threads
         Options fourThreads;
         fourThreads.workerThreads = 4u;
-        const Run withFour = Simulate(scene, fourThreads);
+        const SimRun withFour = Simulate(scene, fourThreads);
         const Divergence threads = Compare(baseline, withFour);
         Report(std::string("scene=") + Name(scene) + " threads 0 vs 4: " +
                (baseline.finalHash == withFour.finalHash && baseline.trajectoryHash == withFour.trajectoryHash
@@ -551,8 +552,8 @@ TEST(PhysXDeterminismReportTest, OneUlpDivergenceAndOptionExperiments)
 
         Options flagOff;
         flagOff.deterministic = false;
-        const Run off1 = Simulate(scene, flagOff);
-        const Run off2 = Simulate(scene, flagOff);
+        const SimRun off1 = Simulate(scene, flagOff);
+        const SimRun off2 = Simulate(scene, flagOff);
         Report(std::string("scene=") + Name(scene) + " option off (flag off, 4 threads): run vs run " +
                (off1.trajectoryHash == off2.trajectoryHash ? "bit-identical" : "DIFFERENT") +
                ", vs option on " + (off1.trajectoryHash == baseline.trajectoryHash ? "bit-identical" : "DIFFERENT") +
