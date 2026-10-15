@@ -409,8 +409,9 @@ TEST_F(VulkanTest, FrameCallsOutOfOrderAreHarmless)
 
 TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
 {
-    // Stages B-E of #43 are not here yet: materials, shaders and draws log once and return null/false (or draw
-    // nothing), and a frame still renders. Meshes and textures (stage A) work: see VulkanResourceTests.cpp
+    // Stage B of #43 made the unlit shader, unlit materials and draws work (see VulkanUnlitDrawTests.cpp); what is
+    // still to come (lit: stage C, text: stage E, custom GLSL: not in v1) returns null/false and logs once, and a frame
+    // still renders. Meshes and textures (stage A) work: see VulkanResourceTests.cpp
     Renderer::Common::MeshData mesh;
     mesh.vertices.resize(3);
     mesh.indices = {0, 1, 2};
@@ -427,12 +428,44 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
     EXPECT_EQ(R().CreateMaterial(nullptr), nullptr);
     EXPECT_EQ(R().CreateMaterial(nullptr, nullptr), nullptr);
     EXPECT_EQ(R().CreateShaderProgram("void main(){}", "void main(){}"), nullptr);
-    EXPECT_EQ(R().GetStandardUnlitShader(), nullptr);
     EXPECT_EQ(R().GetStandardLitShader(), nullptr);
     EXPECT_EQ(R().GetStandardTextShader(), nullptr);
     EXPECT_FALSE(R().IsValidShader(nullptr));
     EXPECT_FALSE(R().DestroyShaderProgram(nullptr));
     R().UseShaderProgram(nullptr);
+
+    // The unlit built-in works (when the build holds the compiled shaders); the lit and text ones exist but are not handed
+    // out, and a material of any shader but the unlit one is refused
+    if (VulkanRenderer::HasBuiltInShaders())
+    {
+        Renderer::Common::IShader* const unlit = R().GetStandardUnlitShader();
+        ASSERT_NE(unlit, nullptr);
+        EXPECT_TRUE(R().IsValidShader(unlit));
+        EXPECT_FALSE(R().DestroyShaderProgram(unlit)) << "the built-ins belong to the renderer";
+        EXPECT_TRUE(R().IsValidShader(unlit));
+        EXPECT_FALSE(unlit->LoadFromStrings("void main(){}", "void main(){}")) << "no custom GLSL in v1";
+        for (const auto which : {Renderer::Vulkan::ShaderInterface::BuiltInShader::Lit,
+                                 Renderer::Vulkan::ShaderInterface::BuiltInShader::Text})
+        {
+            Renderer::Common::IShader* const refused = R().GetBuiltInShaderForTest(which);
+            ASSERT_NE(refused, nullptr);
+            EXPECT_EQ(R().CreateMaterial(refused), nullptr);
+            EXPECT_EQ(R().CreateMaterial(refused, plainTexture), nullptr);
+        }
+        // Another renderer's shader is not this one's
+        VulkanRenderer& other = NewRenderer();
+        ASSERT_TRUE(other.Initialize(nullptr, 4, 4));
+        Renderer::Common::IShader* const foreign = other.GetStandardUnlitShader();
+        ASSERT_NE(foreign, nullptr);
+        EXPECT_FALSE(R().IsValidShader(foreign));
+        EXPECT_FALSE(R().DestroyShaderProgram(foreign));
+        EXPECT_EQ(R().CreateMaterial(foreign), nullptr);
+        EXPECT_TRUE(other.IsValidShader(foreign));
+    }
+    else
+    {
+        EXPECT_EQ(R().GetStandardUnlitShader(), nullptr) << "no compiled shaders in this build";
+    }
     R().DestroyMesh(nullptr);
     R().DestroyTexture(nullptr);
     R().DestroyMaterial(nullptr);
@@ -445,7 +478,7 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
     R().SetWireframe(true);
     R().DrawMesh(nullptr, Identity, nullptr);
     R().DrawMesh(nullptr, Identity, nullptr, Renderer::Common::RenderState{}, Renderer::Common::IndexRange{0, 3});
-    R().DrawMesh(liveMesh, Identity, nullptr); // a real mesh, still nothing to draw it with
+    R().DrawMesh(liveMesh, Identity, nullptr); // a real mesh, no material to draw it with
     R().DrawMesh(liveMesh, Identity, nullptr, Renderer::Common::RenderState{}, Renderer::Common::IndexRange{0, 3});
     std::vector<Renderer::Common::RenderObject> objects(1);
     R().DrawObjects(objects);

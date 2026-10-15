@@ -48,7 +48,8 @@ namespace Renderer::Common
      *   depth-writing state, so it can be reordered. It has no blending: RenderState::blend is ignored.
      *   Its text shader alpha-tests and writes depth wherever a draw depth-tests (see
      *   GetStandardTextShader); text is still ordered by its submitted (Transparent) state.
-     * - VulkanRenderer does not draw yet (#43): it clears its offscreen target each frame and nothing more.
+     * - VulkanRenderer renders into its own offscreen target and draws in submission order, like OpenGL (#43). So far
+     *   (stage B) it draws the unlit shader's materials only; lit shading, blending and text are still to come.
      */
     class IRenderer
     {
@@ -108,9 +109,9 @@ namespace Renderer::Common
                               const RenderState &state) = 0;
         /**
          * Draws only the indices in `range` (a submesh: `range.count` indices from `range.first`), with the given
-         * state. The OpenGL backend draws them with an offset into the index buffer, and draws nothing for a
-         * range that isn't inside the mesh's indices; the software backend loops over them only, clipped to the
-         * mesh. Vulkan draws nothing yet (#43).
+         * state. The OpenGL and Vulkan backends draw them with an offset into the index buffer, and draw nothing for
+         * a range that isn't inside the mesh's indices; the software backend loops over them only, clipped to the
+         * mesh.
          *
          * The default body, for backends and test fakes that predate it: a range covering the whole mesh
          * (first 0, count the mesh's index count) draws through the DrawMesh above; any other range draws

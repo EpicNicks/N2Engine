@@ -1,8 +1,8 @@
 -- The smoke test's heads-up display (on the "Smoke HUD" canvas, bottom-left): which station the camera is at and
 -- what to look for there, also written to the log in case text doesn't draw. Keys 1-7 ("Station N") change station,
 -- as in CameraController.lua, and show the screen-space UI panel only at the station that tests it; U ("Toggle UI
--- Panel") shows or hides the panel anyway, and H ("Toggle HUD") the HUD. Keys 8, 9 and 0 ("Demo Station N") show
--- the demo stations (DemoStations.lua), headed "Demo N/3" so the smoke test stays "Station N/7".
+-- Panel") shows or hides the panel anyway, and H ("Toggle HUD") the HUD. Keys 8, 9, 0 and Minus ("Demo Station N") show
+-- the demo stations (DemoStations.lua), headed "Demo N/4" so the smoke test stays "Station N/7".
 
 local Stations = require("scripts.SmokeStations")
 local DemoStations = require("scripts.DemoStations")
