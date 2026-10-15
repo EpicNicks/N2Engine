@@ -109,12 +109,13 @@ namespace N2Engine::Scripting
             if (!result.valid())
             {
                 sol::error err = result;
-                ReportScriptError(methodName, err.what());
+                // The budget error from the runtime's state when it is spent (the scope above is still open)
+                ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(err.what()));
             }
         }
         catch (const std::exception &e)
         {
-            ReportScriptError(methodName, e.what());
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(e.what()));
         }
     }
 

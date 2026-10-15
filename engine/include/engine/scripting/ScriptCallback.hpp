@@ -82,13 +82,15 @@ namespace N2Engine::Scripting
             if (!result.valid())
             {
                 const sol::error err = result;
-                if (LuaRuntime::IsLimitError(err.what()))
+                // The budget error from the runtime's state when it is spent (the scope above is still open)
+                const std::string message = LuaRuntime::Instance().LimitAwareError(err.what());
+                if (LuaRuntime::IsLimitError(message))
                 {
                     *faulted = true;
-                    Logger::Error(std::format("{} callback aborted: {}. It is switched off.", eventName, err.what()));
+                    Logger::Error(std::format("{} callback aborted: {}. It is switched off.", eventName, message));
                     return;
                 }
-                Logger::Error(std::format("{} callback error: {}", eventName, err.what()));
+                Logger::Error(std::format("{} callback error: {}", eventName, message));
             }
         };
     }

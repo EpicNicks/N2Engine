@@ -256,6 +256,16 @@ namespace N2Engine::Scripting
         return _guard->used;
     }
 
+    std::string LuaRuntime::LimitAwareError(const std::string_view message) const
+    {
+        if (_guard->exhausted)
+        {
+            // The text the count hook raises
+            return std::format("{} of {}", BudgetErrorText, _guard->limit);
+        }
+        return std::string(message);
+    }
+
     bool LuaRuntime::IsLimitError(const std::string_view message)
     {
         return message.find(BudgetErrorText) != std::string_view::npos ||
@@ -339,14 +349,29 @@ namespace N2Engine::Scripting
         const int status = lua_pcall(L, 1, 0, 0);
         if (status != LUA_OK)
         {
-            const char *message = lua_tostring(L, -1);
-            error = message != nullptr ? message : (status == LUA_ERRMEM ? std::string(MemoryErrorText) : "script error");
+            // Not read from the stack when the budget or the memory cap was hit: the error unwound the body's C++
+            // frames, and where those run destructors on the way that pop the stack (MSVC runs C++ destructors on a
+            // longjmp), Lua copies the wrong slot as the error object. Seen in the MSVC Debug build: the error text
+            // was the key the body was reading, not the budget error.
+            if (_guard->exhausted)
+            {
+                error = LimitAwareError({});
+            }
+            else if (status == LUA_ERRMEM)
+            {
+                error = std::string(MemoryErrorText);
+            }
+            else
+            {
+                const char *message = lua_tostring(L, -1);
+                error = message != nullptr ? message : "script error";
+            }
             lua_pop(L, 1);
             return false;
         }
         if (!call.error.empty())
         {
-            error = std::move(call.error);
+            error = LimitAwareError(call.error);
             return false;
         }
         return true;

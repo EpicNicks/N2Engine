@@ -69,6 +69,10 @@ namespace N2Engine::Scripting
         /// True if the error text is one the budget or the cap raises ("script exceeded its instruction budget",
         /// "not enough memory"): what a caller of a protected call checks to fault a component instead of retrying it
         [[nodiscard]] static bool IsLimitError(std::string_view message);
+        /// The text to report for an error a protected call returned inside an entry: once the budget is spent every
+        /// error of the entry is the budget's, so this is the budget error then (from the runtime's own state, not
+        /// from the error object, which a C++ frame unwound on the way can have displaced), else `message`
+        [[nodiscard]] std::string LimitAwareError(std::string_view message) const;
         /// Runs C++ code that touches script tables (a table access can reach a script's metamethods) inside a Lua
         /// protected call (a budget scope too), so a Lua error, the budget or a failed allocation never goes down
         /// the panic path (a C++ exception thrown through Lua's C frames) or jumps over the caller's C++ frames.
