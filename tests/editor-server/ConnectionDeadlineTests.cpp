@@ -222,6 +222,17 @@ namespace
         return Decode(*response);
     }
 
+    std::string DumpLines(const LogCapture &log)
+    {
+        std::string text;
+        for (const std::string &line : log.Lines())
+        {
+            text += line.substr(0, 200) + "
+";
+        }
+        return text;
+    }
+
     /// Plays the host's main loop until the log has this text (the network thread posts its lines to it)
     bool PumpUntilLogged(EditorServer &server, const LogCapture &log, const std::string_view text)
     {
@@ -781,15 +792,20 @@ TEST(ConnectionDeadlineTest, AClientThatNeverReadsCantBlockTheServerPastTheWrite
     name.WriteString(std::string(1024 * 1024, 'n'));
     ASSERT_TRUE(client.SendRequest(CommandType::CreateScript, name.Release()));
 
-    // The main loop runs the command; the network thread then blocks writing the response. Time passes in steps longer
-    // than the write timeout until the server gives up (it logs once).
-    const auto limit = std::chrono::steady_clock::now() + 20s;
+    // The main loop runs the command first
+    ASSERT_TRUE(PumpUntilLogged(rig.server, log, "Generated script template")) << DumpLines(log);
+
+    // The network thread then blocks writing the response. Time passes in steps longer than the write timeout until the
+    // server gives up (it logs once).
+    const auto limit = std::chrono::steady_clock::now() + 10s;
     while (!log.Has("no write progress") && std::chrono::steady_clock::now() < limit)
     {
         rig.AdvanceConnection(31s);
         rig.server.ProcessCommands(10ms);
     }
-    ASSERT_TRUE(log.Has("no write progress for 30000 ms (the write timeout), the client isn't reading peer=203.0.113.7"));
+    ASSERT_TRUE(log.Has("no write progress for 30000 ms (the write timeout), the client isn't reading peer=203.0.113.7"))
+        << "bytes waiting at the client: " << client.BytesAvailable() << "
+" << DumpLines(log);
     EXPECT_EQ(log.Count("no write progress"), 1u);
 
     // What the client can still read is cut short, and then the connection is closed
