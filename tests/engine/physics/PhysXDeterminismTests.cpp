@@ -182,14 +182,17 @@ namespace
     {
         bool deterministic = true;
         std::optional<unsigned> workerThreads; // nullopt: whatever the option implies
-        int perturbBody = -1;                  // index into the dynamic bodies: +1 ulp on its initial x
+        int perturbBody = -1; // index into the dynamic bodies: +1 ulp on its largest-magnitude initial coordinate
     };
 
     struct SimRun
     {
         std::uint64_t finalHash = 0;      // the state after the last step
         std::uint64_t trajectoryHash = 0; // every step's state folded in
+        std::vector<std::uint64_t> stepHashes;       // [step], the full state hash after each step
         std::vector<std::vector<Vector3>> positions; // [step][body], after each step
+        std::vector<Vector3> initialPositions;       // [body], read back from PhysX before the first step
+        int perturbedAxis = -1;                      // 0 = x, 1 = y, 2 = z; -1 = nothing perturbed
         bool deterministicFlag = false;
         unsigned workers = 0;
     };
@@ -211,9 +214,30 @@ namespace
         }
     }
 
-    // Insertion order is part of the scene: ground first, then the dynamic bodies in a fixed order
-    std::vector<PhysicsBodyHandle> Build(PhysXBackend &backend, const SceneKind scene, const int perturbBody)
+    float &Component(Vector3 &v, const int axis) { return axis == 0 ? v.x : axis == 1 ? v.y : v.z; }
+    float Component(const Vector3 &v, const int axis) { return axis == 0 ? v.x : axis == 1 ? v.y : v.z; }
+
+    // The coordinate a 1 ulp nudge is applied to: the largest in magnitude (the first on a tie), so it is never
+    // 0, where nextafter would only reach the denormal 1.4e-45 and change nothing
+    int LargestAxis(const Vector3 &v)
     {
+        int axis = 0;
+        for (int i = 1; i < 3; ++i)
+        {
+            if (std::fabs(Component(v, i)) > std::fabs(Component(v, axis)))
+            {
+                axis = i;
+            }
+        }
+        return axis;
+    }
+
+    // Insertion order is part of the scene: ground first, then the dynamic bodies in a fixed order. perturbedAxis
+    // receives the axis nudged on body perturbBody (-1 when none is)
+    std::vector<PhysicsBodyHandle> Build(PhysXBackend &backend, const SceneKind scene, const int perturbBody,
+                                         int &perturbedAxis)
+    {
+        perturbedAxis = -1;
         const PhysicsMaterial material{};
         const Quaternion identity;
         std::vector<PhysicsBodyHandle> bodies;
@@ -225,7 +249,9 @@ namespace
         {
             if (static_cast<int>(bodies.size()) == perturbBody)
             {
-                position.x = std::nextafter(position.x, std::numeric_limits<float>::infinity());
+                perturbedAxis = LargestAxis(position);
+                float &coordinate = Component(position, perturbedAxis);
+                coordinate = std::nextafter(coordinate, std::numeric_limits<float>::infinity());
             }
             const PhysicsBodyHandle body = backend.CreateDynamicBody(position, identity, 1.0f, nullptr, false);
             switch (kind)
@@ -283,7 +309,11 @@ namespace
         run.deterministicFlag = backend.SceneUsesEnhancedDeterminism();
         run.workers = backend.DispatcherWorkerCount();
 
-        const std::vector<PhysicsBodyHandle> bodies = Build(backend, scene, options.perturbBody);
+        const std::vector<PhysicsBodyHandle> bodies = Build(backend, scene, options.perturbBody, run.perturbedAxis);
+        for (const PhysicsBodyHandle body : bodies)
+        {
+            run.initialPositions.push_back(backend.GetPosition(body));
+        }
         BitHasher trajectory;
         for (int step = 0; step < kSteps; ++step)
         {
@@ -291,6 +321,7 @@ namespace
             BitHasher stepHash;
             HashState(backend, bodies, stepHash);
             trajectory.Add(stepHash.Value());
+            run.stepHashes.push_back(stepHash.Value());
 
             std::vector<Vector3> positions;
             positions.reserve(bodies.size());
@@ -319,7 +350,9 @@ namespace
         // The first step (1-based) at which any body differs by more than the threshold; 0 = never
         int overMicrometre = 0, overMillimetre = 0, overCentimetre = 0;
         float maxDistance = 0.0f;
-        int bitIdenticalSteps = 0; // steps before the first bit-level difference in position
+        // Steps before the first step whose full state hash (position, rotation, linear and angular velocity of
+        // every body, the same hash the asserted test compares) differs
+        int bitIdenticalSteps = 0;
     };
 
     Divergence Compare(const SimRun &a, const SimRun &b)
@@ -328,19 +361,15 @@ namespace
         bool differs = false;
         for (std::size_t step = 0; step < a.positions.size(); ++step)
         {
+            if (!differs && a.stepHashes[step] != b.stepHashes[step])
+            {
+                differs = true;
+                result.bitIdenticalSteps = static_cast<int>(step);
+            }
             float stepMax = 0.0f;
             for (std::size_t i = 0; i < a.positions[step].size(); ++i)
             {
-                const Vector3 &pa = a.positions[step][i];
-                const Vector3 &pb = b.positions[step][i];
-                stepMax = std::max(stepMax, Distance(pa, pb));
-                if (!differs && (std::bit_cast<std::uint32_t>(pa.x) != std::bit_cast<std::uint32_t>(pb.x) ||
-                                 std::bit_cast<std::uint32_t>(pa.y) != std::bit_cast<std::uint32_t>(pb.y) ||
-                                 std::bit_cast<std::uint32_t>(pa.z) != std::bit_cast<std::uint32_t>(pb.z)))
-                {
-                    differs = true;
-                    result.bitIdenticalSteps = static_cast<int>(step);
-                }
+                stepMax = std::max(stepMax, Distance(a.positions[step][i], b.positions[step][i]));
             }
             const int oneBased = static_cast<int>(step) + 1;
             if (!result.overMicrometre && stepMax > 1e-6f) result.overMicrometre = oneBased;
@@ -512,7 +541,8 @@ INSTANTIATE_TEST_SUITE_P(Scenes, PhysXDeterminismRunTest,
 TEST(PhysXDeterminismReportTest, OneUlpDivergenceAndOptionExperiments)
 {
     Report(std::string("one-ulp experiment: dt=1/60, ") + std::to_string(kSteps) +
-           " steps, enhanced determinism on, 0 worker threads; one body's initial x moved by +1 ulp");
+           " steps, enhanced determinism on, 0 worker threads; one body's largest-magnitude initial coordinate"
+           " moved by +1 ulp; bit-identical-steps compares the full state hash (position, rotation, velocities)");
     for (const SceneKind scene : {SceneKind::FreeFall, SceneKind::BoxStack, SceneKind::Pile})
     {
         const SimRun baseline = Simulate(scene, {});
@@ -530,8 +560,38 @@ TEST(PhysXDeterminismReportTest, OneUlpDivergenceAndOptionExperiments)
             Options options;
             options.perturbBody = body;
             const SimRun perturbedRun = Simulate(scene, options);
+
+            // The nudge must be real: a non-zero coordinate, and PhysX must hold a bitwise different start value
+            // for that body than in the baseline (so a no-op can never pass as a 1 ulp result again)
+            ASSERT_EQ(baseline.perturbedAxis, -1) << Name(scene);
+            const int axis = perturbedRun.perturbedAxis;
+            ASSERT_GE(axis, 0) << Name(scene) << " body " << body;
+            ASSERT_LT(axis, 3) << Name(scene) << " body " << body;
+            const float original = Component(baseline.initialPositions[body], axis);
+            const float nudged = Component(perturbedRun.initialPositions[body], axis);
+            ASSERT_NE(original, 0.0f) << Name(scene) << " body " << body << " axis " << axis;
+            ASSERT_TRUE(std::isnormal(original)) << Name(scene) << " body " << body << " axis " << axis;
+            ASSERT_NE(std::bit_cast<std::uint32_t>(nudged), std::bit_cast<std::uint32_t>(original))
+                << Name(scene) << " body " << body << " axis " << axis;
+            ASSERT_EQ(std::bit_cast<std::uint32_t>(nudged),
+                      std::bit_cast<std::uint32_t>(std::nextafter(original, std::numeric_limits<float>::infinity())))
+                << Name(scene) << " body " << body << " axis " << axis;
+            for (int other = 0; other < bodyCount; ++other)
+            {
+                for (int i = 0; i < 3; ++i)
+                {
+                    if (other != body || i != axis)
+                    {
+                        ASSERT_EQ(std::bit_cast<std::uint32_t>(Component(perturbedRun.initialPositions[other], i)),
+                                  std::bit_cast<std::uint32_t>(Component(baseline.initialPositions[other], i)))
+                            << Name(scene) << " body " << other << " axis " << i;
+                    }
+                }
+            }
+
             const Divergence d = Compare(baseline, perturbedRun);
             Report(std::string("scene=") + Name(scene) + " perturbed-body=" + std::to_string(body) +
+                   " axis=" + std::string(1, "xyz"[axis]) + " start=" + std::to_string(original) +
                    " bit-identical-steps=" + std::to_string(d.bitIdenticalSteps) +
                    " first>1um=" + StepText(d.overMicrometre) + " first>1mm=" + StepText(d.overMillimetre) +
                    " first>1cm=" + StepText(d.overCentimetre) + " max-divergence-m=" + std::to_string(d.maxDistance) +
