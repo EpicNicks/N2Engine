@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -29,6 +30,13 @@
 using namespace N2Engine;
 using namespace N2Engine::Scripting;
 namespace fs = std::filesystem;
+
+// engine/src/scripting/LuaPanicRepair.cpp: the thread's nCcalls (C calls in the low 16 bits, non-yieldable calls in
+// the high 16), for the panic test
+namespace N2Engine::Scripting::Detail
+{
+    std::uint32_t ThreadCallCounts(lua_State *L);
+}
 
 // The Lua state's limits (audit F3a): an instruction budget per outermost entry from C++ into Lua, a cap on the
 // memory of the state, and Application.Quit refused on an editor host. Every test lowers the limits through the
@@ -406,6 +414,11 @@ TEST_F(LuaBudgetTest, TheBudgetErrorOnThePanicPathLeavesTheHookAndTheStateWorkin
     // turns into a C++ exception. Lua leaves the thread's hook flag off after an error raised inside a hook unless a
     // protected call restores it, so without the repair in the panic function no later loop would ever be stopped.
     // Hundreds of them must not wear out the C-call counter either ("C stack overflow").
+    // At rest (no call running) the main thread counts no C call and the one non-yieldable call lua_newstate gives it
+    constexpr std::uint32_t FreshMainThread = 0x10000;
+    lua_State *L = Lua().lua_state();
+    EXPECT_EQ(N2Engine::Scripting::Detail::ThreadCallCounts(L), FreshMainThread);
+
     Lua().script("budget_unprotected = function() while true do end end");
     sol::unsafe_function unprotected = Lua()["budget_unprotected"];
     for (int attempt = 0; attempt < 250; ++attempt)
@@ -413,6 +426,11 @@ TEST_F(LuaBudgetTest, TheBudgetErrorOnThePanicPathLeavesTheHookAndTheStateWorkin
         EXPECT_ANY_THROW(unprotected());
     }
     Lua()["budget_unprotected"] = sol::lua_nil;
+
+    // Each call the errors unwound added to both halves; the repair puts them back to the fresh values
+    const std::uint32_t calls = N2Engine::Scripting::Detail::ThreadCallCounts(L);
+    EXPECT_EQ(calls & 0xffffu, 0u) << "C calls left counted after the panics";
+    EXPECT_EQ(calls & 0xffff0000u, FreshMainThread) << "non-yieldable calls left counted after the panics";
 
     const sol::protected_function_result normal = Run("local t = {} for i = 1, 100 do t[i] = i end return #t");
     ASSERT_TRUE(normal.valid()) << ErrorOf(normal);

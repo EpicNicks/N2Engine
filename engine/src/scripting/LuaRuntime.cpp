@@ -73,8 +73,9 @@ namespace N2Engine::Scripting
 
             // Lua calls this for an error raised outside every protected call (an unprotected table access that hit
             // a script's metamethod, or a failed allocation): sol turns it into a C++ exception. Lua has already
-            // reset the thread (no call is running any more), but not three of its fields; they are repaired here,
-            // before the exception leaves, and nothing else touches the thread (its stack is the caller's)
+            // reset the thread (no call is running any more, the stack is cut down to the error object, which
+            // default_at_panic then removes too), but not three of its fields; they are repaired here, before the
+            // exception leaves (LuaPanicRepair.cpp says which, and what the emptied stack means for a caller)
             static int Panic(lua_State *L)
             {
                 RepairThreadAfterPanic(L);
