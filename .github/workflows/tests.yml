@@ -762,13 +762,16 @@ jobs:
           docker logs n2tokens
           exit 1
 
-  # The web (WebAssembly) build, stage 0 of issue #155: the math and text libraries and their unit tests, built with
+  # The web (WebAssembly) build, stages 0 and 1 of issue #155: the math, text and asset-import libraries, the engine
+  # core (headless, single-threaded, no window or audio device) and the software renderer, and their unit tests
+  # (math, text, assetimport, engine and renderer tests, the software-renderer goldens among them), built with
   # Emscripten and run under node. Not a required check. Emscripten is pinned to an exact release (EMSCRIPTEN_VERSION, installed
   # with the official emsdk, no third-party action): a moving "latest" would let an upstream release break or change the
   # build with no change in this repository. 4.0.10 was chosen as a 4.0 release with a recent LLVM/libc++ for C++23 (not yet proven: the first
   # run of this job is the proof; bump the pin here and in docs/web-build.html if it is not enough). ccache is not used.
   # Only the dev profile is built and tested; the size and speed profiles are configured (not built) so a broken profile
-  # fails here. docs/web-build.html describes the build.
+  # fails here. The tests that cannot run on the web are excluded by an explicit list (tests/engine/CMakeLists.txt) or
+  # skip themselves; docs/web-build.html lists them with their reasons and describes the build.
   web:
     name: web (Emscripten, dev profile, node tests)
     needs: changes
@@ -803,7 +806,8 @@ jobs:
           . "$HOME/emsdk/emsdk_env.sh"
           emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev
 
-      # Configure only, without the tests (nothing is fetched): the size and speed profiles must at least configure
+      # Configure only, without the tests (only the GLFW and OpenAL headers are fetched): the size and speed profiles must
+      # at least configure
       - name: Configure (size and speed profiles, configure only)
         run: |
           set -e
@@ -816,7 +820,7 @@ jobs:
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
-          cmake --build build-web --target math_tests text_tests
+          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests
 
       # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
       - name: Test under node

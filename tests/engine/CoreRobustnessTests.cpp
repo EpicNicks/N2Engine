@@ -177,6 +177,9 @@ TEST(CoreRobustnessTest, LoggerDeliversBacklogOnceWhenASubscriberLogs)
 
 TEST(CoreRobustnessTest, LoggerIsSafeToUseFromManyThreads)
 {
+#if defined(N2ENGINE_PLATFORM_WEB) && !defined(__EMSCRIPTEN_PTHREADS__)
+    GTEST_SKIP() << "The single-threaded web build cannot start threads";
+#endif
     constexpr int threadCount = 8;
     constexpr int logsPerThread = 500;
     const std::string prefix = "threaded log ";
