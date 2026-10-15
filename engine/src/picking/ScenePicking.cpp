@@ -279,8 +279,30 @@ namespace N2Engine::Picking
             if (auto *meshRenderer = dynamic_cast<Rendering::MeshRenderer *>(&renderable))
             {
                 const Positionable *positionable = owner->GetPositionable();
-                if (meshRenderer->GetMesh() && positionable)
+                // The exact test uses the mesh the bounds follow (GetDrawnMesh), so both phases agree
+                if (meshRenderer->GetDrawnMesh() && positionable)
                 {
+                    // A runtime deformed mesh (a soft body) changes every frame: a BVH cached with it would be
+                    // rebuilt on every pick, so it gets the plain triangle loop, and a mesh over the cap is picked by
+                    // its (deformed) box
+                    constexpr std::size_t DeformedTriangleCap = 100000;
+                    if (meshRenderer->GetDeformedMesh())
+                    {
+                        if (meshRenderer->GetDeformedMesh()->GetIndices().size() / 3 > DeformedTriangleCap)
+                        {
+                            return [owner, box, ray](const float limit)
+                            {
+                                const std::optional<float> t = RaycastBox(ray, box, limit);
+                                return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
+                            };
+                        }
+                        return [owner, model = positionable->GetLocalToWorldMatrix(),
+                                mesh = meshRenderer->GetDeformedMesh(), ray](const float limit)
+                        {
+                            const std::optional<float> t = RaycastMeshLinear(*mesh, model, ray, limit);
+                            return t ? std::optional<ExactHit>{ExactHit{owner, *t}} : std::nullopt;
+                        };
+                    }
                     return [owner, model = positionable->GetLocalToWorldMatrix(), mesh = meshRenderer->GetMesh(),
                             ray](const float limit)
                     {

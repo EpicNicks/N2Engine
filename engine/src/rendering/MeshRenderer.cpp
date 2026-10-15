@@ -33,11 +33,12 @@ namespace N2Engine::Rendering
 
     bool MeshRenderer::DrawsInQueue(const RenderQueue queue) const
     {
-        if (!_mesh)
+        const std::shared_ptr<Mesh> &mesh = GetDrawnMesh();
+        if (!mesh)
         {
             return false;
         }
-        for (std::size_t i = 0; i < _mesh->GetSubmeshCount(); ++i)
+        for (std::size_t i = 0; i < mesh->GetSubmeshCount(); ++i)
         {
             if (MeshDrawing::QueueFor(*GetEffectiveMaterial(i)) == queue)
             {
@@ -56,7 +57,8 @@ namespace N2Engine::Rendering
     void MeshRenderer::RenderInQueue(Renderer::Common::IRenderer *renderer, const Renderer::Common::RenderState &state,
                                      const RenderQueue queue)
     {
-        if (!renderer || !_mesh)
+        const std::shared_ptr<Mesh> &mesh = GetDrawnMesh();
+        if (!renderer || !mesh)
         {
             return;
         }
@@ -66,7 +68,7 @@ namespace N2Engine::Rendering
             return;
         }
         _resources.Bind(renderer);
-        _resources.Draw(_mesh, _materials, Material::GetDefault(), positionable->GetLocalToWorldMatrix(),
+        _resources.Draw(mesh, _materials, Material::GetDefault(), positionable->GetLocalToWorldMatrix(),
                         Common::Color::White, queue, state);
     }
 
@@ -89,6 +91,7 @@ namespace N2Engine::Rendering
 
     void MeshRenderer::OnDestroy()
     {
+        _deformed.reset();
         CleanupRenderResources(_resources.GetRenderer());
     }
 
@@ -127,19 +130,21 @@ namespace N2Engine::Rendering
     std::optional<BoundingBox> MeshRenderer::GetWorldBounds() const
     {
         const Positionable *positionable = GetGameObject().GetPositionable();
-        if (!_mesh || !positionable)
+        const std::shared_ptr<Mesh> &mesh = GetDrawnMesh();
+        if (!mesh || !positionable)
         {
             return std::nullopt;
         }
-        return _mesh->GetBounds().Transformed(positionable->GetLocalToWorldMatrix());
+        return mesh->GetBounds().Transformed(positionable->GetLocalToWorldMatrix());
     }
 
     std::optional<BoundingBox> MeshRenderer::GetBounds() const
     {
-        if (!_mesh)
+        const std::shared_ptr<Mesh> &mesh = GetDrawnMesh();
+        if (!mesh)
         {
             return std::nullopt;
         }
-        return _mesh->GetBounds();
+        return mesh->GetBounds();
     }
 }
