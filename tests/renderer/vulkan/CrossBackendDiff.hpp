@@ -42,6 +42,13 @@
 
 namespace VulkanTesting::Diff
 {
+    /// The measured results of the lit comparisons of this process, one line each (a test that compares calls Record)
+    inline std::vector<std::string>& RecordedLines()
+    {
+        static std::vector<std::string> lines;
+        return lines;
+    }
+
     struct Image
     {
         std::vector<std::uint8_t> rgba; // RGBA8, row 0 at the bottom (as ReadFramebuffer returns it)

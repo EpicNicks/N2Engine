@@ -128,8 +128,9 @@ namespace
             software.Shutdown();
             const VulkanTesting::Diff::Options options = VulkanTesting::Diff::Lit();
             EXPECT_TRUE(VulkanTesting::Diff::Agree(vulkan.AsImage(), reference.AsImage(), options)) << what;
-            std::cout << "[ cross-diff ] edit-mode lighting, " << what << ": "
-                      << VulkanTesting::Diff::Compare(vulkan.AsImage(), reference.AsImage(), options).Describe() << std::endl;
+            const std::string described = VulkanTesting::Diff::Compare(vulkan.AsImage(), reference.AsImage(), options).Describe();
+            std::cout << "[ cross-diff ] edit-mode lighting, " << what << ": " << described << std::endl;
+            VulkanTesting::Diff::RecordedLines().push_back("edit-mode lighting, " + what + ": " + described);
             return vulkan.Brightness(x, y);
         }
     };

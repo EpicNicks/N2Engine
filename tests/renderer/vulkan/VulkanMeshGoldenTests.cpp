@@ -234,8 +234,9 @@ namespace
             const Frame software = RenderOnSoftware(build, camera, lighting);
             EXPECT_TRUE(VulkanTesting::Diff::Agree(vulkan.AsImage(), software.AsImage(), options)) << what;
             // The measured numbers, for the log (the PR body quotes them)
-            std::cout << "[ cross-diff ] " << what << ": "
-                      << VulkanTesting::Diff::Compare(vulkan.AsImage(), software.AsImage(), options).Describe() << std::endl;
+            const std::string described = VulkanTesting::Diff::Compare(vulkan.AsImage(), software.AsImage(), options).Describe();
+            std::cout << "[ cross-diff ] " << what << ": " << described << std::endl;
+            VulkanTesting::Diff::RecordedLines().push_back("mesh golden, " + what + ": " + described);
             return vulkan;
         }
     };

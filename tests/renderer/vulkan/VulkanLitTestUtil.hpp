@@ -233,6 +233,8 @@ namespace VulkanTesting::Lit
             const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
             std::cout << "[ cross-diff ] " << info->test_suite_name() << "." << info->name() << " draw " << _draws << ": "
                       << result.Describe() << std::endl;
+            Diff::RecordedLines().push_back(std::string(info->test_suite_name()) + "." + info->name() + " draw " +
+                                            std::to_string(_draws) + ": " + result.Describe());
             EXPECT_TRUE(Diff::Agree(vulkan.AsImage(), software.AsImage(), options))
                 << "draw " << _draws << " of the test";
             return vulkan;

@@ -183,6 +183,7 @@ TEST_F(VulkanModelGoldenTest, AnInstantiatedModelCoversItsBoundsShowsBothMateria
     software.Shutdown();
     const VulkanTesting::Diff::Options options = VulkanTesting::Diff::Lit();
     EXPECT_TRUE(VulkanTesting::Diff::Agree(frame.AsImage(), reference.AsImage(), options));
-    std::cout << "[ cross-diff ] model golden: " << VulkanTesting::Diff::Compare(frame.AsImage(), reference.AsImage(), options).Describe()
-              << std::endl;
+    const std::string described = VulkanTesting::Diff::Compare(frame.AsImage(), reference.AsImage(), options).Describe();
+    std::cout << "[ cross-diff ] model golden: " << described << std::endl;
+    VulkanTesting::Diff::RecordedLines().push_back("model golden: " + described);
 }
