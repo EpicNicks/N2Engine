@@ -80,7 +80,7 @@ namespace
         }
         else if (op == "manager")
         {
-            const json data = json::parse(TestJson::SceneText(levels, "ProbeScene"));
+            json data = json::parse(TestJson::SceneText(levels, "ProbeScene"));
             SceneManager::AddScene(data);
             SceneManager::LoadScene("ProbeScene");
             SceneManager::ProcessAnyPendingSceneChange();
