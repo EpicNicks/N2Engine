@@ -46,6 +46,7 @@
 #include "engine/scripting/LuaScriptTemplate.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/FieldInfo.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
 #include "renderer/common/FrameRows.hpp"
@@ -847,6 +848,11 @@ namespace N2Engine::Editor
 
         std::expected<nlohmann::json, std::string> ParseStored(const std::string &text)
         {
+            // What a step saved is the host's own text, but a deep tree is refused here too, before it is parsed
+            if (JsonLimits::SceneJsonTooDeep(text))
+            {
+                return std::unexpected("What the edit saved can't be read back: " + JsonLimits::SceneJsonTooDeepMessage());
+            }
             nlohmann::json value = nlohmann::json::parse(text, nullptr, false);
             if (value.is_discarded())
             {
@@ -3546,6 +3552,16 @@ namespace N2Engine::Editor
 
         Logger::Info("Loading scene from scene data: " + SanitizeForLog(sceneJsonString, 200));
 
+        // Nesting is checked before the parse: a scene nested 100 000 deep would overflow the stack of the walks over
+        // it. Nothing has changed yet, so the open scene stays as it was.
+        if (JsonLimits::SceneJsonTooDeep(sceneJsonString))
+        {
+            BufferWriter response;
+            WriteError(response, "The scene passed was refused: " + JsonLimits::SceneJsonTooDeepMessage());
+            SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
+            return;
+        }
+
         // Non-throwing parse: the JSON comes from the client
         nlohmann::json sceneJson = nlohmann::json::parse(sceneJsonString, nullptr, false);
         if (sceneJson.is_discarded())
@@ -4145,6 +4161,10 @@ namespace N2Engine::Editor
             {
                 return std::unexpected(text.error());
             }
+            if (JsonLimits::SceneJsonTooDeep(*text))
+            {
+                return std::unexpected(SanitizeForLog(resourcePath) + ": " + JsonLimits::SceneJsonTooDeepMessage());
+            }
             sceneJson = nlohmann::json::parse(*text, nullptr, false);
             if (sceneJson.is_discarded())
             {
@@ -4196,6 +4216,10 @@ namespace N2Engine::Editor
         if (!text)
         {
             return std::unexpected(text.error());
+        }
+        if (JsonLimits::SceneJsonTooDeep(*text))
+        {
+            return std::unexpected(Utf8(snapshotFile) + ": " + JsonLimits::SceneJsonTooDeepMessage());
         }
         const nlohmann::json sceneJson = nlohmann::json::parse(*text, nullptr, false);
         if (sceneJson.is_discarded())
@@ -4582,6 +4606,15 @@ namespace N2Engine::Editor
             {
                 SendError(clientSocket, std::format("Can't make '{}' a child of itself or of its own descendant '{}'",
                                                     SanitizeForLog(entity->GetName()), SanitizeForLog(newParent->GetName())));
+                return;
+            }
+            // A tree is only so deep (the same cap a load enforces), or one command at a time would build one a
+            // load refuses, and the walks over it could overflow the stack
+            if (!newParent->CanAddChild(entity))
+            {
+                SendError(clientSocket, std::format("Can't make '{}' a child of '{}': the hierarchy would nest more than {} levels deep",
+                                                    SanitizeForLog(entity->GetName()), SanitizeForLog(newParent->GetName()),
+                                                    JsonLimits::MaxHierarchyDepth));
                 return;
             }
         }
@@ -5856,6 +5889,10 @@ namespace N2Engine::Editor
         {
             return std::unexpected(std::string("No scene loaded"));
         }
+        if (JsonLimits::SceneJsonTooDeep(snapshot))
+        {
+            return std::unexpected(JsonLimits::SceneJsonTooDeepMessage());
+        }
         const nlohmann::json sceneJson = nlohmann::json::parse(snapshot, nullptr, false);
         if (sceneJson.is_discarded())
         {
@@ -6279,6 +6316,13 @@ namespace N2Engine::Editor
             return;
         }
 
+        // The nesting first: an autosave is a file, which is as untrusted as any other
+        if (JsonLimits::SceneJsonTooDeep(*text))
+        {
+            SendError(clientSocket, "The autosave can't be used: " + JsonLimits::SceneJsonTooDeepMessage());
+            return;
+        }
+
         // One scene's autosave is not another's (every scene without a file shares a name for it)
         const nlohmann::json autosaved = nlohmann::json::parse(*text, nullptr, false);
         if (autosaved.is_object() && autosaved.contains("name") && autosaved.at("name").is_string() &&
@@ -6511,6 +6555,10 @@ namespace N2Engine::Editor
         if (!text)
         {
             return std::unexpected(text.error());
+        }
+        if (JsonLimits::SceneJsonTooDeep(*text))
+        {
+            return std::unexpected(SanitizeForLog(resourcePath) + ": " + JsonLimits::SceneJsonTooDeepMessage());
         }
         const nlohmann::json sceneJson = nlohmann::json::parse(*text, nullptr, false);
         if (sceneJson.is_discarded())

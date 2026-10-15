@@ -6,6 +6,7 @@
 #include <math/Quaternion.hpp>
 #include <math/Vector3.hpp>
 #include <engine/Health.hpp>
+#include <engine/serialization/JsonLimits.hpp>
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
@@ -100,35 +101,9 @@ namespace N2Engine::Editor::Protocol
     inline constexpr std::size_t MaxJsonDepth = 64;
     inline constexpr std::size_t MaxJsonValues = 200000;
 
-    /// Throws std::runtime_error when the JSON text nests deeper than maxDepth (counting [ and { outside strings)
-    inline void CheckJsonDepth(std::string_view text, const std::size_t maxDepth)
-    {
-        std::size_t depth = 0;
-        bool inString = false;
-        bool escaped = false;
-        for (const char c : text)
-        {
-            if (inString)
-            {
-                if (escaped)
-                    escaped = false;
-                else if (c == '\\')
-                    escaped = true;
-                else if (c == '"')
-                    inString = false;
-                continue;
-            }
-            if (c == '"')
-                inString = true;
-            else if (c == '[' || c == '{')
-            {
-                if (++depth > maxDepth)
-                    throw std::runtime_error("the JSON nests more than " + std::to_string(maxDepth) + " levels deep");
-            }
-            else if ((c == ']' || c == '}') && depth > 0)
-                --depth;
-        }
-    }
+    /// Throws std::runtime_error when the JSON text nests deeper than maxDepth (counting [ and { outside strings).
+    /// The scanner lives in the engine (JsonLimits.hpp), which also checks scene, prefab and snapshot text with it.
+    using N2Engine::JsonLimits::CheckJsonDepth;
 
     /// ReadJson with the limits above: nesting checked before parsing, the number of values after. Throws
     /// std::runtime_error (an Error response) for either, and nlohmann::json::parse_error for text that isn't JSON.

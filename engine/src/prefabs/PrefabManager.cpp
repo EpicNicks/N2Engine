@@ -11,6 +11,7 @@
 #include "engine/Logger.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
 #include "engine/prefabs/Prefab.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
 using namespace N2Engine;
@@ -186,6 +187,14 @@ std::shared_ptr<GameObject> Instantiate(const nlohmann::json &prefabJson, const 
             }
             rootJson = &*it;
         }
+    }
+
+    // Refused before anything walks it: CollectIds and Renumber recurse over the data, and copying it does too. The
+    // text a prefab came from is checked where it is parsed; this covers a value built or kept some other way.
+    if (JsonLimits::SceneValueTooDeep(*rootJson))
+    {
+        Logger::Error(std::format("InstantiatePrefab: malformed prefab data: {}", JsonLimits::SceneJsonTooDeepMessage()));
+        return nullptr;
     }
 
     // Renumber in the data, before anything is built: every id, every reference to one (pointer members

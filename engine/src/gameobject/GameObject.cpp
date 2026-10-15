@@ -19,6 +19,7 @@
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 // ReSharper disable once CppUnusedIncludeDirective
 #include "engine/serialization/MathSerialization.hpp"
@@ -193,6 +194,13 @@ void GameObject::SetParent(Ptr parent, bool keepWorldPosition)
         Logger::Warn(std::format("Can't make '{}' a child of its descendant '{}'", _name, parent->GetName()));
         return;
     }
+    // Refused before leaving the old parent too, for the same reason
+    if (parent && !parent->CanAddChild(shared_from_this()))
+    {
+        Logger::Warn(std::format("Can't make '{}' a child of '{}': the hierarchy would nest more than {} levels deep",
+                                 _name, parent->GetName(), JsonLimits::MaxHierarchyDepth));
+        return;
+    }
 
     // Remove from old parent
     if (oldParent)
@@ -226,6 +234,12 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
     if (IsChildOf(child))
     {
         Logger::Warn(std::format("Can't make '{}' a child of its descendant '{}'", child->GetName(), _name));
+        return;
+    }
+    if (!CanAddChild(child))
+    {
+        Logger::Warn(std::format("Can't make '{}' a child of '{}': the hierarchy would nest more than {} levels deep",
+                                 child->GetName(), _name, JsonLimits::MaxHierarchyDepth));
         return;
     }
 
@@ -289,6 +303,36 @@ void GameObject::AddChild(Ptr child, bool keepWorldPosition)
 
     // Parenting under an inactive object deactivates the child's subtree (and vice versa)
     child->NotifyIfActiveChanged(childWasActive);
+}
+
+bool GameObject::CanAddChild(const Ptr &child) const
+{
+    if (!child)
+    {
+        return true;
+    }
+    const std::size_t above = GetHierarchyDepth() + 1; // the levels from the root down to this object
+    if (child->_children.empty())
+    {
+        return above + 1 <= JsonLimits::MaxHierarchyDepth; // the usual case: a leaf
+    }
+    // The height of the child's subtree (a leaf is 1), walked with a stack of its own, not by recursion
+    std::vector<std::pair<const GameObject *, std::size_t>> pending;
+    pending.emplace_back(child.get(), 1);
+    while (!pending.empty())
+    {
+        const auto [object, level] = pending.back();
+        pending.pop_back();
+        if (above + level > JsonLimits::MaxHierarchyDepth)
+        {
+            return false;
+        }
+        for (const auto &grandChild : object->_children)
+        {
+            pending.emplace_back(grandChild.get(), level + 1);
+        }
+    }
+    return true;
 }
 
 void GameObject::RemoveChild(Ptr child, bool keepWorldPosition)
@@ -437,7 +481,7 @@ GameObject::Ptr GameObject::FindChildRecursive(const std::string &name) const
         }
     }
 
-    // Check children's children recursively
+    // Check children's children recursively (the depth is bounded, see CanAddChild)
     for (const auto &child : _children)
     {
         auto found = child->FindChildRecursive(name);
@@ -666,7 +710,7 @@ void GameObject::SetScene(Scene *scene)
         }
     }
 
-    // Recursively set scene for children
+    // Recursively set scene for children (the tree is at most JsonLimits::MaxHierarchyDepth levels deep, see CanAddChild)
     for (const auto &child : _children)
     {
         child->SetScene(scene);
@@ -747,7 +791,7 @@ std::vector<GameObject::Ptr> GameObject::GetChildrenRecursive() const
     {
         result.push_back(child);
 
-        // Get children's children recursively
+        // Get children's children recursively (the depth is bounded, see CanAddChild)
         auto grandChildren = child->GetChildrenRecursive();
         result.insert(result.end(), grandChildren.begin(), grandChildren.end());
     }
@@ -873,6 +917,20 @@ using json = nlohmann::json;
 
 json GameObject::Serialize() const
 {
+    // The recursion over the children is all this frame holds. The tree is at most JsonLimits::MaxHierarchyDepth
+    // levels deep (Deserialize, SetParent and AddChild refuse more), so it can't overflow the stack.
+    json j = SerializeSelf();
+    json children = json::array();
+    for (const auto &child : _children)
+    {
+        children.push_back(child->Serialize());
+    }
+    j["children"] = std::move(children);
+    return j;
+}
+
+json GameObject::SerializeSelf() const
+{
     json j;
 
     // Serialize Asset base class (UUID)
@@ -905,18 +963,41 @@ json GameObject::Serialize() const
     }
     j["components"] = components;
 
-    // Children (recursive)
-    json children = json::array();
-    for (const auto &child : _children)
-    {
-        children.push_back(child->Serialize());
-    }
-    j["children"] = children;
-
     return j;
 }
 
 GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolver)
+{
+    return DeserializeAt(j, resolver, 1);
+}
+
+GameObject::Ptr GameObject::DeserializeAt(const json &j, ReferenceResolver *resolver, const std::size_t depth)
+{
+    // Scene and prefab data is untrusted (a client's, or a file's): a chain of "children" 100 000 deep would
+    // overflow the stack, so a hierarchy deeper than the cap fails the load. The callers turn the throw into a
+    // failed load (Scene::FromJSON, Prefab::Deserialize, InstantiatePrefab); the objects built so far are released
+    // as it unwinds, and the resolver holds only pointers to them that its owner drops with it.
+    if (depth > JsonLimits::MaxHierarchyDepth)
+    {
+        throw std::invalid_argument(
+            std::format("the GameObject hierarchy nests more than {} levels deep", JsonLimits::MaxHierarchyDepth));
+    }
+    auto go = DeserializeSelf(j, resolver);
+
+    // Deserialize Children (recursive)
+    if (j.contains("children"))
+    {
+        for (const auto &childJson : j["children"])
+        {
+            const auto child = DeserializeAt(childJson, resolver, depth + 1);
+            go->AddChild(child, false); // Don't keep world position during load
+        }
+    }
+
+    return go;
+}
+
+GameObject::Ptr GameObject::DeserializeSelf(const json &j, ReferenceResolver *resolver)
 {
     // Create GameObject with UUID. Required keys use at(): const operator[] on a missing key is an
     // assertion/UB in nlohmann, while at() throws, which Scene::FromJSON turns into a failed load.
@@ -997,16 +1078,6 @@ GameObject::Ptr GameObject::Deserialize(const json &j, ReferenceResolver *resolv
                 // Was skipped silently, so a component missing REGISTER_COMPONENT vanished on every load
                 Logger::Warn(std::format("Unknown component type '{}' on '{}' was not loaded", typeName, go->_name));
             }
-        }
-    }
-
-    // Deserialize Children (recursive)
-    if (j.contains("children"))
-    {
-        for (const auto &childJson : j["children"])
-        {
-            const auto child = Deserialize(childJson, resolver);
-            go->AddChild(child, false); // Don't keep world position during load
         }
     }
 

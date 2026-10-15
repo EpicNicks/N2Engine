@@ -21,7 +21,11 @@
 #include "engine/io/Resources.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/scripting/LuaScript.hpp"
+#include "engine/prefabs/Prefab.hpp"
+#include "engine/prefabs/PrefabManager.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
+#include "engine/serialization/JsonLimits.hpp"
+#include "DeepSceneJson.hpp"
 #include "engine/serialization/ReferenceResolver.hpp"
 
 using namespace N2Engine;
@@ -459,4 +463,214 @@ TEST_F(AudioAssetReferenceTest, AudioSourceClipResolvesInALaterRun)
 
     ASSERT_NE(source->GetClip(), nullptr) << "looked up in IO::Resources, whose UUIDs are random per run";
     EXPECT_EQ(source->GetClip()->GetUUID(), clipUUID);
+}
+
+// ============================================================================
+// Nesting caps (JsonLimits.hpp): scene, prefab and snapshot data is untrusted
+// ============================================================================
+
+namespace
+{
+    using JsonLimits::MaxHierarchyDepth;
+    using JsonLimits::MaxSceneJsonDepth;
+
+    // The importers allow node trees 256 levels deep (assetimport kMaxNodeDepth), which a model places under a few
+    // scene objects: the hierarchy cap keeps a margin above that, and the text cap follows from it
+    static_assert(MaxHierarchyDepth >= 256 + 32);
+    static_assert(MaxSceneJsonDepth == 2 * MaxHierarchyDepth + 64);
+
+    // How many levels a GameObject chain has: walked down the first children, no recursion
+    std::size_t ChainLevels(const GameObject::Ptr &root)
+    {
+        std::size_t levels = 0;
+        for (GameObject::Ptr current = root; current != nullptr;
+             current = current->GetChildCount() > 0 ? current->GetChild(0) : nullptr)
+        {
+            ++levels;
+        }
+        return levels;
+    }
+
+    // A chain of `levels` GameObjects made with AddChild (no JSON)
+    GameObject::Ptr BuiltChain(const std::size_t levels, GameObject::Ptr *deepest = nullptr)
+    {
+        const GameObject::Ptr root = GameObject::Create("root");
+        GameObject::Ptr current = root;
+        for (std::size_t level = 1; level < levels; ++level)
+        {
+            const GameObject::Ptr child = GameObject::Create("n");
+            current->AddChild(child, false);
+            current = child;
+        }
+        if (deepest != nullptr)
+        {
+            *deepest = current;
+        }
+        return root;
+    }
+
+    // The 100 000-level chain of the audit (several MB of text), parsed (the parser is iterative)
+    const json &VeryDeepChain()
+    {
+        static const json chain = json::parse(TestJson::ChainText(100000));
+        return chain;
+    }
+}
+
+TEST(SceneDepthTest, JsonScannerCountsNestingOutsideStringsOnly)
+{
+    EXPECT_FALSE(JsonLimits::NestsDeeperThan("[[[[1]]]]", 4));
+    EXPECT_TRUE(JsonLimits::NestsDeeperThan("[[[[[1]]]]]", 4));
+    // brackets, braces and escaped quotes inside strings do not count, and an escaped quote does not end the string
+    EXPECT_FALSE(JsonLimits::NestsDeeperThan(R"({"a":"[[[[[[\"[[{{","b":[1]})", 2));
+    EXPECT_FALSE(JsonLimits::NestsDeeperThan(R"(["\\", "[[[[", {"k":"}}}}"}])", 2));
+    // nesting through component data counts as much as nesting through children
+    const std::string inData = R"({"name":"s","rootGameObjects":[{"components":[{"type":"X","data":)" +
+                               TestJson::NestedArrays(MaxSceneJsonDepth) + "}]}]}";
+    EXPECT_TRUE(JsonLimits::SceneJsonTooDeep(inData));
+    // the pre-scan of text and the walk of a parsed value agree
+    EXPECT_TRUE(JsonLimits::SceneValueTooDeep(json::parse(inData)));
+    EXPECT_EQ(JsonLimits::NestingDepth(json::parse(TestJson::NestedArrays(30))), 30u);
+    EXPECT_EQ(JsonLimits::NestingDepth(json(5)), 0u);
+}
+
+TEST(SceneDepthTest, JsonTextAtTheCapIsKeptAndOnePastItIsRefusedBeforeParsing)
+{
+    EXPECT_FALSE(JsonLimits::SceneJsonTooDeep(TestJson::NestedArrays(MaxSceneJsonDepth)));
+    EXPECT_TRUE(JsonLimits::SceneJsonTooDeep(TestJson::NestedArrays(MaxSceneJsonDepth + 1)));
+    EXPECT_NE(JsonLimits::SceneJsonTooDeepMessage().find("the scene JSON nests more than 1088 levels deep"),
+              std::string::npos);
+    EXPECT_FALSE(JsonLimits::SceneJsonTooDeep(TestJson::SceneText(MaxHierarchyDepth)));
+    EXPECT_TRUE(JsonLimits::SceneJsonTooDeep(TestJson::ChainText(100000)));
+}
+
+TEST(SceneDepthTest, HierarchyJustUnderTheCapDeserializesSerializesAndDumps)
+{
+    // The stack this runs on is the smallest the tests meet (MSVC Debug, 1 MiB for the main thread): Deserialize,
+    // Serialize, dump, and the walks over the tree must all fit it at the deepest allowed tree
+    for (const std::size_t levels : {MaxHierarchyDepth - 1, MaxHierarchyDepth})
+    {
+        const json data = json::parse(TestJson::ChainText(levels));
+        const GameObject::Ptr root = GameObject::Deserialize(data);
+        ASSERT_NE(root, nullptr);
+        EXPECT_EQ(ChainLevels(root), levels);
+        EXPECT_NE(root->FindChildRecursive("leaf"), nullptr);
+        EXPECT_EQ(root->GetChildrenRecursive().size(), levels - 1);
+
+        const json saved = root->Serialize();
+        const std::string text = saved.dump();
+        EXPECT_EQ(JsonLimits::NestingDepth(json::parse(text)), 2 * levels);
+        EXPECT_FALSE(JsonLimits::SceneJsonTooDeep(text));
+        EXPECT_EQ(ChainLevels(GameObject::Deserialize(json::parse(text))), levels) << "it loads again from its own text";
+    }
+}
+
+TEST(SceneDepthTest, HierarchyOnePastTheCapIsRefusedWithAnErrorNamingTheCap)
+{
+    const json data = json::parse(TestJson::ChainText(MaxHierarchyDepth + 1));
+    try
+    {
+        (void)GameObject::Deserialize(data);
+        FAIL() << "a hierarchy past the cap was built";
+    }
+    catch (const std::invalid_argument &error)
+    {
+        EXPECT_NE(std::string(error.what()).find("512"), std::string::npos) << error.what();
+    }
+}
+
+TEST(SceneDepthTest, SceneFromJsonLoadsTheDeepestAllowedSceneAndRefusesOnePastIt)
+{
+    const auto allowed = Scene::FromJSON(json::parse(TestJson::SceneText(MaxHierarchyDepth)), true);
+    ASSERT_NE(allowed, nullptr);
+    ASSERT_EQ(allowed->GetRootGameObjectCount(), 1u);
+    EXPECT_EQ(ChainLevels(allowed->GetRootGameObjects().front()), MaxHierarchyDepth);
+    EXPECT_NE(allowed->FindGameObject("leaf"), nullptr);
+    EXPECT_FALSE(allowed->Serialize().dump().empty());
+
+    EXPECT_EQ(Scene::FromJSON(json::parse(TestJson::SceneText(MaxHierarchyDepth + 1)), true), nullptr);
+    EXPECT_EQ(Scene::FromJSON(json::parse(TestJson::SceneText(MaxHierarchyDepth + 1)), false), nullptr);
+}
+
+TEST(SceneDepthTest, AHundredThousandLevelChainIsAnErrorOnEveryEngineEntryPoint)
+{
+    const json &chain = VeryDeepChain();
+    EXPECT_THROW((void)GameObject::Deserialize(chain), std::invalid_argument);
+
+    json scene = {{"name", "Deep"}, {"rootGameObjects", json::array()}};
+    scene["rootGameObjects"].push_back(chain);
+    EXPECT_EQ(Scene::FromJSON(scene, true), nullptr);
+    EXPECT_EQ(Scene::FromJSON(scene, false), nullptr);
+
+    const json prefab = {{"name", "Deep"}, {"rootObject", chain}};
+    const auto parsed = Prefab::Deserialize(prefab);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_EQ(parsed.error(), PrefabParseError::InvalidRootObject);
+    EXPECT_EQ(PrefabManager::InstantiatePrefab(prefab), nullptr);
+    EXPECT_EQ(PrefabManager::InstantiatePrefab(chain), nullptr);
+}
+
+TEST(SceneDepthTest, AFailedDeepLoadBuildsNothingAndLeavesNoPartialObjectsBehind)
+{
+    // Scene::FromJSON throws away the half-built tree: the scene the caller holds is the one it had
+    auto scene = Scene::FromJSON(json::parse(TestJson::SceneText(2)), true);
+    ASSERT_NE(scene, nullptr);
+    const std::size_t roots = scene->GetRootGameObjectCount();
+    EXPECT_EQ(Scene::FromJSON(json::parse(TestJson::SceneText(MaxHierarchyDepth + 1)), true), nullptr);
+    EXPECT_EQ(scene->GetRootGameObjectCount(), roots);
+
+    // and a resolver given to a refused Deserialize is the caller's, whose ResolveAll the throw skipped
+    ReferenceResolver resolver;
+    EXPECT_THROW((void)GameObject::Deserialize(json::parse(TestJson::ChainText(MaxHierarchyDepth + 1)), &resolver),
+                 std::invalid_argument);
+}
+
+TEST(SceneDepthTest, ReparentingPastTheCapIsRefusedAndChangesNothing)
+{
+    GameObject::Ptr deepest;
+    const GameObject::Ptr root = BuiltChain(MaxHierarchyDepth, &deepest);
+    ASSERT_EQ(ChainLevels(root), MaxHierarchyDepth);
+
+    // a leaf under the deepest object would be level cap + 1
+    const GameObject::Ptr leaf = GameObject::Create("leaf");
+    EXPECT_FALSE(deepest->CanAddChild(leaf));
+    deepest->AddChild(leaf, false);
+    EXPECT_EQ(leaf->GetParent(), nullptr);
+    leaf->SetParent(deepest, false);
+    EXPECT_EQ(leaf->GetParent(), nullptr);
+    EXPECT_EQ(deepest->GetChildCount(), 0u);
+
+    // a subtree two levels high does not fit under the parent of the deepest object, a leaf does
+    const GameObject::Ptr above = deepest->GetParent();
+    const GameObject::Ptr pair = GameObject::Create("pair");
+    pair->AddChild(GameObject::Create("pairChild"), false);
+    EXPECT_FALSE(above->CanAddChild(pair));
+    above->AddChild(pair, false);
+    EXPECT_EQ(pair->GetParent(), nullptr);
+    EXPECT_TRUE(above->CanAddChild(leaf));
+
+    // moving an object that has a parent already: it stays where it was when the move is refused
+    const GameObject::Ptr other = GameObject::Create("other");
+    const GameObject::Ptr moved = GameObject::Create("moved");
+    moved->AddChild(GameObject::Create("movedChild"), false);
+    other->AddChild(moved, false);
+    moved->SetParent(above, false);
+    EXPECT_EQ(moved->GetParent(), other);
+
+    // one level shallower, the same kind of move is fine
+    above->AddChild(leaf, false);
+    EXPECT_EQ(leaf->GetParent(), above);
+    EXPECT_EQ(ChainLevels(root), MaxHierarchyDepth) << "the chain is as it was";
+}
+
+TEST(SceneDepthTest, ASerializedDeepestTreeStaysUnderTheTextCap)
+{
+    // every GameObject level costs two JSON levels, so the deepest hierarchy fits the text cap with room for data
+    GameObject::Ptr deepest;
+    const GameObject::Ptr root = BuiltChain(MaxHierarchyDepth, &deepest);
+    const auto scene = Scene::Create("Deepest");
+    scene->AddRootGameObject(root);
+    const std::string text = scene->Serialize().dump();
+    EXPECT_FALSE(JsonLimits::SceneJsonTooDeep(text));
+    EXPECT_LE(JsonLimits::NestingDepth(json::parse(text)), MaxSceneJsonDepth - 60);
 }

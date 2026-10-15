@@ -5,6 +5,7 @@
 #include "engine/prefabs/Prefab.hpp"
 #include "engine/GameObject.hpp"
 #include "engine/Logger.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 
 using namespace N2Engine;
 
@@ -35,6 +36,14 @@ std::expected<std::unique_ptr<Prefab>, PrefabParseError> Prefab::Deserialize(
     const nlohmann::json &j,
     ReferenceResolver *resolver)
 {
+    // Data deeper than a prefab may nest is refused before anything recurses over it (prefab JSON can come from
+    // a file or a client): the same error as a hierarchy that is too deep
+    if (JsonLimits::SceneValueTooDeep(j))
+    {
+        Logger::Error(std::format("Prefab::Deserialize: invalid root object: {}", JsonLimits::SceneJsonTooDeepMessage()));
+        return std::unexpected(PrefabParseError::InvalidRootObject);
+    }
+
     // contains() is false for anything that isn't an object, so non-object data is MissingName
     if (!j.contains("name"))
     {
