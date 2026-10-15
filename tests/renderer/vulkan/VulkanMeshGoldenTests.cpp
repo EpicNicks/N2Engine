@@ -453,7 +453,7 @@ TEST_F(VulkanMeshGoldenTest, TwoSubmeshesShowTheirTwoMaterials)
     EXPECT_EQ(glassPixel.b, 0);
     EXPECT_EQ(mixed.Count(kGreen), 0) << "no pixel is the opaque green";
     EXPECT_EQ(mixedSoftware.At(Size / 2 + 8, row), kGreen) << "the software renderer draws it opaque";
-    const int blendedPixels = [&mixed]
+    const int blendedPixels = [&mixed, expectedGreen]
     {
         int count = 0;
         for (int y = 0; y < Size; ++y)
