@@ -80,7 +80,7 @@
 <li><a href="#size-report">The size report and budgets</a></li>
 <li><a href="#ci">CI</a></li>
 <li><a href="#not-done">What is not done yet</a></li>
-<li><a href="#unverified">Unverified</a></li>
+<li><a href="#unverified">Verified and unverified</a></li>
 </ol>
 </div>
 
@@ -95,7 +95,7 @@
 
 <h2 id="toolchain">Toolchain and pinned version</h2>
 <p>The toolchain is <a href="https://emscripten.org/">Emscripten</a>, used through CMake's own Emscripten toolchain file (<code>emcmake cmake</code>). CMake detects it (<code>EMSCRIPTEN</code> is set, or <code>CMAKE_SYSTEM_NAME</code> is <code>Emscripten</code>) and the root <code>CMakeLists.txt</code> sets the derived variable <code>N2ENGINE_PLATFORM_WEB</code> to <code>ON</code>, includes <code>cmake/N2EngineWeb.cmake</code>, and compiles every target with <code>-DN2ENGINE_PLATFORM_WEB=1</code>. On every other configuration the variable is <code>OFF</code> and nothing else changes: no native option, target, source list or flag differs.</p>
-<p>The version is pinned to <strong>Emscripten 4.0.10</strong> (the <code>EMSCRIPTEN_VERSION</code> variable in the CI job), installed with the official <a href="https://github.com/emscripten-core/emsdk">emsdk</a> and not through a third-party action. Pinning keeps an upstream release from changing the build with no change in this repository; the 4.0 series was chosen for its recent LLVM and libc++ (the engine is C++23). Whether 4.0.10 is new enough is proven only by the CI job, see <a href="#unverified">Unverified</a>. Changing the pin means changing it in <code>.github/workflows/tests.yml</code> and here.</p>
+<p>The version is pinned to <strong>Emscripten 4.0.10</strong> (the <code>EMSCRIPTEN_VERSION</code> variable in the CI job), installed with the official <a href="https://github.com/emscripten-core/emsdk">emsdk</a> and not through a third-party action. Pinning keeps an upstream release from changing the build with no change in this repository; the 4.0 series was chosen for its recent LLVM and libc++ (the engine is C++23). Emscripten 4.0.10 was built and tested by the CI job, see <a href="#unverified">Verified and unverified</a>. Changing the pin means changing it in <code>.github/workflows/tests.yml</code> and here.</p>
 
 <h2 id="build">Building locally</h2>
 <p>Install and activate the pinned SDK once (Linux or macOS shell; on Windows use <code>emsdk.bat</code> and <code>emsdk_env.bat</code>), then configure with <code>emcmake</code> and build with CMake as usual. You need CMake 3.25 or newer and Ninja (or another generator).</p>
@@ -188,10 +188,14 @@ cmake -S . -B build-web -DN2ENGINE_WEB_BUDGET_TOTAL_GZIP=2000000 &amp;&amp; cmak
 <li>Stage 7: the WebGPU backend.</li>
 </ol>
 
-<h2 id="unverified">Unverified</h2>
+<h2 id="unverified">Verified and unverified</h2>
+<div class="callout note">
+<p class="callout-title">Verified by the first CI run of the web job <span class="badge">PR #163</span></p>
+<p>Emscripten 4.0.10 builds the C++23 code of <code>math</code>, <code>text</code> and googletest (without pthreads) with the <code>dev</code> profile; CMake's Emscripten toolchain runs the tests under node and ctest sees their exit code; <code>math_tests</code> (91 tests passed, the SSE2, SSE4.1 and AVX dispatch tests and the three threaded UUID tests skipped) and <code>text_tests</code> (72 passed) pass; the <code>size</code> and <code>speed</code> profiles configure; the size report lists the four artifacts (the dev-profile test executables are 9 MB and 12 MB of <code>.wasm</code> with debug info, which is not a size result).</p>
+</div>
 <div class="callout open-question">
 <p class="callout-title">Open question</p>
-<p>Nothing here was built locally; the first CI run of the web job is the only proof. Not verified: that Emscripten 4.0.10 builds the C++23 code of <code>math</code>, <code>text</code> and googletest; that the toolchain's emulator runs the tests under node and returns their exit code; that googletest links without pthreads; that the <code>size</code> and <code>speed</code> flags work (only <code>dev</code> is built, the others are configured); and whether the engine core can be added with small guards (it is believed not).</p>
+<p>Not verified: that the <code>size</code> and <code>speed</code> flags build and link (they are only configured in CI, and a configure does not compile with <code>add_compile_options</code> flags); real sizes under <code>size</code>; browser behaviour (nothing here runs in a browser); and whether the engine core can be added with small guards (believed not, see the exclusion table).</p>
 </div>
 
 <div class="page-footer">
