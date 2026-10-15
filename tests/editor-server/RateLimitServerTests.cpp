@@ -420,6 +420,24 @@ TEST(RateLimitServerTest, OnlyAWrongTokenCountsNotAVersionMismatch)
     EXPECT_EQ(hello->type, ServerInfoType) << hello->Text();
 }
 
+TEST(RateLimitServerTest, AMalformedHelloCountsAsAFailureOfItsAddress)
+{
+    RateLimitedServer host;
+    ASSERT_TRUE(host.started);
+
+    // A Hello header with no payload does not parse: refused, and the connection closed, but not for the version
+    for (int i = 0; i < 3; ++i)
+    {
+        TestClient client(host.server.GetPort());
+        ASSERT_TRUE(client.IsConnected());
+        const auto response = Roundtrip(host.server, client, CommandType::Hello);
+        ASSERT_TRUE(response.has_value()) << i;
+        EXPECT_EQ(response->type, ErrorType) << i;
+        EXPECT_TRUE(client.IsClosedByServer()) << i;
+    }
+    EXPECT_TRUE(host.ClosedAtAccept());
+}
+
 TEST(RateLimitServerTest, APeerWithFailuresOnRecordGetsTheShortBudget)
 {
     RateLimitPolicy policy;
