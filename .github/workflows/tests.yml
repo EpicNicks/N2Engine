@@ -259,6 +259,13 @@ jobs:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
 
+      # ctest hides a passing test's output: run the PhysX determinism tests again directly (Release PhysX leg only), so
+      # their [DETERMINISM] lines (divergence steps, state hashes) appear in this job's log
+      - name: PhysX determinism numbers
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON'
+        shell: pwsh
+        run: ./build/bin/Release/engine_tests.exe --gtest_filter='*PhysXDeterminism*'
+
       # The real editor host, end to end (tests/smoke/editor_host_smoke.py, Python 3 standard library only; the Linux leg
       # runs the same script). Creates a project as a launcher would (--create, which must not start the engine), starts
       # the host on it (--port 0, then the port from its ready line) with the windowless software renderer and an access
@@ -412,6 +419,11 @@ jobs:
           N2_VULKAN_EXPECT_CPU_DEVICE: "1"
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
+
+      # ctest hides a passing test's output: run the PhysX determinism tests again directly, so their [DETERMINISM] lines
+      # (divergence steps, state hashes) appear in this job's log
+      - name: PhysX determinism numbers
+        run: ./build/bin/engine_tests --gtest_filter='*PhysXDeterminism*'
 
       # The real host, end to end (tests/smoke/editor_host_smoke.py, standard library only): create a project, serve it
       # on the software renderer, and the --exit-on-* flags; then the --tls host, its certificate and key file mode.
