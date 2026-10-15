@@ -11,9 +11,9 @@
 #include "VulkanDraw.hpp"
 #include "VulkanResources.hpp"
 
-// Stage B of the Vulkan backend (#43): the three built-in shaders (unlit, lit, text; only unlit is handed out and drawn
-// with so far), materials, the pipeline layout and cache, the per-draw uniform ring, descriptor sets, and DrawMesh /
-// IndexRange / DrawObjects.
+// Stages B and C of the Vulkan backend (#43): the three built-in shaders (unlit, lit, text; unlit and lit are handed out
+// and drawn with so far, text is stage E), materials, the pipeline layout and cache, the per-draw uniform ring, descriptor
+// sets, scene lighting, and DrawMesh / IndexRange / DrawObjects.
 //
 // Shaders: GLSL 450 under renderer/shaders/vulkan/, compiled to SPIR-V by glslangValidator or glslc when the renderer is
 // BUILT (renderer/CMakeLists.txt) and embedded as generated headers; nothing generated is committed. Without either tool
@@ -21,11 +21,20 @@
 //
 // Interface (VulkanShaderInterface.hpp is the table; the GLSL declares the same):
 //   set 0 (the frame):    binding 0 PerDraw (model, view, projection: UNIFORM_BUFFER_DYNAMIC, an offset per draw in the ring),
-//                         binding 1 Lighting (one buffer, zero-filled in stage B, written by stage C)
+//                         binding 1 Lighting (UNIFORM_BUFFER_DYNAMIC: a copy of the scene lighting block in the ring, below)
 //   set 1 (the material): binding 0 Material block (UNIFORM_BUFFER_DYNAMIC, an offset per draw in the ring),
 //                         bindings 1-5 COMBINED_IMAGE_SAMPLER (the base texture, then the AuxTexture slots in enum order;
 //                         an absent texture is a renderer-owned 1x1 default)
 // One pipeline layout serves all three shaders.
+//
+// SCENE LIGHTING (stage C). UpdateSceneLighting builds the 752-byte std140 block (VulkanLighting.hpp) into a CPU copy and
+// bumps a version; it touches no GPU memory. The first LIT draw after an update copies the block into the current frame
+// slot's ring and every lit draw names that copy with the dynamic offset of set 0's binding 1 (one copy per ring chunk per
+// version). So, as on OpenGL, a draw uses the lighting set by the last UpdateSceneLighting BEFORE it, an update after a draw
+// does not change it, and the next frame's update does not touch a frame in flight: the copies live in the ring, which is
+// rewritten only after the slot's fence wait, like the per-draw data. (The stage B single lighting buffer, read by both frame
+// slots, is gone; the alternative of one buffer per slot would need a ring copy for a second update in a frame anyway.)
+// Before the first update the block holds SceneLightingData{} seen from the origin, as the software renderer's members do.
 //
 // A draw is immediate: DrawMesh writes the draw's model/view/projection and a snapshot of the material block into the
 // current frame slot's ring (a host-visible, persistently mapped uniform buffer, aligned to
@@ -176,13 +185,31 @@ VulkanMaterial::VulkanMaterial(const BuiltInShader shaderKind, IShader* owner, I
     : kind(shaderKind), shader(owner), _warn(std::move(warn)), _textureIdOf(std::move(textureIdOf)), _texture(baseTexture)
 {
     _textureId = (_textureIdOf && baseTexture != nullptr) ? _textureIdOf(baseTexture) : 0;
-    // The OpenGL defaults: OpenGLMaterial's constructor sets uAlbedo white, OpenGLRenderer::CreateMaterial sets
-    // uHasTexture (a texture was given) and uAlphaCutoff 0 (the zero-filled block already holds that)
-    const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    if (const Uniform* albedo = FindMaterialUniform(kind, "uAlbedo"))
+    // The OpenGL defaults, from the table (ShaderInterface::MaterialDefaults): OpenGLMaterial's constructor sets uAlbedo
+    // white, OpenGLRenderer::CreateMaterial the rest per shader (for lit: uMetallic 0, uSmoothness 0.5, uAlphaCutoff 0,
+    // uEmissive 0, the four uHas*Texture flags 0, uOcclusionStrength 1, uNormalScale 1, uPbr 0). All of them go through the
+    // name table, so the type of each entry decides how it is stored
+    for (const MaterialDefault& entry : MaterialDefaults(kind))
     {
-        WriteFloats(albedo->offset, white, 4);
+        const Uniform* uniform = FindMaterialUniform(kind, entry.name);
+        if (uniform == nullptr)
+        {
+            continue;
+        }
+        if (uniform->type == UniformType::Int)
+        {
+            const auto value = static_cast<std::int32_t>(entry.values[0]);
+            std::memcpy(_block.data() + uniform->offset, &value, sizeof(value));
+        }
+        else
+        {
+            const std::uint32_t floats = uniform->type == UniformType::Vec4 ? 4 : uniform->type == UniformType::Vec3 ? 3
+                : uniform->type == UniformType::Vec2                                                                 ? 2
+                                                                                                                      : 1;
+            WriteFloats(uniform->offset, entry.values.data(), floats);
+        }
     }
+    // uHasTexture: a texture was given at creation (SetTexture does not touch it, in either backend)
     if (const Uniform* hasTexture = FindMaterialUniform(kind, "uHasTexture"))
     {
         const std::int32_t value = baseTexture != nullptr ? 1 : 0;
@@ -329,6 +356,19 @@ ITexture* VulkanMaterial::GetTexture() const
     return _texture;
 }
 
+void VulkanMaterial::SetTextureIdForTest(const std::size_t slot, const std::uint64_t id)
+{
+    std::lock_guard lock(_mutex);
+    if (slot == 0)
+    {
+        _textureId = id;
+    }
+    else if (slot - 1 < _auxIds.size())
+    {
+        _auxIds[slot - 1] = id;
+    }
+}
+
 VulkanMaterial::Snapshot VulkanMaterial::TakeSnapshot() const
 {
     std::lock_guard lock(_mutex);
@@ -366,7 +406,7 @@ bool VulkanRenderer::CreateDrawResources()
         bindings[0].descriptorCount = 1;
         bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         bindings[1].binding = 1;
-        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC; // the lighting copy, an offset per draw
         bindings[1].descriptorCount = 1;
         bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo info{};
@@ -442,32 +482,6 @@ bool VulkanRenderer::CreateDrawResources()
         }
 #endif
         draw.shaders[i] = std::move(shader);
-    }
-
-    // The lighting block, zero-filled: the lit and text pipelines are layout-complete now, and stage C writes it
-    {
-        VkBufferCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        info.size = kLightingBlockSize;
-        info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-        info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VmaAllocationCreateInfo allocationInfo{};
-        allocationInfo.usage = VMA_MEMORY_USAGE_AUTO;
-        allocationInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-        if (vmaCreateBuffer(_resources->allocator, &info, &allocationInfo, &draw.lightingBuffer, &draw.lightingAllocation,
-                            nullptr) != VK_SUCCESS)
-        {
-            draw.lightingBuffer = VK_NULL_HANDLE;
-            draw.lightingAllocation = nullptr;
-            return Fail(InitStatus::Failed, "could not allocate the lighting uniform buffer");
-        }
-        ++draw.internalAllocations;
-        const std::array<std::uint8_t, kLightingBlockSize> zeros{};
-        if (vmaCopyMemoryToAllocation(_resources->allocator, zeros.data(), draw.lightingAllocation, 0, kLightingBlockSize) !=
-            VK_SUCCESS)
-        {
-            return Fail(InitStatus::Failed, "could not fill the lighting uniform buffer");
-        }
     }
 
     // The 1x1 defaults for an absent texture: base white, emissive black (adds nothing), occlusion white (no occlusion),
@@ -554,10 +568,6 @@ void VulkanRenderer::DestroyDrawResources()
                 vkDestroyShaderModule(_device, shader->fragmentModule, nullptr);
             }
         }
-        if (draw.lightingBuffer != VK_NULL_HANDLE && _resources->allocator != nullptr)
-        {
-            vmaDestroyBuffer(_resources->allocator, draw.lightingBuffer, draw.lightingAllocation);
-        }
         for (const std::unique_ptr<VulkanTexture>& texture : draw.defaults)
         {
             if (!texture)
@@ -598,6 +608,8 @@ void VulkanRenderer::BeginDrawFrame(const uint32_t slot)
     {
         chunk.used = 0;
         chunk.frameSet = VK_NULL_HANDLE;
+        chunk.lightingVersion = 0; // the lighting copy of an earlier frame is not this frame's
+        chunk.lightingOffset = 0;
     }
     frame.activeChunk = 0;
 }
@@ -692,9 +704,9 @@ VkDescriptorSet VulkanRenderer::AllocateSet(const uint32_t slot, const VkDescrip
         }
         else
         {
-            const std::array<VkDescriptorPoolSize, 3> sizes = {{
+            // A frame set holds two dynamic uniform buffers (per-draw, lighting), a material set one: 2 per set covers either
+            const std::array<VkDescriptorPoolSize, 2> sizes = {{
                 {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 2 * SetsPerPool},
-                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SetsPerPool},
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSamplerCount * SetsPerPool},
             }};
             VkDescriptorPoolCreateInfo info{};
@@ -912,7 +924,14 @@ void VulkanRenderer::SetWireframeUnavailableForTest(const bool unavailable)
     _draw->wireframeUnavailableForTest = unavailable;
     if (_initialized && unavailable)
     {
+        // Like the real feature-absent path at Initialize: support is off, and wireframe that was already asked for is
+        // turned off with the shared line (once), so its draws come out solid instead of being dropped without a word
         _draw->wireframeSupported = false;
+        if (_draw->wireframe)
+        {
+            LogOnce(kWireframeIgnoredMessage);
+            _draw->wireframe = false;
+        }
     }
 }
 
@@ -926,6 +945,18 @@ uint32_t VulkanRenderer::GetPipelineCreateAttemptCountForTest() const
 {
     std::lock_guard lock(_mutex);
     return _draw->pipelineCreateAttempts;
+}
+
+bool VulkanRenderer::SetMaterialTextureIdForTest(IMaterial* material, const std::size_t slot, const std::uint64_t id)
+{
+    std::lock_guard lock(_mutex);
+    const auto it = _draw->materials.find(material);
+    if (it == _draw->materials.end() || slot > 4)
+    {
+        return false;
+    }
+    it->second->SetTextureIdForTest(slot, id);
+    return true;
 }
 
 uint64_t VulkanRenderer::GetTextureIdForTest(const ITexture* texture) const
@@ -1026,7 +1057,19 @@ IShader* VulkanRenderer::GetStandardUnlitShader() const
 
 IShader* VulkanRenderer::GetStandardLitShader() const
 {
-    LogUnsupportedOnce("GetStandardLitShader");
+    {
+        std::lock_guard lock(_mutex);
+        if (const VulkanShader* shader = _draw->shaders[ShaderIndex(BuiltInShader::Lit)].get();
+            shader != nullptr && shader->IsValid())
+        {
+            return const_cast<VulkanShader*>(shader);
+        }
+    }
+    if (!HasBuiltInShaders())
+    {
+        LogOnce("the built-in shaders were not compiled into this build (neither glslangValidator nor glslc was found when "
+                "CMake configured the renderer): the lit shader is not available and nothing will draw");
+    }
     return nullptr;
 }
 
@@ -1046,19 +1089,27 @@ IMaterial* VulkanRenderer::CreateMaterial(IShader* shader, ITexture* texture)
     {
         return nullptr;
     }
-    const VulkanShader* unlit = _draw->shaders[ShaderIndex(BuiltInShader::Unlit)].get();
-    if (unlit == nullptr || !unlit->IsValid() || shader != unlit)
+    // Unlit and lit have materials; the text shader's are stage E. A foreign shader is only compared with the built-ins,
+    // never dereferenced
+    const VulkanShader* chosen = nullptr;
+    for (const BuiltInShader candidate : {BuiltInShader::Unlit, BuiltInShader::Lit})
     {
-        // Only the unlit built-in has materials so far: the lit shader's are stage C, the text shader's stage E. A foreign
-        // shader is only compared with the built-in, never dereferenced
-        LogOnce("CreateMaterial: only materials of the unlit built-in shader exist so far (lit: stage C, text: stage E of "
-                "#43); returning null");
+        const VulkanShader* builtIn = _draw->shaders[ShaderIndex(candidate)].get();
+        if (builtIn != nullptr && builtIn->IsValid() && shader == builtIn)
+        {
+            chosen = builtIn;
+        }
+    }
+    if (chosen == nullptr)
+    {
+        LogOnce("CreateMaterial: only materials of the unlit and lit built-in shaders exist so far (text: stage E of #43); "
+                "returning null");
         return nullptr;
     }
 
     DrawState* const draw = _draw.get(); // the materials die with it, so it outlives them
     auto material = std::make_unique<VulkanMaterial>(
-        BuiltInShader::Unlit, shader, texture, [this](const std::string& message) { LogOnce(message); },
+        chosen->kind, shader, texture, [this](const std::string& message) { LogOnce(message); },
         [draw](const ITexture* candidate) -> std::uint64_t
         {
             std::lock_guard idLock(draw->textureIdMutex);
@@ -1097,6 +1148,38 @@ void VulkanRenderer::SetViewProjection(const float* view, const float* projectio
     {
         std::memcpy(_draw->projection, projection, sizeof(_draw->projection));
     }
+}
+
+void VulkanRenderer::UpdateSceneLighting(const Common::SceneLightingData& lighting,
+                                         const N2Engine::Math::Vector3& cameraPosition)
+{
+    // Builds the block now (a pure function of its arguments) under the lock and stores it: no GPU memory is touched. The
+    // lit draws made after this call copy it into the ring (see the header comment: GL semantics, and nothing a frame in
+    // flight reads is rewritten). Called inside a frame, outside one, or several times in a frame; before the first call the
+    // block holds the defaults
+    const LightingBlock block = BuildLightingBlock(lighting, cameraPosition);
+    std::lock_guard lock(_mutex);
+    _draw->lighting = block;
+    ++_draw->lightingVersion;
+}
+
+bool VulkanRenderer::GetMaterialBlockForTest(const IMaterial* material, std::vector<std::uint8_t>& bytes) const
+{
+    std::lock_guard lock(_mutex);
+    const auto it = _draw->materials.find(material);
+    if (it == _draw->materials.end())
+    {
+        return false;
+    }
+    const VulkanMaterial::Snapshot snapshot = it->second->TakeSnapshot();
+    bytes.assign(snapshot.block.begin(), snapshot.block.end());
+    return true;
+}
+
+std::vector<std::uint8_t> VulkanRenderer::GetLightingBlockForTest() const
+{
+    std::lock_guard lock(_mutex);
+    return std::vector<std::uint8_t>(_draw->lighting.begin(), _draw->lighting.end());
 }
 
 void VulkanRenderer::SetWireframe(const bool enabled)
@@ -1213,17 +1296,32 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
         samplers[i] = texture->sampler;
     }
 
-    // This draw's room in the ring: the per-draw block, then the material block, each at an aligned offset
+    // This draw's room in the ring: the per-draw block, then the material block, each at an aligned offset; and, for a lit
+    // draw whose chunk does not hold the current lighting yet, the lighting block after them
     const uint32_t slot = _currentFrame;
+    FrameDrawState& frame = draw.frames[slot];
+    const bool lit = vulkanMaterial.kind == BuiltInShader::Lit;
     const VkDeviceSize perDrawBytes = AlignUp(kPerDrawBlockSize, draw.uniformAlignment);
     const VkDeviceSize materialBytes = AlignUp(kMaterialBlockRange, draw.uniformAlignment);
+    const VkDeviceSize lightingBytes = AlignUp(kLightingBlockSize, draw.uniformAlignment);
     std::size_t chunkIndex = 0;
     VkDeviceSize offset = 0;
-    if (!AllocateRing(slot, perDrawBytes + materialBytes, chunkIndex, offset))
+    bool copyLighting = false;
+    for (;;)
     {
-        return;
+        // Ask for the lighting too when the chunk the draw would start in does not hold this version of it. If the chunk is
+        // full the allocation moves to the next, which holds none: then ask again with the lighting included
+        copyLighting = lit &&
+            !(frame.activeChunk < frame.chunks.size() && frame.chunks[frame.activeChunk].lightingVersion == draw.lightingVersion);
+        if (!AllocateRing(slot, perDrawBytes + materialBytes + (copyLighting ? lightingBytes : 0), chunkIndex, offset))
+        {
+            return;
+        }
+        if (!lit || copyLighting || frame.chunks[chunkIndex].lightingVersion == draw.lightingVersion)
+        {
+            break;
+        }
     }
-    FrameDrawState& frame = draw.frames[slot];
     RingChunk& chunk = frame.chunks[chunkIndex];
 
     // Row-major matrices, copied as the engine passes them (the GLSL block is row_major, the counterpart of GL's
@@ -1233,6 +1331,13 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     std::memcpy(perDraw + 64, draw.view, 64);
     std::memcpy(perDraw + 128, draw.projection, 64);
     std::memcpy(chunk.mapped + offset + perDrawBytes, snapshot.block.data(), snapshot.block.size());
+    if (copyLighting)
+    {
+        // The first lit draw of this lighting version in this chunk: its copy goes after the material block
+        chunk.lightingOffset = offset + perDrawBytes + materialBytes;
+        chunk.lightingVersion = draw.lightingVersion;
+        std::memcpy(chunk.mapped + chunk.lightingOffset, draw.lighting.data(), draw.lighting.size());
+    }
 
     // Set 0: this chunk's per-draw range and the lighting buffer, made once per chunk per frame
     if (chunk.frameSet == VK_NULL_HANDLE)
@@ -1243,7 +1348,7 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
             return;
         }
         VkDescriptorBufferInfo perDrawInfo{chunk.buffer, 0, kPerDrawBlockSize};
-        VkDescriptorBufferInfo lightingInfo{draw.lightingBuffer, 0, kLightingBlockSize};
+        VkDescriptorBufferInfo lightingInfo{chunk.buffer, 0, kLightingBlockSize}; // the range at the draw's dynamic offset
         std::array<VkWriteDescriptorSet, 2> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = set;
@@ -1255,7 +1360,7 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
         writes[1].dstSet = set;
         writes[1].dstBinding = 1;
         writes[1].descriptorCount = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         writes[1].pBufferInfo = &lightingInfo;
         vkUpdateDescriptorSets(_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         chunk.frameSet = set;
@@ -1309,10 +1414,14 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
 
     const VkCommandBuffer commandBuffer = _frames[slot].commandBuffer;
     const VkDescriptorSet sets[2] = {chunk.frameSet, materialSet};
-    const uint32_t dynamicOffsets[2] = {static_cast<uint32_t>(offset), static_cast<uint32_t>(offset + perDrawBytes)};
+    // In the order of the dynamic descriptors: set 0 binding 0 (per-draw), set 0 binding 1 (lighting), set 1 binding 0
+    // (material). A draw that does not read the lighting (unlit) names the chunk's copy if it has one, else offset 0, which
+    // is in range (the chunks are far bigger than the block) and is never read
+    const uint32_t dynamicOffsets[3] = {static_cast<uint32_t>(offset), static_cast<uint32_t>(chunk.lightingOffset),
+                                        static_cast<uint32_t>(offset + perDrawBytes)};
     const VkDeviceSize vertexOffset = 0;
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.pipelineLayout, 0, 2, sets, 2,
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.pipelineLayout, 0, 2, sets, 3,
                             dynamicOffsets);
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vulkanMesh.vertexBuffer, &vertexOffset);
     vkCmdBindIndexBuffer(commandBuffer, vulkanMesh.indexBuffer, 0, VK_INDEX_TYPE_UINT32);

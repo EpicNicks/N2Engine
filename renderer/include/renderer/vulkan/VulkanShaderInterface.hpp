@@ -20,7 +20,9 @@
 // Blocks (std140):
 //   set 0, binding 0  PerDraw   (dynamic offset per draw)  uModel, uView, uProjection: row-major matrices, copied as the
 //                                                          engine gives them (the GLSL says row_major), 192 bytes
-//   set 0, binding 1  Lighting  (one buffer)               scene lighting for the lit shader (filled in stage C)
+//   set 0, binding 1  Lighting  (dynamic offset per draw)  scene lighting for the lit shader (stage C: UpdateSceneLighting
+//                                                          keeps a CPU copy; the first lit draw after each update copies
+//                                                          it into the frame's ring, see VulkanDraw.cpp)
 //   set 1, binding 0  Material  (dynamic offset per draw)  the material's values, snapshotted at DrawMesh
 //   set 1, binding 1..5 samplers                           the base texture, then the AuxTexture slots in enum order
 namespace Renderer::Vulkan::ShaderInterface
@@ -166,6 +168,121 @@ namespace Renderer::Vulkan::ShaderInterface
     }};
     static_assert(kLitLighting.back().offset + kLitLighting.back().size == kLightingBlockSize);
 
+    /// One member of a light struct inside the lighting block: its std140 offset from the start of the array element
+    struct Member
+    {
+        std::string_view name;
+        std::uint32_t offset;
+        UniformType type;
+    };
+
+    // The light structs (std140: a vec3 aligns to 16 and a float may follow it in the same 16 bytes; a struct is rounded up
+    // to 16 bytes, so the array strides are 32, 48 and 64). They are the declarations in lit.frag, member by member
+    inline constexpr std::array<Member, 3> kDirectionalLightMembers{{
+        {"direction", 0, UniformType::Vec3},
+        {"color", 16, UniformType::Vec3},
+        {"intensity", 28, UniformType::Float},
+    }};
+    inline constexpr std::uint32_t kDirectionalLightStride = 32;
+
+    inline constexpr std::array<Member, 5> kPointLightMembers{{
+        {"position", 0, UniformType::Vec3},
+        {"color", 16, UniformType::Vec3},
+        {"intensity", 28, UniformType::Float},
+        {"range", 32, UniformType::Float},
+        {"attenuation", 36, UniformType::Float},
+    }};
+    inline constexpr std::uint32_t kPointLightStride = 48;
+
+    inline constexpr std::array<Member, 7> kSpotLightMembers{{
+        {"position", 0, UniformType::Vec3},
+        {"direction", 16, UniformType::Vec3},
+        {"color", 32, UniformType::Vec3},
+        {"intensity", 44, UniformType::Float},
+        {"range", 48, UniformType::Float},
+        {"cosInner", 52, UniformType::Float},
+        {"cosOuter", 56, UniformType::Float},
+    }};
+    inline constexpr std::uint32_t kSpotLightStride = 64;
+
+    /// The offset of a lighting-block member of the lit shader, resolved at compile time: a name that is not in the table
+    /// does not compile, so the code that fills the block cannot carry a second, hand-typed copy of an offset
+    [[nodiscard]] consteval std::uint32_t LightingOffset(const std::string_view name)
+    {
+        for (const Uniform& uniform : kLitLighting)
+        {
+            if (uniform.name == name)
+            {
+                return uniform.offset;
+            }
+        }
+        throw "not a member of the lit shader's lighting block";
+    }
+
+    /// The offset of a member inside one element of a light array, resolved at compile time
+    template <std::size_t N>
+    [[nodiscard]] consteval std::uint32_t MemberOffset(const std::array<Member, N>& members, const std::string_view name)
+    {
+        for (const Member& member : members)
+        {
+            if (member.name == name)
+            {
+                return member.offset;
+            }
+        }
+        throw "not a member of the light struct";
+    }
+
+    // The array entries of the lighting table and the struct tables agree (count x stride = the array's size)
+    static_assert(kDirectionalLightStride * kDirectionalLightCount == kLitLighting[6].size);
+    static_assert(kPointLightStride * kPointLightCount == kLitLighting[7].size);
+    static_assert(kSpotLightStride * kSpotLightCount == kLitLighting[8].size);
+    static_assert(kDirectionalLightMembers.back().offset + 4 <= kDirectionalLightStride);
+    static_assert(kPointLightMembers.back().offset + 4 <= kPointLightStride);
+    static_assert(kSpotLightMembers.back().offset + 4 <= kSpotLightStride);
+
+    /// What a new material of a shader holds before anything is set: the OpenGL defaults (OpenGLMaterial's constructor and
+    /// OpenGLRenderer::CreateMaterial), so a Vulkan material draws what an OpenGL one does. `values` holds the vec4 or vec3
+    /// components, or the one float or int (an int is the value cast). uHasTexture is not here: it depends on whether a
+    /// texture was given at creation
+    struct MaterialDefault
+    {
+        std::string_view name;
+        std::array<float, 4> values;
+    };
+
+    inline constexpr std::array<MaterialDefault, 2> kUnlitMaterialDefaults{{
+        {"uAlbedo", {1.0f, 1.0f, 1.0f, 1.0f}},
+        {"uAlphaCutoff", {0.0f, 0.0f, 0.0f, 0.0f}},
+    }};
+
+    inline constexpr std::array<MaterialDefault, 12> kLitMaterialDefaults{{
+        {"uAlbedo", {1.0f, 1.0f, 1.0f, 1.0f}},
+        {"uMetallic", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uSmoothness", {0.5f, 0.0f, 0.0f, 0.0f}},
+        {"uAlphaCutoff", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uEmissive", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uHasEmissiveTexture", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uHasOcclusionTexture", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uOcclusionStrength", {1.0f, 0.0f, 0.0f, 0.0f}},
+        {"uHasNormalTexture", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uNormalScale", {1.0f, 0.0f, 0.0f, 0.0f}},
+        {"uPbr", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uHasMetallicRoughnessTexture", {0.0f, 0.0f, 0.0f, 0.0f}},
+    }};
+
+    /// The text shader's material defaults (OpenGL's CreateMaterial gives the text shader no effects; uAlbedo is white).
+    /// Text materials come in stage E
+    inline constexpr std::array<MaterialDefault, 7> kTextMaterialDefaults{{
+        {"uAlbedo", {1.0f, 1.0f, 1.0f, 1.0f}},
+        {"uOutline", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uOutlineColor", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uSoftness", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uShadowColor", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uShadowOffset", {0.0f, 0.0f, 0.0f, 0.0f}},
+        {"uShadowSoftness", {0.0f, 0.0f, 0.0f, 0.0f}},
+    }};
+
     inline constexpr std::array<Sampler, 1> kBaseSampler{{{"uTexture", 1}}};
     inline constexpr std::array<Sampler, 5> kLitSamplers{{
         {"uTexture", 1},
@@ -183,6 +300,17 @@ namespace Renderer::Vulkan::ShaderInterface
         case BuiltInShader::Unlit: return kUnlitMaterial;
         case BuiltInShader::Lit: return kLitMaterial;
         case BuiltInShader::Text: return kTextMaterial;
+        }
+        return {};
+    }
+
+    [[nodiscard]] constexpr std::span<const MaterialDefault> MaterialDefaults(const BuiltInShader shader)
+    {
+        switch (shader)
+        {
+        case BuiltInShader::Unlit: return kUnlitMaterialDefaults;
+        case BuiltInShader::Lit: return kLitMaterialDefaults;
+        case BuiltInShader::Text: return kTextMaterialDefaults;
         }
         return {};
     }
