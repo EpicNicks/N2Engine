@@ -13,6 +13,13 @@
 
 using N2Engine::Math::UUID;
 
+// The web baseline is single-threaded (no SharedArrayBuffer, no pthreads): std::thread cannot start one there
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+#define N2_SKIP_WITHOUT_THREADS() GTEST_SKIP() << "no threads in the single-threaded web build"
+#else
+#define N2_SKIP_WITHOUT_THREADS() (void)0
+#endif
+
 namespace
 {
     using Bytes = std::array<std::uint8_t, 16>;
@@ -56,6 +63,7 @@ TEST(UUIDRandomTest, TwoHundredThousandOnOneThreadAreUniqueWithV4Bits)
 
 TEST(UUIDRandomTest, EightThreadsOfTwentyFiveThousandAreGloballyUnique)
 {
+    N2_SKIP_WITHOUT_THREADS();
     constexpr std::size_t kThreads = 8;
     constexpr std::size_t kPerThread = 25000;
     std::vector<std::vector<Bytes>> results(kThreads);
@@ -85,6 +93,7 @@ TEST(UUIDRandomTest, EightThreadsOfTwentyFiveThousandAreGloballyUnique)
 
 TEST(UUIDRandomTest, FirstUUIDsOfTwoThreadsDiffer)
 {
+    N2_SKIP_WITHOUT_THREADS();
     UUID a = UUID::ZERO;
     UUID b = UUID::ZERO;
     std::thread ta([&a]() { a = UUID::Random(); });
@@ -101,6 +110,7 @@ TEST(UUIDRandomTest, FirstUUIDsOfTwoThreadsDiffer)
 
 TEST(UUIDRandomTest, ThreadsStartingAndExitingRepeatedlyStayUnique)
 {
+    N2_SKIP_WITHOUT_THREADS();
     constexpr int kRounds = 100;
     std::vector<Bytes> all;
     all.reserve(kRounds * 4);

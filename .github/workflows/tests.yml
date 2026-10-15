@@ -655,3 +655,70 @@ jobs:
           done
           docker logs n2tokens
           exit 1
+
+  # The web (WebAssembly) build, stage 0 of issue #155: the math and text libraries and their unit tests, built with
+  # Emscripten and run under node. Not a required check. Emscripten is pinned to an exact release (EMSCRIPTEN_VERSION, installed
+  # with the official emsdk, no third-party action): a moving "latest" would let an upstream release break or change the
+  # build with no change in this repository. 4.0.10 was chosen as a 4.0 release with a recent LLVM/libc++ for C++23 (not yet proven: the first
+  # run of this job is the proof; bump the pin here and in docs/web-build.html if it is not enough). ccache is not used.
+  # Only the dev profile is built and tested; the size and speed profiles are configured (not built) so a broken profile
+  # fails here. docs/web-build.html describes the build.
+  web:
+    name: web (Emscripten, dev profile, node tests)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      EMSCRIPTEN_VERSION: 4.0.10
+    steps:
+      - uses: actions/checkout@v7
+
+      # emsdk is cloned at the release tag if it has one, otherwise at its default branch; either way `install` fetches
+      # exactly EMSCRIPTEN_VERSION (the emsdk repository only says where to download that release from). The emsdk
+      # node that comes with it is the one the tests run under.
+      - name: Install the Emscripten SDK
+        run: |
+          set -e
+          git clone --depth 1 --branch "$EMSCRIPTEN_VERSION" https://github.com/emscripten-core/emsdk.git "$HOME/emsdk" \
+            || git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          cd "$HOME/emsdk"
+          ./emsdk install "$EMSCRIPTEN_VERSION"
+          ./emsdk activate "$EMSCRIPTEN_VERSION"
+          . ./emsdk_env.sh
+          emcc --version | head -n 1
+          node --version
+          cmake --version | head -n 1
+          ninja --version
+
+      - name: Configure (dev profile)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev
+
+      # Configure only, without the tests (nothing is fetched): the size and speed profiles must at least configure
+      - name: Configure (size and speed profiles, configure only)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          for profile in size speed; do
+            emcmake cmake -S . -B "build-web-$profile" -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE="$profile" -DN2ENGINE_BUILD_TESTS=OFF
+          done
+
+      - name: Build
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web --target math_tests text_tests
+
+      # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
+      - name: Test under node
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          ctest --test-dir build-web --output-on-failure -V
+
+      # No budget is configured, so this only reports (raw and gzip sizes in the job summary)
+      - name: Report artifact sizes
+        run: bash scripts/web-size-report.sh build-web/bin

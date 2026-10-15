@@ -35,6 +35,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `scripting-lua.html` | `LuaComponent`, fields, checked handles, subscriptions, `engine-api.lua` |
 | `logging-and-editor.html` | Logger, engine health, the editor host |
 | `editor.html` | Editor projects: `project.n2proj`, `--create`, opening a project, scene files, unsaved changes, the hierarchy and entity commands, project settings, per-project `user://` |
+| `web-build.html` | The WebAssembly build (stage 0 of #155): Emscripten toolchain and pinned version, `N2ENGINE_PLATFORM_WEB`, the dev/size/speed profiles, building locally, the reduced target set and exclusions, the output contract, the size report, what is not done yet |
 | `testing.html` | Test layout, CI, conventions, pixel tests with the headless software renderer |
 
 ## Adding or changing a page
