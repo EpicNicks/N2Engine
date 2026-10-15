@@ -68,6 +68,47 @@ namespace N2Engine::Editor
         return std::nullopt;
     }
 
+    bool IsLoopbackBindAddress(const std::string_view text)
+    {
+        int fields = 0;
+        int first = -1;
+        size_t pos = 0;
+        while (true)
+        {
+            const size_t end = text.find('.', pos);
+            const std::string_view field = text.substr(pos, end == std::string_view::npos ? end : end - pos);
+            // 1 to 3 digits, no leading zero ("010" is not 10 to inet_pton, and not a spelling to trust here)
+            if (field.empty() || field.size() > 3 || (field.size() > 1 && field.front() == '0'))
+            {
+                return false;
+            }
+            int value = 0;
+            for (const char c : field)
+            {
+                if (c < '0' || c > '9')
+                {
+                    return false;
+                }
+                value = value * 10 + (c - '0');
+            }
+            if (value > 255)
+            {
+                return false;
+            }
+            if (fields == 0)
+            {
+                first = value;
+            }
+            ++fields;
+            if (end == std::string_view::npos)
+            {
+                break;
+            }
+            pos = end + 1;
+        }
+        return fields == 4 && first == 127;
+    }
+
     std::expected<HostOptions, std::string> ParseHostArguments(const std::vector<std::string> &args)
     {
         HostOptions options;
@@ -100,6 +141,11 @@ namespace N2Engine::Editor
             if (arg == "--tls")
             {
                 options.tls = true;
+                continue;
+            }
+            if (arg == "--insecure-bind")
+            {
+                options.insecureBind = true;
                 continue;
             }
             if (arg == "--read-only")
@@ -311,6 +357,25 @@ namespace N2Engine::Editor
         {
             return std::unexpected(std::string(givenName ? "--name" : "--project-id") + " only goes with --create");
         }
+
+        // Fail closed (S3, audit F5): a host that serves on a non-loopback address needs a token and TLS, or an explicit
+        // --insecure-bind. --create and --new-token don't serve; an unparsable address counts as non-loopback.
+        const bool serves = options.createPath.empty() && options.newTokenUser.empty();
+        if (serves && !options.insecureBind && !IsLoopbackBindAddress(options.bindAddress))
+        {
+            const bool hasToken = !options.tokenEnv.empty() || !options.tokensFile.empty();
+            if (!hasToken || !options.tls)
+            {
+                const char *missing = !hasToken && !options.tls ? "an access token and --tls"
+                                      : !hasToken              ? "an access token"
+                                                               : "--tls";
+                return std::unexpected(std::format(
+                    "--bind {} is not a loopback address and the host is missing {}: refusing to start. Add --tls with "
+                    "--token-env or --tokens-file (a build without TLS support can't), or pass --insecure-bind to "
+                    "accept the risk",
+                    options.bindAddress, missing));
+            }
+        }
         return options;
     }
 
@@ -388,9 +453,14 @@ Usage: N2EditorHost [options]
 Options:
   -p, --port <port>         Server port (default: 9999; 0 lets the OS pick a free one)
   --bind <ipv4 address>     Address to listen on (default: 127.0.0.1)
-                            WARNING: without --tls the access token isn't encrypted; any other address
-                            lets whoever can reach it (and, without --token-env, anyone at all) control
-                            this host, including deleting scene files
+                            Any address outside 127.0.0.0/8 is refused at startup unless the host has a
+                            token (--token-env or --tokens-file) and --tls, or --insecure-bind is given
+                            (a build without TLS support needs --insecure-bind). A play host (--play) is
+                            always plaintext, so it needs --insecure-bind too. Whoever can reach the
+                            address (and, without a token, anyone at all) controls this host, including
+                            deleting scene files
+  --insecure-bind           Accept a non-loopback --bind without a token and --tls, and log the warnings.
+                            Unsafe: the access token can be read off the network, or there is none
   --project <path>          Project folder, holding project.n2proj (see --create): res:// assets
                             load from <path>/assets, and its startup scene opens
   --renderer <name>         opengl (default: a hidden window, needs a GPU) or

@@ -499,6 +499,12 @@ namespace N2Engine::Editor
             }
             if (options.bindAddress != EditorServer::DefaultBindAddress)
             {
+                if (options.insecureBind)
+                {
+                    Logger::Warn("--insecure-bind was given: " + options.bindAddress +
+                                 " is not a loopback address and the host would otherwise have refused to start "
+                                 "without a token and --tls");
+                }
                 if (server.IsTlsEnabled())
                 {
                     // Encrypted, but a client that doesn't check the certificate's fingerprint can be talked into
