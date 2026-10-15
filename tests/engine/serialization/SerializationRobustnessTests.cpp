@@ -509,12 +509,9 @@ namespace
         return root;
     }
 
-    // The 100 000-level chain of the audit (several MB of text), parsed (the parser is iterative)
-    const json &VeryDeepChain()
-    {
-        static const json chain = json::parse(TestJson::ChainText(100000));
-        return chain;
-    }
+    // The 100 000-level chain of the audit (several MB of text), parsed (the parser is iterative). Never copy it:
+    // copying a json that deep is a recursive walk too, which is the point of the caps. Each value is parsed from text.
+    json VeryDeepChain() { return json::parse(TestJson::ChainText(100000)); }
 }
 
 TEST(SceneDepthTest, JsonScannerCountsNestingOutsideStringsOnly)
@@ -594,20 +591,23 @@ TEST(SceneDepthTest, SceneFromJsonLoadsTheDeepestAllowedSceneAndRefusesOnePastIt
 
 TEST(SceneDepthTest, AHundredThousandLevelChainIsAnErrorOnEveryEngineEntryPoint)
 {
-    const json &chain = VeryDeepChain();
-    EXPECT_THROW((void)GameObject::Deserialize(chain), std::invalid_argument);
-
-    json scene = {{"name", "Deep"}, {"rootGameObjects", json::array()}};
-    scene["rootGameObjects"].push_back(chain);
-    EXPECT_EQ(Scene::FromJSON(scene, true), nullptr);
-    EXPECT_EQ(Scene::FromJSON(scene, false), nullptr);
-
-    const json prefab = {{"name", "Deep"}, {"rootObject", chain}};
-    const auto parsed = Prefab::Deserialize(prefab);
-    ASSERT_FALSE(parsed.has_value());
-    EXPECT_EQ(parsed.error(), PrefabParseError::InvalidRootObject);
-    EXPECT_EQ(PrefabManager::InstantiatePrefab(prefab), nullptr);
-    EXPECT_EQ(PrefabManager::InstantiatePrefab(chain), nullptr);
+    {
+        const json chain = VeryDeepChain();
+        EXPECT_THROW((void)GameObject::Deserialize(chain), std::invalid_argument);
+        EXPECT_EQ(PrefabManager::InstantiatePrefab(chain), nullptr);
+    }
+    {
+        const json scene = json::parse(TestJson::SceneText(100000));
+        EXPECT_EQ(Scene::FromJSON(scene, true), nullptr);
+        EXPECT_EQ(Scene::FromJSON(scene, false), nullptr);
+    }
+    {
+        const json prefab = json::parse(TestJson::PrefabText(100000));
+        const auto parsed = Prefab::Deserialize(prefab);
+        ASSERT_FALSE(parsed.has_value());
+        EXPECT_EQ(parsed.error(), PrefabParseError::InvalidRootObject);
+        EXPECT_EQ(PrefabManager::InstantiatePrefab(prefab), nullptr);
+    }
 }
 
 TEST(SceneDepthTest, AFailedDeepLoadBuildsNothingAndLeavesNoPartialObjectsBehind)
