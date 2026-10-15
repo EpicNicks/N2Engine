@@ -192,6 +192,22 @@ protected:
         return found;
     }
 
+    // Every line the test captured, with its level: printed when a log expectation fails, so CI shows what was logged
+    std::string DumpLogs() const
+    {
+        std::string out = "
+captured log lines (" + std::to_string(_logs.size()) + "):";
+        for (const auto &[message, logLevel] : _logs)
+        {
+            const char *level = logLevel == Logger::LogLevel::Error ? "Error"
+                                : logLevel == Logger::LogLevel::Warn ? "Warn"
+                                                                     : "Info";
+            out += "
+  [" + std::string(level) + "] " + message;
+        }
+        return out;
+    }
+
     static LuaComponent *Attach(const GameObject::Ptr &go, const char *scriptPath)
     {
         auto *component = go->AddComponent<LuaComponent>();
@@ -237,7 +253,7 @@ TEST_F(LuaBudgetTest, AnInfiniteLoopInOnUpdateIsAbortedLoggedOnceAndTheComponent
     looper->SetScript(IO::ResourcePath("res://budget/Looper.lua"));
     looper->OnUpdate();
     EXPECT_EQ(Lua()["budget_loop_calls"].get<int>(), 2);
-    EXPECT_EQ(CountLogs("instruction budget", Logger::LogLevel::Error), 2);
+    EXPECT_EQ(CountLogs("instruction budget", Logger::LogLevel::Error), 2) << DumpLogs();
 }
 
 TEST_F(LuaBudgetTest, ALoopAtTheTopLevelOfAChunkReturnsAnError)
@@ -336,7 +352,7 @@ TEST_F(LuaBudgetTest, AComponentThatRunsOutOfMemoryIsLoggedOnceAndSwitchedOff)
     }
 
     EXPECT_EQ(Lua()["budget_bomb_calls"].get<int>(), 1);
-    EXPECT_EQ(CountLogs("not enough memory", Logger::LogLevel::Error), 1);
+    EXPECT_EQ(CountLogs("not enough memory", Logger::LogLevel::Error), 1) << DumpLogs();
 }
 
 TEST_F(LuaBudgetTest, NormalScriptsAreUnaffectedByTheDefaults)
@@ -395,7 +411,7 @@ TEST_F(LuaBudgetTest, ACallbackThatRunsOutOfBudgetIsLoggedOnceAndSwitchedOff)
     }
 
     EXPECT_EQ(Lua()["budget_hits"].get<int>(), 1);
-    EXPECT_EQ(CountLogs("callback aborted", Logger::LogLevel::Error), 1);
+    EXPECT_EQ(CountLogs("callback aborted", Logger::LogLevel::Error), 1) << DumpLogs();
 }
 
 TEST_F(LuaBudgetTest, ALoopInAMetamethodTheEngineReadsIsAbortedWithoutLeavingTheStateBroken)
@@ -412,7 +428,21 @@ TEST_F(LuaBudgetTest, ALoopInAMetamethodTheEngineReadsIsAbortedWithoutLeavingThe
         component->OnUpdate();
     }
 
-    EXPECT_GE(CountLogs("instruction budget", Logger::LogLevel::Error), 1);
+    EXPECT_GE(CountLogs("instruction budget", Logger::LogLevel::Error), 1) << DumpLogs();
+
+    // The same read straight through ProtectedCall (what GuardedAccess uses), so a failure above shows which error
+    // text the access path produced
+    sol::table looping;
+    {
+        const sol::protected_function_result made =
+            Run("return setmetatable({}, {__index = function(self, key) while true do end end})");
+        ASSERT_TRUE(made.valid()) << ErrorOf(made);
+        looping = made[0].get<sol::table>();
+    }
+    std::string accessError;
+    EXPECT_FALSE(Runtime().ProtectedCall([&] { (void)looping["anything"].valid(); }, accessError));
+    EXPECT_NE(accessError.find("instruction budget"), std::string::npos) << "ProtectedCall error: '" << accessError << "'";
+
     const sol::protected_function_result normal = Run("local t = {} for i = 1, 100 do t[i] = i end return #t");
     ASSERT_TRUE(normal.valid()) << ErrorOf(normal);
     EXPECT_EQ(normal[0].get<int>(), 100);
@@ -478,7 +508,7 @@ TEST_F(LuaBudgetTest, QuitFromLuaIsRefusedOnAnEditorHostAndLoggedOnce)
     ASSERT_TRUE(first.valid()) << ErrorOf(first);
 
     EXPECT_FALSE(Application::GetInstance().IsQuitRequested());
-    EXPECT_EQ(CountLogs("Application.Quit is ignored on an editor host", Logger::LogLevel::Warn), 1);
+    EXPECT_EQ(CountLogs("Application.Quit is ignored on an editor host", Logger::LogLevel::Warn), 1) << DumpLogs();
 }
 
 TEST_F(LuaBudgetTest, QuitFromLuaStillQuitsAGame)
@@ -489,7 +519,7 @@ TEST_F(LuaBudgetTest, QuitFromLuaStillQuitsAGame)
     ASSERT_TRUE(quit.valid()) << ErrorOf(quit);
 
     EXPECT_TRUE(Application::GetInstance().IsQuitRequested());
-    EXPECT_EQ(CountLogs("ignored on an editor host", Logger::LogLevel::Warn), 0);
+    EXPECT_EQ(CountLogs("ignored on an editor host", Logger::LogLevel::Warn), 0) << DumpLogs();
 
     // C++ callers are not affected by the flag
     Application::GetInstance().ResetQuitRequest();
