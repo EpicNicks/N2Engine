@@ -11,6 +11,7 @@
 
 #include "engine/Logger.hpp"
 #include "engine/scripting/LuaHandles.hpp"
+#include "engine/scripting/LuaRuntime.hpp"
 
 namespace N2Engine::Scripting
 {
@@ -63,21 +64,30 @@ namespace N2Engine::Scripting
     /// Wraps a Lua function for storage in a C++ event. If a component script registered it, the
     /// callback is skipped once that component is destroyed, instead of running with freed
     /// `self.component`/`self.gameObject`. Errors are logged, never thrown into the event dispatch.
+    /// Each call is an entry into Lua with a budget of its own (LuaBudgetScope). A callback that runs out of
+    /// instructions or memory is logged once and then switched off, so it can't burn the budget on every event.
     template <typename... Args>
     std::function<void(Args...)> MakeScriptCallback(sol::protected_function callback, std::string eventName)
     {
         return [callback = std::move(callback), owner = ScriptLifetimeScope::Current(),
-                eventName = std::move(eventName)](Args... args)
+                eventName = std::move(eventName), faulted = std::make_shared<bool>(false)](Args... args)
         {
-            if (owner && !*owner)
+            if ((owner && !*owner) || *faulted)
             {
-                return; // the script that subscribed belongs to a destroyed component
+                return; // the script that subscribed belongs to a destroyed component, or the callback was switched off
             }
 
+            const LuaBudgetScope budget;
             const sol::protected_function_result result = callback(Detail::ToLuaArg(args)...);
             if (!result.valid())
             {
                 const sol::error err = result;
+                if (LuaRuntime::IsLimitError(err.what()))
+                {
+                    *faulted = true;
+                    Logger::Error(std::format("{} callback aborted: {}. It is switched off.", eventName, err.what()));
+                    return;
+                }
                 Logger::Error(std::format("{} callback error: {}", eventName, err.what()));
             }
         };

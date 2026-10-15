@@ -39,6 +39,8 @@ namespace N2Engine
         std::string _particlesBaseDetail; // the Particles row's detail as Init made it (the GPU probe's)
         std::string _softBodiesBaseDetail; // the same for the SoftBodies row
         bool _quitRequested = false;
+        static inline bool _scriptQuitAllowed = true;
+        static inline bool _scriptQuitWarned = false;
         bool _initialized = false; // from Init until Shutdown
         // The fixed-step loop's catch-up time, carried from one Tick to the next
         double _fixedTimestepAccumulator = 0.0;
@@ -98,6 +100,15 @@ namespace N2Engine
         /// shuts down). Safe to call from components and Lua.
         static void Quit();
         [[nodiscard]] bool IsQuitRequested() const { return _quitRequested; }
+
+        /// Whether Lua's Application.Quit() does anything. It does in a game (the default) and in the editor's --play
+        /// child, which is a game; the editor host that edits (N2EditorHost without --play) clears it, because a script
+        /// in a scene a client loaded must not be able to end the host. A refused call logs one warning and does
+        /// nothing; C++ callers of Quit() are not affected. Setting it also re-arms that warning.
+        static void SetScriptQuitAllowed(bool allowed);
+        [[nodiscard]] static bool IsScriptQuitAllowed();
+        /// What the Lua binding of Application.Quit calls: Quit() if scripts may quit, else one warning
+        static void QuitFromScript();
 
         [[nodiscard]] Camera* GetMainCamera() const;
         Window& GetWindow();

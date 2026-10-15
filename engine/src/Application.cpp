@@ -436,6 +436,31 @@ void Application::Quit()
     GetInstance()._quitRequested = true;
 }
 
+void Application::SetScriptQuitAllowed(const bool allowed)
+{
+    _scriptQuitAllowed = allowed;
+    _scriptQuitWarned = false;
+}
+
+bool Application::IsScriptQuitAllowed()
+{
+    return _scriptQuitAllowed;
+}
+
+void Application::QuitFromScript()
+{
+    if (_scriptQuitAllowed)
+    {
+        Quit();
+        return;
+    }
+    if (!_scriptQuitWarned)
+    {
+        _scriptQuitWarned = true;
+        Logger::Warn("Application.Quit is ignored on an editor host");
+    }
+}
+
 void Application::OnWindowResize(const int width, const int height) const
 {
     if (_mainCamera && width > 0 && height > 0)

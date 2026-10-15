@@ -319,6 +319,10 @@ namespace N2Engine::Editor
                 }
             }
 
+            // Scripts in the scenes a client loads must not end an editor host: only the --play child, which is a running
+            // game, lets Application.Quit through. Set before any scene (and so any script) is loaded.
+            Application::SetScriptQuitAllowed(!options.playScene.empty());
+
             auto &app = Application::GetInstance();
             app.Init({
                 .projectPath = projectDir.string(),

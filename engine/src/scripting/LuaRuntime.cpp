@@ -1,5 +1,7 @@
 #include "engine/scripting/LuaRuntime.hpp"
 
+#include <algorithm>
+#include <cstdlib>
 #include <fstream>
 
 #include "engine/io/ResourceLoader.hpp"
@@ -20,6 +22,111 @@
 
 namespace N2Engine::Scripting
 {
+    namespace
+    {
+        constexpr std::string_view BudgetErrorText = "script exceeded its instruction budget";
+        constexpr std::string_view MemoryErrorText = "not enough memory";
+        // Instructions between two calls of the hook: small enough to stop a loop promptly, large enough that the
+        // hook's cost is negligible
+        constexpr std::uint64_t HookGranularity = 1000;
+    }
+
+    namespace Detail
+    {
+        struct LuaGuardState
+        {
+            // Memory: what the allocator counts and refuses
+            std::size_t used = 0;
+            std::size_t cap = LuaLimits{}.maxBytes;
+
+            // Instructions
+            std::uint64_t limit = LuaLimits{}.instructionsPerEntry;
+            std::int64_t remaining = 0;
+            std::uint64_t step = HookGranularity; // instructions the installed hook counts per call
+            bool exhausted = false;               // the budget ran out in this entry: the hook raises on every instruction
+            int depth = 0;                        // LuaBudgetScopes open
+            bool panicked = false;                // an error reached the panic function (none of our calls was protecting)
+            lua_State *state = nullptr;
+
+            void Arm()
+            {
+                exhausted = false;
+                if (limit == 0)
+                {
+                    remaining = 0;
+                    lua_sethook(state, nullptr, 0, 0);
+                    return;
+                }
+                step = std::min(limit, HookGranularity);
+                remaining = static_cast<std::int64_t>(std::min<std::uint64_t>(limit, INT64_MAX));
+                lua_sethook(state, &LuaGuardState::CountHook, LUA_MASKCOUNT, static_cast<int>(step));
+            }
+
+            static LuaGuardState *Of(lua_State *L)
+            {
+                void *userData = nullptr;
+                lua_getallocf(L, &userData);
+                return static_cast<LuaGuardState *>(userData);
+            }
+
+            // Lua calls this for an error raised outside every protected call (an unprotected table access that hit
+            // a script's metamethod, or a failed allocation): sol turns it into a C++ exception
+            static int Panic(lua_State *L)
+            {
+                Of(L)->panicked = true;
+                return sol::default_at_panic(L);
+            }
+
+            static void CountHook(lua_State *L, lua_Debug *)
+            {
+                LuaGuardState *guard = Of(L);
+                if (!guard->exhausted)
+                {
+                    guard->remaining -= static_cast<std::int64_t>(guard->step);
+                    if (guard->remaining > 0)
+                    {
+                        return;
+                    }
+                    // Out of budget. A script can catch the error (pcall), so from here on the hook fires on every
+                    // instruction and raises again, until the outermost entry ends and Arm refills the budget
+                    guard->exhausted = true;
+                    guard->step = 1;
+                    lua_sethook(L, &LuaGuardState::CountHook, LUA_MASKCOUNT, 1);
+                }
+                luaL_error(L, "%s of %I", BudgetErrorText.data(), static_cast<lua_Integer>(guard->limit));
+            }
+        };
+
+        // lua_Alloc with a cap. When ptr is NULL, osize is a type tag (LUA_TSTRING...), not a size. A free or a shrink
+        // always succeeds; a growth past the cap returns NULL, which Lua turns into a memory error (after one
+        // emergency garbage collection and a retry).
+        void *LuaCappedAlloc(void *userData, void *ptr, const std::size_t osize, const std::size_t nsize)
+        {
+            auto *guard = static_cast<LuaGuardState *>(userData);
+            const std::size_t oldSize = ptr != nullptr ? osize : 0;
+            // What the others hold. Never underflows: used includes oldSize of every live block
+            const std::size_t others = guard->used >= oldSize ? guard->used - oldSize : 0;
+
+            if (nsize == 0)
+            {
+                std::free(ptr);
+                guard->used = others;
+                return nullptr;
+            }
+            if (nsize > oldSize && guard->cap != 0 && (others >= guard->cap || nsize > guard->cap - others))
+            {
+                return nullptr;
+            }
+            void *block = std::realloc(ptr, nsize);
+            if (block == nullptr)
+            {
+                return nullptr; // the process is out of memory (the old block stays valid)
+            }
+            guard->used = others + nsize;
+            return block;
+        }
+    }
+
     LuaRuntime *LuaRuntime::_instance = nullptr;
 
     LuaRuntime& LuaRuntime::Instance()
@@ -38,7 +145,12 @@ namespace N2Engine::Scripting
     }
 
     LuaRuntime::LuaRuntime()
+        : _guard(std::make_unique<Detail::LuaGuardState>()),
+          _lua(&Detail::LuaGuardState::Panic, &Detail::LuaCappedAlloc, _guard.get())
     {
+        _guard->state = _lua.lua_state();
+        _guard->Arm();
+
         // No package library: the engine's require (SetupModuleSystem) loads modules through ResourceLoader,
         // and package only added ways around it (loadlib and the C searchers load native code; searchpath
         // and the file searcher open arbitrary paths)
@@ -68,11 +180,100 @@ namespace N2Engine::Scripting
                 return rawLoad(chunk, chunkname, textMode)
             end
         )");
+
+        // A script must not catch the budget error: pcall and xpcall hand it on. (After the budget runs out the hook
+        // also raises on every instruction, so the code after a pcall dies anyway; this is the second barrier.)
+        _lua["__n2_is_budget_error"] = [](const sol::object &message) -> bool
+        {
+            return message.is<std::string>() && message.as<std::string>().find(BudgetErrorText) != std::string::npos;
+        };
+        _lua.script(R"(
+            local rawPcall, rawXpcall = pcall, xpcall
+            local isBudgetError = __n2_is_budget_error
+            __n2_is_budget_error = nil
+            local function check(ok, ...)
+                if not ok and isBudgetError((...)) then
+                    error((...), 0)
+                end
+                return ok, ...
+            end
+            pcall = function(...) return check(rawPcall(...)) end
+            xpcall = function(...) return check(rawXpcall(...)) end
+        )");
+    }
+
+    LuaRuntime::~LuaRuntime() = default;
+
+    void LuaRuntime::SetLimits(const LuaLimits &limits)
+    {
+        _guard->cap = limits.maxBytes;
+        _guard->limit = limits.instructionsPerEntry;
+        if (_guard->depth == 0)
+        {
+            _guard->Arm();
+        }
+        // Inside an entry the new budget applies from the next one: this entry keeps counting down its own
+    }
+
+    LuaLimits LuaRuntime::GetLimits() const
+    {
+        return {_guard->limit, _guard->cap};
+    }
+
+    std::size_t LuaRuntime::GetMemoryUsed() const
+    {
+        return _guard->used;
+    }
+
+    bool LuaRuntime::IsLimitError(const std::string_view message)
+    {
+        return message.find(BudgetErrorText) != std::string_view::npos ||
+               message.find(MemoryErrorText) != std::string_view::npos;
+    }
+
+    bool LuaRuntime::ShouldLogLimitError(const std::string &key)
+    {
+        return _limitLogged.insert(key).second;
+    }
+
+    void LuaRuntime::BeginEntry()
+    {
+        if (_guard->depth++ == 0)
+        {
+            _guard->Arm();
+        }
+    }
+
+    void LuaRuntime::EndEntry()
+    {
+        if (--_guard->depth == 0)
+        {
+            // The panic path leaves the thread reset but its C-call counter raised (about 200 panics would end in
+            // "C stack overflow" for good): no Lua call is running now, so the counter can start from zero again
+            if (_guard->panicked)
+            {
+                _guard->panicked = false;
+                lua_closethread(_guard->state, nullptr);
+            }
+            // Back to a full budget, so C++ that touches Lua outside any scope never meets the exhausted one
+            _guard->Arm();
+        }
+    }
+
+    LuaBudgetScope::LuaBudgetScope()
+    {
+        LuaRuntime::Instance().BeginEntry();
+    }
+
+    LuaBudgetScope::~LuaBudgetScope()
+    {
+        LuaRuntime::Instance().EndEntry();
     }
 
     sol::protected_function_result LuaRuntime::RunSource(const std::string_view source, const std::string &chunkName)
     {
         // Text only: a project .lua asset holding precompiled bytecode would otherwise run as-is
+        const LuaBudgetScope budget;
         return _lua.safe_script(source, sol::script_pass_on_error, chunkName, sol::load_mode::text);
     }
 
@@ -149,7 +350,10 @@ namespace N2Engine::Scripting
         if (!result.valid())
         {
             const sol::error err = result;
-            Logger::Error(std::format("Error running {}: {}", path.ToString(), err.what()));
+            if (!IsLimitError(err.what()) || ShouldLogLimitError(path.ToString()))
+            {
+                Logger::Error(std::format("Error running {}: {}", path.ToString(), err.what()));
+            }
             return false;
         }
         return true;
@@ -212,7 +416,10 @@ namespace N2Engine::Scripting
         if (!result.valid())
         {
             sol::error err = result;
-            Logger::Error(std::format("Failed to load module {}: {}", moduleName, err.what()));
+            if (!IsLimitError(err.what()) || ShouldLogLimitError(path.ToString()))
+            {
+                Logger::Error(std::format("Failed to load module {}: {}", moduleName, err.what()));
+            }
             return _lua.create_table();
         }
 

@@ -3,7 +3,9 @@
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "nlohmann/json.hpp"
+#include <functional>
 #include <memory>
+#include <string_view>
 #include <sol/sol.hpp>
 
 namespace N2Engine
@@ -34,6 +36,9 @@ namespace N2Engine::Scripting
         // Track missing lua script and refs
         bool _hasMissingScript = false;
         bool _hasUnresolvedReferences = false;
+        // Set when a call into the script ran out of instructions or memory (LuaLimits): its lifecycle calls are skipped
+        // until the script is set again or reloaded, so a looping OnUpdate doesn't burn the whole budget every frame
+        bool _faulted = false;
 
         // Cache lifecycle method existence for performance
         bool _hasOnUpdate = false;
@@ -83,6 +88,15 @@ namespace N2Engine::Scripting
 
         template<typename... Args>
         void CallLuaMethod(const std::string& methodName, Args&&... args);
+        /// True if the instance has that method. Reading it can run the script's __index, so it is an entry into Lua:
+        /// a budget scope, and an error (or the budget) is logged and answers false.
+        bool HasMethod(const char* methodName);
+        /// Runs code that touches the instance outside a protected call (a table access can reach the script's
+        /// metamethods) in a budget scope; an exception (a Lua error, the budget, a failed allocation) is reported and
+        /// answers false
+        bool GuardedAccess(const std::function<void()>& body);
+        /// Logs a Lua error. One that ran out of budget or memory is logged once and faults the component.
+        void ReportScriptError(std::string_view what, std::string_view message);
 
     public:
         explicit LuaComponent(GameObject& gameObject);
