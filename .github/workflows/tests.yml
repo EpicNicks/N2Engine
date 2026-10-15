@@ -6,7 +6,61 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  # One live run per pull request: a push to the PR (or an update-branch) cancels the run of the older head. Every other event
+  # (push to master, workflow_dispatch) gets a group of its own (the run id), so it is never cancelled and never replaced by
+  # a newer pending run, which a shared group without cancel-in-progress would do.
+  group: tests-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Decides whether a pull request changes only documentation. docs_only is 'true' only on a pull_request whose changed files
+  # (merge base of the base branch and the PR head, renames counted as a delete plus an add) are ALL under docs/ or are *.md
+  # files in the repository root. Push, workflow_dispatch and tags always get 'false'. The jobs that build and test say
+  # `needs: changes` and skip on 'true'. If this job fails, those jobs are skipped (their needs failed) and this job shows
+  # red, so the run is red: a failure here never looks like success.
+  changes:
+    name: changes (docs-only check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify the changed files
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(mktemp)
+            git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$files"
+            total=0
+            other=0
+            while IFS= read -r -d '' f; do
+              total=$((total + 1))
+              case "$f" in
+                docs/*) ;;
+                */*) other=$((other + 1)); echo "not docs: $f" ;;
+                *.md) ;;
+                *) other=$((other + 1)); echo "not docs: $f" ;;
+              esac
+            done < "$files"
+            echo "changed files: $total, not docs: $other"
+            if [ "$total" -gt 0 ] && [ "$other" -eq 0 ]; then
+              docs_only=true
+            fi
+          fi
+          echo "docs_only=$docs_only"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   # No build: the checked-in generated clients and golden vectors must be what the generators make from protocol.json
   # today, and the generated TypeScript codecs must agree with the vectors (the C++ side is checked by
   # ProtocolVectorTest in the windows job)
@@ -45,6 +99,8 @@ jobs:
     # Legs with the FreeType font backend or the ufbx FBX/OBJ importer say so in their name; the rest use stb_truetype and
     # glTF only
     name: windows (${{ matrix.config }}, PhysX ${{ matrix.physx }}${{ matrix.freetype == 'ON' && ', FreeType ON' || '' }}${{ matrix.ufbx == 'ON' && ', ufbx ON' || '' }}${{ matrix.tls == 'ON' && ', TLS ON' || '' }})
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
@@ -152,6 +208,8 @@ jobs:
   # FreeType, ufbx and TLS are ON so the optional backends compile here too. The editor host smoke tests run here too, the same Python script as on Windows. This is the required Linux check.
   linux:
     name: linux (Release, x86_64, Clang)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -221,6 +279,8 @@ jobs:
   # there and the scalar versions run; PhysX runs its own aarch64 build. Not a required check yet.
   linux-arm64:
     name: linux (Release, arm64, Clang)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     env:
@@ -292,6 +352,8 @@ jobs:
   # carries a marked patch for that (see the "N2Engine local patch" in external/sol2/include/sol/sol.hpp).
   linux-gcc:
     name: linux (Release, x86_64, GCC 14)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -336,6 +398,8 @@ jobs:
   # as its non-root user waits for the TLS ready line and checks that the host reports physics Running (PhysX is linked in statically). Not a required check. arm64 images are not built in CI.
   docker:
     name: docker (editor host image, x86_64)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
