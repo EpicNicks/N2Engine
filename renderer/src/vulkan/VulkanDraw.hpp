@@ -23,6 +23,7 @@
 
 #include "renderer/common/IMaterial.hpp"
 #include "renderer/common/IShader.hpp"
+#include "renderer/vulkan/VulkanLighting.hpp"
 #include "renderer/vulkan/VulkanShaderInterface.hpp"
 
 namespace Renderer::Vulkan
@@ -102,6 +103,10 @@ namespace Renderer::Vulkan
         };
         [[nodiscard]] Snapshot TakeSnapshot() const;
 
+        /// Test hook: replaces the id a texture slot (0 the base texture, 1-4 the AuxTexture slots) holds, so a test can
+        /// put a stale (pointer, id) pair into a material, as a texture made at the address of a destroyed one would
+        void SetTextureIdForTest(std::size_t slot, std::uint64_t id);
+
         const ShaderInterface::BuiltInShader kind;
 
     private:
@@ -132,6 +137,10 @@ namespace Renderer::Vulkan
         VkDeviceSize size = 0;
         VkDeviceSize used = 0;
         VkDescriptorSet frameSet = VK_NULL_HANDLE; // set 0 for this chunk, from this frame's pool; null until needed
+        // The lighting block copy in this chunk this frame: which DrawState::lightingVersion it holds (0: none yet) and where.
+        // The frame set's lighting binding is dynamic, so a draw names the copy by this offset
+        std::uint64_t lightingVersion = 0;
+        VkDeviceSize lightingOffset = 0;
     };
 
     /// Everything one frame slot owns that only its own frame (and the one before it has finished) may touch
@@ -168,7 +177,7 @@ namespace Renderer::Vulkan
 
     struct DrawState
     {
-        // Layout: set 0 the frame (per-draw dynamic UBO, lighting UBO), set 1 the material (dynamic UBO + 5 samplers)
+        // Layout: set 0 the frame (per-draw dynamic UBO, lighting dynamic UBO), set 1 the material (dynamic UBO + 5 samplers)
         VkDescriptorSetLayout frameSetLayout = VK_NULL_HANDLE;
         VkDescriptorSetLayout materialSetLayout = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
@@ -195,14 +204,19 @@ namespace Renderer::Vulkan
         // 1x1 textures for the absent ones (base, emissive, occlusion, normal, metallic-roughness)
         std::array<std::unique_ptr<VulkanTexture>, ShaderInterface::kSamplerCount> defaults;
 
-        // The lighting block: zero-filled in stage B (stage C fills it), so lit and text pipelines are layout-complete
-        VkBuffer lightingBuffer = VK_NULL_HANDLE;
-        VmaAllocation lightingAllocation = nullptr;
+        // The scene lighting (stage C). UpdateSceneLighting only rewrites this CPU copy and bumps the version; the first
+        // lit draw after that copies it into the current frame slot's ring (RingChunk::lightingVersion says which version a
+        // chunk already holds) and names it with a dynamic offset. So a draw sees the last update before it, a later update
+        // changes only later draws, and no frame in flight ever reads memory that is rewritten: the copies live in the ring
+        // chunks, which are written only after their slot's fence wait, like the per-draw data. There is no GPU lighting
+        // buffer of its own
+        LightingBlock lighting = BuildLightingBlock(Common::SceneLightingData{}, N2Engine::Math::Vector3(0.0f, 0.0f, 0.0f));
+        std::uint64_t lightingVersion = 1; // never 0 (a chunk with 0 holds no copy); bumped by every UpdateSceneLighting
 
         std::array<FrameDrawState, 2> frames; // one per frame slot (VulkanRenderer::MAX_FRAMES_IN_FLIGHT)
 
         VkDeviceSize uniformAlignment = 256; // minUniformBufferOffsetAlignment
-        // VMA allocations that are the renderer's own (rings, lighting buffer, default textures): the test hook that
+        // VMA allocations that are the renderer's own (rings, default textures): the test hook that
         // counts a caller's allocations leaves them out
         std::uint32_t internalAllocations = 0;
 
