@@ -329,6 +329,9 @@ namespace Renderer
             [[nodiscard]] uint32_t GetPipelineCreateAttemptCountForTest() const;
             /// The id of a live texture (unique for the renderer's lifetime, never reused); 0 for any other pointer
             [[nodiscard]] uint64_t GetTextureIdForTest(const Common::ITexture* texture) const;
+            /// A copy of the material's std140 block (kMaterialBlockRange bytes: the shader's block, then zeros) as a draw would
+            /// snapshot it now; false for a material that is not this renderer's
+            bool GetMaterialBlockForTest(const Common::IMaterial* material, std::vector<uint8_t>& bytes) const;
             /// The 752-byte std140 lighting block the next lit draw will use (what the last UpdateSceneLighting built, or the
             /// default before any)
             [[nodiscard]] std::vector<std::uint8_t> GetLightingBlockForTest() const;

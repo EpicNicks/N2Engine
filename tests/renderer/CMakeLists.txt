@@ -37,4 +37,8 @@ else()
     target_compile_options(renderer_tests PRIVATE -Wall -Wextra)
 endif()
 
+# tests/common has the glTF file builder the Vulkan model golden (tests/renderer/vulkan/VulkanModelGoldenTests.cpp) shares
+# with tests/engine and tests/assetimport
+target_include_directories(renderer_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/common)
+
 add_test(NAME renderer_tests COMMAND renderer_tests)

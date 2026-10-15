@@ -1163,6 +1163,19 @@ void VulkanRenderer::UpdateSceneLighting(const Common::SceneLightingData& lighti
     ++_draw->lightingVersion;
 }
 
+bool VulkanRenderer::GetMaterialBlockForTest(const IMaterial* material, std::vector<std::uint8_t>& bytes) const
+{
+    std::lock_guard lock(_mutex);
+    const auto it = _draw->materials.find(material);
+    if (it == _draw->materials.end())
+    {
+        return false;
+    }
+    const VulkanMaterial::Snapshot snapshot = it->second->TakeSnapshot();
+    bytes.assign(snapshot.block.begin(), snapshot.block.end());
+    return true;
+}
+
 std::vector<std::uint8_t> VulkanRenderer::GetLightingBlockForTest() const
 {
     std::lock_guard lock(_mutex);

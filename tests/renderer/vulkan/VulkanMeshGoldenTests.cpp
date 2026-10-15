@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,17 +30,19 @@
 #include "CrossBackendDiff.hpp"
 #include "VulkanTestFixture.hpp"
 
-// Golden-image tests of MeshRenderer on the Vulkan backend (#43, stage B): the UNLIT subset of
+// Golden-image tests of MeshRenderer on the Vulkan backend (#43, stages B and C): the unlit scenes and the lit one of
 // tests/engine/rendering/SoftwareMeshGoldenTests.cpp, with the same scenes, cameras, sizes and structural expectations
 // (colours in screen regions, never exact images): scenes drawn by Scene::Render on a Vulkan device (Mesa lavapipe in CI;
 // no window, the offscreen target) and read back. A textured cube must show its texture upright on the faces the camera
 // sees (so a flipped UV, a swapped axis or a wrong winding fails), a cutout material must leave holes, a double-sided quad
-// must show from behind and a single-sided one must not, and two submeshes must show their two materials. The lit Mesh
-// golden is stage C's, the blended "mixed" part of the two-submesh test stage D's.
+// must show from behind and a single-sided one must not, and two submeshes must show their two materials, and (stage C) a
+// lit face toward the light must be brighter than one edge-on to it. The blended "mixed" part of the two-submesh test is
+// stage D's.
 //
 // Every scene is also rendered on a headless SoftwareRenderer and the two frames are compared pixel by pixel (the cross
-// backend diff, CrossBackendDiff.hpp): the scenes are unlit and nearest-sampled, so the software renderer is exact and the
-// proposal's threshold applies, |Vulkan - Software| <= 2/255 per channel.
+// backend diff, CrossBackendDiff.hpp): the unlit scenes are nearest-sampled, so the software renderer is exact and the
+// proposal's strict threshold applies, |Vulkan - Software| <= 2/255 per channel; the lit scene uses the lit criterion (mean
+// error <= 2/255, <= 1% of the pixels over 8/255, a 1-pixel coverage-edge border).
 //
 // The software tests are untouched: the helpers below are copies of that file's.
 
@@ -68,6 +71,7 @@ namespace
     {
         std::uint8_t r = 0, g = 0, b = 0;
         bool operator==(const Rgb&) const = default;
+        [[nodiscard]] int Sum() const { return r + g + b; }
     };
 
     constexpr Rgb kBlack{0, 0, 0};
@@ -118,7 +122,8 @@ namespace
 
     /// Builds a scene and draws it as Application::Render does for the scene pass, on `renderer` (already initialized at
     /// Size x Size), and reads it back
-    Frame RenderOn(Renderer::Common::IRenderer& renderer, const std::function<void(Scene&)>& build, const Camera& camera)
+    Frame RenderOn(Renderer::Common::IRenderer& renderer, const std::function<void(Scene&)>& build, const Camera& camera,
+                   const Renderer::Common::SceneLightingData* lighting = nullptr)
     {
         renderer.Clear(0.0f, 0.0f, 0.0f, 1.0f);
         Frame frame{std::vector<std::uint8_t>(static_cast<std::size_t>(Size) * Size * 4), Size, Size};
@@ -127,6 +132,10 @@ namespace
             build(*scene);
             renderer.BeginFrame();
             renderer.SetViewProjection(camera.GetViewMatrix().Data(), camera.GetProjectionMatrix().Data());
+            if (lighting != nullptr)
+            {
+                renderer.UpdateSceneLighting(*lighting, camera.GetPosition());
+            }
             scene->Render(&renderer, camera);
             renderer.EndFrame();
             renderer.Present();
@@ -137,11 +146,12 @@ namespace
     }
 
     /// The same scene on a fresh headless software renderer: the reference for the cross-backend diff
-    Frame RenderOnSoftware(const std::function<void(Scene&)>& build, const Camera& camera)
+    Frame RenderOnSoftware(const std::function<void(Scene&)>& build, const Camera& camera,
+                           const Renderer::Common::SceneLightingData* lighting = nullptr)
     {
         SoftwareRenderer renderer;
         EXPECT_TRUE(renderer.Initialize(nullptr, Size, Size));
-        const Frame frame = RenderOn(renderer, build, camera);
+        const Frame frame = RenderOn(renderer, build, camera, lighting);
         renderer.Shutdown();
         return frame;
     }
@@ -217,11 +227,15 @@ namespace
         /// The scene on Vulkan, with the cross-backend comparison against the software renderer. `options` are the diff's
         /// (the default: the proposal's strict 2/255 per channel, every pixel)
         Frame Render(const std::function<void(Scene&)>& build, const Camera& camera, const std::string& what,
-                     const VulkanTesting::Diff::Options& options = {})
+                     const VulkanTesting::Diff::Options& options = {},
+                     const Renderer::Common::SceneLightingData* lighting = nullptr)
         {
-            const Frame vulkan = RenderOn(R(), build, camera);
-            const Frame software = RenderOnSoftware(build, camera);
+            const Frame vulkan = RenderOn(R(), build, camera, lighting);
+            const Frame software = RenderOnSoftware(build, camera, lighting);
             EXPECT_TRUE(VulkanTesting::Diff::Agree(vulkan.AsImage(), software.AsImage(), options)) << what;
+            // The measured numbers, for the log (the PR body quotes them)
+            std::cout << "[ cross-diff ] " << what << ": "
+                      << VulkanTesting::Diff::Compare(vulkan.AsImage(), software.AsImage(), options).Describe() << std::endl;
             return vulkan;
         }
     };
@@ -250,6 +264,38 @@ TEST_F(VulkanMeshGoldenTest, ATexturedCubeShowsItsCheckerUprightOnTheFacesTheCam
     // The back face (-Z) from behind: the same picture again, as each face is mapped looking at it from outside
     const Frame back = Render(build, CameraAt(Math::Vector3(0.0f, 0.0f, -3.0f)), "back");
     ExpectCheckerUpright(back, 15, "back");
+}
+
+TEST_F(VulkanMeshGoldenTest, ALitFaceTowardTheLightIsBrighterThanOneAwayFromIt)
+{
+    // A directional light shining down -Z: the front face (+Z) faces it, the right face (+X) is edge-on to it.
+    // The camera, at 45 degrees between them, sees the front face left of centre and the right face right of it.
+    Renderer::Common::SceneLightingData lighting;
+    Renderer::Common::DirectionalLightData sun;
+    sun.direction = Math::Vector3(0.0f, 0.0f, -1.0f);
+    lighting.directionalLights.push_back(sun);
+    const Camera camera = CameraAt(Math::Vector3(2.5f, 0.0f, 2.5f));
+    constexpr int frontX = 23;
+    constexpr int rightX = 41;
+    constexpr int row = Size / 2;
+
+    // Lit (MeshRenderer's default material), against the software renderer with the lit criterion
+    const Frame lit = Render([](Scene& scene) { AddMesh(scene, "LitCube", Mesh::GetBuiltin(BuiltinMesh::Cube)); }, camera,
+                             "lit cube", VulkanTesting::Diff::Lit(), &lighting);
+    const Rgb litFront = lit.At(frontX, row);
+    const Rgb litRight = lit.At(rightX, row);
+    EXPECT_GT(litFront.Sum(), litRight.Sum() + 300) << "toward the light vs edge-on to it";
+    EXPECT_GT(litRight.Sum(), 0) << "the ambient light still reaches the other face";
+    EXPECT_EQ(litFront.r, litFront.g) << "white light on a white material stays grey";
+    EXPECT_EQ(litFront.g, litFront.b);
+
+    // Unlit: the same scene shows both faces alike (the strict comparison: nothing is lit)
+    const Frame unlit = Render([](Scene& scene)
+    {
+        AddMesh(scene, "UnlitCube", Mesh::GetBuiltin(BuiltinMesh::Cube))->SetMaterial(0, Unlit(Common::Color::White));
+    }, camera, "unlit cube under the same light", {}, &lighting);
+    EXPECT_EQ(unlit.At(frontX, row), (Rgb{255, 255, 255}));
+    EXPECT_EQ(unlit.At(rightX, row), (Rgb{255, 255, 255}));
 }
 
 TEST_F(VulkanMeshGoldenTest, AnAlphaMaskMaterialLeavesHoles)
