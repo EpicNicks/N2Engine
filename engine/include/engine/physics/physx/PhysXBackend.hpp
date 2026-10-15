@@ -2,6 +2,7 @@
 
 #include "engine/physics/IPhysicsBackend.hpp"
 #include <vector>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <functional>
@@ -170,6 +171,10 @@ namespace N2Engine::Physics
         void SetIsTrigger(PhysicsBodyHandle body, ICollider* collider, bool isTrigger) override;
         void SetColliderLayer(PhysicsBodyHandle body, ICollider* collider, int layer) override;
         void RefreshCollisionMatrix() override;
+
+        /// Test seam: called once per body that RefreshCollisionMatrix re-filters, in the order it does so, with
+        /// the object that owns the body's first collider. Pass an empty function to remove it.
+        void SetRefilterObserver(std::function<void(const GameObject&)> observer) { _refilterObserver = std::move(observer); }
 
         void AddForce(PhysicsBodyHandle body, const Math::Vector3& force) override;
         void AddImpulse(PhysicsBodyHandle body, const Math::Vector3& impulse) override;
@@ -380,16 +385,29 @@ namespace N2Engine::Physics
             }
         };
 
-        struct CollisionPairHash
+        // Orders pairs by their bodies' handles, smaller side first (A,B and B,A are the same key, like
+        // operator==). Handle indices come from a deterministic free list, so iteration order depends only
+        // on the sequence of body creations and destructions, never on addresses or the standard library's
+        // hash. (Slot reuse means it follows the slot, not strictly the age, of a body.)
+        struct CollisionPairLess
         {
-            size_t operator()(const CollisionPair& pair) const
+            bool operator()(const CollisionPair& a, const CollisionPair& b) const
             {
-                const size_t h1 = std::hash<uint32_t>()(pair.bodyA.index) ^
-                            (std::hash<uint32_t>()(pair.bodyA.generation) << 1);
-                const size_t h2 = std::hash<uint32_t>()(pair.bodyB.index) ^
-                            (std::hash<uint32_t>()(pair.bodyB.generation) << 1);
-                // Order-independent, like operator==: (A, B) and (B, A) must land in the same bucket
-                return std::min(h1, h2) ^ (std::max(h1, h2) << 1);
+                const auto key = [](const CollisionPair& pair)
+                {
+                    const auto lessHandle = [](const PhysicsBodyHandle& x, const PhysicsBodyHandle& y)
+                    {
+                        return x.index != y.index ? x.index < y.index : x.generation < y.generation;
+                    };
+                    return lessHandle(pair.bodyB, pair.bodyA) ? std::pair{pair.bodyB, pair.bodyA}
+                                                              : std::pair{pair.bodyA, pair.bodyB};
+                };
+                const auto [a0, a1] = key(a);
+                const auto [b0, b1] = key(b);
+                if (a0.index != b0.index) return a0.index < b0.index;
+                if (a0.generation != b0.generation) return a0.generation < b0.generation;
+                if (a1.index != b1.index) return a1.index < b1.index;
+                return a1.generation < b1.generation;
             }
         };
 
@@ -427,7 +445,9 @@ namespace N2Engine::Physics
             const physx::PxShape* onA;
             const physx::PxShape* onB;
         };
-        using TouchMap = std::unordered_map<CollisionPair, std::vector<ShapePair>, CollisionPairHash>;
+        // std::map, not unordered_map: the touch maps are iterated to wake partners of re-filtered shapes and to
+        // emit the Exit events of removed bodies and shapes, and that order must not depend on hashing.
+        using TouchMap = std::map<CollisionPair, std::vector<ShapePair>, CollisionPairLess>;
 
         std::vector<CollisionEvent> _newCollisions;
         TouchMap _collisionTouches;
@@ -457,6 +477,7 @@ namespace N2Engine::Physics
         std::unordered_set<const physx::PxShape*> _pendingRefilter; // reset since the last step
         std::unordered_set<const physx::PxShape*> _refiltering;     // being re-filtered in this step
         std::vector<RefilterReport> _refilterReports;
+        std::function<void(const GameObject&)> _refilterObserver;
         // A touch whose last report was "lost" although the new filter data still allows it: PhysX may
         // only report it found again a step later (e.g. once a sleeping partner wakes). Its Exit waits a
         // step and is dropped if "found" arrives meanwhile.
