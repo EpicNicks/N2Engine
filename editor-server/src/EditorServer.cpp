@@ -71,6 +71,7 @@ using NativeSocket = SOCKET;
 #include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <cerrno>
 #include <csignal>
@@ -95,6 +96,29 @@ namespace N2Engine::Editor
 
         // Sockets are kept as int (as before); an invalid SOCKET converts to -1
         constexpr int NoSocket = -1;
+
+        /// Makes a connected socket non-blocking, so no single send or recv can outlast the deadline its caller waits on
+        /// (the TLS session does the same for its own sockets)
+        bool SetSocketNonBlocking(const int socket)
+        {
+#ifdef _WIN32
+            u_long enable = 1;
+            return ioctlsocket(static_cast<SOCKET>(socket), FIONBIO, &enable) == 0;
+#else
+            const int flags = fcntl(socket, F_GETFL, 0);
+            return flags >= 0 && fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0;
+#endif
+        }
+
+        /// Whether a failed send or recv only means "not now" on a non-blocking socket (or was interrupted): wait again
+        bool IsWouldBlock(const int error)
+        {
+#ifdef _WIN32
+            return error == WSAEWOULDBLOCK;
+#else
+            return error == EAGAIN || error == EWOULDBLOCK || error == EINTR;
+#endif
+        }
         // How often a waiting network thread checks whether the server is stopping
         constexpr long PollIntervalMicroseconds = 100 * 1000;
 
@@ -2148,6 +2172,16 @@ namespace N2Engine::Editor
                 continue;
             }
 
+            // Every send and recv on the connection must be able to give way to a deadline: a blocking send() of a large
+            // frame to a client that isn't reading would otherwise sit in the kernel for ever, past any deadline
+            if (!SetSocketNonBlocking(clientSocket))
+            {
+                PostLog("Dropping an editor connection: its socket couldn't be made non-blocking (error " +
+                            std::to_string(SOCKET_ERROR_CODE) + ")",
+                        true);
+                CLOSE_SOCKET(clientSocket);
+                continue;
+            }
             if (_acceptedSocketHook)
             {
                 _acceptedSocketHook(clientSocket);
@@ -7053,6 +7087,7 @@ namespace N2Engine::Editor
                 return false;
             }
             int result = send(socket, bytes + sent, static_cast<int>(size - sent), SendFlags);
+            if (result < 0 && IsWouldBlock(SOCKET_ERROR_CODE)) continue; // writable a moment ago, not now: wait again
             if (result <= 0) return false;
             sent += result;
             restart();
@@ -7095,6 +7130,7 @@ namespace N2Engine::Editor
         {
             if (!WaitUntilReady(socket, false, deadline)) return false;
             int result = recv(socket, bytes + received, static_cast<int>(size - received), 0);
+            if (result < 0 && IsWouldBlock(SOCKET_ERROR_CODE)) continue; // readable a moment ago, not now: wait again
             if (result <= 0) return false;
             received += result;
         }
