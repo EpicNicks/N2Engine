@@ -27,6 +27,25 @@ option(N2ENGINE_USE_PHYSX "Use PhysX physics backend" ON)
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
 
+# == Web (Emscripten) platform ==
+# Derived from the toolchain (`emcmake cmake ...`), never set by hand. Native configurations only get the variable
+# set to OFF here; everything web-specific is behind it. See cmake/N2EngineWeb.cmake and docs/web-build.html.
+if(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(N2ENGINE_PLATFORM_WEB ON)
+else()
+    set(N2ENGINE_PLATFORM_WEB OFF)
+endif()
+
+if(N2ENGINE_PLATFORM_WEB)
+    include(${CMAKE_SOURCE_DIR}/cmake/N2EngineWeb.cmake)
+    # Stage 0 of the web build is the math and text libraries only (docs/web-build.html lists what is excluded and why)
+    message(STATUS "Web: PhysX off (no WebAssembly build of it yet)")
+    set(N2ENGINE_USE_PHYSX OFF)
+    message(STATUS "Web: Vulkan renderer off (no Vulkan in the browser)")
+    set(N2ENGINE_RENDERER_VULKAN OFF)
+    message(STATUS "Web: window (GLFW), OpenGL/Vulkan/software renderer, OpenAL, Lua, assetimport, engine, editor host (sockets, TLS), test_project and lua_project are not built at stage 0")
+endif()
+
 # == PhysX setup ==
 set(N2ENGINE_PHYSX_AVAILABLE OFF)
 
@@ -238,6 +257,7 @@ else()
     message(STATUS "PhysX disabled - no physics backend active")
 endif()
 
+if(NOT N2ENGINE_PLATFORM_WEB)
 file(GLOB LUA_SOURCES
         ${CMAKE_SOURCE_DIR}/external/lua/*.c
 )
@@ -253,16 +273,19 @@ if(WIN32)
             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 endif()
+endif()
 
 # == Production targets ==
 add_subdirectory(math)
 add_subdirectory(text)
+if(NOT N2ENGINE_PLATFORM_WEB)
 add_subdirectory(assetimport)
 add_subdirectory(renderer)
 add_subdirectory(engine)
 add_subdirectory(test_project)
 add_subdirectory(lua_project)
 add_subdirectory(editor-server)
+endif()
 
 if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)
     target_include_directories(test_project PRIVATE ${PHYSX_INCLUDE_DIR})
@@ -271,6 +294,7 @@ if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)
     # N2ENGINE_PHYSX_ENABLED comes from the engine target (PUBLIC)
 endif()
 
+if(NOT N2ENGINE_PLATFORM_WEB)
 add_library(dummy_target INTERFACE)
 target_include_directories(dummy_target INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/dummy_include)
 
@@ -288,6 +312,7 @@ FetchContent_Declare(
         GIT_TAG 1.24.0
 )
 FetchContent_MakeAvailable(OpenAL)
+endif()
 
 # == Tests ==
 if(N2ENGINE_BUILD_TESTS)
@@ -297,6 +322,10 @@ if(N2ENGINE_BUILD_TESTS)
             URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.zip
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    if(N2ENGINE_PLATFORM_WEB)
+        # No pthreads in the single-threaded web baseline: googletest then uses no thread-safety code
+        set(gtest_disable_pthreads ON CACHE BOOL "" FORCE)
+    endif()
     FetchContent_MakeAvailable(googletest)
 
     enable_testing()

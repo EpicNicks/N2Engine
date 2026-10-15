@@ -57,6 +57,7 @@
 <li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
 <li><a href="editor.html">Editor projects</a></li>
 <li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
 </ul>
 </div>
 </nav>
@@ -122,6 +123,7 @@
 <tr><td><code>engine/</code></td><td>The engine proper: application loop, GameObjects, scenes, physics, audio, input, resources, serialization, coroutines and Lua scripting.</td></tr>
 <tr><td><code>editor-server/</code></td><td><code>N2EditorHost</code>, a headless engine host that editors talk to over TCP. See <a href="logging-and-editor.html">Logging, health &amp; editor</a>.</td></tr>
 <tr><td><code>test_project/</code>, <code>lua_project/</code></td><td>Example games, in C++ and in Lua.</td></tr>
+<tr><td><code>cmake/N2EngineWeb.cmake</code>, <code>scripts/</code> <span class="badge">PR #NNN</span></td><td>The WebAssembly (Emscripten) build, stage 0 of issue #155: <code>N2ENGINE_PLATFORM_WEB</code>, the <code>N2ENGINE_WEB_PROFILE</code> profiles and a size report; only <code>math</code> and <code>text</code> build for the web so far. See <a href="web-build.html">Web build</a>.</td></tr>
 <tr><td><code>tests/</code></td><td>GoogleTest suites per module (built when <code>N2ENGINE_BUILD_TESTS=ON</code>). See <a href="testing.html">Testing &amp; CI</a>.</td></tr>
 </tbody>
 </table>
@@ -344,6 +346,7 @@
 <tr><td><a href="editor.html#design-reload-cache-only">Assets other than scripts are dropped from the cache, not rebuilt in place</a> <span class="badge">PR #103</span></td><td>Textures are immutable and held by pointer; the next load, a reopened scene, gets the new file.</td></tr>
 <tr><td><a href="resources.html#design-asset-state">A file's size and time live in .n2/asset-state.json, not in its .meta</a> <span class="badge">PR #103</span></td><td>A committed .meta no longer changes with every edit of its asset; the state file is only a cache.</td></tr>
 <tr><td><a href="resources.html#design-asset-time-ms">Modification times are Unix milliseconds</a> <span class="badge">PR #103</span></td><td>Two saves of the same size in one second are two changes; the cost is a one-time re-import of models.</td></tr>
+<tr><td><a href="web-build.html#design-web-reduced-set">Stage 0 of the web build builds math and text only</a> <span class="badge">PR #NNN</span></td><td>The engine core needs source changes (window, threads, files) that belong to later stages; the two CPU-only libraries prove the toolchain, flags and node test runner end to end.</td></tr>
 </tbody>
 </table>
 </div>
