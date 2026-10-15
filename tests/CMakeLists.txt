@@ -5,6 +5,9 @@ if(N2ENGINE_PLATFORM_WEB)
     # sources' own assets (lua_project/, tests/assets/, renderer/shaders/) by absolute path and write temporary files
     # under the system temp directory. Tests only: a shipped web build uses Emscripten's virtual filesystem.
     add_link_options(-sNODERAWFS=1)
+    # The program's environment variables (HOME, TMPDIR) are node's, as in a native run: Emscripten's default is a
+    # fixed HOME of /home/web_user, which is not a folder on the host
+    add_link_options(-sEXPORTED_RUNTIME_METHODS=ENV "--pre-js=${CMAKE_SOURCE_DIR}/tests/web/node-env.js")
 endif()
 add_subdirectory(math)
 add_subdirectory(text)
