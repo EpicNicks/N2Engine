@@ -2,6 +2,7 @@
 #include <exception>
 #include <format>
 #include <generator>
+#include <ranges>
 
 #include "engine/scheduling/CoroutineScheduler.hpp"
 #include "engine/Logger.hpp"
@@ -24,11 +25,12 @@ void CoroutineScheduler::Update()
 
     // Coroutines stop when their object is deactivated or destroyed. (The predicate used to be
     // inverted, so every coroutine on an *active* object was erased before it first ran.)
-    for (auto &[gameObject, coroutineList] : _coroutines)
+    for (auto &entry : _coroutines | std::views::values)
     {
+        GameObject *gameObject = entry.gameObject;
         if (!gameObject->IsActiveInHierarchy() || gameObject->IsDestroyed())
         {
-            for (const auto &coroutine : coroutineList)
+            for (const auto &coroutine : entry.coroutines)
             {
                 coroutine->RequestStop();
             }
@@ -39,11 +41,11 @@ void CoroutineScheduler::Update()
     // Snapshot: a coroutine body can start coroutines (run from next frame) or stop them, and either
     // would invalidate iterators over the live containers
     std::vector<std::pair<GameObject *, Coroutine *>> snapshot;
-    for (const auto &[gameObject, coroutineList] : _coroutines)
+    for (const auto &entry : _coroutines | std::views::values)
     {
-        for (const auto &coroutine : coroutineList)
+        for (const auto &coroutine : entry.coroutines)
         {
-            snapshot.emplace_back(gameObject, coroutine.get());
+            snapshot.emplace_back(entry.gameObject, coroutine.get());
         }
     }
 
@@ -68,7 +70,13 @@ Coroutine* CoroutineScheduler::StartCoroutine(GameObject *gameObject, std::gener
         return nullptr;
     }
 
-    auto &coroutineList = _coroutines[gameObject];
+    auto [sequence, isNew] = _sequenceOf.try_emplace(gameObject, _nextSequence);
+    if (isNew)
+    {
+        ++_nextSequence;
+        _coroutines.emplace(sequence->second, Entry{gameObject, {}});
+    }
+    auto &coroutineList = _coroutines.at(sequence->second).coroutines;
     coroutineList.push_back(std::make_unique<Coroutine>(std::move(generator)));
     return coroutineList.back().get();
 }
@@ -91,13 +99,14 @@ bool CoroutineScheduler::StopCoroutine(GameObject *gameObject, Coroutine *corout
 
 void CoroutineScheduler::StopAllCoroutines(GameObject *gameObject)
 {
-    const auto it = _coroutines.find(gameObject);
-    if (it == _coroutines.end())
+    const auto sequence = _sequenceOf.find(gameObject);
+    if (sequence == _sequenceOf.end())
     {
         return;
     }
 
-    for (const auto &coroutine : it->second)
+    const auto it = _coroutines.find(sequence->second);
+    for (const auto &coroutine : it->second.coroutines)
     {
         coroutine->RequestStop();
     }
@@ -105,6 +114,7 @@ void CoroutineScheduler::StopAllCoroutines(GameObject *gameObject)
     {
         // Drop the entry now, so no key refers to an object that's about to be freed
         _coroutines.erase(it);
+        _sequenceOf.erase(sequence);
     }
 }
 
@@ -126,7 +136,7 @@ void CoroutineScheduler::StopAllCoroutines(const Scene *curScene, GameObject *ga
 
 bool CoroutineScheduler::RemoveGameObject(GameObject *gameObject)
 {
-    if (!_coroutines.contains(gameObject))
+    if (!_sequenceOf.contains(gameObject))
     {
         return false;
     }
@@ -153,19 +163,32 @@ bool CoroutineScheduler::AdvanceCoroutine(Coroutine *coroutine)
 
 bool CoroutineScheduler::Contains(GameObject *gameObject, const Coroutine *coroutine) const
 {
-    const auto it = _coroutines.find(gameObject);
-    return it != _coroutines.end() &&
-           std::ranges::any_of(it->second, [coroutine](const auto &c) { return c.get() == coroutine; });
+    const auto *list = Find(gameObject);
+    return list && std::ranges::any_of(*list, [coroutine](const auto &c) { return c.get() == coroutine; });
+}
+
+const std::vector<std::unique_ptr<Coroutine>>* CoroutineScheduler::Find(GameObject *gameObject) const
+{
+    const auto sequence = _sequenceOf.find(gameObject);
+    return sequence == _sequenceOf.end() ? nullptr : &_coroutines.at(sequence->second).coroutines;
 }
 
 void CoroutineScheduler::RemoveFinished()
 {
     for (auto it = _coroutines.begin(); it != _coroutines.end();)
     {
-        std::erase_if(it->second, [](const std::unique_ptr<Coroutine> &c)
+        std::erase_if(it->second.coroutines, [](const std::unique_ptr<Coroutine> &c)
         {
             return c->IsStopRequested() || c->IsComplete();
         });
-        it = it->second.empty() ? _coroutines.erase(it) : std::next(it);
+        if (it->second.coroutines.empty())
+        {
+            _sequenceOf.erase(it->second.gameObject);
+            it = _coroutines.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
     }
 }

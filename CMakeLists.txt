@@ -27,6 +27,44 @@ option(N2ENGINE_USE_PHYSX "Use PhysX physics backend" ON)
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
 
+# ON builds every target with the strict floating-point profile: the same source then compiles to the same float
+# operations (no fused multiply-add contraction, no fast-math), which a later deterministic mode checks at startup
+# through Math::IsStrictFp() / N2_STRICT_FP. OFF (the default) changes no flag. It does not make results equal across
+# compilers or architectures by itself (see docs/math.html, "Strict floating-point build").
+option(N2ENGINE_STRICT_FP "Build all targets with the strict floating-point profile (no FP contraction, no fast-math)" OFF)
+
+if(N2ENGINE_STRICT_FP)
+    # Reject flags that defeat the profile, whether they come from the command line, the environment or a toolchain file
+    set(_n2_forbidden_fp_flags "-ffast-math" "-Ofast" "-march=native" "-mtune=native" "/fp:fast" "/fp:contract")
+    set(_n2_flag_vars CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+    foreach(_n2_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        list(APPEND _n2_flag_vars CMAKE_C_FLAGS_${_n2_config} CMAKE_CXX_FLAGS_${_n2_config})
+    endforeach()
+    foreach(_n2_var IN LISTS _n2_flag_vars)
+        foreach(_n2_flag IN LISTS _n2_forbidden_fp_flags)
+            if("${${_n2_var}}" MATCHES "${_n2_flag}")
+                message(FATAL_ERROR "N2ENGINE_STRICT_FP=ON forbids ${_n2_flag} (found in ${_n2_var}: ${${_n2_var}})")
+            endif()
+        endforeach()
+    endforeach()
+
+    if(MSVC)
+        # cl and clang-cl: /fp:precise stated explicitly (it is also the default), never /fp:contract or /fp:fast
+        add_compile_options(/fp:precise)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            # clang-cl still contracts under /fp:precise unless told not to
+            add_compile_options(-ffp-contract=off)
+        endif()
+    else()
+        # GCC defaults to -ffp-contract=fast and Clang to on: both may fuse a * b + c into one rounding as soon as a
+        # target has an FMA instruction. Set on ALL targets (the headers' inline math is compiled into every one)
+        add_compile_options(-ffp-contract=off)
+    endif()
+    # Every target, so any translation unit can ask (math/MathRegistrar.cpp answers Math::IsStrictFp())
+    add_compile_definitions(N2_STRICT_FP)
+    message(STATUS "Strict floating-point profile enabled (N2ENGINE_STRICT_FP)")
+endif()
+
 # == PhysX setup ==
 set(N2ENGINE_PHYSX_AVAILABLE OFF)
 
