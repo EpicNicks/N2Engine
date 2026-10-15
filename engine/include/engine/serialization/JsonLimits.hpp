@@ -37,7 +37,7 @@ namespace N2Engine::JsonLimits
             {
                 if (escaped)
                     escaped = false;
-                else if (c == '\')
+                else if (c == '\\')
                     escaped = true;
                 else if (c == '"')
                     inString = false;
