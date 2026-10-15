@@ -226,6 +226,8 @@ namespace N2Engine::Physics
         // row is the scene status with its own failure on top; no feature's failure touches another's or the scene's.
         std::optional<GpuStatus> _particlesFailure;
         std::optional<GpuStatus> _softBodiesFailure;
+        // Outside the PhysX guard like _gpuMode: the inline SetRefilterObserver is declared in every build
+        std::function<void(const GameObject&)> _refilterObserver;
 
     public:
 #ifdef N2ENGINE_PHYSX_ENABLED
@@ -477,7 +479,6 @@ namespace N2Engine::Physics
         std::unordered_set<const physx::PxShape*> _pendingRefilter; // reset since the last step
         std::unordered_set<const physx::PxShape*> _refiltering;     // being re-filtered in this step
         std::vector<RefilterReport> _refilterReports;
-        std::function<void(const GameObject&)> _refilterObserver;
         // A touch whose last report was "lost" although the new filter data still allows it: PhysX may
         // only report it found again a step later (e.g. once a sleeping partner wakes). Its Exit waits a
         // step and is dropped if "found" arrives meanwhile.
