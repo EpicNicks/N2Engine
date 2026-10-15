@@ -412,6 +412,7 @@ TEST(DeformableSoftBodyBackendTest, AddVelocityAddsToEveryNodeThroughTheVelocity
     EXPECT_EQ(volume.uploads, 1);
     EXPECT_EQ(volume.lastDirty, SoftBodies::kDeformSimVelocities) << "only the velocities are marked dirty";
     EXPECT_EQ(volume.allDirty, SoftBodies::kDeformSimVelocities);
+    EXPECT_EQ(volume.wakes, 1) << "a push wakes the (possibly settled, asleep) body";
     for (const DeformableVec4 &v : volume.deviceSimVelocities)
     {
         EXPECT_NEAR(v.x, 1.0f, 1e-5f);

@@ -38,6 +38,7 @@ namespace N2Engine::TestSupport
             int uploads = 0;
             int readBacks = 0;
             int velocityReadBacks = 0;
+            int wakes = 0; // Uploads with velocities: the real driver sets the wake counter then (a settled body sleeps)
             int materialChanges = 0;
             std::uint32_t lastDirty = 0;
             std::uint32_t allDirty = 0; // every flag any Upload had
@@ -176,6 +177,7 @@ namespace N2Engine::TestSupport
             if (dirty & SoftBodies::kDeformSimVelocities)
             {
                 volume.deviceSimVelocities = volume.hostSimVelocities;
+                ++volume.wakes;
             }
             return true;
         }

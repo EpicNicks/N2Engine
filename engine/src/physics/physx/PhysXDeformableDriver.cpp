@@ -118,7 +118,9 @@ namespace N2Engine::Physics
         if (volume.volume)
         {
             volume.volume->setLinearDamping(material.linearDamping);
-            volume.volume->setSolverIterationCounts(std::clamp<PxU32>(material.solverIterations, 1u, 255u));
+            // Through PxDeformableBody: PxDeformableVolume's own overload of this is deprecated
+            static_cast<PxDeformableBody &>(*volume.volume)
+                .setSolverIterationCounts(std::clamp<PxU32>(material.solverIterations, 1u, 255u));
             volume.volume->setDeformableBodyFlag(PxDeformableBodyFlag::eDISABLE_SELF_COLLISION,
                                                  !material.selfCollision);
         }
@@ -292,6 +294,10 @@ namespace N2Engine::Physics
                 return false;
             }
             flags |= PxDeformableVolumeDataFlag::eSIM_VELOCITY;
+            // A deformable body sleeps once it settles (sleep threshold 0.05), and markDirty is not documented to
+            // wake it: only a positive wake counter, a contact or a sleep-affecting property is. So a settled
+            // jelly would ignore a pushed velocity. 0.4 is PhysX's default wake counter (20 frames at 0.02 s)
+            static_cast<PxDeformableBody &>(*volume.volume).setWakeCounter(0.4f);
         }
         if (dirty & SoftBodies::kDeformSimPositions)
         {
