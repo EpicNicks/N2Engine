@@ -709,5 +709,4 @@ jobs:
 
       # No budget is configured, so this only reports (raw and gzip sizes in the job summary)
       - name: Report artifact sizes
-        if: "!cancelled()"
         run: bash scripts/web-size-report.sh build-web/bin
