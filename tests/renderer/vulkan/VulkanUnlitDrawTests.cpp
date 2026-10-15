@@ -1174,7 +1174,9 @@ TEST_F(VulkanDrawTest, ATextureCreatedAtTheAddressOfADestroyedOneIsNotDrawnInIts
     const std::uint8_t blueTexel[4] = {0, 0, 255, 255};
     ITexture* a = R().CreateTexture(redTexel, 1, 1, 4, Nearest());
     ASSERT_NE(a, nullptr);
-    IMaterial* material = R().CreateMaterial(_unlit);
+    // Created with a texture, as OpenGL does: uHasTexture is set at creation only (SetTexture does not touch it, in either
+    // backend), so a material made without one would draw its white albedo whatever SetTexture gives it
+    IMaterial* material = R().CreateMaterial(_unlit, a);
     ASSERT_NE(material, nullptr);
     IMesh* quad = MakeMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
     ASSERT_NE(quad, nullptr);
