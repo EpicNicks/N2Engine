@@ -39,8 +39,8 @@
 //
 // Pipelines are cached by (shader, RenderState, wireframe) and made lazily on first use, under the renderer's lock, with
 // a dynamic viewport and scissor so resizing the target never invalidates them. Clip space: the vertex shaders remap z from
-// OpenGL's -w..w to Vulkan's 0..w, and BeginFrame's viewport has a negative height so y stays up as in GL; that flip also
-// flips the winding Vulkan sees, so GL's counter-clockwise front faces are VK_FRONT_FACE_CLOCKWISE here.
+// OpenGL's -w..w to Vulkan's 0..w, and BeginFrame's viewport has a negative height so y stays up as in GL; the image is then
+// upright as in GL, so GL's counter-clockwise front faces stay VK_FRONT_FACE_COUNTER_CLOCKWISE.
 
 #ifndef N2ENGINE_VULKAN_HAS_SPIRV
 #define N2ENGINE_VULKAN_HAS_SPIRV 0
@@ -800,9 +800,11 @@ VkPipeline VulkanRenderer::GetPipelineLocked(const BuiltInShader shaderKind, con
     rasterization.cullMode = state.cull == CullMode::Back    ? VK_CULL_MODE_BACK_BIT
         : state.cull == CullMode::Front                      ? VK_CULL_MODE_FRONT_BIT
                                                              : VK_CULL_MODE_NONE;
-    // GL's front faces are counter-clockwise in NDC (y up). The negative-height viewport flips y, so the rasterizer sees
-    // them clockwise
-    rasterization.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    // GL's front faces are counter-clockwise as seen with y up. The negative-height viewport makes the image y-up as in GL,
+    // and Vulkan judges the winding in that image (window coordinates, y down), so a GL front face is counter-clockwise
+    // there too. (Without the flip, GL's projection would give an upside-down image and the winding would need to be
+    // clockwise.)
+    rasterization.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterization.depthBiasEnable = VK_FALSE;
     rasterization.lineWidth = 1.0f;
 
