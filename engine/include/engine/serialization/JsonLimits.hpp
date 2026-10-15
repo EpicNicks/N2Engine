@@ -106,12 +106,18 @@ namespace N2Engine::JsonLimits
         return NestingDepth(value) > MaxSceneJsonDepth;
     }
 
-    /// value.dump(indent, indentChar, ensureAscii, errorHandler), byte for byte, without recursion. nlohmann's own
-    /// dump calls itself once per nesting level (about 2 KB of stack each in an MSVC Debug build), so scene JSON at the
-    /// hierarchy cap would overflow a 1 MiB stack; this one keeps the open arrays and objects on the heap. Scalars,
-    /// empty containers and object keys are still written by nlohmann's serializer (none of them nests), so number
-    /// formatting, string escaping and the error handler behave exactly as in dump. Use it for scene, prefab and
-    /// snapshot JSON, and for anything else that can be as deep.
+    /// value.dump(indent, indentChar, ensureAscii, errorHandler) without recursion. nlohmann's own dump calls itself
+    /// once per nesting level (about 2 KB of stack each in an MSVC Debug build), so scene JSON at the hierarchy cap
+    /// would overflow a 1 MiB stack; this one keeps the open arrays and objects on the heap. Scalars, empty containers
+    /// and object keys are still written by nlohmann's serializer (none of them nests), so number formatting, string
+    /// escaping and the error handler behave exactly as in dump. Use it for scene, prefab and snapshot JSON, and for
+    /// anything else that can be as deep.
+    ///
+    /// Exactly what is identical: the text is byte for byte dump's (vendored nlohmann 3.12.0) for every value, every
+    /// indentChar and ensureAscii, every error handler, and every indent up to 1024 (a negative one is compact, as in
+    /// dump). That includes dump's own quirks: past column 512 it pads with spaces whatever indentChar is (its indent
+    /// buffer grows with ' '), and a binary value is written as dump writes it. An indent over 1024 is the one case not matched: there dump itself
+    /// reads past its indent buffer (undefined behaviour), while this pads as above. No caller uses one.
     inline std::string IterativeDump(const nlohmann::json &value, const int indent = -1, const char indentChar = ' ',
                                      const bool ensureAscii = false,
                                      const nlohmann::json::error_handler_t errorHandler =
@@ -122,6 +128,15 @@ namespace N2Engine::JsonLimits
                                                             indentChar, errorHandler);
         const bool pretty = indent >= 0;
         const unsigned int step = pretty ? static_cast<unsigned int>(indent) : 0u;
+
+        // `columns` of indentation as dump writes it: its indent buffer starts as 512 indentChar and grows with ' '
+        static constexpr unsigned int InitialIndentBuffer = 512;
+        const auto pad = [&out, indentChar](const unsigned int columns)
+        {
+            const unsigned int own = columns < InitialIndentBuffer ? columns : InitialIndentBuffer;
+            out.append(own, indentChar);
+            out.append(columns - own, ' ');
+        };
 
         // An open array or object: the next element to write, and the indent of its closing bracket
         struct Open
@@ -143,8 +158,33 @@ namespace N2Engine::JsonLimits
                     out += '\n';
                 open.push_back(Open{&item, item.cbegin(), currentIndent, true});
             }
+            else if (pretty && item.is_binary())
+            {
+                // As dump writes a binary value, but indented by pad: the serializer's own indent buffer never saw
+                // the levels above, so asked to indent this deep it would read past its end
+                const nlohmann::json::binary_t &binary = item.get_binary();
+                const unsigned int inner = currentIndent + step;
+                out += "{\n";
+                pad(inner);
+                out += "\"bytes\": [";
+                for (std::size_t index = 0; index < binary.size(); ++index)
+                {
+                    if (index > 0)
+                        out += ", ";
+                    out += std::to_string(static_cast<unsigned int>(binary[index]));
+                }
+                out += "],\n";
+                pad(inner);
+                out += "\"subtype\": ";
+                out += binary.has_subtype() ? std::to_string(static_cast<unsigned long long>(binary.subtype()))
+                                            : std::string("null");
+                out += '\n';
+                pad(currentIndent);
+                out += '}';
+            }
             else
             {
+                // A scalar or an empty container: no indentation is written
                 leaves.dump(item, pretty, ensureAscii, step, currentIndent);
             }
         };
@@ -158,7 +198,7 @@ namespace N2Engine::JsonLimits
                 if (pretty)
                 {
                     out += '\n';
-                    out.append(top.indent, indentChar);
+                    pad(top.indent);
                 }
                 out += top.container->is_object() ? '}' : ']';
                 open.pop_back();
@@ -169,7 +209,7 @@ namespace N2Engine::JsonLimits
             top.first = false;
             const unsigned int childIndent = top.indent + step;
             if (pretty)
-                out.append(childIndent, indentChar);
+                pad(childIndent);
             if (top.container->is_object())
             {
                 // The key as dump writes it: a JSON string, escaped by the same serializer

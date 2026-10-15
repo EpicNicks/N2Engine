@@ -160,14 +160,28 @@ namespace N2Engine
                 // Serialize lambda
                 [&member, name](nlohmann::json &j)
                 {
-                    j[name] = member;
+                    if constexpr (std::is_same_v<T, nlohmann::json>)
+                    {
+                        j[name] = JsonLimits::IterativeCopy(member); // JSON data can nest deep: no recursive copy
+                    }
+                    else
+                    {
+                        j[name] = member;
+                    }
                 },
                 // Deserialize lambda
                 [&member, name](const nlohmann::json &j, ReferenceResolver *resolver)
                 {
                     if (j.contains(name))
                     {
-                        member = j[name].get<T>();
+                        if constexpr (std::is_same_v<T, nlohmann::json>)
+                        {
+                            member = JsonLimits::IterativeCopy(j[name]);
+                        }
+                        else
+                        {
+                            member = j[name].get<T>();
+                        }
                     }
                 },
                 MakeFieldInfo<T>(name));

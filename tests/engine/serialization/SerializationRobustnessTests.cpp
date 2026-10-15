@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <math/UUID.hpp>
 #include <nlohmann/json.hpp>
@@ -22,6 +23,7 @@
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/io/Resources.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/prefabs/Prefab.hpp"
 #include "engine/prefabs/PrefabManager.hpp"
@@ -684,6 +686,39 @@ TEST(SceneDepthTest, ASerializedDeepestTreeStaysUnderTheTextCap)
     EXPECT_LE(JsonLimits::NestingDepth(json::parse(text)), MaxSceneJsonDepth - 60);
 }
 
+TEST(SceneDepthTest, ALuaComponentWithDataNestedAThousandLevelsLoadsSavesAndLoadsAgain)
+{
+    // With a shallow hierarchy one component's data can use almost all of the text cap. LuaComponent copies its
+    // scriptData on every load and save; nlohmann's copy overflowed a 1 MiB stack at about 896 levels.
+    const std::string deep = TestJson::NestedArrays(1000);
+    const std::string text =
+        R"({"name":"LuaDeep","rootGameObjects":[{"uuid":"00000000-0000-0000-0000-000000000001","name":"holder",)"
+        R"("children":[],"components":[{"type":"LuaComponent","data":{"isActive":true,"scriptData":{"deep":)" +
+        deep + "}}}]}]}";
+    ASSERT_FALSE(JsonLimits::SceneJsonTooDeep(text));
+
+    const auto scene = Scene::FromJSON(json::parse(text), true);
+    ASSERT_NE(scene, nullptr);
+    const GameObject::Ptr holder = scene->FindGameObject("holder");
+    ASSERT_NE(holder, nullptr);
+    const auto *component = holder->GetComponent<Scripting::LuaComponent>();
+    ASSERT_NE(component, nullptr);
+    EXPECT_EQ(JsonLimits::NestingDepth(component->GetScriptData()), 1001u);
+    const std::string data = JsonLimits::IterativeDump(component->GetScriptData());
+    EXPECT_EQ(data, "{\"deep\":" + deep + "}");
+
+    // saved and loaded again, its data unchanged
+    const std::string saved = JsonLimits::IterativeDump(scene->Serialize());
+    EXPECT_FALSE(JsonLimits::SceneJsonTooDeep(saved));
+    const auto reloaded = Scene::FromJSON(json::parse(saved), true);
+    ASSERT_NE(reloaded, nullptr);
+    const GameObject::Ptr reloadedHolder = reloaded->FindGameObject("holder");
+    ASSERT_NE(reloadedHolder, nullptr);
+    const auto *reloadedComponent = reloadedHolder->GetComponent<Scripting::LuaComponent>();
+    ASSERT_NE(reloadedComponent, nullptr);
+    EXPECT_EQ(JsonLimits::IterativeDump(reloadedComponent->GetScriptData()), data);
+}
+
 // ============================================================================
 // IterativeDump and IterativeCopy (JsonLimits.hpp): nlohmann's dump and copy, without recursion
 // ============================================================================
@@ -715,6 +750,8 @@ namespace
         value["null"] = nullptr;
         value["emptyArray"] = json::array();
         value["emptyObject"] = json::object();
+        value["binary"] = json::binary({1, 2, 255}, 7);
+        value["emptyBinary"] = json::binary(std::vector<std::uint8_t>{});
         value[""] = "an empty key";
         value["key \"with\" escapes\n\xC3\xA9"] = 1;
         value["array"] = json::array({1, "two", 3.5, nullptr, json::array(), json::object(),
@@ -745,6 +782,36 @@ TEST(JsonIterativeTest, DumpIsByteForByteNlohmannDump)
     }
     EXPECT_EQ(JsonLimits::IterativeDump(value, 1, '\t'), value.dump(1, '\t'));
     EXPECT_EQ(JsonLimits::IterativeDump(value), value.dump()) << "the defaults are dump's";
+}
+
+TEST(JsonIterativeTest, DeepIndentationPadsAsDumpDoes)
+{
+    // Past column 512 dump pads with spaces whatever the indent character (its indent buffer grows with ' '), and a
+    // binary value deep down is indented the same way: 140 levels at 4 columns each is 560 columns
+    json value = json::object({{"bin", json::binary({9, 8, 7})}, {"noSubtype", json::binary({1})}, {"s", "leaf"}});
+    for (int level = 0; level < 140; ++level)
+    {
+        value = level % 2 == 0 ? json::array({std::move(value), level}) : json::object({{"next", std::move(value)}});
+    }
+    for (const char indentChar : {' ', '\t'})
+    {
+        for (const int indent : {-1, 0, 4})
+        {
+            EXPECT_EQ(JsonLimits::IterativeDump(value, indent, indentChar), value.dump(indent, indentChar))
+                << "indent " << indent << ", indent char " << static_cast<int>(indentChar);
+        }
+    }
+
+    // an indent wider than the initial buffer (dump grows it once, which is enough up to 1024)
+    const json shallow = json::object({{"a", json::array({1, json::binary({3}, 4)})}});
+    for (const int indent : {600, 1024})
+    {
+        EXPECT_EQ(JsonLimits::IterativeDump(shallow, indent, '\t'), shallow.dump(indent, '\t')) << indent;
+    }
+
+    // over 1024 dump itself reads past its buffer, so it is not called: the padding follows the same rule
+    const std::string expected = "[\n" + std::string(512, '\t') + std::string(1500 - 512, ' ') + "1\n]";
+    EXPECT_EQ(JsonLimits::IterativeDump(json::array({1}), 1500, '\t'), expected);
 }
 
 TEST(JsonIterativeTest, DumpOfScalarsAndEmptyContainersIsNlohmannDump)

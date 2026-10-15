@@ -1037,6 +1037,15 @@ namespace N2Engine::Editor
             LocalTransformState transform;
         };
 
+        /// The answer when a tree would nest past the hierarchy cap (the same cap a load enforces): AddChild and
+        /// SetParent refuse such a move with only a warning, so a command checks CanAddChild first and says this
+        std::string TooDeepMessage(const std::string &childName, const std::string &parentName)
+        {
+            return std::format("Can't make '{}' a child of '{}': the hierarchy would nest more than {} levels deep",
+                               EditorServer::SanitizeForLog(childName), EditorServer::SanitizeForLog(parentName),
+                               JsonLimits::MaxHierarchyDepth);
+        }
+
         PlacementState PlacementOf(const GameObject &gameObject)
         {
             return {ParentIdOf(gameObject), gameObject.GetSiblingIndex(), LocalTransformOf(gameObject)};
@@ -1069,6 +1078,10 @@ namespace N2Engine::Editor
             }
             if ((*entity)->GetParent() != parent)
             {
+                if (parent != nullptr && !parent->CanAddChild(*entity))
+                {
+                    return std::unexpected(TooDeepMessage((*entity)->GetName(), parent->GetName()));
+                }
                 // The local transform is put back below, so the world transform needn't be kept
                 (*entity)->SetParent(parent, false);
                 if ((*entity)->GetParent() != parent)
@@ -1266,7 +1279,16 @@ namespace N2Engine::Editor
 
             if (parent != nullptr)
             {
+                // Its parent may have been moved deeper since: the rebuilt tree is dropped, not left in no scene
+                if (!parent->CanAddChild(restored))
+                {
+                    return std::unexpected(TooDeepMessage(restored->GetName(), parent->GetName()));
+                }
                 parent->AddChild(restored, false);
+                if (restored->GetParent() != parent)
+                {
+                    return std::unexpected(std::string("The object couldn't be put back under its parent"));
+                }
             }
             else
             {
@@ -4553,14 +4575,27 @@ namespace N2Engine::Editor
             return;
         }
 
+        const std::string name = cmd.name.empty() ? std::string(preset->objectName) : cmd.name;
+        // A tree is only so deep: the new object would be one level below its parent (the root being level 1)
+        if (parent != nullptr && parent->GetHierarchyDepth() + 2 > JsonLimits::MaxHierarchyDepth)
+        {
+            SendError(clientSocket, TooDeepMessage(name, parent->GetName()));
+            return;
+        }
+
         // An editor object always has a transform (CreateEntity's has none until something gives it one)
-        auto gameObject = GameObject::Create(cmd.name.empty() ? std::string(preset->objectName) : cmd.name);
+        auto gameObject = GameObject::Create(name);
         gameObject->CreatePositionable();
         preset->addComponents(*gameObject);
 
         if (parent != nullptr)
         {
             parent->AddChild(gameObject, false);
+            if (gameObject->GetParent() != parent)
+            {
+                SendError(clientSocket, TooDeepMessage(name, parent->GetName())); // nothing recorded; it is dropped
+                return;
+            }
         }
         else
         {
@@ -4615,9 +4650,7 @@ namespace N2Engine::Editor
             // load refuses, and the walks over it could overflow the stack
             if (!newParent->CanAddChild(entity))
             {
-                SendError(clientSocket, std::format("Can't make '{}' a child of '{}': the hierarchy would nest more than {} levels deep",
-                                                    SanitizeForLog(entity->GetName()), SanitizeForLog(newParent->GetName()),
-                                                    JsonLimits::MaxHierarchyDepth));
+                SendError(clientSocket, TooDeepMessage(entity->GetName(), newParent->GetName()));
                 return;
             }
         }
@@ -4759,6 +4792,13 @@ namespace N2Engine::Editor
         copy->SetName(DuplicateName(*source, parent != nullptr ? parent->GetChildren() : scene->GetRootGameObjects()));
         if (parent != nullptr)
         {
+            // The copy is as tall as its source, which the parent holds already, so this holds; checked all the same,
+            // as nothing may be recorded for an object that isn't in the scene
+            if (!parent->CanAddChild(copy))
+            {
+                SendError(clientSocket, TooDeepMessage(copy->GetName(), parent->GetName()));
+                return;
+            }
             parent->AddChild(copy, false);
         }
         else

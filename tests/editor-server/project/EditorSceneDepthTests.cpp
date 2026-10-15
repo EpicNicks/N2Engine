@@ -10,6 +10,7 @@
 #include <system_error>
 #include <vector>
 
+#include <math/UUID.hpp>
 #include <nlohmann/json.hpp>
 
 #include <editor-server/Commands.hpp>
@@ -282,4 +283,77 @@ TEST_F(EditorSceneDepthTest, SetEntityParentRefusesAMoveThatWouldNestPastTheCap)
     allowed.WriteBool(false);
     EXPECT_EQ(Execute(server, CommandType::SetEntityParent, allowed.Release()).type, OkType);
     EXPECT_EQ(SceneManager::GetCurSceneRef().GetRootGameObjectCount(), 1u);
+}
+
+namespace
+{
+    // An object of the open scene by its UUID (nullptr if it has none)
+    GameObject::Ptr SceneEntity(const std::string &id)
+    {
+        const auto uuid = Math::UUID::FromString(id);
+        return uuid ? SceneManager::GetCurSceneRef().FindGameObjectByUUID(*uuid) : nullptr;
+    }
+
+    std::vector<uint8_t> CreateEntityExPayload(const std::string &name, const std::string &parentId)
+    {
+        BufferWriter w;
+        w.WriteString(name);
+        w.WriteString(parentId);
+        w.WriteI32(-1);
+        w.WriteString(""); // an empty object
+        return w.Release();
+    }
+}
+
+TEST_F(EditorSceneDepthTest, CreateEntityExRefusesAParentAtTheCapAndRecordsNothing)
+{
+    ASSERT_EQ(LoadScene(TestJson::SceneText(Cap, "Capped")).type, OkType);
+    const GameObject::Ptr deepest = SceneEntity(ChainId(Cap));
+    ASSERT_NE(deepest, nullptr);
+
+    const Frame refused = Execute(server, CommandType::CreateEntityEx, CreateEntityExPayload("Too deep", ChainId(Cap)));
+    EXPECT_EQ(refused.type, ErrorType);
+    EXPECT_NE(refused.Text().find("nest more than 512 levels deep"), std::string::npos) << refused.Text();
+    EXPECT_EQ(deepest->GetChildCount(), 0u);
+    EXPECT_EQ(SceneManager::GetCurSceneRef().FindGameObject("Too deep"), nullptr);
+    EXPECT_EQ(Execute(server, CommandType::Undo).type, ErrorType) << "no Create step was recorded";
+
+    // one level up it is made
+    const Frame created = Execute(server, CommandType::CreateEntityEx, CreateEntityExPayload("Fits", ChainId(Cap - 1)));
+    ASSERT_EQ(created.type, static_cast<uint8_t>(ResponseType::EntityCreated)) << created.Text();
+    BufferReader r(created.payload);
+    const GameObject::Ptr made = SceneEntity(r.ReadString());
+    ASSERT_NE(made, nullptr);
+    EXPECT_EQ(made->GetParent(), SceneEntity(ChainId(Cap - 1)));
+}
+
+TEST_F(EditorSceneDepthTest, RedoOfACreateUnderAParentMovedPastTheCapIsAnErrorAndLeavesNoObject)
+{
+    // a chain of Cap - 1 objects, and a root object beside it to create under
+    const std::string holderId = ChainId(0xFFFF);
+    const std::string scene = "{\"name\":\"Capped\",\"rootGameObjects\":[" + TestJson::ChainText(Cap - 1) +
+                              ",{\"uuid\":\"" + holderId + "\",\"name\":\"holder\",\"children\":[]}]}";
+    ASSERT_EQ(LoadScene(scene).type, OkType);
+
+    const Frame created = Execute(server, CommandType::CreateEntityEx, CreateEntityExPayload("made", holderId));
+    ASSERT_EQ(created.type, static_cast<uint8_t>(ResponseType::EntityCreated)) << created.Text();
+    BufferReader r(created.payload);
+    const std::string madeId = r.ReadString();
+    ASSERT_NE(Execute(server, CommandType::Undo).type, ErrorType);
+    ASSERT_EQ(SceneEntity(madeId), nullptr);
+
+    // the holder moved under the deepest object behind the history's back (as a script can): it is level Cap now,
+    // so the object the redo builds again would be level Cap + 1
+    const GameObject::Ptr holder = SceneEntity(holderId);
+    const GameObject::Ptr deepest = SceneEntity(ChainId(Cap - 1));
+    ASSERT_NE(holder, nullptr);
+    ASSERT_NE(deepest, nullptr);
+    holder->SetParent(deepest, false);
+    ASSERT_EQ(holder->GetParent(), deepest);
+
+    const Frame redo = Execute(server, CommandType::Redo);
+    EXPECT_EQ(redo.type, ErrorType);
+    EXPECT_NE(redo.Text().find("nest more than 512 levels deep"), std::string::npos) << redo.Text();
+    EXPECT_EQ(SceneEntity(madeId), nullptr) << "the object built again is not left anywhere";
+    EXPECT_EQ(holder->GetChildCount(), 0u);
 }
