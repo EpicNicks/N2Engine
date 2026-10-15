@@ -8,6 +8,7 @@
 #include "engine/Logger.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
+#include "engine/serialization/JsonLimits.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -259,7 +260,7 @@ namespace N2Engine::Scripting
                     {
                         if (declared->get<sol::object>(fieldName).valid())
                         {
-                            kept[fieldName] = value;
+                            kept[fieldName] = JsonLimits::IterativeCopy(value); // field data can nest deep
                         }
                     }
                 }
@@ -659,7 +660,8 @@ namespace N2Engine::Scripting
             j["scriptPath"] = _scriptPath;
         }
 
-        j["scriptData"] = _scriptData;
+        // Copied without recursion: a script's data is scene data, which can nest up to JsonLimits::MaxSceneJsonDepth
+        j["scriptData"] = JsonLimits::IterativeCopy(_scriptData);
         return j;
     }
 
@@ -670,7 +672,7 @@ namespace N2Engine::Scripting
         const LuaBudgetScope budget; // SetScript and what follows it each open one; this keeps them in the one entry
         if (j.contains("scriptData") && !j["scriptData"].is_null())
         {
-            _scriptData = j["scriptData"];
+            _scriptData = JsonLimits::IterativeCopy(j["scriptData"]); // as deep as the scene allows
         }
 
         // Try UUID first (preferred)
@@ -710,9 +712,10 @@ namespace N2Engine::Scripting
         // Resolve references if resolver provided
         if (resolver)
         {
-            resolver->AddPendingReference([this, j, resolver]()
+            // Not a copy of j: ResolveReferences reads _scriptData, and copying j would recurse once per JSON level
+            resolver->AddPendingReference([this, resolver]()
             {
-                ResolveReferences(j, resolver);
+                ResolveReferences(_scriptData, resolver);
             });
         }
     }
@@ -735,7 +738,7 @@ namespace N2Engine::Scripting
             // Check if this is a reference field
             if (value.is_object() && value.contains("$ref"))
             {
-                auto refValue = value["$ref"];
+                const auto &refValue = value["$ref"];
                 if (refValue.is_null())
                 {
                     _scriptInstance[fieldName] = sol::nil;
@@ -986,7 +989,8 @@ namespace N2Engine::Scripting
                 {
                     return candidate.container == "scriptData" && candidate.name == fieldName;
                 });
-                _scriptData[fieldName] = field != fields.end() ? ClampFieldValue(*field, fieldValue) : fieldValue;
+                _scriptData[fieldName] = field != fields.end() ? ClampFieldValue(*field, fieldValue)
+                                                               : JsonLimits::IterativeCopy(fieldValue);
             }
             InjectFieldsIntoScript();
             if (resolver != nullptr)
@@ -1003,7 +1007,7 @@ namespace N2Engine::Scripting
     void LuaComponent::SetScriptData(const nlohmann::json &data)
     {
         const LuaBudgetScope budget;
-        _scriptData = data;
+        _scriptData = JsonLimits::IterativeCopy(data);
         InjectFieldsIntoScript();
     }
 

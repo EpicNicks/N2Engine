@@ -88,6 +88,14 @@ namespace N2Engine
         /// Only unlinks the child from this object; the caller decides where it goes (a new parent, the
         /// scene's roots, or nowhere because it's being destroyed)
         void DetachChild(Ptr child, bool keepWorldPosition);
+        /// Serialize without the children: the recursion (Serialize, DeserializeAt) is kept in small frames of its
+        /// own, so a tree of JsonLimits::MaxHierarchyDepth levels fits a small stack (the tests prove it)
+        [[nodiscard]] nlohmann::json SerializeSelf() const;
+        /// Deserialize of one object without its children
+        static Ptr DeserializeSelf(const nlohmann::json &j, ReferenceResolver *resolver);
+        /// Deserialize of the object and its children; depth is this object's level (the root is 1). Throws
+        /// std::invalid_argument past JsonLimits::MaxHierarchyDepth.
+        static Ptr DeserializeAt(const nlohmann::json &j, ReferenceResolver *resolver, std::size_t depth);
         /// Raw pointers to the current components, for running callbacks that may add or remove some
         [[nodiscard]] std::vector<Component *> SnapshotComponents() const;
         /// Whether the component is still one of this object's (a callback may have removed and freed it).
@@ -130,7 +138,15 @@ namespace N2Engine
         // Hierarchy management
         Ptr GetParent() const { return _parent.lock(); }
         void SetParent(Ptr parent, bool keepWorldPosition = true);
+        /// Refused with a warning (nothing changes) when it would make the tree deeper than
+        /// JsonLimits::MaxHierarchyDepth levels, or a cycle (see CanAddChild).
         void AddChild(Ptr child, bool keepWorldPosition = true);
+        /// False when making child (with all its descendants) a child of this object would nest the hierarchy deeper
+        /// than JsonLimits::MaxHierarchyDepth levels, the root being level 1. The depth of the whole tree is bounded
+        /// this way (a loaded scene by Deserialize, an edited one by SetParent and AddChild), so the recursive walks
+        /// (Serialize, SetScene, FindChildRecursive, GetChildrenRecursive, prefab instantiate) are safe by
+        /// construction.
+        [[nodiscard]] bool CanAddChild(const Ptr &child) const;
         /// Detaches the child, which becomes a root of its scene (the same as child->SetParent(nullptr)).
         /// A child that's being destroyed is only unlinked: it leaves the scene with its destroyed hierarchy.
         /// Note: this edits the scene's root list, so it isn't supported inside a TraverseAll/TraverseUntil
