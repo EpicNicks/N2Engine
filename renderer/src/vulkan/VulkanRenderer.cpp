@@ -8,13 +8,19 @@
 
 #include "renderer/vulkan/VulkanRenderer.hpp"
 
+#include "VulkanResources.hpp"
+
 // Stage 0 of the Vulkan backend (#43): headless initialisation, an offscreen colour and depth target, a frame that
 // clears it, readback, resizing and shutdown. Everything that draws is still a stub that fails loudly and cleanly (logs
-// once, returns nullptr/false). Nothing here needs a window, a surface or a swapchain.
+// once, returns nullptr/false). Nothing here needs a window, a surface or a swapchain. Meshes and textures (stage A) are
+// in VulkanResources.cpp.
 //
 // Object lifetimes, in creation order (Shutdown destroys them in reverse):
-//   instance -> debug messenger -> device -> command pool (+ the frames' command buffers and fences) -> render pass ->
-//   targets (colour and depth images + views, framebuffer, host-visible readback buffer)
+//   instance -> debug messenger -> device -> VMA allocator -> command pool (+ the frames' command buffers and fences) ->
+//   render pass -> targets (colour and depth images + views, framebuffer, host-visible readback buffer) -> meshes,
+//   textures and samplers, as the caller makes them (and the deferred-deletion lists)
+// The targets and the readback buffer are plain vkAllocateMemory allocations (stage 0's AllocateMemory), not VMA ones:
+// moving them onto VMA was optional and left alone.
 //
 // Frames in flight: two FrameResources (a command buffer and a fence each) alternate. BeginFrame waits for the fence of
 // its slot, EndFrame resets it and submits with it, so the CPU runs at most two frames ahead. Both frames render into
@@ -177,7 +183,7 @@ namespace
 // Construction and the test/diagnostic accessors
 // ---------------------------------------------------------------------------------------------------------------------
 
-VulkanRenderer::VulkanRenderer() : _debug(std::make_shared<DebugState>())
+VulkanRenderer::VulkanRenderer() : _debug(std::make_shared<DebugState>()), _resources(std::make_unique<ResourceState>())
 {
 }
 
@@ -291,7 +297,19 @@ void VulkanRenderer::LogUnsupportedOnce(const char* what) const
         }
     }
     std::cerr << "Vulkan renderer: " << what
-              << " is not implemented yet (#43, stages A-E); it does nothing and returns null/false" << std::endl;
+              << " is not implemented yet (#43, stages B-E); it does nothing and returns null/false" << std::endl;
+}
+
+void VulkanRenderer::LogOnce(const std::string& message) const
+{
+    {
+        std::lock_guard lock(_logMutex);
+        if (!_loggedUnsupported.insert(message).second)
+        {
+            return;
+        }
+    }
+    std::cerr << "Vulkan renderer: " << message << std::endl;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -362,7 +380,7 @@ bool VulkanRenderer::Initialize(GLFWwindow* windowHandle, uint32_t width, uint32
     }
 
     const bool ok = CreateInstance() && SetupDebugMessenger() && PickPhysicalDevice() && CreateLogicalDevice() &&
-        CreateCommandPool() && CreateFrameResources() && CreateRenderPass() && CreateTargets(width, height);
+        CreateAllocator() && CreateCommandPool() && CreateFrameResources() && CreateRenderPass() && CreateTargets(width, height);
     if (!ok)
     {
         // Every step above leaves what it made in the members; destroy it all, keeping the reason
@@ -957,6 +975,11 @@ bool VulkanRenderer::SubmitOneTime(Recorder&& record) const
     return ok;
 }
 
+bool VulkanRenderer::SubmitOneTimeFn(const std::function<void(VkCommandBuffer)>& record) const
+{
+    return SubmitOneTime([&record](VkCommandBuffer commandBuffer) { record(commandBuffer); });
+}
+
 bool VulkanRenderer::ClearTargetToBlack()
 {
     const VkImage image = _color.image;
@@ -1108,6 +1131,7 @@ void VulkanRenderer::ShutdownLocked()
     if (_device != VK_NULL_HANDLE)
     {
         vkDeviceWaitIdle(_device);
+        DestroyAllResources(); // meshes, textures, samplers and everything retired: before the allocator that made them
         DestroyTargets();
         if (_renderPass != VK_NULL_HANDLE)
         {
@@ -1125,6 +1149,7 @@ void VulkanRenderer::ShutdownLocked()
         {
             vkDestroyCommandPool(_device, _commandPool, nullptr);
         }
+        DestroyAllocator(); // after every allocation was freed, before the device
         vkDestroyDevice(_device, nullptr); // with validation on, the layer reports every object not destroyed by now
     }
     if (_instance != VK_NULL_HANDLE)
@@ -1214,6 +1239,9 @@ void VulkanRenderer::BeginFrame()
                   << std::endl;
         return;
     }
+    // This slot's earlier frame has finished, so what was retired into the slot (replaced or destroyed meshes and
+    // textures) is no longer read by the GPU
+    FlushRetired(_currentFrame);
     vkResetCommandBuffer(frame.commandBuffer, 0);
 
     VkCommandBufferBeginInfo beginInfo{};
@@ -1439,51 +1467,9 @@ bool VulkanRenderer::SetRenderTargetSize(uint32_t width, uint32_t height)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Stubs: stages A-F of #43. Each fails loudly (a log, once) and cleanly (nullptr/false/nothing), never crashes.
+// Stubs: stages B-F of #43. Each fails loudly (a log, once) and cleanly (nullptr/false/nothing), never crashes.
+// (Meshes and textures, stage A, are in VulkanResources.cpp.)
 // ---------------------------------------------------------------------------------------------------------------------
-
-Renderer::Common::IMesh* VulkanRenderer::CreateMesh(const Common::MeshData& meshData)
-{
-    static_cast<void>(meshData);
-    LogUnsupportedOnce("CreateMesh");
-    return nullptr;
-}
-
-void VulkanRenderer::DestroyMesh(Common::IMesh* mesh)
-{
-    static_cast<void>(mesh); // this renderer made none
-}
-
-Renderer::Common::ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t width, uint32_t height,
-                                                uint32_t channels)
-{
-    static_cast<void>(data);
-    static_cast<void>(width);
-    static_cast<void>(height);
-    static_cast<void>(channels);
-    LogUnsupportedOnce("CreateTexture");
-    return nullptr;
-}
-
-Renderer::Common::ITexture* VulkanRenderer::CreateTexture(const uint8_t* data, uint32_t width, uint32_t height,
-                                                uint32_t channels, const Common::TextureOptions& options)
-{
-    static_cast<void>(options);
-    return CreateTexture(data, width, height, channels);
-}
-
-void VulkanRenderer::DestroyTexture(Common::ITexture* texture)
-{
-    static_cast<void>(texture);
-}
-
-bool VulkanRenderer::UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData)
-{
-    static_cast<void>(mesh);
-    static_cast<void>(meshData);
-    LogUnsupportedOnce("UpdateMesh");
-    return false;
-}
 
 Renderer::Common::IMaterial* VulkanRenderer::CreateMaterial(Common::IShader* shader)
 {
