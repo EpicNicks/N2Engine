@@ -11,14 +11,17 @@
 --   6 glTF model    models/smoke_robot.gltf (lua_project/tools/make_smoke_assets.py) instantiated twice
 --   7 Screen UI     a screen-space Canvas on the right of the window (shown only here, or with U): a sprite Image,
 --                   UIText alignment and wrapping, Buttons with a counter
--- and three demo stations after them, on keys 8, 9 and 0 (scripts/DemoStations.lua):
+-- and four demo stations after them, on keys 8, 9, 0 and - (scripts/DemoStations.lua):
 --   8 Particles     a water fountain, a sand burst and a smoke column, with the active backend on each sign
 --   9 World canvas  a world-space panel whose buttons sit behind a trigger volume and behind a solid collider
 --  10 Text passes   TextRenderer:AddEffectPass: outline, shadow, glow, and pass order before and after
+--  11 Soft bodies   SoftBody: cubes of three stiffnesses, two dampings and a robot body dropped on a floor, with the
+--                   backend asked for and the backend RUNNING on each sign
 
 local Stations = require("scripts.SmokeStations")
 local DemoStations = require("scripts.DemoStations")
 local Emitters = require("scripts.ParticleEmitters")
+local SoftBodies = require("scripts.SoftBodies")
 
 local scene = SceneManager.GetCurrentScene()
 if scene == nil then
@@ -53,6 +56,10 @@ local actions = {
     ["Particles Toggle"] = { { type = "KeyboardButton", key = "P" } },
     ["Particles Clear"] = { { type = "KeyboardButton", key = "C" } },
     ["Particles Backend"] = { { type = "KeyboardButton", key = "K" } },
+    -- The soft-body station (scripts/SoftBodyStation.lua)
+    ["Soft Bodies Reset"] = { { type = "KeyboardButton", key = "R" } },
+    ["Soft Bodies Backend"] = { { type = "KeyboardButton", key = "J" } },
+    ["Soft Bodies Push"] = { { type = "KeyboardButton", key = "V" } },
 }
 for index = 1, #Stations do
     actions["Station " .. index] = { { type = "KeyboardButton", key = "Key" .. index } }
@@ -435,11 +442,12 @@ do
         { size = 12, color = CAPTION }), 10, 404, 280, 60)
 end
 
--- ===== Demo stations 8-0 (scripts/DemoStations.lua): particles, world canvas vs colliders, text effect passes =====
+-- ===== Demo stations 8-0 and - (scripts/DemoStations.lua): particles, world canvas vs colliders, text effect passes,
+-- soft bodies =====
 
 -- A demo station's title sign, "8  Name", at the top-left of its view
 local function DemoTitle(index, position)
-    local label = tostring(#Stations + index) -- the 8th station on key 8, the 10th on key 0
+    local label = tostring(#Stations + index) -- the 8th station on key 8, the 10th on key 0, the 11th on key -
     WorldText("Demo " .. label .. " Title", label .. "  " .. DemoStations[index].name, position, 0.45, Color.White)
 end
 
@@ -569,6 +577,39 @@ do
     behind:AddEffectPass(0.16, -0.16, Color.Red, 0.03, 0.0, -300)
 end
 
+-- ===== Demo station 11: soft bodies (SoftBody; scripts/SoftBodies.lua, SoftBodyStation.lua) =====
+
+do
+    local x0 = SoftBodies.CENTER_X
+    DemoTitle(4, Vector3(x0 - 9.0, 8.2, 0.0))
+    -- What the keys do and which backend is asked for; SoftBodyStation.lua rewrites it
+    WorldText("Soft Bodies Info", "R drop again   J backend: Auto, CPU, PhysX   V push up",
+        Vector3(x0 - 9.0, 7.5, 0.0), 0.2, CAPTION)
+    -- The floor top is the plane the CPU backend rests on (SetGround); the PhysX backend collides with the scene's
+    -- colliders instead, so the floor is a static collider too
+    local floorSize = Vector3(21.0, 0.3, 4.0)
+    local floor = ColouredCube("Soft Bodies Floor", Color.new(0.35, 0.35, 0.4, 1.0),
+        Vector3(x0, SoftBodies.FLOOR_TOP - 0.15, 0.0), floorSize)
+    floor:AddComponent("BoxCollider"):SetSize(floorSize)
+
+    for _, spec in ipairs(SoftBodies.Specs) do
+        -- The resolution is shown because the Lua API has no tetrahedron count
+        local title = WorldText("Soft Body Title " .. spec.key, string.format("%s
+E %s Pa
+damping %s
+resolution %d",
+            spec.title, SoftBodies.Short(spec.stiffness), tostring(spec.damping), spec.resolution),
+            Vector3(x0 + spec.x, 6.5, 0.0), 0.18, Color.White, 2.8)
+        title:SetAlignment("Center", "Top")
+        local status = WorldText("Soft Body Status " .. spec.key, "asked: Auto
+running: starting",
+            Vector3(x0 + spec.x, 5.4, 0.0), 0.16, CAPTION, 2.8)
+        status:SetAlignment("Center", "Top")
+        local body = SoftBodies.Create(spec, SoftBodies.BACKENDS[1])
+        table.insert(roots, body)
+    end
+end
+
 -- ===== HUD: the current station and what to look for (scripts/SmokeHud.lua) =====
 
 do
@@ -585,7 +626,7 @@ do
     rect:SetSizeDelta(Vector2(580, 112))
 
     Layout(Label(background, "HUD Title", "", { size = 18, wrap = false }), 10, 4, 560, 22)
-    Layout(Label(background, "HUD Keys", "Keys 1-7, 8-0: stations   WASD: move   Arrows: look   U: UI panel   "
+    Layout(Label(background, "HUD Keys", "Keys 1-7, 8 9 0 -: stations   WASD: move   Arrows: look   U: UI panel   "
         .. "H: this HUD   Esc: quit", { size = 12, color = Color.new(0.8, 0.8, 0.85, 1.0), wrap = false }),
         10, 28, 560, 16)
     Layout(Label(background, "HUD Caption", "", { size = 12, color = CAPTION }), 10, 46, 560, 62)
@@ -603,6 +644,11 @@ table.insert(roots, cameraController)
 local particleStation = GameObject.Create("Particle Station")
 particleStation:AddComponent("LuaComponent"):SetScript("res://scripts/ParticleStation.lua")
 table.insert(roots, particleStation)
+
+-- The same for the soft bodies and their signs
+local softBodyStation = GameObject.Create("Soft Body Station")
+softBodyStation:AddComponent("LuaComponent"):SetScript("res://scripts/SoftBodyStation.lua")
+table.insert(roots, softBodyStation)
 
 local quitHandler = GameObject.Create("Quit Handler")
 quitHandler:AddComponent("LuaComponent"):SetScript("res://scripts/QuitHandler.lua")

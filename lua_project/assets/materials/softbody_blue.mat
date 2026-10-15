@@ -1,0 +1,5 @@
+{
+  "shading": "lit",
+  "baseColor": {"r": 0.25, "g": 0.45, "b": 0.95, "a": 1},
+  "smoothness": 0.6
+}
