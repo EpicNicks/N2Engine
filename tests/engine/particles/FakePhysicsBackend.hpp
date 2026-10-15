@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <new>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <math/Quaternion.hpp>
@@ -15,6 +17,8 @@
 #include "engine/physics/IParticleBackend.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include "engine/physics/ISoftBodyBackend.hpp"
+#include "engine/softbody/DeformableSoftBodyBackend.hpp"
+#include "../softbody/FakeDeformableDriver.hpp"
 
 namespace N2Engine::TestSupport
 {
@@ -139,12 +143,43 @@ namespace N2Engine::TestSupport
         }
         [[nodiscard]] Physics::ISoftBodyBackend *GetSoftBodyBackend() override
         {
+            if (_deformable)
+            {
+                // As the real physics backend: nullptr for good once the GPU backend has failed
+                if (_deformable->HasFailed())
+                {
+                    _deformable.reset();
+                    deformableDriver = nullptr;
+                    return nullptr;
+                }
+                return _deformable.get();
+            }
             return withGpuSoftBodies ? &softGpu : nullptr;
         }
         [[nodiscard]] Physics::GpuStatus GetSoftBodiesGpuStatus() const override
         {
-            return Physics::ComposeSoftBodiesGpuStatus(GetGpuStatus(), std::nullopt, withGpuSoftBodies);
+            return Physics::ComposeSoftBodiesGpuStatus(GetGpuStatus(), std::nullopt,
+                                                       withGpuSoftBodies || _deformable != nullptr);
         }
+
+        /// Offers the PhysX soft-body backend's real logic (DeformableSoftBodyBackend) over a fake driver as the GPU
+        /// soft-body backend; Update then plays the scene step (the fake device moves, the backend reads back). The
+        /// driver is owned by the backend, so deformableDriver is good only while the backend lives (it is null
+        /// again once the backend failed and was dropped).
+        FakeDeformableDriver *UseDeformableSoftBodies()
+        {
+            auto driver = std::make_unique<FakeDeformableDriver>();
+            deformableDriver = driver.get();
+            _deformable = std::make_unique<SoftBodies::DeformableSoftBodyBackend>(std::move(driver));
+            return deformableDriver;
+        }
+        /// Replaces the deformable backend with a new one over a new fake driver (a new generation)
+        FakeDeformableDriver *RecreateDeformableSoftBodies()
+        {
+            _deformable.reset();
+            return UseDeformableSoftBodies();
+        }
+        FakeDeformableDriver *deformableDriver = nullptr;
 
         FakeGpuParticleBackend gpu;
         /// Offers softGpu as the GPU soft-body backend (none by default, as every real backend until the PhysX one)
@@ -168,7 +203,14 @@ namespace N2Engine::TestSupport
         Math::Vector3 gravity{0.0f, -9.81f, 0.0f};
 
         bool Initialize() override { return true; }
-        void Update(float) override {}
+        void Update(const float dt) override
+        {
+            if (_deformable && deformableDriver && !_deformable->HasFailed())
+            {
+                deformableDriver->Simulate(dt);
+                _deformable->OnSceneStepped(dt);
+            }
+        }
         void Shutdown() override {}
         void ApplyPendingChanges() override {}
         void SyncTransforms() override {}
@@ -254,5 +296,6 @@ namespace N2Engine::TestSupport
     private:
         bool _withGpuParticles;
         Physics::GpuStatus _status;
+        std::unique_ptr<SoftBodies::DeformableSoftBodyBackend> _deformable;
     };
 }

@@ -9,6 +9,7 @@
 #include <renderer/common/RenderTypes.hpp>
 
 #include "engine/physics/ISoftBodyBackend.hpp"
+#include "engine/physics/SoftMaterialModel.hpp"
 #include "engine/rendering/Mesh.hpp"
 #include "engine/serialization/ComponentSerializer.hpp"
 #include "engine/softbody/SoftBodyBackendSelection.hpp"
@@ -16,20 +17,6 @@
 namespace N2Engine::Physics
 {
     class CpuSoftBodyBackend;
-
-    /// The material model of the PhysX soft-body backend (the CPU backend ignores it)
-    enum class SoftMaterialModel
-    {
-        /// PhysX's default: fast, needs well-shaped tetrahedra
-        CoRotational,
-        /// Robust to bad tetrahedra, slower
-        NeoHookean
-    };
-
-    N2_SERIALIZE_ENUM(SoftMaterialModel, {
-                      { SoftMaterialModel::CoRotational, "CoRotational" },
-                      { SoftMaterialModel::NeoHookean, "NeoHookean" }
-                      })
 
     /**
      * Makes the MeshRenderer on the same GameObject a soft body: it squashes and wobbles under gravity. See
@@ -44,8 +31,12 @@ namespace N2Engine::Physics
      * Simulation: a SoftBody gets its body simulated by an ISoftBodyBackend, chosen by `backend` when the component
      * attaches (Auto, PhysX or CPU, see SoftBodies::SelectSoftBodyBackend, which mirrors the particles' selection).
      * That is the CPU backend (Physics::CpuSoftBodyBackend, XPBD) unless the physics backend has a PhysX GPU
-     * soft-body backend, which none does yet: Auto then uses the GPU one and otherwise the CPU one quietly, PhysX the
-     * GPU one and otherwise the CPU one with one warning. A body on the GPU backend whose backend is replaced or
+     * soft-body backend (deformable volumes, SoftBodies::DeformableSoftBodyBackend: only with physics.gpu auto or on,
+     * a working GPU and a Windows build with the GPU library): Auto then uses the GPU one and otherwise the CPU one
+     * quietly, PhysX the GPU one and otherwise the CPU one with one warning. The GPU body behaves differently from
+     * the CPU one (a different solver, collision with the scene's colliders instead of the ground plane, the
+     * material model and self collision), see docs/soft-bodies.html. A body whose GPU backend refuses it, or gives
+     * up later, restarts on the CPU with one warning. A body on the GPU backend whose backend is replaced or
      * recreated (its handle's generation no longer matches) restarts on the CPU with one warning; with the physics
      * backend removed entirely it is inert. The CPU backend is stepped from OnFixedUpdate, once per fixed step, so
      * the body moves the same whatever the frame rate. The simulation is in world space: moving the object in play
@@ -113,10 +104,11 @@ namespace N2Engine::Physics
         float friction = 0.5f;
         /// Solver iterations in each of the CPU backend's 4 sub-steps; more is stiffer and slower
         int solverIterations = 2;
-        /// The body rests on the plane y = groundHeight (world space). The only collision the CPU backend does.
+        /// The body rests on the plane y = groundHeight (world space). The only collision the CPU backend does; the
+        /// PhysX backend ignores it (its body collides with the scene's colliders).
         bool collideWithGround = false;
         float groundHeight = 0.0f;
-        /// Used only by the PhysX backend (a later stage); the CPU backend ignores both
+        /// Used only by the PhysX backend (the CPU backend ignores both)
         SoftMaterialModel materialModel = SoftMaterialModel::CoRotational;
         bool selfCollision = false;
 

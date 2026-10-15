@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 
+#include "../particles/FakePhysicsBackend.hpp"
 #include "engine/Application.hpp"
 #include "engine/GameObjectScene.hpp"
 #include "engine/Time.hpp"
@@ -234,6 +235,42 @@ TEST_F(LuaSoftBodyTest, APhysXRequestFallsBackToCpuAndTheNameSaysWhatRuns)
     // The script asked before the scene attached the body, so the PhysX request is what the body started with
     EXPECT_EQ(Eval<std::string>("lua_body:GetBackend()"), "PhysX") << "what was asked for";
     EXPECT_EQ(Eval<std::string>("lua_body:GetActiveBackendName()"), "CPU") << "no GPU backend here: what is used";
+}
+
+TEST_F(LuaSoftBodyTest, APhysXRequestOverThePhysXSoftBodyBackendRunsThereAndTheNameSaysPhysX)
+{
+    // The PhysX backend's real logic over a fake driver stands in for a GPU scene
+    auto fake = std::make_unique<TestSupport::FakePhysicsBackend>(
+        false, Physics::GpuStatus{Physics::GpuState::Ready, "PhysX GPU: fake"});
+    TestSupport::FakePhysicsBackend *physics = fake.get();
+    physics->UseDeformableSoftBodies();
+    Application::GetInstance().Set3DPhysicsBackend(std::move(fake));
+
+    Scene &scene = PlayJelly(R"(lua_body:SetBackend("PhysX"))");
+    EXPECT_EQ(Eval<std::string>("lua_body:GetBackend()"), "PhysX");
+    EXPECT_EQ(Eval<std::string>("lua_body:GetActiveBackendName()"), "PhysX");
+    ASSERT_NE(physics->deformableDriver, nullptr);
+    EXPECT_EQ(physics->deformableDriver->volumes.size(), 1u) << "the body is a volume of the fake driver";
+
+    // The fake scene steps the volume (Update), the component skins the picture (FixedUpdate)
+    const float before = RuntimeMeanY();
+    for (int i = 0; i < 15; ++i)
+    {
+        physics->Update(0.02f);
+        scene.FixedUpdate();
+    }
+    EXPECT_LT(RuntimeMeanY(), before - 0.05f) << "the body fell";
+    EXPECT_EQ(Eval<std::string>("lua_mr:GetMesh()"), "Cube");
+
+    Run("lua_body:AddVelocity(Vector3(3, 0, 0))");
+    EXPECT_EQ(physics->deformableDriver->volumes.begin()->second.velocityReadBacks, 1);
+
+    // Auto asks for the same backend
+    Run(R"(lua_body:SetBackend("Auto"); lua_body:Reset())");
+    EXPECT_EQ(Eval<std::string>("lua_body:GetActiveBackendName()"), "PhysX");
+    // and CPU never does
+    Run(R"(lua_body:SetBackend("CPU"); lua_body:Reset())");
+    EXPECT_EQ(Eval<std::string>("lua_body:GetActiveBackendName()"), "CPU");
 }
 
 TEST_F(LuaSoftBodyTest, AddVelocityPushesTheBodyAndResetPutsItBack)

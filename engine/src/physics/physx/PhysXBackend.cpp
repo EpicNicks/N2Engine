@@ -2,6 +2,8 @@
 #include "engine/particles/PbdParticleBackend.hpp"
 #include "engine/physics/physx/PhysXGpuSupport.hpp" // N2ENGINE_PHYSX_GPU_PROBE
 #include "engine/physics/physx/PhysXPbdDriver.hpp"
+#include "engine/physics/physx/PhysXDeformableDriver.hpp"
+#include "engine/softbody/DeformableSoftBodyBackend.hpp"
 #include "engine/physics/Rigidbody.hpp"
 #include "engine/physics/ICollider.hpp"
 #include "engine/GameObject.hpp"
@@ -193,6 +195,12 @@ namespace N2Engine::Physics
 
     void PhysXBackend::FailSoftBodies(const std::string &reason)
     {
+        if (_softBodies)
+        {
+            // Its bodies go; the SoftBodies that used them see the backend gone and restart on the CPU
+            _softBodies->ReleaseAll();
+        }
+        // The failure is the soft bodies': _gpuStatus, the particle backend and the Particles row stay as they were
         const bool required = _gpuMode == GpuMode::On;
         _softBodiesFailure = GpuStatus{required ? GpuState::Failed : GpuState::Unavailable,
                                        "GPU soft bodies unavailable: " + reason};
@@ -215,6 +223,39 @@ namespace N2Engine::Physics
     {
         PollParticleFailure();
         return _particles.get();
+    }
+
+    void PhysXBackend::PollSoftBodyFailure()
+    {
+        if (_softBodies && _softBodies->HasFailed())
+        {
+            // The backend logged its own failure; this makes the status say so too (once: the backend is dropped)
+            const std::string reason = _softBodies->GetFailureReason();
+            FailSoftBodies(reason);
+            _softBodies.reset();
+        }
+    }
+
+    ISoftBodyBackend *PhysXBackend::GetSoftBodyBackend()
+    {
+        PollSoftBodyFailure();
+        return _softBodies.get();
+    }
+
+    bool PhysXBackend::InstallDeformableDriverForTesting(std::unique_ptr<SoftBodies::IDeformableDriver> driver)
+    {
+        if (!_scene || _softBodies || !driver)
+        {
+            return false;
+        }
+        const std::string device = driver->GetDeviceName();
+        _softBodies = std::make_unique<SoftBodies::DeformableSoftBodyBackend>(std::move(driver));
+        if (_gpuStatus.state != GpuState::Ready)
+        {
+            _gpuStatus = {GpuState::Ready, "PhysX GPU: " + device};
+        }
+        _softBodiesFailure.reset();
+        return true;
     }
 
     bool PhysXBackend::InstallParticleDriverForTesting(std::unique_ptr<Particles::IPbdDriver> driver)
@@ -380,6 +421,10 @@ namespace N2Engine::Physics
         {
             _particles = std::make_unique<Particles::PbdParticleBackend>(
                 std::make_unique<PhysXPbdDriver>(*_physics, *_scene, *_cudaContextManager));
+            // ... and deformable volumes (soft bodies): the same condition, a driver that makes no CUDA call until
+            // the first body is created
+            _softBodies = std::make_unique<SoftBodies::DeformableSoftBodyBackend>(
+                std::make_unique<PhysXDeformableDriver>(*_physics, *_scene, *_cudaContextManager));
         }
 #endif
 
@@ -424,6 +469,12 @@ namespace N2Engine::Physics
             // The scene stepped the PBD particles: read them back, age them, drop the dead
             _particles->OnSceneStepped(deltaTime);
             PollParticleFailure();
+        }
+        if (_softBodies)
+        {
+            // The scene stepped the deformable volumes: read their positions back (once per step)
+            _softBodies->OnSceneStepped(deltaTime);
+            PollSoftBodyFailure();
         }
 
         if (!_refiltering.empty())
@@ -492,7 +543,9 @@ namespace N2Engine::Physics
         _pendingRefilter.clear();
         _refiltering.clear();
 
-        // The particle systems are actors of the scene and own GPU memory: they go before the scene and the CUDA context
+        // The soft bodies (deformable volume actors) and the particle systems are actors of the scene and own GPU
+        // memory: they go before the scene and the CUDA context
+        _softBodies.reset();
         _particles.reset();
 
         if (_scene)
