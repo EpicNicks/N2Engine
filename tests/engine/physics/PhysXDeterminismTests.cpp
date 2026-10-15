@@ -85,10 +85,12 @@ TEST(PhysicsDeterministicSettingTest, ApplyProjectSettingsValidatesIt)
 
 #ifdef N2ENGINE_PHYSX_ENABLED
 
-using namespace N2Engine;
+// No `using namespace N2Engine`: math/MathRegistrar.hpp (included by ProjectSettings.hpp) forward-declares
+// N2Engine::Vector3 and N2Engine::Quaternion, which would make the Math types below ambiguous
 using namespace N2Engine::Physics;
-using Math::Quaternion;
-using Math::Vector3;
+using N2Engine::Logger;
+using N2Engine::Math::Quaternion;
+using N2Engine::Math::Vector3;
 
 namespace
 {
