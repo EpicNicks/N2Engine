@@ -137,10 +137,13 @@ namespace VulkanTesting::Lit
             vulkan->SetVec3(name, x, y, z);
             software->SetVec3(name, x, y, z);
         }
+        /// Sets the base texture on both, and on the Vulkan material uHasTexture, as Material::ApplyUniforms does (OpenGL and
+        /// Vulkan take the flag from the caller, and SetTexture does not touch it; the software renderer uses the texture)
         void SetTexture(const DualTexture& texture)
         {
             vulkan->SetTexture(texture.vulkan);
             software->SetTexture(texture.software);
+            vulkan->SetInt("uHasTexture", texture.vulkan != nullptr ? 1 : 0);
         }
         /// Sets (or, with a null texture, clears) an aux texture, and on the Vulkan material the uHas*Texture flag that goes
         /// with it, as Material::ApplyUniforms does (the software renderer works the flag out itself)

@@ -641,8 +641,9 @@ TEST_F(VulkanLightingUpdateTest, MoreLightsThanTheMaximaAreClamped)
             two.directionalLights.push_back(light);
         }
     }
-    const Frame fiveFrame = S().Draw(five, S().lit);
-    const Frame twoFrame = S().Draw(two, S().lit);
+    // Vulkan only: the software renderer does not clamp the directional lights, so a cross diff of the five would disagree
+    const Frame fiveFrame = S().DrawVulkanOnly(five, S().lit.vulkan, S().mesh.vulkan);
+    const Frame twoFrame = S().DrawVulkanOnly(two, S().lit.vulkan, S().mesh.vulkan);
     EXPECT_EQ(fiveFrame.rgba, twoFrame.rgba) << "lights past the two directional ones never reach the shader";
     EXPECT_GT(twoFrame.At(32, 32).r, 20);
 }
