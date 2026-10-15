@@ -288,11 +288,21 @@ namespace
                 const int column = i % 5;
                 const int row = (i / 5) % 5;
                 const int layer = i / 25;
-                const Vector3 position(1.3f * static_cast<float>(column - 2) + 0.4f * (lcg.Next() - 0.5f),
-                                       1.0f + 1.6f * static_cast<float>(layer) + 0.2f * lcg.Next(),
-                                       1.3f * static_cast<float>(row - 2) + 0.4f * (lcg.Next() - 0.5f));
-                const Vector3 spin(lcg.Next() - 0.5f, lcg.Next() - 0.5f, lcg.Next() - 0.5f);
-                addBody(position, i % 3, Vector3(0.0f, -1.0f * lcg.Next(), 0.0f), spin);
+                // Every draw goes into a named local, one statement each, in this order: the order function
+                // arguments are evaluated in is unspecified (MSVC and Clang differ), so draws inside one
+                // Vector3(...) call would give each compiler a different pile
+                const float jitterX = lcg.Next();
+                const float jitterY = lcg.Next();
+                const float jitterZ = lcg.Next();
+                const float spinX = lcg.Next();
+                const float spinY = lcg.Next();
+                const float spinZ = lcg.Next();
+                const float fallSpeed = lcg.Next();
+                const Vector3 position(1.3f * static_cast<float>(column - 2) + 0.4f * (jitterX - 0.5f),
+                                       1.0f + 1.6f * static_cast<float>(layer) + 0.2f * jitterY,
+                                       1.3f * static_cast<float>(row - 2) + 0.4f * (jitterZ - 0.5f));
+                const Vector3 spin(spinX - 0.5f, spinY - 0.5f, spinZ - 0.5f);
+                addBody(position, i % 3, Vector3(0.0f, -1.0f * fallSpeed, 0.0f), spin);
             }
             break;
         }
