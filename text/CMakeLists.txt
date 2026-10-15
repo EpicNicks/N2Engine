@@ -9,6 +9,10 @@ file(GLOB_RECURSE TEXT_SOURCES
 # Font backends: stb_truetype is always built (StbTrueTypeBackend.cpp). FreeType is optional and adds
 # itself to the list in FontBackendFactory.cpp when this is ON.
 option(N2ENGINE_TEXT_FREETYPE "Build the optional FreeType font backend (fetched with FetchContent)" OFF)
+if(N2ENGINE_PLATFORM_WEB AND N2ENGINE_TEXT_FREETYPE)
+    message(WARNING "Web: the FreeType backend is not built at stage 0 (it is fetched at configure time); using stb_truetype only")
+    set(N2ENGINE_TEXT_FREETYPE OFF CACHE BOOL "Build the optional FreeType font backend (fetched with FetchContent)" FORCE)
+endif()
 if(NOT N2ENGINE_TEXT_FREETYPE)
     list(FILTER TEXT_SOURCES EXCLUDE REGEX ".*/FreeTypeBackend\\.cpp$")
 endif()
