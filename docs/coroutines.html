@@ -143,6 +143,11 @@ Coroutine *blink = GetGameObject().StartCoroutine(Blink(lamp.get(), 6));
   </ul></li>
 <li>Removes coroutines that completed or were stopped during this update.</li>
 </ol>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee <span class="badge">PR #160</span></p>
+<p>Within one update, coroutines run in a fixed order that does not depend on memory addresses: objects in the order their first coroutine started (their creation order, for coroutines started as the object is set up), and one object's coroutines in the order they were started. The same sequence of starts, stops and destroys gives the same execution order on every run and every platform. An object whose coroutines have all ended or been stopped loses its place: the next coroutine started on it takes a new place after every object already running. Stopping or starting coroutines during an update does not change the order of the running snapshot.</p>
+</div>
+<div class="callout note" id="design-coroutine-order"><p class="callout-title">Design decision: coroutines are ordered by start sequence, not by object address <span class="badge">PR #160</span></p><p>The scheduler used to keep an <code>unordered_map</code> keyed by the GameObject pointer, so the order objects' coroutines ran in followed the pointer hash and changed from run to run. It now numbers each object when its first coroutine starts and iterates an ordered map by that number (a second hash map is used for lookup only and never iterated). Lookup stays O(1) on average, adding or dropping an object is O(log n), and the per-frame snapshot is O(n) as before. This is stage S1 of the determinism plan (issue #157): it makes replays and tests reproducible and is a precondition for any networked simulation. The CPU soft-body backend already stepped bodies in creation order.</p></div>
 <p>The first advance happens on the first scheduler update after <code>StartCoroutine</code>:</p>
 <div class="table-wrap">
 <table>
