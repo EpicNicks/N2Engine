@@ -594,15 +594,11 @@ do
 
     for _, spec in ipairs(SoftBodies.Specs) do
         -- The resolution is shown because the Lua API has no tetrahedron count
-        local title = WorldText("Soft Body Title " .. spec.key, string.format("%s
-E %s Pa
-damping %s
-resolution %d",
+        local title = WorldText("Soft Body Title " .. spec.key, string.format("%s\nE %s Pa\ndamping %s\nresolution %d",
             spec.title, SoftBodies.Short(spec.stiffness), tostring(spec.damping), spec.resolution),
             Vector3(x0 + spec.x, 6.5, 0.0), 0.18, Color.White, 2.8)
         title:SetAlignment("Center", "Top")
-        local status = WorldText("Soft Body Status " .. spec.key, "asked: Auto
-running: starting",
+        local status = WorldText("Soft Body Status " .. spec.key, "asked: Auto\nrunning: starting",
             Vector3(x0 + spec.x, 5.4, 0.0), 0.16, CAPTION, 2.8)
         status:SetAlignment("Center", "Top")
         local body = SoftBodies.Create(spec, SoftBodies.BACKENDS[1])
