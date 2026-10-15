@@ -282,7 +282,7 @@ namespace N2Engine::Physics
             error = "the CUDA context is gone";
             return false;
         }
-        PxDeformableVolumeDataFlags flags;
+        PxDeformableVolumeDataFlags flags(PxDeformableVolumeDataFlag::eNONE);
         if (dirty & SoftBodies::kDeformSimVelocities)
         {
             if (context->memcpyHtoD(Device(volume.volume->getSimVelocityBufferD()), volume.simVelocities,
