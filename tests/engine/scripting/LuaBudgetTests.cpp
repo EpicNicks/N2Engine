@@ -517,10 +517,14 @@ TEST_F(LuaBudgetTest, TheBudgetErrorOnThePanicPathLeavesTheHookAndTheStateWorkin
 
     Lua().script("budget_unprotected = function() while true do end end");
     sol::unsafe_function unprotected = Lua()["budget_unprotected"];
+    const std::uint64_t panicsBefore = Runtime().PanicCount();
     for (int attempt = 0; attempt < 250; ++attempt)
     {
         EXPECT_ANY_THROW(unprotected());
     }
+    EXPECT_EQ(Runtime().PanicCount() - panicsBefore, 250u);
+    Runtime().RecoverAfterPanic(panicsBefore); // the panic function leaves padding on the stack for its catcher
+    EXPECT_EQ(lua_gettop(L), 0);
     Lua()["budget_unprotected"] = sol::lua_nil;
 
     // Each call the errors unwound added to both halves; the repair puts them back to the fresh values

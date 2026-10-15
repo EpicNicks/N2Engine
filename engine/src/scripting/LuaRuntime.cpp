@@ -29,6 +29,9 @@ namespace N2Engine::Scripting
         // Instructions between two calls of the hook: small enough to stop a loop promptly, large enough that the
         // hook's cost is negligible
         constexpr std::uint64_t HookGranularity = 1000;
+        // Stack slots the panic function leaves filled (the error object, then nils) for C++ frames that pop while the
+        // exception unwinds. Below LUA_MINSTACK (20), which the thread reset reserves above the base, so no allocation.
+        constexpr int PanicPadding = 16;
     }
 
     namespace Detail
@@ -73,15 +76,32 @@ namespace N2Engine::Scripting
             }
 
             // Lua calls this for an error raised outside every protected call (an unprotected table access that hit
-            // a script's metamethod, or a failed allocation): sol turns it into a C++ exception. Lua has already
-            // reset the thread (no call is running any more, the stack is cut down to the error object, which
-            // default_at_panic then removes too), but not three of its fields; they are repaired here, before the
-            // exception leaves (LuaPanicRepair.cpp says which, and what the emptied stack means for a caller)
+            // a script's metamethod, or a failed allocation), and it throws the error as a sol::error, as sol's own
+            // default_at_panic does. Lua has already reset the thread (no call is running any more, the stack is cut
+            // down to its base and the error object), but not three of its fields; they are repaired here, before the
+            // exception leaves (LuaPanicRepair.cpp says which).
+            // Unlike default_at_panic, this does not empty the stack: it leaves the error object and pads the stack with
+            // nils up to PanicPadding slots (within the slots the reset already reserved, so nothing is allocated). C++
+            // frames the exception unwinds can pop the stack: sol's protected_function call removes its message
+            // handler (lua_remove) when its arguments could not be pushed. On an empty stack that pop goes below the
+            // base, and lua_settop then "closes" the base slot as a to-be-closed variable: calling nil raises a new
+            // error, whose message cannot be allocated at the cap, which panics again inside a destructor while the
+            // first exception unwinds: std::terminate. The caller that catches the exception resets the stack to its
+            // base (LuaRuntime::RecoverAfterPanic).
             static int Panic(lua_State *L)
             {
                 RepairThreadAfterPanic(L);
                 ++Of(L)->panics;
-                return sol::default_at_panic(L);
+                // Only a string is read: converting another value with lua_tolstring could allocate
+                std::string message = "An unexpected error occurred and panicked";
+                if (lua_type(L, -1) == LUA_TSTRING)
+                {
+                    std::size_t length = 0;
+                    const char *text = lua_tolstring(L, -1, &length);
+                    message.assign(text, length);
+                }
+                lua_settop(L, PanicPadding);
+                throw sol::error(message);
             }
 
             static void CountHook(lua_State *L, lua_Debug *)
@@ -281,8 +301,9 @@ namespace N2Engine::Scripting
     {
         if (_guard->panics != panicsBefore)
         {
-            // sol's panic handler emptied the stack, then the frames it unwound popped what they had pushed (the
-            // message handler of a protected call): the top can be below the stack's base. Back to the empty base.
+            // The panic function left the error object and padding on the stack (see Panic), and the frames the
+            // exception unwound may have popped some of it (the message handler of a protected call). Nothing on the
+            // stack is anyone's any more: back to the empty base.
             lua_settop(_lua.lua_state(), 0);
         }
     }

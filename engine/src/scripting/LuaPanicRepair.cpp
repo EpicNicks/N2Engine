@@ -27,8 +27,8 @@ namespace N2Engine::Scripting::Detail
     // Called by the panic function (LuaRuntime.cpp). An error raised outside every protected call makes luaD_throw
     // call luaE_resetthread, which unwinds the CallInfo list (no call runs any more) and cuts the stack down to the
     // error object (luaD_seterrorobj puts it in the first slot); luaD_throw then sets the status to the error code
-    // and calls the panic function. sol's default_at_panic reads the message, empties the stack (lua_settop(L, 0))
-    // and throws it as a C++ exception. The reset leaves three fields as the error found them:
+    // and calls the panic function, which reads the message, pads the stack (see Panic in LuaRuntime.cpp) and throws
+    // it as a C++ exception. The reset leaves three fields as the error found them:
     // - allowhook: 0 when the error came from the count hook (luaD_hook clears it while the hook runs and only a
     //   protected call restores it). Left so, the hook never runs again and the instruction budget is gone for good:
     //   the next `while true do end` runs forever.
@@ -37,9 +37,10 @@ namespace N2Engine::Scripting::Detail
     //   panics would leave every call failing with "C stack overflow"); its high 16 bits count non-yieldable calls,
     //   and luaD_callnoyield adds one of those per call too (nyci, lstate.h), so they would grow by one or more per
     //   panic as well. No call runs now, so it is set back to what a fresh thread has.
-    // The stack itself is not repaired, it is gone: a C++ object that held Lua stack values across the unprotected
-    // operation that panicked would pop past the bottom of the stack when destroyed (sol's message-handler guard
-    // does, when a protected function call's arguments cannot be pushed). The engine makes no unprotected Lua calls;
+    // The stack itself is not repaired, its values are gone: a C++ object that held Lua stack values across the
+    // unprotected operation that panicked pops whatever is there when destroyed (sol's message-handler guard does,
+    // when a protected function call's arguments cannot be pushed); the panic function's padding keeps such pops
+    // above the base, where a pop below it would have run Lua code and panicked again. The engine makes no unprotected Lua calls;
     // what reaches this is an allocation outside a protected call failing at the memory cap: the arguments sol pushes
     // for a component method or a script callback, the collision/trigger argument, and sol references copied outside
     // one (luaL_ref can grow the registry). The first three catch the exception and call LuaRuntime::RecoverAfterPanic,

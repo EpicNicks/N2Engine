@@ -86,9 +86,10 @@ namespace N2Engine::Scripting
         /// How many errors have reached the panic function (an error outside every protected call, e.g. an allocation
         /// failing at the memory cap while sol pushes a call's arguments). Read it before such a call...
         [[nodiscard]] std::uint64_t PanicCount() const;
-        /// ...and pass it here from the catch of the C++ exception sol threw: if it came down the panic path, the stack
-        /// was emptied and the C++ frames unwound after it can have popped below its base, so this resets it to the
-        /// empty base. Only for a caller that is no Lua call's (a panic means none was running) and holds no stack values.
+        /// ...and pass it here from the catch of the C++ exception: if it came down the panic path, the stack holds only
+        /// what the panic function left there (the error object and padding, part of it popped by the unwound C++
+        /// frames), so this resets it to the empty base. Only for a caller that is no Lua call's (a panic means none
+        /// was running) and holds no stack values.
         void RecoverAfterPanic(std::uint64_t panicsBefore);
 
         /// Loads a script through ResourceLoader and runs it once (e.g. a scene setup script).
