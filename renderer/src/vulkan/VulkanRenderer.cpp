@@ -8,12 +8,13 @@
 
 #include "renderer/vulkan/VulkanRenderer.hpp"
 
+#include "VulkanDraw.hpp"
 #include "VulkanResources.hpp"
 
 // Stage 0 of the Vulkan backend (#43): headless initialisation, an offscreen colour and depth target, a frame that
-// clears it, readback, resizing and shutdown. Everything that draws is still a stub that fails loudly and cleanly (logs
-// once, returns nullptr/false). Nothing here needs a window, a surface or a swapchain. Meshes and textures (stage A) are
-// in VulkanResources.cpp.
+// clears it, readback, resizing and shutdown. Nothing here needs a window, a surface or a swapchain. Meshes and textures
+// (stage A) are in VulkanResources.cpp; the built-in shaders, materials, pipelines and draws (stage B) are in
+// VulkanDraw.cpp. What is still a stub (lighting, stage C) logs once and does nothing.
 //
 // Object lifetimes, in creation order (Shutdown destroys them in reverse):
 //   instance -> debug messenger -> device -> VMA allocator -> command pool (+ the frames' command buffers and fences) ->
@@ -183,7 +184,9 @@ namespace
 // Construction and the test/diagnostic accessors
 // ---------------------------------------------------------------------------------------------------------------------
 
-VulkanRenderer::VulkanRenderer() : _debug(std::make_shared<DebugState>()), _resources(std::make_unique<ResourceState>())
+VulkanRenderer::VulkanRenderer()
+    : _debug(std::make_shared<DebugState>()), _resources(std::make_unique<ResourceState>()),
+      _draw(std::make_unique<DrawState>())
 {
 }
 
@@ -297,7 +300,7 @@ void VulkanRenderer::LogUnsupportedOnce(const char* what) const
         }
     }
     std::cerr << "Vulkan renderer: " << what
-              << " is not implemented yet (#43, stages B-E); it does nothing and returns null/false" << std::endl;
+              << " is not implemented yet (#43); it does nothing and returns null/false" << std::endl;
 }
 
 void VulkanRenderer::LogOnce(const std::string& message) const
@@ -380,7 +383,8 @@ bool VulkanRenderer::Initialize(GLFWwindow* windowHandle, uint32_t width, uint32
     }
 
     const bool ok = CreateInstance() && SetupDebugMessenger() && PickPhysicalDevice() && CreateLogicalDevice() &&
-        CreateAllocator() && CreateCommandPool() && CreateFrameResources() && CreateRenderPass() && CreateTargets(width, height);
+        CreateAllocator() && CreateCommandPool() && CreateFrameResources() && CreateRenderPass() &&
+        CreateDrawResources() && CreateTargets(width, height);
     if (!ok)
     {
         // Every step above leaves what it made in the members; destroy it all, keeping the reason
@@ -632,7 +636,20 @@ bool VulkanRenderer::CreateLogicalDevice()
         }
     }
 
-    VkPhysicalDeviceFeatures features{}; // nothing optional is used yet
+    // Wireframe drawing (VK_POLYGON_MODE_LINE) needs fillModeNonSolid, the one optional feature stage B uses: it is
+    // enabled only where the device has it, and SetWireframe is ignored otherwise
+    VkPhysicalDeviceFeatures supported{};
+    vkGetPhysicalDeviceFeatures(_physicalDevice, &supported);
+    VkPhysicalDeviceFeatures features{};
+    features.fillModeNonSolid = supported.fillModeNonSolid;
+    _draw->wireframeSupported = supported.fillModeNonSolid == VK_TRUE && !_draw->wireframeUnavailableForTest;
+    if (_draw->wireframe && !_draw->wireframeSupported)
+    {
+        // SetWireframe(true) came before Initialize, when the feature was not known: treat it as off, as SetWireframe
+        // does after Initialize (draws are solid)
+        LogOnce(kWireframeIgnoredMessage);
+        _draw->wireframe = false;
+    }
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1131,6 +1148,7 @@ void VulkanRenderer::ShutdownLocked()
     if (_device != VK_NULL_HANDLE)
     {
         vkDeviceWaitIdle(_device);
+        DestroyDrawResources(); // pipelines, layouts, pools, rings, default textures: before the allocator and the render pass
         DestroyAllResources(); // meshes, textures, samplers and everything retired: before the allocator that made them
         DestroyTargets();
         if (_renderPass != VK_NULL_HANDLE)
@@ -1166,6 +1184,7 @@ void VulkanRenderer::ShutdownLocked()
         vkDestroyInstance(_instance, nullptr);
     }
 
+    _draw = std::make_unique<DrawState>(); // materials and the rest of the CPU-side state go with the device
     _debugMessenger = VK_NULL_HANDLE;
     _instance = VK_NULL_HANDLE;
     _physicalDevice = VK_NULL_HANDLE;
@@ -1267,6 +1286,24 @@ void VulkanRenderer::BeginFrame()
     passInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
     passInfo.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(frame.commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // OpenGL's y-up clip space: a viewport with a negative height (core in Vulkan 1.1) flips y, so NDC y +1 is the top row
+    // of the image as in GL; the vertex shaders remap z from GL's -w..w to Vulkan's 0..w. Dynamic state, so a resized
+    // target needs no new pipelines.
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = static_cast<float>(_targetHeight);
+    viewport.width = static_cast<float>(_targetWidth);
+    viewport.height = -static_cast<float>(_targetHeight);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {_targetWidth, _targetHeight};
+    vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
+
+    BeginDrawFrame(_currentFrame);
     _frameOpen = true;
 }
 
@@ -1287,6 +1324,8 @@ void VulkanRenderer::EndFrame()
         std::cerr << "Vulkan renderer: vkEndCommandBuffer failed; frames are skipped" << std::endl;
         return;
     }
+
+    EndDrawFrame(_currentFrame); // the frame's uniform ring reaches the device (a flush on non-coherent memory)
 
     // Reset right before the submit that signals it again, so a frame that is never submitted never leaves the slot's
     // fence unsignalled (the next BeginFrame of the slot would wait on it forever)
@@ -1467,112 +1506,15 @@ bool VulkanRenderer::SetRenderTargetSize(uint32_t width, uint32_t height)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Stubs: stages B-F of #43. Each fails loudly (a log, once) and cleanly (nullptr/false/nothing), never crashes.
-// (Meshes and textures, stage A, are in VulkanResources.cpp.)
+// Stubs: stages C-F of #43. Each fails loudly (a log, once) and cleanly (nothing), never crashes.
+// (Meshes and textures, stage A, are in VulkanResources.cpp; shaders, materials and draws, stage B, in VulkanDraw.cpp.)
 // ---------------------------------------------------------------------------------------------------------------------
-
-Renderer::Common::IMaterial* VulkanRenderer::CreateMaterial(Common::IShader* shader)
-{
-    return CreateMaterial(shader, nullptr);
-}
-
-Renderer::Common::IMaterial* VulkanRenderer::CreateMaterial(Common::IShader* shader, Common::ITexture* texture)
-{
-    static_cast<void>(shader);
-    static_cast<void>(texture);
-    LogUnsupportedOnce("CreateMaterial");
-    return nullptr;
-}
-
-void VulkanRenderer::DestroyMaterial(Common::IMaterial* material)
-{
-    static_cast<void>(material);
-}
-
-Renderer::Common::IShader* VulkanRenderer::CreateShaderProgram(const char* vertexSource, const char* fragmentSource)
-{
-    static_cast<void>(vertexSource);
-    static_cast<void>(fragmentSource);
-    LogUnsupportedOnce("CreateShaderProgram");
-    return nullptr;
-}
-
-void VulkanRenderer::UseShaderProgram(Common::IShader* shader)
-{
-    static_cast<void>(shader);
-}
-
-bool VulkanRenderer::DestroyShaderProgram(Common::IShader* shader)
-{
-    static_cast<void>(shader);
-    return false;
-}
-
-bool VulkanRenderer::IsValidShader(Common::IShader* shader) const
-{
-    static_cast<void>(shader);
-    return false;
-}
-
-Renderer::Common::IShader* VulkanRenderer::GetStandardUnlitShader() const
-{
-    LogUnsupportedOnce("GetStandardUnlitShader");
-    return nullptr;
-}
-
-Renderer::Common::IShader* VulkanRenderer::GetStandardLitShader() const
-{
-    LogUnsupportedOnce("GetStandardLitShader");
-    return nullptr;
-}
-
-void VulkanRenderer::SetViewProjection(const float* view, const float* projection)
-{
-    static_cast<void>(view);
-    static_cast<void>(projection);
-}
 
 void VulkanRenderer::UpdateSceneLighting(const Common::SceneLightingData& lighting,
                                          const N2Engine::Math::Vector3& cameraPosition)
 {
     static_cast<void>(lighting);
     static_cast<void>(cameraPosition);
-}
-
-void VulkanRenderer::DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
-                              const Common::RenderState& state)
-{
-    // Nothing is drawn yet (#43). When it is, `state` selects the pipeline's depth/cull/blend settings.
-    static_cast<void>(mesh);
-    static_cast<void>(modelMatrix);
-    static_cast<void>(material);
-    static_cast<void>(state);
-    LogUnsupportedOnce("DrawMesh");
-}
-
-void VulkanRenderer::DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
-                              const Common::RenderState& state, const Common::IndexRange& range)
-{
-    // Nothing is drawn yet (#43). When it is, `range` becomes the firstIndex and indexCount of vkCmdDrawIndexed.
-    static_cast<void>(mesh);
-    static_cast<void>(modelMatrix);
-    static_cast<void>(material);
-    static_cast<void>(state);
-    static_cast<void>(range);
-    LogUnsupportedOnce("DrawMesh");
-}
-
-void VulkanRenderer::DrawObjects(const std::vector<Common::RenderObject>& objects)
-{
-    if (!objects.empty())
-    {
-        LogUnsupportedOnce("DrawObjects");
-    }
-}
-
-void VulkanRenderer::SetWireframe(bool enabled)
-{
-    static_cast<void>(enabled);
 }
 
 std::vector<GPUInfo> VulkanRenderer::GetCompatibleGPUs()
