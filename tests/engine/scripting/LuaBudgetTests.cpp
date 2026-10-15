@@ -195,15 +195,13 @@ protected:
     // Every line the test captured, with its level: printed when a log expectation fails, so CI shows what was logged
     std::string DumpLogs() const
     {
-        std::string out = "
-captured log lines (" + std::to_string(_logs.size()) + "):";
+        std::string out = "\ncaptured log lines (" + std::to_string(_logs.size()) + "):";
         for (const auto &[message, logLevel] : _logs)
         {
             const char *level = logLevel == Logger::LogLevel::Error ? "Error"
                                 : logLevel == Logger::LogLevel::Warn ? "Warn"
                                                                      : "Info";
-            out += "
-  [" + std::string(level) + "] " + message;
+            out += "\n  [" + std::string(level) + "] " + message;
         }
         return out;
     }
