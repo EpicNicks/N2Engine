@@ -901,7 +901,11 @@ TEST_F(VulkanDrawTest, AMaterialHasTheOpenGlDefaultsAndKeepsItsTextures)
     EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, textured); }).Count(kRed), Size * Size);
 
     // The material setters
-    N2Engine::Math::Vector4 blue(0.0f, 0.0f, 1.0f, 1.0f);
+    N2Engine::Math::Vector4 blue;
+    blue.x = 0.0f; // (the members by name: the constructor's argument order is not the point of this test)
+    blue.y = 0.0f;
+    blue.z = 1.0f;
+    blue.w = 1.0f;
     plain->SetVec4("uAlbedo", blue);
     EXPECT_EQ(RenderFrame([&] { R().DrawMesh(quad, Identity, plain); }).Count(kBlue), Size * Size);
     plain->SetVec4("uAlbedo", 0.0f, 1.0f, 0.0f, 1.0f);
