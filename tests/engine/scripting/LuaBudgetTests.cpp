@@ -20,6 +20,7 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 #include "engine/io/ResourceUUID.hpp"
+#include "engine/physics/PhysicsTypes.hpp"
 #include "engine/scripting/LuaComponent.hpp"
 #include "engine/scripting/LuaHandles.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -111,6 +112,16 @@ protected:
                 while true do end
             end
             return IndexLoop
+        )");
+
+        // A collision handler (its argument is a userdata the engine builds before the call)
+        WriteAsset("budget/Collider.lua", R"(
+            local Collider = {}
+            Collider.__index = Collider
+            function Collider:OnCollisionEnter(collision)
+                budget_collisions = budget_collisions + 1
+            end
+            return Collider
         )");
 
         // A loop at the top level of the chunk
@@ -410,6 +421,47 @@ TEST_F(LuaBudgetTest, ACallbackThatRunsOutOfBudgetIsLoggedOnceAndSwitchedOff)
 
     EXPECT_EQ(Lua()["budget_hits"].get<int>(), 1);
     EXPECT_EQ(CountLogs("callback aborted", Logger::LogLevel::Error), 1) << DumpLogs();
+}
+
+TEST_F(LuaBudgetTest, AnArgumentThatCannotBeAllocatedAtTheCapSwitchesTheCallbackOffAndNothingThrows)
+{
+    // An input callback and a collision handler each get a userdata argument, which is allocated before the protected
+    // call (sol pushes a callback's arguments first; the engine builds the collision first). With the cap below what
+    // the state holds, that allocation fails outside every protected call, down the panic path: the C++ exception sol
+    // throws must stay in the engine, the callback and the component are switched off, and the error is logged once.
+    Lua()["budget_action"] = InputActionRef(_action);
+    Lua()["budget_hits"] = 0;
+    Lua()["budget_collisions"] = 0;
+    Lua().script("budget_action:Subscribe(function(action) budget_hits = budget_hits + 1 end)");
+    const auto go = GameObject::Create("Collider");
+    auto *collider = Attach(go, "res://budget/Collider.lua");
+    ASSERT_FALSE(collider->HasMissingScript());
+    const auto other = GameObject::Create("Other");
+    Physics::Collision collision;
+    collision.gameObject = go.get();
+    collision.otherGameObject = other.get();
+
+    Lua().collect_garbage();
+    // Half of what the state holds: no allocation that grows it can succeed, even after Lua's emergency collection
+    Runtime().SetLimits({TestBudget, Runtime().GetMemoryUsed() / 2});
+    for (int event = 0; event < 3; ++event)
+    {
+        EXPECT_NO_THROW(_action.GetOnStateChanged()(_action));
+        EXPECT_NO_THROW(collider->OnCollisionEnter(collision));
+    }
+    Runtime().SetLimits({TestBudget, Runtime().GetMemoryUsed() + 16 * MiB});
+
+    EXPECT_EQ(Lua()["budget_hits"].get<int>(), 0);
+    EXPECT_EQ(Lua()["budget_collisions"].get<int>(), 0);
+    EXPECT_EQ(CountLogs("callback aborted", Logger::LogLevel::Error), 1) << DumpLogs();
+    EXPECT_EQ(CountLogs("res://budget/Collider.lua aborted", Logger::LogLevel::Error), 1) << DumpLogs();
+    EXPECT_EQ(CountLogs("not enough memory", Logger::LogLevel::Error), 2) << DumpLogs();
+
+    // The stack is back at its base and the state works
+    EXPECT_EQ(lua_gettop(Lua().lua_state()), 0);
+    const sol::protected_function_result normal = Run("local t = {} for i = 1, 100 do t[i] = i end return #t");
+    ASSERT_TRUE(normal.valid()) << ErrorOf(normal);
+    EXPECT_EQ(normal[0].get<int>(), 100);
 }
 
 TEST_F(LuaBudgetTest, ALoopInAMetamethodTheEngineReadsIsAbortedWithoutLeavingTheStateBroken)

@@ -96,6 +96,7 @@ namespace N2Engine::Scripting
         // component (and to this script instance: see RetireScriptInstance)
         ScriptLifetimeScope scope(_alive);
 
+        const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
         try
         {
             // Reading the method can run the script's __index: do it in a protected call
@@ -109,14 +110,45 @@ namespace N2Engine::Scripting
             if (!result.valid())
             {
                 sol::error err = result;
-                // The budget error from the runtime's state when it is spent (the scope above is still open)
-                ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(err.what()));
+                // The budget error from the runtime's state when it is spent (the scope above is still open), and a
+                // memory error from the call's status, not from an error object that can be displaced
+                ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(
+                                                  err.what(), result.status() == sol::call_status::memory));
             }
         }
         catch (const std::exception &e)
         {
+            // Includes the panic path: pushing the arguments happens before sol's protected call, so at the memory
+            // cap it fails outside it and sol throws
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
             ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(e.what()));
         }
+        catch (...)
+        {
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError("unknown error"));
+        }
+    }
+
+    template <typename MakeArgument>
+    void LuaComponent::CallLuaMethodWithArgument(const std::string &methodName, MakeArgument makeArgument)
+    {
+        if (_hasMissingScript || _faulted)
+            return;
+
+        const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+        sol::object argument;
+        try
+        {
+            argument = makeArgument();
+        }
+        catch (const std::exception &e)
+        {
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(e.what()));
+            return;
+        }
+        CallLuaMethod(methodName, std::move(argument));
     }
 
     void LuaComponent::SetScript(const IO::ResourcePath &path)
@@ -207,12 +239,13 @@ namespace N2Engine::Scripting
             return sol::table{};
         }
 
-        sol::table instance = lua.create_table();
-        instance[sol::metatable_key] = scriptClass;
-
-        // Handles, so anything that copies them out of self can't reach freed objects later
+        // The table and the handles, so anything that copies them out of self can't reach freed objects later. All in a
+        // protected call: each allocates, and at the memory cap an allocation outside one would go down the panic path
+        sol::table instance;
         const bool bound = GuardedAccess([&]
         {
+            instance = lua.create_table();
+            instance[sol::metatable_key] = scriptClass;
             instance["component"] = ComponentRef<LuaComponent>(*this);
             instance["gameObject"] = GameObjectRef(_gameObject);
         });
@@ -543,7 +576,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnCollisionEnter && !_hasMissingScript)
         {
-            CallLuaMethod("OnCollisionEnter", Bindings::CollisionToLua(collision, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnCollisionEnter", [&] { return Bindings::CollisionToLua(collision, _scriptInstance.lua_state()); });
         }
     }
 
@@ -551,7 +584,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnCollisionStay && !_hasMissingScript)
         {
-            CallLuaMethod("OnCollisionStay", Bindings::CollisionToLua(collision, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnCollisionStay", [&] { return Bindings::CollisionToLua(collision, _scriptInstance.lua_state()); });
         }
     }
 
@@ -559,7 +592,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnCollisionExit && !_hasMissingScript)
         {
-            CallLuaMethod("OnCollisionExit", Bindings::CollisionToLua(collision, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnCollisionExit", [&] { return Bindings::CollisionToLua(collision, _scriptInstance.lua_state()); });
         }
     }
 
@@ -567,7 +600,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnTriggerEnter && !_hasMissingScript)
         {
-            CallLuaMethod("OnTriggerEnter", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnTriggerEnter", [&] { return Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()); });
         }
     }
 
@@ -575,7 +608,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnTriggerStay && !_hasMissingScript)
         {
-            CallLuaMethod("OnTriggerStay", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnTriggerStay", [&] { return Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()); });
         }
     }
 
@@ -583,7 +616,7 @@ namespace N2Engine::Scripting
     {
         if (_hasOnTriggerExit && !_hasMissingScript)
         {
-            CallLuaMethod("OnTriggerExit", Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()));
+            CallLuaMethodWithArgument("OnTriggerExit", [&] { return Bindings::TriggerToLua(trigger, _scriptInstance.lua_state()); });
         }
     }
 

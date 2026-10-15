@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <exception>
 #include <format>
 #include <functional>
 #include <memory>
@@ -78,20 +80,41 @@ namespace N2Engine::Scripting
             }
 
             const LuaBudgetScope budget;
-            const sol::protected_function_result result = callback(Detail::ToLuaArg(args)...);
-            if (!result.valid())
+            const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+            std::string message;
+            try
             {
-                const sol::error err = result;
-                // The budget error from the runtime's state when it is spent (the scope above is still open)
-                const std::string message = LuaRuntime::Instance().LimitAwareError(err.what());
-                if (LuaRuntime::IsLimitError(message))
+                const sol::protected_function_result result = callback(Detail::ToLuaArg(args)...);
+                if (result.valid())
                 {
-                    *faulted = true;
-                    Logger::Error(std::format("{} callback aborted: {}. It is switched off.", eventName, message));
                     return;
                 }
-                Logger::Error(std::format("{} callback error: {}", eventName, message));
+                const sol::error err = result;
+                // The budget error from the runtime's state when it is spent (the scope above is still open), and a
+                // memory error from the call's status, not from an error object that can be displaced
+                message = LuaRuntime::Instance().LimitAwareError(err.what(),
+                                                                 result.status() == sol::call_status::memory);
             }
+            catch (const std::exception &e)
+            {
+                // sol pushes the arguments (a handle is a userdata) before its protected call: at the memory cap that
+                // allocation fails down the panic path, and sol throws. It must not leave into the event dispatch.
+                LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+                message = LuaRuntime::Instance().LimitAwareError(e.what());
+            }
+            catch (...)
+            {
+                LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+                message = LuaRuntime::Instance().LimitAwareError("unknown error");
+            }
+
+            if (LuaRuntime::IsLimitError(message))
+            {
+                *faulted = true;
+                Logger::Error(std::format("{} callback aborted: {}. It is switched off.", eventName, message));
+                return;
+            }
+            Logger::Error(std::format("{} callback error: {}", eventName, message));
         };
     }
 }

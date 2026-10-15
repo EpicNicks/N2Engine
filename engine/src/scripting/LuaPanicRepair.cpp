@@ -38,10 +38,12 @@ namespace N2Engine::Scripting::Detail
     //   and luaD_callnoyield adds one of those per call too (nyci, lstate.h), so they would grow by one or more per
     //   panic as well. No call runs now, so it is set back to what a fresh thread has.
     // The stack itself is not repaired, it is gone: a C++ object that held Lua stack values across the unprotected
-    // operation that panicked (a sol result, say) would pop past the bottom of the stack when destroyed. The engine
-    // makes no unprotected Lua calls (every entry is a protected call); what is left is an allocation outside one
-    // failing at the memory cap (the create_table in LuaComponent::CreateScriptInstance and
-    // LuaRuntime::LoadScriptAsModule, which hold the chunk's result), and the tests' unsafe_function.
+    // operation that panicked would pop past the bottom of the stack when destroyed (sol's message-handler guard
+    // does, when a protected function call's arguments cannot be pushed). The engine makes no unprotected Lua calls;
+    // what reaches this is an allocation outside a protected call failing at the memory cap: the arguments sol pushes
+    // for a component method or a script callback, the collision/trigger argument, and sol references copied outside
+    // one (luaL_ref can grow the registry). The first three catch the exception and call LuaRuntime::RecoverAfterPanic,
+    // which resets the stack to its empty base; the full list is in docs/scripting-lua.html (resource limits).
     void RepairThreadAfterPanic(lua_State *L)
     {
         L->allowhook = static_cast<lu_byte>(1);

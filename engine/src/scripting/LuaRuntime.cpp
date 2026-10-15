@@ -48,6 +48,7 @@ namespace N2Engine::Scripting
             std::uint64_t step = HookGranularity; // instructions the installed hook counts per call
             bool exhausted = false;               // the budget ran out in this entry: the hook raises on every instruction
             int depth = 0;                        // LuaBudgetScopes open
+            std::uint64_t panics = 0;             // errors that reached the panic function
             lua_State *state = nullptr;
 
             void Arm()
@@ -79,6 +80,7 @@ namespace N2Engine::Scripting
             static int Panic(lua_State *L)
             {
                 RepairThreadAfterPanic(L);
+                ++Of(L)->panics;
                 return sol::default_at_panic(L);
             }
 
@@ -256,14 +258,33 @@ namespace N2Engine::Scripting
         return _guard->used;
     }
 
-    std::string LuaRuntime::LimitAwareError(const std::string_view message) const
+    std::string LuaRuntime::LimitAwareError(const std::string_view message, const bool memoryError) const
     {
         if (_guard->exhausted)
         {
             // The text the count hook raises
             return std::format("{} of {}", BudgetErrorText, _guard->limit);
         }
+        if (memoryError)
+        {
+            return std::string(MemoryErrorText); // what Lua's preregistered memory error message says
+        }
         return std::string(message);
+    }
+
+    std::uint64_t LuaRuntime::PanicCount() const
+    {
+        return _guard->panics;
+    }
+
+    void LuaRuntime::RecoverAfterPanic(const std::uint64_t panicsBefore)
+    {
+        if (_guard->panics != panicsBefore)
+        {
+            // sol's panic handler emptied the stack, then the frames it unwound popped what they had pushed (the
+            // message handler of a protected call): the top can be below the stack's base. Back to the empty base.
+            lua_settop(_lua.lua_state(), 0);
+        }
     }
 
     bool LuaRuntime::IsLimitError(const std::string_view message)
@@ -517,6 +538,15 @@ namespace N2Engine::Scripting
     sol::table LuaRuntime::LoadScriptAsModule(const IO::ResourcePath &path, LuaScript *script)
     {
         std::string moduleName = PathToModuleName(path);
+        // A new empty table, made in a protected call: at the memory cap an allocation outside one would go down the
+        // panic path (from ReloadModule, which no Lua call protects). On failure it is an invalid table (nil to Lua).
+        const auto emptyTable = [this]
+        {
+            sol::table table;
+            std::string error;
+            ProtectedCall([&] { table = _lua.create_table(); }, error);
+            return table;
+        };
 
         auto result = RunSource(script->GetSourceCode(), path.ToString());
 
@@ -527,7 +557,7 @@ namespace N2Engine::Scripting
             {
                 Logger::Error(std::format("Failed to load module {}: {}", moduleName, err.what()));
             }
-            return _lua.create_table();
+            return emptyTable();
         }
 
         sol::table moduleTable;
@@ -538,7 +568,7 @@ namespace N2Engine::Scripting
         }
         else
         {
-            moduleTable = _lua.create_table();
+            moduleTable = emptyTable();
         }
 
         _loadedModules[moduleName] = moduleTable;

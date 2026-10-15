@@ -71,8 +71,9 @@ namespace N2Engine::Scripting
         [[nodiscard]] static bool IsLimitError(std::string_view message);
         /// The text to report for an error a protected call returned inside an entry: once the budget is spent every
         /// error of the entry is the budget's, so this is the budget error then (from the runtime's own state, not
-        /// from the error object, which a C++ frame unwound on the way can have displaced), else `message`
-        [[nodiscard]] std::string LimitAwareError(std::string_view message) const;
+        /// from the error object, which a C++ frame unwound on the way can have displaced). With `memoryError` (the
+        /// call's status said LUA_ERRMEM) it is the memory error, whatever the error object says; else `message`
+        [[nodiscard]] std::string LimitAwareError(std::string_view message, bool memoryError = false) const;
         /// Runs C++ code that touches script tables (a table access can reach a script's metamethods) inside a Lua
         /// protected call (a budget scope too), so a Lua error, the budget or a failed allocation never goes down
         /// the panic path (a C++ exception thrown through Lua's C frames) or jumps over the caller's C++ frames.
@@ -82,6 +83,13 @@ namespace N2Engine::Scripting
         /// True the first time it is asked about a key: limit errors of chunks that run outside a component are
         /// logged once per chunk name
         bool ShouldLogLimitError(const std::string& key);
+        /// How many errors have reached the panic function (an error outside every protected call, e.g. an allocation
+        /// failing at the memory cap while sol pushes a call's arguments). Read it before such a call...
+        [[nodiscard]] std::uint64_t PanicCount() const;
+        /// ...and pass it here from the catch of the C++ exception sol threw: if it came down the panic path, the stack
+        /// was emptied and the C++ frames unwound after it can have popped below its base, so this resets it to the
+        /// empty base. Only for a caller that is no Lua call's (a panic means none was running) and holds no stack values.
+        void RecoverAfterPanic(std::uint64_t panicsBefore);
 
         /// Loads a script through ResourceLoader and runs it once (e.g. a scene setup script).
         /// @returns false if the file couldn't be loaded or the script raised an error; the error is logged

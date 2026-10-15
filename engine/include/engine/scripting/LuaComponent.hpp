@@ -88,6 +88,11 @@ namespace N2Engine::Scripting
 
         template<typename... Args>
         void CallLuaMethod(const std::string& methodName, Args&&... args);
+        /// CallLuaMethod with one argument `makeArgument()` builds in the state (a userdata). Building it allocates
+        /// outside any protected call, so at the memory cap it fails down the panic path as a C++ exception: that is
+        /// caught and reported here (the component is faulted) instead of leaving through the physics callback.
+        template<typename MakeArgument>
+        void CallLuaMethodWithArgument(const std::string& methodName, MakeArgument makeArgument);
         /// True if the instance has that method. Reading it can run the script's __index, so it is an entry into Lua:
         /// a budget scope, and an error (or the budget) is logged and answers false.
         bool HasMethod(const char* methodName);
