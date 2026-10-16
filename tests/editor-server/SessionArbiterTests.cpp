@@ -216,3 +216,39 @@ TEST(SessionArbiterTest, ConcurrentBeginsLeaveExactlyOneActiveSession)
     EXPECT_NE(arbiter.ActiveSessionId(), 0u);
     EXPECT_GE(accepted.load(), 500) << "the winner's own 500 Begins are all Takeovers";
 }
+
+TEST(SessionArbiterTest, ALaterHelloChangesWhatTheActiveSessionIsJudgedAs)
+{
+    SessionArbiter arbiter;
+    const SessionArbiter::BeginResult viewer = arbiter.Begin(Who("carol", TokenRole::Viewer));
+    ASSERT_NE(viewer.sessionId, 0u);
+    // As a viewer, an editor of another user preempts it
+    EXPECT_EQ(arbiter.Evaluate(Who("erin", TokenRole::Editor)).decision, ArbiterDecision::Preempt);
+
+    // The connection says Hello again as an editor: the same editor then only gets Busy, and its own user takes over
+    arbiter.UpdateIdentity(viewer.sessionId, Who("bob", TokenRole::Editor));
+    ASSERT_TRUE(arbiter.Active().has_value());
+    EXPECT_EQ(arbiter.Active()->user, "bob");
+    EXPECT_EQ(arbiter.Active()->role, TokenRole::Editor);
+    EXPECT_EQ(arbiter.Evaluate(Who("erin", TokenRole::Editor)).decision, ArbiterDecision::Busy);
+    EXPECT_EQ(arbiter.Evaluate(Who("bob", TokenRole::Editor)).decision, ArbiterDecision::Takeover);
+    EXPECT_EQ(arbiter.ActiveSessionId(), viewer.sessionId) << "the session is the same one";
+}
+
+TEST(SessionArbiterTest, AnIdentityUpdateForASessionThatIsNotActiveIsIgnored)
+{
+    SessionArbiter arbiter;
+    const SessionArbiter::BeginResult first = arbiter.Begin(Who("carol", TokenRole::Viewer));
+    const SessionArbiter::BeginResult second = arbiter.Begin(Who("alice", TokenRole::Admin));
+    ASSERT_NE(second.sessionId, 0u);
+
+    // The replaced session's late Hello must not rewrite its successor; a zero id is nobody's
+    arbiter.UpdateIdentity(first.sessionId, Who("mallory", TokenRole::Viewer));
+    arbiter.UpdateIdentity(0, Who("mallory", TokenRole::Viewer));
+    ASSERT_TRUE(arbiter.Active().has_value());
+    EXPECT_EQ(arbiter.Active()->user, "alice");
+
+    arbiter.End(second.sessionId);
+    arbiter.UpdateIdentity(second.sessionId, Who("mallory", TokenRole::Viewer));
+    EXPECT_FALSE(arbiter.Active().has_value()) << "an update does not start a session";
+}
