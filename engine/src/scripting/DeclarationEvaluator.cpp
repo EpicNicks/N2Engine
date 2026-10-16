@@ -30,12 +30,15 @@ namespace N2Engine::Scripting
 
         // The environment of the throwaway state and the function that reads a script's declarations out of it, in Lua.
         // Run once, after the libraries and the budget sandbox (pcall, xpcall and setmetatable of the engine's own
-        // sandbox, LuaRuntime.cpp), before the instruction hook is armed. It returns the reader.
+        // sandbox, LuaRuntime.cpp), before the instruction hook is armed, with RefuseLongLoop and MaxTableLoop as its
+        // arguments. It returns the reader.
         //
         // - Nothing of the engine exists in this state: no binding, no require, no package, io, os, debug, utf8 or
         //   coroutine library (never opened). Of the base library, the functions that load code, read files, print or
         //   steer the collector are removed, and so are the string functions that take patterns (their cost is C
-        //   code the instruction budget cannot see) and math.random (a declaration must not depend on the clock).
+        //   code the instruction budget cannot see), string.pack/unpack/packsize and math.random (a declaration must
+        //   not depend on the clock). The table functions that loop in C are redone in Lua, with a bound on lengths
+        //   and ranges (see below and docs/scripting-lua.html, the audit of the C loops).
         // - Anything a script reads that is not there answers ONE inert placeholder (STUB): a table whose metatable
         //   makes it callable, indexable (an integer index answers nil, so ipairs over it ends), usable in arithmetic
         //   and concatenation, and always returning itself; it compares less-than and equal to nothing. Its metatable
@@ -48,9 +51,14 @@ namespace N2Engine::Scripting
         //   It returns plain tables with no metatable, which the C++ side reads with the raw API.
         // The locals are captured here, so a script that replaces a global (type, next, rawget...) changes nothing.
         constexpr const char *SetupScript = R"LUA(
+-- refuse: ends the evaluation as an exhausted budget (RefuseLongLoop); LOOPMAX: DeclarationEvaluator::MaxTableLoop
+local refuse, LOOPMAX = ...
 local type, rawequal, rawget, next, pcall, setmetatable = type, rawequal, rawget, next, pcall, setmetatable
-local mathtype, ssub, sfind, srep = math.type, string.sub, string.find, string.rep
-local rawlen, tinsert, tremove = rawlen, table.insert, table.remove
+local select, error = select, error
+local mathtype, mtoint, maxint = math.type, math.tointeger, math.maxinteger
+local ssub, sfind, srep, sformat = string.sub, string.find, string.rep, string.format
+local tinsert, tremove, tconcat, tunpack, tmove, tsort =
+    table.insert, table.remove, table.concat, table.unpack, table.move, table.sort
 local MARK = "\1N2STUB\1"
 -- What a failed allocation raises (Lua's preregistered message): a pcall of the reader cannot hide it from the result
 local MEMERR = "not enough memory"
@@ -104,23 +112,233 @@ string.match = STUB
 string.gmatch = STUB
 string.gsub = STUB
 string.dump = STUB
--- C loops the instruction hook cannot see and the allocator does not bound: table.move over a huge range of missing
--- keys (no allocation, nothing to count) and string.rep of an empty string a huge number of times (a 0-byte copy per
--- repeat). table.move is the placeholder; string.rep answers the empty string at once for an empty result.
-table.move = STUB
--- table.insert and table.remove loop over missing keys the same way when a __len metamethod makes the length huge:
--- when the length is not the raw length they answer the placeholder instead of looping
-local function guardLen(f)
-    return function(t, ...)
-        if type(t) == "table" and rawlen(t) ~= #t then
-            touches = touches + 1
-            return STUB
+-- string.pack fills padding one byte at a time in C (up to the memory cap); no declaration packs binary data
+string.pack = STUB
+string.unpack = STUB
+string.packsize = STUB
+
+-- The table library loops in C over a length or a range, and one C call runs no Lua instruction: the hook (the
+-- instruction budget and the deadline) cannot interrupt it, and a table's length is not bounded by its memory (a
+-- border can be huge with a few elements, a __len metamethod can answer anything, and every access can walk a chain
+-- of up to 2000 __index tables). So table.insert, remove, concat, unpack, move and sort are redone here in Lua: the
+-- length is read once, every element is read and written by Lua code (each access is counted), and the C functions
+-- are only handed plain tables this code filled itself (unpack, concat, sort with a Lua comparator). On top of that a
+-- length, position or range above LOOPMAX (2^16, which no declaration needs) is refused before any loop: refuse()
+-- ends the evaluation as an exhausted budget, which pcall cannot catch, so a refused call is never silently wrong data.
+-- A first argument that is not a table goes to the C function as it is (it raises at once; unpack of a string is
+-- redone here too, a string's __index can be a chain as well).
+
+-- An integer argument as luaL_checkinteger reads it (an integer, an integral float, a numeric string), or an error
+local function intArg(v, argn, fname)
+    local tv = type(v)
+    local n = nil
+    if tv == "number" or tv == "string" then
+        n = mtoint(v)
+    end
+    if n == nil then
+        if tv == "number" then
+            error(sformat("bad argument #%d to '%s' (number has no integer representation)", argn, fname), 3)
         end
-        return f(t, ...)
+        error(sformat("bad argument #%d to '%s' (number expected, got %s)", argn, fname,
+            tv == "nil" and "no value" or tv), 3)
+    end
+    return n
+end
+-- The length the C function would read (#t, through __len), read once; refused above LOOPMAX
+local function lengthOf(t, fname)
+    local len = #t
+    local tl = type(len)
+    local n = nil
+    if tl == "number" or tl == "string" then
+        n = mtoint(len)
+    end
+    if n == nil then
+        error("object length is not an integer", 3)
+    end
+    if n > LOOPMAX then
+        refuse(fname)
+    end
+    return n
+end
+-- A range first..last of more than LOOPMAX elements (or one whose size overflows) is refused
+local function checkRange(first, last, fname)
+    if last >= first and (last - first < 0 or last - first >= LOOPMAX) then
+        refuse(fname)
     end
 end
-table.insert = guardLen(tinsert)
-table.remove = guardLen(tremove)
+
+table.insert = function(t, ...)
+    if type(t) ~= "table" then
+        return tinsert(t, ...)
+    end
+    local nargs = select("#", ...)
+    if nargs ~= 1 and nargs ~= 2 then
+        error("wrong number of arguments to 'insert'", 2)
+    end
+    local e = lengthOf(t, "insert") + 1
+    if nargs == 1 then
+        t[e] = (...)
+        return
+    end
+    local p, v = ...
+    local pos = intArg(p, 2, "insert")
+    if pos > LOOPMAX + 1 then
+        refuse("insert")
+    end
+    if pos < 1 or pos > e then
+        error("bad argument #2 to 'insert' (position out of bounds)", 2)
+    end
+    for i = e, pos + 1, -1 do
+        t[i] = t[i - 1]
+    end
+    t[pos] = v
+end
+
+table.remove = function(t, ...)
+    if type(t) ~= "table" then
+        return tremove(t, ...)
+    end
+    local size = lengthOf(t, "remove")
+    local pos = size
+    local p = ...
+    if p ~= nil then
+        pos = intArg(p, 2, "remove")
+    end
+    if pos ~= size then
+        if pos > LOOPMAX + 1 then
+            refuse("remove")
+        end
+        if pos < 1 or pos > size + 1 then
+            error("bad argument #2 to 'remove' (position out of bounds)", 2)
+        end
+    end
+    local removed = t[pos]
+    for i = pos, size - 1 do
+        t[i] = t[i + 1]
+    end
+    if pos < size then
+        pos = size
+    end
+    t[pos] = nil
+    return removed
+end
+
+table.concat = function(t, sep, i, j)
+    if type(t) ~= "table" then
+        return tconcat(t, sep, i, j)
+    end
+    local last = lengthOf(t, "concat")
+    local first = 1
+    if i ~= nil then
+        first = intArg(i, 3, "concat")
+    end
+    if j ~= nil then
+        last = intArg(j, 4, "concat")
+    end
+    checkRange(first, last, "concat")
+    local buf, n = {}, 0
+    for k = first, last do
+        local v = t[k]
+        local tv = type(v)
+        if tv ~= "string" and tv ~= "number" then
+            error(sformat("invalid value (at index %d) in table for 'concat'", k), 2)
+        end
+        n = n + 1
+        buf[n] = v
+    end
+    return tconcat(buf, sep, 1, n)
+end
+
+table.unpack = function(t, i, j)
+    local first = 1
+    if i ~= nil then
+        first = intArg(i, 2, "unpack")
+    end
+    local last
+    if j ~= nil then
+        last = intArg(j, 3, "unpack")
+    elseif type(t) == "table" then
+        last = lengthOf(t, "unpack")
+    elseif type(t) == "string" then
+        last = #t
+    else
+        return tunpack(t, first)
+    end
+    if first > last then
+        return
+    end
+    checkRange(first, last, "unpack")
+    local buf, n = {}, 0
+    for k = first, last do
+        n = n + 1
+        buf[n] = t[k]
+    end
+    return tunpack(buf, 1, n)
+end
+
+table.move = function(a1, f, e, t, a2)
+    local explicit = a2 ~= nil
+    if not explicit then
+        a2 = a1
+    end
+    if type(a1) ~= "table" or type(a2) ~= "table" then
+        return tmove(a1, f, e, t, a2)
+    end
+    local from = intArg(f, 2, "move")
+    local to = intArg(e, 3, "move")
+    local dest = intArg(t, 4, "move")
+    if to >= from then
+        checkRange(from, to, "move")
+        local n = to - from
+        if dest > maxint - n then
+            error("bad argument #4 to 'move' (destination wrap around)", 2)
+        end
+        if dest > to or dest <= from or (explicit and not (a1 == a2)) then
+            for k = 0, n do
+                a2[dest + k] = a1[from + k]
+            end
+        else
+            for k = n, 0, -1 do
+                a2[dest + k] = a1[from + k]
+            end
+        end
+    end
+    return a2
+end
+
+-- The default order as Lua code, so that every comparison the C sort makes runs counted instructions
+local function lessThan(a, b)
+    return a < b
+end
+table.sort = function(t, comp)
+    if type(t) ~= "table" then
+        return tsort(t, comp)
+    end
+    local n = lengthOf(t, "sort")
+    if n > 1 then
+        if comp ~= nil and type(comp) ~= "function" then
+            error(sformat("bad argument #2 to 'sort' (function expected, got %s)", type(comp)), 2)
+        end
+        -- A script's comparator is called through Lua as well: a C function given as the comparator (string.rep)
+        -- would otherwise run once per comparison without a counted instruction
+        local order = lessThan
+        if comp ~= nil then
+            order = function(a, b)
+                return comp(a, b)
+            end
+        end
+        -- A plain copy whose length is n even with holes (the C sort reads it through this __len, once)
+        local buf = setmetatable({}, { __len = function() return n end })
+        for k = 1, n do
+            buf[k] = t[k]
+        end
+        tsort(buf, order)
+        for k = 1, n do
+            t[k] = buf[k]
+        end
+    end
+end
+
 string.rep = function(s, n, sep)
     if type(s) == "string" and #s == 0 and (sep == nil or (type(sep) == "string" and #sep == 0)) then
         return ""
@@ -327,12 +545,40 @@ end
             return std::format("(a {} error value)", lua_typename(L, lua_type(L, -1)));
         }
 
+        // The table library's refusal (SetupScript: a length, position or range above MaxTableLoop): the evaluation
+        // ends as an exhausted budget. The message is the budget error's, so the sandbox's pcall and xpcall hand it on,
+        // and from here on the hook raises on every instruction, as when the instruction count runs out. Called only
+        // by the evaluator's own wrappers, with the name of the table function.
+        int RefuseLongLoop(lua_State *L)
+        {
+            Detail::LuaGuardState *guard = Detail::LuaGuardState::Of(L);
+            guard->loopRefused = true;
+            guard->exhausted = true;
+            guard->step = 1;
+            lua_sethook(L, &Detail::LuaGuardState::CountHook, LUA_MASKCOUNT, 1);
+            const char *name = lua_type(L, 1) == LUA_TSTRING ? lua_tostring(L, 1) : "?";
+            return luaL_error(L, "%s (table.%s over more than %d elements)", Detail::BudgetErrorText.data(), name,
+                              static_cast<int>(DeclarationEvaluator::MaxTableLoop));
+        }
+
+        std::string LoopRefusedText()
+        {
+            return std::format("A table library call over more than {} elements was refused (one C call, which the "
+                               "instruction budget and the time limit cannot interrupt)",
+                               DeclarationEvaluator::MaxTableLoop);
+        }
+
         // A failed call of the evaluation, as data. The budget and the memory cap are read from the state's own
         // counters, not from the error object (see docs/scripting-lua.html, the limits: the object can be displaced)
         void ReportFailure(const Detail::LuaGuardState &guard, lua_State *L, const int status, const char *phase,
                            DeclarationResult &result)
         {
-            if (guard.timedOut)
+            if (guard.loopRefused)
+            {
+                result.budgetExceeded = true;
+                result.errors.push_back(LoopRefusedText());
+            }
+            else if (guard.timedOut)
             {
                 result.budgetExceeded = true;
                 result.timedOut = true;
@@ -545,7 +791,9 @@ end
             int status = luaL_loadbufferx(L, SetupScript, std::strlen(SetupScript), "=declaration-setup", "t");
             if (status == LUA_OK)
             {
-                status = lua_pcall(L, 0, 1, 0);
+                lua_pushcfunction(L, &RefuseLongLoop);
+                lua_pushinteger(L, static_cast<lua_Integer>(DeclarationEvaluator::MaxTableLoop));
+                status = lua_pcall(L, 2, 1, 0);
             }
             if (status != LUA_OK)
             {
@@ -658,7 +906,12 @@ end
             // An error that reached the panic function (an allocation failing outside a protected call) or a C++ error:
             // data like any other. The state was closed as the exception left Run.
             const std::string text = Clean(e.what());
-            if (guard->timedOut)
+            if (guard->loopRefused)
+            {
+                result.budgetExceeded = true;
+                result.errors.push_back(LoopRefusedText());
+            }
+            else if (guard->timedOut)
             {
                 result.budgetExceeded = true;
                 result.timedOut = true;

@@ -107,6 +107,11 @@ namespace N2Engine::Scripting
     class DeclarationEvaluator
     {
     public:
+        /// The longest length, position or range a table library call (insert, remove, concat, unpack, move, sort)
+        /// may use during an evaluation (2^16; no declaration needs more). A longer one ends the evaluation as
+        /// budgetExceeded: those functions loop in C, where the instruction budget and the time limit cannot stop them.
+        static constexpr std::int64_t MaxTableLoop = 65536;
+
         /// @param source the script's text (binary chunks are refused)
         /// @param chunkName names it in error messages
         [[nodiscard]] static DeclarationResult Evaluate(std::string_view source, const std::string &chunkName,

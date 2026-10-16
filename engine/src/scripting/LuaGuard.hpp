@@ -50,6 +50,9 @@ namespace N2Engine::Scripting::Detail
         std::chrono::steady_clock::time_point deadline{};
         bool timedOut = false;                // the deadline, not the instruction count, ended the entry
         bool exhausted = false;               // the budget ran out in this entry: the hook raises on every instruction
+        // The declaration evaluator only: its table library refused a call whose C loop the hook could not interrupt
+        // (exhausted is set with it)
+        bool loopRefused = false;
         int depth = 0;                        // LuaBudgetScopes open
         std::uint64_t panics = 0;             // errors that reached the panic function
         lua_State *state = nullptr;
@@ -67,6 +70,7 @@ namespace N2Engine::Scripting::Detail
         {
             exhausted = false;
             timedOut = false;
+            loopRefused = false;
             if (limit == 0)
             {
                 remaining = 0;

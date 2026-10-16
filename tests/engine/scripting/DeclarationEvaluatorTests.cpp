@@ -323,22 +323,183 @@ TEST_F(DeclarationEvaluatorTest, AMemoryBombIsRefusedAtTheCapNotFollowed)
     EXPECT_EQ(Find(caught, "caught")->defaultValue, true);
 }
 
-TEST_F(DeclarationEvaluatorTest, CLoopsTheHookCannotSeeAreRemovedNotFollowed)
+namespace
 {
-    // table.move over a huge range of missing keys allocates nothing and runs no Lua instruction; string.rep of ""
-    // copies zero bytes a huge number of times. Neither may be able to hang the evaluation.
-    const auto start = std::chrono::steady_clock::now();
-    const DeclarationResult move = Eval("table.move({}, 1, math.maxinteger // 2, 1) return {}");
-    EXPECT_FALSE(move.budgetExceeded);
-    EXPECT_GT(move.stubUses, 0u);
-    const DeclarationResult remove = Eval(
+    // One evaluation that a table library call must end at once: refused as an exhausted budget (not a time-out, not
+    // an ordinary error), well within the time a C loop over the length or range would have taken
+    void ExpectTableLoopRefused(const std::string &source)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        const DeclarationResult result = Eval(source);
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        EXPECT_TRUE(result.budgetExceeded) << source;
+        EXPECT_FALSE(result.timedOut) << source;
+        EXPECT_FALSE(result.Complete()) << source;
+        ASSERT_FALSE(result.errors.empty()) << source;
+        EXPECT_NE(result.errors[0].find("was refused"), std::string::npos) << source << ": " << result.errors[0];
+        // A bound with generous slack for the Debug and web legs: the refused call itself loops nowhere
+        EXPECT_LT(elapsed, std::chrono::seconds(5)) << source;
+    }
+
+    // Keys 2^40, 2^39, ..., 2, 1 inserted from the largest down: the last rehash (at the 33rd key) saw no small key, so
+    // the array part stays empty, all 41 keys live in the hash part and the border Lua finds is 2^40
+    constexpr const char *HugeBorder = "local t = {} for k = 40, 0, -1 do t[1 << k] = true end ";
+}
+
+TEST_F(DeclarationEvaluatorTest, ATableCanHaveAHugeLengthWithAFewElements)
+{
+    // What the table library guard is for: the length is not bounded by the table's memory
+    const DeclarationResult result = Eval(std::string(HugeBorder) + R"LUA(
+        local C = {}
+        C.__index = C
+        C.SerializableFields = { border = #t, raw = rawlen(t) }
+        return C
+    )LUA");
+    ASSERT_TRUE(result.Complete()) << (result.errors.empty() ? "" : result.errors[0]);
+    EXPECT_EQ(Find(result, "border")->defaultValue, std::int64_t{1} << 40);
+    EXPECT_EQ(Find(result, "raw")->defaultValue, std::int64_t{1} << 40);
+}
+
+TEST_F(DeclarationEvaluatorTest, TableLibraryLoopsOverAHugeLengthOrRangeAreRefusedNotFollowed)
+{
+    // Each of these is one C call of the stock table library that would loop 2^30 to 2^62 times without running a Lua
+    // instruction (the hook, the budget and the deadline never see it). They end at once as budgetExceeded.
+    const std::string border(HugeBorder);
+    ExpectTableLoopRefused(border + "table.insert(t, 1, 0) return {}");
+    ExpectTableLoopRefused(border + "table.insert(t, 0) return {}");
+    ExpectTableLoopRefused(border + "table.remove(t, 1) return {}");
+    ExpectTableLoopRefused(border + "table.concat(t) return {}");
+    ExpectTableLoopRefused(border + "table.unpack(t) return {}");
+    ExpectTableLoopRefused(border + "table.sort(t) return {}");
+    // Explicit positions and ranges (2^40 is a float: read as luaL_checkinteger reads it)
+    ExpectTableLoopRefused("table.insert({}, 2^40, 1) return {}");
+    ExpectTableLoopRefused("table.insert({ 1, 2, 3 }, '1e12', 1) return {}");
+    ExpectTableLoopRefused("table.remove({ 1, 2, 3 }, 2^40) return {}");
+    ExpectTableLoopRefused("table.unpack({}, 1, 2^30) return {}");
+    ExpectTableLoopRefused("table.unpack('abc', math.mininteger, math.maxinteger) return {}");
+    ExpectTableLoopRefused("table.concat({}, '', 1, 2^40) return {}");
+    ExpectTableLoopRefused("table.concat({}, 'x', math.mininteger, math.maxinteger) return {}");
+    ExpectTableLoopRefused("table.move({}, 1, 2^40, 2) return {}");
+    ExpectTableLoopRefused("table.move({}, 1, math.maxinteger // 2, 1) return {}");
+    // A __len that answers a huge length is read once, by the guard, and refused
+    ExpectTableLoopRefused(
         "table.remove(setmetatable({}, { __len = function() return math.maxinteger end }), 1) return {}");
-    EXPECT_FALSE(remove.budgetExceeded);
-    EXPECT_GT(remove.stubUses, 0u);
-    const DeclarationResult insert = Eval(
+    ExpectTableLoopRefused(
         "table.insert(setmetatable({}, { __len = function() return math.maxinteger - 1 end }), 1, 0) return {}");
-    EXPECT_FALSE(insert.budgetExceeded);
-    EXPECT_GT(insert.stubUses, 0u);
+    // A hostile comparator on a list longer than the bound is never called
+    ExpectTableLoopRefused(R"LUA(
+        local t = {}
+        for i = 1, 100000 do t[i] = i end
+        table.sort(t, function(a, b) while true do end end)
+        return {}
+    )LUA");
+    // The refusal cannot be caught: the code after the pcall dies too
+    ExpectTableLoopRefused(border + R"LUA(
+        pcall(table.insert, t, 1, 0)
+        local C = {}
+        C.__index = C
+        C.SerializableFields = { after = 1 }
+        return C
+    )LUA");
+}
+
+TEST_F(DeclarationEvaluatorTest, ASortsComparisonsAreCountedInstructions)
+{
+    // Below the bound the sort runs, but every comparison (the default order too) is Lua code the budget counts
+    const auto start = std::chrono::steady_clock::now();
+    const DeclarationResult hostile = Eval(R"LUA(
+        local t = {}
+        for i = 1, 1000 do t[i] = i end
+        table.sort(t, function(a, b) while true do end end)
+        return {}
+    )LUA");
+    EXPECT_TRUE(hostile.budgetExceeded);
+    EXPECT_FALSE(hostile.timedOut);
+    const DeclarationResult large = Eval(R"LUA(
+        local t = {}
+        for i = 1, 60000 do t[i] = (i * 7919) % 60000 end
+        table.sort(t)
+        return {}
+    )LUA");
+    EXPECT_TRUE(large.budgetExceeded);
+    // A C function as the comparator (each call copies 600 KB) is called through Lua too, so the deadline sees it
+    DeclarationLimits limits;
+    limits.maxMillis = 300;
+    const DeclarationResult heavy = Eval(R"LUA(
+        local t = {}
+        for i = 1, 65536 do t[i] = 100000 end
+        table.sort(t, string.rep)
+        return {}
+    )LUA", limits);
+    EXPECT_TRUE(heavy.budgetExceeded);
+    EXPECT_FALSE(heavy.Complete());
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(20));
+}
+
+TEST_F(DeclarationEvaluatorTest, TheTableLibraryBehavesAsLuasOnSmallLists)
+{
+    const DeclarationResult result = Eval(R"LUA(
+        local t = { "b", "d" }
+        table.insert(t, "e")
+        table.insert(t, 1, "a")
+        table.insert(t, 3, "c")
+        local r1 = table.remove(t)
+        local r2 = table.remove(t, 1)
+        local s = { 5, 3, 9, 1 }
+        table.sort(s)
+        local sorted = table.concat(s, ",")
+        table.sort(s, function(a, b) return a > b end)
+        local C = {}
+        C.__index = C
+        C.SerializableFields = {
+            joined = table.concat(t, "-"),
+            r1 = r1,
+            r2 = r2,
+            nums = table.concat({ 1, 2.5, "x" }, ","),
+            mid = table.concat(t, "", 2, 3),
+            x = (table.unpack({ 10, nil, 30 }, 1, 3)),
+            z = select(3, table.unpack({ 10, nil, 30 }, 1, 3)),
+            n = select("#", table.unpack({ 10, nil, 30 }, 1, 3)),
+            moved = table.concat(table.move({ 1, 2, 3, 4, 5 }, 1, 3, 2), ""),
+            sorted = sorted,
+            desc = table.concat(s, ","),
+            badInsert = (pcall(table.insert, { 1 }, 5, 0)),
+            badConcat = (pcall(table.concat, { 1, {}, 3 })),
+        }
+        return C
+    )LUA");
+    ASSERT_TRUE(result.Complete()) << (result.errors.empty() ? "" : result.errors[0]);
+    EXPECT_EQ(result.stubUses, 0u);
+    EXPECT_EQ(Find(result, "joined")->defaultValue, "b-c-d");
+    EXPECT_EQ(Find(result, "r1")->defaultValue, "e");
+    EXPECT_EQ(Find(result, "r2")->defaultValue, "a");
+    EXPECT_EQ(Find(result, "nums")->defaultValue, "1,2.5,x");
+    EXPECT_EQ(Find(result, "mid")->defaultValue, "cd");
+    EXPECT_EQ(Find(result, "x")->defaultValue, 10);
+    EXPECT_EQ(Find(result, "z")->defaultValue, 30);
+    EXPECT_EQ(Find(result, "n")->defaultValue, 3);
+    EXPECT_EQ(Find(result, "moved")->defaultValue, "11235");
+    EXPECT_EQ(Find(result, "sorted")->defaultValue, "1,3,5,9");
+    EXPECT_EQ(Find(result, "desc")->defaultValue, "9,5,3,1");
+    EXPECT_EQ(Find(result, "badInsert")->defaultValue, false);
+    EXPECT_EQ(Find(result, "badConcat")->defaultValue, false);
+}
+
+TEST_F(DeclarationEvaluatorTest, CLoopsTheHookCannotSeeAreBoundedNotFollowed)
+{
+    // string.rep of "" copies zero bytes a huge number of times: answered at once. The binary packing functions
+    // (byte-at-a-time padding in C) are placeholders.
+    const auto start = std::chrono::steady_clock::now();
+    const DeclarationResult pack = Eval(R"LUA(
+        local C = {}
+        C.__index = C
+        C.SerializableFields = { packed = string.pack("i4", 1), size = string.packsize("i4") }
+        return C
+    )LUA");
+    EXPECT_FALSE(pack.budgetExceeded);
+    EXPECT_GT(pack.stubUses, 0u);
+    EXPECT_TRUE(Find(pack, "packed")->unevaluable);
+    EXPECT_TRUE(Find(pack, "size")->unevaluable);
     const DeclarationResult rep = Eval(R"LUA(
         local C = {}
         C.__index = C
@@ -1059,6 +1220,28 @@ protected:
             local C = {}
             C.__index = C
             C.SerializableFields = { speed = 5, label = { type = "string", default = "x" } }
+            return C
+        )LUA");
+        // The table library on a short list of declared names: the evaluator's bounded versions must give what the
+        // stock C functions give in the runtime
+        WriteAsset("corpus/TableLibrary.lua", R"LUA(
+            local names = { "speed", "jump", "dash" }
+            table.insert(names, "climb")
+            table.insert(names, 1, "idle")
+            local removed = table.remove(names, 2)
+            table.sort(names)
+            local first, second = table.unpack(names, 1, 2)
+            local copy = table.move(names, 1, #names, 1, {})
+            local C = {}
+            C.__index = C
+            C.SerializableFields = {
+                moves = table.concat(names, ","),
+                first = first,
+                second = second,
+                removed = removed,
+                count = #copy,
+                last = { type = "string", default = copy[#copy] },
+            }
             return C
         )LUA");
 
