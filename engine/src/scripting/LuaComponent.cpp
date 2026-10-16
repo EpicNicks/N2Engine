@@ -16,6 +16,8 @@
 #include <iterator>
 #include <limits>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace N2Engine::Scripting
 {
@@ -158,6 +160,14 @@ namespace N2Engine::Scripting
         if (_hasMissingScript || _faulted)
             return;
 
+        // The object makeArgument returns is a registry reference made outside a protected call (sol::make_object):
+        // a free slot first, so it allocates nothing there (the userdata it wraps still can fail: caught below)
+        std::string reserveError;
+        if (!LuaRuntime::Instance().ReserveReferences(1, reserveError))
+        {
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(reserveError));
+            return;
+        }
         const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
         sol::object argument;
         try
@@ -237,16 +247,20 @@ namespace N2Engine::Scripting
         const LuaBudgetScope budget;
         // At most the chunk's first value stays on the stack (RunChunk), so the copies below, which allocate outside
         // a protected call, cannot leave more on the stack than the panic path's padding covers
-        auto result = LuaRuntime::Instance().RunChunk(_script->GetSourceCode(), _scriptPath.ToString());
-
-        if (!result.valid())
+        // A failure that is the memory cap's (or the budget's) is logged once per script, whatever the step
+        const auto logLoadFailure = [this](const std::string &error)
         {
-            const std::string error = LuaRuntime::Instance().LimitAwareError(
-                LuaRuntime::ErrorText(result), result.status() == sol::call_status::memory);
             if (!LuaRuntime::IsLimitError(error) || LuaRuntime::Instance().ShouldLogLimitError(_scriptPath.ToString()))
             {
                 Logger::Error(std::format("Failed to load script {}: {}", _scriptPath.ToString(), error));
             }
+        };
+        auto result = LuaRuntime::Instance().RunChunk(_script->GetSourceCode(), _scriptPath.ToString());
+
+        if (!result.valid())
+        {
+            logLoadFailure(LuaRuntime::Instance().LimitAwareError(
+                LuaRuntime::ErrorText(result), result.status() == sol::call_status::memory));
             return sol::table{};
         }
 
@@ -254,6 +268,15 @@ namespace N2Engine::Scripting
 
         if (result.return_count() > 0 && result[0].is<sol::table>())
         {
+            // The reference to the chunk's table is made outside a protected call (a stack value to a registry
+            // reference): a free registry slot first, so at the memory cap it allocates nothing (sol's constructors are
+            // noexcept: a failure there would end the process)
+            std::string reserveError;
+            if (!LuaRuntime::Instance().ReserveReferences(1, reserveError))
+            {
+                logLoadFailure(LuaRuntime::Instance().LimitAwareError(reserveError));
+                return sol::table{};
+            }
             scriptClass = result[0];
         }
         else
@@ -262,24 +285,36 @@ namespace N2Engine::Scripting
             return sol::table{};
         }
 
-        // The VM runs a __gc finalizer with its debug hooks off, so the budget could not stop a looping one
-        if (const sol::type gcType = scriptClass.raw_get<sol::object>("__gc").get_type();
-            gcType != sol::type::lua_nil && gcType != sol::type::none)
-        {
-            Logger::Error(std::format("Script {} defines __gc, which scripts may not use", _scriptPath.ToString()));
-            return sol::table{};
-        }
-
-        // The table and the handles, so anything that copies them out of self can't reach freed objects later. All in a
-        // protected call: each allocates, and at the memory cap an allocation outside one would go down the panic path
+        // The VM runs a __gc finalizer with its debug hooks off, so the budget could not stop a looping one: the class
+        // is read for it (raw, with Lua's own API: no sol reference is made for the value, which is the script's) and
+        // the table and the handles are made, all in a protected call: each allocates, and at the memory cap an
+        // allocation outside one would go down the panic path. The table and the handles are made so anything that
+        // copies them out of self can't reach freed objects later.
         sol::table instance;
+        bool definesFinalizer = false;
         const bool bound = GuardedAccess([&]
         {
+            lua_State *L = scriptClass.lua_state();
+            scriptClass.push(L);
+            lua_pushstring(L, "__gc");
+            lua_rawget(L, -2);
+            const int gcType = lua_type(L, -1);
+            lua_pop(L, 2);
+            if (gcType != LUA_TNIL && gcType != LUA_TNONE)
+            {
+                definesFinalizer = true;
+                return;
+            }
             instance = lua.create_table();
             instance[sol::metatable_key] = scriptClass;
             instance["component"] = ComponentRef<LuaComponent>(*this);
             instance["gameObject"] = GameObjectRef(_gameObject);
         });
+        if (definesFinalizer)
+        {
+            Logger::Error(std::format("Script {} defines __gc, which scripts may not use", _scriptPath.ToString()));
+            return sol::table{};
+        }
         if (!bound)
         {
             return sol::table{};
@@ -308,7 +343,8 @@ namespace N2Engine::Scripting
             return;
         }
 
-        _scriptInstance = instance;
+        // Moved, not copied: a copy is a registry reference made outside a protected call (see ReserveReferences)
+        _scriptInstance = std::move(instance);
         _hasMissingScript = false;
         // The script's metamethods can run in every step below, outside a protected call
         const bool setUp = GuardedAccess([&]
@@ -351,10 +387,9 @@ namespace N2Engine::Scripting
 
     sol::table LuaComponent::RetireScriptInstance()
     {
-        sol::table previous = _scriptInstance;
-        if (!previous.valid())
+        if (!_scriptInstance.valid())
         {
-            return previous;
+            return sol::table{};
         }
 
         const LuaBudgetScope budget;
@@ -376,11 +411,12 @@ namespace N2Engine::Scripting
         _alive = std::make_shared<bool>(true);
         GuardedAccess([&]
         {
-            previous["component"] = sol::lua_nil;
-            previous["gameObject"] = sol::lua_nil;
+            _scriptInstance["component"] = sol::lua_nil;
+            _scriptInstance["gameObject"] = sol::lua_nil;
         });
-        _scriptInstance = sol::lua_nil;
-        return previous;
+        // The instance leaves the component by a move: a copy would be a registry reference made outside a protected
+        // call (see ReserveReferences), and the member is empty afterwards, as `= sol::lua_nil` left it
+        return std::move(_scriptInstance);
     }
 
     void LuaComponent::CopyReferenceFields(const sol::table &from)
@@ -882,8 +918,7 @@ namespace N2Engine::Scripting
         script.assetType = script.typeName;
         fields.push_back(std::move(script));
 
-        sol::table instance = _scriptInstance;
-        if (!instance.valid())
+        if (!_scriptInstance.valid())
         {
             return fields;
         }
@@ -899,14 +934,36 @@ namespace N2Engine::Scripting
             Logger::Warn(std::format("Lua error reading the fields of {}: {}", _scriptPath.ToString(), error));
             return false;
         };
+        // A copy, so a script instance replaced while the reads below run its metamethods cannot free the table being
+        // read. Made in a protected call, like every reference below: a copy outside one that fails at the memory cap
+        // would end the process (sol's reference constructors are noexcept)
+        sol::table instance;
+        if (!guarded([&] { instance = _scriptInstance; }) || !instance.valid())
+        {
+            return fields;
+        }
         sol::optional<sol::table> declared;
         if (!guarded([&] { declared = instance["SerializableFields"].get<sol::optional<sol::table>>(); }) || !declared)
         {
             return fields;
         }
 
+        // The declarations are copied out first, in a protected call (the iteration makes a reference for each key and
+        // each value), so the loop below holds only references that already exist
+        std::vector<std::pair<sol::object, sol::object>> declarations;
+        if (!guarded([&]
+        {
+            for (const auto &[key, value] : *declared)
+            {
+                declarations.emplace_back(key, value);
+            }
+        }))
+        {
+            return fields;
+        }
+
         std::vector<FieldInfo> scriptFields;
-        for (const auto &[key, value] : *declared)
+        for (const auto &[key, value] : declarations)
         {
             // A field is named by a string (a table can be keyed by anything: the script's own business)
             if (key.get_type() != sol::type::string)
@@ -918,18 +975,24 @@ namespace N2Engine::Scripting
             info.displayName = DefaultDisplayName(info.name);
             info.container = "scriptData";
 
-            // Either { default = 5, type = "..." } or the shorthand `speed = 5`
+            // Either { default = 5, type = "..." } or the shorthand `speed = 5`: the default is the declaration's own
+            // "default" (read in a protected call, from the stack, so no reference is made for the table), or the value
             std::string declaredType;
-            sol::object defaultValue = value;
-            if (value.is<sol::table>())
+            sol::object declaredDefault;
+            const bool isDefinition = value.is<sol::table>();
+            if (isDefinition)
             {
-                const sol::table definition = value.as<sol::table>();
                 guarded([&]
                 {
+                    lua_State *L = value.lua_state();
+                    value.push(L);
+                    const sol::stack_table definition(L, -1);
                     declaredType = definition.get_or<std::string>("type", "");
-                    defaultValue = definition.get<sol::object>("default");
+                    declaredDefault = definition.get<sol::object>("default");
+                    lua_pop(L, 1);
                 });
             }
+            const sol::object &defaultValue = isDefinition ? declaredDefault : value;
 
             if (declaredType == "GameObject")
             {

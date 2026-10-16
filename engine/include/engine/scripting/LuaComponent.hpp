@@ -71,7 +71,8 @@ namespace N2Engine::Scripting
         void LoadScriptInstance(bool keepOldOnFailure, bool keepOnlyDeclaredFields);
         /// Ends the current instance as if its component were removed: OnDisable (if enabled in an active
         /// hierarchy) and OnDestroy once the component is attached, then its subscriptions stop firing and
-        /// its self.component/self.gameObject are cleared. Returns it (invalid if there was none).
+        /// its self.component/self.gameObject are cleared. Returns it (invalid if there was none): moved out of the
+        /// component, never copied (a reference copy outside a protected call can end the process at the memory cap).
         sol::table RetireScriptInstance();
         /// Back to a component with no script (what a new one is): the instance is retired and the path forgotten.
         /// Deserialize does it for a saved "scriptPath" that is empty, so a component whose script was chosen in the
@@ -90,7 +91,9 @@ namespace N2Engine::Scripting
         void CallLuaMethod(const std::string& methodName, Args&&... args);
         /// CallLuaMethod with one argument `makeArgument()` builds in the state (a userdata). Building it allocates
         /// outside any protected call, so at the memory cap it fails down the panic path as a C++ exception: that is
-        /// caught and reported here (the component is faulted) instead of leaving through the physics callback.
+        /// caught and reported here (the component is faulted) instead of leaving through the physics callback. The
+        /// sol::object it returns is a registry reference, made outside a protected call too: a free registry slot is
+        /// reserved before it (LuaRuntime::ReserveReferences), and a failure to reserve is reported the same way.
         template<typename MakeArgument>
         void CallLuaMethodWithArgument(const std::string& methodName, MakeArgument makeArgument);
         /// True if the instance has that method. Reading it can run the script's __index, so it is an entry into Lua:

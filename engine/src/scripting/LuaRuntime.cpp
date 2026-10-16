@@ -97,6 +97,8 @@ namespace N2Engine::Scripting
     {
         // LuaPanicRepair.cpp (it reads Lua's internal thread state, so it is kept to a file of its own)
         void RepairThreadAfterPanic(lua_State *L);
+        // Also there: the length of the registry's free list (what luaL_ref reuses before it allocates), up to limit
+        int CountFreeRegistrySlots(lua_State *L, int limit);
 
         struct LuaGuardState
         {
@@ -112,6 +114,15 @@ namespace N2Engine::Scripting
             int depth = 0;                        // LuaBudgetScopes open
             std::uint64_t panics = 0;             // errors that reached the panic function
             lua_State *state = nullptr;
+#if defined(N2ENGINE_LUA_ALLOC_FAULT_HOOK)
+            // Tests only (the engine target defines the macro when N2ENGINE_BUILD_TESTS is on; a shipped build has
+            // none of this): growth allocations that may still succeed before every later one is refused, as at the
+            // memory cap, and how many growths were asked for. Switched on only through the functions at the end of
+            // this file, which nothing in the engine calls.
+            static constexpr std::uint64_t NoFault = UINT64_MAX;
+            std::uint64_t growthsAllowed = NoFault;
+            std::uint64_t growthRequests = 0;
+#endif
 
             void Arm()
             {
@@ -199,6 +210,20 @@ namespace N2Engine::Scripting
                 guard->used = others;
                 return nullptr;
             }
+#if defined(N2ENGINE_LUA_ALLOC_FAULT_HOOK)
+            if (nsize > oldSize)
+            {
+                ++guard->growthRequests;
+                if (guard->growthsAllowed != LuaGuardState::NoFault)
+                {
+                    if (guard->growthsAllowed == 0)
+                    {
+                        return nullptr;
+                    }
+                    --guard->growthsAllowed;
+                }
+            }
+#endif
             if (nsize > oldSize && guard->cap != 0 && (others >= guard->cap || nsize > guard->cap - others))
             {
                 return nullptr;
@@ -440,6 +465,39 @@ namespace N2Engine::Scripting
         }
     }
 
+    bool LuaRuntime::ReserveReferences(const int count, std::string &error)
+    {
+        constexpr int MaxReserve = 16;
+        const int wanted = std::clamp(count, 1, MaxReserve);
+        lua_State *L = _lua.lua_state();
+        if (Detail::CountFreeRegistrySlots(L, wanted) >= wanted)
+        {
+            return true;
+        }
+        // Take `wanted` references (each luaL_ref reuses a free slot or grows the registry) and give them all back:
+        // the registry then holds that many free slots, and luaL_ref takes one without allocating. In a protected
+        // call, so a growth that fails is the memory error here. Plain ints and C calls only in the body: an error
+        // abandons it without running destructors. What was taken before an error is given back below.
+        int refs[MaxReserve];
+        volatile int made = 0;
+        const bool reserved = ProtectedCall(
+            [&]
+            {
+                while (made < wanted)
+                {
+                    lua_pushboolean(L, 1);
+                    refs[made] = luaL_ref(L, LUA_REGISTRYINDEX);
+                    made = made + 1;
+                }
+            },
+            error);
+        for (int i = 0; i < made; ++i)
+        {
+            luaL_unref(L, LUA_REGISTRYINDEX, refs[i]);
+        }
+        return reserved;
+    }
+
     bool LuaRuntime::ProtectedCall(const std::function<void()> &body, std::string &error)
     {
         const LuaBudgetScope budget;
@@ -659,6 +717,21 @@ namespace N2Engine::Scripting
             return emptyTable();
         }
 
+        // The chunk's table and the module map's copy of it are references made outside a protected call (a stack
+        // value to a reference, a reference copy: luaL_ref, which at the memory cap with no free registry slot would
+        // end the process): two free slots first
+        std::string reserveError;
+        if (!ReserveReferences(2, reserveError))
+        {
+            _loadedModules.erase(moduleName);
+            const std::string error = LimitAwareError(reserveError);
+            if (!IsLimitError(error) || ShouldLogLimitError(path.ToString()))
+            {
+                Logger::Error(std::format("Failed to load module {}: {}", moduleName, error));
+            }
+            return sol::table{};
+        }
+
         sol::table moduleTable;
 
         if (result.return_count() > 0 && result[0].is<sol::table>())
@@ -678,8 +751,6 @@ namespace N2Engine::Scripting
             Logger::Error(std::format("Failed to load module {}: {}", moduleName, MemoryErrorText));
             return moduleTable;
         }
-        // (A reference copy outside a protected call, as is result[0] above: see the known limitation in
-        // docs/scripting-lua.html, follow-up sec-lua-registry-reserve)
         _loadedModules[moduleName] = moduleTable;
         Logger::Info(std::format("Loaded Lua module: {}", moduleName));
 
@@ -688,12 +759,22 @@ namespace N2Engine::Scripting
 
     sol::optional<sol::table> LuaRuntime::GetModule(const std::string &moduleName)
     {
-        auto it = _loadedModules.find(moduleName);
-        if (it != _loadedModules.end())
+        const auto it = _loadedModules.find(moduleName);
+        if (it == _loadedModules.end())
         {
-            return it->second;
+            return sol::nullopt;
         }
-        return sol::nullopt;
+        // The copy is a registry reference: made in a protected call, so at the memory cap it is an error here (a
+        // reference copy outside one that fails ends the process)
+        sol::table copy;
+        std::string error;
+        if (!ProtectedCall([&] { copy = it->second; }, error))
+        {
+            Logger::Warn(std::format("Module {} could not be read: {}", SanitizeForLog(moduleName),
+                                     LimitAwareError(error)));
+            return sol::nullopt;
+        }
+        return sol::optional<sol::table>(std::move(copy));
     }
 
     void LuaRuntime::ReloadModule(const IO::ResourcePath &path, LuaScript *script)
@@ -706,8 +787,8 @@ namespace N2Engine::Scripting
         // A hot reload is an outermost entry no Lua call protects (a client's WriteTextAsset on the editor host): a C++
         // exception from it (an allocation outside a protected call failing at the memory cap, which comes down the
         // panic path) is reported here instead of leaving into the host's command handling, and one failing reload
-        // callback does not stop the others. Not covered: a sol reference created or copied outside a protected call
-        // is noexcept, so its failure ends the process before any catch (known limitation, docs/scripting-lua.html)
+        // callback does not stop the others. (A sol reference made outside a protected call is noexcept, so nothing
+        // could catch its failure: each such site reserves free registry slots first, ReserveReferences.)
         const auto guarded = [this, &moduleName](const auto &step)
         {
             const std::uint64_t panicsBefore = PanicCount();
@@ -766,3 +847,24 @@ namespace N2Engine::Scripting
         _reloadCallbacks.erase(moduleName);
     }
 }
+
+#if defined(N2ENGINE_LUA_ALLOC_FAULT_HOOK)
+// For the tests only (declared in the test files that use them; the macro is defined for the engine target only when
+// N2ENGINE_BUILD_TESTS is on, so a shipped build has neither these nor the check in the allocator): the first
+// `allowed` growth allocations of the state succeed and every later one fails, as at the memory cap, until the
+// allowance is set back to UINT64_MAX. A test then makes the registry's growth the failing allocation of the path
+// under test.
+namespace N2Engine::Scripting::Detail
+{
+    void SetGrowthAllowanceForTest(lua_State *L, const std::uint64_t allowed)
+    {
+        LuaGuardState::Of(L)->growthsAllowed = allowed;
+    }
+
+    // Growth allocations asked for so far (refused ones included)
+    std::uint64_t GrowthRequestsForTest(lua_State *L)
+    {
+        return LuaGuardState::Of(L)->growthRequests;
+    }
+}
+#endif

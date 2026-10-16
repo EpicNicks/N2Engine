@@ -74,6 +74,17 @@ namespace N2Engine::Scripting
         /// from the error object, which a C++ frame unwound on the way can have displaced). With `memoryError` (the
         /// call's status said LUA_ERRMEM) it is the memory error, whatever the error object says; else `message`
         [[nodiscard]] std::string LimitAwareError(std::string_view message, bool memoryError = false) const;
+        /// Makes sure the registry hands out `count` (1 to 16) references without allocating: sol creates and copies
+        /// a reference (table, object, function, make_object) with luaL_ref, which grows the registry when it has no
+        /// free slot, and does so in a noexcept constructor, so a growth that fails at the memory cap outside a
+        /// protected call would end the process (the panic function throws, the exception meets the noexcept frame).
+        /// Call it right before the unprotected reference creations of a path that runs with no Lua call on the stack
+        /// (a component loading its script, a hot reload, a collision handler), `count` being how many it makes, and
+        /// make none in between (script code can take slots). It grows the registry in a protected call, so a failure
+        /// is an error here: false with the text in `error` (the memory error, or the budget's), and the caller then
+        /// logs it and gives up instead of making the reference. Cheap when the slots are free (a read of the free
+        /// list; no Lua call, no allocation).
+        [[nodiscard]] bool ReserveReferences(int count, std::string& error);
         /// Runs C++ code that touches script tables (a table access can reach a script's metamethods) inside a Lua
         /// protected call (a budget scope too), so a Lua error, the budget or a failed allocation never goes down
         /// the panic path (a C++ exception thrown through Lua's C frames) or jumps over the caller's C++ frames.
@@ -111,6 +122,7 @@ namespace N2Engine::Scripting
 
         // Module management
         sol::table LoadScriptAsModule(const IO::ResourcePath& path, LuaScript* script);
+        /// The module's table, or nothing if it is not loaded or its reference could not be copied (the memory cap)
         sol::optional<sol::table> GetModule(const std::string& moduleName);
         void ReloadModule(const IO::ResourcePath& path, LuaScript* script);
 

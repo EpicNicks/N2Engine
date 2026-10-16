@@ -42,17 +42,38 @@ namespace N2Engine::Scripting::Detail
     // when a protected function call's arguments cannot be pushed); the panic function's padding keeps such pops
     // above the base, where a pop below it would have run Lua code and panicked again. The engine makes no unprotected Lua calls;
     // what reaches this is an allocation outside a protected call failing at the memory cap: the arguments sol pushes
-    // for a component method or a script callback, the collision/trigger argument, and sol references copied outside
-    // one (luaL_ref can grow the registry). The callers of the first two, and a hot reload, catch the exception and
-    // call LuaRuntime::RecoverAfterPanic, which resets the stack to its empty base; the padding holds only while the
-    // unwound frames pop 16 values or fewer. The last cannot be caught: creating or copying a sol reference is
-    // noexcept, so the exception thrown from inside one ends the process (std::terminate). That known limitation, its
-    // sites and its precondition are in docs/scripting-lua.html (resource limits); follow-up sec-lua-registry-reserve.
+    // for a component method or a script callback, and the collision/trigger argument. The callers of those, and a hot
+    // reload, catch the exception and call LuaRuntime::RecoverAfterPanic, which resets the stack to its empty base; the
+    // padding holds only while the unwound frames pop 16 values or fewer. A sol reference created or copied outside a
+    // protected call (luaL_ref can grow the registry) never gets here: its construction is noexcept, so an exception
+    // thrown from inside one would end the process (std::terminate). Every such site first reserves free registry
+    // slots in a protected call (LuaRuntime::ReserveReferences, CountFreeRegistrySlots below), so luaL_ref allocates
+    // nothing there; docs/scripting-lua.html (resource limits) lists them.
     void RepairThreadAfterPanic(lua_State *L)
     {
         L->allowhook = static_cast<lu_byte>(1);
         L->status = static_cast<lu_byte>(LUA_OK);
         L->nCcalls = L == G(L)->mainthread ? FreshMainThreadCalls : 0;
+    }
+
+    // How many free slots the registry hands out without allocating, counted up to `limit`: the length of luaL_ref's
+    // free list (lauxlib.c of 5.4.8: t[freelist] is the first free index, t[index] the next, 0 ends the list; the list
+    // lives at LUA_RIDX_LAST + 1 in this version, it was at 0 before 5.4.3). Reads only: no allocation, no error.
+    int CountFreeRegistrySlots(lua_State *L, const int limit)
+    {
+        int count = 0;
+        int isNumber = 0;
+        lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_LAST + 1);
+        lua_Integer index = lua_tointegerx(L, -1, &isNumber);
+        lua_pop(L, 1);
+        while (isNumber != 0 && index != 0 && count < limit)
+        {
+            ++count;
+            lua_rawgeti(L, LUA_REGISTRYINDEX, index);
+            index = lua_tointegerx(L, -1, &isNumber);
+            lua_pop(L, 1);
+        }
+        return count;
     }
 
     // For the tests: the thread's nCcalls (C calls in the low 16 bits, non-yieldable calls in the high 16)
