@@ -114,7 +114,8 @@
 
   // index.js is added by emcc where the script placeholder is, below (an async script, so the load event waits for it).
   // n2-loader.js (next to this page) fetches manifest.json, index.data and index.wasm with progress and clear errors, and
-  // falls back to ArrayBuffer instantiation when the host serves .wasm with the wrong MIME type.
+  // falls back to ArrayBuffer instantiation when the host serves .wasm with the wrong MIME type. The package step adds
+  // ?v=<hash> to both script URLs, so a new build's page never runs an older cached index.js or loader.
   window.addEventListener('load', function () {
     if (typeof createN2Player !== 'function') {
       showError('index.js did not load (is it next to this page?)');
@@ -124,7 +125,12 @@
       showError('n2-loader.js did not load (is it next to this page?)');
       return;
     }
+    // The ?v= this page loaded index.js with (written by scripts/web-package-finalize.mjs): the loader reports a page
+    // older than the build's manifest.json
+    var indexScript = document.querySelector('script[src*="index.js"]');
+    var indexVersion = indexScript && /[?&]v=([0-9a-f]+)/.exec(indexScript.getAttribute('src') || '');
     var loader = N2Loader.create({
+      indexJsVersion: indexVersion ? indexVersion[1] : null,
       onProgress: onProgress,
       onEvent: function (name, detail) { log('loader: ' + name + (detail && detail.reason ? ' (' + detail.reason + ')' : '')); }
     });

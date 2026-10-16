@@ -8,7 +8,8 @@
 //    files: sizes, sha256, gzip and brotli sizes; every sibling must decompress to its plain file.
 // 2. index.js is loaded the way the page loads it: through web/n2-loader.js (the package's copy) with a mock fetch that
 //    serves the folder's files, serves index.wasm with the WRONG content type (text/plain), and so makes the loader
-//    take its ArrayBuffer fallback, which is asserted. The player then runs N frames with the canvas mocked: it calls
+//    take its ArrayBuffer fallback on the same response (one request for index.wasm), which is asserted. The page's
+//    script tags must name index.js and n2-loader.js with ?v=<their hash>. The player then runs N frames with the canvas mocked: it calls
 //    Module.n2Present(pixels, width, height) for every frame, as it does for the page's canvas. The frames must come,
 //    have the size asked for, and show something (more than one colour, some pixel not black). The loader's progress
 //    must end at the manifest's sizes and the asset pack must have come through the loader's hook.
@@ -80,8 +81,11 @@ if (problems.length === 0) {
   for (const url of urls) {
     expect(!/^([a-z][a-z0-9+.-]*:|\/)/i.test(url), `index.html has a non-relative URL: ${url}`);
   }
-  expect(urls.includes('index.js'), 'index.html does not load index.js by a relative URL');
-  expect(urls.includes('n2-loader.js'), 'index.html does not load n2-loader.js by a relative URL');
+  // Both scripts are loaded by a relative URL versioned with their own hash (scripts/web-package-finalize.mjs)
+  for (const script of ['index.js', 'n2-loader.js']) {
+    const versioned = `${script}?v=${manifest.files[script].sha256.slice(0, 12)}`;
+    expect(urls.includes(versioned), `index.html does not load ${script} as ${versioned} (it names ${urls.join(', ')})`);
+  }
   expect(fs.readFileSync(path.join(dir, 'n2-loader.js')).equals(fs.readFileSync(new URL('../web/n2-loader.js', import.meta.url))), 'the package n2-loader.js differs from web/n2-loader.js');
   expect(!/crossOriginIsolated|SharedArrayBuffer|Cross-Origin-/.test(html), 'index.html mentions cross-origin isolation');
   const js = fs.readFileSync(path.join(dir, 'index.js'), 'utf8');
@@ -131,6 +135,7 @@ async function mockFetch(url) {
 }
 const loader = N2Loader.create({
   fetch: mockFetch,
+  indexJsVersion: manifest.files['index.js'].sha256.slice(0, 12), // as the page passes it: this page is current
   onEvent: (event) => loaderEvents.push(event),
   onProgress: (p) => { lastProgress = p; },
 });
@@ -169,6 +174,8 @@ if (manifest) {
   for (const name of ['index.wasm', 'index.data']) {
     expect(requested.includes(`${name}?v=${manifest.files[name].sha256.slice(0, 12)}`), `${name} was not requested by its hash: ${requested}`);
   }
+  const wasmGets = requested.filter((url) => url.split('?')[0] === 'index.wasm').length;
+  expect(wasmGets === 1, `index.wasm was requested ${wasmGets} times, expected once (the fallback reuses the first response)`);
   const total = manifest.files['index.wasm'].raw + manifest.files['index.data'].raw;
   expect(lastProgress && lastProgress.loaded === total && lastProgress.total === total, `loader progress ended at ${JSON.stringify(lastProgress)}, expected ${total}`);
 }

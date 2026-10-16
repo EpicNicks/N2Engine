@@ -863,7 +863,8 @@ jobs:
           . "$HOME/emsdk/emsdk_env.sh"
           node scripts/web-package-smoke.mjs build-web/web-package 30 320x180
 
-      # The loader (web/n2-loader.js) under node with a mock fetch: right and wrong MIME type, no manifest, 404, truncated file
+      # The loader (web/n2-loader.js) under node with a mock fetch: right and wrong MIME type (one request), no manifest,
+      # a compressing host without a manifest, 404, truncated file, LinkError, a page older than its manifest
       - name: Test the web loader under node
         run: |
           set -e

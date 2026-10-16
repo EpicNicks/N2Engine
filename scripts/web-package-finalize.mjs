@@ -2,6 +2,7 @@
 // Usage: node scripts/web-package-finalize.mjs <package folder> --loader <n2-loader.js> --profile dev|size|speed [--precompress]
 //
 //   * copies the loader (web/n2-loader.js) next to index.html
+//   * versions the page's script tags: index.js?v=<hash> and n2-loader.js?v=<hash> (first 12 hex digits of sha256)
 //   * with --precompress: writes index.<ext>.br and index.<ext>.gz next to each compressible file (the plain files stay:
 //     the package works on a host that does neither); stale .br/.gz files are removed first either way
 //   * writes manifest.json: for every file of the package, its raw size, sha256, gzip size and brotli size (brotli is
@@ -33,6 +34,26 @@ for (const name of fs.readdirSync(dir)) {
 }
 fs.copyFileSync(loader, path.join(dir, 'n2-loader.js'));
 
+// The page's two script tags get ?v=<first 12 hex digits of the file's sha256>, the same version the loader puts on
+// index.wasm and index.data, so a fresh index.html never runs an older cached index.js or loader. Idempotent: an
+// existing ?v= is replaced. emcc may have minified the page (unquoted attribute values): both forms are matched.
+const sha256 = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
+const pagePath = path.join(dir, 'index.html');
+let page = fs.readFileSync(pagePath, 'utf8');
+for (const script of ['index.js', 'n2-loader.js']) {
+  const version = sha256(fs.readFileSync(path.join(dir, script))).slice(0, 12);
+  const escaped = script.replace(/[.]/g, '\\.');
+  // The new value is always quoted (an unquoted value with '=' in it is an HTML parse error)
+  const tag = new RegExp(`(<script\\b[^>]*\\bsrc\\s*=\\s*)(["']?)${escaped}(?:\\?v=[0-9a-f]*)?\\2(?=[\\s>])`, 'g');
+  const matches = page.match(tag) ?? [];
+  if (matches.length !== 1) {
+    console.error(`web-package-finalize: index.html has ${matches.length} script tags for ${script}, expected 1`);
+    process.exit(1);
+  }
+  page = page.replace(tag, `$1"${script}?v=${version}"`);
+}
+fs.writeFileSync(pagePath, page);
+
 const gzip = (buffer) => zlib.gzipSync(buffer, { level: 9 });
 const brotli = (buffer) => zlib.brotliCompressSync(buffer, {
   params: {
@@ -52,7 +73,7 @@ for (const name of fs.readdirSync(dir).sort()) {
   const br = precompress ? brotli(buffer) : null;
   files[name] = {
     raw: buffer.length,
-    sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+    sha256: sha256(buffer),
     gzip: gz.length,
     brotli: br ? br.length : null,
   };

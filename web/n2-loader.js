@@ -8,11 +8,16 @@
 //   2. downloads index.data (the asset pack) with progress and hands it to Emscripten (Module.getPreloadedPackage), so a
 //      failure is a clear message here instead of an Emscripten abort.
 //   3. downloads index.wasm with progress and instantiates it (Module.instantiateWasm): WebAssembly.instantiateStreaming
-//      first (compiles while downloading), and when that fails, e.g. because the host serves .wasm with a wrong MIME
-//      type, a second download into an ArrayBuffer and WebAssembly.instantiate. Both paths need nothing from the host.
-//   4. every URL is index.<ext>?v=<first 12 hex digits of the file's sha256> (cache busting: a new build is never
-//      served from a stale cache; the host needs no cache headers for that). manifest.json itself is fetched with
-//      cache: 'no-cache'.
+//      (compiles while downloading) when the host says application/wasm; otherwise (a wrong MIME type, or a browser
+//      without streaming) the same response is read into an ArrayBuffer for WebAssembly.instantiate: one download
+//      either way. A LinkError or CompileError is not a hosting problem (index.wasm and index.js are from different
+//      builds, or the file is damaged) and gets its own message, not the fallback.
+//   4. index.wasm and index.data are fetched as index.<ext>?v=<first 12 hex digits of the file's sha256>; index.js and
+//      n2-loader.js are loaded by the page with the same kind of ?v= (scripts/web-package-finalize.mjs writes it into
+//      index.html). manifest.json is fetched with cache: 'no-cache'. So a fresh index.html never gets an older cached
+//      file of another build. index.html itself is only as fresh as the host serves it: with options.indexJsVersion
+//      (the ?v= the page loaded index.js with) a page older than the manifest is reported, with a request to reload.
+//      Hosts should serve index.html and manifest.json with Cache-Control: no-cache.
 // Every URL is relative to the page. Nothing here needs cross-origin isolation or any header.
 (function (root, factory) {
   'use strict';
@@ -70,11 +75,14 @@
   //   onProgress  function ({ loaded, total, file }) called as bytes arrive; total is 0 when no size is known
   //   onEvent     function (name, detail) for what the loader decided: manifest-ok, manifest-missing, wasm-streaming,
   //               wasm-fallback, wasm-done, data-done (tests assert on these; the page may log them)
+  //   indexJsVersion  the ?v= the page loaded index.js with (null: not checked); a manifest whose index.js hash starts
+  //               differently means the page is an older cached copy than the build on the server
   function create(options) {
     options = options || {};
     var fetchFn = options.fetch || (typeof fetch === 'function' ? fetch.bind(typeof self !== 'undefined' ? self : undefined) : null);
     var onProgress = options.onProgress || function () {};
     var onEvent = options.onEvent || function () {};
+    var indexJsVersion = options.indexJsVersion || null;
     if (!fetchFn) throw LoadError('this browser has no fetch()');
 
     var manifest = null;
@@ -115,6 +123,14 @@
       });
     }
 
+    // The size a response's body will have once read: its Content-Length, but only when the host did not compress it
+    // (with a Content-Encoding the header is the encoded size and the body arrives decoded, so the size is unknown)
+    function plainLength(response) {
+      var encoding = String(response.headers.get('content-encoding') || '').trim().toLowerCase();
+      if (encoding && encoding !== 'identity') return 0;
+      return Number(response.headers.get('content-length')) || 0;
+    }
+
     function checkLength(name, length) {
       var expected = sizes[name] || 0;
       if (expected && length !== expected) {
@@ -138,12 +154,20 @@
       }).catch(function (cause) {
         manifest = null;
         onEvent('manifest-missing', { reason: String(cause && cause.message ? cause.message : cause) });
+      }).then(function () {
+        var entry = manifest && manifest.files['index.js'];
+        var built = entry && entry.sha256 ? entry.sha256.slice(0, 12) : null;
+        if (indexJsVersion && built && built !== indexJsVersion) {
+          throw LoadError('This page is an older copy than the build on the server (it loaded index.js ?v=' + indexJsVersion +
+            ', the build has ' + built + '). Reload the page. (Hosts: serve index.html and manifest.json with ' +
+            'Cache-Control: no-cache.)', 'index.html');
+        }
       });
     }
 
     function loadData() {
       return get(DATA).then(function (response) {
-        if (!sizes[DATA]) sizes[DATA] = Number(response.headers.get('content-length')) || 0;
+        if (!sizes[DATA]) sizes[DATA] = plainLength(response);
         received[DATA] = 0;
         return readAll(response, function (n) { received[DATA] += n; report(DATA); });
       }).then(function (bytes) {
@@ -154,39 +178,58 @@
       });
     }
 
-    // Streaming first: the response body is counted on its way into WebAssembly.instantiateStreaming. A wrong MIME type
-    // (anything but application/wasm) makes that reject before it reads a byte; so does a browser without it. Then a
-    // second request reads the file into an ArrayBuffer for WebAssembly.instantiate.
+    function contentType(response) {
+      return String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    }
+
+    // A LinkError or CompileError from instantiating means index.wasm does not fit this index.js (two different builds,
+    // usually an older cached page or index.js) or is damaged: no download fixes that, so no fallback for it
+    function isModuleError(error) {
+      return !!error && (error instanceof WebAssembly.LinkError || error instanceof WebAssembly.CompileError);
+    }
+    function moduleError(error) {
+      if (error && error.name === 'LoadError') return error;
+      return LoadError('index.wasm could not be used with this index.js (' + String(error && error.message ? error.message : error) +
+        '): the two are from different builds (an older cached copy of the page or of index.js) or index.wasm is damaged. ' +
+        'Reload the page. (Hosts: serve index.html and manifest.json with Cache-Control: no-cache.)', WASM);
+    }
+
+    // Streaming when the host says application/wasm: the body is counted on its way into
+    // WebAssembly.instantiateStreaming. With any other type (instantiateStreaming would reject it) or a browser without
+    // streaming, the same response is read into an ArrayBuffer for WebAssembly.instantiate: no second request.
     function instantiateWasm(imports) {
       received[WASM] = 0;
+      function count(n) { received[WASM] += n; report(WASM); }
+      function fromBytes(bytes) {
+        checkLength(WASM, bytes.length);
+        return WebAssembly.instantiate(bytes, imports).catch(function (error) { throw moduleError(error); });
+      }
       return get(WASM).then(function (response) {
-        if (!sizes[WASM]) sizes[WASM] = Number(response.headers.get('content-length')) || 0;
+        if (!sizes[WASM]) sizes[WASM] = plainLength(response);
+        var type = contentType(response);
         var canStream = typeof WebAssembly.instantiateStreaming === 'function' && response.body &&
           typeof TransformStream === 'function' && typeof Response === 'function';
-        if (!canStream) return { response: null, reason: 'this browser cannot stream-compile' };
+        if (!canStream || type !== 'application/wasm') {
+          onEvent('wasm-fallback', { reason: canStream ? 'served as ' + (type || 'no type') + ', not application/wasm'
+                                                       : 'this browser cannot stream-compile' });
+          return readAll(response, count).then(fromBytes);
+        }
         var counted = response.body.pipeThrough(new TransformStream({
           transform: function (chunk, controller) {
-            received[WASM] += chunk.length;
-            report(WASM);
+            count(chunk.length);
             controller.enqueue(chunk);
           }
         }));
-        var wrapped = new Response(counted, { status: 200, headers: { 'content-type': response.headers.get('content-type') || '' } });
+        var wrapped = new Response(counted, { status: 200, headers: { 'content-type': type } });
         onEvent('wasm-streaming', {});
-        return WebAssembly.instantiateStreaming(wrapped, imports).then(function (result) {
-          return { result: result };
-        }, function (error) {
-          return { response: null, reason: String(error && error.message ? error.message : error) };
-        });
-      }).then(function (outcome) {
-        if (outcome.result) return outcome.result;
-        onEvent('wasm-fallback', { reason: outcome.reason });
-        received[WASM] = 0;
-        return get(WASM).then(function (response) {
-          return readAll(response, function (n) { received[WASM] += n; report(WASM); });
-        }).then(function (bytes) {
-          checkLength(WASM, bytes.length);
-          return WebAssembly.instantiate(bytes, imports);
+        return WebAssembly.instantiateStreaming(wrapped, imports).catch(function (error) {
+          if (isModuleError(error)) throw moduleError(error);
+          // Rejected for another reason, with the right type: read the file again into an ArrayBuffer. Whatever is left
+          // of the first body is cancelled first, so the two downloads do not run side by side.
+          if (wrapped.body && !wrapped.body.locked) wrapped.body.cancel().catch(function () {});
+          onEvent('wasm-fallback', { reason: String(error && error.message ? error.message : error) });
+          received[WASM] = 0;
+          return get(WASM).then(function (second) { return readAll(second, count); }).then(fromBytes);
         });
       }).then(function (result) {
         checkLength(WASM, received[WASM]);
