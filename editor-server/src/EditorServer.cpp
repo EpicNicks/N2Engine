@@ -1638,6 +1638,7 @@ namespace N2Engine::Editor
             _sessionRunning = false;
             _claimId = 0;
             _closeConnection.store(false);
+            _sessionReplaced.store(false);
         }
         // A host without any token has no Hello: every client is an admin with no name, and the newest takes over
         _arbiter.emplace(!RequiresAccessToken());
@@ -2959,6 +2960,7 @@ namespace N2Engine::Editor
             // on the main thread finishes, and then runs the cleanup that every end of a session runs. The request is set
             // under the lock that clears _sessionRunning, and the thread clears it when it takes the next hand-off, so it
             // can neither be lost nor end a later session.
+            _sessionReplaced.store(true);
             _closeConnection.store(true);
         }
     }
@@ -3163,6 +3165,7 @@ namespace N2Engine::Editor
                 // A close request left over from the last session (made after it had stopped looking) must not end this
                 // one; one made from now on (the lock is held until _sessionRunning is set) is meant for it
                 _closeConnection.store(false);
+                _sessionReplaced.store(false);
                 _sessionRunning = true;
                 work->connection->sessionId = work->sessionId;
             }
@@ -3255,8 +3258,9 @@ namespace N2Engine::Editor
             return CommandQueue::Response{};
         });
 
-        // A Shutdown (or Stop) has already cleared _running; this is the client going away on its own
-        if (_stopOnDisconnect && sessionOpened && _running)
+        // A Shutdown (or Stop) has already cleared _running; this is the client going away on its own. A session that was
+        // closed for a takeover or a preemption did not go away: its successor is waiting for the host.
+        if (_stopOnDisconnect && sessionOpened && _running && !_sessionReplaced.load())
         {
             PostLog("Stopping the editor server: the client's session ended, and it stops on disconnect");
             _running = false;

@@ -456,6 +456,7 @@ namespace
         std::chrono::milliseconds takeoverWait = 10s;
         EditorServer::SessionStartHook sessionStartHook;
         EditorServer::SessionEndHook sessionEndHook;
+        bool stopOnDisconnect = false;
     };
 
     /// A server whose peers the test chooses
@@ -477,6 +478,7 @@ namespace
             EXPECT_TRUE(server.SetTakeoverWait(options.takeoverWait));
             EXPECT_TRUE(server.SetSessionStartHook(options.sessionStartHook));
             EXPECT_TRUE(server.SetSessionEndHook(options.sessionEndHook));
+            EXPECT_TRUE(server.SetStopOnDisconnect(options.stopOnDisconnect));
             EXPECT_TRUE(server.SetAdmissionSummaryInterval(options.summaryInterval));
             EXPECT_TRUE(server.SetHandshakeRateLimit(options.bucket, options.bucketClock));
             EXPECT_TRUE(server.SetPeerAddressProvider([this](int) { return peer.Get(); }));
@@ -1589,6 +1591,43 @@ TEST(SessionPolicyTest, ACandidateThatHungUpWhileItWaitedGivesItsSlotBack)
     const auto response = Roundtrip(rig.server, next, CommandType::GetPlayState);
     ASSERT_TRUE(response.has_value());
     EXPECT_NE(response->type, ErrorType) << response->Text();
+}
+
+TEST(SessionPolicyTest, ASessionClosedForATakeoverDoesNotStopAHostThatStopsOnDisconnect)
+{
+    RigOptions options;
+    options.token = false;
+    options.stopOnDisconnect = true; // an editor-launched host: it ends with its client
+    Rig rig(options);
+    ASSERT_TRUE(rig.started);
+
+    auto first = std::make_unique<TestClient>(rig.server.GetPort());
+    ASSERT_TRUE(first->IsConnected());
+    ASSERT_TRUE(Roundtrip(rig.server, *first, CommandType::GetPlayState).has_value());
+
+    // The newest connection takes over: the first session ends, but that is not its client going away, so the host stays
+    TestClient second(rig.server.GetPort());
+    ASSERT_TRUE(second.IsConnected());
+    const auto response = Roundtrip(rig.server, second, CommandType::GetPlayState);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_NE(response->type, ErrorType) << response->Text();
+    EXPECT_TRUE(first->IsClosedWithin(5000));
+    Pump(rig.server, 300ms);
+    EXPECT_TRUE(rig.server.IsRunning());
+
+    // A session whose client goes away on its own does stop it, as before (this one takes over from the second, then leaves)
+    first.reset();
+    {
+        TestClient last(rig.server.GetPort());
+        ASSERT_TRUE(last.IsConnected());
+        ASSERT_TRUE(Roundtrip(rig.server, last, CommandType::GetPlayState).has_value());
+    }
+    const auto limit = std::chrono::steady_clock::now() + 10s;
+    while (rig.server.IsRunning() && std::chrono::steady_clock::now() < limit)
+    {
+        rig.server.ProcessCommands(10ms);
+    }
+    EXPECT_FALSE(rig.server.IsRunning()) << "the last session ended on its own";
 }
 
 // ==================== TCP keepalive on the session socket ====================

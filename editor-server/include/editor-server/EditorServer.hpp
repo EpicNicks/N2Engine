@@ -1109,6 +1109,10 @@ namespace N2Engine::Editor
         // thread takes the next hand-off (SessionLoop): not at the start of RunSession, where it would swallow a request
         // made between the take and that start.
         std::atomic<bool> _closeConnection{false};
+        // Set with _closeConnection when the request is a takeover or a preemption (not a revoked token): the session that
+        // ends for it does not stop a host that stops on disconnect, since its successor is a client that is there. Written
+        // and cleared where _closeConnection is (under _sessionMutex).
+        std::atomic<bool> _sessionReplaced{false};
         // The close flag of the connections that are not the session (pre-auth workers): never set
         std::atomic<bool> _neverClose{false};
         // Whether the current connection's Hello asked for ErrorCoded: set by HandleHello (main thread), reset when a
