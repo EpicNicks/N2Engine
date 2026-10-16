@@ -1,6 +1,7 @@
 #include "engine/scripting/LuaRuntime.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 
@@ -34,7 +35,8 @@ namespace N2Engine::Scripting
         constexpr int PanicPadding = 16;
 
         // The error object at `index` as text, without converting it: lua_tolstring on a number makes a new string,
-        // an allocation that, at the memory cap and outside a protected call, goes down the panic path
+        // an allocation that, at the memory cap and outside a protected call, goes down the panic path. A number is
+        // read as a number (lua_tointeger/lua_tonumber leave the object as it is) and formatted into a C++ buffer.
         std::string ErrorValueText(lua_State *L, const int index)
         {
             const int type = lua_type(L, index);
@@ -44,7 +46,50 @@ namespace N2Engine::Scripting
                 const char *text = lua_tolstring(L, index, &length);
                 return std::string(text, length);
             }
+            if (type == LUA_TNUMBER)
+            {
+                char number[64];
+                if (lua_isinteger(L, index))
+                {
+                    std::snprintf(number, sizeof(number), "%lld", static_cast<long long>(lua_tointeger(L, index)));
+                }
+                else
+                {
+                    std::snprintf(number, sizeof(number), "%.14g", static_cast<double>(lua_tonumber(L, index)));
+                }
+                return std::format("(a number error value: {})", number);
+            }
             return std::format("(a {} error value)", lua_typename(L, type));
+        }
+
+        // What a log line may show of text that came from a script or a path: control characters replaced by '?',
+        // cut at 100 bytes on a character boundary (the same rule as the editor host's SanitizeForLog)
+        std::string SanitizeForLog(std::string_view text)
+        {
+            constexpr std::size_t MaxBytes = 100;
+            bool truncated = false;
+            if (text.size() > MaxBytes)
+            {
+                std::size_t cut = MaxBytes;
+                while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+                {
+                    --cut;
+                }
+                text = text.substr(0, cut);
+                truncated = true;
+            }
+            std::string result;
+            result.reserve(text.size() + 3);
+            for (const char c : text)
+            {
+                const auto byte = static_cast<unsigned char>(c);
+                result += byte < 0x20 || byte == 0x7F ? '?' : c;
+            }
+            if (truncated)
+            {
+                result += "...";
+            }
+            return result;
         }
     }
 
@@ -625,6 +670,16 @@ namespace N2Engine::Scripting
             moduleTable = emptyTable();
         }
 
+        if (!moduleTable.valid())
+        {
+            // The empty table could not be made (the memory cap): nothing is stored, so a later require runs the
+            // module again instead of being handed nil as the module
+            _loadedModules.erase(moduleName);
+            Logger::Error(std::format("Failed to load module {}: {}", moduleName, MemoryErrorText));
+            return moduleTable;
+        }
+        // (A reference copy outside a protected call, as is result[0] above: see the known limitation in
+        // docs/scripting-lua.html, follow-up sec-lua-registry-reserve)
         _loadedModules[moduleName] = moduleTable;
         Logger::Info(std::format("Loaded Lua module: {}", moduleName));
 
@@ -648,9 +703,11 @@ namespace N2Engine::Scripting
         std::string moduleName = PathToModuleName(path);
 
         _loadedModules.erase(moduleName);
-        // A hot reload is an outermost entry no Lua call protects (a client's WriteTextAsset on the editor host): an
-        // allocation outside a protected call that fails at the memory cap (a sol reference copy, say) comes down the
-        // panic path as a C++ exception, which is reported here instead of leaving into the host's command handling
+        // A hot reload is an outermost entry no Lua call protects (a client's WriteTextAsset on the editor host): a C++
+        // exception from it (an allocation outside a protected call failing at the memory cap, which comes down the
+        // panic path) is reported here instead of leaving into the host's command handling, and one failing reload
+        // callback does not stop the others. Not covered: a sol reference created or copied outside a protected call
+        // is noexcept, so its failure ends the process before any catch (known limitation, docs/scripting-lua.html)
         const auto guarded = [this, &moduleName](const auto &step)
         {
             const std::uint64_t panicsBefore = PanicCount();
@@ -661,12 +718,13 @@ namespace N2Engine::Scripting
             catch (const std::exception &e)
             {
                 RecoverAfterPanic(panicsBefore);
-                Logger::Error(std::format("Reloading module {} failed: {}", moduleName, e.what()));
+                Logger::Error(std::format("Reloading module {} failed: {}", SanitizeForLog(moduleName),
+                                          SanitizeForLog(e.what())));
             }
             catch (...)
             {
                 RecoverAfterPanic(panicsBefore);
-                Logger::Error(std::format("Reloading module {} failed", moduleName));
+                Logger::Error(std::format("Reloading module {} failed", SanitizeForLog(moduleName)));
             }
         };
         guarded([&] { LoadScriptAsModule(path, script); });

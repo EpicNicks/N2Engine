@@ -496,29 +496,40 @@ TEST_F(LuaBudgetTest, TheEnginesLoadingKeepsOneValueOfAChunkOnTheStack)
 TEST_F(LuaBudgetTest, ANumberErrorObjectIsReportedWithoutConvertingIt)
 {
     // Converting a number error object to text makes a new string: at the memory cap, outside a protected call, that
-    // allocation would go down the panic path (out of a destructor, std::terminate). The engine reads only strings.
+    // allocation would go down the panic path (out of a destructor, std::terminate). The engine reads a string as it is
+    // and formats a number from its value into a C++ buffer, never converting the Lua object.
     // (A chunk or a method call goes through sol's default message handler, a traceback, which already hands back a
     // string; ProtectedCall has no handler, so its error object is the script's value itself.)
-    sol::table raising;
+    const auto readError = [](const char *errorValue)
     {
-        const sol::protected_function_result made =
-            Run("return setmetatable({}, {__index = function(self, key) error(0.123) end})");
-        ASSERT_TRUE(made.valid()) << ErrorOf(made);
-        raising = made[0].get<sol::table>();
-    }
-    std::string accessError;
-    EXPECT_FALSE(Runtime().ProtectedCall([&] { (void)raising["anything"].valid(); }, accessError));
-    // Everywhere: never the number converted to text
-    EXPECT_EQ(accessError.find("0.123"), std::string::npos) << accessError;
+        sol::table raising;
+        {
+            const sol::protected_function_result made = Run(
+                std::string("return setmetatable({}, {__index = function(self, key) error(") + errorValue + ") end})");
+            EXPECT_TRUE(made.valid()) << ErrorOf(made);
+            if (!made.valid())
+            {
+                return std::string();
+            }
+            raising = made[0].get<sol::table>();
+        }
+        std::string accessError;
+        EXPECT_FALSE(Runtime().ProtectedCall([&] { (void)raising["anything"].valid(); }, accessError));
+        return accessError;
+    };
+    const std::string fraction = readError("0.123");
+    const std::string integer = readError("404");
 #if (defined(_MSC_VER) && (defined(_DEBUG) || defined(N2ENGINE_DEBUG))) || defined(N2ENGINE_PLATFORM_WEB)
-    // MSVC Debug: the longjmp out of the body runs C++ destructors that pop the stack, so the slot Lua takes as the
-    // error object can be another value (seen: the __index function, "(a function error value)"; a string slot, such
-    // as the key, would be reported as it is). The known limitation in docs/scripting-lua.html (resource limits,
-    // "Known limitation"). The web build is included because its longjmp is a WebAssembly exception
-    // (-fwasm-exceptions), which can run C++ cleanups on the way as MSVC's does (not observed there).
-    EXPECT_FALSE(accessError.empty());
+    // MSVC Debug and the web build: the longjmp out of the body runs C++ cleanups that pop the stack (MSVC by design;
+    // on the web build longjmp is a WebAssembly exception), so the slot Lua takes as the error object can be another
+    // value (seen on MSVC Debug: the __index function, "(a function error value)"; a string slot, such as the key,
+    // would be reported as it is). The known limitation in docs/scripting-lua.html (resource limits). Only a text is
+    // required there.
+    EXPECT_FALSE(fraction.empty());
+    EXPECT_FALSE(integer.empty());
 #else
-    EXPECT_EQ(accessError, "(a number error value)");
+    EXPECT_EQ(fraction, "(a number error value: 0.123)");
+    EXPECT_EQ(integer, "(a number error value: 404)");
 #endif
 }
 
