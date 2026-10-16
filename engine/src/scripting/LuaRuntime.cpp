@@ -262,6 +262,13 @@ namespace N2Engine::Scripting
         _guard->state = _lua.lua_state();
         _guard->Arm();
 
+        // Keeps alive, for the life of the state, the string sol looks its default error handler up by (a global named
+        // with it, set by sol::state): each lookup then finds the string instead of making it, so it allocates nothing
+        // (where Lua's errors are C++ exceptions, the web build and MSVC Debug, a lookup that failed to allocate inside
+        // one of sol's noexcept constructors would end the process even in a protected call)
+        lua_pushstring(_lua.lua_state(), sol::detail::default_handler_name());
+        luaL_ref(_lua.lua_state(), LUA_REGISTRYINDEX);
+
         // No package library: the engine's require (SetupModuleSystem) loads modules through ResourceLoader,
         // and package only added ways around it (loadlib and the C searchers load native code; searchpath
         // and the file searcher open arbitrary paths)
@@ -539,7 +546,38 @@ namespace N2Engine::Scripting
     {
         // Text only: a project .lua asset holding precompiled bytecode would otherwise run as-is
         const LuaBudgetScope budget;
-        return _lua.safe_script(source, sol::script_pass_on_error, chunkName, sol::load_mode::text);
+        // What sol's safe_script does, with Lua's own API: safe_script builds a sol::protected_function, whose
+        // constructor looks up sol's default error handler (the traceback function the state registered) through a
+        // noexcept path. Outside any protected call that lookup can fail at the memory cap, and the panic function's
+        // exception then meets a noexcept frame of sol's (std::terminate) instead of reaching a catch. Here the lookup
+        // is one lua_getglobal in this function, whose exception goes to the caller's catch. Loading is protected by
+        // Lua itself; the call is a plain lua_pcall with that handler, and the result is sol's own stack-based result.
+        lua_State *L = _lua.lua_state();
+        const int base = lua_gettop(L);
+        lua_getglobal(L, sol::detail::default_handler_name()); // base + 1: the handler, or nil
+        const int handlerIndex = base + 1;
+        const int loadStatus = luaL_loadbufferx(L, source.data(), source.size(), chunkName.c_str(), "t");
+        if (loadStatus != LUA_OK)
+        {
+            lua_remove(L, handlerIndex); // the error object is left where the handler was
+            return sol::protected_function_result(L, lua_absindex(L, -1), 0, 1, static_cast<sol::call_status>(loadStatus));
+        }
+        int callStatus = LUA_OK;
+        try
+        {
+            callStatus = lua_pcall(L, 0, LUA_MULTRET, lua_isnil(L, handlerIndex) ? 0 : handlerIndex);
+        }
+        catch (const std::exception &e)
+        {
+            // A C++ exception that came through the call (not an error Lua raised): reported as an error, as sol does
+            lua_pushstring(L, e.what());
+            lua_remove(L, handlerIndex);
+            return sol::protected_function_result(L, lua_gettop(L), 0, 1, sol::call_status::runtime);
+        }
+        lua_remove(L, handlerIndex); // the function's results, from base + 1, are all that is left above the base
+        const int returnCount = lua_gettop(L) - base;
+        return sol::protected_function_result(L, base + 1, returnCount, returnCount,
+                                              static_cast<sol::call_status>(callStatus));
     }
 
     sol::protected_function_result LuaRuntime::RunChunk(const std::string_view source, const std::string &chunkName)
