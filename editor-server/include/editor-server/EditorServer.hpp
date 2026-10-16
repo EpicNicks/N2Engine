@@ -333,6 +333,8 @@ namespace N2Engine::Editor
         [[nodiscard]] uint64_t SessionHandoffs() const { return _sessionHandoffs.load(); }
         /// Slots in use right now (any thread); 0 when the server isn't running
         [[nodiscard]] size_t PreAuthSlotsInUse() const;
+        /// Connections that were given a pre-auth slot since the server started (any thread); 0 when it isn't running
+        [[nodiscard]] uint64_t PreAuthAdmittedConnections() const;
 
         // ==================== Failed-Hello rate limiting ====================
 

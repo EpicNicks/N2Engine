@@ -2286,6 +2286,11 @@ namespace N2Engine::Editor
         return _running && _slots.has_value() ? _slots->InUse() : 0;
     }
 
+    uint64_t EditorServer::PreAuthAdmittedConnections() const
+    {
+        return _running && _slots.has_value() ? _slots->TotalCounters().admitted : 0;
+    }
+
     std::chrono::steady_clock::time_point EditorServer::ConnectionNow() const
     {
         return _connectionClock ? _connectionClock() : std::chrono::steady_clock::now();
