@@ -105,7 +105,7 @@
 <tr><td><code>Vector2</code></td><td><code>x, y</code></td><td>Scalar single operations; batch operations use AVX when compiled with it, or NEON on aarch64 <span class="badge">PR #128</span></td></tr>
 <tr><td><code>VectorN&lt;T, N&gt;</code></td><td><code>std::array&lt;T, N&gt;</code> (arithmetic <code>T</code>, <code>N &gt; 0</code>, checked by <code>static_assert</code>)</td><td>None</td></tr>
 <tr><td><code>Constants.hpp</code>, <code>Functions.hpp</code>, <code>Utils.hpp</code></td><td>Free functions and constants</td><td>&mdash;</td></tr>
-<tr><td><code>Random.hpp</code>, <code>UUID.hpp</code></td><td>Global Mersenne Twister helpers; 16-byte UUID</td><td>&mdash;</td></tr>
+<tr><td><code>Random.hpp</code>, <code>DeterministicRandom.hpp</code>, <code>UUID.hpp</code></td><td>Global random helpers (Mersenne Twister, or the seedable deterministic stream after <code>Random::Seed</code> <span class="badge">PR #172</span>); 16-byte UUID</td><td>&mdash;</td></tr>
 <tr><td><code>CpuInfo.hpp</code>, <code>MathRegistrar.hpp</code></td><td>CPU detection, <code>SIMDLevel</code>, <code>InitializeSIMD</code>/<code>SetSIMDLevel</code></td><td>&mdash;</td></tr>
 </tbody>
 </table>
@@ -430,12 +430,23 @@ positionable-&gt;SetRotation(Quaternion::LookRotation(target - position, Vector3
 
 <h2 id="random">Random</h2>
 <ul>
-<li>One process-wide <code>std::mt19937</code>, seeded once from <code>std::random_device</code> (<code>GetRandomEngine()</code>). There is no API to seed it, so sequences are not reproducible.</li>
+<li>Until <code>Random::Seed(n)</code> is called (never, by default), one process-wide <code>std::mt19937</code>, seeded once from <code>std::random_device</code> (<code>GetRandomEngine()</code>): sequences are not reproducible, and <code>std::uniform_*_distribution</code> is implementation-defined. This path is unchanged. <span class="badge">PR #172</span></li>
+<li><code>Random::Seed(n)</code> (Lua: <code>Random.Seed(n)</code>) switches every function below to one global <code>Math::DeterministicRandom</code> stream: the same seed gives the same sequence on every platform. Calling it again restarts the sequence; <code>Random::Unseed()</code> (C++ only, for tests and tools) goes back to <code>random_device</code>; <code>Random::IsSeeded()</code> says which is active. Seeded, <code>RandomFloat()</code> is in [0, 1) (24 random bits, exactly representable). The stream is one global: a script that seeds it restarts it for everything that draws from it.</li>
 <li><code>RandomFloat()</code> uses <code>uniform_real_distribution&lt;float&gt;(0, 1)</code>. That is nominally [0, 1), but the float distribution can round up and return exactly 1.0f (a known <code>std::generate_canonical</code> issue in common standard libraries), so treat the range as [0, 1], as the header comment says. <code>RandomRange(min, max)</code> scales it. <code>RandomInt(min, max)</code> is inclusive on both ends.</li>
-<li><code>RandomOnUnitCircle()</code> returns a unit <code>Vector2</code>; <code>RandomInUnitCircle()</code> is uniform over the disc (radius is <code>sqrt</code> of a uniform value).</li>
+<li><code>RandomOnUnitCircle()</code> returns a unit <code>Vector2</code>; <code>RandomInUnitCircle()</code> is uniform over the disc (unseeded: radius is <code>sqrt</code> of a uniform value and the angle goes through <code>std::cos</code>/<code>std::sin</code>; seeded: see below, no libm).</li>
 <li>The shared engine and the static distribution are not synchronised; do not call these from several threads at once.</li>
 </ul>
-<p class="src">Source: <code>math/include/math/Random.hpp</code>, <code>math/src/math/Random.cpp</code></p>
+<h3 id="deterministic-random">DeterministicRandom <span class="badge">PR #172</span></h3>
+<p><code>Math::DeterministicRandom</code> (<code>math/include/math/DeterministicRandom.hpp</code>) is a seedable generator whose sequence depends on the seed alone: SplitMix32-style mixing of a counter, the algorithm of <code>Particles::ParticleRandom</code> (the same seed gives the same <code>NextU32</code> sequence in both; a test keeps them equal). One object is one stream, so a system that must be reproducible on its own owns its own object. Not thread safe.</p>
+<ul>
+<li><code>NextU32()</code>, <code>NextFloat()</code> (in [0, 1), 24 bits, one exact multiplication) and <code>Range(lo, hi)</code> use integer arithmetic and no libm. <code>NextInt(min, max)</code> is inclusive on both ends, by rejection sampling (no modulo bias), and returns <code>min</code> when <code>max &lt;= min</code>.</li>
+<li><code>InUnitCircle()</code> and <code>OnUnitCircle()</code> sample points of the grid of odd integers in [-65535, 65535]&sup2; (one <code>NextU32</code> per try) and keep those inside the disc of radius 65536. The first divides by 65536 (exact); the second divides by the <code>sqrt</code> of the integer squared length. <code>sqrt</code> and division are each one correctly rounded IEEE operation, so the result is the same wherever doubles are IEEE; there is no <code>sin</code> or <code>cos</code>. About 78.5% of tries are accepted, so a sample takes about 1.27 draws.</li>
+</ul>
+<div class="callout note" id="design-random-seed">
+<p class="callout-title">Design decision: seeding is opt-in, and one call switches the whole global Random <span class="badge">PR #172</span></p>
+<p>Nothing seeds <code>Random</code> on its own: with no <code>Seed</code> call every project, scene and test behaves as before, and the unseeded functions run the same code as before. The seed is an explicit call (a script or C++), not a project setting, because the right moment is the game's: a replay or a netcode session seeds from its own session value. Randomness that must not be reproducible (a shuffled menu) should not draw from <code>Random.*</code> in a seeded game; UUIDs have their own generator and are not affected. The rejection loop means a call has no fixed number of draws, which is fine for one stream used by one simulation but is the reason to give each independent simulation its own <code>DeterministicRandom</code> rather than interleave draws on the global one.</p>
+</div>
+<p class="src">Source: <code>math/include/math/Random.hpp</code>, <code>math/include/math/DeterministicRandom.hpp</code>, <code>math/src/math/Random.cpp</code>; tests: <code>DeterministicRandomTest</code>, <code>SeededRandomTest</code> (math_tests), <code>DeterministicRandomParityTest</code>, <code>LuaRandomSeedTest</code> (engine_tests)</p>
 
 <h2 id="uuid">UUID</h2>
 <ul>

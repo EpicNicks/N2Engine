@@ -19,6 +19,7 @@
 #include "engine/input/InputMapping.hpp"
 #include "engine/input/InputValue.hpp"
 #include "engine/input/Input.hpp"
+#include <n2seed.h>
 #include "engine/scripting/bindings/LuaBindings.hpp"
 
 namespace N2Engine::Scripting
@@ -255,8 +256,28 @@ namespace N2Engine::Scripting
         _instance = nullptr;
     }
 
+    void LuaRuntime::SetLuaSeed(const std::optional<std::uint64_t> seed)
+    {
+        n2lua_setseed(seed.has_value() ? 1 : 0, seed.value_or(0));
+        if (_instance != nullptr && _instance->_stateLuaSeed != seed)
+        {
+            Logger::Warn("determinism.luaSeed changed after the Lua state was created; it applies after a restart");
+        }
+    }
+
+    std::optional<std::uint64_t> LuaRuntime::GetLuaSeed()
+    {
+        unsigned long long seed = 0;
+        if (n2lua_getseed(&seed) != 0)
+        {
+            return static_cast<std::uint64_t>(seed);
+        }
+        return std::nullopt;
+    }
+
     LuaRuntime::LuaRuntime()
-        : _guard(std::make_unique<Detail::LuaGuardState>()),
+        : _stateLuaSeed(GetLuaSeed()),
+          _guard(std::make_unique<Detail::LuaGuardState>()),
           _lua(&Detail::LuaGuardState::Panic, &Detail::LuaCappedAlloc, _guard.get())
     {
         _guard->state = _lua.lua_state();
