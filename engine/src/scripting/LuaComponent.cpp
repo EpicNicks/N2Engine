@@ -16,6 +16,8 @@
 #include <iterator>
 #include <limits>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace N2Engine::Scripting
 {
@@ -46,7 +48,7 @@ namespace N2Engine::Scripting
                 {
                     _scriptInstance["component"] = sol::lua_nil;
                     _scriptInstance["gameObject"] = sol::lua_nil;
-                });
+                }, 2);
             }
             catch (...)
             {
@@ -70,7 +72,7 @@ namespace N2Engine::Scripting
         Logger::Error(std::format("Lua {} error in {}: {}", what, _scriptPath.ToString(), message));
     }
 
-    bool LuaComponent::GuardedAccess(const std::function<void()> &body)
+    bool LuaComponent::GuardedAccess(const std::function<void()> &body, const int references)
     {
         // A Lua protected call, so an error in a metamethod (or the budget) is a return value here: never a panic
         // (a C++ exception thrown through Lua's C frames) and never a jump over this function's frames
@@ -78,7 +80,11 @@ namespace N2Engine::Scripting
         const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
         try
         {
-            if (LuaRuntime::Instance().ProtectedCall(body, error))
+            // The bodies make sol references (a method read as a function, the fields' tables and values): free registry
+            // slots first, so none of them has to grow the registry. Where Lua's errors are C++ exceptions (the web
+            // build, MSVC Debug) a failing luaL_ref inside sol's noexcept constructors ends the process even in a
+            // protected call; with the slots reserved it cannot fail. A body holds a few references at a time.
+            if (LuaRuntime::Instance().ReserveReferences(references, error) && LuaRuntime::Instance().ProtectedCall(body, error))
             {
                 return true;
             }
@@ -100,7 +106,7 @@ namespace N2Engine::Scripting
             return false;
 
         bool has = false;
-        GuardedAccess([&] { has = _scriptInstance[methodName].valid(); });
+        GuardedAccess([&] { has = _scriptInstance[methodName].valid(); }, 2);
         return has;
     }
 
@@ -122,7 +128,7 @@ namespace N2Engine::Scripting
         {
             // Reading the method can run the script's __index: do it in a protected call
             sol::protected_function func;
-            if (!GuardedAccess([&] { func = _scriptInstance[methodName].get<sol::protected_function>(); }))
+            if (!GuardedAccess([&] { func = _scriptInstance[methodName].get<sol::protected_function>(); }, 2))
             {
                 return;
             }
@@ -158,6 +164,15 @@ namespace N2Engine::Scripting
         if (_hasMissingScript || _faulted)
             return;
 
+        // The object makeArgument returns is a registry reference made outside a protected call (sol::make_object):
+        // free slots first (one is needed, a second is margin for a temporary), so it allocates nothing there (the
+        // userdata it wraps still can fail: caught below)
+        std::string reserveError;
+        if (!LuaRuntime::Instance().ReserveReferences(2, reserveError))
+        {
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(reserveError));
+            return;
+        }
         const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
         sol::object argument;
         try
@@ -237,16 +252,20 @@ namespace N2Engine::Scripting
         const LuaBudgetScope budget;
         // At most the chunk's first value stays on the stack (RunChunk), so the copies below, which allocate outside
         // a protected call, cannot leave more on the stack than the panic path's padding covers
-        auto result = LuaRuntime::Instance().RunChunk(_script->GetSourceCode(), _scriptPath.ToString());
-
-        if (!result.valid())
+        // A failure that is the memory cap's (or the budget's) is logged once per script, whatever the step
+        const auto logLoadFailure = [this](const std::string &error)
         {
-            const std::string error = LuaRuntime::Instance().LimitAwareError(
-                LuaRuntime::ErrorText(result), result.status() == sol::call_status::memory);
             if (!LuaRuntime::IsLimitError(error) || LuaRuntime::Instance().ShouldLogLimitError(_scriptPath.ToString()))
             {
                 Logger::Error(std::format("Failed to load script {}: {}", _scriptPath.ToString(), error));
             }
+        };
+        auto result = LuaRuntime::Instance().RunChunk(_script->GetSourceCode(), _scriptPath.ToString());
+
+        if (!result.valid())
+        {
+            logLoadFailure(LuaRuntime::Instance().LimitAwareError(
+                LuaRuntime::ErrorText(result), result.status() == sol::call_status::memory));
             return sol::table{};
         }
 
@@ -254,6 +273,16 @@ namespace N2Engine::Scripting
 
         if (result.return_count() > 0 && result[0].is<sol::table>())
         {
+            // The reference to the chunk's table is made outside a protected call (a stack value to a registry
+            // reference): free registry slots first (one is needed for it, one for the instance table the protected call
+            // below makes, and as many again as margin for temporaries), so at the memory cap it allocates nothing
+            // (sol's constructors are noexcept: a failure there would end the process)
+            std::string reserveError;
+            if (!LuaRuntime::Instance().ReserveReferences(4, reserveError))
+            {
+                logLoadFailure(LuaRuntime::Instance().LimitAwareError(reserveError));
+                return sol::table{};
+            }
             scriptClass = result[0];
         }
         else
@@ -262,24 +291,36 @@ namespace N2Engine::Scripting
             return sol::table{};
         }
 
-        // The VM runs a __gc finalizer with its debug hooks off, so the budget could not stop a looping one
-        if (const sol::type gcType = scriptClass.raw_get<sol::object>("__gc").get_type();
-            gcType != sol::type::lua_nil && gcType != sol::type::none)
-        {
-            Logger::Error(std::format("Script {} defines __gc, which scripts may not use", _scriptPath.ToString()));
-            return sol::table{};
-        }
-
-        // The table and the handles, so anything that copies them out of self can't reach freed objects later. All in a
-        // protected call: each allocates, and at the memory cap an allocation outside one would go down the panic path
+        // The VM runs a __gc finalizer with its debug hooks off, so the budget could not stop a looping one: the class
+        // is read for it (raw, with Lua's own API: no sol reference is made for the value, which is the script's) and
+        // the table and the handles are made, all in a protected call: each allocates, and at the memory cap an
+        // allocation outside one would go down the panic path. The table and the handles are made so anything that
+        // copies them out of self can't reach freed objects later.
         sol::table instance;
+        bool definesFinalizer = false;
         const bool bound = GuardedAccess([&]
         {
+            lua_State *L = scriptClass.lua_state();
+            scriptClass.push(L);
+            lua_pushstring(L, "__gc");
+            lua_rawget(L, -2);
+            const int gcType = lua_type(L, -1);
+            lua_pop(L, 2);
+            if (gcType != LUA_TNIL && gcType != LUA_TNONE)
+            {
+                definesFinalizer = true;
+                return;
+            }
             instance = lua.create_table();
             instance[sol::metatable_key] = scriptClass;
             instance["component"] = ComponentRef<LuaComponent>(*this);
             instance["gameObject"] = GameObjectRef(_gameObject);
         });
+        if (definesFinalizer)
+        {
+            Logger::Error(std::format("Script {} defines __gc, which scripts may not use", _scriptPath.ToString()));
+            return sol::table{};
+        }
         if (!bound)
         {
             return sol::table{};
@@ -308,7 +349,8 @@ namespace N2Engine::Scripting
             return;
         }
 
-        _scriptInstance = instance;
+        // Moved, not copied: a copy is a registry reference made outside a protected call (see ReserveReferences)
+        _scriptInstance = std::move(instance);
         _hasMissingScript = false;
         // The script's metamethods can run in every step below, outside a protected call
         const bool setUp = GuardedAccess([&]
@@ -351,10 +393,9 @@ namespace N2Engine::Scripting
 
     sol::table LuaComponent::RetireScriptInstance()
     {
-        sol::table previous = _scriptInstance;
-        if (!previous.valid())
+        if (!_scriptInstance.valid())
         {
-            return previous;
+            return sol::table{};
         }
 
         const LuaBudgetScope budget;
@@ -376,11 +417,12 @@ namespace N2Engine::Scripting
         _alive = std::make_shared<bool>(true);
         GuardedAccess([&]
         {
-            previous["component"] = sol::lua_nil;
-            previous["gameObject"] = sol::lua_nil;
-        });
-        _scriptInstance = sol::lua_nil;
-        return previous;
+            _scriptInstance["component"] = sol::lua_nil;
+            _scriptInstance["gameObject"] = sol::lua_nil;
+        }, 2);
+        // The instance leaves the component by a move: a copy would be a registry reference made outside a protected
+        // call (see ReserveReferences), and the member is empty afterwards, as `= sol::lua_nil` left it
+        return std::move(_scriptInstance);
     }
 
     void LuaComponent::CopyReferenceFields(const sol::table &from)
@@ -882,8 +924,7 @@ namespace N2Engine::Scripting
         script.assetType = script.typeName;
         fields.push_back(std::move(script));
 
-        sol::table instance = _scriptInstance;
-        if (!instance.valid())
+        if (!_scriptInstance.valid())
         {
             return fields;
         }
@@ -899,37 +940,135 @@ namespace N2Engine::Scripting
             Logger::Warn(std::format("Lua error reading the fields of {}: {}", _scriptPath.ToString(), error));
             return false;
         };
-        sol::optional<sol::table> declared;
-        if (!guarded([&] { declared = instance["SerializableFields"].get<sol::optional<sol::table>>(); }) || !declared)
+        // The declarations are read with Lua's own API into plain C++ data: a sol reference made for each key, value or
+        // table would be a registry reference (luaL_ref), and where Lua's errors are C++ exceptions (the web build, MSVC
+        // Debug) one that fails at the memory cap ends the process even inside a protected call, as outside one. The
+        // instance is pushed on the stack, which keeps it alive while the reads run its metamethods (a SetScript from
+        // one of them cannot free it).
+        enum class DefaultKind
+        {
+            Other,
+            Integer,
+            Float,
+            Bool,
+            String,
+            Vector3
+        };
+        struct Declaration
+        {
+            std::string name;
+            bool isDefinition = false; // { default = 5, type = "..." } rather than the shorthand `speed = 5`
+            std::string declaredType;
+            DefaultKind defaultKind = DefaultKind::Other; // what the default (or the shorthand value) is
+        };
+        const auto classify = [](lua_State *state, const int index)
+        {
+            switch (lua_type(state, index))
+            {
+            case LUA_TNUMBER:
+                return lua_isinteger(state, index) != 0 ? DefaultKind::Integer : DefaultKind::Float;
+            case LUA_TBOOLEAN:
+                return DefaultKind::Bool;
+            case LUA_TSTRING:
+                return DefaultKind::String;
+            default:
+                return sol::stack_object(state, index).is<Math::Vector3>() ? DefaultKind::Vector3
+                                                                            : DefaultKind::Other;
+            }
+        };
+
+        // The state is read once, before any script code runs: a metamethod can retire the instance (SetScript), which
+        // empties the member and nulls its state
+        lua_State *const luaState = _scriptInstance.lua_state();
+        std::vector<Declaration> declarations;
+        bool declared = false;
+        if (!guarded([&]
+        {
+            lua_State *state = luaState;
+            const int base = lua_gettop(state);
+            _scriptInstance.push(state);
+            lua_getfield(state, -1, "SerializableFields");
+            if (lua_type(state, -1) == LUA_TTABLE)
+            {
+                declared = true;
+                const int table = lua_gettop(state);
+                lua_pushnil(state);
+                while (lua_next(state, table) != 0)
+                {
+                    // A field is named by a string (a table can be keyed by anything: the script's own business)
+                    if (lua_type(state, -2) == LUA_TSTRING)
+                    {
+                        Declaration declaration;
+                        std::size_t length = 0;
+                        const char *text = lua_tolstring(state, -2, &length);
+                        declaration.name.assign(text, length);
+                        // As ExtractSerializableFields reads it: sol's table check accepts a userdata too
+                        declaration.isDefinition = lua_type(state, -1) == LUA_TTABLE || lua_type(state, -1) == LUA_TUSERDATA;
+                        if (!declaration.isDefinition)
+                        {
+                            declaration.defaultKind = classify(state, -1);
+                        }
+                        declarations.push_back(std::move(declaration));
+                    }
+                    lua_pop(state, 1);
+                }
+            }
+            lua_settop(state, base);
+        }) || !declared)
         {
             return fields;
         }
 
-        std::vector<FieldInfo> scriptFields;
-        for (const auto &[key, value] : *declared)
+        // A definition's type and default are read one definition at a time, each in a protected call of its own (they
+        // can run the definition's metamethods): one that fails leaves that field to its default, the others unaffected
+        for (Declaration &declaration : declarations)
         {
-            // A field is named by a string (a table can be keyed by anything: the script's own business)
-            if (key.get_type() != sol::type::string)
+            if (!declaration.isDefinition)
             {
                 continue;
             }
+            guarded([&]
+            {
+                // An earlier definition's metamethod may have retired the instance: nothing left to read
+                if (!_scriptInstance.valid())
+                {
+                    return;
+                }
+                lua_State *state = luaState;
+                const int base = lua_gettop(state);
+                _scriptInstance.push(state);
+                lua_getfield(state, -1, "SerializableFields");
+                if (lua_type(state, -1) == LUA_TTABLE)
+                {
+                    lua_pushlstring(state, declaration.name.data(), declaration.name.size());
+                    lua_rawget(state, -2);
+                    if (lua_type(state, -1) == LUA_TTABLE || lua_type(state, -1) == LUA_TUSERDATA)
+                    {
+                        const int definition = lua_gettop(state);
+                        lua_getfield(state, definition, "type");
+                        if (lua_type(state, -1) == LUA_TSTRING)
+                        {
+                            std::size_t length = 0;
+                            const char *text = lua_tolstring(state, -1, &length);
+                            declaration.declaredType.assign(text, length);
+                        }
+                        lua_pop(state, 1);
+                        lua_getfield(state, definition, "default");
+                        declaration.defaultKind = classify(state, -1);
+                    }
+                }
+                lua_settop(state, base);
+            });
+        }
+
+        std::vector<FieldInfo> scriptFields;
+        for (const Declaration &declaration : declarations)
+        {
             FieldInfo info;
-            info.name = key.as<std::string>();
+            info.name = declaration.name;
             info.displayName = DefaultDisplayName(info.name);
             info.container = "scriptData";
-
-            // Either { default = 5, type = "..." } or the shorthand `speed = 5`
-            std::string declaredType;
-            sol::object defaultValue = value;
-            if (value.is<sol::table>())
-            {
-                const sol::table definition = value.as<sol::table>();
-                guarded([&]
-                {
-                    declaredType = definition.get_or<std::string>("type", "");
-                    defaultValue = definition.get<sol::object>("default");
-                });
-            }
+            const std::string &declaredType = declaration.declaredType;
 
             if (declaredType == "GameObject")
             {
@@ -966,27 +1105,24 @@ namespace N2Engine::Scripting
                 info.kind = FieldKind::Vector3;
                 info.typeName = "Vector3";
             }
-            else if (defaultValue.get_type() == sol::type::number)
+            else if (declaration.defaultKind == DefaultKind::Integer || declaration.defaultKind == DefaultKind::Float)
             {
                 // As ExtractSerializableFields stores it: a Lua integer is an integer
-                lua_State *L = defaultValue.lua_state();
-                defaultValue.push(L);
-                const bool isInteger = lua_isinteger(L, -1) != 0;
-                lua_pop(L, 1);
+                const bool isInteger = declaration.defaultKind == DefaultKind::Integer;
                 info.kind = isInteger ? FieldKind::Int : FieldKind::Float;
                 info.typeName = isInteger ? "int" : "float";
             }
-            else if (defaultValue.is<bool>())
+            else if (declaration.defaultKind == DefaultKind::Bool)
             {
                 info.kind = FieldKind::Bool;
                 info.typeName = "bool";
             }
-            else if (defaultValue.is<std::string>())
+            else if (declaration.defaultKind == DefaultKind::String)
             {
                 info.kind = FieldKind::String;
                 info.typeName = "string";
             }
-            else if (defaultValue.is<Math::Vector3>())
+            else if (declaration.defaultKind == DefaultKind::Vector3)
             {
                 info.kind = FieldKind::Vector3;
                 info.typeName = "Vector3";

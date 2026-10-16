@@ -30,6 +30,13 @@ set_target_properties(engine PROPERTIES
 # The engine version (engine/Version.hpp): the root project's (engine declares no project of its own)
 target_compile_definitions(engine PRIVATE N2ENGINE_VERSION="${PROJECT_VERSION}")
 
+# The Lua allocator's fault hook (LuaRuntime.cpp): lets a test refuse the state's growth allocations from the Nth on, so
+# a registry growth fails where the test wants it. Compiled in only when the unit tests are built; a shipped build
+# (N2ENGINE_BUILD_TESTS=OFF) has neither the hook's functions nor its check in the allocator.
+if (N2ENGINE_BUILD_TESTS)
+    target_compile_definitions(engine PRIVATE N2ENGINE_LUA_ALLOC_FAULT_HOOK=1)
+endif ()
+
 # Debug define — works with multi-config generators (VS) too.
 target_compile_definitions(engine PUBLIC
     $<$<CONFIG:Debug>:N2ENGINE_DEBUG=1>
