@@ -144,7 +144,10 @@ namespace N2Engine::Editor
         bool Start(int port, const std::string &bindAddress = DefaultBindAddress);
         /// Main thread. Disconnects any client and joins the acceptor, every pre-auth worker and the session thread (each
         /// polls for stop between waits of at most 100 ms, so this returns within about that, plus the time a command the
-        /// session is waiting on takes to be abandoned: closing the queue wakes it). Sockets are closed only after the joins.
+        /// session is waiting on takes to be abandoned: closing the queue wakes it). No thread closes a socket another
+        /// thread waits on: each connection is closed by the thread that owns it as it ends, and what is left (a
+        /// connection still queued for a worker or waiting in the hand-off, the listening socket) is closed here after
+        /// the joins.
         void Stop();
         [[nodiscard]] bool IsRunning() const { return _running; }
         /// The port listened on (useful after Start(0)); 0 when not started
@@ -723,6 +726,8 @@ namespace N2Engine::Editor
         void ServerLoop(int listenSocket);
         /// The summary line for the connections the acceptor closed without a word since the last one (when there are any)
         void LogAdmissionSummary(bool force);
+        /// The acceptor's decision about one accepted socket: closes it, or queues it for a worker with a slot
+        void AdmitAcceptedSocket(int clientSocket);
         /// A pre-auth worker thread: takes jobs until the server stops
         void PreAuthWorkerLoop();
         /// One connection on a worker: TLS, then (with an access token) one Hello, then the offer to the session
@@ -752,6 +757,11 @@ namespace N2Engine::Editor
         void ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload);
         /// Network thread: the Logger isn't thread-safe, so log lines are posted to the main thread
         void PostLog(std::string message, bool isWarning = false);
+        /// PostLog, then waits (at most 500 ms, and not once the server is stopping) for the main thread to have written
+        /// the line. A pre-auth worker uses it for the line about a refused Hello, so the line is written before the
+        /// refusal reaches the client, as it was when the main thread refused the Hello itself (a client, or a test, that
+        /// has seen the refusal can rely on its line). The bound keeps a busy main thread from holding a worker.
+        void PostLogAndWait(std::string message, bool isWarning = false);
 
         // Command handlers
         void HandleHello(int clientSocket, const std::vector<uint8_t> &payload);

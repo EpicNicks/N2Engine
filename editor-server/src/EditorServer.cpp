@@ -1662,8 +1662,9 @@ namespace N2Engine::Editor
     {
         // The network thread never blocks on a socket for long (see Connection::WaitUntilReady), so clearing _running
         // stops it within one poll interval. Closing the queue wakes it if it is waiting for a command's
-        // result. Sockets are only closed once it has exited: closing or shutting down a socket another
-        // thread is blocked on doesn't reliably wake it (shutdown doesn't on Windows, close doesn't on Linux).
+        // result. A socket is only closed by the thread that owns it (as its connection ends) or, for what is left, here
+        // once every thread has exited: closing or shutting down a socket another thread is blocked on doesn't reliably
+        // wake it (shutdown doesn't on Windows, close doesn't on Linux).
         _running = false;
         _commands.Close();
         // Wake what waits on a condition variable (the workers for a job, the session thread for a hand-off, an offer for
@@ -1766,6 +1767,27 @@ namespace N2Engine::Editor
                 Logger::Info(message);
             return CommandQueue::Response{};
         });
+    }
+
+    void EditorServer::PostLogAndWait(std::string message, const bool isWarning)
+    {
+        std::future<CommandQueue::Response> written = _commands.Enqueue([message = std::move(message), isWarning]
+        {
+            if (isWarning)
+                Logger::Warn(message);
+            else
+                Logger::Info(message);
+            return CommandQueue::Response{};
+        });
+        const auto giveUpAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (_running && std::chrono::steady_clock::now() < giveUpAt)
+        {
+            // Ready also when the queue was closed (the task was dropped, which breaks its promise)
+            if (written.wait_for(std::chrono::milliseconds(5)) == std::future_status::ready)
+            {
+                return;
+            }
+        }
     }
 
     bool EditorServer::SetAccessToken(std::string token)
@@ -2440,88 +2462,102 @@ namespace N2Engine::Editor
                 continue;
             }
 
-            // The connection is somebody's to close from here on: whichever way this iteration ends, the job (and its slot,
-            // once it has one) goes out of scope and closes the socket before it frees the slot
-            PreAuthJob job;
-            job.connection.reset(new Connection(clientSocket, ConnectionEnv{}));
-            Connection &connection = *job.connection;
-
-            // Every send and recv on the connection must be able to give way to a deadline: a blocking send() of a large
-            // frame to a client that isn't reading would otherwise sit in the kernel for ever, past any deadline
-            if (!SetSocketNonBlocking(clientSocket))
-            {
-                PostLog("Dropping an editor connection: its socket couldn't be made non-blocking (error " +
-                            std::to_string(SOCKET_ERROR_CODE) + ")",
-                        true);
-                continue;
-            }
-            if (_acceptedSocketHook)
-            {
-                _acceptedSocketHook(clientSocket);
-            }
-
-            // Who connected, before anything costly. A peer that is backed off for failed Hellos is closed right here: no
-            // TLS handshake, no Hello, nothing read from it. One with failures on record gets the shorter budget.
+            // Nothing may escape this thread (that would terminate the host): a connection that can't be admitted (say, no
+            // memory for its job) is dropped, closed by its job, and the loop accepts the next
             try
             {
-                connection.peer = _peerAddressProvider ? _peerAddressProvider(clientSocket) : ReadSocketPeer(clientSocket);
+                AdmitAcceptedSocket(clientSocket);
             }
             catch (...)
             {
-                // An address nobody could read is Unknown, which is a peer like any other
+                PostLog("Dropping an editor connection after an unexpected error at accept", true);
             }
-            std::chrono::milliseconds helloBudget = _helloTimeout;
-            std::chrono::milliseconds handshakeBudget = _tlsHandshakeTimeout;
-            if (_rateLimiter.has_value())
-            {
-                const RateLimiter::Admission admission = _rateLimiter->AdmitConnection(connection.peer);
-                if (!admission.allowed)
-                {
-                    ++_rateLimitedConnections;
-                    continue;
-                }
-                if (admission.suppressed > 0)
-                {
-                    PostLog(std::format("Rate limit: {} may connect again; {} connection(s) were closed during its backoff",
-                                        RateLimitSubject(connection.peer), admission.suppressed));
-                }
-                if (admission.priorOffender)
-                {
-                    helloBudget = std::min(helloBudget, _rateLimiter->Policy().priorOffenderBudget);
-                    handshakeBudget = std::min(handshakeBudget, _rateLimiter->Policy().priorOffenderBudget);
-                }
-            }
-
-            // A pre-auth slot, or the connection is closed at once (no TLS, no line: it is counted for the summary). The
-            // slot is taken before the handshake token, so a refusal for lack of a slot spends none of the rate budget.
-            job.slot = _slots->TryAcquire(connection.peer);
-            if (!job.slot)
-            {
-                ++_preAuthRefusedConnections;
-                continue;
-            }
-            // The handshake rate: the excess is closed before TLS (the slot goes back with the connection)
-            if (_handshakeBucket.has_value() && !_handshakeBucket->TryTake(connection.peer))
-            {
-                ++_preAuthRefusedConnections;
-                continue;
-            }
-
-            connection.env = MakeConnectionEnv(EnvKind::PreAuth, connection.peer.ToString());
-            job.helloBudget = helloBudget;
-            job.handshakeBudget = handshakeBudget;
-            // The tokens file is looked at before the connection's Hello is checked, so a token revoked since the last
-            // connection can't be used (this thread is the one that reloads)
-            ReloadTokens(false);
-
-            // At most one job per slot, so the queue holds at most as many as there are workers
-            {
-                const std::lock_guard lock(_jobMutex);
-                _jobs.push_back(std::move(job));
-            }
-            _jobCv.notify_one();
         }
         LogAdmissionSummary(true);
+    }
+
+    void EditorServer::AdmitAcceptedSocket(const int clientSocket)
+    {
+        // The connection is somebody's to close from here on: whichever way this iteration ends, the job (and its slot,
+        // once it has one) goes out of scope and closes the socket before it frees the slot
+        PreAuthJob job;
+        job.connection.reset(new Connection(clientSocket, ConnectionEnv{}));
+        Connection &connection = *job.connection;
+
+        // Every send and recv on the connection must be able to give way to a deadline: a blocking send() of a large
+        // frame to a client that isn't reading would otherwise sit in the kernel for ever, past any deadline
+        if (!SetSocketNonBlocking(clientSocket))
+        {
+            PostLog("Dropping an editor connection: its socket couldn't be made non-blocking (error " +
+                        std::to_string(SOCKET_ERROR_CODE) + ")",
+                    true);
+            return;
+        }
+        if (_acceptedSocketHook)
+        {
+            _acceptedSocketHook(clientSocket);
+        }
+
+        // Who connected, before anything costly. A peer that is backed off for failed Hellos is closed right here: no
+        // TLS handshake, no Hello, nothing read from it. One with failures on record gets the shorter budget.
+        try
+        {
+            connection.peer = _peerAddressProvider ? _peerAddressProvider(clientSocket) : ReadSocketPeer(clientSocket);
+        }
+        catch (...)
+        {
+            // An address nobody could read is Unknown, which is a peer like any other
+        }
+        std::chrono::milliseconds helloBudget = _helloTimeout;
+        std::chrono::milliseconds handshakeBudget = _tlsHandshakeTimeout;
+        if (_rateLimiter.has_value())
+        {
+            const RateLimiter::Admission admission = _rateLimiter->AdmitConnection(connection.peer);
+            if (!admission.allowed)
+            {
+                ++_rateLimitedConnections;
+                return;
+            }
+            if (admission.suppressed > 0)
+            {
+                PostLog(std::format("Rate limit: {} may connect again; {} connection(s) were closed during its backoff",
+                                    RateLimitSubject(connection.peer), admission.suppressed));
+            }
+            if (admission.priorOffender)
+            {
+                helloBudget = std::min(helloBudget, _rateLimiter->Policy().priorOffenderBudget);
+                handshakeBudget = std::min(handshakeBudget, _rateLimiter->Policy().priorOffenderBudget);
+            }
+        }
+
+        // A pre-auth slot, or the connection is closed at once (no TLS, no line: it is counted for the summary). The
+        // slot is taken before the handshake token, so a refusal for lack of a slot spends none of the rate budget.
+        job.slot = _slots->TryAcquire(connection.peer);
+        if (!job.slot)
+        {
+            ++_preAuthRefusedConnections;
+            return;
+        }
+        // The handshake rate: the excess is closed before TLS (the slot goes back with the connection)
+        if (_handshakeBucket.has_value() && !_handshakeBucket->TryTake(connection.peer))
+        {
+            ++_preAuthRefusedConnections;
+            return;
+        }
+
+        connection.env = MakeConnectionEnv(EnvKind::PreAuth, connection.peer.ToString());
+        job.helloBudget = helloBudget;
+        job.handshakeBudget = handshakeBudget;
+        // The tokens file is looked at before the connection's Hello is checked, so a token revoked since the last
+        // connection can't be used (this thread is the one that reloads)
+        ReloadTokens(false);
+
+        // At most one job per slot, so the queue holds at most as many as there are workers
+        {
+            const std::lock_guard lock(_jobMutex);
+            _jobs.push_back(std::move(job));
+        }
+        _jobCv.notify_one();
     }
 
     void EditorServer::PreAuthWorkerLoop()
@@ -2711,7 +2747,7 @@ namespace N2Engine::Editor
         {
             // A Hello that wouldn't even parse: it held a worker and proved nothing, so it counts like an unfinished one,
             // before its answer is sent (the answer is the one a failing command gets)
-            PostLog(std::format("Command 0x{:X} failed: {}", cmdType, failure), true);
+            PostLogAndWait(std::format("Command 0x{:X} failed: {}", cmdType, failure), true);
             countUnfinished();
             BufferWriter response;
             WriteError(response, "Command failed: " + failure);
@@ -2726,7 +2762,7 @@ namespace N2Engine::Editor
             hello = std::move(payload);
             return true;
         }
-        PostLog(evaluation.warning, true);
+        PostLogAndWait(evaluation.warning, true);
         // The outcome is counted before the answer is sent, so a client that sees the refusal and connects again meets
         // the backoff it earned. A good token and an old client (the version) is not a failure of the address.
         if (rateLimited && evaluation.result == HelloEvaluation::Result::TokenRefused)
