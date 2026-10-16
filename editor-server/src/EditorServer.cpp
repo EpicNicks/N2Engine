@@ -1743,6 +1743,20 @@ namespace N2Engine::Editor
         return _tokens;
     }
 
+    bool EditorServer::HelloTokenIsValid(const std::vector<uint8_t> &payload) const
+    {
+        try
+        {
+            BufferReader reader(payload);
+            const HelloCmd cmd = HelloCmd::Deserialize(reader);
+            return Authenticate(cmd.token, cmd.user).has_value();
+        }
+        catch (...)
+        {
+            return false; // a malformed Hello authenticates nobody
+        }
+    }
+
     std::optional<EditorServer::ConnectionIdentity> EditorServer::Authenticate(const std::string_view token,
                                                                                 const std::string_view user) const
     {
@@ -1977,7 +1991,7 @@ namespace N2Engine::Editor
         if (outcome.user.has_value())
         {
             PostLog(std::format("Rate limit: user={} is backed off for {} ms after {} failed Hellos naming it, from any "
-                                "address; a Hello naming it is refused until then (last from peer={})",
+                                "address; a Hello naming it is still checked (the right token gets in and clears it, a wrong one is counted) (last from peer={})",
                                 LoggableClaimedUser(user), outcome.user->duration.count(), outcome.user->failures,
                                 peer.ToString()),
                     true);
@@ -2595,17 +2609,22 @@ namespace N2Engine::Editor
                 break;
             }
 
-            // A Hello on a host that counts failed ones: who it names is read here, on the network thread, which keeps the
-            // limiter's state its own. A user that is backed off is refused before its token is looked at.
+            // A Hello on a host that counts failed ones: who it names is read here, on the network thread. The token is
+            // checked BEFORE a user's backoff applies: a correct token always gets in (so an attacker who guesses a
+            // user's name cannot lock that user out), while a wrong one is still refused, counted and backs off further.
             const bool isHello = static_cast<CommandType>(cmdType) == CommandType::Hello;
             const bool rateLimited = gated && isHello && _rateLimiter.has_value();
             std::optional<std::string> helloUser;
             if (rateLimited && HasTokensFile())
             {
                 helloUser = UserNamedByHello(payload);
-                if (helloUser.has_value() && _rateLimiter->IsUserBackedOff(*helloUser))
+                if (helloUser.has_value() && _rateLimiter->IsUserBackedOff(*helloUser) && !HelloTokenIsValid(payload))
                 {
-                    helloRun = true; // refused for the user's backoff, not counted against this address
+                    // Counted like any wrong-token Hello (the user's backoff grows, the address is counted), before
+                    // the answer is sent; the answer is the backoff's, as before
+                    helloRun = true;
+                    LogRateLimitOutcome(_rateLimiter->RecordFailure(connection.peer, std::string_view(*helloUser)),
+                                        *helloUser, connection.peer);
                     BufferWriter response;
                     WriteError(response, RateLimitedError);
                     connection.Send(response.Data().data(), response.Size());

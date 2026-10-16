@@ -91,10 +91,39 @@ class Reader:
         return len(self.payload) - self.offset
 
 
+TLS_SERVER_NAME = "n2-editor-host"
+_tls_context = None
+
+
+def tls_client_context():
+    """The client context, built once per process and warmed up with an in-memory handshake (no network). The
+    process's first TLS handshake costs seconds of CPU on a slow runner (context set-up, RNG seeding, algorithm
+    fetches, key-share generation); doing it before the TCP connect keeps it out of the host's 5 s handshake budget,
+    which starts at accept. As before, the context accepts any certificate: the caller pins the fingerprint itself,
+    as a trust-on-first-use client does."""
+    global _tls_context
+    if _tls_context is None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        started = time.monotonic()
+        try:
+            # Writes a ClientHello into the outgoing BIO, then wants the server's reply, which never comes.
+            context.wrap_bio(ssl.MemoryBIO(), ssl.MemoryBIO(), server_hostname=TLS_SERVER_NAME).do_handshake()
+        except ssl.SSLWantReadError:
+            pass
+        except (ssl.SSLError, OSError) as error:
+            print("TLS warm-up ended early (ignored): %s" % error)
+        print("TLS client warm-up took %.0f ms" % ((time.monotonic() - started) * 1000.0))
+        _tls_context = context
+    return _tls_context
+
+
 def connect(port, tls=False, timeout=10.0):
     """Connects to 127.0.0.1:port. The host listens before it prints its ready line, so the first attempt should
     work; a few retries for safety. With tls, completes a handshake that accepts any certificate (the caller pins
-    the fingerprint itself, as a trust-on-first-use client does)."""
+    the fingerprint itself, as a trust-on-first-use client does). The TLS context is built and warmed up first."""
+    context = tls_client_context() if tls else None
     last_error = None
     for _ in range(10):
         try:
@@ -107,11 +136,11 @@ def connect(port, tls=False, timeout=10.0):
         raise SmokeFailure("Editor host never accepted a connection on port %d: %s" % (port, last_error))
     if not tls:
         return Connection(raw)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
     raw.settimeout(20.0)
-    return Connection(context.wrap_socket(raw, server_hostname="n2-editor-host"))
+    started = time.monotonic()
+    wrapped = context.wrap_socket(raw, server_hostname=TLS_SERVER_NAME)
+    print("TLS handshake took %.0f ms" % ((time.monotonic() - started) * 1000.0))
+    return Connection(wrapped)
 
 
 class Connection:

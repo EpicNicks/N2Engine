@@ -254,7 +254,7 @@ jobs:
 
       - name: Test
         if: needs.changes.outputs.docs_only != 'true'
-        run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure
+        run: ctest --test-dir build --build-config ${{ matrix.config }} --output-on-failure --timeout 600
         env:
           # Silent OpenAL output device; the runner has no sound card
           ALSOFT_DRIVERS: "null"
@@ -411,7 +411,7 @@ jobs:
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --timeout 600
         env:
           # A missing Vulkan device or validation layer fails the Vulkan renderer tests instead of skipping them, and the
           # device must be a CPU device (lavapipe), so a green run means they executed
@@ -536,7 +536,7 @@ jobs:
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --timeout 600
         env:
           # A missing Vulkan device or validation layer fails the Vulkan renderer tests instead of skipping them, and the
           # device must be a CPU device (lavapipe), so a green run means they executed
@@ -639,7 +639,7 @@ jobs:
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --timeout 600
         env:
           ALSOFT_DRIVERS: "null"
 

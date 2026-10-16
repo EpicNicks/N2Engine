@@ -799,6 +799,10 @@ namespace N2Engine::Editor
         /// The identity Hello would give a client with this token (and user, when it names one); nullopt when it doesn't
         /// match. Needs no authentication on a host without a token: that is an unauthenticated identity.
         [[nodiscard]] std::optional<ConnectionIdentity> Authenticate(std::string_view token, std::string_view user) const;
+        /// Whether the token (and user) a Hello payload carries would authenticate now; false for a payload that doesn't
+        /// parse. The network thread asks it before a user's backoff refuses a Hello: the same Authenticate (constant
+        /// time compare) the Hello handler uses, nothing is recorded.
+        [[nodiscard]] bool HelloTokenIsValid(const std::vector<uint8_t> &payload) const;
         [[nodiscard]] ConnectionIdentity CurrentIdentity() const;
         void SetIdentity(ConnectionIdentity identity);
         void ClearIdentity();
@@ -847,7 +851,7 @@ namespace N2Engine::Editor
         ConnectionClock _connectionClock;
         AcceptedSocketHook _acceptedSocketHook;
         // Rate limiting: the settings are set before Start only. The limiter is made by Start (so every run begins with
-        // empty tables) and used by the network thread only, so it has no lock.
+        // empty tables). It has its own mutex (every method), though only the network thread uses it today.
         bool _rateLimiting{true};
         RateLimitPolicy _rateLimitPolicy;
         RateLimiter::Clock _rateLimitClock;
