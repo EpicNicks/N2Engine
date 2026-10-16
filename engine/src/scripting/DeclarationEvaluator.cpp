@@ -57,8 +57,11 @@ local type, rawequal, rawget, next, pcall, setmetatable = type, rawequal, rawget
 local select, error = select, error
 local mathtype, mtoint, maxint = math.type, math.tointeger, math.maxinteger
 local ssub, sfind, srep, sformat = string.sub, string.find, string.rep, string.format
-local tinsert, tremove, tconcat, tunpack, tmove, tsort =
-    table.insert, table.remove, table.concat, table.unpack, table.move, table.sort
+-- The only C table functions still called, and only on plain tables this script filled itself (see below)
+local tconcat, tunpack, tsort = table.concat, table.unpack, table.sort
+-- The strings' metatable is shared by every string: protected, so a script cannot add __len, __newindex or another
+-- __index to it (getmetatable("") answers "protected")
+getmetatable("").__metatable = "protected"
 local MARK = "\1N2STUB\1"
 -- What a failed allocation raises (Lua's preregistered message): a pcall of the reader cannot hide it from the result
 local MEMERR = "not enough memory"
@@ -123,10 +126,11 @@ string.packsize = STUB
 -- of up to 2000 __index tables). So table.insert, remove, concat, unpack, move and sort are redone here in Lua: the
 -- length is read once, every element is read and written by Lua code (each access is counted), and the C functions
 -- are only handed plain tables this code filled itself (unpack, concat, sort with a Lua comparator). On top of that a
--- length, position or range above LOOPMAX (2^16, which no declaration needs) is refused before any loop: refuse()
+-- length or range above LOOPMAX (2^16, which no declaration needs) is refused before any loop: refuse()
 -- ends the evaluation as an exhausted budget, which pcall cannot catch, so a refused call is never silently wrong data.
--- A first argument that is not a table goes to the C function as it is (it raises at once; unpack of a string is
--- redone here too, a string's __index can be a chain as well).
+-- A first argument that is not a table never reaches a C table function: a string would pass its check through the
+-- strings' metatable and loop over missing keys in C. insert, remove, concat, move and sort raise the stock type error
+-- here; unpack (which takes any value) reads a string's elements in Lua like a table's.
 
 -- An integer argument as luaL_checkinteger reads it (an integer, an integral float, a numeric string), or an error
 local function intArg(v, argn, fname)
@@ -160,6 +164,12 @@ local function lengthOf(t, fname)
     end
     return n
 end
+-- The stock type error of a table argument (no userdata exists here, so only a real table passes)
+local function checkTable(v, argn, fname)
+    if type(v) ~= "table" then
+        error(sformat("bad argument #%d to '%s' (table expected, got %s)", argn, fname, type(v)), 3)
+    end
+end
 -- A range first..last of more than LOOPMAX elements (or one whose size overflows) is refused
 local function checkRange(first, last, fname)
     if last >= first and (last - first < 0 or last - first >= LOOPMAX) then
@@ -168,9 +178,7 @@ local function checkRange(first, last, fname)
 end
 
 table.insert = function(t, ...)
-    if type(t) ~= "table" then
-        return tinsert(t, ...)
-    end
+    checkTable(t, 1, "insert")
     local nargs = select("#", ...)
     if nargs ~= 1 and nargs ~= 2 then
         error("wrong number of arguments to 'insert'", 2)
@@ -182,9 +190,6 @@ table.insert = function(t, ...)
     end
     local p, v = ...
     local pos = intArg(p, 2, "insert")
-    if pos > LOOPMAX + 1 then
-        refuse("insert")
-    end
     if pos < 1 or pos > e then
         error("bad argument #2 to 'insert' (position out of bounds)", 2)
     end
@@ -195,22 +200,15 @@ table.insert = function(t, ...)
 end
 
 table.remove = function(t, ...)
-    if type(t) ~= "table" then
-        return tremove(t, ...)
-    end
+    checkTable(t, 1, "remove")
     local size = lengthOf(t, "remove")
     local pos = size
     local p = ...
     if p ~= nil then
         pos = intArg(p, 2, "remove")
     end
-    if pos ~= size then
-        if pos > LOOPMAX + 1 then
-            refuse("remove")
-        end
-        if pos < 1 or pos > size + 1 then
-            error("bad argument #2 to 'remove' (position out of bounds)", 2)
-        end
+    if pos ~= size and (pos < 1 or pos > size + 1) then
+        error("bad argument #2 to 'remove' (position out of bounds)", 2)
     end
     local removed = t[pos]
     for i = pos, size - 1 do
@@ -224,9 +222,7 @@ table.remove = function(t, ...)
 end
 
 table.concat = function(t, sep, i, j)
-    if type(t) ~= "table" then
-        return tconcat(t, sep, i, j)
-    end
+    checkTable(t, 1, "concat")
     local last = lengthOf(t, "concat")
     local first = 1
     if i ~= nil then
@@ -259,10 +255,9 @@ table.unpack = function(t, i, j)
         last = intArg(j, 3, "unpack")
     elseif type(t) == "table" then
         last = lengthOf(t, "unpack")
-    elseif type(t) == "string" then
-        last = #t
     else
-        return tunpack(t, first)
+        -- a string's byte length; any other value raises Lua's own length error here
+        last = #t
     end
     if first > last then
         return
@@ -281,9 +276,8 @@ table.move = function(a1, f, e, t, a2)
     if not explicit then
         a2 = a1
     end
-    if type(a1) ~= "table" or type(a2) ~= "table" then
-        return tmove(a1, f, e, t, a2)
-    end
+    checkTable(a1, 1, "move")
+    checkTable(a2, explicit and 5 or 1, "move")
     local from = intArg(f, 2, "move")
     local to = intArg(e, 3, "move")
     local dest = intArg(t, 4, "move")
@@ -311,9 +305,7 @@ local function lessThan(a, b)
     return a < b
 end
 table.sort = function(t, comp)
-    if type(t) ~= "table" then
-        return tsort(t, comp)
-    end
+    checkTable(t, 1, "sort")
     local n = lengthOf(t, "sort")
     if n > 1 then
         if comp ~= nil and type(comp) ~= "function" then
@@ -545,7 +537,7 @@ end
             return std::format("(a {} error value)", lua_typename(L, lua_type(L, -1)));
         }
 
-        // The table library's refusal (SetupScript: a length, position or range above MaxTableLoop): the evaluation
+        // The table library's refusal (SetupScript: a length or range above MaxTableLoop): the evaluation
         // ends as an exhausted budget. The message is the budget error's, so the sandbox's pcall and xpcall hand it on,
         // and from here on the hook raises on every instruction, as when the instruction count runs out. Called only
         // by the evaluator's own wrappers, with the name of the table function.

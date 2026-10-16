@@ -371,10 +371,7 @@ TEST_F(DeclarationEvaluatorTest, TableLibraryLoopsOverAHugeLengthOrRangeAreRefus
     ExpectTableLoopRefused(border + "table.concat(t) return {}");
     ExpectTableLoopRefused(border + "table.unpack(t) return {}");
     ExpectTableLoopRefused(border + "table.sort(t) return {}");
-    // Explicit positions and ranges (2^40 is a float: read as luaL_checkinteger reads it)
-    ExpectTableLoopRefused("table.insert({}, 2^40, 1) return {}");
-    ExpectTableLoopRefused("table.insert({ 1, 2, 3 }, '1e12', 1) return {}");
-    ExpectTableLoopRefused("table.remove({ 1, 2, 3 }, 2^40) return {}");
+    // Explicit ranges (2^40 is a float: read as luaL_checkinteger reads it)
     ExpectTableLoopRefused("table.unpack({}, 1, 2^30) return {}");
     ExpectTableLoopRefused("table.unpack('abc', math.mininteger, math.maxinteger) return {}");
     ExpectTableLoopRefused("table.concat({}, '', 1, 2^40) return {}");
@@ -401,6 +398,86 @@ TEST_F(DeclarationEvaluatorTest, TableLibraryLoopsOverAHugeLengthOrRangeAreRefus
         C.SerializableFields = { after = 1 }
         return C
     )LUA");
+}
+
+TEST_F(DeclarationEvaluatorTest, AHugePositionIsTheStockCatchableErrorNotARefusal)
+{
+    // A position is only checked against the length (which is bounded), as stock Lua does: an ordinary error
+    const auto start = std::chrono::steady_clock::now();
+    const DeclarationResult caught = Eval(R"LUA(
+        local C = {}
+        C.__index = C
+        C.SerializableFields = {
+            a = (pcall(table.insert, {}, 2^40, 1)),
+            b = (pcall(table.insert, { 1, 2, 3 }, '1e12', 1)),
+            c = (pcall(table.remove, { 1, 2, 3 }, 2^40)),
+            after = 1,
+        }
+        return C
+    )LUA");
+    ASSERT_TRUE(caught.Complete()) << (caught.errors.empty() ? "" : caught.errors[0]);
+    EXPECT_EQ(Find(caught, "a")->defaultValue, false);
+    EXPECT_EQ(Find(caught, "b")->defaultValue, false);
+    EXPECT_EQ(Find(caught, "c")->defaultValue, false);
+    EXPECT_EQ(Find(caught, "after")->defaultValue, 1);
+    const DeclarationResult uncaught = Eval("table.insert({}, 2^40, 1) return {}");
+    EXPECT_FALSE(uncaught.budgetExceeded);
+    EXPECT_FALSE(uncaught.memoryExhausted);
+    EXPECT_FALSE(uncaught.errors.empty());
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(5));
+}
+
+TEST_F(DeclarationEvaluatorTest, AStringNeverReachesACTableFunction)
+{
+    // The stock table.move accepts a string through the strings' metatable (it has __index) and would read 2^63
+    // missing keys in C, allocating nothing: no budget, cap or deadline would end it. Here it is the stock type error.
+    auto start = std::chrono::steady_clock::now();
+    const DeclarationResult move = Eval("table.move('', 1, math.maxinteger, 1, {}) return {}");
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+    EXPECT_FALSE(move.Complete());
+    EXPECT_FALSE(move.errors.empty());
+    EXPECT_FALSE(move.memoryExhausted);
+
+    // With __newindex and __len added to the strings' metatable, the stock table.insert would loop in C over a long
+    // string's length. The metatable is protected: getmetatable answers a string, and writing to it raises.
+    start = std::chrono::steady_clock::now();
+    const DeclarationResult meta = Eval(R"LUA(
+        local m = getmetatable("")
+        m.__newindex = {}
+        m.__len = function() return 16000000 end
+        table.insert(string.rep("x", 1000000), 1, 0)
+        return {}
+    )LUA");
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));
+    EXPECT_FALSE(meta.Complete());
+    EXPECT_FALSE(meta.errors.empty());
+    EXPECT_FALSE(meta.memoryExhausted);
+
+    // Every table function given a string: the stock type error (catchable), or for unpack the stock reading
+    const DeclarationResult probe = Eval(R"LUA(
+        local C = {}
+        C.__index = C
+        C.SerializableFields = {
+            meta = getmetatable(""),
+            insert = (pcall(table.insert, "abc", 1, "x")),
+            remove = (pcall(table.remove, "abc")),
+            concat = (pcall(table.concat, "abc")),
+            sort = (pcall(table.sort, "abc")),
+            move = (pcall(table.move, {}, 1, 1, 1, "abc")),
+            unpacked = select("#", table.unpack("abc")),
+            upper = ("abc"):upper(),
+        }
+        return C
+    )LUA");
+    ASSERT_TRUE(probe.Complete()) << (probe.errors.empty() ? "" : probe.errors[0]);
+    EXPECT_EQ(Find(probe, "meta")->defaultValue, "protected");
+    EXPECT_EQ(Find(probe, "insert")->defaultValue, false);
+    EXPECT_EQ(Find(probe, "remove")->defaultValue, false);
+    EXPECT_EQ(Find(probe, "concat")->defaultValue, false);
+    EXPECT_EQ(Find(probe, "sort")->defaultValue, false);
+    EXPECT_EQ(Find(probe, "move")->defaultValue, false);
+    EXPECT_EQ(Find(probe, "unpacked")->defaultValue, 3);
+    EXPECT_EQ(Find(probe, "upper")->defaultValue, "ABC");
 }
 
 TEST_F(DeclarationEvaluatorTest, ASortsComparisonsAreCountedInstructions)
