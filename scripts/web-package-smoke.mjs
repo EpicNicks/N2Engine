@@ -75,7 +75,8 @@ if (problems.length === 0) {
 if (problems.length === 0) {
   const html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
   // Every URL the page and the loader name is relative: no scheme, no leading slash
-  const urls = [...html.matchAll(/\b(?:src|href)\s*=\s*["']([^"']+)["']/g)].map((m) => m[1]);
+  // (emcc minifies the page at -O1 and up, which drops the quotes around attribute values: accept both)
+  const urls = [...html.matchAll(/\b(?:src|href)\s*=\s*(?:["']([^"']+)["']|([^\s"'>]+))/g)].map((m) => m[1] ?? m[2]);
   for (const url of urls) {
     expect(!/^([a-z][a-z0-9+.-]*:|\/)/i.test(url), `index.html has a non-relative URL: ${url}`);
   }
