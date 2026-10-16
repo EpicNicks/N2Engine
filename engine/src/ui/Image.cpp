@@ -31,7 +31,8 @@ namespace N2Engine::UI
         }
         if (!_spriteTexture.Holds(renderer) || _spriteTexture.GetSource() != _sprite.get())
         {
-            // A renderer that couldn't create this sprite's texture (Vulkan until #43) isn't asked every frame
+            // A renderer that couldn't create this sprite's texture (for example one over the device's size
+            // limit) isn't asked every frame
             const std::weak_ptr<const void> lifetime = renderer->GetLifetimeToken();
             // Compared by owner, not address: a new sprite or renderer at a freed one's address is a new one
             const bool sameRenderer = !_failedRenderer.owner_before(lifetime) && !lifetime.owner_before(_failedRenderer);

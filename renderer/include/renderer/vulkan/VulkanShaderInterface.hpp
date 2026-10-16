@@ -271,8 +271,7 @@ namespace Renderer::Vulkan::ShaderInterface
         {"uHasMetallicRoughnessTexture", {0.0f, 0.0f, 0.0f, 0.0f}},
     }};
 
-    /// The text shader's material defaults (OpenGL's CreateMaterial gives the text shader no effects; uAlbedo is white).
-    /// Text materials come in stage E
+    /// The text shader's material defaults (OpenGL's CreateMaterial gives the text shader no effects; uAlbedo is white)
     inline constexpr std::array<MaterialDefault, 7> kTextMaterialDefaults{{
         {"uAlbedo", {1.0f, 1.0f, 1.0f, 1.0f}},
         {"uOutline", {0.0f, 0.0f, 0.0f, 0.0f}},

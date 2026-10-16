@@ -203,6 +203,9 @@ namespace Renderer::Vulkan
 
         // 1x1 textures for the absent ones (base, emissive, occlusion, normal, metallic-roughness)
         std::array<std::unique_ptr<VulkanTexture>, ShaderInterface::kSamplerCount> defaults;
+        // The text shader's base sampler default, (0,0,0,0): a text material without an atlas (or whose atlas was destroyed)
+        // reads sdf 0 and its fragments are discarded. The white base default would give sdf 1 and fill the quad
+        std::unique_ptr<VulkanTexture> textBaseDefault;
 
         // The scene lighting (stage C). UpdateSceneLighting only rewrites this CPU copy and bumps the version; the first
         // lit draw after that copies it into the current frame slot's ring (RingChunk::lightingVersion says which version a

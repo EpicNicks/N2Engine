@@ -49,7 +49,8 @@ namespace Renderer::Common
      *   Its text shader alpha-tests and writes depth wherever a draw depth-tests (see
      *   GetStandardTextShader); text is still ordered by its submitted (Transparent) state.
      * - VulkanRenderer renders into its own offscreen target and draws in submission order, like OpenGL (#43). It
-     *   draws the unlit and lit shaders' materials with OpenGL's blending (stages B-D); text is still to come.
+     *   draws the unlit, lit and text shaders' materials with OpenGL's blending (stages B-E); text is antialiased and blended
+     *   like OpenGL's (see GetStandardTextShader). Only a window is still to come (stage F).
      */
     class IRenderer
     {
@@ -180,7 +181,10 @@ namespace Renderer::Common
          * - Software: alpha-tested at 0.5 (no blending, no antialiasing), sampled bilinearly; a covered
          *   pixel is written unblended and writes depth whenever the draw depth-tests, even if its state says
          *   no depth write.
-         * - Vulkan and the default body: null, as the backend can't draw text yet (#43).
+         * - Vulkan: as OpenGL (a port of its shader): antialiased over one screen pixel and blended, depth as the
+         *   draw's state says, outline and shadow composited under the face in one draw, softness widening the ramp;
+         *   null only in a build without the built-in shaders (no SPIR-V compiler found).
+         * - The default body: null (a renderer or fake without a text shader).
          * Effect uniforms (uOutline, uOutlineColor, uSoftness, uShadowColor, uShadowOffset, uShadowSoftness;
          * see TextDrawing::EffectUniforms in the engine) are all 0 for plain text. OpenGL composites the
          * outline and shadow under the face; the software renderer alpha-tests them and ignores softness.

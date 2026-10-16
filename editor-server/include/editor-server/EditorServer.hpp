@@ -24,6 +24,7 @@
 #include "engine/io/ResourcePath.hpp"
 
 #include "editor-server/CommandQueue.hpp"
+#include "editor-server/Connection.hpp"
 #include "editor-server/EditHistory.hpp"
 #include "editor-server/EditorCamera.hpp"
 #include "editor-server/EventRing.hpp"
@@ -610,10 +611,10 @@ namespace N2Engine::Editor
         void ServerLoop(int listenSocket);
         /// Serves one connection until it closes. sessionOpened is set (and stays set) once the connection has a
         /// session: at once without an access token, at its first successful Hello with one.
-        /// connectedAt: when the connection was ready for its Hello, which the Hello deadline counts from: when it was
-        /// accepted without TLS, when its TLS handshake finished with it (the handshake has its own budget)
-        void HandleClient(int clientSocket, bool &sessionOpened, std::chrono::steady_clock::time_point connectedAt,
-                          std::chrono::milliseconds helloBudget);
+        /// connection.connectedAt: when the connection was ready for its Hello, which the Hello deadline counts from:
+        /// when it was accepted without TLS, when its TLS handshake finished with it (the handshake has its own budget).
+        /// connection.helloBudget is the time from then to a good Hello.
+        void HandleClient(Connection &connection, bool &sessionOpened);
         void ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload);
         /// Network thread: the Logger isn't thread-safe, so log lines are posted to the main thread
         void PostLog(std::string message, bool isWarning = false);
@@ -763,26 +764,20 @@ namespace N2Engine::Editor
         void LoadOpenedScene(std::unique_ptr<Scene> scene, std::string path);
 
         // Network helpers
-        bool Send(int socket, const void *data, size_t size);
-        /// Network thread: secures a just-accepted connection when TLS is on, by `deadline`; true when there is nothing
-        /// to do (no TLS) or the handshake succeeded. False (the reason logged) closes the connection.
-        bool BeginTls(int socket, std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds budget);
-        /// Network thread: ends this connection's TLS session, if any, before its socket is closed
-        void EndTls();
+        /// What a Connection needs from this server: the stop and close flags, the connection clock, the write timeout
+        /// and the per-wait token service (see ServiceTokens)
+        [[nodiscard]] ConnectionEnv MakeConnectionEnv();
+        /// Network thread: secures a just-accepted connection when TLS is on (its session goes in connection.tls), by
+        /// `deadline`; true when there is nothing to do (no TLS) or the handshake succeeded. False (the reason logged)
+        /// closes the connection.
+        bool BeginTls(Connection &connection, std::chrono::steady_clock::time_point deadline,
+                      std::chrono::milliseconds budget);
         /// The connection clock's time (the real steady clock when none is set)
         [[nodiscard]] std::chrono::steady_clock::time_point ConnectionNow() const;
-        /// Network thread: counts the current connection as a failed Hello for its address (the limiter's
+        /// Network thread: counts a connection from this peer as a failed Hello for its address (the limiter's
         /// RecordUnfinishedHello: loopback is exempt) and logs a backoff it starts. For a connection that ended without a
         /// successful Hello and without a Hello the token check already counted. A host without a limiter does nothing.
-        void CountUnfinishedHello();
-        /// False on disconnect, error, a stopping server, or (when given) once the deadline has passed
-        bool Receive(int socket, void *data, size_t size,
-                     std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
-        /// Network thread: waits (in short slices) until the socket is readable/writable; false once the
-        /// server is stopping, on error, or once the deadline (if any) has passed. Keeps every socket call
-        /// non-blocking, so Stop() can't hang.
-        bool WaitUntilReady(int socket, bool forWrite,
-                            std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
+        void CountUnfinishedHello(const PeerAddress &peer);
         /// Handlers run on the main thread and don't touch the socket: this records the response frame,
         /// which ExecuteCommand returns for the network thread to send
         void SendResponse(int clientSocket, std::vector<uint8_t> data);
@@ -811,7 +806,10 @@ namespace N2Engine::Editor
         void ReloadTokens(bool force);
         /// Network thread: ends the open connection when its user no longer has the role and token it was given
         void CheckIdentityAgainstTokens();
-        /// Network thread: ServiceTokens runs the reload a signal asked for; called wherever the thread waits
+        /// Network thread: ServiceTokens runs the reload a signal asked for; called wherever the thread waits (every wait
+        /// slice of a Connection, through its beforeWait hook). It stays on the wait path rather than moving to the accept
+        /// loop: with one thread the accept loop is not reached while a session runs, so a SIGHUP revoking the session's
+        /// user would no longer end it.
         void ServiceTokens();
         /// The tokens as of now (never null when there is a tokens file)
         [[nodiscard]] std::shared_ptr<const TokenTable> CurrentTokens() const;
@@ -863,24 +861,21 @@ namespace N2Engine::Editor
         /// " peer=<address>" for a log line about the current connection, or nothing
         [[nodiscard]] std::string PeerSuffix() const;
         void SetPeerText(std::string text);
-        /// Network thread: the current connection's peer
-        PeerAddress _peer;
-        /// Network thread: one line for each backoff a failed Hello started
-        void LogRateLimitOutcome(const RateLimiter::FailureOutcome &outcome, std::string_view user);
+        /// Network thread: one line for each backoff a failed Hello started (`peer` is the connection's)
+        void LogRateLimitOutcome(const RateLimiter::FailureOutcome &outcome, std::string_view user,
+                                 const PeerAddress &peer);
         /// What a log line may say of the user a Hello CLAIMED (client text, never trust it into a durable log): the name
         /// when it is a user of the CURRENT tokens table, "?" for any other name, "-" when nothing is claimed or the host
         /// has no named users (--token-env, no authentication). The one place every such log line goes through.
         [[nodiscard]] std::string LoggableClaimedUser(std::string_view claimed) const;
-        // Whether the last Hello (run on the main thread) was refused for its token, as opposed to its version or its
-        // shape: the network thread clears it before queueing a Hello and reads it once the command's future is ready
-        std::atomic<bool> _helloTokenRefused{false};
-        // Whether the last Hello was refused only for its protocol version (the token was right): not counted
-        std::atomic<bool> _helloVersionRefused{false};
-        // TLS: the identity is set before Start only. The session is the current connection's, made and used on the
-        // network thread only (one client at a time); it is declared after the identity, so it goes first.
+        // The connection the network thread is serving (a Connection on ServerLoop's stack, set for the time HandleClient
+        // runs; null otherwise and for a command run without a socket). Hello (the main thread) records its outcome in
+        // that connection's helloTokenRefused and helloVersionRefused, which the network thread reads once the command's
+        // future is ready: the Hello is queued and awaited, so the connection outlives it.
+        std::atomic<Connection *> _activeConnection{nullptr};
+        // TLS: the identity is set before Start only. A session is the connection's (Connection::tls), made and used on
+        // the network thread only (one client at a time).
         std::unique_ptr<EditorTlsServer> _tlsServer;
-        std::unique_ptr<EditorTlsSession> _tlsSession;
-        int _tlsSessionSocket{-1};
         // Atomic: a client Shutdown clears _running on the network thread, so the setter's _running check alone
         // doesn't keep it from racing ServerLoop's read
         std::atomic<bool> _stopOnDisconnect{false};

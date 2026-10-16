@@ -68,9 +68,9 @@ namespace N2Engine::Rendering
      * (Particles::BuildBillboards) and drawn as one mesh updated in place (IRenderer::UpdateMesh) in the
      * Transparent queue with the unlit shader: the particle's colour (a vertex colour) times the optional texture.
      * That rebuild (4 vertices per particle) is the one per-frame cost beyond the simulation; the vectors keep their
-     * capacity, so a steady system allocates nothing. Needs a renderer that creates meshes and materials (OpenGL and
-     * the software renderer); on the Vulkan renderer, which is still stubs, nothing is drawn and one warning is
-     * logged per process.
+     * capacity, so a steady system allocates nothing. Needs a renderer that creates meshes and materials (OpenGL,
+     * the software renderer and the Vulkan renderer); where the renderer has no unlit shader (a Vulkan build without the
+     * built-in shaders) nothing is drawn and one warning is logged per process.
      */
     class ParticleSystem final : public IRenderable
     {
