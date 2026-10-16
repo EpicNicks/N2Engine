@@ -323,6 +323,117 @@ TEST_F(DeclarationEvaluatorTest, AMemoryBombIsRefusedAtTheCapNotFollowed)
     EXPECT_EQ(Find(caught, "caught")->defaultValue, true);
 }
 
+TEST_F(DeclarationEvaluatorTest, CLoopsTheHookCannotSeeAreRemovedNotFollowed)
+{
+    // table.move over a huge range of missing keys allocates nothing and runs no Lua instruction; string.rep of ""
+    // copies zero bytes a huge number of times. Neither may be able to hang the evaluation.
+    const auto start = std::chrono::steady_clock::now();
+    const DeclarationResult move = Eval("table.move({}, 1, math.maxinteger // 2, 1) return {}");
+    EXPECT_FALSE(move.budgetExceeded);
+    EXPECT_GT(move.stubUses, 0u);
+    const DeclarationResult rep = Eval(R"LUA(
+        local C = {}
+        C.__index = C
+        C.SerializableFields = { empty = string.rep("", math.maxinteger), three = ("ab"):rep(3, "-") }
+        return C
+    )LUA");
+    EXPECT_TRUE(rep.Complete());
+    EXPECT_EQ(Find(rep, "empty")->defaultValue, "");
+    EXPECT_EQ(Find(rep, "three")->defaultValue, "ab-ab-ab");
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(20));
+}
+
+TEST_F(DeclarationEvaluatorTest, TheWallClockBoundsWorkTheInstructionCountCannot)
+{
+    // About five instructions a pass, but each compares two 4 MB strings: the instruction budget alone would allow
+    // far more time than the caller gave
+    DeclarationLimits limits;
+    limits.maxMillis = 300;
+    const auto start = std::chrono::steady_clock::now();
+    const DeclarationResult result = Eval(R"LUA(
+        local a = string.rep("x", 4000000)
+        local b = string.rep("x", 4000000)
+        while true do local _ = (a == b) end
+    )LUA", limits);
+    EXPECT_TRUE(result.budgetExceeded);
+    EXPECT_TRUE(result.timedOut);
+    EXPECT_FALSE(result.Complete());
+    EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(20));
+
+    // An ordinary loop that the instruction budget ends is not reported as a time-out
+    const DeclarationResult plain = Eval("while true do end");
+    EXPECT_TRUE(plain.budgetExceeded);
+    EXPECT_FALSE(plain.timedOut);
+}
+
+TEST_F(DeclarationEvaluatorTest, ATextMadeFromAnEngineValueIsUnknownNotTheWordStub)
+{
+    const DeclarationResult result = Eval(R"LUA(
+        local C = {}
+        C.__index = C
+        C.SerializableFields = {
+            label = "v" .. tostring(Config.Version),
+            formatted = { default = string.format("%s!", Config.Name) },
+            typed = { type = tostring(Config.Type), default = 1 },
+            plain = "v1",
+        }
+        return C
+    )LUA");
+    EXPECT_FALSE(result.Complete());
+    EXPECT_TRUE(Find(result, "label")->unevaluable);
+    EXPECT_TRUE(Find(result, "formatted")->unevaluable);
+    EXPECT_TRUE(Find(result, "typed")->unevaluable);
+    EXPECT_TRUE(Find(result, "label")->defaultValue.is_null());
+    EXPECT_FALSE(Find(result, "plain")->unevaluable);
+    EXPECT_EQ(Find(result, "plain")->defaultValue, "v1");
+}
+
+TEST_F(DeclarationEvaluatorTest, AVector3DefaultThatIsNotFiniteIsUnknownLikeAFloat)
+{
+    const DeclarationResult result = Eval(R"LUA(
+        local C = {}
+        C.__index = C
+        C.SerializableFields = {
+            offset = { default = Vector3(0 / 0, math.huge, 0) },
+            fine = { default = Vector3(1, 2, 3) },
+        }
+        return C
+    )LUA");
+    EXPECT_FALSE(result.Complete());
+    EXPECT_TRUE(Find(result, "offset")->unevaluable);
+    EXPECT_TRUE(Find(result, "offset")->defaultValue.is_null());
+    EXPECT_FALSE(Find(result, "fine")->unevaluable);
+    EXPECT_FALSE(result.DefaultValues().contains("offset"));
+}
+
+TEST_F(DeclarationEvaluatorTest, RunningOutOfMemoryWhileReadingIsReportedNotSwallowed)
+{
+    // The reader's own pcalls catch a failure inside a metamethod; a refused allocation must still show
+    const DeclarationResult inIndex = Eval(R"LUA(
+        local C = {}
+        C.__index = function()
+            local t = {}
+            while true do t[#t + 1] = string.rep("x", 1024) end
+        end
+        return C
+    )LUA");
+    EXPECT_TRUE(inIndex.memoryExhausted);
+    EXPECT_FALSE(inIndex.Complete());
+
+    const DeclarationResult inDefinition = Eval(R"LUA(
+        local C = {}
+        C.__index = C
+        local definition = setmetatable({}, { __index = function()
+            local t = {}
+            while true do t[#t + 1] = string.rep("x", 1024) end
+        end })
+        C.SerializableFields = { hungry = definition }
+        return C
+    )LUA");
+    EXPECT_TRUE(inDefinition.memoryExhausted);
+    EXPECT_FALSE(inDefinition.Complete());
+}
+
 TEST_F(DeclarationEvaluatorTest, DeepRecursionIsAnErrorNotACrash)
 {
     const DeclarationResult result = Eval(R"LUA(
@@ -498,15 +609,16 @@ TEST_F(DeclarationEvaluatorTest, WhatIsLeftOfTheLibrariesIsTheSafeCore)
         F.randomIsStub = tostring(math.random)
         return C
     )LUA");
-    EXPECT_TRUE(result.Complete());
+    EXPECT_FALSE(result.Complete()); // the two placeholder-derived fields are unknown
     EXPECT_EQ(Find(result, "mathFloor")->defaultValue, "yes");
     EXPECT_EQ(Find(result, "stringRep")->defaultValue, "yes");
     EXPECT_EQ(Find(result, "stringFormat")->defaultValue, "yes");
     EXPECT_EQ(Find(result, "tableConcat")->defaultValue, "yes");
     EXPECT_EQ(Find(result, "pcall")->defaultValue, "yes");
     EXPECT_EQ(Find(result, "setmetatable")->defaultValue, "yes");
-    EXPECT_EQ(Find(result, "findIsStub")->defaultValue, "stub");
-    EXPECT_EQ(Find(result, "randomIsStub")->defaultValue, "stub");
+    EXPECT_TRUE(Find(result, "findIsStub")->unevaluable);
+    EXPECT_TRUE(Find(result, "randomIsStub")->unevaluable);
+    EXPECT_FALSE(Find(result, "pcall")->unevaluable);
 }
 
 TEST_F(DeclarationEvaluatorTest, PatternFunctionsAndRandomAreUnknownNotRun)

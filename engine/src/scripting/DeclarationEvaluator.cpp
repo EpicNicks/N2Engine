@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -48,7 +49,10 @@ namespace N2Engine::Scripting
         // The locals are captured here, so a script that replaces a global (type, next, rawget...) changes nothing.
         constexpr const char *SetupScript = R"LUA(
 local type, rawequal, rawget, next, pcall, setmetatable = type, rawequal, rawget, next, pcall, setmetatable
-local mathtype, ssub = math.type, string.sub
+local mathtype, ssub, sfind, srep = math.type, string.sub, string.find, string.rep
+local MARK = "\1N2STUB\1"
+-- What a failed allocation raises (Lua's preregistered message): a pcall of the reader cannot hide it from the result
+local MEMERR = "not enough memory"
 local touches = 0
 
 dofile = nil
@@ -87,7 +91,9 @@ setmetatable(STUB, {
         return 0
     end,
     __lt = no, __le = no, __eq = no,
-    __tostring = function() return "stub" end,
+    -- tostring and string.format("%s") must answer a string: one that carries a marker the reader recognises, so a
+    -- default built from it is unevaluable rather than the text "stub"
+    __tostring = function() return MARK end,
 })
 
 math.random = STUB
@@ -97,6 +103,16 @@ string.match = STUB
 string.gmatch = STUB
 string.gsub = STUB
 string.dump = STUB
+-- C loops the instruction hook cannot see and the allocator does not bound: table.move over a huge range of missing
+-- keys (no allocation, nothing to count) and string.rep of an empty string a huge number of times (a 0-byte copy per
+-- repeat). table.move is the placeholder; string.rep answers the empty string at once for an empty result.
+table.move = STUB
+string.rep = function(s, n, sep)
+    if type(s) == "string" and #s == 0 and (sep == nil or (type(sep) == "string" and #sep == 0)) then
+        return ""
+    end
+    return srep(s, n, sep)
+end
 
 local isVec = setmetatable({}, { __mode = "k" })
 local vecMeta = {
@@ -136,6 +152,9 @@ local function classify(v, maxString)
         if #v > maxString then
             return "toolong"
         end
+        if sfind(v, MARK, 1, true) then
+            return "stub"
+        end
         return "string", v
     elseif t == "table" then
         if rawequal(v, STUB) then
@@ -172,6 +191,9 @@ local function readDeclarations(class, maxFields, maxString, maxName)
     local instance = setmetatable({}, class)
     local readable, declarations = pcall(function() return instance.SerializableFields end)
     if not readable then
+        if declarations == MEMERR then
+            result.memError = true
+        end
         result.readError = type(declarations) == "string" and ssub(declarations, 1, 200) or "(an error value)"
         return result
     end
@@ -209,12 +231,17 @@ local function readDeclarations(class, maxFields, maxString, maxName)
                         end
                     else
                         local declaredType, defaultValue
-                        local read = pcall(function()
+                        local read, readErr = pcall(function()
                             declaredType = value.type
                             defaultValue = value.default
                         end)
+                        if not read and readErr == MEMERR then
+                            result.memError = true
+                        end
                         if type(declaredType) == "string" then
-                            if #declaredType <= maxName then
+                            if #declaredType <= maxName and sfind(declaredType, MARK, 1, true) then
+                                field.typeStub = true
+                            elseif #declaredType <= maxName then
                                 field.declaredType = declaredType
                             end
                         elseif rawequal(declaredType, STUB) then
@@ -291,7 +318,13 @@ end
         void ReportFailure(const Detail::LuaGuardState &guard, lua_State *L, const int status, const char *phase,
                            DeclarationResult &result)
         {
-            if (guard.exhausted)
+            if (guard.timedOut)
+            {
+                result.budgetExceeded = true;
+                result.timedOut = true;
+                result.errors.push_back("The evaluation exceeded its time limit");
+            }
+            else if (guard.exhausted)
             {
                 result.budgetExceeded = true;
                 result.errors.push_back(std::format("{} of {}", Detail::BudgetErrorText, guard.limit));
@@ -342,6 +375,12 @@ end
         void ReadAnswer(lua_State *L, const int answer, const DeclarationLimits &limits, DeclarationResult &result)
         {
             result.stubUses = static_cast<std::uint64_t>(GetNumber(L, answer, "touches"));
+            if (GetFlag(L, answer, "memError"))
+            {
+                // The reader's own pcalls caught a refused allocation: what they read is not trustworthy
+                result.memoryExhausted = true;
+                result.errors.push_back(std::format("{} while reading the declarations", Detail::MemoryErrorText));
+            }
             if (GetFlag(L, answer, "notTable"))
             {
                 result.errors.push_back("Script must return a table");
@@ -443,9 +482,18 @@ end
                             const double y = GetNumber(L, entry, "b");
                             const double z = GetNumber(L, entry, "c");
                             field.defaultKind = LuaDefaultKind::Vector3;
-                            field.defaultValue = {{"x", static_cast<float>(x)},
-                                                  {"y", static_cast<float>(y)},
-                                                  {"z", static_cast<float>(z)}};
+                            const auto fx = static_cast<float>(x);
+                            const auto fy = static_cast<float>(y);
+                            const auto fz = static_cast<float>(z);
+                            if (std::isfinite(fx) && std::isfinite(fy) && std::isfinite(fz))
+                            {
+                                field.defaultValue = {{"x", fx}, {"y", fy}, {"z", fz}};
+                            }
+                            else
+                            {
+                                field.unevaluable = true;
+                                field.unevaluableReason = "its default has a component that is not a finite number";
+                            }
                         }
                         else if (kind == "stub")
                         {
@@ -492,7 +540,11 @@ end
             }
             lua_setfield(L, LUA_REGISTRYINDEX, ReaderKey);
 
-            // From here on every instruction counts, for the chunk and for the reading alike (one entry)
+            // From here on every instruction counts, for the chunk and for the reading alike (one entry), and so does
+            // the wall clock
+            const std::uint64_t millis = limits.maxMillis == 0 ? DeclarationLimits{}.maxMillis : limits.maxMillis;
+            guard.hasDeadline = true;
+            guard.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(millis);
             guard.Arm();
 
             const std::string name = chunkName.size() > 100 ? chunkName.substr(0, 100) : chunkName;
@@ -592,7 +644,13 @@ end
             // An error that reached the panic function (an allocation failing outside a protected call) or a C++ error:
             // data like any other. The state was closed as the exception left Run.
             const std::string text = Clean(e.what());
-            if (guard->exhausted)
+            if (guard->timedOut)
+            {
+                result.budgetExceeded = true;
+                result.timedOut = true;
+                result.errors.push_back("The evaluation exceeded its time limit");
+            }
+            else if (guard->exhausted)
             {
                 result.budgetExceeded = true;
                 result.errors.push_back(std::format("{} of {}", Detail::BudgetErrorText, guard->limit));

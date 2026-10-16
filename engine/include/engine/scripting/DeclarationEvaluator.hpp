@@ -29,6 +29,10 @@ namespace N2Engine::Scripting
         std::size_t maxFields = 256;
         /// A string default longer than this is not read (that field's default is unevaluable)
         std::size_t maxStringBytes = 4096;
+        /// Wall-clock milliseconds the whole evaluation may take (0 means the default, never unlimited). The
+        /// instruction budget does not bound time: one instruction can compare or copy megabytes. Reported as
+        /// budgetExceeded with timedOut set.
+        std::uint64_t maxMillis = 2000;
     };
 
     /// One entry of a script's SerializableFields as the evaluator read it
@@ -64,6 +68,8 @@ namespace N2Engine::Scripting
         std::vector<std::string> errors;
         /// The script ran past the instruction budget (also in errors)
         bool budgetExceeded = false;
+        /// The wall-clock limit (not the instruction count) was what ended it; budgetExceeded is set too
+        bool timedOut = false;
         /// The script (or the reading of its declarations) ran into the memory cap (also in errors)
         bool memoryExhausted = false;
         /// The list of fields itself cannot be known: the script returns a value that came from the engine, or its

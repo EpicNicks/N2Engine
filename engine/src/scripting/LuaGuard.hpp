@@ -6,6 +6,7 @@
 #include <sol/sol.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -20,6 +21,9 @@ namespace N2Engine::Scripting::Detail
     // Instructions between two calls of the hook: small enough to stop a loop promptly, large enough that the
     // hook's cost is negligible
     inline constexpr std::uint64_t HookGranularity = 1000;
+    // The same when a wall-clock deadline is set: the clock is read at every call, so the deadline is met within the
+    // time of this many instructions
+    inline constexpr std::uint64_t DeadlineGranularity = 100;
     // Stack slots the panic function leaves filled (the error object, then nils) for C++ frames that pop while the
     // exception unwinds. Below LUA_MINSTACK (20), which the thread reset reserves above the base, so no allocation.
     inline constexpr int PanicPadding = 16;
@@ -40,6 +44,11 @@ namespace N2Engine::Scripting::Detail
         std::uint64_t limit = LuaLimits{}.instructionsPerEntry;
         std::int64_t remaining = 0;
         std::uint64_t step = HookGranularity; // instructions the installed hook counts per call
+        // Wall clock (the declaration evaluator only; the runtime leaves it off): the instruction budget does not bound
+        // time, since one instruction can do megabytes of C work (comparing or copying two long strings)
+        bool hasDeadline = false;
+        std::chrono::steady_clock::time_point deadline{};
+        bool timedOut = false;                // the deadline, not the instruction count, ended the entry
         bool exhausted = false;               // the budget ran out in this entry: the hook raises on every instruction
         int depth = 0;                        // LuaBudgetScopes open
         std::uint64_t panics = 0;             // errors that reached the panic function
@@ -57,13 +66,14 @@ namespace N2Engine::Scripting::Detail
         void Arm()
         {
             exhausted = false;
+            timedOut = false;
             if (limit == 0)
             {
                 remaining = 0;
                 lua_sethook(state, nullptr, 0, 0);
                 return;
             }
-            step = std::min(limit, HookGranularity);
+            step = std::min(limit, hasDeadline ? DeadlineGranularity : HookGranularity);
             remaining = static_cast<std::int64_t>(std::min<std::uint64_t>(limit, INT64_MAX));
             lua_sethook(state, &LuaGuardState::CountHook, LUA_MASKCOUNT, static_cast<int>(step));
         }
@@ -110,7 +120,11 @@ namespace N2Engine::Scripting::Detail
             if (!guard->exhausted)
             {
                 guard->remaining -= static_cast<std::int64_t>(guard->step);
-                if (guard->remaining > 0)
+                if (guard->hasDeadline && std::chrono::steady_clock::now() >= guard->deadline)
+                {
+                    guard->timedOut = true;
+                }
+                else if (guard->remaining > 0)
                 {
                     return;
                 }
