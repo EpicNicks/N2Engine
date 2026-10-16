@@ -1232,6 +1232,60 @@ TEST(EditorTlsServerTest, PeersStalledInTheHandshakeDoNotBlockAnAuthenticatedTls
     server.Stop();
 }
 
+TEST(EditorTlsServerTest, StopWithAWorkerMidHandshakeAndASessionReturnsWithinASecond)
+{
+    // PR S-3, "join within one interval": a worker inside its TLS handshake wait (the 5 s budget) and the session in
+    // its idle wait both see Stop at their next 100 ms slice. Stop returns well inside a second, and every slot was given
+    // back by the thread that held it (the stop hook sees the count after the joins, before anything else is closed).
+    // Before the server: its destructor stops it again, which calls the hook
+    std::mutex reportsMutex;
+    std::vector<EditorServer::StopReport> reports;
+    TempDirectory directory;
+    EditorServer server;
+    ASSERT_TRUE(server.SetAccessToken(TestToken));
+    ASSERT_TRUE(server.SetStopHook(
+        [&](const EditorServer::StopReport &report)
+        {
+            const std::lock_guard lock(reportsMutex);
+            reports.push_back(report);
+        }));
+    const auto enabled = server.EnableTls(directory.Path());
+    ASSERT_TRUE(enabled.has_value()) << (enabled ? "" : enabled.error());
+    ASSERT_TRUE(server.Start(0));
+
+    TlsClient session(server.GetPort());
+    PlainConnection partial(server.GetPort());
+    {
+        MainLoop loop(server);
+        ASSERT_TRUE(session.IsConnected());
+        ASSERT_EQ(session.Handshake(), 0);
+        const auto hello = session.Roundtrip(Frame(CommandType::Hello, HelloPayload(TestToken)));
+        ASSERT_TRUE(hello.has_value());
+        ASSERT_EQ(hello->type, ServerInfoType) << hello->body;
+
+        // A record header and nothing more: the worker waits for the rest of the ClientHello
+        ASSERT_TRUE(partial.IsConnected());
+        const uint8_t start[3] = {0x16, 0x03, 0x01};
+        ASSERT_TRUE(partial.Send(start, sizeof(start)));
+        ASSERT_TRUE(WaitFor([&] { return server.PreAuthSlotsInUse() == 1; }));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200)); // the worker is inside the handshake's wait
+    }
+
+    const auto began = std::chrono::steady_clock::now();
+    server.Stop();
+    const auto took = std::chrono::steady_clock::now() - began;
+    EXPECT_LT(took, std::chrono::seconds(1))
+        << "Stop took " << std::chrono::duration_cast<std::chrono::milliseconds>(took).count() << " ms";
+    {
+        const std::lock_guard lock(reportsMutex);
+        ASSERT_FALSE(reports.empty());
+        EXPECT_EQ(reports.front().slotsHeldAfterJoins, 0u) << "the worker gave its slot back as it left";
+        EXPECT_EQ(reports.front().leftoverConnections, 0u);
+        EXPECT_EQ(reports.front().slotsHeldAfterCleanup, 0u);
+    }
+    EXPECT_TRUE(partial.DrainUntilClosed(std::chrono::milliseconds(3000))) << "the stalled handshake was closed";
+}
+
 TEST(EditorTlsServerTest, SeveralHandshakesRunAtOnceOnTheWorkers)
 {
     // Concurrent handshakes on separate sessions of one shared configuration (the Mbed TLS threading callbacks and the

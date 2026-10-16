@@ -90,6 +90,19 @@ namespace N2Engine::Editor
         // Sockets are kept as int (as before); an invalid SOCKET converts to -1
         constexpr int NoSocket = -1;
 
+        // The kinds of pre-auth failure whose lines are coalesced (AdmitPreAuthLine): each has its own window, and the
+        // name is what its summary line calls it
+        constexpr std::string_view PreAuthTlsStartFailed = "TLS session not started";
+        constexpr std::string_view PreAuthTlsFailed = "TLS handshake failed";
+        constexpr std::string_view PreAuthTlsTimedOut = "TLS handshake timed out";
+        constexpr std::string_view PreAuthHelloTimedOut = "no Hello in time";
+        constexpr std::string_view PreAuthNotHello = "command before Hello";
+        constexpr std::string_view PreAuthOversized = "oversized frame before Hello";
+        constexpr std::string_view PreAuthUnparsable = "unparsable Hello";
+        constexpr std::string_view PreAuthTokenRefused = "Hello refused: wrong token";
+        constexpr std::string_view PreAuthVersionRefused = "Hello refused: protocol version";
+        constexpr std::string_view PreAuthWriteStalled = "write stalled before Hello";
+
         /// Makes a connected socket non-blocking, so no single send or recv can outlast the deadline its caller waits on
         /// (the TLS session does the same for its own sockets)
         bool SetSocketNonBlocking(const int socket)
@@ -1614,6 +1627,7 @@ namespace N2Engine::Editor
         }
         _bucketReported = {};
         _lastAdmissionSummary = std::chrono::steady_clock::now();
+        _preAuthLog.emplace(_preAuthLogOptions);
         {
             const std::lock_guard lock(_jobMutex);
             _jobs.clear();
@@ -1682,6 +1696,7 @@ namespace N2Engine::Editor
         // Joins: the acceptor first (nothing new arrives), then the workers, then the session thread. No thread waits on
         // another without also watching _running, so none of these can block for more than a poll interval (and a
         // session's wait for the main thread ends because the queue is closed).
+        const auto joinsBegan = std::chrono::steady_clock::now();
         if (_serverThread.joinable())
             _serverThread.join();
         for (std::thread &worker : _workers)
@@ -1692,6 +1707,9 @@ namespace N2Engine::Editor
         _workers.clear();
         if (_sessionThread.joinable())
             _sessionThread.join();
+        StopReport report;
+        report.joinTime = std::chrono::steady_clock::now() - joinsBegan;
+        report.slotsHeldAfterJoins = _slots.has_value() ? _slots->InUse() : 0;
 
         // Connections still waiting in the queue or the hand-off slot: closed now that no thread uses a socket. Their
         // slots are released as they go.
@@ -1701,6 +1719,7 @@ namespace N2Engine::Editor
                 const std::lock_guard lock(_jobMutex);
                 leftovers.swap(_jobs);
             }
+            report.leftoverConnections += leftovers.size();
             leftovers.clear();
         }
         {
@@ -1710,7 +1729,13 @@ namespace N2Engine::Editor
                 leftover.swap(_handoff);
                 _sessionRunning = false;
             }
+            report.leftoverConnections += leftover.has_value() ? 1 : 0;
             leftover.reset();
+        }
+        report.slotsHeldAfterCleanup = _slots.has_value() ? _slots->InUse() : 0;
+        if (_stopHook)
+        {
+            _stopHook(report);
         }
 
         if (_listenSocket != -1)
@@ -2280,6 +2305,62 @@ namespace N2Engine::Editor
         return true;
     }
 
+    bool EditorServer::SetPreAuthLogCoalescing(const LogCoalescerOptions options)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's pre-auth log coalescing can't change while it is running");
+            return false;
+        }
+        // Clamped as the coalescer clamps them, so the getter says what a run uses
+        _preAuthLogOptions = LogCoalescer(options).Options();
+        return true;
+    }
+
+    uint64_t EditorServer::PreAuthLogLinesSuppressed() const
+    {
+        return _running && _preAuthLog.has_value() ? _preAuthLog->TotalSuppressed() : 0;
+    }
+
+    bool EditorServer::SetStopHook(StopHook hook)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's stop hook can't change while it is running");
+            return false;
+        }
+        _stopHook = std::move(hook);
+        return true;
+    }
+
+    bool EditorServer::AdmitPreAuthLine(const std::string_view kind)
+    {
+        // _preAuthLog is made by Start before any thread and only replaced by the next Start, after every join
+        if (!_preAuthLog.has_value())
+        {
+            return true;
+        }
+        LogCoalescer::Decision decision = _preAuthLog->Record(kind);
+        if (decision.closed.has_value())
+        {
+            PostLog(LogCoalescer::Describe(*decision.closed, _preAuthLog->Options().burst), true);
+        }
+        return decision.write;
+    }
+
+    void EditorServer::PostPreAuthLogSummaries(const bool all)
+    {
+        if (!_preAuthLog.has_value())
+        {
+            return;
+        }
+        const std::vector<LogCoalescer::Summary> summaries = all ? _preAuthLog->TakeAll() : _preAuthLog->TakeClosed();
+        for (const LogCoalescer::Summary &summary : summaries)
+        {
+            PostLog(LogCoalescer::Describe(summary, _preAuthLog->Options().burst), true);
+        }
+    }
+
     size_t EditorServer::PreAuthSlotsInUse() const
     {
         // _slots is made by Start and never replaced while the server runs; before that there is nothing in use
@@ -2462,6 +2543,7 @@ namespace N2Engine::Editor
                 }
             }
             LogAdmissionSummary(false);
+            PostPreAuthLogSummaries(false);
             if (clientSocket == NoSocket)
             {
                 continue;
@@ -2479,6 +2561,7 @@ namespace N2Engine::Editor
             }
         }
         LogAdmissionSummary(true);
+        PostPreAuthLogSummaries(true);
     }
 
     void EditorServer::AdmitAcceptedSocket(const int clientSocket)
@@ -2654,13 +2737,16 @@ namespace N2Engine::Editor
         // the socket is closed, which the caller does by dropping the job.
         const auto deadline = connection.connectedAt + connection.helloBudget;
         const std::string peerSuffix = " peer=" + std::string(peerText);
+        // Every line here is about a connection that never authenticated, so each goes through the coalescer: the first
+        // few of a kind in a window are written as before, the rest only counted (a loop of connect + garbage must not
+        // write a line per connection into the main thread's queue, which has no bound)
         const auto closeUnauthorized = [&](const std::string &reason)
         {
             PostLog("Closing an editor connection that hasn't sent a successful Hello: " + reason + peerSuffix, true);
         };
         const auto logIfDeadlinePassed = [&]
         {
-            if (_running && ConnectionNow() >= deadline)
+            if (_running && ConnectionNow() >= deadline && AdmitPreAuthLine(PreAuthHelloTimedOut))
             {
                 closeUnauthorized(std::format("no Hello within {} ms", connection.helloBudget.count()));
             }
@@ -2690,7 +2776,10 @@ namespace N2Engine::Editor
             BufferWriter response;
             WriteError(response, message);
             connection.Send(response.Data().data(), response.Size());
-            PostLog(message, true);
+            if (AdmitPreAuthLine(PreAuthOversized))
+            {
+                PostLog(message, true);
+            }
             countUnfinished();
             return false;
         }
@@ -2707,7 +2796,10 @@ namespace N2Engine::Editor
             BufferWriter response;
             WriteError(response, HelloRequiredError);
             connection.Send(response.Data().data(), response.Size());
-            closeUnauthorized(std::format("it sent command 0x{:X}", cmdType));
+            if (AdmitPreAuthLine(PreAuthNotHello))
+            {
+                closeUnauthorized(std::format("it sent command 0x{:X}", cmdType));
+            }
             countUnfinished();
             return false;
         }
@@ -2751,13 +2843,21 @@ namespace N2Engine::Editor
         if (!cmd.has_value())
         {
             // A Hello that wouldn't even parse: it held a worker and proved nothing, so it counts like an unfinished one,
-            // before its answer is sent (the answer is the one a failing command gets)
-            PostLogAndWait(std::format("Command 0x{:X} failed: {}", cmdType, failure), true);
+            // before its answer is sent (the answer is the one a failing command gets). Its line is written (and waited
+            // for) only when the coalescer lets it through; a flood of them neither writes nor waits.
+            const bool logged = AdmitPreAuthLine(PreAuthUnparsable);
+            if (logged)
+            {
+                PostLogAndWait(std::format("Command 0x{:X} failed: {}", cmdType, failure), true);
+            }
             countUnfinished();
             BufferWriter response;
             WriteError(response, "Command failed: " + failure);
             connection.Send(response.Data().data(), response.Size());
-            closeUnauthorized("its Hello was refused");
+            if (logged)
+            {
+                closeUnauthorized("its Hello was refused");
+            }
             return false;
         }
 
@@ -2767,7 +2867,15 @@ namespace N2Engine::Editor
             hello = std::move(payload);
             return true;
         }
-        PostLogAndWait(evaluation.warning, true);
+        // The warning precedes the refusal (waited for, bounded) when the coalescer lets it through, as before; past the
+        // kind's burst the refusal goes out at once and the line is only counted
+        const bool logged = AdmitPreAuthLine(evaluation.result == HelloEvaluation::Result::TokenRefused
+                                                 ? PreAuthTokenRefused
+                                                 : PreAuthVersionRefused);
+        if (logged)
+        {
+            PostLogAndWait(evaluation.warning, true);
+        }
         // The outcome is counted before the answer is sent, so a client that sees the refusal and connects again meets
         // the backoff it earned. A good token and an old client (the version) is not a failure of the address.
         if (rateLimited && evaluation.result == HelloEvaluation::Result::TokenRefused)
@@ -2778,7 +2886,10 @@ namespace N2Engine::Editor
                                 connection.peer);
         }
         connection.Send(evaluation.refusal.data(), evaluation.refusal.size());
-        closeUnauthorized("its Hello was refused");
+        if (logged)
+        {
+            closeUnauthorized("its Hello was refused");
+        }
         return false;
     }
 
@@ -2950,8 +3061,13 @@ namespace N2Engine::Editor
         // A worker only ever writes one small Error: a client that doesn't read it must not hold the worker for the
         // session's write budget
         env.writeTimeout = kind == EnvKind::PreAuth ? std::min(_writeTimeout, _helloTimeout) : _writeTimeout;
-        env.writeStalled = [this, timeout = env.writeTimeout, peerText = std::move(peerText)]
+        env.writeStalled = [this, kind, timeout = env.writeTimeout, peerText = std::move(peerText)]
         {
+            // A pre-auth connection's stalled write is a pre-auth failure like the others (coalesced); the session's is not
+            if (kind == EnvKind::PreAuth && !AdmitPreAuthLine(PreAuthWriteStalled))
+            {
+                return;
+            }
             PostLog(std::format("Closing an editor connection: no write progress for {} ms (the write timeout), the "
                                 "client isn't reading{}",
                                 timeout.count(), peerText.empty() ? std::string{} : " peer=" + peerText),
@@ -2970,8 +3086,13 @@ namespace N2Engine::Editor
         connection.tls = _tlsServer->NewSession(connection.socket);
         if (!connection.tls)
         {
-            PostLog("Closing an editor connection: its TLS session couldn't be started peer=" + connection.peer.ToString(),
-                    true);
+            // Here and below: lines about a connection that never authenticated go through the coalescer
+            if (AdmitPreAuthLine(PreAuthTlsStartFailed))
+            {
+                PostLog("Closing an editor connection: its TLS session couldn't be started peer=" +
+                            connection.peer.ToString(),
+                        true);
+            }
             return false;
         }
 
@@ -2986,14 +3107,17 @@ namespace N2Engine::Editor
             }
             if (step == TlsStep::Failed)
             {
-                PostLog("Closing an editor connection: its TLS handshake failed: " + connection.tls->LastError() +
-                            " peer=" + connection.peer.ToString(),
-                        true);
+                if (AdmitPreAuthLine(PreAuthTlsFailed))
+                {
+                    PostLog("Closing an editor connection: its TLS handshake failed: " + connection.tls->LastError() +
+                                " peer=" + connection.peer.ToString(),
+                            true);
+                }
                 return false;
             }
             if (!connection.WaitUntilReady(step == TlsStep::WantWrite, deadline))
             {
-                if (_running)
+                if (_running && AdmitPreAuthLine(PreAuthTlsTimedOut))
                 {
                     PostLog(std::format("Closing an editor connection: its TLS handshake didn't finish within {} ms peer={}",
                                         budget.count(), connection.peer.ToString()),

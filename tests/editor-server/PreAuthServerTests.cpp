@@ -310,6 +310,8 @@ namespace
         TokenBucket::Clock bucketClock;
         std::chrono::milliseconds summaryInterval = EditorServer::DefaultAdmissionSummaryInterval;
         bool readOnly = false;
+        std::optional<LogCoalescerOptions> logCoalescing;
+        EditorServer::StopHook stopHook;
     };
 
     /// A server whose peers the test chooses
@@ -331,6 +333,11 @@ namespace
             {
                 EXPECT_TRUE(server.SetReadOnly(true));
             }
+            if (options.logCoalescing.has_value())
+            {
+                EXPECT_TRUE(server.SetPreAuthLogCoalescing(*options.logCoalescing));
+            }
+            EXPECT_TRUE(server.SetStopHook(options.stopHook));
             started = server.Start(0);
         }
 
@@ -817,16 +824,81 @@ TEST(PreAuthServerTest, ARefusedHelloIsAnsweredOnTheWorkerAndNeverReachesTheSess
     EXPECT_EQ(log.Count("Editor connected"), 0u);
 }
 
-// ==================== Stop ====================
+// ==================== What a failing pre-auth connection logs ====================
 
-TEST(PreAuthServerTest, StopWithEveryThreadBusyJoinsThemAllAndClosesTheirSockets)
+TEST(PreAuthServerTest, ABurstOfGarbageConnectionsWritesABoundedNumberOfLines)
 {
+    // Loopback (as behind a proxy): no backoff for a connection that sends garbage instead of a Hello, so nothing but
+    // the coalescer stands between a loop of them and one line each in the main thread's queue
+    LogCapture log;
     RigOptions options;
-    options.busyGrace = 60s; // the waiting client is still waiting when Stop comes
+    options.logCoalescing = LogCoalescerOptions{60s, 3};
     Rig rig(options);
     ASSERT_TRUE(rig.started);
 
-    // A session, two silent peers in their slots, and an authenticated client waiting for the session in a worker
+    constexpr int Connections = 50;
+    for (int i = 0; i < Connections; ++i)
+    {
+        ASSERT_TRUE(WaitFor([&] { return rig.server.PreAuthSlotsInUse() == 0; })) << i;
+        TestClient garbage(rig.server.GetPort());
+        ASSERT_TRUE(garbage.IsConnected()) << i;
+        const auto response = Roundtrip(rig.server, garbage, CommandType::GetPlayState);
+        ASSERT_TRUE(response.has_value()) << i;
+        EXPECT_EQ(response->type, ErrorType) << i;
+        EXPECT_EQ(response->Text(), EditorServer::HelloRequiredError) << i;
+    }
+    // Every connection was answered and counted, but only the first three wrote their line
+    ASSERT_TRUE(WaitFor([&] { return rig.server.PreAuthLogLinesSuppressed() == static_cast<uint64_t>(Connections - 3); }))
+        << rig.server.PreAuthLogLinesSuppressed();
+    Pump(rig.server, 300ms);
+    EXPECT_EQ(log.Count("it sent command 0x"), 3u);
+    EXPECT_EQ(log.Count("hasn't sent a successful Hello"), 3u);
+    // The start lines, "Waiting for editor connection..." and the three: a bound, not one line per connection
+    EXPECT_LE(log.Lines().size(), 10u);
+}
+
+TEST(PreAuthServerTest, TheFailuresPastTheBurstAreReportedInOneSummaryLineOnceTheWindowHasPassed)
+{
+    LogCapture log;
+    RigOptions options;
+    options.logCoalescing = LogCoalescerOptions{1000ms, 1};
+    Rig rig(options);
+    ASSERT_TRUE(rig.started);
+
+    for (int i = 0; i < 5; ++i)
+    {
+        ASSERT_TRUE(WaitFor([&] { return rig.server.PreAuthSlotsInUse() == 0; })) << i;
+        TestClient garbage(rig.server.GetPort());
+        ASSERT_TRUE(garbage.IsConnected()) << i;
+        const auto response = Roundtrip(rig.server, garbage, CommandType::GetPlayState);
+        ASSERT_TRUE(response.has_value()) << i;
+    }
+    ASSERT_TRUE(WaitFor([&] { return rig.server.PreAuthLogLinesSuppressed() > 0; }));
+    // The first was written at once; the acceptor reports the rest within about a second of the window's end
+    EXPECT_TRUE(PumpUntilLogged(rig.server, log, "it sent command 0x"));
+    ASSERT_TRUE(PumpUntilLogged(rig.server, log, "pre-auth failure(s) of kind 'command before Hello'"));
+    EXPECT_TRUE(log.Has("were not logged one by one (at most 1 line(s) per kind every 1 s are)"));
+}
+
+// ==================== Stop ====================
+
+TEST(PreAuthServerTest, StopWithEveryThreadBusyJoinsThemWithinASecondAndEachGaveItsSlotBack)
+{
+    // What Stop saw after its joins, before it closed what was left (the first Stop only: the rig stops again at the end)
+    std::mutex reportsMutex;
+    std::vector<EditorServer::StopReport> reports;
+    RigOptions options;
+    options.busyGrace = 60s; // the waiting client is still waiting when Stop comes
+    options.stopHook = [&](const EditorServer::StopReport &report)
+    {
+        const std::lock_guard lock(reportsMutex);
+        reports.push_back(report);
+    };
+    Rig rig(options);
+    ASSERT_TRUE(rig.started);
+
+    // A session in its idle wait, two silent peers in their Hello wait, and an authenticated client waiting for the
+    // session in a worker: every kind of thread is inside a wait when Stop comes
     TestClient session(rig.server.GetPort());
     ASSERT_TRUE(session.IsConnected());
     const auto hello = rig.Hello(session);
@@ -839,12 +911,27 @@ TEST(PreAuthServerTest, StopWithEveryThreadBusyJoinsThemAllAndClosesTheirSockets
     ASSERT_TRUE(waiting.SendRequest(CommandType::Hello, HelloPayload(Token)));
     Pump(rig.server, 300ms); // the worker has read the Hello and waits for the session
     EXPECT_EQ(rig.server.BusyRefusals(), 0u);
+    ASSERT_EQ(rig.server.PreAuthSlotsInUse(), 3u) << "two silent peers and the waiting client hold a slot each";
 
+    // Every wait is sliced at 100 ms and looks at the stop flag: Stop returns within a small multiple of that, not
+    // after the 1 s busy grace, the Hello budget or the 60 s grace given here
     const auto start = std::chrono::steady_clock::now();
     StopWithin(rig.server, 5s);
-    EXPECT_LT(std::chrono::steady_clock::now() - start, 3s) << "Stop returns within about a poll interval";
+    const auto took = std::chrono::steady_clock::now() - start;
+    EXPECT_LT(took, 1s) << "Stop took " << std::chrono::duration_cast<std::chrono::milliseconds>(took).count() << " ms";
     EXPECT_FALSE(rig.server.IsRunning());
-    EXPECT_EQ(rig.server.PreAuthSlotsInUse(), 0u);
+
+    {
+        const std::lock_guard lock(reportsMutex);
+        ASSERT_FALSE(reports.empty()) << "the stop hook was called";
+        const EditorServer::StopReport &report = reports.front();
+        EXPECT_LT(report.joinTime, std::chrono::steady_clock::duration(1s));
+        // Each worker gave its slot back as it left (none was left queued for Stop to close): a slot a thread failed to
+        // release would still be counted here
+        EXPECT_EQ(report.leftoverConnections, 0u);
+        EXPECT_EQ(report.slotsHeldAfterJoins, 0u);
+        EXPECT_EQ(report.slotsHeldAfterCleanup, 0u);
+    }
 
     // Every connection was closed by the server (sockets are closed after the joins)
     EXPECT_TRUE(session.IsClosedWithin(3000));

@@ -31,6 +31,7 @@
 #include "editor-server/EditorCamera.hpp"
 #include "editor-server/EventRing.hpp"
 #include "editor-server/FrameTracker.hpp"
+#include "editor-server/LogCoalescer.hpp"
 #include "editor-server/PreAuthSlots.hpp"
 #include "editor-server/RateLimiter.hpp"
 #include "editor-server/TokenBucket.hpp"
@@ -335,6 +336,28 @@ namespace N2Engine::Editor
         [[nodiscard]] size_t PreAuthSlotsInUse() const;
         /// Connections that were given a pre-auth slot since the server started (any thread); 0 when it isn't running
         [[nodiscard]] uint64_t PreAuthAdmittedConnections() const;
+        /// The log lines of pre-auth connections that fail (a TLS handshake that failed or timed out, no Hello in time, a
+        /// command before Hello, an oversized or unparsable Hello, a refused Hello, a stalled write): per kind of failure,
+        /// the first `burst` in a window are written one by one and the rest are counted and reported in one summary line
+        /// once the window has passed (see LogCoalescer). Default 10 per 10 s (real time). Before Start.
+        bool SetPreAuthLogCoalescing(LogCoalescerOptions options);
+        [[nodiscard]] const LogCoalescerOptions &GetPreAuthLogCoalescing() const { return _preAuthLogOptions; }
+        /// Pre-auth failure lines not written one by one since the server started (any thread); 0 when it isn't running
+        [[nodiscard]] uint64_t PreAuthLogLinesSuppressed() const;
+        /// What Stop saw once every thread had been joined (for tests): the slots still held then (a slot a thread failed
+        /// to give back, or one of a connection still queued), the connections still queued or in the hand-off slot,
+        /// the slots held once those were closed, and how long the joins took
+        struct StopReport
+        {
+            size_t slotsHeldAfterJoins = 0;
+            size_t leftoverConnections = 0;
+            size_t slotsHeldAfterCleanup = 0;
+            std::chrono::steady_clock::duration joinTime{};
+        };
+        /// Called by Stop, on the thread that called it, after the joins and the cleanup and before the listening socket
+        /// is closed. For tests. Not for production use; before Start.
+        using StopHook = std::function<void(const StopReport &)>;
+        bool SetStopHook(StopHook hook);
 
         // ==================== Failed-Hello rate limiting ====================
 
@@ -762,8 +785,14 @@ namespace N2Engine::Editor
         /// PostLog, then waits (at most 500 ms, and not once the server is stopping) for the main thread to have written
         /// the line. A pre-auth worker uses it for the line about a refused Hello, so the line is written before the
         /// refusal reaches the client, as it was when the main thread refused the Hello itself (a client, or a test, that
-        /// has seen the refusal can rely on its line). The bound keeps a busy main thread from holding a worker.
+        /// has seen the refusal can rely on its line). The bound keeps a busy main thread from holding a worker, and the
+        /// worker only waits for a line the coalescer lets through (at most its burst per window): a flood does not wait.
         void PostLogAndWait(std::string message, bool isWarning = false);
+        /// Any thread: one pre-auth failure of this kind. True when its line(s) are to be written (the coalescer's
+        /// decision); a summary of the kind's last window, if it ended with lines unwritten, is posted first.
+        [[nodiscard]] bool AdmitPreAuthLine(std::string_view kind);
+        /// Acceptor: posts the summaries of the coalescer's windows that have ended (`all`: every count, when stopping)
+        void PostPreAuthLogSummaries(bool all);
 
         // Command handlers
         void HandleHello(int clientSocket, const std::vector<uint8_t> &payload);
@@ -1054,6 +1083,10 @@ namespace N2Engine::Editor
         std::chrono::milliseconds _busyGrace{DefaultBusyGrace};
         std::chrono::milliseconds _admissionSummaryInterval{DefaultAdmissionSummaryInterval};
         PreHandoffHook _preHandoffHook;
+        StopHook _stopHook;
+        // The pre-auth failure lines' coalescer: options before Start; made by Start (every run begins empty), own mutex
+        LogCoalescerOptions _preAuthLogOptions;
+        std::optional<LogCoalescer> _preAuthLog;
         std::optional<PreAuthSlots> _slots;
         std::optional<TokenBucket> _handshakeBucket;
         std::atomic<uint64_t> _preAuthRefusedConnections{0};
