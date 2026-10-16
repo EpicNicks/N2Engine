@@ -12,6 +12,7 @@
 extern "C"
 {
 #include "lstate.h"
+#include "ltable.h"
 }
 
 #if LUA_VERSION_RELEASE_NUM != 50408
@@ -74,6 +75,16 @@ namespace N2Engine::Scripting::Detail
             lua_pop(L, 1);
         }
         return count;
+    }
+
+    // For the tests: the size of the registry table (array slots plus hash nodes). It changes when the registry grows
+    // (a growth never shrinks it back), which is how a test sees that a path made the registry allocate.
+    uint64_t RegistryCapacity(lua_State *L)
+    {
+        const Table *registry = hvalue(&G(L)->l_registry);
+        const uint64_t arraySlots = luaH_realasize(registry);
+        const uint64_t hashNodes = isdummy(registry) ? 0 : static_cast<uint64_t>(sizenode(registry));
+        return arraySlots + hashNodes;
     }
 
     // For the tests: the thread's nCcalls (C calls in the low 16 bits, non-yieldable calls in the high 16)

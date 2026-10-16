@@ -719,9 +719,9 @@ namespace N2Engine::Scripting
 
         // The chunk's table and the module map's copy of it are references made outside a protected call (a stack
         // value to a reference, a reference copy: luaL_ref, which at the memory cap with no free registry slot would
-        // end the process): two free slots first
+        // end the process): free slots first, two for the two references and as many again as margin for temporaries
         std::string reserveError;
-        if (!ReserveReferences(2, reserveError))
+        if (!ReserveReferences(4, reserveError))
         {
             _loadedModules.erase(moduleName);
             const std::string error = LimitAwareError(reserveError);

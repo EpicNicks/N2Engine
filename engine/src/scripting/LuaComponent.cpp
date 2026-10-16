@@ -161,9 +161,10 @@ namespace N2Engine::Scripting
             return;
 
         // The object makeArgument returns is a registry reference made outside a protected call (sol::make_object):
-        // a free slot first, so it allocates nothing there (the userdata it wraps still can fail: caught below)
+        // free slots first (one is needed, a second is margin for a temporary), so it allocates nothing there (the
+        // userdata it wraps still can fail: caught below)
         std::string reserveError;
-        if (!LuaRuntime::Instance().ReserveReferences(1, reserveError))
+        if (!LuaRuntime::Instance().ReserveReferences(2, reserveError))
         {
             ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(reserveError));
             return;
@@ -269,10 +270,10 @@ namespace N2Engine::Scripting
         if (result.return_count() > 0 && result[0].is<sol::table>())
         {
             // The reference to the chunk's table is made outside a protected call (a stack value to a registry
-            // reference): a free registry slot first, so at the memory cap it allocates nothing (sol's constructors are
-            // noexcept: a failure there would end the process)
+            // reference): free registry slots first (one is needed, a second is margin for a temporary), so at the
+            // memory cap it allocates nothing (sol's constructors are noexcept: a failure there would end the process)
             std::string reserveError;
-            if (!LuaRuntime::Instance().ReserveReferences(1, reserveError))
+            if (!LuaRuntime::Instance().ReserveReferences(2, reserveError))
             {
                 logLoadFailure(LuaRuntime::Instance().LimitAwareError(reserveError));
                 return sol::table{};
@@ -979,20 +980,21 @@ namespace N2Engine::Scripting
             // "default" (read in a protected call, from the stack, so no reference is made for the table), or the value
             std::string declaredType;
             sol::object declaredDefault;
-            const bool isDefinition = value.is<sol::table>();
+            const sol::object &declaration = value;
+            const bool isDefinition = declaration.is<sol::table>();
             if (isDefinition)
             {
                 guarded([&]
                 {
-                    lua_State *L = value.lua_state();
-                    value.push(L);
+                    lua_State *L = declaration.lua_state();
+                    declaration.push(L);
                     const sol::stack_table definition(L, -1);
                     declaredType = definition.get_or<std::string>("type", "");
                     declaredDefault = definition.get<sol::object>("default");
                     lua_pop(L, 1);
                 });
             }
-            const sol::object &defaultValue = isDefinition ? declaredDefault : value;
+            const sol::object &defaultValue = isDefinition ? declaredDefault : declaration;
 
             if (declaredType == "GameObject")
             {
