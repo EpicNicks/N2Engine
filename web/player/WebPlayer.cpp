@@ -84,6 +84,7 @@ namespace
     {
         Input::InjectedKeys keys;
         std::uint32_t buttons = 0;
+        std::uint32_t pressedSinceSample = 0; // presses latched so a click shorter than a frame still reaches the game
         Math::Vector2 pointer{0.0f, 0.0f};
         bool domAvailable = true;  // false under node (--frames): no canvas to measure, no events to listen to
         int smokeFrames = 0;       // > 0: stop after this many frames
@@ -114,6 +115,7 @@ namespace
     {
         g_player.keys.ReleaseAll();
         g_player.buttons = 0;
+        g_player.pressedSinceSample = 0;
     }
 
     EM_BOOL OnBlur(int, const EmscriptenFocusEvent *, void *)
@@ -167,6 +169,10 @@ namespace
         g_player.keys.SetMouseButton(*button, down);
         const std::uint32_t bit = Input::Mouse::ButtonBit(static_cast<int>(*button));
         g_player.buttons = down ? (g_player.buttons | bit) : (g_player.buttons & ~bit);
+        if (down)
+        {
+            g_player.pressedSinceSample |= bit;
+        }
         return down ? EM_TRUE : EM_FALSE;
     }
 
@@ -234,6 +240,11 @@ namespace
         renderer->ReadFramebuffer(g_player.frame.data(), g_player.size.width, g_player.size.height);
         // ReadFramebuffer gives the bottom row first (as glReadPixels does); a canvas wants the top row first
         Renderer::Common::FlipRows(g_player.frame.data(), rowBytes, static_cast<std::size_t>(g_player.size.height));
+        // The software renderer stores its alpha as written; the canvas premultiplies it, so show every pixel opaque
+        for (std::size_t i = 3; i < g_player.frame.size(); i += 4)
+        {
+            g_player.frame[i] = 255;
+        }
         n2_present(g_player.frame.data(), g_player.size.width, g_player.size.height);
     }
 
@@ -264,7 +275,8 @@ namespace
         }
         if (auto *mouse = Input::Mouse::Get())
         {
-            mouse->InjectPointer(g_player.pointer, g_player.buttons);
+            mouse->InjectPointer(g_player.pointer, g_player.buttons | g_player.pressedSinceSample);
+            g_player.pressedSinceSample = 0;
         }
         if (!application.RunFrame())
         {
