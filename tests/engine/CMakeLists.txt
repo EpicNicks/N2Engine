@@ -26,9 +26,6 @@ if(N2ENGINE_PLATFORM_WEB)
 endif()
 
 add_executable(engine_tests ${ENGINE_TEST_SOURCES})
-if (UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
-    target_link_options(engine_tests PRIVATE -rdynamic) # TEMPORARY: symbol names in the terminate backtrace
-endif ()
 
 target_link_libraries(engine_tests
         PRIVATE
