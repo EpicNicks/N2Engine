@@ -395,9 +395,11 @@ TEST(ErrorCodedTest, TheCodesAreTheSpecsStableWords)
         (void)description;
         codes.insert(code);
     }
-    EXPECT_EQ(codes, (std::set<std::string>{std::string{ErrorCodeReadOnly}, std::string{ErrorCodeForbidden}}));
+    EXPECT_EQ(codes, (std::set<std::string>{std::string{ErrorCodeReadOnly}, std::string{ErrorCodeForbidden},
+                                            std::string{ErrorCodeBusy}}));
     EXPECT_EQ(std::string{ErrorCodeReadOnly}, "readOnly");
     EXPECT_EQ(std::string{ErrorCodeForbidden}, "forbidden");
+    EXPECT_EQ(std::string{ErrorCodeBusy}, "busy");
 }
 
 TEST(ErrorCodedTest, HelloTakesTheCapabilityAsATrailingFieldThatDefaultsToFalse)
