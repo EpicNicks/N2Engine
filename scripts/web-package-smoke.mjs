@@ -71,13 +71,21 @@ const done = new Promise((resolve, reject) => {
   globalThis.__n2Failed = (message) => { clearTimeout(timer); reject(new Error(`the player failed: ${message}`)); };
 });
 
+// Emscripten's node loader opens the asset pack relative to the working directory: run from the package, as a server
+// would serve it
+process.chdir(dir);
 const require = createRequire(pathToFileURL(path.join(dir, 'index.js')));
 const createN2Player = require(path.join(dir, 'index.js'));
 try {
   createN2Player({
     arguments: ['--frames', String(frames), '--size', size],
     print: (text) => { output.push(text); console.log(text); },
-    printErr: (text) => { output.push(text); console.error(text); },
+    printErr: (text) => {
+      output.push(text);
+      console.error(text);
+      if (text.startsWith('package error')) globalThis.__n2Failed(text); // the asset pack did not load: no point waiting
+    },
+    locateFile: (name) => path.join(dir, name),
     // The canvas, mocked: keeps the last frame and checks the shape of each
     n2Present: (pixels, w, h) => {
       ++frameCount;
