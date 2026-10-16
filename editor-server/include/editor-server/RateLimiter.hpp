@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,7 +16,9 @@ namespace N2Engine::Editor
     /**
      * Failed-Hello rate limiting for a host that needs an access token: who may connect, and when, after Hellos with a
      * wrong token. Plain logic with no sockets and no real clock (the time comes from an injected function), so it is
-     * unit tested on its own and its tests never sleep. EditorServer owns one and uses it on its network thread only.
+     * unit tested on its own and its tests never sleep. EditorServer owns one. Every public method takes one mutex (they are short
+     * and logic-only, and nothing is called out while it is held: the injected clock is read before it is taken), so the
+     * pre-auth workers of a later change can share it.
      *
      * Three rules, each a table that is bounded so the limiter is not itself something to exhaust:
      *  - per address: after `freeFailures` failed Hellos from an address, it is backed off for `initialBackoff`,
@@ -151,8 +154,8 @@ namespace N2Engine::Editor
         /// A Hello that succeeded: clears the address and the user. Loopback's global counter is left (see above).
         void RecordSuccess(const PeerAddress &peer, std::optional<std::string_view> user);
 
-        [[nodiscard]] size_t AddressCount() const { return _addresses.size(); }
-        [[nodiscard]] size_t UserCount() const { return _users.size(); }
+        [[nodiscard]] size_t AddressCount() const;
+        [[nodiscard]] size_t UserCount() const;
 
     private:
         struct Entry
@@ -182,8 +185,11 @@ namespace N2Engine::Editor
         /// The entry for a key, made (evicting if the table is full) when there is none, reset when it went idle
         Entry &Touch(std::map<std::string, Entry> &table, const std::string &key, TimePoint now);
 
+        // Set at construction and never changed, so Policy() and Now() need no lock
         RateLimitPolicy _policy;
         Clock _clock;
+        // Guards the three tables below; taken by every public method, never recursively (the private helpers assume it)
+        mutable std::mutex _mutex;
         std::map<std::string, Entry> _addresses;
         std::map<std::string, Entry> _users;
         LoopbackState _loopback;

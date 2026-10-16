@@ -1,12 +1,14 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <editor-server/RateLimiter.hpp>
@@ -646,4 +648,92 @@ TEST(RateLimiterTest, WithoutAnInjectedClockItUsesTheSteadyClock)
     const auto admission = limiter.AdmitConnection(Attacker);
     EXPECT_FALSE(admission.allowed);
     EXPECT_GT(admission.retryAfter, milliseconds(0));
+}
+
+// ---- thread safety: every public method is locked (no sanitizer leg runs these; a data race would show as a crash, a
+// corrupt table or a wrong count)
+
+TEST(RateLimiterThreadingTest, ManyThreadsHammeringTheLimiterKeepItConsistent)
+{
+    RateLimitPolicy policy;
+    policy.maxEntries = 64; // small, so the eviction paths run too
+    RateLimiter limiter(policy, [] { return RateLimiter::TimePoint(milliseconds(1000)); });
+
+    constexpr int ThreadCount = 8;
+    constexpr int Rounds = 3000;
+    std::vector<std::thread> threads;
+    for (int t = 0; t < ThreadCount; ++t)
+    {
+        threads.emplace_back(
+            [&limiter, t]
+            {
+                for (int i = 0; i < Rounds; ++i)
+                {
+                    const uint8_t host = static_cast<uint8_t>((t * 31 + i) % 250);
+                    const PeerAddress peer = (i % 17 == 0) ? PeerAddress::IPv4(127, 0, 0, 1)
+                                                           : PeerAddress::IPv4(203, 0, static_cast<uint8_t>(i % 7), host);
+                    const std::string user = "user" + std::to_string((t + i) % 90);
+                    switch (i % 5)
+                    {
+                    case 0:
+                        (void)limiter.AdmitConnection(peer);
+                        break;
+                    case 1:
+                        (void)limiter.RecordFailure(peer, std::string_view(user));
+                        break;
+                    case 2:
+                        (void)limiter.IsUserBackedOff(user);
+                        break;
+                    case 3:
+                        (void)limiter.RecordUnfinishedHello(peer);
+                        break;
+                    default:
+                        limiter.RecordSuccess(peer, std::string_view(user));
+                        (void)limiter.AddressCount();
+                        (void)limiter.UserCount();
+                        break;
+                    }
+                }
+            });
+    }
+    for (std::thread &thread : threads)
+    {
+        thread.join();
+    }
+    EXPECT_LE(limiter.AddressCount(), policy.maxEntries);
+    EXPECT_LE(limiter.UserCount(), policy.maxEntries);
+}
+
+TEST(RateLimiterThreadingTest, ConcurrentFailuresAreAllCounted)
+{
+    RateLimiter limiter({}, [] { return RateLimiter::TimePoint(milliseconds(1000)); });
+
+    constexpr int ThreadCount = 8;
+    constexpr int Failures = 250;
+    std::atomic<int> backoffsStarted{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < ThreadCount; ++t)
+    {
+        threads.emplace_back(
+            [&limiter, &backoffsStarted, t]
+            {
+                // Different addresses (so no address rule interferes), one user: its failures are counted wherever they
+                // come from
+                const PeerAddress peer = PeerAddress::IPv4(203, 0, 113, static_cast<uint8_t>(t + 1));
+                for (int i = 0; i < Failures; ++i)
+                {
+                    if (limiter.RecordFailure(peer, std::string_view("alice")).user.has_value())
+                    {
+                        ++backoffsStarted;
+                    }
+                }
+            });
+    }
+    for (std::thread &thread : threads)
+    {
+        thread.join();
+    }
+    // Two failures are free, every one after starts a backoff: a lost update would leave a gap
+    EXPECT_EQ(backoffsStarted.load(), ThreadCount * Failures - static_cast<int>(RateLimitPolicy{}.userFreeFailures));
+    EXPECT_TRUE(limiter.IsUserBackedOff("alice"));
 }

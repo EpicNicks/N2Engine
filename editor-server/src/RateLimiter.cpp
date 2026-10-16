@@ -190,6 +190,7 @@ namespace N2Engine::Editor
     RateLimiter::Admission RateLimiter::AdmitConnection(const PeerAddress &peer)
     {
         const TimePoint now = Now();
+        const std::lock_guard lock(_mutex);
         Admission admission;
 
         if (peer.IsLoopback())
@@ -235,14 +236,17 @@ namespace N2Engine::Editor
 
     bool RateLimiter::IsUserBackedOff(const std::string_view user)
     {
+        const TimePoint now = Now();
+        const std::lock_guard lock(_mutex);
         const auto found = _users.find(std::string(user));
-        return found != _users.end() && Now() < found->second.nextAllowed;
+        return found != _users.end() && now < found->second.nextAllowed;
     }
 
     RateLimiter::FailureOutcome RateLimiter::RecordFailure(const PeerAddress &peer,
                                                            const std::optional<std::string_view> user)
     {
         const TimePoint now = Now();
+        const std::lock_guard lock(_mutex);
         FailureOutcome outcome;
 
         if (peer.IsLoopback())
@@ -310,6 +314,7 @@ namespace N2Engine::Editor
 
     void RateLimiter::RecordSuccess(const PeerAddress &peer, const std::optional<std::string_view> user)
     {
+        const std::lock_guard lock(_mutex);
         if (!peer.IsLoopback())
         {
             _addresses.erase(peer.ToString());
@@ -318,5 +323,17 @@ namespace N2Engine::Editor
         {
             _users.erase(std::string(*user));
         }
+    }
+
+    size_t RateLimiter::AddressCount() const
+    {
+        const std::lock_guard lock(_mutex);
+        return _addresses.size();
+    }
+
+    size_t RateLimiter::UserCount() const
+    {
+        const std::lock_guard lock(_mutex);
+        return _users.size();
     }
 }
