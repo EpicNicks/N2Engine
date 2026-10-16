@@ -35,7 +35,11 @@ if(N2ENGINE_RENDERER_VULKAN)
     # backend then builds without its built-in shaders: see the SPIR-V step below)
     find_package(Vulkan REQUIRED OPTIONAL_COMPONENTS glslangValidator glslc)
 endif()
+# Web: no OpenGL library and no GLFW to build. external/web-stubs (added by the root CMakeLists.txt first) defines the
+# `glfw` and `OpenGL::GL` targets the renderer links: GLFW's real headers with no-op functions, and nothing for GL
+if(NOT N2ENGINE_PLATFORM_WEB)
 find_package(OpenGL REQUIRED)
+endif()
 
 # Configure GLFW
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
@@ -47,12 +51,14 @@ if(UNIX AND NOT APPLE)
     set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
 endif()
 
+if(NOT N2ENGINE_PLATFORM_WEB)
 FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
     GIT_TAG 3.4
 )
 FetchContent_MakeAvailable(glfw)
+endif()
 
 # Add GLAD
 add_library(glad ${CMAKE_SOURCE_DIR}/external/glad/src/glad.c)

@@ -414,6 +414,10 @@ class AudioAssetReferenceTest : public ResourceLoaderTest
 protected:
     void SetUp() override
     {
+#ifdef N2ENGINE_PLATFORM_WEB
+        _skipped = true;
+        GTEST_SKIP() << "The web build has no audio device yet (stage 4)";
+#endif
 #ifdef _WIN32
         _putenv_s("ALSOFT_DRIVERS", "null");
 #else
@@ -429,9 +433,16 @@ protected:
 
     void TearDown() override
     {
+        if (_skipped)
+        {
+            return; // SetUp never ran the loader's or the audio system's setup
+        }
         ResourceLoaderTest::TearDown(); // releases cached clips while the context is alive
         Audio::AudioSystem::Instance().Shutdown();
     }
+
+private:
+    bool _skipped = false; // set only by the web build's skip in SetUp
 };
 
 TEST_F(AudioAssetReferenceTest, AudioFilesLoadByExtension)

@@ -4,6 +4,27 @@ file(GLOB_RECURSE ENGINE_TEST_SOURCES
         "*.cxx"
 )
 
+# Web (Emscripten, node): whole test files that cannot run in the single-threaded headless build, each with its reason.
+# Nothing here applies to a native build, and a path that no longer exists fails the configure, so the list cannot go
+# stale. Tests that need only a few lines skipped inside a file that otherwise runs use GTEST_SKIP under
+# N2ENGINE_PLATFORM_WEB instead (they show as skipped in the output: SerializationRobustnessTests.cpp's audio fixture,
+# CoreRobustnessTests.cpp's multi-threaded logger test). docs/web-build.html lists both.
+if(N2ENGINE_PLATFORM_WEB)
+    set(N2ENGINE_WEB_EXCLUDED_ENGINE_TESTS
+        # OpenAL: the web build has no audio device yet (external/web-stubs), and these open OpenAL Soft's null and
+        # loopback devices
+        audio/AudioTests.cpp
+        audio/LoopbackAudioTests.cpp
+    )
+    foreach(_excluded IN LISTS N2ENGINE_WEB_EXCLUDED_ENGINE_TESTS)
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_excluded}")
+            message(FATAL_ERROR "N2ENGINE_WEB_EXCLUDED_ENGINE_TESTS names a file that does not exist: ${_excluded}")
+        endif()
+        list(REMOVE_ITEM ENGINE_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${_excluded}")
+        message(STATUS "Web: engine_tests excludes ${_excluded}")
+    endforeach()
+endif()
+
 add_executable(engine_tests ${ENGINE_TEST_SOURCES})
 
 target_link_libraries(engine_tests

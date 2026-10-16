@@ -3,7 +3,10 @@
 # configurations never include this file.
 #
 # What this file does:
-#   * defines the N2ENGINE_PLATFORM_WEB compile definition for every target
+#   * defines the N2ENGINE_PLATFORM_WEB compile definition for every target, and N2ENGINE_SINGLE_THREADED (the baseline
+#     build has no threads: the software renderer renders on the calling thread, see RenderThread.hpp)
+#   * compiles and links everything with WebAssembly exceptions (the engine, sol2, nlohmann::json and googletest throw
+#     and catch; Emscripten's default is to abort on a throw)
 #   * defines the N2ENGINE_WEB_PROFILE cache variable (dev | size | speed) and turns it into compile and link flags
 #   * defines the optional size budget variables and a `web-size-report` target that runs scripts/web-size-report.sh
 #
@@ -18,6 +21,15 @@ if(NOT N2ENGINE_WEB_PROFILE MATCHES "^(dev|size|speed)$")
 endif()
 
 add_compile_definitions(N2ENGINE_PLATFORM_WEB=1)
+
+# The baseline web build is single-threaded (no pthreads, no SharedArrayBuffer, no cross-origin isolation). Code that
+# would start or wait on a thread checks this macro. A later threaded second artifact (stage 6) would not define it.
+add_compile_definitions(N2ENGINE_SINGLE_THREADED=1)
+
+# WebAssembly exceptions (the native wasm EH instructions, no JavaScript glue), for every language: they also make
+# Lua's setjmp/longjmp (a C library) use the wasm implementation, so the C and C++ objects agree. Compile AND link flag.
+add_compile_options(-fwasm-exceptions)
+add_link_options(-fwasm-exceptions)
 
 # Every profile: the heap may grow (the Emscripten default is a fixed 16 MB heap, which a game or a large test exceeds),
 # and the stack is 1 MB (the Emscripten default of 64 KB is below what the engine's tests and recursive code expect).
