@@ -1,4 +1,5 @@
 #include "engine/scripting/LuaComponent.hpp"
+#include "engine/scripting/LuaFieldDeclaration.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
@@ -905,11 +906,7 @@ namespace N2Engine::Scripting
 
     bool LuaComponent::IsComponentType(const std::string &type) const
     {
-        // Any type scripts can add by name (Rigidbody, BoxCollider, ...), or a name ending in "Component".
-        // Only the latter used to count, so `type = "Rigidbody"` reference fields were silently skipped.
-        const auto names = Bindings::GetScriptableComponentNames();
-        return std::ranges::find(names, type) != names.end() ||
-               (type.size() > 9 && type.ends_with("Component"));
+        return IsLuaComponentType(type);
     }
 
     std::vector<FieldInfo> LuaComponent::DescribeFields() const
@@ -945,15 +942,7 @@ namespace N2Engine::Scripting
         // Debug) one that fails at the memory cap ends the process even inside a protected call, as outside one. The
         // instance is pushed on the stack, which keeps it alive while the reads run its metamethods (a SetScript from
         // one of them cannot free it).
-        enum class DefaultKind
-        {
-            Other,
-            Integer,
-            Float,
-            Bool,
-            String,
-            Vector3
-        };
+        using DefaultKind = LuaDefaultKind;
         struct Declaration
         {
             std::string name;
@@ -1064,76 +1053,8 @@ namespace N2Engine::Scripting
         std::vector<FieldInfo> scriptFields;
         for (const Declaration &declaration : declarations)
         {
-            FieldInfo info;
-            info.name = declaration.name;
-            info.displayName = DefaultDisplayName(info.name);
-            info.container = "scriptData";
-            const std::string &declaredType = declaration.declaredType;
-
-            if (declaredType == "GameObject")
-            {
-                info.kind = FieldKind::GameObjectRef;
-                info.typeName = "GameObject";
-            }
-            else if (!declaredType.empty() && IsComponentType(declaredType))
-            {
-                info.kind = FieldKind::ComponentRef;
-                info.typeName = declaredType;
-            }
-            else if (declaredType == "string")
-            {
-                info.kind = FieldKind::String;
-                info.typeName = "string";
-            }
-            else if (declaredType == "int" || declaredType == "integer")
-            {
-                info.kind = FieldKind::Int;
-                info.typeName = "int";
-            }
-            else if (declaredType == "number" || declaredType == "float")
-            {
-                info.kind = FieldKind::Float;
-                info.typeName = "float";
-            }
-            else if (declaredType == "bool" || declaredType == "boolean")
-            {
-                info.kind = FieldKind::Bool;
-                info.typeName = "bool";
-            }
-            else if (declaredType == "Vector3")
-            {
-                info.kind = FieldKind::Vector3;
-                info.typeName = "Vector3";
-            }
-            else if (declaration.defaultKind == DefaultKind::Integer || declaration.defaultKind == DefaultKind::Float)
-            {
-                // As ExtractSerializableFields stores it: a Lua integer is an integer
-                const bool isInteger = declaration.defaultKind == DefaultKind::Integer;
-                info.kind = isInteger ? FieldKind::Int : FieldKind::Float;
-                info.typeName = isInteger ? "int" : "float";
-            }
-            else if (declaration.defaultKind == DefaultKind::Bool)
-            {
-                info.kind = FieldKind::Bool;
-                info.typeName = "bool";
-            }
-            else if (declaration.defaultKind == DefaultKind::String)
-            {
-                info.kind = FieldKind::String;
-                info.typeName = "string";
-            }
-            else if (declaration.defaultKind == DefaultKind::Vector3)
-            {
-                info.kind = FieldKind::Vector3;
-                info.typeName = "Vector3";
-            }
-            // else Json (the FieldInfo's own default): whatever the data holds
-            if (info.kind == FieldKind::Int)
-            {
-                // Stored as a JSON integer and injected as a Lua integer
-                info.limits = {static_cast<double>(std::numeric_limits<std::int64_t>::lowest()),
-                               static_cast<double>(std::numeric_limits<std::int64_t>::max())};
-            }
+            // The mapping from a declaration to the editor field is shared with the DeclarationEvaluator
+            FieldInfo info = MakeLuaFieldInfo(declaration.name, declaration.declaredType, declaration.defaultKind);
             scriptFields.push_back(std::move(info));
         }
 
