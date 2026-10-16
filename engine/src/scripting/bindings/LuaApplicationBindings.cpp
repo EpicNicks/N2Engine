@@ -10,7 +10,8 @@ namespace N2Engine::Scripting::Bindings
         
         // ===== Application Global =====
         lua["Application"] = lua.create_table_with(
-            "Quit", &Application::Quit,
+            // Refused on the editor host that edits (Application::SetScriptQuitAllowed)
+            "Quit", &Application::QuitFromScript,
             
             "GetPlatform", []() -> std::string {
 #ifdef _WIN32
