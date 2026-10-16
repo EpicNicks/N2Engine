@@ -11,7 +11,7 @@ namespace N2Engine::Editor
 {
     /**
      * Who gets the one authenticated session when a second verified client arrives (design: security-design Part 2,
-     * "Arbiter"). Plain logic, no sockets and no clock. NOT wired into EditorServer yet (PR S-3/S-4 do that).
+     * "Arbiter"). Plain logic, no sockets and no clock. EditorServer's OfferToSession applies it (PR S-4).
      *
      * Given the active session (none, or a user and a role) and a verified candidate:
      *  - no active session: Accept;
@@ -83,6 +83,9 @@ namespace N2Engine::Editor
         [[nodiscard]] BeginResult Begin(const SessionIdentity &candidate);
         /// The session with this id ended. Ignored when it is not the active one (it was replaced, or ended already).
         void End(uint64_t sessionId);
+        /// A later Hello on the active session's connection gave it another user or role: the arbiter judges the next
+        /// candidate against what the session is now. Ignored when `sessionId` is not the active one.
+        void UpdateIdentity(uint64_t sessionId, const SessionIdentity &identity);
 
         [[nodiscard]] std::optional<SessionIdentity> Active() const;
         [[nodiscard]] uint64_t ActiveSessionId() const;

@@ -66,6 +66,25 @@ namespace N2Engine::Editor
         /// deadline (if any) has passed, or on error. Keeps every socket call non-blocking, so Stop() can't hang.
         bool WaitUntilReady(bool forWrite, std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
 
+        /// Whether the peer has gone: it closed or reset the connection (a socket error counts). Looks at the socket
+        /// without reading anything, so a client that is still there, or has sent bytes, is not gone. Where the OS says so
+        /// (Linux: POLLRDHUP) a half-close is noticed even with bytes unread; elsewhere a peer that sent something and then
+        /// closed is noticed only once the bytes are read. With TLS only the transport is looked at (a client's
+        /// close_notify is bytes), so a TLS client that said goodbye is not seen until it is read. Non-blocking.
+        [[nodiscard]] bool PeerHasHungUp() const;
+
+        /// TCP keepalive on a socket: SO_KEEPALIVE, and the first probe after `idle` of silence, then one every
+        /// `interval`, the peer being dead after `count` unanswered. The options differ per OS: Linux TCP_KEEPIDLE,
+        /// TCP_KEEPINTVL and TCP_KEEPCNT; macOS TCP_KEEPALIVE (the idle time), TCP_KEEPINTVL and TCP_KEEPCNT; Windows
+        /// SIO_KEEPALIVE_VALS (idle and interval in milliseconds; the number of probes is not settable there, the system
+        /// uses 10). False when an option could not be set (what was set stays).
+        static bool EnableKeepAlive(int socketHandle, std::chrono::seconds idle, std::chrono::seconds interval, int count);
+        /// The values the host uses for a session: 60 s idle, then a probe every 10 s, 3 unanswered: a half-open
+        /// connection is dropped by the kernel after about 90 s (about 160 s on Windows)
+        static constexpr std::chrono::seconds KeepAliveIdle{60};
+        static constexpr std::chrono::seconds KeepAliveInterval{10};
+        static constexpr int KeepAliveCount = 3;
+
         /// Ends the TLS session, if any (before the socket is closed)
         void EndTls();
         /// EndTls, then closes the socket; safe to call twice
@@ -85,6 +104,9 @@ namespace N2Engine::Editor
         std::chrono::steady_clock::time_point connectedAt{};
         /// The time a gated connection has from connectedAt to send a good Hello
         std::chrono::milliseconds helloBudget{0};
+        /// The arbiter's id of the session this connection is (0 before it is handed to the session thread); set and read
+        /// by the session thread only
+        uint64_t sessionId = 0;
         /// Whether the last Hello on this connection was refused for its token (as opposed to its version or its
         /// shape): the serving thread clears it before queueing a Hello and reads it once the command's future is
         /// ready; the main thread sets it

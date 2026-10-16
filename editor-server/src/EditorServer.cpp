@@ -1636,7 +1636,11 @@ namespace N2Engine::Editor
             const std::lock_guard lock(_sessionMutex);
             _handoff.reset();
             _sessionRunning = false;
+            _claimId = 0;
+            _closeConnection.store(false);
         }
+        // A host without any token has no Hello: every client is an admin with no name, and the newest takes over
+        _arbiter.emplace(!RequiresAccessToken());
 
         _commands.Reopen();
         _running = true;
@@ -1660,15 +1664,18 @@ namespace N2Engine::Editor
         }
         Logger::Info("Editor server listening on " + bindAddress + ":" + std::to_string(_port));
         Logger::Info(std::format("Pre-auth limits: {} slot(s) (at most {} per non-loopback address; loopback may use all), "
-                                 "{}; one session at a time, a second authenticated client waits up to {} ms and then "
-                                 "gets \"{}\"",
+                                 "{}; one session at a time: {} (a taking-over client waits up to {} ms for the old "
+                                 "session to end); any other second client waits up to {} ms and gets \"{}\"",
                                  _slots->Options().totalSlots, _slots->Options().perAddressSlots,
                                  _handshakeRate.has_value()
                                      ? std::format("handshake rate {}/s in all and {}/s per address",
                                                    _handshakeBucket->Options().globalPerSecond,
                                                    _handshakeBucket->Options().perAddressPerSecond)
                                      : std::string("no handshake rate limit"),
-                                 _busyGrace.count(), BusyError));
+                                 _arbiter->NoTokenHost()
+                                     ? "the newest connection takes over (no access token)"
+                                     : "the same user's newest connection takes the session over, a higher role preempts it",
+                                 _takeoverWait.count(), _busyGrace.count(), BusyError));
         return true;
     }
 
@@ -2014,9 +2021,10 @@ namespace N2Engine::Editor
 
     void EditorServer::BeginSessionState()
     {
+        // The close request is NOT cleared here: a takeover or preemption may have asked this session to end since the
+        // session thread took it (SessionLoop clears the request, under the lock that request is made under, before that)
         const std::lock_guard lock(_identityMutex);
         _identity = ConnectionIdentity{};
-        _closeConnection.store(false);
     }
 
     void EditorServer::EndSessionState()
@@ -2137,13 +2145,6 @@ namespace N2Engine::Editor
             PostLog(std::format("Rate limit: {} is backed off for {} ms after {} failed Hellos; its connections are "
                                 "closed until then", RateLimitSubject(peer), outcome.address->duration.count(),
                                 outcome.address->failures),
-                    true);
-        }
-        if (outcome.loopback.has_value())
-        {
-            PostLog(std::format("Rate limit: all of loopback is backed off for {} ms after burst {} of failed Hellos "
-                                "(the last from peer={}); its connections are closed until then",
-                                outcome.loopback->duration.count(), outcome.loopback->failures, peer.ToString()),
                     true);
         }
         if (outcome.user.has_value())
@@ -2279,6 +2280,39 @@ namespace N2Engine::Editor
             return false;
         }
         _busyGrace = grace;
+        return true;
+    }
+
+    bool EditorServer::SetTakeoverWait(const std::chrono::milliseconds wait)
+    {
+        if (_running || wait < std::chrono::milliseconds::zero())
+        {
+            Logger::Warn("The editor server's takeover wait can't change while it is running, or be negative");
+            return false;
+        }
+        _takeoverWait = wait;
+        return true;
+    }
+
+    bool EditorServer::SetSessionStartHook(SessionStartHook hook)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's session start hook can't change while it is running");
+            return false;
+        }
+        _sessionStartHook = std::move(hook);
+        return true;
+    }
+
+    bool EditorServer::SetSessionEndHook(SessionEndHook hook)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's session end hook can't change while it is running");
+            return false;
+        }
+        _sessionEndHook = std::move(hook);
         return true;
     }
 
@@ -2716,20 +2750,25 @@ namespace N2Engine::Editor
         connection.helloBudget = job.helloBudget;
 
         std::optional<std::vector<uint8_t>> hello;
+        // Without a token there is no Hello: the client is an admin with no name (what its session's identity will be)
+        SessionIdentity candidate{std::string{}, TokenRole::Admin};
+        bool errorCodes = false;
         if (RequiresAccessToken())
         {
-            std::vector<uint8_t> payload;
-            if (!ReadAndVerifyHello(connection, peerText, payload))
+            VerifiedHello verified;
+            if (!ReadAndVerifyHello(connection, peerText, verified))
             {
                 return;
             }
-            hello = std::move(payload);
+            candidate = verified.identity;
+            errorCodes = verified.errorCodes;
+            hello = std::move(verified.payload);
         }
-        (void)OfferToSession(job, std::move(hello));
+        (void)OfferToSession(job, std::move(hello), candidate, errorCodes);
     }
 
     bool EditorServer::ReadAndVerifyHello(Connection &connection, const std::string_view peerText,
-                                          std::vector<uint8_t> &hello)
+                                          VerifiedHello &verified)
     {
         // The pre-Hello part of the request loop (HandleClient), for the one frame a connection may send before it has a
         // session: the same budget, payload cap, refusals, failure accounting and log lines. Everything that fails is
@@ -2864,7 +2903,9 @@ namespace N2Engine::Editor
         HelloEvaluation evaluation = EvaluateHello(*cmd, peerSuffix);
         if (evaluation.result == HelloEvaluation::Result::Accepted)
         {
-            hello = std::move(payload);
+            verified.payload = std::move(payload);
+            verified.identity = SessionIdentity{evaluation.identity.user, evaluation.identity.role};
+            verified.errorCodes = cmd->errorCodes;
             return true;
         }
         // The warning precedes the refusal (waited for, bounded) when the coalescer lets it through, as before; past the
@@ -2893,51 +2934,210 @@ namespace N2Engine::Editor
         return false;
     }
 
-    bool EditorServer::OfferToSession(PreAuthJob &job, std::optional<std::vector<uint8_t>> hello)
+    std::string EditorServer::BusyMessage(const std::optional<TokenRole> holder)
+    {
+        if (!holder.has_value())
+        {
+            return BusyError;
+        }
+        return std::format("The host is serving another session (a {} session); try again later", TokenRoleName(*holder));
+    }
+
+    void EditorServer::EndActiveSessionLocked(ConnectionPtr &dropped)
+    {
+        if (_handoff.has_value())
+        {
+            // Handed over but not taken by the session thread yet: it never ran, so there is nothing to clean up. The
+            // connection is closed by the caller, after it has let go of the lock.
+            _arbiter->End(_handoff->sessionId);
+            dropped = std::move(_handoff->connection);
+            _handoff.reset();
+        }
+        else if (_sessionRunning)
+        {
+            // The session thread leaves at its next wait (at most one poll interval), or when the command it has in flight
+            // on the main thread finishes, and then runs the cleanup that every end of a session runs. The request is set
+            // under the lock that clears _sessionRunning, and the thread clears it when it takes the next hand-off, so it
+            // can neither be lost nor end a later session.
+            _closeConnection.store(true);
+        }
+    }
+
+    void EditorServer::NoteSessionIdentity(const Connection &connection)
+    {
+        if (connection.sessionId == 0 || !_arbiter.has_value())
+        {
+            return;
+        }
+        const ConnectionIdentity identity = CurrentIdentity();
+        _arbiter->UpdateIdentity(connection.sessionId, SessionIdentity{identity.user, identity.role});
+    }
+
+    bool EditorServer::OfferToSession(PreAuthJob &job, std::optional<std::vector<uint8_t>> hello,
+                                      const SessionIdentity &candidate, const bool errorCodes)
     {
         if (_preHandoffHook)
         {
             _preHandoffHook();
         }
-        // With an access token an authenticated client waits for the active session only for BusyGrace (a session whose
-        // client has just gone is still ending for a moment); without one there is no Hello and no Busy, and the
-        // connection waits for as long as the session lasts, as it did in the backlog
-        const bool gated = hello.has_value();
-        const auto giveUpAt = std::chrono::steady_clock::now() + _busyGrace;
+        Connection &connection = *job.connection;
+        const std::string peerText = connection.peer.ToString();
+        const bool noTokenHost = _arbiter->NoTokenHost();
+        const auto busyUntil = std::chrono::steady_clock::now() + _busyGrace;
+        const auto userText = [](const SessionIdentity &who) { return who.user.empty() ? std::string("-") : who.user; };
+
+        enum class Outcome : uint8_t
+        {
+            Stopping,
+            HungUp,
+            Busy,
+            TimedOut,
+            Superseded,
+        };
+        Outcome outcome = Outcome::Stopping;
+        // Whom the Busy answer says holds the host
+        std::optional<SessionIdentity> holder;
+        // The claim this offer holds (0: none): it is the one candidate told to wait for the active session to end
+        uint64_t myClaim = 0;
+        std::chrono::steady_clock::time_point claimUntil{};
+        // A connection taken out of the hand-off slot is closed here, after the lock is let go (declared before the lock)
+        ConnectionPtr dropped;
 
         std::unique_lock lock(_sessionMutex);
         while (_running)
         {
-            // Free means no session running and nobody else's connection in the slot: the session thread takes the slot
-            // and sets _sessionRunning under this same mutex, so there is no moment with neither
-            if (!_sessionRunning && !_handoff.has_value())
+            if (myClaim != 0 && _claimId != myClaim)
             {
-                _handoff.emplace(HandOff{std::move(job.connection), std::move(hello)});
-                lock.unlock();
-                ++_sessionHandoffs;
-                // The connection is no longer pre-auth: its slot goes back (the job's connection is empty now)
-                job.slot.Release();
-                _sessionCv.notify_all();
-                return true;
-            }
-            if (gated && std::chrono::steady_clock::now() >= giveUpAt)
-            {
+                // A newer candidate that outranks this one (or is the same user) has claimed the host since
+                outcome = Outcome::Superseded;
                 break;
             }
+            // Free means no session running and nobody's connection in the slot: the session thread takes the slot and
+            // sets _sessionRunning under this same mutex, and ends a session and tells the arbiter under it too, so there
+            // is no moment with neither
+            const bool free = !_sessionRunning && !_handoff.has_value();
+            const std::optional<SessionIdentity> active = _arbiter->Active();
+            if (myClaim != 0 || (!active.has_value() && _claimId == 0))
+            {
+                if (free)
+                {
+                    const SessionArbiter::BeginResult begun = _arbiter->Begin(candidate);
+                    if (begun.sessionId != 0)
+                    {
+                        _handoff.emplace(HandOff{std::move(job.connection), std::move(hello), begun.sessionId});
+                        if (myClaim != 0)
+                        {
+                            _claimId = 0;
+                        }
+                        lock.unlock();
+                        ++_sessionHandoffs;
+                        // The connection is no longer pre-auth: its slot goes back (the job's connection is empty now)
+                        job.slot.Release();
+                        _sessionCv.notify_all();
+                        return true;
+                    }
+                }
+                else if (myClaim != 0 && std::chrono::steady_clock::now() >= claimUntil)
+                {
+                    // The old session did not end in time (a stuck write, a command that does not finish): it has been
+                    // asked to end and still will, but this candidate does not wait for it any longer
+                    outcome = Outcome::TimedOut;
+                    holder = active;
+                    break;
+                }
+            }
+            else
+            {
+                // Somebody is active, or has claimed the host and not got it yet: the candidate is judged against whoever
+                // would hold the host next
+                const std::optional<SessionIdentity> effective =
+                    _claimId != 0 ? std::optional<SessionIdentity>(_claim) : active;
+                const ArbiterVerdict verdict = SessionArbiter::Decide(effective, candidate, noTokenHost);
+                if (verdict.decision == ArbiterDecision::Takeover || verdict.decision == ArbiterDecision::Preempt)
+                {
+                    myClaim = ++_claimCounter;
+                    if (_claimCounter == 0)
+                    {
+                        myClaim = ++_claimCounter;
+                    }
+                    _claimId = myClaim;
+                    _claim = candidate;
+                    claimUntil = std::chrono::steady_clock::now() + _takeoverWait;
+                    if (verdict.decision == ArbiterDecision::Takeover)
+                    {
+                        ++_sessionTakeovers;
+                        PostLog(noTokenHost
+                                    ? std::format("Session takeover: the newest connection takes over (the host has no "
+                                                  "access token) peer={}",
+                                                  peerText)
+                                    : std::format("Session takeover: the session of user={} role={} is closed for a newer "
+                                                  "connection of the same user peer={}",
+                                                  userText(*effective), TokenRoleName(effective->role), peerText));
+                    }
+                    else
+                    {
+                        ++_sessionPreemptions;
+                        PostLog(std::format("Session preemption: the session of user={} role={} is closed for a client "
+                                            "with a higher role (user={} role={}) peer={}",
+                                            userText(*effective), TokenRoleName(effective->role), userText(candidate),
+                                            TokenRoleName(candidate.role), peerText));
+                    }
+                    EndActiveSessionLocked(dropped);
+                    continue; // look again at once: the session may already be gone
+                }
+                // Busy: it waits for the session to end by itself (a session whose client just went away is still ending
+                // for a moment) and is turned away when the grace is over
+                holder = effective;
+                if (std::chrono::steady_clock::now() >= busyUntil)
+                {
+                    outcome = Outcome::Busy;
+                    break;
+                }
+            }
             _sessionCv.wait_for(lock, Connection::PollInterval);
+            if (connection.PeerHasHungUp())
+            {
+                outcome = Outcome::HungUp;
+                break;
+            }
+        }
+        if (myClaim != 0 && _claimId == myClaim)
+        {
+            _claimId = 0;
         }
         lock.unlock();
-        if (!_running)
+
+        if (outcome == Outcome::Stopping)
         {
             return false; // stopping: the job closes the connection
         }
+        if (outcome == Outcome::HungUp)
+        {
+            // Nothing is left to serve: the slot goes back with the connection, instead of being held until the session
+            // it was waiting for ends
+            PostLog("A client waiting for the session hung up; its connection is closed peer=" + peerText);
+            return false;
+        }
 
         ++_busyRefusals;
+        const std::string text =
+            BusyMessage(holder.has_value() && outcome != Outcome::Superseded ? std::optional<TokenRole>(holder->role)
+                                                                             : std::nullopt);
         BufferWriter response;
-        WriteError(response, BusyError);
-        job.connection->Send(response.Data().data(), response.Size());
-        PostLog("Turned away an authenticated client: the host is serving another session peer=" +
-                job.connection->peer.ToString());
+        if (errorCodes)
+        {
+            WriteErrorCoded(response, text, ErrorCodeBusy);
+        }
+        else
+        {
+            WriteError(response, text);
+        }
+        connection.Send(response.Data().data(), response.Size());
+        const char *why = outcome == Outcome::Busy       ? "its role does not outrank the session's"
+                          : outcome == Outcome::TimedOut ? "the session it was to take over did not end in time"
+                                                         : "a newer client took the host first";
+        PostLog(std::format("Turned away an authenticated client: the host is serving another session ({}) peer={}", why,
+                            peerText));
         return false;
     }
 
@@ -2960,7 +3160,11 @@ namespace N2Engine::Editor
                 }
                 work.emplace(std::move(*_handoff));
                 _handoff.reset();
+                // A close request left over from the last session (made after it had stopped looking) must not end this
+                // one; one made from now on (the lock is held until _sessionRunning is set) is meant for it
+                _closeConnection.store(false);
                 _sessionRunning = true;
+                work->connection->sessionId = work->sessionId;
             }
             try
             {
@@ -2971,9 +3175,12 @@ namespace N2Engine::Editor
                 // e.g. bad_alloc; nothing may escape this thread (that would terminate the host)
                 PostLog("Dropping the editor connection after an unexpected error", true);
             }
+            const uint64_t endedSession = work->sessionId;
             work.reset(); // closes the connection if RunSession didn't
             {
+                // The arbiter and the flag change together: an offer that sees the host free sees nobody active
                 const std::lock_guard lock(_sessionMutex);
+                _arbiter->End(endedSession);
                 _sessionRunning = false;
             }
             _sessionCv.notify_all();
@@ -2995,6 +3202,20 @@ namespace N2Engine::Editor
             connection.connectedAt = ConnectionNow();
         }
 
+        // Half-open connections (a client whose machine lost power, a NAT that dropped the mapping) are noticed by the
+        // kernel, whatever the idle timeout is; the idle timeout and a takeover are the other ways out
+        if (!Connection::EnableKeepAlive(connection.socket, Connection::KeepAliveIdle, Connection::KeepAliveInterval,
+                                         Connection::KeepAliveCount))
+        {
+            PostLog("Couldn't set TCP keepalive on the session's socket: a half-open connection is noticed only by the "
+                    "idle timeout peer=" + peerText,
+                    true);
+        }
+        if (_sessionStartHook)
+        {
+            _sessionStartHook(connection.socket);
+        }
+
         // A new session has no identity (its Hello gives it one)
         BeginSessionState();
         SetPeerText(peerText);
@@ -3012,6 +3233,10 @@ namespace N2Engine::Editor
             PostLog("Dropping the editor connection after an unexpected error", true);
         }
         _activeConnection.store(nullptr);
+        if (_sessionEndHook)
+        {
+            _sessionEndHook();
+        }
 
         handOff.connection.reset(); // its TLS session first, then the socket
         _clientConnected = false;
@@ -3399,6 +3624,9 @@ namespace N2Engine::Editor
                 if (helloAccepted)
                 {
                     CheckIdentityAgainstTokens();
+                    // A later Hello can give the connection another user or role: the arbiter judges a candidate against
+                    // what the session is now
+                    NoteSessionIdentity(connection);
                 }
             }
             // The outcome is counted before the answer is sent, so a client that sees the refusal and connects again

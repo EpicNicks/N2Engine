@@ -26,18 +26,18 @@ namespace N2Engine::Editor
      *    accept (AdmitConnection), before any TLS handshake. A success clears the address; so does `idleReset` without a
      *    failure.
      *  - loopback (127.0.0.0/8, ::1) is exempt from the per-address rule, because a reverse proxy or an SSH tunnel makes
-     *    every peer loopback and one ban would lock everybody out. All of loopback shares ONE counter instead:
-     *    `loopbackFailures` failed Hellos within `loopbackWindow` start a global backoff, doubling with each further
-     *    burst up to `maxBackoff`. A success does not clear it (an attacker could interleave a good login); only
-     *    `idleReset` without a failure does.
+     *    every peer loopback and one ban would lock everybody out. Since PR S-4 it has NO backoff of its own either: the
+     *    shared counter that used to refuse every loopback connection after ten failed Hellos in a minute (and so locked
+     *    out a client with a CORRECT token) is gone. What bounds loopback is a cap on pre-auth concurrency and handshake
+     *    rate (PreAuthSlots: loopback may use every slot; TokenBucket: the global bucket applies to loopback), which no
+     *    failure of anybody changes, and the per-user backoff below, which a correct token passes.
      *  - per user: failed Hellos that name a user are counted against that name wherever they come from (the only
      *    handle on an attacker behind a tunnel), with a SHORT cap (`userMaxBackoff`) so an attacker can't keep a real
      *    user out for long. A success of that user clears it.
      * A connection that ends without a successful Hello, and without a wrong-token Hello (which is counted as such), is a
      * failure too: it timed out, closed early, sent another command or an oversized frame, or failed its TLS handshake
-     * (RecordUnfinishedHello). Per address only: loopback's global counter is NOT fed by it, since behind a tunnel or
-     * a proxy every peer is loopback and a mere connect would then make the lockout above cheap. Loopback relies on the
-     * short pre-Hello budget instead.
+     * (RecordUnfinishedHello). Per non-loopback address only: loopback has nothing to count it in (see above) and
+     * relies on the pre-Hello budget and the slot and handshake caps instead.
      * No trusted-proxy support: the peer address is the TCP peer, never a header or a PROXY line.
      */
 
@@ -85,9 +85,6 @@ namespace N2Engine::Editor
         std::chrono::milliseconds idleReset{15 * 60 * 1000};
         /// Entries per table (addresses, users); past it the oldest idle one is evicted
         size_t maxEntries = 4096;
-        /// Failed Hellos across all of loopback, inside `loopbackWindow`, that start the global backoff
-        uint32_t loopbackFailures = 10;
-        std::chrono::milliseconds loopbackWindow{60 * 1000};
         /// Failed Hellos naming one user before that user is backed off (then doubling, capped at `userMaxBackoff`)
         uint32_t userFreeFailures = 2;
         std::chrono::milliseconds userMaxBackoff{30 * 1000};
@@ -125,7 +122,8 @@ namespace N2Engine::Editor
             uint32_t suppressed = 0;
         };
 
-        /// At accept. Loopback is held to the global loopback backoff, any other address to its own.
+        /// At accept. A non-loopback address is held to its own backoff; loopback is always admitted (its caps are the
+        /// pre-auth slots and the handshake rate, which the caller applies next).
         [[nodiscard]] Admission AdmitConnection(const PeerAddress &peer);
         /// Whether a Hello naming this user is refused for now (the user is backed off). Doesn't count as a failure.
         [[nodiscard]] bool IsUserBackedOff(std::string_view user);
@@ -134,24 +132,24 @@ namespace N2Engine::Editor
         {
             /// How long from now
             Duration duration{0};
-            /// The failures on record for this subject when it started (loopback: strikes, the bursts so far)
+            /// The failures on record for this subject when it started
             uint32_t failures = 0;
         };
         /// A backoff this failure started (nullopt: none; one at most per rule)
         struct FailureOutcome
         {
             std::optional<Backoff> address;
-            std::optional<Backoff> loopback;
             std::optional<Backoff> user;
         };
 
         /// A Hello with a wrong token. `user` is the user it named, when it named a valid one on a host with a tokens file.
+        /// A loopback peer has no address entry (no per-address or shared backoff): only the user is counted.
         FailureOutcome RecordFailure(const PeerAddress &peer, std::optional<std::string_view> user);
         /// A connection that ended without a successful Hello (and was not counted as a wrong-token one): a failure for
         /// its address, naming no user, so the same backoff, one log line per backoff and suppressed count apply.
         /// Loopback is exempt (nothing is recorded, an empty outcome): see above.
         FailureOutcome RecordUnfinishedHello(const PeerAddress &peer);
-        /// A Hello that succeeded: clears the address and the user. Loopback's global counter is left (see above).
+        /// A Hello that succeeded: clears the address and the user.
         void RecordSuccess(const PeerAddress &peer, std::optional<std::string_view> user);
 
         [[nodiscard]] size_t AddressCount() const;
@@ -161,17 +159,6 @@ namespace N2Engine::Editor
         struct Entry
         {
             uint32_t failures = 0;
-            TimePoint nextAllowed{};
-            TimePoint lastSeen{};
-            uint32_t suppressed = 0;
-        };
-        struct LoopbackState
-        {
-            /// Whether a failure has been counted yet (a clock may start at zero, so no time stands for "never")
-            bool seen = false;
-            TimePoint windowStart{};
-            uint32_t windowFailures = 0;
-            uint32_t strikes = 0;
             TimePoint nextAllowed{};
             TimePoint lastSeen{};
             uint32_t suppressed = 0;
@@ -188,10 +175,9 @@ namespace N2Engine::Editor
         // Set at construction and never changed, so Policy() and Now() need no lock
         RateLimitPolicy _policy;
         Clock _clock;
-        // Guards the three tables below; taken by every public method, never recursively (the private helpers assume it)
+        // Guards the two tables below; taken by every public method, never recursively (the private helpers assume it)
         mutable std::mutex _mutex;
         std::map<std::string, Entry> _addresses;
         std::map<std::string, Entry> _users;
-        LoopbackState _loopback;
     };
 }

@@ -770,6 +770,9 @@ namespace N2Engine::Editor::Protocol
     inline constexpr std::string_view ErrorCodeReadOnly = "readOnly";
     /// Since 1.12.0: the role bound to the connection may not run the command (a host with a tokens file)
     inline constexpr std::string_view ErrorCodeForbidden = "forbidden";
+    /// Since 1.13.0: the host is serving another session and this client is turned away at Hello (it does not outrank
+    /// that session and is not the same user): the connection is closed after the answer
+    inline constexpr std::string_view ErrorCodeBusy = "busy";
 
     /// ErrorCoded (since 1.11.0), sent only to a client that asked for it with Hello's errorCodes: the message an Error
     /// would carry, then a code. Unlike Error's, its payload is two length-prefixed strings.
