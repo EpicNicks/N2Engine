@@ -80,7 +80,11 @@ namespace N2Engine::Scripting
         const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
         try
         {
-            if (LuaRuntime::Instance().ProtectedCall(body, error))
+            // The bodies make sol references (a method read as a function, the fields' tables and values): free registry
+            // slots first, so none of them has to grow the registry. Where Lua's errors are C++ exceptions (the web
+            // build, MSVC Debug) a failing luaL_ref inside sol's noexcept constructors ends the process even in a
+            // protected call; with the slots reserved it cannot fail. A body holds a few references at a time.
+            if (LuaRuntime::Instance().ReserveReferences(16, error) && LuaRuntime::Instance().ProtectedCall(body, error))
             {
                 return true;
             }
@@ -270,10 +274,11 @@ namespace N2Engine::Scripting
         if (result.return_count() > 0 && result[0].is<sol::table>())
         {
             // The reference to the chunk's table is made outside a protected call (a stack value to a registry
-            // reference): free registry slots first (one is needed, a second is margin for a temporary), so at the
-            // memory cap it allocates nothing (sol's constructors are noexcept: a failure there would end the process)
+            // reference): free registry slots first (one is needed for it, one for the instance table the protected call
+            // below makes, and as many again as margin for temporaries), so at the memory cap it allocates nothing
+            // (sol's constructors are noexcept: a failure there would end the process)
             std::string reserveError;
-            if (!LuaRuntime::Instance().ReserveReferences(2, reserveError))
+            if (!LuaRuntime::Instance().ReserveReferences(4, reserveError))
             {
                 logLoadFailure(LuaRuntime::Instance().LimitAwareError(reserveError));
                 return sol::table{};
@@ -935,66 +940,126 @@ namespace N2Engine::Scripting
             Logger::Warn(std::format("Lua error reading the fields of {}: {}", _scriptPath.ToString(), error));
             return false;
         };
-        // A copy, so a script instance replaced while the reads below run its metamethods cannot free the table being
-        // read. Made in a protected call, like every reference below: a copy outside one that fails at the memory cap
-        // would end the process (sol's reference constructors are noexcept)
-        sol::table instance;
-        if (!guarded([&] { instance = _scriptInstance; }) || !instance.valid())
+        // The declarations are read with Lua's own API into plain C++ data: a sol reference made for each key, value or
+        // table would be a registry reference (luaL_ref), and where Lua's errors are C++ exceptions (the web build, MSVC
+        // Debug) one that fails at the memory cap ends the process even inside a protected call, as outside one. The
+        // instance is pushed on the stack, which keeps it alive while the reads run its metamethods (a SetScript from
+        // one of them cannot free it).
+        enum class DefaultKind
         {
-            return fields;
-        }
-        sol::optional<sol::table> declared;
-        if (!guarded([&] { declared = instance["SerializableFields"].get<sol::optional<sol::table>>(); }) || !declared)
+            Other,
+            Integer,
+            Float,
+            Bool,
+            String,
+            Vector3
+        };
+        struct Declaration
         {
-            return fields;
-        }
+            std::string name;
+            bool isDefinition = false; // { default = 5, type = "..." } rather than the shorthand `speed = 5`
+            std::string declaredType;
+            DefaultKind defaultKind = DefaultKind::Other; // what the default (or the shorthand value) is
+        };
+        const auto classify = [](lua_State *state, const int index)
+        {
+            switch (lua_type(state, index))
+            {
+            case LUA_TNUMBER:
+                return lua_isinteger(state, index) != 0 ? DefaultKind::Integer : DefaultKind::Float;
+            case LUA_TBOOLEAN:
+                return DefaultKind::Bool;
+            case LUA_TSTRING:
+                return DefaultKind::String;
+            default:
+                return sol::stack_object(state, index).is<Math::Vector3>() ? DefaultKind::Vector3
+                                                                            : DefaultKind::Other;
+            }
+        };
 
-        // The declarations are copied out first, in a protected call (the iteration makes a reference for each key and
-        // each value), so the loop below holds only references that already exist
-        std::vector<std::pair<sol::object, sol::object>> declarations;
+        std::vector<Declaration> declarations;
+        bool declared = false;
         if (!guarded([&]
         {
-            for (const auto &[key, value] : *declared)
+            lua_State *state = _scriptInstance.lua_state();
+            const int base = lua_gettop(state);
+            _scriptInstance.push(state);
+            lua_getfield(state, -1, "SerializableFields");
+            if (lua_type(state, -1) == LUA_TTABLE)
             {
-                declarations.emplace_back(key, value);
+                declared = true;
+                const int table = lua_gettop(state);
+                lua_pushnil(state);
+                while (lua_next(state, table) != 0)
+                {
+                    // A field is named by a string (a table can be keyed by anything: the script's own business)
+                    if (lua_type(state, -2) == LUA_TSTRING)
+                    {
+                        Declaration declaration;
+                        std::size_t length = 0;
+                        const char *text = lua_tolstring(state, -2, &length);
+                        declaration.name.assign(text, length);
+                        declaration.isDefinition = lua_type(state, -1) == LUA_TTABLE;
+                        if (!declaration.isDefinition)
+                        {
+                            declaration.defaultKind = classify(state, -1);
+                        }
+                        declarations.push_back(std::move(declaration));
+                    }
+                    lua_pop(state, 1);
+                }
             }
-        }))
+            lua_settop(state, base);
+        }) || !declared)
         {
             return fields;
         }
 
-        std::vector<FieldInfo> scriptFields;
-        for (const auto &[key, value] : declarations)
+        // A definition's type and default are read one definition at a time, each in a protected call of its own (they
+        // can run the definition's metamethods): one that fails leaves that field to its default, the others unaffected
+        for (Declaration &declaration : declarations)
         {
-            // A field is named by a string (a table can be keyed by anything: the script's own business)
-            if (key.get_type() != sol::type::string)
+            if (!declaration.isDefinition)
             {
                 continue;
             }
+            guarded([&]
+            {
+                lua_State *state = _scriptInstance.lua_state();
+                const int base = lua_gettop(state);
+                _scriptInstance.push(state);
+                lua_getfield(state, -1, "SerializableFields");
+                if (lua_type(state, -1) == LUA_TTABLE)
+                {
+                    lua_pushlstring(state, declaration.name.data(), declaration.name.size());
+                    lua_rawget(state, -2);
+                    if (lua_type(state, -1) == LUA_TTABLE)
+                    {
+                        const int definition = lua_gettop(state);
+                        lua_getfield(state, definition, "type");
+                        if (lua_type(state, -1) == LUA_TSTRING)
+                        {
+                            std::size_t length = 0;
+                            const char *text = lua_tolstring(state, -1, &length);
+                            declaration.declaredType.assign(text, length);
+                        }
+                        lua_pop(state, 1);
+                        lua_getfield(state, definition, "default");
+                        declaration.defaultKind = classify(state, -1);
+                    }
+                }
+                lua_settop(state, base);
+            });
+        }
+
+        std::vector<FieldInfo> scriptFields;
+        for (const Declaration &declaration : declarations)
+        {
             FieldInfo info;
-            info.name = key.as<std::string>();
+            info.name = declaration.name;
             info.displayName = DefaultDisplayName(info.name);
             info.container = "scriptData";
-
-            // Either { default = 5, type = "..." } or the shorthand `speed = 5`: the default is the declaration's own
-            // "default" (read in a protected call, from the stack, so no reference is made for the table), or the value
-            std::string declaredType;
-            sol::object declaredDefault;
-            const sol::object &declaration = value;
-            const bool isDefinition = declaration.is<sol::table>();
-            if (isDefinition)
-            {
-                guarded([&]
-                {
-                    lua_State *L = declaration.lua_state();
-                    declaration.push(L);
-                    const sol::stack_table definition(L, -1);
-                    declaredType = definition.get_or<std::string>("type", "");
-                    declaredDefault = definition.get<sol::object>("default");
-                    lua_pop(L, 1);
-                });
-            }
-            const sol::object &defaultValue = isDefinition ? declaredDefault : declaration;
+            const std::string &declaredType = declaration.declaredType;
 
             if (declaredType == "GameObject")
             {
@@ -1031,27 +1096,24 @@ namespace N2Engine::Scripting
                 info.kind = FieldKind::Vector3;
                 info.typeName = "Vector3";
             }
-            else if (defaultValue.get_type() == sol::type::number)
+            else if (declaration.defaultKind == DefaultKind::Integer || declaration.defaultKind == DefaultKind::Float)
             {
                 // As ExtractSerializableFields stores it: a Lua integer is an integer
-                lua_State *L = defaultValue.lua_state();
-                defaultValue.push(L);
-                const bool isInteger = lua_isinteger(L, -1) != 0;
-                lua_pop(L, 1);
+                const bool isInteger = declaration.defaultKind == DefaultKind::Integer;
                 info.kind = isInteger ? FieldKind::Int : FieldKind::Float;
                 info.typeName = isInteger ? "int" : "float";
             }
-            else if (defaultValue.is<bool>())
+            else if (declaration.defaultKind == DefaultKind::Bool)
             {
                 info.kind = FieldKind::Bool;
                 info.typeName = "bool";
             }
-            else if (defaultValue.is<std::string>())
+            else if (declaration.defaultKind == DefaultKind::String)
             {
                 info.kind = FieldKind::String;
                 info.typeName = "string";
             }
-            else if (defaultValue.is<Math::Vector3>())
+            else if (declaration.defaultKind == DefaultKind::Vector3)
             {
                 info.kind = FieldKind::Vector3;
                 info.typeName = "Vector3";

@@ -701,7 +701,12 @@ namespace N2Engine::Scripting
         {
             sol::table table;
             std::string error;
-            ProtectedCall([&] { table = _lua.create_table(); }, error);
+            // Free registry slots first: the table's reference is made by a noexcept sol constructor, which where Lua's
+            // errors are C++ exceptions (the web build, MSVC Debug) ends the process if the registry cannot grow
+            if (ReserveReferences(2, error))
+            {
+                ProtectedCall([&] { table = _lua.create_table(); }, error);
+            }
             return table;
         };
 
@@ -764,17 +769,17 @@ namespace N2Engine::Scripting
         {
             return sol::nullopt;
         }
-        // The copy is a registry reference: made in a protected call, so at the memory cap it is an error here (a
-        // reference copy outside one that fails ends the process)
-        sol::table copy;
+        // The copy is a registry reference made outside a protected call (a protected one is no safer where Lua's
+        // errors are C++ exceptions, the web build and MSVC Debug: sol's constructor is noexcept): free slots first,
+        // and at the memory cap that is an error here
         std::string error;
-        if (!ProtectedCall([&] { copy = it->second; }, error))
+        if (!ReserveReferences(2, error))
         {
             Logger::Warn(std::format("Module {} could not be read: {}", SanitizeForLog(moduleName),
                                      LimitAwareError(error)));
             return sol::nullopt;
         }
-        return sol::optional<sol::table>(std::move(copy));
+        return sol::optional<sol::table>(it->second);
     }
 
     void LuaRuntime::ReloadModule(const IO::ResourcePath &path, LuaScript *script)
