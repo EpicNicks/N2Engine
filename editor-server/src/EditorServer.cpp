@@ -1991,7 +1991,7 @@ namespace N2Engine::Editor
         if (outcome.user.has_value())
         {
             PostLog(std::format("Rate limit: user={} is backed off for {} ms after {} failed Hellos naming it, from any "
-                                "address; a Hello naming it is refused until then (last from peer={})",
+                                "address; a Hello naming it is still checked (the right token gets in and clears it, a wrong one is counted) (last from peer={})",
                                 LoggableClaimedUser(user), outcome.user->duration.count(), outcome.user->failures,
                                 peer.ToString()),
                     true);
