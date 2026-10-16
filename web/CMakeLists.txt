@@ -4,9 +4,11 @@
 #   n2_web_input   the pure translation from browser events to the engine's input types (no DOM, so it is unit tested
 #                  under node: tests/web)
 #   N2WebPlayer    the player: the engine on the software renderer, drawing to the page's canvas. It links straight into
-#                  the package folder, ${CMAKE_BINARY_DIR}/web-package, as index.html + index.js + index.wasm + index.data:
+#                  the package folder, ${CMAKE_BINARY_DIR}/web-package, as index.html + index.js + index.wasm + index.data
+#                  (+ n2-loader.js and manifest.json from web-package):
 #                  static files only, every URL relative, nothing the host has to be configured for
-#   web-package    builds that folder (the target to build; scripts/web-package-smoke.mjs checks and runs it)
+#   web-package    builds that folder (the target to build) and finishes it: n2-loader.js, manifest.json and, for the size and
+#                  speed profiles, the .br/.gz siblings; scripts/web-package-smoke.mjs checks and runs it
 #
 # The page (shell.html) is emcc's --shell-file: emcc fills in the script tag, which names index.js relative to the page,
 # and index.js finds index.wasm and index.data the same way, so the folder works from any path or subdomain.
@@ -53,6 +55,16 @@ target_link_options(N2WebPlayer PRIVATE
 set_property(TARGET N2WebPlayer APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/shell.html" "${N2_WEB_PROJECT_DIR}/project.n2proj" ${N2_WEB_PROJECT_FILES})
 
-add_custom_target(web-package DEPENDS N2WebPlayer
+# After the link: the loader next to the page, manifest.json (sizes and sha256 of every file) and, for the size and speed
+# profiles, the .br/.gz siblings (scripts/web-package-finalize.mjs). The plain files always stay.
+set(N2_WEB_FINALIZE_ARGS "")
+if(N2ENGINE_WEB_PRECOMPRESS_EFFECTIVE)
+    list(APPEND N2_WEB_FINALIZE_ARGS --precompress)
+endif()
+add_custom_target(web-package
+    COMMAND ${N2ENGINE_WEB_NODE} "${CMAKE_SOURCE_DIR}/scripts/web-package-finalize.mjs" "${CMAKE_BINARY_DIR}/web-package"
+            --loader "${CMAKE_CURRENT_SOURCE_DIR}/n2-loader.js" --profile ${N2ENGINE_WEB_PROFILE} ${N2_WEB_FINALIZE_ARGS}
     COMMENT "The web package is in ${CMAKE_BINARY_DIR}/web-package"
+    VERBATIM
 )
+add_dependencies(web-package N2WebPlayer)

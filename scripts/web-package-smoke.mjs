@@ -1,11 +1,17 @@
 // Checks the web package (the folder `cmake --build <dir> --target web-package` writes: <dir>/web-package) and runs
-// it headless under node. Usage: node scripts/web-package-smoke.mjs <package folder> [frames] [WxH]
+// it headless under node. Usage: node scripts/web-package-smoke.mjs <package folder> [frames] [WxH] [--precompressed]
 //
-// 1. The folder holds the static files and nothing else: index.html, index.js, index.wasm, index.data, no worker script
-//    (a threaded build would need cross-origin isolation), and the page refers to nothing by an absolute URL.
-// 2. index.js is loaded the way the page loads it (createN2Player(settings)) and run for N frames with the canvas mocked:
-//    the player calls Module.n2Present(pixels, width, height) for every frame, as it does for the page's canvas. The
-//    frames must come, have the size asked for, and show something (more than one colour, some pixel not black).
+// 1. The folder holds the static files and nothing else: index.html, index.js, index.wasm, index.data, n2-loader.js,
+//    manifest.json (and, with --precompressed, the .br/.gz siblings of the five compressible files, which the size and
+//    speed profiles write; without the flag there must be none), no worker script (a threaded build would need
+//    cross-origin isolation), and the page refers to nothing by an absolute URL. manifest.json is checked against the
+//    files: sizes, sha256, gzip and brotli sizes; every sibling must decompress to its plain file.
+// 2. index.js is loaded the way the page loads it: through web/n2-loader.js (the package's copy) with a mock fetch that
+//    serves the folder's files, serves index.wasm with the WRONG content type (text/plain), and so makes the loader
+//    take its ArrayBuffer fallback, which is asserted. The player then runs N frames with the canvas mocked: it calls
+//    Module.n2Present(pixels, width, height) for every frame, as it does for the page's canvas. The frames must come,
+//    have the size asked for, and show something (more than one colour, some pixel not black). The loader's progress
+//    must end at the manifest's sizes and the asset pack must have come through the loader's hook.
 //
 // This is not a browser: nothing here proves the canvas, the input events, the page or the hosting work. See
 // docs/web-checklist.html for what a person has to check.
@@ -13,10 +19,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 
-const dir = path.resolve(process.argv[2] ?? 'build-web/web-package');
-const frames = Number(process.argv[3] ?? 30);
-const size = process.argv[4] ?? '320x180';
+const positional = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const expectPrecompressed = process.argv.includes('--precompressed');
+const dir = path.resolve(positional[0] ?? 'build-web/web-package');
+const frames = Number(positional[1] ?? 30);
+const size = positional[2] ?? '320x180';
 const [width, height] = size.split('x').map(Number);
 const timeoutMs = 120000;
 
@@ -26,14 +36,41 @@ function expect(condition, message) {
 }
 
 // 1. The package contents
-const required = ['index.html', 'index.js', 'index.wasm', 'index.data'];
+const compressible = ['index.html', 'index.js', 'index.wasm', 'index.data', 'n2-loader.js'];
+const required = [...compressible, 'manifest.json'];
+const siblings = compressible.flatMap((name) => [`${name}.br`, `${name}.gz`]);
 const present = fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
 console.log(`Package ${dir}: ${present.join(', ') || '(missing)'}`);
 for (const name of required) {
   expect(present.includes(name), `missing ${name}`);
 }
+for (const name of expectPrecompressed ? siblings : []) {
+  expect(present.includes(name), `missing ${name} (--precompressed)`);
+}
 for (const name of present) {
-  expect(required.includes(name), `unexpected file ${name} (the package is index.html, index.js, index.wasm and index.data only)`);
+  const allowed = required.includes(name) || (expectPrecompressed && siblings.includes(name));
+  expect(allowed, `unexpected file ${name} (the package is ${required.join(', ')}${expectPrecompressed ? ' and their .br/.gz siblings' : ''} only)`);
+}
+let manifest = null;
+if (problems.length === 0) {
+  // manifest.json against the files
+  manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  expect(Object.keys(manifest.files).sort().join() === compressible.slice().sort().join(), `manifest lists ${Object.keys(manifest.files)}`);
+  for (const name of compressible) {
+    const entry = manifest.files[name];
+    const plain = fs.readFileSync(path.join(dir, name));
+    if (!entry) continue;
+    expect(entry.raw === plain.length, `manifest: ${name} raw ${entry.raw} but the file is ${plain.length}`);
+    expect(entry.sha256 === crypto.createHash('sha256').update(plain).digest('hex'), `manifest: sha256 of ${name} is wrong`);
+    expect(entry.gzip === zlib.gzipSync(plain, { level: 9 }).length, `manifest: gzip size of ${name} is wrong`);
+    if (expectPrecompressed) {
+      const gz = fs.readFileSync(path.join(dir, `${name}.gz`));
+      const br = fs.readFileSync(path.join(dir, `${name}.br`));
+      expect(entry.gzip === gz.length && entry.brotli === br.length, `manifest: sizes of ${name} do not match its .gz/.br`);
+      expect(zlib.gunzipSync(gz).equals(plain), `${name}.gz does not decompress to ${name}`);
+      expect(zlib.brotliDecompressSync(br).equals(plain), `${name}.br does not decompress to ${name}`);
+    }
+  }
 }
 if (problems.length === 0) {
   const html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
@@ -43,6 +80,8 @@ if (problems.length === 0) {
     expect(!/^([a-z][a-z0-9+.-]*:|\/)/i.test(url), `index.html has a non-relative URL: ${url}`);
   }
   expect(urls.includes('index.js'), 'index.html does not load index.js by a relative URL');
+  expect(urls.includes('n2-loader.js'), 'index.html does not load n2-loader.js by a relative URL');
+  expect(fs.readFileSync(path.join(dir, 'n2-loader.js')).equals(fs.readFileSync(new URL('../web/n2-loader.js', import.meta.url))), 'the package n2-loader.js differs from web/n2-loader.js');
   expect(!/crossOriginIsolated|SharedArrayBuffer|Cross-Origin-/.test(html), 'index.html mentions cross-origin isolation');
   const js = fs.readFileSync(path.join(dir, 'index.js'), 'utf8');
   expect(!/PThread/.test(js), 'index.js looks like a threaded (pthreads) build');
@@ -76,8 +115,26 @@ const done = new Promise((resolve, reject) => {
 process.chdir(dir);
 const require = createRequire(pathToFileURL(path.join(dir, 'index.js')));
 const createN2Player = require(path.join(dir, 'index.js'));
+const N2Loader = require(path.join(dir, 'n2-loader.js'));
+
+// The mock host: serves the folder's files by the URL the loader asks for (query dropped), index.wasm with a wrong MIME type
+const requested = [];
+const loaderEvents = [];
+let lastProgress = null;
+async function mockFetch(url) {
+  requested.push(url);
+  const name = url.split('?')[0];
+  if (!required.includes(name)) return new Response('not found', { status: 404 });
+  const type = name === 'index.wasm' ? 'text/plain' : 'application/octet-stream';
+  return new Response(fs.readFileSync(path.join(dir, name)), { headers: { 'content-type': type } });
+}
+const loader = N2Loader.create({
+  fetch: mockFetch,
+  onEvent: (event) => loaderEvents.push(event),
+  onProgress: (p) => { lastProgress = p; },
+});
 try {
-  createN2Player({
+  loader.run(createN2Player, {
     arguments: ['--frames', String(frames), '--size', size],
     print: (text) => { output.push(text); console.log(text); },
     printErr: (text) => {
@@ -85,7 +142,6 @@ try {
       console.error(text);
       if (text.startsWith('package error')) globalThis.__n2Failed(text); // the asset pack did not load: no point waiting
     },
-    locateFile: (name) => path.join(dir, name),
     // The canvas, mocked: keeps the last frame and checks the shape of each
     n2Present: (pixels, w, h) => {
       ++frameCount;
@@ -104,6 +160,18 @@ try {
   problems.push(String(error?.message ?? error));
 }
 
+// The loader's part: manifest read, MIME fallback taken, the pack and the wasm fetched by hash, progress complete
+expect(loaderEvents.includes('manifest-ok'), `loader events: ${loaderEvents}`);
+expect(loaderEvents.includes('wasm-fallback') && loaderEvents.includes('wasm-done'), `the wrong MIME type did not take the ArrayBuffer fallback: ${loaderEvents}`);
+expect(loaderEvents.includes('data-done'), `the asset pack did not come through the loader: ${loaderEvents}`);
+if (manifest) {
+  for (const name of ['index.wasm', 'index.data']) {
+    expect(requested.includes(`${name}?v=${manifest.files[name].sha256.slice(0, 12)}`), `${name} was not requested by its hash: ${requested}`);
+  }
+  const total = manifest.files['index.wasm'].raw + manifest.files['index.data'].raw;
+  expect(lastProgress && lastProgress.loaded === total && lastProgress.total === total, `loader progress ended at ${JSON.stringify(lastProgress)}, expected ${total}`);
+}
+console.log(`Loader: ${loaderEvents.join(', ')}`);
 expect(frameCount === frames, `${frameCount} frames reached the canvas, expected ${frames}`);
 expect(!badFrame, badFrame ?? '');
 expect(output.some((line) => line.startsWith('N2_WEB_SMOKE_DONE')), 'the player did not print N2_WEB_SMOKE_DONE');

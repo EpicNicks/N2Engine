@@ -774,15 +774,16 @@ jobs:
           docker logs n2tokens
           exit 1
 
-  # The web (WebAssembly) build, stages 0 to 2 of issue #155: the math, text and asset-import libraries, the engine
+  # The web (WebAssembly) build, stages 0 to 3 of issue #155: the math, text and asset-import libraries, the engine
   # core (single-threaded, no audio device) and the software renderer, and their unit tests (math, text, assetimport,
   # engine, renderer and web input tests, the software-renderer goldens among them), built with Emscripten and run under
-  # node; and the web player package (index.html, js, wasm and the asset pack), checked and run headless under node. Not a required check. Emscripten is pinned to an exact release (EMSCRIPTEN_VERSION, installed
+  # node; and the web player package (index.html, js, wasm, the asset pack, the loader and manifest.json), checked and run
+  # headless under node in all three profiles (dev, size, speed; stage 3), with the size budgets of web/budgets.json enforced. Not a required check. Emscripten is pinned to an exact release (EMSCRIPTEN_VERSION, installed
   # with the official emsdk, no third-party action): a moving "latest" would let an upstream release break or change the
   # build with no change in this repository. 4.0.10 was chosen as a 4.0 release with a recent LLVM/libc++ for C++23 (not yet proven: the first
   # run of this job is the proof; bump the pin here and in docs/web-build.html if it is not enough). ccache is not used.
-  # Only the dev profile is built and tested; the size and speed profiles are configured (not built) so a broken profile
-  # fails here. The tests that cannot run on the web are excluded by an explicit list (tests/engine/CMakeLists.txt) or
+  # The unit tests run on the dev profile only; the size and speed profiles build and check the player package (no tests:
+  # they would not add coverage, only minutes). The tests that cannot run on the web are excluded by an explicit list (tests/engine/CMakeLists.txt) or
   # skip themselves; docs/web-build.html lists them with their reasons and describes the build.
   web:
     name: web (Emscripten, dev profile, node tests)
@@ -818,9 +819,9 @@ jobs:
           . "$HOME/emsdk/emsdk_env.sh"
           emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev
 
-      # Configure only, without the tests (only the GLFW and OpenAL headers are fetched): the size and speed profiles must
-      # at least configure
-      - name: Configure (size and speed profiles, configure only)
+      # Without the tests (only the GLFW and OpenAL headers are fetched): the size and speed profiles build the player
+      # package further down
+      - name: Configure (size and speed profiles)
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
@@ -841,7 +842,7 @@ jobs:
           . "$HOME/emsdk/emsdk_env.sh"
           ctest --test-dir build-web --output-on-failure -V
 
-      # No budget is configured, so this only reports (raw and gzip sizes in the job summary)
+      # Only reports (raw and gzip sizes in the job summary); the budgets are checked on the package below
       - name: Report artifact sizes
         run: bash scripts/web-size-report.sh build-web/bin
 
@@ -862,6 +863,40 @@ jobs:
           . "$HOME/emsdk/emsdk_env.sh"
           node scripts/web-package-smoke.mjs build-web/web-package 30 320x180
 
-      # No budget is configured, so this only reports: the package's files, raw and gzip, in the job summary
+      # The loader (web/n2-loader.js) under node with a mock fetch: right and wrong MIME type, no manifest, 404, truncated file
+      - name: Test the web loader under node
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node scripts/web-loader-test.mjs
+
       - name: Report web package sizes
         run: bash scripts/web-size-report.sh build-web/web-package
+
+      # Stage 3: the package's sizes (manifest.json, written by the web-package target) against web/budgets.json, the one
+      # place the budgets live. The job fails when one is exceeded.
+      - name: Check the web package size budgets (dev)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node scripts/web-budget-check.mjs build-web/web-package dev
+
+      # Stage 3: the size and speed profiles, each a full rebuild of the engine, the renderer and the player (LTO, no tests),
+      # then the same package smoke (now with the .br/.gz siblings required) and the profile's budgets.
+      - name: Build and check the web package (size profile)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web-size --target web-package -- -k 0
+          node scripts/web-package-smoke.mjs build-web-size/web-package 30 320x180 --precompressed
+          bash scripts/web-size-report.sh build-web-size/web-package
+          node scripts/web-budget-check.mjs build-web-size/web-package size
+
+      - name: Build and check the web package (speed profile)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web-speed --target web-package -- -k 0
+          node scripts/web-package-smoke.mjs build-web-speed/web-package 30 320x180 --precompressed
+          bash scripts/web-size-report.sh build-web-speed/web-package
+          node scripts/web-budget-check.mjs build-web-speed/web-package speed

@@ -8,7 +8,9 @@
 #   * compiles and links everything with WebAssembly exceptions (the engine, sol2, nlohmann::json and googletest throw
 #     and catch; Emscripten's default is to abort on a throw)
 #   * defines the N2ENGINE_WEB_PROFILE cache variable (dev | size | speed) and turns it into compile and link flags
-#   * defines the optional size budget variables and a `web-size-report` target that runs scripts/web-size-report.sh
+#   * defines N2ENGINE_WEB_PRECOMPRESS (the .br/.gz siblings of the web package) and a `web-size-report` target that runs
+#     scripts/web-size-report.sh (size budgets are not here: they are in web/budgets.json, checked by
+#     scripts/web-budget-check.mjs)
 #
 # The flags are global (add_compile_options / add_link_options) so that every library and executable, including the
 # fetched googletest, is built the same way; LTO in particular needs every object to be compiled with it.
@@ -53,22 +55,38 @@ else()
     add_link_options(-O3 -flto -sASSERTIONS=0)
 endif()
 
-# Optional size budgets, in bytes. Empty (the default) means no budget. They are read by scripts/web-size-report.sh,
-# which fails only for a budget that is set and exceeded.
-set(N2ENGINE_WEB_BUDGET_WASM_GZIP "" CACHE STRING "Fail web-size-report when the gzip size of any one .wasm exceeds this many bytes (empty: no budget)")
-set(N2ENGINE_WEB_BUDGET_TOTAL_GZIP "" CACHE STRING "Fail web-size-report when the gzip size of all .wasm and .js files together exceeds this many bytes (empty: no budget)")
-
-set(N2ENGINE_WEB_SIZE_ENV "")
-if(NOT N2ENGINE_WEB_BUDGET_WASM_GZIP STREQUAL "")
-    list(APPEND N2ENGINE_WEB_SIZE_ENV "N2ENGINE_WEB_BUDGET_WASM_GZIP=${N2ENGINE_WEB_BUDGET_WASM_GZIP}")
+# Precompressed outputs (stage 3): index.<ext>.br and index.<ext>.gz next to the plain files of the web package. auto
+# means on for the size and speed profiles, off for dev (the dev wasm is a few hundred MB of debug info).
+set(N2ENGINE_WEB_PRECOMPRESS "auto" CACHE STRING "Write .br and .gz siblings of the web package files: auto (size and speed profiles), on or off")
+set_property(CACHE N2ENGINE_WEB_PRECOMPRESS PROPERTY STRINGS auto on off)
+if(N2ENGINE_WEB_PRECOMPRESS STREQUAL "auto")
+    if(N2ENGINE_WEB_PROFILE STREQUAL "dev")
+        set(N2ENGINE_WEB_PRECOMPRESS_EFFECTIVE OFF)
+    else()
+        set(N2ENGINE_WEB_PRECOMPRESS_EFFECTIVE ON)
+    endif()
+elseif(N2ENGINE_WEB_PRECOMPRESS STREQUAL "on")
+    set(N2ENGINE_WEB_PRECOMPRESS_EFFECTIVE ON)
+elseif(N2ENGINE_WEB_PRECOMPRESS STREQUAL "off")
+    set(N2ENGINE_WEB_PRECOMPRESS_EFFECTIVE OFF)
+else()
+    message(FATAL_ERROR "N2ENGINE_WEB_PRECOMPRESS must be auto, on or off (got '${N2ENGINE_WEB_PRECOMPRESS}')")
 endif()
-if(NOT N2ENGINE_WEB_BUDGET_TOTAL_GZIP STREQUAL "")
-    list(APPEND N2ENGINE_WEB_SIZE_ENV "N2ENGINE_WEB_BUDGET_TOTAL_GZIP=${N2ENGINE_WEB_BUDGET_TOTAL_GZIP}")
+
+# node runs the packaging scripts (scripts/web-package-finalize.mjs, scripts/web-budget-check.mjs): the one the
+# Emscripten toolchain uses for the tests, or the one on PATH. Size budgets live in web/budgets.json only.
+if(CMAKE_CROSSCOMPILING_EMULATOR)
+    set(N2ENGINE_WEB_NODE ${CMAKE_CROSSCOMPILING_EMULATOR})
+else()
+    find_program(N2ENGINE_WEB_NODE_EXE node)
+    if(NOT N2ENGINE_WEB_NODE_EXE)
+        message(FATAL_ERROR "node is needed to package the web build (scripts/web-package-finalize.mjs)")
+    endif()
+    set(N2ENGINE_WEB_NODE ${N2ENGINE_WEB_NODE_EXE})
 endif()
 
 add_custom_target(web-size-report
-    COMMAND ${CMAKE_COMMAND} -E env ${N2ENGINE_WEB_SIZE_ENV}
-            bash "${CMAKE_SOURCE_DIR}/scripts/web-size-report.sh" "${CMAKE_BINARY_DIR}/bin"
+    COMMAND bash "${CMAKE_SOURCE_DIR}/scripts/web-size-report.sh" "${CMAKE_BINARY_DIR}/bin"
     COMMENT "Reporting the sizes of the built .wasm and .js files"
     VERBATIM
 )
