@@ -123,7 +123,7 @@
 <tr><td><code>engine/</code></td><td>The engine proper: application loop, GameObjects, scenes, physics, audio, input, resources, serialization, coroutines and Lua scripting.</td></tr>
 <tr><td><code>editor-server/</code></td><td><code>N2EditorHost</code>, a headless engine host that editors talk to over TCP. See <a href="logging-and-editor.html">Logging, health &amp; editor</a>.</td></tr>
 <tr><td><code>test_project/</code>, <code>lua_project/</code></td><td>Example games, in C++ and in Lua.</td></tr>
-<tr><td><code>cmake/N2EngineWeb.cmake</code>, <code>scripts/</code> <span class="badge">PR #163</span></td><td>The WebAssembly (Emscripten) build, stage 0 of issue #155: <code>N2ENGINE_PLATFORM_WEB</code>, the <code>N2ENGINE_WEB_PROFILE</code> profiles and a size report; only <code>math</code> and <code>text</code> build for the web so far. See <a href="web-build.html">Web build</a>.</td></tr>
+<tr><td><code>cmake/N2EngineWeb.cmake</code>, <code>scripts/</code> <span class="badge">PR #163</span></td><td>The WebAssembly (Emscripten) build, issue #155: <code>N2ENGINE_PLATFORM_WEB</code>, the <code>N2ENGINE_WEB_PROFILE</code> profiles and a size report; the engine core, the web player (<code>web/</code>, <span class="badge">PR #170</span>) and a static package that runs the software renderer on a canvas. See <a href="web-build.html">Web build</a> and the <a href="web-checklist.html">manual browser checklist</a>.</td></tr>
 <tr><td><code>tests/</code></td><td>GoogleTest suites per module (built when <code>N2ENGINE_BUILD_TESTS=ON</code>). See <a href="testing.html">Testing &amp; CI</a>.</td></tr>
 </tbody>
 </table>

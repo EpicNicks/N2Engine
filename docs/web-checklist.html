@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web checklist · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Web player checklist <span class="badge">PR #170</span></h1>
+<p class="lead">What to check by hand in a real browser for the web player, which CI cannot do: the CI job builds the package and runs it headless under node with a mocked canvas, so nothing about a browser (the canvas, the events, the page, hosting, speed) has been seen. Report which steps pass, the browser and its version, and the text of anything in the page's error box or the DevTools console.</p>
+
+<div class="callout open-question">
+<p class="callout-title">Not verified until this is done</p>
+<p>Every item below is unverified: that the page loads, that frames reach the canvas the right way up and in the right colours, that keyboard, mouse and wheel reach the game, that resizing and the pointer mapping are right, that the folder works from a subdirectory and with a wrong <code>.wasm</code> MIME type, and that the software renderer is fast enough in a tab.</p>
+</div>
+
+<h2 id="requirements">Requirements</h2>
+<ul>
+<li>A recent desktop Chrome or Edge, and Firefox (and Safari if you have it). Nothing else: no GPU feature, no special flags.</li>
+<li>The package folder from CI or a local build (<a href="web-build.html#hosting">Building and hosting the package</a>): <code>index.html</code>, <code>index.js</code>, <code>index.wasm</code>, <code>index.data</code>. To build it yourself: Emscripten 4.0.10, then <code>emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=speed</code> and <code>cmake --build build-web --target web-package</code>.</li>
+<li>Any static file server. The simplest: <code>cd build-web/web-package &amp;&amp; python -m http.server 8080</code>.</li>
+</ul>
+
+<h2 id="load">1. It loads</h2>
+<ul>
+<li>Open <code>http://localhost:8080/</code> with DevTools open (Console and Network). Expected: the dark page says "Loading the engine...", then "Ready." and the <strong>Click to start</strong> button turns on. Network shows <code>index.js</code>, <code>index.wasm</code> and <code>index.data</code>, all relative to the page, all 200.</li>
+<li>No red errors in the Console (a warning from the audio system about having no device is expected: audio is not in the build yet).</li>
+<li>Note the time from opening the page to "Ready." and the transferred sizes (a first, uncached load).</li>
+</ul>
+
+<h2 id="canvas">2. The canvas shows the scene</h2>
+<ul>
+<li>Click <strong>Click to start</strong>. Expected: the page-covering gate goes away and the canvas shows the <code>lua_project</code> scene (station 1: a lit cube, a sphere and a floor on a dark background, and the demo's text). The picture is the right way up (the floor at the bottom) and the colours are right (not red and blue swapped).</li>
+<li>Things move: the scene animates (spinning objects, particles). The cube and the sphere do <strong>not</strong> fall: there is no physics in the web build.</li>
+<li>Note the frame rate you see (a counter in the demo's HUD if it has one, or DevTools Performance) at your window size.</li>
+</ul>
+
+<h2 id="input">3. Keyboard, mouse and wheel</h2>
+<ul>
+<li>Keyboard: keys 1 to 7 move the camera between stations (as in the native <code>lua_project</code>); the arrow keys and Space do not scroll the page.</li>
+<li>Mouse: moving the pointer and clicking in the scene work as in the native player (for example the UI station: hover and click). Check that the pointer's position matches what is drawn under it: click on a corner and on the centre of a UI element and see that the hit is where the cursor is. Repeat after resizing the window (step 4) and in a window larger than 1280 pixels wide, where the canvas is scaled.</li>
+<li>Right and middle buttons: right click does not open a browser menu over the canvas; holding the right or middle button is seen by the game (the scene's mouse-button demo, if any).</li>
+<li>Wheel: scrolling over the canvas is seen by the game (zoom or the scroll demo) and does not scroll the page; one notch is about one unit in both Chrome and Firefox.</li>
+<li>Focus: hold a movement key, switch to another tab or window and release it there, then come back: the key must not be stuck down.</li>
+<li>F5 reloads, F12 opens DevTools, Ctrl+R and Ctrl+L still work while the game runs.</li>
+<li>Escape quits the game (the scene's Quit action): the page shows "The game has ended. Reload the page to play again." and the console shows no error.</li>
+</ul>
+
+<h2 id="resize">4. Resize</h2>
+<ul>
+<li>Drag the window narrower, wider and to a very different shape (tall and narrow, then wide and short). Expected: the picture keeps its shape (not stretched: the camera's aspect follows), it fills the window, and nothing flickers or stays at the old size.</li>
+<li>Maximise and restore, and use the browser's zoom (Ctrl +/-). Expected: the same.</li>
+<li>Make the window small enough that the canvas is a few pixels, then large again: no crash and no error box.</li>
+</ul>
+
+<h2 id="hosting">5. Hosting</h2>
+<ul>
+<li><strong>Subdirectory.</strong> Copy the package into a subfolder of another folder, serve the parent, and open <code>http://localhost:8080/some/deeper/path/</code> (and the same with <code>index.html</code> at the end). Expected: identical behaviour, with every request under that path (Network).</li>
+<li><strong>No special headers.</strong> The server above sends none: that is the test. In the Console, <code>crossOriginIsolated</code> is <code>false</code> and the game still runs.</li>
+<li><strong>Wrong MIME type.</strong> Serve <code>.wasm</code> as <code>text/plain</code> (a one-line server that sets that type, or the Network panel's overrides). Expected: the Console warns that streaming instantiation failed and falls back to <code>ArrayBuffer</code> instantiation, and the game still starts.</li>
+<li><strong>Another host.</strong> If you can, upload the folder to a real static host (GitHub Pages, any bucket) and open it there. Expected: the same. Opening <code>index.html</code> from disk (<code>file://</code>) is <em>not</em> expected to work: browsers do not let a page fetch its own <code>.wasm</code> from there.</li>
+<li><strong>Embedded.</strong> Put the page in an <code>&lt;iframe&gt;</code> of a page on another origin or port. Expected: it loads and runs (click into the frame first so it gets the keyboard).</li>
+</ul>
+
+<h2 id="errors">6. Error display (optional)</h2>
+<ul>
+<li>Delete <code>index.data</code> from the served folder and reload: the page must say something went wrong (the error box with a message) rather than stay on "Loading the engine..." forever.</li>
+<li>Delete <code>index.wasm</code> and reload: the same.</li>
+</ul>
+
+<h2 id="performance">7. Performance (a note, not a pass or fail)</h2>
+<p>The software renderer runs on one thread in the tab. Note, for the <code>dev</code>, <code>size</code> and <code>speed</code> profiles if you build them, the frame rate at about 1280x720 on your machine, and whether the tab stays responsive (the page can still be scrolled in DevTools, other tabs are fine). The render size is capped at 1280 pixels wide whatever the window; if that feels too soft or too slow, say which way.</p>
+
+<h2 id="report">What to report</h2>
+<ul>
+<li>For each step: pass, fail, or not tried, with the browser and its version.</li>
+<li>Anything in the error box, and the Console text around it.</li>
+<li>Load time and frame rate (steps 1, 2 and 7).</li>
+</ul>
+<p>Background: <a href="web-build.html#player">The web player</a>, <a href="web-build.html#hosting">Building and hosting the package</a>, <a href="web-build.html#output-contract">Output contract</a>.</p>
+
+<div class="page-footer">
+<span>Describes the web player of PR #170.</span>
+<a href="web-build.html">Back to Web build</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
