@@ -331,6 +331,14 @@ TEST_F(DeclarationEvaluatorTest, CLoopsTheHookCannotSeeAreRemovedNotFollowed)
     const DeclarationResult move = Eval("table.move({}, 1, math.maxinteger // 2, 1) return {}");
     EXPECT_FALSE(move.budgetExceeded);
     EXPECT_GT(move.stubUses, 0u);
+    const DeclarationResult remove = Eval(
+        "table.remove(setmetatable({}, { __len = function() return math.maxinteger end }), 1) return {}");
+    EXPECT_FALSE(remove.budgetExceeded);
+    EXPECT_GT(remove.stubUses, 0u);
+    const DeclarationResult insert = Eval(
+        "table.insert(setmetatable({}, { __len = function() return math.maxinteger - 1 end }), 1, 0) return {}");
+    EXPECT_FALSE(insert.budgetExceeded);
+    EXPECT_GT(insert.stubUses, 0u);
     const DeclarationResult rep = Eval(R"LUA(
         local C = {}
         C.__index = C
@@ -341,6 +349,19 @@ TEST_F(DeclarationEvaluatorTest, CLoopsTheHookCannotSeeAreRemovedNotFollowed)
     EXPECT_EQ(Find(rep, "empty")->defaultValue, "");
     EXPECT_EQ(Find(rep, "three")->defaultValue, "ab-ab-ab");
     EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(20));
+}
+
+TEST_F(DeclarationEvaluatorTest, ATextDerivedFromAPlaceholderStaysUnknown)
+{
+    const DeclarationResult result = Eval(R"LUA(
+        local C = {}
+        C.__index = C
+        C.SerializableFields = { a = { default = string.lower(tostring(Config.Tag)) }, b = { default = tostring(Config.Name):sub(2) } }
+        return C
+    )LUA");
+    EXPECT_FALSE(result.Complete());
+    EXPECT_TRUE(Find(result, "a")->unevaluable);
+    EXPECT_TRUE(Find(result, "b")->unevaluable);
 }
 
 TEST_F(DeclarationEvaluatorTest, TheWallClockBoundsWorkTheInstructionCountCannot)

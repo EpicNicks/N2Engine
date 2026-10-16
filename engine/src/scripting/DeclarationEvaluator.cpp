@@ -50,6 +50,7 @@ namespace N2Engine::Scripting
         constexpr const char *SetupScript = R"LUA(
 local type, rawequal, rawget, next, pcall, setmetatable = type, rawequal, rawget, next, pcall, setmetatable
 local mathtype, ssub, sfind, srep = math.type, string.sub, string.find, string.rep
+local rawlen, tinsert, tremove = rawlen, table.insert, table.remove
 local MARK = "\1N2STUB\1"
 -- What a failed allocation raises (Lua's preregistered message): a pcall of the reader cannot hide it from the result
 local MEMERR = "not enough memory"
@@ -107,6 +108,19 @@ string.dump = STUB
 -- keys (no allocation, nothing to count) and string.rep of an empty string a huge number of times (a 0-byte copy per
 -- repeat). table.move is the placeholder; string.rep answers the empty string at once for an empty result.
 table.move = STUB
+-- table.insert and table.remove loop over missing keys the same way when a __len metamethod makes the length huge:
+-- when the length is not the raw length they answer the placeholder instead of looping
+local function guardLen(f)
+    return function(t, ...)
+        if type(t) == "table" and rawlen(t) ~= #t then
+            touches = touches + 1
+            return STUB
+        end
+        return f(t, ...)
+    end
+end
+table.insert = guardLen(tinsert)
+table.remove = guardLen(tremove)
 string.rep = function(s, n, sep)
     if type(s) == "string" and #s == 0 and (sep == nil or (type(sep) == "string" and #sep == 0)) then
         return ""
@@ -152,7 +166,7 @@ local function classify(v, maxString)
         if #v > maxString then
             return "toolong"
         end
-        if sfind(v, MARK, 1, true) then
+        if sfind(v, "", 1, true) then
             return "stub"
         end
         return "string", v
@@ -239,7 +253,7 @@ local function readDeclarations(class, maxFields, maxString, maxName)
                             result.memError = true
                         end
                         if type(declaredType) == "string" then
-                            if #declaredType <= maxName and sfind(declaredType, MARK, 1, true) then
+                            if #declaredType <= maxName and sfind(declaredType, "", 1, true) then
                                 field.typeStub = true
                             elseif #declaredType <= maxName then
                                 field.declaredType = declaredType
