@@ -102,7 +102,9 @@ namespace N2Engine::Scripting
         /// Runs code that touches the instance outside a protected call (a table access can reach the script's
         /// metamethods) in a budget scope; an exception (a Lua error, the budget, a failed allocation) is reported and
         /// answers false
-        bool GuardedAccess(const std::function<void()>& body);
+        /// `references` free registry slots are reserved first (at most 16): a body that makes only one or two
+        /// references asks for few, so near the memory cap it is not refused for slots it would not use.
+        bool GuardedAccess(const std::function<void()>& body, int references = 16);
         /// Logs a Lua error. One that ran out of budget or memory is logged once and faults the component.
         void ReportScriptError(std::string_view what, std::string_view message);
 

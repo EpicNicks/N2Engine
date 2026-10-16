@@ -92,6 +92,20 @@ protected:
             return Fields
         )");
 
+        // A definition whose metamethod runs host code on the first read of its type (the test retires the instance)
+        WriteAsset("registry/Retiring.lua", R"(
+            local Retiring = {}
+            Retiring.__index = Retiring
+            Retiring.SerializableFields = {
+                a = setmetatable({}, { __index = function(t, k)
+                    if k == "type" then registry_retire() end
+                    return nil
+                end }),
+                b = { default = 1 },
+            }
+            return Retiring
+        )");
+
         WriteAsset("registry/Collider.lua", R"(
             local Collider = {}
             Collider.__index = Collider
@@ -442,6 +456,21 @@ TEST_F(LuaRegistryReserveTest, TheEditorFieldsAtTheEdgeAndTheCapNeedNoRegistryRe
 
     const std::vector<FieldInfo> normal = component->DescribeFields();
     ASSERT_EQ(normal.size(), 4u) << DumpLogs();
+}
+
+TEST_F(LuaRegistryReserveTest, AMetamethodThatRetiresTheInstanceWhileTheFieldsAreListedIsSurvived)
+{
+    const auto go = GameObject::Create("RegistryRetire");
+    auto *component = go->AddComponent<LuaComponent>();
+    component->SetScript(PathOf("Retiring.lua"));
+    ASSERT_FALSE(component->HasMissingScript()) << DumpLogs();
+
+    Lua()["registry_retire"] = [&] { component->SetScript(PathOf("NoSuchScript.lua")); };
+    std::vector<FieldInfo> fields;
+    EXPECT_NO_THROW(fields = component->DescribeFields());
+    Lua()["registry_retire"] = sol::lua_nil;
+    EXPECT_FALSE(fields.empty());
+    EXPECT_TRUE(component->HasMissingScript());
 }
 
 TEST_F(LuaRegistryReserveTest, LoadingAScriptSurvivesTheRegistryGrowingAtAnyPointOfIt)

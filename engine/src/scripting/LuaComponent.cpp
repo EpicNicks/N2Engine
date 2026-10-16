@@ -48,7 +48,7 @@ namespace N2Engine::Scripting
                 {
                     _scriptInstance["component"] = sol::lua_nil;
                     _scriptInstance["gameObject"] = sol::lua_nil;
-                });
+                }, 2);
             }
             catch (...)
             {
@@ -72,7 +72,7 @@ namespace N2Engine::Scripting
         Logger::Error(std::format("Lua {} error in {}: {}", what, _scriptPath.ToString(), message));
     }
 
-    bool LuaComponent::GuardedAccess(const std::function<void()> &body)
+    bool LuaComponent::GuardedAccess(const std::function<void()> &body, const int references)
     {
         // A Lua protected call, so an error in a metamethod (or the budget) is a return value here: never a panic
         // (a C++ exception thrown through Lua's C frames) and never a jump over this function's frames
@@ -84,7 +84,7 @@ namespace N2Engine::Scripting
             // slots first, so none of them has to grow the registry. Where Lua's errors are C++ exceptions (the web
             // build, MSVC Debug) a failing luaL_ref inside sol's noexcept constructors ends the process even in a
             // protected call; with the slots reserved it cannot fail. A body holds a few references at a time.
-            if (LuaRuntime::Instance().ReserveReferences(16, error) && LuaRuntime::Instance().ProtectedCall(body, error))
+            if (LuaRuntime::Instance().ReserveReferences(references, error) && LuaRuntime::Instance().ProtectedCall(body, error))
             {
                 return true;
             }
@@ -106,7 +106,7 @@ namespace N2Engine::Scripting
             return false;
 
         bool has = false;
-        GuardedAccess([&] { has = _scriptInstance[methodName].valid(); });
+        GuardedAccess([&] { has = _scriptInstance[methodName].valid(); }, 2);
         return has;
     }
 
@@ -128,7 +128,7 @@ namespace N2Engine::Scripting
         {
             // Reading the method can run the script's __index: do it in a protected call
             sol::protected_function func;
-            if (!GuardedAccess([&] { func = _scriptInstance[methodName].get<sol::protected_function>(); }))
+            if (!GuardedAccess([&] { func = _scriptInstance[methodName].get<sol::protected_function>(); }, 2))
             {
                 return;
             }
@@ -419,7 +419,7 @@ namespace N2Engine::Scripting
         {
             _scriptInstance["component"] = sol::lua_nil;
             _scriptInstance["gameObject"] = sol::lua_nil;
-        });
+        }, 2);
         // The instance leaves the component by a move: a copy would be a registry reference made outside a protected
         // call (see ReserveReferences), and the member is empty afterwards, as `= sol::lua_nil` left it
         return std::move(_scriptInstance);
@@ -977,11 +977,14 @@ namespace N2Engine::Scripting
             }
         };
 
+        // The state is read once, before any script code runs: a metamethod can retire the instance (SetScript), which
+        // empties the member and nulls its state
+        lua_State *const luaState = _scriptInstance.lua_state();
         std::vector<Declaration> declarations;
         bool declared = false;
         if (!guarded([&]
         {
-            lua_State *state = _scriptInstance.lua_state();
+            lua_State *state = luaState;
             const int base = lua_gettop(state);
             _scriptInstance.push(state);
             lua_getfield(state, -1, "SerializableFields");
@@ -999,7 +1002,8 @@ namespace N2Engine::Scripting
                         std::size_t length = 0;
                         const char *text = lua_tolstring(state, -2, &length);
                         declaration.name.assign(text, length);
-                        declaration.isDefinition = lua_type(state, -1) == LUA_TTABLE;
+                        // As ExtractSerializableFields reads it: sol's table check accepts a userdata too
+                        declaration.isDefinition = lua_type(state, -1) == LUA_TTABLE || lua_type(state, -1) == LUA_TUSERDATA;
                         if (!declaration.isDefinition)
                         {
                             declaration.defaultKind = classify(state, -1);
@@ -1025,7 +1029,12 @@ namespace N2Engine::Scripting
             }
             guarded([&]
             {
-                lua_State *state = _scriptInstance.lua_state();
+                // An earlier definition's metamethod may have retired the instance: nothing left to read
+                if (!_scriptInstance.valid())
+                {
+                    return;
+                }
+                lua_State *state = luaState;
                 const int base = lua_gettop(state);
                 _scriptInstance.push(state);
                 lua_getfield(state, -1, "SerializableFields");
@@ -1033,7 +1042,7 @@ namespace N2Engine::Scripting
                 {
                     lua_pushlstring(state, declaration.name.data(), declaration.name.size());
                     lua_rawget(state, -2);
-                    if (lua_type(state, -1) == LUA_TTABLE)
+                    if (lua_type(state, -1) == LUA_TTABLE || lua_type(state, -1) == LUA_TUSERDATA)
                     {
                         const int definition = lua_gettop(state);
                         lua_getfield(state, definition, "type");
