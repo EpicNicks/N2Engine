@@ -71,8 +71,7 @@ protected:
     static inline std::uint64_t s_allowance = 0;
     static void ReportTerminate()
     {
-        std::fprintf(stderr, "[reserve-debug] terminate during the sweep with allowance %llu
-",
+        std::fprintf(stderr, "[reserve-debug] terminate during the sweep with allowance %llu\n",
                      static_cast<unsigned long long>(s_allowance));
 #if defined(__linux__)
         void *frames[48];
