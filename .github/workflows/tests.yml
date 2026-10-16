@@ -774,10 +774,10 @@ jobs:
           docker logs n2tokens
           exit 1
 
-  # The web (WebAssembly) build, stages 0 and 1 of issue #155: the math, text and asset-import libraries, the engine
-  # core (headless, single-threaded, no window or audio device) and the software renderer, and their unit tests
-  # (math, text, assetimport, engine and renderer tests, the software-renderer goldens among them), built with
-  # Emscripten and run under node. Not a required check. Emscripten is pinned to an exact release (EMSCRIPTEN_VERSION, installed
+  # The web (WebAssembly) build, stages 0 to 2 of issue #155: the math, text and asset-import libraries, the engine
+  # core (single-threaded, no audio device) and the software renderer, and their unit tests (math, text, assetimport,
+  # engine, renderer and web input tests, the software-renderer goldens among them), built with Emscripten and run under
+  # node; and the web player package (index.html, js, wasm and the asset pack), checked and run headless under node. Not a required check. Emscripten is pinned to an exact release (EMSCRIPTEN_VERSION, installed
   # with the official emsdk, no third-party action): a moving "latest" would let an upstream release break or change the
   # build with no change in this repository. 4.0.10 was chosen as a 4.0 release with a recent LLVM/libc++ for C++23 (not yet proven: the first
   # run of this job is the proof; bump the pin here and in docs/web-build.html if it is not enough). ccache is not used.
@@ -832,7 +832,7 @@ jobs:
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
-          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests -- -k 0
+          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests -- -k 0
 
       # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
       - name: Test under node
@@ -844,3 +844,24 @@ jobs:
       # No budget is configured, so this only reports (raw and gzip sizes in the job summary)
       - name: Report artifact sizes
         run: bash scripts/web-size-report.sh build-web/bin
+
+      # Stage 2 (issue #155): the web player and its package folder (build-web/web-package: index.html, index.js,
+      # index.wasm, index.data, static files only). Linking it also runs the packaging of lua_project's assets.
+      - name: Build the web package
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web --target web-package -- -k 0
+
+      # Checks the folder's contents (static files only, relative URLs, no worker script) and runs the player headless
+      # under node for 30 frames with the canvas mocked: every frame must arrive at the size asked for and show something.
+      # This is not a browser: the canvas, the input events and the page itself are checked by hand (docs/web-checklist.html).
+      - name: Smoke the web package under node
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node scripts/web-package-smoke.mjs build-web/web-package 30 320x180
+
+      # No budget is configured, so this only reports: the package's files, raw and gzip, in the job summary
+      - name: Report web package sizes
+        run: bash scripts/web-size-report.sh build-web/web-package
