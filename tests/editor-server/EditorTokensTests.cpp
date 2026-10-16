@@ -581,8 +581,20 @@ TEST(TokenEnvTest, ANewConnectionStartsWithoutTheLastOnesIdentity)
     EXPECT_EQ(Decode(*response).Text(), EditorServer::HelloRequiredError);
     EXPECT_TRUE(second.IsClosedByServer());
     // The host itself holds no identity between connections either: a command that reaches it with nobody's Hello is
-    // refused, though the last connection was an admin
-    EXPECT_EQ(Execute(server, CommandType::GetAllEntities).Text(), EditorServer::HelloRequiredError);
+    // refused, though the last connection was an admin. The first session ends on its own thread (the second
+    // connection is answered by a worker), so give it a moment to finish before looking.
+    const auto identityDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    std::string afterwards;
+    do
+    {
+        afterwards = Execute(server, CommandType::GetAllEntities).Text();
+        if (afterwards == EditorServer::HelloRequiredError)
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    } while (std::chrono::steady_clock::now() < identityDeadline);
+    EXPECT_EQ(afterwards, EditorServer::HelloRequiredError);
     StopWithin(server, std::chrono::seconds(10));
 }
 
