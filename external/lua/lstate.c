@@ -26,6 +26,7 @@
 #include "lstring.h"
 #include "ltable.h"
 #include "ltm.h"
+#include "n2seed.h"  /* N2Engine local patch */
 
 
 
@@ -72,6 +73,11 @@ static unsigned int luai_makeseed (lua_State *L) {
   char buff[3 * sizeof(size_t)];
   unsigned int h = cast_uint(time(NULL));
   int p = 0;
+  { /* N2Engine local patch: a configured seed makes the hash seed a constant (see n2seed.h) */
+    unsigned long long fixed;
+    if (n2lua_getseed(&fixed))
+      return cast_uint(fixed) ^ cast_uint(fixed >> 32);
+  }
   addbuff(buff, p, L);  /* heap variable */
   addbuff(buff, p, &h);  /* local variable */
   addbuff(buff, p, &lua_newstate);  /* public function */

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <string>
@@ -33,6 +34,13 @@ namespace N2Engine
      *               anything else is refused with a warning and means auto). Read by ReadMathSimdTier before
      *               Application::Init selects the math tier, so applying it afterwards only validates it (a change
      *               needs a restart)
+     *     determinism {"luaSeed": integer >= 0}: unset by default. Set, Lua's string hash seed is a constant and
+     *               math.random starts from that seed, so pairs() order over string keys and math.random are the same
+     *               on every run (LuaRuntime::SetLuaSeed); anything but a non-negative integer is refused with a
+     *               warning and means unset. Read by ReadDeterminismLuaSeed before Application::Init creates the Lua
+     *               state, so applying it afterwards only validates it (a change needs a restart). SECURITY: a
+     *               constant hash seed makes hash flooding of string-keyed tables possible, so leave it unset unless
+     *               the script data is trusted; no host sets it implicitly
      *     rendering {"colorSpace": "gamma" | "linear"}: Rendering::RenderSettings::SetColorSpace (case-insensitive;
      *               other keys in the block are left alone). A block without colorSpace, with it null, or (when
      *               `only` names rendering) removed, means the default, gamma. "forceShaderEncode": true makes
@@ -76,6 +84,14 @@ namespace N2Engine
      */
     [[nodiscard]] Math::SIMDTierRequest ReadMathSimdTier(const nlohmann::json &settings,
                                                          std::vector<std::string> *problems = nullptr);
+
+    /**
+     * determinism.luaSeed from a project's settings object: empty (unset) when it is absent, null or not a
+     * non-negative integer (a float such as 5.0, a string, a boolean and a negative number are refused). Application::Init
+     * calls it before the Lua state is created. problems, when given, gets one message for a refused value.
+     */
+    [[nodiscard]] std::optional<std::uint64_t> ReadDeterminismLuaSeed(const nlohmann::json &settings,
+                                                                      std::vector<std::string> *problems = nullptr);
 
     /**
      * The live state ApplyProjectSettings changes, taken before applying so it can be put back exactly (a block the

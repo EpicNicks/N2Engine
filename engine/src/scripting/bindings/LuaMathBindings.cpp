@@ -7,6 +7,7 @@
 #include <math/Matrix.hpp>
 #include <math/Constants.hpp>
 #include <math/Random.hpp>
+#include <cstdint>
 
 namespace N2Engine::Scripting::Bindings
 {
@@ -31,6 +32,9 @@ namespace N2Engine::Scripting::Bindings
                 &Math::Random::RandomInt
             ),
             "Int", &Math::Random::RandomInt,
+            // Random.Seed(n): from then on Random.* draws from the deterministic generator (the same n gives the same
+            // sequence on every platform; n is taken modulo 2^32). Without a call, nothing changes.
+            "Seed", [](const std::int64_t seed) { Math::Random::Seed(static_cast<std::uint32_t>(seed)); },
             "InUnitCircle", &Math::Random::RandomInUnitCircle,
             "OnUnitCircle", &Math::Random::RandomOnUnitCircle
         );

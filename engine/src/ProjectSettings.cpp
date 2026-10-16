@@ -171,6 +171,16 @@ namespace N2Engine
             }
             (void)ReadMathSimdTier(nlohmann::json{{"math", math}}, &problems);
         });
+        // Validated only: the seed is read before the Lua state is created (ReadDeterminismLuaSeed), so a change needs a restart
+        apply("determinism", [&](const nlohmann::json &determinism)
+        {
+            if (!determinism.is_object())
+            {
+                problems.emplace_back("determinism: not an object");
+                return;
+            }
+            (void)ReadDeterminismLuaSeed(nlohmann::json{{"determinism", determinism}}, &problems);
+        });
         apply("rendering", [&](const nlohmann::json &rendering) { ApplyRendering(rendering, problems); });
         // A patch that removed the whole block (only names it, and it is gone): back to the default too
         if (only && only->contains("rendering"))
@@ -240,6 +250,40 @@ namespace N2Engine
             problems->push_back(std::format("physics.deterministic: {} is not true or false; using false", value->dump()));
         }
         return false;
+    }
+
+    std::optional<std::uint64_t> ReadDeterminismLuaSeed(const nlohmann::json &settings,
+                                                        std::vector<std::string> *problems)
+    {
+        if (!settings.is_object())
+        {
+            return std::nullopt;
+        }
+        const auto block = settings.find("determinism");
+        if (block == settings.end() || !block->is_object())
+        {
+            return std::nullopt;
+        }
+        const auto seed = block->find("luaSeed");
+        if (seed == block->end() || seed->is_null())
+        {
+            return std::nullopt;
+        }
+        // is_number_integer is true for a signed integer too: a negative one is refused below
+        if (seed->is_number_unsigned())
+        {
+            return seed->get<std::uint64_t>();
+        }
+        if (seed->is_number_integer() && seed->get<std::int64_t>() >= 0)
+        {
+            return static_cast<std::uint64_t>(seed->get<std::int64_t>());
+        }
+        if (problems)
+        {
+            problems->push_back(std::format("determinism.luaSeed: {} is not a non-negative integer; leaving it unset",
+                                            seed->dump()));
+        }
+        return std::nullopt;
     }
 
     Math::SIMDTierRequest ReadMathSimdTier(const nlohmann::json &settings, std::vector<std::string> *problems)

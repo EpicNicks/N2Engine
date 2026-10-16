@@ -100,6 +100,32 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     SubsystemStatus audioStatus{.name = "Audio"};
     SubsystemStatus scriptingStatus{.name = "Scripting"};
 
+    // The project file is read once here: determinism.luaSeed must be set before the Lua state is created, math.simdTier
+    // before anything else runs (and so before any scene loads), and physics.gpu is read from the same file below.
+    // No project, or no setting: auto, as before.
+    std::optional<IO::ProjectFile> project;
+    if (!options.projectPath.empty())
+    {
+        if (auto loaded = IO::ProjectFile::Load(options.projectPath))
+        {
+            project = std::move(*loaded);
+        }
+    }
+
+    // Before the first Instance(): the Lua state reads its seeds as it is created. Unset (also with no project) is
+    // upstream Lua's behaviour. A bad value is reported by ApplyProjectSettings, as for physics.gpu.
+    std::optional<std::uint64_t> luaSeed;
+    if (project)
+    {
+        luaSeed = ReadDeterminismLuaSeed(project->settings);
+    }
+    Scripting::LuaRuntime::SetLuaSeed(luaSeed);
+    if (luaSeed)
+    {
+        Logger::Warn("determinism.luaSeed is set: Lua's string hash seed is a constant, so keys an attacker controls "
+                     "can be chosen to collide (hash flooding). Leave it unset unless the scripts' data is trusted.");
+    }
+
     if (Scripting::LuaRuntime::Instance().Initialize())
     {
         scriptingStatus.state = SubsystemState::Running;
@@ -110,16 +136,6 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         scriptingStatus.detail = "Lua bindings failed to register (see log)";
     }
 
-    // The project file is read once here: math.simdTier must be applied before anything else runs (and so before any
-    // scene loads), and physics.gpu is read from the same file below. No project, or no setting: auto, as before.
-    std::optional<IO::ProjectFile> project;
-    if (!options.projectPath.empty())
-    {
-        if (auto loaded = IO::ProjectFile::Load(options.projectPath))
-        {
-            project = std::move(*loaded);
-        }
-    }
     // A bad value is reported by ApplyProjectSettings (the hosts call it after Init), as for physics.gpu, so it is
     // warned once, not twice
     Math::SIMDTierRequest simdRequest = Math::SIMDTierRequest::Auto;

@@ -35,6 +35,8 @@ namespace N2Engine::Scripting
     private:
         static LuaRuntime* _instance;
 
+        // What GetLuaSeed was when the state was created (declared first: the state reads the setting as it is made)
+        std::optional<std::uint64_t> _stateLuaSeed;
         // Declared before _lua: the allocator and the hook use it until the state is closed
         std::unique_ptr<Detail::LuaGuardState> _guard;
         sol::state _lua;
@@ -53,6 +55,23 @@ namespace N2Engine::Scripting
 
     public:
         static LuaRuntime& Instance();
+
+        /// The project setting determinism.luaSeed (unset by default). Unset: Lua seeds its string hash from the clock
+        /// and addresses and math.random from the clock, as upstream Lua does, so pairs() order over string keys and
+        /// math.random differ from run to run. Set: the hash seed is a constant and math.random starts as
+        /// math.randomseed(seed) would, so both are a function of the seed alone.
+        /// SECURITY: a constant hash seed lets whoever controls the keys a script stores (network input, save files,
+        /// mods) build keys that all collide and so make string-keyed tables quadratically slow (hash flooding). It
+        /// must stay unset unless the game needs reproducible Lua and its script data is trusted; a host must never
+        /// set it on its own.
+        /// Call it from the main thread BEFORE the first Instance() (Application::Init does): the seeds are read when
+        /// the state is created, a state that exists keeps the ones it was created with (a warning says so if the
+        /// value differs). Takes effect for every Lua state created after it, also a sol::state of a test.
+        static void SetLuaSeed(std::optional<std::uint64_t> seed);
+        /// The seed SetLuaSeed configured (empty: unset)
+        [[nodiscard]] static std::optional<std::uint64_t> GetLuaSeed();
+        /// The seed this runtime's state was created with (empty: it seeded itself from the clock)
+        [[nodiscard]] std::optional<std::uint64_t> StateLuaSeed() const { return _stateLuaSeed; }
 
         /// Registers all engine bindings. Safe to call more than once: later calls return the first result,
         /// because re-registering a usertype in the same state breaks the metatables of existing values.
