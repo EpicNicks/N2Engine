@@ -1154,6 +1154,67 @@ TEST_F(TokensServerTest, AReloadThatRemovesTheOpenConnectionsUserClosesIt)
     StopWithin(server, std::chrono::seconds(10));
 }
 
+TEST_F(TokensServerTest, ATokenRevokedBetweenThePreAuthCheckAndTheReplayIsRefusedAndTheNextClientIsServed)
+{
+    // PR S-3: a pre-auth worker verifies the Hello's token, and the session thread replays the Hello through the
+    // ordinary Hello command on the main thread, which checks the token again. A user revoked in between must not get in.
+    // The hook holds the worker after its check (the connection is verified, not yet offered); the file is rewritten and
+    // reloaded while it waits.
+    LogCapture log;
+    EditorServer server;
+    ASSERT_TRUE(server.SetTokensFile(File()));
+    std::atomic<int> offers{0};
+    std::atomic<bool> held{false};
+    std::atomic<bool> release{false};
+    ASSERT_TRUE(server.SetPreHandoffHook(
+        [&]
+        {
+            if (offers++ == 0)
+            {
+                held = true;
+                while (!release.load())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }));
+    ASSERT_TRUE(server.Start(0));
+
+    TestClient bob(server.GetPort());
+    ASSERT_TRUE(bob.IsConnected());
+    ASSERT_TRUE(bob.SendRequest(CommandType::Hello, HelloPayload(Bob.token, true, "bob")));
+    {
+        const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!held.load() && std::chrono::steady_clock::now() < limit)
+            server.ProcessCommands(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(held.load()) << "the worker never verified bob's Hello";
+
+    WriteTokensFile(File(), {Alice, Carol});
+    server.RequestTokensReload();
+    ASSERT_TRUE(PumpUntilLogged(server, log, "Reloaded the tokens file: 2 user(s)"));
+    release = true;
+
+    // The replay on the main thread refuses him, as a wrong token, and the connection closes
+    {
+        const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (bob.BytesAvailable() < 5 && std::chrono::steady_clock::now() < limit)
+            server.ProcessCommands(std::chrono::milliseconds(10));
+    }
+    const auto response = bob.ReadResponse();
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(Decode(*response).type, ErrorType);
+    EXPECT_EQ(Decode(*response).Text(), "Invalid access token");
+    EXPECT_TRUE(bob.IsClosedByServer());
+
+    // The host is not stuck on him: the next candidate is served
+    TestClient carol(server.GetPort());
+    ASSERT_TRUE(carol.IsConnected());
+    const auto hello = Roundtrip(server, carol, CommandType::Hello, HelloPayload(Carol.token, true, "carol"));
+    ASSERT_TRUE(hello.has_value());
+    ASSERT_EQ(hello->type, ServerInfoType) << hello->Text();
+    EXPECT_EQ(DecodeServerInfo(*hello).role, "viewer");
+    StopWithin(server, std::chrono::seconds(10));
+}
+
 TEST_F(TokensServerTest, AReloadThatChangesTheOpenConnectionsRoleOrTokenClosesIt)
 {
     EditorServer server;

@@ -2,7 +2,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <deque>
 #include <expected>
 #include <functional>
 #include <filesystem>
@@ -29,7 +31,10 @@
 #include "editor-server/EditorCamera.hpp"
 #include "editor-server/EventRing.hpp"
 #include "editor-server/FrameTracker.hpp"
+#include "editor-server/LogCoalescer.hpp"
+#include "editor-server/PreAuthSlots.hpp"
 #include "editor-server/RateLimiter.hpp"
+#include "editor-server/TokenBucket.hpp"
 #include "editor-server/TokenTable.hpp"
 
 namespace Renderer::Common
@@ -46,6 +51,15 @@ namespace N2Engine::Editor
 {
     class EditorTlsServer;
     class EditorTlsSession;
+}
+
+namespace N2Engine::Editor::Protocol
+{
+    struct HelloCmd;
+}
+
+namespace N2Engine::Editor
+{
 
     /// The open scene, as OpenScene, NewScene, SaveSceneToFile and GetOpenScene report it (SceneInfo)
     struct OpenSceneInfo
@@ -71,20 +85,29 @@ namespace N2Engine::Editor
 
     /// TCP host for the editor client.
     ///
-    /// Threading model: a single network thread accepts one client at a time and reads its requests, but
-    /// never touches engine state (scenes, Lua, GLFW/GL, the Logger). Each request is enqueued on a
-    /// CommandQueue and the network thread blocks until the main thread has run it: the host's main loop
-    /// calls ProcessCommands() every iteration, which executes the queued commands (handlers, rendering
-    /// and logging all happen there) and hands each response frame back for the network thread to send.
-    /// Shutdown is the one command answered on the network thread, since it only stops the server.
+    /// Threading model: network threads never touch engine state (scenes, Lua, GLFW/GL, the Logger). There are
+    ///  - one ACCEPTOR thread (_serverThread): accepts, reads the peer address, applies the failed-Hello backoff, the
+    ///    pre-auth slots and the handshake rate limit, and hands the socket to a worker; it also re-reads the tokens file;
+    ///  - N PRE-AUTH WORKERS (SetPreAuthSlots, default 4): each takes one connection at a time through its TLS handshake
+    ///    and, with an access token, its one Hello frame (verified there: token and protocol major version), inside the
+    ///    handshake and Hello budgets; a peer that stalls here holds one worker for at most those budgets and nobody else;
+    ///  - ONE SESSION thread: serves the one authenticated connection at a time (the request loop with the idle, write
+    ///    and age deadlines).
+    /// The main thread owns the engine. Each request is enqueued on a CommandQueue and the session thread blocks until the
+    /// main thread has run it: the host's main loop calls ProcessCommands() every iteration, which executes the queued
+    /// commands (handlers, rendering and logging all happen there) and hands each response frame back for the session
+    /// thread to send. Shutdown is the one command answered on the session thread, since it only stops the server.
     ///
     /// Sessions: a client opens one with Hello (protocol version, access token), and it lasts as long as the
     /// connection, so a client that reconnects sends Hello again. Hello is optional unless the server has an access
-    /// token (SetAccessToken): then the network thread refuses every other command on a connection, Shutdown included,
-    /// until a Hello on that connection has succeeded. Since one connection is served at a time, a connection that
-    /// hasn't succeeded a Hello can't be allowed to hold the server: it is closed after a refused command or a failed
-    /// Hello, and when no Hello has succeeded within the Hello timeout of accepting it. Without an access token none
-    /// of this applies.
+    /// token (SetAccessToken): then a connection that hasn't sent a good Hello gets nothing but its refusal. A worker
+    /// that verified a Hello offers the connection to the session thread, which REPLAYS that Hello through the ordinary
+    /// Hello command on the main thread (it authenticates again, binds the identity and builds ServerInfo exactly as
+    /// before, and refuses if the token was revoked in the meantime). While a session is active another authenticated
+    /// client waits for it for BusyGrace (a session that is just ending), then gets a plain Error (BusyError) and is
+    /// closed; a host without an access token keeps serving one connection at a time and a second one waits. A
+    /// connection that hasn't succeeded a Hello can't hold more than a worker for its budgets: it is closed after a
+    /// refused command or a failed Hello, and when no Hello has succeeded within the Hello timeout.
     ///
     /// Events: the server keeps an EventRing that PollEvents reads. From construction to destruction it is subscribed to
     /// the Logger, so every line logged in the process (the server's own included) becomes a log event; a host that
@@ -120,8 +143,12 @@ namespace N2Engine::Editor
 
         /// Main thread. False if the socket couldn't be set up (the server isn't running then).
         bool Start(int port, const std::string &bindAddress = DefaultBindAddress);
-        /// Main thread. Disconnects any client and joins the network thread (which polls for stop
-        /// between short select() waits, so this returns within ~100 ms).
+        /// Main thread. Disconnects any client and joins the acceptor, every pre-auth worker and the session thread (each
+        /// polls for stop between waits of at most 100 ms, so this returns within about that, plus the time a command the
+        /// session is waiting on takes to be abandoned: closing the queue wakes it). No thread closes a socket another
+        /// thread waits on: each connection is closed by the thread that owns it as it ends, and what is left (a
+        /// connection still queued for a worker or waiting in the hand-off, the listening socket) is closed here after
+        /// the joins.
         void Stop();
         [[nodiscard]] bool IsRunning() const { return _running; }
         /// The port listened on (useful after Start(0)); 0 when not started
@@ -253,6 +280,85 @@ namespace N2Engine::Editor
         using AcceptedSocketHook = std::function<void(int socket)>;
         bool SetAcceptedSocketHook(AcceptedSocketHook hook);
 
+        // ==================== Pre-auth slots, handshake rate and the one session ====================
+
+        /**
+         * What keeps connections that have not authenticated from costing the host more than a fixed amount of threads,
+         * memory, CPU and time (audit F1, F2, F6; design: security-design Part 2). Every setter is before Start, like
+         * SetAccessToken: false, changing nothing, while running.
+         *
+         *  - SetPreAuthSlots(n): n connections at once may be in their TLS handshake and Hello (n workers; 1-16, default
+         *    4). With the Hello timeout this is the longest a silent peer holds anything, and it holds one slot, not the
+         *    host. When every slot is taken a new connection is closed at once, with no TLS and no log line of its own
+         *    (counted, and reported in one summary line every 10 s).
+         *  - SetPreAuthSlotsPerAddress(n): at most n slots for one NON-loopback address (default 2). Loopback may use them
+         *    all: behind a reverse proxy or an SSH tunnel every peer is loopback, so no address can be told apart.
+         *  - SetHandshakeRateLimit: a token bucket per host and per non-loopback address on connections that would start
+         *    a handshake; the excess is closed before TLS. Off in the class (nullopt) so a test that makes many
+         *    connections from one pretend address is not throttled; N2EditorHost turns it on (20/s in all, 5/s per
+         *    address). The clock is the real steady clock unless one is given.
+         *  - SetBusyGrace: how long an authenticated client waits for the active session to end before it is turned away
+         *    with BusyError (a session whose client just went away is still ending for a moment). Default 1 s. A host
+         *    without an access token has no Hello and no Busy: a second connection waits for the first for as long as it
+         *    takes (one at a time, as before).
+         */
+        static constexpr size_t DefaultPreAuthSlots = 4;
+        static constexpr size_t MaxPreAuthSlots = 16;
+        static constexpr size_t DefaultPreAuthSlotsPerAddress = 2;
+        static constexpr std::chrono::milliseconds DefaultBusyGrace{1000};
+        /// What a second authenticated client is answered with (a plain Error: the protocol has no code for it) while a
+        /// session is active
+        static constexpr const char *BusyError = "The host is serving another session; try again later";
+        /// A value outside 1-16 is refused (false)
+        bool SetPreAuthSlots(size_t slots);
+        [[nodiscard]] size_t GetPreAuthSlots() const { return _preAuthSlotOptions.totalSlots; }
+        bool SetPreAuthSlotsPerAddress(size_t slots);
+        [[nodiscard]] size_t GetPreAuthSlotsPerAddress() const { return _preAuthSlotOptions.perAddressSlots; }
+        bool SetHandshakeRateLimit(std::optional<TokenBucketOptions> options, TokenBucket::Clock clock = {});
+        [[nodiscard]] bool HasHandshakeRateLimit() const { return _handshakeRate.has_value(); }
+        bool SetBusyGrace(std::chrono::milliseconds grace);
+        /// How often the acceptor reports the connections it closed without a word (slots taken, handshake rate spent): at
+        /// most one line per interval, and none when there was nothing to report. Default 10 s (real time).
+        static constexpr std::chrono::milliseconds DefaultAdmissionSummaryInterval{10000};
+        bool SetAdmissionSummaryInterval(std::chrono::milliseconds interval);
+        /// Called on a pre-auth worker with a verified Hello, just before the connection is offered to the session (for
+        /// tests: to change the world between the worker's check and the replay). Not for production use.
+        using PreHandoffHook = std::function<void()>;
+        bool SetPreHandoffHook(PreHandoffHook hook);
+        /// Connections closed at accept because no pre-auth slot was free for them, or the handshake rate was spent (any
+        /// thread), since the server was built
+        [[nodiscard]] uint64_t PreAuthRefusedConnections() const { return _preAuthRefusedConnections.load(); }
+        /// Authenticated connections turned away with BusyError (any thread), since the server was built
+        [[nodiscard]] uint64_t BusyRefusals() const { return _busyRefusals.load(); }
+        /// Connections handed to the session thread (any thread), since the server was built; for tests
+        [[nodiscard]] uint64_t SessionHandoffs() const { return _sessionHandoffs.load(); }
+        /// Slots in use right now (any thread); 0 when the server isn't running
+        [[nodiscard]] size_t PreAuthSlotsInUse() const;
+        /// Connections that were given a pre-auth slot since the server started (any thread); 0 when it isn't running
+        [[nodiscard]] uint64_t PreAuthAdmittedConnections() const;
+        /// The log lines of pre-auth connections that fail (a TLS handshake that failed or timed out, no Hello in time, a
+        /// command before Hello, an oversized or unparsable Hello, a refused Hello, a stalled write): per kind of failure,
+        /// the first `burst` in a window are written one by one and the rest are counted and reported in one summary line
+        /// once the window has passed (see LogCoalescer). Default 10 per 10 s (real time). Before Start.
+        bool SetPreAuthLogCoalescing(LogCoalescerOptions options);
+        [[nodiscard]] const LogCoalescerOptions &GetPreAuthLogCoalescing() const { return _preAuthLogOptions; }
+        /// Pre-auth failure lines not written one by one since the server started (any thread); 0 when it isn't running
+        [[nodiscard]] uint64_t PreAuthLogLinesSuppressed() const;
+        /// What Stop saw once every thread had been joined (for tests): the slots still held then (a slot a thread failed
+        /// to give back, or one of a connection still queued), the connections still queued or in the hand-off slot,
+        /// the slots held once those were closed, and how long the joins took
+        struct StopReport
+        {
+            size_t slotsHeldAfterJoins = 0;
+            size_t leftoverConnections = 0;
+            size_t slotsHeldAfterCleanup = 0;
+            std::chrono::steady_clock::duration joinTime{};
+        };
+        /// Called by Stop, on the thread that called it, after the joins and the cleanup and before the listening socket
+        /// is closed. For tests. Not for production use; before Start.
+        using StopHook = std::function<void(const StopReport &)>;
+        bool SetStopHook(StopHook hook);
+
         // ==================== Failed-Hello rate limiting ====================
 
         /**
@@ -263,8 +369,8 @@ namespace N2Engine::Editor
          * failures from anywhere off that user. A connection that ends without a successful Hello is a failure too (it
          * timed out, closed early, sent another command or an oversized frame, or failed its TLS handshake), for its
          * address only: loopback is exempt from that, and it never feeds loopback's global backoff. On by default; a host
-         * without an access token has no failed Hellos, so nothing is tracked and nothing changes. All of this state is
-         * the network thread's.
+         * without an access token has no failed Hellos, so nothing is tracked and nothing changes. The limiter is shared by the
+         * acceptor, the workers and the session thread (one mutex).
          *
          * Each setter is before Start, like SetAccessToken: false, changing nothing, while running.
          */
@@ -608,16 +714,85 @@ namespace N2Engine::Editor
         [[nodiscard]] static std::string CommandName(uint8_t commandType);
 
     private:
+        /// A connection that is somebody's to close: whoever drops the last owner closes it (its TLS session first, then
+        /// the socket). Connection's own destructor doesn't, because a Connection made around the listener must not.
+        struct ConnectionCloser
+        {
+            void operator()(Connection *connection) const
+            {
+                if (connection != nullptr)
+                {
+                    connection->Close();
+                    delete connection;
+                }
+            }
+        };
+        using ConnectionPtr = std::unique_ptr<Connection, ConnectionCloser>;
+
+        /// One accepted connection on its way to a pre-auth worker. The slot is released after the connection is closed
+        /// (members are destroyed in reverse order), so a slot is never free while its socket is still open.
+        struct PreAuthJob
+        {
+            PreAuthSlots::Handle slot;
+            ConnectionPtr connection;
+            std::chrono::milliseconds helloBudget{0};
+            std::chrono::milliseconds handshakeBudget{0};
+        };
+
+        /// A connection the pre-auth side is giving to the session thread, with the Hello (the whole request payload)
+        /// the session replays through the ordinary Hello command; empty on a host without an access token
+        struct HandOff
+        {
+            ConnectionPtr connection;
+            std::optional<std::vector<uint8_t>> hello;
+        };
+
+        /// The acceptor thread
         void ServerLoop(int listenSocket);
+        /// The summary line for the connections the acceptor closed without a word since the last one (when there are any)
+        void LogAdmissionSummary(bool force);
+        /// The acceptor's decision about one accepted socket: closes it, or queues it for a worker with a slot
+        void AdmitAcceptedSocket(int clientSocket);
+        /// A pre-auth worker thread: takes jobs until the server stops
+        void PreAuthWorkerLoop();
+        /// One connection on a worker: TLS, then (with an access token) one Hello, then the offer to the session
+        void ServePreAuth(PreAuthJob &job);
+        /// Reads and checks the one Hello frame. True with `hello` set when the connection may be offered to the session;
+        /// false when it was refused or gave up (the answer sent, the outcome counted and logged).
+        bool ReadAndVerifyHello(Connection &connection, std::string_view peerText, std::vector<uint8_t> &hello);
+        /// Gives the connection to the session thread: waits for the active session (BusyGrace with an access token, as
+        /// long as it takes without), then hands it over (true) or answers BusyError and gives up (false)
+        bool OfferToSession(PreAuthJob &job, std::optional<std::vector<uint8_t>> hello);
+        /// The session thread: takes one hand-off at a time until the server stops
+        void SessionLoop();
+        void RunSession(HandOff &handOff);
+        /// Session start and end: the identity and the close request are cleared together, under the identity's mutex, so
+        /// a tokens reload on the acceptor can't close the wrong session
+        void BeginSessionState();
+        void EndSessionState();
         /// Serves one connection until it closes. sessionOpened is set (and stays set) once the connection has a
         /// session: at once without an access token, at its first successful Hello with one.
         /// connection.connectedAt: when the connection was ready for its Hello, which the Hello deadline counts from:
         /// when it was accepted without TLS, when its TLS handshake finished with it (the handshake has its own budget).
         /// connection.helloBudget is the time from then to a good Hello.
-        void HandleClient(Connection &connection, bool &sessionOpened);
+        /// `helloReplay`: the Hello a pre-auth worker already read and verified; it is run as the connection's first
+        /// request (the same path a Hello read here takes), and nothing is read for it.
+        void HandleClient(Connection &connection, bool &sessionOpened,
+                          std::optional<std::vector<uint8_t>> helloReplay = std::nullopt);
         void ProcessCommand(int clientSocket, uint8_t commandType, const std::vector<uint8_t> &payload);
         /// Network thread: the Logger isn't thread-safe, so log lines are posted to the main thread
         void PostLog(std::string message, bool isWarning = false);
+        /// PostLog, then waits (at most 500 ms, and not once the server is stopping) for the main thread to have written
+        /// the line. A pre-auth worker uses it for the line about a refused Hello, so the line is written before the
+        /// refusal reaches the client, as it was when the main thread refused the Hello itself (a client, or a test, that
+        /// has seen the refusal can rely on its line). The bound keeps a busy main thread from holding a worker, and the
+        /// worker only waits for a line the coalescer lets through (at most its burst per window): a flood does not wait.
+        void PostLogAndWait(std::string message, bool isWarning = false);
+        /// Any thread: one pre-auth failure of this kind. True when its line(s) are to be written (the coalescer's
+        /// decision); a summary of the kind's last window, if it ended with lines unwritten, is posted first.
+        [[nodiscard]] bool AdmitPreAuthLine(std::string_view kind);
+        /// Acceptor: posts the summaries of the coalescer's windows that have ended (`all`: every count, when stopping)
+        void PostPreAuthLogSummaries(bool all);
 
         // Command handlers
         void HandleHello(int clientSocket, const std::vector<uint8_t> &payload);
@@ -764,10 +939,21 @@ namespace N2Engine::Editor
         void LoadOpenedScene(std::unique_ptr<Scene> scene, std::string path);
 
         // Network helpers
-        /// What a Connection needs from this server: the stop and close flags, the connection clock, the write timeout
-        /// and the per-wait token service (see ServiceTokens)
-        [[nodiscard]] ConnectionEnv MakeConnectionEnv();
-        /// Network thread: secures a just-accepted connection when TLS is on (its session goes in connection.tls), by
+        /// Whose Connection it is, which decides what its waits do
+        enum class EnvKind : uint8_t
+        {
+            /// The acceptor's wait on the listening socket: services the tokens file every slice
+            Listener,
+            /// A connection in a pre-auth slot: never asked to close by a reload, a short write budget, its own peer in the
+            /// write-stalled line
+            PreAuth,
+            /// The session: closed when a reload takes its rights away, the full write budget
+            Session,
+        };
+        /// What a Connection needs from this server: the stop and close flags, the connection clock and the write timeout.
+        /// `peerText` names the peer in the write-stalled line.
+        [[nodiscard]] ConnectionEnv MakeConnectionEnv(EnvKind kind, std::string peerText = {});
+        /// A pre-auth worker (for every host, with or without an access token): secures a just-accepted connection when TLS is on (its session goes in connection.tls), by
         /// `deadline`; true when there is nothing to do (no TLS) or the handshake succeeded. False (the reason logged)
         /// closes the connection.
         bool BeginTls(Connection &connection, std::chrono::steady_clock::time_point deadline,
@@ -799,6 +985,26 @@ namespace N2Engine::Editor
         /// The identity Hello would give a client with this token (and user, when it names one); nullopt when it doesn't
         /// match. Needs no authentication on a host without a token: that is an unauthenticated identity.
         [[nodiscard]] std::optional<ConnectionIdentity> Authenticate(std::string_view token, std::string_view user) const;
+        /// What a Hello's token and protocol major version come to: the part of HandleHello that also runs on a pre-auth
+        /// worker (it reads nothing that only the main thread owns, and logs nothing: the caller does, with `warning`).
+        /// `peerSuffix` ends the refusal's log line.
+        struct HelloEvaluation
+        {
+            enum class Result : uint8_t
+            {
+                Accepted,
+                TokenRefused,
+                VersionRefused,
+            };
+            Result result = Result::Accepted;
+            /// The identity the token gives (Accepted)
+            ConnectionIdentity identity;
+            /// The Error frame of a refusal
+            std::vector<uint8_t> refusal;
+            /// The warning that says so (a refusal)
+            std::string warning;
+        };
+        [[nodiscard]] HelloEvaluation EvaluateHello(const Protocol::HelloCmd &cmd, const std::string &peerSuffix) const;
         /// Whether the token (and user) a Hello payload carries would authenticate now; false for a payload that doesn't
         /// parse. The network thread asks it before a user's backoff refuses a Hello: the same Authenticate (constant
         /// time compare) the Hello handler uses, nothing is recorded.
@@ -806,20 +1012,26 @@ namespace N2Engine::Editor
         [[nodiscard]] ConnectionIdentity CurrentIdentity() const;
         void SetIdentity(ConnectionIdentity identity);
         void ClearIdentity();
-        /// Network thread: re-reads the tokens file when `force` or when its signature changed, and swaps the table in
+        /// Acceptor thread only: re-reads the tokens file when `force` or when its signature changed, and swaps the table in
         void ReloadTokens(bool force);
-        /// Network thread: ends the open connection when its user no longer has the role and token it was given
+        /// Ends the open connection when its user no longer has the role and token it was given. Acceptor thread (after a
+        /// reload) and the session thread (right after a Hello bound an identity, in case a reload slipped in between the
+        /// Hello's check and the binding).
         void CheckIdentityAgainstTokens();
-        /// Network thread: ServiceTokens runs the reload a signal asked for; called wherever the thread waits (every wait
-        /// slice of a Connection, through its beforeWait hook). It stays on the wait path rather than moving to the accept
-        /// loop: with one thread the accept loop is not reached while a session runs, so a SIGHUP revoking the session's
-        /// user would no longer end it.
+        /// Acceptor thread ONLY (ReloadTokens keeps unsynchronised bookkeeping of the file): ServiceTokens runs the reload a
+        /// signal asked for. The acceptor's own waits call it (every wait slice of the listener's Connection, through its
+        /// beforeWait hook), so it runs every 100 ms while the host is up, whatever the session and the workers are doing:
+        /// a SIGHUP revoking the session's user ends that session within about 100 ms. The workers' and the session's
+        /// Connections have no beforeWait.
         void ServiceTokens();
         /// The tokens as of now (never null when there is a tokens file)
         [[nodiscard]] std::shared_ptr<const TokenTable> CurrentTokens() const;
 
         std::atomic<bool> _running{false};
+        // The acceptor, the pre-auth workers and the session thread (see the class comment). Started by Start, joined by Stop.
         std::thread _serverThread;
+        std::vector<std::thread> _workers;
+        std::thread _sessionThread;
         int _listenSocket{-1};
         int _port{0};
         bool _socketsInitialized{false};
@@ -834,11 +1046,15 @@ namespace N2Engine::Editor
         TokensFileSignature _tokensLoaded;
         std::optional<TokensFileSignature> _tokensRejected;
         std::atomic<bool> _tokensReloadRequested{false};
-        // The current connection's identity, written by Hello (main thread) and read by the network thread
+        // The session's identity, written by Hello (main thread) and read by the session thread and the acceptor
+        // (a tokens reload checks it); cleared with _closeConnection at the start and end of a session
         mutable std::mutex _identityMutex;
         ConnectionIdentity _identity;
-        // Set by the network thread when a reload took the connection's rights away: its waits fail, which ends it
+        // Set when a reload took the SESSION's rights away (acceptor, or session thread): its waits fail, which ends it.
+        // Cleared with the identity at the start and the end of a session (BeginSessionState, EndSessionState).
         std::atomic<bool> _closeConnection{false};
+        // The close flag of the connections that are not the session (pre-auth workers): never set
+        std::atomic<bool> _neverClose{false};
         // Whether the current connection's Hello asked for ErrorCoded: set by HandleHello (main thread), reset when a
         // connection starts and read by the network thread for Shutdown's refusal, so atomic
         std::atomic<bool> _clientErrorCodes{false};
@@ -851,15 +1067,49 @@ namespace N2Engine::Editor
         ConnectionClock _connectionClock;
         AcceptedSocketHook _acceptedSocketHook;
         // Rate limiting: the settings are set before Start only. The limiter is made by Start (so every run begins with
-        // empty tables). It has its own mutex (every method), though only the network thread uses it today.
+        // empty tables). It has its own mutex (every method): the acceptor, the pre-auth workers and the session thread all use it.
         bool _rateLimiting{true};
         RateLimitPolicy _rateLimitPolicy;
         RateLimiter::Clock _rateLimitClock;
         PeerAddressProvider _peerAddressProvider;
         std::optional<RateLimiter> _rateLimiter;
         std::atomic<uint64_t> _rateLimitedConnections{0};
-        // The current connection's peer as text (empty when there is none, as for a command run without a socket), set by
-        // the network thread and read by the handlers' log lines on the main thread
+        // Pre-auth slots (see SetPreAuthSlots). The options are set before Start; the slots, the bucket and the clock they
+        // read are made by Start (every run begins empty); each has its own mutex. _slots is declared BEFORE the job queue
+        // and the hand-off slot, which hold handles into it, so it is destroyed after them.
+        PreAuthSlotsOptions _preAuthSlotOptions;
+        std::optional<TokenBucketOptions> _handshakeRate;
+        TokenBucket::Clock _handshakeClock;
+        std::chrono::milliseconds _busyGrace{DefaultBusyGrace};
+        std::chrono::milliseconds _admissionSummaryInterval{DefaultAdmissionSummaryInterval};
+        PreHandoffHook _preHandoffHook;
+        StopHook _stopHook;
+        // The pre-auth failure lines' coalescer: options before Start; made by Start (every run begins empty), own mutex
+        LogCoalescerOptions _preAuthLogOptions;
+        std::optional<LogCoalescer> _preAuthLog;
+        std::optional<PreAuthSlots> _slots;
+        std::optional<TokenBucket> _handshakeBucket;
+        std::atomic<uint64_t> _preAuthRefusedConnections{0};
+        std::atomic<uint64_t> _busyRefusals{0};
+        std::atomic<uint64_t> _sessionHandoffs{0};
+        // What the last summary line already reported (acceptor thread only)
+        TokenBucket::Counters _bucketReported;
+        std::chrono::steady_clock::time_point _lastAdmissionSummary{};
+        // The acceptor's queue of connections for the workers: at most one per slot, so never longer than the workers
+        // are many. Both guarded by _jobMutex; the condition variable is notified on a push and on Stop.
+        std::mutex _jobMutex;
+        std::condition_variable _jobCv;
+        std::deque<PreAuthJob> _jobs;
+        // The hand-off slot to the session thread (at most one connection), and whether a session is running. Guarded by
+        // _sessionMutex; the condition variable is notified when the slot fills, when a session ends and on Stop. A
+        // session is "active" from the moment its hand-off is taken until it has ended, so an offer sees it either in the
+        // slot or running, never in neither.
+        std::mutex _sessionMutex;
+        std::condition_variable _sessionCv;
+        std::optional<HandOff> _handoff;
+        bool _sessionRunning{false};
+        // The session's peer as text (empty when there is none, as for a command run without a socket), set by the session
+        // thread and read by the handlers' log lines on the main thread. Pre-auth lines carry their own connection's peer.
         mutable std::mutex _peerMutex;
         std::string _peerText;
         /// " peer=<address>" for a log line about the current connection, or nothing
@@ -872,13 +1122,15 @@ namespace N2Engine::Editor
         /// when it is a user of the CURRENT tokens table, "?" for any other name, "-" when nothing is claimed or the host
         /// has no named users (--token-env, no authentication). The one place every such log line goes through.
         [[nodiscard]] std::string LoggableClaimedUser(std::string_view claimed) const;
-        // The connection the network thread is serving (a Connection on ServerLoop's stack, set for the time HandleClient
-        // runs; null otherwise and for a command run without a socket). Hello (the main thread) records its outcome in
+        // The connection the session thread is serving (owned by the hand-off, set for the time HandleClient runs; null
+        // otherwise and for a command run without a socket). Hello (the main thread) records its outcome in
         // that connection's helloTokenRefused and helloVersionRefused, which the network thread reads once the command's
         // future is ready: the Hello is queued and awaited, so the connection outlives it.
         std::atomic<Connection *> _activeConnection{nullptr};
-        // TLS: the identity is set before Start only. A session is the connection's (Connection::tls), made and used on
-        // the network thread only (one client at a time).
+        // TLS: the identity is set before Start only and is read-only after it (the shared mbedtls_ssl_config; its random
+        // generator is locked by Mbed TLS: MBEDTLS_THREADING_C), so the pre-auth workers handshake concurrently. A TLS
+        // session is the connection's (Connection::tls), made and used by the one thread that holds the connection at the
+        // time (a worker, then the session thread after the hand-off).
         std::unique_ptr<EditorTlsServer> _tlsServer;
         // Atomic: a client Shutdown clears _running on the network thread, so the setter's _running check alone
         // doesn't keep it from racing ServerLoop's read

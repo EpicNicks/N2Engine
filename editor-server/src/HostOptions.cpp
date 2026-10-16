@@ -186,7 +186,8 @@ namespace N2Engine::Editor
                                     arg == "--renderer" || arg == "--token-env" || arg == "--tokens-file" ||
                                     arg == "--create" || arg == "--name" || arg == "--project-id" || arg == "--play" ||
                                     arg == "--log-level" || arg == "--log-file" || arg == "--idle-timeout" ||
-                                    arg == "--write-timeout" || arg == "--max-session";
+                                    arg == "--write-timeout" || arg == "--max-session" ||
+                                    arg == "--preauth-slots";
             if (!takesValue)
             {
                 continue; // unknown arguments are ignored
@@ -269,6 +270,16 @@ namespace N2Engine::Editor
                                                        value, HostOptions::MaxSessionMinutesLimit));
                 }
                 options.maxSessionMinutes = *minutes;
+            }
+            else if (arg == "--preauth-slots")
+            {
+                const std::optional<int> slots = ParseWholeNumber(value, 1, HostOptions::MaxPreAuthSlots);
+                if (!slots)
+                {
+                    return std::unexpected(std::format("Invalid --preauth-slots: {} (expected a whole number from 1 to {})",
+                                                       value, HostOptions::MaxPreAuthSlots));
+                }
+                options.preAuthSlots = *slots;
             }
             else if (arg == "--log-level")
             {
@@ -514,6 +525,17 @@ Options:
                             client isn't reading). Progress restarts it, so a slow reader isn't cut off.
                             Default: 30; at least 1
   --max-session <minutes>   Close a session older than this, whatever it does. Default: off (0)
+  --preauth-slots <n>       How many connections may be in their TLS handshake and Hello at once (and how
+                            many worker threads serve them), 1 to 16. Default: 4. At most 2 of them for
+                            one non-loopback address (loopback may use all: behind a proxy or an SSH
+                            tunnel every peer is loopback). A connection that finds none free is closed
+                            at once, before TLS, with no line of its own (one summary line every 10 s).
+                            Handshakes are also limited to 20 a second in all and 5 a second per
+                            address. The authenticated session has its own thread: a peer that stalls
+                            in a slot (a silent connection, a stalled handshake) holds that slot for the
+                            handshake and Hello budgets (5 s and 2 s) and nothing else. A second
+                            authenticated client while a session is active waits up to 1 s for it to end,
+                            then gets the Error "The host is serving another session; try again later"
   --log-level <level>       The least severe level written to stderr (and --log-file): info (the default),
                             warn or error. Every line is "<UTC time> <LEVEL> <message>", one per event,
                             in every build type; the audit, rate-limit and tokens-reload lines are Info or Warn

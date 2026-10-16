@@ -1,0 +1,24 @@
+{
+  "comment": "Web package size budgets in bytes, upper limits, one set per profile (docs/web-build.html explains each number: measured in the web CI job of PR #174, plus about 15 percent headroom, rounded). Read by scripts/web-budget-check.mjs in the web CI job. Keys: <kind>.<size>, kind = wasm|js|data|initial (initial = every file of the package), size = raw|gzip|brotli.",
+  "profiles": {
+    "dev": {
+      "wasm.raw": 260000000,
+      "wasm.gzip": 49000000,
+      "initial.gzip": 49500000
+    },
+    "size": {
+      "wasm.raw": 4500000,
+      "wasm.brotli": 880000,
+      "wasm.gzip": 1250000,
+      "initial.brotli": 935000,
+      "initial.gzip": 1310000
+    },
+    "speed": {
+      "wasm.raw": 10700000,
+      "wasm.brotli": 1140000,
+      "wasm.gzip": 1970000,
+      "initial.brotli": 1195000,
+      "initial.gzip": 2035000
+    }
+  }
+}
