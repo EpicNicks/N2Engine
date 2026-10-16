@@ -1581,7 +1581,9 @@ namespace N2Engine::Editor
             return false;
         }
 
-        if (listen(_listenSocket, 1) < 0)
+        // A backlog of the workers plus four: the acceptor drains it at once (accept does no handshake), so it only has to
+        // absorb a burst; a connection past it is refused by the kernel
+        if (listen(_listenSocket, static_cast<int>(_preAuthSlotOptions.totalSlots) + 4) < 0)
         {
             Logger::Error("Failed to listen");
             CLOSE_SOCKET(_listenSocket);
@@ -1603,10 +1605,56 @@ namespace N2Engine::Editor
             _rateLimiter.emplace(_rateLimitPolicy, _rateLimitClock);
         }
 
+        // Every run starts with empty slots and an empty bucket, and nothing in either queue
+        _slots.emplace(_preAuthSlotOptions);
+        _handshakeBucket.reset();
+        if (_handshakeRate.has_value())
+        {
+            _handshakeBucket.emplace(*_handshakeRate, _handshakeClock);
+        }
+        _bucketReported = {};
+        _lastAdmissionSummary = std::chrono::steady_clock::now();
+        {
+            const std::lock_guard lock(_jobMutex);
+            _jobs.clear();
+        }
+        {
+            const std::lock_guard lock(_sessionMutex);
+            _handoff.reset();
+            _sessionRunning = false;
+        }
+
         _commands.Reopen();
         _running = true;
-        _serverThread = std::thread(&EditorServer::ServerLoop, this, _listenSocket);
+        try
+        {
+            _sessionThread = std::thread(&EditorServer::SessionLoop, this);
+            const size_t workers = _slots->Options().totalSlots;
+            _workers.reserve(workers);
+            for (size_t i = 0; i < workers; ++i)
+            {
+                _workers.emplace_back(&EditorServer::PreAuthWorkerLoop, this);
+            }
+            _serverThread = std::thread(&EditorServer::ServerLoop, this, _listenSocket);
+        }
+        catch (const std::system_error &e)
+        {
+            // A thread that can't start: undo what did start, so the host fails to listen instead of half serving
+            Logger::Error(std::string("Failed to start the editor server's threads: ") + e.what());
+            Stop();
+            return false;
+        }
         Logger::Info("Editor server listening on " + bindAddress + ":" + std::to_string(_port));
+        Logger::Info(std::format("Pre-auth limits: {} slot(s) (at most {} per non-loopback address; loopback may use all), "
+                                 "{}; one session at a time, a second authenticated client waits up to {} ms and then "
+                                 "gets \"{}\"",
+                                 _slots->Options().totalSlots, _slots->Options().perAddressSlots,
+                                 _handshakeRate.has_value()
+                                     ? std::format("handshake rate {}/s in all and {}/s per address",
+                                                   _handshakeBucket->Options().globalPerSecond,
+                                                   _handshakeBucket->Options().perAddressPerSecond)
+                                     : std::string("no handshake rate limit"),
+                                 _busyGrace.count(), BusyError));
         return true;
     }
 
@@ -1618,9 +1666,51 @@ namespace N2Engine::Editor
         // thread is blocked on doesn't reliably wake it (shutdown doesn't on Windows, close doesn't on Linux).
         _running = false;
         _commands.Close();
+        // Wake what waits on a condition variable (the workers for a job, the session thread for a hand-off, an offer for
+        // the session to end): each also wakes on its own every PollInterval and looks at _running, so a notification
+        // only makes it quicker. The lock is taken so a waiter that has just checked the flag is already waiting.
+        {
+            const std::lock_guard lock(_jobMutex);
+        }
+        _jobCv.notify_all();
+        {
+            const std::lock_guard lock(_sessionMutex);
+        }
+        _sessionCv.notify_all();
 
+        // Joins: the acceptor first (nothing new arrives), then the workers, then the session thread. No thread waits on
+        // another without also watching _running, so none of these can block for more than a poll interval (and a
+        // session's wait for the main thread ends because the queue is closed).
         if (_serverThread.joinable())
             _serverThread.join();
+        for (std::thread &worker : _workers)
+        {
+            if (worker.joinable())
+                worker.join();
+        }
+        _workers.clear();
+        if (_sessionThread.joinable())
+            _sessionThread.join();
+
+        // Connections still waiting in the queue or the hand-off slot: closed now that no thread uses a socket. Their
+        // slots are released as they go.
+        {
+            std::deque<PreAuthJob> leftovers;
+            {
+                const std::lock_guard lock(_jobMutex);
+                leftovers.swap(_jobs);
+            }
+            leftovers.clear();
+        }
+        {
+            std::optional<HandOff> leftover;
+            {
+                const std::lock_guard lock(_sessionMutex);
+                leftover.swap(_handoff);
+                _sessionRunning = false;
+            }
+            leftover.reset();
+        }
 
         if (_listenSocket != -1)
         {
@@ -1851,21 +1941,42 @@ namespace N2Engine::Editor
 
     void EditorServer::CheckIdentityAgainstTokens()
     {
-        const ConnectionIdentity identity = CurrentIdentity();
-        if (!identity.fromTokensFile)
-        {
-            return;
-        }
+        // The table first, then the identity's lock: the identity is read and the close flag set in one step, so the
+        // verdict is about the session that holds the identity now and can't land on the next one (BeginSessionState and
+        // EndSessionState clear the identity and the flag under the same lock). Lock order: identity, never the reverse.
         const std::shared_ptr<const TokenTable> tokens = CurrentTokens();
-        const TokenEntry *entry = tokens ? tokens->Find(identity.user) : nullptr;
-        if (entry != nullptr && entry->role == identity.role && TokenHashesEqual(entry->hash, identity.hash))
+        ConnectionIdentity identity;
         {
-            return;
+            const std::lock_guard lock(_identityMutex);
+            if (!_identity.fromTokensFile)
+            {
+                return;
+            }
+            identity = _identity;
+            const TokenEntry *entry = tokens ? tokens->Find(identity.user) : nullptr;
+            if (entry != nullptr && entry->role == identity.role && TokenHashesEqual(entry->hash, identity.hash))
+            {
+                return;
+            }
+            _closeConnection.store(true);
         }
-        _closeConnection.store(true);
         PostLog(std::format("Closing the connection of user={} role={}: the reloaded tokens file no longer grants it",
                             identity.user, TokenRoleName(identity.role)),
                 true);
+    }
+
+    void EditorServer::BeginSessionState()
+    {
+        const std::lock_guard lock(_identityMutex);
+        _identity = ConnectionIdentity{};
+        _closeConnection.store(false);
+    }
+
+    void EditorServer::EndSessionState()
+    {
+        const std::lock_guard lock(_identityMutex);
+        _identity = ConnectionIdentity{};
+        _closeConnection.store(false);
     }
 
     void EditorServer::ServiceTokens()
@@ -2076,6 +2187,83 @@ namespace N2Engine::Editor
         return true;
     }
 
+    bool EditorServer::SetPreAuthSlots(const size_t slots)
+    {
+        if (_running || slots < 1 || slots > MaxPreAuthSlots)
+        {
+            Logger::Warn(std::format("The editor server's pre-auth slots can't change while it is running, and must be "
+                                     "from 1 to {}",
+                                     MaxPreAuthSlots));
+            return false;
+        }
+        _preAuthSlotOptions.totalSlots = slots;
+        return true;
+    }
+
+    bool EditorServer::SetPreAuthSlotsPerAddress(const size_t slots)
+    {
+        if (_running || slots < 1)
+        {
+            Logger::Warn("The editor server's pre-auth slots per address can't change while it is running, and must be at "
+                         "least 1");
+            return false;
+        }
+        _preAuthSlotOptions.perAddressSlots = slots;
+        return true;
+    }
+
+    bool EditorServer::SetHandshakeRateLimit(std::optional<TokenBucketOptions> options, TokenBucket::Clock clock)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's handshake rate limit can't change while it is running");
+            return false;
+        }
+        _handshakeRate = std::move(options);
+        _handshakeClock = std::move(clock);
+        return true;
+    }
+
+    bool EditorServer::SetBusyGrace(const std::chrono::milliseconds grace)
+    {
+        if (_running || grace < std::chrono::milliseconds::zero())
+        {
+            Logger::Warn("The editor server's busy grace can't change while it is running, or be negative");
+            return false;
+        }
+        _busyGrace = grace;
+        return true;
+    }
+
+    bool EditorServer::SetAdmissionSummaryInterval(const std::chrono::milliseconds interval)
+    {
+        if (_running || interval <= std::chrono::milliseconds::zero())
+        {
+            Logger::Warn("The editor server's admission summary interval can't change while it is running, or be zero or "
+                         "negative");
+            return false;
+        }
+        _admissionSummaryInterval = interval;
+        return true;
+    }
+
+    bool EditorServer::SetPreHandoffHook(PreHandoffHook hook)
+    {
+        if (_running)
+        {
+            Logger::Warn("The editor server's pre-hand-off hook can't change while it is running");
+            return false;
+        }
+        _preHandoffHook = std::move(hook);
+        return true;
+    }
+
+    size_t EditorServer::PreAuthSlotsInUse() const
+    {
+        // _slots is made by Start and never replaced while the server runs; before that there is nothing in use
+        return _running && _slots.has_value() ? _slots->InUse() : 0;
+    }
+
     std::chrono::steady_clock::time_point EditorServer::ConnectionNow() const
     {
         return _connectionClock ? _connectionClock() : std::chrono::steady_clock::now();
@@ -2181,41 +2369,82 @@ namespace N2Engine::Editor
         return static_cast<CommandType>(commandType) == CommandType::Hello;
     }
 
+    void EditorServer::LogAdmissionSummary(const bool force)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (!force && now - _lastAdmissionSummary < _admissionSummaryInterval)
+        {
+            return;
+        }
+        _lastAdmissionSummary = now;
+        if (!_slots.has_value())
+        {
+            return;
+        }
+        const PreAuthSlots::Counters slotCounts = _slots->TakeCounters();
+        uint64_t overRate = 0;
+        if (_handshakeBucket.has_value())
+        {
+            const TokenBucket::Counters total = _handshakeBucket->TotalCounters();
+            overRate = (total.refusedGlobal - _bucketReported.refusedGlobal) +
+                       (total.refusedAddress - _bucketReported.refusedAddress);
+            _bucketReported = total;
+        }
+        const uint64_t refused = slotCounts.refusedFull + slotCounts.refusedPerAddress + overRate;
+        if (refused == 0)
+        {
+            return;
+        }
+        // One line for all of them: a refused connection writes nothing of its own (a flood would otherwise fill the
+        // main thread's log queue, which has no bound)
+        PostLog(std::format("Pre-auth limits: closed {} connection(s) at accept without a word since the last report: {} "
+                            "with every slot taken, {} past an address's share of the slots, {} over the handshake rate",
+                            refused, slotCounts.refusedFull, slotCounts.refusedPerAddress, overRate),
+                true);
+    }
+
     void EditorServer::ServerLoop(int listenSocket)
     {
-        // A connection closed for its peer's backoff is not worth a line (nor the "Waiting" line it would bring back):
-        // the backoff's start was logged once
-        bool quiet = false;
+        // The acceptor. It never blocks on a client: it takes the connection off the listener, decides in microseconds
+        // whether it may have a slot, and hands it to a pre-auth worker. A connection refused here is closed at once and
+        // writes no log line of its own ("Waiting" is written once, and again when a session ends).
+        PostLog("Waiting for editor connection...");
         while (_running)
         {
-            if (!quiet)
-            {
-                PostLog("Waiting for editor connection...");
-            }
-            quiet = false;
-
             int clientSocket = NoSocket;
             {
-                // A Connection around the listener only to wait on it (the same slices, token service and stop check as
-                // any wait); it is never closed here
-                Connection listener(listenSocket, MakeConnectionEnv());
-                if (listener.WaitUntilReady(false))
+                // A Connection around the listener only to wait on it (the same slices and stop check as any wait, and the
+                // tokens file service every slice: this thread is the one that reloads it); it is never closed here. The
+                // wait ends after a second on the real clock, so the summary line below is written on time when quiet.
+                Connection listener(listenSocket, MakeConnectionEnv(EnvKind::Listener));
+                const auto sliceEnd = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+                if (listener.WaitUntilReady(false, sliceEnd))
                 {
                     clientSocket = static_cast<int>(accept(listenSocket, nullptr, nullptr));
+                    if (clientSocket == NoSocket && _running)
+                    {
+                        PostLog("Accept failed: " + std::to_string(SOCKET_ERROR_CODE), true);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // don't spin on a broken listener
+                    }
+                }
+                else if (_running && std::chrono::steady_clock::now() < sliceEnd)
+                {
+                    // The wait failed before its time was up: the listener is broken
+                    PostLog("Waiting for a connection failed: " + std::to_string(SOCKET_ERROR_CODE), true);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
             }
+            LogAdmissionSummary(false);
             if (clientSocket == NoSocket)
             {
-                if (_running)
-                {
-                    PostLog("Accept failed: " + std::to_string(SOCKET_ERROR_CODE), true);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // don't spin on a broken listener
-                }
                 continue;
             }
 
-            // From here the connection's per-connection state is this object (its socket, TLS session, peer and times)
-            Connection connection(clientSocket, MakeConnectionEnv());
+            // The connection is somebody's to close from here on: whichever way this iteration ends, the job (and its slot,
+            // once it has one) goes out of scope and closes the socket before it frees the slot
+            PreAuthJob job;
+            job.connection.reset(new Connection(clientSocket, ConnectionEnv{}));
+            Connection &connection = *job.connection;
 
             // Every send and recv on the connection must be able to give way to a deadline: a blocking send() of a large
             // frame to a client that isn't reading would otherwise sit in the kernel for ever, past any deadline
@@ -2224,7 +2453,6 @@ namespace N2Engine::Editor
                 PostLog("Dropping an editor connection: its socket couldn't be made non-blocking (error " +
                             std::to_string(SOCKET_ERROR_CODE) + ")",
                         true);
-                connection.Close();
                 continue;
             }
             if (_acceptedSocketHook)
@@ -2234,7 +2462,6 @@ namespace N2Engine::Editor
 
             // Who connected, before anything costly. A peer that is backed off for failed Hellos is closed right here: no
             // TLS handshake, no Hello, nothing read from it. One with failures on record gets the shorter budget.
-            connection.peer = PeerAddress{};
             try
             {
                 connection.peer = _peerAddressProvider ? _peerAddressProvider(clientSocket) : ReadSocketPeer(clientSocket);
@@ -2243,7 +2470,6 @@ namespace N2Engine::Editor
             {
                 // An address nobody could read is Unknown, which is a peer like any other
             }
-            const std::string peerText = connection.peer.ToString();
             std::chrono::milliseconds helloBudget = _helloTimeout;
             std::chrono::milliseconds handshakeBudget = _tlsHandshakeTimeout;
             if (_rateLimiter.has_value())
@@ -2252,8 +2478,6 @@ namespace N2Engine::Editor
                 if (!admission.allowed)
                 {
                     ++_rateLimitedConnections;
-                    connection.Close();
-                    quiet = true;
                     continue;
                 }
                 if (admission.suppressed > 0)
@@ -2268,97 +2492,428 @@ namespace N2Engine::Editor
                 }
             }
 
-            // With TLS the connection is secured first, inside its own handshake deadline (which counts from here: an
-            // unoptimised build's handshake can take longer than the Hello budget). One that can't be is closed without
-            // ever counting as a client or a session, and the loop accepts the next.
-            const auto acceptedAt = ConnectionNow();
-            connection.acceptedAt = acceptedAt;
-            bool secured = false;
+            // A pre-auth slot, or the connection is closed at once (no TLS, no line: it is counted for the summary). The
+            // slot is taken before the handshake token, so a refusal for lack of a slot spends none of the rate budget.
+            job.slot = _slots->TryAcquire(connection.peer);
+            if (!job.slot)
+            {
+                ++_preAuthRefusedConnections;
+                continue;
+            }
+            // The handshake rate: the excess is closed before TLS (the slot goes back with the connection)
+            if (_handshakeBucket.has_value() && !_handshakeBucket->TryTake(connection.peer))
+            {
+                ++_preAuthRefusedConnections;
+                continue;
+            }
+
+            connection.env = MakeConnectionEnv(EnvKind::PreAuth, connection.peer.ToString());
+            job.helloBudget = helloBudget;
+            job.handshakeBudget = handshakeBudget;
+            // The tokens file is looked at before the connection's Hello is checked, so a token revoked since the last
+            // connection can't be used (this thread is the one that reloads)
+            ReloadTokens(false);
+
+            // At most one job per slot, so the queue holds at most as many as there are workers
+            {
+                const std::lock_guard lock(_jobMutex);
+                _jobs.push_back(std::move(job));
+            }
+            _jobCv.notify_one();
+        }
+        LogAdmissionSummary(true);
+    }
+
+    void EditorServer::PreAuthWorkerLoop()
+    {
+        while (_running)
+        {
+            PreAuthJob job;
+            {
+                std::unique_lock lock(_jobMutex);
+                _jobCv.wait_for(lock, Connection::PollInterval, [this] { return !_jobs.empty() || !_running; });
+                // Stopping: what is still queued is closed by Stop, after the joins
+                if (!_running)
+                {
+                    break;
+                }
+                if (_jobs.empty())
+                {
+                    continue;
+                }
+                job = std::move(_jobs.front());
+                _jobs.pop_front();
+            }
             try
             {
-                secured = BeginTls(connection, acceptedAt + handshakeBudget, handshakeBudget);
+                ServePreAuth(job);
             }
             catch (...)
             {
-                PostLog("Dropping an editor connection after an unexpected error in its TLS handshake", true);
+                // e.g. bad_alloc; nothing may escape this thread (that would terminate the host)
+                PostLog("Dropping an editor connection after an unexpected error before its Hello", true);
             }
-            if (!secured)
+            // The job goes out of scope here: its connection is closed (unless it was handed on), then its slot is freed
+        }
+    }
+
+    void EditorServer::ServePreAuth(PreAuthJob &job)
+    {
+        Connection &connection = *job.connection;
+        const std::string peerText = connection.peer.ToString();
+
+        // With TLS the connection is secured first, inside its own handshake deadline (which counts from here: an
+        // unoptimised build's handshake can take longer than the Hello budget). One that can't be is closed without
+        // ever counting as a client or a session.
+        const auto acceptedAt = ConnectionNow();
+        connection.acceptedAt = acceptedAt;
+        bool secured = false;
+        try
+        {
+            secured = BeginTls(connection, acceptedAt + job.handshakeBudget, job.handshakeBudget);
+        }
+        catch (...)
+        {
+            PostLog("Dropping an editor connection after an unexpected error in its TLS handshake", true);
+        }
+        if (!secured)
+        {
+            // A handshake that failed or stalled is a connection that never got to Hello: a failure for its address
+            // (a stopping server's own abort is not the peer's doing). Counted before the socket is closed.
+            if (_running)
             {
-                // A handshake that failed or stalled is a connection that never got to Hello: a failure for its address
-                // (a stopping server's own abort is not the peer's doing)
-                if (_running)
-                {
-                    CountUnfinishedHello(connection.peer);
-                }
-                connection.Close(); // its TLS session first, then the socket
-                continue;
+                CountUnfinishedHello(connection.peer);
             }
-            // The Hello budget (and, without a token, the session) starts once the connection is ready for it: at
-            // accept without TLS, at the end of the handshake with it
-            connection.connectedAt = connection.tls ? ConnectionNow() : acceptedAt;
-            connection.helloBudget = helloBudget;
+            return;
+        }
+        // The Hello budget (and, without a token, the session) starts once the connection is ready for it: at accept
+        // without TLS, at the end of the handshake with it
+        connection.connectedAt = connection.tls ? ConnectionNow() : acceptedAt;
+        connection.helloBudget = job.helloBudget;
 
-            // A new connection has no identity (its Hello gives it one). The tokens file is looked at before that Hello,
-            // so a token revoked since the last connection can't be used.
-            _closeConnection.store(false);
-            ClearIdentity();
-            ReloadTokens(false);
+        std::optional<std::vector<uint8_t>> hello;
+        if (RequiresAccessToken())
+        {
+            std::vector<uint8_t> payload;
+            if (!ReadAndVerifyHello(connection, peerText, payload))
+            {
+                return;
+            }
+            hello = std::move(payload);
+        }
+        (void)OfferToSession(job, std::move(hello));
+    }
 
-            SetPeerText(peerText);
-            PostLog("Editor connected peer=" + peerText);
-            _clientConnected = true;
-            bool sessionOpened = false;
-            _activeConnection.store(&connection);
+    bool EditorServer::ReadAndVerifyHello(Connection &connection, const std::string_view peerText,
+                                          std::vector<uint8_t> &hello)
+    {
+        // The pre-Hello part of the request loop (HandleClient), for the one frame a connection may send before it has a
+        // session: the same budget, payload cap, refusals, failure accounting and log lines. Everything that fails is
+        // counted for the peer's address (a connection that ends without a good Hello held a worker for its budget) before
+        // the socket is closed, which the caller does by dropping the job.
+        const auto deadline = connection.connectedAt + connection.helloBudget;
+        const std::string peerSuffix = " peer=" + std::string(peerText);
+        const auto closeUnauthorized = [&](const std::string &reason)
+        {
+            PostLog("Closing an editor connection that hasn't sent a successful Hello: " + reason + peerSuffix, true);
+        };
+        const auto logIfDeadlinePassed = [&]
+        {
+            if (_running && ConnectionNow() >= deadline)
+            {
+                closeUnauthorized(std::format("no Hello within {} ms", connection.helloBudget.count()));
+            }
+        };
+        const auto countUnfinished = [&]
+        {
+            if (_running)
+            {
+                CountUnfinishedHello(connection.peer);
+            }
+        };
+
+        uint8_t cmdType;
+        uint32_t payloadLength;
+        if (!connection.Receive(&cmdType, 1, deadline) || !connection.Receive(&payloadLength, sizeof(payloadLength), deadline))
+        {
+            logIfDeadlinePassed();
+            countUnfinished();
+            return false;
+        }
+        // The length is client-supplied, so check it before allocating. The oversized payload is still in the stream, so
+        // the connection can't be resynchronized and is closed.
+        if (payloadLength > MaxPayloadBytesBeforeHello)
+        {
+            const std::string message = std::format("Payload of {} bytes exceeds the {} byte limit before Hello",
+                                                    payloadLength, MaxPayloadBytesBeforeHello);
+            BufferWriter response;
+            WriteError(response, message);
+            connection.Send(response.Data().data(), response.Size());
+            PostLog(message, true);
+            countUnfinished();
+            return false;
+        }
+        std::vector<uint8_t> payload(payloadLength);
+        if (payloadLength > 0 && !connection.Receive(payload.data(), payloadLength, deadline))
+        {
+            logIfDeadlinePassed();
+            countUnfinished();
+            return false;
+        }
+        // Nothing but Hello (Shutdown included) is answered before a successful Hello
+        if (!IsAllowedBeforeHello(cmdType))
+        {
+            BufferWriter response;
+            WriteError(response, HelloRequiredError);
+            connection.Send(response.Data().data(), response.Size());
+            closeUnauthorized(std::format("it sent command 0x{:X}", cmdType));
+            countUnfinished();
+            return false;
+        }
+
+        // The user the Hello names is read here, and the token is checked BEFORE the user's backoff applies: a correct
+        // token always gets in (so an attacker who guesses a user's name cannot lock that user out), while a wrong one is
+        // still refused, counted and backs off further.
+        const bool rateLimited = _rateLimiter.has_value();
+        std::optional<std::string> helloUser;
+        if (rateLimited && HasTokensFile())
+        {
+            helloUser = UserNamedByHello(payload);
+            if (helloUser.has_value() && _rateLimiter->IsUserBackedOff(*helloUser) && !HelloTokenIsValid(payload))
+            {
+                LogRateLimitOutcome(_rateLimiter->RecordFailure(connection.peer, std::string_view(*helloUser)), *helloUser,
+                                    connection.peer);
+                BufferWriter response;
+                WriteError(response, RateLimitedError);
+                connection.Send(response.Data().data(), response.Size());
+                return false;
+            }
+        }
+
+        // The token and the protocol's major version, on this thread: HandleHello checks the same payload again on the
+        // main thread when the session replays it
+        std::optional<HelloCmd> cmd;
+        std::string failure;
+        try
+        {
+            BufferReader reader(payload);
+            cmd.emplace(HelloCmd::Deserialize(reader));
+        }
+        catch (const std::exception &e)
+        {
+            failure = e.what();
+        }
+        catch (...)
+        {
+            failure = "unknown exception";
+        }
+        if (!cmd.has_value())
+        {
+            // A Hello that wouldn't even parse: it held a worker and proved nothing, so it counts like an unfinished one,
+            // before its answer is sent (the answer is the one a failing command gets)
+            PostLog(std::format("Command 0x{:X} failed: {}", cmdType, failure), true);
+            countUnfinished();
+            BufferWriter response;
+            WriteError(response, "Command failed: " + failure);
+            connection.Send(response.Data().data(), response.Size());
+            closeUnauthorized("its Hello was refused");
+            return false;
+        }
+
+        HelloEvaluation evaluation = EvaluateHello(*cmd, peerSuffix);
+        if (evaluation.result == HelloEvaluation::Result::Accepted)
+        {
+            hello = std::move(payload);
+            return true;
+        }
+        PostLog(evaluation.warning, true);
+        // The outcome is counted before the answer is sent, so a client that sees the refusal and connects again meets
+        // the backoff it earned. A good token and an old client (the version) is not a failure of the address.
+        if (rateLimited && evaluation.result == HelloEvaluation::Result::TokenRefused)
+        {
+            const std::optional<std::string_view> named =
+                helloUser.has_value() ? std::optional<std::string_view>(*helloUser) : std::nullopt;
+            LogRateLimitOutcome(_rateLimiter->RecordFailure(connection.peer, named), helloUser.value_or(std::string{}),
+                                connection.peer);
+        }
+        connection.Send(evaluation.refusal.data(), evaluation.refusal.size());
+        closeUnauthorized("its Hello was refused");
+        return false;
+    }
+
+    bool EditorServer::OfferToSession(PreAuthJob &job, std::optional<std::vector<uint8_t>> hello)
+    {
+        if (_preHandoffHook)
+        {
+            _preHandoffHook();
+        }
+        // With an access token an authenticated client waits for the active session only for BusyGrace (a session whose
+        // client has just gone is still ending for a moment); without one there is no Hello and no Busy, and the
+        // connection waits for as long as the session lasts, as it did in the backlog
+        const bool gated = hello.has_value();
+        const auto giveUpAt = std::chrono::steady_clock::now() + _busyGrace;
+
+        std::unique_lock lock(_sessionMutex);
+        while (_running)
+        {
+            // Free means no session running and nobody else's connection in the slot: the session thread takes the slot
+            // and sets _sessionRunning under this same mutex, so there is no moment with neither
+            if (!_sessionRunning && !_handoff.has_value())
+            {
+                _handoff.emplace(HandOff{std::move(job.connection), std::move(hello)});
+                lock.unlock();
+                ++_sessionHandoffs;
+                // The connection is no longer pre-auth: its slot goes back (the job's connection is empty now)
+                job.slot.Release();
+                _sessionCv.notify_all();
+                return true;
+            }
+            if (gated && std::chrono::steady_clock::now() >= giveUpAt)
+            {
+                break;
+            }
+            _sessionCv.wait_for(lock, Connection::PollInterval);
+        }
+        lock.unlock();
+        if (!_running)
+        {
+            return false; // stopping: the job closes the connection
+        }
+
+        ++_busyRefusals;
+        BufferWriter response;
+        WriteError(response, BusyError);
+        job.connection->Send(response.Data().data(), response.Size());
+        PostLog("Turned away an authenticated client: the host is serving another session peer=" +
+                job.connection->peer.ToString());
+        return false;
+    }
+
+    void EditorServer::SessionLoop()
+    {
+        while (_running)
+        {
+            std::optional<HandOff> work;
+            {
+                std::unique_lock lock(_sessionMutex);
+                _sessionCv.wait_for(lock, Connection::PollInterval, [this] { return _handoff.has_value() || !_running; });
+                // Stopping: a connection still in the slot is closed by Stop, after the joins
+                if (!_running)
+                {
+                    break;
+                }
+                if (!_handoff.has_value())
+                {
+                    continue;
+                }
+                work.emplace(std::move(*_handoff));
+                _handoff.reset();
+                _sessionRunning = true;
+            }
             try
             {
-                HandleClient(connection, sessionOpened);
+                RunSession(*work);
             }
             catch (...)
             {
                 // e.g. bad_alloc; nothing may escape this thread (that would terminate the host)
                 PostLog("Dropping the editor connection after an unexpected error", true);
             }
-            _activeConnection.store(nullptr);
-
-            connection.Close(); // its TLS session first, then the socket
-            _clientConnected = false;
-            ClearIdentity();
-            _closeConnection.store(false);
-            PostLog("Editor disconnected peer=" + peerText);
-            SetPeerText({});
-            // A group it left open becomes a step (queued: the history is main-thread state)
-            (void)_commands.Enqueue([this]
+            work.reset(); // closes the connection if RunSession didn't
             {
-                CloseEditGroups();
-                // A play host's keys the client held go up with it (a key held when it crashed would stay down)
-                _keys.ReleaseAll();
-                // A client that went away may have crashed: the last edits are written, however recent the autosave
-                FlushAutosave(true);
-                return CommandQueue::Response{};
-            });
-
-            // A Shutdown (or Stop) has already cleared _running; this is the client going away on its own
-            if (_stopOnDisconnect && sessionOpened && _running)
-            {
-                PostLog("Stopping the editor server: the client's session ended, and it stops on disconnect");
-                _running = false;
+                const std::lock_guard lock(_sessionMutex);
+                _sessionRunning = false;
             }
+            _sessionCv.notify_all();
         }
     }
 
-    ConnectionEnv EditorServer::MakeConnectionEnv()
+    void EditorServer::RunSession(HandOff &handOff)
+    {
+        Connection &connection = *handOff.connection;
+        const std::string peerText = connection.peer.ToString();
+
+        // From here the connection is the session's: a reload that takes its rights away closes it, and its writes have
+        // the full budget
+        connection.env = MakeConnectionEnv(EnvKind::Session, peerText);
+        if (!RequiresAccessToken())
+        {
+            // Without a token the session (and its idle and age deadlines) starts when it gets the session thread; with
+            // one, at its first good Hello
+            connection.connectedAt = ConnectionNow();
+        }
+
+        // A new session has no identity (its Hello gives it one)
+        BeginSessionState();
+        SetPeerText(peerText);
+        PostLog("Editor connected peer=" + peerText);
+        _clientConnected = true;
+        bool sessionOpened = false;
+        _activeConnection.store(&connection);
+        try
+        {
+            HandleClient(connection, sessionOpened, std::move(handOff.hello));
+        }
+        catch (...)
+        {
+            // e.g. bad_alloc; nothing may escape this thread (that would terminate the host)
+            PostLog("Dropping the editor connection after an unexpected error", true);
+        }
+        _activeConnection.store(nullptr);
+
+        handOff.connection.reset(); // its TLS session first, then the socket
+        _clientConnected = false;
+        EndSessionState();
+        PostLog("Editor disconnected peer=" + peerText);
+        SetPeerText({});
+        // A group it left open becomes a step (queued: the history is main-thread state). Enqueued before the session is
+        // marked ended, so the next session's Hello (replayed through the same queue) runs after it.
+        (void)_commands.Enqueue([this]
+        {
+            CloseEditGroups();
+            // A play host's keys the client held go up with it (a key held when it crashed would stay down)
+            _keys.ReleaseAll();
+            // A client that went away may have crashed: the last edits are written, however recent the autosave
+            FlushAutosave(true);
+            return CommandQueue::Response{};
+        });
+
+        // A Shutdown (or Stop) has already cleared _running; this is the client going away on its own
+        if (_stopOnDisconnect && sessionOpened && _running)
+        {
+            PostLog("Stopping the editor server: the client's session ended, and it stops on disconnect");
+            _running = false;
+        }
+        else if (_running)
+        {
+            PostLog("Waiting for editor connection...");
+        }
+    }
+
+    ConnectionEnv EditorServer::MakeConnectionEnv(const EnvKind kind, std::string peerText)
     {
         ConnectionEnv env;
         env.running = &_running;
-        env.closeRequested = &_closeConnection;
-        env.now = [this] { return ConnectionNow(); };
-        env.beforeWait = [this] { ServiceTokens(); };
-        env.writeTimeout = _writeTimeout;
-        env.writeStalled = [this]
+        // Only the session is ever asked to close by a tokens reload; the listener's and the workers' flag stays clear
+        env.closeRequested = kind == EnvKind::Session ? &_closeConnection : &_neverClose;
+        if (kind == EnvKind::Listener)
+        {
+            // The real steady clock (the listener has no deadline of the connection clock's), and the tokens file is
+            // serviced every slice: the only thread that does
+            env.beforeWait = [this] { ServiceTokens(); };
+        }
+        else
+        {
+            env.now = [this] { return ConnectionNow(); };
+        }
+        // A worker only ever writes one small Error: a client that doesn't read it must not hold the worker for the
+        // session's write budget
+        env.writeTimeout = kind == EnvKind::PreAuth ? std::min(_writeTimeout, _helloTimeout) : _writeTimeout;
+        env.writeStalled = [this, timeout = env.writeTimeout, peerText = std::move(peerText)]
         {
             PostLog(std::format("Closing an editor connection: no write progress for {} ms (the write timeout), the "
                                 "client isn't reading{}",
-                                _writeTimeout.count(), PeerSuffix()),
+                                timeout.count(), peerText.empty() ? std::string{} : " peer=" + peerText),
                     true);
         };
         return env;
@@ -2408,7 +2963,8 @@ namespace N2Engine::Editor
         }
     }
 
-    void EditorServer::HandleClient(Connection &connection, bool &sessionOpened)
+    void EditorServer::HandleClient(Connection &connection, bool &sessionOpened,
+                                    std::optional<std::vector<uint8_t>> helloReplay)
     {
         const auto connectedAt = connection.connectedAt;
         const auto helloBudget = connection.helloBudget;
@@ -2521,37 +3077,49 @@ namespace N2Engine::Editor
                 waitedOn.has_value() ? std::optional<std::chrono::steady_clock::time_point>(waitedOn->at) : std::nullopt;
             const bool beforeHello = gated && !helloAccepted;
 
-            // Read command header: [type: 1 byte][length: 4 bytes]
-            uint8_t cmdType;
-            uint32_t payloadLength;
-            if (!connection.Receive(&cmdType, 1, deadline) ||
-                !connection.Receive(&payloadLength, sizeof(payloadLength), deadline))
+            // The request: the Hello a pre-auth worker already read and verified (once, as the connection's first), else
+            // read from the connection
+            uint8_t cmdType = 0;
+            std::vector<uint8_t> payload;
+            if (helloReplay.has_value())
             {
-                logIfLimitPassed(waitedOn);
-                break;
+                cmdType = static_cast<uint8_t>(CommandType::Hello);
+                payload = std::move(*helloReplay);
+                helloReplay.reset();
             }
-
-            // The length is client-supplied, so check it before allocating. The oversized payload is
-            // still in the stream, so the connection can't be resynchronized and is closed. Before a Hello on a
-            // gated connection, a payload bigger than any Hello needs is refused the same way.
-            const uint32_t limit = beforeHello ? MaxPayloadBytesBeforeHello : MaxPayloadBytes;
-            if (payloadLength > limit)
+            else
             {
-                const std::string message = std::format("Payload of {} bytes exceeds the {} byte limit{}",
-                                                        payloadLength, limit, beforeHello ? " before Hello" : "");
-                BufferWriter response;
-                WriteError(response, message);
-                connection.Send(response.Data().data(), response.Size());
-                PostLog(message, true);
-                break;
-            }
+                // Read command header: [type: 1 byte][length: 4 bytes]
+                uint32_t payloadLength;
+                if (!connection.Receive(&cmdType, 1, deadline) ||
+                    !connection.Receive(&payloadLength, sizeof(payloadLength), deadline))
+                {
+                    logIfLimitPassed(waitedOn);
+                    break;
+                }
 
-            // Read payload
-            std::vector<uint8_t> payload(payloadLength);
-            if (payloadLength > 0 && !connection.Receive(payload.data(), payloadLength, deadline))
-            {
-                logIfLimitPassed(waitedOn);
-                break;
+                // The length is client-supplied, so check it before allocating. The oversized payload is
+                // still in the stream, so the connection can't be resynchronized and is closed. Before a Hello on a
+                // gated connection, a payload bigger than any Hello needs is refused the same way.
+                const uint32_t limit = beforeHello ? MaxPayloadBytesBeforeHello : MaxPayloadBytes;
+                if (payloadLength > limit)
+                {
+                    const std::string message = std::format("Payload of {} bytes exceeds the {} byte limit{}",
+                                                            payloadLength, limit, beforeHello ? " before Hello" : "");
+                    BufferWriter response;
+                    WriteError(response, message);
+                    connection.Send(response.Data().data(), response.Size());
+                    PostLog(message, true);
+                    break;
+                }
+
+                // Read payload
+                payload.assign(payloadLength, 0);
+                if (payloadLength > 0 && !connection.Receive(payload.data(), payloadLength, deadline))
+                {
+                    logIfLimitPassed(waitedOn);
+                    break;
+                }
             }
 
             // With an access token, nothing but Hello runs (or is even queued) until a Hello has succeeded, and
@@ -2661,6 +3229,12 @@ namespace N2Engine::Editor
                     sessionStart = ConnectionNow();
                 }
                 sessionOpened = sessionOpened || helloAccepted;
+                // A tokens reload may have slipped in between the Hello's check and the identity it bound: the reload's own
+                // check saw no identity yet, so look again now
+                if (helloAccepted)
+                {
+                    CheckIdentityAgainstTokens();
+                }
             }
             // The outcome is counted before the answer is sent, so a client that sees the refusal and connects again
             // meets the backoff it earned
@@ -3281,11 +3855,9 @@ namespace N2Engine::Editor
         }
     }
 
-    void EditorServer::HandleHello(int clientSocket, const std::vector<uint8_t> &payload)
+    EditorServer::HelloEvaluation EditorServer::EvaluateHello(const HelloCmd &cmd, const std::string &peerSuffix) const
     {
-        BufferReader reader(payload);
-        const HelloCmd cmd = HelloCmd::Deserialize(reader);
-
+        HelloEvaluation evaluation;
         // Client-supplied text only reaches the log, or the Error, sanitised and shortened; the token never does
         const std::string clientName = SanitizeForLog(cmd.clientName);
         const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
@@ -3293,40 +3865,30 @@ namespace N2Engine::Editor
         // too) or anything else there must not see it in a durable log: it is logged only when it is a user of the
         // current tokens table, else as user=? (user=- without named users)
         const std::string claimedUser = LoggableClaimedUser(cmd.user);
-        const std::string peerSuffix = PeerSuffix();
-        // This Hello's outcome goes to the connection being served (none for a command run without a socket)
-        Connection *const served = _activeConnection.load();
-        if (served != nullptr)
-        {
-            served->helloTokenRefused = false;
-            served->helloVersionRefused = false;
-        }
-        BufferWriter response;
 
         // The token first, so a client without it learns nothing else. A wrong user and a wrong token are the same
         // answer, and the log holds the user the client claimed, never the token or its hash.
-        ConnectionIdentity identity;
         if (RequiresAccessToken())
         {
-            const std::optional<ConnectionIdentity> matched = Authenticate(cmd.token, cmd.user);
+            std::optional<ConnectionIdentity> matched = Authenticate(cmd.token, cmd.user);
             if (!matched)
             {
-                if (served != nullptr)
-                    served->helloTokenRefused = true;
-                Logger::Warn(std::format("Refused Hello from editor client '{}' (user={} role=none): wrong access token{}",
-                                         clientName, claimedUser, peerSuffix));
+                evaluation.result = HelloEvaluation::Result::TokenRefused;
+                evaluation.warning = std::format(
+                    "Refused Hello from editor client '{}' (user={} role=none): wrong access token{}", clientName,
+                    claimedUser, peerSuffix);
+                BufferWriter response;
                 WriteError(response, "Invalid access token");
-                SendResponse(clientSocket, response.Release());
-                return;
+                evaluation.refusal = response.Release();
+                return evaluation;
             }
-            identity = *matched;
+            evaluation.identity = std::move(*matched);
         }
-        // user=<u> role=<r> on every line about this Hello, once the token says who it is (a host without
-        // authentication has nobody to name)
-        const std::string who =
-            identity.authenticated ? std::format("user={} role={}", identity.user, TokenRoleName(identity.role)) : std::string{};
-        const std::string whoInParentheses = who.empty() ? std::string{} : " (" + who + ")";
-        const std::string whoAtEnd = who.empty() ? std::string{} : " " + who;
+        const ConnectionIdentity &identity = evaluation.identity;
+        const std::string whoInParentheses =
+            identity.authenticated
+                ? std::format(" (user={} role={})", identity.user, TokenRoleName(identity.role))
+                : std::string{};
 
         const auto clientVersion = ParseProtocolVersion(cmd.protocolVersion);
         const auto serverVersion = ParseProtocolVersion(ProtocolVersion);
@@ -3339,15 +3901,59 @@ namespace N2Engine::Editor
                                   "must match)", ProtocolVersion, clientVersionText)
                     : std::format("Invalid protocol version '{}' (expected major.minor.patch; this server speaks {})",
                                   clientVersionText, ProtocolVersion);
-            if (served != nullptr)
-                served->helloVersionRefused = true;
-            Logger::Warn("Refused Hello from editor client '" + clientName + "'" + whoInParentheses + ": " + message +
-                         peerSuffix);
+            evaluation.result = HelloEvaluation::Result::VersionRefused;
+            evaluation.warning =
+                "Refused Hello from editor client '" + clientName + "'" + whoInParentheses + ": " + message + peerSuffix;
+            BufferWriter response;
             WriteError(response, message);
-            SendResponse(clientSocket, response.Release());
+            evaluation.refusal = response.Release();
+        }
+        return evaluation;
+    }
+
+    void EditorServer::HandleHello(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const HelloCmd cmd = HelloCmd::Deserialize(reader);
+
+        // Client-supplied text only reaches the log, or the Error, sanitised and shortened; the token never does
+        const std::string clientName = SanitizeForLog(cmd.clientName);
+        const std::string clientVersionText = SanitizeForLog(cmd.protocolVersion, 40);
+        const std::string peerSuffix = PeerSuffix();
+        // This Hello's outcome goes to the connection being served (none for a command run without a socket)
+        Connection *const served = _activeConnection.load();
+        if (served != nullptr)
+        {
+            served->helloTokenRefused = false;
+            served->helloVersionRefused = false;
+        }
+        BufferWriter response;
+
+        // The token and the protocol's major version: the check a pre-auth worker has already made on this same payload
+        // (EvaluateHello). A refusal is the same Error and the same log line wherever it is made.
+        HelloEvaluation evaluation = EvaluateHello(cmd, peerSuffix);
+        if (evaluation.result != HelloEvaluation::Result::Accepted)
+        {
+            if (served != nullptr)
+            {
+                if (evaluation.result == HelloEvaluation::Result::TokenRefused)
+                    served->helloTokenRefused = true;
+                else
+                    served->helloVersionRefused = true;
+            }
+            Logger::Warn(evaluation.warning);
+            SendResponse(clientSocket, std::move(evaluation.refusal));
             return;
         }
+        const ConnectionIdentity identity = std::move(evaluation.identity);
+        // user=<u> role=<r> on every line about this Hello, once the token says who it is (a host without
+        // authentication has nobody to name)
+        const std::string who =
+            identity.authenticated ? std::format("user={} role={}", identity.user, TokenRoleName(identity.role)) : std::string{};
+        const std::string whoAtEnd = who.empty() ? std::string{} : " " + who;
 
+        const auto clientVersion = ParseProtocolVersion(cmd.protocolVersion);
+        const auto serverVersion = ParseProtocolVersion(ProtocolVersion);
         if (clientVersion->minorVersion != serverVersion->minorVersion)
         {
             // Compatible, but one side has commands the other doesn't: those fail with "Unknown command"

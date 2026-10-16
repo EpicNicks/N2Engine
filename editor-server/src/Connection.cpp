@@ -52,7 +52,7 @@ namespace N2Engine::Editor
         bool IsWouldBlock(const int error)
         {
 #ifdef _WIN32
-            return error == WSAEWOULDBLOCK;
+            return error == WSAEWOULDBLOCK || error == WSAEINTR;
 #else
             return error == EAGAIN || error == EWOULDBLOCK || error == EINTR;
 #endif
@@ -61,6 +61,12 @@ namespace N2Engine::Editor
         /// One wait of at most Connection::PollInterval on one socket. Positive when it is ready (a pending error or a
         /// closed peer counts: the next recv or send reports it, as it did for select), 0 on timeout, negative on an
         /// error (including a socket that isn't one, POLLNVAL, which select reported as an error too).
+        ///
+        /// A wait interrupted by a signal (EINTR; WSAEINTR on Windows) is NOT an error: it reports 0, like a timeout, so
+        /// the caller looks at its flags and deadline and waits again. With one thread this could be told apart from a
+        /// failure only by luck (the host's SIGHUP handler runs on whichever thread the kernel picks); with an acceptor,
+        /// pre-auth workers and a session thread the signal lands on any of them and would otherwise end an innocent
+        /// connection, so the interruption is retried everywhere.
         int PollOnce(const int socket, const bool forWrite)
         {
             const int timeoutMilliseconds = static_cast<int>(Connection::PollInterval.count());
@@ -70,14 +76,14 @@ namespace N2Engine::Editor
             descriptor.events = forWrite ? POLLWRNORM : POLLRDNORM;
             const int result = WSAPoll(&descriptor, 1, timeoutMilliseconds);
             if (result == SOCKET_ERROR)
-                return -1;
+                return WSAGetLastError() == WSAEINTR ? 0 : -1;
 #else
             pollfd descriptor{};
             descriptor.fd = socket;
             descriptor.events = forWrite ? POLLOUT : POLLIN;
             const int result = poll(&descriptor, 1, timeoutMilliseconds);
             if (result < 0)
-                return -1;
+                return errno == EINTR ? 0 : -1;
 #endif
             if (result == 0)
                 return 0;

@@ -39,6 +39,10 @@ namespace N2Engine::Editor
         static constexpr int MaxIdleTimeoutSeconds = 24 * 60 * 60;
         static constexpr int MaxWriteTimeoutSeconds = 60 * 60;
         static constexpr int MaxSessionMinutesLimit = 365 * 24 * 60;
+        /// EditorServer::DefaultPreAuthSlots / MaxPreAuthSlots, spelled out like the timeouts above; HostOptionsTest pins
+        /// them equal
+        static constexpr int DefaultPreAuthSlots = 4;
+        static constexpr int MaxPreAuthSlots = 16;
 
         /// 0 lets the OS pick a free port; the ready line reports the one it picked
         int port = DefaultPort;
@@ -90,6 +94,10 @@ namespace N2Engine::Editor
         int writeTimeoutSeconds = DefaultWriteTimeoutSeconds;
         /// --max-session <minutes>: close a session older than this (EditorServer::SetMaxSessionAge). 0, the default, is off.
         int maxSessionMinutes = 0;
+        /// --preauth-slots <n>: how many connections may be in their TLS handshake and Hello at once, and how many pre-auth
+        /// worker threads there are (EditorServer::SetPreAuthSlots); 1 to 16. Default 4. The authenticated session has its
+        /// own thread, so these bound only what an unauthenticated peer can occupy.
+        int preAuthSlots = DefaultPreAuthSlots;
         /// --log-level <info|warn|error>: the least severe level the host's log sink (LogSink; stderr, and --log-file) writes.
         /// Info by default. The Logger has no Debug level, and polled commands never log, so Info is quiet while idle.
         Logger::LogLevel logLevel = Logger::LogLevel::Info;
