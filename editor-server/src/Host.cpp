@@ -472,6 +472,14 @@ namespace N2Engine::Editor
             // The deadlines that keep one connection from holding the one-at-a-time server (the pre-Hello budget is
             // EditorServer::DefaultHelloTimeout, 2 s, from the end of the TLS handshake, which has its own
             // DefaultTlsHandshakeTimeout, 5 s; neither is a flag)
+            // The pre-auth side: this many connections in their TLS handshake and Hello at once, each address limited to
+            // its share, and handshakes (the TLS CPU) rationed. Everything behind a proxy is loopback, which has no
+            // per-address limits (see the docs).
+            (void)server.SetPreAuthSlots(static_cast<size_t>(options.preAuthSlots));
+            TokenBucketOptions handshakeRate;
+            handshakeRate.globalPerSecond = 20;
+            handshakeRate.perAddressPerSecond = 5;
+            (void)server.SetHandshakeRateLimit(handshakeRate);
             (void)server.SetIdleTimeout(std::chrono::seconds(options.idleTimeoutSeconds));
             (void)server.SetWriteTimeout(std::chrono::seconds(options.writeTimeoutSeconds));
             (void)server.SetMaxSessionAge(std::chrono::minutes(options.maxSessionMinutes));

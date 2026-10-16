@@ -593,6 +593,60 @@ TEST(HostOptionsTest, TheUsageNamesTheConnectionLimits)
     EXPECT_NE(usage.find("Default: 30;"), std::string_view::npos) << "the write default is documented";
 }
 
+// ==================== --preauth-slots ====================
+
+TEST(HostOptionsTest, PreAuthSlotsDefaultToTheServersDefault)
+{
+    const auto parsed = ParseHostArguments({});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ(parsed->preAuthSlots, 4);
+    // HostOptions spells the numbers out (to keep EditorServer.hpp out of its header); they must stay the server's
+    EXPECT_EQ(static_cast<size_t>(parsed->preAuthSlots), EditorServer::DefaultPreAuthSlots);
+    EXPECT_EQ(static_cast<size_t>(HostOptions::DefaultPreAuthSlots), EditorServer::DefaultPreAuthSlots);
+    EXPECT_EQ(static_cast<size_t>(HostOptions::MaxPreAuthSlots), EditorServer::MaxPreAuthSlots);
+}
+
+TEST(HostOptionsTest, PreAuthSlotsTakeAWholeNumberFromOneToSixteen)
+{
+    for (const int slots : {1, 2, 4, 15, 16})
+    {
+        const auto parsed = ParseHostArguments({"--preauth-slots", std::to_string(slots), "--port", "1234"});
+        ASSERT_TRUE(parsed) << slots << ": " << parsed.error();
+        EXPECT_EQ(parsed->preAuthSlots, slots);
+        EXPECT_EQ(parsed->port, 1234) << "the next option is still parsed";
+    }
+    const auto later = ParseHostArguments({"--preauth-slots", "2", "--preauth-slots", "9"});
+    ASSERT_TRUE(later) << later.error();
+    EXPECT_EQ(later->preAuthSlots, 9);
+}
+
+TEST(HostOptionsTest, PreAuthSlotsRefuseGarbageAndValuesOutsideTheRange)
+{
+    for (const std::string &bad : {std::string{"0"}, std::string{"17"}, std::string{"-1"}, std::string{"+4"},
+                                   std::string{"abc"}, std::string{"1.5"}, std::string{" 4"}, std::string{"4 "},
+                                   std::string{""}, std::string{"99999999999"}})
+    {
+        const auto parsed = ParseHostArguments({"--preauth-slots", bad});
+        ASSERT_FALSE(parsed) << "'" << bad << "'";
+        EXPECT_NE(parsed.error().find("--preauth-slots"), std::string::npos) << parsed.error();
+    }
+
+    const auto missing = ParseHostArguments({"--preauth-slots"});
+    ASSERT_FALSE(missing);
+    EXPECT_EQ(missing.error(), "--preauth-slots is missing a value");
+    const auto swallowed = ParseHostArguments({"--preauth-slots", "--port", "0"});
+    ASSERT_FALSE(swallowed);
+    EXPECT_EQ(swallowed.error(), "--preauth-slots is missing a value");
+}
+
+TEST(HostOptionsTest, TheUsageNamesThePreAuthSlots)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--preauth-slots <n>"), std::string_view::npos);
+    EXPECT_NE(usage.find("Default: 4"), std::string_view::npos) << "the default is documented";
+    EXPECT_NE(usage.find("The host is serving another session"), std::string_view::npos) << "the Busy answer is documented";
+}
+
 // ==================== --read-only ====================
 
 TEST(HostOptionsTest, ReadOnlyIsAFlagAndOffByDefault)
