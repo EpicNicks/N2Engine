@@ -494,7 +494,15 @@ TEST(PreHelloAccountingTest, EveryWayOutWithoutAHelloCountsAsAFailure)
             ASSERT_FALSE(::testing::Test::HasFatalFailure());
         }
 
-        // The server serves one connection at a time, so the three have all been counted before it accepts this one
+        // The three are served by pre-auth workers concurrently with the acceptor now, so they are counted a moment after
+        // their peers have gone: a connection's slot is freed only after its failure is counted, so once every slot is
+        // free all three have been (before PR #176 the one serving thread made this implicit)
+        {
+            const auto limit = std::chrono::steady_clock::now() + 10s;
+            while (rig.server.PreAuthSlotsInUse() != 0 && std::chrono::steady_clock::now() < limit)
+                std::this_thread::sleep_for(5ms);
+            ASSERT_EQ(rig.server.PreAuthSlotsInUse(), 0u);
+        }
         TestClient next(rig.server.GetPort());
         ASSERT_TRUE(next.IsConnected());
         EXPECT_TRUE(next.IsClosedWithin(5000)) << "the address is backed off";
