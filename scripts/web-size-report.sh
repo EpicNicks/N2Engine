@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Reports the sizes of the built web artifacts (.wasm and .js), raw and gzip -9, as a table on stdout and, when
+# Reports the sizes of the built web artifacts (.wasm and .js; also .data, the preloaded asset pack, and .html, the page,
+# which a web package has), raw and gzip -9, as a table on stdout and, when
 # GITHUB_STEP_SUMMARY is set, in the job summary. Fails only when a budget is configured and exceeded:
 #   N2ENGINE_WEB_BUDGET_WASM_GZIP   gzip bytes allowed for any one .wasm file
-#   N2ENGINE_WEB_BUDGET_TOTAL_GZIP  gzip bytes allowed for all .wasm and .js files together
+#   N2ENGINE_WEB_BUDGET_TOTAL_GZIP  gzip bytes allowed for all .wasm and .js files together (.data and .html are listed,
+#                                   not counted)
 # Unset or empty means no budget (the stage 0 default). Brotli sizes are not reported yet.
 # Usage: scripts/web-size-report.sh [directory]   (default: build/bin)
 set -euo pipefail
@@ -33,7 +35,9 @@ while IFS= read -r f; do
   raw=$(wc -c < "$f" | tr -d ' ')
   gz=$(gzip -9 -c "$f" | wc -c | tr -d ' ')
   count=$((count + 1))
-  total_gzip=$((total_gzip + gz))
+  case "$f" in
+    *.wasm|*.js) total_gzip=$((total_gzip + gz)) ;;
+  esac
   printf '| %s | %s | %s |\n' "${f#"$dir"/}" "$raw" "$gz" >> "$table"
   case "$f" in
     *.wasm)
@@ -43,7 +47,7 @@ while IFS= read -r f; do
       fi
       ;;
   esac
-done < <(find "$dir" -type f \( -name '*.wasm' -o -name '*.js' \) | LC_ALL=C sort)
+done < <(find "$dir" -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.data' -o -name '*.html' \) | LC_ALL=C sort)
 
 if [ -n "$total_budget" ] && [ "$total_gzip" -gt "$total_budget" ]; then
   failed=1
@@ -57,7 +61,7 @@ report() {
   echo "|---|---:|---:|"
   cat "$table"
   echo
-  echo "Files: ${count}, total gzip: ${total_gzip} bytes."
+  echo "Files: ${count}, total gzip of the .wasm and .js files: ${total_gzip} bytes."
   echo "Budgets: .wasm gzip ${wasm_budget:-none}, total gzip ${total_budget:-none}."
   if [ -n "$messages" ]; then
     echo

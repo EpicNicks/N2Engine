@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>N2Engine</title>
+<style>
+  :root { color-scheme: dark; --bg: #101216; --fg: #e6e8ec; --muted: #9aa3b2; --accent: #4f8cff; --error: #ff6b6b; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; }
+  #gate { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+          gap: 12px; background: rgba(16, 18, 22, 0.92); text-align: center; padding: 16px; }
+  #gate h1 { margin: 0; font-size: 1.5rem; }
+  #status { margin: 0; color: var(--muted); min-height: 1.4em; }
+  button { font: inherit; padding: 10px 28px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { background: #3a4252; color: var(--muted); cursor: default; }
+  #error { display: none; position: fixed; left: 16px; right: 16px; bottom: 16px; max-height: 40%; overflow: auto;
+           padding: 12px 16px; border: 1px solid var(--error); border-radius: 6px; background: #1c1214; color: var(--error); }
+  #error pre { margin: 8px 0 0; white-space: pre-wrap; color: var(--fg); font-size: 0.8rem; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="canvas" tabindex="0"></canvas></div>
+<div id="gate">
+  <h1>N2Engine</h1>
+  <p id="status">Loading the engine...</p>
+  <button id="start" type="button" disabled>Click to start</button>
+</div>
+<div id="error" role="alert"></div>
+
+<script>
+(function () {
+  'use strict';
+  var canvas = document.getElementById('canvas');
+  var gate = document.getElementById('gate');
+  var statusLine = document.getElementById('status');
+  var startButton = document.getElementById('start');
+  var errorBox = document.getElementById('error');
+  var logLines = [];
+  var failed = false;
+
+  function showError(message) {
+    failed = true;
+    errorBox.style.display = 'block';
+    errorBox.textContent = '';
+    var title = document.createElement('strong');
+    title.textContent = 'The game stopped: ' + message;
+    errorBox.appendChild(title);
+    var log = document.createElement('pre');
+    log.textContent = logLines.join('\n');
+    errorBox.appendChild(log);
+    gate.style.display = 'none';
+  }
+
+  function log(text) {
+    logLines.push(text);
+    if (logLines.length > 100) logLines.shift();
+  }
+
+  window.addEventListener('error', function (event) { showError(event.message || 'script error'); });
+  window.addEventListener('unhandledrejection', function (event) {
+    showError(String(event.reason && event.reason.message ? event.reason.message : event.reason));
+  });
+  // Right click is the game's: no browser menu over the canvas
+  canvas.addEventListener('contextmenu', function (event) { event.preventDefault(); });
+
+  // The player (web/player/WebPlayer.cpp) hands each finished frame here: RGBA8, top row first, width x height
+  var context = null;
+  function present(pixels, width, height) {
+    if (!context) context = canvas.getContext('2d', { alpha: false });
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    // pixels is a view of the WebAssembly memory: the image is made from it at once, before the memory can grow
+    context.putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.length), width, height), 0, 0);
+  }
+
+  var engine = null;
+  var moduleSettings = {
+    noInitialRun: true,
+    canvas: canvas,
+    print: function (text) { console.log(text); log(text); },
+    printErr: function (text) { console.warn(text); log(text); },
+    onAbort: function (reason) { showError('the engine aborted (' + reason + ')'); },
+    n2Present: present,
+    n2Stopped: function () {
+      gate.style.display = 'flex';
+      statusLine.textContent = 'The game has ended. Reload the page to play again.';
+      startButton.style.display = 'none';
+    },
+    n2Failed: function (message) { showError(message); }
+  };
+
+  // index.js is added by emcc where the script placeholder is, below (an async script, so the load event waits for it)
+  window.addEventListener('load', function () {
+    if (typeof createN2Player !== 'function') {
+      showError('index.js did not load (is it next to this page?)');
+      return;
+    }
+    createN2Player(moduleSettings).then(function (instance) {
+      engine = instance;
+      statusLine.textContent = 'Ready.';
+      startButton.disabled = false;
+      startButton.focus();
+    }).catch(function (error) {
+      showError(String(error && error.message ? error.message : error));
+    });
+  });
+
+  // A click is the user gesture browsers require before a page may start audio (audio is not in the web build yet)
+  startButton.addEventListener('click', function () {
+    if (!engine || failed) return;
+    gate.style.display = 'none';
+    canvas.focus();
+    try {
+      engine.callMain([]);
+    } catch (error) {
+      // callMain's own unwinding for a main that does not return is handled inside it; anything else is a failure
+      showError(String(error && error.message ? error.message : error));
+    }
+  });
+})();
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

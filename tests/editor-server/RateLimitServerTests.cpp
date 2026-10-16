@@ -758,12 +758,13 @@ TEST_F(UserRateLimitTest, FailuresNamingAUserBackThatUserOffFromAnywhereAndOther
         EXPECT_EQ(response->type, ErrorType) << i;
     }
 
-    // Alice herself, with the right token, is turned away for now: the same Error, a closed connection
+    // A wrong token naming alice is turned away for now: the same Error, a closed connection (and, as the token is
+    // checked first, it is counted as a further failure: UserRateLimitTest.TheTokenIsCheckedBeforeTheUsersBackoff)
     {
         TestClient client(_server.GetPort());
         ASSERT_TRUE(client.IsConnected());
-        const auto response =
-            Roundtrip(_server, client, CommandType::Hello, HelloPayload(Alice.token, std::string{ProtocolVersion}, Alice.name));
+        const auto response = Roundtrip(_server, client, CommandType::Hello,
+                                        HelloPayload("still-not-alices-token", std::string{ProtocolVersion}, Alice.name));
         ASSERT_TRUE(response.has_value());
         EXPECT_EQ(response->type, ErrorType);
         EXPECT_EQ(response->Text(), EditorServer::RateLimitedError);
@@ -771,7 +772,7 @@ TEST_F(UserRateLimitTest, FailuresNamingAUserBackThatUserOffFromAnywhereAndOther
     }
     // ... and so from another address
     _peer.Set(PeerAddress::IPv4(198, 51, 100, 20));
-    const auto elsewhere = Hello(Alice, Alice.token);
+    const auto elsewhere = Hello(Alice, "not-alices-token-either");
     ASSERT_TRUE(elsewhere.has_value());
     EXPECT_EQ(elsewhere->Text(), EditorServer::RateLimitedError);
 
@@ -782,14 +783,57 @@ TEST_F(UserRateLimitTest, FailuresNamingAUserBackThatUserOffFromAnywhereAndOther
     EXPECT_EQ(bob->type, ServerInfoType) << bob->Text();
     EXPECT_EQ(_server.RateLimitedConnections(), 0u) << "a user's backoff refuses a Hello, not a connection at accept";
 
-    // The cap is short: a second later alice is back, and her success clears the count
-    _nowMs += 1000;
+    // The backoff grows with the counted failures (5 by now: 4 s), and it does not keep alice out: she presents her
+    // own token, which is checked first, and her success clears the count
     const auto alice = Hello(Alice, Alice.token);
     ASSERT_TRUE(alice.has_value());
     EXPECT_EQ(alice->type, ServerInfoType) << alice->Text();
 
     EXPECT_TRUE(PumpUntilLogged(_server, log, "Rate limit: user=alice is backed off for 1000 ms after 3 failed Hellos"));
-    EXPECT_EQ(log.Count("Rate limit: user=alice"), 1u);
+    EXPECT_EQ(log.Count("Rate limit: user=alice"), 3u) << "one line per backoff that starts: 3, 4 and 5 failures";
+    for (const std::string &line : log.Lines())
+    {
+        EXPECT_EQ(line.find(Alice.token), std::string::npos) << line;
+        EXPECT_EQ(line.find("not-alices-token"), std::string::npos) << line;
+    }
+}
+
+TEST_F(UserRateLimitTest, TheTokenIsCheckedBeforeTheUsersBackoff)
+{
+    LogCapture log;
+    for (int i = 0; i < 3; ++i)
+    {
+        const auto response = Hello(Alice, "not-alices-token");
+        ASSERT_TRUE(response.has_value()) << i;
+        EXPECT_EQ(response->Text(), "Invalid access token") << i;
+    }
+    ASSERT_TRUE(PumpUntilLogged(_server, log, "Rate limit: user=alice is backed off for 1000 ms after 3 failed Hellos"));
+
+    // A fourth wrong token during the backoff is refused as before, AND counted: the backoff doubles
+    const auto fourth = Hello(Alice, "not-alices-token");
+    ASSERT_TRUE(fourth.has_value());
+    EXPECT_EQ(fourth->Text(), EditorServer::RateLimitedError);
+    EXPECT_TRUE(PumpUntilLogged(_server, log, "Rate limit: user=alice is backed off for 2000 ms after 4 failed Hellos"));
+
+    // A second on, the first backoff would have ended but the doubled one has not: a wrong token is still refused and
+    // counted (5 failures: 4 s) ...
+    _nowMs += 1000;
+    const auto fifth = Hello(Alice, "not-alices-token");
+    ASSERT_TRUE(fifth.has_value());
+    EXPECT_EQ(fifth->Text(), EditorServer::RateLimitedError);
+    EXPECT_TRUE(PumpUntilLogged(_server, log, "Rate limit: user=alice is backed off for 4000 ms after 5 failed Hellos"));
+
+    // ... while the correct token gets in during the backoff, from any address, and clears it
+    _peer.Set(PeerAddress::IPv4(198, 51, 100, 20));
+    const auto right = Hello(Alice, Alice.token);
+    ASSERT_TRUE(right.has_value());
+    EXPECT_EQ(right->type, ServerInfoType) << right->Text();
+
+    // Cleared: a wrong token is an ordinary first failure again, answered as one
+    const auto afterwards = Hello(Alice, "not-alices-token");
+    ASSERT_TRUE(afterwards.has_value());
+    EXPECT_EQ(afterwards->Text(), "Invalid access token");
+
     for (const std::string &line : log.Lines())
     {
         EXPECT_EQ(line.find(Alice.token), std::string::npos) << line;
