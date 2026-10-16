@@ -37,11 +37,21 @@ namespace N2Engine::Scripting
         // make those fields nil so a stray call errors in Lua instead of touching freed memory
         if (_scriptInstance.valid())
         {
-            GuardedAccess([this]
+            // The destructor calls this: nothing may leave it (GuardedAccess does not throw, but this is the one
+            // place where an exception would be std::terminate)
+            const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+            try
             {
-                _scriptInstance["component"] = sol::lua_nil;
-                _scriptInstance["gameObject"] = sol::lua_nil;
-            });
+                GuardedAccess([this]
+                {
+                    _scriptInstance["component"] = sol::lua_nil;
+                    _scriptInstance["gameObject"] = sol::lua_nil;
+                });
+            }
+            catch (...)
+            {
+                LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            }
         }
     }
 
@@ -65,9 +75,20 @@ namespace N2Engine::Scripting
         // A Lua protected call, so an error in a metamethod (or the budget) is a return value here: never a panic
         // (a C++ exception thrown through Lua's C frames) and never a jump over this function's frames
         std::string error;
-        if (LuaRuntime::Instance().ProtectedCall(body, error))
+        const std::uint64_t panicsBefore = LuaRuntime::Instance().PanicCount();
+        try
         {
-            return true;
+            if (LuaRuntime::Instance().ProtectedCall(body, error))
+            {
+                return true;
+            }
+        }
+        catch (...)
+        {
+            // ProtectedCall is not expected to throw (it reads its error without converting it); kept so a Lua
+            // failure can never leave a lifecycle call or a destructor
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            error = "unknown error";
         }
         ReportScriptError("access", error);
         return false;
@@ -109,11 +130,12 @@ namespace N2Engine::Scripting
 
             if (!result.valid())
             {
-                sol::error err = result;
-                // The budget error from the runtime's state when it is spent (the scope above is still open), and a
-                // memory error from the call's status, not from an error object that can be displaced
+                // The budget error from the runtime's state when it is spent (the scope above is still open), a
+                // memory error from the call's status, not from an error object that can be displaced, and the text
+                // read without converting (ErrorText)
                 ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(
-                                                  err.what(), result.status() == sol::call_status::memory));
+                                                  LuaRuntime::ErrorText(result),
+                                                  result.status() == sol::call_status::memory));
             }
         }
         catch (const std::exception &e)
@@ -146,6 +168,12 @@ namespace N2Engine::Scripting
         {
             LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
             ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError(e.what()));
+            return;
+        }
+        catch (...)
+        {
+            LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
+            ReportScriptError(methodName, LuaRuntime::Instance().LimitAwareError("unknown error"));
             return;
         }
         CallLuaMethod(methodName, std::move(argument));
@@ -207,14 +235,17 @@ namespace N2Engine::Scripting
         // The chunk and the instance setup below (assigning into a table whose metatable the script chose can run its
         // __newindex) share one budget
         const LuaBudgetScope budget;
-        auto result = LuaRuntime::Instance().RunSource(_script->GetSourceCode(), _scriptPath.ToString());
+        // At most the chunk's first value stays on the stack (RunChunk), so the copies below, which allocate outside
+        // a protected call, cannot leave more on the stack than the panic path's padding covers
+        auto result = LuaRuntime::Instance().RunChunk(_script->GetSourceCode(), _scriptPath.ToString());
 
         if (!result.valid())
         {
-            sol::error err = result;
-            if (!LuaRuntime::IsLimitError(err.what()) || LuaRuntime::Instance().ShouldLogLimitError(_scriptPath.ToString()))
+            const std::string error = LuaRuntime::Instance().LimitAwareError(
+                LuaRuntime::ErrorText(result), result.status() == sol::call_status::memory);
+            if (!LuaRuntime::IsLimitError(error) || LuaRuntime::Instance().ShouldLogLimitError(_scriptPath.ToString()))
             {
-                Logger::Error(std::format("Failed to load script {}: {}", _scriptPath.ToString(), err.what()));
+                Logger::Error(std::format("Failed to load script {}: {}", _scriptPath.ToString(), error));
             }
             return sol::table{};
         }

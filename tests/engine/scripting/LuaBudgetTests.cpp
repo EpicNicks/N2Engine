@@ -124,6 +124,10 @@ protected:
             return Collider
         )");
 
+        // A module that returns many values
+        WriteAsset("budget/Many.lua",
+                   "return {}, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20\n");
+
         // A loop at the top level of the chunk
         WriteAsset("budget/ChunkLoop.lua", "while true do end\n");
 
@@ -429,6 +433,8 @@ TEST_F(LuaBudgetTest, AnArgumentThatCannotBeAllocatedAtTheCapSwitchesTheCallback
     // call (sol pushes a callback's arguments first; the engine builds the collision first). With the cap below what
     // the state holds, that allocation fails outside every protected call, down the panic path: the C++ exception sol
     // throws must stay in the engine, the callback and the component are switched off, and the error is logged once.
+    // Nothing here depends on free registry slots: the copy of the callback EventHandler makes for each dispatch
+    // copies a shared pointer (MakeScriptCallback), not the sol::protected_function and its registry references.
     Lua()["budget_action"] = InputActionRef(_action);
     Lua()["budget_hits"] = 0;
     Lua()["budget_collisions"] = 0;
@@ -462,6 +468,47 @@ TEST_F(LuaBudgetTest, AnArgumentThatCannotBeAllocatedAtTheCapSwitchesTheCallback
     const sol::protected_function_result normal = Run("local t = {} for i = 1, 100 do t[i] = i end return #t");
     ASSERT_TRUE(normal.valid()) << ErrorOf(normal);
     EXPECT_EQ(normal[0].get<int>(), 100);
+}
+
+TEST_F(LuaBudgetTest, TheEnginesLoadingKeepsOneValueOfAChunkOnTheStack)
+{
+    // A chunk can return any number of values. The engine's loading (RunChunk: RunFile, require and hot reload,
+    // LuaComponent) keeps only the first, so if an allocation after it fails down the panic path, unwinding the
+    // result pops one value, within the panic function's padding, instead of as many as the script returned.
+    lua_State *L = Lua().lua_state();
+    const int before = lua_gettop(L);
+    {
+        const sol::protected_function_result many = Runtime().RunChunk(
+            "return {}, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20", "budget-many");
+        ASSERT_TRUE(many.valid()) << ErrorOf(many);
+        EXPECT_EQ(many.return_count(), 1);
+        EXPECT_EQ(lua_gettop(L), before + 1);
+        EXPECT_TRUE(many[0].is<sol::table>());
+    }
+    EXPECT_EQ(lua_gettop(L), before);
+
+    // require of such a module still hands the script its table
+    const sol::protected_function_result required = Run("return type(require('budget.Many'))");
+    ASSERT_TRUE(required.valid()) << ErrorOf(required);
+    EXPECT_EQ(required[0].get<std::string>(), "table");
+}
+
+TEST_F(LuaBudgetTest, ANumberErrorObjectIsReportedWithoutConvertingIt)
+{
+    // Converting a number error object to text makes a new string: at the memory cap, outside a protected call, that
+    // allocation would go down the panic path (out of a destructor, std::terminate). The engine reads only strings.
+    // (A chunk or a method call goes through sol's default message handler, a traceback, which already hands back a
+    // string; ProtectedCall has no handler, so its error object is the script's value itself.)
+    sol::table raising;
+    {
+        const sol::protected_function_result made =
+            Run("return setmetatable({}, {__index = function(self, key) error(0.123) end})");
+        ASSERT_TRUE(made.valid()) << ErrorOf(made);
+        raising = made[0].get<sol::table>();
+    }
+    std::string accessError;
+    EXPECT_FALSE(Runtime().ProtectedCall([&] { (void)raising["anything"].valid(); }, accessError));
+    EXPECT_EQ(accessError, "(a number error value)");
 }
 
 TEST_F(LuaBudgetTest, ALoopInAMetamethodTheEngineReadsIsAbortedWithoutLeavingTheStateBroken)

@@ -71,7 +71,11 @@ namespace N2Engine::Scripting
     template <typename... Args>
     std::function<void(Args...)> MakeScriptCallback(sol::protected_function callback, std::string eventName)
     {
-        return [callback = std::move(callback), owner = ScriptLifetimeScope::Current(),
+        // Shared, so the event's copies of this std::function (EventHandler copies its callbacks for each dispatch)
+        // copy a pointer: copying a sol::protected_function makes two registry references, allocations outside any
+        // protected call that could fail at the memory cap before the try below is reached
+        return [callback = std::make_shared<sol::protected_function>(std::move(callback)),
+                owner = ScriptLifetimeScope::Current(),
                 eventName = std::move(eventName), faulted = std::make_shared<bool>(false)](Args... args)
         {
             if ((owner && !*owner) || *faulted)
@@ -84,15 +88,15 @@ namespace N2Engine::Scripting
             std::string message;
             try
             {
-                const sol::protected_function_result result = callback(Detail::ToLuaArg(args)...);
+                const sol::protected_function_result result = (*callback)(Detail::ToLuaArg(args)...);
                 if (result.valid())
                 {
                     return;
                 }
-                const sol::error err = result;
-                // The budget error from the runtime's state when it is spent (the scope above is still open), and a
-                // memory error from the call's status, not from an error object that can be displaced
-                message = LuaRuntime::Instance().LimitAwareError(err.what(),
+                // The budget error from the runtime's state when it is spent (the scope above is still open), a
+                // memory error from the call's status, not from an error object that can be displaced, and the text
+                // read without converting (ErrorText)
+                message = LuaRuntime::Instance().LimitAwareError(LuaRuntime::ErrorText(result),
                                                                  result.status() == sol::call_status::memory);
             }
             catch (const std::exception &e)

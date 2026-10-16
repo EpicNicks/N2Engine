@@ -43,8 +43,9 @@ namespace N2Engine::Scripting::Detail
     // above the base, where a pop below it would have run Lua code and panicked again. The engine makes no unprotected Lua calls;
     // what reaches this is an allocation outside a protected call failing at the memory cap: the arguments sol pushes
     // for a component method or a script callback, the collision/trigger argument, and sol references copied outside
-    // one (luaL_ref can grow the registry). The first three catch the exception and call LuaRuntime::RecoverAfterPanic,
-    // which resets the stack to its empty base; the full list is in docs/scripting-lua.html (resource limits).
+    // one (luaL_ref can grow the registry). The callers of the first three, and a hot reload, catch the exception and
+    // call LuaRuntime::RecoverAfterPanic, which resets the stack to its empty base; the padding holds only while the
+    // unwound frames pop 16 values or fewer. The full list is in docs/scripting-lua.html (resource limits).
     void RepairThreadAfterPanic(lua_State *L)
     {
         L->allowhook = static_cast<lu_byte>(1);

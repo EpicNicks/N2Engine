@@ -98,6 +98,16 @@ namespace N2Engine::Scripting
         /// Runs Lua source text in the global environment. The one way the engine runs script assets
         /// (RunFile, require, LuaComponent): binary (precompiled) chunks are rejected.
         sol::protected_function_result RunSource(std::string_view source, const std::string& chunkName);
+        /// RunSource keeping at most the chunk's first return value on the stack (the error object if it failed). What
+        /// the engine's own loading uses (RunFile, require and hot reload, LuaComponent): a chunk can return any number
+        /// of values, the result pops all of them when destroyed, and if a C++ exception from the panic path (an
+        /// allocation failing outside a protected call) unwinds it, more pops than the panic function's padding would
+        /// go below the base of the stack (std::terminate). One value always fits.
+        sol::protected_function_result RunChunk(std::string_view source, const std::string& chunkName);
+        /// The error text of a failed result, read without converting: a string error object as it is, any other
+        /// value as "(a <type> error value)". sol's conversion (sol::error err = result) turns a number into a new
+        /// string, an allocation that fails at the memory cap outside any protected call.
+        [[nodiscard]] static std::string ErrorText(const sol::protected_function_result& result);
 
         // Module management
         sol::table LoadScriptAsModule(const IO::ResourcePath& path, LuaScript* script);

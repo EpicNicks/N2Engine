@@ -32,6 +32,20 @@ namespace N2Engine::Scripting
         // Stack slots the panic function leaves filled (the error object, then nils) for C++ frames that pop while the
         // exception unwinds. Below LUA_MINSTACK (20), which the thread reset reserves above the base, so no allocation.
         constexpr int PanicPadding = 16;
+
+        // The error object at `index` as text, without converting it: lua_tolstring on a number makes a new string,
+        // an allocation that, at the memory cap and outside a protected call, goes down the panic path
+        std::string ErrorValueText(lua_State *L, const int index)
+        {
+            const int type = lua_type(L, index);
+            if (type == LUA_TSTRING)
+            {
+                std::size_t length = 0;
+                const char *text = lua_tolstring(L, index, &length);
+                return std::string(text, length);
+            }
+            return std::format("(a {} error value)", lua_typename(L, type));
+        }
     }
 
     namespace Detail
@@ -405,8 +419,7 @@ namespace N2Engine::Scripting
             }
             else
             {
-                const char *message = lua_tostring(L, -1);
-                error = message != nullptr ? message : "script error";
+                error = ErrorValueText(L, -1);
             }
             lua_pop(L, 1);
             return false;
@@ -424,6 +437,26 @@ namespace N2Engine::Scripting
         // Text only: a project .lua asset holding precompiled bytecode would otherwise run as-is
         const LuaBudgetScope budget;
         return _lua.safe_script(source, sol::script_pass_on_error, chunkName, sol::load_mode::text);
+    }
+
+    sol::protected_function_result LuaRuntime::RunChunk(const std::string_view source, const std::string &chunkName)
+    {
+        sol::protected_function_result result = RunSource(source, chunkName);
+        if (!result.valid() || result.return_count() <= 1)
+        {
+            return result;
+        }
+        // Keep the first value only: the result no longer pops the others, they are dropped here (no allocation)
+        lua_State *L = result.lua_state();
+        const int first = result.stack_index();
+        result.abandon();
+        lua_settop(L, first);
+        return sol::protected_function_result(L, first, 1, 1, sol::call_status::ok);
+    }
+
+    std::string LuaRuntime::ErrorText(const sol::protected_function_result &result)
+    {
+        return ErrorValueText(result.lua_state(), result.stack_index());
     }
 
     bool LuaRuntime::Initialize()
@@ -495,13 +528,13 @@ namespace N2Engine::Scripting
             return false;
         }
 
-        const auto result = RunSource(script->GetSourceCode(), path.ToString());
+        const auto result = RunChunk(script->GetSourceCode(), path.ToString());
         if (!result.valid())
         {
-            const sol::error err = result;
-            if (!IsLimitError(err.what()) || ShouldLogLimitError(path.ToString()))
+            const std::string error = LimitAwareError(ErrorText(result), result.status() == sol::call_status::memory);
+            if (!IsLimitError(error) || ShouldLogLimitError(path.ToString()))
             {
-                Logger::Error(std::format("Error running {}: {}", path.ToString(), err.what()));
+                Logger::Error(std::format("Error running {}: {}", path.ToString(), error));
             }
             return false;
         }
@@ -569,14 +602,14 @@ namespace N2Engine::Scripting
             return table;
         };
 
-        auto result = RunSource(script->GetSourceCode(), path.ToString());
+        auto result = RunChunk(script->GetSourceCode(), path.ToString());
 
         if (!result.valid())
         {
-            sol::error err = result;
-            if (!IsLimitError(err.what()) || ShouldLogLimitError(path.ToString()))
+            const std::string error = LimitAwareError(ErrorText(result), result.status() == sol::call_status::memory);
+            if (!IsLimitError(error) || ShouldLogLimitError(path.ToString()))
             {
-                Logger::Error(std::format("Failed to load module {}: {}", moduleName, err.what()));
+                Logger::Error(std::format("Failed to load module {}: {}", moduleName, error));
             }
             return emptyTable();
         }
@@ -615,7 +648,28 @@ namespace N2Engine::Scripting
         std::string moduleName = PathToModuleName(path);
 
         _loadedModules.erase(moduleName);
-        LoadScriptAsModule(path, script);
+        // A hot reload is an outermost entry no Lua call protects (a client's WriteTextAsset on the editor host): an
+        // allocation outside a protected call that fails at the memory cap (a sol reference copy, say) comes down the
+        // panic path as a C++ exception, which is reported here instead of leaving into the host's command handling
+        const auto guarded = [this, &moduleName](const auto &step)
+        {
+            const std::uint64_t panicsBefore = PanicCount();
+            try
+            {
+                step();
+            }
+            catch (const std::exception &e)
+            {
+                RecoverAfterPanic(panicsBefore);
+                Logger::Error(std::format("Reloading module {} failed: {}", moduleName, e.what()));
+            }
+            catch (...)
+            {
+                RecoverAfterPanic(panicsBefore);
+                Logger::Error(std::format("Reloading module {} failed", moduleName));
+            }
+        };
+        guarded([&] { LoadScriptAsModule(path, script); });
 
         // Notify callbacks. Iterate a copy: a callback can register or unregister callbacks
         // (LuaComponent::ReloadScript may call SetScript), which would invalidate the live vector
@@ -624,7 +678,7 @@ namespace N2Engine::Scripting
             const auto callbacks = it->second;
             for (const auto &entry : callbacks)
             {
-                entry.callback();
+                guarded([&] { entry.callback(); });
             }
         }
 
