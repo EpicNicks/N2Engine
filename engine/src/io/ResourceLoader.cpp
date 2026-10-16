@@ -32,7 +32,13 @@ namespace N2Engine::IO
         /// (as it was before the state file): two saves of a file a second apart, with the same size, are two changes.
         uint64_t UnixMilliseconds(const std::filesystem::file_time_type fileTime)
         {
+#ifdef N2ENGINE_PLATFORM_WEB
+            // libc++ (Emscripten) has no clock_cast; its file clock counts from the Unix epoch, so the same duration
+            // since the epoch is the system clock's time
+            const std::chrono::sys_time<std::filesystem::file_time_type::duration> systemTime(fileTime.time_since_epoch());
+#else
             const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(fileTime);
+#endif
             const auto milliseconds = std::chrono::floor<std::chrono::milliseconds>(systemTime).time_since_epoch().count();
             return milliseconds > 0 ? static_cast<uint64_t>(milliseconds) : 0u;
         }
@@ -362,7 +368,7 @@ namespace N2Engine::IO
 
         if (!lastSeen || lastSeen->lastModified != timestamp || lastSeen->fileSize != fileSize)
         {
-            _assetState[resourcePath] = AssetState{timestamp, fileSize};
+            _assetState[resourcePath] = AssetState{timestamp, static_cast<std::size_t>(fileSize)};
             _assetStateDirty = true;
         }
 

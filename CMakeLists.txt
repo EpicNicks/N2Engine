@@ -76,12 +76,12 @@ endif()
 
 if(N2ENGINE_PLATFORM_WEB)
     include(${CMAKE_SOURCE_DIR}/cmake/N2EngineWeb.cmake)
-    # Stage 0 of the web build is the math and text libraries only (docs/web-build.html lists what is excluded and why)
+    # Stage 1 of the web build is the headless engine core (docs/web-build.html lists what is excluded and why)
     message(STATUS "Web: PhysX off (no WebAssembly build of it yet)")
     set(N2ENGINE_USE_PHYSX OFF)
     message(STATUS "Web: Vulkan renderer off (no Vulkan in the browser)")
     set(N2ENGINE_RENDERER_VULKAN OFF)
-    message(STATUS "Web: window (GLFW), OpenGL/Vulkan/software renderer, OpenAL, Lua, assetimport, engine, editor host (sockets, TLS), test_project and lua_project are not built at stage 0")
+    message(STATUS "Web: no window, GL context or audio device (external/web-stubs stands in for GLFW and OpenAL); the editor host (sockets, TLS), test_project and lua_project are not built at stage 1")
 endif()
 
 # == PhysX setup ==
@@ -295,7 +295,6 @@ else()
     message(STATUS "PhysX disabled - no physics backend active")
 endif()
 
-if(NOT N2ENGINE_PLATFORM_WEB)
 file(GLOB LUA_SOURCES
         ${CMAKE_SOURCE_DIR}/external/lua/*.c
 )
@@ -311,15 +310,19 @@ if(WIN32)
             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 endif()
-endif()
 
 # == Production targets ==
 add_subdirectory(math)
 add_subdirectory(text)
-if(NOT N2ENGINE_PLATFORM_WEB)
 add_subdirectory(assetimport)
+if(N2ENGINE_PLATFORM_WEB)
+    # Headers-only GLFW and OpenAL plus no-op stand-ins for their functions: the renderer and the engine link them
+    # (a window and an audio device are later web stages)
+    add_subdirectory(external/web-stubs)
+endif()
 add_subdirectory(renderer)
 add_subdirectory(engine)
+if(NOT N2ENGINE_PLATFORM_WEB)
 add_subdirectory(test_project)
 add_subdirectory(lua_project)
 add_subdirectory(editor-server)

@@ -65,6 +65,11 @@ if (WIN32)
     target_compile_options(engine PRIVATE /bigobj)
 endif ()
 
+# Web: the standard library has no std::generator (external/web-stubs/include/generator stands in for it)
+if (N2ENGINE_PLATFORM_WEB)
+    target_link_libraries(engine PUBLIC n2_web_cxx_compat)
+endif ()
+
 target_link_libraries(engine
     PRIVATE
     renderer
