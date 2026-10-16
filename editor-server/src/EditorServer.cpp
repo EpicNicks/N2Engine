@@ -3055,8 +3055,15 @@ namespace N2Engine::Editor
                 const std::optional<SessionIdentity> effective =
                     _claimId != 0 ? std::optional<SessionIdentity>(_claim) : active;
                 const ArbiterVerdict verdict = SessionArbiter::Decide(effective, candidate, noTokenHost);
-                if (verdict.decision == ArbiterDecision::Takeover || verdict.decision == ArbiterDecision::Preempt)
+                if ((verdict.decision == ArbiterDecision::Takeover || verdict.decision == ArbiterDecision::Preempt) &&
+                    _takeoverWait > std::chrono::milliseconds::zero())
                 {
+                    if (connection.PeerHasHungUp())
+                    {
+                        // Gone already (a port probe): it must not end the active session
+                        outcome = Outcome::HungUp;
+                        break;
+                    }
                     myClaim = ++_claimCounter;
                     if (_claimCounter == 0)
                     {
@@ -3106,6 +3113,9 @@ namespace N2Engine::Editor
         if (myClaim != 0 && _claimId == myClaim)
         {
             _claimId = 0;
+            // Nobody was handed the host: the session that was closed for this claim is not "replaced", so a host that
+            // stops on disconnect still stops when it ends
+            _sessionReplaced.store(false);
         }
         lock.unlock();
 
