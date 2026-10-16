@@ -64,6 +64,20 @@ namespace N2Engine
         void Run();
 
         /**
+         * Run() in three parts, for a host whose loop is not its own to block: the web player, where the browser calls a
+         * frame function and a blocking while loop would freeze the tab (emscripten_set_main_loop). Run() is exactly
+         * BeginRun, then RunFrame until it returns false, then EndRun, so the frame, the fixed-step accumulator and the
+         * ending are the same on every platform.
+         * BeginRun: false (after shutting down, with the error logged) when there is no valid window and renderer;
+         * otherwise it clears the fixed-step accumulator and returns true.
+         * RunFrame: false, without ticking, once the window should close or Quit() was called; otherwise one Tick.
+         * EndRun: OnApplicationQuit on the current scene, then Shutdown. Call it once, after RunFrame returned false.
+         */
+        [[nodiscard]] bool BeginRun();
+        [[nodiscard]] bool RunFrame();
+        void EndRun();
+
+        /**
          * One frame of the game, exactly the body of Run()'s loop (which calls it until the window closes or Quit): window
          * events, Time::Update, the fixed steps (physics, FixedUpdate), the pointer dispatch, Update, coroutines,
          * LateUpdate, audio, the frame, then destroyed objects and a pending scene change. A host with its own loop (the

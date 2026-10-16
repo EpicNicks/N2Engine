@@ -298,19 +298,41 @@ void Application::Init(std::unique_ptr<Scene> &&initialScene)
 
 void Application::Run()
 {
+    if (!BeginRun())
+    {
+        return;
+    }
+    while (RunFrame())
+    {
+    }
+    EndRun();
+}
+
+bool Application::BeginRun()
+{
     if (!_window.IsValid())
     {
         Logger::Error("Cannot run: no window or renderer (see GetHealth())");
         Shutdown();
-        return;
+        return false;
     }
 
     _fixedTimestepAccumulator = 0.0;
-    while (!_window.ShouldClose() && !_quitRequested)
-    {
-        Tick();
-    }
+    return true;
+}
 
+bool Application::RunFrame()
+{
+    if (_window.ShouldClose() || _quitRequested)
+    {
+        return false;
+    }
+    Tick();
+    return true;
+}
+
+void Application::EndRun()
+{
     // Window close and Quit() both end the run; components get OnApplicationQuit either way
     if (SceneManager::GetCurScene() != nullptr)
     {
