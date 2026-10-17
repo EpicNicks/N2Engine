@@ -454,43 +454,33 @@ TEST(RateLimitServerTest, APeerWithFailuresOnRecordGetsTheShortBudget)
 
 // ==================== Loopback ====================
 
-TEST(RateLimitServerTest, LoopbackIsExemptFromTheAddressBanButHasOneGlobalBackoff)
+// PR S-4: the shared loopback backoff (ten failed Hellos in a minute refused every loopback connection, a client with
+// the right token included) is replaced by the caps on pre-auth slots and handshake rate (PreAuthServerTests)
+TEST(RateLimitServerTest, LoopbackIsExemptFromTheAddressBanAndNoFloodOfWrongTokensLocksItOut)
 {
     RateLimitedServer host;
     ASSERT_TRUE(host.started);
     host.SetPeer(RateLimitedServer::Loopback);
 
-    // Seven failures: past what an address may fail, short of loopback's ten a minute
-    host.FailHellos(7);
-    const auto hello = host.Hello(Token);
-    ASSERT_TRUE(hello.has_value());
-    EXPECT_EQ(hello->type, ServerInfoType) << hello->Text();
-    EXPECT_EQ(host.server.RateLimitedConnections(), 0u);
-
-    // Three more make ten inside the minute (a good login in between doesn't reset the count): all of loopback is
-    // backed off, whichever address on it connects
-    host.FailHellos(3);
-    EXPECT_TRUE(host.ClosedAtAccept());
+    // Three times what used to start the global backoff, from the first spelling of loopback and then two others
+    host.FailHellos(10);
     host.SetPeer(PeerAddress::IPv4(127, 3, 3, 3));
-    EXPECT_TRUE(host.ClosedAtAccept());
+    host.FailHellos(10);
     std::array<uint8_t, 16> ipv6Loopback{};
     ipv6Loopback[15] = 1;
     host.SetPeer(PeerAddress::IPv6(ipv6Loopback));
-    EXPECT_TRUE(host.ClosedAtAccept());
-    EXPECT_EQ(host.server.RateLimitedConnections(), 3u);
+    host.FailHellos(10);
 
-    // Another network is unaffected
-    host.SetPeer(RateLimitedServer::Friend);
-    const auto friendHello = host.Hello(Token);
-    ASSERT_TRUE(friendHello.has_value());
-    EXPECT_EQ(friendHello->type, ServerInfoType) << friendHello->Text();
-
-    // And loopback is back when its backoff has run
-    host.SetPeer(RateLimitedServer::Loopback);
-    host.Advance(std::chrono::milliseconds(1000));
-    const auto back = host.Hello(Token);
-    ASSERT_TRUE(back.has_value());
-    EXPECT_EQ(back->type, ServerInfoType) << back->Text();
+    // Nothing was refused at accept, and the right token gets in from each of them
+    EXPECT_EQ(host.server.RateLimitedConnections(), 0u);
+    for (const PeerAddress &peer : {RateLimitedServer::Loopback, PeerAddress::IPv4(127, 3, 3, 3), PeerAddress::IPv6(ipv6Loopback)})
+    {
+        host.SetPeer(peer);
+        const auto hello = host.Hello(Token);
+        ASSERT_TRUE(hello.has_value()) << peer.ToString();
+        EXPECT_EQ(hello->type, ServerInfoType) << peer.ToString() << ": " << hello->Text();
+    }
+    EXPECT_EQ(host.server.RateLimitedConnections(), 0u);
 }
 
 TEST(RateLimitServerTest, AnIPv6PeerIsBackedOffLikeAnyAddress)

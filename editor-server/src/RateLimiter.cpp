@@ -193,21 +193,11 @@ namespace N2Engine::Editor
         const std::lock_guard lock(_mutex);
         Admission admission;
 
+        // Loopback is never refused here: a refusal of all of it (behind a proxy, of everybody) is what the loopback
+        // backoff did, and a client with a correct token was locked out with the attacker. Its caps are the slots and the
+        // handshake rate.
         if (peer.IsLoopback())
         {
-            LoopbackState &state = _loopback;
-            if (now >= state.nextAllowed && state.seen && now - state.lastSeen >= _policy.idleReset)
-            {
-                state = LoopbackState{};
-            }
-            if (now < state.nextAllowed)
-            {
-                admission.allowed = false;
-                admission.retryAfter = std::chrono::duration_cast<Duration>(state.nextAllowed - now);
-                state.suppressed = std::min(state.suppressed + 1, std::numeric_limits<uint32_t>::max() - 1);
-                return admission;
-            }
-            admission.suppressed = std::exchange(state.suppressed, 0);
             return admission;
         }
 
@@ -249,33 +239,8 @@ namespace N2Engine::Editor
         const std::lock_guard lock(_mutex);
         FailureOutcome outcome;
 
-        if (peer.IsLoopback())
-        {
-            LoopbackState &state = _loopback;
-            if (now >= state.nextAllowed && state.seen && now - state.lastSeen >= _policy.idleReset)
-            {
-                state = LoopbackState{};
-            }
-            if (!state.seen || now - state.windowStart >= _policy.loopbackWindow)
-            {
-                state.windowStart = now;
-                state.windowFailures = 0;
-            }
-            state.seen = true;
-            state.lastSeen = now;
-            ++state.windowFailures;
-            if (state.windowFailures >= _policy.loopbackFailures)
-            {
-                // A burst: the next one is counted from here, and the backoff doubles with every burst
-                ++state.strikes;
-                state.windowFailures = 0;
-                state.windowStart = now;
-                const Duration backoff = BackoffFor(state.strikes, 0, _policy.maxBackoff);
-                state.nextAllowed = now + backoff;
-                outcome.loopback = Backoff{backoff, state.strikes};
-            }
-        }
-        else
+        // Loopback has no address entry and no shared one: only the user below is counted
+        if (!peer.IsLoopback())
         {
             Entry &entry = Touch(_addresses, peer.ToString(), now);
             entry.failures = std::min(entry.failures + 1, std::numeric_limits<uint32_t>::max() - 1);

@@ -7,9 +7,12 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mstcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #else
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <unistd.h>
 #include <cerrno>
@@ -101,6 +104,86 @@ namespace N2Engine::Editor
     std::chrono::steady_clock::time_point Connection::Now() const
     {
         return env.now ? env.now() : std::chrono::steady_clock::now();
+    }
+
+    bool Connection::PeerHasHungUp() const
+    {
+        if (socket == NoSocket)
+        {
+            return true;
+        }
+        char byte = 0;
+#ifdef _WIN32
+        const int result = recv(static_cast<SOCKET>(socket), &byte, 1, MSG_PEEK);
+        if (result == 0)
+        {
+            return true;
+        }
+        return result < 0 && !IsWouldBlock(WSAGetLastError());
+#else
+        pollfd descriptor{};
+        descriptor.fd = socket;
+        descriptor.events = POLLIN;
+#ifdef POLLRDHUP
+        descriptor.events |= POLLRDHUP;
+#endif
+        if (poll(&descriptor, 1, 0) < 0)
+        {
+            return errno != EINTR;
+        }
+        if ((descriptor.revents & (POLLHUP | POLLERR | POLLNVAL)) != 0)
+        {
+            return true;
+        }
+#ifdef POLLRDHUP
+        if ((descriptor.revents & POLLRDHUP) != 0)
+        {
+            return true;
+        }
+#endif
+        if ((descriptor.revents & POLLIN) == 0)
+        {
+            return false;
+        }
+        const ssize_t result = recv(socket, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (result == 0)
+        {
+            return true;
+        }
+        return result < 0 && !IsWouldBlock(errno);
+#endif
+    }
+
+    bool Connection::EnableKeepAlive(const int socketHandle, const std::chrono::seconds idle,
+                                     const std::chrono::seconds interval, const int count)
+    {
+        const int idleSeconds = static_cast<int>(idle.count());
+        const int intervalSeconds = static_cast<int>(interval.count());
+        const int on = 1;
+        bool ok = true;
+#ifdef _WIN32
+        const SOCKET native = static_cast<SOCKET>(socketHandle);
+        ok = setsockopt(native, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char *>(&on), sizeof(on)) == 0;
+        // The idle time and the probe interval, in milliseconds; the count of probes is fixed by the system
+        tcp_keepalive values{};
+        values.onoff = 1;
+        values.keepalivetime = static_cast<ULONG>(idleSeconds) * 1000;
+        values.keepaliveinterval = static_cast<ULONG>(intervalSeconds) * 1000;
+        DWORD returned = 0;
+        ok = WSAIoctl(native, SIO_KEEPALIVE_VALS, &values, sizeof(values), nullptr, 0, &returned, nullptr, nullptr) == 0 && ok;
+        (void)count;
+#else
+        ok = setsockopt(socketHandle, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on)) == 0;
+#ifdef __APPLE__
+        // macOS spells the idle time TCP_KEEPALIVE; the interval and the count have the Linux names
+        ok = setsockopt(socketHandle, IPPROTO_TCP, TCP_KEEPALIVE, &idleSeconds, sizeof(idleSeconds)) == 0 && ok;
+#else
+        ok = setsockopt(socketHandle, IPPROTO_TCP, TCP_KEEPIDLE, &idleSeconds, sizeof(idleSeconds)) == 0 && ok;
+#endif
+        ok = setsockopt(socketHandle, IPPROTO_TCP, TCP_KEEPINTVL, &intervalSeconds, sizeof(intervalSeconds)) == 0 && ok;
+        ok = setsockopt(socketHandle, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count)) == 0 && ok;
+#endif
+        return ok;
     }
 
     void Connection::EndTls()

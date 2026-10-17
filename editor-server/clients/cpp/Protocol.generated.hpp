@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.12.0";
+inline constexpr const char *ProtocolVersion = "1.13.0";
 
 enum class CommandType : uint8_t
 {

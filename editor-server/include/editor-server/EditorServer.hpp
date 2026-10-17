@@ -34,6 +34,7 @@
 #include "editor-server/LogCoalescer.hpp"
 #include "editor-server/PreAuthSlots.hpp"
 #include "editor-server/RateLimiter.hpp"
+#include "editor-server/SessionArbiter.hpp"
 #include "editor-server/TokenBucket.hpp"
 #include "editor-server/TokenTable.hpp"
 
@@ -297,18 +298,31 @@ namespace N2Engine::Editor
          *    a handshake; the excess is closed before TLS. Off in the class (nullopt) so a test that makes many
          *    connections from one pretend address is not throttled; N2EditorHost turns it on (20/s in all, 5/s per
          *    address). The clock is the real steady clock unless one is given.
-         *  - SetBusyGrace: how long an authenticated client waits for the active session to end before it is turned away
-         *    with BusyError (a session whose client just went away is still ending for a moment). Default 1 s. A host
-         *    without an access token has no Hello and no Busy: a second connection waits for the first for as long as it
-         *    takes (one at a time, as before).
+         *  - the second authenticated client while a session is active (PR S-4; SessionArbiter decides, the rule is in its
+         *    header): a client of the SAME user and role takes the session over, a client of a STRICTLY HIGHER role
+         *    (admin > editor > viewer) preempts it, anybody else is turned away with Busy. Takeover and preemption end the
+         *    active session the way a disconnect does (its open edit groups are closed, its autosave flushed, before the
+         *    new Hello runs); the new client waits for that in its slot for SetTakeoverWait (default 3 s) and gets Busy if
+         *    the old session has not ended by then. A client that would be turned away waits SetBusyGrace (default 1 s)
+         *    first, since a session whose client just went away is still ending for a moment. Busy is ErrorCoded `busy`
+         *    (protocol 1.13.0) for a client whose Hello asked for errorCodes and a plain Error otherwise; the text names
+         *    the role of the session it is turned away from, never its user.
+         *  - a host without an access token has no Hello and every client is an admin with no name, so the NEWEST
+         *    connection takes over (before PR S-4 the second one waited in the backlog for as long as the first lasted).
+         *  - TCP keepalive on the session socket (Connection::EnableKeepAlive), so a half-open session is noticed by the
+         *    kernel.
          */
         static constexpr size_t DefaultPreAuthSlots = 4;
         static constexpr size_t MaxPreAuthSlots = 16;
         static constexpr size_t DefaultPreAuthSlotsPerAddress = 2;
         static constexpr std::chrono::milliseconds DefaultBusyGrace{1000};
-        /// What a second authenticated client is answered with (a plain Error: the protocol has no code for it) while a
-        /// session is active
+        /// How long a client that takes a session over (same user, or a higher role) waits for the old one to end
+        static constexpr std::chrono::milliseconds DefaultTakeoverWait{3000};
+        /// What a client turned away is answered with when the session it was turned away from is not known (a plain
+        /// Error, or the message of ErrorCoded `busy`); BusyMessage adds the holder's role
         static constexpr const char *BusyError = "The host is serving another session; try again later";
+        /// BusyError naming the role of the session that holds the host ("... (a viewer session) ..."), never its user
+        [[nodiscard]] static std::string BusyMessage(std::optional<TokenRole> holder);
         /// A value outside 1-16 is refused (false)
         bool SetPreAuthSlots(size_t slots);
         [[nodiscard]] size_t GetPreAuthSlots() const { return _preAuthSlotOptions.totalSlots; }
@@ -317,6 +331,22 @@ namespace N2Engine::Editor
         bool SetHandshakeRateLimit(std::optional<TokenBucketOptions> options, TokenBucket::Clock clock = {});
         [[nodiscard]] bool HasHandshakeRateLimit() const { return _handshakeRate.has_value(); }
         bool SetBusyGrace(std::chrono::milliseconds grace);
+        /// Zero or more: how long a taking-over client waits (0: it takes over only a session that has already ended)
+        bool SetTakeoverWait(std::chrono::milliseconds wait);
+        [[nodiscard]] std::chrono::milliseconds GetTakeoverWait() const { return _takeoverWait; }
+        /// Called on the session thread once the session's socket is set up (keepalive on), before its first request. For
+        /// tests (a socket option can be read back here). Not for production use; before Start.
+        using SessionStartHook = std::function<void(int socket)>;
+        bool SetSessionStartHook(SessionStartHook hook);
+        /// Called on the session thread when its connection has ended, before its cleanup runs and before the session is
+        /// marked ended: a hook that blocks is a session that cannot end (a stuck write). For tests. Not for production
+        /// use; before Start. A hook that blocks must be released before Stop.
+        using SessionEndHook = std::function<void()>;
+        bool SetSessionEndHook(SessionEndHook hook);
+        /// Sessions closed for a newer connection of the same user (and role), or of a host with no token (any thread)
+        [[nodiscard]] uint64_t SessionTakeovers() const { return _sessionTakeovers.load(); }
+        /// Sessions closed for a client of a strictly higher role (any thread)
+        [[nodiscard]] uint64_t SessionPreemptions() const { return _sessionPreemptions.load(); }
         /// How often the acceptor reports the connections it closed without a word (slots taken, handshake rate spent): at
         /// most one line per interval, and none when there was nothing to report. Default 10 s (real time).
         static constexpr std::chrono::milliseconds DefaultAdmissionSummaryInterval{10000};
@@ -328,7 +358,7 @@ namespace N2Engine::Editor
         /// Connections closed at accept because no pre-auth slot was free for them, or the handshake rate was spent (any
         /// thread), since the server was built
         [[nodiscard]] uint64_t PreAuthRefusedConnections() const { return _preAuthRefusedConnections.load(); }
-        /// Authenticated connections turned away with BusyError (any thread), since the server was built
+        /// Connections turned away with Busy (any thread), since the server was built
         [[nodiscard]] uint64_t BusyRefusals() const { return _busyRefusals.load(); }
         /// Connections handed to the session thread (any thread), since the server was built; for tests
         [[nodiscard]] uint64_t SessionHandoffs() const { return _sessionHandoffs.load(); }
@@ -365,10 +395,12 @@ namespace N2Engine::Editor
          * A host with an access token (SetAccessToken, SetTokensFile) backs off a peer that sends failed Hellos (see
          * RateLimiter for the rules): a backed-off address is accepted and closed at once, before its TLS handshake, and
          * an address with failures on record gets a shorter handshake-and-Hello budget. Loopback peers are exempt from
-         * per-address backoff but share one global one, and (with a tokens file) a backoff per user named in Hello keeps
-         * failures from anywhere off that user. A connection that ends without a successful Hello is a failure too (it
+         * per-address backoff and, since PR S-4, have no backoff of their own (the global one that refused every
+         * loopback connection, a correct token included, is gone: loopback is bounded by the pre-auth slots and the handshake
+         * rate below), and (with a tokens file) a backoff per user named in Hello keeps failures from anywhere off that
+         * user, which a correct token passes. A connection that ends without a successful Hello is a failure too (it
          * timed out, closed early, sent another command or an oversized frame, or failed its TLS handshake), for its
-         * address only: loopback is exempt from that, and it never feeds loopback's global backoff. On by default; a host
+         * address only: loopback is exempt from that. On by default; a host
          * without an access token has no failed Hellos, so nothing is tracked and nothing changes. The limiter is shared by the
          * acceptor, the workers and the session thread (one mutex).
          *
@@ -745,6 +777,17 @@ namespace N2Engine::Editor
         {
             ConnectionPtr connection;
             std::optional<std::vector<uint8_t>> hello;
+            /// The arbiter's id for the session this connection becomes
+            uint64_t sessionId = 0;
+        };
+
+        /// A Hello a pre-auth worker has read and checked: the whole request payload (the session replays it), who the
+        /// token says the client is, and whether it asked for ErrorCoded (for a Busy answer, before any session exists)
+        struct VerifiedHello
+        {
+            std::vector<uint8_t> payload;
+            SessionIdentity identity;
+            bool errorCodes = false;
         };
 
         /// The acceptor thread
@@ -759,10 +802,20 @@ namespace N2Engine::Editor
         void ServePreAuth(PreAuthJob &job);
         /// Reads and checks the one Hello frame. True with `hello` set when the connection may be offered to the session;
         /// false when it was refused or gave up (the answer sent, the outcome counted and logged).
-        bool ReadAndVerifyHello(Connection &connection, std::string_view peerText, std::vector<uint8_t> &hello);
-        /// Gives the connection to the session thread: waits for the active session (BusyGrace with an access token, as
-        /// long as it takes without), then hands it over (true) or answers BusyError and gives up (false)
-        bool OfferToSession(PreAuthJob &job, std::optional<std::vector<uint8_t>> hello);
+        bool ReadAndVerifyHello(Connection &connection, std::string_view peerText, VerifiedHello &hello);
+        /// Gives the connection to the session thread. The arbiter says what the candidate does to the active session:
+        /// Accept (nobody is active: hand over at once); Takeover or Preempt (the active session is asked to end, and the
+        /// candidate waits in its slot up to the takeover wait for it to be gone, then hands over, or is turned away);
+        /// Busy (it waits the busy grace for the session to end by itself, then is turned away). A candidate that a newer
+        /// takeover or preemption overtook while it waited is turned away too; one whose peer hung up gives its slot back.
+        /// True when handed over; false when it was turned away (the Busy answer sent), hung up, or the server is stopping.
+        /// `hello` is empty on a host without an access token (no Hello is read: the candidate is an admin with no name).
+        bool OfferToSession(PreAuthJob &job, std::optional<std::vector<uint8_t>> hello, const SessionIdentity &candidate,
+                            bool errorCodes);
+        /// Under _sessionMutex: asks the active session (running, or still in the hand-off slot) to end
+        void EndActiveSessionLocked(ConnectionPtr &dropped);
+        /// Session thread: the arbiter's identity for the session follows a later Hello on its connection
+        void NoteSessionIdentity(const Connection &connection);
         /// The session thread: takes one hand-off at a time until the server stops
         void SessionLoop();
         void RunSession(HandOff &handOff);
@@ -1051,8 +1104,15 @@ namespace N2Engine::Editor
         mutable std::mutex _identityMutex;
         ConnectionIdentity _identity;
         // Set when a reload took the SESSION's rights away (acceptor, or session thread): its waits fail, which ends it.
-        // Cleared with the identity at the start and the end of a session (BeginSessionState, EndSessionState).
+        // Also set, under _sessionMutex, when the session is to make way for a takeover or a preemption (OfferToSession).
+        // Cleared with the identity at the end of a session (EndSessionState) and, under _sessionMutex, when the session
+        // thread takes the next hand-off (SessionLoop): not at the start of RunSession, where it would swallow a request
+        // made between the take and that start.
         std::atomic<bool> _closeConnection{false};
+        // Set with _closeConnection when the request is a takeover or a preemption (not a revoked token): the session that
+        // ends for it does not stop a host that stops on disconnect, since its successor is a client that is there. Written
+        // and cleared where _closeConnection is (under _sessionMutex).
+        std::atomic<bool> _sessionReplaced{false};
         // The close flag of the connections that are not the session (pre-auth workers): never set
         std::atomic<bool> _neverClose{false};
         // Whether the current connection's Hello asked for ErrorCoded: set by HandleHello (main thread), reset when a
@@ -1092,6 +1152,11 @@ namespace N2Engine::Editor
         std::atomic<uint64_t> _preAuthRefusedConnections{0};
         std::atomic<uint64_t> _busyRefusals{0};
         std::atomic<uint64_t> _sessionHandoffs{0};
+        std::atomic<uint64_t> _sessionTakeovers{0};
+        std::atomic<uint64_t> _sessionPreemptions{0};
+        std::chrono::milliseconds _takeoverWait{DefaultTakeoverWait};
+        SessionStartHook _sessionStartHook;
+        SessionEndHook _sessionEndHook;
         // What the last summary line already reported (acceptor thread only)
         TokenBucket::Counters _bucketReported;
         std::chrono::steady_clock::time_point _lastAdmissionSummary{};
@@ -1108,6 +1173,17 @@ namespace N2Engine::Editor
         std::condition_variable _sessionCv;
         std::optional<HandOff> _handoff;
         bool _sessionRunning{false};
+        // Who the session is (the arbiter's id and identity from the hand-off to its end): made by Start. Every decision
+        // that reads it and then changes the hand-off, the close request or the claim below is made under _sessionMutex
+        // (the arbiter has its own mutex too, taken inside, never the other way round). A session ends, and the arbiter is
+        // told, in the same critical section that clears _sessionRunning, so "free" and "nobody is active" are one fact.
+        std::optional<SessionArbiter> _arbiter;
+        // The one candidate that has been told to wait for the active session to end (it takes it over or preempts it), 0
+        // when none: a newer candidate that outranks it (or is the same user) replaces the claim and the old one is turned
+        // away; one that does not is judged against the claim, as if it were the active session
+        uint64_t _claimId{0};
+        SessionIdentity _claim;
+        uint64_t _claimCounter{0};
         // The session's peer as text (empty when there is none, as for a command run without a socket), set by the session
         // thread and read by the handlers' log lines on the main thread. Pre-auth lines carry their own connection's peer.
         mutable std::mutex _peerMutex;

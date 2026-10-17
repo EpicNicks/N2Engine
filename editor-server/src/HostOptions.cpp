@@ -511,12 +511,15 @@ Options:
                             --create (it writes a project)
   --no-rate-limit           Turn off the failed-Hello rate limiting. By default, with --token-env or
                             --tokens-file, an address that fails 3 Hellos is backed off (1 s, doubling to
-                            5 min; its connections are closed at once, before any TLS handshake), loopback
-                            as a whole is backed off after 10 failures in a minute, and with --tokens-file a
-                            user that fails 3 Hellos is backed off for up to 30 s. A connection that never
-                            finishes a Hello (idle for the 2 s Hello budget, closed early, a failed TLS
-                            handshake or one not done within its own 5 s) counts as a failure for its
-                            address too, but not for loopback. For test rigs only
+                            5 min; its connections are closed at once, before any TLS handshake), and with
+                            --tokens-file a user that fails 3 Hellos is backed off for up to 30 s (a Hello
+                            with the right token still gets in). Loopback has no backoff of its own (behind
+                            a proxy or an SSH tunnel everyone is loopback, and a ban would lock out the
+                            client with the right token): it is bounded by --preauth-slots and the
+                            handshake rate. A connection that never finishes a Hello (idle for the 2 s Hello
+                            budget, closed early, a failed TLS handshake or one not done within its own
+                            5 s) counts as a failure for its address too, but not for loopback. For test
+                            rigs only
   --idle-timeout <seconds>  Close a connection that has sent no request for this long once it is a session
                             (after its Hello with a token; from the start without one). Every request,
                             polled ones included, restarts it. Default: 300 (5 minutes); 0 turns it off.
@@ -533,9 +536,14 @@ Options:
                             Handshakes are also limited to 20 a second in all and 5 a second per
                             address. The authenticated session has its own thread: a peer that stalls
                             in a slot (a silent connection, a stalled handshake) holds that slot for the
-                            handshake and Hello budgets (5 s and 2 s) and nothing else. A second
-                            authenticated client while a session is active waits up to 1 s for it to end,
-                            then gets the Error "The host is serving another session; try again later"
+                            handshake and Hello budgets (5 s and 2 s) and nothing else. One session at a
+                            time: a second authenticated client of the same user and role takes it over,
+                            and a client of a strictly higher role (admin over editor over viewer)
+                            preempts it (the old session ends as on a disconnect and the new client
+                            waits up to 3 s for that); any other second client waits up to 1 s for the
+                            session to end, then gets the error "The host is serving another session; try
+                            again later" (naming its role; ErrorCoded busy for a client that asked for
+                            error codes). Without a token the newest connection takes over
   --log-level <level>       The least severe level written to stderr (and --log-file): info (the default),
                             warn or error. Every line is "<UTC time> <LEVEL> <message>", one per event,
                             in every build type; the audit, rate-limit and tokens-reload lines are Info or Warn

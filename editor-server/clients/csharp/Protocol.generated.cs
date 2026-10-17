@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.12.0";
+        public const string ProtocolVersion = "1.13.0";
     }
 
     public enum CommandType : byte

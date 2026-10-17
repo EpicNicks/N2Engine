@@ -358,96 +358,58 @@ TEST(RateLimiterTest, LoopbackIsExemptFromTheAddressRule)
     FakeClock clock;
     RateLimiter limiter({}, clock.Get());
 
-    // Nine failures: more than an address is allowed, fewer than loopback's burst
+    // More failures than an address is allowed
     for (int i = 0; i < 9; ++i)
     {
         const auto outcome = limiter.RecordFailure(Loopback, std::nullopt);
         EXPECT_FALSE(outcome.address.has_value());
-        EXPECT_FALSE(outcome.loopback.has_value());
+        EXPECT_FALSE(outcome.user.has_value());
         EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
         EXPECT_FALSE(limiter.AdmitConnection(Loopback).priorOffender) << "no short budget for a tunnel";
     }
     EXPECT_EQ(limiter.AddressCount(), 0u) << "no per-address entry for loopback";
 }
 
-TEST(RateLimiterTest, TenFailuresInAMinuteBackOffAllOfLoopback)
+// PR S-4: the shared loopback counter, which refused every loopback connection after ten failed Hellos in a minute
+// (a client with the right token included, and everybody behind a proxy), is gone. Loopback is bounded by the slots and
+// the handshake rate (PreAuthServerTests), not by a count of failures.
+TEST(RateLimiterTest, FailuresFromLoopbackNeverRefuseLoopback)
 {
-    FakeClock clock; // starts at zero: no time stands for "never"
+    FakeClock clock;
     RateLimiter limiter({}, clock.Get());
-    Fail(limiter, Loopback, 9);
 
-    const auto tenth = limiter.RecordFailure(PeerAddress::IPv4(127, 0, 0, 5), std::nullopt);
-    ASSERT_TRUE(tenth.loopback.has_value());
-    EXPECT_EQ(tenth.loopback->duration, milliseconds(1000));
-    EXPECT_FALSE(tenth.address.has_value());
-
-    // All of loopback, whichever spelling, until it ends; anything else is served
-    EXPECT_FALSE(limiter.AdmitConnection(Loopback).allowed);
-    EXPECT_FALSE(limiter.AdmitConnection(PeerAddress::IPv4(127, 9, 9, 9)).allowed);
-    EXPECT_FALSE(limiter.AdmitConnection(PeerAddress::IPv6(Ipv6({}, 1))).allowed);
-    EXPECT_TRUE(limiter.AdmitConnection(OtherPeer).allowed);
+    // Far more than the ten in a minute that used to start the global backoff, over every spelling of loopback
+    for (int i = 0; i < 300; ++i)
+    {
+        const PeerAddress peer = i % 3 == 0   ? Loopback
+                                 : i % 3 == 1 ? PeerAddress::IPv4(127, 9, 9, 9)
+                                              : PeerAddress::IPv6(Ipv6({}, 1));
+        const auto outcome = limiter.RecordFailure(peer, std::nullopt);
+        ASSERT_FALSE(outcome.address.has_value()) << i;
+        ASSERT_FALSE(outcome.user.has_value()) << i;
+        ASSERT_TRUE(limiter.AdmitConnection(peer).allowed) << i;
+        clock.Advance(milliseconds(10));
+    }
     EXPECT_EQ(limiter.AddressCount(), 0u);
-
-    clock.Advance(milliseconds(1000));
-    const auto after = limiter.AdmitConnection(Loopback);
-    EXPECT_TRUE(after.allowed);
-    EXPECT_EQ(after.suppressed, 3u);
+    EXPECT_EQ(limiter.UserCount(), 0u);
+    EXPECT_TRUE(limiter.AdmitConnection(OtherPeer).allowed);
 }
 
-TEST(RateLimiterTest, LoopbackFailuresSpreadOverMoreThanAMinuteNeverBackOff)
+TEST(RateLimiterTest, LoopbackFailuresThatNameAUserStillBackThatUserOffButNotLoopback)
 {
     FakeClock clock;
     RateLimiter limiter({}, clock.Get());
-    // One failure every 7 seconds is under 10 a minute, for as long as it goes on
-    for (int i = 0; i < 200; ++i)
-    {
-        const auto outcome = limiter.RecordFailure(Loopback, std::nullopt);
-        ASSERT_FALSE(outcome.loopback.has_value()) << i;
-        clock.Advance(milliseconds(7000));
-    }
+
+    // Wrong tokens naming alice through a tunnel: the user's backoff (short, capped) is what holds an attacker there
+    Fail(limiter, Loopback, 2, "alice");
+    const auto third = limiter.RecordFailure(Loopback, "alice");
+    ASSERT_TRUE(third.user.has_value());
+    EXPECT_TRUE(limiter.IsUserBackedOff("alice"));
+    EXPECT_FALSE(limiter.IsUserBackedOff("bob"));
+    // ... and every loopback connection is still admitted, so bob (and alice, whose right token passes the user's
+    // backoff in the server) get in
     EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
-}
-
-TEST(RateLimiterTest, EachFurtherBurstOnLoopbackDoublesTheBackoff)
-{
-    FakeClock clock;
-    RateLimiter limiter({}, clock.Get());
-
-    const std::vector<int64_t> expected = {1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 300000, 300000};
-    for (const int64_t wanted : expected)
-    {
-        const auto outcome = Fail(limiter, Loopback, 10);
-        ASSERT_TRUE(outcome.loopback.has_value());
-        EXPECT_EQ(outcome.loopback->duration.count(), wanted);
-        clock.Advance(outcome.loopback->duration);
-        ASSERT_TRUE(limiter.AdmitConnection(Loopback).allowed);
-    }
-}
-
-TEST(RateLimiterTest, ALoopbackSuccessDoesNotClearTheGlobalCounter)
-{
-    FakeClock clock;
-    RateLimiter limiter({}, clock.Get());
-    Fail(limiter, Loopback, 9);
-    // A good login through the tunnel must not give an attacker behind it a fresh count
-    limiter.RecordSuccess(Loopback, std::nullopt);
-    EXPECT_TRUE(limiter.RecordFailure(Loopback, std::nullopt).loopback.has_value());
-}
-
-TEST(RateLimiterTest, LoopbackIsForgottenAfterFifteenIdleMinutes)
-{
-    FakeClock clock;
-    RateLimiter limiter({}, clock.Get());
-    Fail(limiter, Loopback, 10);
-    clock.Advance(milliseconds(1000));
-    ASSERT_TRUE(limiter.AdmitConnection(Loopback).allowed);
-
-    clock.Advance(milliseconds(15 * 60 * 1000));
-    // The strikes are gone: the next burst is the first again
-    const auto outcome = Fail(limiter, Loopback, 10);
-    ASSERT_TRUE(outcome.loopback.has_value());
-    EXPECT_EQ(outcome.loopback->duration, milliseconds(1000));
-    EXPECT_EQ(outcome.loopback->failures, 1u);
+    EXPECT_FALSE(third.address.has_value());
 }
 
 TEST(RateLimiterTest, AnUnknownPeerIsAnAddressLikeAnyOther)
@@ -551,7 +513,6 @@ TEST(RateLimiterTest, AFailureCanStartTheAddressAndTheUserBackoffTogether)
     const auto outcome = limiter.RecordFailure(Attacker, "alice");
     ASSERT_TRUE(outcome.address.has_value());
     ASSERT_TRUE(outcome.user.has_value());
-    EXPECT_FALSE(outcome.loopback.has_value());
 }
 
 TEST(RateLimiterTest, AUserBackoffIsNotAFailureAndDoesNotChangeTheAddress)
@@ -586,7 +547,6 @@ TEST(RateLimiterTest, AnUnfinishedHelloCountsLikeAFailedHelloForItsAddress)
     ASSERT_TRUE(third.address.has_value());
     EXPECT_EQ(third.address->duration, milliseconds(1000));
     EXPECT_EQ(third.address->failures, 3u);
-    EXPECT_FALSE(third.loopback.has_value());
     EXPECT_FALSE(third.user.has_value());
     EXPECT_EQ(limiter.UserCount(), 0u);
 
@@ -606,24 +566,19 @@ TEST(RateLimiterTest, AnUnfinishedHelloFromLoopbackIsNotRecordedAtAll)
     FakeClock clock;
     RateLimiter limiter({}, clock.Get());
 
-    // Behind a tunnel or a proxy every peer is loopback: a mere connect must not feed the global backoff (it would make
-    // the lockout of every user a matter of opening sockets), so nothing is recorded however many there are
+    // Behind a tunnel or a proxy every peer is loopback: nothing is recorded for a mere connect, however many there are
     for (int i = 0; i < 50; ++i)
     {
         const auto outcome = limiter.RecordUnfinishedHello(i % 2 == 0 ? Loopback : PeerAddress::IPv4(127, 7, 7, 7));
         EXPECT_FALSE(outcome.address.has_value());
-        EXPECT_FALSE(outcome.loopback.has_value());
         EXPECT_FALSE(outcome.user.has_value());
     }
     EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
     EXPECT_EQ(limiter.AddressCount(), 0u);
 
-    // ... and the wrong-token rule for loopback is as it was: ten in a minute
-    Fail(limiter, Loopback, 9);
+    // ... and neither does a wrong token from loopback: there is no shared loopback counter to feed (PR S-4)
+    Fail(limiter, Loopback, 30);
     EXPECT_TRUE(limiter.AdmitConnection(Loopback).allowed);
-    const auto tenth = limiter.RecordFailure(Loopback, std::nullopt);
-    ASSERT_TRUE(tenth.loopback.has_value());
-    EXPECT_FALSE(limiter.AdmitConnection(Loopback).allowed);
 }
 
 TEST(RateLimiterTest, ThePolicyIsTheDocumentedOne)
@@ -634,8 +589,6 @@ TEST(RateLimiterTest, ThePolicyIsTheDocumentedOne)
     EXPECT_EQ(policy.maxBackoff, milliseconds(5 * 60 * 1000));
     EXPECT_EQ(policy.idleReset, milliseconds(15 * 60 * 1000));
     EXPECT_EQ(policy.maxEntries, 4096u);
-    EXPECT_EQ(policy.loopbackFailures, 10u);
-    EXPECT_EQ(policy.loopbackWindow, milliseconds(60 * 1000));
     EXPECT_EQ(policy.userMaxBackoff, milliseconds(30 * 1000));
     EXPECT_EQ(policy.priorOffenderBudget, milliseconds(2000));
 }

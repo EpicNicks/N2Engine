@@ -79,6 +79,15 @@ namespace N2Engine::Editor
         }
     }
 
+    void SessionArbiter::UpdateIdentity(const uint64_t sessionId, const SessionIdentity &identity)
+    {
+        const std::lock_guard lock(_mutex);
+        if (_active.has_value() && sessionId != 0 && sessionId == _activeId)
+        {
+            _active = identity;
+        }
+    }
+
     std::optional<SessionIdentity> SessionArbiter::Active() const
     {
         const std::lock_guard lock(_mutex);
