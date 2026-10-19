@@ -202,7 +202,8 @@
       function count(n) { received[WASM] += n; report(WASM); }
       function fromBytes(bytes) {
         checkLength(WASM, bytes.length);
-        return WebAssembly.instantiate(bytes, imports).catch(function (error) { throw moduleError(error); });
+        // Only a real module error is "different builds"; anything else (an out-of-memory RangeError, say) keeps its own message
+        return WebAssembly.instantiate(bytes, imports).catch(function (error) { throw isModuleError(error) ? moduleError(error) : error; });
       }
       return get(WASM).then(function (response) {
         if (!sizes[WASM]) sizes[WASM] = plainLength(response);
@@ -214,8 +215,12 @@
                                                        : 'this browser cannot stream-compile' });
           return readAll(response, count).then(fromBytes);
         }
+        var abandoned = false;
+        var counter = null;
         var counted = response.body.pipeThrough(new TransformStream({
+          start: function (controller) { counter = controller; },
           transform: function (chunk, controller) {
+            if (abandoned) return;
             count(chunk.length);
             controller.enqueue(chunk);
           }
@@ -225,8 +230,11 @@
         return WebAssembly.instantiateStreaming(wrapped, imports).catch(function (error) {
           if (isModuleError(error)) throw moduleError(error);
           // Rejected for another reason, with the right type: read the file again into an ArrayBuffer. Whatever is left
-          // of the first body is cancelled first, so the two downloads do not run side by side.
-          if (wrapped.body && !wrapped.body.locked) wrapped.body.cancel().catch(function () {});
+          // of the first body is cancelled first, so the two downloads do not run side by side. The wrapping stream is
+          // locked by now (instantiateStreaming read it), so it is errored from inside: that releases its reader and the
+          // pipe from the network body cancels that body, once.
+          abandoned = true;
+          try { counter.error(error); } catch (ignored) { /* already closed or errored */ }
           onEvent('wasm-fallback', { reason: String(error && error.message ? error.message : error) });
           received[WASM] = 0;
           return get(WASM).then(function (second) { return readAll(second, count); }).then(fromBytes);

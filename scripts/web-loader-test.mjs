@@ -196,6 +196,64 @@ await scenario('network failure: a clear error', {}, async () => {
   check(manifestOk && message && message.includes('index.data') && message.includes('network'), `message was: ${message}`);
 });
 
+// instantiateStreaming that fails after reading part of the body (and leaves its reader locked, as the browser does) for a
+// reason that is not a module error: the loader reads the file again, and the first body must be cancelled, once
+await scenario('streaming fails for another reason: the first body is cancelled once, the re-fetch loads', { manifest: null }, async ({ loader, events, requests, progress }) => {
+  const realStreaming = WebAssembly.instantiateStreaming;
+  let cancels = 0;
+  let wasmRequests = 0;
+  const base = host({ manifest: null }).fetchMock;
+  const fetchMock = async (url, init) => {
+    requests.push({ url, init });
+    if (url.split('?')[0] !== 'index.wasm') return base(url, init);
+    if (++wasmRequests > 1) return new Response(wasmBytes, { headers: { 'content-type': 'application/wasm' } });
+    let sent = 0;
+    const body = new ReadableStream({
+      pull(controller) { controller.enqueue(wasmBytes.slice(sent, sent + 4)); sent += 4; if (sent >= wasmBytes.length * 5) controller.close(); },
+      cancel() { cancels++; },
+    });
+    return new Response(body, { headers: { 'content-type': 'application/wasm' } });
+  };
+  const own = N2Loader.create({ fetch: fetchMock, onEvent: (e, d) => events.push(e + (d.reason ? `(${d.reason})` : '')), onProgress: (p) => progress.push(p) });
+  WebAssembly.instantiateStreaming = async (response) => {
+    const reader = response.body.getReader();
+    await reader.read(); // part of the body, then it fails; the reader stays locked
+    throw new TypeError('streaming compile failed');
+  };
+  try {
+    const out = await own.run(fakeFactory, {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    check(out.instance instanceof WebAssembly.Instance, 'the fallback loaded');
+    check(events.some((e) => e.startsWith('wasm-fallback(streaming compile failed')), `events ${events}`);
+    check(wasmRequests === 2, `the wasm is requested twice, got ${wasmRequests}`);
+    check(cancels === 1, `the first body is cancelled exactly once, got ${cancels}`);
+    check(progress.at(-1).loaded === wasmBytes.length + dataBytes.length, `no double count, ended at ${progress.at(-1)?.loaded}`);
+  } finally {
+    WebAssembly.instantiateStreaming = realStreaming;
+  }
+});
+
+// Only a CompileError or LinkError means "different builds"; an out-of-memory RangeError keeps its own message
+for (const [kind, make, isModule] of [
+  ['CompileError', () => new WebAssembly.CompileError('bad module'), true],
+  ['LinkError', () => new WebAssembly.LinkError('bad import'), true],
+  ['RangeError (out of memory)', () => new RangeError('WebAssembly.instantiate(): Out of memory: Cannot allocate Wasm memory'), false],
+]) {
+  await scenario(`instantiate rejects with ${kind}: ${isModule ? 'moduleError' : 'passed through'}`, { wasmType: 'text/plain', manifest: null }, async ({ loader }) => {
+    const realInstantiate = WebAssembly.instantiate;
+    WebAssembly.instantiate = () => Promise.reject(make());
+    let error = null;
+    try {
+      await loader.run(fakeFactory, {}).catch((e) => { error = e; });
+    } finally {
+      WebAssembly.instantiate = realInstantiate;
+    }
+    check(error && (error.message.includes('different builds') === isModule), `message was: ${error && error.message}`);
+    check(error && (error.name === 'LoadError') === isModule, `error was: ${error && error.name}`);
+    if (!isModule) check(error instanceof RangeError, 'the RangeError itself propagates');
+  });
+}
+
 if (failures > 0) {
   console.error(`web loader test: ${failures} failure(s)`);
   process.exit(1);
