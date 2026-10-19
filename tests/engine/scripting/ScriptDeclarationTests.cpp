@@ -2,12 +2,10 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -48,24 +46,18 @@ namespace
     // with) and the fixture, so a worker that is still waiting never touches a destroyed object.
     struct Gate
     {
-        std::mutex mutex;
-        std::condition_variable changed;
-        bool open = false;
+        std::atomic<bool> open{false};
         std::atomic<int> entered{0};
 
-        void Open()
-        {
-            {
-                const std::lock_guard lock(mutex);
-                open = true;
-            }
-            changed.notify_all();
-        }
+        void Open() { open = true; }
 
-        void Wait()
+        // Polls: the single-threaded web build has no condition variable (and a test that blocks skips itself there)
+        void Wait() const
         {
-            std::unique_lock lock(mutex);
-            changed.wait(lock, [this] { return open; });
+            while (!open.load())
+            {
+                std::this_thread::sleep_for(1ms);
+            }
         }
     };
 
@@ -161,6 +153,14 @@ protected:
             local C = {}
             C.__index = C
             C.SerializableFields = { speed = 5, label = { type = "string", default = "x" } }
+            return C
+        )LUA");
+
+        // A script with behaviour and no fields at all (most scripts)
+        WriteAsset("decl/NoFields.lua", R"LUA(
+            local C = {}
+            C.__index = C
+            function C:OnUpdate() end
             return C
         )LUA");
 
@@ -393,6 +393,9 @@ TEST_F(ScriptDeclarationTest, EveryFormGivesTheSameFieldsAndDataUnderBothPolicie
         {{"Types.lua"}, json()},
         {{"Computed.lua"}, json()},
         {{"TopLevelEngine.lua"}, json()},
+        // no SerializableFields: nothing failed, and only a different script drops what it does not declare
+        {{"NoFields.lua"}, json{{"count", 3}}},
+        {{"Fields.lua", "NoFields.lua"}, json()},
         // a different script keeps only the fields it declares (count is in both)
         {{"Fields.lua", "Other.lua"}, json()},
         // saved values win over defaults; the ones a script does not declare stay on its first script only
@@ -446,6 +449,20 @@ TEST_F(ScriptDeclarationTest, AHostileScriptRunsNothingAndStillDeclaresItsField)
     EXPECT_FALSE(GlobalIsSet("L2_DISABLED"));
     EXPECT_FALSE(Application::GetInstance().IsQuitRequested());
     EXPECT_EQ(memoryAfter, memoryBefore) << "the engine's Lua state allocated nothing";
+}
+
+TEST_F(ScriptDeclarationTest, AScriptThatDeclaresNoFieldsIsNotAFailure)
+{
+    LuaRuntime::SetExecutionPolicy(LuaExecutionPolicy::DeclarationsOnly);
+    const auto go = GameObject::Create("Plain");
+    auto *component = go->AddComponent<LuaComponent>();
+    component->SetScriptData(json{{"count", 3}});
+
+    component->SetScript(PathOf("NoFields.lua"));
+
+    EXPECT_FALSE(component->HasMissingScript());
+    EXPECT_EQ(FieldNames(component->DescribeFields()), (std::vector<std::string>{"scriptUUID"}));
+    EXPECT_EQ(component->GetScriptData(), (json{{"count", 3}})) << "the first script keeps what it was given";
 }
 
 TEST_F(ScriptDeclarationTest, ALoopingScriptIsAFailedDeclarationAndTheCallerGetsItBack)

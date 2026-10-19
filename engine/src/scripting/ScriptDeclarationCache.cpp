@@ -1,11 +1,15 @@
 #include "engine/scripting/ScriptDeclarationCache.hpp"
 
 #include <algorithm>
-#include <condition_variable>
 #include <format>
+#include <utility>
+
+// A build with no threads (the web baseline) has no worker, so it needs neither the thread nor the condition variable
+#if !defined(N2ENGINE_SINGLE_THREADED)
+#include <condition_variable>
 #include <system_error>
 #include <thread>
-#include <utility>
+#endif
 
 #include "engine/Logger.hpp"
 
@@ -18,7 +22,9 @@ namespace N2Engine::Scripting
         struct Workers
         {
             std::mutex mutex;
+#if !defined(N2ENGINE_SINGLE_THREADED)
             std::condition_variable changed;
+#endif
             int live = 0;
             bool stopping = false;
         };
@@ -29,8 +35,9 @@ namespace N2Engine::Scripting
             return *workers;
         }
 
-        // One evaluation, owned by the caller and its worker through shared_ptrs: whichever lets go last frees it, so an
-        // abandoned worker keeps everything it uses alive on its own (a copy of the source, never the cache's)
+        // One evaluation's inputs. On a threaded build it is owned by the caller and its worker through shared_ptrs:
+        // whichever lets go last frees it, so an abandoned worker keeps everything it uses alive on its own (a copy of the
+        // source, never the cache's)
         struct Job
         {
             std::string source;
@@ -38,10 +45,12 @@ namespace N2Engine::Scripting
             DeclarationLimits limits;
             std::shared_ptr<const ScriptDeclarationCache::EvaluateFunction> evaluate;
 
+#if !defined(N2ENGINE_SINGLE_THREADED)
             std::mutex mutex;
             std::condition_variable finished;
             bool done = false;
             DeclarationResult result;
+#endif
         };
 
         DeclarationResult Failed(std::string text, const bool timedOut = false)
@@ -360,7 +369,11 @@ namespace N2Engine::Scripting
         Workers &workers = SharedWorkers();
         std::unique_lock lock(workers.mutex);
         workers.stopping = true;
+#if !defined(N2ENGINE_SINGLE_THREADED)
         workers.changed.wait_for(lock, maxWait, [&] { return workers.live == 0; });
+#else
+        (void)maxWait; // no worker exists
+#endif
         return workers.live;
     }
 

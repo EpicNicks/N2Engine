@@ -1,12 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -91,23 +90,17 @@ namespace
     // never touches a destroyed object
     struct Gate
     {
-        std::mutex mutex;
-        std::condition_variable changed;
-        bool open = false;
+        std::atomic<bool> open{false};
 
-        void Open()
+        void Open() { open = true; }
+
+        // Polls: the single-threaded web build has no condition variable (and a test that blocks skips itself there)
+        void Wait() const
         {
+            while (!open.load())
             {
-                const std::lock_guard lock(mutex);
-                open = true;
+                std::this_thread::sleep_for(1ms);
             }
-            changed.notify_all();
-        }
-
-        void Wait()
-        {
-            std::unique_lock lock(mutex);
-            changed.wait(lock, [this] { return open; });
         }
     };
 

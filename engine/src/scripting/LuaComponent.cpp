@@ -43,11 +43,15 @@ namespace N2Engine::Scripting
             }
         };
 
-        /// The list of fields is known: the script returned a table with a SerializableFields table, and nothing in the
-        /// list came from the engine. (A field whose own default is unknown is still listed: that is a field, not the list.)
+        /// The list of fields is known. That is so for a script that declares them, and for one that declares none (it
+        /// returned a table and no SerializableFields table: declared is false and nothing went wrong), as long as no
+        /// limit was hit and nothing in the LIST came from the engine. A partial list (an error such as "more fields than
+        /// the limit" beside a declared one) is still a list. (A field whose own default is unknown is listed too: that
+        /// is a field, not the list.)
         bool IsReadable(const DeclarationResult &declaration)
         {
-            return declaration.declared && !declaration.unevaluable;
+            return !declaration.unevaluable && !declaration.budgetExceeded && !declaration.memoryExhausted &&
+                   (declaration.declared || declaration.errors.empty());
         }
 
         /// What kind of default a stored value looks like, for a script whose declarations could not be read: as
