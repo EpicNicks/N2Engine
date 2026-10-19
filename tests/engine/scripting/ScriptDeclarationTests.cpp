@@ -213,7 +213,15 @@ protected:
 
     static ScriptDeclarationCache &Cache() { return ScriptDeclarationCache::Instance(); }
     static sol::state &Lua() { return LuaRuntime::Instance().GetState(); }
-    static bool GlobalIsSet(const char *name) { return Lua()[name].get_type() != sol::type::lua_nil; }
+    // A global of the engine's state that is not nil (read with Lua's own API: no reference is made)
+    static bool GlobalIsSet(const char *name)
+    {
+        lua_State *state = Lua().lua_state();
+        lua_getglobal(state, name);
+        const bool set = lua_type(state, -1) != LUA_TNIL;
+        lua_pop(state, 1);
+        return set;
+    }
     static IO::ResourcePath PathOf(const char *name) { return IO::ResourcePath(std::string("res://decl/") + name); }
 
     void SetUp() override
@@ -605,8 +613,8 @@ TEST_F(ScriptDeclarationTest, AReloadThatBreaksTheScriptKeepsTheDeclarationsOfTh
 TEST_F(ScriptDeclarationTest, TheCacheHitsOnTheSameSourceAndMissesAfterAnEdit)
 {
     const IO::ResourcePath path = PathOf("Cached.lua");
-    const std::string first = "local C = {} C.SerializableFields = { a = 1 } return C";
-    const std::string second = "local C = {} C.SerializableFields = { a = 2 } return C";
+    const std::string first = "local C = {} C.__index = C C.SerializableFields = { a = 1 } return C";
+    const std::string second = "local C = {} C.__index = C C.SerializableFields = { a = 2 } return C";
 
     const auto one = Cache().Get(path, first);
     const auto again = Cache().Get(path, first);
@@ -829,8 +837,8 @@ TEST_F(ScriptDeclarationTest, SeveralThreadsAskingTheCacheAtOnceAllGetAnAnswer)
             for (int round = 0; round < 4; ++round)
             {
                 const auto result = Cache().Get(IO::ResourcePath("res://decl/Many" + std::to_string(i) + ".lua"),
-                                                "local C = {} C.SerializableFields = { n = " + std::to_string(round) +
-                                                    " } return C");
+                                                "local C = {} C.__index = C C.SerializableFields = { n = " +
+                                                    std::to_string(round) + " } return C");
                 if (result == nullptr || !result->declared || result->fields.size() != 1)
                 {
                     ++failures;

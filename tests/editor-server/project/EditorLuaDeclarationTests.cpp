@@ -164,7 +164,15 @@ namespace
         static ScriptDeclarationCache &Cache() { return ScriptDeclarationCache::Instance(); }
         static sol::state &Lua() { return LuaRuntime::Instance().GetState(); }
 
-        static bool GlobalIsSet(const char *name) { return Lua()[name].get_type() != sol::type::lua_nil; }
+        // A global of the engine's state that is not nil (read with Lua's own API: no reference is made)
+        static bool GlobalIsSet(const char *name)
+        {
+            lua_State *state = Lua().lua_state();
+            lua_getglobal(state, name);
+            const bool set = lua_type(state, -1) != LUA_TNIL;
+            lua_pop(state, 1);
+            return set;
+        }
 
         static void ClearGlobals()
         {
@@ -283,7 +291,8 @@ namespace
             if (frame.type != LuaFieldsType)
                 return names;
             BufferReader r(frame.payload);
-            for (const json &field : ReadJson(r).at("fields"))
+            const json schema = ReadJson(r); // kept: a range over a part of a temporary would dangle
+            for (const json &field : schema.at("fields"))
             {
                 names.push_back(field.at("name").get<std::string>() + ":" + field.at("kind").get<std::string>());
             }
@@ -555,7 +564,7 @@ TEST_F(EditorLuaDeclarationTest, WritingALoadedScriptRereadsItsDeclarationsThrou
 
 TEST_F(EditorLuaDeclarationTest, AScriptWhoseReadingStallsDoesNotStallTheCommandThread)
 {
-    WriteAsset("scripts/Stall.lua", "local C = {} C.SerializableFields = { a = 1 } return C\n");
+    WriteAsset("scripts/Stall.lua", "local C = {} C.__index = C C.SerializableFields = { a = 1 } return C\n");
     Rescan();
     Cache().SetDeadlineMillis(120);
     BlockEvaluations();
