@@ -7,7 +7,6 @@
 // A build with no threads (the web baseline) has no worker, so it needs neither the thread nor the condition variable
 #if !defined(N2ENGINE_SINGLE_THREADED)
 #include <condition_variable>
-#include <system_error>
 #include <thread>
 #endif
 
@@ -52,6 +51,17 @@ namespace N2Engine::Scripting
             DeclarationResult result;
 #endif
         };
+
+        // The CommandBudget open on this thread, if any: when every evaluation it starts must have answered
+        struct ThreadBudget
+        {
+            bool active = false;
+            std::chrono::steady_clock::time_point end{};
+        };
+        thread_local ThreadBudget t_budget;
+
+        constexpr const char *BudgetSpentText =
+            "The evaluation budget for this command is exhausted: the script's declarations are read by a later command";
 
         DeclarationResult Failed(std::string text, const bool timedOut = false)
         {
@@ -153,9 +163,36 @@ namespace N2Engine::Scripting
         return found != _entries.end() && found->second.hash == hash ? found->second.declaration : nullptr;
     }
 
+    ScriptDeclarationCache::CommandBudget::CommandBudget()
+        : CommandBudget(std::chrono::milliseconds(ScriptDeclarationCache::Instance().GetCommandBudgetMillis()))
+    {
+    }
+
+    ScriptDeclarationCache::CommandBudget::CommandBudget(const std::chrono::milliseconds allowance)
+        : _hadOuter(t_budget.active), _outerEnd(t_budget.end)
+    {
+        const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now() + allowance;
+        t_budget.end = _hadOuter ? std::min(_outerEnd, end) : end;
+        t_budget.active = true;
+    }
+
+    ScriptDeclarationCache::CommandBudget::~CommandBudget()
+    {
+        t_budget.active = _hadOuter;
+        t_budget.end = _outerEnd;
+    }
+
     ScriptDeclarationCache::Declaration ScriptDeclarationCache::Get(const IO::ResourcePath &path,
                                                                     const std::string_view source)
     {
+        bool refused = false;
+        return Get(path, source, refused);
+    }
+
+    ScriptDeclarationCache::Declaration ScriptDeclarationCache::Get(const IO::ResourcePath &path,
+                                                                    const std::string_view source, bool &refused)
+    {
+        refused = false;
         const std::string key = path.ToString();
         const std::string hash = HashSource(source);
         {
@@ -170,9 +207,14 @@ namespace N2Engine::Scripting
 
         bool transient = false;
         Declaration declaration = Evaluate(source, key, transient);
+        refused = transient;
+        if (transient)
+        {
+            // A refusal says nothing of the script, and the caller asks again: the caller says it once
+            return declaration;
+        }
         LogOutcome(key, *declaration);
 
-        if (!transient)
         {
             const std::lock_guard lock(_mutex);
             if (_entries.size() >= MaxEntries && !_entries.contains(key))
@@ -199,14 +241,55 @@ namespace N2Engine::Scripting
         job->chunkName = chunkName;
         job->limits.maxMillis = deadline;
 
+        // What is left of the command's budget (no scope open: only the deadline bounds the wait). Spent: refused before
+        // anything starts.
+        const bool budgeted = t_budget.active;
+        const auto budgetEnd = t_budget.end;
+        const auto budgetLeft = [&budgetEnd]
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(budgetEnd - std::chrono::steady_clock::now());
+        };
+        if (budgeted && budgetLeft().count() <= 0)
+        {
+            {
+                const std::lock_guard stats(_mutex);
+                ++_stats.refused;
+                ++_stats.overBudget;
+            }
+            transient = true;
+            return std::make_shared<const DeclarationResult>(Failed(BudgetSpentText));
+        }
+
 #if defined(N2ENGINE_SINGLE_THREADED)
-        // No threads here: the evaluation runs on this one, bounded by the evaluator's own checks
-        (void)transient; // nothing is refused here
+        // No threads here: the evaluation runs on this one, bounded by the evaluator's own checks, which are given no
+        // more than what is left of the budget
+        bool cutByBudget = false;
+        if (budgeted)
+        {
+            const auto leftCount = budgetLeft().count();
+            const auto left = static_cast<std::uint64_t>(leftCount > 0 ? leftCount : 1);
+            if (left < deadline)
+            {
+                job->limits.maxMillis = left;
+                cutByBudget = true;
+            }
+        }
         {
             const std::lock_guard lock(_mutex);
             ++_stats.evaluations;
         }
-        return std::make_shared<const DeclarationResult>(RunEvaluation(*job));
+        DeclarationResult result = RunEvaluation(*job);
+        if (cutByBudget && result.timedOut)
+        {
+            // Stopped by the command's budget, not by its own deadline: not the script's answer
+            {
+                const std::lock_guard lock(_mutex);
+                ++_stats.overBudget;
+            }
+            transient = true;
+            return std::make_shared<const DeclarationResult>(Failed(BudgetSpentText));
+        }
+        return std::make_shared<const DeclarationResult>(std::move(result));
 #else
         Workers &workers = SharedWorkers();
         {
@@ -251,8 +334,9 @@ namespace N2Engine::Scripting
                 job->finished.notify_all();
             }).detach();
         }
-        catch (const std::system_error &)
+        catch (...)
         {
+            // Whatever failed (no thread to be had, std::bad_alloc for its state), the slot is given back
             {
                 const std::lock_guard lock(workers.mutex);
                 --workers.live;
@@ -271,8 +355,21 @@ namespace N2Engine::Scripting
             ++_stats.evaluations;
         }
 
+        // The deadline and the grace, or what is left of the command's budget if that is less
+        auto wait = std::chrono::milliseconds(deadline + GraceMillis);
+        bool cutByBudget = false;
+        if (budgeted)
+        {
+            const auto left = budgetLeft();
+            if (left < wait)
+            {
+                wait = left.count() > 0 ? left : std::chrono::milliseconds(0);
+                cutByBudget = true;
+            }
+        }
+
         std::unique_lock lock(job->mutex);
-        if (job->finished.wait_for(lock, std::chrono::milliseconds(deadline + GraceMillis), [&] { return job->done; }))
+        if (job->finished.wait_for(lock, wait, [&] { return job->done; }))
         {
             return std::make_shared<const DeclarationResult>(std::move(job->result));
         }
@@ -282,6 +379,16 @@ namespace N2Engine::Scripting
         {
             const std::lock_guard stats(_mutex);
             ++_stats.abandoned;
+            if (cutByBudget)
+            {
+                ++_stats.overBudget;
+            }
+        }
+        if (cutByBudget)
+        {
+            // The command ran out of time, not the script: a refusal, so a later command reads it again
+            transient = true;
+            return std::make_shared<const DeclarationResult>(Failed(BudgetSpentText));
         }
         return std::make_shared<const DeclarationResult>(Failed(
             std::format("Reading the script's declarations took longer than {} ms and was abandoned", deadline), true));
@@ -402,6 +509,18 @@ namespace N2Engine::Scripting
         return _deadlineMillis;
     }
 
+    void ScriptDeclarationCache::SetCommandBudgetMillis(const std::uint64_t millis)
+    {
+        const std::lock_guard lock(_mutex);
+        _commandBudgetMillis = millis == 0 ? DefaultCommandBudgetMillis : millis;
+    }
+
+    std::uint64_t ScriptDeclarationCache::GetCommandBudgetMillis() const
+    {
+        const std::lock_guard lock(_mutex);
+        return _commandBudgetMillis;
+    }
+
     void ScriptDeclarationCache::SetEvaluatorForTest(EvaluateFunction evaluate)
     {
         const std::lock_guard lock(_mutex);
@@ -415,6 +534,7 @@ namespace N2Engine::Scripting
             _entries.clear();
             _stats = {};
             _deadlineMillis = DefaultDeadlineMillis;
+            _commandBudgetMillis = DefaultCommandBudgetMillis;
             _evaluator = nullptr;
         }
         {

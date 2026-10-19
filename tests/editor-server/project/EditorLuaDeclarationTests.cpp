@@ -589,3 +589,44 @@ TEST_F(EditorLuaDeclarationTest, AScriptWhoseReadingStallsDoesNotStallTheCommand
     _gate->Open();
     EXPECT_EQ(Cache().Shutdown(10s), 0);
 }
+
+TEST_F(EditorLuaDeclarationTest, ASceneOfManyStallingScriptsAnswersWithinOneCommandBudget)
+{
+#if defined(N2ENGINE_SINGLE_THREADED)
+    GTEST_SKIP() << "The single-threaded web build has no worker to abandon";
+#endif
+    // Four distinct scripts whose reading stalls: one deadline (and grace) each would hold the command about 5 s
+    json roots = json::array();
+    for (int i = 0; i < 4; ++i)
+    {
+        const std::string script = "scripts/Stall" + std::to_string(i) + ".lua";
+        WriteAsset(script, "local C = {} C.__index = C C.SerializableFields = { n = " + std::to_string(i) + " } return C\n");
+        roots.push_back(json{{"uuid", "123e4567-e89b-12d3-a456-42661417410" + std::to_string(i)},
+                             {"name", "Stalled" + std::to_string(i)},
+                             {"tag", "Untagged"},
+                             {"layer", 0},
+                             {"isActive", true},
+                             {"components", json::array({json{{"type", "LuaComponent"},
+                                                              {"data", json{{"scriptPath", "res://" + script}}}}})},
+                             {"children", json::array()}});
+    }
+    Rescan();
+    Cache().SetDeadlineMillis(1000);
+    Cache().SetCommandBudgetMillis(1500);
+    BlockEvaluations();
+
+    const auto start = std::chrono::steady_clock::now();
+    const Frame loaded =
+        Execute(server, CommandType::LoadScene, Strings({json{{"name", "Stalls"}, {"rootGameObjects", roots}}.dump()}));
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_EQ(loaded.type, OkType) << loaded.Text();
+    EXPECT_LT(elapsed, 3500ms) << "the command's budget (1.5 s) bounds all of its evaluations together";
+    EXPECT_GE(Cache().GetStats().overBudget, 3u);
+    EXPECT_LE(Cache().LiveWorkers(), 2) << "no worker is started once the budget is spent";
+    ExpectHostIntactAndNothingRan("after the scene of stalling scripts");
+    // What the budget refused is not remembered as the script's answer: a later command reads it
+    EXPECT_EQ(Cache().Peek(IO::ResourcePath("res://scripts/Stall3.lua"),
+                           "local C = {} C.__index = C C.SerializableFields = { n = 3 } return C\n"),
+              nullptr);
+}

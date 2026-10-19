@@ -44,6 +44,7 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/scripting/LuaScriptTemplate.hpp"
+#include "engine/scripting/ScriptDeclarationCache.hpp"
 #include "engine/serialization/ComponentRegistry.hpp"
 #include "engine/serialization/FieldInfo.hpp"
 #include "engine/serialization/JsonLimits.hpp"
@@ -3690,6 +3691,9 @@ namespace N2Engine::Editor
     std::vector<uint8_t> EditorServer::ExecuteCommand(uint8_t commandType, const std::vector<uint8_t> &payload)
     {
         _response.clear();
+        // Every script declaration this command reads (a scene of many scripts, say) shares one wall-clock allowance,
+        // so the command answers within it however many scripts are slow (ScriptDeclarationCache::CommandBudget)
+        const Scripting::ScriptDeclarationCache::CommandBudget evaluationBudget;
 
         bool failed = false;
         std::string failure;
@@ -6759,6 +6763,8 @@ namespace N2Engine::Editor
             return false;
         }
         _lastAssetPoll = now;
+        // A reload the poll triggers reads declarations on this thread too: one allowance for all of them
+        const Scripting::ScriptDeclarationCache::CommandBudget evaluationBudget;
         return PollAssets();
     }
 

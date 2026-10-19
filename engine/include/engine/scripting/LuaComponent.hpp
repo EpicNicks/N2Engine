@@ -30,6 +30,12 @@ namespace N2Engine::Scripting
         // Null when no script is set or its file is missing. A declaration that failed (declared false) is kept too, so
         // DescribeFields can say the script could not be read and still list the keys of _scriptData.
         std::shared_ptr<const DeclarationResult> _declaration;
+        // DeclarationsOnly: the last reading was refused by the cache (no worker free, the command's evaluation budget
+        // spent, shutdown, a thread that could not start). That is not the script's answer, so it is not kept as one: the
+        // component is read again, with the same arguments, the next time it is described (RetryRefusedDeclaration).
+        bool _declarationRefused = false;
+        bool _refusedKeepOld = false;
+        bool _refusedKeepOnlyDeclared = false;
         // True until this component is destroyed, or its script instance is replaced (SetScript, reload),
         // which gives the new instance a new flag. Callbacks the script registers hold it, so they stop
         // firing afterwards instead of running with freed or stale self.component/self.gameObject.
@@ -82,6 +88,10 @@ namespace N2Engine::Scripting
         /// declarations cannot be read keeps _scriptData as it is (keepOnlyDeclaredFields is then skipped, as there is
         /// no list to keep to), and DescribeFields shows its keys.
         void LoadDeclaration(bool keepOldOnFailure, bool keepOnlyDeclaredFields);
+        /// A reading the cache refused is tried again (LoadDeclaration with the refused call's arguments); a no-op
+        /// otherwise. Const because the readers that need it (DescribeFields, HasMissingScript) are: a component is never
+        /// a const object, and only the reading the refusal left undone changes.
+        void RetryRefusedDeclaration() const;
         /// The fields DescribeFields adds after scriptUUID in DeclarationsOnly
         void AppendDeclaredFields(std::vector<FieldInfo> &fields) const;
         /// Drops this component's reload subscriptions, in the cache and (if a runtime exists) in the runtime

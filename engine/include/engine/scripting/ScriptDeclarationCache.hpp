@@ -30,6 +30,10 @@ namespace N2Engine::Scripting
     ///     (an edit changes the hash, which is a new attempt);
     ///   - at most MaxWorkers workers exist at a time, abandoned ones included; when they are all busy a further
     ///     evaluation answers a failed declaration at once and is not recorded (a later attempt may succeed);
+    ///   - the deadline bounds ONE evaluation; a host command (or a scene build) may need many (a scene with several
+    ///     scripts), so a CommandBudget open on the calling thread bounds them together: the caller waits at most what
+    ///     is left of it, and once it is spent a further evaluation answers a failed declaration at once. Either answer
+    ///     is a refusal (not recorded: the script is not at fault, the next command reads it);
     ///   - Shutdown stops new evaluations and waits a bounded time for the running workers. A thread cannot be
     ///     interrupted, so one still running after that is left (detached) and the process may exit: everything it
     ///     touches is heap state that is never destroyed (the cache itself and the worker bookkeeping are leaked on
@@ -60,6 +64,30 @@ namespace N2Engine::Scripting
         static constexpr std::size_t MaxEntries = 1024;
         /// How long Shutdown waits for running workers by default
         static constexpr std::chrono::milliseconds DefaultShutdownWait{1000};
+        /// The wall-clock time every evaluation one command starts may take together (CommandBudget): one script that
+        /// stalls still gets its whole deadline and grace, a second one only what is left
+        static constexpr std::uint64_t DefaultCommandBudgetMillis = 3000;
+
+        /// A wall-clock allowance shared by every evaluation started on this thread while it is open: the editor host
+        /// opens one per command (and for its startup scene), so a scene with many slow scripts answers within the
+        /// allowance instead of one deadline per script. Once spent, Get answers a refusal ("the evaluation budget for
+        /// this command is exhausted") without starting a worker; a wait cut short by it is abandoned the same way and
+        /// is a refusal too. Neither is recorded in the cache, so the next command evaluates the script again. Scopes
+        /// nest: an inner one never extends the outer one's end. Without a scope only the per-evaluation deadline holds.
+        class CommandBudget
+        {
+        public:
+            /// The cache's current allowance (SetCommandBudgetMillis; DefaultCommandBudgetMillis by default)
+            CommandBudget();
+            explicit CommandBudget(std::chrono::milliseconds allowance);
+            ~CommandBudget();
+            CommandBudget(const CommandBudget &) = delete;
+            CommandBudget &operator=(const CommandBudget &) = delete;
+
+        private:
+            bool _hadOuter = false;
+            std::chrono::steady_clock::time_point _outerEnd{};
+        };
 
         /// What happened since the last ResetForTest (or the start of the process)
         struct Stats
@@ -70,8 +98,10 @@ namespace N2Engine::Scripting
             std::uint64_t evaluations = 0;
             /// Evaluations whose caller gave up at the deadline
             std::uint64_t abandoned = 0;
-            /// Evaluations refused with no worker free, or after Shutdown
+            /// Evaluations refused with no worker free, after Shutdown, or with the command's budget spent
             std::uint64_t refused = 0;
+            /// Evaluations the command's budget refused or cut short (counted in refused or abandoned as well)
+            std::uint64_t overBudget = 0;
         };
 
         [[nodiscard]] static ScriptDeclarationCache &Instance();
@@ -79,8 +109,12 @@ namespace N2Engine::Scripting
         /// The declarations of `source`, the text of the script at `path`: from the cache when this path's entry has the
         /// same source hash, else evaluated (off this thread) and kept. Never null; every failure is data in the result
         /// (declared false, errors saying why, timedOut set for an abandoned one). Blocks at most the deadline plus the
-        /// grace.
+        /// grace, and at most what is left of an open CommandBudget.
         [[nodiscard]] Declaration Get(const IO::ResourcePath &path, std::string_view source);
+        /// Get, and `refused` says whether the answer is a refusal (no worker free, shutdown, a thread that could not
+        /// start, the command's budget): not the script's declarations and not recorded, so a caller should not keep it
+        /// as the script's answer but ask again later
+        [[nodiscard]] Declaration Get(const IO::ResourcePath &path, std::string_view source, bool &refused);
 
         /// The cache's entry for this path and source if there is one, without evaluating (null otherwise)
         [[nodiscard]] Declaration Peek(const IO::ResourcePath &path, std::string_view source) const;
@@ -118,10 +152,13 @@ namespace N2Engine::Scripting
         /// The deadline the next evaluation uses (0 restores the default)
         void SetDeadlineMillis(std::uint64_t millis);
         [[nodiscard]] std::uint64_t GetDeadlineMillis() const;
+        /// The allowance a CommandBudget made from now on gets (0 restores the default)
+        void SetCommandBudgetMillis(std::uint64_t millis);
+        [[nodiscard]] std::uint64_t GetCommandBudgetMillis() const;
         /// Replaces what an evaluation runs (an empty function restores the DeclarationEvaluator)
         void SetEvaluatorForTest(EvaluateFunction evaluate);
-        /// Empties the cache and the subscriptions, zeroes the stats, restores the deadline and the evaluator and allows
-        /// evaluations again (undoing Shutdown). Does not stop running workers.
+        /// Empties the cache and the subscriptions, zeroes the stats, restores the deadline, the command budget and the
+        /// evaluator and allows evaluations again (undoing Shutdown). Does not stop running workers.
         void ResetForTest();
 
         /// The content hash a source is kept under: two independent 64-bit hashes and the length
@@ -149,6 +186,7 @@ namespace N2Engine::Scripting
         mutable std::mutex _mutex;
         std::unordered_map<std::string, Entry> _entries; // by resource path text
         std::uint64_t _deadlineMillis = DefaultDeadlineMillis;
+        std::uint64_t _commandBudgetMillis = DefaultCommandBudgetMillis;
         std::shared_ptr<const EvaluateFunction> _evaluator;
         Stats _stats;
 

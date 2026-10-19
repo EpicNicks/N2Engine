@@ -376,6 +376,8 @@ namespace N2Engine::Editor
                 {
                     try
                     {
+                        // One allowance for the declarations of every script of the scene, as a command has
+                        const Scripting::ScriptDeclarationCache::CommandBudget evaluationBudget;
                         if (const auto opened = server.OpenSceneFile(project->startupScene); !opened)
                         {
                             Logger::Warn("Couldn't open the startup scene: " + opened.error());

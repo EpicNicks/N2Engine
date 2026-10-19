@@ -269,6 +269,7 @@ namespace N2Engine::Scripting
         _scriptPath = path;
         _script = nullptr;
         _declaration = nullptr;
+        _declarationRefused = false;
 
         // Use ResourceLoader and gracefully handle missing files
         auto scriptAsset = IO::ResourceLoader::Instance().Load<LuaScript>(path);
@@ -311,6 +312,7 @@ namespace N2Engine::Scripting
         _scriptPath = IO::ResourcePath{};
         _script = nullptr;
         _declaration = nullptr;
+        _declarationRefused = false;
         _hasMissingScript = false;
         CacheLifecycleMethods();
     }
@@ -408,8 +410,35 @@ namespace N2Engine::Scripting
     {
         // Evaluated off this thread, in a state of its own that has no engine binding; kept per source hash, so the same
         // text (a scene loaded twice, an undo) is read once. Never null.
+        bool refused = false;
         const ScriptDeclarationCache::Declaration declaration =
-            ScriptDeclarationCache::Instance().Get(_scriptPath, _script->GetSourceCode());
+            ScriptDeclarationCache::Instance().Get(_scriptPath, _script->GetSourceCode(), refused);
+        if (refused)
+        {
+            // Not the script's answer (no worker free, the command's budget spent, shutdown): read again when the
+            // component is next described. Said once, not on every retry.
+            if (!_declarationRefused)
+            {
+                Logger::Warn(std::format("The declarations of {} are not read now ({}); they are read again when the "
+                                         "component is next described",
+                                         _scriptPath.ToString(),
+                                         declaration->errors.empty() ? std::string{} : declaration->errors.front()));
+            }
+            _declarationRefused = true;
+            _refusedKeepOld = keepOldOnFailure;
+            _refusedKeepOnlyDeclared = keepOnlyDeclaredFields;
+            if (keepOldOnFailure && _declaration != nullptr && IsReadable(*_declaration) && !_hasMissingScript)
+            {
+                return; // a reload: the previous version's declarations stay meanwhile
+            }
+            // Meanwhile it is shown as a script that cannot be read (the keys of its data, left as they are)
+            _declaration = declaration;
+            _faulted = false;
+            _hasMissingScript = true;
+            return;
+        }
+        _declarationRefused = false;
+
         if (!IsReadable(*declaration) && keepOldOnFailure && _declaration != nullptr && IsReadable(*_declaration) &&
             !_hasMissingScript)
         {
@@ -457,6 +486,18 @@ namespace N2Engine::Scripting
                 _scriptData[field.name] = field.defaultValue;
             }
         }
+    }
+
+    void LuaComponent::RetryRefusedDeclaration() const
+    {
+        if (!_declarationRefused || !_script || LuaRuntime::RunsScripts())
+        {
+            return;
+        }
+        // Components live in their scene's objects, never as const objects: this changes only what the refused reading
+        // left undone (the declaration, the missing-script flag, the defaults it adds to _scriptData)
+        auto *self = const_cast<LuaComponent *>(this);
+        self->LoadDeclaration(_refusedKeepOld, _refusedKeepOnlyDeclared);
     }
 
     void LuaComponent::AppendDeclaredFields(std::vector<FieldInfo> &fields) const
@@ -1076,6 +1117,7 @@ namespace N2Engine::Scripting
 
         if (!LuaRuntime::RunsScripts())
         {
+            RetryRefusedDeclaration();
             AppendDeclaredFields(fields);
             return fields;
         }
@@ -1355,6 +1397,7 @@ namespace N2Engine::Scripting
     // Add getter for missing script status
     bool LuaComponent::HasMissingScript() const
     {
+        RetryRefusedDeclaration(); // a refused reading is not a missing script: it is asked again first
         return _hasMissingScript;
     }
 

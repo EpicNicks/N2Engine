@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -852,4 +853,94 @@ TEST_F(ScriptDeclarationTest, SeveralThreadsAskingTheCacheAtOnceAllGetAnAnswer)
     }
     EXPECT_EQ(failures.load(), 0);
     EXPECT_TRUE(WaitForNoWorkers(10s));
+}
+
+// ==================== the command's budget, refusals ====================
+
+TEST_F(ScriptDeclarationTest, ACommandBudgetBoundsEveryEvaluationOfTheCommandTogether)
+{
+#if defined(N2ENGINE_SINGLE_THREADED)
+    GTEST_SKIP() << "The single-threaded web build has no worker to abandon";
+#endif
+    // Each evaluation alone may take the deadline and the grace (1.25 s): four that stall would hold a command 5 s
+    Cache().SetDeadlineMillis(1000);
+    BlockEvaluations();
+    std::vector<ScriptDeclarationCache::Declaration> results;
+    std::vector<bool> refused;
+
+    const auto start = std::chrono::steady_clock::now();
+    {
+        const ScriptDeclarationCache::CommandBudget budget(1500ms);
+        for (int i = 0; i < 4; ++i)
+        {
+            bool wasRefused = false;
+            results.push_back(Cache().Get(IO::ResourcePath("res://decl/Slow" + std::to_string(i) + ".lua"), "return {}",
+                                          wasRefused));
+            refused.push_back(wasRefused);
+        }
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_LT(elapsed, 3500ms) << "the budget (1.5 s) bounds the command, not one deadline per script";
+    for (int i = 1; i < 4; ++i)
+    {
+        EXPECT_TRUE(refused[i]) << i;
+        ASSERT_FALSE(results[i]->errors.empty()) << i;
+        EXPECT_NE(results[i]->errors[0].find("budget"), std::string::npos) << results[i]->errors[0];
+        EXPECT_FALSE(results[i]->timedOut) << i << ": not the script's own timeout";
+    }
+    EXPECT_GE(Cache().GetStats().overBudget, 3u);
+    EXPECT_LE(Cache().LiveWorkers(), 2) << "no worker is started once the budget is spent";
+    EXPECT_LE(Cache().EntryCount(), 1u) << "what the budget refused is not remembered";
+    EXPECT_EQ(Cache().Peek(IO::ResourcePath("res://decl/Slow3.lua"), "return {}"), nullptr);
+
+    // A later command (or no budget at all) reads them
+    _gate->Open();
+    ASSERT_TRUE(WaitForNoWorkers(10s));
+    const ScriptDeclarationCache::CommandBudget next;
+    EXPECT_TRUE(Cache().Get(IO::ResourcePath("res://decl/Slow3.lua"), "return {}")->declared);
+}
+
+TEST_F(ScriptDeclarationTest, CommandBudgetsNestWithoutExtendingTheOuterOne)
+{
+    const ScriptDeclarationCache::CommandBudget outer(0ms);
+    {
+        const ScriptDeclarationCache::CommandBudget inner(10s);
+        bool refused = false;
+        (void)Cache().Get(PathOf("Fields.lua"), "return {}", refused);
+        EXPECT_TRUE(refused) << "the outer budget is already spent";
+        EXPECT_EQ(Cache().GetStats().evaluations, 0u);
+    }
+    bool refused = false;
+    (void)Cache().Get(PathOf("Fields.lua"), "return {}", refused);
+    EXPECT_TRUE(refused);
+    EXPECT_EQ(Cache().EntryCount(), 0u);
+}
+
+TEST_F(ScriptDeclarationTest, ARefusedReadingIsNotKeptAndIsReadAgainWhenTheComponentIsNextDescribed)
+{
+    LuaRuntime::SetExecutionPolicy(LuaExecutionPolicy::DeclarationsOnly);
+    const auto go = GameObject::Create("Refused");
+    auto *component = go->AddComponent<LuaComponent>();
+    component->SetScriptData(json{{"kept", 7}});
+    {
+        // A command whose budget is already spent: every reading in it is refused at once (as with no worker free)
+        const ScriptDeclarationCache::CommandBudget spent(0ms);
+        component->SetScript(PathOf("Fields.lua"));
+
+        EXPECT_TRUE(component->HasMissingScript()) << "meanwhile it is shown as a script that cannot be read";
+        EXPECT_EQ(FieldNames(component->DescribeFields()), (std::vector<std::string>{"scriptUUID", "kept"}));
+        EXPECT_EQ(component->GetScriptData(), (json{{"kept", 7}})) << "its data untouched";
+        EXPECT_EQ(Cache().EntryCount(), 0u);
+        EXPECT_EQ(CountLogs("are not read now", Logger::LogLevel::Warn), 1) << "said once, not on every retry" << DumpLogs();
+    }
+
+    // The next reader asks again, and this time the script's own answer is kept
+    EXPECT_FALSE(component->HasMissingScript()) << DumpLogs();
+    const std::vector<std::string> names = FieldNames(component->DescribeFields());
+    EXPECT_NE(std::ranges::find(names, "count"), names.end());
+    EXPECT_EQ(component->GetScriptData().at("kept"), 7) << "the first SetScript keeps saved data";
+    EXPECT_EQ(component->GetScriptData().at("count"), 3) << "the defaults it lacked are added";
+    EXPECT_EQ(Cache().GetStats().evaluations, 1u);
+    EXPECT_EQ(Cache().EntryCount(), 1u);
 }
