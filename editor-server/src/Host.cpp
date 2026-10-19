@@ -24,6 +24,8 @@
 #include "engine/io/ResourceUUID.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
+#include "engine/scripting/LuaRuntime.hpp"
+#include "engine/scripting/ScriptDeclarationCache.hpp"
 
 #include "editor-server/EditorServer.hpp"
 #include "editor-server/EditorTls.hpp"
@@ -323,6 +325,15 @@ namespace N2Engine::Editor
             // game, lets Application.Quit through. Set before any scene (and so any script) is loaded.
             Application::SetScriptQuitAllowed(!options.playScene.empty());
 
+            // The same split for project Lua as a whole: a host that edits never runs it. A LuaComponent there reads the
+            // fields its script declares (a budgeted evaluation in a throwaway state with no engine bindings, off this
+            // thread) and the engine's Lua state runs nothing of the project: not a scene's script, not a callback, not a
+            // reloaded module. Only the --play child, a running game, runs scripts. Process-wide and set before any scene
+            // loads, because a scene is built (and its scripts would run) before it is put in edit mode.
+            Scripting::LuaRuntime::SetExecutionPolicy(options.playScene.empty()
+                                                          ? Scripting::LuaExecutionPolicy::DeclarationsOnly
+                                                          : Scripting::LuaExecutionPolicy::Run);
+
             auto &app = Application::GetInstance();
             app.Init({
                 .projectPath = projectDir.string(),
@@ -614,6 +625,15 @@ namespace N2Engine::Editor
             server.ProcessCommands(); // flushes log lines the network thread has posted
             server.Stop();
             Logger::Info("Editor server stopped");
+
+            // A script evaluation that is still running (abandoned at its deadline, stuck in a long garbage collection)
+            // cannot be stopped: wait a moment for it, then leave it. It owns everything it touches and holds no host
+            // data, so the host ends either way (ScriptDeclarationCache).
+            if (const int leftRunning = Scripting::ScriptDeclarationCache::Instance().Shutdown(); leftRunning > 0)
+            {
+                Logger::Warn(std::format("{} script evaluation(s) still running at exit; they are left to end with the process",
+                                         leftRunning));
+            }
 
             // As Application::Run does, however the loop ended
             if (SceneManager::GetCurScene() != nullptr)

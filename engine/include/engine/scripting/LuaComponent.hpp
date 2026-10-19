@@ -15,6 +15,8 @@ namespace N2Engine
 
 namespace N2Engine::Scripting
 {
+    struct DeclarationResult;
+
     class LuaComponent : public SerializableComponent
     {
     private:
@@ -23,6 +25,11 @@ namespace N2Engine::Scripting
         // pointer here would then dangle (the next reload would read freed memory)
         std::shared_ptr<LuaScript> _script;
         sol::table _scriptInstance;
+        // DeclarationsOnly (LuaRuntime::GetExecutionPolicy): what the script declares, from the ScriptDeclarationCache. There
+        // is no _scriptInstance then (no Lua of the project runs): this is the component's whole knowledge of its script.
+        // Null when no script is set or its file is missing. A declaration that failed (declared false) is kept too, so
+        // DescribeFields can say the script could not be read and still list the keys of _scriptData.
+        std::shared_ptr<const DeclarationResult> _declaration;
         // True until this component is destroyed, or its script instance is replaced (SetScript, reload),
         // which gives the new instance a new flag. Callbacks the script registers hold it, so they stop
         // firing afterwards instead of running with freed or stale self.component/self.gameObject.
@@ -69,6 +76,16 @@ namespace N2Engine::Scripting
         /// keepOnlyDeclaredFields (a different script): drop saved fields and references the new script
         /// doesn't declare in SerializableFields.
         void LoadScriptInstance(bool keepOldOnFailure, bool keepOnlyDeclaredFields);
+        /// LoadScriptInstance for DeclarationsOnly: reads the script's declarations from the cache (evaluated off the
+        /// calling thread, never in the engine's Lua state) and gives _scriptData the defaults of the fields it lacks.
+        /// keepOldOnFailure: a new version whose declarations cannot be read leaves the previous ones. A script whose
+        /// declarations cannot be read keeps _scriptData as it is (keepOnlyDeclaredFields is then skipped, as there is
+        /// no list to keep to), and DescribeFields shows its keys.
+        void LoadDeclaration(bool keepOldOnFailure, bool keepOnlyDeclaredFields);
+        /// The fields DescribeFields adds after scriptUUID in DeclarationsOnly
+        void AppendDeclaredFields(std::vector<FieldInfo> &fields) const;
+        /// Drops this component's reload subscriptions, in the cache and (if a runtime exists) in the runtime
+        void UnsubscribeReload();
         /// Ends the current instance as if its component were removed: OnDisable (if enabled in an active
         /// hierarchy) and OnDestroy once the component is attached, then its subscriptions stop firing and
         /// its self.component/self.gameObject are cleared. Returns it (invalid if there was none): moved out of the

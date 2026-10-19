@@ -4880,16 +4880,10 @@ namespace N2Engine::Editor
         // The scene that was open is left: what it hadn't saved is dropped, and so is its autosave
         DiscardWrittenAutosave();
 
-        if (int sceneIndex = SceneManager::GetSceneIndex(scene->sceneName); sceneIndex != -1)
-        {
-            SceneManager::UpdateScene(sceneIndex, sceneJson);
-            SceneManager::LoadScene(sceneIndex);
-        }
-        else
-        {
-            SceneManager::AddScene(sceneJson);
-            SceneManager::LoadScene(scene->sceneName);
-        }
+        // The scene is built once, above: that instance (validated by being built) is stored, replacing the stored scene of
+        // its name if there is one, and loaded as it is. It used to be built again to store it, and again when it loaded
+        // (a script's top-level code ran each time).
+        SceneManager::AddScene(std::move(scene), true);
         SceneManager::ProcessAnyPendingSceneChange();
 
         // The scene came from the client, not a file: it has none (until SaveSceneToFile names one), and it is

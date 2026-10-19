@@ -3,6 +3,8 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaScript.hpp"
 #include "engine/scripting/ScriptCallback.hpp"
+#include "engine/scripting/DeclarationEvaluator.hpp"
+#include "engine/scripting/ScriptDeclarationCache.hpp"
 #include "engine/scripting/bindings/LuaBindings.hpp"
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/GameObject.hpp"
@@ -16,12 +18,56 @@
 #include <format>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace N2Engine::Scripting
 {
+    namespace
+    {
+        /// LuaBudgetScope where scripts run; nothing where they do not (the scope would make the engine's Lua state just to
+        /// count in it). The policy is set once at start-up, so the scope is opened and closed under the same one.
+        class EntryScope
+        {
+            std::optional<LuaBudgetScope> _scope;
+
+        public:
+            EntryScope()
+            {
+                if (LuaRuntime::RunsScripts())
+                {
+                    _scope.emplace();
+                }
+            }
+        };
+
+        /// The list of fields is known: the script returned a table with a SerializableFields table, and nothing in the
+        /// list came from the engine. (A field whose own default is unknown is still listed: that is a field, not the list.)
+        bool IsReadable(const DeclarationResult &declaration)
+        {
+            return declaration.declared && !declaration.unevaluable;
+        }
+
+        /// What kind of default a stored value looks like, for a script whose declarations could not be read: as
+        /// InjectFieldsIntoScript would hand it to the script
+        LuaDefaultKind KindOfStoredValue(const nlohmann::json &value)
+        {
+            if (value.is_number_float())
+                return LuaDefaultKind::Float;
+            if (value.is_number_integer())
+                return LuaDefaultKind::Integer;
+            if (value.is_boolean())
+                return LuaDefaultKind::Bool;
+            if (value.is_string())
+                return LuaDefaultKind::String;
+            if (value.is_object() && value.contains("x"))
+                return LuaDefaultKind::Vector3;
+            return LuaDefaultKind::Other;
+        }
+    }
+
     LuaComponent::LuaComponent(GameObject &gameObject)
         : SerializableComponent(gameObject) {}
 
@@ -34,7 +80,7 @@ namespace N2Engine::Scripting
     void LuaComponent::ReleaseScript()
     {
         *_alive = false;
-        LuaRuntime::Instance().UnregisterReloadCallbacks(this);
+        UnsubscribeReload();
 
         // Closures the script registered can outlive this component (they keep `self` alive);
         // make those fields nil so a stray call errors in Lua instead of touching freed memory
@@ -55,6 +101,17 @@ namespace N2Engine::Scripting
             {
                 LuaRuntime::Instance().RecoverAfterPanic(panicsBefore);
             }
+        }
+    }
+
+    void LuaComponent::UnsubscribeReload()
+    {
+        ScriptDeclarationCache::Instance().Unsubscribe(this);
+        // Only an existing runtime has callbacks to remove: asking for it would make a Lua state (and a destructor of a
+        // component on a host that runs no scripts must not)
+        if (LuaRuntime::HasInstance())
+        {
+            LuaRuntime::Instance().UnregisterReloadCallbacks(this);
         }
     }
 
@@ -103,7 +160,9 @@ namespace N2Engine::Scripting
 
     bool LuaComponent::HasMethod(const char *methodName)
     {
-        if (!_scriptInstance.valid())
+        // No instance exists where scripts do not run; if one was made under another policy it is not asked either: reading
+        // a method can run the script's __index
+        if (!_scriptInstance.valid() || !LuaRuntime::RunsScripts())
             return false;
 
         bool has = false;
@@ -116,6 +175,8 @@ namespace N2Engine::Scripting
     {
         if (_hasMissingScript || _faulted)
             return; // Silently skip if script is missing, or it ran out of budget
+        if (!LuaRuntime::RunsScripts())
+            return; // DeclarationsOnly: there is no instance and nothing may run (no caller gets here; this is the guard)
 
         // One budget for the whole call, whatever it triggers (see LuaBudgetScope)
         const LuaBudgetScope budget;
@@ -162,7 +223,7 @@ namespace N2Engine::Scripting
     template <typename MakeArgument>
     void LuaComponent::CallLuaMethodWithArgument(const std::string &methodName, MakeArgument makeArgument)
     {
-        if (_hasMissingScript || _faulted)
+        if (_hasMissingScript || _faulted || !LuaRuntime::RunsScripts())
             return;
 
         // The object makeArgument returns is a registry reference made outside a protected call (sol::make_object):
@@ -199,10 +260,11 @@ namespace N2Engine::Scripting
     {
         // A different script keeps only the fields it declares itself (not on the first SetScript, which
         // may follow Deserialize filling _scriptData)
-        const LuaBudgetScope budget;
+        const EntryScope budget;
         const bool otherScript = _scriptPath.IsValid() && _scriptPath != path;
         _scriptPath = path;
         _script = nullptr;
+        _declaration = nullptr;
 
         // Use ResourceLoader and gracefully handle missing files
         auto scriptAsset = IO::ResourceLoader::Instance().Load<LuaScript>(path);
@@ -218,11 +280,18 @@ namespace N2Engine::Scripting
         }
 
         _script = scriptAsset;
+        const std::string moduleName = LuaRuntime::PathToModuleName(path);
+        // Register the reload callback, replacing any from a previous SetScript; removed on destroy
+        if (!LuaRuntime::RunsScripts())
+        {
+            UnsubscribeReload();
+            LoadDeclaration(false, otherScript);
+            ScriptDeclarationCache::Instance().Subscribe(moduleName, [this]() { ReloadScript(); }, this);
+            return;
+        }
         LoadScriptInstance(false, otherScript);
 
-        // Register reload callback, replacing any from a previous SetScript; removed on destroy
-        std::string moduleName = LuaRuntime::Instance().PathToModuleName(path);
-        LuaRuntime::Instance().UnregisterReloadCallbacks(this);
+        UnsubscribeReload();
         LuaRuntime::Instance().RegisterReloadCallback(moduleName, [this]()
         {
             ReloadScript();
@@ -231,12 +300,13 @@ namespace N2Engine::Scripting
 
     void LuaComponent::ClearScript()
     {
-        const LuaBudgetScope budget;
-        LuaRuntime::Instance().UnregisterReloadCallbacks(this);
+        const EntryScope budget;
+        UnsubscribeReload();
         RetireScriptInstance();
         _faulted = false;
         _scriptPath = IO::ResourcePath{};
         _script = nullptr;
+        _declaration = nullptr;
         _hasMissingScript = false;
         CacheLifecycleMethods();
     }
@@ -328,6 +398,85 @@ namespace N2Engine::Scripting
         }
 
         return instance;
+    }
+
+    void LuaComponent::LoadDeclaration(const bool keepOldOnFailure, const bool keepOnlyDeclaredFields)
+    {
+        // Evaluated off this thread, in a state of its own that has no engine binding; kept per source hash, so the same
+        // text (a scene loaded twice, an undo) is read once. Never null.
+        const ScriptDeclarationCache::Declaration declaration =
+            ScriptDeclarationCache::Instance().Get(_scriptPath, _script->GetSourceCode());
+        if (!IsReadable(*declaration) && keepOldOnFailure && _declaration != nullptr && IsReadable(*_declaration) &&
+            !_hasMissingScript)
+        {
+            Logger::Warn(std::format("Keeping the declarations of the running version of {}", _scriptPath.ToString()));
+            return;
+        }
+
+        _declaration = declaration;
+        _faulted = false;
+        // As a script that fails to run is: the editor shows it as one it could not load
+        _hasMissingScript = !IsReadable(*_declaration);
+        if (!IsReadable(*_declaration))
+        {
+            // _scriptData is left exactly as it is, and the step that drops what the script does not declare is skipped:
+            // there is no list to keep to (the cache's log line says why)
+            return;
+        }
+
+        if (!_scriptData.is_object())
+        {
+            _scriptData = nlohmann::json::object();
+        }
+        // A list that is partial (an error was reported: more fields than the limit, say) cannot say what is NOT declared
+        if (keepOnlyDeclaredFields && _declaration->errors.empty())
+        {
+            // An unrelated script must not inherit another's values or references under the same name unless it declares
+            // that field (and then, as a field of the component, it keeps the value)
+            nlohmann::json kept = nlohmann::json::object();
+            for (auto &[fieldName, value] : _scriptData.items())
+            {
+                const bool isDeclared = std::ranges::any_of(
+                    _declaration->fields, [&fieldName](const DeclaredField &field) { return field.name == fieldName; });
+                if (isDeclared)
+                {
+                    kept[fieldName] = JsonLimits::IterativeCopy(value); // field data can nest deep
+                }
+            }
+            _scriptData = std::move(kept);
+        }
+        // Fields the script declares but _scriptData lacks get their defaults; saved values are kept
+        for (const DeclaredField &field : _declaration->fields)
+        {
+            if (!_scriptData.contains(field.name) && !field.defaultValue.is_null())
+            {
+                _scriptData[field.name] = field.defaultValue;
+            }
+        }
+    }
+
+    void LuaComponent::AppendDeclaredFields(std::vector<FieldInfo> &fields) const
+    {
+        if (_declaration == nullptr)
+        {
+            return;
+        }
+        if (IsReadable(*_declaration))
+        {
+            // The same mapping as a running instance's (MakeLuaFieldInfo), sorted by name
+            std::vector<FieldInfo> declared = _declaration->ToFieldInfos();
+            fields.insert(fields.end(), std::make_move_iterator(declared.begin()), std::make_move_iterator(declared.end()));
+            return;
+        }
+        // The script could not be read: nothing is lost or hidden. Every key of the data is a field, of the kind its value
+        // has (an object's keys come out sorted).
+        if (_scriptData.is_object())
+        {
+            for (const auto &[fieldName, value] : _scriptData.items())
+            {
+                fields.push_back(MakeLuaFieldInfo(fieldName, std::string{}, KindOfStoredValue(value)));
+            }
+        }
     }
 
     void LuaComponent::LoadScriptInstance(const bool keepOldOnFailure, const bool keepOnlyDeclaredFields)
@@ -777,7 +926,7 @@ namespace N2Engine::Scripting
     {
         SerializableComponent::Deserialize(j, resolver);
 
-        const LuaBudgetScope budget; // SetScript and what follows it each open one; this keeps them in the one entry
+        const EntryScope budget; // SetScript and what follows it each open one; this keeps them in the one entry
         if (j.contains("scriptData") && !j["scriptData"].is_null())
         {
             _scriptData = JsonLimits::IterativeCopy(j["scriptData"]); // as deep as the scene allows
@@ -921,6 +1070,11 @@ namespace N2Engine::Scripting
         script.assetType = script.typeName;
         fields.push_back(std::move(script));
 
+        if (!LuaRuntime::RunsScripts())
+        {
+            AppendDeclaredFields(fields);
+            return fields;
+        }
         if (!_scriptInstance.valid())
         {
             return fields;
@@ -1072,7 +1226,7 @@ namespace N2Engine::Scripting
             return;
         }
 
-        const LuaBudgetScope budget;
+        const EntryScope budget;
         if (const auto found = values.find("scriptUUID"); found != values.end())
         {
             if (!found->is_string())
@@ -1128,7 +1282,7 @@ namespace N2Engine::Scripting
 
     void LuaComponent::SetScriptData(const nlohmann::json &data)
     {
-        const LuaBudgetScope budget;
+        const EntryScope budget;
         _scriptData = JsonLimits::IterativeCopy(data);
         InjectFieldsIntoScript();
     }
@@ -1182,7 +1336,14 @@ namespace N2Engine::Scripting
 
         // Saved fields (and resolved references) carry over, fields the new version adds get their
         // defaults, and the old instance is retired properly: see LoadScriptInstance
-        LoadScriptInstance(true, false);
+        if (!LuaRuntime::RunsScripts())
+        {
+            LoadDeclaration(true, false);
+        }
+        else
+        {
+            LoadScriptInstance(true, false);
+        }
 
         Logger::Info(std::format("Reloaded script: {}", _scriptPath.ToString()));
     }

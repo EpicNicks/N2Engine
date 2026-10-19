@@ -1,0 +1,415 @@
+#include "engine/scripting/ScriptDeclarationCache.hpp"
+
+#include <algorithm>
+#include <condition_variable>
+#include <format>
+#include <system_error>
+#include <thread>
+#include <utility>
+
+#include "engine/Logger.hpp"
+
+namespace N2Engine::Scripting
+{
+    namespace
+    {
+        // What every worker thread shares. Made on first use and NEVER destroyed: a worker that is still running when the
+        // process exits (abandoned in a long garbage-collection call) must not find it gone.
+        struct Workers
+        {
+            std::mutex mutex;
+            std::condition_variable changed;
+            int live = 0;
+            bool stopping = false;
+        };
+
+        Workers &SharedWorkers()
+        {
+            static Workers *const workers = new Workers();
+            return *workers;
+        }
+
+        // One evaluation, owned by the caller and its worker through shared_ptrs: whichever lets go last frees it, so an
+        // abandoned worker keeps everything it uses alive on its own (a copy of the source, never the cache's)
+        struct Job
+        {
+            std::string source;
+            std::string chunkName;
+            DeclarationLimits limits;
+            std::shared_ptr<const ScriptDeclarationCache::EvaluateFunction> evaluate;
+
+            std::mutex mutex;
+            std::condition_variable finished;
+            bool done = false;
+            DeclarationResult result;
+        };
+
+        DeclarationResult Failed(std::string text, const bool timedOut = false)
+        {
+            DeclarationResult result;
+            result.errors.push_back(std::move(text));
+            if (timedOut)
+            {
+                result.budgetExceeded = true;
+                result.timedOut = true;
+            }
+            return result;
+        }
+
+        DeclarationResult RunEvaluation(const Job &job)
+        {
+            try
+            {
+                if (job.evaluate != nullptr && *job.evaluate)
+                {
+                    return (*job.evaluate)(job.source, job.chunkName, job.limits);
+                }
+                return DeclarationEvaluator::Evaluate(job.source, job.chunkName, job.limits);
+            }
+            catch (...)
+            {
+                return Failed("The evaluation failed");
+            }
+        }
+
+        // What a log line may show of a path or a message (control characters replaced)
+        std::string Printable(std::string_view text)
+        {
+            std::string result(text.substr(0, 200));
+            for (char &c : result)
+            {
+                const auto byte = static_cast<unsigned char>(c);
+                if (byte < 0x20 || byte == 0x7F)
+                {
+                    c = '?';
+                }
+            }
+            return result;
+        }
+
+        // Said once per evaluation (the cache keeps the answer): why a script's declarations are partial or missing
+        void LogOutcome(const std::string &path, const DeclarationResult &result)
+        {
+            constexpr std::size_t MaxLines = 3;
+            const std::string shown = Printable(path);
+            const std::size_t errorLines = std::min(result.errors.size(), MaxLines);
+            for (std::size_t i = 0; i < errorLines; ++i)
+            {
+                Logger::Warn(std::format("Script {}: {}", shown, Printable(result.errors[i])));
+            }
+            if (result.unevaluable)
+            {
+                Logger::Warn(std::format("Script {}: its fields are unknown here: {}", shown,
+                                         Printable(result.unevaluableReason)));
+            }
+            std::size_t fieldLines = 0;
+            for (const DeclaredField &field : result.fields)
+            {
+                if (field.unevaluable && fieldLines++ < MaxLines)
+                {
+                    Logger::Warn(std::format("Script {}: the field '{}' comes from the engine and has no value here: {}",
+                                             shown, Printable(field.name), Printable(field.unevaluableReason)));
+                }
+            }
+        }
+    }
+
+    ScriptDeclarationCache &ScriptDeclarationCache::Instance()
+    {
+        static ScriptDeclarationCache *const instance = new ScriptDeclarationCache();
+        return *instance;
+    }
+
+    std::string ScriptDeclarationCache::HashSource(const std::string_view source)
+    {
+        std::uint64_t first = 0xcbf29ce484222325ULL;  // FNV-1a
+        std::uint64_t second = 0x9E3779B97F4A7C15ULL; // a different mixing, so the two do not collide together
+        for (const char c : source)
+        {
+            const auto byte = static_cast<std::uint64_t>(static_cast<unsigned char>(c));
+            first = (first ^ byte) * 0x100000001B3ULL;
+            second = (second + byte + 1) * 0xff51afd7ed558ccdULL;
+            second ^= second >> 29;
+        }
+        return std::format("{:016x}{:016x}{}", first, second, source.size());
+    }
+
+    ScriptDeclarationCache::Declaration ScriptDeclarationCache::Peek(const IO::ResourcePath &path,
+                                                                     const std::string_view source) const
+    {
+        const std::string key = path.ToString();
+        const std::string hash = HashSource(source);
+        const std::lock_guard lock(_mutex);
+        const auto found = _entries.find(key);
+        return found != _entries.end() && found->second.hash == hash ? found->second.declaration : nullptr;
+    }
+
+    ScriptDeclarationCache::Declaration ScriptDeclarationCache::Get(const IO::ResourcePath &path,
+                                                                    const std::string_view source)
+    {
+        const std::string key = path.ToString();
+        const std::string hash = HashSource(source);
+        {
+            const std::lock_guard lock(_mutex);
+            ++_stats.lookups;
+            if (const auto found = _entries.find(key); found != _entries.end() && found->second.hash == hash)
+            {
+                ++_stats.hits;
+                return found->second.declaration;
+            }
+        }
+
+        bool transient = false;
+        Declaration declaration = Evaluate(source, key, transient);
+        LogOutcome(key, *declaration);
+
+        if (!transient)
+        {
+            const std::lock_guard lock(_mutex);
+            if (_entries.size() >= MaxEntries && !_entries.contains(key))
+            {
+                _entries.clear(); // a project with more scripts than that just evaluates again
+            }
+            _entries[key] = Entry{hash, declaration};
+        }
+        return declaration;
+    }
+
+    ScriptDeclarationCache::Declaration ScriptDeclarationCache::Evaluate(const std::string_view source,
+                                                                         const std::string &chunkName,
+                                                                         bool &transient)
+    {
+        std::uint64_t deadline = DefaultDeadlineMillis;
+        auto job = std::make_shared<Job>();
+        {
+            const std::lock_guard lock(_mutex);
+            deadline = _deadlineMillis == 0 ? DefaultDeadlineMillis : _deadlineMillis;
+            job->evaluate = _evaluator;
+        }
+        job->source = std::string(source); // a copy: the worker may outlive the caller's buffer
+        job->chunkName = chunkName;
+        job->limits.maxMillis = deadline;
+
+#if defined(N2ENGINE_SINGLE_THREADED)
+        // No threads here: the evaluation runs on this one, bounded by the evaluator's own checks
+        (void)transient; // nothing is refused here
+        {
+            const std::lock_guard lock(_mutex);
+            ++_stats.evaluations;
+        }
+        return std::make_shared<const DeclarationResult>(RunEvaluation(*job));
+#else
+        Workers &workers = SharedWorkers();
+        {
+            std::unique_lock lock(workers.mutex);
+            if (workers.stopping || workers.live >= MaxWorkers)
+            {
+                const bool stopping = workers.stopping;
+                const int live = workers.live;
+                lock.unlock();
+                {
+                    const std::lock_guard stats(_mutex);
+                    ++_stats.refused;
+                }
+                transient = true;
+                return std::make_shared<const DeclarationResult>(Failed(
+                    stopping ? std::string("The host is shutting down: the script's declarations are not read")
+                             : std::format("{} script evaluations are still running (abandoned ones count): the "
+                                           "script's declarations are not read now",
+                                           live)));
+            }
+            ++workers.live;
+        }
+
+        try
+        {
+            std::thread([job, &workers]() mutable
+            {
+                DeclarationResult result = RunEvaluation(*job);
+                // The evaluation is over, so the worker stops counting before anyone is told it has an answer: a caller
+                // that has its result then finds this worker's slot free. What follows touches only the job, which this
+                // thread owns a share of.
+                {
+                    const std::lock_guard lock(workers.mutex);
+                    --workers.live;
+                }
+                workers.changed.notify_all();
+                {
+                    const std::lock_guard lock(job->mutex);
+                    job->result = std::move(result);
+                    job->done = true;
+                }
+                job->finished.notify_all();
+            }).detach();
+        }
+        catch (const std::system_error &)
+        {
+            {
+                const std::lock_guard lock(workers.mutex);
+                --workers.live;
+            }
+            workers.changed.notify_all();
+            {
+                const std::lock_guard stats(_mutex);
+                ++_stats.refused;
+            }
+            transient = true;
+            return std::make_shared<const DeclarationResult>(
+                Failed("A thread could not be started to read the script's declarations"));
+        }
+        {
+            const std::lock_guard lock(_mutex);
+            ++_stats.evaluations;
+        }
+
+        std::unique_lock lock(job->mutex);
+        if (job->finished.wait_for(lock, std::chrono::milliseconds(deadline + GraceMillis), [&] { return job->done; }))
+        {
+            return std::make_shared<const DeclarationResult>(std::move(job->result));
+        }
+        lock.unlock();
+
+        // Abandoned: the worker still holds the job and frees it when it ends; its result is never read
+        {
+            const std::lock_guard stats(_mutex);
+            ++_stats.abandoned;
+        }
+        return std::make_shared<const DeclarationResult>(Failed(
+            std::format("Reading the script's declarations took longer than {} ms and was abandoned", deadline), true));
+#endif
+    }
+
+    void ScriptDeclarationCache::Refresh(const IO::ResourcePath &path, const std::string_view source)
+    {
+        const std::string key = path.ToString();
+        const std::string hash = HashSource(source);
+        const std::lock_guard lock(_mutex);
+        if (const auto found = _entries.find(key); found != _entries.end() && found->second.hash != hash)
+        {
+            _entries.erase(found);
+        }
+    }
+
+    void ScriptDeclarationCache::Forget(const IO::ResourcePath &path)
+    {
+        const std::lock_guard lock(_mutex);
+        _entries.erase(path.ToString());
+    }
+
+    void ScriptDeclarationCache::Clear()
+    {
+        const std::lock_guard lock(_mutex);
+        _entries.clear();
+    }
+
+    std::size_t ScriptDeclarationCache::EntryCount() const
+    {
+        const std::lock_guard lock(_mutex);
+        return _entries.size();
+    }
+
+    void ScriptDeclarationCache::Subscribe(const std::string &moduleName, std::function<void()> callback,
+                                           const void *owner)
+    {
+        const std::lock_guard lock(_subscriptionMutex);
+        _subscriptions[moduleName].push_back({owner, std::move(callback)});
+    }
+
+    void ScriptDeclarationCache::Unsubscribe(const void *owner)
+    {
+        if (owner == nullptr)
+        {
+            return;
+        }
+        const std::lock_guard lock(_subscriptionMutex);
+        for (auto &subscriptions : _subscriptions)
+        {
+            std::erase_if(subscriptions.second, [owner](const Subscription &entry) { return entry.owner == owner; });
+        }
+    }
+
+    void ScriptDeclarationCache::NotifyReloaded(const std::string &moduleName)
+    {
+        std::vector<Subscription> callbacks;
+        {
+            const std::lock_guard lock(_subscriptionMutex);
+            if (const auto found = _subscriptions.find(moduleName); found != _subscriptions.end())
+            {
+                callbacks = found->second;
+            }
+        }
+        for (const Subscription &entry : callbacks)
+        {
+            try
+            {
+                entry.callback();
+            }
+            catch (const std::exception &e)
+            {
+                Logger::Error(std::format("Reloading module {} failed: {}", Printable(moduleName), Printable(e.what())));
+            }
+            catch (...)
+            {
+                Logger::Error(std::format("Reloading module {} failed", Printable(moduleName)));
+            }
+        }
+    }
+
+    int ScriptDeclarationCache::Shutdown(const std::chrono::milliseconds maxWait)
+    {
+        Workers &workers = SharedWorkers();
+        std::unique_lock lock(workers.mutex);
+        workers.stopping = true;
+        workers.changed.wait_for(lock, maxWait, [&] { return workers.live == 0; });
+        return workers.live;
+    }
+
+    int ScriptDeclarationCache::LiveWorkers() const
+    {
+        Workers &workers = SharedWorkers();
+        const std::lock_guard lock(workers.mutex);
+        return workers.live;
+    }
+
+    ScriptDeclarationCache::Stats ScriptDeclarationCache::GetStats() const
+    {
+        const std::lock_guard lock(_mutex);
+        return _stats;
+    }
+
+    void ScriptDeclarationCache::SetDeadlineMillis(const std::uint64_t millis)
+    {
+        const std::lock_guard lock(_mutex);
+        _deadlineMillis = millis == 0 ? DefaultDeadlineMillis : millis;
+    }
+
+    std::uint64_t ScriptDeclarationCache::GetDeadlineMillis() const
+    {
+        const std::lock_guard lock(_mutex);
+        return _deadlineMillis;
+    }
+
+    void ScriptDeclarationCache::SetEvaluatorForTest(EvaluateFunction evaluate)
+    {
+        const std::lock_guard lock(_mutex);
+        _evaluator = evaluate ? std::make_shared<const EvaluateFunction>(std::move(evaluate)) : nullptr;
+    }
+
+    void ScriptDeclarationCache::ResetForTest()
+    {
+        {
+            const std::lock_guard lock(_mutex);
+            _entries.clear();
+            _stats = {};
+            _deadlineMillis = DefaultDeadlineMillis;
+            _evaluator = nullptr;
+        }
+        {
+            const std::lock_guard lock(_subscriptionMutex);
+            _subscriptions.clear();
+        }
+        Workers &workers = SharedWorkers();
+        const std::lock_guard lock(workers.mutex);
+        workers.stopping = false;
+    }
+}
