@@ -66,6 +66,27 @@ in that source tree. OpenAL Soft's source tree also bundles third-party code und
 see that repository. The build does not set a static library type for OpenAL Soft; changing it to a
 static build would change this arrangement and this section would need revisiting.
 
+## PhysX on the web
+
+The web (Emscripten) build compiles PhysX from source instead of downloading an archive. `scripts/web-build-physx.sh`, run by
+`cmake/PhysXWeb.cmake`, fetches <https://github.com/NVIDIA-Omniverse/PhysX> at the commit pinned in
+`cmake/PhysXWebPin.cmake` (`09ff24f3279b735e672ff27b155cbf49f6296f4d`, tag `107.3-omni-and-physx-5.6.1`, PhysX 5.6.1) and
+builds five static, CPU-only libraries (PhysX, PhysXCommon, PhysXFoundation, PhysXExtensions, PhysXPvdSDK) into
+`external/PhysX/physx/bin/emscripten.wasm32` (git-ignored), together with a copy of that commit's headers. The source is
+modified by six small patches, all in the script and each checked to have applied (the vendored headers in
+`external/PhysX/physx/include` are not touched): `-Werror` is removed, two header guards and an overload are extended to
+Emscripten (`PxMath.h`, `PxHash.h`), and three platform-glue lines of the foundation sources are changed (`FdUnixThread.cpp`,
+`FdTempAllocator.cpp`, `FdUnixMutex.cpp`); docs/web-build.html lists them. PhysX's licence is BSD 3-Clause (Copyright (c)
+2008-2025 NVIDIA Corporation), the same as for the native builds above. It requires the copyright notice, the conditions
+and the disclaimer to be reproduced in the documentation or other materials that come with a binary distribution: the
+build script copies PhysX's `LICENSE.md` next to the libraries, but the web package (`index.wasm` and the other files
+the build produces) contains the compiled code and no licence text. Putting this file and the licence texts into
+packages is the follow-up already named below. Dependencies: every file under `physx/source` and `physx/include` of the
+pinned commit that has a copyright line names NVIDIA, AGEIA or NovodeX, except four Windows resource scripts that are
+not built (found with `grep -rIl Copyright source include | xargs grep -L "NVIDIA|AGEIA|NovodeX"`); one file compiled into
+PhysXCommon, `GuCookingVolumeIntegration.cpp`, says it is based on public domain code by Brian Mirtich and David Eberly,
+which needs no notice. That search found no other third-party notice in the PhysX source the five libraries are built from.
+
 ## Not shipped
 
 The Vulkan SDK and loader headers, Mesa lavapipe, the Khronos validation layers and glslang are build
