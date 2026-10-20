@@ -32,13 +32,25 @@ namespace N2Engine
             Error
         };
 
+        /// Who may read a line when a host shows the log to remote clients (the editor host's PollEvents). Public is
+        /// what the project's own scripts and components log: every role sees it. Admin is what the host logs about
+        /// itself and its clients (audit lines, peer addresses, users, rate limiting, host paths): only an admin does.
+        /// A line logged without one is Public. The tag travels with the line to every subscriber (see
+        /// CurrentSensitivity); it is never part of the text, and nothing decides it by looking at the text.
+        enum class LogSensitivity
+        {
+            Public,
+            Admin
+        };
+
         /// An EventHandler whose subscribe, unsubscribe and dispatch hold the Logger's lock
         class LogEventHandler
         {
         public:
             size_t operator+=(const std::function<void(std::string_view, LogLevel)> &func);
             void operator-=(size_t id);
-            void operator()(std::string_view message, LogLevel level);
+            void operator()(std::string_view message, LogLevel level,
+                            LogSensitivity sensitivity = LogSensitivity::Public);
             [[nodiscard]] size_t GetSubscriberCount() const;
 
         private:
@@ -48,13 +60,17 @@ namespace N2Engine
         static LogEventHandler logEvent;
         static std::atomic<bool> broadcastUnbroadcastLogs;
 
-        static void Log(std::string_view log, LogLevel level);
+        static void Log(std::string_view log, LogLevel level, LogSensitivity sensitivity = LogSensitivity::Public);
+
+        /// The sensitivity of the line the calling thread's subscriber is being given right now (Public outside a
+        /// delivery). A subscriber keeps it with its copy of the line; subscribers that don't ask see no change.
+        [[nodiscard]] static LogSensitivity CurrentSensitivity();
 
         // helpers
 
-        static void Info(std::string_view log);
-        static void Warn(std::string_view log);
-        static void Error(std::string_view log);
+        static void Info(std::string_view log, LogSensitivity sensitivity = LogSensitivity::Public);
+        static void Warn(std::string_view log, LogSensitivity sensitivity = LogSensitivity::Public);
+        static void Error(std::string_view log, LogSensitivity sensitivity = LogSensitivity::Public);
 
         // General color/coded debugging sent to stdout
         static void InitializeDebugConsoleHelper();
@@ -112,6 +128,7 @@ namespace N2Engine
         {
             std::string message;
             LogLevel level;
+            LogSensitivity sensitivity;
         };
 
         static std::queue<QueuedLog> _logQueue;
