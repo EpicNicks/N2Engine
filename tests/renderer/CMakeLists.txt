@@ -20,6 +20,10 @@ target_link_libraries(renderer_tests
         GTest::gtest_main
 )
 
+# The embedded WGSL (the generated header of renderer/CMakeLists.txt: kUnlitWgsl, kLitWgsl, kTextWgsl), which the WebGPU shader
+# parity test compares with the files
+target_link_libraries(renderer_tests PRIVATE renderer_webgpu_shaders)
+
 set_target_properties(renderer_tests PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
