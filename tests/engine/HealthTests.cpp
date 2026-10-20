@@ -92,6 +92,26 @@ TEST(ApplicationShutdownTest, SafeWithoutInitAndWhenRepeated)
     EXPECT_FALSE(app.GetWindow().IsValid());
 }
 
+TEST(ApplicationShutdownTest, ShutdownEndsANetworkSimulationModeSoTheNextProjectStartsOffline)
+{
+    auto &app = Application::GetInstance();
+
+    // A project with a network preset leaves its mode behind; a later project with preset none does not touch the mode
+    // in Init, so Shutdown has to put it back (the A1 follow-up: the none preset kept an earlier mode)
+    for (const SimulationMode mode : {SimulationMode::Authoritative, SimulationMode::Deterministic})
+    {
+        app.SetSimulationMode(mode);
+        ASSERT_EQ(app.GetSimulationMode(), mode);
+        app.Shutdown();
+        EXPECT_EQ(app.GetSimulationMode(), SimulationMode::None);
+        EXPECT_FALSE(app.GetSimulationClock().IsNetworked());
+    }
+
+    // Already none stays none, and a second Shutdown is still harmless
+    app.Shutdown();
+    EXPECT_EQ(app.GetSimulationMode(), SimulationMode::None);
+}
+
 // ============================================================================
 // Window without a successful InitWindow (the state left behind by any init failure)
 // ============================================================================

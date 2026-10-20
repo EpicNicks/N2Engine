@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -64,12 +66,15 @@ namespace
     }
 
     /// The environment of a real build today: what Application::Init sees for a default project on PhysX with a
-    /// network preset (which selects a network SimulationMode, so the tick loop is there)
+    /// network preset (which selects a network SimulationMode, so the tick loop is there). PhysX supports set-state
+    /// and not snapshot/restore.
     NetworkEnvironment TodayWithPhysX()
     {
         NetworkEnvironment env;
         env.hasBackend = true;
+        env.backendName = "physx";
         env.backendLevel = DeterminismLevel::None;
+        env.backendSupportsSetState = true;
         env.strictFp = false;
         env.simdTier = Math::SIMDTierRequest::Auto;
         env.ownedTickLoop = true;
@@ -144,8 +149,9 @@ TEST(NetworkValidationTest, AuthoritativeWarnsWhenTheBackendCannotSetState)
 
 TEST(NetworkValidationTest, AuthoritativeWarnsNeverRefuses)
 {
-    // The worst case: GPU on, PhysX today (no set-state)
+    // The worst case: GPU on, and a backend without set-state (PhysX has it now)
     NetworkEnvironment env = TodayWithPhysX();
+    env.backendSupportsSetState = false;
     env.gpuMode = GpuMode::On;
     const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Authoritative), env);
     EXPECT_EQ(validation.warnings.size(), 2u);
@@ -175,6 +181,42 @@ TEST(NetworkValidationTest, DeterministicTodayNamesEveryUnmetRequirement)
         EXPECT_EQ(requirement.detail.empty(), requirement.met) << requirement.id;
         EXPECT_FALSE(requirement.text.empty()) << requirement.id;
     }
+}
+
+TEST(NetworkValidationTest, TheBackendRequirementNamesTheSelectedBackend)
+{
+    const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), TodayWithPhysX());
+    const auto &backend = validation.requirements.front();
+    ASSERT_EQ(backend.id, "physics-backend");
+    EXPECT_NE(backend.detail.find("the selected backend (physx) declares None"), std::string::npos) << backend.detail;
+
+    // An environment filled in by hand with no name still reads sensibly
+    NetworkEnvironment unnamed = TodayWithPhysX();
+    unnamed.backendName.clear();
+    const NetworkValidation plainValidation = ValidateNetwork(Preset(NetworkPreset::Deterministic), unnamed);
+    const auto &plain = plainValidation.requirements.front();
+    EXPECT_NE(plain.detail.find("the backend declares None"), std::string::npos) << plain.detail;
+}
+
+TEST(NetworkValidationTest, ARequestedBackendThatIsNotInTheBuildRefusesDeterministicAndSaysSo)
+{
+    // physics.backend jolt in a build with no Jolt backend: Application::Init found nothing to start
+    NetworkEnvironment env = EverythingMet();
+    env.hasBackend = false;
+    env.backendName = "jolt";
+    env.backendUnavailable = true;
+    env.backendRequested = "jolt";
+    const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
+    EXPECT_TRUE(validation.Refused());
+    const auto &backend = validation.requirements.front();
+    ASSERT_EQ(backend.id, "physics-backend");
+    EXPECT_FALSE(backend.met);
+    EXPECT_NE(backend.detail.find("physics.backend is jolt but this build has no such backend"), std::string::npos)
+        << backend.detail;
+    // The Failed row carries it
+    const SubsystemStatus row = MakeNetworkStatus(Preset(NetworkPreset::Deterministic), validation);
+    EXPECT_EQ(row.state, SubsystemState::Failed);
+    EXPECT_NE(row.detail.find("physics.backend is jolt"), std::string::npos) << row.detail;
 }
 
 TEST(NetworkValidationTest, DeterministicWithAPhysicsDeterministicPhysXStillCannotStart)
@@ -354,6 +396,27 @@ TEST(PhysicsBackendDeclarationTest, ABackendDeclaresNothingByDefault)
     EXPECT_FALSE(fake.SupportsSetState());
 }
 
+TEST(PhysicsBackendDeclarationTest, ABackendThatOverridesNothingNewKeepsTheSafeDefaults)
+{
+    // The interface additions (backend id, body state, snapshot hooks) all default, so PhysX-free mocks keep compiling
+    TestSupport::FakePhysicsBackend fake(false);
+    EXPECT_EQ(fake.BackendId(), "unknown");
+
+    Physics::BodyState state;
+    state.position = Math::Vector3(1.0f, 2.0f, 3.0f);
+    state.sleeping = true;
+    EXPECT_FALSE(fake.GetBodyState(Physics::INVALID_PHYSICS_HANDLE, state));
+    EXPECT_EQ(state.position.x, 1.0f) << "an unsupported read leaves the output alone";
+    EXPECT_TRUE(state.sleeping);
+    EXPECT_FALSE(fake.SetBodyState(Physics::INVALID_PHYSICS_HANDLE, state));
+
+    std::vector<std::byte> bytes{std::byte{1}};
+    EXPECT_FALSE(fake.SaveState(bytes));
+    EXPECT_EQ(bytes.size(), 1u) << "an unsupported save leaves the output alone";
+    EXPECT_FALSE(fake.RestoreState(bytes));
+    EXPECT_FALSE(fake.HashState().has_value());
+}
+
 TEST(PhysicsBackendDeclarationTest, DeterminismLevelsAreOrderedAndNamed)
 {
     EXPECT_LT(DeterminismLevel::None, DeterminismLevel::SameBinary);
@@ -378,7 +441,8 @@ TEST(PhysicsBackendDeclarationTest, PhysXDeclaresSameBinaryOnlyWithTheDeterminis
         EXPECT_NE(PhysXBackend::DeclaredDeterminism(deterministic), DeterminismLevel::CrossPlatform);
     }
     EXPECT_FALSE(PhysXBackend::kSupportsSnapshot);
-    EXPECT_FALSE(PhysXBackend::kSupportsSetState);
+    // Set-state is implemented and tested (PhysXBodyStateTests.cpp); snapshot/restore is not
+    EXPECT_TRUE(PhysXBackend::kSupportsSetState);
 }
 
 #ifdef N2ENGINE_PHYSX_ENABLED
@@ -389,13 +453,14 @@ TEST(PhysicsBackendDeclarationTest, ANotYetInitializedPhysXBackendDeclaresFromIt
     Physics::PhysXBackend backend;
     EXPECT_EQ(backend.GetDeterminism(), DeterminismLevel::None);
     EXPECT_FALSE(backend.SupportsSnapshot());
-    // SupportsSetState stays false until the body-state API (teleporting a dynamic body, sleep state) exists
-    EXPECT_FALSE(backend.SupportsSetState());
+    EXPECT_TRUE(backend.SupportsSetState());
+    EXPECT_EQ(backend.BackendId(), "physx");
+    EXPECT_FALSE(backend.HashState().has_value()) << "PhysX has no snapshot hooks";
 
     backend.SetDeterministic(true);
     EXPECT_EQ(backend.GetDeterminism(), DeterminismLevel::SameBinary);
     EXPECT_FALSE(backend.SupportsSnapshot());
-    EXPECT_FALSE(backend.SupportsSetState());
+    EXPECT_TRUE(backend.SupportsSetState());
 
     backend.SetWorkerThreadsForTesting(4u);
     EXPECT_EQ(backend.GetDeterminism(), DeterminismLevel::None);
