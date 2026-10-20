@@ -944,3 +944,62 @@ TEST_F(ScriptDeclarationTest, ARefusedReadingIsNotKeptAndIsReadAgainWhenTheCompo
     EXPECT_EQ(Cache().GetStats().evaluations, 1u);
     EXPECT_EQ(Cache().EntryCount(), 1u);
 }
+
+TEST_F(ScriptDeclarationTest, AWaitTheBudgetCutShortIsResumedNotStartedAgainAndItsLateAnswerIsKept)
+{
+#if defined(N2ENGINE_SINGLE_THREADED)
+    GTEST_SKIP() << "The single-threaded web build has no worker to abandon";
+#endif
+    Cache().SetDeadlineMillis(5000);
+    BlockEvaluations();
+    const IO::ResourcePath path = PathOf("CutShort.lua");
+    for (int command = 0; command < 3; ++command)
+    {
+        const ScriptDeclarationCache::CommandBudget budget(100ms);
+        bool refused = false;
+        const auto result = Cache().Get(path, "return {}", refused);
+        EXPECT_TRUE(refused) << command;
+        EXPECT_FALSE(result->timedOut) << command;
+    }
+    EXPECT_EQ(Cache().LiveWorkers(), 1) << "one stalling text holds one slot, however often it is asked";
+    EXPECT_EQ(_gate->entered.load(), 1) << "the evaluation was started once";
+    EXPECT_EQ(Cache().GetStats().evaluations, 1u);
+    EXPECT_EQ(Cache().Peek(path, "return {}"), nullptr) << "nothing recorded while it runs";
+
+    // It ends: the next reader takes that job's answer, and it is recorded
+    _gate->Open();
+    ASSERT_TRUE(WaitForNoWorkers(10s));
+    {
+        const ScriptDeclarationCache::CommandBudget budget(0ms); // even with this command's budget already spent
+        bool refused = true;
+        const auto result = Cache().Get(path, "return {}", refused);
+        EXPECT_FALSE(refused);
+        EXPECT_TRUE(result->declared);
+    }
+    EXPECT_EQ(_gate->entered.load(), 1);
+    EXPECT_EQ(Cache().GetStats().evaluations, 1u);
+    EXPECT_NE(Cache().Peek(path, "return {}"), nullptr);
+}
+
+TEST_F(ScriptDeclarationTest, ACutShortWaitThatPassesItsOwnDeadlineIsARecordedTimeoutOnOneSlot)
+{
+#if defined(N2ENGINE_SINGLE_THREADED)
+    GTEST_SKIP() << "The single-threaded web build has no worker to abandon";
+#endif
+    Cache().SetDeadlineMillis(100); // the job is given up for good 350 ms after its worker starts
+    BlockEvaluations();
+    const IO::ResourcePath path = PathOf("CutThenStalled.lua");
+    {
+        const ScriptDeclarationCache::CommandBudget budget(20ms);
+        bool refused = false;
+        (void)Cache().Get(path, "return {}", refused);
+        EXPECT_TRUE(refused);
+    }
+
+    // A later reader with no budget waits for the same job until its own deadline, not for a new one
+    const auto result = Cache().Get(path, "return {}");
+    EXPECT_TRUE(result->timedOut);
+    EXPECT_EQ(Cache().LiveWorkers(), 1);
+    EXPECT_EQ(_gate->entered.load(), 1);
+    EXPECT_EQ(Cache().Peek(path, "return {}"), result) << "recorded under its hash";
+}

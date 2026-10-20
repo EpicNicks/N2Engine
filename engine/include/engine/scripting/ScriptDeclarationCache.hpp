@@ -33,7 +33,9 @@ namespace N2Engine::Scripting
     ///   - the deadline bounds ONE evaluation; a host command (or a scene build) may need many (a scene with several
     ///     scripts), so a CommandBudget open on the calling thread bounds them together: the caller waits at most what
     ///     is left of it, and once it is spent a further evaluation answers a failed declaration at once. Either answer
-    ///     is a refusal (not recorded: the script is not at fault, the next command reads it);
+    ///     is a refusal (not recorded: the script is not at fault, the next command reads it). A worker whose wait was
+    ///     cut short keeps running and keeps its slot; the next Get of the same text waits for THAT job (and takes its
+    ///     answer, recorded as usual) rather than starting a second worker, so one stalling text holds one slot;
     ///   - Shutdown stops new evaluations and waits a bounded time for the running workers. A thread cannot be
     ///     interrupted, so one still running after that is left (detached) and the process may exit: everything it
     ///     touches is heap state that is never destroyed (the cache itself and the worker bookkeeping are leaked on
@@ -182,6 +184,12 @@ namespace N2Engine::Scripting
         /// Runs one evaluation off this thread (or inline on a build with no threads); `transient` is set when the answer
         /// is a refusal that must not be remembered
         Declaration Evaluate(std::string_view source, const std::string &chunkName, bool &transient);
+        /// Waits for the job an earlier command's budget cut short for this same text (its worker still holds its slot)
+        /// instead of starting a second worker: its answer if it has one by its own deadline and grace (recorded), a
+        /// timeout past that (recorded), or a refusal if this command's budget ends first. `runningJob` is the cache
+        /// file's own job type. Threaded builds only.
+        Declaration AwaitCutShort(const std::shared_ptr<void> &runningJob, const std::string &chunkName, bool budgeted,
+                                  std::chrono::steady_clock::time_point budgetEnd, bool &transient);
 
         mutable std::mutex _mutex;
         std::unordered_map<std::string, Entry> _entries; // by resource path text

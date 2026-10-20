@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <format>
+#include <unordered_map>
 #include <utility>
 
 // A build with no threads (the web baseline) has no worker, so it needs neither the thread nor the condition variable
@@ -49,8 +50,33 @@ namespace N2Engine::Scripting
             std::condition_variable finished;
             bool done = false;
             DeclarationResult result;
+            // When its caller gives up on it for good: the deadline and the grace after the worker started
+            std::chrono::steady_clock::time_point abandonAt{};
 #endif
         };
+
+#if !defined(N2ENGINE_SINGLE_THREADED)
+        // Jobs a command's budget cut short, by resource path, with the hash of the text they read: the worker still runs
+        // (it keeps its slot), so the next Get of the same text waits for THAT job instead of starting a second worker, and
+        // takes its answer when it has one. One stalling text therefore holds one slot however often it is asked. Only
+        // callers touch this (a worker never does). Made on first use and never destroyed, like the worker bookkeeping.
+        struct CutShortJob
+        {
+            std::string hash;
+            std::shared_ptr<Job> job;
+        };
+        struct CutShortJobs
+        {
+            std::mutex mutex;
+            std::unordered_map<std::string, CutShortJob> byPath;
+        };
+
+        CutShortJobs &SharedCutShortJobs()
+        {
+            static CutShortJobs *const jobs = new CutShortJobs();
+            return *jobs;
+        }
+#endif
 
         // The CommandBudget open on this thread, if any: when every evaluation it starts must have answered
         struct ThreadBudget
@@ -62,6 +88,11 @@ namespace N2Engine::Scripting
 
         constexpr const char *BudgetSpentText =
             "The evaluation budget for this command is exhausted: the script's declarations are read by a later command";
+
+        std::string TimedOutText(const std::uint64_t deadline)
+        {
+            return std::format("Reading the script's declarations took longer than {} ms and was abandoned", deadline);
+        }
 
         DeclarationResult Failed(std::string text, const bool timedOut = false)
         {
@@ -249,6 +280,35 @@ namespace N2Engine::Scripting
         {
             return std::chrono::duration_cast<std::chrono::milliseconds>(budgetEnd - std::chrono::steady_clock::now());
         };
+
+#if !defined(N2ENGINE_SINGLE_THREADED)
+        // The same text was cut short by an earlier command's budget and its worker may still be running: wait for that
+        // one (never a second worker for it), and take its answer if it has one by now, budget or not
+        {
+            const std::string hash = HashSource(source);
+            std::shared_ptr<Job> running;
+            {
+                CutShortJobs &cutShort = SharedCutShortJobs();
+                const std::lock_guard lock(cutShort.mutex);
+                if (const auto found = cutShort.byPath.find(chunkName); found != cutShort.byPath.end())
+                {
+                    if (found->second.hash == hash)
+                    {
+                        running = found->second.job;
+                    }
+                    else
+                    {
+                        cutShort.byPath.erase(found); // another text: that worker ends on its own, its answer is not wanted
+                    }
+                }
+            }
+            if (running != nullptr)
+            {
+                return AwaitCutShort(running, chunkName, budgeted, budgetEnd, transient);
+            }
+        }
+#endif
+
         if (budgeted && budgetLeft().count() <= 0)
         {
             {
@@ -313,6 +373,7 @@ namespace N2Engine::Scripting
             ++workers.live;
         }
 
+        job->abandonAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(deadline + GraceMillis);
         try
         {
             std::thread([job, &workers]() mutable
@@ -386,14 +447,77 @@ namespace N2Engine::Scripting
         }
         if (cutByBudget)
         {
-            // The command ran out of time, not the script: a refusal, so a later command reads it again
+            // The command ran out of time, not the script: a refusal, so a later command reads it again, from this same
+            // job (its worker keeps running and keeps its slot; it is not started twice)
+            {
+                CutShortJobs &cutShort = SharedCutShortJobs();
+                const std::lock_guard jobs(cutShort.mutex);
+                if (cutShort.byPath.size() >= MaxEntries && !cutShort.byPath.contains(chunkName))
+                {
+                    cutShort.byPath.clear();
+                }
+                cutShort.byPath[chunkName] = CutShortJob{HashSource(source), job};
+            }
             transient = true;
             return std::make_shared<const DeclarationResult>(Failed(BudgetSpentText));
         }
-        return std::make_shared<const DeclarationResult>(Failed(
-            std::format("Reading the script's declarations took longer than {} ms and was abandoned", deadline), true));
+        return std::make_shared<const DeclarationResult>(Failed(TimedOutText(deadline), true));
 #endif
     }
+
+#if !defined(N2ENGINE_SINGLE_THREADED)
+    ScriptDeclarationCache::Declaration ScriptDeclarationCache::AwaitCutShort(
+        const std::shared_ptr<void> &runningJob, const std::string &chunkName, const bool budgeted,
+        const std::chrono::steady_clock::time_point budgetEnd, bool &transient)
+    {
+        const auto job = std::static_pointer_cast<Job>(runningJob);
+        const auto forget = [&]
+        {
+            CutShortJobs &cutShort = SharedCutShortJobs();
+            const std::lock_guard lock(cutShort.mutex);
+            const auto found = cutShort.byPath.find(chunkName);
+            if (found != cutShort.byPath.end() && found->second.job == job)
+            {
+                cutShort.byPath.erase(found);
+            }
+        };
+
+        // Until the job's own deadline and grace (counted from when its worker started), or the budget's end if sooner
+        auto until = job->abandonAt;
+        bool cutByBudget = false;
+        if (budgeted && budgetEnd < until)
+        {
+            until = budgetEnd;
+            cutByBudget = true;
+        }
+
+        std::unique_lock lock(job->mutex);
+        if (job->finished.wait_until(lock, until, [&] { return job->done; }))
+        {
+            // Its answer, late for the command that started it, is the script's answer: recorded as any other
+            DeclarationResult result = job->result; // a copy: the job is shared until the entry goes
+            lock.unlock();
+            forget();
+            return std::make_shared<const DeclarationResult>(std::move(result));
+        }
+        lock.unlock();
+
+        if (cutByBudget)
+        {
+            // Still running, and this command is out of time too: the entry stays for the next one
+            {
+                const std::lock_guard stats(_mutex);
+                ++_stats.refused;
+                ++_stats.overBudget;
+            }
+            transient = true;
+            return std::make_shared<const DeclarationResult>(Failed(BudgetSpentText));
+        }
+        // Past its own deadline: a timeout, recorded under its hash like one waited out in a single command
+        forget();
+        return std::make_shared<const DeclarationResult>(Failed(TimedOutText(job->limits.maxMillis), true));
+    }
+#endif
 
     void ScriptDeclarationCache::Refresh(const IO::ResourcePath &path, const std::string_view source)
     {
@@ -541,6 +665,13 @@ namespace N2Engine::Scripting
             const std::lock_guard lock(_subscriptionMutex);
             _subscriptions.clear();
         }
+#if !defined(N2ENGINE_SINGLE_THREADED)
+        {
+            CutShortJobs &cutShort = SharedCutShortJobs();
+            const std::lock_guard lock(cutShort.mutex);
+            cutShort.byPath.clear();
+        }
+#endif
         Workers &workers = SharedWorkers();
         const std::lock_guard lock(workers.mutex);
         workers.stopping = false;
