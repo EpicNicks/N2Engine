@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -13,6 +15,9 @@
 #include "engine/Time.hpp"
 #include "engine/Window.hpp"
 #include "engine/config/ApplicationOptions.hpp"
+#include "engine/physics/Rigidbody.hpp"
+#include "engine/physics/SphereCollider.hpp"
+#include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/sceneManagement/SceneManager.hpp"
 
@@ -454,6 +459,160 @@ TEST_F(SimulationClockTest, AnObjectCreatedInATickJoinsAtTheNextTickBoundaryWhat
     {
         EXPECT_TRUE(results[i] == first) << "partition run " << i << " differs";
     }
+}
+
+#ifdef N2ENGINE_PHYSX_ENABLED
+namespace
+{
+    /// At the FixedUpdate of tick SpawnTick creates a dynamic sphere (Rigidbody + SphereCollider) and keeps it in Ball;
+    /// every FixedUpdate it records the tick and the ball's height, which only falls once the body is simulated
+    class PhysXSpawnWatcher final : public Component
+    {
+    public:
+        explicit PhysXSpawnWatcher(GameObject &gameObject) : Component(gameObject) {}
+
+        [[nodiscard]] std::string GetTypeName() const override { return "SimulationClockTest_PhysXWatcher"; }
+
+        void OnFixedUpdate() override
+        {
+            if (Ball != nullptr)
+            {
+                ticks.push_back(Time::GetTick());
+                heights.push_back(Ball->GetPositionable()->GetPosition().y);
+            }
+            if (Time::GetTick() == SpawnTick && Ball == nullptr)
+            {
+                Ball = GameObject::Create("PhysXBall");
+                Ball->CreatePositionable();
+                Ball->GetPositionable()->SetPosition(Math::Vector3(0.0f, 10.0f, 0.0f));
+                SceneManager::GetCurSceneRef().AddRootGameObject(Ball);
+                Ball->AddComponent<Physics::SphereCollider>()->SetRadius(0.5f);
+                auto *body = Ball->AddComponent<Physics::Rigidbody>();
+                body->SetBodyType(Physics::BodyType::Dynamic);
+                body->SetGravityEnabled(true);
+            }
+        }
+
+        static void Clear()
+        {
+            Ball.reset();
+            ticks.clear();
+            heights.clear();
+        }
+
+        static inline GameObject::Ptr Ball;
+        static inline std::vector<std::uint64_t> ticks;
+        static inline std::vector<float> heights;
+        static inline std::uint64_t SpawnTick = 3;
+    };
+}
+
+TEST_F(SimulationClockTest, APhysicsBodyCreatedInATickIsSimulatedFromTheNextTickBoundaryWhateverTheFrameTiming)
+{
+    const std::vector<std::vector<double>> partitions = {
+        {12.0},
+        {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+        {5.0, 7.0},
+        {0.0, 4.5, 0.0, 0.5, 7.0, 0.0},
+    };
+
+    std::vector<std::uint64_t> firstMovedTicks;
+    for (const std::vector<double> &partition : partitions)
+    {
+        SceneManager::AddScene(Scene::Create("SimulationClockTest_PhysX_" + std::to_string(++sceneCounter)), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+        auto backend = std::make_unique<Physics::PhysXBackend>();
+        ASSERT_TRUE(backend->Initialize());
+        Application::GetInstance().Set3DPhysicsBackend(std::move(backend));
+        ASSERT_TRUE(Time::SetFixedTimestep(ExactStep));
+        Application::GetInstance().SetSimulationMode(SimulationMode::Authoritative);
+        Clock().Reset();
+        PhysXSpawnWatcher::Clear();
+        const auto watcher = GameObject::Create("Watcher");
+        watcher->CreatePositionable();
+        SceneManager::GetCurSceneRef().AddRootGameObject(watcher);
+        watcher->AddComponent<PhysXSpawnWatcher>();
+
+        for (const double steps : partition)
+        {
+            TickFor(steps * ExactStep);
+        }
+        EXPECT_EQ(Time::GetTick(), 12u);
+
+        // The first tick whose FixedUpdate sees the ball lower than it started: the body was simulated by the tick
+        // before it
+        std::uint64_t firstMoved = 0;
+        for (std::size_t i = 0; i < PhysXSpawnWatcher::ticks.size(); ++i)
+        {
+            if (PhysXSpawnWatcher::heights[i] < 10.0f)
+            {
+                firstMoved = PhysXSpawnWatcher::ticks[i];
+                break;
+            }
+        }
+        firstMovedTicks.push_back(firstMoved);
+
+        // Release the body before its backend goes
+        PhysXSpawnWatcher::Clear();
+        SceneManager::AddScene(Scene::Create("SimulationClockTest_PhysX_Empty_" + std::to_string(++sceneCounter)), true);
+        SceneManager::ProcessAnyPendingSceneChange();
+        Application::GetInstance().Set3DPhysicsBackend(nullptr);
+    }
+
+    ASSERT_EQ(firstMovedTicks.size(), partitions.size());
+    // Created in tick 3: attached and given its body at tick 4's boundary, stepped by tick 4, seen moved by tick 5
+    EXPECT_GT(firstMovedTicks[0], PhysXSpawnWatcher::SpawnTick);
+    EXPECT_LE(firstMovedTicks[0], PhysXSpawnWatcher::SpawnTick + 2);
+    for (std::size_t i = 1; i < firstMovedTicks.size(); ++i)
+    {
+        EXPECT_EQ(firstMovedTicks[i], firstMovedTicks[0]) << "partition " << i << " differs";
+    }
+}
+#endif // N2ENGINE_PHYSX_ENABLED
+
+TEST_F(SimulationClockTest, ANetworkModeIgnoresAFrameDeltaThatIsNotTime)
+{
+    ASSERT_TRUE(Time::SetFixedTimestep(ExactStep));
+    Application::GetInstance().SetSimulationMode(SimulationMode::Authoritative);
+    Clock().SetMaxCatchUpTicks(0);
+    AddProbe();
+
+    // Straight to the clock: Time::Advance does not take these
+    Clock().BeginFrame(std::numeric_limits<double>::quiet_NaN());
+    Clock().BeginFrame(std::numeric_limits<double>::infinity());
+    Clock().BeginFrame(-1.0);
+    EXPECT_EQ(Clock().GetAccumulator(), 0.0);
+    EXPECT_FALSE(Clock().TickDue(ExactStep));
+    Clock().BeginFrame(2 * ExactStep);
+    EXPECT_EQ(Clock().GetAccumulator(), 2 * ExactStep);
+    Clock().ResetAccumulator();
+}
+
+TEST_F(SimulationClockTest, LeavingANetworkModeThatIsBehindKeepsOnlyTheNoneClampOfTheDebt)
+{
+    ASSERT_TRUE(Time::SetFixedTimestep(ExactStep));
+    Application &app = Application::GetInstance();
+    app.SetSimulationMode(SimulationMode::Authoritative);
+    Clock().SetMaxCatchUpTicks(2);
+    AddProbe();
+    TickFor(640 * ExactStep);
+    ASSERT_TRUE(Clock().IsBehind());
+
+    app.SetSimulationMode(SimulationMode::None);
+    EXPECT_LE(Clock().GetAccumulator(), SimulationClock::MaxFrameTime);
+    ClockProbe::Clear();
+    TickFor(0.0);
+    EXPECT_LE(ClockProbe::fixedTicks.size(), 16u) << "0.25 s at 1/64 s, not the whole debt";
+}
+
+TEST_F(SimulationClockTest, AStandaloneClockDoesNotChangeTheApplicationsFixedDelta)
+{
+    ASSERT_TRUE(Time::SetFixedTimestep(ExactStep));
+    Time::SetTimeScale(0.5f);
+    SimulationClock other;
+    other.SetMode(SimulationMode::Authoritative);
+    EXPECT_EQ(Application::GetInstance().GetSimulationMode(), SimulationMode::None);
+    EXPECT_FLOAT_EQ(Time::GetFixedDeltaTime(), static_cast<float>(ExactStep) * 0.5f);
 }
 
 TEST_F(SimulationClockTest, InNoneModeTheAttachQueueRunsOncePerFrameBeforeTheFixedSteps)

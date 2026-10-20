@@ -26,7 +26,12 @@ void SimulationClock::SetMode(const SimulationMode mode)
 {
     _mode = mode;
     _behind = false;
-    Time::SetFixedIgnoresTimeScale(IsNetworked());
+    if (mode == SimulationMode::None)
+    {
+        // The None loop has no catch-up limit and holds at most MaxFrameTime: a debt a network mode was carrying must
+        // not become a burst of ticks
+        _accumulator = std::min(_accumulator, MaxFrameTime);
+    }
 }
 
 std::uint32_t SimulationClock::GetTicksOwed(const double step) const
@@ -62,7 +67,17 @@ void SimulationClock::BeginFrame(const double unscaledDelta)
 {
     _ticksThisFrame = 0;
     // None: the loop as it has always been (a long stall is clamped, the rest dropped). Network modes keep all of it.
-    _accumulator += IsNetworked() ? unscaledDelta : std::min(unscaledDelta, MaxFrameTime);
+    if (IsNetworked())
+    {
+        // A NaN, infinite or negative delta would poison the accumulator (every comparison against NaN is false, so
+        // the loop would never see itself behind): it is not time, so none is added
+        if (std::isfinite(unscaledDelta) && unscaledDelta > 0.0)
+        {
+            _accumulator += unscaledDelta;
+        }
+        return;
+    }
+    _accumulator += std::min(unscaledDelta, MaxFrameTime);
 }
 
 bool SimulationClock::TickDue(const double step) const

@@ -59,8 +59,9 @@ namespace N2Engine
 
         using BehindHandler = std::function<void(const SimulationBehind &)>;
 
-        /// Switches the loop's mode; also makes Time::GetFixedDeltaTime() follow (None) or ignore (network modes) the
-        /// time scale. The accumulator and the tick counter are kept.
+        /// Switches the loop's mode. The tick counter is kept, and so is the accumulator, except that going to None
+        /// keeps at most MaxFrameTime of it. It does not touch Time: Application::SetSimulationMode also makes
+        /// Time::GetFixedDeltaTime() follow (None) or ignore (network modes) the time scale.
         void SetMode(SimulationMode mode);
         [[nodiscard]] SimulationMode GetMode() const { return _mode; }
         [[nodiscard]] bool IsNetworked() const { return _mode != SimulationMode::None; }

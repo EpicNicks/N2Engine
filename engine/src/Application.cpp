@@ -662,6 +662,13 @@ Physics::IPhysicsBackend* Application::Get3DPhysicsBackend() const
     return _3DphysicsBackend.get();
 }
 
+void Application::SetSimulationMode(const SimulationMode mode)
+{
+    _simulationClock.SetMode(mode);
+    // Global Time state follows the Application's mode, not any SimulationClock instance's
+    Time::SetFixedIgnoresTimeScale(_simulationClock.IsNetworked());
+}
+
 void Application::Set3DPhysicsBackend(std::unique_ptr<Physics::IPhysicsBackend> backend)
 {
     _3DphysicsBackend = std::move(backend);

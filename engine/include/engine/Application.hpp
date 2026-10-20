@@ -99,9 +99,9 @@ namespace N2Engine
          * ignores the time scale (which then only scales what Update sees), the attach queue is processed at each tick
          * boundary instead of once per frame, and no frame time is dropped (a clock too far behind reports it through
          * the SimulationClock's behind handler). The network presets will set this when the project's settings do;
-         * until then a host or a test does. Does not touch the tick counter or the carried time.
+         * until then a host or a test does. Does not touch the tick counter; going to None keeps at most 0.25 s of carried time.
          */
-        void SetSimulationMode(SimulationMode mode) { _simulationClock.SetMode(mode); }
+        void SetSimulationMode(SimulationMode mode);
         [[nodiscard]] SimulationMode GetSimulationMode() const { return _simulationClock.GetMode(); }
         /// The clock that decides the ticks: its catch-up limit, behind handler and accumulator
         [[nodiscard]] SimulationClock& GetSimulationClock() { return _simulationClock; }
