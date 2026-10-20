@@ -44,8 +44,9 @@
 #
 # Do not add --exit-on-stdin-eof: a service's stdin is /dev/null, so the host would exit as soon as it started.
 # The host takes no --bind here, so it stays on 127.0.0.1. Behind the SSH tunnel every peer is 127.0.0.1, so the failed-Hello
-# rate limiting is one shared backoff for loopback and a per-user one (docs/logging-and-editor.html#rate-limit-loopback), not
-# a per-person ban. To listen elsewhere add --bind <ipv4 address> (the host then refuses to start unless it also has --tls and a
+# rate limiting is a per-user backoff only (no loopback backoff; loopback is bounded by --preauth-slots and the handshake
+# rate: docs/logging-and-editor.html#rate-limit-loopback), not a per-person ban. To listen elsewhere add --bind <ipv4 address>
+# (the host then refuses to start unless it also has --tls and a
 # token, as this unit does, or --insecure-bind) and read the firewall notes in the docs first: the
 # allow-list of addresses is the primary control. For a host that should only be looked at, add --read-only to ExecStart
 # (docs/logging-and-editor.html#read-only).
