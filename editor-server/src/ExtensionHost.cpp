@@ -19,6 +19,7 @@
 #include <sol/sol.hpp>
 
 #include "engine/Logger.hpp"
+#include "editor-server/ServerLog.hpp"
 #include "engine/serialization/FieldInfo.hpp"
 
 namespace N2Engine::Editor
@@ -1406,7 +1407,7 @@ end
         }
         if (fs::is_symlink(folderStatus))
         {
-            Logger::Warn("The project's editor folder is a link: no editor extensions are loaded from it");
+            ServerLog::Warn("The project's editor folder is a link: no editor extensions are loaded from it");
             return found;
         }
         if (!fs::is_directory(folderStatus))
@@ -1436,7 +1437,7 @@ end
             }
             if (++visited > MaxVisitedEntries)
             {
-                Logger::Warn(std::format("The project's editor folder has more than {} entries: the rest are not looked at",
+                ServerLog::Warn(std::format("The project's editor folder has more than {} entries: the rest are not looked at",
                                          MaxVisitedEntries));
                 break;
             }
@@ -1474,7 +1475,7 @@ end
             std::string id(u8.begin(), u8.end());
             if (id.empty() || !IsValidUtf8(id) || HasControlCharacter(id))
             {
-                Logger::Warn("An editor extension file has a name that is not valid text and is not loaded");
+                ServerLog::Warn("An editor extension file has a name that is not valid text and is not loaded");
                 continue;
             }
             found.push_back({std::move(id), it->path()});
@@ -1741,7 +1742,7 @@ end
         std::vector<FoundFile> files = Discover();
         if (files.size() > MaxFiles)
         {
-            Logger::Warn(std::format("The project's editor folder has {} extension files: only the first {} (in name "
+            ServerLog::Warn(std::format("The project's editor folder has {} extension files: only the first {} (in name "
                                      "order) are loaded",
                                      files.size(), MaxFiles));
             files.resize(MaxFiles);
@@ -1811,14 +1812,14 @@ end
         {
             if (isLoaded)
             {
-                Logger::Info(text);
+                ServerLog::Info(text);
             }
             else
             {
-                Logger::Warn(text);
+                ServerLog::Warn(text);
             }
         }
-        Logger::Info(std::format("Editor extensions: {} of {} loaded", loaded, total));
+        ServerLog::Info(std::format("Editor extensions: {} of {} loaded", loaded, total));
     }
 
     void ExtensionHost::Reload()
@@ -1896,7 +1897,7 @@ end
         {
             if (entry.id == id)
             {
-                return entry.state == ExtensionState::Loaded ? entry.chargedBytes : 0;
+                return entry.state == ExtensionState::Failed ? 0 : entry.chargedBytes; // faulted keeps its state
             }
         }
         return 0;
@@ -1974,7 +1975,7 @@ end
         }
         if (becameFaulted)
         {
-            Logger::Warn(std::format("Editor extension {} is faulted until reload ({} failures within {} minutes)",
+            ServerLog::Warn(std::format("Editor extension {} is faulted until reload ({} failures within {} minutes)",
                                      Printable(std::string(id), 120), FaultThreshold, FaultWindow.count()));
             if (changed)
             {

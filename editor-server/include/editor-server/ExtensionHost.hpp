@@ -177,7 +177,7 @@ namespace N2Engine::Editor
         ExtensionState NoteFailure(std::string_view id,
                                    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
         /// What the loaded extension with this id was charged against MaxTotalBytes: the most its state held while it
-        /// loaded. 0 for an unknown id and for one that is not loaded (it keeps no state).
+        /// loaded. 0 for an unknown id and for one that failed (it keeps no state); a faulted one keeps its state and its charge.
         [[nodiscard]] std::size_t ChargedBytesOf(std::string_view id) const;
         /// The state of the extension with this id; Failed for an unknown one
         [[nodiscard]] ExtensionState StateOf(std::string_view id) const;
