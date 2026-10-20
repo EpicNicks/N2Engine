@@ -446,7 +446,7 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
         Renderer::Common::IShader* const lit = R().GetStandardLitShader();
         ASSERT_NE(lit, nullptr) << "stage C hands out the lit shader";
         EXPECT_NE(lit, unlit);
-        EXPECT_EQ(lit, R().GetBuiltInShaderForTest(Renderer::Vulkan::ShaderInterface::BuiltInShader::Lit));
+        EXPECT_EQ(lit, R().GetBuiltInShaderForTest(Renderer::Gpu::ShaderInterface::BuiltInShader::Lit));
         EXPECT_TRUE(R().IsValidShader(lit));
         EXPECT_FALSE(R().DestroyShaderProgram(lit)) << "the built-ins belong to the renderer";
         EXPECT_TRUE(R().IsValidShader(lit));
@@ -456,7 +456,7 @@ TEST_F(VulkanTest, EverythingThatWouldDrawFailsCleanly)
         {
             Renderer::Common::IShader* const text = R().GetStandardTextShader();
             ASSERT_NE(text, nullptr) << "stage E hands out the text shader";
-            EXPECT_EQ(text, R().GetBuiltInShaderForTest(Renderer::Vulkan::ShaderInterface::BuiltInShader::Text));
+            EXPECT_EQ(text, R().GetBuiltInShaderForTest(Renderer::Gpu::ShaderInterface::BuiltInShader::Text));
             EXPECT_NE(text, unlit);
             EXPECT_NE(text, lit);
             EXPECT_TRUE(R().IsValidShader(text));

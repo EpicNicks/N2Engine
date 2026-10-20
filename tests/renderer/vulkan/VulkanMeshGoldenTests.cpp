@@ -27,8 +27,8 @@
 #include "engine/rendering/MeshRenderer.hpp"
 #include "engine/rendering/Texture.hpp"
 
-#include "BlendReference.hpp"
-#include "CrossBackendDiff.hpp"
+#include "common/BlendReference.hpp"
+#include "common/CrossBackendDiff.hpp"
 #include "VulkanTestFixture.hpp"
 
 // Golden-image tests of MeshRenderer on the Vulkan backend (#43, stages B and C): the unlit scenes and the lit one of

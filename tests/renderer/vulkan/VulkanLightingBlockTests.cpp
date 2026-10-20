@@ -7,8 +7,8 @@
 
 #include <math/Vector3.hpp>
 #include <renderer/common/SceneLighting.hpp>
-#include <renderer/vulkan/VulkanLighting.hpp>
-#include <renderer/vulkan/VulkanShaderInterface.hpp>
+#include <renderer/common/GpuLighting.hpp>
+#include <renderer/common/GpuShaderInterface.hpp>
 
 // The lit shader's 752-byte lighting block as UpdateSceneLighting fills it (#43, stage C), checked without a device:
 // BuildLightingBlock is a pure function of a SceneLightingData and the camera position. The expectations are what
@@ -20,10 +20,10 @@ using Renderer::Common::DirectionalLightData;
 using Renderer::Common::PointLightData;
 using Renderer::Common::SceneLightingData;
 using Renderer::Common::SpotLightData;
-using Renderer::Vulkan::BuildLightingBlock;
-using Renderer::Vulkan::LightingBlock;
+using Renderer::Gpu::BuildLightingBlock;
+using Renderer::Gpu::LightingBlock;
 using N2Engine::Math::Vector3;
-namespace Vk = Renderer::Vulkan::ShaderInterface;
+namespace Vk = Renderer::Gpu::ShaderInterface;
 
 namespace
 {

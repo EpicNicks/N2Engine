@@ -20,7 +20,7 @@
 // BUILT (renderer/CMakeLists.txt) and embedded as generated headers; nothing generated is committed. Without either tool
 // the build still succeeds (N2ENGINE_VULKAN_HAS_SPIRV=0): there are then no shader modules and nothing draws.
 //
-// Interface (VulkanShaderInterface.hpp is the table; the GLSL declares the same):
+// Interface (GpuShaderInterface.hpp is the table; the GLSL declares the same):
 //   set 0 (the frame):    binding 0 PerDraw (model, view, projection: UNIFORM_BUFFER_DYNAMIC, an offset per draw in the ring),
 //                         binding 1 Lighting (UNIFORM_BUFFER_DYNAMIC: a copy of the scene lighting block in the ring, below)
 //   set 1 (the material): binding 0 Material block (UNIFORM_BUFFER_DYNAMIC, an offset per draw in the ring),
@@ -29,7 +29,7 @@
 //                         defaults to (0,0,0,0) instead of white)
 // One pipeline layout serves all three shaders.
 //
-// SCENE LIGHTING (stage C). UpdateSceneLighting builds the 752-byte std140 block (VulkanLighting.hpp) into a CPU copy and
+// SCENE LIGHTING (stage C). UpdateSceneLighting builds the 752-byte std140 block (GpuLighting.hpp) into a CPU copy and
 // bumps a version; it touches no GPU memory. The first LIT draw after an update copies the block into the current frame
 // slot's ring and every lit draw names that copy with the dynamic offset of set 0's binding 1 (one copy per ring chunk per
 // version). So, as on OpenGL, a draw uses the lighting set by the last UpdateSceneLighting BEFORE it, an update after a draw
@@ -87,7 +87,7 @@ using Renderer::Common::RenderState;
 using Renderer::Common::TextureFilter;
 using Renderer::Common::TextureOptions;
 using Renderer::Common::TextureWrap;
-using namespace Renderer::Vulkan::ShaderInterface;
+using namespace Renderer::Gpu::ShaderInterface;
 
 namespace
 {
@@ -127,21 +127,6 @@ namespace
         case 3: return VK_FORMAT_R32G32B32_SFLOAT;
         default: return VK_FORMAT_R32G32B32A32_SFLOAT;
         }
-    }
-
-    const char* TypeName(const UniformType type)
-    {
-        switch (type)
-        {
-        case UniformType::Int: return "int";
-        case UniformType::Float: return "float";
-        case UniformType::Vec2: return "vec2";
-        case UniformType::Vec3: return "vec3";
-        case UniformType::Vec4: return "vec4";
-        case UniformType::Mat4: return "mat4";
-        case UniformType::Struct: return "struct";
-        }
-        return "?";
     }
 
 #if N2ENGINE_VULKAN_HAS_SPIRV
@@ -187,214 +172,6 @@ namespace
         return module;
     }
 #endif
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// VulkanMaterial
-// ---------------------------------------------------------------------------------------------------------------------
-
-VulkanMaterial::VulkanMaterial(const BuiltInShader shaderKind, IShader* owner, ITexture* baseTexture, Warn warn,
-                               TextureIdOf textureIdOf)
-    : kind(shaderKind), shader(owner), _warn(std::move(warn)), _textureIdOf(std::move(textureIdOf)), _texture(baseTexture)
-{
-    _textureId = (_textureIdOf && baseTexture != nullptr) ? _textureIdOf(baseTexture) : 0;
-    // The OpenGL defaults, from the table (ShaderInterface::MaterialDefaults): OpenGLMaterial's constructor sets uAlbedo
-    // white, OpenGLRenderer::CreateMaterial the rest per shader (for lit: uMetallic 0, uSmoothness 0.5, uAlphaCutoff 0,
-    // uEmissive 0, the four uHas*Texture flags 0, uOcclusionStrength 1, uNormalScale 1, uPbr 0). All of them go through the
-    // name table, so the type of each entry decides how it is stored
-    for (const MaterialDefault& entry : MaterialDefaults(kind))
-    {
-        const Uniform* uniform = FindMaterialUniform(kind, entry.name);
-        if (uniform == nullptr)
-        {
-            continue;
-        }
-        if (uniform->type == UniformType::Int)
-        {
-            const auto value = static_cast<std::int32_t>(entry.values[0]);
-            std::memcpy(_block.data() + uniform->offset, &value, sizeof(value));
-        }
-        else
-        {
-            const std::uint32_t floats = uniform->type == UniformType::Vec4 ? 4 : uniform->type == UniformType::Vec3 ? 3
-                : uniform->type == UniformType::Vec2                                                                 ? 2
-                                                                                                                      : 1;
-            WriteFloats(uniform->offset, entry.values.data(), floats);
-        }
-    }
-    // uHasTexture: a texture was given at creation (SetTexture does not touch it, in either backend)
-    if (const Uniform* hasTexture = FindMaterialUniform(kind, "uHasTexture"))
-    {
-        const std::int32_t value = baseTexture != nullptr ? 1 : 0;
-        std::memcpy(_block.data() + hasTexture->offset, &value, sizeof(value));
-    }
-}
-
-const Uniform* VulkanMaterial::Find(const std::string& name, const UniformType expected, const char* setter) const
-{
-    const Uniform* uniform = FindMaterialUniform(kind, name);
-    if (uniform == nullptr)
-    {
-        if (_warn)
-        {
-            _warn("material uniform '" + name + "' is not in the " + std::string(ShaderName(kind)) +
-                  " shader's material block: ignored");
-        }
-        return nullptr;
-    }
-    if (uniform->type != expected)
-    {
-        if (_warn)
-        {
-            _warn("material uniform '" + name + "' is a " + TypeName(uniform->type) + ", so " + setter +
-                  " does not apply to it: ignored");
-        }
-        return nullptr;
-    }
-    return uniform;
-}
-
-void VulkanMaterial::WriteFloats(const std::uint32_t offset, const float* values, const std::uint32_t count)
-{
-    if (offset + count * sizeof(float) <= _block.size())
-    {
-        std::memcpy(_block.data() + offset, values, count * sizeof(float));
-    }
-}
-
-void VulkanMaterial::SetInt(const std::string& name, const int value)
-{
-    std::lock_guard lock(_mutex);
-    if (const Uniform* uniform = Find(name, UniformType::Int, "SetInt"))
-    {
-        const std::int32_t stored = value;
-        std::memcpy(_block.data() + uniform->offset, &stored, sizeof(stored));
-    }
-}
-
-void VulkanMaterial::SetFloat(const std::string& name, const float value)
-{
-    std::lock_guard lock(_mutex);
-    if (const Uniform* uniform = Find(name, UniformType::Float, "SetFloat"))
-    {
-        WriteFloats(uniform->offset, &value, 1);
-    }
-}
-
-void VulkanMaterial::SetVec2(const std::string& name, const float x, const float y)
-{
-    std::lock_guard lock(_mutex);
-    if (const Uniform* uniform = Find(name, UniformType::Vec2, "SetVec2"))
-    {
-        const float values[2] = {x, y};
-        WriteFloats(uniform->offset, values, 2);
-    }
-}
-
-void VulkanMaterial::SetVec2(const std::string& name, N2Engine::Math::Vector2& value)
-{
-    SetVec2(name, value.x, value.y);
-}
-
-void VulkanMaterial::SetVec3(const std::string& name, const float x, const float y, const float z)
-{
-    std::lock_guard lock(_mutex);
-    if (const Uniform* uniform = Find(name, UniformType::Vec3, "SetVec3"))
-    {
-        const float values[3] = {x, y, z};
-        WriteFloats(uniform->offset, values, 3);
-    }
-}
-
-void VulkanMaterial::SetVec3(const std::string& name, N2Engine::Math::Vector3& value)
-{
-    SetVec3(name, value.x, value.y, value.z);
-}
-
-void VulkanMaterial::SetVec4(const std::string& name, const float x, const float y, const float z, const float w)
-{
-    std::lock_guard lock(_mutex);
-    if (const Uniform* uniform = Find(name, UniformType::Vec4, "SetVec4"))
-    {
-        const float values[4] = {x, y, z, w};
-        WriteFloats(uniform->offset, values, 4);
-    }
-}
-
-void VulkanMaterial::SetVec4(const std::string& name, N2Engine::Math::Vector4& value)
-{
-    SetVec4(name, value.x, value.y, value.z, value.w);
-}
-
-void VulkanMaterial::SetColor(const std::string& name, const float r, const float g, const float b, const float a)
-{
-    std::lock_guard lock(_mutex);
-    if (const Uniform* uniform = Find(name, UniformType::Vec4, "SetColor"))
-    {
-        const float values[4] = {r, g, b, a};
-        WriteFloats(uniform->offset, values, 4);
-    }
-}
-
-void VulkanMaterial::SetTexture(ITexture* texture)
-{
-    // The id is asked for before this material's lock is taken (the resolver takes its own leaf lock)
-    const std::uint64_t id = (_textureIdOf && texture != nullptr) ? _textureIdOf(texture) : 0;
-    std::lock_guard lock(_mutex);
-    _texture = texture;
-    _textureId = id;
-}
-
-void VulkanMaterial::SetAuxTexture(const Common::AuxTexture which, ITexture* texture)
-{
-    const std::uint64_t id = (_textureIdOf && texture != nullptr) ? _textureIdOf(texture) : 0;
-    std::lock_guard lock(_mutex);
-    if (const auto slot = static_cast<std::size_t>(which); slot < _aux.size())
-    {
-        _aux[slot] = texture;
-        _auxIds[slot] = id;
-    }
-}
-
-ITexture* VulkanMaterial::GetAuxTexture(const Common::AuxTexture which) const
-{
-    std::lock_guard lock(_mutex);
-    const auto slot = static_cast<std::size_t>(which);
-    return slot < _aux.size() ? _aux[slot] : nullptr;
-}
-
-ITexture* VulkanMaterial::GetTexture() const
-{
-    std::lock_guard lock(_mutex);
-    return _texture;
-}
-
-void VulkanMaterial::SetTextureIdForTest(const std::size_t slot, const std::uint64_t id)
-{
-    std::lock_guard lock(_mutex);
-    if (slot == 0)
-    {
-        _textureId = id;
-    }
-    else if (slot - 1 < _auxIds.size())
-    {
-        _auxIds[slot - 1] = id;
-    }
-}
-
-VulkanMaterial::Snapshot VulkanMaterial::TakeSnapshot() const
-{
-    std::lock_guard lock(_mutex);
-    Snapshot snapshot;
-    snapshot.block = _block;
-    snapshot.textures[0] = _texture;
-    snapshot.textureIds[0] = _textureId;
-    for (std::size_t i = 0; i < _aux.size(); ++i)
-    {
-        snapshot.textures[1 + i] = _aux[i];
-        snapshot.textureIds[1 + i] = _auxIds[i];
-    }
-    return snapshot;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1167,7 +944,7 @@ IMaterial* VulkanRenderer::CreateMaterial(IShader* shader, ITexture* texture)
     }
 
     DrawState* const draw = _draw.get(); // the materials die with it, so it outlives them
-    auto material = std::make_unique<VulkanMaterial>(
+    auto material = std::make_unique<Renderer::Gpu::BlockMaterial>(
         chosen->kind, shader, texture, [this](const std::string& message) { LogOnce(message); },
         [draw](const ITexture* candidate) -> std::uint64_t
         {
@@ -1216,7 +993,7 @@ void VulkanRenderer::UpdateSceneLighting(const Common::SceneLightingData& lighti
     // lit draws made after this call copy it into the ring (see the header comment: GL semantics, and nothing a frame in
     // flight reads is rewritten). Called inside a frame, outside one, or several times in a frame; before the first call the
     // block holds the defaults
-    const LightingBlock block = BuildLightingBlock(lighting, cameraPosition);
+    const Renderer::Gpu::LightingBlock block = Renderer::Gpu::BuildLightingBlock(lighting, cameraPosition);
     std::lock_guard lock(_mutex);
     _draw->lighting = block;
     ++_draw->lightingVersion;
@@ -1230,7 +1007,7 @@ bool VulkanRenderer::GetMaterialBlockForTest(const IMaterial* material, std::vec
     {
         return false;
     }
-    const VulkanMaterial::Snapshot snapshot = it->second->TakeSnapshot();
+    const Renderer::Gpu::BlockMaterial::Snapshot snapshot = it->second->TakeSnapshot();
     bytes.assign(snapshot.block.begin(), snapshot.block.end());
     return true;
 }
@@ -1313,16 +1090,16 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     {
         return;
     }
-    const VulkanMaterial& vulkanMaterial = *materialIt->second;
+    const Renderer::Gpu::BlockMaterial& blockMaterial = *materialIt->second;
 
-    const VkPipeline pipeline = GetPipelineLocked(vulkanMaterial.kind, state, draw.wireframe);
+    const VkPipeline pipeline = GetPipelineLocked(blockMaterial.kind, state, draw.wireframe);
     if (pipeline == VK_NULL_HANDLE)
     {
         return; // no shaders in this build, or the pipeline could not be made (logged)
     }
 
     // The textures: a texture the renderer no longer has (destroyed since it was set) is replaced by the 1x1 default
-    const VulkanMaterial::Snapshot snapshot = vulkanMaterial.TakeSnapshot();
+    const Renderer::Gpu::BlockMaterial::Snapshot snapshot = blockMaterial.TakeSnapshot();
     std::array<VkImageView, kSamplerCount> views{};
     std::array<VkSampler, kSamplerCount> samplers{};
     for (std::size_t i = 0; i < kSamplerCount; ++i)
@@ -1342,7 +1119,7 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
         if (texture == nullptr || texture->view == VK_NULL_HANDLE || texture->sampler == VK_NULL_HANDLE)
         {
             // The text shader's atlas is its base sampler, and an absent one must read sdf 0 (draw nothing), not white
-            texture = (i == 0 && vulkanMaterial.kind == BuiltInShader::Text) ? draw.textBaseDefault.get() : draw.defaults[i].get();
+            texture = (i == 0 && blockMaterial.kind == BuiltInShader::Text) ? draw.textBaseDefault.get() : draw.defaults[i].get();
         }
         if (texture == nullptr)
         {
@@ -1356,7 +1133,7 @@ void VulkanRenderer::DrawLocked(IMesh* mesh, const float* modelMatrix, IMaterial
     // draw whose chunk does not hold the current lighting yet, the lighting block after them
     const uint32_t slot = _currentFrame;
     FrameDrawState& frame = draw.frames[slot];
-    const bool lit = vulkanMaterial.kind == BuiltInShader::Lit;
+    const bool lit = blockMaterial.kind == BuiltInShader::Lit;
     const VkDeviceSize perDrawBytes = AlignUp(kPerDrawBlockSize, draw.uniformAlignment);
     const VkDeviceSize materialBytes = AlignUp(kMaterialBlockRange, draw.uniformAlignment);
     const VkDeviceSize lightingBytes = AlignUp(kLightingBlockSize, draw.uniformAlignment);

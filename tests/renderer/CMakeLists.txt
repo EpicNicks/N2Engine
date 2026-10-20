@@ -41,4 +41,8 @@ endif()
 # with tests/engine and tests/assetimport
 target_include_directories(renderer_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/common)
 
+# tests/renderer/common has the cross-backend test helpers (CrossBackendDiff.hpp, BlendReference.hpp) every GPU backend's
+# tests share: included as "common/<name>.hpp" from tests/renderer
+target_include_directories(renderer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 add_test(NAME renderer_tests COMMAND renderer_tests)

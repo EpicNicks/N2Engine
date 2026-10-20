@@ -17,7 +17,7 @@
 #include "engine/text/Font.hpp"
 #include "engine/text/TextEffects.hpp"
 
-#include "CrossBackendDiff.hpp"
+#include "common/CrossBackendDiff.hpp"
 #include "VulkanDrawTestUtil.hpp"
 #include "VulkanTestFixture.hpp"
 #include "VulkanTextSceneUtil.hpp"

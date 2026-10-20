@@ -23,7 +23,7 @@
 #include "engine/rendering/Mesh.hpp"
 #include "engine/rendering/MeshRenderer.hpp"
 
-#include "CrossBackendDiff.hpp"
+#include "common/CrossBackendDiff.hpp"
 #include "VulkanTestFixture.hpp"
 
 // The editor's viewport is lit by the lights of the scene it shows (#6, E4): tests/engine/rendering/

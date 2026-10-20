@@ -8,12 +8,12 @@
 
 #include <math/Vector3.hpp>
 
+#include "renderer/common/GpuShaderInterface.hpp"
 #include "renderer/common/SceneLighting.hpp"
-#include "renderer/vulkan/VulkanShaderInterface.hpp"
 
 // The lit shader's lighting block (#43, stage C): the 752-byte std140 block that UpdateSceneLighting fills from a
-// SceneLightingData, as a pure function with no Vulkan in it (so a test needs no device). Every offset comes from the
-// tables of VulkanShaderInterface.hpp at compile time (LightingOffset, MemberOffset: a name that is not in a table does
+// SceneLightingData, as a pure function with no GPU API in it (so a test needs no device). Every offset comes from the
+// tables of GpuShaderInterface.hpp at compile time (LightingOffset, MemberOffset: a name that is not in a table does
 // not compile), so there is no second hand-typed copy; VulkanShaderParityTests.cpp checks the tables against lit.frag.
 //
 // It mirrors OpenGLRenderer::UpdateSceneLighting, which sets the same values on the lit program by name:
@@ -31,7 +31,7 @@
 //                           smoothstep decides what that means)
 // Everything else in the block (the unused light slots) is zero.
 
-namespace Renderer::Vulkan
+namespace Renderer::Gpu
 {
     using LightingBlock = std::array<std::uint8_t, ShaderInterface::kLightingBlockSize>;
 

@@ -8,14 +8,15 @@
 
 #include "renderer/common/RenderTypes.hpp"
 
-// The interface of the Vulkan backend's three built-in shaders (#43, stage B), as C++: which uniform lives in which
-// block, at which std140 offset, and where the vertex attributes and samplers are. There is no SPIR-V reflection: this
-// table IS the contract between the C++ side (VulkanMaterial writes a name's value at its offset; the pipeline layout and
+// The interface of the three built-in shaders shared by the GPU backends (#43, stage B), as C++: which uniform lives in
+// which block, at which std140 offset, and where the vertex attributes and samplers are. There is no SPIR-V reflection: this
+// table IS the contract between the C++ side (BlockMaterial writes a name's value at its offset; the pipeline layout and
 // vertex input follow it) and the GLSL under renderer/shaders/vulkan/. tests/renderer/vulkan/VulkanShaderParityTests.cpp
 // parses the GLSL as text and checks every entry against the declaration (block, member order, type, std140 offset),
 // every uniform Material::ApplyUniforms sets against it, and the vertex attributes against Common::Vertex.
 //
-// Vulkan-free on purpose (no vulkan.h), so the parity test and anything else can include it on any machine.
+// Backend-free on purpose (no vulkan.h, no GPU API of any kind), so the parity test, any backend and anything else can
+// include it on any machine, with the Vulkan backend on or off.
 //
 // Blocks (std140):
 //   set 0, binding 0  PerDraw   (dynamic offset per draw)  uModel, uView, uProjection: row-major matrices, copied as the
@@ -25,7 +26,7 @@
 //                                                          it into the frame's ring, see VulkanDraw.cpp)
 //   set 1, binding 0  Material  (dynamic offset per draw)  the material's values, snapshotted at DrawMesh
 //   set 1, binding 1..5 samplers                           the base texture, then the AuxTexture slots in enum order
-namespace Renderer::Vulkan::ShaderInterface
+namespace Renderer::Gpu::ShaderInterface
 {
     enum class BuiltInShader : std::uint8_t
     {
@@ -242,7 +243,7 @@ namespace Renderer::Vulkan::ShaderInterface
     static_assert(kSpotLightMembers.back().offset + 4 <= kSpotLightStride);
 
     /// What a new material of a shader holds before anything is set: the OpenGL defaults (OpenGLMaterial's constructor and
-    /// OpenGLRenderer::CreateMaterial), so a Vulkan material draws what an OpenGL one does. `values` holds the vec4 or vec3
+    /// OpenGLRenderer::CreateMaterial), so a GPU-backend material draws what an OpenGL one does. `values` holds the vec4 or vec3
     /// components, or the one float or int (an int is the value cast). uHasTexture is not here: it depends on whether a
     /// texture was given at creation
     struct MaterialDefault

@@ -17,9 +17,9 @@
 #include <renderer/common/RenderTypes.hpp>
 #include <renderer/common/SceneLighting.hpp>
 #include <renderer/vulkan/VulkanRenderer.hpp>
-#include <renderer/vulkan/VulkanShaderInterface.hpp>
+#include <renderer/common/GpuShaderInterface.hpp>
 
-#include "BlendReference.hpp"
+#include "common/BlendReference.hpp"
 #include "VulkanDrawTestUtil.hpp"
 #include "VulkanTestFixture.hpp"
 
@@ -450,7 +450,7 @@ TEST_F(VulkanBlendTest, BlendPipelinesAreMadeOncePerKeyAndAdditiveWithoutBlendSh
     additiveOnly.additive = true;
     RenderFrame([&] { R().DrawMesh(quad, Identity, red, additiveOnly); });
     EXPECT_EQ(R().GetPipelineCountForTest(), 3u) << "additive without blend is the opaque draw: no new pipeline";
-    EXPECT_TRUE(R().CreatePipelineForTest(Renderer::Vulkan::ShaderInterface::BuiltInShader::Unlit, additiveOnly, false));
+    EXPECT_TRUE(R().CreatePipelineForTest(Renderer::Gpu::ShaderInterface::BuiltInShader::Unlit, additiveOnly, false));
     EXPECT_EQ(R().GetPipelineCountForTest(), 3u);
 
     // Depth write still distinguishes pipelines (the same blend, writing depth or not)

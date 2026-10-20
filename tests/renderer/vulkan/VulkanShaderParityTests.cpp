@@ -18,7 +18,7 @@
 #include <renderer/common/ITexture.hpp>
 #include <renderer/common/LightingMath.hpp>
 #include <renderer/common/RenderTypes.hpp>
-#include <renderer/vulkan/VulkanShaderInterface.hpp>
+#include <renderer/common/GpuShaderInterface.hpp>
 
 #include "engine/rendering/Material.hpp"
 #include "engine/rendering/Texture.hpp"
@@ -28,7 +28,7 @@
 // renderer/shaders/vulkan/ as TEXT. It ties together, for the three built-in shaders:
 //   - every uniform Material::ApplyUniforms sets for the shader GpuCache would pick (and every default
 //     OpenGLRenderer::CreateMaterial sets, and every uniform the GL shaders declare) has an entry in the interface table
-//     (VulkanShaderInterface.hpp) AND is declared as a member of the right block in the GLSL;
+//     (GpuShaderInterface.hpp) AND is declared as a member of the right block in the GLSL;
 //   - the table's std140 offsets, sizes and member order are the ones computed from the GLSL block declarations (a small
 //     std140 calculator: scalars, vectors, mat4, and the light structs and their arrays);
 //   - the vertex attribute locations of the GLSL are the table's and Common::Vertex's offsets, and what the vertex stage
@@ -43,7 +43,7 @@ using namespace N2Engine;
 using Rendering::Material;
 using Rendering::ShadingModel;
 using Rendering::Texture;
-namespace Vk = Renderer::Vulkan::ShaderInterface;
+namespace Vk = Renderer::Gpu::ShaderInterface;
 
 namespace
 {
@@ -1189,7 +1189,7 @@ TEST(VulkanShaderParityTest, EveryDefaultTheOpenGlRendererGivesALitMaterialIsInT
         seen.insert(name);
         if (name == "uHasTexture")
         {
-            continue; // depends on the texture given at creation (written by the VulkanMaterial constructor)
+            continue; // depends on the texture given at creation (written by the BlockMaterial constructor)
         }
         const std::span<const Vk::MaterialDefault> defaults = Vk::kLitMaterialDefaults;
         const auto entryDefault = std::find_if(defaults.begin(), defaults.end(),

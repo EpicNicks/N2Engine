@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "CrossBackendDiff.hpp"
+#include "common/CrossBackendDiff.hpp"
 #include "VulkanDrawTestUtil.hpp"
 
 // What the Vulkan text tests share (#43, stage E): VulkanTextShaderTests.cpp, VulkanTextGoldenTests.cpp,

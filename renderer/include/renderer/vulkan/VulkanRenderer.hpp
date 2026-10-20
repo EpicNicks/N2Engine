@@ -21,12 +21,15 @@
 #include "renderer/common/ITexture.hpp"
 #include "renderer/common/IMaterial.hpp"
 #include "renderer/common/RenderState.hpp"
-#include "renderer/vulkan/VulkanShaderInterface.hpp"
+#include "renderer/common/GpuShaderInterface.hpp"
 
 namespace Renderer
 {
     namespace Vulkan
     {
+        // The shader interface table is shared by the GPU backends (renderer/common/GpuShaderInterface.hpp)
+        namespace ShaderInterface = Gpu::ShaderInterface;
+
         struct GPUInfo
         {
             VkPhysicalDevice device;
