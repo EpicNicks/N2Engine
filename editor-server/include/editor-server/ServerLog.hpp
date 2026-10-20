@@ -33,4 +33,17 @@ namespace N2Engine::Editor::ServerLog
     {
         Logger::Info(message, Logger::LogSensitivity::Public);
     }
+
+    /// A warning or error about the project the host reads or runs (a game frame that threw, an asset that did not
+    /// reload): every role reads it, as it reads a script's own errors. Its text passes the public view's host path
+    /// scrubbing.
+    inline void PublicWarn(const std::string_view message)
+    {
+        Logger::Warn(message, Logger::LogSensitivity::Public);
+    }
+
+    inline void PublicError(const std::string_view message)
+    {
+        Logger::Error(message, Logger::LogSensitivity::Public);
+    }
 }

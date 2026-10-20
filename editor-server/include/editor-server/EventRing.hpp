@@ -110,7 +110,7 @@ namespace N2Engine::Editor
         /// The current epoch (never 0); each view has its own
         [[nodiscard]] uint32_t Epoch(EventView view = EventView::Full) const;
 
-        /// The folders whose path prefix a PublicOnly reader sees as res:// (the open project's folder). Replaces the
+        /// The folders whose path prefix a PublicOnly reader sees as res:// (the open project's assets folder, which is res://). Replaces the
         /// earlier list; applies to lines pushed after it.
         void SetHostRoots(std::vector<std::string> roots);
         /// text with host paths made safe to show a non-admin: a path under a known root becomes res://..., any other

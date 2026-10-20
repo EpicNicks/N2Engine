@@ -5670,7 +5670,7 @@ namespace N2Engine::Editor
             catch (const std::exception &e)
             {
                 // Another frame would only throw the same way sixty times a second
-                ServerLog::Error(std::string("A game frame failed, so the game is paused: ") + e.what());
+                ServerLog::PublicError(std::string("A game frame failed, so the game is paused: ") + e.what());
                 SetPausedState(true);
             }
         }
@@ -6755,7 +6755,7 @@ namespace N2Engine::Editor
                 auto text = ReadTextFile(loader.Resolve(path));
                 if (!text)
                 {
-                    ServerLog::Warn("Can't reload " + path.ToString() + ": " + text.error());
+                    ServerLog::PublicWarn("Can't reload " + path.ToString() + ": " + text.error());
                     return;
                 }
                 script->SetSourceCode(*text);
@@ -6766,11 +6766,11 @@ namespace N2Engine::Editor
         }
         catch (const std::exception &e)
         {
-            ServerLog::Error(std::format("Can't reload {}: {}", path.ToString(), SanitizeForLog(e.what(), 300)));
+            ServerLog::PublicError(std::format("Can't reload {}: {}", path.ToString(), SanitizeForLog(e.what(), 300)));
         }
         catch (...)
         {
-            ServerLog::Error("Can't reload " + path.ToString());
+            ServerLog::PublicError("Can't reload " + path.ToString());
         }
     }
 
@@ -7794,8 +7794,10 @@ namespace N2Engine::Editor
 
     void EditorServer::SetProject(std::filesystem::path root, IO::ProjectFile project)
     {
-        // What a non-admin reader sees as res:// in a line that names the project's folder
-        _events.SetHostRoots({root.string(), root.generic_string()});
+        // What a non-admin reader sees as res:// is the project's assets folder (the project folder itself is user://,
+        // and anything else under it reads as a hidden host path)
+        const std::filesystem::path assets = root / "assets";
+        _events.SetHostRoots({assets.string(), assets.generic_string()});
         _project = ProjectState{std::move(root), std::move(project)};
     }
 

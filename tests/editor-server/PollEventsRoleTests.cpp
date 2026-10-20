@@ -486,6 +486,32 @@ TEST(HostPathScrubTest, APublicLineIsScrubbedForThePublicViewAndWholeForTheFullO
     EXPECT_EQ(pub.events[1].at("seq").get<uint32_t>(), 2u);
 }
 
+TEST(HostPathScrubTest, TheAssetsFolderIsResAndTheRestOfTheProjectFolderIsHidden)
+{
+    EventRing ring;
+    ring.SetHostRoots({"/srv/games/proj/assets"});
+    ring.PushLog(Logger::LogLevel::Error, "Failed to load /srv/games/proj/assets/tex.png", 1, Pub);
+    ring.PushLog(Logger::LogLevel::Error, "Bad state /srv/games/proj/.n2/asset-state.json", 2, Pub);
+    const EventBatch pub = ring.Read(0, All, 0, EventView::PublicOnly);
+    ASSERT_EQ(pub.events.size(), 2u);
+    EXPECT_EQ(pub.events[0].at("message").get<std::string>(), "Failed to load res://tex.png");
+    EXPECT_EQ(pub.events[1].at("message").get<std::string>(), "Bad state <host path>");
+}
+
+TEST(HostPathScrubTest, AProjectFailureLineIsPublicAndScrubbed)
+{
+    EventRing ring;
+    ring.SetHostRoots({"/srv/games/proj/assets"});
+    const size_t token = Logger::logEvent += [&ring](const std::string_view message, const Logger::LogLevel level)
+    { ring.PushLog(level, message, 1, Logger::CurrentSensitivity()); };
+    ServerLog::PublicError("A game frame failed, so the game is paused: bad /srv/games/proj/assets/a.lua");
+    ServerLog::Error("audit: admin only");
+    Logger::logEvent -= token;
+    const EventBatch pub = ring.Read(0, All, 0, EventView::PublicOnly);
+    ASSERT_EQ(pub.events.size(), 1u);
+    EXPECT_EQ(pub.events[0].at("message").get<std::string>(), "A game frame failed, so the game is paused: bad res://a.lua");
+}
+
 // ==================== The Logger's tag and the host's own lines ====================
 
 TEST(LoggerSensitivityTest, ASubscriberSeesTheTagOfTheLineItIsGiven)
