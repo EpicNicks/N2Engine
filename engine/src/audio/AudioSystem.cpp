@@ -81,7 +81,7 @@ namespace N2Engine::Audio
         {
 #ifdef N2ENGINE_PLATFORM_WEB
             // Logged as Info: the caller reports the one warning (Application: "Subsystem Audio failed")
-            Logger::Info("Failed to open an OpenAL device (this page has no WebAudio, or this is a headless run)");
+            Logger::Info("Failed to open an OpenAL device (no WebAudio here: a browser without AudioContext, or a run under node)");
 #else
             Logger::Error("Failed to open OpenAL device");
 #endif
@@ -105,10 +105,25 @@ namespace N2Engine::Audio
 
     bool AudioSystem::IsLoopbackSupported()
     {
+#if defined(N2ENGINE_PLATFORM_WEB) && defined(N2ENGINE_WEB_WEBAUDIO)
+        // Emscripten's OpenAL (WebAudio) has no ALC_SOFT_loopback (and no alcGetProcAddress to load it with)
+        return false;
+#else
         // A device-independent extension, so it can be asked without a device
         return alcIsExtensionPresent(nullptr, "ALC_SOFT_loopback") == ALC_TRUE;
+#endif
     }
 
+#if defined(N2ENGINE_PLATFORM_WEB) && defined(N2ENGINE_WEB_WEBAUDIO)
+    bool AudioSystem::OpenLoopbackDevice()
+    {
+        // Not in the WebAudio build at all: the port lacks alcGetProcAddress, so this function's extension loading cannot
+        // even link. The audio system reports the missing capability and stays disabled (the editor host, the only user
+        // of the loopback stream, is not built for the web). docs/web-build.html
+        Logger::Info("The web build's OpenAL (WebAudio) has no ALC_SOFT_loopback extension; there is no streamed audio output");
+        return false;
+    }
+#else
     bool AudioSystem::OpenLoopbackDevice()
     {
         if (!IsLoopbackSupported())
@@ -184,6 +199,7 @@ namespace N2Engine::Audio
                                  ToString(format.sampleFormat)));
         return true;
     }
+#endif
 
     bool AudioSystem::FinishInitialize()
     {
