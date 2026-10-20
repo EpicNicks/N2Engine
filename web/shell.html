@@ -63,6 +63,16 @@
     if (logLines.length > 100) logLines.shift();
   }
 
+  // Audio (stage 4): the engine's AudioContext (Emscripten's OpenAL) is created inside the Start click below, which is a
+  // gesture, but a browser may still keep it suspended, and suspends it again while the tab is hidden. This remembers every
+  // context made from here on, resumes them on the first click, key press or touch, and suspends and resumes them with the
+  // tab (n2-loader.js, createAudioUnlock). No sound, or a failed context, is not an error here: the engine reports it.
+  if (typeof N2Loader === 'object' && typeof N2Loader.createAudioUnlock === 'function') {
+    N2Loader.createAudioUnlock({
+      onEvent: function (name, detail) { log('loader: ' + name + (detail && detail.reason ? ' (' + detail.reason + ')' : '')); }
+    }).install();
+  }
+
   window.addEventListener('error', function (event) { showError(event.message || 'script error'); });
   window.addEventListener('unhandledrejection', function (event) {
     showError(String(event.reason && event.reason.message ? event.reason.message : event.reason));
@@ -145,7 +155,8 @@
     });
   });
 
-  // A click is the user gesture browsers require before a page may start audio (audio is not in the web build yet)
+  // A click is the user gesture browsers require before a page may start audio: the engine starts here, so its audio
+  // output is created inside this click (see createAudioUnlock above for a browser that suspends it anyway)
   startButton.addEventListener('click', function () {
     if (!engine || failed) return;
     gate.style.display = 'none';

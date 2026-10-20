@@ -82,6 +82,7 @@
 <li><a href="#source-pool">Source pool</a></li>
 <li><a href="#shutdown">Shutdown semantics</a></li>
 <li><a href="#clips">AudioClip and loaders</a></li>
+<li><a href="#web">Web build (WebAudio)</a></li>
 <li><a href="#lua">Lua API</a></li>
 </ol>
 </div>
@@ -111,6 +112,7 @@
 <tr><td><code>ApplicationOptions::isHeadless</code></td><td><code>Initialize(AudioOutput::Loopback)</code>: audio runs on an OpenAL Soft loopback device, so nothing plays locally and no sound card is needed, and the mix is streamed to the editor client <span class="badge">PR #56</span>. Health is <code>Running</code> ("Loopback 48000 Hz, 2 channels, float32 (streamed to the editor client)"). See <a href="#loopback">Loopback output</a>. Before PR #56, headless mode skipped audio (<code>Disabled</code>).</td></tr>
 <tr><td>Headless, and OpenAL has no <code>ALC_SOFT_loopback</code></td><td><code>Initialize</code> logs "OpenAL has no ALC_SOFT_loopback extension; audio is disabled (nothing to stream)" and returns <code>false</code>; the engine warns and continues without sound, and health is <code>Failed</code> ("No OpenAL loopback device ...") <span class="badge">PR #56</span>. OpenAL Soft always has the extension; this covers another OpenAL implementation.</td></tr>
 <tr><td>No audio device / context failure</td><td><code>Initialize</code> returns <code>false</code>; the engine logs "Failed to initialize audio!" and "Audio will be disabled. Game will continue without sound."; health is <code>Failed</code>. The game keeps running.</td></tr>
+<tr><td>Web build (<code>N2ENGINE_PLATFORM_WEB</code>) <span class="badge">PR #181</span></td><td>Even though the web player is headless (no window), it does <strong>not</strong> use the loopback output: <code>Application::Init</code> calls <code>Initialize()</code> for the browser's device (Emscripten's OpenAL on WebAudio). With no <code>AudioContext</code> (node, an old browser) or a context the browser refuses, <code>Initialize</code> returns <code>false</code>, health is <code>Failed</code> ("No WebAudio output: audio is off, the game continues without sound") and the log has the one warning <code>Subsystem Audio failed</code>; the native "Failed to initialize audio!" lines are not used. <code>Initialize(AudioOutput::Loopback)</code> always returns <code>false</code> there (<code>IsLoopbackSupported()</code> is false: the port has no <code>ALC_SOFT_loopback</code>). See <a href="#web">Web build</a>.</td></tr>
 <tr><td>CI and tests</td><td>The Tests workflow sets <code>ALSOFT_DRIVERS=null</code>, and the audio test fixture sets it too before the first ALC call, so OpenAL Soft uses its silent null backend and a real context exists without a sound card. The loopback tests need no backend at all: a loopback device has none <span class="badge">PR #56</span>.</td></tr>
 </tbody>
 </table>
@@ -425,6 +427,17 @@ if (!h.IsValid()) { /* not initialized, group full, or no source */ }
 <p>WAV mono/stereo and 8-bit files load (8-bit converted to 16-bit) with sample values preserved; missing or invalid files return empty data; clip creation rejects empty data and unsupported channel counts, replaces a previous buffer, and is not failed by a stale OpenAL error.</p>
 </div>
 <p class="src">Source: <code>engine/src/audio/AudioClip.cpp</code> â€” <code>CreateFromData</code>, <code>Unload</code>, <code>AudioClipLoaderRegistrar</code>; <code>engine/src/audio/AudioClipLoader.cpp</code> â€” <code>LoadAudioClipFromFile</code>; <code>engine/src/audio/AudioLoaders.cpp</code>; <code>engine/include/engine/io/Resources.hpp</code> â€” <code>Resources::RegisterLoader</code>; tests: <code>WAVLoaderTest.*</code>, <code>AudioClipTest.*</code> (including <code>ClipFromAnEarlierContextNeitherPlaysNorDeletesANewBuffer</code>)</p>
+
+<h2 id="web">Web build (WebAudio) <span class="badge">PR #181</span></h2>
+<p>On the web the OpenAL calls above run on Emscripten's OpenAL, which plays through Web Audio. Everything on this page holds, with these differences (all behind <code>N2ENGINE_PLATFORM_WEB</code> and <code>N2ENGINE_WEB_WEBAUDIO</code>; a native build is the same code as before):</p>
+<ul>
+<li><strong>Browsers keep audio suspended until a user gesture.</strong> <code>AudioSystem::IsOutputSuspended()</code> is true while the browser keeps the page's <code>AudioContext</code> from running (before the first click, key press or touch, or while the tab is hidden); it is always false natively. While it is true, <code>PlayOneShot</code> returns an invalid handle and <code>AudioSource::Play()</code> does nothing: the sound is dropped, not queued, and the first drop of a run logs one Info line. Sounds that are already playing are untouched. The page's script (<code>web/n2-loader.js</code>) resumes the context on the first gesture. A game should start its sound after an input; the web player's Start click already counts.</li>
+<li><strong>No loopback output</strong> (the editor's streamed audio): the capability is absent, <code>IsLoopbackSupported()</code> is false and <code>Initialize(AudioOutput::Loopback)</code> fails.</li>
+<li><strong>Distance attenuation</strong> uses Web Audio's <code>inverse</code> model, which has no maximum distance: <code>SetMaxDistance</code> reaches the panner but a sound beyond it keeps falling off (not verified by ear).</li>
+<li>Master volume, mixer groups, pitch, looping, one-shots and the source pool (32 pre-allocated) work as described above (the audible result is not verified in a browser).</li>
+</ul>
+<p>What the engine calls, what the port covers, the backend choice (<code>N2ENGINE_WEB_AUDIO</code>), the node behaviour and what is not verified: <a href="web-build.html#audio">Web build: Audio</a>. By hand: <a href="web-checklist.html#audio">the checklist</a>.</p>
+<p class="src">Source: <code>engine/src/audio/AudioSystem.cpp</code> — <code>IsOutputSuspended</code>, <code>RefuseWhileSuspended</code>, <code>OpenLoopbackDevice</code>, <code>PlayOneShot</code>; <code>engine/src/audio/AudioSource.cpp</code> — <code>Play</code>; <code>engine/src/Application.cpp</code> — <code>Application::Init</code>; <code>web/n2-loader.js</code> — <code>createAudioUnlock</code>; tests: <code>WebAudioDegradeTests</code> (<code>tests/web/WebAudioTests.cpp</code>), <code>scripts/web-audio-unlock-test.mjs</code></p>
 
 <h2 id="lua">Lua API</h2>
 <p>Lua sees <code>AudioSource</code> and <code>AudioListener</code> as component handles <span class="badge">PR #29</span>: every method goes through a checked handle and raises "attempt to use a destroyed â€¦" once the component is torn down; <code>IsValid()</code> checks first. See <a href="scripting-lua.html">Lua scripting</a>.</p>

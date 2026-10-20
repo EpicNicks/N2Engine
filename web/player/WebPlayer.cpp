@@ -256,6 +256,21 @@ namespace
         }
         g_player.ended = true;
         emscripten_cancel_main_loop();
+        if (g_player.smokeFrames > 0)
+        {
+            // The audio row of the engine's health, for the node smoke test (node has no WebAudio: it must be "failed")
+            for (const SubsystemStatus &status : Application::GetInstance().GetHealth().subsystems)
+            {
+                if (status.name == "Audio")
+                {
+                    const char *state = status.state == SubsystemState::Running    ? "running"
+                                        : status.state == SubsystemState::Failed   ? "failed"
+                                        : status.state == SubsystemState::Disabled ? "disabled"
+                                                                                   : "not-started";
+                    std::printf("N2_WEB_AUDIO state=%s\n", state);
+                }
+            }
+        }
         Application::GetInstance().EndRun();
         if (g_player.smokeFrames > 0)
         {
@@ -350,8 +365,10 @@ int main(int argc, char *argv[])
 
     Application &application = Application::GetInstance();
     // Headless is the engine's windowless software path (Window::UsesNoWindow): no GLFW, frames read back and shown by
-    // the page. It also makes the audio system try a loopback device, which the OpenAL stand-in refuses: audio stays
-    // off until stage 4 gives the web build WebAudio.
+    // the page. On the web it does not send the sound to a loopback device: Application opens the browser's output
+    // (Emscripten's OpenAL on WebAudio), so the game's sounds play from the page. That context is created here, inside
+    // the Start button's click (callMain), and the loader resumes it on the first gesture if the browser kept it
+    // suspended (web/n2-loader.js). With no WebAudio (node, a browser without it) audio stays off with one warning.
     application.Init({
         .projectPath = projectDir.string(),
         .physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX,

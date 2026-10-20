@@ -280,5 +280,230 @@
     return { run: run, hooks: hooks, manifest: function () { return manifest; } };
   }
 
-  return { create: create, LoadError: LoadError, files: { manifest: MANIFEST, wasm: WASM, data: DATA } };
+  // ---- Audio unlock (stage 4) ----
+  //
+  // Browsers keep an AudioContext "suspended" until the page has had a user gesture, and suspend it again for a hidden tab.
+  // Emscripten's OpenAL (the web build's audio) creates its AudioContext inside the engine, where the page cannot reach it,
+  // so install() wraps the page's AudioContext constructor (window.AudioContext and webkitAudioContext) to remember every
+  // context made after that. Call it before the engine starts (the page does, before loader.run).
+  //
+  //   * Every remembered context arms gesture listeners on the document (whatever its state). Only events that grant
+  //     user activation in HTML count: keydown (not Escape), a mouse pointerdown, a pointerup that is not from a mouse
+  //     (touch, pen) and touchend. A touch or pen pointerdown, a mouse pointerup and Escape are ignored: they neither
+  //     resume nor disarm. The first counting event calls resume() on each context that is not running, closed or
+  //     already resuming from an earlier gesture. The listeners are removed once no context needs a resume (none
+  //     suspended, no gesture's resume pending), so a later gesture does nothing; a gesture that finds every context
+  //     running removes them at once. A gesture's resume() that is refused, throws, or settles with the context still
+  //     not running keeps them armed for the next counting gesture; after MAX_RESUME_TRIES such refusals the next one
+  //     removes them (a browser that never allows it is not retried forever). The count starts again on any successful
+  //     resume, whenever every context is found running (or closed) with nothing pending (by a gesture, a settled
+  //     resume or the tab becoming visible, including a context the browser resumed by itself), and when a new
+  //     context is made; a new context also arms the listeners again.
+  //   * A hidden tab suspends the running contexts; the tab becoming visible resumes the ones this suspended and arms
+  //     the listeners while one is not running yet. That resume is not a gesture: its refusal does not count, and while
+  //     it is pending a gesture still calls resume() (calling it twice is harmless).
+  //   * Nothing throws: no AudioContext (no WebAudio), a constructor that throws (the engine sees that, as it would
+  //     without this wrapper), a resume() that rejects or throws, a context that is already closed.
+  //
+  // options: window (the global scope: default self), document (default window.document), onEvent(name, detail) with
+  // audio-installed, audio-unavailable, audio-context-created, audio-resumed, audio-resume-failed, audio-suspended-hidden,
+  // audio-resumed-visible. Returns { install, uninstall, contexts, isArmed }.
+  var GESTURES = ['pointerdown', 'pointerup', 'keydown', 'touchend'];
+  var MAX_RESUME_TRIES = 3;
+
+  function createAudioUnlock(options) {
+    options = options || {};
+    var win = options.window || (typeof self !== 'undefined' ? self : null);
+    var doc = options.document || (win && win.document) || null;
+    var onEvent = options.onEvent || function () {};
+    var contexts = [];
+    var suspendedHere = [];
+    var pending = []; // contexts whose resume() promise has not settled
+    var failures = 0;
+    var armed = false;
+    var installed = false;
+    var originals = null;
+    var listenerOptions = { capture: true, passive: true };
+
+    function emit(name, detail) {
+      try { onEvent(name, detail || {}); } catch (ignored) { /* a broken listener is not the unlock's problem */ }
+    }
+    function reasonOf(error) { return String(error && error.message ? error.message : error); }
+    function isRunning(context) { return context.state === 'running'; }
+    function isClosed(context) { return context.state === 'closed'; }
+
+    function arm() {
+      if (armed || !doc) return;
+      armed = true;
+      GESTURES.forEach(function (name) { doc.addEventListener(name, onGesture, listenerOptions); });
+    }
+    function disarm() {
+      if (!armed || !doc) return;
+      armed = false;
+      GESTURES.forEach(function (name) { doc.removeEventListener(name, onGesture, listenerOptions); });
+    }
+
+    function needsResume(context) { return !isRunning(context) && !isClosed(context); }
+
+    // Arms while a context still needs a resume or a gesture's resume is pending, disarms otherwise or once the gesture
+    // refusals in a row are used up. Every context found running (or closed) with nothing pending, however it got
+    // there (a resume, or the browser by itself, as iOS does after a call), starts the refusal count again.
+    function update() {
+      if (pending.length === 0 && !contexts.some(needsResume)) {
+        failures = 0;
+        disarm();
+        return;
+      }
+      if (failures > MAX_RESUME_TRIES) disarm(); else arm();
+    }
+
+    // fromGesture: started by an activating event. Only those count as pending (so a resume the tab started when it
+    // became visible, which may stay pending until an allowed one, never stops a gesture from asking again) and only
+    // their refusals use up MAX_RESUME_TRIES. A successful resume, from either, starts the count again.
+    function resume(context, eventName, fromGesture) {
+      var result;
+      try {
+        result = context.resume();
+      } catch (error) {
+        refused(error, fromGesture);
+        return;
+      }
+      if (result && typeof result.then === 'function') {
+        if (fromGesture) pending.push(context);
+        result.then(function () {
+          if (fromGesture) settled(context);
+          if (needsResume(context)) refused(new Error('still ' + context.state + ' after resume()'), fromGesture);
+          else succeeded(eventName);
+        }, function (error) {
+          if (fromGesture) settled(context);
+          refused(error, fromGesture);
+        });
+      } else if (needsResume(context)) {
+        refused(new Error('still ' + context.state + ' after resume()'), fromGesture);
+      } else {
+        succeeded(eventName);
+      }
+    }
+    function settled(context) {
+      var index = pending.indexOf(context);
+      if (index >= 0) pending.splice(index, 1);
+    }
+    function succeeded(eventName) {
+      failures = 0;
+      emit(eventName, {});
+      update();
+    }
+    function refused(error, fromGesture) {
+      emit('audio-resume-failed', { reason: reasonOf(error) });
+      if (fromGesture) ++failures;
+      update();
+    }
+
+    // The events that grant user activation (HTML "activation triggering input event"); the rest are ignored.
+    function isActivation(event) {
+      if (!event) return false;
+      switch (event.type) {
+        case 'pointerdown': return event.pointerType === 'mouse';
+        case 'pointerup': return event.pointerType !== 'mouse';
+        case 'keydown': return event.key !== 'Escape';
+        case 'touchend': return true;
+        default: return false;
+      }
+    }
+
+    function onGesture(event) {
+      if (!isActivation(event)) return;
+      contexts.filter(function (context) { return needsResume(context) && pending.indexOf(context) < 0; })
+              .forEach(function (context) { resume(context, 'audio-resumed', true); });
+      update();
+    }
+
+    function onVisibility() {
+      if (!doc) return;
+      if (doc.visibilityState === 'hidden' || doc.hidden === true) {
+        contexts.forEach(function (context) {
+          if (!isRunning(context) || suspendedHere.indexOf(context) >= 0) return;
+          suspendedHere.push(context);
+          try {
+            var result = context.suspend();
+            if (result && typeof result.catch === 'function') result.catch(function () {});
+          } catch (ignored) { /* already closed */ }
+          emit('audio-suspended-hidden', {});
+        });
+      } else {
+        var back = suspendedHere;
+        suspendedHere = [];
+        back.forEach(function (context) {
+          if (isClosed(context)) return;
+          resume(context, 'audio-resumed-visible', false);
+        });
+        // A context still not running (refused, pending, or suspended by the browser) waits for the next gesture
+        update();
+      }
+    }
+
+    function track(context) {
+      contexts.push(context);
+      emit('audio-context-created', { state: context.state });
+      failures = 0; // a new context gets the full MAX_RESUME_TRIES
+      arm();
+    }
+
+    function wrap(Native) {
+      // A function (not a class) so that `new AudioContext(options)` and a subclass-free call both work; the prototype is
+      // the native one, so instanceof and every method keep working. Reflect.construct builds the native object.
+      function Tracked() {
+        var context = Reflect.construct(Native, arguments, new.target || Tracked);
+        try { track(context); } catch (ignored) { /* tracking must never break the engine's own context */ }
+        return context;
+      }
+      Tracked.prototype = Native.prototype;
+      Object.setPrototypeOf(Tracked, Native);
+      return Tracked;
+    }
+
+    function install() {
+      if (installed) return true;
+      if (!win || !(win.AudioContext || win.webkitAudioContext) || typeof Reflect !== 'object') {
+        emit('audio-unavailable', { reason: 'no AudioContext here' });
+        return false;
+      }
+      installed = true;
+      originals = { AudioContext: win.AudioContext, webkitAudioContext: win.webkitAudioContext };
+      var wrapped = [];
+      ['AudioContext', 'webkitAudioContext'].forEach(function (name) {
+        var Native = originals[name];
+        if (!Native) return;
+        for (var i = 0; i < wrapped.length; ++i) {
+          if (wrapped[i].Native === Native) { win[name] = wrapped[i].Tracked; return; }
+        }
+        var Tracked = wrap(Native);
+        wrapped.push({ Native: Native, Tracked: Tracked });
+        win[name] = Tracked;
+      });
+      if (doc) doc.addEventListener('visibilitychange', onVisibility, listenerOptions);
+      emit('audio-installed', {});
+      return true;
+    }
+
+    function uninstall() {
+      if (!installed) return;
+      installed = false;
+      disarm();
+      if (doc) doc.removeEventListener('visibilitychange', onVisibility, listenerOptions);
+      ['AudioContext', 'webkitAudioContext'].forEach(function (name) {
+        if (originals[name]) win[name] = originals[name];
+      });
+      originals = null;
+    }
+
+    return {
+      install: install,
+      uninstall: uninstall,
+      contexts: function () { return contexts.slice(); },
+      isArmed: function () { return armed; }
+    };
+  }
+
+  return { create: create, createAudioUnlock: createAudioUnlock, LoadError: LoadError, files: { manifest: MANIFEST, wasm: WASM, data: DATA } };
 });

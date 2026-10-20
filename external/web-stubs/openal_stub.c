@@ -1,4 +1,5 @@
-/* Web (Emscripten) build: a no-op OpenAL. See CMakeLists.txt in this directory.
+/* Web (Emscripten) build: a no-op OpenAL, linked only with N2ENGINE_WEB_AUDIO=stub (the default build links Emscripten's
+ * own OpenAL on WebAudio instead). See CMakeLists.txt in this directory.
  *
  * Only the functions the engine calls are defined. No device opens, so there is never a context, and (like OpenAL with
  * no context) every object function reports AL_INVALID_OPERATION through alGetError and does nothing else. No extension

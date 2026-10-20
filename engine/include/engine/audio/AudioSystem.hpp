@@ -100,6 +100,17 @@ namespace N2Engine::Audio
         [[nodiscard]] std::uint32_t GetContextGeneration() const { return _contextGeneration; }
         void Update();
 
+        /// Web (WebAudio) builds only: whether the browser is keeping the audio output from running, i.e. the
+        /// AudioContext is suspended: before the first user gesture (click, key press or touch) unlocked it, or while
+        /// the tab is hidden. A sound asked for in that time is dropped (PlayOneShot returns an invalid handle,
+        /// AudioSource::Play does nothing) rather than queued: a suspended context's clock does not advance, so
+        /// queued sounds would pile up and all start at once on the unlock. Always false on a native build, and on a
+        /// web build without WebAudio (nothing is initialized there to be suspended). docs/web-build.html
+        [[nodiscard]] bool IsOutputSuspended() const;
+        /// IsOutputSuspended(), and when true the first such refusal of the run logs one Info line saying why a sound
+        /// was dropped. What PlayOneShot and AudioSource::Play ask before starting a sound
+        [[nodiscard]] bool RefuseWhileSuspended();
+
         // ==================== Loopback (headless streaming) ====================
         // Main thread only, like the rest of AudioSystem. A loopback device's clock only moves when samples are
         // rendered: until then nothing plays, one-shots never finish and their sources never return to the pool.
@@ -227,5 +238,6 @@ namespace N2Engine::Audio
         float _masterVolume = 1.0f;
         bool _initialized = false;
         std::uint32_t _contextGeneration = 0;
+        bool _suspendedDropLogged = false; // the one log line for sounds dropped while the output is suspended
     };
 }

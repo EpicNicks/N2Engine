@@ -65,12 +65,12 @@
 <main id="main">
 <div class="content">
 
-<h1>Web player checklist <span class="badge">PR #170</span></h1>
+<h1>Web player checklist <span class="badge">PR #170</span> <span class="badge">PR #181</span></h1>
 <p class="lead">What to check by hand in a real browser for the web player, which CI cannot do: the CI job builds the package and runs it headless under node with a mocked canvas, so nothing about a browser (the canvas, the events, the page, hosting, speed) has been seen. Report which steps pass, the browser and its version, and the text of anything in the page's error box or the DevTools console.</p>
 
 <div class="callout open-question">
 <p class="callout-title">Not verified until this is done</p>
-<p>Every item below is unverified: that the page loads, that frames reach the canvas the right way up and in the right colours, that keyboard, mouse and wheel reach the game, that resizing and the pointer mapping are right, that the folder works from a subdirectory and with a wrong <code>.wasm</code> MIME type, and that the software renderer is fast enough in a tab.</p>
+<p>Every item below is unverified: that the page loads, that frames reach the canvas the right way up and in the right colours, that keyboard, mouse and wheel reach the game, that resizing and the pointer mapping are right, that the folder works from a subdirectory and with a wrong <code>.wasm</code> MIME type, and that the software renderer is fast enough in a tab. Stage 4 adds audio: that sound is heard, that the page's unlock starts it after the first input per browser, that the hidden tab silences and restores it, and that a blocked or missing Web Audio leaves a quiet game (<a href="#audio">step 8</a>).</p>
 </div>
 
 <h2 id="requirements">Requirements</h2>
@@ -83,7 +83,7 @@
 <h2 id="load">1. It loads</h2>
 <ul>
 <li>Open <code>http://localhost:8080/</code> with DevTools open (Console and Network). Expected: the dark page says "Loading the engine...", then "Ready." and the <strong>Click to start</strong> button turns on. Network shows <code>index.js</code>, <code>index.wasm</code> and <code>index.data</code>, all relative to the page, all 200.</li>
-<li>No red errors in the Console (a warning from the audio system about having no device is expected: audio is not in the build yet).</li>
+<li>No red errors in the Console (the audio system should not warn here: with Web Audio working it has no failure to report; an "Audio failed" warning means the browser gave no audio output, see step 8).</li>
 <li>Note the time from opening the page to "Ready." and the transferred sizes (a first, uncached load).</li>
 </ul>
 
@@ -132,16 +132,34 @@
 <h2 id="performance">7. Performance (a note, not a pass or fail)</h2>
 <p>The software renderer runs on one thread in the tab. Note, for the <code>dev</code>, <code>size</code> and <code>speed</code> profiles if you build them, the frame rate at about 1280x720 on your machine, and whether the tab stays responsive (the page can still be scrolled in DevTools, other tabs are fine). The render size is capped at 1280 pixels wide whatever the window; if that feels too soft or too slow, say which way.</p>
 
+<h2 id="audio">8. Audio (stage 4) <span class="badge">PR #181</span></h2>
+<p><strong>Everything in this section is unverified</strong>: CI has no browser and no sound device (it checks only that the player links Emscripten's OpenAL, that start-up with no <code>AudioContext</code> leaves the audio status failed under node, and that the loader's unlock script works against a mock). Background and the rules: <a href="web-build.html#audio">Web build: Audio</a>.</p>
+<p><strong>You need a project with sound.</strong> <code>lua_project</code> has no audio asset, so the default package is silent and a step below that says "hear" cannot pass with it. Build the package with <code>-DN2_WEB_PROJECT_DIR=/path/to/a/project</code> (it needs <code>project.n2proj</code> and <code>assets/scene.lua</code>) whose scene has: (a) a looping <code>AudioSource</code> with play on awake (music or a tone); (b) a few short <code>AudioSource</code>s that a Lua script plays on a key (<code>source:Play()</code>; Lua cannot assign a clip, so the clips are set in the scene data); (c) one spatial source away from the camera; (d) an <code>AudioListener</code> on the camera. A <code>.wav</code>, <code>.ogg</code>, <code>.mp3</code> or <code>.flac</code> in <code>assets/</code> works (<a href="audio.html#clips">AudioClip and loaders</a>). Open DevTools (Console) first.</p>
+<ul>
+<li><strong>Before any input.</strong> Load the page and do <em>not</em> click or press anything. Expected: no sound and no errors in the Console (the page is not in a state to play; the "Click to start" button is the first input). Note any warning text.</li>
+<li><strong>Sound after the first click.</strong> Click <strong>Click to start</strong>. Expected: the looping source (a) is heard within about a second, and the Console shows no error. Note per browser whether it played at once or only after a further click or key press.</li>
+<li><strong>Sound asked for too early is dropped, not piled up.</strong> Only if you can start a sound before the Start click (for example by a project that autostarts, or by editing <code>shell.html</code> to call <code>callMain</code> on <code>load</code>): reload without any input. Expected: nothing is heard and nothing is logged as an error (the log has one Info line about a dropped sound); then click or press a key: sounds started after that play, and the earlier ones do <strong>not</strong> all burst out at once. Report what you hear: this is the documented "dropped" behaviour (<a href="web-build.html#audio-gesture">The user-gesture rule</a>).</li>
+<li><strong>The unlock script.</strong> Open DevTools, Elements, Event Listeners, and look at <code>document</code>. Right after the Start click, with no further input, <code>pointerdown</code>, <code>pointerup</code>, <code>keydown</code> and <code>touchend</code> listeners from <code>n2-loader.js</code> are expected to be there: they are added for every context the engine creates, whatever its state, and stay until the first gesture after the context exists (the Start click itself came before the context, so it does not count). Then click the page once (or press a key, or tap) and look again. Expected: those four are gone (the gesture found the context running, or resumed it); a <code>visibilitychange</code> listener stays. On a touch device the listeners stay through a touch that only goes down, and are removed by the lift (<code>pointerup</code>/<code>touchend</code>); they also stay while the context is not running after a gesture's <code>resume()</code> (still pending, refused, or resolved but <code>interrupted</code>), and after the tab comes back visible until the context runs again (the next tap retries; the listeners are removed after the fourth refusal of a gesture's resume, counted since the last time every context was found running, the last successful resume, or the last new context).</li>
+<li><strong>Hidden tab.</strong> Switch to another tab for a few seconds, then come back. Expected: silence while hidden, and the sound continues when visible, with no click needed in Chrome and Firefox; if a browser keeps it silent until you click or press a key, note which browser (the unlock listens again after a refused resume). No errors in the Console.</li>
+<li><strong>Volume.</strong> With a script calling <code>Audio.SetMasterVolume(0.2)</code> (and <code>1</code> again) on a key, and a mixer group change if the project has one: the loudness changes. There is no mute button in the page.</li>
+<li><strong>Looping and short sounds.</strong> The loop is seamless (no gap or click at the loop point, a known difference between WebAudio and OpenAL Soft is worth noting if heard). Each key plays its short sound once and it ends (a played-out source returns to the pool: pressing the key 100 times does not go silent).</li>
+<li><strong>Many simultaneous sources.</strong> Trigger far more than 32 sounds at once (32 sources are pre-allocated; more are created on demand, and a mixer group's concurrency limit can refuse sounds, as natively). Expected: no crash, no hang and no error box; note whether the sound stays clean or crackles, and the tab's CPU use.</li>
+<li><strong>Spatial.</strong> Move the camera (or the listener) toward and away from the spatial source (c): it gets louder and quieter and pans left and right. Note whether a very distant sound is ever fully cut off (the web build has no cut-off at the maximum distance: expected not).</li>
+<li><strong>Escape / end of game.</strong> Quit the game with its Quit action. Expected: the sound stops, no error in the Console.</li>
+<li><strong>Failure path.</strong> In a browser (or a profile) with Web Audio blocked or disabled, or with <code>window.AudioContext</code> and <code>webkitAudioContext</code> set to <code>undefined</code> in the Console before clicking Start: the game starts with no sound, shows its picture, does not hang, and there is no error box. The engine should log one warning, <code>Subsystem Audio failed: No WebAudio output ...</code> (by reading the code; CI could not count it, because the engine's log did not appear in the node smoke output, so also report whether any engine log line reaches the Console at all).</li>
+</ul>
+<p><strong>Browser notes.</strong> Chrome and Edge: a context created inside the Start click should be running at once; a click on the page counts as the gesture. Firefox: same; its autoplay policy can also block audio until a gesture, which the unlock handles; note any "The AudioContext was not allowed to start" console message (it is a warning, not a failure, if sound plays after the first input). Safari (desktop and iOS): the least certain. A context may start <code>suspended</code> or <code>interrupted</code> and may only be resumed inside a gesture handler: if sound never starts, note that, and whether a second click, a key press or a touch start it. iOS also silences Web Audio when the ringer switch is off. Report the browser and its version for each result.</p>
+
 <h2 id="report">What to report</h2>
 <ul>
 <li>For each step: pass, fail, or not tried, with the browser and its version.</li>
 <li>Anything in the error box, and the Console text around it.</li>
-<li>Load time and frame rate (steps 1, 2 and 7).</li>
+<li>Load time and frame rate (steps 1, 2 and 7), and for step 8 each browser's result with its version.</li>
 </ul>
 <p>Background: <a href="web-build.html#player">The web player</a>, <a href="web-build.html#hosting">Building and hosting the package</a>, <a href="web-build.html#output-contract">Output contract</a>.</p>
 
 <div class="page-footer">
-<span>Describes the web player of PR #170.</span>
+<span>Describes the web player of PR #170, with its audio from PR #181.</span>
 <a href="web-build.html">Back to Web build</a>
 </div>
 

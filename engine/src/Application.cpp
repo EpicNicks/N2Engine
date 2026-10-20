@@ -244,7 +244,16 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     physicsStatus.detail = "Built without PhysX";
 #endif
 
-    if (options.isHeadless)
+#ifdef N2ENGINE_PLATFORM_WEB
+    // The web player runs "headless" (no window: the page shows the frames), but its sound is meant to be heard, so it
+    // opens the browser's output (Emscripten's OpenAL on WebAudio) like a game with a window. The editor host, the only
+    // user of the loopback stream, is not built for the web. With N2ENGINE_WEB_AUDIO=stub no device opens either, so
+    // both web configurations end in the one "Subsystem Audio failed" warning. docs/web-build.html
+    constexpr bool audioToLoopback = false;
+#else
+    const bool audioToLoopback = options.isHeadless;
+#endif
+    if (audioToLoopback)
     {
         // Headless audio is mixed into a loopback device (nothing plays locally) and streamed to the editor
         // client; see AudioSystem::AdvanceStream and the editor protocol's GetAudio
@@ -270,10 +279,17 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     }
     else
     {
+#ifdef N2ENGINE_PLATFORM_WEB
+        // One warning, the "Subsystem Audio failed" line below: no WebAudio (a browser without it, a blocked or failed
+        // AudioContext, node), exactly like a machine with no sound card
+        audioStatus.state = SubsystemState::Failed;
+        audioStatus.detail = "No WebAudio output: audio is off, the game continues without sound";
+#else
         Logger::Error("Failed to initialize audio!");
         Logger::Warn("Audio will be disabled. Game will continue without sound.");
         audioStatus.state = SubsystemState::Failed;
         audioStatus.detail = "Could not open an audio device (see log)";
+#endif
     }
 
     // The Particles and SoftBodies rows follow the physics GPU probe: Disabled with the reason unless the GPU scene
