@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -66,7 +67,13 @@ namespace N2Engine::Editor
      * so one still running after that is left, holding nothing of the host.
      *
      * Calls are made from the command thread (Load, Reload, the readers); the registry is also guarded by a mutex, so a
-     * reader on another thread sees either the old or the new registry, never a half-built one.
+     * reader on another thread sees either the old or the new registry, never a half-built one. Every read of the
+     * registry, the log lines of Load included, happens under that mutex; only the logging itself and the changed
+     * callback run after it is released.
+     *
+     * Limits of one Load: each state is capped at SandboxDefaults::MaxBytes, all the states together at MaxTotalBytes,
+     * and the whole Load at ReloadBudgetMillis of wall-clock time. The new states are made before the old ones are
+     * closed (the swap is atomic), so during a reload both sets exist at once.
      */
     class ExtensionHost
     {
@@ -88,6 +95,16 @@ namespace N2Engine::Editor
         /// How long past two load budgets (the chunk, then the declaration read) the caller waits before it abandons a
         /// worker: the two budgets stop a script that runs Lua; this is for one that is stuck in C
         static constexpr std::uint64_t GraceMillis = 1000;
+        /// Bytes all the extension states of a Load may hold together (the sum of what each loaded state held at its
+        /// most while it loaded: LuaSandbox's peak counter). A state gets the smaller of SandboxDefaults::MaxBytes and
+        /// what is left of this as its own cap; a file that finds less than SandboxDefaults::MinBytes left, or that
+        /// needs more than is left, fails as data ("extension memory budget exhausted") and the others still load. The
+        /// files are taken in their sorted order, so which ones fit is the same on every run.
+        static constexpr std::size_t MaxTotalBytes = std::size_t{256} * 1024 * 1024;
+        /// The wall-clock budget of one Load (and so of a Reload and of the host's start): a file still to be loaded
+        /// when it is spent fails as data ("reload time budget exhausted") and is tried again at the next reload, and a
+        /// file whose wait would pass it is abandoned at it
+        static constexpr std::uint64_t ReloadBudgetMillis = 10000;
         /// How long Shutdown waits for running workers by default
         static constexpr std::chrono::milliseconds DefaultShutdownWait{1000};
         /// Failures (NoteFailure) within FaultWindow that make an extension faulted (design 5.2: 3 in 10 minutes)
@@ -126,8 +143,9 @@ namespace N2Engine::Editor
         /// Finds and loads every file, replacing the registry, and logs one line per extension ("name@sha8
         /// capabilities" for a loaded one, the reason for a failed one). Sets the uiRevision to 1 the first time and
         /// bumps it on every later call, which is what Reload is. Does not call the changed callback. Blocks the caller
-        /// for the time the files take: each is bounded by AbandonMillis(), and once MaxWorkers workers are stuck the
-        /// remaining files fail at once.
+        /// for the time the files take: each is bounded by AbandonMillis(), the whole call by ReloadBudget() (files not
+        /// loaded when it ends fail at once as data), and once MaxWorkers workers are stuck the remaining files fail at
+        /// once.
         void Load();
         /// Load, then tells the changed callback (the host pushes extensionsChanged)
         void Reload();
@@ -177,6 +195,13 @@ namespace N2Engine::Editor
 
         /// Replaces AbandonMillis() (0 restores the default)
         static void SetAbandonMillisForTest(std::uint64_t millis);
+        /// Replaces ReloadBudgetMillis (0 restores the default)
+        static void SetReloadBudgetMillisForTest(std::uint64_t millis);
+        /// Replaces MaxTotalBytes (0 restores the default)
+        static void SetMaxTotalBytesForTest(std::size_t bytes);
+        /// The two limits in force now (the constants unless a test replaced them)
+        [[nodiscard]] static std::uint64_t ReloadBudget();
+        [[nodiscard]] static std::size_t TotalBytesBudget();
         /// Runs at the start of every worker with the file's id, before its state exists: a test blocks here to stand
         /// for a call into C that never returns. An empty function removes it.
         static void SetWorkerHookForTest(std::function<void(const std::string &id)> hook);
@@ -194,8 +219,13 @@ namespace N2Engine::Editor
         };
 
         [[nodiscard]] std::vector<FoundFile> Discover() const;
-        [[nodiscard]] Entry LoadOne(const FoundFile &file);
-        void LogEntry(const Entry &entry) const;
+        /// `memoryLeft` is what of the total budget the states loaded so far in this Load have not used; `deadline` is
+        /// when the Load's time budget ends
+        [[nodiscard]] Entry LoadOne(const FoundFile &file, std::size_t memoryLeft,
+                                    std::chrono::steady_clock::time_point deadline);
+        /// What the host logs for an entry: whether it loaded, and the line. Pure formatting of the entry it is given,
+        /// so a caller holding the registry's mutex can take it and log after letting go.
+        [[nodiscard]] static std::pair<bool, std::string> FormatLogLine(const Entry &entry);
 
         std::filesystem::path _root;
         std::shared_ptr<Tracker> _tracker;

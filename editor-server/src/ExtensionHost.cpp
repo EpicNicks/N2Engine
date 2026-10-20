@@ -660,6 +660,13 @@ end
             return value.get<double>();
         }
 
+        // Whether an int param may hold it as a bound or a default: finite, whole, and small enough that a double (and
+        // the int64 a default is turned into) represents it exactly
+        bool IsWholeNumber(const double value)
+        {
+            return std::isfinite(value) && std::floor(value) == value && std::fabs(value) <= 9.0e15;
+        }
+
         // The wire form of a form's field (protocol.json's FieldSchema), built from a Lua param spec
         struct FormField
         {
@@ -790,13 +797,28 @@ end
             {
                 Bad(where, "'min' is greater than 'max'");
             }
+            if (kind == FieldKind::Int)
+            {
+                // A whole number a double holds exactly: no fraction, no NaN or infinity, nothing past 9e15
+                if (minimum != nullptr && !IsWholeNumber(NumberOf(*minimum)))
+                {
+                    Bad(where, "'min' of an int must be a whole number");
+                }
+                if (maximum != nullptr && !IsWholeNumber(NumberOf(*maximum)))
+                {
+                    Bad(where, "'max' of an int must be a whole number");
+                }
+            }
+            // An int's bounds are whole (checked above) and go out as integers, 3.0 included
+            const auto asBound = [kind](const json &bound)
+            { return kind == FieldKind::Int ? json(static_cast<std::int64_t>(NumberOf(bound))) : bound; };
             if (minimum != nullptr)
             {
-                schema["min"] = *minimum;
+                schema["min"] = asBound(*minimum);
             }
             if (maximum != nullptr)
             {
-                schema["max"] = *maximum;
+                schema["max"] = asBound(*maximum);
             }
 
             // The default, checked against the kind (and the range), or the kind's own default
@@ -815,12 +837,11 @@ end
                     }
                     if (kind == FieldKind::Int)
                     {
-                        const double d = NumberOf(*given);
-                        if (std::floor(d) != d || std::fabs(d) > 9.0e15)
+                        if (!IsWholeNumber(NumberOf(*given)))
                         {
                             Bad(where, "'default' of an int must be a whole number");
                         }
-                        defaultValue = static_cast<std::int64_t>(d);
+                        defaultValue = static_cast<std::int64_t>(NumberOf(*given));
                     }
                     else
                     {
@@ -829,11 +850,11 @@ end
                 }
                 else if (minimum != nullptr && NumberOf(*minimum) > 0)
                 {
-                    defaultValue = *minimum;
+                    defaultValue = asBound(*minimum);
                 }
                 else if (maximum != nullptr && NumberOf(*maximum) < 0)
                 {
-                    defaultValue = *maximum;
+                    defaultValue = asBound(*maximum);
                 }
                 if ((minimum != nullptr && NumberOf(defaultValue) < NumberOf(*minimum)) ||
                     (maximum != nullptr && NumberOf(defaultValue) > NumberOf(*maximum)))
@@ -1144,6 +1165,8 @@ end
         }
 
         std::atomic<std::uint64_t> g_abandonOverrideMillis{0};
+        std::atomic<std::uint64_t> g_reloadBudgetOverrideMillis{0};
+        std::atomic<std::size_t> g_totalBytesOverride{0};
         std::mutex g_hookMutex;
         std::function<void(const std::string &)> g_workerHook;
 
@@ -1170,6 +1193,8 @@ end
         std::string id;
         std::string source;
         std::function<void(const std::string &)> hook;
+        /// The cap of the file's state (the smaller of the per-state cap and what is left of the total budget)
+        std::size_t capBytes = 0;
 
         std::mutex mutex;
         std::condition_variable finished;
@@ -1178,6 +1203,8 @@ end
         // The result
         bool ok = false;
         std::string error;
+        /// The failure was the state's memory cap
+        bool memoryExhausted = false;
         json snapshot;
         std::unique_ptr<Scripting::LuaSandbox> sandbox;
     };
@@ -1194,14 +1221,17 @@ end
         std::vector<json> items;
         /// The state the file ran in, kept for E-X3 (idle until then)
         std::unique_ptr<Scripting::LuaSandbox> sandbox;
+        /// What the state held at its most while it loaded: its share of the total memory budget
+        std::size_t chargedBytes = 0;
         std::deque<std::chrono::steady_clock::time_point> failures;
     };
 
     namespace
     {
-        void Fail(ExtensionLoadJob &job, std::string text)
+        void Fail(ExtensionLoadJob &job, std::string text, const bool memoryExhausted = false)
         {
             job.ok = false;
+            job.memoryExhausted = memoryExhausted;
             job.error = std::move(text);
             job.sandbox.reset();
         }
@@ -1220,7 +1250,9 @@ end
                 {
                     job.hook(job.id);
                 }
-                std::unique_ptr<LuaSandbox> sandbox = LuaSandbox::Create(SandboxProfile::EditorExtension);
+                SandboxOptions options;
+                options.maxBytes = job.capBytes;
+                std::unique_ptr<LuaSandbox> sandbox = LuaSandbox::Create(SandboxProfile::EditorExtension, options);
                 if (sandbox == nullptr)
                 {
                     Fail(job, "The extension's state could not be created");
@@ -1233,7 +1265,7 @@ end
                                                                       SandboxDefaults::LoadBudget, 1);
                     !prelude.ok)
                 {
-                    Fail(job, "The editor API could not be set up: " + prelude.error);
+                    Fail(job, "The editor API could not be set up: " + prelude.error, prelude.memoryExhausted);
                     return;
                 }
                 const int reader = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -1242,7 +1274,7 @@ end
                 if (const SandboxOutcome run = sandbox->RunChunk(job.source, "=" + job.id, SandboxDefaults::LoadBudget, 1);
                     !run.ok)
                 {
-                    Fail(job, run.error);
+                    Fail(job, run.error, run.memoryExhausted);
                     return;
                 }
 
@@ -1256,7 +1288,7 @@ end
                 {
                     const SandboxOutcome failure = sandbox->FailureOutcome(status, "The declaration could not be read");
                     lua_settop(L, 0);
-                    Fail(job, failure.error);
+                    Fail(job, failure.error, failure.memoryExhausted);
                     return;
                 }
                 std::size_t nodes = 0;
@@ -1304,6 +1336,28 @@ end
     void ExtensionHost::SetAbandonMillisForTest(const std::uint64_t millis)
     {
         g_abandonOverrideMillis.store(millis);
+    }
+
+    void ExtensionHost::SetReloadBudgetMillisForTest(const std::uint64_t millis)
+    {
+        g_reloadBudgetOverrideMillis.store(millis);
+    }
+
+    void ExtensionHost::SetMaxTotalBytesForTest(const std::size_t bytes)
+    {
+        g_totalBytesOverride.store(bytes);
+    }
+
+    std::uint64_t ExtensionHost::ReloadBudget()
+    {
+        const std::uint64_t value = g_reloadBudgetOverrideMillis.load();
+        return value == 0 ? ReloadBudgetMillis : value;
+    }
+
+    std::size_t ExtensionHost::TotalBytesBudget()
+    {
+        const std::size_t value = g_totalBytesOverride.load();
+        return value == 0 ? MaxTotalBytes : value;
     }
 
     void ExtensionHost::SetWorkerHookForTest(std::function<void(const std::string &)> hook)
@@ -1429,7 +1483,8 @@ end
         return found;
     }
 
-    ExtensionHost::Entry ExtensionHost::LoadOne(const FoundFile &file)
+    ExtensionHost::Entry ExtensionHost::LoadOne(const FoundFile &file, const std::size_t memoryLeft,
+                                                const std::chrono::steady_clock::time_point deadline)
     {
         Entry entry;
         entry.id = file.id;
@@ -1485,6 +1540,16 @@ end
             return entry;
         }
 
+        // The Load's time is spent: nothing more starts, and the file is tried again at the next reload (nothing is
+        // remembered about it)
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            fail(std::format("reload time budget exhausted: the reload's {} ms ran out before this file was reached; the "
+                             "file is tried again at the next reload",
+                             ReloadBudget()));
+            return entry;
+        }
+
         // An abandoned worker of this same text still running: it is not started a second time
         {
             const std::lock_guard lock(_mutex);
@@ -1512,8 +1577,19 @@ end
             }
         }
 
+        // The states loaded before this file hold what they hold; this one gets the smaller of its own cap and the rest
+        if (memoryLeft < Scripting::SandboxDefaults::MinBytes)
+        {
+            fail(std::format("extension memory budget exhausted: the extension states already loaded use the {} bytes "
+                             "all of them may hold; the file is tried again at the next reload",
+                             TotalBytesBudget()));
+            return entry;
+        }
+        const std::size_t capBytes = std::min(Scripting::SandboxDefaults::MaxBytes, memoryLeft);
+
         auto job = std::make_shared<ExtensionLoadJob>();
         job->id = file.id;
+        job->capBytes = capBytes;
         job->source = std::move(source);
         job->hook = CurrentWorkerHook();
 
@@ -1576,10 +1652,15 @@ end
             return entry;
         }
 
-        const std::uint64_t deadline = AbandonMillis();
+        // The wait is the abandon deadline, cut short where the Load's own time ends
+        const std::uint64_t abandonMillis = AbandonMillis();
+        const std::int64_t leftMillis = std::max<std::int64_t>(
+            1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count());
+        const bool cutByBudget = static_cast<std::uint64_t>(leftMillis) < abandonMillis;
+        const std::uint64_t waitMillis = cutByBudget ? static_cast<std::uint64_t>(leftMillis) : abandonMillis;
         {
             std::unique_lock lock(job->mutex);
-            if (!job->finished.wait_for(lock, std::chrono::milliseconds(deadline), [&] { return job->done; }))
+            if (!job->finished.wait_for(lock, std::chrono::milliseconds(waitMillis), [&] { return job->done; }))
             {
                 lock.unlock();
                 // Abandoned: the worker still holds the job and frees it (and its state) when it ends; its result is
@@ -1588,13 +1669,30 @@ end
                     const std::lock_guard registry(_mutex);
                     _abandoned[file.id] = {entry.sha256, job};
                 }
-                fail(std::format("Loading the file took longer than {} ms and was abandoned", deadline));
+                if (cutByBudget)
+                {
+                    fail(std::format("reload time budget exhausted: the file was still loading when the reload's {} ms "
+                                     "ran out and was abandoned; it is tried again at the next reload",
+                                     ReloadBudget()));
+                }
+                else
+                {
+                    fail(std::format("Loading the file took longer than {} ms and was abandoned", abandonMillis));
+                }
                 return entry;
             }
         }
 
         if (!job->ok)
         {
+            if (job->memoryExhausted && capBytes < Scripting::SandboxDefaults::MaxBytes)
+            {
+                // The cap that stopped it was the shrunk one: the total budget, not the file's own state
+                fail(std::format("extension memory budget exhausted: the file needs more than the {} bytes left of the "
+                                 "{} bytes all extension states may hold",
+                                 capBytes, TotalBytesBudget()));
+                return entry;
+            }
             fail(job->error);
             return entry;
         }
@@ -1606,6 +1704,7 @@ end
             entry.capabilities = std::move(parsed.capabilities);
             entry.items = std::move(parsed.items);
             entry.sandbox = std::move(job->sandbox);
+            entry.chargedBytes = entry.sandbox != nullptr ? entry.sandbox->Counters().peakBytes : 0;
             entry.state = ExtensionState::Loaded;
         }
         catch (const ShapeError &e)
@@ -1619,7 +1718,7 @@ end
         return entry;
     }
 
-    void ExtensionHost::LogEntry(const Entry &entry) const
+    std::pair<bool, std::string> ExtensionHost::FormatLogLine(const Entry &entry)
     {
         if (entry.state == ExtensionState::Loaded)
         {
@@ -1628,18 +1727,16 @@ end
             {
                 capabilities += (capabilities.empty() ? "" : ",") + capability;
             }
-            Logger::Info(std::format("Editor extension: {}@{} capabilities=[{}] menu items={} ({})", entry.name,
-                                     entry.sha256.substr(0, 8), capabilities, entry.items.size(), entry.id));
+            return {true, std::format("Editor extension: {}@{} capabilities=[{}] menu items={} ({})", entry.name,
+                                      entry.sha256.substr(0, 8), capabilities, entry.items.size(), entry.id)};
         }
-        else
-        {
-            Logger::Warn(std::format("Editor extension {} did not load: {}", Printable(entry.id, 120),
-                                     Printable(entry.error)));
-        }
+        return {false, std::format("Editor extension {} did not load: {}", Printable(entry.id, 120),
+                                   Printable(entry.error))};
     }
 
     void ExtensionHost::Load()
     {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ReloadBudget());
         std::vector<FoundFile> files = Discover();
         if (files.size() > MaxFiles)
         {
@@ -1652,9 +1749,11 @@ end
         std::vector<Entry> entries;
         entries.reserve(files.size());
         std::map<std::string, std::string> itemOwners; // item id -> the extension that has it
+        const std::size_t totalBytes = TotalBytesBudget();
+        std::size_t memoryUsed = 0; // what the states kept so far held at their most
         for (const FoundFile &file : files)
         {
-            Entry entry = LoadOne(file);
+            Entry entry = LoadOne(file, totalBytes - std::min(memoryUsed, totalBytes), deadline);
             if (entry.state == ExtensionState::Loaded)
             {
                 // Item ids are global: InvokeMenuItem names an item and nothing else. The first extension (in file order)
@@ -1680,27 +1779,45 @@ end
                     {
                         itemOwners[item.at("id").get<std::string>()] = entry.id;
                     }
+                    memoryUsed += entry.chargedBytes; // a state dropped above (a clash) gives its share back
                 }
             }
             entries.push_back(std::move(entry));
         }
 
+        // The log lines are made from the registry under the mutex and written after it is released: nothing reads
+        // _entries without the lock
+        std::vector<std::pair<bool, std::string>> lines;
+        std::size_t loaded = 0;
+        std::size_t total = 0;
         std::vector<Entry> previous;
         {
             const std::lock_guard lock(_mutex);
             previous.swap(_entries);
             _entries = std::move(entries);
             ++_uiRevision;
+            lines.reserve(_entries.size());
+            for (const Entry &entry : _entries)
+            {
+                lines.push_back(FormatLogLine(entry));
+                loaded += entry.state == ExtensionState::Loaded ? 1 : 0;
+            }
+            total = _entries.size();
         }
         // The old states close here, outside the registry's mutex
 
-        std::size_t loaded = 0;
-        for (const Entry &entry : _entries)
+        for (const auto &[isLoaded, text] : lines)
         {
-            LogEntry(entry);
-            loaded += entry.state == ExtensionState::Loaded ? 1 : 0;
+            if (isLoaded)
+            {
+                Logger::Info(text);
+            }
+            else
+            {
+                Logger::Warn(text);
+            }
         }
-        Logger::Info(std::format("Editor extensions: {} of {} loaded", loaded, _entries.size()));
+        Logger::Info(std::format("Editor extensions: {} of {} loaded", loaded, total));
     }
 
     void ExtensionHost::Reload()

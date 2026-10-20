@@ -199,6 +199,8 @@ namespace
         {
             ExtensionHost::SetWorkerHookForTest({});
             ExtensionHost::SetAbandonMillisForTest(0);
+            ExtensionHost::SetReloadBudgetMillisForTest(0);
+            ExtensionHost::SetMaxTotalBytesForTest(0);
             if (_gate)
             {
                 _gate->Open();
@@ -677,6 +679,21 @@ namespace
             "'default' must be a number");
         add("an int default with a fraction", Declaration(OneItem("params = { x = { type = \"int\", default = 1.5 } }")),
             "whole number");
+        add("an int min with a fraction", Declaration(OneItem("params = { x = { type = \"int\", min = 0.5 } }")),
+            "'min' of an int must be a whole number");
+        add("an int max with a fraction", Declaration(OneItem("params = { x = { type = \"int\", max = 2.5 } }")),
+            "'max' of an int must be a whole number");
+        add("an int min that is NaN", Declaration(OneItem("params = { x = { type = \"int\", min = 0/0 } }")),
+            "'min' of an int must be a whole number");
+        add("an int max that is infinite", Declaration(OneItem("params = { x = { type = \"int\", max = math.huge } }")),
+            "'max' of an int must be a whole number");
+        add("an int min that is minus infinity", Declaration(OneItem("params = { x = { type = \"int\", min = -math.huge } }")),
+            "'min' of an int must be a whole number");
+        add("an int max too large for a double to hold exactly",
+            Declaration(OneItem("params = { x = { type = \"int\", max = 1e300 } }")),
+            "'max' of an int must be a whole number");
+        add("an int default that is NaN", Declaration(OneItem("params = { x = { type = \"int\", default = 0/0 } }")),
+            "whole number");
         add("a default outside the range",
             Declaration(OneItem("params = { x = { type = \"number\", min = 1, max = 2, default = 5 } }")),
             "outside 'min' and 'max'");
@@ -730,6 +747,31 @@ TEST_F(ExtensionHostTest, EveryBadShapeIsAnErrorOfThatFileAloneAsData)
         EXPECT_TRUE(Find(description, "a_bad.lua").at("capabilities").empty()) << shape.what;
         EXPECT_EQ(host.UiJson().at("menuItems").size(), 1u) << shape.what << ": a bad file adds no menu item";
     }
+}
+
+TEST_F(ExtensionHostTest, AnIntParamWithWholeBoundsLoadsAndTakesItsDefaultFromThem)
+{
+    TempProject project;
+    project.Write("a.lua", Declaration(OneItem("params = { lo = { type = \"int\", min = 3, max = 9 },"
+                                               " hi = { type = \"int\", max = -2 },"
+                                               " plain = { type = \"int\" },"
+                                               " frac = { type = \"number\", min = 0.5 } }")));
+    ExtensionHost host(project.Root());
+    host.Load();
+    ASSERT_EQ(StateOf(host.DescribeJson(), "a.lua"), "loaded") << ErrorOf(host.DescribeJson(), "a.lua");
+    const json item = host.UiJson().at("menuItems").at(0);
+    std::map<std::string, json> fields;
+    for (const json &field : item.at("form").at("fields"))
+        fields[field.at("name").get<std::string>()] = field;
+    ASSERT_EQ(fields.size(), 4u);
+    EXPECT_EQ(fields.at("lo").at("kind"), "Int");
+    const json &defaults = item.at("form").at("defaults");
+    EXPECT_EQ(defaults.at("lo"), 3) << "no default: the min, a whole number";
+    EXPECT_TRUE(defaults.at("lo").is_number_integer());
+    EXPECT_EQ(defaults.at("hi"), -2) << "no default and a max below zero: the max";
+    EXPECT_EQ(defaults.at("plain"), 0);
+    EXPECT_EQ(fields.at("frac").at("kind"), "Float");
+    EXPECT_EQ(defaults.at("frac"), 0.5) << "a fractional bound is still fine for a number param";
 }
 
 TEST_F(ExtensionHostTest, TwoFilesThatDeclareTheSameItemIdLetTheFirstKeepIt)
@@ -992,6 +1034,144 @@ TEST_F(ExtensionHostTest, TheReadersRunNoLua)
         (void)host.LoadedCount();
     }
     EXPECT_EQ(g_instructions.load(), 0) << "reading the registry ran Lua";
+}
+
+// ==================== The memory budget of all the states together ====================
+
+namespace
+{
+    // A file whose state holds about `bytes` of memory at its most while it loads
+    std::string Heavy(const std::string &name, const std::string &itemId, const int bytes)
+    {
+        return "local s = string.rep(\"x\", " + std::to_string(bytes) + ")\n" + Valid(name, itemId);
+    }
+}
+
+TEST_F(ExtensionHostTest, TheTotalMemoryBudgetIsAFixedNamedLimitAboveOneState)
+{
+    EXPECT_EQ(ExtensionHost::MaxTotalBytes, std::size_t{256} * 1024 * 1024);
+    EXPECT_GT(ExtensionHost::MaxTotalBytes, Scripting::SandboxDefaults::MaxBytes);
+    EXPECT_EQ(ExtensionHost::TotalBytesBudget(), ExtensionHost::MaxTotalBytes);
+    EXPECT_EQ(ExtensionHost::ReloadBudget(), ExtensionHost::ReloadBudgetMillis);
+}
+
+TEST_F(ExtensionHostTest, ManySmallStatesStayUnderTheTotalMemoryBudget)
+{
+    TempProject project;
+    for (int i = 0; i < 8; ++i)
+    {
+        char name[32];
+        std::snprintf(name, sizeof(name), "e%02d.lua", i);
+        project.Write(name, Valid("Small" + std::to_string(i), "small" + std::to_string(i)));
+    }
+    ExtensionHost::SetMaxTotalBytesForTest(std::size_t{16} * 1024 * 1024);
+    ExtensionHost host(project.Root());
+    host.Load();
+    EXPECT_EQ(host.ExtensionCount(), 8u);
+    EXPECT_EQ(host.LoadedCount(), 8u) << host.DescribeJson().dump();
+}
+
+TEST_F(ExtensionHostTest, AFileThatWouldPassTheTotalMemoryBudgetFailsAsDataAndTheOthersStillLoad)
+{
+    TempProject project;
+    // 8 MiB in all; each heavy state holds a little over 3 MB while it loads: two fit, the third finds under 2 MiB left
+    project.Write("a_heavy.lua", Heavy("A", "a.item", 3000000));
+    project.Write("b_heavy.lua", Heavy("B", "b.item", 3000000));
+    project.Write("c_heavy.lua", Heavy("C", "c.item", 3000000));
+    project.Write("d_small.lua", Valid("D", "d.item"));
+    ExtensionHost::SetMaxTotalBytesForTest(std::size_t{8} * 1024 * 1024);
+
+    const int statesBefore = Scripting::LuaSandbox::LiveStates();
+    ExtensionHost host(project.Root());
+    host.Load();
+    const json description = host.DescribeJson();
+    EXPECT_EQ(StateOf(description, "a_heavy.lua"), "loaded") << ErrorOf(description, "a_heavy.lua");
+    EXPECT_EQ(StateOf(description, "b_heavy.lua"), "loaded") << ErrorOf(description, "b_heavy.lua");
+    EXPECT_EQ(StateOf(description, "c_heavy.lua"), "failed") << "sorted order: the third is the one that does not fit";
+    const std::string error = ErrorOf(description, "c_heavy.lua");
+    EXPECT_NE(error.find("extension memory budget exhausted"), std::string::npos) << error;
+    EXPECT_EQ(error.find(project.Root().string()), std::string::npos) << error;
+    EXPECT_EQ(StateOf(description, "d_small.lua"), "loaded") << "a later file that fits still loads";
+    EXPECT_EQ(host.UiJson().at("menuItems").size(), 3u);
+    EXPECT_EQ(Scripting::LuaSandbox::LiveStates(), statesBefore + 3) << "the refused file left no state behind";
+
+    // The same on the next run: the order is the sorted one, not a race
+    host.Reload();
+    EXPECT_EQ(StateOf(host.DescribeJson(), "c_heavy.lua"), "failed");
+    EXPECT_EQ(host.LoadedCount(), 3u);
+
+    // The budget is per Load: with the file that did not fit gone, the next reload loads what is there
+    project.Remove("c_heavy.lua");
+    project.Write("e_small.lua", Valid("E", "e.item"));
+    host.Reload();
+    EXPECT_EQ(host.LoadedCount(), 4u);
+}
+
+TEST_F(ExtensionHostTest, AFileThatFailsOrIsDroppedGivesItsMemoryBack)
+{
+    TempProject project;
+    // The first allocates then fails (its state is closed, so it costs the budget nothing); the third clashes on an item
+    // id after loading (dropped); the two heavy files after them fit only because those gave their share back
+    project.Write("a_fails.lua", "local s = string.rep(\"x\", 3000000)\nerror(\"after allocating\")");
+    project.Write("b_first.lua", Valid("First", "shared.item"));
+    project.Write("c_clash.lua", Heavy("Clash", "shared.item", 3000000));
+    project.Write("d_heavy.lua", Heavy("D", "d.item", 3000000));
+    project.Write("e_heavy.lua", Heavy("E", "e.item", 3000000));
+    ExtensionHost::SetMaxTotalBytesForTest(std::size_t{8} * 1024 * 1024);
+
+    ExtensionHost host(project.Root());
+    host.Load();
+    const json description = host.DescribeJson();
+    EXPECT_EQ(StateOf(description, "a_fails.lua"), "failed");
+    EXPECT_EQ(StateOf(description, "c_clash.lua"), "failed");
+    EXPECT_NE(ErrorOf(description, "c_clash.lua").find("already used by"), std::string::npos);
+    EXPECT_EQ(StateOf(description, "d_heavy.lua"), "loaded") << ErrorOf(description, "d_heavy.lua");
+    EXPECT_EQ(StateOf(description, "e_heavy.lua"), "loaded") << ErrorOf(description, "e_heavy.lua");
+}
+
+// ==================== The time budget of a Load ====================
+
+TEST_F(ExtensionHostTest, ALoadThatRunsOutOfTimeFailsTheRestAsDataAndTriesThemAgainAtTheNextReload)
+{
+    TempProject project;
+    project.Write("a_ok.lua", Valid("A", "a.item"));
+    project.Write("b_stall.lua", Valid("Stall", "stall.item"));
+    project.Write("c_late.lua", Valid("C", "c.item"));
+    project.Write("d_late.lua", Valid("D", "d.item"));
+    HoldWorkers("b_stall");
+    ExtensionHost::SetAbandonMillisForTest(20000); // far past the budget: only the budget can end the wait
+    ExtensionHost::SetReloadBudgetMillisForTest(400);
+
+    ExtensionHost host(project.Root());
+    const auto started = std::chrono::steady_clock::now();
+    host.Load();
+    const auto took = std::chrono::steady_clock::now() - started;
+    EXPECT_GE(took, 350ms) << "it waited for the stalled file";
+    EXPECT_LT(took, 10s) << "and not for the abandon deadline";
+
+    const json description = host.DescribeJson();
+    EXPECT_EQ(StateOf(description, "a_ok.lua"), "loaded");
+    EXPECT_EQ(StateOf(description, "b_stall.lua"), "failed");
+    EXPECT_NE(ErrorOf(description, "b_stall.lua").find("reload time budget exhausted"), std::string::npos)
+        << ErrorOf(description, "b_stall.lua");
+    for (const char *late : {"c_late.lua", "d_late.lua"})
+    {
+        EXPECT_EQ(StateOf(description, late), "failed") << late;
+        EXPECT_NE(ErrorOf(description, late).find("reload time budget exhausted"), std::string::npos)
+            << ErrorOf(description, late);
+        EXPECT_FALSE(Find(description, late).at("sha256").get<std::string>().empty()) << "listed like any other file";
+    }
+    EXPECT_EQ(host.ExtensionCount(), 4u) << "failed as data: still listed";
+
+    // Not remembered: once the stalled worker ends and there is time, the next reload loads every one of them
+    _gate->Open();
+    EXPECT_TRUE(WaitUntil([] { return ExtensionHost::LiveWorkers() == 0; }));
+    ExtensionHost::SetReloadBudgetMillisForTest(0);
+    EXPECT_TRUE(WaitUntil([&]
+    {
+        host.Reload();
+        return host.LoadedCount() == 4u;
+    })) << host.DescribeJson().dump();
 }
 
 // ==================== Off the command thread, with an abandon deadline ====================
