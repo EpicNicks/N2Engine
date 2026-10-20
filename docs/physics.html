@@ -75,6 +75,7 @@
 <li><a href="#gpu">GPU physics (physics.gpu)</a></li>
 <li><a href="#gpu-particles">GPU particles (PhysX PBD)</a></li>
 <li><a href="#gpu-features">GPU features: per-feature status and the soft-body seam</a></li>
+<li><a href="#network-presets">Network presets and the backend's determinism declarations</a></li>
 <li><a href="#fixed-step">The fixed physics step</a></li>
 <li><a href="#body-creation">When bodies are created</a></li>
 <li><a href="#bodies-colliders">Bodies, colliders and shapes</a></li>
@@ -166,6 +167,99 @@
 <p>What it does not do: it does not make N2Engine deterministic (the other blockers in issue #157, such as Lua <code>pairs()</code> order, the engine <code>Random</code> API, timeScale-scaled steps and SIMD tiers, are separate items), it does not make results the same on Windows and Linux (they are different PhysX binaries), and it is not a network mode. What it is expected to give, and the test that checks it, are on the <a href="testing.html#determinism-tests">testing page</a>.</p>
 <div class="callout note" id="design-physics-deterministic"><p class="callout-title">Design decision: an opt-in setting; GPU physics yields to it <span class="badge">PR #161</span></p><p>Enhanced determinism costs performance and 0 worker threads costs parallelism, so the setting is opt-in and off by default, and a project without it behaves exactly as before. When both <code>physics.deterministic</code> and <code>physics.gpu</code> auto/on are set, the explicit determinism request wins and the scene is the CPU scene, with a warning, rather than a GPU scene that silently is not deterministic. This is a judgement call the plan did not cover: the alternative, refusing to start, would have been stricter.</p></div>
 <p class="src">Source: <code>engine/src/physics/physx/PhysXBackend.cpp</code> - <code>PhysXBackend::Initialize</code>, <code>PhysXBackend::ProbeGpu</code>; <code>engine/src/ProjectSettings.cpp</code> - <code>ReadPhysicsDeterministic</code>; <code>tests/engine/physics/PhysXDeterminismTests.cpp</code>.</p>
+
+<h2 id="network-presets">Network presets and the backend's determinism declarations <span class="badge">PR #187</span></h2>
+<p>The project setting <code>network</code> chooses the project's network model. This is the first stage (A1) of the netcode runtime plan, and it is <strong>data and startup checks only</strong>: there is no transport, no replication, no prediction and no network tick loop yet. With the default preset <code>none</code> the engine behaves exactly as it did before; the only visible difference is one more row in the engine health. Three presets exist: <code>none</code> (offline), <code>authoritative</code> (server authoritative: PhysX, client prediction and reconciliation) and <code>deterministic</code> (lockstep or rollback, the same result on every platform).</p>
+
+<h3 id="network-block">The network block</h3>
+<p><code>ReadNetworkSettings</code> (<code>engine/src/ProjectSettings.cpp</code>) parses the block. Every key is optional, the preset and mode names are case-insensitive, and the ranges are the single table <code>Network::NumericSettingSpecs()</code>, shared with the preset table below.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Key</th><th>Meaning</th><th>Default</th><th>Allowed</th></tr></thead>
+<tbody>
+<tr><td><code>preset</code></td><td><code>"none"</code>, <code>"authoritative"</code> or <code>"deterministic"</code></td><td><code>none</code></td><td>those three</td></tr>
+<tr><td><code>tickRate</code></td><td>Simulation ticks per second</td><td>60</td><td>30 to 120</td></tr>
+<tr><td><code>transport.udp</code>, <code>transport.webSocket</code></td><td>Which transports are on</td><td>true, true</td><td>booleans</td></tr>
+<tr><td><code>transport.port</code></td><td>Listen port</td><td>7777</td><td>1 to 65535</td></tr>
+<tr><td><code>authoritative.snapshotRate</code></td><td>Server snapshots per second</td><td>30</td><td>10 to 60</td></tr>
+<tr><td><code>authoritative.interpolationDelayMs</code></td><td>How far behind remote entities are drawn</td><td>100</td><td>0 to 1000</td></tr>
+<tr><td><code>authoritative.inputRedundancy</code></td><td>Unacknowledged inputs resent in every packet</td><td>4</td><td>1 to 8</td></tr>
+<tr><td><code>authoritative.predictionMaxMs</code></td><td>Client prediction window</td><td>250</td><td>0 to 250</td></tr>
+<tr><td><code>authoritative.smoothingMs</code></td><td>Visual smoothing of a correction</td><td>100</td><td>0 to 1000</td></tr>
+<tr><td><code>authoritative.snapThreshold</code></td><td>Metres above which a correction snaps</td><td>1.0</td><td>0.01 to 100</td></tr>
+<tr><td><code>authoritative.lagCompMaxMs</code></td><td>How far back the server rewinds a hit query</td><td>200</td><td>0 to 1000</td></tr>
+<tr><td><code>deterministic.mode</code></td><td><code>"lockstep"</code> or <code>"rollback"</code></td><td><code>lockstep</code></td><td>those two</td></tr>
+<tr><td><code>deterministic.inputDelay</code></td><td>Ticks of input delay</td><td>2</td><td>0 to 6</td></tr>
+<tr><td><code>deterministic.rollbackWindow</code></td><td>Maximum rollback in ticks (0 is pure lockstep)</td><td>8</td><td>0 to 15</td></tr>
+<tr><td><code>deterministic.hashInterval</code></td><td>Ticks between state hashes</td><td>30</td><td>1 to 600</td></tr>
+<tr><td><code>overrides</code></td><td>Values changed away from the preset, by setting key (<code>{"math.simdTier": "auto"}</code>); keys the presets do not govern are ignored with a warning</td><td>empty</td><td>an object</td></tr>
+<tr><td><code>customised</code></td><td>The editor's stored flag; read and kept, and nothing in the engine acts on it yet (the table decides, see below)</td><td>false</td><td>boolean</td></tr>
+</tbody>
+</table>
+</div>
+<p>Validation never aborts <code>Init</code>. A missing, null or non-object block is the defaults (<code>ApplyProjectSettings</code> reports the non-object case as <code>network: not an object</code>). A value of the wrong type, an unknown preset or mode name, or a fraction for a whole-number setting is one warning and the default; a number outside its range is one warning and is clamped to it. Like <code>physics.gpu</code>, the block is read by <code>Application::Init</code> (before the physics backend exists), so <code>ApplyProjectSettings</code>, which the hosts call after <code>Init</code>, only validates it and a change needs a restart.</p>
+
+<h3 id="network-table">The preset table</h3>
+<p><code>Network::PresetTable()</code> (<code>engine/include/engine/network/NetworkPresets.hpp</code>) holds the design's preset bundles as data, so the editor and the engine apply the same rules: one row per governed setting, with a cell for each preset (its class, its value, the design's wording and, for a locked cell, the guarantee a change loses). It has 26 rows: the 18 rows of the design's preset bundles (physics backend, GPU physics, fixed timestep, tick driver, SIMD tier, floating-point profile, transcendental functions, snapshot/restore, input delay, prediction or rollback window, state sync rate, interpolation, reconciliation, authority rules, RNG policy, ordering rules, threads, the backend picker) and the 8 transport and runtime settings the bundles do not cover.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Class</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><strong>L</strong> Locked</td><td>The preset fixes the value. Changing it marks the project Customised and loses the guarantee the cell names (for example <code>math.simdTier</code> away from <code>scalar</code>: "SIMD tier Auto: x86 and ARM peers will desync").</td></tr>
+<tr><td><strong>T</strong> Tunable</td><td>The preset has a default and the project may change it within its range without losing anything.</td></tr>
+<tr><td><strong>S</strong> Startup-checked</td><td><code>Application::Init</code> checks it (<code>ValidateNetwork</code>): a Deterministic project is refused when it is unmet, an Authoritative one only gets a warning. A cell can be L and S at once.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Queries: <code>EffectiveValues(preset, overrides)</code> is <code>{settingKey: value}</code> for every cell of the preset that has a setting key and a value, with the overrides on top (an override of a key the preset does not govern is ignored; <code>none</code> governs nothing, so its result is empty); <code>LostGuarantees(preset, overrides)</code> lists one entry per overridden cell that is Locked and not Tunable and whose override differs from the preset's value (strings compare case-insensitively; a requirement with no value to write, such as the strict floating-point build, is waived by any override of its row); <code>IsCustomised</code> is whether that list is not empty. Overriding a Tunable cell, or a Locked one to the preset's own value, loses nothing. The Authoritative preset locks nothing, so only the Deterministic preset can be Customised.</p>
+
+<h3 id="network-backend">What a physics backend declares</h3>
+<p><code>IPhysicsBackend</code> gained three queries the checks read. A backend declares more than the default only when it can prove it.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Query</th><th>Default</th><th>PhysX</th></tr></thead>
+<tbody>
+<tr><td><code>GetDeterminism()</code> (<code>None</code> &lt; <code>SameBinary</code> &lt; <code>CrossPlatform</code>)</td><td><code>None</code></td><td><code>SameBinary</code> only when <code>physics.deterministic</code> is on and the dispatcher has 0 worker threads (the scene then has enhanced determinism and is the CPU scene, even with <code>physics.gpu</code> auto/on, see <a href="#deterministic">above</a>); <code>None</code> otherwise. Never <code>CrossPlatform</code>: Windows and Linux use different PhysX binaries and their hashes differ.</td></tr>
+<tr><td><code>SupportsSnapshot()</code></td><td>false</td><td>false: nothing saves or restores the PhysX scene.</td></tr>
+<tr><td><code>SupportsSetState()</code></td><td>false</td><td>false for now: the interface cannot yet teleport a dynamic body or set its sleep state, so PhysX does not claim it. It becomes true when that body-state API exists.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>PhysXBackend::DeclaredDeterminism(deterministic, workerThreadsOverride)</code> is the same rule as a static function, because <code>Application::Init</code> asks before a backend exists. The fake backend of the tests and any other backend keep the defaults. Since no backend declares <code>CrossPlatform</code>, the Deterministic preset cannot start yet; that is intended.</p>
+
+<h3 id="network-refusal">Startup checks and the refusal</h3>
+<p><code>Application::Init</code> reads the preset right after the project file and calls <code>ValidateNetwork</code>, a pure function of the settings and an environment (the backend's declarations, <code>Math::IsStrictFp()</code>, the requested <code>math.simdTier</code>, whether <code>determinism.luaSeed</code> is set, <code>physics.gpu</code>). What it checks depends on the preset:</p>
+<ul>
+<li><strong>none</strong>: nothing.</li>
+<li><strong>authoritative</strong>: warnings only, logged as <code>network.preset is authoritative: ...</code>: <code>physics.gpu</code> is not off (a dedicated server runs the CPU scene; this reads the setting, not the scene's final state), and the physics backend does not support set-state (or there is no backend). With PhysX every Authoritative project gets the set-state warning today.</li>
+<li><strong>deterministic</strong>: every requirement below. If any is unmet the engine <strong>refuses to start</strong>.</li>
+</ul>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Requirement id</th><th>Met when</th><th>Today</th></tr></thead>
+<tbody>
+<tr><td><code>physics-backend</code></td><td>the backend's <code>GetDeterminism()</code> is <code>CrossPlatform</code></td><td>never met: no backend declares it</td></tr>
+<tr><td><code>strict-fp</code></td><td><code>Math::IsStrictFp()</code>: the build has the strict floating-point profile (<code>N2ENGINE_STRICT_FP</code>, <a href="math.html">math</a>)</td><td>only in a build made with that option</td></tr>
+<tr><td><code>simd-scalar</code></td><td><code>math.simdTier</code> is <code>scalar</code> (the requested tier, not the one in use)</td><td>when the project sets it</td></tr>
+<tr><td><code>lua-seed</code></td><td><code>determinism.luaSeed</code> is set</td><td>when the project sets it</td></tr>
+<tr><td><code>engine-trig</code></td><td>engine-owned trigonometry exists (netcode item C1)</td><td>never met: math and Lua still call the C library</td></tr>
+<tr><td><code>physics-threads</code></td><td>the backend declares at least <code>SameBinary</code> (PhysX: <code>physics.deterministic</code> on, 0 worker threads)</td><td>when <code>physics.deterministic</code> is on (PhysX)</td></tr>
+<tr><td><code>gpu-physics-off</code></td><td><code>physics.gpu</code> is <code>off</code> (the setting)</td><td>by default</td></tr>
+<tr><td><code>fixed-timestep</code></td><td>the fixed timestep is on</td><td>always met: it cannot be switched off</td></tr>
+<tr><td><code>tick-loop</code></td><td>a netcode-owned tick loop independent of <code>timeScale</code> exists (netcode item A2)</td><td>never met: the fixed-step loop still follows the frame clock and the physics step is scaled by <code>timeScale</code></td></tr>
+<tr><td><code>snapshot</code></td><td>only when <code>deterministic.mode</code> is <code>rollback</code>: the backend's <code>SupportsSnapshot()</code> is true</td><td>never met (PhysX)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The refusal happens before anything starts: <code>Init</code> logs one error with the number of unmet requirements and one error line per unmet requirement (<code>unmet: id - requirement (reason)</code>), returns a health report whose seven usual rows are <em>NotStarted</em> and whose <em>Network</em> row is <em>Failed</em> and names every unmet requirement, clears its initialised flag (so a later <code>Init</code> runs the checks again) and creates no Lua state, window, camera, physics backend or scene. The engine never silently degrades a Deterministic project. A host that checks <code>GetWindow().IsValid()</code> after <code>Init</code> (<code>lua_project</code>, the web player) stops there.</p>
+<div class="callout open-question"><p class="callout-title">Open question: the editor host and a refused project</p><p><code>Editor::RunHost</code> (<code>editor-server/src/Host.cpp</code>) does not stop when <code>Init</code> leaves no window: it warns that rendering commands will be unavailable and keeps serving, so a client can still ask <code>GetEngineHealth</code> and read the Failed <em>Network</em> row. But a refused <code>Init</code> also leaves the Lua state uninitialised and creates no camera, and the host then goes on to apply the project's settings and open its startup scene. What that does has not been checked. Nothing in this stage lets a user select the Deterministic preset (the editor panel is a later item), but a hand-edited <code>project.n2proj</code> can.</p></div>
+
+<h3 id="network-health">The Network health row</h3>
+<p>The row is a generic <code>SubsystemStatus</code> named <code>Network</code>, so no editor protocol change is needed (the protocol carries <code>{name, state, detail}</code> rows). <em>Disabled</em> for <code>none</code> (<code>Preset none (offline): no network model</code>) and for a passing preset, because no network runtime exists yet; <em>Failed</em> for a refused Deterministic project. Details and the row's place in the report are on <a href="application.html#health">Subsystem health</a>.</p>
+
+<div class="callout note" id="design-network-presets-data"><p class="callout-title">Design decision: the preset bundles are one table of data in the engine <span class="badge">PR #187</span></p><p>Decided by the user on 2026-10-20 (three built-in presets; the Deterministic preset disabled while no backend declares <code>CrossPlatform</code>; the engine refuses to start a Deterministic project whose requirements are unmet). The bundles are a table in the engine, not logic spread over the editor and the engine, so both read the same rows and the same numeric ranges and cannot disagree about what a preset locks. A project is Customised only by overriding a cell that is Locked and not Tunable. Judgement calls the plan did not cover: the ranges of the settings the design gives no range for (for example <code>authoritative.snapshotRate</code> 10 to 60 and <code>transport.port</code> 1 to 65535) are sanity bounds chosen here; the tick rate allows 30 to 120, where the design lists 30, 60 and 120 as the suggestions.</p></div>
+<div class="callout note" id="design-network-refusal"><p class="callout-title">Design decision: a Deterministic project is refused before anything starts <span class="badge">PR #187</span></p><p>Decided by the user on 2026-10-20 (D4: refuse, never silently degrade). The check runs right after the project file is read, so a refused project opens no window, audio device or physics scene and tears nothing down; the physics backend's declarations are read from the type (<code>PhysXBackend::DeclaredDeterminism</code>) because the backend does not exist yet. Judgement calls the plan did not cover: <code>tick-loop</code> is listed as unmet (the plan's list names the fixed timestep, but the timeScale-independent tick loop is also part of the preset and does not exist), as is <code>engine-trig</code>; <code>physics-threads</code> is derived from the declared level (SameBinary or better) rather than from a separate query; the Authoritative GPU warning reads the <code>physics.gpu</code> setting, because the engine does not know whether it is the server; and rows that are startup-checked in the preset table but cannot be checked yet (RNG policy, ordering rules) are not part of the refusal.</p></div>
+<p class="src">Source: <code>engine/include/engine/network/NetworkSettings.hpp</code>, <code>NetworkPresets.hpp</code>, <code>NetworkValidation.hpp</code>; <code>engine/src/network/</code>; <code>engine/include/engine/physics/DeterminismLevel.hpp</code>; <code>engine/include/engine/physics/IPhysicsBackend.hpp</code> - <code>GetDeterminism</code>, <code>SupportsSnapshot</code>, <code>SupportsSetState</code>; <code>engine/include/engine/physics/physx/PhysXBackend.hpp</code> - <code>DeclaredDeterminism</code>; <code>engine/src/ProjectSettings.cpp</code> - <code>ReadNetworkSettings</code>; <code>engine/src/Application.cpp</code> - <code>Application::Init</code>; tests: <code>tests/engine/network/</code>, <code>tests/engine/HealthTests.cpp</code> (<code>NetworkPresetInitTest</code>).</p>
 
 <h2 id="gpu-particles">GPU particles (PhysX PBD) <span class="badge">PR #129</span></h2>
 <p>With <code>physics.gpu</code> <code>auto</code> or <code>on</code>, a working probe and a build with the GPU library (Windows), <code>PhysXBackend::Initialize</code> also creates the PhysX PBD particle backend over the real driver, and <code>GetParticleBackend()</code> returns it. With <code>physics.gpu</code> <code>off</code> (the default) the scene is built by exactly the same code as before: no CUDA call, no particle backend. The component, the presets, the driver seam and the limits are on <a href="particles.html#physx-backend">Particles</a>; this section is what belongs to the physics side.</p>
