@@ -31,6 +31,8 @@
 #      long) is also compiled for Emscripten, where size_t is unsigned long on wasm32 and matches no other overload
 #   4. source/foundation/unix/FdUnixThread.cpp: the x86 `pause` inline assembly is dropped (WebAssembly has none)
 #   5. source/foundation/FdTempAllocator.cpp: an ambiguous PxHighestSetBit(unsigned long) call gets an explicit PxU32
+#   6. source/foundation/unix/FdUnixMutex.cpp: the pthread_mutexattr_setprioceiling call is dropped (Emscripten has no
+#      such function; a priority ceiling means nothing without threads)
 # After the build a smoke program (the one of .github/workflows/physx-linux.yml) is compiled against the result and run
 # under node: a foundation, a physics SDK, a scene on a 0-worker dispatcher and a falling sphere.
 
@@ -104,6 +106,9 @@ patch_file source/foundation/unix/FdUnixThread.cpp \
 patch_file source/foundation/FdTempAllocator.cpp \
     's/PxHighestSetBit(PxU32(size) + sizeof(Chunk) - 1)/PxHighestSetBit(PxU32(PxU32(size) + sizeof(Chunk) - 1))/' \
     'PxHighestSetBit(PxU32(PxU32(size) + sizeof(Chunk) - 1))'
+patch_file source/foundation/unix/FdUnixMutex.cpp \
+    's|pthread_mutexattr_setprioceiling(&attr, 0);|/* no priority ceiling in WebAssembly */|' \
+    '/* no priority ceiling in WebAssembly */'
 
 PX="$SRC/physx"
 BUILD="$WORK/build"
