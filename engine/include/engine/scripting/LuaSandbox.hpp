@@ -112,8 +112,9 @@ namespace N2Engine::Scripting
     /// thread, several at once, with or without a LuaRuntime. The builder and its state are not thread safe: one
     /// thread at a time uses one LuaSandbox. The destructor closes the state on every path.
     ///
-    /// Not wired into any host feature yet: the declaration evaluator is its one user, and the editor-extension
-    /// profile is built only by tests until the host (E-X2) installs it.
+    /// Its users: the declaration evaluator (the Declarations profile) and the editor host's ExtensionHost, in
+    /// editor-server (the EditorExtension profile, one state per extension file, with an Editor global the host adds
+    /// in a prelude of its own: the builder's own prelude for the profile stays empty).
     ///
     /// Precondition for every caller: run it where it can be abandoned. The entry's instruction count and clock are
     /// checked by a hook between VM instructions, so a single call into C that does not return cannot be
