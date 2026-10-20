@@ -81,7 +81,7 @@ if(N2ENGINE_PLATFORM_WEB)
     set(N2ENGINE_USE_PHYSX OFF)
     message(STATUS "Web: Vulkan renderer off (no Vulkan in the browser)")
     set(N2ENGINE_RENDERER_VULKAN OFF)
-    message(STATUS "Web: no GLFW window, GL context or audio device (external/web-stubs stands in for GLFW and OpenAL; the player shows frames on a canvas and reads input from the page); the editor host (sockets, TLS), test_project and lua_project are not built")
+    message(STATUS "Web: no GLFW window or GL context (external/web-stubs stands in for GLFW; the player shows frames on a canvas and reads input from the page), audio is Emscripten's OpenAL on WebAudio (N2ENGINE_WEB_AUDIO, or a no-op stub); the editor host (sockets, TLS), test_project and lua_project are not built")
 endif()
 
 # == PhysX setup ==
@@ -316,8 +316,8 @@ add_subdirectory(math)
 add_subdirectory(text)
 add_subdirectory(assetimport)
 if(N2ENGINE_PLATFORM_WEB)
-    # Headers-only GLFW and OpenAL plus no-op stand-ins for their functions: the renderer and the engine link them
-    # (a window and an audio device are later web stages)
+    # Headers-only GLFW and OpenAL plus a no-op stand-in for GLFW (and, with N2ENGINE_WEB_AUDIO=stub, for OpenAL; by
+    # default OpenAL::OpenAL is Emscripten's own OpenAL on WebAudio): the renderer and the engine link them
     add_subdirectory(external/web-stubs)
 endif()
 add_subdirectory(renderer)

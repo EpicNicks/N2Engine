@@ -11,8 +11,9 @@ file(GLOB_RECURSE ENGINE_TEST_SOURCES
 # CoreRobustnessTests.cpp's multi-threaded logger test). docs/web-build.html lists both.
 if(N2ENGINE_PLATFORM_WEB)
     set(N2ENGINE_WEB_EXCLUDED_ENGINE_TESTS
-        # OpenAL: the web build has no audio device yet (external/web-stubs), and these open OpenAL Soft's null and
-        # loopback devices
+        # OpenAL: these open OpenAL Soft's own "null" and loopback devices (ALSOFT_DRIVERS=null, ALC_SOFT_loopback), which
+        # Emscripten's OpenAL (WebAudio; node has none, so no device opens at all) does not have. The web build's audio
+        # is tested by tests/web/WebAudioTests.cpp (the no-device path under node) and by the manual browser checklist
         audio/AudioTests.cpp
         audio/LoopbackAudioTests.cpp
     )

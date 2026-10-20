@@ -10,6 +10,25 @@
 #include <limits>
 #include <ranges>
 
+#if defined(N2ENGINE_PLATFORM_WEB) && defined(N2ENGINE_WEB_WEBAUDIO)
+#include <emscripten.h>
+
+// The AudioContext lives inside Emscripten's OpenAL port (library_openal.js, the `AL` object); asking it is the one way
+// to know whether the browser lets it run. Returns 0 when there is no context to ask (nothing initialized, or the port
+// keeps its state elsewhere), 1 when it is running, 2 when it is not (suspended before the first user gesture or while
+// the page is hidden, or Safari's "interrupted"). The page's loader (web/n2-loader.js) resumes it on the first gesture.
+EM_JS_DEPS(n2_web_audio_deps, "$AL");
+EM_JS(int, N2WebAudioContextState, (), {
+    try {
+        var current = AL.currentCtx;
+        if (!current || !current.audioCtx) return 0;
+        return current.audioCtx.state === 'running' ? 1 : 2;
+    } catch (error) {
+        return 0;
+    }
+});
+#endif
+
 namespace N2Engine::Audio
 {
     namespace
@@ -60,14 +79,23 @@ namespace N2Engine::Audio
         _device = alcOpenDevice(nullptr);
         if (!_device)
         {
+#ifdef N2ENGINE_PLATFORM_WEB
+            // Logged as Info: the caller reports the one warning (Application: "Subsystem Audio failed")
+            Logger::Info("Failed to open an OpenAL device (this page has no WebAudio, or this is a headless run)");
+#else
             Logger::Error("Failed to open OpenAL device");
+#endif
             return false;
         }
 
         _context = alcCreateContext(_device, nullptr);
         if (!_context)
         {
+#ifdef N2ENGINE_PLATFORM_WEB
+            Logger::Info("Failed to create an OpenAL context (the browser refused to create an AudioContext)");
+#else
             Logger::Error("Failed to create OpenAL context");
+#endif
             alcCloseDevice(_device);
             _device = nullptr;
             return false;
@@ -245,6 +273,31 @@ namespace N2Engine::Audio
         ResetLoopbackState();
         _output = AudioOutput::Device;
         Logger::Info("AudioSystem shutdown");
+    }
+
+    bool AudioSystem::IsOutputSuspended() const
+    {
+#if defined(N2ENGINE_PLATFORM_WEB) && defined(N2ENGINE_WEB_WEBAUDIO)
+        // Only a device output has an AudioContext of the browser's; the loopback one is never created on the web
+        return _initialized && _output == AudioOutput::Device && N2WebAudioContextState() == 2;
+#else
+        return false;
+#endif
+    }
+
+    bool AudioSystem::RefuseWhileSuspended()
+    {
+        if (!IsOutputSuspended())
+        {
+            return false;
+        }
+        if (!_suspendedDropLogged)
+        {
+            _suspendedDropLogged = true;
+            Logger::Info("A sound was dropped: the browser keeps audio suspended until the page gets a click, key press "
+                         "or touch (or while the tab is hidden). Sounds asked for in that time are not queued.");
+        }
+        return true;
     }
 
     void AudioSystem::Update()
@@ -514,6 +567,12 @@ namespace N2Engine::Audio
     AudioHandle AudioSystem::PlayOneShot(const std::shared_ptr<AudioClip>& clip, const PlaybackParams& params)
     {
         if (!_initialized || !clip || !clip->IsLoaded())
+        {
+            return AudioHandle{};
+        }
+
+        // Web: the browser has not let the AudioContext run (yet): drop the sound (IsOutputSuspended)
+        if (RefuseWhileSuspended())
         {
             return AudioHandle{};
         }

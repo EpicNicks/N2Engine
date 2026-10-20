@@ -33,6 +33,21 @@ add_compile_definitions(N2ENGINE_SINGLE_THREADED=1)
 add_compile_options(-fwasm-exceptions)
 add_link_options(-fwasm-exceptions)
 
+# The audio backend (stage 4): webaudio (the default) links Emscripten's own OpenAL (-lopenal, library_openal.js: WebAudio)
+# and defines N2ENGINE_WEB_WEBAUDIO, which turns on the engine's browser-side audio handling (the player opens a device
+# output, and sounds asked for while the browser keeps the AudioContext suspended are dropped; AudioSystem.hpp). stub
+# links external/web-stubs/openal_stub.c instead: no sound at all, for a build that must not touch WebAudio. The node
+# tests use the webaudio backend too: node has no AudioContext, so Emscripten's alcOpenDevice returns no device and the
+# audio system disables itself exactly as on a machine with no sound card (docs/web-build.html).
+set(N2ENGINE_WEB_AUDIO "webaudio" CACHE STRING "Web audio backend: webaudio (Emscripten's OpenAL on WebAudio) or stub (no sound)")
+set_property(CACHE N2ENGINE_WEB_AUDIO PROPERTY STRINGS webaudio stub)
+if(NOT N2ENGINE_WEB_AUDIO MATCHES "^(webaudio|stub)$")
+    message(FATAL_ERROR "N2ENGINE_WEB_AUDIO must be webaudio or stub (got '${N2ENGINE_WEB_AUDIO}')")
+endif()
+if(N2ENGINE_WEB_AUDIO STREQUAL "webaudio")
+    add_compile_definitions(N2ENGINE_WEB_WEBAUDIO=1)
+endif()
+
 # Every profile: the heap may grow (the Emscripten default is a fixed 16 MB heap, which a game or a large test exceeds),
 # and the stack is 1 MB (the Emscripten default of 64 KB is below what the engine's tests and recursive code expect).
 # Nothing here needs cross-origin isolation, SharedArrayBuffer or pthreads: this is the single-threaded baseline.
@@ -91,4 +106,4 @@ add_custom_target(web-size-report
     VERBATIM
 )
 
-message(STATUS "Web: profile ${N2ENGINE_WEB_PROFILE} (N2ENGINE_WEB_PROFILE), single-threaded baseline")
+message(STATUS "Web: profile ${N2ENGINE_WEB_PROFILE} (N2ENGINE_WEB_PROFILE), single-threaded baseline, audio ${N2ENGINE_WEB_AUDIO} (N2ENGINE_WEB_AUDIO)")

@@ -280,5 +280,165 @@
     return { run: run, hooks: hooks, manifest: function () { return manifest; } };
   }
 
-  return { create: create, LoadError: LoadError, files: { manifest: MANIFEST, wasm: WASM, data: DATA } };
+  // ---- Audio unlock (stage 4) ----
+  //
+  // Browsers keep an AudioContext "suspended" until the page has had a user gesture, and suspend it again for a hidden tab.
+  // Emscripten's OpenAL (the web build's audio) creates its AudioContext inside the engine, where the page cannot reach it,
+  // so install() wraps the page's AudioContext constructor (window.AudioContext and webkitAudioContext) to remember every
+  // context made after that. Call it before the engine starts (the page does, before loader.run).
+  //
+  //   * While a remembered context is not running, the first pointerdown, keydown or touchend on the page calls resume()
+  //     on each such context once, and the listeners are removed (idempotent: a second gesture does nothing). They come
+  //     back for a context made later, and when a resume() was refused (at most MAX_RESUME_TRIES refusals in all, so a
+  //     browser that never allows it is not retried forever).
+  //   * A hidden tab suspends the running contexts; the tab becoming visible resumes the ones this suspended (a refused
+  //     resume then waits for the next gesture as above).
+  //   * Nothing throws: no AudioContext (no WebAudio), a constructor that throws (the engine sees that, as it would
+  //     without this wrapper), a resume() that rejects or throws, a context that is already closed.
+  //
+  // options: window (the global scope: default self), document (default window.document), onEvent(name, detail) with
+  // audio-installed, audio-unavailable, audio-context-created, audio-resumed, audio-resume-failed, audio-suspended-hidden,
+  // audio-resumed-visible. Returns { install, uninstall, contexts, isArmed }.
+  var GESTURES = ['pointerdown', 'keydown', 'touchend'];
+  var MAX_RESUME_TRIES = 3;
+
+  function createAudioUnlock(options) {
+    options = options || {};
+    var win = options.window || (typeof self !== 'undefined' ? self : null);
+    var doc = options.document || (win && win.document) || null;
+    var onEvent = options.onEvent || function () {};
+    var contexts = [];
+    var suspendedHere = [];
+    var failures = 0;
+    var armed = false;
+    var installed = false;
+    var originals = null;
+    var listenerOptions = { capture: true, passive: true };
+
+    function emit(name, detail) {
+      try { onEvent(name, detail || {}); } catch (ignored) { /* a broken listener is not the unlock's problem */ }
+    }
+    function reasonOf(error) { return String(error && error.message ? error.message : error); }
+    function isRunning(context) { return context.state === 'running'; }
+    function isClosed(context) { return context.state === 'closed'; }
+
+    function arm() {
+      if (armed || !doc) return;
+      armed = true;
+      GESTURES.forEach(function (name) { doc.addEventListener(name, onGesture, listenerOptions); });
+    }
+    function disarm() {
+      if (!armed || !doc) return;
+      armed = false;
+      GESTURES.forEach(function (name) { doc.removeEventListener(name, onGesture, listenerOptions); });
+    }
+
+    function resume(context, eventName) {
+      try {
+        var result = context.resume();
+        if (result && typeof result.then === 'function') {
+          result.then(function () { emit(eventName, {}); }, function (error) { refused(error); });
+        } else {
+          emit(eventName, {});
+        }
+      } catch (error) {
+        refused(error);
+      }
+    }
+    function refused(error) {
+      emit('audio-resume-failed', { reason: reasonOf(error) });
+      if (++failures <= MAX_RESUME_TRIES) arm();
+    }
+
+    function onGesture() {
+      disarm();
+      contexts.filter(function (context) { return !isRunning(context) && !isClosed(context); })
+              .forEach(function (context) { resume(context, 'audio-resumed'); });
+    }
+
+    function onVisibility() {
+      if (!doc) return;
+      if (doc.visibilityState === 'hidden' || doc.hidden === true) {
+        contexts.forEach(function (context) {
+          if (!isRunning(context) || suspendedHere.indexOf(context) >= 0) return;
+          suspendedHere.push(context);
+          try {
+            var result = context.suspend();
+            if (result && typeof result.catch === 'function') result.catch(function () {});
+          } catch (ignored) { /* already closed */ }
+          emit('audio-suspended-hidden', {});
+        });
+      } else {
+        var back = suspendedHere;
+        suspendedHere = [];
+        back.forEach(function (context) {
+          if (isClosed(context)) return;
+          resume(context, 'audio-resumed-visible');
+        });
+      }
+    }
+
+    function track(context) {
+      contexts.push(context);
+      emit('audio-context-created', { state: context.state });
+      arm();
+    }
+
+    function wrap(Native) {
+      // A function (not a class) so that `new AudioContext(options)` and a subclass-free call both work; the prototype is
+      // the native one, so instanceof and every method keep working. Reflect.construct builds the native object.
+      function Tracked() {
+        var context = Reflect.construct(Native, arguments, new.target || Tracked);
+        try { track(context); } catch (ignored) { /* tracking must never break the engine's own context */ }
+        return context;
+      }
+      Tracked.prototype = Native.prototype;
+      Object.setPrototypeOf(Tracked, Native);
+      return Tracked;
+    }
+
+    function install() {
+      if (installed) return true;
+      if (!win || !(win.AudioContext || win.webkitAudioContext) || typeof Reflect !== 'object') {
+        emit('audio-unavailable', { reason: 'no AudioContext here' });
+        return false;
+      }
+      installed = true;
+      originals = { AudioContext: win.AudioContext, webkitAudioContext: win.webkitAudioContext };
+      var wrapped = [];
+      ['AudioContext', 'webkitAudioContext'].forEach(function (name) {
+        var Native = originals[name];
+        if (!Native) return;
+        for (var i = 0; i < wrapped.length; ++i) {
+          if (wrapped[i].Native === Native) { win[name] = wrapped[i].Tracked; return; }
+        }
+        var Tracked = wrap(Native);
+        wrapped.push({ Native: Native, Tracked: Tracked });
+        win[name] = Tracked;
+      });
+      if (doc) doc.addEventListener('visibilitychange', onVisibility, listenerOptions);
+      emit('audio-installed', {});
+      return true;
+    }
+
+    function uninstall() {
+      if (!installed) return;
+      installed = false;
+      disarm();
+      if (doc) doc.removeEventListener('visibilitychange', onVisibility, listenerOptions);
+      ['AudioContext', 'webkitAudioContext'].forEach(function (name) {
+        if (originals[name]) win[name] = originals[name];
+      });
+      originals = null;
+    }
+
+    return {
+      install: install,
+      uninstall: uninstall,
+      contexts: function () { return contexts.slice(); },
+      isArmed: function () { return armed; }
+    };
+  }
+
+  return { create: create, createAudioUnlock: createAudioUnlock, LoadError: LoadError, files: { manifest: MANIFEST, wasm: WASM, data: DATA } };
 });

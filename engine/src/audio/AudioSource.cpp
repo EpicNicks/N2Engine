@@ -60,6 +60,12 @@ namespace N2Engine::Audio
             return;
         }
 
+        // Web: the browser has not let the AudioContext run (yet): drop the sound (AudioSystem::IsOutputSuspended)
+        if (AudioSystem::Instance().RefuseWhileSuspended())
+        {
+            return;
+        }
+
         EnsureSource();
         if (_source == 0)
         {
