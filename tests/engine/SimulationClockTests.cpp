@@ -615,6 +615,18 @@ TEST_F(SimulationClockTest, AStandaloneClockDoesNotChangeTheApplicationsFixedDel
     EXPECT_FLOAT_EQ(Time::GetFixedDeltaTime(), static_cast<float>(ExactStep) * 0.5f);
 }
 
+TEST_F(SimulationClockTest, SettingTheModeOnTheApplicationsClockMakesTheFixedDeltaIgnoreTheTimeScale)
+{
+    ASSERT_TRUE(Time::SetFixedTimestep(ExactStep));
+    Time::SetTimeScale(0.5f);
+    Clock().SetMode(SimulationMode::Authoritative);
+    TickFor(ExactStep);
+    EXPECT_FLOAT_EQ(Time::GetFixedDeltaTime(), static_cast<float>(ExactStep));
+    Clock().SetMode(SimulationMode::None);
+    TickFor(ExactStep);
+    EXPECT_FLOAT_EQ(Time::GetFixedDeltaTime(), static_cast<float>(ExactStep) * 0.5f);
+}
+
 TEST_F(SimulationClockTest, InNoneModeTheAttachQueueRunsOncePerFrameBeforeTheFixedSteps)
 {
     // The contrast: one frame of three steps attaches the spawner once, before step 1, and an object created in step 3

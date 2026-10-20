@@ -392,6 +392,9 @@ void Application::Tick(const TickOptions &options)
     // steps after 3 hours of running, 8 ms after 18). In None mode the clock keeps at most 0.25 s of it: the longest
     // frame the fixed-step loop catches up on; after a long stall (debugger, loading) it would otherwise queue hundreds
     // of physics steps and fall further behind while running them. Network modes keep all of it.
+    // The fixed dt follows the clock mode every frame, so GetSimulationClock().SetMode() cannot leave the mode and
+    // Time::GetFixedDeltaTime() disagreeing
+    Time::SetFixedIgnoresTimeScale(_simulationClock.IsNetworked());
     _simulationClock.BeginFrame(static_cast<double>(Time::GetUnscaledDeltaTime()));
     if (SceneManager::GetCurSceneIndex() != -1)
     {
@@ -465,6 +468,7 @@ std::uint32_t Application::StepTicks(const std::uint32_t count)
     {
         return 0;
     }
+    Time::SetFixedIgnoresTimeScale(_simulationClock.IsNetworked());
     Scene &curScene = SceneManager::GetCurSceneRef();
     if (!_simulationClock.IsNetworked())
     {
