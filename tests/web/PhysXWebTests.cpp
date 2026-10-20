@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <malloc.h>
 #include <string>
 #include <vector>
 
@@ -128,6 +129,7 @@ TEST(PhysXWebTest, ABoxStackCostsAModestHeapGrowthAndSteps)
     constexpr int kBoxes = 200;
     constexpr int kSteps = 120;
     const std::size_t heapBefore = emscripten_get_heap_size();
+    const std::size_t usedBefore = static_cast<std::size_t>(mallinfo().uordblks);
 
     static physx::PxDefaultAllocator allocator;
     PhysXLoggerErrorCallback callback;
@@ -169,11 +171,14 @@ TEST(PhysXWebTest, ABoxStackCostsAModestHeapGrowthAndSteps)
     }
     const double elapsedMs = emscripten_get_now() - start;
     const std::size_t heapAfter = emscripten_get_heap_size();
+    const std::size_t usedAfter = static_cast<std::size_t>(mallinfo().uordblks);
 
     std::printf("[PHYSX-WEB] %d boxes on a floor, %d steps of 1/60 s, 0 workers, under node: %.1f ms in total (%.2f ms per step); "
-                "heap %zu -> %zu bytes (+%zu)\n",
-                kBoxes, kSteps, elapsedMs, elapsedMs / kSteps, heapBefore, heapAfter, heapAfter - heapBefore);
+                "wasm heap %zu -> %zu bytes (+%zu), malloc'ed bytes in use %zu -> %zu (+%zu)\n",
+                kBoxes, kSteps, elapsedMs, elapsedMs / kSteps, heapBefore, heapAfter, heapAfter - heapBefore, usedBefore,
+                usedAfter, usedAfter - usedBefore);
     EXPECT_LT(heapAfter - heapBefore, static_cast<std::size_t>(64) * 1024 * 1024);
+    EXPECT_LT(usedAfter - usedBefore, static_cast<std::size_t>(64) * 1024 * 1024);
 
     scene->release();
     material->release();
