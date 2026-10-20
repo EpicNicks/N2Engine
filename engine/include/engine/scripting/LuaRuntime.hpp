@@ -24,6 +24,17 @@ namespace N2Engine::Scripting
         std::size_t maxBytes = std::size_t{256} * 1024 * 1024;
     };
 
+    /// What this process lets the engine do with project Lua. Run is every game, the play host and every test: scripts run
+    /// as the docs describe. DeclarationsOnly is the editor host that edits (N2EditorHost without --play): project Lua
+    /// never runs in the engine's state there. A LuaComponent reads its script's field declarations from the
+    /// ScriptDeclarationCache (a throwaway, budgeted evaluation with no engine bindings, off the calling thread), and the
+    /// runtime refuses every way of running a script.
+    enum class LuaExecutionPolicy
+    {
+        Run,
+        DeclarationsOnly
+    };
+
     namespace Detail
     {
         /// What the state's allocator and count hook share (reached through lua_getallocf). Defined in LuaRuntime.cpp.
@@ -55,6 +66,18 @@ namespace N2Engine::Scripting
 
     public:
         static LuaRuntime& Instance();
+        /// True once Instance() has made the runtime. A path that only has something to undo in an existing runtime
+        /// (a destructor removing its reload callbacks) asks this instead of making a Lua state to look.
+        [[nodiscard]] static bool HasInstance();
+
+        /// Sets what the process may run (default Run). Process-wide on purpose: the editor host turns edit mode on for a
+        /// scene only AFTER it is deserialised, and deserialising is what runs a script's top-level chunk, so a per-scene
+        /// switch comes too late. N2EditorHost sets it once at start-up, before any scene loads, and nothing changes it
+        /// back; tests set it and restore it. Safe to call from any thread.
+        static void SetExecutionPolicy(LuaExecutionPolicy policy);
+        [[nodiscard]] static LuaExecutionPolicy GetExecutionPolicy();
+        /// True under Run
+        [[nodiscard]] static bool RunsScripts() { return GetExecutionPolicy() == LuaExecutionPolicy::Run; }
 
         /// The project setting determinism.luaSeed (unset by default). Unset: Lua seeds its string hash from the clock
         /// and addresses and math.random from the clock, as upstream Lua does, so pairs() order over string keys and
@@ -143,6 +166,9 @@ namespace N2Engine::Scripting
         sol::table LoadScriptAsModule(const IO::ResourcePath& path, LuaScript* script);
         /// The module's table, or nothing if it is not loaded or its reference could not be copied (the memory cap)
         sol::optional<sol::table> GetModule(const std::string& moduleName);
+        /// Run: runs the new source as the module (erasing the old one) and tells every component that registered for it
+        /// to rebuild. DeclarationsOnly: runs nothing: it drops the cache's entries of other sources of this path and tells
+        /// the components (ScriptDeclarationCache::Subscribe) to read the new source's declarations.
         void ReloadModule(const IO::ResourcePath& path, LuaScript* script);
 
         // Reload callbacks
@@ -154,7 +180,7 @@ namespace N2Engine::Scripting
         void ClearReloadCallbacks(const std::string& moduleName);
 
         // Path conversion (public for LuaComponent)
-        std::string PathToModuleName(const IO::ResourcePath& path);
+        [[nodiscard]] static std::string PathToModuleName(const IO::ResourcePath& path);
 
     private:
         friend class LuaBudgetScope;

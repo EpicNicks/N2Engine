@@ -2,6 +2,7 @@
 #include "LuaGuard.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -22,6 +23,7 @@
 #include "engine/input/Input.hpp"
 #include <n2seed.h>
 #include "engine/scripting/bindings/LuaBindings.hpp"
+#include "engine/scripting/ScriptDeclarationCache.hpp"
 
 namespace N2Engine::Scripting
 {
@@ -29,6 +31,11 @@ namespace N2Engine::Scripting
     {
         using Detail::BudgetErrorText;
         using Detail::MemoryErrorText;
+
+        std::atomic<LuaExecutionPolicy> g_executionPolicy{LuaExecutionPolicy::Run};
+
+        constexpr const char *ExecutionRefusedText =
+            "Lua is not run on this host: it reads script declarations only (LuaExecutionPolicy::DeclarationsOnly)";
 
         // The error object at `index` as text, without converting it: lua_tolstring on a number makes a new string,
         // an allocation that, at the memory cap and outside a protected call, goes down the panic path. A number is
@@ -194,6 +201,21 @@ namespace N2Engine::Scripting
             _instance = new LuaRuntime();
         }
         return *_instance;
+    }
+
+    bool LuaRuntime::HasInstance()
+    {
+        return _instance != nullptr;
+    }
+
+    void LuaRuntime::SetExecutionPolicy(const LuaExecutionPolicy policy)
+    {
+        g_executionPolicy.store(policy);
+    }
+
+    LuaExecutionPolicy LuaRuntime::GetExecutionPolicy()
+    {
+        return g_executionPolicy.load();
     }
 
     void LuaRuntime::Destroy()
@@ -468,6 +490,15 @@ namespace N2Engine::Scripting
 
     sol::protected_function_result LuaRuntime::RunSource(const std::string_view source, const std::string &chunkName)
     {
+        if (!RunsScripts())
+        {
+            // The one door through which the engine runs script text (RunChunk, RunFile, require and module loading
+            // come here): shut, answered as a load failure so every caller reports it as one. Nothing is compiled.
+            lua_State *state = _lua.lua_state();
+            lua_pushstring(state, ExecutionRefusedText);
+            return sol::protected_function_result(state, lua_absindex(state, -1), 0, 1,
+                                                  static_cast<sol::call_status>(LUA_ERRSYNTAX));
+        }
         // Text only: a project .lua asset holding precompiled bytecode would otherwise run as-is
         const LuaBudgetScope budget;
         // What sol's safe_script does, with Lua's own API: safe_script builds a sol::protected_function, whose
@@ -746,6 +777,20 @@ namespace N2Engine::Scripting
 
     void LuaRuntime::ReloadModule(const IO::ResourcePath &path, LuaScript *script)
     {
+        if (!RunsScripts())
+        {
+            // Nothing runs, not even as a module: the cache forgets the path's older sources and the components that
+            // read declarations from it read the new source's (a hit when it was seen before, an evaluation otherwise)
+            auto &cache = ScriptDeclarationCache::Instance();
+            if (script != nullptr)
+            {
+                cache.Refresh(path, script->GetSourceCode());
+            }
+            cache.NotifyReloaded(PathToModuleName(path));
+            Logger::Info(std::format("Reloaded module (declarations only): {}", PathToModuleName(path)));
+            return;
+        }
+
         // The module run and every component's reload callback share one budget
         const LuaBudgetScope budget;
         std::string moduleName = PathToModuleName(path);

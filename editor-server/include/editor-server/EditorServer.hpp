@@ -714,8 +714,9 @@ namespace N2Engine::Editor
         // ==================== Read-only mode ====================
 
         /// What a command does to the host. Read: answers from what the host holds and changes nothing a client could
-        /// save, run or lose. Write: changes the project, a scene, the game or an asset, or runs project code. Admin:
-        /// controls the host itself (Shutdown).
+        /// save, run or lose. Write: changes the project, a scene, the game or an asset, or (a play host only) runs project
+        /// code. A host that edits never runs it: a script on a scene is read for its declarations in a throwaway state
+        /// with no engine bindings (LuaExecutionPolicy::DeclarationsOnly). Admin: controls the host itself (Shutdown).
         enum class CommandClass : uint8_t
         {
             Read,
