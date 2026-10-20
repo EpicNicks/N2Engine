@@ -600,7 +600,7 @@ TEST(ServerLogTest, TheTagArrivesWithALineLoggedOnAnotherThread)
 
 // ==================== PollEvents by role ====================
 
-TEST(PollEventsRoleTest, ANoTokenHostGivesTheLocalUserEveryLineAsBefore)
+TEST(PollEventsNoRolesTest, ANoTokenHostGivesTheLocalUserEveryLineAsBefore)
 {
     EditorServer server;
     ASSERT_FALSE(server.RequiresAccessToken());
@@ -619,7 +619,7 @@ TEST(PollEventsRoleTest, ANoTokenHostGivesTheLocalUserEveryLineAsBefore)
     EXPECT_EQ(polled.epoch, server.GetEvents().Epoch(EventView::Full));
 }
 
-TEST(PollEventsRoleTest, ASingleTokenHostIsAnAdminAndReadsEveryLine)
+TEST(PollEventsNoRolesTest, ASingleTokenHostIsAnAdminAndReadsEveryLine)
 {
     EditorServer server;
     ASSERT_TRUE(server.SetAccessToken("the-one-token"));
