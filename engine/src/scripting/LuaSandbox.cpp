@@ -72,16 +72,19 @@ namespace N2Engine::Scripting
         // is invisible to the instruction hook; design decision D6) and dump (it serializes a function's bytecode)
         constexpr const char *RemovedStringFunctions[] = {"find", "match", "gmatch", "gsub", "dump"};
 
-        SandboxBudget Resolve(const SandboxBudget &budget)
+        // A 0 field takes the sandbox's load budget value (never unlimited)
+        SandboxBudget Resolve(const SandboxBudget &budget, const SandboxBudget &loadBudget)
         {
             SandboxBudget resolved = budget;
             if (resolved.instructions == 0)
             {
-                resolved.instructions = SandboxDefaults::LoadBudget.instructions;
+                resolved.instructions = loadBudget.instructions == 0 ? SandboxDefaults::LoadBudget.instructions
+                                                                      : loadBudget.instructions;
             }
             if (resolved.maxMillis == 0)
             {
-                resolved.maxMillis = SandboxDefaults::LoadBudget.maxMillis;
+                resolved.maxMillis = loadBudget.maxMillis == 0 ? SandboxDefaults::LoadBudget.maxMillis
+                                                               : loadBudget.maxMillis;
             }
             resolved.maxMillis = std::min(resolved.maxMillis, MaxMillis);
             return resolved;
@@ -112,6 +115,111 @@ string.rep = function(s, n, sep)
         return ""
     end
     return srep(s, n, sep)
+end
+
+-- table.move, insert and remove loop in C over a range or a length, one C call runs no instruction, and a plain
+-- table can have a huge border (2^40 with 41 elements) or be given a huge range with nothing in it: the hook could
+-- not stop them. Here they are Lua with the stock semantics (metamethods included), so every element step is counted
+-- and a huge range ends as a budget trip. concat, unpack and sort stay the stock C functions (see LuaSandbox.hpp).
+local mtoint, maxint, sformat, select = math.tointeger, math.maxinteger, string.format, select
+local function intArg(v, argn, fname)
+    local tv = type(v)
+    local n = nil
+    if tv == "number" or tv == "string" then
+        n = mtoint(v)
+    end
+    if n == nil then
+        if tv == "number" then
+            error(sformat("bad argument #%d to '%s' (number has no integer representation)", argn, fname), 3)
+        end
+        error(sformat("bad argument #%d to '%s' (number expected, got %s)", argn, fname,
+            tv == "nil" and "no value" or tv), 3)
+    end
+    return n
+end
+local function checkTable(v, argn, fname)
+    if type(v) ~= "table" then
+        error(sformat("bad argument #%d to '%s' (table expected, got %s)", argn, fname, type(v)), 3)
+    end
+end
+local function lengthOf(t)
+    local n = mtoint(#t)
+    if n == nil then
+        error("object length is not an integer", 3)
+    end
+    return n
+end
+table.move = function(a1, f, e, t, a2)
+    local explicit = a2 ~= nil
+    if not explicit then
+        a2 = a1
+    end
+    checkTable(a1, 1, "move")
+    checkTable(a2, explicit and 5 or 1, "move")
+    local from = intArg(f, 2, "move")
+    local to = intArg(e, 3, "move")
+    local dest = intArg(t, 4, "move")
+    if to >= from then
+        local n = to - from
+        if n < 0 then
+            error("bad argument #3 to 'move' (too many elements to move)", 2)
+        end
+        if dest > maxint - n then
+            error("bad argument #4 to 'move' (destination wrap around)", 2)
+        end
+        if dest > to or dest <= from or (explicit and not (a1 == a2)) then
+            for k = 0, n do
+                a2[dest + k] = a1[from + k]
+            end
+        else
+            for k = n, 0, -1 do
+                a2[dest + k] = a1[from + k]
+            end
+        end
+    end
+    return a2
+end
+table.insert = function(t, ...)
+    checkTable(t, 1, "insert")
+    local nargs = select("#", ...)
+    if nargs ~= 1 and nargs ~= 2 then
+        error("wrong number of arguments to 'insert'", 2)
+    end
+    local e = lengthOf(t) + 1
+    if nargs == 1 then
+        t[e] = (...)
+        return
+    end
+    local p, v = ...
+    local pos = intArg(p, 2, "insert")
+    if pos < 1 or pos > e then
+        error("bad argument #2 to 'insert' (position out of bounds)", 2)
+    end
+    for i = e, pos + 1, -1 do
+        t[i] = t[i - 1]
+    end
+    t[pos] = v
+end
+table.remove = function(t, ...)
+    checkTable(t, 1, "remove")
+    local size = lengthOf(t)
+    local pos = size
+    local p = ...
+    if p ~= nil then
+        pos = intArg(p, 2, "remove")
+    end
+    if pos ~= size and (pos < 1 or pos > size + 1) then
+        error("bad argument #2 to 'remove' (position out of bounds)", 2)
+    end
+    local removed = t[pos]
+    for i = pos, size - 1 do
+        t[i] = t[i + 1]
+    end
+    if pos < size then
+        pos = size
+    end
+    t[pos] = nil
+    return removed
 end
 )LUA";
 
@@ -190,6 +298,7 @@ end
         std::unique_ptr<Detail::LuaGuardState> guard;
         std::unique_ptr<sol::state> lua;
         SandboxOutcome prelude;
+        SandboxBudget loadBudget = SandboxDefaults::LoadBudget;
         bool counted = false;
 
         void CloseState()
@@ -222,7 +331,8 @@ end
         Detail::LuaGuardState &guard = *impl->guard;
         guard.cap = std::max(options.maxBytes == 0 ? SandboxDefaults::MaxBytes : options.maxBytes,
                              SandboxDefaults::MinBytes);
-        guard.limit = Resolve(options.loadBudget).instructions;
+        impl->loadBudget = Resolve(options.loadBudget, SandboxDefaults::LoadBudget);
+        guard.limit = impl->loadBudget.instructions;
 
         g_liveSandboxes.fetch_add(1);
         impl->counted = true;
@@ -280,7 +390,7 @@ end
         {
             return;
         }
-        const SandboxBudget resolved = Resolve(budget);
+        const SandboxBudget resolved = Resolve(budget, _impl->loadBudget);
         Detail::LuaGuardState &guard = *_impl->guard;
         guard.limit = resolved.instructions;
         guard.hasDeadline = true;
@@ -303,6 +413,11 @@ end
         SandboxOutcome outcome;
         outcome.ok = false;
         const Detail::LuaGuardState &guard = *_impl->guard;
+        if (!_impl->lua && !guard.timedOut && !guard.exhausted && status != LUA_ERRMEM)
+        {
+            outcome.error = "The sandbox is closed";
+            return outcome;
+        }
         if (guard.timedOut)
         {
             outcome.budgetExceeded = true;

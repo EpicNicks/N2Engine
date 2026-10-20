@@ -24,14 +24,16 @@ namespace N2Engine::Scripting
         /// gmatch and gsub (pattern matching: their C-level cost is invisible to the instruction budget) and without
         /// dump. No io, os, package, debug or coroutine library, no require, no engine binding and no editor API
         /// (the `Editor` namespace comes with the host that installs it). string.rep of an empty string answers ""
-        /// without a C loop; the table library is the stock one (design 6.4), so a table function over a table whose
-        /// `__len` lies still loops in C, where the hook cannot stop it: the caller's abandon deadline (see
-        /// LuaSandbox) is what bounds that.
+        /// without a C loop. table.move, insert and remove are redone in Lua (stock semantics), so a huge range or a
+        /// huge border costs counted instructions and ends as a budget trip; concat, unpack and sort are the stock C
+        /// functions (design 6.4), so one over a huge range or length (a table whose `__len` lies, or whose border
+        /// is huge) still loops in C, where the hook cannot stop it: the caller's abandon deadline (see LuaSandbox)
+        /// is what bounds that.
         EditorExtension,
     };
 
     /// What one entry into a state (one chunk, later one callback) may spend: VM instructions and wall-clock time.
-    /// 0 in either field means the profile's load budget value, never unlimited.
+    /// 0 in either field means the sandbox's load budget value (SandboxOptions::loadBudget), never unlimited.
     struct SandboxBudget
     {
         std::uint64_t instructions = 0;

@@ -903,3 +903,56 @@ TEST_F(LuaSandboxTest, TheEvaluatorClosesItsStateThroughTheBuilder)
     EXPECT_EQ(looping.leakedBytes, 0u);
     EXPECT_EQ(LuaSandbox::LiveStates(), _liveBefore);
 }
+
+TEST_F(LuaSandboxTest, TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip)
+{
+    // Stock C loops over a plain table with nothing in it: no allocation, no VM instruction. Redone in Lua they are counted.
+    for (const char *source : {"table.move({}, 1, 1 << 40, 2)", "local t = {} t[1 << 40] = 1 table.insert(t, 1, 0)",
+                               "local t = {} t[1 << 40] = 1 table.remove(t, 1)"})
+    {
+        auto sandbox = Make(SandboxProfile::EditorExtension);
+        const auto started = std::chrono::steady_clock::now();
+        const SandboxOutcome outcome = Exec(*sandbox, source, Instructions);
+        EXPECT_LT(ElapsedMs(started), 30000.0) << source;
+        EXPECT_FALSE(outcome.ok) << source;
+        EXPECT_TRUE(outcome.budgetExceeded) << source;
+        CloseChecked(*sandbox);
+    }
+}
+
+TEST_F(LuaSandboxTest, TableMoveInsertAndRemoveKeepTheirStockBehaviour)
+{
+    auto sandbox = Make(SandboxProfile::EditorExtension);
+    EXPECT_EQ(Value(*sandbox, "table.concat(table.move({1, 2, 3}, 1, 3, 2), ',')"), "1,1,2,3");
+    EXPECT_EQ(Value(*sandbox, "table.concat(table.move({1, 2, 3}, 2, 3, 1), ',')"), "2,3,3");
+    EXPECT_EQ(Value(*sandbox, "table.concat(table.move({1, 2, 3}, 1, 3, 1, {}), ',')"), "1,2,3");
+    EXPECT_EQ(Value(*sandbox, "#table.move({}, 5, 1, 1)"), "0");
+    EXPECT_EQ(Value(*sandbox, "(function() local t = {1, 2} table.insert(t, 3) table.insert(t, 1, 0) "
+                              "return table.concat(t, ',') end)()"), "0,1,2,3");
+    EXPECT_EQ(Value(*sandbox, "(function() local t = {1, 2, 3} local r = table.remove(t, 1) "
+                              "return r .. ':' .. table.concat(t, ',') end)()"), "1:2,3");
+    EXPECT_EQ(Value(*sandbox, "(function() local t = {1, 2, 3} return table.remove(t) end)()"), "3");
+    EXPECT_EQ(Value(*sandbox, "select(2, pcall(table.insert, {}, 5, 1)) ~= nil"), "true");
+    EXPECT_EQ(Value(*sandbox, "(pcall(table.insert, 'x', 1))"), "false");
+    CloseChecked(*sandbox);
+}
+
+TEST_F(LuaSandboxTest, ABudgetOfZeroTakesTheSandboxsOwnLoadBudget)
+{
+    SandboxOptions options;
+    options.loadBudget = SandboxBudget{1'000'000, 60'000};
+    auto sandbox = Make(SandboxProfile::EditorExtension, options);
+    const SandboxOutcome outcome = Exec(*sandbox, "while true do end", SandboxBudget{});
+    EXPECT_TRUE(outcome.budgetExceeded);
+    EXPECT_EQ(sandbox->Counters().instructionLimit, 1'000'000u);
+    CloseChecked(*sandbox);
+}
+
+TEST_F(LuaSandboxTest, AFailureOutcomeOfAClosedSandboxIsDataNotACrash)
+{
+    auto sandbox = Make(SandboxProfile::EditorExtension);
+    sandbox->Close();
+    const SandboxOutcome outcome = sandbox->FailureOutcome(LUA_ERRRUN, "x");
+    EXPECT_FALSE(outcome.ok);
+    EXPECT_FALSE(outcome.error.empty());
+}
