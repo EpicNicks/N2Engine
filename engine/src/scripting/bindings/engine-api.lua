@@ -2423,6 +2423,7 @@ function GameObjectEvent:Unsubscribe(id) end
 ---@field unscaledDeltaTime number Time since last frame (unscaled)
 ---@field unscaledTime number Time since game start (unscaled)
 ---@field fixedUnscaledDeltaTime number Fixed timestep for physics (unscaled)
+---@field tick integer Fixed ticks begun so far (read-only): 0 before the first, N inside tick N's OnFixedUpdate
 ---@field timeScale number Time scale multiplier (1.0 = normal, 0.5 = slow motion, 0.0 = paused)
 Time = {}
 
