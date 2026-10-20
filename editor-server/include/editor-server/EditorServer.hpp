@@ -115,6 +115,9 @@ namespace N2Engine::Editor
     /// the Logger, so every line logged in the process (the server's own included) becomes a log event; a host that
     /// constructs the server before Application::Init keeps the engine's startup lines for a client that connects later.
     /// Nothing the ring or PollEvents does logs, so polling an idle server finds no events.
+    /// Each line carries the Logger's sensitivity tag (Public or Admin; the host's own lines, written through ServerLog,
+    /// are Admin). PollEvents gives an admin, and any client of a host with no authentication, every event; the other
+    /// roles get the Public view (EventRing): no Admin line, host paths scrubbed, numbered as a view of its own.
     ///
     /// Security: the server binds to loopback by default. Without an access token there is no authentication, so
     /// any local process can drive the host (including deleting scene files); with --bind, anything that can reach it.
@@ -1087,6 +1090,9 @@ namespace N2Engine::Editor
         /// time compare) the Hello handler uses, nothing is recorded.
         [[nodiscard]] bool HelloTokenIsValid(const std::vector<uint8_t> &payload) const;
         [[nodiscard]] ConnectionIdentity CurrentIdentity() const;
+        /// Whether the connection reads every event and the full health detail: an admin, or any client of a host with
+        /// no authentication (no roles; its single local user). Every other role reads the Public view of the log.
+        [[nodiscard]] bool SeesEveryEvent() const;
         void SetIdentity(ConnectionIdentity identity);
         void ClearIdentity();
         /// Acceptor thread only: re-reads the tokens file when `force` or when its signature changed, and swaps the table in
