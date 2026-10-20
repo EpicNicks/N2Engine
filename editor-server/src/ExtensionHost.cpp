@@ -1654,8 +1654,9 @@ end
 
         // The wait is the abandon deadline, cut short where the Load's own time ends
         const std::uint64_t abandonMillis = AbandonMillis();
+        // Rounded up: the wait must not end a hair before the budget does, or the next file would still start
         const std::int64_t leftMillis = std::max<std::int64_t>(
-            1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count());
+            1, std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count());
         const bool cutByBudget = static_cast<std::uint64_t>(leftMillis) < abandonMillis;
         const std::uint64_t waitMillis = cutByBudget ? static_cast<std::uint64_t>(leftMillis) : abandonMillis;
         {
@@ -1886,6 +1887,19 @@ end
     json ExtensionHost::DisabledUiJson()
     {
         return {{"uiRevision", 0}, {"menuItems", json::array()}, {"inspectorSections", json::array()}};
+    }
+
+    std::size_t ExtensionHost::ChargedBytesOf(const std::string_view id) const
+    {
+        const std::lock_guard lock(_mutex);
+        for (const Entry &entry : _entries)
+        {
+            if (entry.id == id)
+            {
+                return entry.state == ExtensionState::Loaded ? entry.chargedBytes : 0;
+            }
+        }
+        return 0;
     }
 
     std::uint32_t ExtensionHost::UiRevision() const

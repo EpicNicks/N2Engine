@@ -683,17 +683,18 @@ namespace
             "'min' of an int must be a whole number");
         add("an int max with a fraction", Declaration(OneItem("params = { x = { type = \"int\", max = 2.5 } }")),
             "'max' of an int must be a whole number");
+        // NaN and infinity never get as far as the int check: the copy of the declaration refuses them
         add("an int min that is NaN", Declaration(OneItem("params = { x = { type = \"int\", min = 0/0 } }")),
-            "'min' of an int must be a whole number");
+            "NaN or infinite");
         add("an int max that is infinite", Declaration(OneItem("params = { x = { type = \"int\", max = math.huge } }")),
-            "'max' of an int must be a whole number");
+            "NaN or infinite");
         add("an int min that is minus infinity", Declaration(OneItem("params = { x = { type = \"int\", min = -math.huge } }")),
-            "'min' of an int must be a whole number");
+            "NaN or infinite");
         add("an int max too large for a double to hold exactly",
             Declaration(OneItem("params = { x = { type = \"int\", max = 1e300 } }")),
             "'max' of an int must be a whole number");
         add("an int default that is NaN", Declaration(OneItem("params = { x = { type = \"int\", default = 0/0 } }")),
-            "whole number");
+            "NaN or infinite");
         add("a default outside the range",
             Declaration(OneItem("params = { x = { type = \"number\", min = 1, max = 2, default = 5 } }")),
             "outside 'min' and 'max'");
@@ -1071,15 +1072,36 @@ TEST_F(ExtensionHostTest, ManySmallStatesStayUnderTheTotalMemoryBudget)
     EXPECT_EQ(host.LoadedCount(), 8u) << host.DescribeJson().dump();
 }
 
+namespace
+{
+    // What one heavy file's state is charged (what it held at its most while it loaded), measured on a host of its own
+    // with the default budget: the tests below set their budgets from it, so they do not depend on how the allocator
+    // grows a buffer
+    std::size_t MeasureHeavyCharge()
+    {
+        TempProject project;
+        project.Write("only.lua", Heavy("Only", "only.item", 3000000));
+        ExtensionHost host(project.Root());
+        host.Load();
+        EXPECT_EQ(host.LoadedCount(), 1u) << host.DescribeJson().dump();
+        return host.ChargedBytesOf("only.lua");
+    }
+}
+
 TEST_F(ExtensionHostTest, AFileThatWouldPassTheTotalMemoryBudgetFailsAsDataAndTheOthersStillLoad)
 {
+    const std::size_t heavy = MeasureHeavyCharge();
+    EXPECT_GT(heavy, std::size_t{3000000}) << "the state held the string it built";
+    EXPECT_LT(heavy, std::size_t{32} * 1024 * 1024);
+
     TempProject project;
-    // 8 MiB in all; each heavy state holds a little over 3 MB while it loads: two fit, the third finds under 2 MiB left
+    // Room for two heavy states and 1.2 MiB more: the third is given that 1.2 MiB as its cap (at least the smallest cap
+    // a state gets, so it is tried) and needs more
     project.Write("a_heavy.lua", Heavy("A", "a.item", 3000000));
     project.Write("b_heavy.lua", Heavy("B", "b.item", 3000000));
     project.Write("c_heavy.lua", Heavy("C", "c.item", 3000000));
     project.Write("d_small.lua", Valid("D", "d.item"));
-    ExtensionHost::SetMaxTotalBytesForTest(std::size_t{8} * 1024 * 1024);
+    ExtensionHost::SetMaxTotalBytesForTest(2 * heavy + std::size_t{1200} * 1024);
 
     const int statesBefore = Scripting::LuaSandbox::LiveStates();
     ExtensionHost host(project.Root());
@@ -1094,13 +1116,15 @@ TEST_F(ExtensionHostTest, AFileThatWouldPassTheTotalMemoryBudgetFailsAsDataAndTh
     EXPECT_EQ(StateOf(description, "d_small.lua"), "loaded") << "a later file that fits still loads";
     EXPECT_EQ(host.UiJson().at("menuItems").size(), 3u);
     EXPECT_EQ(Scripting::LuaSandbox::LiveStates(), statesBefore + 3) << "the refused file left no state behind";
+    EXPECT_GT(host.ChargedBytesOf("a_heavy.lua"), std::size_t{3000000});
+    EXPECT_EQ(host.ChargedBytesOf("c_heavy.lua"), 0u) << "a file that did not load is charged nothing";
 
     // The same on the next run: the order is the sorted one, not a race
     host.Reload();
     EXPECT_EQ(StateOf(host.DescribeJson(), "c_heavy.lua"), "failed");
     EXPECT_EQ(host.LoadedCount(), 3u);
 
-    // The budget is per Load: with the file that did not fit gone, the next reload loads what is there
+    // The budget is per load: with the file that did not fit gone, the next reload loads what is there
     project.Remove("c_heavy.lua");
     project.Write("e_small.lua", Valid("E", "e.item"));
     host.Reload();
@@ -1109,15 +1133,19 @@ TEST_F(ExtensionHostTest, AFileThatWouldPassTheTotalMemoryBudgetFailsAsDataAndTh
 
 TEST_F(ExtensionHostTest, AFileThatFailsOrIsDroppedGivesItsMemoryBack)
 {
+    const std::size_t heavy = MeasureHeavyCharge();
+
     TempProject project;
     // The first allocates then fails (its state is closed, so it costs the budget nothing); the third clashes on an item
-    // id after loading (dropped); the two heavy files after them fit only because those gave their share back
+    // id after loading (dropped); the two heavy files after them fit only because those gave their share back: the
+    // budget holds 2.5 heavy states and a half MiB, and the small one in front, so without the refund the last heavy
+    // file would be left less than one heavy state
     project.Write("a_fails.lua", "local s = string.rep(\"x\", 3000000)\nerror(\"after allocating\")");
     project.Write("b_first.lua", Valid("First", "shared.item"));
     project.Write("c_clash.lua", Heavy("Clash", "shared.item", 3000000));
     project.Write("d_heavy.lua", Heavy("D", "d.item", 3000000));
     project.Write("e_heavy.lua", Heavy("E", "e.item", 3000000));
-    ExtensionHost::SetMaxTotalBytesForTest(std::size_t{8} * 1024 * 1024);
+    ExtensionHost::SetMaxTotalBytesForTest(heavy * 5 / 2 + std::size_t{512} * 1024);
 
     ExtensionHost host(project.Root());
     host.Load();
