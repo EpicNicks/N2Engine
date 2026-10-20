@@ -17,7 +17,7 @@ namespace N2Engine::Editor
      * Admission to the bounded set of pre-authentication slots (design: security-design Part 2). A connection holds a
      * slot from accept until it has authenticated or been closed, so the work an unauthenticated peer can cause is
      * bounded in threads and memory. Plain logic: no sockets, and the time comes from an injected function, so its tests
-     * never sleep. NOT wired into EditorServer yet (PR S-3 does that).
+     * never sleep. EditorServer owns one and takes a slot per accepted connection (it does not turn the reserve on).
      *
      *  - at most `totalSlots` slots at once (1-16, default 4);
      *  - at most `perAddressSlots` (default 2) for one non-loopback address;
@@ -27,7 +27,8 @@ namespace N2Engine::Editor
      *    TLS and no log line; the refusals are counted so a periodic summary line can be written (TakeCounters);
      *  - optional, OFF by default: `reservedSlots` of the total are kept for non-loopback addresses that authenticated
      *    within `recentAuthWindow` (RecordAuthenticated), so a flood cannot lock a known user out. Everybody else,
-     *    loopback included, can use only `totalSlots - reservedSlots`. Useless behind a proxy.
+     *    loopback included, can use only `totalSlots - reservedSlots`. Useless when every peer is loopback (a proxy
+     *    or tunnel that connects over loopback): loopback never uses the reserve, so it would only take slots away.
      *
      * Thread-safe: one mutex, no call out while it is held except the injected clock, which is read before it is taken.
      * A handle must not outlive the PreAuthSlots.
