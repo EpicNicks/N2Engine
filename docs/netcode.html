@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Netcode (n2net) · N2Engine docs</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="layout">
+<aside class="sidebar">
+<a class="brand" href="index.html">N2Engine</a>
+<p class="brand-sub">Behaviour reference</p>
+<nav aria-label="Documentation">
+<div>
+<h2>Start</h2>
+<ul>
+<li><a href="index.html">Overview</a></li>
+</ul>
+</div>
+<div>
+<h2>Core</h2>
+<ul>
+<li><a href="application.html">Application &amp; frame loop</a></li>
+<li><a href="gameobjects-components.html">GameObjects &amp; components</a></li>
+<li><a href="transforms.html">Transforms</a></li>
+<li><a href="scenes.html">Scenes &amp; SceneManager</a></li>
+<li><a href="coroutines.html">Coroutines</a></li>
+</ul>
+</div>
+<div>
+<h2>Systems</h2>
+<ul>
+<li><a href="physics.html">Physics</a></li>
+<li><a href="input.html">Input</a></li>
+<li><a href="audio.html">Audio</a></li>
+<li><a href="text.html">Text &amp; fonts</a></li>
+<li><a href="ui.html">UI</a></li>
+<li><a href="meshes.html">Meshes, models &amp; textures</a></li>
+<li><a href="particles.html">Particles</a></li>
+<li><a href="soft-bodies.html">Soft bodies</a></li>
+<li><a href="resources.html">Resources &amp; paths</a></li>
+<li><a href="serialization.html">Serialization</a></li>
+<li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html" aria-current="page">Netcode (n2net)</a></li>
+</ul>
+</div>
+<div>
+<h2>Scripting</h2>
+<ul>
+<li><a href="scripting-lua.html">Lua scripting</a></li>
+</ul>
+</div>
+<div>
+<h2>Tooling</h2>
+<ul>
+<li><a href="logging-and-editor.html">Logging, health &amp; editor</a></li>
+<li><a href="editor.html">Editor projects</a></li>
+<li><a href="testing.html">Testing &amp; CI</a></li>
+<li><a href="web-build.html">Web build</a></li>
+</ul>
+</div>
+</nav>
+</aside>
+<main id="main">
+<div class="content">
+
+<h1>Netcode: the n2net library</h1>
+<p class="lead">n2net is the netcode's lowest layer: a transport interface, an in-memory network simulator, and a packet layer on top of datagrams (acknowledgements, a reliable-ordered channel, an unreliable-sequenced channel, fragmentation of large reliable messages). This page describes what exists in <code>master</code> now. It is a self-contained library: no sockets, no encryption and no engine integration yet (see <a href="#not-yet">What is not there yet</a>).</p>
+
+<div class="toc">
+<p class="toc-title">On this page</p>
+<ol>
+<li><a href="#overview">What exists and where it lives</a></li>
+<li><a href="#transport">The transport interface</a></li>
+<li><a href="#packet">The packet format</a></li>
+<li><a href="#connection">The connection: acknowledgements and channels</a>
+<ol>
+<li><a href="#acks">Packet numbers and acknowledgements</a></li>
+<li><a href="#reliable">The reliable-ordered channel</a></li>
+<li><a href="#fragmentation">Fragmentation and its limits</a></li>
+<li><a href="#unreliable">The unreliable-sequenced channel</a></li>
+<li><a href="#stream">Stream transports</a></li>
+<li><a href="#failure">Failure, timeouts and statistics</a></li>
+</ol>
+</li>
+<li><a href="#untrusted">Untrusted input and bounded memory</a></li>
+<li><a href="#simulator">The network simulator</a>
+<ol>
+<li><a href="#sim-config">What a link can do</a></li>
+<li><a href="#sim-determinism">Determinism</a></li>
+<li><a href="#sim-usage">Using it in a test</a></li>
+</ol>
+</li>
+<li><a href="#tests">Tests</a></li>
+<li><a href="#not-yet">What is not there yet</a></li>
+</ol>
+</div>
+
+<h2 id="overview">What exists and where it lives <span class="badge">PR #197</span></h2>
+<p>The library is the CMake target <code>n2net</code> (alias <code>N2Engine::n2net</code>), a static library defined in <code>engine/CMakeLists.txt</code>. Its headers are under <code>engine/include/engine/network/n2net/</code> and its sources under <code>engine/src/network/n2net/</code>. The <code>engine</code> target excludes that source directory from its glob and does not link <code>n2net</code>; only <code>engine_tests</code> does. It uses the standard library only: no sockets, no threads, no platform headers, no engine types, no global state, no exceptions across its API (errors are return codes), and it reads no clock (every time is passed in as microseconds). That is what lets the same code build on Windows, Linux x86_64 and arm64, and in the single-threaded web build.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Header</th><th>What it holds</th></tr></thead>
+<tbody>
+<tr><td><code>Transport.hpp</code></td><td><code>ITransport</code>, <code>TransportEvent</code>, <code>TransportSendResult</code>, <code>PeerId</code>, <code>kMaxPacketSize</code></td></tr>
+<tr><td><code>Packet.hpp</code> (+ <code>ByteIO.hpp</code>, <code>Sequence.hpp</code>)</td><td>The wire format: header and block read/write, bounds-checked little-endian byte reader and writer, wraparound-safe sequence comparison</td></tr>
+<tr><td><code>Connection.hpp</code> (+ <code>RttEstimator.hpp</code>)</td><td><code>Connection</code>: one end of a connection, its configuration, statistics and failure reasons</td></tr>
+<tr><td><code>SimTransport.hpp</code> (+ <code>SimRandom.hpp</code>)</td><td><code>SimNetwork</code> and <code>SimTransport</code>: the deterministic in-memory network, and its portable random number generator</td></tr>
+<tr><td><code>FunctionRef.hpp</code></td><td>A non-owning callable reference used for every callback (it never allocates and never throws, unlike <code>std::function</code>); the callable must outlive the call it is passed to</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>Connection</code> does no I/O and does not hold a transport. The caller moves bytes: a datagram from <code>ITransport::Poll</code> goes into <code>Connection::OnPacket</code>, and each datagram <code>Connection::Update</code> produces goes to <code>ITransport::Send</code> (the example in <a href="#sim-usage">Using it in a test</a> does exactly that). Everything is single-threaded and polled.</p>
+<p class="src">Source: <code>engine/CMakeLists.txt</code>; <code>engine/include/engine/network/n2net/</code>; <code>engine/src/network/n2net/</code></p>
+
+<div class="callout note" id="design-n2net-own-layer">
+<p class="callout-title">Design decision: our own small reliability layer, not a networking dependency <span class="badge">PR #197</span></p>
+<p>The netcode design (decision N2) chose to write the packet layer here rather than adopt ENet, GameNetworkingSockets or yojimbo. The browser transports, the security model and the simulator all have to be ours anyway, and the reliability layer is the small part. No new third-party dependency is added by this library.</p>
+</div>
+
+<h2 id="transport">The transport interface <span class="badge">PR #197</span></h2>
+<p><code>ITransport</code> is the seam between the packet layer and a network. It is datagram-oriented, non-blocking and polled on one thread, so the web build (which has no threads) needs nothing special. An implementation must never throw across the interface. Each method is there for a reason:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Member</th><th>Behaviour</th><th>Why it exists</th></tr></thead>
+<tbody>
+<tr><td><code>MaxPacketSize()</code></td><td>The largest datagram <code>Send</code> accepts and <code>Poll</code> delivers; at most <code>kMaxPacketSize</code> (1200 bytes).</td><td>The packet layer must never build a datagram the link cannot carry. 1200 fits an IPv6 minimum-MTU path with the IP and UDP headers and WebRTC data channels.</td></tr>
+<tr><td><code>IsReliableStream()</code></td><td><code>true</code> for a stream transport (WebSocket over TCP): it already delivers every datagram once, in order. See <a href="#stream">Stream transports</a>.</td><td>Lets the upper layer skip its own resends while keeping sequencing.</td></tr>
+<tr><td><code>Send(peer, bytes)</code></td><td>Queues one datagram and never blocks. Returns <code>Sent</code> (a datagram transport may still lose it), <code>UnknownPeer</code>, <code>PacketTooLarge</code> or <code>EmptyPacket</code>.</td><td>The only way out.</td></tr>
+<tr><td><code>Poll(handler)</code></td><td>Delivers every event that is due, in order, to the handler, then returns. The handler may call <code>Send</code> but not <code>Poll</code> or <code>Disconnect</code> on the same transport. The event's bytes are valid only during the callback.</td><td>The only way in; one call per tick on the main thread.</td></tr>
+<tr><td><code>Disconnect(peer)</code></td><td>Drops the link to <code>peer</code> (no-op if none); the other side then sees <code>PeerDisconnected</code>.</td><td>A session must be able to end a link deliberately.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Connecting and disconnecting are events, not methods: <code>Poll</code> reports <code>PeerConnected</code>, <code>PeerDisconnected</code> and <code>Datagram</code> through one <code>TransportEvent</code> (type, peer, bytes). A <code>PeerId</code> is a 32-bit number meaningful only to the transport that issued it; 0 (<code>kInvalidPeer</code>) is never valid.</p>
+<p class="src">Source: <code>engine/include/engine/network/n2net/Transport.hpp</code>; tests: <code>SendResultsAndLimits</code>, <code>DisconnectTellsThePeerAndDropsWhatIsInFlight</code></p>
+
+<h2 id="packet">The packet format <span class="badge">PR #197</span></h2>
+<p>One datagram is a 17-byte header followed by blocks, at most 1200 bytes in all. All integers are little-endian, read and written byte by byte, so the format does not depend on the host's endianness or alignment.</p>
+<h3 id="packet-header">Header (17 bytes)</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>u32</td><td>protocol id</td><td>What the receiver expects (a protocol version and game build identifier chosen by the caller); any other value drops the packet.</td></tr>
+<tr><td>4</td><td>u32</td><td>connection id</td><td>The receiver's connection; any other value drops the packet. Configured, the same on both sides (a later handshake will agree it).</td></tr>
+<tr><td>8</td><td>u16</td><td>sequence</td><td>This packet's number: +1 per packet sent, wrapping at 65536. The first one is <code>ConnectionConfig::initialSequence</code>.</td></tr>
+<tr><td>10</td><td>u16</td><td>ack</td><td>The newest packet number received from the other side. Valid only if flags bit 0 is set (written as 0 otherwise).</td></tr>
+<tr><td>12</td><td>u32</td><td>ack bits</td><td>Bit <em>i</em> set: packet <code>ack - 1 - i</code> (modulo 65536) was received too. Written as 0 when there is no ack.</td></tr>
+<tr><td>16</td><td>u8</td><td>flags</td><td>Bit 0: ack and ack bits are valid. Bits 1 to 7 are reserved and must be zero.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="packet-blocks">Blocks</h3>
+<p>After the header come blocks, back to back to the end of the datagram. A datagram may have none (an ack-only or keep-alive packet).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Block</th><th>Layout</th><th>Limits</th></tr></thead>
+<tbody>
+<tr><td>Reliable unit (type 1)</td><td><code>u8 type = 1</code>, <code>u16 unit id</code>, <code>u8 unit flags</code>, <code>u16 length</code>, then <code>length</code> bytes of data (6-byte block header)</td><td>Length 1 to <code>kMaxUnitPayload</code> = 1177 (a unit can fill a packet exactly: 1200 - 17 - 6). Unit flags: bit 0 first unit of a message, bit 1 last unit; other bits must be zero.</td></tr>
+<tr><td>Unreliable message (type 2)</td><td><code>u8 type = 2</code>, <code>u16 message sequence</code>, <code>u16 length</code>, then the data (5-byte block header)</td><td>Length 1 to <code>kMaxUnreliablePayload</code> = 1178 (1200 - 17 - 5). Never fragments.</td></tr>
+</tbody>
+</table>
+</div>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee: a malformed packet changes nothing</p>
+<p>A datagram is parsed completely before anything in it is applied. An unknown block type, a length of 0, a length past the end of the datagram or past the block's cap, a reserved bit set (in the header flags or the unit flags), a truncated header or block, or bytes left over after the last block makes the whole packet malformed: it is dropped without effect (no acknowledgement, no delivery, no state change other than the rejection counters). Tests: <code>HeaderLayoutByteForByte</code>, <code>BlockLayoutByteForByte</code>, <code>MalformedBlocksAreRefused</code>, <code>HeaderRejectsReservedFlagsAndTruncation</code>.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/network/n2net/Packet.hpp</code>; <code>engine/src/network/n2net/Packet.cpp</code> &mdash; <code>WriteHeader</code>, <code>ReadHeader</code>, <code>ReadBlock</code>, <code>ValidateBlocks</code></p>
+
+<h2 id="connection">The connection: acknowledgements and channels <span class="badge">PR #197</span></h2>
+<p>A <code>Connection</code> is one end of a connection. It is built from a <code>ConnectionConfig</code> and the current time, and has four calls: <code>SendReliable</code> and <code>SendUnreliable</code> queue a message (copied); <code>OnPacket(now, datagram, handler)</code> processes one received datagram and delivers any messages it completes to the handler (which may send, but not call <code>OnPacket</code> or <code>Update</code>); <code>Update(now, sender)</code> resends what is due, sends what the window allows, acknowledges, sends keep-alives, and calls <code>sender</code> once per packet (the span is valid only during the call). <code>Update</code> produces at most <code>maxPacketsPerUpdate</code> (default 64) packets per call. The configuration is sanitised on construction: sizes, windows and times are clamped into safe ranges whatever the caller passed.</p>
+
+<h3 id="acks">Packet numbers and acknowledgements</h3>
+<p>Every packet carries a 16-bit sequence number. Ordering uses wraparound arithmetic: <code>a</code> is more recent than <code>b</code> when it is 1 to 32767 steps ahead modulo 65536; a difference of exactly 32768 counts as neither. The receiver remembers the last 256 packet numbers in a ring and answers every packet with the newest number it has seen (<code>ack</code>) and a 32-bit mask of the 32 numbers before it (<code>ack bits</code>), Gaffer-on-Games style.</p>
+<ul>
+<li>A packet number already seen is dropped as a duplicate (<code>DuplicatePacket</code>); one 256 or more behind the newest is dropped as <code>TooOld</code>. A jump forward of 256 or more clears the ring, so stale entries cannot be mistaken for new packets.</li>
+<li>A packet that carries blocks makes the receiver send an acknowledgement on its next <code>Update</code>; a duplicate of such a packet does too (the peer is resending, so the ack was probably lost). Packets with no blocks (keep-alives, ack-only packets) are not themselves acknowledged and are not counted in the loss figures.</li>
+<li>A packet is declared lost when its deadline passes (the RTO, below), when three or more newer packets have been acknowledged, or when its slot in the sender's 128-entry ring is needed again. A packet declared lost and acknowledged later is reclassified (counted in <code>packetsAckedLate</code>), and any pending resend of its units is cancelled.</li>
+<li>Because the ack bits reach back only 32 packets, a sender never leaves more than 32 data packets unanswered: while the oldest unanswered packet is 32 or more behind, packets go out with no blocks. That is at most 32 data packets per round trip.</li>
+</ul>
+<p>The RTT estimate follows RFC 6298 in integer microseconds: smoothed RTT and variance, RTO = smoothed + max(1 ms, 4 &times; variance), clamped to <code>[minRtoMicros, maxRtoMicros]</code> (defaults 50 ms and 2 s); before the first sample the RTO is <code>initialRtoMicros</code> (200 ms). A sample is taken from the packet named by each received <code>ack</code> field, never from the ack bits. A resend's deadline backs off by doubling per retry up to 16 times the RTO, capped at the maximum RTO.</p>
+<p class="src">Source: <code>engine/src/network/n2net/Connection.cpp</code> &mdash; <code>OnPacket</code>, <code>ProcessAck</code>, <code>BuildPacket</code>, <code>MarkLost</code>; <code>RttEstimator.hpp</code>; tests: <code>SequenceAndAckNumbersWrapAround</code>, <code>AckBitsDescribeTheReceivedPackets</code>, <code>AckBitsAcrossTheWrap</code>, <code>AnAckOfPacketsAcrossTheWrapReleasesTheirUnits</code>, <code>AHugeForwardJumpOfThePacketNumberDoesNotConfuseDuplicateDetection</code>, <code>RttConvergesOnTheLinkRoundTrip</code>, <code>FirstSampleThenSmoothing</code>, <code>ConvergesOnASteadyRttAndClampsTheRto</code></p>
+
+<h3 id="reliable">The reliable-ordered channel</h3>
+<p>Reliable messages are cut into units (see <a href="#fragmentation">Fragmentation</a>). The units form one numbered stream (16-bit unit ids, starting at <code>initialUnitId</code>, which must be the same on both sides). Each unit is resent until acknowledged and delivered in order, so a message reaches the handler whole, exactly once, in the order it was sent, whatever the link does short of ending the connection.</p>
+<ul>
+<li><strong>Resends</strong> happen when the packet that carried a unit is declared lost; they go out oldest first, before new units, at the next <code>Update</code>.</li>
+<li><strong>Window.</strong> At most <code>reliableWindow</code> units are in flight (sender) and the receiver buffers units only up to that many ahead of the next one it expects; a unit further ahead is dropped (<code>unitsOutOfWindow</code>) and will be resent. The configured window is clamped to 1 to 1024 and rounded down to a power of two (default 256), so unit ids map to slots without collisions across the 65536 wrap.</li>
+<li><strong>Queue.</strong> <code>SendReliable</code> fails with <code>QueueFull</code> when the bytes queued and not yet packetised would pass <code>maxSendQueueBytes</code> (default 256 KiB); the caller retries later. Other results: <code>Empty</code>, <code>TooLarge</code> (over <code>maxMessageSize</code>), <code>ConnectionFailed</code>.</li>
+<li><strong>Congestion.</strong> There is no congestion control. The unit window and the 32-packets-per-round-trip rule are the only things that slow a sender.</li>
+</ul>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee: exactly once, in order</p>
+<p>Over a link that loses 30% of datagrams and also reorders and duplicates them, every reliable message queued is delivered exactly once and in the order it was sent, and the connection ends idle. Tests: <code>ReliableUnderThirtyPercentLossWithReorderingAndDuplication</code>, <code>TenThousandMessagesEachWayOverALossyLink</code>, <code>AWindowOfOneStillDeliversUnderLoss</code>.</p>
+</div>
+
+<h3 id="fragmentation">Fragmentation and its limits</h3>
+<p>A reliable message larger than one unit is cut into units of up to 1177 bytes; the first carries the "first" flag, the last the "last" flag, and a message that fits in one unit has both (the smallest message, 1 byte, is a 24-byte packet: 17 + 6 + 1). Units are numbered in sequence, so the receiver reassembles by delivering them in order; units that arrive out of order wait in the window until the gap fills. Every limit below is enforced, and a configuration that asks for more is clamped.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Limit</th><th>Default</th><th>Hard cap</th><th>What happens at the limit</th></tr></thead>
+<tbody>
+<tr><td>Largest reliable message (<code>maxMessageSize</code>), sent or received</td><td>64 KiB</td><td>1 MiB (<code>kHardMaxMessageSize</code>)</td><td>Sending a larger one returns <code>TooLarge</code>. A received message that grows past it ends the connection with <code>MessageTooLarge</code> (the buffer never passes the cap).</td></tr>
+<tr><td>Units in flight, and units buffered ahead on the receiver (<code>reliableWindow</code>)</td><td>256</td><td>1024 (<code>kHardMaxReliableWindow</code>)</td><td>Sender stops adding new units; receiver drops units beyond the window.</td></tr>
+<tr><td>Reliable send queue (<code>maxSendQueueBytes</code>)</td><td>256 KiB (never below <code>maxMessageSize</code>)</td><td>none beyond the config</td><td><code>QueueFull</code></td></tr>
+<tr><td>Incomplete message or units waiting behind a gap, with no progress (<code>reassemblyTimeoutMicros</code>)</td><td>5 s</td><td>about 12 days</td><td>The connection ends with <code>ReassemblyStall</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>A peer that sends a continuation unit with no start, or a start inside an unfinished message, ends the connection with <code>ProtocolViolation</code>.</p>
+<p class="src">Source: <code>engine/src/network/n2net/Connection.cpp</code> &mdash; <code>BuildPacket</code>, <code>OnUnit</code>, <code>DeliverReady</code>, <code>ConsumeUnit</code>; tests: <code>FragmentationAtEveryBoundarySize</code> (sizes 1 and 2, one below, at and one above the first two unit boundaries, 10 units, and the sizes at, one below and one unit below the default cap), <code>FragmentsArrivingOutOfOrderAndRepeatedAssembleOnce</code>, <code>ShuffledFragmentsOfManyMessagesStillComeOutInOrder</code>, <code>SendLimits</code>, <code>ConfigIsClampedToTheHardCaps</code>, <code>AReceivedMessageOverTheCapEndsTheConnection</code>, <code>ImpossibleUnitSequencesEndTheConnection</code>, <code>UnitsOutsideTheReceiveWindowAreDroppedNotBuffered</code>, <code>AnIncompleteMessageThatStopsMakingProgressEndsTheConnection</code>, <code>UnitsWaitingBehindAGapAreTimedOutToo</code>, <code>ACompletedMessageClearsTheReassemblyClock</code></p>
+
+<h3 id="unreliable">The unreliable-sequenced channel</h3>
+<p><code>SendUnreliable</code> queues a message of 1 to 1178 bytes (never fragmented). Each one is sent once, in a later <code>Update</code>, with a 16-bit message sequence number that increments per message and is never resent. The receiver delivers a message only if its sequence is more recent (wraparound rules, as above) than the newest it has delivered; an older or equal one is dropped and counted in <code>unreliableStale</code>. So the stream the handler sees only ever moves forward: newest wins, stale is dropped, and a lost message is simply never delivered.</p>
+<p>The send queue holds at most <code>maxQueuedUnreliableMessages</code> (default 64) messages and <code>maxQueuedUnreliableBytes</code> (default 64 KiB); beyond either the oldest queued message is dropped (<code>unreliableDropped</code>). Unreliable messages share packets with reliable units, after them, only if they fit.</p>
+<p class="src">Source: <code>engine/src/network/n2net/Connection.cpp</code> &mdash; <code>SendUnreliable</code>, <code>OnUnreliable</code>; tests: <code>UnreliableNewestWinsWhateverTheArrivalOrder</code>, <code>UnreliableSequenceWrapsAround</code>, <code>UnreliableStreamOverALossyReorderingLinkOnlyMovesForward</code>, <code>UnreliableQueueDropsTheOldestWhenFull</code></p>
+
+<h3 id="stream">Stream transports</h3>
+<p>With <code>ConnectionConfig::reliableStream</code> set (what <code>ITransport::IsReliableStream()</code> reports), the connection never resends and keeps no copy of sent units, and has no unit window. Packet numbers and acks are still sent and received (for RTT and ordering checks); a packet unanswered past its deadline is not counted as lost. Units must arrive exactly in order: any other unit id ends the connection with <code>ProtocolViolation</code>.</p>
+<p class="src">Tests: <code>StreamModeSendsOnceAndKeepsNothingForResends</code>, <code>StreamModeRefusesUnitsOutOfOrder</code></p>
+
+<h3 id="failure">Failure, timeouts and statistics</h3>
+<p>A connection can fail, and then stays failed: <code>IsFailed()</code> and <code>Failure()</code> report why, every buffer it held is released, <code>Update</code> produces nothing, sends return <code>ConnectionFailed</code> and <code>OnPacket</code> returns <code>ConnectionFailed</code>. There is no recovery; the owner ends it and starts a new connection.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th><code>FailureReason</code></th><th>When</th></tr></thead>
+<tbody>
+<tr><td><code>Timeout</code></td><td>Nothing was received for <code>idleTimeoutMicros</code> (default 10 s), checked in <code>Update</code>.</td></tr>
+<tr><td><code>ReassemblyStall</code></td><td>Partly received reliable data made no progress for <code>reassemblyTimeoutMicros</code> (default 5 s).</td></tr>
+<tr><td><code>MessageTooLarge</code></td><td>A received message grew past <code>maxMessageSize</code>.</td></tr>
+<tr><td><code>ProtocolViolation</code></td><td>The peer sent reliable units that cannot be a legal stream.</td></tr>
+</tbody>
+</table>
+</div>
+<p>To keep the link alive, <code>Update</code> sends an empty packet when nothing else was sent for <code>keepAliveMicros</code> (default 1 s), and an acknowledgement-only packet when blocks were received. <code>OnPacket</code> returns a <code>PacketStatus</code> naming what it did with the datagram: <code>Ok</code>, <code>TooLarge</code>, <code>BadHeader</code>, <code>WrongProtocol</code>, <code>WrongConnection</code>, <code>Malformed</code>, <code>DuplicatePacket</code>, <code>TooOld</code> or <code>ConnectionFailed</code>; only <code>Ok</code> means it was processed.</p>
+<p><code>Connection::Stats()</code> counts, among others: packets and bytes sent and received; packets rejected, malformed, duplicate; packets acked, acked late and lost; units sent and resent; reliable and unreliable messages delivered; stale and dropped unreliable messages; duplicate and out-of-window units. <code>Rtt()</code> gives the smoothed, latest, minimum and variance of the round trip and the current RTO. <code>LossRatePpm()</code> is packets lost over packets settled (acked or lost), in parts per million. <code>ReliableBacklogBytes()</code> and <code>ReliableIdle()</code> report what reliable data is still unacknowledged.</p>
+<p class="src">Source: <code>engine/include/engine/network/n2net/Connection.hpp</code>; tests: <code>SilenceEndsTheConnection</code>, <code>KeepAliveAndAckOnlyPackets</code>, <code>OnPacketNamesWhyADatagramWasRefused</code>, <code>LossStatisticsTrackTheLink</code>, <code>MaxPacketsPerUpdateBoundsTheWorkOfOneCall</code></p>
+
+<h2 id="untrusted">Untrusted input and bounded memory <span class="badge">PR #197</span></h2>
+<p>This layer will face the internet, so every byte that arrives is treated as hostile.</p>
+<ul>
+<li><strong>Every length is checked before data is taken.</strong> <code>ByteReader</code> never reads past the end whatever lengths the bytes claim: a failed read returns 0 or an empty view and sets a flag. <code>ByteWriter</code> never writes past its buffer. A block's length is checked against the bytes that remain and against its cap before the data is viewed.</li>
+<li><strong>Validate, then apply.</strong> <code>OnPacket</code> checks size (at most 1200), header, protocol id, connection id and the whole block structure before it touches any state. A packet has at most 197 blocks (the smallest, an unreliable message of one byte, takes 6 bytes of the 1183 after the header), so the work per datagram is bounded.</li>
+<li><strong>No unbounded allocation.</strong> What a peer can make a connection hold is bounded by the configuration, not by what the peer sends: the receive window (units), the message size cap, the send queue, and the unreliable queue. <code>MemoryInUseBytes()</code> reports the payload buffers held now and <code>MemoryBoundBytes()</code> what that can never exceed under the configuration (1,664,000 bytes with the defaults); the tests assert the first never passes the second, including while a peer floods maximum-size units at every unit id.</li>
+<li><strong>No loops driven by input.</strong> There are no length-prefixed repeat counts: loops run over the bytes of one datagram, over fixed-size rings (32 ack bits, 128 sent packets, 256 received numbers), or over the window.</li>
+<li><strong>Time arithmetic cannot wrap.</strong> Configured times are clamped to about 12 days and RTT samples to the same order, so no deadline or backoff shift overflows.</li>
+<li><strong>Errors are values.</strong> Nothing throws on bad input. A bad datagram is a <code>PacketStatus</code>; a peer that breaks the stream rules ends its connection with a <code>FailureReason</code>.</li>
+</ul>
+<div class="callout warning">
+<p class="callout-title">The ids are not secrets and nothing is authenticated yet</p>
+<p>The protocol id and connection id only filter out stray traffic; they are not keys. Anyone who can send datagrams to a connection and knows or guesses the two ids and a plausible sequence number can inject packets. Authentication, encryption and the handshake that agrees the connection id are later work (see <a href="#not-yet">What is not there yet</a>); until then this layer is for tests and for loopback development, not for an exposed port.</p>
+</div>
+<p class="src">Source: <code>engine/include/engine/network/n2net/ByteIO.hpp</code>; <code>engine/src/network/n2net/Connection.cpp</code> &mdash; <code>Sanitize</code>, <code>OnPacket</code>, <code>MemoryBoundBytes</code>; tests: <code>ReaderChecksEveryRead</code>, <code>WriterIsLittleEndianAndNeverOverflows</code>, <code>RandomTruncatedAndMutatedPacketsNeverBreakAConnection</code>, <code>EveryPrefixOfAValidPacketIsHandled</code>, <code>EverySingleByteChangeOfAValidPacketIsHandled</code>, <code>AFloodOfMaxSizeUnitsAtEveryIdStaysInsideTheWindowBudget</code>, <code>AnEndlessMessageEndsAtTheCapNotWhenMemoryRunsOut</code>, <code>AFullPacketOfTinyBlocksIsParsedInBoundedTime</code>, <code>MemoryStaysUnderTheBoundWithAFullWindowOfMaxSizeUnits</code></p>
+
+<h2 id="simulator">The network simulator <span class="badge">PR #197</span></h2>
+<p><code>SimNetwork</code> is a deterministic in-memory network for tests; it is what every later netcode test runs on. It creates endpoints (<code>SimTransport</code>, an <code>ITransport</code>) with ids 1, 2, 3 in creation order; <code>Link(a, b, config)</code> connects two of them (each side then gets a <code>PeerConnected</code> event) with a separate <code>SimLinkConfig</code> per direction if wanted. Time is the network's virtual clock: <code>NowMicros()</code> starts at 0 and only <code>Advance(micros)</code> moves it. A datagram is scheduled when sent and handed out by <code>SimTransport::Poll</code> once the clock has reached its delivery time; <code>Poll</code> never moves time. Nothing sleeps and nothing reads a wall clock.</p>
+
+<h3 id="sim-config">What a link can do</h3>
+<p>All times are virtual microseconds and all probabilities are parts per million (1,000,000 = always), so the simulation is integer-only. The default <code>SimLinkConfig</code> is a perfect link.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Field</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>latencyMicros</code>, <code>jitterMicros</code></td><td>Fixed one-way delay, plus a uniform extra delay in [0, jitter].</td></tr>
+<tr><td><code>lossPpm</code></td><td>Independent loss.</td></tr>
+<tr><td><code>burstEnterPpm</code>, <code>burstExitPpm</code>, <code>burstLossPpm</code></td><td>Burst loss, a two-state model: in the good state a datagram moves the link to the burst state with probability <code>burstEnterPpm</code>; in the burst state it moves back with probability <code>burstExitPpm</code>, and a datagram is lost with probability <code>burstLossPpm</code> (default 100%) instead of <code>lossPpm</code>. <code>burstEnterPpm</code> 0 never bursts.</td></tr>
+<tr><td><code>reorderPpm</code>, <code>reorderDelayMicros</code></td><td>With probability <code>reorderPpm</code> a datagram is delayed by a further 1 to <code>reorderDelayMicros</code>, so later datagrams overtake it. A <code>reorderDelayMicros</code> of 0 never reorders this way (jitter can still reorder).</td></tr>
+<tr><td><code>duplicatePpm</code></td><td>With this probability a second copy is delivered, with its own jitter.</td></tr>
+<tr><td><code>bandwidthBytesPerSecond</code></td><td>0 is unlimited. Otherwise datagrams are serialised at this rate: each waits for the ones before it and takes bytes &times; 10<sup>6</sup> / rate microseconds (rounded up).</td></tr>
+<tr><td><code>queueLimitBytes</code></td><td>With a bandwidth cap: a datagram that would find more than this many bytes already waiting is dropped (tail drop). 0 is unlimited.</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>SetLinkConfig</code> changes one direction's config while it runs (its burst state and random stream continue); <code>Unlink</code> removes a link without telling the other side (datagrams in flight on it are dropped when due), whereas <code>SimTransport::Disconnect</code> removes it and gives the other side a <code>PeerDisconnected</code>; <code>GetLinkStats(from, to)</code> returns per-direction counters (submitted, dropped by loss, by queue limit, or because the link was removed, duplicated, reordered, delivered).</p>
+
+<h3 id="sim-determinism">Determinism</h3>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee: the same seed and the same calls give the same bytes on every platform</p>
+<p>The simulator's random numbers come from <code>SimRandom</code>, xoshiro256** seeded through SplitMix64, written out in the library with integer arithmetic only (not <code>std::random_device</code> or the standard distributions, whose output differs between standard libraries). Each link direction has its own stream derived from the seed and the two endpoint ids, so adding a link does not change what another link does. Every datagram consumes the same seven random draws in the same order whatever the configuration and whatever its fate, so changing one impairment does not change what another decides for the same datagram. Delivery order is fully determined: events are keyed by delivery time and then by the order the datagrams were sent. Tests: <code>SameSeedSameBytesDifferentSeedDifferent</code>, <code>AnotherLinkDoesNotDisturbThisOne</code>, <code>AnImpairmentDoesNotShiftAnothersDecisions</code>, <code>StreamIsFixedAcrossPlatforms</code>, and the two golden traces under <a href="#tests">Tests</a>.</p>
+</div>
+
+<h3 id="sim-usage">Using it in a test</h3>
+<p>Create a network with a seed, add endpoints, link them, and give each side a <code>Connection</code>. Each step: advance the clock, poll each endpoint into its connection, then update each connection into its endpoint. This is a complete, compiling example:</p>
+<pre class="lang-cpp"><code>SimNetwork network(1234);
+SimTransport &amp;a = network.AddEndpoint();
+SimTransport &amp;b = network.AddEndpoint();
+
+SimLinkConfig link;
+link.latencyMicros = 40'000;
+link.jitterMicros = 10'000;
+link.lossPpm = 300'000; // 30%
+link.duplicatePpm = 50'000;
+network.Link(a.Id(), b.Id(), link);
+
+ConnectionConfig config;
+config.protocolId = 0x4E32'4E54;
+config.connectionId = 7;
+Connection connA(config, network.NowMicros());
+Connection connB(config, network.NowMicros());
+
+const std::vector&lt;std::uint8_t&gt; hello = {'h', 'i'};
+connA.SendReliable(hello);
+
+const auto onMessage = [&amp;](MessageChannel, std::span&lt;const std::uint8_t&gt; message) { /* use it now: copy what you keep */ };
+for (int step = 0; step &lt; 2000; ++step)
+{
+    network.Advance(1'000); // the only thing that moves time
+    const std::uint64_t now = network.NowMicros();
+    a.Poll([&amp;](const TransportEvent &amp;event) {
+        if (event.type == TransportEventType::Datagram) connA.OnPacket(now, event.data, onMessage);
+    });
+    b.Poll([&amp;](const TransportEvent &amp;event) {
+        if (event.type == TransportEventType::Datagram) connB.OnPacket(now, event.data, onMessage);
+    });
+    connA.Update(now, [&amp;](std::span&lt;const std::uint8_t&gt; packet) { a.Send(b.Id(), packet); });
+    connB.Update(now, [&amp;](std::span&lt;const std::uint8_t&gt; packet) { b.Send(a.Id(), packet); });
+}
+</code></pre>
+<p>Includes are <code>engine/network/n2net/Connection.hpp</code> and <code>engine/network/n2net/SimTransport.hpp</code>; everything is in <code>N2Engine::N2Net</code>. The tests' <code>TwoPeers</code> helper (<code>tests/engine/network/n2net/N2NetTestUtil.hpp</code>) wraps this loop for two connections over one link.</p>
+<p class="src">Source: <code>engine/include/engine/network/n2net/SimTransport.hpp</code>; <code>engine/src/network/n2net/SimTransport.cpp</code> &mdash; <code>SimNetwork::Submit</code>, <code>SimTransport::Poll</code>; <code>SimRandom.hpp</code>; tests: <code>PerfectLinkDeliversExactlyAtTheLatency</code>, <code>JitterStaysInsideItsBound</code>, <code>IndependentLossMatchesItsRate</code>, <code>BurstLossComesInRuns</code>, <code>ReorderingOvertakesAndNothingIsLost</code>, <code>DuplicationDeliversExtraCopies</code>, <code>BandwidthCapSerialisesDatagrams</code>, <code>QueueLimitTailDrops</code>, <code>ReconfiguringADirectionTakesEffectForLaterDatagrams</code></p>
+
+<div class="callout note" id="design-n2net-integer-sim">
+<p class="callout-title">Design decision: the simulator is integer-only with its own random number generator <span class="badge">PR #197</span></p>
+<p>The simulator is the CI proof for all later netcode, and the same trace has to come out on Windows, Linux, arm64 and wasm. Floating-point probabilities, <code>std::uniform_*_distribution</code> and <code>std::random_device</code> all risk differing between compilers and standard libraries, so probabilities are parts per million compared against a multiply-shift of a 64-bit generator written out in the library. The multiply-shift has a tiny bias that is irrelevant to a network simulator.</p>
+</div>
+
+<h2 id="tests">Tests <span class="badge">PR #197</span></h2>
+<p>The tests are in <code>tests/engine/network/n2net/</code> and run in <code>engine_tests</code> on every leg, including the web (node) leg and arm64; nothing is excluded or skipped. They need no sockets, threads or files, and the fuzz test's iteration counts are fixed and small enough for the wasm leg. See <a href="testing.html#n2net-tests">Testing &amp; CI</a> for the list of suites and how the golden hashes work.</p>
+
+<h2 id="not-yet">What is not there yet</h2>
+<ul>
+<li><strong>No sockets.</strong> The only <code>ITransport</code> implementation is <code>SimTransport</code>. The native UDP transport (Windows and Linux) is the next stage (A4); the browser WebSocket transport is later (B10).</li>
+<li><strong>No encryption, authentication or handshake.</strong> Packets are plain; the connection id is configured, not negotiated, and nothing proves who sent a packet. The handshake (challenge cookie, join token) and per-packet AEAD are stage A5.</li>
+<li><strong>No engine integration.</strong> The <code>engine</code> target does not link <code>n2net</code>. Sessions, replication, <code>NetworkObject</code>, RPCs, prediction and lockstep are the netcode's later tracks.</li>
+<li><strong>No transport-to-connection glue.</strong> There is no class that owns a <code>Connection</code> per <code>PeerId</code> and pumps an <code>ITransport</code> into it; the example above is the pattern, and the tests' <code>TwoPeers</code> is its only implementation.</li>
+<li><strong>No congestion control and no flow control beyond the unit window.</strong></li>
+</ul>
+<div class="callout open-question">
+<p class="callout-title">Not verified</p>
+<p>Real network behaviour and performance on real links: the library has only run over the simulator, whose impairments are a model. Whether the window, the 32-packets-per-round-trip rule and the timeouts are good defaults for real games is untested.</p>
+</div>
+
+<div class="page-footer">
+<span>Describes master through PR #34.</span>
+<a href="index.html">Back to overview</a>
+</div>
+
+</div>
+</main>
+</div>
+</body>
+</html>
