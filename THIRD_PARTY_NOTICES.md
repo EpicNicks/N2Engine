@@ -95,5 +95,14 @@ or CI tools only. The Docker runtime image (`deploy/Dockerfile`) does not instal
 only `libvulkan1` and other system libraries from the Ubuntu base image, which carry their own
 licences, plus the engine host and the OpenAL Soft library.
 
+Tint and naga validate the WebGPU shaders (`renderer/shaders/webgpu/*.wgsl`) in the CI job `wgsl (Tint, naga)` and are CI tools
+only: nothing of them is vendored, fetched at configure time, linked into or shipped with the engine. Tint is the `bin/tint`
+of Dawn's prebuilt release archive (tag `v20261016.190333`, commit `67d4d6e64b0755d638f76549794692badfdbc8ab`, downloaded by
+`scripts/install-wgsl-validators.sh` and checked against a pinned SHA-256); Dawn and Tint are BSD 3-Clause, Copyright The Dawn &
+Tint Authors, and the prebuilt binary links Dawn's own dependencies (for example SPIRV-Tools and Abseil, under their own licences;
+not verified one by one). naga is naga-cli 30.0.1 (the wgpu project), built in the job from its crates.io source package, whose
+SHA-256 is pinned, with `cargo install --locked`; MIT or Apache-2.0 (the `license` field of its `Cargo.toml`), and its dependencies
+come from the package's own `Cargo.lock`.
+
 Copying this file and the licence texts into the Docker image and release archives is a separate
 follow-up; the image does not currently include them.

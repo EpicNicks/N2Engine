@@ -1000,3 +1000,32 @@ jobs:
           cmake --build build-web-speed --target jolt_size_baseline jolt_size_probe -- -k 0
           node build-web-speed/bin/jolt_size_probe.js
           node scripts/web-jolt-size-report.mjs build-web-speed speed
+
+  # WebGPU backend, stage G1 (#155): the hand-written WGSL shaders (renderer/shaders/webgpu/*.wgsl) are validated by Tint (the
+  # WGSL compiler of Chrome and Edge) and by naga (Firefox's; Safari's WebKit compiler has no CI path), the pinned versions in scripts/install-wgsl-validators.sh
+  # (Tint: Dawn's prebuilt release binary, SHA-256 checked; naga-cli: its crates.io source package, SHA-256 checked, built with
+  # --locked). Not a required check, and it follows the docs-only skip like the jobs above. No build of the engine: a few
+  # minutes (the Tint download is seconds; a cold cache also installs the pinned Rust toolchain and builds naga, a few minutes, cached keyed on the install script).
+  wgsl:
+    name: wgsl (Tint, naga)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore the validators
+        uses: actions/cache@v6
+        with:
+          path: ~/wgsl-validators
+          key: wgsl-validators-${{ runner.os }}-${{ hashFiles('scripts/install-wgsl-validators.sh') }}
+
+      - name: Install Tint and naga (pinned, hash-checked)
+        run: bash scripts/install-wgsl-validators.sh "$HOME/wgsl-validators"
+
+      - name: Validate the WGSL shaders
+        run: |
+          set -e
+          export TINT="$HOME/wgsl-validators/tint/bin/tint" NAGA="$HOME/wgsl-validators/naga/bin/naga"
+          bash scripts/validate-wgsl.sh
