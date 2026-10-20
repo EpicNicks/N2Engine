@@ -47,7 +47,7 @@ namespace
         return sandbox;
     }
 
-    SandboxOutcome Run(LuaSandbox &sandbox, const std::string &source, const SandboxBudget &budget = Roomy,
+    SandboxOutcome Exec(LuaSandbox &sandbox, const std::string &source, const SandboxBudget &budget = Roomy,
                        const int results = 0)
     {
         return sandbox.RunChunk(source, "test.lua", budget, results);
@@ -229,7 +229,7 @@ TEST_F(LuaSandboxTest, ClosingIsIdempotentAndALaterRunIsRefusedAsData)
     EXPECT_EQ(LuaSandbox::LiveStates(), _liveBefore);
     sandbox->Close();
     EXPECT_EQ(sandbox->State(), nullptr);
-    const SandboxOutcome outcome = Run(*sandbox, "return 1");
+    const SandboxOutcome outcome = Exec(*sandbox, "return 1");
     EXPECT_FALSE(outcome.ok);
     EXPECT_FALSE(outcome.error.empty());
     EXPECT_EQ(sandbox->Counters().usedBytes, 0u);
@@ -240,7 +240,7 @@ TEST_F(LuaSandboxTest, TheDestructorClosesTheState)
     {
         auto sandbox = Make(SandboxProfile::EditorExtension);
         EXPECT_EQ(LuaSandbox::LiveStates(), _liveBefore + 1);
-        EXPECT_TRUE(Run(*sandbox, "local t = {} for i = 1, 100 do t[i] = {i} end").ok);
+        EXPECT_TRUE(Exec(*sandbox, "local t = {} for i = 1, 100 do t[i] = {i} end").ok);
     }
     EXPECT_EQ(LuaSandbox::LiveStates(), _liveBefore);
 }
@@ -341,11 +341,11 @@ TEST_F(LuaSandboxTest, EditorExtensionCannotLoadCodeReadFilesOrSteerTheCollector
     {
         EXPECT_EQ(Value(*sandbox, std::string("rawget(_G, '") + name + "')"), "nil") << name;
         EXPECT_EQ(Value(*sandbox, std::string("_G.") + name), "nil") << name;
-        EXPECT_FALSE(Run(*sandbox, std::string("local f = ") + name + " f('return 1')").ok) << name << " is callable";
+        EXPECT_FALSE(Exec(*sandbox, std::string("local f = ") + name + " f('return 1')").ok) << name << " is callable";
     }
     // No bytecode either: string.dump is absent and the text-only loader of the host refuses a binary chunk
     EXPECT_EQ(Value(*sandbox, "string.dump"), "nil");
-    EXPECT_FALSE(Run(*sandbox, std::string("\x1b") + "Lua").ok);
+    EXPECT_FALSE(Exec(*sandbox, std::string("\x1b") + "Lua").ok);
     // Reaching for a library through the strings' metatable or _G finds nothing either
     EXPECT_EQ(Value(*sandbox, "_G._G.io"), "nil");
     EXPECT_EQ(Value(*sandbox, "getmetatable('')"), "protected");
@@ -362,7 +362,7 @@ TEST_F(LuaSandboxTest, EditorExtensionHasNoStringPatterns)
         EXPECT_EQ(Value(*sandbox, std::string("string.") + name), "nil") << name;
         // The method form goes through the strings' metatable, which reaches the same table
         EXPECT_EQ(Value(*sandbox, std::string("('abc').") + name), "nil") << name;
-        const SandboxOutcome outcome = Run(*sandbox, std::string("return ('abc'):") + name + "('b')");
+        const SandboxOutcome outcome = Exec(*sandbox, std::string("return ('abc'):") + name + "('b')");
         EXPECT_FALSE(outcome.ok) << name;
         EXPECT_FALSE(outcome.budgetExceeded);
         EXPECT_FALSE(outcome.memoryExhausted);
@@ -432,7 +432,7 @@ TEST_F(LuaSandboxTest, AScriptCannotGiveItselfAFinalizer)
     {
         SCOPED_TRACE(ProfileName(profile));
         auto sandbox = Make(profile);
-        const SandboxOutcome outcome = Run(*sandbox, "setmetatable({}, { __gc = function() end })");
+        const SandboxOutcome outcome = Exec(*sandbox, "setmetatable({}, { __gc = function() end })");
         EXPECT_FALSE(outcome.ok);
         EXPECT_FALSE(outcome.budgetExceeded);
         CloseChecked(*sandbox);
@@ -464,7 +464,7 @@ TEST_F(LuaSandboxTest, ScriptErrorsAreReportedAsData)
         for (const char *source : {"error('boom')", "error({})", "error(nil)", "local x = nil + 1", "x = = 1",
                                    "return (", "local t = nil; t.x = 1", "error(404)"})
         {
-            const SandboxOutcome outcome = Run(*sandbox, source);
+            const SandboxOutcome outcome = Exec(*sandbox, source);
             EXPECT_FALSE(outcome.ok) << source;
             EXPECT_FALSE(outcome.budgetExceeded) << source;
             EXPECT_FALSE(outcome.timedOut) << source;
@@ -480,7 +480,7 @@ TEST_F(LuaSandboxTest, ScriptErrorsAreReportedAsData)
 TEST_F(LuaSandboxTest, AControlCharacterInAnErrorIsReplaced)
 {
     auto sandbox = Make(SandboxProfile::EditorExtension);
-    const SandboxOutcome outcome = Run(*sandbox, "error('a\\1b\\27c', 0)");
+    const SandboxOutcome outcome = Exec(*sandbox, "error('a\\1b\\27c', 0)");
     EXPECT_FALSE(outcome.ok);
     for (const char c : outcome.error)
     {
@@ -493,14 +493,14 @@ TEST_F(LuaSandboxTest, AControlCharacterInAnErrorIsReplaced)
 TEST_F(LuaSandboxTest, ARunLeavesTheRequestedNumberOfResults)
 {
     auto sandbox = Make(SandboxProfile::EditorExtension);
-    EXPECT_TRUE(Run(*sandbox, "return 1, 2, 3", Roomy, 2).ok);
+    EXPECT_TRUE(Exec(*sandbox, "return 1, 2, 3", Roomy, 2).ok);
     EXPECT_EQ(lua_gettop(sandbox->State()), 2);
     EXPECT_EQ(lua_tointeger(sandbox->State(), 1), 1);
     EXPECT_EQ(lua_tointeger(sandbox->State(), 2), 2);
     lua_settop(sandbox->State(), 0);
-    EXPECT_TRUE(Run(*sandbox, "return 1, 2, 3").ok);
+    EXPECT_TRUE(Exec(*sandbox, "return 1, 2, 3").ok);
     EXPECT_EQ(lua_gettop(sandbox->State()), 0);
-    EXPECT_TRUE(Run(*sandbox, "return 1", Roomy, -1).ok);
+    EXPECT_TRUE(Exec(*sandbox, "return 1", Roomy, -1).ok);
     EXPECT_EQ(lua_gettop(sandbox->State()), 0) << "a negative count is treated as none";
     CloseChecked(*sandbox);
 }
@@ -514,7 +514,7 @@ TEST_F(LuaSandboxTest, AnInfiniteLoopEndsAsABudgetTripInBoundedTime)
         SCOPED_TRACE(ProfileName(profile));
         auto sandbox = Make(profile);
         const auto started = std::chrono::steady_clock::now();
-        const SandboxOutcome outcome = Run(*sandbox, "while true do end", Instructions);
+        const SandboxOutcome outcome = Exec(*sandbox, "while true do end", Instructions);
         EXPECT_LT(ElapsedMs(started), 30000.0);
         EXPECT_FALSE(outcome.ok);
         EXPECT_TRUE(outcome.budgetExceeded);
@@ -541,7 +541,7 @@ TEST_F(LuaSandboxTest, ALoopInsidePcallXpcallOrAMetamethodIsStillATrip)
                  "local t = setmetatable({}, { __index = function() while true do end end }) local x = t.field return 1",
                  "local ok = pcall(function() while true do end end) while true do end"})
         {
-            const SandboxOutcome outcome = Run(*sandbox, source, Instructions);
+            const SandboxOutcome outcome = Exec(*sandbox, source, Instructions);
             EXPECT_FALSE(outcome.ok) << source;
             EXPECT_TRUE(outcome.budgetExceeded) << source;
         }
@@ -558,7 +558,7 @@ TEST_F(LuaSandboxTest, TheWallClockEndsWhatTheInstructionCountWouldNotYet)
         SCOPED_TRACE(ProfileName(profile));
         auto sandbox = Make(profile);
         const auto started = std::chrono::steady_clock::now();
-        const SandboxOutcome outcome = Run(*sandbox, "while true do end", Clock);
+        const SandboxOutcome outcome = Exec(*sandbox, "while true do end", Clock);
         EXPECT_LT(ElapsedMs(started), 30000.0);
         EXPECT_FALSE(outcome.ok);
         EXPECT_TRUE(outcome.budgetExceeded);
@@ -576,7 +576,7 @@ TEST_F(LuaSandboxTest, AnEntryUnderItsBudgetRunsToTheEnd)
 {
     auto sandbox = Make(SandboxProfile::EditorExtension);
     const SandboxOutcome outcome =
-        Run(*sandbox, "local n = 0 for i = 1, 100000 do n = n + i end result = n", Instructions);
+        Exec(*sandbox, "local n = 0 for i = 1, 100000 do n = n + i end result = n", Instructions);
     EXPECT_TRUE(outcome.ok) << outcome.error;
     EXPECT_FALSE(outcome.budgetExceeded);
     EXPECT_EQ(Value(*sandbox, "result"), "5000050000");
@@ -588,7 +588,7 @@ TEST_F(LuaSandboxTest, AZeroBudgetIsTheLoadDefaultNeverUnlimited)
 {
     auto sandbox = Make(SandboxProfile::EditorExtension);
     const auto started = std::chrono::steady_clock::now();
-    const SandboxOutcome outcome = Run(*sandbox, "while true do end", SandboxBudget{});
+    const SandboxOutcome outcome = Exec(*sandbox, "while true do end", SandboxBudget{});
     EXPECT_LT(ElapsedMs(started), 30000.0);
     EXPECT_FALSE(outcome.ok);
     EXPECT_TRUE(outcome.budgetExceeded);
@@ -603,7 +603,7 @@ TEST_F(LuaSandboxTest, DeepRecursionEndsAsAnErrorNotACrash)
         SCOPED_TRACE(ProfileName(profile));
         auto sandbox = Make(profile);
         const SandboxOutcome outcome =
-            Run(*sandbox, "local function f(n) return 1 + f(n + 1) end return f(1)", SandboxDefaults::LoadBudget);
+            Exec(*sandbox, "local function f(n) return 1 + f(n + 1) end return f(1)", SandboxDefaults::LoadBudget);
         EXPECT_FALSE(outcome.ok);
         EXPECT_FALSE(outcome.error.empty());
         EXPECT_EQ(Value(*sandbox, "1 + 1"), "2");
@@ -623,7 +623,7 @@ TEST_F(LuaSandboxTest, AMemoryBombIsRefusedAtTheCapNotFollowed)
 
         {
             auto sandbox = Make(profile, options);
-            const SandboxOutcome outcome = Run(*sandbox, "local s = string.rep('x', 1e9) return #s");
+            const SandboxOutcome outcome = Exec(*sandbox, "local s = string.rep('x', 1e9) return #s");
             EXPECT_FALSE(outcome.ok);
             EXPECT_TRUE(outcome.memoryExhausted);
             EXPECT_FALSE(outcome.budgetExceeded);
@@ -633,7 +633,7 @@ TEST_F(LuaSandboxTest, AMemoryBombIsRefusedAtTheCapNotFollowed)
         }
         {
             auto sandbox = Make(profile, options);
-            const SandboxOutcome outcome = Run(*sandbox, "local t = {} local i = 0 while true do i = i + 1 t[i] = {i} end");
+            const SandboxOutcome outcome = Exec(*sandbox, "local t = {} local i = 0 while true do i = i + 1 t[i] = {i} end");
             EXPECT_FALSE(outcome.ok);
             EXPECT_TRUE(outcome.memoryExhausted);
             EXPECT_FALSE(outcome.budgetExceeded);
@@ -643,7 +643,7 @@ TEST_F(LuaSandboxTest, AMemoryBombIsRefusedAtTheCapNotFollowed)
         }
         {
             auto sandbox = Make(profile, options);
-            const SandboxOutcome outcome = Run(*sandbox, "local s = 'x' while true do s = s .. s end");
+            const SandboxOutcome outcome = Exec(*sandbox, "local s = 'x' while true do s = s .. s end");
             EXPECT_FALSE(outcome.ok);
             EXPECT_TRUE(outcome.memoryExhausted);
             CloseChecked(*sandbox);
@@ -652,7 +652,7 @@ TEST_F(LuaSandboxTest, AMemoryBombIsRefusedAtTheCapNotFollowed)
             // The string library's growth is in C, past what the hook sees: the allocator is what stops it
             auto sandbox = Make(profile, options);
             const SandboxOutcome outcome =
-                Run(*sandbox, "local t = {} while true do t[#t + 1] = string.rep('y', 1024) end");
+                Exec(*sandbox, "local t = {} while true do t[#t + 1] = string.rep('y', 1024) end");
             EXPECT_FALSE(outcome.ok);
             EXPECT_TRUE(outcome.memoryExhausted);
             CloseChecked(*sandbox);
@@ -664,7 +664,7 @@ TEST_F(LuaSandboxTest, TheDefaultCapIs64MiBForTheEditorExtensionProfile)
 {
     auto sandbox = Make(SandboxProfile::EditorExtension);
     // 100 MiB in one block: past the cap with room to spare, so no allocation of this size is made
-    const SandboxOutcome outcome = Run(*sandbox, "return string.rep('x', 100 * 1024 * 1024)");
+    const SandboxOutcome outcome = Exec(*sandbox, "return string.rep('x', 100 * 1024 * 1024)");
     EXPECT_FALSE(outcome.ok);
     EXPECT_TRUE(outcome.memoryExhausted);
     EXPECT_LE(sandbox->Counters().peakBytes, SandboxDefaults::MaxBytes);
@@ -690,17 +690,17 @@ TEST_F(LuaSandboxTest, TwoStatesAliveAtOnceAreIndependent)
         lua_getallocf(second->State(), &secondAllocator);
         EXPECT_NE(firstAllocator, secondAllocator) << "each state has its own allocator";
 
-        EXPECT_TRUE(Run(*first, "Shared = 1; string.rep = nil; math.floor = nil").ok);
+        EXPECT_TRUE(Exec(*first, "Shared = 1; string.rep = nil; math.floor = nil").ok);
         EXPECT_EQ(Value(*second, "rawget(_G, 'Shared')"), "nil");
         EXPECT_EQ(Value(*second, "type(string.rep)"), "function");
         EXPECT_EQ(Value(*second, "math.floor(2.5)"), "2");
         EXPECT_EQ(Value(*first, "Shared"), "1");
 
         // One tripping does not touch the other, and neither does closing it
-        const SandboxOutcome tripped = Run(*first, "while true do end", Instructions);
+        const SandboxOutcome tripped = Exec(*first, "while true do end", Instructions);
         EXPECT_TRUE(tripped.budgetExceeded);
         EXPECT_FALSE(second->Counters().budgetExhausted);
-        EXPECT_TRUE(Run(*second, "local n = 0 for i = 1, 1000 do n = n + 1 end").ok);
+        EXPECT_TRUE(Exec(*second, "local n = 0 for i = 1, 1000 do n = n + 1 end").ok);
         CloseChecked(*first);
         EXPECT_EQ(LuaSandbox::LiveStates(), _liveBefore + 1);
         EXPECT_EQ(Value(*second, "1 + 1"), "2");
@@ -731,13 +731,13 @@ TEST_F(LuaSandboxTest, TheGameStateAndItsLimitsAreNotTouched)
 
         // The runtime's own budget is tiny: it makes no difference to a sandbox
         runtime.SetLimits({1000, saved.maxBytes});
-        EXPECT_TRUE(Run(*sandbox, "local n = 0 for i = 1, 100000 do n = n + 1 end").ok);
+        EXPECT_TRUE(Exec(*sandbox, "local n = 0 for i = 1, 100000 do n = n + 1 end").ok);
         runtime.SetLimits(saved);
 
         // And what trips here trips only here
-        EXPECT_TRUE(Run(*sandbox, "while true do end", Instructions).budgetExceeded);
-        EXPECT_TRUE(Run(*sandbox, "local s = 'x' while true do s = s .. s end").memoryExhausted);
-        EXPECT_TRUE(Run(*sandbox, "Leak = 'set by the script'").ok);
+        EXPECT_TRUE(Exec(*sandbox, "while true do end", Instructions).budgetExceeded);
+        EXPECT_TRUE(Exec(*sandbox, "local s = 'x' while true do s = s .. s end").memoryExhausted);
+        EXPECT_TRUE(Exec(*sandbox, "Leak = 'set by the script'").ok);
         CloseChecked(*sandbox);
     }
 
