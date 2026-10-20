@@ -75,6 +75,31 @@ namespace N2Engine::Physics
         /// 0 worker threads (tasks run on the thread that calls Update). Not supported by GPU dynamics, so with
         /// physics.gpu auto/on the GPU probe is skipped with one warning and the scene is the CPU scene.
         void SetDeterministic(bool deterministic) override { _deterministic = deterministic; }
+        /// What a PhysXBackend declares for a physics.deterministic value and an optional worker-thread override
+        /// (SetWorkerThreadsForTesting): SameBinary when it is on and the dispatcher has 0 worker threads (the scene
+        /// then has enhanced determinism and is the CPU scene: PhysX supports neither together with GPU dynamics),
+        /// None otherwise. Never CrossPlatform: Windows and Linux use different PhysX binaries and their hashes
+        /// differ (see docs/physics.html). Static so Application::Init can ask before it creates a backend.
+        [[nodiscard]] static constexpr DeterminismLevel DeclaredDeterminism(
+            const bool deterministic, const std::optional<unsigned> workerThreadsOverride = std::nullopt)
+        {
+            return deterministic && workerThreadsOverride.value_or(0u) == 0u ? DeterminismLevel::SameBinary
+                                                                             : DeterminismLevel::None;
+        }
+        /// SameBinary or None as DeclaredDeterminism says for this backend's configuration; the same before and
+        /// after Initialize
+        [[nodiscard]] DeterminismLevel GetDeterminism() const override
+        {
+            return DeclaredDeterminism(_deterministic, _workerThreadsOverride);
+        }
+        /// What the PhysX backend supports of snapshot and set-state (static, like DeclaredDeterminism): neither
+        static constexpr bool kSupportsSnapshot = false;
+        static constexpr bool kSupportsSetState = false;
+        /// False: nothing saves or restores the PhysX scene
+        [[nodiscard]] bool SupportsSnapshot() const override { return kSupportsSnapshot; }
+        /// False for now: IPhysicsBackend has no way to teleport a dynamic body or set its sleep state yet (it
+        /// becomes true when that body-state API lands)
+        [[nodiscard]] bool SupportsSetState() const override { return kSupportsSetState; }
         /// For tests: the dispatcher worker-thread count to use instead of the one SetDeterministic implies (4 by
         /// default, 0 when deterministic). Call before Initialize.
         void SetWorkerThreadsForTesting(std::optional<unsigned> threads) { _workerThreadsOverride = threads; }
