@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "engine/physics/DeterminismLevel.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
@@ -30,6 +31,16 @@ namespace N2Engine::Physics
         /// the backend's reproducible-replay configuration; a backend without one ignores it. Default off, and off
         /// changes nothing.
         virtual void SetDeterministic(bool) {}
+
+        /// What this backend promises about reproducing its results, as configured now (see DeterminismLevel).
+        /// None by default: a backend declares more only when it can prove it. The network presets read it at
+        /// startup (the Deterministic preset needs CrossPlatform).
+        [[nodiscard]] virtual DeterminismLevel GetDeterminism() const { return DeterminismLevel::None; }
+        /// Whether the whole simulation can be saved and restored exactly (what rollback needs). False by default.
+        [[nodiscard]] virtual bool SupportsSnapshot() const { return false; }
+        /// Whether a body's full state (pose, velocities, sleep state) can be written back, including a dynamic
+        /// body (what client reconciliation needs). False by default.
+        [[nodiscard]] virtual bool SupportsSetState() const { return false; }
         /// What Initialize made of the GPU request: the SCENE (and probe) status, Disabled for a backend that never
         /// asks. It does not change when a feature that runs in the GPU scene (particles, soft bodies) fails, so
         /// Physics.IsGpuAvailable reflects the scene only; a feature's own status is GetParticlesGpuStatus and
