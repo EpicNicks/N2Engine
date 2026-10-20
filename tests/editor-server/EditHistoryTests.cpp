@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include <editor-server/ClientText.hpp>
 #include <editor-server/EditHistory.hpp>
 
 using namespace N2Engine::Editor;
@@ -750,11 +751,29 @@ TEST(EditHistoryTest, AThrowingRedoIsAFailureToo)
     history.Record("Throws", std::move(throwing));
     ASSERT_TRUE(history.Undo().has_value());
 
+    // A local client is told what the exception said (outside a ClientText scope nobody is local)
+    const ClientText::Scope local(true, {});
     const auto redone = history.Redo();
     ASSERT_FALSE(redone.has_value());
     EXPECT_NE(redone.error().find("Couldn't redo 'Throws'"), std::string::npos) << redone.error();
     EXPECT_NE(redone.error().find("boom"), std::string::npos);
     EXPECT_EQ(history.StepCount(), 0u);
+}
+
+TEST(EditHistoryTest, AThrowingStepsTextIsNotToldToARemoteClient)
+{
+    EditHistory history;
+    EditOp throwing;
+    throwing.undo = []() -> EditOutcome { throw std::runtime_error("boom at /srv/secret/path"); };
+    throwing.redo = []() -> EditOutcome { return EditEffect{}; };
+    history.Record("Throws", std::move(throwing));
+
+    const ClientText::Scope remote(false, {});
+    const auto undone = history.Undo();
+    ASSERT_FALSE(undone.has_value());
+    EXPECT_NE(undone.error().find("Couldn't undo 'Throws'"), std::string::npos) << undone.error();
+    EXPECT_EQ(undone.error().find("boom"), std::string::npos) << undone.error();
+    EXPECT_EQ(undone.error().find("/srv/secret"), std::string::npos) << undone.error();
 }
 
 TEST(EditHistoryTest, AFullEffectSurvivesTheStep)
