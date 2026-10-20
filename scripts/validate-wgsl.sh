@@ -83,10 +83,15 @@ done
 # The negative controls
 echo "== negative controls (must be rejected)"
 reject() {
-  local label="$1"
-  shift
+  local label="$1" reason="$2"
+  shift 2
   if "$@" > "$out/negative.log" 2>&1; then
     echo "::error::$label ACCEPTED an invalid shader: the validation job could not fail"
+    sed 's/^/    /' "$out/negative.log"
+    failures=$((failures + 1))
+  elif ! grep -qiE "$reason" "$out/negative.log"; then
+    # rejected, but not for the reason the control exists for (a bad flag, a writer error): it proves nothing
+    echo "::error::$label rejected the shader, but its message does not match /$reason/"
     sed 's/^/    /' "$out/negative.log"
     failures=$((failures + 1))
   else
@@ -95,9 +100,9 @@ reject() {
   fi
 }
 negative="$root/scripts/wgsl-negative"
-reject "tint (type error)" "$tint" --format spvasm -o "$out/negative.spvasm" "$negative/type-error.wgsl"
-reject "naga (type error)" "$naga" "$negative/type-error.wgsl"
-reject "tint (non-uniform sample)" "$tint" --format spvasm -o "$out/negative.spvasm" "$negative/non-uniform-sample.wgsl"
+reject "tint (type error)" "error" "$tint" --format spvasm --validate --ep fs_main -o "$out/negative.spvasm" "$negative/type-error.wgsl"
+reject "naga (type error)" "error" "$naga" "$negative/type-error.wgsl"
+reject "tint (non-uniform sample)" "uniform" "$tint" --format spvasm --validate --ep fs_main -o "$out/negative.spvasm" "$negative/non-uniform-sample.wgsl"
 
 if [ "$failures" -ne 0 ]; then
   echo "::error::$failures WGSL validation step(s) failed"

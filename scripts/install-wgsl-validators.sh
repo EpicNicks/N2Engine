@@ -23,6 +23,9 @@ DAWN_COMMIT="67d4d6e64b0755d638f76549794692badfdbc8ab"
 DAWN_ARCHIVE="Dawn-${DAWN_COMMIT}-ubuntu-latest-Release.tar.gz"
 DAWN_SHA256="20ff88448def9645ceeff30911e07295aeb433be23e26180c96019b4300bff5a"
 
+# Rust toolchain for the naga build (the runner image's own rustc would move with the image): stable as of 2026-10-15
+RUST_TOOLCHAIN="1.99.1"
+
 # naga-cli 30.0.1 (wgpu v30.0.1, 2026-08-22)
 NAGA_VERSION="30.0.1"
 NAGA_CRATE_SHA256="45283c11b8b1da1936214eefc9caf9c1bc74ae5c090023eaea84ba317a194c8c"
@@ -61,7 +64,7 @@ else
 fi
 
 # ---- naga ----------------------------------------------------------------------------------------------------------
-naga_stamp="naga-cli $NAGA_VERSION $NAGA_CRATE_SHA256"
+naga_stamp="naga-cli $NAGA_VERSION $NAGA_CRATE_SHA256 rustc $RUST_TOOLCHAIN"
 if [ -x "$dest/naga/bin/naga" ] && [ "$(cat "$dest/naga/.pin" 2>/dev/null)" = "$naga_stamp" ]; then
   echo "naga: pin matches, already installed"
 else
@@ -72,7 +75,9 @@ else
   mkdir -p "$work/src"
   tar -xzf "$work/naga-cli.crate" -C "$work/src"
   # --locked: the Cargo.lock inside the package decides every dependency version (and checks its checksum)
-  cargo install --locked --path "$work/src/naga-cli-${NAGA_VERSION}" --root "$dest/naga"
+  # a pinned toolchain through rustup (preinstalled on the ubuntu runners), so a runner image update cannot change the compiler
+  rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+  cargo "+$RUST_TOOLCHAIN" install --locked --path "$work/src/naga-cli-${NAGA_VERSION}" --root "$dest/naga"
   test -x "$dest/naga/bin/naga"
   echo "$naga_stamp" > "$dest/naga/.pin"
   echo "naga: built from naga-cli $NAGA_VERSION"
