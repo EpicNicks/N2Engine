@@ -55,6 +55,7 @@
 
 #include "editor-server/EditorServer.hpp"
 #include "editor-server/EditorTls.hpp"
+#include "editor-server/ExtensionHost.hpp"
 #include "editor-server/Protocol.hpp"
 #include "editor-server/Commands.hpp"
 #include "editor-server/Serialization.hpp"
@@ -2493,7 +2494,29 @@ namespace N2Engine::Editor
 
     std::vector<std::string> EditorServer::Capabilities()
     {
-        return {};
+        return {"editorExtensions"};
+    }
+
+    bool EditorServer::EnableEditorExtensions(std::filesystem::path projectRoot)
+    {
+        if (_running || _playMode)
+        {
+            Logger::Warn("The editor server's editor extensions can't be enabled while it is running or playing");
+            return false;
+        }
+        _extensions = std::make_unique<ExtensionHost>(std::move(projectRoot));
+        // Loaded here, before any client: the extensions are read at host start and on ReloadEditorExtensions only
+        _extensions->Load();
+        _extensions->SetChangedCallback([this](const uint32_t uiRevision)
+        {
+            _events.Push("extensionsChanged", nlohmann::json{{"uiRevision", uiRevision}});
+        });
+        return true;
+    }
+
+    int EditorServer::ShutdownEditorExtensions(const std::chrono::milliseconds maxWait)
+    {
+        return _extensions ? _extensions->Shutdown(maxWait) : 0;
     }
 
     bool EditorServer::TokensMatch(std::string_view accessToken, std::string_view token)
@@ -3862,6 +3885,11 @@ namespace N2Engine::Editor
         {CommandType::GetLuaFields, "GetLuaFields", EditorServer::CommandClass::Read},
         {CommandType::GetProjectInfo, "GetProjectInfo", EditorServer::CommandClass::Read},
         {CommandType::GetHistory, "GetHistory", EditorServer::CommandClass::Read},
+        // The extension lists answer from what was captured at load: they run no Lua. 0x82 and 0x83 are reserved for
+        // InvokeMenuItem and InvokeInspectorAction (Write); nothing is classified for them until they exist, so they are
+        // refused as unknown ids (default deny).
+        {CommandType::ListEditorExtensions, "ListEditorExtensions", EditorServer::CommandClass::Read},
+        {CommandType::GetEditorUi, "GetEditorUi", EditorServer::CommandClass::Read},
         {CommandType::GetAutosave, "GetAutosave", EditorServer::CommandClass::Read},
         {CommandType::GetPlayState, "GetPlayState", EditorServer::CommandClass::Read},
         // Write: changes the project, a scene, the game or an asset, or runs project code (SendInput, SetPaused,
@@ -3905,6 +3933,8 @@ namespace N2Engine::Editor
         {CommandType::SendInput, "SendInput", EditorServer::CommandClass::Write},
         // Admin: controls the host itself
         {CommandType::Shutdown, "Shutdown", EditorServer::CommandClass::Admin},
+        // Admin: reloading runs every extension file again, as the host's operator would by restarting it
+        {CommandType::ReloadEditorExtensions, "ReloadEditorExtensions", EditorServer::CommandClass::Admin},
         };
 
         const CommandInfo *FindCommand(const uint8_t commandType)
@@ -4202,6 +4232,15 @@ namespace N2Engine::Editor
             break;
         case CommandType::GetLuaFields:
             HandleGetLuaFields(clientSocket, payload);
+            break;
+        case CommandType::ListEditorExtensions:
+            HandleListEditorExtensions(clientSocket);
+            break;
+        case CommandType::GetEditorUi:
+            HandleGetEditorUi(clientSocket);
+            break;
+        case CommandType::ReloadEditorExtensions:
+            HandleReloadEditorExtensions(clientSocket);
             break;
         case CommandType::CreateScript:
             HandleCreateScript(clientSocket, payload);
@@ -5390,6 +5429,9 @@ namespace N2Engine::Editor
         case CommandType::WriteTextAsset:
         case CommandType::CreateScriptAsset:
         case CommandType::CreateFolder:
+        // Reloading runs the project's extension files again, which a play host (it plays a snapshot, and runs no
+        // extension) never does
+        case CommandType::ReloadEditorExtensions:
             return true;
         default:
             return false;
@@ -6421,6 +6463,40 @@ namespace N2Engine::Editor
 
         BufferWriter response;
         WriteLuaFields(response, schema.ToJson());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleListEditorExtensions(int clientSocket)
+    {
+        // What was captured at load: no Lua runs. Without --editor-extensions the answer says so (not an error), so a
+        // client can ask any host and show or hide its Tools menu.
+        BufferWriter response;
+        WriteEditorExtensions(response, _extensions ? _extensions->DescribeJson() : ExtensionHost::DisabledDescribeJson());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleGetEditorUi(int clientSocket)
+    {
+        BufferWriter response;
+        WriteEditorUi(response, _extensions ? _extensions->UiJson() : ExtensionHost::DisabledUiJson());
+        SendResponse(clientSocket, response.Release());
+    }
+
+    void EditorServer::HandleReloadEditorExtensions(int clientSocket)
+    {
+        if (!_extensions)
+        {
+            SendResponse(clientSocket,
+                         BuildDenial(Protocol::ErrorCodeExtensionsDisabled,
+                                     "Editor extensions are not enabled on this host (it was not started with "
+                                     "--editor-extensions)"));
+            return;
+        }
+        // Every file is evaluated again, each off this thread under its own deadline; the new registry replaces the old
+        // one, uiRevision moves on and extensionsChanged follows (the extension host's changed callback)
+        _extensions->Reload();
+        BufferWriter response;
+        WriteEditorExtensions(response, _extensions->DescribeJson());
         SendResponse(clientSocket, response.Release());
     }
 

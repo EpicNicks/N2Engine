@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.13.0";
+inline constexpr const char *ProtocolVersion = "1.14.0";
 
 enum class CommandType : uint8_t
 {
@@ -67,6 +67,9 @@ enum class CommandType : uint8_t
     GetProjectInfo = 0x70,
     SetProjectSettings = 0x71,
     SetStartupScene = 0x72,
+    ListEditorExtensions = 0x80,
+    GetEditorUi = 0x81,
+    ReloadEditorExtensions = 0x84,
     Undo = 0x90,
     Redo = 0x91,
     BeginEditGroup = 0x92,
@@ -120,6 +123,8 @@ enum class ResponseType : uint8_t
     PlaySnapshot = 0xB0,
     PlayState = 0xB1,
     ErrorCoded = 0x1C,
+    EditorExtensions = 0x1D,
+    EditorUi = 0x1E,
 };
 
 // Custom types
@@ -595,6 +600,16 @@ struct ProjectInfoData
     std::string rootPath;
     std::string userDataPath;
     std::string project; // JSON: ProjectFile
+};
+
+struct EditorExtensionsData
+{
+    std::string info; // JSON: EditorExtensionsInfo
+};
+
+struct EditorUiData
+{
+    std::string ui; // JSON: EditorUiInfo
 };
 
 struct EditResultData

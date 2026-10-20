@@ -153,6 +153,11 @@ namespace N2Engine::Editor
                 options.readOnly = true;
                 continue;
             }
+            if (arg == "--editor-extensions")
+            {
+                options.editorExtensions = true;
+                continue;
+            }
             if (arg == "--no-rate-limit")
             {
                 options.noRateLimit = true;
@@ -364,6 +369,11 @@ namespace N2Engine::Editor
         {
             return std::unexpected("--read-only and --create can't be combined: --create writes a project");
         }
+        if (options.editorExtensions && !options.playScene.empty())
+        {
+            return std::unexpected("--editor-extensions and --play can't be combined: a play host never loads editor "
+                                   "extensions");
+        }
         if (options.createPath.empty() && (givenName || givenId))
         {
             return std::unexpected(std::string(givenName ? "--name" : "--project-id") + " only goes with --create");
@@ -372,6 +382,16 @@ namespace N2Engine::Editor
         // Fail closed (S3, audit F5): a host that serves on a non-loopback address needs a token and TLS, or an explicit
         // --insecure-bind. --create and --new-token don't serve; an unparsable address counts as non-loopback.
         const bool serves = options.createPath.empty() && options.newTokenUser.empty();
+        // Editor extensions run project code on the host for whoever may invoke them, so a host that is reachable from
+        // other machines needs roles (a tokens file) for that. --insecure-bind does not lift this.
+        if (options.editorExtensions && serves && !IsLoopbackBindAddress(options.bindAddress) && options.tokensFile.empty())
+        {
+            return std::unexpected(std::format(
+                "--editor-extensions needs --tokens-file with --bind {}: that address is not loopback, and editor "
+                "extensions run project code on the host, so who may invoke them has to be a role (--insecure-bind does "
+                "not lift this)",
+                options.bindAddress));
+        }
         if (serves && !options.insecureBind && !IsLoopbackBindAddress(options.bindAddress))
         {
             const bool hasToken = !options.tokenEnv.empty() || !options.tokensFile.empty();
@@ -509,6 +529,16 @@ Options:
                             work, with or without --token-env. Commands nobody has classified are refused.
                             Can't be combined with --play (it runs the game and the project's Lua) or
                             --create (it writes a project)
+  --editor-extensions       Load the project's Lua editor extensions: the files <project>/editor/**/*.lua
+                            (a folder beside assets/, so no protocol write, require or play host reaches
+                            it). Each file runs in a sandbox state of its own with a time and memory budget,
+                            at start and on ReloadEditorExtensions only, never when a scene loads, and
+                            declares menu items with Editor.Extension{...}. A file that fails only marks
+                            itself failed. ListEditorExtensions and GetEditorUi list what loaded. OFF by
+                            default: it runs project code on this host, so it is a decision of whoever
+                            starts it. Can't be combined with --play, nor with a --bind outside 127.0.0.0/8
+                            unless --tokens-file is given (--insecure-bind does not lift that). Works with
+                            --read-only (the extensions are listed). Without --project there is nothing to load
   --no-rate-limit           Turn off the failed-Hello rate limiting. By default, with --token-env or
                             --tokens-file, an address that fails 3 Hellos is backed off (1 s, doubling to
                             5 min; its connections are closed at once, before any TLS handshake), and with

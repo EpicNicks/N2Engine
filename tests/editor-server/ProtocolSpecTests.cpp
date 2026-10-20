@@ -99,6 +99,9 @@ namespace
             {"GetProjectInfo", CommandType::GetProjectInfo},
             {"SetProjectSettings", CommandType::SetProjectSettings},
             {"SetStartupScene", CommandType::SetStartupScene},
+            {"ListEditorExtensions", CommandType::ListEditorExtensions},
+            {"GetEditorUi", CommandType::GetEditorUi},
+            {"ReloadEditorExtensions", CommandType::ReloadEditorExtensions},
             {"Undo", CommandType::Undo},
             {"Redo", CommandType::Redo},
             {"BeginEditGroup", CommandType::BeginEditGroup},
@@ -150,6 +153,8 @@ namespace
             {"AssetDetail", ResponseType::AssetDetail},
             {"TextData", ResponseType::TextData},
             {"AssetCreated", ResponseType::AssetCreated},
+            {"EditorExtensions", ResponseType::EditorExtensions},
+            {"EditorUi", ResponseType::EditorUi},
         };
         return responses;
     }
@@ -626,6 +631,8 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"ListAssets", false}, {"GetAssetInfo", false}, {"ReadTextAsset", false},
         {"WritePlaySnapshot", false}, {"SetPaused", false}, {"Step", false}, {"GetPlayState", false},
         {"SendInput", false}, {"Shutdown", false},
+        // A play host runs no editor extension: the lists answer (nothing is loaded there), the reload is refused
+        {"ListEditorExtensions", false}, {"GetEditorUi", false}, {"ReloadEditorExtensions", true},
     };
 
     const spec_json spec = LoadSpec();

@@ -82,6 +82,12 @@ namespace N2Engine::Editor
         /// --read-only: the host answers every command that isn't a read (EditorServer::IsReadCommand; Shutdown included)
         /// with the readOnly error, and keeps serving. Works with or without --token-env.
         bool readOnly = false;
+        /// --editor-extensions: load the project's Lua editor extensions (<project>/editor/**/*.lua; EditorServer::
+        /// EnableEditorExtensions) and answer ListEditorExtensions, GetEditorUi and ReloadEditorExtensions from them.
+        /// OFF by default on every host: running project code on the host is a decision of whoever starts it, never of
+        /// a project. ParseHostArguments refuses it with --play (a play host never loads extensions) and with a
+        /// non-loopback --bind unless --tokens-file is given (so roles exist). Allowed with --read-only.
+        bool editorExtensions = false;
         /// --no-rate-limit: turns off the failed-Hello rate limiting (EditorServer::SetRateLimiting) that a host with
         /// an access token has by default; for test rigs that fail Hellos on purpose. It changes nothing on a host
         /// without a token, which has no failed Hellos to count.

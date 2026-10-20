@@ -773,6 +773,14 @@ namespace N2Engine::Editor::Protocol
     /// Since 1.13.0: the host is serving another session and this client is turned away at Hello (it does not outrank
     /// that session and is not the same user): the connection is closed after the answer
     inline constexpr std::string_view ErrorCodeBusy = "busy";
+    /// Since 1.14.0: the host was not started with --editor-extensions, so it has no editor extensions to reload or run
+    inline constexpr std::string_view ErrorCodeExtensionsDisabled = "extensionsDisabled";
+    /// Since 1.14.0: an extension's call failed (a Lua error, a budget trip, or an error of a command it sent). Nothing
+    /// answers it yet: the commands that run an extension come later.
+    inline constexpr std::string_view ErrorCodeExtensionFailed = "extensionFailed";
+    /// Since 1.14.0: the extension failed too often in a short time and is disabled until the extensions are reloaded.
+    /// Nothing answers it yet, as above.
+    inline constexpr std::string_view ErrorCodeExtensionFaulted = "extensionFaulted";
 
     /// ErrorCoded (since 1.11.0), sent only to a client that asked for it with Hello's errorCodes: the message an Error
     /// would carry, then a code. Unlike Error's, its payload is two length-prefixed strings.
@@ -1181,6 +1189,28 @@ namespace N2Engine::Editor::Protocol
         WriteJson(payload, schema);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::LuaFields));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// ListEditorExtensions' and ReloadEditorExtensions' response: an EditorExtensionsInfo as JSON
+    inline void WriteEditorExtensions(BufferWriter &w, const nlohmann::json &info)
+    {
+        BufferWriter payload;
+        WriteJson(payload, info);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EditorExtensions));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// GetEditorUi's response: an EditorUiInfo as JSON
+    inline void WriteEditorUi(BufferWriter &w, const nlohmann::json &ui)
+    {
+        BufferWriter payload;
+        WriteJson(payload, ui);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::EditorUi));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

@@ -48,6 +48,8 @@ namespace
             {"GetProjectInfo", Class::Read}, {"GetHistory", Class::Read}, {"GetAutosave", Class::Read},
             {"ListAssets", Class::Read}, {"GetAssetInfo", Class::Read}, {"ReadTextAsset", Class::Read},
             {"GetPlayState", Class::Read},
+            // The extension lists answer from what was captured at load and run no Lua
+            {"ListEditorExtensions", Class::Read}, {"GetEditorUi", Class::Read},
             // Write: the project, a scene, an asset, the game, or project code
             {"SetCameraPosition", Class::Write}, {"CreateScene", Class::Write}, {"LoadScene", Class::Write},
             {"SaveScene", Class::Write}, {"DeleteScene", Class::Write}, {"OpenScene", Class::Write},
@@ -64,7 +66,7 @@ namespace
             {"WritePlaySnapshot", Class::Write}, {"SetPaused", Class::Write}, {"Step", Class::Write},
             {"SendInput", Class::Write},
             // Admin: the host itself
-            {"Shutdown", Class::Admin},
+            {"Shutdown", Class::Admin}, {"ReloadEditorExtensions", Class::Admin},
         };
         return classes;
     }
