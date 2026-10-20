@@ -294,9 +294,11 @@
   //     already resuming from an earlier gesture. The listeners are removed once no context needs a resume (none
   //     suspended, no gesture's resume pending), so a later gesture does nothing; a gesture that finds every context
   //     running removes them at once. A gesture's resume() that is refused, throws, or settles with the context still
-  //     not running keeps them armed for the next counting gesture, at most MAX_RESUME_TRIES such refusals in a row (a
-  //     browser that never allows it is not retried forever); any successful resume starts the count again. A context
-  //     made later arms them again.
+  //     not running keeps them armed for the next counting gesture; after MAX_RESUME_TRIES such refusals the next one
+  //     removes them (a browser that never allows it is not retried forever). The count starts again on any successful
+  //     resume, whenever every context is found running (or closed) with nothing pending (by a gesture, a settled
+  //     resume or the tab becoming visible, including a context the browser resumed by itself), and when a new
+  //     context is made; a new context also arms the listeners again.
   //   * A hidden tab suspends the running contexts; the tab becoming visible resumes the ones this suspended and arms
   //     the listeners while one is not running yet. That resume is not a gesture: its refusal does not count, and while
   //     it is pending a gesture still calls resume() (calling it twice is harmless).
@@ -344,10 +346,15 @@
     function needsResume(context) { return !isRunning(context) && !isClosed(context); }
 
     // Arms while a context still needs a resume or a gesture's resume is pending, disarms otherwise or once the gesture
-    // refusals in a row are used up.
+    // refusals in a row are used up. Every context found running (or closed) with nothing pending, however it got
+    // there (a resume, or the browser by itself, as iOS does after a call), starts the refusal count again.
     function update() {
-      if (failures > MAX_RESUME_TRIES) { disarm(); return; }
-      if (pending.length > 0 || contexts.some(needsResume)) arm(); else disarm();
+      if (pending.length === 0 && !contexts.some(needsResume)) {
+        failures = 0;
+        disarm();
+        return;
+      }
+      if (failures > MAX_RESUME_TRIES) disarm(); else arm();
     }
 
     // fromGesture: started by an activating event. Only those count as pending (so a resume the tab started when it
@@ -438,6 +445,7 @@
     function track(context) {
       contexts.push(context);
       emit('audio-context-created', { state: context.state });
+      failures = 0; // a new context gets the full MAX_RESUME_TRIES
       arm();
     }
 

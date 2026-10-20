@@ -8,8 +8,9 @@
 // already running is not resumed, a context made after the unlock re-arms it, a refused or throwing resume() is
 // tolerated and retried on the next gesture a bounded number of times, a constructor that throws is the engine's to
 // handle, the hidden tab suspending and the visible tab resuming only what it suspended, hide/show cycles whose refused
-// resumes never use up the gesture retries (a working gesture resets the count), and a visible-tab resume left pending
-// not blocking a real gesture.
+// resumes never use up the gesture retries (a working gesture resets the count), a visible-tab resume left pending
+// not blocking a real gesture, and the count starting again when a gesture finds the context running (resumed by the
+// browser itself) and when a new context is created.
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -422,6 +423,67 @@ await scenario('hide/show cycles with refusals never use up the gesture retries;
     check(context.state === 'running', `cycle ${cycle}: the next tap restores sound`);
     check(!unlock.isArmed(), `cycle ${cycle}: disarmed again`);
   }
+  unlock.uninstall();
+});
+
+await scenario('a context the browser resumes by itself, found running by a gesture, starts the refusal count again', async () => {
+  const { win, doc, made, unlock } = setup();
+  unlock.install();
+  new win.AudioContext();
+  const context = made[0];
+  let interrupted = true; // iOS during a call: resume() resolves but the context stays interrupted
+  context.resume = function () {
+    this.resumeCalls += 1;
+    this.state = interrupted ? 'interrupted' : 'running';
+    return Promise.resolve();
+  };
+  for (let i = 0; i < 3; ++i) {
+    doc.fire('keydown', { key: 'a' });
+    await tick();
+  }
+  check(context.resumeCalls === 3 && unlock.isArmed(), 'three refusals, still armed');
+  context.state = 'running'; // the call ends: the browser resumes it by itself
+  doc.fire('keydown', { key: 'a' });
+  await tick();
+  check(context.resumeCalls === 3 && !unlock.isArmed(), 'the gesture finds it running and disarms');
+  doc.setVisible(false); // later the tab goes away and comes back while another call is on
+  await tick();
+  doc.setVisible(true);
+  await tick();
+  check(unlock.isArmed(), 'armed after the refused visible resume');
+  for (let i = 1; i <= 3; ++i) {
+    doc.fire('keydown', { key: 'a' });
+    await tick();
+    check(unlock.isArmed(), `refusal ${i} after the reset does not disarm`);
+  }
+  interrupted = false;
+  doc.fire('keydown', { key: 'a' });
+  await tick();
+  check(context.state === 'running' && !unlock.isArmed(), 'the 4th gesture of the new run still gets its try');
+  unlock.uninstall();
+});
+
+await scenario('a new context gets the full retries even after an earlier one used them up', async () => {
+  const { win, doc, made, unlock } = setup({ resumeRejects: true });
+  unlock.install();
+  new win.AudioContext();
+  for (let i = 0; i < 4; ++i) {
+    doc.fire('keydown', { key: 'a' });
+    await tick();
+  }
+  check(!unlock.isArmed(), 'gave up on the first context');
+  made[0].state = 'closed'; // the engine closes it and makes another
+  new win.AudioContext();
+  check(unlock.isArmed(), 'the new context arms again');
+  for (let i = 1; i <= 3; ++i) {
+    doc.fire('keydown', { key: 'a' });
+    await tick();
+    check(unlock.isArmed(), `still armed after refusal ${i} of the new context`);
+  }
+  doc.fire('keydown', { key: 'a' });
+  await tick();
+  check(!unlock.isArmed(), 'the 4th refusal removes them');
+  check(made[1].resumeCalls === 4, `four tries for the new context (${made[1].resumeCalls})`);
   unlock.uninstall();
 });
 
