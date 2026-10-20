@@ -906,9 +906,9 @@ TEST_F(LuaSandboxTest, TheEvaluatorClosesItsStateThroughTheBuilder)
 
 TEST_F(LuaSandboxTest, TableMoveInsertAndRemoveOverAHugeRangeEndAsABudgetTrip)
 {
-    // Stock C loops over a plain table with nothing in it: no allocation, no VM instruction. Redone in Lua they are counted.
-    for (const char *source : {"table.move({}, 1, 1 << 40, 2)", "local t = {} t[1 << 40] = 1 table.insert(t, 1, 0)",
-                               "local t = {} t[1 << 40] = 1 table.remove(t, 1)"})
+    // Stock C loops over a huge range or length (a plain table for move, a __len for insert and remove): no allocation, no VM instruction. Redone in Lua they are counted.
+    for (const char *source : {"table.move({}, 1, 1 << 40, 2)", "local t = setmetatable({}, {__len = function() return 1 << 40 end}) table.insert(t, 1, 0)",
+                               "local t = setmetatable({}, {__len = function() return 1 << 40 end}) table.remove(t, 1)"})
     {
         auto sandbox = Make(SandboxProfile::EditorExtension);
         const auto started = std::chrono::steady_clock::now();
