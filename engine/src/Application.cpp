@@ -19,6 +19,7 @@
 #include "engine/network/NetworkValidation.hpp"
 #include "engine/particles/ParticleBackendSelection.hpp"
 #include "engine/physics/GpuStatus.hpp"
+#include "engine/physics/PhysicsBackendKind.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "engine/softbody/SoftBodyBackendSelection.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
@@ -142,8 +143,40 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     // the start goes ahead); none keeps the offline loop
     const SimulationMode presetMode = Network::SimulationModeFor(networkSettings.preset);
     networkEnv.ownedTickLoop = presetMode != SimulationMode::None;
+    // physics.backend: the project's setting, else the host's default (ApplicationOptions::PhysicsBackend). Chosen here,
+    // before anything is started, because the Deterministic preset is checked against the SELECTED backend's
+    // declarations. A backend that is not in this build refuses a Deterministic project and falls back to PhysX (with a
+    // warning) for any other (Physics::ChooseBackend).
+    Physics::PhysicsBackendKind requestedBackend =
+        options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::JOLT ? Physics::PhysicsBackendKind::Jolt
+                                                                                    : Physics::PhysicsBackendKind::PhysX;
+    if (project)
+    {
+        if (const auto setting = ReadPhysicsBackend(project->settings))
+        {
+            requestedBackend = *setting;
+        }
+    }
+    const Physics::BackendChoice backendChoice = Physics::ChooseBackend(
+        requestedBackend, networkSettings.preset == Network::NetworkPreset::Deterministic,
+        Physics::IsBackendCompiledIn(requestedBackend));
+    const Physics::PhysicsBackendKind backendKind = backendChoice.selected;
+    if (backendChoice.refused)
+    {
+        Logger::Error(backendChoice.message);
+    }
+    else if (backendChoice.fellBack)
+    {
+        Logger::Warn(backendChoice.message);
+    }
+    networkEnv.backendName = std::string(Physics::ToString(backendKind));
+    if (backendChoice.refused)
+    {
+        networkEnv.backendUnavailable = true;
+        networkEnv.backendRequested = std::string(Physics::ToString(backendChoice.requested));
+    }
 #ifdef N2ENGINE_PHYSX_ENABLED
-    if (options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::PHYSX)
+    else if (backendKind == Physics::PhysicsBackendKind::PhysX)
     {
         networkEnv.hasBackend = true;
         networkEnv.backendLevel = Physics::PhysXBackend::DeclaredDeterminism(
@@ -286,7 +319,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     }
 
 #ifdef N2ENGINE_PHYSX_ENABLED
-    if (options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::PHYSX)
+    if (backendKind == Physics::PhysicsBackendKind::PhysX)
     {
         _3DphysicsBackend = std::make_unique<Physics::PhysXBackend>();
         // Before Initialize: the scene's GPU flag is fixed when it is created
@@ -304,12 +337,15 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         {
             Logger::Info("3D Physics backend initialized successfully");
             physicsStatus.state = SubsystemState::Running;
-            physicsStatus.detail = "PhysX";
+            physicsStatus.detail = backendChoice.fellBack
+                                       ? std::format("PhysX (physics.backend {} is not in this build: fell back to PhysX)",
+                                                     Physics::ToString(backendChoice.requested))
+                                       : std::string("PhysX");
         }
     }
     else
     {
-        Logger::Error(NAMEOF(options.physicsBackend) + " is not currently supported");
+        Logger::Error(std::format("physics.backend {} is not currently supported", Physics::ToString(backendKind)));
         physicsStatus.state = SubsystemState::Disabled;
         physicsStatus.detail = "Selected physics backend is not supported";
     }
@@ -383,6 +419,13 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         }
     }
     SubsystemStatus networkStatus = Network::MakeNetworkStatus(networkSettings, networkValidation);
+    if (networkSettings.preset != Network::NetworkPreset::None)
+    {
+        // The backend that actually runs (not the one asked for), so the row cannot claim one that failed to start
+        networkStatus.detail += std::format("; physics backend {}",
+                                            _3DphysicsBackend ? std::string(_3DphysicsBackend->BackendId())
+                                                              : std::string("none"));
+    }
     if (presetMode != SimulationMode::None)
     {
         // The mode the application actually runs in, read back rather than assumed
@@ -611,6 +654,9 @@ void Application::Shutdown()
     Audio::AudioSystem::Instance().Shutdown();
     _3DphysicsBackend.reset(); // ~PhysXBackend releases the PhysX SDK
     _window.Shutdown();
+    // A network preset's simulation mode ends with the project that selected it: the next Init (a project with no
+    // network preset does not touch the mode) must start in the offline loop
+    SetSimulationMode(SimulationMode::None);
     _initialized = false;
 }
 

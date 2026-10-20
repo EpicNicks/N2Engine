@@ -95,14 +95,16 @@ namespace N2Engine::Physics
         {
             return DeclaredDeterminism(_deterministic, _workerThreadsOverride);
         }
-        /// What the PhysX backend supports of snapshot and set-state (static, like DeclaredDeterminism): neither
+        /// What the PhysX backend supports of snapshot and set-state (static, like DeclaredDeterminism): set-state
+        /// only
         static constexpr bool kSupportsSnapshot = false;
-        static constexpr bool kSupportsSetState = false;
-        /// False: nothing saves or restores the PhysX scene
+        static constexpr bool kSupportsSetState = true;
+        /// False: nothing saves or restores the PhysX scene (SaveState, RestoreState and HashState stay unsupported)
         [[nodiscard]] bool SupportsSnapshot() const override { return kSupportsSnapshot; }
-        /// False for now: IPhysicsBackend has no way to teleport a dynamic body or set its sleep state yet (it
-        /// becomes true when that body-state API lands)
+        /// True: GetBodyState and SetBodyState teleport a dynamic body and set its velocities and sleep state
         [[nodiscard]] bool SupportsSetState() const override { return kSupportsSetState; }
+        /// "physx"
+        [[nodiscard]] std::string_view BackendId() const override { return "physx"; }
         /// For tests: the dispatcher worker-thread count to use instead of the one SetDeterministic implies (4 by
         /// default, 0 when deterministic). Call before Initialize.
         void SetWorkerThreadsForTesting(std::optional<unsigned> threads) { _workerThreadsOverride = threads; }
@@ -156,6 +158,22 @@ namespace N2Engine::Physics
             PhysicsBodyHandle handle,
             const Math::Vector3& position,
             const Math::Quaternion& rotation) override;
+
+        /// Pose, velocities and sleep state of a body that is in the scene (false for a stale handle or a disabled
+        /// body). A kinematic or static body reports zero velocities; a static one is never asleep.
+        bool GetBodyState(PhysicsBodyHandle handle, BodyState& out) const override;
+        /// What each kind takes (a non-finite value or a zero-length rotation is refused with nothing changed):
+        ///   dynamic    teleports with setGlobalPose, then setLinearVelocity and setAngularVelocity, all without
+        ///              waking (autowake false); then sleeping puts it to sleep (putToSleep, which also zeroes its
+        ///              velocities, so a sleeping body keeps none) and not sleeping wakes it (wakeUp: the wake counter
+        ///              is reset, so it does not fall asleep in the next step). PhysX applies the sleep change when the
+        ///              scene next steps, so GetBodyState's sleeping flag follows after the next Update.
+        ///   kinematic  only the pose, as a kinematic target (the body moves there in the next step, like
+        ///              SetBodyTransform); velocities and sleeping do not apply to it
+        ///   static     only the pose (setGlobalPose, which is not cheap: it re-inserts the actor in the broadphase)
+        /// Never call it from inside a PhysX callback or while Update runs; the engine's callbacks only queue events,
+        /// so game code never does.
+        bool SetBodyState(PhysicsBodyHandle handle, const BodyState& state) override;
 
         void AddSphereCollider(
             PhysicsBodyHandle body,

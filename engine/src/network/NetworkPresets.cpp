@@ -66,9 +66,9 @@ namespace N2Engine::Network
                 "physics.backend", "Physics backend",
                 Any("any (PhysX)"),
                 Cell(T, {}, nullptr, "any; PhysX is fine"),
-                Cell(L | S, {}, "CrossPlatform",
-                     "the backend must declare DeterminismLevel CrossPlatform (IPhysicsBackend::GetDeterminism); "
-                     "today none does",
+                Cell(L | S, "physics.backend", "jolt",
+                     "jolt: the SELECTED backend must declare DeterminismLevel CrossPlatform "
+                     "(IPhysicsBackend::GetDeterminism); only Jolt can, once it is built (today none does)",
                      "The physics backend is not bit-identical across platforms: peers desync")));
             rows.push_back(Row(
                 "physics.gpu", "GPU physics",
@@ -90,7 +90,9 @@ namespace N2Engine::Network
                 Cell(T, {}, nullptr, "tick counter owned by netcode; the catch-up clamp is tunable"),
                 Cell(L | S, {}, nullptr,
                      "tick counter owned by netcode (SimulationMode::Deterministic, selected by the preset); no "
-                     "wall-clock clamp dropping ticks: owed ticks are kept and reported",
+                     "wall-clock clamp dropping ticks: owed ticks are kept and reported (only a frame that ends more "
+                     "than SimulationClock::MaxOwedSeconds behind, with no behind handler, resyncs by dropping "
+                     "them, with a warning)",
                      "A wall-clock catch-up clamp drops ticks: peers run different tick counts")));
             rows.push_back(Row(
                 "math.simdTier", "Math SIMD tier",
