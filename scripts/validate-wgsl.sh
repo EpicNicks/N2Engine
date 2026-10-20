@@ -62,11 +62,20 @@ fi
 for shader in "${shaders[@]}"; do
   name="$(basename "$shader" .wgsl)"
   echo "== $name.wgsl"
-  run "tint $name.wgsl (resolve, uniformity, SPIR-V + spirv-val)" "$tint" --format spvasm --validate -o "$out/$name.spvasm" "$shader"
+  # Tint writes one entry point per output file (--ep), so each of the two goes through the SPIR-V writer and spirv-val
+  for entry in vs_main fs_main; do
+    run "tint $name.wgsl $entry (resolve, uniformity, SPIR-V + spirv-val)" "$tint" --format spvasm --validate --ep "$entry" -o "$out/$name.$entry.spvasm" "$shader"
+  done
   run "tint $name.wgsl (WGSL round trip)" "$tint" --format wgsl -o "$out/$name.roundtrip.wgsl" "$shader"
   run "naga $name.wgsl (parse and validate)" "$naga" "$shader"
-  for target in spv msl hlsl wgsl; do
+  # naga picks the backend from the output extension (and only prints a message, exit 0, for one it does not know), so
+  # each output file must exist and not be empty
+  for target in spv metal hlsl wgsl; do
     run "naga $name.wgsl -> $target" "$naga" "$shader" "$out/$name.naga.$target"
+    if [ ! -s "$out/$name.naga.$target" ]; then
+      echo "::error::naga wrote no $target output for $name.wgsl"
+      failures=$((failures + 1))
+    fi
   done
 done
 
@@ -80,7 +89,8 @@ reject() {
     sed 's/^/    /' "$out/negative.log"
     failures=$((failures + 1))
   else
-    echo "  ok: $label rejected it"
+    echo "  ok: $label rejected it:"
+    head -n 3 "$out/negative.log" | sed 's/^/    /'
   fi
 }
 negative="$root/scripts/wgsl-negative"
