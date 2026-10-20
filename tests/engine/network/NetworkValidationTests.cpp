@@ -311,7 +311,7 @@ TEST(NetworkValidationTest, TheRefusedRowIsFailedAndNamesEveryUnmetRequirement)
     const SubsystemStatus row = MakeNetworkStatus(settings, validation);
     EXPECT_EQ(row.name, "Network");
     EXPECT_EQ(row.state, SubsystemState::Failed);
-    EXPECT_NE(row.detail.find("Preset deterministic: refused to start, 7 unmet requirements"), std::string::npos)
+    EXPECT_NE(row.detail.find("Preset deterministic: refused to start, 6 unmet requirements"), std::string::npos)
         << row.detail;
     for (const NetworkRequirement *requirement : validation.Unmet())
     {
