@@ -7,7 +7,9 @@
 // Escape) neither resuming nor disarming nor using up a retry, a pending resume keeping the listeners, a context that is
 // already running is not resumed, a context made after the unlock re-arms it, a refused or throwing resume() is
 // tolerated and retried on the next gesture a bounded number of times, a constructor that throws is the engine's to
-// handle, the hidden tab suspending and the visible tab resuming only what it suspended.
+// handle, the hidden tab suspending and the visible tab resuming only what it suspended, hide/show cycles whose refused
+// resumes never use up the gesture retries (a working gesture resets the count), and a visible-tab resume left pending
+// not blocking a real gesture.
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -384,6 +386,70 @@ await scenario('a refused resume when the tab is visible again waits for a gestu
   await tick();
   check(made[0].resumeCalls === 1, 'tried once on visible');
   check(unlock.isArmed(), 'armed: the next gesture tries again');
+  unlock.uninstall();
+});
+
+await scenario('hide/show cycles with refusals never use up the gesture retries; a working gesture resets the count', async () => {
+  const { win, doc, made, unlock } = setup({ startState: 'running' });
+  unlock.install();
+  new win.AudioContext();
+  const context = made[0];
+  let refuse = 0; // how many of the next resume() calls are refused
+  context.resume = function () {
+    this.resumeCalls += 1;
+    if (refuse > 0) {
+      refuse -= 1;
+      return Promise.reject(new Error('NotAllowedError'));
+    }
+    this.state = 'running';
+    return Promise.resolve();
+  };
+  doc.fire('keydown', { key: 'a' });
+  await tick();
+  check(!unlock.isArmed(), 'disarmed by the first gesture (running)');
+  for (let cycle = 1; cycle <= 6; ++cycle) {
+    doc.setVisible(false);
+    await tick();
+    refuse = 2; // iOS-like: the visible resume and the first tap are refused, the second tap works
+    doc.setVisible(true);
+    await tick();
+    check(context.state !== 'running' && unlock.isArmed(), `cycle ${cycle}: armed after the refused visible resume`);
+    doc.fire('pointerup', { pointerType: 'touch' });
+    await tick();
+    check(unlock.isArmed(), `cycle ${cycle}: still armed after a refused tap`);
+    doc.fire('pointerup', { pointerType: 'touch' });
+    await tick();
+    check(context.state === 'running', `cycle ${cycle}: the next tap restores sound`);
+    check(!unlock.isArmed(), `cycle ${cycle}: disarmed again`);
+  }
+  unlock.uninstall();
+});
+
+await scenario('a visible-tab resume left pending does not block a real gesture', async () => {
+  const { win, doc, made, unlock } = setup({ startState: 'running' });
+  unlock.install();
+  new win.AudioContext();
+  const context = made[0];
+  doc.fire('keydown', { key: 'a' });
+  await tick();
+  check(!unlock.isArmed() && context.resumeCalls === 0, 'disarmed by the first gesture (running)');
+  context.resume = function () {
+    this.resumeCalls += 1;
+    if (this.resumeCalls === 1) return new Promise(() => {}); // not allowed yet: stays pending
+    this.state = 'running';
+    return Promise.resolve();
+  };
+  doc.setVisible(false);
+  await tick();
+  doc.setVisible(true);
+  await tick();
+  check(context.resumeCalls === 1, 'the tab asked once');
+  check(unlock.isArmed(), 'armed while the context is not running');
+  doc.fire('pointerup', { pointerType: 'touch' });
+  await tick();
+  check(context.resumeCalls === 2, `the gesture asks again (${context.resumeCalls})`);
+  check(context.state === 'running', 'running');
+  check(!unlock.isArmed(), 'disarmed on success');
   unlock.uninstall();
 });
 

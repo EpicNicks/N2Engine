@@ -291,13 +291,15 @@
   //     user activation in HTML count: keydown (not Escape), a mouse pointerdown, a pointerup that is not from a mouse
   //     (touch, pen) and touchend. A touch or pen pointerdown, a mouse pointerup and Escape are ignored: they neither
   //     resume nor disarm. The first counting event calls resume() on each context that is not running, closed or
-  //     already resuming. The listeners are removed once no context needs a resume (none suspended, none pending), so
-  //     a later gesture does nothing; a gesture that finds every context running removes them at once. A resume() that
-  //     is refused, throws, or settles with the context still not running keeps them armed for the next counting
-  //     gesture, at most MAX_RESUME_TRIES refusals in all (a browser that never allows it is not retried forever).
-  //     A context made later arms them again.
-  //   * A hidden tab suspends the running contexts; the tab becoming visible resumes the ones this suspended (a refused
-  //     resume then waits for the next gesture as above).
+  //     already resuming from an earlier gesture. The listeners are removed once no context needs a resume (none
+  //     suspended, no gesture's resume pending), so a later gesture does nothing; a gesture that finds every context
+  //     running removes them at once. A gesture's resume() that is refused, throws, or settles with the context still
+  //     not running keeps them armed for the next counting gesture, at most MAX_RESUME_TRIES such refusals in a row (a
+  //     browser that never allows it is not retried forever); any successful resume starts the count again. A context
+  //     made later arms them again.
+  //   * A hidden tab suspends the running contexts; the tab becoming visible resumes the ones this suspended and arms
+  //     the listeners while one is not running yet. That resume is not a gesture: its refusal does not count, and while
+  //     it is pending a gesture still calls resume() (calling it twice is harmless).
   //   * Nothing throws: no AudioContext (no WebAudio), a constructor that throws (the engine sees that, as it would
   //     without this wrapper), a resume() that rejects or throws, a context that is already closed.
   //
@@ -341,42 +343,52 @@
 
     function needsResume(context) { return !isRunning(context) && !isClosed(context); }
 
-    // Arms while a context still needs a resume or one is pending, disarms otherwise or once the refusals are used up.
+    // Arms while a context still needs a resume or a gesture's resume is pending, disarms otherwise or once the gesture
+    // refusals in a row are used up.
     function update() {
       if (failures > MAX_RESUME_TRIES) { disarm(); return; }
       if (pending.length > 0 || contexts.some(needsResume)) arm(); else disarm();
     }
 
-    function resume(context, eventName) {
+    // fromGesture: started by an activating event. Only those count as pending (so a resume the tab started when it
+    // became visible, which may stay pending until an allowed one, never stops a gesture from asking again) and only
+    // their refusals use up MAX_RESUME_TRIES. A successful resume, from either, starts the count again.
+    function resume(context, eventName, fromGesture) {
       var result;
       try {
         result = context.resume();
       } catch (error) {
-        refused(error);
+        refused(error, fromGesture);
         return;
       }
       if (result && typeof result.then === 'function') {
-        pending.push(context);
+        if (fromGesture) pending.push(context);
         result.then(function () {
-          settled(context);
-          if (needsResume(context)) refused(new Error('still ' + context.state + ' after resume()'));
-          else { emit(eventName, {}); update(); }
+          if (fromGesture) settled(context);
+          if (needsResume(context)) refused(new Error('still ' + context.state + ' after resume()'), fromGesture);
+          else succeeded(eventName);
         }, function (error) {
-          settled(context);
-          refused(error);
+          if (fromGesture) settled(context);
+          refused(error, fromGesture);
         });
+      } else if (needsResume(context)) {
+        refused(new Error('still ' + context.state + ' after resume()'), fromGesture);
       } else {
-        emit(eventName, {});
-        update();
+        succeeded(eventName);
       }
     }
     function settled(context) {
       var index = pending.indexOf(context);
       if (index >= 0) pending.splice(index, 1);
     }
-    function refused(error) {
+    function succeeded(eventName) {
+      failures = 0;
+      emit(eventName, {});
+      update();
+    }
+    function refused(error, fromGesture) {
       emit('audio-resume-failed', { reason: reasonOf(error) });
-      ++failures;
+      if (fromGesture) ++failures;
       update();
     }
 
@@ -395,7 +407,7 @@
     function onGesture(event) {
       if (!isActivation(event)) return;
       contexts.filter(function (context) { return needsResume(context) && pending.indexOf(context) < 0; })
-              .forEach(function (context) { resume(context, 'audio-resumed'); });
+              .forEach(function (context) { resume(context, 'audio-resumed', true); });
       update();
     }
 
@@ -416,8 +428,10 @@
         suspendedHere = [];
         back.forEach(function (context) {
           if (isClosed(context)) return;
-          resume(context, 'audio-resumed-visible');
+          resume(context, 'audio-resumed-visible', false);
         });
+        // A context still not running (refused, pending, or suspended by the browser) waits for the next gesture
+        update();
       }
     }
 
