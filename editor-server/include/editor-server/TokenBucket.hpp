@@ -20,7 +20,7 @@ namespace N2Engine::Editor
      *
      *  - a token is taken from BOTH buckets or from neither, so an address that is out of tokens does not drain the
      *    global bucket by trying;
-     *  - loopback has no per-address bucket (behind a proxy or a tunnel every peer is loopback and one bucket would
+     *  - loopback has no per-address bucket (a proxy or tunnel that connects over loopback makes every peer loopback and one bucket would
      *    throttle everybody): only the global one applies to it;
      *  - the per-address table is bounded: past `maxAddresses` the buckets that have refilled completely are dropped
      *    (they are indistinguishable from a new one), then the least recently used;

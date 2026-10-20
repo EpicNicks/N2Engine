@@ -292,7 +292,7 @@ namespace N2Engine::Editor
          *    host. When every slot is taken a new connection is closed at once, with no TLS and no log line of its own
          *    (counted, and reported in one summary line every 10 s).
          *  - SetPreAuthSlotsPerAddress(n): at most n slots for one NON-loopback address (default 2). Loopback may use them
-         *    all: behind a reverse proxy or an SSH tunnel every peer is loopback, so no address can be told apart.
+         *    all: a proxy or tunnel that connects over loopback makes every peer loopback, so no address can be told apart.
          *  - SetHandshakeRateLimit: a token bucket per host and per non-loopback address on connections that would start
          *    a handshake; the excess is closed before TLS. Off in the class (nullopt) so a test that makes many
          *    connections from one pretend address is not throttled; N2EditorHost turns it on (20/s in all, 5/s per
