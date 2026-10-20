@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -403,25 +402,16 @@ TEST(EditorExtensionCommandsTest, TheIdsOfTheLaterInvokeCommandsAreReservedAndRe
     }
 }
 
-TEST(EditorExtensionCommandsTest, EveryErrorCodeConstantIsInTheSpecAndNothingElse)
+TEST(EditorExtensionCommandsTest, TheSpecHasTheEventKeyTheShapesAndTheResponsesTheCommandsAnswerWith)
 {
     std::ifstream file(N2_PROTOCOL_JSON);
     ASSERT_TRUE(file.is_open()) << N2_PROTOCOL_JSON;
     const json spec = json::parse(file);
-    std::set<std::string> listed;
     for (const auto &[code, meaning] : spec.at("errorCodes").items())
-    {
         EXPECT_FALSE(meaning.get<std::string>().empty()) << code;
-        listed.insert(code);
-    }
-    const std::set<std::string> constants = {
-        std::string{ErrorCodeReadOnly},          std::string{ErrorCodeForbidden},
-        std::string{ErrorCodeBusy},              std::string{ErrorCodeExtensionsDisabled},
-        std::string{ErrorCodeExtensionFailed},   std::string{ErrorCodeExtensionFaulted},
-    };
-    EXPECT_EQ(listed, constants);
+    EXPECT_EQ(spec.at("version"), "1.14.0");
 
-    // The event key and the JSON shapes the extension commands answer with are in the spec too
+    // The event key and the JSON shapes the extension commands answer with
     EXPECT_TRUE(spec.at("jsonTypes").at("EditorEvent").contains("uiRevision?"));
     for (const char *shape : {"ExtensionInfo", "EditorExtensionsInfo", "MenuForm", "MenuItemInfo", "EditorUiInfo"})
         EXPECT_TRUE(spec.at("jsonTypes").contains(shape)) << shape;
