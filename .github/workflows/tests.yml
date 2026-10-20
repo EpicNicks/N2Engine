@@ -969,7 +969,7 @@ jobs:
   # N2ENGINE_RENDERER_WEBGPU=ON, never selectable at run time) runs on the pinned prebuilt Dawn (cmake/DawnPrebuilt.cmake, the
   # same release the "wgsl" job takes Tint from) over Mesa lavapipe, the CPU Vulkan driver the Linux legs use. Builds the renderer
   # and the webgpu_tests program only (not the engine). Not a required check, and it follows the docs-only skip like the jobs above.
-  # No existing job changes: the option is OFF everywhere else. Cost: see docs/webgpu.html ("CI cost").
+  # No existing job changes: the option is OFF everywhere else. Cost: see docs/application.html#webgpu-backend (CI).
   webgpu:
     name: webgpu (Dawn, lavapipe)
     needs: changes

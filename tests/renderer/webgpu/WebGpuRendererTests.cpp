@@ -353,8 +353,7 @@ TEST_F(WebGpuTest, SetRenderTargetSizeRejectsAZeroDimensionAndKeepsTheTarget)
 
 TEST_F(WebGpuTest, SetRenderTargetSizeOverTheDeviceLimitsFailsAndALaterCallRecovers)
 {
-    // Over the texture limit, and (a size within the texture limit) over what the readback buffer could hold: no WebGPU error
-    // is raised, the renderer says no first
+    // Over the texture limit: no WebGPU error is raised, the renderer says no first (the buffer limit has its own test)
     const std::uint32_t limit = R().GetMaxTextureDimensionForTest();
     EXPECT_FALSE(R().SetRenderTargetSize(1u << 30, 4));
     EXPECT_EQ(R().GetRenderWidth(), 0u); // the old target is gone
@@ -367,6 +366,19 @@ TEST_F(WebGpuTest, SetRenderTargetSizeOverTheDeviceLimitsFailsAndALaterCallRecov
     ClearTo(R(), {1, 2, 3, 4});
     RenderFrame(R());
     EXPECT_TRUE(IsSolid(Read(R(), 6, 4), 6, 4, {1, 2, 3, 4}));
+}
+
+TEST_F(WebGpuTest, SetRenderTargetSizeOverTheReadbackBufferLimitFailsWithoutAWebGpuError)
+{
+    // Within the texture limit, over the (lowered) buffer limit: rows pad to 256 bytes, so 16x16 needs 4096 bytes
+    R().SetMaxBufferSizeForTest(1024);
+    EXPECT_FALSE(R().SetRenderTargetSize(16, 16));
+    EXPECT_EQ(R().GetRenderWidth(), 0u);
+    EXPECT_TRUE(R().SetRenderTargetSize(4, 4)); // 4 rows of 256 bytes = exactly 1024: fits
+    ClearTo(R(), {7, 8, 9, 255});
+    RenderFrame(R());
+    EXPECT_TRUE(IsSolid(Read(R(), 4, 4), 4, 4, {7, 8, 9, 255}));
+    EXPECT_FALSE(R().SetRenderTargetSize(4, 5)); // 1280 bytes: one row over
 }
 
 TEST_F(WebGpuTest, ResizeFollowsUntilSetRenderTargetSizeFixesTheSize)

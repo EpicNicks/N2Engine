@@ -462,6 +462,12 @@ namespace Renderer::WebGpu
         return _state->maxBufferSize;
     }
 
+    void WebGpuRenderer::SetMaxBufferSizeForTest(std::uint64_t bytes)
+    {
+        std::lock_guard lock(_mutex);
+        _state->maxBufferSize = bytes;
+    }
+
     std::int64_t WebGpuRenderer::GetLiveObjectCountForTest()
     {
         return g_liveObjects.load();

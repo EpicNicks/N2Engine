@@ -9,14 +9,14 @@
 # validator and the renderer's Dawn are the same revision by construction. Building Dawn from source needs depot_tools-style
 # dependency fetching or a dozen pinned submodules and 15-30 minutes of CI per cold cache; this is a 36 MB download checked
 # against the SHA-256 below (no build, so no ccache or build cache to tune). The archive is a GCC 14 build with the libstdc++
-# C++11 ABI, position-independent, which the GCC 14 and Clang + libstdc++ 14 legs of the CI link against.
+# C++11 ABI, position-independent, which the GCC 14 "webgpu (Dawn, lavapipe)" job links against (a Clang link is not exercised: the option is OFF in every Clang leg).
 #
 # Linux x86_64 only: it is a CI harness (design decision W8), never a shipped renderer, and Dawn publishes the one archive.
 #
 # To bump Dawn: pick a release tag, set the four values below (the commit is in the archive's name; take the hash from the
 # file you pinned with sha256sum, not from a web page), and set the same tag, commit and hash in
 # scripts/install-wgsl-validators.sh so Tint moves with it. The emdawnwebgpu port (stage G4) pins its own Dawn revision through
-# the Emscripten version: see docs/webgpu.html, "Bumping Dawn".
+# the Emscripten version: see docs/application.html#bumping-dawn.
 set(N2_DAWN_TAG "v20261016.190333")
 set(N2_DAWN_COMMIT "67d4d6e64b0755d638f76549794692badfdbc8ab")
 set(N2_DAWN_SHA256 "20ff88448def9645ceeff30911e07295aeb433be23e26180c96019b4300bff5a")

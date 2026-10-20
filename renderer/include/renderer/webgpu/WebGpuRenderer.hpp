@@ -177,6 +177,8 @@ namespace Renderer
             /// The device's limits for texture dimension and buffer size (0 before Initialize)
             [[nodiscard]] uint32_t GetMaxTextureDimensionForTest() const;
             [[nodiscard]] uint64_t GetMaxBufferSizeForTest() const;
+            /// Lowers the buffer-size limit the renderer checks a readback against, so a test can reach that check
+            void SetMaxBufferSizeForTest(uint64_t bytes);
             /// How many WebGPU objects (instances, adapters, devices, queues, textures, views, buffers, command encoders and
             /// buffers, passes) this process holds a reference to through a WebGpuRenderer right now, across all renderers.
             /// It returns to its baseline once every renderer is shut down: a count that does not is a leaked reference
