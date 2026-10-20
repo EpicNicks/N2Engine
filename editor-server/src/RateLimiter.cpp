@@ -193,8 +193,8 @@ namespace N2Engine::Editor
         const std::lock_guard lock(_mutex);
         Admission admission;
 
-        // Loopback is never refused here: a refusal of all of it (behind a proxy, of everybody) is what the loopback
-        // backoff did, and a client with a correct token was locked out with the attacker. Its caps are the slots and the
+        // Loopback is never refused here: a refusal of all of it (behind a proxy that connects over loopback, of
+        // everybody) is what the loopback backoff did, and a client with a correct token was locked out with the attacker. Its caps are the slots and the
         // handshake rate.
         if (peer.IsLoopback())
         {
