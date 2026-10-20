@@ -1377,3 +1377,22 @@ TEST_F(TokensServerTest, AReloadOfAFileTheOthersCanReadIsRefusedOnPosix)
     StopWithin(server, std::chrono::seconds(10));
 #endif
 }
+
+// ==================== Nobody on a tokens host is local (audit item 11) ====================
+
+TEST_F(TokensServerTest, NobodyOnATokensHostIsLocalAndNoUserIsToldWhatAnExceptionSaid)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.SetTokensFile(File()));
+    EXPECT_FALSE(server.IsLocalClient()) << "a host with a tokens file serves several users: the detail is the admin's log";
+
+    // Every role gets the same generic answer to a command that throws (a payload that is cut short)
+    for (const User &user : {Alice, Bob})
+    {
+        ASSERT_EQ(DecodeServerInfo(Execute(server, CommandType::Hello, HelloPayload(user.token, true, user.name))).user,
+                  user.name);
+        const Frame failed = Execute(server, CommandType::CreateEntity);
+        EXPECT_EQ(failed.type, static_cast<uint8_t>(ResponseType::Error)) << user.name;
+        EXPECT_EQ(failed.Text(), "Command failed: the host couldn't complete it (see the host's log)") << user.name;
+    }
+}

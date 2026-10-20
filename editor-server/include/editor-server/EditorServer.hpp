@@ -25,6 +25,7 @@
 #include "engine/io/ResourceLoader.hpp"
 #include "engine/io/ResourcePath.hpp"
 
+#include "editor-server/ClientText.hpp"
 #include "editor-server/CommandQueue.hpp"
 #include "editor-server/Connection.hpp"
 #include "editor-server/EditHistory.hpp"
@@ -202,6 +203,24 @@ namespace N2Engine::Editor
         [[nodiscard]] static bool RoleAllows(TokenRole role, uint8_t commandType);
         /// The refusal of a role: "forbidden: role <role> is not allowed to run <command>"
         [[nodiscard]] static std::string RoleDeniedMessage(TokenRole role, uint8_t commandType);
+
+        /// Whether a top-level block of the project's settings is an admin's alone to change in SetProjectSettings, as a
+        /// Write command otherwise is an editor's too (audit item 11): "determinism", whose luaSeed the engine itself calls a
+        /// security trade-off (a constant Lua hash seed allows hash flooding). The other blocks (layers, input, physics,
+        /// math, rendering) are not: they can't be turned against the script data.
+        [[nodiscard]] static bool IsAdminOnlySettingsBlock(std::string_view block);
+
+        /**
+         * Whether the client a command answers to is local: it may be told the detail of a failure and the host's own
+         * paths (the single local user). That is a host with no tokens file whose client is either a caller in this process
+         * (ExecuteCommand with no session) or a session from a loopback address. Everything else is remote, and gets generic
+         * messages and res://-relative paths (ClientText): a host with a tokens file serves several users, so nobody on it
+         * is local, and a peer that is not loopback (or whose address is unknown) is remote on any host.
+         */
+        [[nodiscard]] bool IsLocalClient() const;
+        /// A caller of ExecuteCommand with no session is local unless this is set: for an embedder that forwards a remote
+        /// client's commands itself, and for the tests of what a remote client is told. Any thread.
+        void SetCallerRemote(const bool remote) { _callerRemote.store(remote); }
 
         /**
          * Before Start (the network thread uses it): serves TLS 1.2 or newer on the editor port instead of plaintext
@@ -1212,6 +1231,15 @@ namespace N2Engine::Editor
         // thread and read by the handlers' log lines on the main thread. Pre-auth lines carry their own connection's peer.
         mutable std::mutex _peerMutex;
         std::string _peerText;
+        /// Whether the current session's peer is not loopback (set by the session thread, read on the main thread);
+        /// false with no session
+        std::atomic<bool> _sessionRemote{false};
+        std::atomic<bool> _callerRemote{false};
+        /// The folders ClientText replaces in what a remote client is told: the project's (assets as res://) and its user://
+        [[nodiscard]] std::vector<ClientText::HostRoot> HostRoots() const;
+        /// A file under the project as a client is told it: the host's path for a local client, else relative to the project
+        /// (".n2/play/Main-1a2b3c4d.scene"; empty for a file outside it)
+        [[nodiscard]] std::string ClientPath(const std::filesystem::path &file) const;
         /// " peer=<address>" for a log line about the current connection, or nothing
         [[nodiscard]] std::string PeerSuffix() const;
         void SetPeerText(std::string text);
