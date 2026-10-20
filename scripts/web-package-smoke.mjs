@@ -13,7 +13,7 @@
 //    Module.n2Present(pixels, width, height) for every frame, as it does for the page's canvas. The frames must come,
 //    have the size asked for, and show something (more than one colour, some pixel not black). The loader's progress
 //    must end at the manifest's sizes and the asset pack must have come through the loader's hook. Under node there is no
-//    WebAudio: the player must report that audio is off with exactly one warning (stage 4).
+//    WebAudio: the player must run with the audio subsystem failed in its health (stage 4).
 //
 // This is not a browser: nothing here proves the canvas, the input events, the page or the hosting work. See
 // docs/web-checklist.html for what a person has to check.
@@ -184,11 +184,11 @@ console.log(`Loader: ${loaderEvents.join(', ')}`);
 expect(frameCount === frames, `${frameCount} frames reached the canvas, expected ${frames}`);
 expect(!badFrame, badFrame ?? '');
 expect(output.some((line) => line.startsWith('N2_WEB_SMOKE_DONE')), 'the player did not print N2_WEB_SMOKE_DONE');
-// Audio (stage 4): node has no WebAudio, so the player must start without sound and say so once, not crash or hang
-// (the frames above prove it ran): exactly one "Subsystem Audio failed" warning and no second, native-style error
-const audioWarnings = output.filter((line) => line.includes('Subsystem Audio failed')).length;
-expect(audioWarnings === 1, `expected one 'Subsystem Audio failed' warning under node (no WebAudio), got ${audioWarnings}`);
-expect(!output.some((line) => line.includes('Failed to initialize audio')), "the native-style 'Failed to initialize audio!' error was logged on the web");
+// Audio (stage 4): node has no WebAudio, so the player must start without sound (the frames above prove it ran, did not
+// crash and did not hang) and its health must report the audio subsystem as failed, not running or missing. The engine's log
+// does not reach this output, so the one warning itself is not counted here.
+const audioLines = output.filter((line) => line.startsWith('N2_WEB_AUDIO'));
+expect(audioLines.length === 1 && audioLines[0] === 'N2_WEB_AUDIO state=failed', `expected 'N2_WEB_AUDIO state=failed' under node (no WebAudio), got ${JSON.stringify(audioLines)}`);
 if (lastFrame) {
   const colours = new Set();
   let notBlack = 0;

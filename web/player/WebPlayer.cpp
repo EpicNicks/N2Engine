@@ -256,6 +256,21 @@ namespace
         }
         g_player.ended = true;
         emscripten_cancel_main_loop();
+        if (g_player.smokeFrames > 0)
+        {
+            // The audio row of the engine's health, for the node smoke test (node has no WebAudio: it must be "failed")
+            for (const SubsystemStatus &status : Application::GetInstance().GetHealth().subsystems)
+            {
+                if (status.name == "Audio")
+                {
+                    const char *state = status.state == SubsystemState::Running    ? "running"
+                                        : status.state == SubsystemState::Failed   ? "failed"
+                                        : status.state == SubsystemState::Disabled ? "disabled"
+                                                                                   : "not-started";
+                    std::printf("N2_WEB_AUDIO state=%s\n", state);
+                }
+            }
+        }
         Application::GetInstance().EndRun();
         if (g_player.smokeFrames > 0)
         {
