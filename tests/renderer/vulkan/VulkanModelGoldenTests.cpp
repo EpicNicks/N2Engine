@@ -18,7 +18,7 @@
 
 #include "GltfTestBuilder.hpp"
 
-#include "CrossBackendDiff.hpp"
+#include "common/CrossBackendDiff.hpp"
 #include "VulkanTestFixture.hpp"
 
 // The golden-image test of an instantiated model on the Vulkan backend (#43, stage C): tests/engine/rendering/

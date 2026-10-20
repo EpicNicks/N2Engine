@@ -22,6 +22,9 @@
 #include <extensions/PxDefaultSimulationFilterShader.h>
 #include <extensions/PxRigidBodyExt.h>
 #include <PxQueryReport.h>
+#ifdef N2ENGINE_PLATFORM_WEB
+#include "engine/physics/physx/PhysXLoggerErrorCallback.hpp"
+#endif
 
 // The PhysX Visual Debugger connection is Windows-only: a Linux (server) build never opens the PVD socket, even though
 // the PVD SDK library is linked, so the backend has no PxPvd there
@@ -308,7 +311,12 @@ namespace N2Engine::Physics
 
     private:
         physx::PxDefaultAllocator _allocator;
+#ifdef N2ENGINE_PLATFORM_WEB
+        // The web build reports PhysX's errors through the engine Logger (PhysXLoggerErrorCallback.hpp)
+        PhysXLoggerErrorCallback _errorCallback;
+#else
         physx::PxDefaultErrorCallback _errorCallback;
+#endif
         physx::PxFoundation* _foundation = nullptr;
         physx::PxPhysics* _physics = nullptr;
         physx::PxScene* _scene = nullptr;

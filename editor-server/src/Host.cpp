@@ -418,6 +418,22 @@ namespace N2Engine::Editor
                 Logger::Info("No --project given: assets and asset references are unavailable");
             }
 
+            // --editor-extensions: the project's Lua editor extensions, read once here (never as a side effect of loading a
+            // scene) and again only on ReloadEditorExtensions. The flag combinations that make this unsafe were refused when
+            // the arguments were parsed (ParseHostArguments).
+            if (options.editorExtensions)
+            {
+                if (!project)
+                {
+                    Logger::Warn("--editor-extensions without --project: there is no project folder to find extensions in");
+                }
+                Logger::Info("Editor extensions are on (--editor-extensions): the project's editor/ folder runs Lua on this host");
+                if (!server.EnableEditorExtensions(project ? projectDir : std::filesystem::path{}))
+                {
+                    Logger::Warn("The editor extensions could not be enabled");
+                }
+            }
+
             // --play: the game is the snapshot (a file a launcher got from WritePlaySnapshot, or a res:// scene of the
             // project); the host serves it as a play host. A snapshot that can't be played ends the host before it
             // listens, with exit code 1 and a line on stderr, so a launcher never waits for a ready line that won't come.
@@ -638,6 +654,14 @@ namespace N2Engine::Editor
             server.ProcessCommands(); // flushes log lines the network thread has posted
             server.Stop();
             Logger::Info("Editor server stopped");
+
+            // The same for an editor extension still being evaluated (abandoned at its deadline, stuck in C)
+            if (const int leftRunning = server.ShutdownEditorExtensions(std::chrono::milliseconds(1000)); leftRunning > 0)
+            {
+                Logger::Warn(std::format("{} editor extension evaluation(s) still running at exit; they are left to end with "
+                                         "the process",
+                                         leftRunning));
+            }
 
             // A script evaluation that is still running (abandoned at its deadline, stuck in a long garbage collection)
             // cannot be stopped: wait a moment for it, then leave it. It owns everything it touches and holds no host

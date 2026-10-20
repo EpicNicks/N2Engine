@@ -1049,3 +1049,88 @@ TEST(HostOptionsTest, TheUsageNamesInsecureBind)
     EXPECT_NE(usage.find("--insecure-bind"), std::string_view::npos);
     EXPECT_NE(usage.find("127.0.0.0/8"), std::string_view::npos);
 }
+
+// ==================== --editor-extensions ====================
+
+TEST(HostOptionsTest, EditorExtensionsIsAFlagAndOffByDefault)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults) << defaults.error();
+    EXPECT_FALSE(defaults->editorExtensions) << "project code on the host is never on unless the operator says so";
+
+    // Not a value-taking option: the next argument is still parsed on its own, in either order
+    const auto parsed = ParseHostArguments({"--editor-extensions", "--port", "1234", "--project", "proj"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->editorExtensions);
+    EXPECT_EQ(parsed->port, 1234);
+    EXPECT_EQ(parsed->projectPath, "proj");
+
+    const auto last = ParseHostArguments({"--project", "proj", "--editor-extensions"});
+    ASSERT_TRUE(last) << last.error();
+    EXPECT_TRUE(last->editorExtensions);
+}
+
+TEST(HostOptionsTest, EditorExtensionsIsRefusedWithPlayInEitherOrder)
+{
+    const auto play = ParseHostArguments({"--editor-extensions", "--play", "snapshot.json"});
+    ASSERT_FALSE(play);
+    EXPECT_NE(play.error().find("--editor-extensions and --play can't be combined"), std::string::npos) << play.error();
+    const auto playFirst = ParseHostArguments({"--play", "snapshot.json", "--port", "1234", "--editor-extensions"});
+    ASSERT_FALSE(playFirst);
+    EXPECT_NE(playFirst.error().find("--editor-extensions and --play"), std::string::npos) << playFirst.error();
+
+    // Each alone still parses
+    EXPECT_TRUE(ParseHostArguments({"--play", "snapshot.json"}));
+    EXPECT_TRUE(ParseHostArguments({"--editor-extensions"}));
+}
+
+TEST(HostOptionsTest, EditorExtensionsOnAnOpenBindNeedsATokensFile)
+{
+    // Not loopback and no tokens file: refused, and the message says what to add
+    const auto open = ParseHostArguments({"--editor-extensions", "--bind", "0.0.0.0"});
+    ASSERT_FALSE(open);
+    EXPECT_NE(open.error().find("--editor-extensions needs --tokens-file"), std::string::npos) << open.error();
+
+    // --insecure-bind lifts the fail-closed bind rule, not this one
+    const auto insecure = ParseHostArguments({"--editor-extensions", "--bind", "0.0.0.0", "--insecure-bind"});
+    ASSERT_FALSE(insecure);
+    EXPECT_NE(insecure.error().find("--tokens-file"), std::string::npos) << insecure.error();
+
+    // One admin token is no roles: --token-env does not satisfy it either
+    const auto tokenEnv = ParseHostArguments({"--editor-extensions", "--bind", "0.0.0.0", "--token-env", "N2_TOKEN", "--tls"});
+    ASSERT_FALSE(tokenEnv);
+    EXPECT_NE(tokenEnv.error().find("--tokens-file"), std::string::npos) << tokenEnv.error();
+
+    // The order of the arguments does not matter
+    EXPECT_FALSE(ParseHostArguments({"--bind", "10.0.0.5", "--editor-extensions"}));
+
+    // With a tokens file (and the rest the bind rule asks for) it is allowed
+    const auto roles = ParseHostArguments(
+        {"--editor-extensions", "--bind", "0.0.0.0", "--tokens-file", "tokens.json", "--tls"});
+    ASSERT_TRUE(roles) << roles.error();
+    EXPECT_TRUE(roles->editorExtensions);
+    EXPECT_TRUE(ParseHostArguments(
+        {"--editor-extensions", "--bind", "0.0.0.0", "--tokens-file", "tokens.json", "--insecure-bind"}));
+
+    // On loopback no tokens are needed, as for every other flag
+    EXPECT_TRUE(ParseHostArguments({"--editor-extensions", "--bind", "127.0.0.1"}));
+    EXPECT_TRUE(ParseHostArguments({"--editor-extensions", "--bind", "127.5.5.5"}));
+}
+
+TEST(HostOptionsTest, EditorExtensionsIsAllowedWithReadOnly)
+{
+    const auto parsed = ParseHostArguments({"--editor-extensions", "--read-only", "--project", "proj"});
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_TRUE(parsed->editorExtensions);
+    EXPECT_TRUE(parsed->readOnly);
+}
+
+TEST(HostOptionsTest, TheUsageNamesEditorExtensions)
+{
+    const std::string_view usage = HostUsage();
+    EXPECT_NE(usage.find("--editor-extensions"), std::string_view::npos);
+    EXPECT_NE(usage.find("<project>/editor/**/*.lua"), std::string_view::npos);
+    EXPECT_NE(usage.find("OFF by"), std::string_view::npos) << "the default is documented";
+    EXPECT_NE(usage.find("--play"), std::string_view::npos);
+    EXPECT_NE(usage.find("--tokens-file"), std::string_view::npos);
+}

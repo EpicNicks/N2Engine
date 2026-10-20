@@ -53,7 +53,12 @@ if (N2ENGINE_PHYSX_AVAILABLE)
     target_compile_definitions(engine PUBLIC N2ENGINE_PHYSX_ENABLED=1)
     target_include_directories(engine PUBLIC $<BUILD_INTERFACE:${PHYSX_INCLUDE_DIR}>)
     target_link_libraries(engine PUBLIC ${PHYSX_LIBS})
-    if (WIN32)
+    if (N2ENGINE_PLATFORM_WEB)
+        # The web libraries (cmake/PhysXWeb.cmake) are static, CPU-only, with PhysX's scalar math: the SIMD path needs
+        # WebAssembly SIMD. Every target that includes the PhysX headers must see the same macro as the libraries
+        # were built with (scripts/web-build-physx.sh), hence PUBLIC. Full library paths, no link directory.
+        target_compile_definitions(engine PUBLIC PX_SIMD_DISABLED=1)
+    elseif (WIN32)
         target_link_directories(engine PUBLIC
             ${PHYSX_ROOT}/physx/bin/win.x86_64.vc143.mt/$<IF:$<CONFIG:Debug>,debug,release>
         )

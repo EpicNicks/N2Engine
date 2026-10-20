@@ -25,7 +25,7 @@
 #include "engine/ui/UISystem.hpp"
 #include "engine/ui/UIText.hpp"
 
-#include "CrossBackendDiff.hpp"
+#include "common/CrossBackendDiff.hpp"
 #include "VulkanDrawTestUtil.hpp"
 #include "VulkanTestFixture.hpp"
 #include "VulkanTextSceneUtil.hpp"

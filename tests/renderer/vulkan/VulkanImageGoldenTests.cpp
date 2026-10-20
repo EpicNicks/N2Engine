@@ -31,8 +31,8 @@
 #include "engine/ui/RectTransform.hpp"
 #include "engine/ui/UISystem.hpp"
 
-#include "BlendReference.hpp"
-#include "CrossBackendDiff.hpp"
+#include "common/BlendReference.hpp"
+#include "common/CrossBackendDiff.hpp"
 #include "VulkanDrawTestUtil.hpp"
 #include "VulkanTestFixture.hpp"
 

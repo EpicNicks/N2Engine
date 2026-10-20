@@ -2,6 +2,8 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/Time.hpp"
 
+#include <cstdint>
+
 namespace N2Engine::Scripting::Bindings
 {
     namespace
@@ -43,6 +45,11 @@ namespace N2Engine::Scripting::Bindings
 
             "fixedUnscaledDeltaTime", sol::property([](const LuaTime&) -> float {
                 return Time::GetFixedUnscaledDeltaTime();
+            }),
+
+            // Fixed ticks begun (read-only integer)
+            "tick", sol::property([](const LuaTime&) -> std::int64_t {
+                return static_cast<std::int64_t>(Time::GetTick());
             }),
 
             // Time scale control

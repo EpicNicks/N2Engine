@@ -1,5 +1,5 @@
 {
-  "version": "1.13.0",
+  "version": "1.14.0",
   "encoding": {
     "frame": "Requests and responses are [type: uint8][payload length: uint32][payload]. A request's type is its command id, a response's its response id. Each request gets exactly one response, in order.",
     "byteOrder": "Little-endian for every multi-byte number.",
@@ -17,7 +17,7 @@
       "<type>[]": "Elements of <type> back to back, with no length prefix: their number is the uint32 field named count declared before the array."
     },
     "errorPayload": "An Error response's payload is the message as raw UTF-8 bytes, not a string: the frame's length is the message's byte count. It has no room for a trailing field, so it never changed: a host that refuses a command for a reason a client can act on (errorCodes) answers ErrorCoded instead, but only to a client that asked for it in Hello (since 1.11.0).",
-    "reservedIds": "Ids 0xC0 to 0xFE are reserved for server-pushed event frames: no command or response uses them.",
+    "reservedIds": "Ids 0xC0 to 0xFE are reserved for server-pushed event frames: no command or response uses them. Command ids 0x82 and 0x83 are reserved for InvokeMenuItem and InvokeInspectorAction, which later minor versions of 1.x add: no command uses them yet, and a host answers them as an unknown command (an Error), after the read-only and role gates, which refuse an id nobody classified.",
     "versioning": "version is major.minor.patch. The minor version goes up for new commands, new responses, new trailing request fields and new trailing response fields; anything else (a changed id, field order or type, a removed field) bumps the major version. Both directions must keep working within a major version: a server reads a trailing request field only when the payload has bytes left and otherwise uses a default, since a client of an older minor version doesn't send it (Commands.hpp: ReadTrailing); a client's decoders ignore response bytes after the fields they know, and the trailing fields listed in optionalTrailing (the last fields of a message, added in a later minor version; each a bool or number whose default is false or 0, or a string whose default is empty) are decoded as that default when the payload ends before them (a 1.12 client reading the ServerInfo of a 1.10 host gets readOnly false and an empty user and role), so a decoder never throws on the shorter payload of an older peer; and a client relies on a response field added in a later minor version only once Hello has shown the server speaks that version. Hello refuses a client whose major version differs from the server's, and accepts any minor version with a warning when it differs."
   },
   "commands": {
@@ -60,7 +60,7 @@
     },
     "Hello": {
       "id": "0x04",
-      "description": "Opens a session: the client's name, the protocol version it speaks (its PROTOCOL_VERSION) and the host's access token (empty when it has none). Error when the major versions differ, or when the host requires a token and this isn't it. Optional on a host without a token. On a host with one, every other command (Shutdown included) is refused with an Error until a Hello on the same connection succeeds, and a failed Hello ends the session. The session belongs to the connection: a client that reconnects sends Hello again. capabilities names optional features beyond what the version implies (none are defined yet); projectLoaded is whether the host has a project (was started with --project). Since 1.11.0: errorCodes (a trailing request field, false when absent) says the client understands ErrorCoded: the host answers a refused command with ErrorCoded (message and a stable code from errorCodes) to a client that sent true, and with a plain Error whose message says why to every other client, so a client of an older minor version keeps working and still shows the reason. The flag belongs to the connection, like the session: a later Hello on it replaces the value. readOnly (a trailing response field) is whether the host was started with --read-only: it answers every command that is not a read with the readOnly error (a client can show that and disable what would be refused). A read command is one the host classifies as a read: it changes nothing a client could save, run or lose (the host's own classification, which refuses a command it has not classified). Since 1.12.0: user (a trailing request field, empty when absent) names the user whose token this is, for a host started with --tokens-file: only that user's entry is considered, and an empty user matches the token against every entry (a client of an older minor version sends none). A host with one token (--token-env) or none ignores it. A wrong user and a wrong token are the same Error (Invalid access token). A host with a tokens file binds the matched user and its role (admin, editor or viewer) to the connection; user and role (trailing response fields, empty strings from an older host) report them. A host with no tokens file answers an empty user and the role admin (--token-env: the user token and the role admin), so role is always one of the three. A command the role may not run is refused with the forbidden code (ErrorCoded for a client that asked for it in Hello, else an Error whose message says why), and the connection stays open: a viewer may run reads only and may not play (SendInput, WritePlaySnapshot, SetPaused and Step are refused), an editor everything except Shutdown, an admin everything. The host re-reads its tokens file without a restart and closes the connection of a user whose entry was removed or changed. Since 1.13.0: a host serves one session at a time. A Hello that succeeds while another session is active ends that session when the new client is the same user with the same role (it takes over, so a client that lost its connection can reconnect at once) or has a strictly higher role (admin over editor over viewer: it preempts), and every other client is answered with the busy error and the connection is closed (ErrorCoded busy for a client that asked for it in Hello, else an Error whose message says why). A host with no access token has no Hello and every client is an admin with no name, so the newest connection takes over.",
+      "description": "Opens a session: the client's name, the protocol version it speaks (its PROTOCOL_VERSION) and the host's access token (empty when it has none). Error when the major versions differ, or when the host requires a token and this isn't it. Optional on a host without a token. On a host with one, every other command (Shutdown included) is refused with an Error until a Hello on the same connection succeeds, and a failed Hello ends the session. The session belongs to the connection: a client that reconnects sends Hello again. capabilities names optional features beyond what the version implies: \"editorExtensions\" (since 1.14.0) says the host has the Lua editor extension commands (ListEditorExtensions, GetEditorUi, ReloadEditorExtensions); whether it was started with --editor-extensions is ListEditorExtensions' enabled; projectLoaded is whether the host has a project (was started with --project). Since 1.11.0: errorCodes (a trailing request field, false when absent) says the client understands ErrorCoded: the host answers a refused command with ErrorCoded (message and a stable code from errorCodes) to a client that sent true, and with a plain Error whose message says why to every other client, so a client of an older minor version keeps working and still shows the reason. The flag belongs to the connection, like the session: a later Hello on it replaces the value. readOnly (a trailing response field) is whether the host was started with --read-only: it answers every command that is not a read with the readOnly error (a client can show that and disable what would be refused). A read command is one the host classifies as a read: it changes nothing a client could save, run or lose (the host's own classification, which refuses a command it has not classified). Since 1.12.0: user (a trailing request field, empty when absent) names the user whose token this is, for a host started with --tokens-file: only that user's entry is considered, and an empty user matches the token against every entry (a client of an older minor version sends none). A host with one token (--token-env) or none ignores it. A wrong user and a wrong token are the same Error (Invalid access token). A host with a tokens file binds the matched user and its role (admin, editor or viewer) to the connection; user and role (trailing response fields, empty strings from an older host) report them. A host with no tokens file answers an empty user and the role admin (--token-env: the user token and the role admin), so role is always one of the three. A command the role may not run is refused with the forbidden code (ErrorCoded for a client that asked for it in Hello, else an Error whose message says why), and the connection stays open: a viewer may run reads only and may not play (SendInput, WritePlaySnapshot, SetPaused and Step are refused), an editor everything except Shutdown, an admin everything. The host re-reads its tokens file without a restart and closes the connection of a user whose entry was removed or changed. Since 1.13.0: a host serves one session at a time. A Hello that succeeds while another session is active ends that session when the new client is the same user with the same role (it takes over, so a client that lost its connection can reconnect at once) or has a strictly higher role (admin over editor over viewer: it preempts), and every other client is answered with the busy error and the connection is closed (ErrorCoded busy for a client that asked for it in Hello, else an Error whose message says why). A host with no access token has no Hello and every client is an admin with no name, so the newest connection takes over.",
       "request": {
         "clientName": "string",
         "protocolVersion": "string",
@@ -687,6 +687,39 @@
         }
       }
     },
+    "ListEditorExtensions": {
+      "id": "0x80",
+      "description": "The Lua editor extensions of the host (since 1.14.0): info is {enabled, uiRevision, extensions}. enabled is whether the host was started with --editor-extensions; a host without it answers enabled false, uiRevision 0 and no extensions (not an Error), so a client can ask any host. uiRevision starts at 1 when the host loads its extensions and moves on at every ReloadEditorExtensions and whenever an extension becomes faulted; a client that sees it change (the extensionsChanged event carries it) fetches GetEditorUi again. extensions has one entry per extension file, in id order: the files of the project's editor/ folder (editor/**/*.lua, outside assets/, so no protocol write, require or play host can reach them; at most 64 files, each at most 1 MiB; links are skipped). id is the file's path inside editor/ with '/' separators. name is the name the file declared (the id when it did not get far enough to declare one). sha256 is the SHA-256 of the file's bytes as 64 lowercase hex digits (empty when the file was not read). apiVersion is the declared version (0 when unknown); the host speaks 1. state is loaded, failed (the file could not be read, is too large, raised an error, ran out of its time or instruction or memory budget, or declared a bad shape or an unsupported apiVersion) or faulted (loaded, then failed too often in a short time: disabled until the next reload). error is the reason for a failed or faulted extension, with no host path in it (absent otherwise). capabilities are the ones the extension declared and the host granted: scene.read, scene.write, assets.read, assets.write. itemCount is the number of its menu items. A Read command: it answers from what the host captured when it loaded the files and runs no Lua, so a viewer may call it. An extension that failed to load never stops the others from loading.",
+      "request": {},
+      "response": {
+        "type": "EditorExtensions",
+        "fields": {
+          "info": "json:EditorExtensionsInfo"
+        }
+      }
+    },
+    "GetEditorUi": {
+      "id": "0x81",
+      "description": "What a client shows of the host's Lua editor extensions (since 1.14.0): ui is {uiRevision, menuItems, inspectorSections}. uiRevision is ListEditorExtensions' (0 on a host without --editor-extensions, which answers no items). menuItems are the menu items of every loaded or faulted extension (a failed one has none), in id order of their files and then as declared: id (letters, digits, '.', '_' and '-'; unique across the host), extension (the id of the extension that has it), path (the menu path, segments separated by '/', for example Tools/Align/Snap selection to grid), title (the label; the path's last segment unless the extension gave one), enabledWhen ({selection: any, nonEmpty, one or none, componentType?}, evaluated by the client, which knows the selection and the component types), confirm (a question to ask first, when the extension declared one), minRole (editor or admin: the least role that may invoke it), and form when the item declares params: fields, a list of FieldSchema sorted by name, with kinds Float, Int, String, Bool, Vector3, GameObjectRef or Enum, and defaults, an object with the starting value of each field. inspectorSections is always an empty list in 1.14.0 (reserved). A Read command that answers from what the host captured at load and runs no Lua, so a viewer may call it. An item of a faulted extension is listed (its extension's state is in ListEditorExtensions) so that a client can show it disabled with the reason.",
+      "request": {},
+      "response": {
+        "type": "EditorUi",
+        "fields": {
+          "ui": "json:EditorUiInfo"
+        }
+      }
+    },
+    "ReloadEditorExtensions": {
+      "id": "0x84",
+      "description": "Loads every extension file again (since 1.14.0): each file runs in a new sandbox state and the old states are discarded, so an edited file is picked up, a deleted one disappears and a new one appears. Answers EditorExtensions as ListEditorExtensions does, with uiRevision one higher, and an extensionsChanged event follows with that revision. This is the only way, besides starting the host, that an extension loads; opening or loading a scene never does. An Admin command (a viewer or an editor is refused with the forbidden code), refused with the readOnly error on a --read-only host, with an Error in a play host, and with the extensionsDisabled error on a host that was not started with --editor-extensions. The files are evaluated one after the other on worker threads, each bounded by a load budget (10 million VM instructions, 1 s of wall clock, 64 MiB) and an abandon deadline a little past it; the host answers when the last one has loaded or been abandoned, so a stalled file delays the answer by at most that deadline, and once four evaluations are stuck the files after them fail at once and are tried again at the next reload.",
+      "request": {},
+      "response": {
+        "type": "EditorExtensions",
+        "fields": {
+          "info": "json:EditorExtensionsInfo"
+        }
+      }
+    },
     "Undo": {
       "id": "0x90",
       "description": "Undoes the step that was done last: the latest edit made by an editing command (CreateEntity, CreateEntityEx, DuplicateEntity, DestroyEntity, SetEntityTransform, SetLocalTransform, SetEntityParent, SetEntityProperties, AddComponent, RemoveComponent, SetComponentFields) or, when it was made between BeginEditGroup and EndEditGroup, the whole group. Answers EditResult: the step's label, the scene revision after it, whether another step can be undone or redone, and savedRevision. Error without a scene, with nothing to undo, or while a group is open (end it first); a step that can't be undone (an object it needs is gone) clears the history and the Error says so. The revision moves and sceneChanged follows: entityIds names the objects the step touched, or full is true when the step was undone by putting back a snapshot of the scene (undoing DestroyEntity, RemoveComponent or RestoreAutosave rebuilds every object, with the same UUIDs), so a client refetches everything. Undoing back to the state the scene was last opened or saved at makes savedRevision equal the revision (no unsaved changes). historyChanged follows. Editing commands are meant for a scene opened for editing: a client doesn't send them to a play-mode host (which answers Error to the ones that write project files: OpenScene, NewScene, LoadScene, SaveSceneToFile, DeleteScene, SetProjectSettings, SetStartupScene, RestoreAutosave and DiscardAutosave, and never writes an autosave; the others change the running game).",
@@ -875,7 +908,8 @@
       "undoCount?": "number",
       "redoCount?": "number",
       "state?": "string",
-      "frame?": "number"
+      "frame?": "number",
+      "uiRevision?": "number"
     },
     "InputEvent": {
       "type": "string",
@@ -998,6 +1032,40 @@
       "singleton": "bool",
       "fields": "FieldSchema[]",
       "defaults?": "json"
+    },
+    "ExtensionInfo": {
+      "id": "string",
+      "name": "string",
+      "sha256": "string",
+      "apiVersion": "number",
+      "state": "string",
+      "error?": "string",
+      "capabilities": "string[]",
+      "itemCount": "number"
+    },
+    "EditorExtensionsInfo": {
+      "enabled": "bool",
+      "uiRevision": "number",
+      "extensions": "ExtensionInfo[]"
+    },
+    "MenuForm": {
+      "fields": "FieldSchema[]",
+      "defaults": "json"
+    },
+    "MenuItemInfo": {
+      "id": "string",
+      "extension": "string",
+      "path": "string",
+      "title": "string",
+      "enabledWhen": "json",
+      "confirm?": "string",
+      "minRole": "string",
+      "form?": "MenuForm"
+    },
+    "EditorUiInfo": {
+      "uiRevision": "number",
+      "menuItems": "MenuItemInfo[]",
+      "inspectorSections": "json[]"
     }
   },
   "responses": {
@@ -1035,7 +1103,9 @@
     "AssetCreated": "0xA3",
     "PlaySnapshot": "0xB0",
     "PlayState": "0xB1",
-    "ErrorCoded": "0x1C"
+    "ErrorCoded": "0x1C",
+    "EditorExtensions": "0x1D",
+    "EditorUi": "0x1E"
   },
   "extraResponses": {
     "ErrorCoded": {
@@ -1053,6 +1123,9 @@
   "errorCodes": {
     "readOnly": "The host was started with --read-only and the command is not a read (it would change the project, the scene, the game, the assets or the host). Shutdown is refused too. The connection stays open and reads keep working.",
     "forbidden": "The role bound to the connection at Hello (a host started with --tokens-file; since 1.12.0) may not run the command: a viewer may only read and may not play, an editor may not Shutdown. The connection stays open and the commands its role allows keep working.",
-    "busy": "The host is serving another session and this client may not replace it (since 1.13.0): its Hello was right, but it is not the same user and role as the session, and its role is not strictly higher; or it was to take the session over and the old one did not end within a few seconds. The answer to a Hello (ErrorCoded for a client that asked for errorCodes, else an Error with the same message, which names the role of the session that holds the host, never its user), and the host closes the connection after it. Try again later, with a growing delay."
+    "busy": "The host is serving another session and this client may not replace it (since 1.13.0): its Hello was right, but it is not the same user and role as the session, and its role is not strictly higher; or it was to take the session over and the old one did not end within a few seconds. The answer to a Hello (ErrorCoded for a client that asked for errorCodes, else an Error with the same message, which names the role of the session that holds the host, never its user), and the host closes the connection after it. Try again later, with a growing delay.",
+    "extensionsDisabled": "The host was not started with --editor-extensions, so it has no editor extensions to reload (and none to run; since 1.14.0). ListEditorExtensions and GetEditorUi do not use it: they answer enabled false and nothing listed. The connection stays open.",
+    "extensionFailed": "An extension's call failed: a Lua error, a budget trip or an error of a command it sent (since 1.14.0). The message says why, with no host path in it. Reserved: no command answers it yet, the commands that run an extension (InvokeMenuItem, 0x82, and InvokeInspectorAction, 0x83) come in later minor versions.",
+    "extensionFaulted": "The extension failed too often in a short time (3 failures within 10 minutes) and is disabled until ReloadEditorExtensions (since 1.14.0). Reserved like extensionFailed: nothing answers it yet."
   }
 }

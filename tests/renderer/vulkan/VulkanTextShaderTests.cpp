@@ -19,9 +19,9 @@
 #include <renderer/common/TextureOptions.hpp>
 #include <renderer/software/SoftwareRenderer.hpp>
 #include <renderer/vulkan/VulkanRenderer.hpp>
-#include <renderer/vulkan/VulkanShaderInterface.hpp>
+#include <renderer/common/GpuShaderInterface.hpp>
 
-#include "BlendReference.hpp"
+#include "common/BlendReference.hpp"
 #include "VulkanDrawTestUtil.hpp"
 #include "VulkanTestFixture.hpp"
 #include "VulkanTextTestUtil.hpp"
@@ -49,7 +49,7 @@ using namespace VulkanTesting::Draw;
 using Renderer::Common::CullMode;
 using Renderer::Common::TextureOptions;
 using Renderer::Software::SoftwareRenderer;
-namespace Vk = Renderer::Vulkan::ShaderInterface;
+namespace Vk = Renderer::Gpu::ShaderInterface;
 
 namespace
 {

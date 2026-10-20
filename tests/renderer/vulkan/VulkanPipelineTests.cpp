@@ -12,7 +12,7 @@
 #include <renderer/common/RenderTypes.hpp>
 #include <renderer/common/TextureOptions.hpp>
 #include <renderer/vulkan/VulkanRenderer.hpp>
-#include <renderer/vulkan/VulkanShaderInterface.hpp>
+#include <renderer/common/GpuShaderInterface.hpp>
 
 #include "VulkanDrawTestUtil.hpp"
 #include "VulkanTestFixture.hpp"
@@ -35,7 +35,7 @@ using Renderer::Common::CullMode;
 using Renderer::Common::IndexRange;
 using Renderer::Common::TextureOptions;
 using Renderer::Vulkan::VulkanRenderer;
-using Renderer::Vulkan::ShaderInterface::BuiltInShader;
+using Renderer::Gpu::ShaderInterface::BuiltInShader;
 
 namespace
 {

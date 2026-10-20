@@ -52,6 +52,7 @@ namespace N2Engine::Editor
 {
     class EditorTlsServer;
     class EditorTlsSession;
+    class ExtensionHost;
 }
 
 namespace N2Engine::Editor::Protocol
@@ -218,7 +219,8 @@ namespace N2Engine::Editor
 
         /// The engine version Hello reports (CMake's project version)
         [[nodiscard]] static std::string_view EngineVersion();
-        /// The optional features Hello reports, beyond what the protocol version implies. None are defined yet.
+        /// The optional features Hello reports, beyond what the protocol version implies: "editorExtensions" (since 1.14.0:
+        /// the host has the Lua editor extension commands; whether it loaded any is ListEditorExtensions' `enabled`)
         [[nodiscard]] static std::vector<std::string> Capabilities();
         /// Whether a token matches the access token, comparing every byte (the time taken doesn't depend on where
         /// they first differ, so it doesn't reveal how much of a guess was right)
@@ -710,6 +712,24 @@ namespace N2Engine::Editor
         /// The commands a play host answers with an Error: the ones that write project files or swap the scene
         [[nodiscard]] static bool IsEditOnlyCommand(uint8_t commandType);
 
+        // ==================== Lua editor extensions (main thread, before Start) ====================
+
+        /**
+         * --editor-extensions: makes the host's ExtensionHost for the project at `projectRoot` (empty: a host without a
+         * project, which has none to find) and loads its files now (ExtensionHost::Load: each file in a sandbox state of
+         * its own, off this thread). From then on ListEditorExtensions answers enabled and ReloadEditorExtensions works;
+         * without this call they answer that extensions are disabled. Loading happens here, at host start, and in
+         * ReloadEditorExtensions, never as a side effect of loading a scene. False, changing nothing, while the server is
+         * running or in play mode (a play host never runs extensions; N2EditorHost refuses the combination).
+         */
+        bool EnableEditorExtensions(std::filesystem::path projectRoot);
+        [[nodiscard]] bool EditorExtensionsEnabled() const { return _extensions != nullptr; }
+        /// The host's extensions, or nullptr without EnableEditorExtensions
+        [[nodiscard]] ExtensionHost *GetEditorExtensions() const { return _extensions.get(); }
+        /// Stops loading and waits up to maxWait for extension workers that are still running (an abandoned one is stuck
+        /// in C and cannot be stopped); how many are left. 0 without extensions.
+        int ShutdownEditorExtensions(std::chrono::milliseconds maxWait);
+
         // ==================== Read-only mode ====================
 
         /// What a command does to the host. Read: answers from what the host holds and changes nothing a client could
@@ -725,7 +745,7 @@ namespace N2Engine::Editor
 
         /// The class of a command id, or nullopt for an id nobody classified (every command of protocol.json is
         /// classified: a test requires it, so a new command can't ship without a decision). Not IsEditOnlyCommand,
-        /// which is a play host's deny list of 13 file-writing commands.
+        /// which is a play host's deny list of 14 commands (the ones that write files, and ReloadEditorExtensions).
         [[nodiscard]] static std::optional<CommandClass> ClassifyCommand(uint8_t commandType);
 
         /// An allow list with default deny: true only for a command classified Read. An id that is no command, or that
@@ -894,6 +914,10 @@ namespace N2Engine::Editor
         void HandleSetComponentFields(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetComponent(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleGetLuaFields(int clientSocket, const std::vector<uint8_t> &payload);
+
+        void HandleListEditorExtensions(int clientSocket);
+        void HandleGetEditorUi(int clientSocket);
+        void HandleReloadEditorExtensions(int clientSocket);
 
         void HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleRescanAssets(int clientSocket);
@@ -1226,6 +1250,9 @@ namespace N2Engine::Editor
             IO::ProjectFile file;
         };
         std::optional<ProjectState> _project;
+
+        /// The Lua editor extensions (--editor-extensions): null on a host without the flag
+        std::unique_ptr<ExtensionHost> _extensions;
 
         // The loaded scene's file (a res:// path, "" for none) and the Scene it was opened into: once another scene is
         // loaded (LoadScene, or anything else that switches scenes), the file is no longer the loaded scene's

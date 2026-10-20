@@ -16,6 +16,8 @@ double Time::unscaledDeltaTime = 0.0;
 double Time::scaledDeltaTime = 0.0;
 double Time::fixedUnscaledDeltaTime = 0.02; // default 50Hz physics
 double Time::fixedDeltaTime = 0.02;
+bool Time::fixedIgnoresTimeScale = false;
+std::uint64_t Time::tick = 0;
 
 float Time::GetDeltaTime()
 {
@@ -35,6 +37,22 @@ float Time::GetFixedDeltaTime()
 float Time::GetFixedUnscaledDeltaTime()
 {
     return static_cast<float>(fixedUnscaledDeltaTime);
+}
+
+std::uint64_t Time::GetTick()
+{
+    return tick;
+}
+
+double Time::ScaledFixedDelta()
+{
+    return fixedIgnoresTimeScale ? fixedUnscaledDeltaTime : fixedUnscaledDeltaTime * timeScale;
+}
+
+void Time::SetFixedIgnoresTimeScale(const bool ignores)
+{
+    fixedIgnoresTimeScale = ignores;
+    fixedDeltaTime = ScaledFixedDelta();
 }
 
 float Time::GetTime()
@@ -57,7 +75,7 @@ void Time::SetTimeScale(float scale)
     }
     scale = std::max(scale, 0.0f);
     timeScale = scale;
-    fixedDeltaTime = fixedUnscaledDeltaTime * scale;
+    fixedDeltaTime = ScaledFixedDelta();
 }
 
 float Time::GetTimeScale()
@@ -77,7 +95,7 @@ bool Time::SetFixedTimestep(const double seconds)
         return false;
     }
     fixedUnscaledDeltaTime = seconds;
-    fixedDeltaTime = seconds * timeScale;
+    fixedDeltaTime = ScaledFixedDelta();
     return true;
 }
 
@@ -90,6 +108,7 @@ void Time::Init()
     timeScale = 1.0f;
     fixedUnscaledDeltaTime = 0.02;
     fixedDeltaTime = 0.02;
+    tick = 0;
     lastFrameTime = std::chrono::high_resolution_clock::now();
 }
 

@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.13.0";
+        public const string ProtocolVersion = "1.14.0";
     }
 
     public enum CommandType : byte
@@ -66,6 +66,9 @@ namespace N2Engine.Editor.Protocol
         GetProjectInfo = 0x70,
         SetProjectSettings = 0x71,
         SetStartupScene = 0x72,
+        ListEditorExtensions = 0x80,
+        GetEditorUi = 0x81,
+        ReloadEditorExtensions = 0x84,
         Undo = 0x90,
         Redo = 0x91,
         BeginEditGroup = 0x92,
@@ -119,6 +122,8 @@ namespace N2Engine.Editor.Protocol
         PlaySnapshot = 0xB0,
         PlayState = 0xB1,
         ErrorCoded = 0x1C,
+        EditorExtensions = 0x1D,
+        EditorUi = 0x1E,
     }
 
     public struct Vec3
@@ -193,6 +198,8 @@ namespace N2Engine.Editor.Protocol
         public string? State { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("frame")]
         public double? Frame { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("uiRevision")]
+        public double? UiRevision { get; set; }
     }
 
     public class InputEvent
@@ -437,6 +444,74 @@ namespace N2Engine.Editor.Protocol
         public FieldSchema[] Fields { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("defaults")]
         public System.Text.Json.JsonElement? Defaults { get; set; }
+    }
+
+    public class ExtensionInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("sha256")]
+        public string Sha256 { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("apiVersion")]
+        public double ApiVersion { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("state")]
+        public string State { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("error")]
+        public string? Error { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("capabilities")]
+        public string[] Capabilities { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("itemCount")]
+        public double ItemCount { get; set; }
+    }
+
+    public class EditorExtensionsInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("enabled")]
+        public bool Enabled { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("uiRevision")]
+        public double UiRevision { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("extensions")]
+        public ExtensionInfo[] Extensions { get; set; }
+    }
+
+    public class MenuForm
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("fields")]
+        public FieldSchema[] Fields { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("defaults")]
+        public System.Text.Json.JsonElement Defaults { get; set; }
+    }
+
+    public class MenuItemInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("extension")]
+        public string Extension { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("path")]
+        public string Path { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("title")]
+        public string Title { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("enabledWhen")]
+        public System.Text.Json.JsonElement EnabledWhen { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("confirm")]
+        public string? Confirm { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("minRole")]
+        public string MinRole { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("form")]
+        public MenuForm? Form { get; set; }
+    }
+
+    public class EditorUiInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("uiRevision")]
+        public double UiRevision { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("menuItems")]
+        public MenuItemInfo[] MenuItems { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("inspectorSections")]
+        public System.Text.Json.JsonElement[] InspectorSections { get; set; }
     }
 
     public struct SetViewportSizeRequest
@@ -905,6 +980,18 @@ namespace N2Engine.Editor.Protocol
         public string UserDataPath;
         /// <summary>JSON text: ProjectFile</summary>
         public string Project;
+    }
+
+    public struct EditorExtensionsResponse
+    {
+        /// <summary>JSON text: EditorExtensionsInfo</summary>
+        public string Info;
+    }
+
+    public struct EditorUiResponse
+    {
+        /// <summary>JSON text: EditorUiInfo</summary>
+        public string Ui;
     }
 
     public struct EditResultResponse

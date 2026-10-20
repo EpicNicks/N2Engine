@@ -150,16 +150,42 @@
 </ul>
 <p><strong>Browser notes.</strong> Chrome and Edge: a context created inside the Start click should be running at once; a click on the page counts as the gesture. Firefox: same; its autoplay policy can also block audio until a gesture, which the unlock handles; note any "The AudioContext was not allowed to start" console message (it is a warning, not a failure, if sound plays after the first input). Safari (desktop and iOS): the least certain. A context may start <code>suspended</code> or <code>interrupted</code> and may only be resumed inside a gesture handler: if sound never starts, note that, and whether a second click, a key press or a touch start it. iOS also silences Web Audio when the ringer switch is off. Report the browser and its version for each result.</p>
 
+<h2 id="physics">9. Physics (stage 5) <span class="badge">PR #184</span></h2>
+<p><strong>Everything in this section is unverified</strong>: CI runs the engine's physics tests and a stack of 200 boxes under node (the same WebAssembly, no browser), and prints what that costs there. Nothing has run in a browser, so what you note down here is the evidence. Background and the build: <a href="web-build.html#physx">Web build: PhysX on the web</a>.</p>
+<p>The default package (<code>lua_project</code>) has two stations that use physics. Station 1 (key <code>1</code>): a blue cube and a red sphere above a static floor, which fall when the game starts (the sphere is offset so it lands on the cube's edge). Station 9 (key <code>9</code>): a world-space panel with two buttons, one behind a trigger volume (a yellow frame) and one behind a solid block, which a click's ray is tested against. Open DevTools (Console) first.</p>
+<ul>
+<li><strong>Physics starts.</strong> Reload, click <strong>Click to start</strong>. Expected: no Console line saying <code>Failed to initialize PhysX backend!</code>, <code>Physics will be disabled</code> or <code>Physics backend not available - Rigidbody disabled</code>, and no line starting <code>PhysX </code> with <code>invalid</code>, <code>internal error</code>, <code>out of memory</code> or <code>abort</code> (the web build writes PhysX's own errors and warnings to the engine log, <code>PhysX &lt;kind&gt;: &lt;message&gt; (&lt;file&gt;:&lt;line&gt;)</code>). Copy any <code>PhysX warning</code> or <code>PhysX performance warning</code> line. As in step 8, also report whether any engine log line reaches the Console at all: if none does, this step cannot show a failure and the next ones carry it.</li>
+<li><strong>Bodies fall and collide.</strong> Station 1 starts as the game starts, so reload and look from the click. Expected: the cube and the sphere fall, the sphere hits the cube's edge and rolls off, both come to rest on the floor, and nothing falls through the floor, stays frozen in the air or keeps jittering once at rest. Note roughly how long they take to settle (a few seconds) and whether it looks the same in each browser.</li>
+<li><strong>Raycast (the pointer ray).</strong> Press <code>9</code>. Click button <strong>A</strong>: its counter goes up (the trigger volume in front of it never blocks the ray). Click button <strong>B</strong>: its counter stays at 0 (the solid block in front of it takes the hit). This is the physics query (<code>Raycast</code> with trigger and layer filtering) running through the WebAssembly PhysX.</li>
+<li><strong>Performance on a stack of N bodies.</strong> The default project has no big stack, so make a copy of <code>lua_project</code> and add this to its <code>assets/scene.lua</code>, just before the final <code>for _, gameObject in ipairs(roots) do</code> loop (it builds N boxes in 5 by 5 layers above the floor of station 1; change <code>STACK_N</code> to 50, 200 and 500 for three builds or three edits):
+<pre><code>local STACK_N = 200
+for i = 1, STACK_N do
+    local box = GameObject.Create("StackBox" .. i)
+    box:CreatePositionable()
+    box:GetPositionable():SetPosition(Vector3(((i - 1) % 5) * 1.2 - 2.4, -4.0 + math.floor((i - 1) / 25) * 1.2, (math.floor((i - 1) / 5) % 5) * 1.2 - 2.4))
+    box:AddComponent("CubeRenderer"):SetColor(Color.Blue)
+    box:AddComponent("BoxCollider"):SetSize(Vector3.One)
+    local body = box:AddComponent("Rigidbody")
+    body:SetBodyType(BodyType.Dynamic)
+    body:SetGravityEnabled(true)
+    table.insert(roots, box)
+end</code></pre>
+Build the package with <code>-DN2_WEB_PROJECT_DIR=/path/to/the/copy</code> (the <code>speed</code> profile is the one to judge), press <code>1</code> and look at the stack. Expected: the boxes settle into a pile on the floor without exploding or sinking. Note, per N and per browser, the frame rate (DevTools, Performance, or the browser's own FPS meter) and whether the tab stays responsive. CI's number for orientation only: under node the 200-box scene costs 0.8 ms per physics step (the dev profile, not a browser, and the renderer is not included); the physics step is not the only cost per frame, since the software renderer draws every box. Say which N first drops under 30 frames per second, and if the stack is much slower than the same scene without bodies (delete the <code>Rigidbody</code> lines to compare), say so: that is the measurement that decides whether the scalar PhysX is fast enough (<a href="web-build.html#physx-simd">Scalar math</a>).</li>
+<li><strong>Memory.</strong> With the 500-box stack running, note the tab's memory (the browser's task manager, or DevTools, Memory). Expected: it grows while the scene is built and then stays flat; a steady climb while the boxes lie still is a leak and worth reporting. On a phone or tablet, note whether the tab survives the 500-box scene at all.</li>
+<li><strong>Quit.</strong> Press Escape: the game ends as in step 3, with no error in the Console.</li>
+</ul>
+<p>Report: browser and version, the results above, the frame rates per N, and any <code>PhysX</code> lines from the Console.</p>
+
 <h2 id="report">What to report</h2>
 <ul>
 <li>For each step: pass, fail, or not tried, with the browser and its version.</li>
 <li>Anything in the error box, and the Console text around it.</li>
-<li>Load time and frame rate (steps 1, 2 and 7), and for step 8 each browser's result with its version.</li>
+<li>Load time and frame rate (steps 1, 2 and 7), for step 8 each browser's result with its version, and for step 9 the frame rate per number of boxes and any <code>PhysX</code> line from the Console.</li>
 </ul>
 <p>Background: <a href="web-build.html#player">The web player</a>, <a href="web-build.html#hosting">Building and hosting the package</a>, <a href="web-build.html#output-contract">Output contract</a>.</p>
 
 <div class="page-footer">
-<span>Describes the web player of PR #170, with its audio from PR #181.</span>
+<span>Describes the web player of PR #170, with its audio from PR #181 and its physics from PR #184.</span>
 <a href="web-build.html">Back to Web build</a>
 </div>
 
