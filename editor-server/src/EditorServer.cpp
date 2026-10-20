@@ -59,6 +59,7 @@
 #include "editor-server/Protocol.hpp"
 #include "editor-server/Commands.hpp"
 #include "editor-server/Serialization.hpp"
+#include "editor-server/ServerLog.hpp"
 
 #ifdef _WIN32
 #define NOMINMAX
@@ -1518,7 +1519,7 @@ namespace N2Engine::Editor
         {
             try
             {
-                _events.PushLog(level, message, EventRing::NowUnixMilliseconds());
+                _events.PushLog(level, message, EventRing::NowUnixMilliseconds(), Logger::CurrentSensitivity());
             }
             catch (...)
             {
@@ -1551,7 +1552,7 @@ namespace N2Engine::Editor
             WSADATA wsaData;
             if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
             {
-                Logger::Error("WSAStartup failed");
+                ServerLog::Error("WSAStartup failed");
                 return false;
             }
         }
@@ -1569,14 +1570,14 @@ namespace N2Engine::Editor
         addr.sin_port = htons(static_cast<uint16_t>(port));
         if (inet_pton(AF_INET, bindAddress.c_str(), &addr.sin_addr) != 1)
         {
-            Logger::Error("Invalid bind address (expected an IPv4 address): " + bindAddress);
+            ServerLog::Error("Invalid bind address (expected an IPv4 address): " + bindAddress);
             return false;
         }
 
         _listenSocket = static_cast<int>(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
         if (_listenSocket == INVALID_SOCKET)
         {
-            Logger::Error("Failed to create socket");
+            ServerLog::Error("Failed to create socket");
             _listenSocket = -1;
             return false;
         }
@@ -1590,7 +1591,7 @@ namespace N2Engine::Editor
 
         if (bind(_listenSocket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
         {
-            Logger::Error("Failed to bind to " + bindAddress + ":" + std::to_string(port));
+            ServerLog::Error("Failed to bind to " + bindAddress + ":" + std::to_string(port));
             CLOSE_SOCKET(_listenSocket);
             _listenSocket = -1;
             return false;
@@ -1600,7 +1601,7 @@ namespace N2Engine::Editor
         // absorb a burst; a connection past it is refused by the kernel
         if (listen(_listenSocket, static_cast<int>(_preAuthSlotOptions.totalSlots) + 4) < 0)
         {
-            Logger::Error("Failed to listen");
+            ServerLog::Error("Failed to listen");
             CLOSE_SOCKET(_listenSocket);
             _listenSocket = -1;
             return false;
@@ -1661,12 +1662,12 @@ namespace N2Engine::Editor
         catch (const std::system_error &e)
         {
             // A thread that can't start: undo what did start, so the host fails to listen instead of half serving
-            Logger::Error(std::string("Failed to start the editor server's threads: ") + e.what());
+            ServerLog::Error(std::string("Failed to start the editor server's threads: ") + e.what());
             Stop();
             return false;
         }
-        Logger::Info("Editor server listening on " + bindAddress + ":" + std::to_string(_port));
-        Logger::Info(std::format("Pre-auth limits: {} slot(s) (at most {} per non-loopback address; loopback may use all), "
+        ServerLog::Info("Editor server listening on " + bindAddress + ":" + std::to_string(_port));
+        ServerLog::Info(std::format("Pre-auth limits: {} slot(s) (at most {} per non-loopback address; loopback may use all), "
                                  "{}; one session at a time: {} (a taking-over client waits up to {} ms for the old "
                                  "session to end); any other second client waits up to {} ms and gets \"{}\"",
                                  _slots->Options().totalSlots, _slots->Options().perAddressSlots,
@@ -1797,9 +1798,9 @@ namespace N2Engine::Editor
         (void)_commands.Enqueue([message = std::move(message), isWarning]
         {
             if (isWarning)
-                Logger::Warn(message);
+                ServerLog::Warn(message);
             else
-                Logger::Info(message);
+                ServerLog::Info(message);
             return CommandQueue::Response{};
         });
     }
@@ -1809,9 +1810,9 @@ namespace N2Engine::Editor
         std::future<CommandQueue::Response> written = _commands.Enqueue([message = std::move(message), isWarning]
         {
             if (isWarning)
-                Logger::Warn(message);
+                ServerLog::Warn(message);
             else
-                Logger::Info(message);
+                ServerLog::Info(message);
             return CommandQueue::Response{};
         });
         const auto giveUpAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
@@ -1829,12 +1830,12 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's access token can't change while it is running");
+            ServerLog::Warn("The editor server's access token can't change while it is running");
             return false;
         }
         if (!_tokensFile.empty())
         {
-            Logger::Warn("The editor server has a tokens file, which can't be combined with a single access token");
+            ServerLog::Warn("The editor server has a tokens file, which can't be combined with a single access token");
             return false;
         }
         _accessToken = std::move(token);
@@ -1943,6 +1944,13 @@ namespace N2Engine::Editor
             return identity;
         }
         return identity;
+    }
+
+    bool EditorServer::SeesEveryEvent() const
+    {
+        // The role is bound by Hello on a host with authentication; a host without it has no roles, and its one local
+        // user has always read everything
+        return !RequiresAccessToken() || CurrentIdentity().role == TokenRole::Admin;
     }
 
     EditorServer::ConnectionIdentity EditorServer::CurrentIdentity() const
@@ -2073,7 +2081,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's rate limiting can't change while it is running");
+            ServerLog::Warn("The editor server's rate limiting can't change while it is running");
             return false;
         }
         _rateLimiting = enabled;
@@ -2084,7 +2092,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's rate limit policy can't change while it is running");
+            ServerLog::Warn("The editor server's rate limit policy can't change while it is running");
             return false;
         }
         _rateLimitPolicy = policy;
@@ -2095,7 +2103,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's rate limit clock can't change while it is running");
+            ServerLog::Warn("The editor server's rate limit clock can't change while it is running");
             return false;
         }
         _rateLimitClock = std::move(clock);
@@ -2106,7 +2114,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's peer address provider can't change while it is running");
+            ServerLog::Warn("The editor server's peer address provider can't change while it is running");
             return false;
         }
         _peerAddressProvider = std::move(provider);
@@ -2164,7 +2172,7 @@ namespace N2Engine::Editor
     {
         if (_running || timeout <= std::chrono::milliseconds::zero())
         {
-            Logger::Warn("The editor server's Hello timeout can't change while it is running, or be zero or negative");
+            ServerLog::Warn("The editor server's Hello timeout can't change while it is running, or be zero or negative");
             return false;
         }
         _helloTimeout = timeout;
@@ -2175,7 +2183,7 @@ namespace N2Engine::Editor
     {
         if (_running || timeout <= std::chrono::milliseconds::zero())
         {
-            Logger::Warn("The editor server's TLS handshake timeout can't change while it is running, or be zero or "
+            ServerLog::Warn("The editor server's TLS handshake timeout can't change while it is running, or be zero or "
                          "negative");
             return false;
         }
@@ -2187,7 +2195,7 @@ namespace N2Engine::Editor
     {
         if (_running || timeout < std::chrono::milliseconds::zero())
         {
-            Logger::Warn("The editor server's idle timeout can't change while it is running, or be negative");
+            ServerLog::Warn("The editor server's idle timeout can't change while it is running, or be negative");
             return false;
         }
         _idleTimeout = timeout;
@@ -2198,7 +2206,7 @@ namespace N2Engine::Editor
     {
         if (_running || timeout <= std::chrono::milliseconds::zero())
         {
-            Logger::Warn("The editor server's write timeout can't change while it is running, or be zero or negative");
+            ServerLog::Warn("The editor server's write timeout can't change while it is running, or be zero or negative");
             return false;
         }
         _writeTimeout = timeout;
@@ -2209,7 +2217,7 @@ namespace N2Engine::Editor
     {
         if (_running || age < std::chrono::milliseconds::zero())
         {
-            Logger::Warn("The editor server's maximum session age can't change while it is running, or be negative");
+            ServerLog::Warn("The editor server's maximum session age can't change while it is running, or be negative");
             return false;
         }
         _maxSessionAge = age;
@@ -2220,7 +2228,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's connection clock can't change while it is running");
+            ServerLog::Warn("The editor server's connection clock can't change while it is running");
             return false;
         }
         _connectionClock = std::move(clock);
@@ -2231,7 +2239,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's accepted-socket hook can't change while it is running");
+            ServerLog::Warn("The editor server's accepted-socket hook can't change while it is running");
             return false;
         }
         _acceptedSocketHook = std::move(hook);
@@ -2242,7 +2250,7 @@ namespace N2Engine::Editor
     {
         if (_running || slots < 1 || slots > MaxPreAuthSlots)
         {
-            Logger::Warn(std::format("The editor server's pre-auth slots can't change while it is running, and must be "
+            ServerLog::Warn(std::format("The editor server's pre-auth slots can't change while it is running, and must be "
                                      "from 1 to {}",
                                      MaxPreAuthSlots));
             return false;
@@ -2255,7 +2263,7 @@ namespace N2Engine::Editor
     {
         if (_running || slots < 1)
         {
-            Logger::Warn("The editor server's pre-auth slots per address can't change while it is running, and must be at "
+            ServerLog::Warn("The editor server's pre-auth slots per address can't change while it is running, and must be at "
                          "least 1");
             return false;
         }
@@ -2267,7 +2275,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's handshake rate limit can't change while it is running");
+            ServerLog::Warn("The editor server's handshake rate limit can't change while it is running");
             return false;
         }
         _handshakeRate = std::move(options);
@@ -2279,7 +2287,7 @@ namespace N2Engine::Editor
     {
         if (_running || grace < std::chrono::milliseconds::zero())
         {
-            Logger::Warn("The editor server's busy grace can't change while it is running, or be negative");
+            ServerLog::Warn("The editor server's busy grace can't change while it is running, or be negative");
             return false;
         }
         _busyGrace = grace;
@@ -2290,7 +2298,7 @@ namespace N2Engine::Editor
     {
         if (_running || wait < std::chrono::milliseconds::zero())
         {
-            Logger::Warn("The editor server's takeover wait can't change while it is running, or be negative");
+            ServerLog::Warn("The editor server's takeover wait can't change while it is running, or be negative");
             return false;
         }
         _takeoverWait = wait;
@@ -2301,7 +2309,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's session start hook can't change while it is running");
+            ServerLog::Warn("The editor server's session start hook can't change while it is running");
             return false;
         }
         _sessionStartHook = std::move(hook);
@@ -2312,7 +2320,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's session end hook can't change while it is running");
+            ServerLog::Warn("The editor server's session end hook can't change while it is running");
             return false;
         }
         _sessionEndHook = std::move(hook);
@@ -2323,7 +2331,7 @@ namespace N2Engine::Editor
     {
         if (_running || interval <= std::chrono::milliseconds::zero())
         {
-            Logger::Warn("The editor server's admission summary interval can't change while it is running, or be zero or "
+            ServerLog::Warn("The editor server's admission summary interval can't change while it is running, or be zero or "
                          "negative");
             return false;
         }
@@ -2335,7 +2343,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's pre-hand-off hook can't change while it is running");
+            ServerLog::Warn("The editor server's pre-hand-off hook can't change while it is running");
             return false;
         }
         _preHandoffHook = std::move(hook);
@@ -2346,7 +2354,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's pre-auth log coalescing can't change while it is running");
+            ServerLog::Warn("The editor server's pre-auth log coalescing can't change while it is running");
             return false;
         }
         // Clamped as the coalescer clamps them, so the getter says what a run uses
@@ -2363,7 +2371,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's stop hook can't change while it is running");
+            ServerLog::Warn("The editor server's stop hook can't change while it is running");
             return false;
         }
         _stopHook = std::move(hook);
@@ -2454,7 +2462,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("Whether the editor server stops on disconnect can't change while it is running");
+            ServerLog::Warn("Whether the editor server stops on disconnect can't change while it is running");
             return false;
         }
         _stopOnDisconnect = stop;
@@ -2501,7 +2509,7 @@ namespace N2Engine::Editor
     {
         if (_running || _playMode)
         {
-            Logger::Warn("The editor server's editor extensions can't be enabled while it is running or playing");
+            ServerLog::Warn("The editor server's editor extensions can't be enabled while it is running or playing");
             return false;
         }
         _extensions = std::make_unique<ExtensionHost>(std::move(projectRoot));
@@ -3754,7 +3762,7 @@ namespace N2Engine::Editor
             {
                 failure = "the command produced no response";
             }
-            Logger::Error(std::format("Command 0x{:X} failed: {}", commandType, failure));
+            ServerLog::Error(std::format("Command 0x{:X} failed: {}", commandType, failure));
 
             BufferWriter response;
             WriteError(response, "Command failed: " + failure);
@@ -3988,7 +3996,7 @@ namespace N2Engine::Editor
     {
         if (_running)
         {
-            Logger::Warn("The editor server's read-only mode can't change while it is running");
+            ServerLog::Warn("The editor server's read-only mode can't change while it is running");
             return false;
         }
         _readOnly = readOnly;
@@ -4064,7 +4072,7 @@ namespace N2Engine::Editor
         // A role may run only what its class of commands allows (default deny, as the read-only gate above)
         if (hasRoles && !RoleAllows(identity.role, commandType))
         {
-            Logger::Warn(std::format("audit: denied user={} role={} command={}{}", identity.user,
+            ServerLog::Warn(std::format("audit: denied user={} role={} command={}{}", identity.user,
                                      TokenRoleName(identity.role), CommandName(commandType), PeerSuffix()));
             SendResponse(clientSocket,
                          BuildDenial(Protocol::ErrorCodeForbidden, RoleDeniedMessage(identity.role, commandType)));
@@ -4085,7 +4093,7 @@ namespace N2Engine::Editor
             const std::optional<CommandClass> commandClass = ClassifyCommand(commandType);
             if (commandClass.has_value() && *commandClass != CommandClass::Read)
             {
-                Logger::Info(std::format("audit: user={} role={} command={}{}", identity.user, TokenRoleName(identity.role),
+                ServerLog::Info(std::format("audit: user={} role={} command={}{}", identity.user, TokenRoleName(identity.role),
                                          CommandName(commandType), PeerSuffix()));
             }
         }
@@ -4297,7 +4305,7 @@ namespace N2Engine::Editor
             HandleDiscardAutosave(clientSocket);
             break;
         default:
-            Logger::Warn("Unknown command: " + std::to_string(commandType));
+            ServerLog::Warn("Unknown command: " + std::to_string(commandType));
             BufferWriter response;
             WriteError(response, "Unknown command");
             SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
@@ -4391,7 +4399,7 @@ namespace N2Engine::Editor
                 else
                     served->helloVersionRefused = true;
             }
-            Logger::Warn(evaluation.warning);
+            ServerLog::Warn(evaluation.warning);
             SendResponse(clientSocket, std::move(evaluation.refusal));
             return;
         }
@@ -4407,13 +4415,13 @@ namespace N2Engine::Editor
         if (clientVersion->minorVersion != serverVersion->minorVersion)
         {
             // Compatible, but one side has commands the other doesn't: those fail with "Unknown command"
-            Logger::Warn(std::format("Editor client '{}' said Hello with protocol {}, this server speaks {}: commands "
+            ServerLog::Warn(std::format("Editor client '{}' said Hello with protocol {}, this server speaks {}: commands "
                                      "only one of them knows will fail{}{}", clientName, clientVersionText, ProtocolVersion,
                                      whoAtEnd, peerSuffix));
         }
         else
         {
-            Logger::Info(std::format("Editor client '{}' said Hello (protocol {}){}{}", clientName, clientVersionText,
+            ServerLog::Info(std::format("Editor client '{}' said Hello (protocol {}){}{}", clientName, clientVersionText,
                                      whoAtEnd, peerSuffix));
         }
         // A new session: a group the last one left open is ended, and the keys it held (a play host's) go up
@@ -4505,7 +4513,10 @@ namespace N2Engine::Editor
 
         // Nothing here may log: every logged line is an event, so a poll that logged would always find one more. (Only
         // a failure, such as a malformed payload, is logged, by ExecuteCommand, as for every polled command.)
-        EventBatch batch = _events.Read(cmd.afterSeq, cmd.maxEvents, cmd.epoch);
+        // An admin, and the one local user of a host with no authentication, read every event. Any other role reads the
+        // Public view: its own numbering, no Admin line, host paths scrubbed (see EventRing).
+        EventBatch batch = _events.Read(cmd.afterSeq, cmd.maxEvents, cmd.epoch,
+                                        SeesEveryEvent() ? EventView::Full : EventView::PublicOnly);
         BufferWriter response;
         WriteEvents(response, batch.epoch, batch.nextSeq, batch.dropped, nlohmann::json(std::move(batch.events)));
         SendResponse(clientSocket, response.Release());
@@ -4873,11 +4884,11 @@ namespace N2Engine::Editor
             SceneManager::AddScene(std::move(newScene), false);
 
             WriteSceneData(response, sceneJsonString);
-            Logger::Info("Created scene: " + SanitizeForLog(cmd.name));
+            ServerLog::PublicInfo("Created scene: " + SanitizeForLog(cmd.name));
         }
         catch (const std::exception &e)
         {
-            Logger::Error("Failed to create scene: " + std::string(e.what()));
+            ServerLog::Error("Failed to create scene: " + std::string(e.what()));
             WriteError(response, std::string("Failed to create scene: ") + e.what());
         }
 
@@ -4889,7 +4900,7 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         const std::string sceneJsonString = LoadSceneCmd::Deserialize(reader).sceneJson;
 
-        Logger::Info("Loading scene from scene data: " + SanitizeForLog(sceneJsonString, 200));
+        ServerLog::Info("Loading scene from scene data: " + SanitizeForLog(sceneJsonString, 200));
 
         // Nesting is checked before the parse: a scene nested 100 000 deep would overflow the stack of the walks over
         // it. Nothing has changed yet, so the open scene stays as it was.
@@ -4955,7 +4966,7 @@ namespace N2Engine::Editor
 
         if (SceneManager::GetCurScene() == nullptr)
         {
-            Logger::Warn("No scene loaded to save");
+            ServerLog::Warn("No scene loaded to save");
             WriteError(response, "No scene loaded");
             SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
 
@@ -4990,7 +5001,7 @@ namespace N2Engine::Editor
             }
             else if (!sceneFile.has_value())
             {
-                Logger::Warn("Rejected DeleteScene outside the scenes directory: " + SanitizeForLog(cmd.sceneName));
+                ServerLog::Warn("Rejected DeleteScene outside the scenes directory: " + SanitizeForLog(cmd.sceneName));
                 WriteError(response, "Not a scene file in the project's scenes directory: " + cmd.sceneName);
             }
             else if (loadedScene != nullptr && sceneFile->stem() == std::filesystem::path(loadedScene->sceneName))
@@ -5004,7 +5015,7 @@ namespace N2Engine::Editor
                 // narrow string can throw for names the code page can't represent.
                 // Only the file is removed. Scenes in SceneManager aren't tied to files (the editor loads
                 // them by sending JSON), so a stored scene that happens to share the name is left alone.
-                Logger::Info("Deleting scene file: " + SanitizeForLog(cmd.sceneName));
+                ServerLog::Info("Deleting scene file: " + SanitizeForLog(cmd.sceneName));
                 std::filesystem::remove(*sceneFile);
                 WriteOk(response);
             }
@@ -5042,7 +5053,7 @@ namespace N2Engine::Editor
         }
         catch (const std::exception &e)
         {
-            Logger::Error("Failed to get current scene: " + std::string(e.what()));
+            ServerLog::Error("Failed to get current scene: " + std::string(e.what()));
             WriteError(response, "Failed to get current scene: " + std::string(e.what()));
             SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
         }
@@ -5066,7 +5077,7 @@ namespace N2Engine::Editor
         }
         else
         {
-            Logger::Warn("No scene present");
+            ServerLog::Warn("No scene present");
             WriteError(response, "No scene present");
         }
 
@@ -5537,7 +5548,7 @@ namespace N2Engine::Editor
             SendError(clientSocket, written.error());
             return;
         }
-        Logger::Info("Wrote the play snapshot " + Utf8(*written));
+        ServerLog::Info("Wrote the play snapshot " + Utf8(*written));
         BufferWriter response;
         Protocol::WritePlaySnapshot(response, Utf8(*written));
         SendResponse(clientSocket, response.Release());
@@ -5594,7 +5605,7 @@ namespace N2Engine::Editor
         Application::GetInstance().ResetFrameClock();
         _watchAssets = false;
 
-        Logger::Info(std::format("Playing scene '{}' from {}", playing->sceneName, Utf8(snapshotFile)));
+        ServerLog::Info(std::format("Playing scene '{}' from {}", playing->sceneName, Utf8(snapshotFile)));
         PushPlayState();
         return {};
     }
@@ -5659,7 +5670,7 @@ namespace N2Engine::Editor
             catch (const std::exception &e)
             {
                 // Another frame would only throw the same way sixty times a second
-                Logger::Error(std::string("A game frame failed, so the game is paused: ") + e.what());
+                ServerLog::PublicError(std::string("A game frame failed, so the game is paused: ") + e.what());
                 SetPausedState(true);
             }
         }
@@ -5779,7 +5790,16 @@ namespace N2Engine::Editor
     void EditorServer::HandleGetEngineHealth(int clientSocket)
     {
         BufferWriter response;
-        WriteEngineHealth(response, Application::GetInstance().GetHealth());
+        EngineHealth health = Application::GetInstance().GetHealth();
+        if (!SeesEveryEvent())
+        {
+            // A subsystem's detail can name a file of the host: the same scrubbing as the Public events
+            for (SubsystemStatus &subsystem : health.subsystems)
+            {
+                subsystem.detail = _events.ScrubHostPaths(subsystem.detail);
+            }
+        }
+        WriteEngineHealth(response, health);
         SendResponse(clientSocket, {response.Data().begin(), response.Data().end()});
     }
 
@@ -6511,7 +6531,7 @@ namespace N2Engine::Editor
         {
             std::string scriptTemplate = Scripting::MakeLuaScriptTemplate(cmd.name);
             WriteScriptData(response, scriptTemplate);
-            Logger::Info("Generated script template for: " + SanitizeForLog(cmd.name));
+            ServerLog::Info("Generated script template for: " + SanitizeForLog(cmd.name));
         }
         catch (const std::exception &e)
         {
@@ -6735,7 +6755,7 @@ namespace N2Engine::Editor
                 auto text = ReadTextFile(loader.Resolve(path));
                 if (!text)
                 {
-                    Logger::Warn("Can't reload " + path.ToString() + ": " + text.error());
+                    ServerLog::PublicWarn("Can't reload " + path.ToString() + ": " + text.error());
                     return;
                 }
                 script->SetSourceCode(*text);
@@ -6746,11 +6766,11 @@ namespace N2Engine::Editor
         }
         catch (const std::exception &e)
         {
-            Logger::Error(std::format("Can't reload {}: {}", path.ToString(), SanitizeForLog(e.what(), 300)));
+            ServerLog::PublicError(std::format("Can't reload {}: {}", path.ToString(), SanitizeForLog(e.what(), 300)));
         }
         catch (...)
         {
-            Logger::Error("Can't reload " + path.ToString());
+            ServerLog::PublicError("Can't reload " + path.ToString());
         }
     }
 
@@ -6819,7 +6839,7 @@ namespace N2Engine::Editor
             if (!_assetPollFailureLogged)
             {
                 _assetPollFailureLogged = true;
-                Logger::Warn(std::format("The asset watcher couldn't scan the assets folder: {}",
+                ServerLog::Warn(std::format("The asset watcher couldn't scan the assets folder: {}",
                                          SanitizeForLog(e.what(), 300)));
             }
             return false;
@@ -7054,7 +7074,7 @@ namespace N2Engine::Editor
         _events.Push("assetsChanged", nlohmann::json{{"added", nlohmann::json::array()},
                                                      {"removed", nlohmann::json::array()},
                                                      {"modified", nlohmann::json::array({resolved->resourcePath.ToString()})}});
-        Logger::Info("Changed the import settings of " + resolved->resourcePath.ToString());
+        ServerLog::PublicInfo("Changed the import settings of " + resolved->resourcePath.ToString());
 
         BufferWriter response;
         WriteOk(response);
@@ -7167,7 +7187,7 @@ namespace N2Engine::Editor
             return;
         }
         NoteAssetWritten(resolved->resourcePath, true);
-        Logger::Info("Wrote " + shown);
+        ServerLog::Info("Wrote " + shown);
 
         BufferWriter response;
         WriteOk(response);
@@ -7216,7 +7236,7 @@ namespace N2Engine::Editor
             return;
         }
         NoteAssetWritten(resolved->resourcePath, false);
-        Logger::Info("Created script " + shown);
+        ServerLog::Info("Created script " + shown);
 
         const Math::UUID uuid = IO::ResourceLoader::Instance().GetUUID(resolved->resourcePath);
         BufferWriter response;
@@ -7258,7 +7278,7 @@ namespace N2Engine::Editor
                 SendError(clientSocket, "Couldn't create " + shown + ": " + error.message());
                 return;
             }
-            Logger::Info("Created folder " + shown);
+            ServerLog::Info("Created folder " + shown);
         }
 
         BufferWriter response;
@@ -7606,7 +7626,7 @@ namespace N2Engine::Editor
             if (!_protectedAutosaveWarned)
             {
                 _protectedAutosaveWarned = true;
-                Logger::Warn("An autosave from an earlier session is kept, and none is written over it, until it is "
+                ServerLog::Warn("An autosave from an earlier session is kept, and none is written over it, until it is "
                              "restored or discarded (RestoreAutosave, DiscardAutosave) or the scene is saved");
             }
             return;
@@ -7634,7 +7654,7 @@ namespace N2Engine::Editor
         {
             // Once: a folder that can't be written would otherwise log after every edit
             _autosaveWarned = true;
-            Logger::Warn("Couldn't write the autosave: " + written.error());
+            ServerLog::Warn("Couldn't write the autosave: " + written.error());
         }
         else if (written)
         {
@@ -7774,6 +7794,10 @@ namespace N2Engine::Editor
 
     void EditorServer::SetProject(std::filesystem::path root, IO::ProjectFile project)
     {
+        // What a non-admin reader sees as res:// is the project's assets folder (the project folder itself is user://,
+        // and anything else under it reads as a hidden host path)
+        const std::filesystem::path assets = root / "assets";
+        _events.SetHostRoots({assets.string(), assets.generic_string()});
         _project = ProjectState{std::move(root), std::move(project)};
     }
 
@@ -7974,7 +7998,7 @@ namespace N2Engine::Editor
         scene->SetResourcePath(resolved->resourcePath);
 
         LoadOpenedScene(std::move(scene), resourcePath);
-        Logger::Info("Opened scene " + resourcePath);
+        ServerLog::PublicInfo("Opened scene " + resourcePath);
         return GetOpenSceneInfo();
     }
 
@@ -8025,7 +8049,7 @@ namespace N2Engine::Editor
         }
 
         LoadOpenedScene(std::move(scene), resourcePath);
-        Logger::Info(resourcePath.empty() ? "New scene " + SanitizeForLog(sceneName) + " (not saved to a file yet)"
+        ServerLog::Info(resourcePath.empty() ? "New scene " + SanitizeForLog(sceneName) + " (not saved to a file yet)"
                                           : "New scene " + SanitizeForLog(sceneName) + " at " + resourcePath);
         return GetOpenSceneInfo();
     }
@@ -8085,7 +8109,7 @@ namespace N2Engine::Editor
         _autosavePending = false;
         _autosaveProtected = false;
         PushSceneChanged();
-        Logger::Info("Saved scene " + resourcePath);
+        ServerLog::PublicInfo("Saved scene " + resourcePath);
         return GetOpenSceneInfo();
     }
 
@@ -8221,7 +8245,7 @@ namespace N2Engine::Editor
             SendResponse(clientSocket, response.Release());
             return;
         }
-        Logger::Info("Project settings changed and saved");
+        ServerLog::PublicInfo("Project settings changed and saved");
         SendProjectInfo(clientSocket);
     }
 
@@ -8265,7 +8289,7 @@ namespace N2Engine::Editor
             SendResponse(clientSocket, response.Release());
             return;
         }
-        Logger::Info(_project->file.startupScene.empty() ? std::string("The project has no startup scene now")
+        ServerLog::Info(_project->file.startupScene.empty() ? std::string("The project has no startup scene now")
                                                          : "Startup scene: " + _project->file.startupScene);
         SendProjectInfo(clientSocket);
     }
