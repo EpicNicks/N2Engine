@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Validates the WebGPU shaders (renderer/shaders/webgpu/*.wgsl) with Tint and naga, the WGSL compilers of Chrome/Edge/Safari
+# (Dawn) and Firefox (wgpu). The "wgsl (Tint, naga)" CI job runs it; scripts/install-wgsl-validators.sh installs the pinned
+# tools. Locally: TINT=/path/to/tint NAGA=/path/to/naga scripts/validate-wgsl.sh
+#
+# What counts as a failure:
+#   - a non-zero exit of either tool, or any line starting with "warning" in its output (warnings are errors);
+#   - Tint: parse, resolve and the WGSL rules including uniformity analysis (a derivative-taking textureSample or fwidth in
+#     non-uniform control flow is an error), then the SPIR-V writer and spirv-val on its output (--validate), then a WGSL
+#     round trip;
+#   - naga: parse and validate, then the SPIR-V, MSL, HLSL and WGSL backends (what Firefox runs per platform).
+# And, so the job can fail at all: every file under scripts/wgsl-negative/ must be rejected (a type error by both tools; the
+# non-uniform sample by Tint, which treats it as an error; naga's analysis lets it through, so naga is not asked).
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tint="${TINT:-tint}"
+naga="${NAGA:-naga}"
+for tool in "$tint" "$naga"; do
+  if ! command -v "$tool" > /dev/null 2>&1; then
+    echo "::error::validator not found: $tool (scripts/install-wgsl-validators.sh installs it)"
+    exit 2
+  fi
+done
+echo "tint: $(command -v "$tint")"
+echo "naga: $(command -v "$naga")"
+
+out="$(mktemp -d)"
+trap 'rm -rf "$out"' EXIT
+failures=0
+
+# run <label> <command...>: runs it, shows its output, and fails on a non-zero exit or on a line starting with "warning"
+run() {
+  local label="$1"
+  shift
+  local log status
+  log="$("$@" 2>&1)"
+  status=$?
+  if [ -n "$log" ]; then
+    printf '%s\n' "$log" | sed 's/^/    /'
+  fi
+  if [ "$status" -ne 0 ]; then
+    echo "::error::$label failed (exit $status)"
+    failures=$((failures + 1))
+    return 1
+  fi
+  if printf '%s\n' "$log" | grep -qiE '^[[:space:]]*(warning|.*: warning)'; then
+    echo "::error::$label printed a warning (warnings are errors)"
+    failures=$((failures + 1))
+    return 1
+  fi
+  echo "  ok: $label"
+}
+
+shopt -s nullglob
+shaders=("$root"/renderer/shaders/webgpu/*.wgsl)
+if [ "${#shaders[@]}" -ne 3 ]; then
+  echo "::error::expected unlit.wgsl, lit.wgsl and text.wgsl under renderer/shaders/webgpu, found ${#shaders[@]} files"
+  exit 2
+fi
+
+for shader in "${shaders[@]}"; do
+  name="$(basename "$shader" .wgsl)"
+  echo "== $name.wgsl"
+  run "tint $name.wgsl (resolve, uniformity, SPIR-V + spirv-val)" "$tint" --format spvasm --validate -o "$out/$name.spvasm" "$shader"
+  run "tint $name.wgsl (WGSL round trip)" "$tint" --format wgsl -o "$out/$name.roundtrip.wgsl" "$shader"
+  run "naga $name.wgsl (parse and validate)" "$naga" "$shader"
+  for target in spv msl hlsl wgsl; do
+    run "naga $name.wgsl -> $target" "$naga" "$shader" "$out/$name.naga.$target"
+  done
+done
+
+# The negative controls
+echo "== negative controls (must be rejected)"
+reject() {
+  local label="$1"
+  shift
+  if "$@" > "$out/negative.log" 2>&1; then
+    echo "::error::$label ACCEPTED an invalid shader: the validation job could not fail"
+    sed 's/^/    /' "$out/negative.log"
+    failures=$((failures + 1))
+  else
+    echo "  ok: $label rejected it"
+  fi
+}
+negative="$root/scripts/wgsl-negative"
+reject "tint (type error)" "$tint" --format spvasm -o "$out/negative.spvasm" "$negative/type-error.wgsl"
+reject "naga (type error)" "$naga" "$negative/type-error.wgsl"
+reject "tint (non-uniform sample)" "$tint" --format spvasm -o "$out/negative.spvasm" "$negative/non-uniform-sample.wgsl"
+
+if [ "$failures" -ne 0 ]; then
+  echo "::error::$failures WGSL validation step(s) failed"
+  exit 1
+fi
+echo "All WGSL validation steps passed"
