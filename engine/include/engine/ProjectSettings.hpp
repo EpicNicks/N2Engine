@@ -10,6 +10,7 @@
 
 #include <math/MathRegistrar.hpp>
 #include <math/Vector3.hpp>
+#include "engine/network/NetworkSettings.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include <renderer/common/SceneLighting.hpp>
 
@@ -41,6 +42,13 @@ namespace N2Engine
      *               state, so applying it afterwards only validates it (a change needs a restart). SECURITY: a
      *               constant hash seed makes hash flooding of string-keyed tables possible, so leave it unset unless
      *               the script data is trusted; no host sets it implicitly
+     *     network   the network model: {"preset": "none" | "authoritative" | "deterministic", "tickRate", "transport":
+     *               {"udp", "webSocket", "port"}, "authoritative": {...}, "deterministic": {"mode": "lockstep" |
+     *               "rollback", "inputDelay", "rollbackWindow", "hashInterval"}, "overrides": {}, "customised"}; see
+     *               ReadNetworkSettings. Default preset none, which changes nothing. Read by Application::Init (which
+     *               refuses to start a Deterministic project whose requirements are unmet), so applying it afterwards
+     *               only validates it (a change needs a restart). A bad value is a warning and the default or the
+     *               nearest allowed value is used; it never stops Init
      *     rendering {"colorSpace": "gamma" | "linear"}: Rendering::RenderSettings::SetColorSpace (case-insensitive;
      *               other keys in the block are left alone). A block without colorSpace, with it null, or (when
      *               `only` names rendering) removed, means the default, gamma. "forceShaderEncode": true makes
@@ -92,6 +100,18 @@ namespace N2Engine
      */
     [[nodiscard]] std::optional<std::uint64_t> ReadDeterminismLuaSeed(const nlohmann::json &settings,
                                                                       std::vector<std::string> *problems = nullptr);
+
+    /**
+     * The "network" block of a project's settings object, every value validated: a project without the block, or with
+     * a block that is not an object, gets the defaults (preset none). A value of the wrong type, an unknown preset or
+     * mode name, an integer setting that is not a whole number, or an override of a key the presets do not govern is
+     * refused with one message in `problems` (when given) and replaced by its default (or ignored, for an override);
+     * a number outside its allowed range (Network::NumericSettingSpecs) is clamped to it, also with one message. It
+     * never throws and a bad value never stops Application::Init. Names are case-insensitive. Application::Init calls it
+     * before the physics backend is created.
+     */
+    [[nodiscard]] Network::NetworkSettings ReadNetworkSettings(const nlohmann::json &settings,
+                                                               std::vector<std::string> *problems = nullptr);
 
     /**
      * The live state ApplyProjectSettings changes, taken before applying so it can be put back exactly (a block the

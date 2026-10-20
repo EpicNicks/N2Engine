@@ -336,12 +336,22 @@ namespace N2Engine::Editor
                                                           : Scripting::LuaExecutionPolicy::Run);
 
             auto &app = Application::GetInstance();
-            app.Init({
+            const EngineHealth health = app.Init({
                 .projectPath = projectDir.string(),
                 .physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX,
                 .renderBackend = ToRenderBackend(options.renderer),
                 .isHeadless = true,
             });
+
+            // A refused project (network.preset deterministic with unmet requirements: a Failed Network row) is never
+            // edited or played: Init started nothing and logged every unmet requirement, so the host ends here, before
+            // play mode, the edit loop and the ready line, with exit code 1 and a line on stderr
+            if (const SubsystemStatus *network = health.Find("Network");
+                network != nullptr && network->state == SubsystemState::Failed)
+            {
+                std::println(stderr, "N2EditorHost: the engine refused to start the project: {}", network->detail);
+                return 1;
+            }
 
             ServerLog::Info("Engine initialized");
 
