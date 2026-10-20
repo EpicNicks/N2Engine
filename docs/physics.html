@@ -72,6 +72,7 @@
 <p class="toc-title">On this page</p>
 <ol>
 <li><a href="#backends">Backends and build configuration</a></li>
+<li><a href="#backend-setting">Choosing the backend (physics.backend) and the backend interface</a></li>
 <li><a href="#gpu">GPU physics (physics.gpu)</a></li>
 <li><a href="#gpu-particles">GPU particles (PhysX PBD)</a></li>
 <li><a href="#gpu-features">GPU features: per-feature status and the soft-body seam</a></li>
@@ -116,9 +117,10 @@
 <table>
 <thead><tr><th>Situation</th><th>Backend</th><th>Physics health state</th></tr></thead>
 <tbody>
-<tr><td>Built with PhysX, <code>options.physicsBackend == PHYSX</code>, <code>Initialize()</code> succeeds</td><td><code>PhysXBackend</code></td><td>Running, detail "PhysX"</td></tr>
+<tr><td>Built with PhysX, PhysX selected (<code>physics.backend</code> physx or unset), <code>Initialize()</code> succeeds</td><td><code>PhysXBackend</code></td><td>Running, detail "PhysX"</td></tr>
 <tr><td>Built with PhysX, <code>Initialize()</code> fails</td><td>null (reset)</td><td>Failed, "PhysX failed to initialize (see log)"</td></tr>
-<tr><td>Built with PhysX, another backend selected</td><td>null</td><td>Disabled, "Selected physics backend is not supported" (also logged as an error)</td></tr>
+<tr><td>The project asks for a backend the build does not have (<code>physics.backend</code> jolt: no build has the Jolt backend yet) <span class="badge">PR #199</span>, and its preset is not Deterministic</td><td><code>PhysXBackend</code> (a fallback)</td><td>Running, detail "PhysX (physics.backend jolt is not in this build: fell back to PhysX)"; one warning is logged. <a href="#backend-setting">Choosing the backend</a></td></tr>
+<tr><td>The same, and the preset is Deterministic <span class="badge">PR #199</span></td><td>nothing starts</td><td>The start is refused: the Network row is Failed and names it ("physics.backend is jolt but this build has no such backend")</td></tr>
 <tr><td>Built without PhysX</td><td>null</td><td>Disabled, "Built without PhysX"</td></tr>
 </tbody>
 </table>
@@ -131,6 +133,61 @@
 <p class="callout-title">Note</p>
 <p>Tests install a backend headlessly with <code>Application::Set3DPhysicsBackend(std::make_unique&lt;PhysXBackend&gt;())</code> after calling <code>Initialize()</code> themselves. <code>Application::Init</code> does not require a window (headless it continues and reports Failed health), but it tries to open a real window and audio device and clears the quit flag, which tests avoid. See <a href="testing.html">Testing &amp; CI</a>.</p>
 </div>
+
+<h2 id="backend-setting">Choosing the backend (physics.backend) and the backend interface <span class="badge">PR #199</span></h2>
+<p>The project setting <code>physics.backend</code> (a string in the <code>physics</code> block) names the project's 3D physics backend: <code>"physx"</code> or <code>"jolt"</code>, case-insensitive. It is stage J2 of the plan to add a deterministic backend (issue #156): the <strong>setting, the selection and the interface additions</strong> are here; the Jolt backend itself is a later stage, so no build has it yet and PhysX stays the default and the only backend that runs. <code>Application::Init</code> reads it with <code>ReadPhysicsBackend</code>, next to <code>physics.gpu</code> and <code>physics.deterministic</code>, because the backend is created once there and lives across scene switches (one backend per project, not per scene). A change needs a restart: applying it later with <code>ApplyProjectSettings</code> only validates it.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Value in the project file</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>absent or <code>null</code></td><td>unset: the host's <code>ApplicationOptions::physicsBackend</code> applies (<code>PHYSX</code> and <code>AUTO</code> mean PhysX, <code>JOLT</code> means Jolt; every host passes <code>PHYSX</code> today)</td></tr>
+<tr><td><code>"physx"</code>, <code>"jolt"</code> (any case)</td><td>that backend is requested; a project's setting wins over the host's value</td></tr>
+<tr><td>anything else (another string, a number, a boolean, an object)</td><td>physx, with one warning from <code>ApplyProjectSettings</code>: <code>physics.backend: ... is not "physx" or "jolt"; using physx</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Selection.</strong> <code>Physics::ChooseBackend(requested, deterministicPreset, requestedCompiledIn)</code> (<code>engine/include/engine/physics/PhysicsBackendKind.hpp</code>) is a pure function <code>Init</code> applies before anything is started, because the Deterministic preset is checked against the <em>selected</em> backend's declarations:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Requested backend</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>in this build (<code>IsBackendCompiledIn</code>: PhysX with <code>N2ENGINE_USE_PHYSX</code>; Jolt never yet)</td><td>selected as asked, whatever the preset</td></tr>
+<tr><td>not in this build, preset Deterministic</td><td><strong>refused</strong>: the start does not go ahead; the log has one error naming the setting, and the Network row is Failed with "the physics backend declares CrossPlatform determinism (physics.backend is jolt but this build has no such backend)". Nothing is put in its place.</td></tr>
+<tr><td>not in this build, any other preset</td><td>falls back to PhysX with one warning (<code>physics.backend is jolt but this build has no Jolt backend; using physx instead</code>), and the Physics row says so</td></tr>
+<tr><td>PhysX in a build without PhysX</td><td>unchanged: left to <code>Init</code>'s "Built without PhysX" path (nothing to fall back to)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The <a href="#network-table">preset table</a>'s <code>physics.backend</code> row for the Deterministic preset now names the setting and its value: <code>EffectiveValues</code> gives <code>"physics.backend": "jolt"</code> for it, and an override to <code>physx</code> is a lost guarantee (<code>jolt</code> in any case is not). It is table data only: <code>Init</code> does not write <code>jolt</code> into a project that did not ask, so a Deterministic project must set it, and until the Jolt backend exists it is refused either way (with PhysX selected, the requirement reports that PhysX declares less than <code>CrossPlatform</code>; with <code>jolt</code>, that the build has no such backend). The row stays Locked and Startup-checked.</p>
+<p><strong>Health.</strong> The Physics row's detail names the backend that runs (and the fallback, above). For any preset but <code>none</code> the Network row ends with <code>; physics backend &lt;BackendId()&gt;</code> (the backend that actually started, or <code>none</code> when it failed to start), before the simulation mode. With the preset <code>none</code> that row is unchanged.</p>
+
+<h3 id="backend-interface">What <code>IPhysicsBackend</code> gained</h3>
+<p>Every addition has a default, so a backend that does not know about them (the PhysX-free test fakes, any later backend before it implements them) keeps compiling and behaves as "unsupported".</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Member</th><th>Default</th><th>PhysX</th></tr></thead>
+<tbody>
+<tr><td><code>BackendId()</code></td><td><code>"unknown"</code></td><td><code>"physx"</code> (the <code>physics.backend</code> values, <code>"jolt"</code> for the later backend)</td></tr>
+<tr><td><code>GetBodyState(handle, BodyState&amp;)</code> and <code>SetBodyState(handle, const BodyState&amp;)</code> (<code>BodyState</code>: position, rotation, linear and angular velocity, <code>sleeping</code>)</td><td>return false and touch nothing</td><td>implemented, see below; <code>SupportsSetState()</code> is now true</td></tr>
+<tr><td><code>SaveState(std::vector&lt;std::byte&gt;&amp;)</code>, <code>RestoreState(std::span&lt;const std::byte&gt;)</code>, <code>HashState()</code> (the snapshot hooks of the design; <code>HashState</code> returns <code>std::optional&lt;std::uint64_t&gt;</code>)</td><td>false, false and <code>nullopt</code> ("unsupported"; not 0, which is a legal hash)</td><td>unchanged: <code>SupportsSnapshot()</code> stays false and nothing saves or restores a PhysX scene</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>PhysX body state.</strong> Both calls need the body to be in the scene (a stale handle, an invalid one or a disabled body, see <a href="#active-state">Inactive objects</a>, returns false and changes nothing). <code>SetBodyState</code> also refuses, changing nothing, a state with a non-finite position or velocity or a rotation of no length; a rotation that is not unit length is normalised (one that already is, within float rounding, is passed on untouched). It is for the main thread between steps: the engine's PhysX callbacks only queue events, so game code never runs inside one.</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Body</th><th><code>SetBodyState</code> does</th><th><code>GetBodyState</code> reports</th></tr></thead>
+<tbody>
+<tr><td>dynamic</td><td><code>setGlobalPose</code> (a teleport, which <code>SetBodyTransform</code> cannot do), then <code>setLinearVelocity</code> and <code>setAngularVelocity</code>, none of them waking the body; then <code>sleeping</code> true calls <code>putToSleep</code> (which also zeroes the velocities: a sleeping body keeps none) and false calls <code>wakeUp</code> (the wake counter is reset, so it does not fall back asleep in the next step)</td><td>pose, velocities and <code>isSleeping</code></td></tr>
+<tr><td>kinematic</td><td>the pose only, as a kinematic target (the body is there after the next step, like <code>SetBodyTransform</code>); velocities and <code>sleeping</code> do not apply</td><td>pose and <code>isSleeping</code>, zero velocities</td></tr>
+<tr><td>static</td><td>the pose only (<code>setGlobalPose</code>, which is not cheap: it updates the broadphase)</td><td>pose, zero velocities, not asleep</td></tr>
+</tbody>
+</table>
+</div>
+<p>PhysX applies a sleep or wake request when the scene next steps, so <code>GetBodyState</code> reports the new <code>sleeping</code> flag after the next <code>Update</code>; the pose and velocities read back at once. The pose is read relative to the body's centre of mass, so a pose written and read back can differ in the last float bit (the tests compare within 1e-6).</p>
+<div class="callout note" id="design-physics-backend-setting"><p class="callout-title">Design decision: the project picks the backend; an unavailable one never degrades a Deterministic project <span class="badge">PR #199</span></p><p>Decided by the user on 2026-10-20 (P1 to P11: Jolt as a second 3D backend, chosen per project by <code>physics.backend</code> read at <code>Init</code>, PhysX the default). Judgement calls the plan did not cover: (1) the plan has hosts pass <code>AUTO</code> and the project decide; all four hosts pass <code>PHYSX</code> today (three are outside this change's paths), so a project's own setting wins over the host's value and the host's value is only the default for a project that does not say (<code>AUTO</code> and <code>PHYSX</code> then behave alike); (2) a backend missing from the build refuses a Deterministic project (it can never keep its promise on another backend) and falls back to PhysX with a warning for the others (they only lose what the other backend would have added); (3) the unavailable-backend refusal reuses the existing <code>physics-backend</code> requirement of <code>ValidateNetwork</code> (new environment fields <code>backendName</code>, <code>backendUnavailable</code>, <code>backendRequested</code>) rather than a requirement of its own; (4) the snapshot hash is named <code>HashState</code> as in the design, not <code>StateHash</code>, and returns an optional so "unsupported" is not a hash value; (5) <code>BackendId()</code> is the bare setting value (<code>"physx"</code>), without the version suffix the design's determinism fingerprint will want later.</p></div>
+<div class="callout note" id="design-physx-set-state"><p class="callout-title">Design decision: PhysX claims set-state, not snapshot <span class="badge">PR #199</span></p><p>Teleporting a dynamic body, setting its velocities and its sleep state is what client reconciliation needs, and PhysX can do all of it, so <code>SupportsSetState()</code> is true and tested; the Authoritative preset no longer warns about it. Restoring a whole PhysX scene (contact caches, warm starting) cannot be done through its API, so <code>SupportsSnapshot()</code> stays false. Judgement calls: a kinematic body takes a target pose and ignores velocity and sleep (PhysX has no velocity for a kinematic body and refuses the call), and a sleeping dynamic body loses its velocities (<code>putToSleep</code> clears them), which is also what a sleeping body is.</p></div>
+<p class="src">Source: <code>engine/include/engine/physics/PhysicsBackendKind.hpp</code>, <code>BodyState.hpp</code>, <code>IPhysicsBackend.hpp</code>; <code>engine/include/engine/physics/physx/PhysXBackend.hpp</code> and <code>engine/src/physics/physx/PhysXBackend.cpp</code> - <code>GetBodyState</code>, <code>SetBodyState</code>; <code>engine/src/ProjectSettings.cpp</code> - <code>ReadPhysicsBackend</code>; <code>engine/src/Application.cpp</code> - <code>Application::Init</code>; tests: <code>tests/engine/physics/PhysicsBackendSettingTests.cpp</code>, <code>tests/engine/physics/PhysXBodyStateTests.cpp</code>, <code>tests/engine/network/NetworkValidationTests.cpp</code>.</p>
 
 <h2 id="gpu">GPU physics (physics.gpu) <span class="badge">PR #122</span></h2>
 <p>The project setting <code>physics.gpu</code> (in the <code>physics</code> block of <code>project.n2proj</code>, next to <code>fixedTimestep</code> and <code>gravity</code>) chooses whether the rigid-body scene may run on an NVIDIA GPU through PhysX GPU dynamics. It is the groundwork for GPU particles; on its own it adds no new feature.</p>
@@ -215,31 +272,31 @@
 <p>Queries: <code>EffectiveValues(preset, overrides, tickRate)</code> is <code>{settingKey: value}</code> for every cell of the preset that has a setting key and a value, with the overrides on top (the fixed timestep resolves to <code>1 / tickRate</code> seconds, the form the setting is written in; an override of a key the preset does not govern is ignored; <code>none</code> governs nothing, so its result is empty); <code>LostGuarantees(preset, overrides, tickRate)</code> lists one entry per overridden cell that is Locked and not Tunable and whose override differs from the preset's value (strings compare case-insensitively and numbers within 0.1 percent; a requirement with no value to write, such as the strict floating-point build, is waived by any override of its row); <code>IsCustomised</code> is whether that list is not empty. Overriding a Tunable cell, or a Locked one to the preset's own value, loses nothing. The Authoritative preset locks nothing, so only the Deterministic preset can be Customised.</p>
 
 <h3 id="network-backend">What a physics backend declares</h3>
-<p><code>IPhysicsBackend</code> gained three queries the checks read. A backend declares more than the default only when it can prove it.</p>
+<p><code>IPhysicsBackend</code> gained three queries the checks read (and, since <span class="badge">PR #199</span>, <a href="#backend-interface">more</a>). A backend declares more than the default only when it can prove it.</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Query</th><th>Default</th><th>PhysX</th></tr></thead>
 <tbody>
 <tr><td><code>GetDeterminism()</code> (<code>None</code> &lt; <code>SameBinary</code> &lt; <code>CrossPlatform</code>)</td><td><code>None</code></td><td><code>SameBinary</code> only when <code>physics.deterministic</code> is on and the dispatcher has 0 worker threads (the scene then has enhanced determinism and is the CPU scene, even with <code>physics.gpu</code> auto/on, see <a href="#deterministic">above</a>); <code>None</code> otherwise. Never <code>CrossPlatform</code>: Windows and Linux use different PhysX binaries and their hashes differ.</td></tr>
 <tr><td><code>SupportsSnapshot()</code></td><td>false</td><td>false: nothing saves or restores the PhysX scene.</td></tr>
-<tr><td><code>SupportsSetState()</code></td><td>false</td><td>false for now: the interface cannot yet teleport a dynamic body or set its sleep state, so PhysX does not claim it. It becomes true when that body-state API exists.</td></tr>
+<tr><td><code>SupportsSetState()</code></td><td>false</td><td>true <span class="badge">PR #199</span>: <code>GetBodyState</code> and <code>SetBodyState</code> teleport a dynamic body and set its velocities and sleep state (<a href="#backend-interface">what PhysX does</a>). Before PR #199 it was false.</td></tr>
 </tbody>
 </table>
 </div>
-<p><code>PhysXBackend::DeclaredDeterminism(deterministic, workerThreadsOverride)</code> is the same rule as a static function, because <code>Application::Init</code> asks before a backend exists. The fake backend of the tests and any other backend keep the defaults. Since no backend declares <code>CrossPlatform</code>, the Deterministic preset cannot start yet; that is intended.</p>
+<p><code>PhysXBackend::DeclaredDeterminism(deterministic, workerThreadsOverride)</code> is the same rule as a static function, because <code>Application::Init</code> asks before a backend exists. The fake backend of the tests and any other backend keep the defaults. Since no backend declares <code>CrossPlatform</code>, the Deterministic preset cannot start yet; that is intended. The checks read the <em>selected</em> backend (<a href="#backend-setting"><code>physics.backend</code></a>) <span class="badge">PR #199</span>.</p>
 
 <h3 id="network-refusal">Startup checks and the refusal</h3>
 <p><code>Application::Init</code> reads the preset right after the project file and calls <code>ValidateNetwork</code>, a pure function of the settings and an environment (the backend's declarations, <code>Math::IsStrictFp()</code>, the requested <code>math.simdTier</code>, whether <code>determinism.luaSeed</code> is set, <code>physics.gpu</code>). What it checks depends on the preset:</p>
 <ul>
 <li><strong>none</strong>: nothing.</li>
-<li><strong>authoritative</strong>: warnings only, logged as <code>network.preset is authoritative: ...</code>: <code>physics.gpu</code> is not off (a dedicated server runs the CPU scene; this reads the setting, not the scene's final state), and the physics backend does not support set-state (or there is no backend). With PhysX every Authoritative project gets the set-state warning today.</li>
+<li><strong>authoritative</strong>: warnings only, logged as <code>network.preset is authoritative: ...</code>: <code>physics.gpu</code> is not off (a dedicated server runs the CPU scene; this reads the setting, not the scene's final state), and the physics backend does not support set-state (or there is no backend). PhysX supports set-state since PR #199, so an Authoritative project on PhysX no longer gets that warning.</li>
 <li><strong>deterministic</strong>: every requirement below. If any is unmet the engine <strong>refuses to start</strong>.</li>
 </ul>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Requirement id</th><th>Met when</th><th>Today</th></tr></thead>
 <tbody>
-<tr><td><code>physics-backend</code></td><td>the backend's <code>GetDeterminism()</code> is <code>CrossPlatform</code></td><td>never met: no backend declares it</td></tr>
+<tr><td><code>physics-backend</code></td><td>the selected backend's <code>GetDeterminism()</code> is <code>CrossPlatform</code></td><td>never met: no backend declares it, and a <code>physics.backend</code> the build does not have is named in the reason</td></tr>
 <tr><td><code>strict-fp</code></td><td><code>Math::IsStrictFp()</code>: the build has the strict floating-point profile (<code>N2ENGINE_STRICT_FP</code>, <a href="math.html">math</a>)</td><td>only in a build made with that option</td></tr>
 <tr><td><code>simd-scalar</code></td><td><code>math.simdTier</code> is <code>scalar</code> (the requested tier, not the one in use)</td><td>when the project sets it</td></tr>
 <tr><td><code>lua-seed</code></td><td><code>determinism.luaSeed</code> is set</td><td>when the project sets it</td></tr>
