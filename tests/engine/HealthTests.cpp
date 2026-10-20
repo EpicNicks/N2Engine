@@ -216,7 +216,8 @@ TEST_F(NetworkPresetInitTest, ADeterministicProjectIsRefusedAndNothingStarts)
     EXPECT_TRUE(Mentions(health, "determinism.luaSeed is set"));
     EXPECT_TRUE(Mentions(health, "engine-owned trig (C1)"));
     EXPECT_TRUE(Mentions(health, "physics results do not depend on the thread count"));
-    EXPECT_TRUE(Mentions(health, "netcode-owned tick loop"));
+    // The preset selects the tick loop (SimulationMode::Deterministic), so that requirement is met
+    EXPECT_FALSE(Mentions(health, "the netcode tick loop"));
     // The strict profile is the one requirement that depends on the build (there is a strict-FP CI leg)
     EXPECT_EQ(Mentions(health, "strict floating-point profile"), !Math::IsStrictFp());
     // Met on this project: physics.gpu is off by default and the fixed timestep is 1 / tickRate
@@ -237,6 +238,8 @@ TEST_F(NetworkPresetInitTest, ADeterministicProjectIsRefusedAndNothingStarts)
     EXPECT_EQ(app.GetWindow().GetRenderer(), nullptr);
     EXPECT_EQ(app.GetMainCamera(), nullptr);
     EXPECT_EQ(app.Get3DPhysicsBackend(), nullptr);
+    // ...and the simulation mode is untouched: the preset's mode is applied only to a start that goes ahead
+    EXPECT_EQ(app.GetSimulationMode(), SimulationMode::None);
     for (const char *name : {"Window", "Renderer", "Physics", "Particles", "SoftBodies", "Audio", "Scripting"})
     {
         const SubsystemStatus *row = health.Find(name);
@@ -255,7 +258,7 @@ TEST_F(NetworkPresetInitTest, ADeterministicProjectIsRefusedAndNothingStarts)
 TEST_F(NetworkPresetInitTest, TheRefusalListsEveryRequirementTheProjectCouldNotMeet)
 {
     // Every project setting a Deterministic project can make is made: the refusal still stands, for what no setting
-    // can provide (a cross-platform backend, engine-owned trig, the tick loop, and a strict-FP build)
+    // can provide (a cross-platform backend, engine-owned trig, and a strict-FP build)
     const EngineHealth health = InitWith({
         {"network", {{"preset", "deterministic"}}},
         {"physics", {{"gpu", "off"}, {"deterministic", true}}},
@@ -267,9 +270,9 @@ TEST_F(NetworkPresetInitTest, TheRefusalListsEveryRequirementTheProjectCouldNotM
     EXPECT_EQ(network->state, SubsystemState::Failed);
     EXPECT_TRUE(Mentions(health, "the physics backend declares CrossPlatform determinism"));
     EXPECT_TRUE(Mentions(health, "engine-owned trig (C1)"));
-    EXPECT_TRUE(Mentions(health, "netcode-owned tick loop"));
     EXPECT_EQ(Mentions(health, "strict floating-point profile"), !Math::IsStrictFp());
-    // Met by those settings, so not named
+    // Met by those settings (and the tick loop by the preset), so not named
+    EXPECT_FALSE(Mentions(health, "the netcode tick loop"));
     EXPECT_FALSE(Mentions(health, "math.simdTier is scalar"));
     EXPECT_FALSE(Mentions(health, "determinism.luaSeed is set"));
     EXPECT_FALSE(Mentions(health, "physics.gpu is off"));

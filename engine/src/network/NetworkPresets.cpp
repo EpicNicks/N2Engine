@@ -89,7 +89,8 @@ namespace N2Engine::Network
                 Any("frame-driven accumulator"),
                 Cell(T, {}, nullptr, "tick counter owned by netcode; the catch-up clamp is tunable"),
                 Cell(L | S, {}, nullptr,
-                     "tick counter owned by netcode; no wall-clock clamp dropping ticks (not built yet)",
+                     "tick counter owned by netcode (SimulationMode::Deterministic, selected by the preset); no "
+                     "wall-clock clamp dropping ticks: owed ticks are kept and reported",
                      "A wall-clock catch-up clamp drops ticks: peers run different tick counts")));
             rows.push_back(Row(
                 "math.simdTier", "Math SIMD tier",

@@ -6,6 +6,7 @@
 #include <math/MathRegistrar.hpp>
 
 #include "engine/Health.hpp"
+#include "engine/SimulationClock.hpp"
 #include "engine/network/NetworkSettings.hpp"
 #include "engine/physics/DeterminismLevel.hpp"
 #include "engine/physics/GpuStatus.hpp"
@@ -29,7 +30,9 @@ namespace N2Engine::Network
         bool luaSeedSet = false;
         /// Engine-owned Sin/Cos/Atan2/Acos exist (they do not yet: planned as netcode item C1)
         bool engineOwnedTrig = false;
-        /// A netcode-owned tick loop, independent of timeScale and the frame clock, exists (not yet: item A2)
+        /// The fixed-step loop runs as the netcode's tick loop (SimulationClock in a network SimulationMode: whole ticks
+        /// owed, never dropped, and a fixed dt independent of timeScale). Application::Init sets it when network.preset
+        /// selects a network mode (SimulationModeFor), which it then applies with Application::SetSimulationMode.
         bool ownedTickLoop = false;
         /// The fixed timestep is on (it always is: the engine has no way to switch it off)
         bool fixedTimestep = true;
@@ -78,6 +81,11 @@ namespace N2Engine::Network
      * A pure function of its arguments.
      */
     [[nodiscard]] NetworkValidation ValidateNetwork(const NetworkSettings &settings, const NetworkEnvironment &env);
+
+    /// The application's simulation mode for a preset: none -> None (the offline loop), authoritative ->
+    /// Authoritative, deterministic -> Deterministic. Application::Init applies it (SetSimulationMode) for a project
+    /// that starts with a network preset; for none it changes nothing.
+    [[nodiscard]] SimulationMode SimulationModeFor(NetworkPreset preset);
 
     /**
      * The engine health "Network" row: Disabled for none (and for a preset whose checks pass: no network runtime

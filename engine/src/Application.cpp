@@ -138,6 +138,10 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         }
     }
     networkEnv.strictFp = Math::IsStrictFp();
+    // A network preset runs the fixed-step loop as the tick loop (SimulationClock's network modes, applied below once
+    // the start goes ahead); none keeps the offline loop
+    const SimulationMode presetMode = Network::SimulationModeFor(networkSettings.preset);
+    networkEnv.ownedTickLoop = presetMode != SimulationMode::None;
 #ifdef N2ENGINE_PHYSX_ENABLED
     if (options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::PHYSX)
     {
@@ -214,6 +218,15 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     Logger::Info(std::format("Math SIMD tier: {} ({})", Math::SIMDLevelName(simdLevel),
                              simdRequest == Math::SIMDTierRequest::Auto ? "auto-detected" : "forced by math.simdTier"));
     Time::Init();
+    // network.preset drives the simulation mode: authoritative and deterministic switch the fixed-step loop to the
+    // tick loop (whole ticks owed, never dropped; fixed dt independent of timeScale). None does not touch it, so a
+    // project without a network preset starts exactly as before.
+    if (presetMode != SimulationMode::None)
+    {
+        SetSimulationMode(presetMode);
+        Logger::Info(std::format("network.preset {}: simulation mode {}", Network::ToString(networkSettings.preset),
+                                 ToString(presetMode)));
+    }
     // A project's rendering settings belong to that project: a second Init in the same process starts from the defaults
     Rendering::RenderSettings::SetColorSpace(Rendering::ColorSpace::Gamma);
     Rendering::RenderSettings::SetForceShaderEncode(false);
@@ -369,7 +382,12 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
             Logger::Warn("network.preset is authoritative: " + warning);
         }
     }
-    const SubsystemStatus networkStatus = Network::MakeNetworkStatus(networkSettings, networkValidation);
+    SubsystemStatus networkStatus = Network::MakeNetworkStatus(networkSettings, networkValidation);
+    if (presetMode != SimulationMode::None)
+    {
+        // The mode the application actually runs in, read back rather than assumed
+        networkStatus.detail += std::format("; simulation mode {}", ToString(GetSimulationMode()));
+    }
 
     // The Particles and SoftBodies rows follow the physics GPU probe: Disabled with the reason unless the GPU scene
     // is up (and, for each, its own feature has not failed)

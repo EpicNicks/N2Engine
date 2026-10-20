@@ -351,6 +351,10 @@ def scenario_network_presets(hosts, work, version):
     network = authoritative[-1]
     check(network[0] == "Network" and network[1] == "Disabled" and network[2].startswith("Preset authoritative"),
           "The authoritative Network row is %s" % (network,))
+    # The preset drives Application::SetSimulationMode; the row reports the mode the application runs in
+    check(network[2].endswith("; simulation mode authoritative"),
+          "The authoritative Network row doesn't report simulation mode authoritative: %s" % network[2])
+    check("simulation mode" not in baseline[-1][2], "The none Network row reports a simulation mode: %s" % baseline[-1][2])
     say("network.preset: no block and none report the same health; authoritative differs only in its Network row")
 
     set_network_block(project, {"preset": "deterministic"})

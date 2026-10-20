@@ -35,7 +35,7 @@ namespace
     }
 
     /// An environment that meets every Deterministic requirement: what a project would have once a cross-platform
-    /// backend, the engine trig and the tick loop exist. Nothing like it exists today.
+    /// backend and the engine trig exist. Nothing like it exists today.
     NetworkEnvironment EverythingMet()
     {
         NetworkEnvironment env;
@@ -63,7 +63,8 @@ namespace
         return ids;
     }
 
-    /// The environment of a real build today: what Application::Init sees for a default project on PhysX
+    /// The environment of a real build today: what Application::Init sees for a default project on PhysX with a
+    /// network preset (which selects a network SimulationMode, so the tick loop is there)
     NetworkEnvironment TodayWithPhysX()
     {
         NetworkEnvironment env;
@@ -71,6 +72,7 @@ namespace
         env.backendLevel = DeterminismLevel::None;
         env.strictFp = false;
         env.simdTier = Math::SIMDTierRequest::Auto;
+        env.ownedTickLoop = true;
         return env;
     }
 }
@@ -165,7 +167,7 @@ TEST(NetworkValidationTest, DeterministicTodayNamesEveryUnmetRequirement)
     EXPECT_TRUE(validation.Refused());
     EXPECT_EQ(UnmetIds(validation),
               (std::vector<std::string>{"physics-backend", "strict-fp", "simd-scalar", "lua-seed", "engine-trig",
-                                        "physics-threads", "tick-loop"}));
+                                        "physics-threads"}));
     // gpu-physics-off and fixed-timestep are met and listed as met; lockstep has no snapshot requirement
     EXPECT_EQ(validation.requirements.size(), 9u);
     for (const NetworkRequirement &requirement : validation.requirements)
@@ -185,7 +187,7 @@ TEST(NetworkValidationTest, DeterministicWithAPhysicsDeterministicPhysXStillCann
     env.luaSeedSet = true;
     const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
     EXPECT_TRUE(validation.Refused());
-    EXPECT_EQ(UnmetIds(validation), (std::vector<std::string>{"physics-backend", "engine-trig", "tick-loop"}));
+    EXPECT_EQ(UnmetIds(validation), (std::vector<std::string>{"physics-backend", "engine-trig"}));
 }
 
 TEST(NetworkValidationTest, DeterministicWithoutABackendNamesIt)
@@ -262,6 +264,25 @@ TEST(NetworkValidationTest, TheFixedTimestepMustMatchTheTickRate)
     EXPECT_NE(mismatch.Unmet()[0]->detail.find("network.tickRate 60"), std::string::npos);
     settings.tickRate = 50;
     EXPECT_FALSE(ValidateNetwork(settings, env).Refused());
+}
+
+TEST(NetworkValidationTest, EachPresetSelectsItsSimulationMode)
+{
+    // What Application::Init applies with SetSimulationMode (none: it applies nothing)
+    EXPECT_EQ(SimulationModeFor(NetworkPreset::None), SimulationMode::None);
+    EXPECT_EQ(SimulationModeFor(NetworkPreset::Authoritative), SimulationMode::Authoritative);
+    EXPECT_EQ(SimulationModeFor(NetworkPreset::Deterministic), SimulationMode::Deterministic);
+}
+
+TEST(NetworkValidationTest, TheTickLoopRequirementNamesTheOfflineLoop)
+{
+    // Unmet only when the loop is not in a network mode (Init sets ownedTickLoop from SimulationModeFor)
+    NetworkEnvironment env = EverythingMet();
+    env.ownedTickLoop = false;
+    const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
+    ASSERT_EQ(UnmetIds(validation), (std::vector<std::string>{"tick-loop"}));
+    EXPECT_NE(validation.Unmet()[0]->text.find("the netcode tick loop"), std::string::npos);
+    EXPECT_NE(validation.Unmet()[0]->detail.find("mode none"), std::string::npos);
 }
 
 TEST(NetworkValidationTest, RollbackAlsoNeedsASnapshotLockstepDoesNot)

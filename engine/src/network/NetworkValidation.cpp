@@ -114,8 +114,11 @@ namespace N2Engine::Network
                 : std::format("physics.fixedTimestep is {} s but network.tickRate {} needs {} s",
                               env.fixedTimestepSeconds, settings.tickRate, expectedStep)));
         requirements.push_back(Requirement(
-            "tick-loop", "a netcode-owned tick loop independent of timeScale (A2)", env.ownedTickLoop,
-            "not built yet: the fixed-step loop follows the frame clock and the physics step is scaled by timeScale"));
+            "tick-loop",
+            "the fixed-step loop is the netcode tick loop, independent of timeScale (a network SimulationMode)",
+            env.ownedTickLoop,
+            "the simulation runs in mode none: the offline loop drops time beyond MaxFrameTime and its fixed dt "
+            "follows timeScale"));
         if (settings.deterministic.mode == DeterministicMode::Rollback)
         {
             requirements.push_back(Requirement(
@@ -125,6 +128,20 @@ namespace N2Engine::Network
                                : std::string("there is no physics backend")));
         }
         return result;
+    }
+
+    SimulationMode SimulationModeFor(const NetworkPreset preset)
+    {
+        switch (preset)
+        {
+        case NetworkPreset::Authoritative:
+            return SimulationMode::Authoritative;
+        case NetworkPreset::Deterministic:
+            return SimulationMode::Deterministic;
+        case NetworkPreset::None:
+            break;
+        }
+        return SimulationMode::None;
     }
 
     SubsystemStatus MakeNetworkStatus(const NetworkSettings &settings, const NetworkValidation &validation)
