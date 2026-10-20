@@ -4,8 +4,12 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <string>
 #include <vector>
+
+#include <emscripten/emscripten.h>
+#include <emscripten/heap.h>
 
 #include "engine/Logger.hpp"
 
@@ -114,6 +118,68 @@ TEST(PhysXWebTest, ErrorsReportedByTheSdkReachTheLogger)
     }
     foundation->release();
     EXPECT_GE(capture.Count(Logger::LogLevel::Error, "PhysX invalid parameter"), 1);
+}
+
+// What a scene costs in wasm memory and time under node, printed and only loosely asserted (docs/web-build.html, "PhysX
+// on the web"): the heap may grow (-sALLOW_MEMORY_GROWTH=1; no up-front allocation was added for PhysX), so this is the
+// number to watch. The times are those of node, not of a browser, and are not a performance claim.
+TEST(PhysXWebTest, ABoxStackCostsAModestHeapGrowthAndSteps)
+{
+    constexpr int kBoxes = 200;
+    constexpr int kSteps = 120;
+    const std::size_t heapBefore = emscripten_get_heap_size();
+
+    static physx::PxDefaultAllocator allocator;
+    PhysXLoggerErrorCallback callback;
+    physx::PxFoundation *foundation = PxCreateFoundation(PX_PHYSICS_VERSION, allocator, callback);
+    ASSERT_NE(foundation, nullptr);
+    physx::PxPhysics *physics =
+        PxCreatePhysics(PX_PHYSICS_VERSION, *foundation, physx::PxTolerancesScale(), true, nullptr);
+    ASSERT_NE(physics, nullptr);
+    physx::PxDefaultCpuDispatcher *dispatcher = physx::PxDefaultCpuDispatcherCreate(0);
+    ASSERT_NE(dispatcher, nullptr);
+    physx::PxSceneDesc desc(physics->getTolerancesScale());
+    desc.gravity = physx::PxVec3(0.0f, -9.81f, 0.0f);
+    desc.cpuDispatcher = dispatcher;
+    desc.filterShader = physx::PxDefaultSimulationFilterShader;
+    desc.flags |= physx::PxSceneFlag::eENABLE_PCM | physx::PxSceneFlag::eENABLE_STABILIZATION;
+    physx::PxScene *scene = physics->createScene(desc);
+    ASSERT_NE(scene, nullptr);
+    physx::PxMaterial *material = physics->createMaterial(0.5f, 0.5f, 0.1f);
+
+    physx::PxRigidStatic *floor = physics->createRigidStatic(physx::PxTransform(physx::PxVec3(0.0f, -0.5f, 0.0f)));
+    physx::PxRigidActorExt::createExclusiveShape(*floor, physx::PxBoxGeometry(50.0f, 0.5f, 50.0f), *material);
+    scene->addActor(*floor);
+    for (int i = 0; i < kBoxes; ++i)
+    {
+        const float x = static_cast<float>(i % 5) * 1.2f - 2.4f;
+        const float y = 0.5f + static_cast<float>(i / 25) * 1.2f;
+        const float z = static_cast<float>((i / 5) % 5) * 1.2f - 2.4f;
+        physx::PxRigidDynamic *box = physics->createRigidDynamic(physx::PxTransform(physx::PxVec3(x, y, z)));
+        physx::PxRigidActorExt::createExclusiveShape(*box, physx::PxBoxGeometry(0.5f, 0.5f, 0.5f), *material);
+        physx::PxRigidBodyExt::updateMassAndInertia(*box, 1.0f);
+        scene->addActor(*box);
+    }
+
+    const double start = emscripten_get_now();
+    for (int i = 0; i < kSteps; ++i)
+    {
+        scene->simulate(1.0f / 60.0f);
+        scene->fetchResults(true);
+    }
+    const double elapsedMs = emscripten_get_now() - start;
+    const std::size_t heapAfter = emscripten_get_heap_size();
+
+    std::printf("[PHYSX-WEB] %d boxes on a floor, %d steps of 1/60 s, 0 workers, under node: %.1f ms in total (%.2f ms per step); "
+                "heap %zu -> %zu bytes (+%zu)\n",
+                kBoxes, kSteps, elapsedMs, elapsedMs / kSteps, heapBefore, heapAfter, heapAfter - heapBefore);
+    EXPECT_LT(heapAfter - heapBefore, static_cast<std::size_t>(64) * 1024 * 1024);
+
+    scene->release();
+    material->release();
+    dispatcher->release();
+    physics->release();
+    foundation->release();
 }
 
 // The backend itself: it builds on the web, runs its scene with no worker threads and steps
