@@ -76,9 +76,8 @@ endif()
 
 if(N2ENGINE_PLATFORM_WEB)
     include(${CMAKE_SOURCE_DIR}/cmake/N2EngineWeb.cmake)
-    # Stage 1 of the web build is the headless engine core (docs/web-build.html lists what is excluded and why)
-    message(STATUS "Web: PhysX off (no WebAssembly build of it yet)")
-    set(N2ENGINE_USE_PHYSX OFF)
+    # PhysX (stage 5) is built from source for WebAssembly below (cmake/PhysXWeb.cmake); -DN2ENGINE_USE_PHYSX=OFF gives
+    # a web build with no physics backend
     message(STATUS "Web: Vulkan renderer off (no Vulkan in the browser)")
     set(N2ENGINE_RENDERER_VULKAN OFF)
     message(STATUS "Web: no GLFW window or GL context (external/web-stubs stands in for GLFW; the player shows frames on a canvas and reads input from the page), audio is Emscripten's OpenAL on WebAudio (N2ENGINE_WEB_AUDIO, or a no-op stub); the editor host (sockets, TLS), test_project and lua_project are not built")
@@ -88,7 +87,10 @@ endif()
 set(N2ENGINE_PHYSX_AVAILABLE OFF)
 
 if(N2ENGINE_USE_PHYSX)
-    if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if(N2ENGINE_PLATFORM_WEB)
+        # Static CPU-only libraries compiled for WebAssembly from the pinned source (scripts/web-build-physx.sh)
+        include(${CMAKE_SOURCE_DIR}/cmake/PhysXWeb.cmake)
+    elseif(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         message(WARNING
                 "PhysX is not supported with MinGW/GCC on Windows. "
                 "Disabling PhysX. Use MSVC or clang-cl for PhysX support."
