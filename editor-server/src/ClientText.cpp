@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "editor-server/EditorServer.hpp"
-#include "engine/Logger.hpp"
+#include "editor-server/ServerLog.hpp"
 
 namespace N2Engine::Editor::ClientText
 {
@@ -74,6 +74,61 @@ namespace N2Engine::Editor::ClientText
             return std::isalnum(u) != 0 || c == '_' || c == '-' || u >= 0x80;
         }
 
+        /// Whether the folder found at `at` of the (separator-normalised) text is only the tail of something longer: a
+        /// name, a drive ("D:/srv/game" is not "/srv/game"), or a path or URL whose slashes run into it (a client's own
+        /// "res://srv/game/a.txt" is not the host's "/srv/game"). A file:// URL is still the host's folder.
+        bool StartsInsideName(const std::string &normalized, const size_t at)
+        {
+            if (at == 0)
+            {
+                return false;
+            }
+            const char c = normalized[at - 1];
+            const auto u = static_cast<unsigned char>(c);
+            if (std::isalnum(u) != 0 || c == '_' || c == '-' || c == '.' || c == ':' || u >= 0x80)
+            {
+                return true;
+            }
+            if (c != '/')
+            {
+                return false;
+            }
+            if (at >= 4 && normalized.compare(at - 4, 4, "//?/") == 0)
+            {
+                // A Windows long path ("\\?\C:\srv\game") is the host's folder
+                return false;
+            }
+            size_t k = at;
+            while (k > 0 && normalized[k - 1] == '/')
+            {
+                --k;
+            }
+            constexpr std::string_view scheme = "file:";
+            if (k < scheme.size())
+            {
+                return true;
+            }
+            for (size_t i = 0; i < scheme.size(); ++i)
+            {
+                if (std::tolower(static_cast<unsigned char>(normalized[k - scheme.size() + i])) != scheme[i])
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// A folder that is the top of a drive or of the file system ("/", "C:\", "C:"), or too short to be told apart
+        /// from ordinary text: it would match nearly anything, so it is never replaced
+        bool TooBroadToReplace(const HostRoot &root, std::string spelled)
+        {
+            while (!spelled.empty() && (spelled.back() == '/' || spelled.back() == '\\'))
+            {
+                spelled.pop_back();
+            }
+            return spelled.size() < 3 || root.path.relative_path().empty();
+        }
+
         /// Where the path that follows a replaced folder ends
         bool EndsPath(const char c)
         {
@@ -102,9 +157,10 @@ namespace N2Engine::Editor::ClientText
 
     std::string Failure(const std::string_view what, const std::string_view reason, const std::string_view detail)
     {
-        // The detail is the host's to read, whoever asked
+        // The detail is the host's to read, whoever asked: it names host paths, so it is an Admin line (PollEvents gives
+        // it to an admin, or to a host without authentication, and to no other role)
         const std::string logged = what.empty() ? std::string(detail) : std::string(what) + ": " + std::string(detail);
-        Logger::Warn(EditorServer::SanitizeForLog(logged, 300));
+        ServerLog::Warn(EditorServer::SanitizeForLog(logged, 300));
 
         const std::string_view shown = IsLocal() && !detail.empty() ? detail : reason;
         if (what.empty())
@@ -121,7 +177,7 @@ namespace N2Engine::Editor::ClientText
         for (const HostRoot &root : roots)
         {
             std::string spelled = GenericText(root.path);
-            if (spelled.size() > 1)
+            if (!TooBroadToReplace(root, spelled))
             {
                 forms.emplace_back(std::move(spelled), root.label);
             }
@@ -143,9 +199,9 @@ namespace N2Engine::Editor::ClientText
                 }
                 const size_t end = found + folder.size();
                 result.append(text, at, found - at);
-                if (ContinuesName(text, end))
+                if (ContinuesName(text, end) || StartsInsideName(normalized, found))
                 {
-                    // Only the start of a longer name: not this folder
+                    // Only the start or the tail of a longer name or path: not this folder
                     result.append(text, found, end - found);
                     at = end;
                     continue;

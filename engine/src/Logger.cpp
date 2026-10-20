@@ -32,6 +32,9 @@ namespace
         static auto *mutex = new std::recursive_mutex();
         return *mutex;
     }
+
+    // The tag of the line being delivered on this thread (subscribers run on the logging thread)
+    thread_local Logger::LogSensitivity deliveringSensitivity = Logger::LogSensitivity::Public;
 }
 
 Logger::LogEventHandler Logger::logEvent;
@@ -50,10 +53,23 @@ void Logger::LogEventHandler::operator-=(const size_t id)
     _handler -= id;
 }
 
-void Logger::LogEventHandler::operator()(const std::string_view message, const LogLevel level)
+void Logger::LogEventHandler::operator()(const std::string_view message, const LogLevel level,
+                                         const LogSensitivity sensitivity)
 {
     std::lock_guard lock(LogMutex());
+    // A subscriber that logs re-enters here: its own line carries its own tag, and the outer one is restored after
+    struct Restore
+    {
+        LogSensitivity previous = deliveringSensitivity;
+        ~Restore() { deliveringSensitivity = previous; }
+    } restore;
+    deliveringSensitivity = sensitivity;
     _handler(message, level);
+}
+
+Logger::LogSensitivity Logger::CurrentSensitivity()
+{
+    return deliveringSensitivity;
 }
 
 size_t Logger::LogEventHandler::GetSubscriberCount() const
@@ -62,13 +78,13 @@ size_t Logger::LogEventHandler::GetSubscriberCount() const
     return _handler.GetSubscriberCount();
 }
 
-void Logger::Log(std::string_view log, LogLevel level)
+void Logger::Log(std::string_view log, LogLevel level, const LogSensitivity sensitivity)
 {
     // Held across the backlog check and the delivery: another thread's log waits for this one to finish
     std::lock_guard lock(LogMutex());
     if (broadcastUnbroadcastLogs && logEvent.GetSubscriberCount() == 0)
     {
-        _logQueue.push({std::string(log), level});
+        _logQueue.push({std::string(log), level, sensitivity});
     }
     else
     {
@@ -80,25 +96,25 @@ void Logger::Log(std::string_view log, LogLevel level)
         {
             const QueuedLog queuedLog = std::move(backlog.front());
             backlog.pop();
-            logEvent(queuedLog.message, queuedLog.level);
+            logEvent(queuedLog.message, queuedLog.level, queuedLog.sensitivity);
         }
-        logEvent(log, level);
+        logEvent(log, level, sensitivity);
     }
 }
 
-void Logger::Info(const std::string_view log)
+void Logger::Info(const std::string_view log, const LogSensitivity sensitivity)
 {
-    Log(log, LogLevel::Info);
+    Log(log, LogLevel::Info, sensitivity);
 }
 
-void Logger::Warn(const std::string_view log)
+void Logger::Warn(const std::string_view log, const LogSensitivity sensitivity)
 {
-    Log(log, LogLevel::Warn);
+    Log(log, LogLevel::Warn, sensitivity);
 }
 
-void Logger::Error(const std::string_view log)
+void Logger::Error(const std::string_view log, const LogSensitivity sensitivity)
 {
-    Log(log, LogLevel::Error);
+    Log(log, LogLevel::Error, sensitivity);
 }
 
 static bool SupportsColor(std::ostream& stream)

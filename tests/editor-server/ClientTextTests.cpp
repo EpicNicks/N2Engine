@@ -34,6 +34,7 @@ namespace
             {
                 const std::lock_guard lock(_mutex);
                 _lines.emplace_back(message);
+                _sensitivities.push_back(Logger::CurrentSensitivity());
             };
         }
 
@@ -53,9 +54,26 @@ namespace
             return false;
         }
 
+        /// Whether every line holding `text` was logged at Admin sensitivity (and there is one)
+        [[nodiscard]] bool OnlyAdminHas(const std::string_view text) const
+        {
+            const std::lock_guard lock(_mutex);
+            bool found = false;
+            for (size_t i = 0; i < _lines.size(); ++i)
+            {
+                if (_lines[i].find(text) == std::string::npos)
+                    continue;
+                if (_sensitivities[i] != Logger::LogSensitivity::Admin)
+                    return false;
+                found = true;
+            }
+            return found;
+        }
+
     private:
         mutable std::mutex _mutex;
         std::vector<std::string> _lines;
+        std::vector<Logger::LogSensitivity> _sensitivities;
         size_t _id = 0;
     };
 
@@ -116,6 +134,28 @@ TEST(ClientTextRedactTest, ARootThatIsNothingIsIgnored)
     EXPECT_EQ(ClientText::RedactHostPaths("a/b and /c", roots), "a/b and /c");
 }
 
+TEST(ClientTextRedactTest, AFolderAtTheTopOfADriveOrTheFileSystemIsNeverReplaced)
+{
+    // A working folder of "C:\" (or "/") would otherwise leave "C:" as a root that matches everywhere
+    const std::vector<ClientText::HostRoot> roots{
+        {fs::path("C:\\"), "<host>"}, {fs::path("C:/"), "<host>"}, {fs::path("C:"), "<host>"}, {fs::path("/a"), "<a>"}};
+    const std::string text = "C:/x and C:\\y\\z and /a/b and D:/a";
+    EXPECT_EQ(ClientText::RedactHostPaths(text, roots), text);
+}
+
+TEST(ClientTextRedactTest, AFolderIsOnlyReplacedWhereItStartsAPath)
+{
+    const std::vector<ClientText::HostRoot> roots{{fs::path("/srv/game"), "<project>"}};
+    // The client's own res:// and user:// paths, a deeper folder and another drive are not the host's /srv/game
+    const std::string clientPaths = "res://srv/game/a.txt, user://srv/game/b.bin, /data/srv/game/c and D:/srv/game/d";
+    EXPECT_EQ(ClientText::RedactHostPaths(clientPaths, roots), clientPaths);
+    EXPECT_EQ(ClientText::RedactHostPaths("x/srv/game/e", roots), "x/srv/game/e");
+    // After a space, a quote, a bracket or '=' it is the host's folder, and so is a file:// URL to it
+    EXPECT_EQ(ClientText::RedactHostPaths("'/srv/game/a' [/srv/game/b] path=/srv/game/c", roots),
+              "'<project>/a' [<project>/b] path=<project>/c");
+    EXPECT_EQ(ClientText::RedactHostPaths("file:///srv/game/a.txt", roots), "file://<project>/a.txt");
+}
+
 TEST(ClientTextRedactTest, RedactDoesNothingForALocalClientAndAppliesTheScopesFoldersForARemoteOne)
 {
     const std::string text = "can't read /srv/zz/assets/a.txt";
@@ -169,6 +209,8 @@ TEST(ClientTextScopeTest, FailureGivesALocalClientTheDetailAndARemoteOneTheReaso
                                       "can't replace /srv/zz/assets/a.txt: Access is denied"),
                   "Couldn't write res://a.txt: the file could not be written");
         EXPECT_TRUE(log.Has("can't replace /srv/zz/assets/a.txt: Access is denied")) << "the detail is in the host's log";
+        EXPECT_TRUE(log.OnlyAdminHas("/srv/zz/assets/a.txt"))
+            << "the detail names host paths: an Admin line (ServerLog), never a Public one a non-admin poller reads";
         EXPECT_EQ(ClientText::Failure("", "the component refused the value", "boom"), "the component refused the value");
     }
 }
