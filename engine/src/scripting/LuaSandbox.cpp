@@ -122,6 +122,17 @@ end
                 lua_pushnil(L);
                 lua_setglobal(L, name);
             }
+            // What the library setup and sol leave in _G besides the libraries: "base" (the globals table again),
+            // sol's default error handler (a function) and its exception handler (a light userdata: the address of
+            // a function of the host's binary, which tostring would show). Nothing of the sandbox needs them: sol
+            // falls back to its own handler when the global is not a light userdata, and an absent error handler
+            // means no handler.
+            for (const char *name : {"base", sol::detail::default_handler_name(),
+                                     sol::detail::default_exception_handler_name()})
+            {
+                lua_pushnil(L);
+                lua_setglobal(L, name);
+            }
             lua_getglobal(L, "string");
             if (lua_istable(L, -1))
             {

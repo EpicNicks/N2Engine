@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 
+#include <sol/sol.hpp>
+
 #include "engine/scripting/DeclarationEvaluator.hpp"
 #include "engine/scripting/LuaRuntime.hpp"
 #include "engine/scripting/LuaSandbox.hpp"
@@ -130,11 +132,24 @@ namespace
         return names;
     }
 
-    // What the standard base library leaves, with the other libraries: the Declarations profile's globals
-    const std::vector<std::string> DeclarationsGlobals = Sorted({
-        "_G", "_VERSION", "assert", "collectgarbage", "dofile", "error", "getmetatable", "ipairs", "load", "loadfile",
-        "math", "next", "pairs", "pcall", "print", "rawequal", "rawget", "rawlen", "rawset", "select", "setmetatable",
-        "string", "table", "tonumber", "tostring", "type", "warn", "xpcall"});
+    // What sol leaves in _G of a state it makes (and "base", which opening the base library through sol adds): kept in
+    // the Declarations profile, which is what the evaluator always had, and removed from the EditorExtension one
+    const std::vector<std::string> SolGlobals = {"base", sol::detail::default_handler_name(),
+                                                 sol::detail::default_exception_handler_name()};
+
+    std::vector<std::string> Joined(std::vector<std::string> names, const std::vector<std::string> &more)
+    {
+        names.insert(names.end(), more.begin(), more.end());
+        std::ranges::sort(names);
+        return names;
+    }
+
+    // What the standard base library leaves, with the other libraries and sol's: the Declarations profile's globals
+    const std::vector<std::string> DeclarationsGlobals = Joined(
+        {"_G", "_VERSION", "assert", "collectgarbage", "dofile", "error", "getmetatable", "ipairs", "load", "loadfile",
+         "math", "next", "pairs", "pcall", "print", "rawequal", "rawget", "rawlen", "rawset", "select", "setmetatable",
+         "string", "table", "tonumber", "tostring", "type", "warn", "xpcall"},
+        SolGlobals);
 
     // The EditorExtension profile's: the base library without load, loadfile, dofile, collectgarbage, print and warn,
     // plus math, string, table and utf8. Nothing of the engine, no Editor namespace yet (E-X3).
@@ -144,10 +159,11 @@ namespace
         "utf8", "xpcall"});
 
     // What the declaration evaluator leaves after its environment script (what a declaration script sees)
-    const std::vector<std::string> EvaluatorGlobals = Sorted({
-        "Vector3", "_G", "_VERSION", "assert", "error", "getmetatable", "ipairs", "math", "next", "pairs", "pcall",
-        "rawequal", "rawget", "rawlen", "rawset", "select", "setmetatable", "string", "table", "tonumber", "tostring",
-        "type", "xpcall"});
+    const std::vector<std::string> EvaluatorGlobals = Joined(
+        {"Vector3", "_G", "_VERSION", "assert", "error", "getmetatable", "ipairs", "math", "next", "pairs", "pcall",
+         "rawequal", "rawget", "rawlen", "rawset", "select", "setmetatable", "string", "table", "tonumber", "tostring",
+         "type", "xpcall"},
+        SolGlobals);
 
     double ElapsedMs(const std::chrono::steady_clock::time_point since)
     {
@@ -260,6 +276,10 @@ TEST_F(LuaSandboxTest, TheEditorExtensionProfileHasExactlyTheAllowlistedGlobals)
 {
     auto sandbox = Make(SandboxProfile::EditorExtension);
     EXPECT_EQ(KeysOf(sandbox->State()), EditorGlobals);
+    for (const std::string &name : SolGlobals)
+    {
+        EXPECT_EQ(Value(*sandbox, "rawget(_G, '" + name + "')"), "nil") << "sol's bookkeeping is not visible to scripts";
+    }
     EXPECT_TRUE(sandbox->PreludeOutcome().ok);
     CloseChecked(*sandbox);
 }
