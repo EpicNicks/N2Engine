@@ -11,7 +11,9 @@
 #include <sol/sol.hpp>
 
 #include "LuaGuard.hpp"
+#include "LuaSandboxText.hpp"
 #include "engine/io/ResourceLoader.hpp"
+#include "engine/scripting/LuaSandbox.hpp"
 #include "engine/scripting/LuaScript.hpp"
 
 namespace N2Engine::Scripting
@@ -20,10 +22,6 @@ namespace N2Engine::Scripting
     {
         // Longest field name and declared type kept (a longer name is not a field name a script would write)
         constexpr std::size_t MaxNameBytes = 256;
-        // Longest error text kept
-        constexpr std::size_t MaxErrorBytes = 200;
-        // The smallest cap a state is given (the libraries and the environment take well under it)
-        constexpr std::size_t MinCapBytes = std::size_t{1024} * 1024;
         constexpr const char *ReaderKey = "n2.declaration.reader";
 
         std::atomic<int> g_liveStates{0};
@@ -495,48 +493,6 @@ return function(class, maxFields, maxString, maxName)
 end
 )LUA";
 
-        // What a log line or an error entry may show of text that came from a script: control characters replaced by
-        // '?', cut at MaxErrorBytes on a character boundary
-        std::string Clean(std::string_view text)
-        {
-            bool truncated = false;
-            if (text.size() > MaxErrorBytes)
-            {
-                std::size_t cut = MaxErrorBytes;
-                while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
-                {
-                    --cut;
-                }
-                text = text.substr(0, cut);
-                truncated = true;
-            }
-            std::string clean;
-            clean.reserve(text.size() + 3);
-            for (const char c : text)
-            {
-                const auto byte = static_cast<unsigned char>(c);
-                clean += byte < 0x20 || byte == 0x7F ? '?' : c;
-            }
-            if (truncated)
-            {
-                clean += "...";
-            }
-            return clean;
-        }
-
-        // The error object on top of the stack as text, read without converting it (a string as it is, anything else
-        // by its type)
-        std::string ErrorObjectText(lua_State *L)
-        {
-            if (lua_type(L, -1) == LUA_TSTRING)
-            {
-                std::size_t length = 0;
-                const char *text = lua_tolstring(L, -1, &length);
-                return Clean(std::string_view(text, length));
-            }
-            return std::format("(a {} error value)", lua_typename(L, lua_type(L, -1)));
-        }
-
         // The table library's refusal (SetupScript: a length or range above MaxTableLoop): the evaluation
         // ends as an exhausted budget. The message is the budget error's, so the sandbox's pcall and xpcall hand it on,
         // and from here on the hook raises on every instruction, as when the instruction count runs out. Called only
@@ -588,7 +544,7 @@ end
             }
             else
             {
-                result.errors.push_back(std::format("{}: {}", phase, ErrorObjectText(L)));
+                result.errors.push_back(std::format("{}: {}", phase, Detail::ErrorObjectText(L)));
             }
         }
 
@@ -652,7 +608,7 @@ end
             std::string readError;
             if (GetString(L, answer, "readError", readError))
             {
-                result.errors.push_back("Error reading SerializableFields: " + Clean(readError));
+                result.errors.push_back("Error reading SerializableFields: " + Detail::CleanScriptText(readError));
                 return;
             }
             if (GetFlag(L, answer, "stubTable"))
@@ -768,16 +724,14 @@ end
             std::ranges::sort(result.fields, {}, &DeclaredField::name);
         }
 
-        // The whole evaluation in a state of its own. Everything of it lives in this function: the state is closed when
-        // it returns or throws, before the caller reads the guard's counters.
-        void Run(Detail::LuaGuardState &guard, const std::string_view source, const std::string &chunkName,
-                 const DeclarationLimits &limits, DeclarationResult &result)
+        // The whole evaluation in the state of the Declarations profile (LuaSandbox: its own allocator with a cap, the
+        // base, math, string and table libraries, the budget sandbox). The caller closes the state when this returns
+        // or throws, before it reads the counters.
+        void Run(LuaSandbox &sandbox, const std::string_view source, const std::string &chunkName,
+                 const DeclarationLimits &limits, const std::uint64_t instructions, DeclarationResult &result)
         {
-            sol::state lua(&Detail::LuaGuardState::Panic, &Detail::LuaCappedAlloc, &guard);
-            lua_State *L = lua.lua_state();
-            guard.state = L;
-            lua.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string, sol::lib::table);
-            Detail::InstallBudgetSandbox(lua);
+            lua_State *L = sandbox.State();
+            Detail::LuaGuardState &guard = *Detail::LuaGuardState::Of(L);
 
             // The environment and the reader, before the budget is armed (they are the evaluator's own code)
             int status = luaL_loadbufferx(L, SetupScript, std::strlen(SetupScript), "=declaration-setup", "t");
@@ -797,9 +751,7 @@ end
             // From here on every instruction counts, for the chunk and for the reading alike (one entry), and so does
             // the wall clock
             const std::uint64_t millis = limits.maxMillis == 0 ? DeclarationLimits{}.maxMillis : limits.maxMillis;
-            guard.hasDeadline = true;
-            guard.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(millis);
-            guard.Arm();
+            sandbox.Arm({instructions, millis});
 
             const std::string name = chunkName.size() > 100 ? chunkName.substr(0, 100) : chunkName;
             // Text only: a precompiled chunk is refused, as everywhere in the engine
@@ -883,33 +835,45 @@ end
             return result;
         }
 
-        // Before the state and outliving it: its allocator and its hook use it until the state is closed
-        auto guard = std::make_unique<Detail::LuaGuardState>();
-        // 0 is "unlimited" for the runtime's tools, never here; a state needs about 100 KiB to exist at all
-        guard->cap = limits.maxBytes == 0 ? DeclarationLimits{}.maxBytes : std::max(limits.maxBytes, MinCapBytes);
-        guard->limit = limits.instructions == 0 ? DeclarationLimits{}.instructions : limits.instructions;
+        // The Declarations profile of the sandbox builder: the sandbox owns the allocator's guard, which outlives the
+        // state, so the flags and counters below are read after the state is closed
+        std::unique_ptr<LuaSandbox> sandbox;
+        const Detail::LuaGuardState *guard = nullptr;
+        // 0 is "unlimited" for the runtime's tools, never here; a state needs about 100 KiB to exist at all (the
+        // builder raises a smaller cap to SandboxDefaults::MinBytes)
+        const std::uint64_t instructions =
+            limits.instructions == 0 ? DeclarationLimits{}.instructions : limits.instructions;
+        SandboxOptions options;
+        options.maxBytes = limits.maxBytes == 0 ? DeclarationLimits{}.maxBytes : limits.maxBytes;
+        options.loadBudget.instructions = instructions;
         g_liveStates.fetch_add(1);
         try
         {
-            Run(*guard, source, chunkName, limits, result);
+            sandbox = LuaSandbox::Create(SandboxProfile::Declarations, options);
+            guard = Detail::LuaGuardState::Of(sandbox->State());
+            Run(*sandbox, source, chunkName, limits, instructions, result);
         }
         catch (const std::exception &e)
         {
             // An error that reached the panic function (an allocation failing outside a protected call) or a C++ error:
-            // data like any other. The state was closed as the exception left Run.
-            const std::string text = Clean(e.what());
-            if (guard->loopRefused)
+            // data like any other. The state is closed here, before the counters are read.
+            if (sandbox)
+            {
+                sandbox->Close();
+            }
+            const std::string text = Detail::CleanScriptText(e.what());
+            if (guard != nullptr && guard->loopRefused)
             {
                 result.budgetExceeded = true;
                 result.errors.push_back(LoopRefusedText());
             }
-            else if (guard->timedOut)
+            else if (guard != nullptr && guard->timedOut)
             {
                 result.budgetExceeded = true;
                 result.timedOut = true;
                 result.errors.push_back("The evaluation exceeded its time limit");
             }
-            else if (guard->exhausted)
+            else if (guard != nullptr && guard->exhausted)
             {
                 result.budgetExceeded = true;
                 result.errors.push_back(std::format("{} of {}", Detail::BudgetErrorText, guard->limit));
@@ -927,8 +891,13 @@ end
         {
             result.errors.push_back("The evaluation failed");
         }
-        result.peakBytes = guard->peak;
-        result.leakedBytes = guard->used;
+        if (sandbox)
+        {
+            sandbox->Close();
+            const SandboxCounters counters = sandbox->Counters();
+            result.peakBytes = counters.peakBytes;
+            result.leakedBytes = counters.usedBytes;
+        }
         g_liveStates.fetch_sub(1);
         return result;
     }
@@ -939,7 +908,7 @@ end
         if (!script)
         {
             DeclarationResult result;
-            result.errors.push_back("Lua script not found: " + Clean(path.ToString()));
+            result.errors.push_back("Lua script not found: " + Detail::CleanScriptText(path.ToString()));
             return result;
         }
         return Evaluate(script->GetSourceCode(), path.ToString(), limits);
