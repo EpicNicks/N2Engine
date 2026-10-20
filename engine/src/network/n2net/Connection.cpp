@@ -447,7 +447,7 @@ namespace N2Engine::N2Net
             }
         }
 
-        // A packet 3 or more behind the newest ack and still unanswered is lost (the ack bits reach back 32, so past
+        // A packet 3 or more behind the newest acked sequence and still unanswered is lost (the ack bits reach back 32, so past
         // that it can never be answered)
         for (SentPacket &packet : sent_)
         {
@@ -644,7 +644,10 @@ namespace N2Engine::N2Net
             const bool ok = ConsumeUnit(slot.flags, slot.data, now, handler);
             slot.present = false;
             ReleaseBuffer(slot.data);
-            --receiveBufferedUnits_;
+            if (receiveBufferedUnits_ > 0)
+            {
+                --receiveBufferedUnits_;
+            }
             ++receiveNext_;
             progress = true;
             if (!ok)
@@ -725,6 +728,7 @@ namespace N2Engine::N2Net
         // Nothing more will be sent or delivered: give the buffers back
         sendQueue_.clear();
         sendQueueBytes_ = 0;
+        headOffset_ = 0;
         unreliableQueue_.clear();
         unreliableQueueBytes_ = 0;
         for (SendUnit &unit : sendUnits_)

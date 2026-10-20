@@ -34,7 +34,8 @@ namespace N2Engine::N2Net
         /// The most reliable bytes queued and not yet packetised; SendReliable returns QueueFull beyond it
         std::uint32_t maxSendQueueBytes = 256 * 1024;
         /// The most units in flight (sender) and the units ahead of the next one the receiver will buffer. Clamped to
-        /// [1, kHardMaxReliableWindow].
+        /// [1, kHardMaxReliableWindow]. Both peers must use the same value (not negotiated until A5): a unit beyond the
+        /// receiver's window is dropped but its packet is still acknowledged, so it is never resent.
         std::uint16_t reliableWindow = 256;
         /// Unreliable messages waiting for the next Update: beyond either limit the oldest is dropped
         std::uint16_t maxQueuedUnreliableMessages = 64;
@@ -124,8 +125,8 @@ namespace N2Engine::N2Net
         std::uint64_t packetsAcked = 0;
         /// Of those, the ones first declared lost and then acknowledged late (a wrong guess: reordering or a slow ack)
         std::uint64_t packetsAckedLate = 0;
-        /// Our packets declared lost and not acknowledged since (no ack by the deadline, 3 or more newer packets acked
-        /// first, or too old to ack). Counts only packets that carried blocks; the loss figure is
+        /// Our packets declared lost and not acknowledged since (no ack by the deadline, 3 or more sequences behind the newest acked one,
+        /// or too old to ack). Counts only packets that carried blocks; the loss figure is
         /// packetsLost / (packetsLost + packetsAcked).
         std::uint64_t packetsLost = 0;
         std::uint64_t unitsSent = 0;

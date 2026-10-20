@@ -87,6 +87,8 @@ namespace N2Engine::N2Net
         {
             TransportEventType type = TransportEventType::Datagram;
             PeerId peer = kInvalidPeer;
+            /// For datagrams: the link generation they were sent on (a re-linked pair is a new link)
+            std::uint64_t generation = 0;
             std::vector<std::uint8_t> data;
         };
 
@@ -121,7 +123,7 @@ namespace N2Engine::N2Net
         bool Link(PeerId a, PeerId b, const SimLinkConfig &aToB, const SimLinkConfig &bToA);
         bool Link(PeerId a, PeerId b, const SimLinkConfig &bothDirections);
         /// Removes the link (the other side is not told: use SimTransport::Disconnect for that). Datagrams in flight
-        /// on it are dropped when due.
+        /// on it are dropped when due, even if the pair is linked again before then.
         bool Unlink(PeerId a, PeerId b);
         /// Replaces one direction's config; its state (burst, serialisation queue) and random stream continue
         bool SetLinkConfig(PeerId from, PeerId to, const SimLinkConfig &config);
@@ -138,6 +140,7 @@ namespace N2Engine::N2Net
             SimLinkConfig config;
             SimRandom random;
             bool active = false;
+            std::uint64_t generation = 0;
             bool inBurst = false;
             std::uint64_t nextFreeAt = 0;
             SimLinkStats stats;

@@ -47,7 +47,8 @@ namespace N2Engine::N2Net
             if (item.type == TransportEventType::Datagram)
             {
                 const auto direction = network_->directions_.find({item.peer, self_});
-                if (direction == network_->directions_.end() || !direction->second.active)
+                if (direction == network_->directions_.end() || !direction->second.active ||
+                    direction->second.generation != item.generation)
                 {
                     if (direction != network_->directions_.end())
                     {
@@ -115,12 +116,14 @@ namespace N2Engine::N2Net
             {
                 Direction direction(config, SimRandom::ForStream(seed_, from, to));
                 direction.active = true;
+                direction.generation = 1;
                 directions_.emplace(std::make_pair(from, to), std::move(direction));
             }
             else
             {
                 found->second.config = config;
                 found->second.active = true;
+                ++found->second.generation;
                 found->second.inBurst = false;
                 found->second.nextFreeAt = 0;
             }
@@ -181,6 +184,11 @@ namespace N2Engine::N2Net
         SimTransport::Item item;
         item.type = type;
         item.peer = peer;
+        if (type == TransportEventType::Datagram)
+        {
+            const auto link = directions_.find({peer, to});
+            item.generation = link == directions_.end() ? 0 : link->second.generation;
+        }
         item.data.assign(data.begin(), data.end());
         endpoint->inbox_.emplace(std::make_pair(deliverAt, arrivalCounter_++), std::move(item));
     }

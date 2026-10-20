@@ -266,6 +266,28 @@ TEST(N2NetSimTransportTest, DisconnectTellsThePeerAndDropsWhatIsInFlight)
     EXPECT_EQ(a.Send(b.Id(), payload), TransportSendResult::Sent);
 }
 
+TEST(N2NetSimTransportTest, ADatagramFromAnOldLinkIsNotDeliveredOnTheRelinkedPair)
+{
+    SimNetwork network(1);
+    SimTransport &a = network.AddEndpoint();
+    SimTransport &b = network.AddEndpoint();
+    SimLinkConfig link;
+    link.latencyMicros = 100'000;
+    network.Link(a.Id(), b.Id(), link);
+    Drain(network, a);
+    Drain(network, b);
+
+    const std::vector<std::uint8_t> payload{7};
+    ASSERT_EQ(a.Send(b.Id(), payload), TransportSendResult::Sent);
+    ASSERT_TRUE(network.Unlink(a.Id(), b.Id()));
+    ASSERT_TRUE(network.Link(a.Id(), b.Id(), link));
+
+    network.Advance(100'000);
+    EXPECT_TRUE(Datagrams(Drain(network, b)).empty());
+    EXPECT_EQ(network.GetLinkStats(a.Id(), b.Id())->droppedLinkGone, 1u);
+    EXPECT_EQ(network.GetLinkStats(a.Id(), b.Id())->delivered, 0u);
+}
+
 TEST(N2NetSimTransportTest, JitterStaysInsideItsBound)
 {
     SimNetwork network(11);
