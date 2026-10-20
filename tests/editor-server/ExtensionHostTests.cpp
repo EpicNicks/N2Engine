@@ -585,7 +585,7 @@ TEST_F(ExtensionHostTest, ErrorTextNeverShowsAHostPath)
     for (const char c : parent)
     {
         escaped += c;
-        if (c == '\')
+        if (c == '\\')
             escaped += c;
     }
     for (const std::string &text : {description.dump(), host.UiJson().dump()})
