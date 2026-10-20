@@ -483,11 +483,12 @@ namespace N2Engine::Editor
                              "backoff (the slots and the handshake rate bound it); users in a tokens file have one of "
                              "up to 30 s, which the right token passes");
             }
-            // The deadlines that keep one connection from holding the one-at-a-time server (the pre-Hello budget is
-            // EditorServer::DefaultHelloTimeout, 2 s, from the end of the TLS handshake, which has its own
-            // DefaultTlsHandshakeTimeout, 5 s; neither is a flag)
-            // The pre-auth side: this many connections in their TLS handshake and Hello at once, each address limited to
-            // its share, and handshakes (the TLS CPU) rationed. Everything behind a proxy is loopback, which has no
+            // The deadlines that bound how long a connection that has not said Hello holds one pre-auth slot (the
+            // pre-Hello budget is EditorServer::DefaultHelloTimeout, 2 s, from the end of the TLS handshake, which has
+            // its own DefaultTlsHandshakeTimeout, 5 s; neither is a flag)
+            // The pre-auth side: this many connections in their TLS handshake and Hello at once, each non-loopback
+            // address limited to its share, and handshakes (the TLS CPU) rationed. The host sees the peer address the
+            // proxy or container presents: loopback only when the proxy connects over loopback, and loopback has no
             // per-address limits (see the docs).
             (void)server.SetPreAuthSlots(static_cast<size_t>(options.preAuthSlots));
             TokenBucketOptions handshakeRate;

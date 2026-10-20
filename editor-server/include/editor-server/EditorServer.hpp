@@ -229,10 +229,9 @@ namespace N2Engine::Editor
         static constexpr const char *HelloRequiredError =
             "Not authorized: this host requires Hello with its access token before any other command";
         /// How long a connection has, with an access token, to send a successful Hello: from being accepted without TLS,
-        /// from the end of its TLS handshake with it (the handshake has its own budget, below). 2 s: the server serves
-        /// one connection at a time, so this is the longest a peer that says nothing can hold it after connecting (a
-        /// host with a token also counts each such connection as a failure for the peer's address, see Failed-Hello
-        /// rate limiting).
+        /// from the end of its TLS handshake with it (the handshake has its own budget, below). 2 s: this is the longest
+        /// a peer that says nothing can hold a pre-auth slot after connecting (a host with a token also counts each such
+        /// connection as a failure for the peer's address, see Failed-Hello rate limiting).
         static constexpr std::chrono::milliseconds DefaultHelloTimeout{2000};
         /// Before Start, like SetAccessToken; false, changing nothing, while running (or for a non-positive timeout)
         bool SetHelloTimeout(std::chrono::milliseconds timeout);
@@ -240,8 +239,8 @@ namespace N2Engine::Editor
         /// How long a connection has, from being accepted, to finish its TLS handshake (TLS hosts only, with or without
         /// an access token). 5 s, what the handshake had before the Hello budget was cut to 2 s: an unoptimised (Debug)
         /// build's handshake can take over 2 s on a slow machine for a legitimate client. A handshake that fails or runs
-        /// out of time is a failed Hello for the peer's address, like a Hello that never comes. A peer can so hold the
-        /// server for up to this plus the Hello budget (7 s by default) per connection.
+        /// out of time is a failed Hello for the peer's address, like a Hello that never comes. A peer can so hold a
+        /// pre-auth slot for up to this plus the Hello budget (7 s by default) per connection.
         static constexpr std::chrono::milliseconds DefaultTlsHandshakeTimeout{5000};
         /// Before Start, like SetHelloTimeout; false, changing nothing, while running (or for a non-positive timeout)
         bool SetTlsHandshakeTimeout(std::chrono::milliseconds timeout);
@@ -250,7 +249,7 @@ namespace N2Engine::Editor
         // ==================== Connection deadlines ====================
 
         /**
-         * What keeps one connection from holding the (one-at-a-time) server for ever. Besides the pre-Hello budget above:
+         * What keeps one connection from holding a pre-auth slot or the session for ever. Besides the pre-Hello budget above:
          *  - idle timeout: once the connection is a session (at once without an access token, at its first good Hello with
          *    one), it is closed when no complete request has arrived for this long. Every request resets it, polled ones
          *    included, so a client that polls (the editor does) is never idle. Zero turns it off.

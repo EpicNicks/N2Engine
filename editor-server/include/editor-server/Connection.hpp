@@ -108,7 +108,7 @@ namespace N2Engine::Editor
         /// by the session thread only
         uint64_t sessionId = 0;
         /// Whether the last Hello on this connection was refused for its token (as opposed to its version or its
-        /// shape): the serving thread clears it before queueing a Hello and reads it once the command's future is
+        /// shape): the session thread clears it before queueing a Hello and reads it once the command's future is
         /// ready; the main thread sets it
         std::atomic<bool> helloTokenRefused{false};
         /// Whether the last Hello was refused only for its protocol version (the token was right): not counted
