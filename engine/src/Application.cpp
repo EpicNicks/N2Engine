@@ -16,6 +16,7 @@
 #include "engine/sceneManagement/Scene.hpp"
 #include "engine/ProjectSettings.hpp"
 #include "engine/io/ProjectFile.hpp"
+#include "engine/network/NetworkValidation.hpp"
 #include "engine/particles/ParticleBackendSelection.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
@@ -112,6 +113,71 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         }
     }
 
+    // The network model, from the same project file. A bad value is reported by ApplyProjectSettings, like the others
+    // here. The Deterministic preset is checked now, before anything is started: a project whose requirements are
+    // unmet is refused (never silently degraded) with no window, no physics and no scene, so a host that checks
+    // GetWindow().IsValid() stops. The physics backend's declarations are read from the type, because no backend
+    // exists yet; none preset: nothing is checked.
+    Network::NetworkSettings networkSettings;
+    Network::NetworkEnvironment networkEnv;
+    if (project)
+    {
+        networkSettings = ReadNetworkSettings(project->settings);
+        networkEnv.gpuMode = ReadPhysicsGpuMode(project->settings);
+        networkEnv.simdTier = ReadMathSimdTier(project->settings);
+        networkEnv.luaSeedSet = ReadDeterminismLuaSeed(project->settings).has_value();
+        networkEnv.fixedTimestepSeconds = Time::GetFixedTimestep();
+        if (const auto physics = project->settings.find("physics"); physics != project->settings.end() &&
+                                                                    physics->is_object())
+        {
+            if (const auto step = physics->find("fixedTimestep");
+                step != physics->end() && step->is_number() && step->get<double>() > 0.0)
+            {
+                networkEnv.fixedTimestepSeconds = step->get<double>();
+            }
+        }
+    }
+    networkEnv.strictFp = Math::IsStrictFp();
+    // A network preset runs the fixed-step loop as the tick loop (SimulationClock's network modes, applied below once
+    // the start goes ahead); none keeps the offline loop
+    const SimulationMode presetMode = Network::SimulationModeFor(networkSettings.preset);
+    networkEnv.ownedTickLoop = presetMode != SimulationMode::None;
+#ifdef N2ENGINE_PHYSX_ENABLED
+    if (options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::PHYSX)
+    {
+        networkEnv.hasBackend = true;
+        networkEnv.backendLevel = Physics::PhysXBackend::DeclaredDeterminism(
+            project && ReadPhysicsDeterministic(project->settings));
+        networkEnv.backendSupportsSnapshot = Physics::PhysXBackend::kSupportsSnapshot;
+        networkEnv.backendSupportsSetState = Physics::PhysXBackend::kSupportsSetState;
+    }
+#endif
+    Network::NetworkValidation networkValidation = Network::ValidateNetwork(networkSettings, networkEnv);
+    if (networkValidation.Refused())
+    {
+        const auto unmet = networkValidation.Unmet();
+        Logger::Error(std::format("network.preset is deterministic but {} requirement{} unmet: the engine refuses to "
+                                  "start this project (it never silently degrades)",
+                                  unmet.size(), unmet.size() == 1 ? " is" : "s are"));
+        for (const Network::NetworkRequirement *requirement : unmet)
+        {
+            Logger::Error(std::format("  unmet: {} - {} ({})", requirement->id, requirement->text,
+                                      requirement->detail));
+        }
+        // The usual rows, none started, then the Network row that says why
+        const std::string refusedDetail = "Not started: the network preset was refused (see Network)";
+        for (const char *name : {"Window", "Renderer", "Physics", "Particles", "SoftBodies", "Audio", "Scripting"})
+        {
+            _health.subsystems.push_back({.name = name, .state = SubsystemState::NotStarted, .detail = refusedDetail});
+        }
+        // GetHealth recomposes these two rows from their base details
+        _particlesBaseDetail = refusedDetail;
+        _softBodiesBaseDetail = refusedDetail;
+        _health.subsystems.push_back(Network::MakeNetworkStatus(networkSettings, networkValidation));
+        _initialized = false;
+        return _health;
+    }
+
     // Before the first Instance(): the Lua state reads its seeds as it is created. Unset (also with no project) is
     // upstream Lua's behaviour. A bad value is reported by ApplyProjectSettings, as for physics.gpu.
     std::optional<std::uint64_t> luaSeed;
@@ -152,6 +218,15 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     Logger::Info(std::format("Math SIMD tier: {} ({})", Math::SIMDLevelName(simdLevel),
                              simdRequest == Math::SIMDTierRequest::Auto ? "auto-detected" : "forced by math.simdTier"));
     Time::Init();
+    // network.preset drives the simulation mode: authoritative and deterministic switch the fixed-step loop to the
+    // tick loop (whole ticks owed, never dropped; fixed dt independent of timeScale). None does not touch it, so a
+    // project without a network preset starts exactly as before.
+    if (presetMode != SimulationMode::None)
+    {
+        SetSimulationMode(presetMode);
+        Logger::Info(std::format("network.preset {}: simulation mode {}", Network::ToString(networkSettings.preset),
+                                 ToString(presetMode)));
+    }
     // A project's rendering settings belong to that project: a second Init in the same process starts from the defaults
     Rendering::RenderSettings::SetColorSpace(Rendering::ColorSpace::Gamma);
     Rendering::RenderSettings::SetForceShaderEncode(false);
@@ -292,6 +367,28 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
 #endif
     }
 
+    // The Network row. The Authoritative preset only warns, and does so against the backend that exists now (a
+    // Deterministic project never gets here: it was refused above)
+    if (networkSettings.preset == Network::NetworkPreset::Authoritative)
+    {
+        networkEnv.hasBackend = _3DphysicsBackend != nullptr;
+        networkEnv.backendLevel = _3DphysicsBackend ? _3DphysicsBackend->GetDeterminism()
+                                                    : Physics::DeterminismLevel::None;
+        networkEnv.backendSupportsSnapshot = _3DphysicsBackend && _3DphysicsBackend->SupportsSnapshot();
+        networkEnv.backendSupportsSetState = _3DphysicsBackend && _3DphysicsBackend->SupportsSetState();
+        networkValidation = Network::ValidateNetwork(networkSettings, networkEnv);
+        for (const std::string &warning : networkValidation.warnings)
+        {
+            Logger::Warn("network.preset is authoritative: " + warning);
+        }
+    }
+    SubsystemStatus networkStatus = Network::MakeNetworkStatus(networkSettings, networkValidation);
+    if (presetMode != SimulationMode::None)
+    {
+        // The mode the application actually runs in, read back rather than assumed
+        networkStatus.detail += std::format("; simulation mode {}", ToString(GetSimulationMode()));
+    }
+
     // The Particles and SoftBodies rows follow the physics GPU probe: Disabled with the reason unless the GPU scene
     // is up (and, for each, its own feature has not failed)
     const Physics::GpuStatus noBackendGpu{gpuMode == Physics::GpuMode::Off ? Physics::GpuState::Disabled
@@ -305,7 +402,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         _3DphysicsBackend ? _3DphysicsBackend->GetSoftBodiesGpuStatus() : noBackendGpu);
 
     _health.subsystems = {windowStatus,    rendererStatus, physicsStatus, particlesStatus,
-                          softBodiesStatus, audioStatus,   scriptingStatus};
+                          softBodiesStatus, audioStatus,   scriptingStatus, networkStatus};
     _particlesBaseDetail = particlesStatus.detail;
     _softBodiesBaseDetail = softBodiesStatus.detail;
     for (const SubsystemStatus &status : _health.subsystems)

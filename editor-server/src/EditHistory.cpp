@@ -1,5 +1,7 @@
 #include "editor-server/EditHistory.hpp"
 
+#include "editor-server/ClientText.hpp"
+
 #include <algorithm>
 #include <exception>
 #include <format>
@@ -267,7 +269,8 @@ namespace N2Engine::Editor
             }
             catch (const std::exception &error)
             {
-                failure = error.what();
+                // The engine's own text stays in the log for a remote client (audit F10)
+                failure = ClientText::Failure("", "the engine refused it", error.what());
             }
             catch (...)
             {
