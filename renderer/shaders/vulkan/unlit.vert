@@ -2,7 +2,7 @@
 
 // The Vulkan port of OpenGLRenderer.cpp's unlitVert (GLSL 330). Compiled to SPIR-V at build time (renderer/CMakeLists.txt)
 // and embedded; read as text by tests/renderer/vulkan/VulkanShaderParityTests.cpp, which ties the names, block offsets
-// and attribute locations below to VulkanShaderInterface.hpp and to Material::ApplyUniforms.
+// and attribute locations below to GpuShaderInterface.hpp and to Material::ApplyUniforms.
 //
 // Only the attributes the shader reads are declared (the pipeline provides exactly those): the layer warns about a
 // vertex attribute nothing consumes.

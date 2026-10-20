@@ -13,9 +13,9 @@
 #include <renderer/common/ITexture.hpp>
 #include <renderer/common/LightingMath.hpp>
 #include <renderer/common/SceneLighting.hpp>
-#include <renderer/vulkan/VulkanLighting.hpp>
+#include <renderer/common/GpuLighting.hpp>
 #include <renderer/vulkan/VulkanRenderer.hpp>
-#include <renderer/vulkan/VulkanShaderInterface.hpp>
+#include <renderer/common/GpuShaderInterface.hpp>
 
 #include "VulkanLitTestUtil.hpp"
 
@@ -31,7 +31,7 @@ using namespace VulkanTesting::Lit;
 using Renderer::Common::ColorSpace;
 using Renderer::Common::PointLightData;
 using Renderer::Common::SpotLightData;
-namespace Vk = Renderer::Vulkan::ShaderInterface;
+namespace Vk = Renderer::Gpu::ShaderInterface;
 namespace Diff = VulkanTesting::Diff;
 
 namespace

@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "BlendReference.hpp"
-#include "CrossBackendDiff.hpp"
+#include "common/BlendReference.hpp"
+#include "common/CrossBackendDiff.hpp"
 
 // Tests of the GL-semantics blend reference (BlendReference.hpp, #43 stage D) and of the diff's ignore mask. No device is
 // needed, so they run on every build that has the Vulkan tests (the Windows legs too). They fix the equation the blended

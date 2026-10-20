@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "CrossBackendDiff.hpp"
+#include "common/CrossBackendDiff.hpp"
 
 // Tests of the cross-backend diff harness itself (#43, stage C). No device is needed, so they run on every build that
 // has the Vulkan tests (the Windows legs too). The lit criterion is the proposal's: mean error <= 2/255 AND <= 1% of the

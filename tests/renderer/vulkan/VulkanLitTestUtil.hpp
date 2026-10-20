@@ -21,7 +21,7 @@
 #include <renderer/software/SoftwareRenderer.hpp>
 #include <renderer/vulkan/VulkanRenderer.hpp>
 
-#include "CrossBackendDiff.hpp"
+#include "common/CrossBackendDiff.hpp"
 #include "VulkanTestFixture.hpp"
 
 // What the Vulkan lighting and normal-map/PBR tests share (#43, stage C): they mirror the RENDERED tests of
