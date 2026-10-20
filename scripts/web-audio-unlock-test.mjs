@@ -2,10 +2,12 @@
 // Usage: node scripts/web-audio-unlock-test.mjs. Nothing here needs a build or a browser.
 // Covered: no AudioContext (install reports it, nothing throws), the constructor wrapper (instanceof, arguments, both
 // names, uninstall puts the originals back, install twice), resume() called once per suspended context on the first
-// pointerdown, keydown or touchend and the listeners removed (a second gesture does nothing), a context that is already
-// running is not resumed, a context made after the unlock re-arms it, a refused or throwing resume() is tolerated and
-// retried on the next gesture a bounded number of times, a constructor that throws is the engine's to handle, the hidden
-// tab suspending and the visible tab resuming only what it suspended.
+// activating event (a mouse pointerdown, a touch or pen pointerup, touchend, keydown) and the listeners removed (a second
+// gesture does nothing), events that do not grant user activation (a touch or pen pointerdown, a mouse pointerup,
+// Escape) neither resuming nor disarming nor using up a retry, a pending resume keeping the listeners, a context that is
+// already running is not resumed, a context made after the unlock re-arms it, a refused or throwing resume() is
+// tolerated and retried on the next gesture a bounded number of times, a constructor that throws is the engine's to
+// handle, the hidden tab suspending and the visible tab resuming only what it suspended.
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,7 +40,7 @@ function mockDocument() {
       if (listeners.has(type) && listeners.get(type).delete(fn)) doc.removes += 1;
     },
     count(type) { return listeners.has(type) ? listeners.get(type).size : 0; },
-    fire(type) { for (const fn of [...(listeners.get(type) || [])]) fn({ type }); },
+    fire(type, extra = {}) { for (const fn of [...(listeners.get(type) || [])]) fn({ type, ...extra }); },
     setVisible(visible) {
       doc.visibilityState = visible ? 'visible' : 'hidden';
       doc.hidden = !visible;
@@ -64,6 +66,7 @@ function mockAudio(behaviour = {}) {
       this.resumeCalls += 1;
       if (behaviour.resumeThrows) throw new Error('InvalidStateError');
       if (behaviour.resumeRejects) return Promise.reject(new Error('NotAllowedError'));
+      if (behaviour.resumePending) return new Promise(() => {});
       this.state = 'running';
       return Promise.resolve();
     }
@@ -135,37 +138,131 @@ await scenario('webkitAudioContext alone is wrapped too', async () => {
   unlock.uninstall();
 });
 
-await scenario('resume is called once on the first gesture, then the listeners are gone', async () => {
-  for (const gesture of ['pointerdown', 'keydown', 'touchend']) {
+// The events that grant user activation in HTML, as [type, event fields]
+const ACTIVATING = [
+  ['pointerdown', { pointerType: 'mouse' }],
+  ['pointerup', { pointerType: 'touch' }],
+  ['pointerup', { pointerType: 'pen' }],
+  ['touchend', {}],
+  ['keydown', { key: 'a' }],
+];
+// Events a browser fires that do not grant user activation: a resume() from them is refused or left pending
+const NOT_ACTIVATING = [
+  ['pointerdown', { pointerType: 'touch' }],
+  ['pointerdown', { pointerType: 'pen' }],
+  ['pointerup', { pointerType: 'mouse' }],
+  ['keydown', { key: 'Escape' }],
+];
+const GESTURE_TYPES = ['pointerdown', 'pointerup', 'keydown', 'touchend'];
+const label = ([type, extra]) => `${type}${extra.pointerType ? `(${extra.pointerType})` : ''}${extra.key ? `(${extra.key})` : ''}`;
+
+await scenario('resume is called once on the first activating gesture, then the listeners are gone', async () => {
+  for (const gesture of ACTIVATING) {
+    const name = label(gesture);
     const { win, doc, made, events, unlock } = setup();
     unlock.install();
-    check(doc.count(gesture) === 0, `${gesture}: no gesture listener before a context exists`);
+    check(GESTURE_TYPES.every((t) => doc.count(t) === 0), `${name}: no gesture listener before a context exists`);
     new win.AudioContext();
-    check(unlock.isArmed(), `${gesture}: armed once a context exists`);
-    check(doc.count('pointerdown') === 1 && doc.count('keydown') === 1 && doc.count('touchend') === 1, `${gesture}: three gesture listeners`);
-    doc.fire(gesture);
+    check(unlock.isArmed(), `${name}: armed once a context exists`);
+    check(GESTURE_TYPES.every((t) => doc.count(t) === 1), `${name}: four gesture listeners`);
+    doc.fire(...gesture);
     await tick();
-    check(made[0].resumeCalls === 1, `${gesture}: resume called once (${made[0].resumeCalls})`);
-    check(made[0].state === 'running', `${gesture}: running`);
-    check(!unlock.isArmed(), `${gesture}: disarmed`);
-    check(doc.count('pointerdown') === 0 && doc.count('keydown') === 0 && doc.count('touchend') === 0, `${gesture}: listeners removed`);
-    doc.fire('pointerdown');
-    doc.fire('keydown');
+    check(made[0].resumeCalls === 1, `${name}: resume called once (${made[0].resumeCalls})`);
+    check(made[0].state === 'running', `${name}: running`);
+    check(!unlock.isArmed(), `${name}: disarmed`);
+    check(GESTURE_TYPES.every((t) => doc.count(t) === 0), `${name}: listeners removed`);
+    for (const again of ACTIVATING) doc.fire(...again);
     await tick();
-    check(made[0].resumeCalls === 1, `${gesture}: a later gesture does nothing`);
-    check(names(events).includes('audio-resumed'), `${gesture}: audio-resumed reported`);
+    check(made[0].resumeCalls === 1, `${name}: a later gesture does nothing`);
+    check(names(events).includes('audio-resumed'), `${name}: audio-resumed reported`);
     unlock.uninstall();
   }
+});
+
+await scenario('events that do not grant user activation neither resume nor disarm', async () => {
+  for (const gesture of NOT_ACTIVATING) {
+    const name = label(gesture);
+    const { win, doc, made, unlock } = setup();
+    unlock.install();
+    new win.AudioContext();
+    doc.fire(...gesture);
+    await tick();
+    check(made[0].resumeCalls === 0, `${name}: resume not called (${made[0].resumeCalls})`);
+    check(unlock.isArmed() && GESTURE_TYPES.every((t) => doc.count(t) === 1), `${name}: still armed`);
+    unlock.uninstall();
+  }
+});
+
+await scenario('a touch tap (pointerdown, pointerup, touchend) resumes from the pointerup, once', async () => {
+  const { win, doc, made, unlock } = setup();
+  unlock.install();
+  new win.AudioContext();
+  doc.fire('pointerdown', { pointerType: 'touch' });
+  check(made[0].resumeCalls === 0, 'not on the touch pointerdown');
+  doc.fire('pointerup', { pointerType: 'touch' });
+  doc.fire('touchend');
+  await tick();
+  check(made[0].resumeCalls === 1, `resumed once (${made[0].resumeCalls})`);
+  check(!unlock.isArmed(), 'disarmed');
+  unlock.uninstall();
+});
+
+await scenario('touch taps against a refusing browser: only activating events use up the retries', async () => {
+  const { win, doc, made, events, unlock } = setup({ resumeRejects: true });
+  unlock.install();
+  new win.AudioContext();
+  let taps = 0;
+  for (let i = 0; i < 10; ++i) {
+    if (!unlock.isArmed()) break;
+    doc.fire('pointerdown', { pointerType: 'touch' });
+    await tick();
+    doc.fire('pointerup', { pointerType: 'touch' });
+    doc.fire('touchend');
+    taps += 1;
+    await tick();
+  }
+  check(taps === 4, `gave up after 4 taps (3 refusals keep it armed, the 4th does not): ${taps}`);
+  check(made[0].resumeCalls === 4, `one resume per tap (${made[0].resumeCalls})`);
+  check(names(events).filter((n) => n === 'audio-resume-failed').length === 4, 'every refusal reported');
+  unlock.uninstall();
+});
+
+await scenario('a pending resume keeps the listeners and is not asked again', async () => {
+  const { win, doc, made, unlock } = setup({ resumePending: true });
+  unlock.install();
+  new win.AudioContext();
+  doc.fire('pointerup', { pointerType: 'touch' });
+  await tick();
+  check(made[0].resumeCalls === 1, 'resume asked');
+  check(unlock.isArmed() && GESTURE_TYPES.every((t) => doc.count(t) === 1), 'still armed while it is pending');
+  doc.fire('touchend');
+  await tick();
+  check(made[0].resumeCalls === 1, 'not asked again while pending');
+  unlock.uninstall();
+});
+
+await scenario('a resume that settles with the context still suspended keeps the listeners', async () => {
+  const { win, doc, made, events, unlock } = setup();
+  unlock.install();
+  new win.AudioContext();
+  made[0].resume = function () { this.resumeCalls += 1; return Promise.resolve(); }; // Safari: resolves, still interrupted
+  doc.fire('keydown', { key: 'a' });
+  await tick();
+  check(made[0].resumeCalls === 1, 'resume asked');
+  check(names(events).includes('audio-resume-failed'), 'reported as a refusal');
+  check(unlock.isArmed(), 'armed for the next gesture');
+  unlock.uninstall();
 });
 
 await scenario('a running context is not resumed, and the listeners still go', async () => {
   const { win, doc, made, unlock } = setup({ startState: 'running' });
   unlock.install();
   new win.AudioContext();
+  check(unlock.isArmed(), 'armed for a running context too, until the first gesture');
   doc.fire('keydown');
   await tick();
   check(made[0].resumeCalls === 0, 'resume not called');
-  check(!unlock.isArmed() && doc.count('keydown') === 0, 'disarmed');
+  check(!unlock.isArmed() && GESTURE_TYPES.every((t) => doc.count(t) === 0), 'disarmed');
   unlock.uninstall();
 });
 
@@ -185,7 +282,7 @@ await scenario('a context made after the unlock arms it again', async () => {
   const { win, doc, made, unlock } = setup();
   unlock.install();
   new win.AudioContext();
-  doc.fire('pointerdown');
+  doc.fire('pointerdown', { pointerType: 'mouse' });
   await tick();
   check(!unlock.isArmed(), 'disarmed');
   new win.AudioContext();
@@ -202,7 +299,7 @@ await scenario('uninstall removes the gesture and visibility listeners', async (
   new win.AudioContext();
   check(doc.count('visibilitychange') === 1, 'visibility listener installed');
   unlock.uninstall();
-  check(doc.count('pointerdown') === 0 && doc.count('keydown') === 0 && doc.count('touchend') === 0 && doc.count('visibilitychange') === 0, 'all removed');
+  check(GESTURE_TYPES.every((t) => doc.count(t) === 0) && doc.count('visibilitychange') === 0, 'all removed');
   check(doc.adds === doc.removes, `adds ${doc.adds} equal removes ${doc.removes}`);
 });
 
@@ -228,7 +325,7 @@ await scenario('a throwing resume is tolerated', async () => {
   const { win, doc, made, events, unlock } = setup({ resumeThrows: true });
   unlock.install();
   new win.AudioContext();
-  doc.fire('pointerdown');
+  doc.fire('pointerdown', { pointerType: 'mouse' });
   await tick();
   check(made[0].resumeCalls === 1, 'resume was tried');
   check(names(events).includes('audio-resume-failed'), 'reported');

@@ -287,10 +287,15 @@
   // so install() wraps the page's AudioContext constructor (window.AudioContext and webkitAudioContext) to remember every
   // context made after that. Call it before the engine starts (the page does, before loader.run).
   //
-  //   * While a remembered context is not running, the first pointerdown, keydown or touchend on the page calls resume()
-  //     on each such context once, and the listeners are removed (idempotent: a second gesture does nothing). They come
-  //     back for a context made later, and when a resume() was refused (at most MAX_RESUME_TRIES refusals in all, so a
-  //     browser that never allows it is not retried forever).
+  //   * Every remembered context arms gesture listeners on the document (whatever its state). Only events that grant
+  //     user activation in HTML count: keydown (not Escape), a mouse pointerdown, a pointerup that is not from a mouse
+  //     (touch, pen) and touchend. A touch or pen pointerdown, a mouse pointerup and Escape are ignored: they neither
+  //     resume nor disarm. The first counting event calls resume() on each context that is not running, closed or
+  //     already resuming. The listeners are removed once no context needs a resume (none suspended, none pending), so
+  //     a later gesture does nothing; a gesture that finds every context running removes them at once. A resume() that
+  //     is refused, throws, or settles with the context still not running keeps them armed for the next counting
+  //     gesture, at most MAX_RESUME_TRIES refusals in all (a browser that never allows it is not retried forever).
+  //     A context made later arms them again.
   //   * A hidden tab suspends the running contexts; the tab becoming visible resumes the ones this suspended (a refused
   //     resume then waits for the next gesture as above).
   //   * Nothing throws: no AudioContext (no WebAudio), a constructor that throws (the engine sees that, as it would
@@ -299,7 +304,7 @@
   // options: window (the global scope: default self), document (default window.document), onEvent(name, detail) with
   // audio-installed, audio-unavailable, audio-context-created, audio-resumed, audio-resume-failed, audio-suspended-hidden,
   // audio-resumed-visible. Returns { install, uninstall, contexts, isArmed }.
-  var GESTURES = ['pointerdown', 'keydown', 'touchend'];
+  var GESTURES = ['pointerdown', 'pointerup', 'keydown', 'touchend'];
   var MAX_RESUME_TRIES = 3;
 
   function createAudioUnlock(options) {
@@ -309,6 +314,7 @@
     var onEvent = options.onEvent || function () {};
     var contexts = [];
     var suspendedHere = [];
+    var pending = []; // contexts whose resume() promise has not settled
     var failures = 0;
     var armed = false;
     var installed = false;
@@ -333,27 +339,64 @@
       GESTURES.forEach(function (name) { doc.removeEventListener(name, onGesture, listenerOptions); });
     }
 
+    function needsResume(context) { return !isRunning(context) && !isClosed(context); }
+
+    // Arms while a context still needs a resume or one is pending, disarms otherwise or once the refusals are used up.
+    function update() {
+      if (failures > MAX_RESUME_TRIES) { disarm(); return; }
+      if (pending.length > 0 || contexts.some(needsResume)) arm(); else disarm();
+    }
+
     function resume(context, eventName) {
+      var result;
       try {
-        var result = context.resume();
-        if (result && typeof result.then === 'function') {
-          result.then(function () { emit(eventName, {}); }, function (error) { refused(error); });
-        } else {
-          emit(eventName, {});
-        }
+        result = context.resume();
       } catch (error) {
         refused(error);
+        return;
       }
+      if (result && typeof result.then === 'function') {
+        pending.push(context);
+        result.then(function () {
+          settled(context);
+          if (needsResume(context)) refused(new Error('still ' + context.state + ' after resume()'));
+          else { emit(eventName, {}); update(); }
+        }, function (error) {
+          settled(context);
+          refused(error);
+        });
+      } else {
+        emit(eventName, {});
+        update();
+      }
+    }
+    function settled(context) {
+      var index = pending.indexOf(context);
+      if (index >= 0) pending.splice(index, 1);
     }
     function refused(error) {
       emit('audio-resume-failed', { reason: reasonOf(error) });
-      if (++failures <= MAX_RESUME_TRIES) arm();
+      ++failures;
+      update();
     }
 
-    function onGesture() {
-      disarm();
-      contexts.filter(function (context) { return !isRunning(context) && !isClosed(context); })
+    // The events that grant user activation (HTML "activation triggering input event"); the rest are ignored.
+    function isActivation(event) {
+      if (!event) return false;
+      switch (event.type) {
+        case 'pointerdown': return event.pointerType === 'mouse';
+        case 'pointerup': return event.pointerType !== 'mouse';
+        case 'keydown': return event.key !== 'Escape';
+        case 'touchend': return true;
+        default: return false;
+      }
+    }
+
+    function onGesture(event) {
+      if (!isActivation(event)) return;
+      contexts.filter(function (context) { return needsResume(context) && pending.indexOf(context) < 0; })
               .forEach(function (context) { resume(context, 'audio-resumed'); });
+      update();
     }
 
     function onVisibility() {
