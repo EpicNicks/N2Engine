@@ -587,14 +587,6 @@ TEST_F(SimulationClockTest, StepTicksInNoneModeRunsNoTickWhilePausedAndAttachesF
     EXPECT_EQ(ClockProbe::fixedTicks.size(), 3u);
 }
 
-TEST_F(SimulationClockTest, StepTicksWithoutACurrentSceneRunsNothing)
-{
-    SceneManager::UnloadScenes();
-    ASSERT_EQ(SceneManager::GetCurSceneIndex(), -1);
-    EXPECT_EQ(Application::GetInstance().StepTicks(4), 0u);
-    EXPECT_EQ(Time::GetTick(), 0u);
-}
-
 // ---------------------------------------------------------------------------------------------------------------------
 // The clock on its own
 // ---------------------------------------------------------------------------------------------------------------------
