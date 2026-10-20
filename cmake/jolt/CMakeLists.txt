@@ -24,7 +24,8 @@ set(OBJECT_LAYER_BITS 16)
 set(JPH_BUILD_SHARED_LIBS OFF)
 set(GENERATE_DEBUG_SYMBOLS OFF)
 set(CROSS_COMPILE_ARM OFF)
-# Asserts off in every configuration (JPH_ENABLE_ASSERTS is only defined through this option)
+# Jolt turns its asserts on by itself whenever NDEBUG is not defined (Core/IssueReporting.h), so Debug has them and the
+# release configurations do not; this option would add them to the release configurations too
 set(USE_ASSERTS OFF)
 # One link-time optimisation policy for the whole engine (the web profiles set theirs globally), not Jolt's own
 set(INTERPROCEDURAL_OPTIMIZATION OFF)
@@ -107,10 +108,15 @@ else()
 endif()
 
 # == Jolt's own translation units (PRIVATE) ==
-# No RTTI and no exceptions, as upstream builds it (Jolt has its own runtime type information and throws nothing). The
-# engine's code keeps its own settings: a library compiled without them links into a program with them.
+# No RTTI and no exceptions, as upstream builds it (Jolt has its own runtime type information and throws nothing), except
+# exceptions on the web. The engine's code keeps its own settings: a library compiled without them links into a program
+# with them.
 if(MSVC)
     target_compile_options(Jolt PRIVATE /GR- /w)
+elseif(EMSCRIPTEN)
+    # Not -fno-exceptions: the web build compiles everything with -fwasm-exceptions (cmake/N2EngineWeb.cmake), and
+    # Emscripten rejects that flag together with -fno-exceptions (it then wants setjmp/longjmp support instead)
+    target_compile_options(Jolt PRIVATE -fno-rtti -w)
 else()
     target_compile_options(Jolt PRIVATE -fno-rtti -fno-exceptions -w)
 endif()

@@ -49,7 +49,7 @@ namespace n2jolt
 
 // The state hash of RunDeterminismScenario() every leg must produce. The value is the one the first green run printed
 // on all legs; it changes only in a change that says why (a Jolt upgrade, a different scenario).
-inline constexpr std::uint64_t kGoldenStateHash = 0x0000000000000000ULL;
+inline constexpr std::uint64_t kGoldenStateHash = 0x81a7425e66b56bb4ULL;
 
 inline constexpr int kDeterminismSteps = 480;
 inline constexpr int kRestSteps = 240;
