@@ -937,7 +937,7 @@ jobs:
           node scripts/web-budget-check.mjs build-web-speed/web-package speed
 
   # WebGPU backend, stage G1 (#155): the hand-written WGSL shaders (renderer/shaders/webgpu/*.wgsl) are validated by Tint (the
-  # WGSL compiler of Chrome, Edge and Safari) and by naga (Firefox's), the pinned versions in scripts/install-wgsl-validators.sh
+  # WGSL compiler of Chrome and Edge) and by naga (Firefox's; Safari's WebKit compiler has no CI path), the pinned versions in scripts/install-wgsl-validators.sh
   # (Tint: Dawn's prebuilt release binary, SHA-256 checked; naga-cli: its crates.io source package, SHA-256 checked, built with
   # --locked). Not a required check, and it follows the docs-only skip like the jobs above. No build of the engine: a few
   # minutes (the Tint download is seconds; the first naga build takes a few minutes and is cached keyed on the install script).

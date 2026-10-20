@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Validates the WebGPU shaders (renderer/shaders/webgpu/*.wgsl) with Tint and naga, the WGSL compilers of Chrome/Edge/Safari
-# (Dawn) and Firefox (wgpu). The "wgsl (Tint, naga)" CI job runs it; scripts/install-wgsl-validators.sh installs the pinned
-# tools. Locally: TINT=/path/to/tint NAGA=/path/to/naga scripts/validate-wgsl.sh
+# Validates the WebGPU shaders (renderer/shaders/webgpu/*.wgsl) with Tint and naga, the WGSL compilers of Chrome/Edge
+# (Dawn) and Firefox (wgpu); Safari's own WGSL compiler (WebKit) has no CI path (a check by hand). The "wgsl (Tint, naga)" CI
+# job runs it; scripts/install-wgsl-validators.sh installs the pinned tools.
+# Locally: TINT=/path/to/tint NAGA=/path/to/naga scripts/validate-wgsl.sh
 #
 # What counts as a failure:
 #   - a non-zero exit of either tool, or any line starting with "warning" in its output (warnings are errors);

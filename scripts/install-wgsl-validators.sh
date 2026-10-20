@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Installs the two WGSL validators the "wgsl (Tint, naga)" CI job runs (scripts/validate-wgsl.sh), pinned and hash-checked:
 #
-#   Tint  the WGSL compiler of Chrome, Edge and Safari's Dawn: the `bin/tint` of Dawn's own prebuilt release archive
+#   Tint  the WGSL compiler of Chrome and Edge (Dawn): the `bin/tint` of Dawn's own prebuilt release archive
 #         (https://github.com/google/dawn/releases, the ubuntu-latest Release build), the archive's SHA-256 pinned below.
-#         No build: a 36 MB download. Apache-2.0.
+#         No build: a 36 MB download. BSD-3-Clause (Copyright The Dawn & Tint Authors).
 #   naga  the WGSL compiler of Firefox's wgpu: naga-cli built from its crates.io source package with `cargo install --locked`
 #         (the package's own Cargo.lock pins every dependency with a checksum), the package's SHA-256 pinned below. Built here
 #         because naga publishes no binaries. MIT or Apache-2.0.
