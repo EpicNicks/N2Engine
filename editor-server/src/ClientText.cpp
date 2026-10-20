@@ -74,48 +74,82 @@ namespace N2Engine::Editor::ClientText
             return std::isalnum(u) != 0 || c == '_' || c == '-' || u >= 0x80;
         }
 
-        /// Whether the folder found at `at` of the (separator-normalised) text is only the tail of something longer: a
-        /// name, a drive ("D:/srv/game" is not "/srv/game"), or a path or URL whose slashes run into it (a client's own
-        /// "res://srv/game/a.txt" is not the host's "/srv/game"). A file:// URL is still the host's folder.
-        bool StartsInsideName(const std::string &normalized, const size_t at)
+        bool IsNameChar(const char c)
+        {
+            const auto u = static_cast<unsigned char>(c);
+            return std::isalnum(u) != 0 || c == '_' || c == '-' || u >= 0x80;
+        }
+
+        /// Whether the folder found at `at` of the normalised text is only the tail of something longer, so it is not
+        /// the host's folder: a name ("/p/xgame"), a path that goes on from further left ("/data/srv/game", a client's
+        /// own "res://a/srv/game/b.txt"), a drive ("D:/srv/game" is not "/srv/game"), a relative path ("../srv/game") or
+        /// the client's own res:// or user:// path ("res://srv/game/a.txt"). A folder after anything else is the host's:
+        /// a space, a quote, a bracket, '=', ':' ("open:/srv/game"), a full stop ("failed./srv/game") or a slash run
+        /// that is file:// or a Windows long-path prefix, so those are replaced.
+        bool StartsInsideName(const std::string &t, const size_t at, const bool folderStartsWithSlash)
         {
             if (at == 0)
             {
                 return false;
             }
-            const char c = normalized[at - 1];
-            const auto u = static_cast<unsigned char>(c);
-            if (std::isalnum(u) != 0 || c == '_' || c == '-' || c == '.' || c == ':' || u >= 0x80)
+            const char c = t[at - 1];
+            if (IsNameChar(c))
             {
                 return true;
+            }
+            if (c == '.')
+            {
+                if (!folderStartsWithSlash)
+                {
+                    return false;
+                }
+                // "./srv/game" and "../srv/game" are relative paths, but "failed./srv/game" has a name before the dot
+                size_t k = at - 1;
+                while (k > 0 && t[k - 1] == '.')
+                {
+                    --k;
+                }
+                return at - k <= 2 && (k == 0 || !IsNameChar(t[k - 1]));
+            }
+            if (c == ':')
+            {
+                // Only a drive letter makes "X:/srv/game" another path than "/srv/game"
+                return folderStartsWithSlash && at >= 2 && std::isalpha(static_cast<unsigned char>(t[at - 2])) != 0 &&
+                       (at == 2 || !IsNameChar(t[at - 3]));
             }
             if (c != '/')
             {
                 return false;
             }
-            if (at >= 4 && normalized.compare(at - 4, 4, "//?/") == 0)
+            if (at >= 3 && t.compare(at - 3, 3, "/?/") == 0)
             {
                 // A Windows long path ("\\?\C:\srv\game") is the host's folder
                 return false;
             }
             size_t k = at;
-            while (k > 0 && normalized[k - 1] == '/')
+            while (k > 0 && t[k - 1] == '/')
             {
                 --k;
             }
-            constexpr std::string_view scheme = "file:";
-            if (k < scheme.size())
+            if (k == 0)
             {
-                return true;
+                return false;
             }
-            for (size_t i = 0; i < scheme.size(); ++i)
+            const char before = t[k - 1];
+            if (before == ':')
             {
-                if (std::tolower(static_cast<unsigned char>(normalized[k - scheme.size() + i])) != scheme[i])
+                // The slashes follow a scheme: only the client's own res:// and user:// protect the folder
+                size_t s = k - 1;
+                while (s > 0 && std::isalpha(static_cast<unsigned char>(t[s - 1])) != 0)
                 {
-                    return true;
+                    --s;
                 }
+                std::string scheme = t.substr(s, k - 1 - s);
+                std::ranges::transform(scheme, scheme.begin(),
+                                       [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                return scheme == "res" || scheme == "user" || (scheme.size() == 1 && folderStartsWithSlash);
             }
-            return false;
+            return IsNameChar(before) || before == '.';
         }
 
         /// A folder that is the top of a drive or of the file system ("/", "C:\", "C:"), or too short to be told apart
@@ -129,11 +163,140 @@ namespace N2Engine::Editor::ClientText
             return spelled.size() < 3 || root.path.relative_path().empty();
         }
 
+        /// A message's text as the folders are matched in it: percent-encoded characters decoded ("%5C", "%2F", "%3A"),
+        /// each '\' as '/', and with `collapse` a run of backslashes written for each separator in a C or JSON string
+        /// ("C:\\proj" is "C:\proj") counted as half as many. `origin[i]` is where character i starts in the original
+        /// text and `origin.back()` is its length, so a stretch of the normalised text is a stretch of the original.
+        struct Normalised
+        {
+            std::string text;
+            std::vector<size_t> origin;
+        };
+
+        int HexValue(const char c)
+        {
+            if (c >= '0' && c <= '9')
+            {
+                return c - '0';
+            }
+            if (c >= 'a' && c <= 'f')
+            {
+                return c - 'a' + 10;
+            }
+            if (c >= 'A' && c <= 'F')
+            {
+                return c - 'A' + 10;
+            }
+            return -1;
+        }
+
+        Normalised Normalise(const std::string &text, const bool collapse)
+        {
+            std::string decoded;
+            std::vector<size_t> where;
+            for (size_t i = 0; i < text.size();)
+            {
+                if (text[i] == '%' && i + 2 < text.size())
+                {
+                    const int high = HexValue(text[i + 1]);
+                    const int low = HexValue(text[i + 2]);
+                    if (high >= 0 && low >= 0 && (high != 0 || low != 0))
+                    {
+                        decoded.push_back(static_cast<char>(high * 16 + low));
+                        where.push_back(i);
+                        i += 3;
+                        continue;
+                    }
+                }
+                decoded.push_back(text[i]);
+                where.push_back(i);
+                ++i;
+            }
+
+            Normalised result;
+            for (size_t i = 0; i < decoded.size();)
+            {
+                if (decoded[i] != '\\')
+                {
+                    result.text.push_back(decoded[i]);
+                    result.origin.push_back(where[i]);
+                    ++i;
+                    continue;
+                }
+                size_t run = 0;
+                while (i + run < decoded.size() && decoded[i + run] == '\\')
+                {
+                    ++run;
+                }
+                const size_t step = collapse ? 2 : 1;
+                for (size_t j = 0; j * step < run; ++j)
+                {
+                    result.text.push_back('/');
+                    result.origin.push_back(where[i + j * step]);
+                }
+                i += run;
+            }
+            result.origin.push_back(text.size());
+            return result;
+        }
+
         /// Where the path that follows a replaced folder ends
         bool EndsPath(const char c)
         {
             return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\'' || c == '"' || c == ')' || c == ']' ||
                    c == '>' || c == ',' || c == ';';
+        }
+
+        /// `text` with each occurrence of `folder` (and the path below it) written as `label`
+        std::string ReplaceFolder(const std::string &text, const std::string &folder, const std::string &label,
+                                  const bool collapse)
+        {
+            const Normalised n = Normalise(text, collapse);
+            std::string result;
+            size_t at = 0;
+            size_t from = 0;
+            bool changed = false;
+            for (;;)
+            {
+                const size_t found = Find(n.text, folder, from);
+                if (found == std::string::npos)
+                {
+                    break;
+                }
+                const size_t end = found + folder.size();
+                if (ContinuesName(n.text, end) || StartsInsideName(n.text, found, folder.front() == '/'))
+                {
+                    // Only the start or the tail of a longer name or path: not this folder
+                    from = end;
+                    continue;
+                }
+                changed = true;
+                result.append(text, at, n.origin[found] - at);
+                result += label;
+                size_t k = end;
+                if (k < n.text.size() && n.text[k] == '/')
+                {
+                    if (label.empty() || label.back() != '/')
+                    {
+                        result += '/';
+                    }
+                    ++k;
+                }
+                // What follows is a path below the folder: its separators are '/' too
+                while (k < n.text.size() && !EndsPath(n.text[k]))
+                {
+                    result += n.text[k];
+                    ++k;
+                }
+                at = n.origin[k];
+                from = k;
+            }
+            if (!changed)
+            {
+                return text;
+            }
+            result.append(text, at, std::string::npos);
+            return result;
         }
     }
 
@@ -186,50 +349,9 @@ namespace N2Engine::Editor::ClientText
 
         for (const auto &[folder, label] : forms)
         {
-            std::string normalized = text;
-            std::ranges::replace(normalized, '\\', '/');
-            std::string result;
-            size_t at = 0;
-            for (;;)
-            {
-                const size_t found = Find(normalized, folder, at);
-                if (found == std::string::npos)
-                {
-                    break;
-                }
-                const size_t end = found + folder.size();
-                result.append(text, at, found - at);
-                if (ContinuesName(text, end) || StartsInsideName(normalized, found))
-                {
-                    // Only the start or the tail of a longer name or path: not this folder
-                    result.append(text, found, end - found);
-                    at = end;
-                    continue;
-                }
-                result += label;
-                size_t k = end;
-                if (k < text.size() && (text[k] == '/' || text[k] == '\\'))
-                {
-                    if (label.empty() || label.back() != '/')
-                    {
-                        result += '/';
-                    }
-                    ++k;
-                }
-                // What follows is a path below the folder: its separators are '/' too
-                while (k < text.size() && !EndsPath(text[k]))
-                {
-                    result += text[k] == '\\' ? '/' : text[k];
-                    ++k;
-                }
-                at = k;
-            }
-            if (at == 0)
-            {
-                continue;
-            }
-            result.append(text, at, std::string::npos);
-            text = std::move(result);
+            // Once as the text is written, then with its doubled backslashes (an escaped string) counted as one
+            text = ReplaceFolder(text, folder, label, false);
+            text = ReplaceFolder(text, folder, label, true);
         }
         return text;
     }
