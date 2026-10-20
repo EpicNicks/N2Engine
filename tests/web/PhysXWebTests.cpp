@@ -65,7 +65,7 @@ TEST(PhysXWebTest, BuiltForScalarSingleThreadedWebAssembly)
 #endif
     EXPECT_EQ(PX_EMSCRIPTEN, 1);
     EXPECT_EQ(PX_SSE2, 0);
-    EXPECT_EQ(PX_SUPPORT_PVD, 0);
+    EXPECT_EQ(PX_SUPPORT_GPU_PHYSX, 0); // no CUDA types: the GPU scene and the particle driver are not built
     EXPECT_EQ(sizeof(void *), 4u);
 }
 

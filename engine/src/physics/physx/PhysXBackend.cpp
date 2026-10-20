@@ -163,11 +163,13 @@ namespace N2Engine::Physics
 
     void PhysXBackend::FailGpu(const std::string &reason)
     {
+#if PX_SUPPORT_GPU_PHYSX // the web build (Emscripten) has no CUDA types: PxCudaContextManager stays incomplete there
         if (_cudaContextManager)
         {
             _cudaContextManager->release();
             _cudaContextManager = nullptr;
         }
+#endif
         // auto: no usable GPU is not an error; on: the project asked for it, so it is
         const bool required = _gpuMode == GpuMode::On;
         _gpuStatus = {required ? GpuState::Failed : GpuState::Unavailable, "GPU physics unavailable: " + reason};
@@ -538,11 +540,13 @@ namespace N2Engine::Physics
             _defaultMaterial->release();
         if (_physics)
             _physics->release();
+#if PX_SUPPORT_GPU_PHYSX // the web build (Emscripten) has no CUDA types: PxCudaContextManager stays incomplete there
         if (_cudaContextManager)
         {
             _cudaContextManager->release();
             _cudaContextManager = nullptr;
         }
+#endif
 
 #if N2ENGINE_PHYSX_HAS_PVD
         if (_pvd)
