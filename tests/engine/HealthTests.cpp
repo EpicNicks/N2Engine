@@ -201,8 +201,9 @@ namespace
 TEST_F(NetworkPresetInitTest, ADeterministicProjectIsRefusedAndNothingStarts)
 {
     auto &app = Application::GetInstance();
-    const EngineHealth health =
-        InitWith({{"network", {{"preset", "deterministic"}}}, {"physics", {{"fixedTimestep", 1.0 / 60.0}}}});
+    const nlohmann::json settings = {{"network", {{"preset", "deterministic"}}},
+                                     {"physics", {{"fixedTimestep", 1.0 / 60.0}}}};
+    const EngineHealth health = InitWith(settings);
 
     // The refusal is a Failed Network row that names every requirement still unmet
     const SubsystemStatus *network = health.Find("Network");
@@ -246,7 +247,7 @@ TEST_F(NetworkPresetInitTest, ADeterministicProjectIsRefusedAndNothingStarts)
     // GetHealth reports the same, and Init is not left half-done: asking again refuses again (it does not take
     // the "already initialized" path)
     EXPECT_EQ(app.GetHealth().Find("Network")->state, SubsystemState::Failed);
-    const EngineHealth again = InitWith({{"network", {{"preset", "deterministic"}}}});
+    const EngineHealth again = InitWith(settings);
     ASSERT_NE(again.Find("Network"), nullptr);
     EXPECT_EQ(again.Find("Network")->detail, network->detail);
 }

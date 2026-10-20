@@ -11,7 +11,9 @@ namespace N2Engine::Editor
      * ready line, then serves on this thread until a signal (SIGINT/SIGTERM), a Shutdown command, Application::Quit,
      * the window closing, or (with exitOnDisconnect) the client's session ending. Then it stops the server and shuts
      * the engine down. Returns the process exit code: 0, or 1 when the token, the project (no folder, no valid
-     * project.n2proj, another engine major version) or the server couldn't be set up, or a std::exception escaped.
+     * project.n2proj, another engine major version) or the server couldn't be set up, Application::Init refused the
+     * project (a Failed "Network" row: network.preset deterministic with unmet requirements; the host stops right after
+     * Init, before it opens the project, enters play mode or prints the ready line), or a std::exception escaped.
      * With options.showHelp it only prints HostUsage() and returns 0; with options.createPath it is RunCreate, and with
      * options.newTokenUser RunNewToken.
      *
