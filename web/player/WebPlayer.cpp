@@ -369,12 +369,19 @@ int main(int argc, char *argv[])
     // (Emscripten's OpenAL on WebAudio), so the game's sounds play from the page. That context is created here, inside
     // the Start button's click (callMain), and the loader resumes it on the first gesture if the browser kept it
     // suspended (web/n2-loader.js). With no WebAudio (node, a browser without it) audio stays off with one warning.
-    application.Init({
+    const EngineHealth health = application.Init({
         .projectPath = projectDir.string(),
         .physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX,
         .renderBackend = Config::ApplicationOptions::RenderBackend::SOFTWARE,
         .isHeadless = true,
     });
+    // A refused project (network.preset deterministic with unmet requirements) starts nothing: show why, not the
+    // renderer's (empty) error
+    if (const SubsystemStatus *network = health.Find("Network");
+        network != nullptr && network->state == SubsystemState::Failed)
+    {
+        return Fail("The engine refused to start the project: " + network->detail);
+    }
     if (!application.GetWindow().IsValid())
     {
         return Fail("The engine could not start (no renderer): " + application.GetWindow().GetInitError());

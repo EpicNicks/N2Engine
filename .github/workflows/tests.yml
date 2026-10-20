@@ -964,3 +964,113 @@ jobs:
           set -e
           export TINT="$HOME/wgsl-validators/tint/bin/tint" NAGA="$HOME/wgsl-validators/naga/bin/naga"
           bash scripts/validate-wgsl.sh
+
+  # WebGPU backend, stage G2 (#155): the native test harness. The WebGPU renderer (renderer/src/webgpu/, built only with
+  # N2ENGINE_RENDERER_WEBGPU=ON, never selectable at run time) runs on the pinned prebuilt Dawn (cmake/DawnPrebuilt.cmake, the
+  # same release the "wgsl" job takes Tint from) over Mesa lavapipe, the CPU Vulkan driver the Linux legs use. Builds the renderer
+  # and the webgpu_tests program only (not the engine). Not a required check, and it follows the docs-only skip like the jobs above.
+  # No existing job changes: the option is OFF everywhere else. Cost: see docs/application.html#webgpu-backend (CI).
+  webgpu:
+    name: webgpu (Dawn, lavapipe)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CC: gcc-14
+      CXX: g++-14
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: "1"
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      # The renderer's Dawn and the shader validators' Tint must be one revision: the two pins name the same Dawn release
+      - name: Dawn and Tint pins agree
+        run: |
+          set -eu
+          cmake_pin() { sed -n "s/^set($1 \"\(.*\)\")\$/\1/p" cmake/DawnPrebuilt.cmake; }
+          script_pin() { sed -n "s/^$1=\"\(.*\)\"\$/\1/p" scripts/install-wgsl-validators.sh; }
+          for pair in N2_DAWN_TAG:DAWN_TAG N2_DAWN_COMMIT:DAWN_COMMIT N2_DAWN_SHA256:DAWN_SHA256; do
+            a=$(cmake_pin "${pair%%:*}")
+            b=$(script_pin "${pair##*:}")
+            echo "${pair%%:*} = $a ; ${pair##*:} = $b"
+            test -n "$a"
+            test "$a" = "$b"
+          done
+
+      # Dawn's Vulkan backend needs a Vulkan loader and a driver at run time, not the headers: libvulkan1 and Mesa lavapipe
+      # (mesa-vulkan-drivers). The Vulkan renderer is compiled out of this job (N2ENGINE_RENDERER_VULKAN=OFF), so no libvulkan-dev.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-14 g++-14 cmake ninja-build python3 libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libasound2-dev ccache libvulkan1 mesa-vulkan-drivers
+
+      # The runners have no GPU: Mesa lavapipe is the Vulkan driver Dawn gets. Pin whichever ICD file is installed (so the loader
+      # cannot pick anything else), and fail here, not in the tests, when there is none.
+      - name: Select the lavapipe Vulkan driver
+        run: |
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          test -n "$icd"
+          echo "Using $icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+
+      # ccache: PRs only restore the cache that master pushes saved; the cache is per job and compiler. A miss or a failure here
+      # only means a cold build.
+      - name: Restore ccache
+        id: ccache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-webgpu-x86_64-gcc14-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-webgpu-x86_64-gcc14-
+
+      - name: Reset ccache statistics
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --zero-stats
+          ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_RENDERER_VULKAN=OFF -DN2ENGINE_RENDERER_WEBGPU=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build --parallel --target webgpu_tests -- -k 0
+
+      # -V: ctest hides a passing test's output, and the adapter line and the memory numbers are worth having in the log
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -V --timeout 600 -R webgpu_tests
+        env:
+          # No adapter fails the tests instead of skipping them, and the adapter must be a CPU one (lavapipe), so a green run
+          # means they executed on the pinned device
+          N2_REQUIRE_WEBGPU: "1"
+          N2_WEBGPU_EXPECT_CPU_DEVICE: "1"
+
+      # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
+      - name: ccache statistics
+        if: "!cancelled()"
+        continue-on-error: true
+        run: |
+          {
+            echo "### ccache (webgpu-x86_64-gcc14)"
+            echo "restored cache: ${{ steps.ccache-restore.outputs.cache-matched-key || 'none (cold build)' }}"
+            echo '```'
+            ccache -s
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          ccache -s
+
+      # Only a push to master saves (never a pull request, never workflow_dispatch); master runs are never cancelled, so a
+      # partial cache from a cancelled run cannot be saved. Entries are immutable, so the key carries the run id.
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ccache-webgpu-x86_64-gcc14-${{ github.run_id }}-${{ github.run_attempt }}
