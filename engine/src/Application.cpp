@@ -126,6 +126,16 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         networkEnv.gpuMode = ReadPhysicsGpuMode(project->settings);
         networkEnv.simdTier = ReadMathSimdTier(project->settings);
         networkEnv.luaSeedSet = ReadDeterminismLuaSeed(project->settings).has_value();
+        networkEnv.fixedTimestepSeconds = Time::GetFixedTimestep();
+        if (const auto physics = project->settings.find("physics"); physics != project->settings.end() &&
+                                                                    physics->is_object())
+        {
+            if (const auto step = physics->find("fixedTimestep");
+                step != physics->end() && step->is_number() && step->get<double>() > 0.0)
+            {
+                networkEnv.fixedTimestepSeconds = step->get<double>();
+            }
+        }
     }
     networkEnv.strictFp = Math::IsStrictFp();
 #ifdef N2ENGINE_PHYSX_ENABLED
@@ -151,12 +161,14 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
                                       requirement->detail));
         }
         // The usual rows, none started, then the Network row that says why
+        const std::string refusedDetail = "Not started: the network preset was refused (see Network)";
         for (const char *name : {"Window", "Renderer", "Physics", "Particles", "SoftBodies", "Audio", "Scripting"})
         {
-            _health.subsystems.push_back({.name = name,
-                                          .state = SubsystemState::NotStarted,
-                                          .detail = "Not started: the network preset was refused (see Network)"});
+            _health.subsystems.push_back({.name = name, .state = SubsystemState::NotStarted, .detail = refusedDetail});
         }
+        // GetHealth recomposes these two rows from their base details
+        _particlesBaseDetail = refusedDetail;
+        _softBodiesBaseDetail = refusedDetail;
         _health.subsystems.push_back(Network::MakeNetworkStatus(networkSettings, networkValidation));
         _initialized = false;
         return _health;

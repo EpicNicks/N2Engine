@@ -92,15 +92,20 @@ namespace N2Engine::Network
     /// The effective values of the settings `preset` governs: {settingKey: value} for every cell with a setting key
     /// and a value, with `overrides` ({settingKey: value}) applied on top. An override of a key the preset does not
     /// govern is ignored. For None the result is empty: the none preset governs nothing.
+    /// A cell whose value follows the tick rate (physics.fixedTimestep is 1 / tickRate seconds) is resolved with
+    /// `tickRate` to a number of seconds, the form the setting is written in.
     [[nodiscard]] nlohmann::json EffectiveValues(NetworkPreset preset,
-                                                 const nlohmann::json &overrides = nlohmann::json::object());
+                                                 const nlohmann::json &overrides = nlohmann::json::object(),
+                                                 int tickRate = 60);
 
     /// The guarantees `preset` loses to `overrides`: one entry per overridden Locked setting whose override differs
     /// from the preset's value. Overriding a Tunable setting, or a Locked one to the preset's own value, loses nothing.
-    [[nodiscard]] std::vector<LostGuarantee> LostGuarantees(NetworkPreset preset, const nlohmann::json &overrides);
+    /// A tick-rate-derived value (see EffectiveValues) matches an override within 0.1 percent.
+    [[nodiscard]] std::vector<LostGuarantee> LostGuarantees(NetworkPreset preset, const nlohmann::json &overrides,
+                                                            int tickRate = 60);
 
     /// Whether `overrides` leave the preset Customised (LostGuarantees is not empty)
-    [[nodiscard]] bool IsCustomised(NetworkPreset preset, const nlohmann::json &overrides);
+    [[nodiscard]] bool IsCustomised(NetworkPreset preset, const nlohmann::json &overrides, int tickRate = 60);
 
     /// Whether `key` names a setting or a row of the table (for any preset)
     [[nodiscard]] bool IsKnownSettingKey(std::string_view key);

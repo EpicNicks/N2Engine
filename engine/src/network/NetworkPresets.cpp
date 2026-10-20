@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <utility>
 
 namespace N2Engine::Network
@@ -249,11 +250,27 @@ namespace N2Engine::Network
             });
         }
 
+        /// The cell's value as the setting is written: "1/tickRate" becomes seconds
+        json ResolveValue(const json &value, const int tickRate)
+        {
+            if (value.is_string() && value.get<std::string>() == "1/tickRate")
+            {
+                return 1.0 / static_cast<double>(std::max(1, tickRate));
+            }
+            return value;
+        }
+
         bool ValuesEqual(const json &a, const json &b)
         {
             if (a.is_string() && b.is_string())
             {
                 return EqualsIgnoreCase(a.get<std::string>(), b.get<std::string>());
+            }
+            if (a.is_number() && b.is_number())
+            {
+                const double x = a.get<double>();
+                const double y = b.get<double>();
+                return std::abs(x - y) <= std::max(std::abs(x), std::abs(y)) * 1e-3;
             }
             return a == b;
         }
@@ -302,7 +319,7 @@ namespace N2Engine::Network
         return false;
     }
 
-    json EffectiveValues(const NetworkPreset preset, const json &overrides)
+    json EffectiveValues(const NetworkPreset preset, const json &overrides, const int tickRate)
     {
         json values = json::object();
         for (const PresetRow &row : PresetTable())
@@ -310,7 +327,7 @@ namespace N2Engine::Network
             const PresetCell &cell = row.Cell(preset);
             if (cell.classes != 0 && !cell.settingKey.empty() && !cell.value.is_null())
             {
-                values[cell.settingKey] = cell.value;
+                values[cell.settingKey] = ResolveValue(cell.value, tickRate);
             }
         }
         if (overrides.is_object())
@@ -326,7 +343,8 @@ namespace N2Engine::Network
         return values;
     }
 
-    std::vector<LostGuarantee> LostGuarantees(const NetworkPreset preset, const json &overrides)
+    std::vector<LostGuarantee> LostGuarantees(const NetworkPreset preset, const json &overrides,
+                                              const int tickRate)
     {
         std::vector<LostGuarantee> lost;
         if (!overrides.is_object())
@@ -349,7 +367,7 @@ namespace N2Engine::Network
                 continue;
             }
             // A requirement with no value (the build profile, the backend) is waived by any override of its row
-            if (cell.value.is_null() || !ValuesEqual(*found, cell.value))
+            if (cell.value.is_null() || !ValuesEqual(*found, ResolveValue(cell.value, tickRate)))
             {
                 lost.push_back({key, row.key, cell.lostGuarantee});
             }
@@ -357,8 +375,8 @@ namespace N2Engine::Network
         return lost;
     }
 
-    bool IsCustomised(const NetworkPreset preset, const json &overrides)
+    bool IsCustomised(const NetworkPreset preset, const json &overrides, const int tickRate)
     {
-        return !LostGuarantees(preset, overrides).empty();
+        return !LostGuarantees(preset, overrides, tickRate).empty();
     }
 }

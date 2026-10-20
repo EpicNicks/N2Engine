@@ -201,7 +201,8 @@ namespace
 TEST_F(NetworkPresetInitTest, ADeterministicProjectIsRefusedAndNothingStarts)
 {
     auto &app = Application::GetInstance();
-    const EngineHealth health = InitWith({{"network", {{"preset", "deterministic"}}}});
+    const EngineHealth health =
+        InitWith({{"network", {{"preset", "deterministic"}}}, {"physics", {{"fixedTimestep", 1.0 / 60.0}}}});
 
     // The refusal is a Failed Network row that names every requirement still unmet
     const SubsystemStatus *network = health.Find("Network");
@@ -217,9 +218,18 @@ TEST_F(NetworkPresetInitTest, ADeterministicProjectIsRefusedAndNothingStarts)
     EXPECT_TRUE(Mentions(health, "netcode-owned tick loop"));
     // The strict profile is the one requirement that depends on the build (there is a strict-FP CI leg)
     EXPECT_EQ(Mentions(health, "strict floating-point profile"), !Math::IsStrictFp());
-    // Met on this project: physics.gpu is off by default and the fixed timestep is always on
+    // Met on this project: physics.gpu is off by default and the fixed timestep is 1 / tickRate
     EXPECT_FALSE(Mentions(health, "physics.gpu is off"));
     EXPECT_FALSE(Mentions(health, "the fixed timestep is on"));
+    EXPECT_FALSE(Mentions(health, "physics.fixedTimestep is"));
+
+    // GetHealth (what GetEngineHealth reads) keeps the refusal on the rows it recomposes
+    for (const char *name : {"Particles", "SoftBodies"})
+    {
+        const SubsystemStatus *row = app.GetHealth().Find(name);
+        ASSERT_NE(row, nullptr) << name;
+        EXPECT_NE(row->detail.find("the network preset was refused"), std::string::npos) << name;
+    }
 
     // Nothing was started: no window, no renderer, no camera, no physics, no scene
     EXPECT_FALSE(app.GetWindow().IsValid());

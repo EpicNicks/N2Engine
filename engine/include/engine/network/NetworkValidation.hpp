@@ -33,6 +33,9 @@ namespace N2Engine::Network
         bool ownedTickLoop = false;
         /// The fixed timestep is on (it always is: the engine has no way to switch it off)
         bool fixedTimestep = true;
+        /// The physics fixed timestep in seconds (physics.fixedTimestep, else the engine default); 0: not known, which
+        /// is not checked against network.tickRate. Deterministic needs it to equal 1 / tickRate.
+        double fixedTimestepSeconds = 0.0;
         /// physics.gpu
         Physics::GpuMode gpuMode = Physics::GpuMode::Off;
     };

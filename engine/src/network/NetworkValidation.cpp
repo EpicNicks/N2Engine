@@ -1,5 +1,7 @@
 #include "engine/network/NetworkValidation.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <format>
 #include <utility>
 
@@ -101,8 +103,16 @@ namespace N2Engine::Network
         requirements.push_back(Requirement(
             "gpu-physics-off", "physics.gpu is off", env.gpuMode == Physics::GpuMode::Off,
             std::format("physics.gpu is {}", Physics::ToString(env.gpuMode))));
+        const double expectedStep = 1.0 / static_cast<double>(std::max(1, settings.tickRate));
+        const bool stepMatches = env.fixedTimestepSeconds <= 0.0 ||
+                                 std::abs(env.fixedTimestepSeconds - expectedStep) <= expectedStep * 1e-3;
         requirements.push_back(Requirement(
-            "fixed-timestep", "the fixed timestep is on", env.fixedTimestep, "the fixed timestep is off"));
+            "fixed-timestep", "the fixed timestep is on and its rate is network.tickRate",
+            env.fixedTimestep && stepMatches,
+            !env.fixedTimestep
+                ? std::string("the fixed timestep is off")
+                : std::format("physics.fixedTimestep is {} s but network.tickRate {} needs {} s",
+                              env.fixedTimestepSeconds, settings.tickRate, expectedStep)));
         requirements.push_back(Requirement(
             "tick-loop", "a netcode-owned tick loop independent of timeScale (A2)", env.ownedTickLoop,
             "not built yet: the fixed-step loop follows the frame clock and the physics step is scaled by timeScale"));

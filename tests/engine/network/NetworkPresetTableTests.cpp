@@ -169,6 +169,19 @@ TEST(NetworkPresetTableTest, EffectiveValuesAreThePresetsSettings)
     EXPECT_FALSE(authoritative.contains("network.deterministic.inputDelay"));
 }
 
+TEST(NetworkPresetTableTest, TheFixedTimestepIsSecondsDerivedFromTheTickRate)
+{
+    const json at60 = EffectiveValues(Deterministic);
+    ASSERT_TRUE(at60.at("physics.fixedTimestep").is_number());
+    EXPECT_DOUBLE_EQ(at60.at("physics.fixedTimestep").get<double>(), 1.0 / 60.0);
+    EXPECT_DOUBLE_EQ(EffectiveValues(Deterministic, json::object(), 120).at("physics.fixedTimestep").get<double>(),
+                     1.0 / 120.0);
+    // Exactly 1 / tickRate (as a project file rounds it) loses nothing; another rate does
+    EXPECT_TRUE(LostGuarantees(Deterministic, json{{"physics.fixedTimestep", 0.0166667}}, 60).empty());
+    EXPECT_FALSE(IsCustomised(Deterministic, json{{"physics.fixedTimestep", 1.0 / 30.0}}, 30));
+    EXPECT_TRUE(IsCustomised(Deterministic, json{{"physics.fixedTimestep", 0.0166667}}, 30));
+}
+
 TEST(NetworkPresetTableTest, OverridesChangeOnlyTheSettingsThePresetGoverns)
 {
     const json overrides = {{"math.simdTier", "auto"},

@@ -228,6 +228,7 @@ TEST(NetworkValidationTest, EachDeterministicRequirementCanRefuseOnItsOwn)
         {"gpu-physics-off", [](NetworkEnvironment &e) { e.gpuMode = GpuMode::On; }},
         {"fixed-timestep", [](NetworkEnvironment &e) { e.fixedTimestep = false; }},
         {"tick-loop", [](NetworkEnvironment &e) { e.ownedTickLoop = false; }},
+        {"fixed-timestep", [](NetworkEnvironment &e) { e.fixedTimestepSeconds = 0.02; }},
     };
     for (const Case &c : cases)
     {
@@ -243,6 +244,24 @@ TEST(NetworkValidationTest, EachDeterministicRequirementCanRefuseOnItsOwn)
     none.backendLevel = DeterminismLevel::None;
     EXPECT_EQ(UnmetIds(ValidateNetwork(Preset(NetworkPreset::Deterministic), none)),
               (std::vector<std::string>{"physics-backend", "physics-threads"}));
+}
+
+TEST(NetworkValidationTest, TheFixedTimestepMustMatchTheTickRate)
+{
+    NetworkSettings settings = Preset(NetworkPreset::Deterministic);
+    settings.tickRate = 60;
+    NetworkEnvironment env = EverythingMet();
+
+    env.fixedTimestepSeconds = 1.0 / 60.0;
+    EXPECT_FALSE(ValidateNetwork(settings, env).Refused());
+    env.fixedTimestepSeconds = 0.0166667; // what a project file holds
+    EXPECT_FALSE(ValidateNetwork(settings, env).Refused());
+    env.fixedTimestepSeconds = 0.02;
+    const NetworkValidation mismatch = ValidateNetwork(settings, env);
+    EXPECT_EQ(UnmetIds(mismatch), (std::vector<std::string>{"fixed-timestep"}));
+    EXPECT_NE(mismatch.Unmet()[0]->detail.find("network.tickRate 60"), std::string::npos);
+    settings.tickRate = 50;
+    EXPECT_FALSE(ValidateNetwork(settings, env).Refused());
 }
 
 TEST(NetworkValidationTest, RollbackAlsoNeedsASnapshotLockstepDoesNot)
