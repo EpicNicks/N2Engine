@@ -813,11 +813,37 @@ jobs:
           cmake --version | head -n 1
           ninja --version
 
+      # Stage 5: PhysX for WebAssembly is compiled from source by the first configure (cmake/PhysXWeb.cmake runs
+      # scripts/web-build-physx.sh) into external/PhysX/physx/bin/emscripten.wasm32, which every profile reuses. The cache
+      # holds that folder (static libraries, patched headers, licence, stamp), keyed by the PhysX pin, the build recipe
+      # and the Emscripten release, so the build runs again only when one of them changes. Saved right after the configure
+      # (not at the end of the job) so a failing test run later still leaves the libraries cached.
+      - name: Restore the PhysX WebAssembly libraries
+        id: physx-web-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: external/PhysX/physx/bin/emscripten.wasm32
+          key: physx-web-emsdk-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('cmake/PhysXWebPin.cmake', 'scripts/web-build-physx.sh') }}
+
       - name: Configure (dev profile)
         run: |
-          set -e
+          set -e -o pipefail
           . "$HOME/emsdk/emsdk_env.sh"
-          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev
+          start=$(date +%s)
+          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev 2>&1 | tee configure-dev.log
+          echo "configure took $(( $(date +%s) - start )) s (PhysX cache hit: ${{ steps.physx-web-cache.outputs.cache-hit }})"
+          # PhysX failing to build turns it OFF with a warning in every other configuration; on the web that would only
+          # skip the physics tests, so the job insists that it is on
+          grep -q "PhysX enabled" configure-dev.log
+          cat external/PhysX/physx/bin/emscripten.wasm32/.pin
+          ls -l external/PhysX/physx/bin/emscripten.wasm32/lib
+
+      - name: Save the PhysX WebAssembly libraries
+        if: steps.physx-web-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: external/PhysX/physx/bin/emscripten.wasm32
+          key: ${{ steps.physx-web-cache.outputs.cache-primary-key }}
 
       # Without the tests (only the GLFW and OpenAL headers are fetched): the size and speed profiles build the player
       # package further down

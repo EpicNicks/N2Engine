@@ -341,7 +341,14 @@ namespace N2Engine::Physics
         // 5. Create scene. With physics.gpu off (the default) nothing GPU-related is touched; otherwise the scene
         // is the GPU scene when the probe works and today's CPU scene when it does not.
         // physics.deterministic: no worker threads, so every task runs on the thread that calls simulate()
+#ifdef N2ENGINE_SINGLE_THREADED
+        // The single-threaded web build has no threads to start (no pthreads, no SharedArrayBuffer): the dispatcher
+        // always has 0 workers, whatever SetWorkerThreadsForTesting or physics.deterministic ask for, so every task
+        // runs on the thread that calls simulate()
+        const unsigned workerThreads = 0u;
+#else
         const unsigned workerThreads = _workerThreadsOverride.value_or(_deterministic ? 0u : 4u);
+#endif
         _dispatcher = PxDefaultCpuDispatcherCreate(workerThreads);
 
         const auto createScene = [this](const bool gpu) -> PxScene *

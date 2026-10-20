@@ -96,6 +96,12 @@ namespace
 {
     constexpr float kDt = 1.0f / 60.0f;
     constexpr int kSteps = 600; // 10 s
+#ifdef N2ENGINE_SINGLE_THREADED
+    // The single-threaded web build has no threads to start: the dispatcher always has 0 workers (PhysXBackend.cpp)
+    constexpr unsigned kDefaultWorkers = 0u;
+#else
+    constexpr unsigned kDefaultWorkers = 4u;
+#endif
 
     // The 64-bit FNV-1a hash over the exact bit patterns of the floats: not a tolerance, a bit-exact comparison
     // (so -0 and +0, and a NaN payload, all count as different)
@@ -433,7 +439,7 @@ TEST(PhysXDeterminismOptionTest, DefaultSceneIsUnchanged)
     PhysXBackend backend;
     ASSERT_TRUE(backend.Initialize());
     EXPECT_FALSE(backend.SceneUsesEnhancedDeterminism());
-    EXPECT_EQ(backend.DispatcherWorkerCount(), 4u);
+    EXPECT_EQ(backend.DispatcherWorkerCount(), kDefaultWorkers);
     EXPECT_EQ(backend.GetGpuStatus().state, GpuState::Disabled);
     backend.Shutdown();
 }
@@ -444,9 +450,26 @@ TEST(PhysXDeterminismOptionTest, ExplicitlyOffIsTheDefaultScene)
     backend.SetDeterministic(false);
     ASSERT_TRUE(backend.Initialize());
     EXPECT_FALSE(backend.SceneUsesEnhancedDeterminism());
-    EXPECT_EQ(backend.DispatcherWorkerCount(), 4u);
+    EXPECT_EQ(backend.DispatcherWorkerCount(), kDefaultWorkers);
     backend.Shutdown();
 }
+
+#ifdef N2ENGINE_SINGLE_THREADED
+// The web build has no threads: a request for worker threads (the testing seam here, or a future setting) is answered
+// with the 0-worker dispatcher instead of a thread that cannot be started
+TEST(PhysXDeterminismOptionTest, NoThreadsOnTheSingleThreadedWebBuild)
+{
+    for (const unsigned requested : {1u, 4u})
+    {
+        PhysXBackend backend;
+        backend.SetDeterministic(false);
+        backend.SetWorkerThreadsForTesting(requested);
+        ASSERT_TRUE(backend.Initialize()) << requested;
+        EXPECT_EQ(backend.DispatcherWorkerCount(), 0u) << requested;
+        backend.Shutdown();
+    }
+}
+#endif
 
 TEST(PhysXDeterminismOptionTest, OnSetsEnhancedDeterminismAndZeroWorkerThreads)
 {
