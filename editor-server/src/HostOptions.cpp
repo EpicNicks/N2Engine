@@ -514,8 +514,8 @@ Options:
                             5 min; its connections are closed at once, before any TLS handshake), and with
                             --tokens-file a user that fails 3 Hellos is backed off for up to 30 s (a Hello
                             with the right token still gets in). Loopback has no backoff of its own (behind
-                            a proxy or an SSH tunnel everyone is loopback, and a ban would lock out the
-                            client with the right token): it is bounded by --preauth-slots and the
+                            a proxy or an SSH tunnel that connects over loopback everyone is loopback, and
+                            a ban would lock out the client with the right token): it is bounded by --preauth-slots and the
                             handshake rate. A connection that never finishes a Hello (idle for the 2 s Hello
                             budget, closed early, a failed TLS handshake or one not done within its own
                             5 s) counts as a failure for its address too, but not for loopback. For test
@@ -530,8 +530,9 @@ Options:
   --max-session <minutes>   Close a session older than this, whatever it does. Default: off (0)
   --preauth-slots <n>       How many connections may be in their TLS handshake and Hello at once (and how
                             many worker threads serve them), 1 to 16. Default: 4. At most 2 of them for
-                            one non-loopback address (loopback may use all: behind a proxy or an SSH
-                            tunnel every peer is loopback). A connection that finds none free is closed
+                            one non-loopback address (loopback may use all: a proxy or an SSH tunnel on
+                            the same machine makes every peer loopback; the host sees the address a
+                            proxy or container presents). A connection that finds none free is closed
                             at once, before TLS, with no line of its own (one summary line every 10 s).
                             Handshakes are also limited to 20 a second in all and 5 a second per
                             address. The authenticated session has its own thread: a peer that stalls

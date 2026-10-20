@@ -21,8 +21,8 @@ namespace N2Engine::Editor
      *
      *  - at most `totalSlots` slots at once (1-16, default 4);
      *  - at most `perAddressSlots` (default 2) for one non-loopback address;
-     *  - loopback (127.0.0.0/8, ::1) has no per-address cap and may use every slot, because behind a proxy or a tunnel
-     *    every peer is loopback. All peers of an unknown family share one address ("unknown") and so its cap;
+     *  - loopback (127.0.0.0/8, ::1) has no per-address cap and may use every slot, because a proxy or tunnel that connects
+     *    over loopback makes every peer loopback. All peers of an unknown family share one address ("unknown") and so its cap;
      *  - when nothing is free TryAcquire returns an empty handle and the caller closes the connection at once, with no
      *    TLS and no log line; the refusals are counted so a periodic summary line can be written (TakeCounters);
      *  - optional, OFF by default: `reservedSlots` of the total are kept for non-loopback addresses that authenticated

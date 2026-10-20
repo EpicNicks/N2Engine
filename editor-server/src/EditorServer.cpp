@@ -3378,7 +3378,7 @@ namespace N2Engine::Editor
         bool helloAccepted = false;
         // A new connection hasn't asked for ErrorCoded: its Hello does (HandleHello)
         _clientErrorCodes = false;
-        // With an access token, a connection that hasn't succeeded a Hello must not hold the (one-at-a-time) server:
+        // With an access token, a connection that hasn't succeeded a Hello must not hold the session thread:
         // it has until this deadline to do so, and is closed after a refused command or a failed Hello
         const bool gated = RequiresAccessToken();
         // Without a token every connection is a session (for SetStopOnDisconnect); with one, from its first good Hello

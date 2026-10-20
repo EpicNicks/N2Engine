@@ -25,8 +25,9 @@ namespace N2Engine::Editor
      *    doubling with each further failure up to `maxBackoff`. A connection from a backed-off address is refused at
      *    accept (AdmitConnection), before any TLS handshake. A success clears the address; so does `idleReset` without a
      *    failure.
-     *  - loopback (127.0.0.0/8, ::1) is exempt from the per-address rule, because a reverse proxy or an SSH tunnel makes
-     *    every peer loopback and one ban would lock everybody out. Since PR S-4 it has NO backoff of its own either: the
+     *  - loopback (127.0.0.0/8, ::1) is exempt from the per-address rule, because a reverse proxy or an SSH tunnel that
+     *    connects over loopback makes every peer loopback and one ban would lock everybody out (a proxy or container on
+     *    another network presents its own address, which is limited like any other). Since PR S-4 it has NO backoff of its own either: the
      *    shared counter that used to refuse every loopback connection after ten failed Hellos in a minute (and so locked
      *    out a client with a CORRECT token) is gone. What bounds loopback is a cap on pre-auth concurrency and handshake
      *    rate (PreAuthSlots: loopback may use every slot; TokenBucket: the global bucket applies to loopback), which no
