@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -201,6 +202,16 @@ TEST_F(LuaTest, TimeValuesAreNumbers)
     {
         EXPECT_EQ(Eval<std::string>(std::string("type(Time.") + field + ")"), "number") << field;
     }
+}
+
+TEST_F(LuaTest, TimeTickIsTheEnginesTickCounterAsAReadOnlyInteger)
+{
+    EXPECT_EQ(Eval<std::string>("math.type(Time.tick)"), "integer");
+    EXPECT_EQ(Eval<std::int64_t>("Time.tick"), static_cast<std::int64_t>(Time::GetTick()));
+
+    // Read-only: a write is an error and the counter is unchanged
+    EXPECT_FALSE(Eval<bool>("pcall(function() Time.tick = 5 end)"));
+    EXPECT_EQ(Eval<std::int64_t>("Time.tick"), static_cast<std::int64_t>(Time::GetTick()));
 }
 
 TEST_F(LuaTest, TimeScaleIsWritable)

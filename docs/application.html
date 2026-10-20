@@ -87,6 +87,7 @@
 </ol>
 </li>
 <li><a href="#fixed-step">Fixed steps and physics</a></li>
+<li><a href="#sim-clock">The simulation clock and the tick counter</a></li>
 <li><a href="#time">Time</a></li>
 <li><a href="#quit">Quitting</a></li>
 <li><a href="#shutdown">Shutdown order</a></li>
@@ -230,8 +231,8 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <ol class="steps">
 <li><code>Window::PollEvents()</code>: GLFW events, then <code>InputSystem::Update()</code> (actions fire here; see <a href="input.html">Input</a>).</li>
 <li><code>Time::Update()</code>: measure the frame delta and advance the clocks.</li>
-<li>Add <code>min(unscaled delta, 0.25 s)</code> to the fixed-step accumulator. With no scene loaded the accumulator is reset to 0 instead of being drained <span class="badge">PR #34</span>.</li>
-<li><em>If a scene is loaded</em>: <code>Scene::ProcessAttachQueue()</code>, so components added since the last frame get attached before anything updates.</li>
+<li>Add <code>min(unscaled delta, 0.25 s)</code> to the fixed-step accumulator. With no scene loaded the accumulator is reset to 0 instead of being drained <span class="badge">PR #34</span>. (In a network <a href="#sim-clock">simulation mode</a> the whole delta is added, <span class="badge">PR #186</span>.)</li>
+<li><em>If a scene is loaded</em>: <code>Scene::ProcessAttachQueue()</code>, so components added since the last frame get attached before anything updates. (A network <a href="#sim-clock">simulation mode</a> skips this step and processes the queue at each tick boundary instead <span class="badge">PR #186</span>.)</li>
 <li><em>If a scene is loaded</em>: zero or more fixed steps (<a href="#fixed-step">below</a>).</li>
 <li><em>If a scene is loaded</em>: <code>PointerDispatcher::Update()</code>: the <code>OnMouse*</code> callbacks for the object under the cursor, where Unity sends them (see <a href="input.html#picking">Picking</a>) <span class="badge">PR #48</span>.</li>
 <li><em>If a scene is loaded</em>: <code>Scene::Update()</code>.</li>
@@ -251,7 +252,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <tbody>
 <tr><td>Add a GameObject (with components) to the scene</td><td>any callback</td><td>The object is in the scene at once; its components are queued and attached at step 4 of the <em>next</em> frame (see <a href="gameobjects-components.html">GameObjects</a>).</td></tr>
 <tr><td>Read <code>Time::GetDeltaTime()</code></td><td>Update / LateUpdate / coroutines</td><td>This frame's scaled delta (step 2).</td></tr>
-<tr><td>Read <code>Time::GetFixedDeltaTime()</code></td><td>FixedUpdate</td><td><code>fixedUnscaledDeltaTime × timeScale</code>.</td></tr>
+<tr><td>Read <code>Time::GetFixedDeltaTime()</code></td><td>FixedUpdate</td><td><code>fixedUnscaledDeltaTime &times; timeScale</code> (in a network <a href="#sim-clock">simulation mode</a> just <code>fixedUnscaledDeltaTime</code> <span class="badge">PR #186</span>).</td></tr>
 <tr><td>Change a body or transform that physics tracks</td><td>Update</td><td>Applied to the backend at the start of the next fixed step (<code>ApplyPendingChanges</code>); see <a href="physics.html">Physics</a>.</td></tr>
 <tr><td>Destroy an object</td><td>any callback</td><td>Torn down at step 12 of the same frame, after Render (see <a href="gameobjects-components.html">GameObjects</a> for what a destroyed object still does before then).</td></tr>
 <tr><td>Request a scene load</td><td>any callback</td><td>Switched at step 13; the rest of the current frame runs on the old scene.</td></tr>
@@ -420,11 +421,14 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p class="src">Source: <code>renderer/include/renderer/software/SoftwareRenderer.hpp</code> — <code>SWMaterialSnapshot</code>; <code>renderer/src/software/SoftwareRenderer.cpp</code> — <code>SnapshotMaterial</code>, <code>SoftwareRenderer::DrawMesh</code>, <code>DestroyMesh</code>, <code>DestroyTexture</code>, <code>DestroyMaterial</code>, <code>DestroyShaderProgram</code>; tests: <code>SoftwareMaterialSnapshotTest.*</code>, <code>SoftwareResourceLifetimeTest.*</code> (<code>tests/renderer/software/SoftwareRendererGoldenTests.cpp</code>)</p>
 
 <h2 id="fixed-step">Fixed steps and physics</h2>
-<p>The accumulator is a <code>double</code> local to <code>Run()</code>, starting at 0. Each frame adds the <em>unscaled</em> frame delta, clamped to 0.25 s, then, while a scene is loaded:</p>
+<p>This is the <code>None</code> loop, the default (the <a href="#sim-clock">simulation clock</a> section has the network modes') <span class="badge">PR #186</span>. The accumulator is a <code>double</code> held by the <code>SimulationClock</code> that <code>Application</code> owns, starting at 0. Each frame adds the <em>unscaled</em> frame delta, clamped to 0.25 s, then, while a scene is loaded:</p>
 <pre class="lang-cpp"><code>while (accumulator &gt;= Time::GetFixedUnscaledDeltaTime())   // 0.02 s
 {
     if (Time::GetFixedDeltaTime() &gt; 0.0f)                    // scaled; 0 when paused
+    {
+        ++tick;                                                 // Time::GetTick()
         PhysicsUpdate(curScene);
+    }
     accumulator -= Time::GetFixedUnscaledDeltaTime();
 }
 </code></pre>
@@ -449,6 +453,37 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p>The accumulator only builds up while a scene is loaded. In a frame with no scene (<code>GetCurSceneIndex() == -1</code>) it is reset to 0, so the first scene to load starts with at most one frame's worth of steps instead of a burst of catch-up steps for the time spent without a scene. Before PR #34 it kept accumulating, and the per-frame 0.25 s clamp did not limit the total.</p>
 </div>
 
+<h2 id="sim-clock">The simulation clock and the tick counter <span class="badge">PR #186</span></h2>
+<p>How many fixed ticks a frame runs is decided by a <code>SimulationClock</code> (<code>engine/include/engine/SimulationClock.hpp</code>) that <code>Application</code> owns. It holds the fixed-step accumulator and a 64-bit tick counter, <code>Time::GetTick()</code>: <strong>0 before the first tick, incremented once at the start of every tick</strong>, so inside tick N's <code>FixedUpdate</code> (and in the <code>OnAttach</code> that runs at that tick's boundary) it is N, and between frames it is the number of ticks run so far. It is 64 bits wide and does not wrap in practice. <code>Time::GetTick()</code> is static, like the rest of <code>Time</code>; Lua reads it as <code>Time.tick</code> (a read-only integer). <code>Time::Init</code> sets it back to 0.</p>
+<p><code>Application::SetSimulationMode(mode)</code> chooses how the loop runs:</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th></th><th><code>None</code> (the default)</th><th><code>Authoritative</code>, <code>Deterministic</code> (the network modes)</th></tr></thead>
+<tbody>
+<tr><td>Time added to the accumulator</td><td><code>min(unscaled delta, 0.25 s)</code>: the rest of a long frame is dropped</td><td>The whole unscaled delta. Nothing is dropped.</td></tr>
+<tr><td>Ticks per frame</td><td>As many as the accumulator pays for (up to 12 after a clamped stall)</td><td>As many as it pays for, at most <code>SimulationClock::GetMaxCatchUpTicks()</code> (default 30; 0 is no limit). Whole ticks beyond that stay owed (below).</td></tr>
+<tr><td><code>Time::GetFixedDeltaTime()</code></td><td><code>fixedUnscaledDeltaTime &times; timeScale</code>; 0 while paused</td><td><code>fixedUnscaledDeltaTime</code>, whatever <code>timeScale</code> is. <code>timeScale</code> only scales <code>Time::GetDeltaTime()</code> and <code>Time::GetTime()</code>, which <code>Update</code> sees.</td></tr>
+<tr><td>Paused (<code>timeScale</code> 0)</td><td>No tick runs (no <code>FixedUpdate</code>, no physics step), so the counter stands still</td><td>Ticks run as usual; a pause is the netcode's to decide, not the time scale's</td></tr>
+<tr><td>Attach queue (<code>OnAttach</code>, body creation)</td><td>Once per frame, before the fixed steps</td><td>At <strong>each tick boundary</strong>: the counter moves on, then <code>ProcessAttachQueue</code>, then that tick's <code>FixedUpdate</code> and physics step. It does not run once per frame.</td></tr>
+<tr><td><code>Update</code>, coroutines, <code>LateUpdate</code></td><td>Once per frame with the variable delta</td><td>Unchanged: once per frame with the variable delta, for presentation</td></tr>
+</tbody>
+</table>
+</div>
+<p>The network modes are what the design calls for (<a href="https://github.com/EpicNicks/N2Engine/issues/157">#157</a> blocker B5, netcode design 2.4): the simulation advances only in fixed ticks of a fixed length, and what is created during a tick joins the simulation at a tick boundary that does not depend on the frame timing. A component created in tick N's <code>FixedUpdate</code> (or by a script running there) is attached before tick N+1's <code>FixedUpdate</code> on every run, whether the frames were 1 or 12 ticks long, so its physics body enters the simulation at the same tick. Test: <code>SimulationClockTest.AnObjectCreatedInATickJoinsAtTheNextTickBoundaryWhateverTheFrameTiming</code> runs the same twelve ticks of time as six different partitions of frames in both modes and compares the tick-by-tick records.</p>
+<p><strong>Falling behind.</strong> A network-mode frame that ends with at least one whole tick still owed (it hit the catch-up limit) leaves that time in the accumulator, sets <code>SimulationClock::IsBehind()</code> and calls the handler set with <code>SetBehindHandler</code>, with a <code>SimulationBehind{tick, ticksOwed, ticksRunThisFrame, owedSeconds}</code>, once per such frame. The loop never discards the time by itself: the debt is paid, up to the limit's number of ticks a frame, until it is gone, unless the netcode decides to resync and calls <code>SimulationClock::ResetAccumulator()</code>. With the limit at 0 a long stall runs every tick it owes in one frame, so a frame delta that is huge is the caller's to keep out. A NaN, infinite or negative delta is not time: a network-mode clock adds nothing for it, rather than poisoning the accumulator. Switching back to <code>None</code> keeps at most 0.25 s of any debt, so the None loop never inherits a burst of ticks. Test: <code>SimulationClockTest.ANetworkModeIgnoresAFrameDeltaThatIsNotTime</code>, <code>SimulationClockTest.LeavingANetworkModeThatIsBehindKeepsOnlyTheNoneClampOfTheDebt</code>.</p>
+<p><strong>Headless stepping.</strong> <code>Application::StepTicks(n)</code> runs exactly n ticks of the current scene (each one the tick a <code>Tick</code> runs) with no window events, no clock, no <code>Update</code>, coroutines, <code>LateUpdate</code>, drawing or destroyed-object cleanup, and leaves the accumulator and <code>Time::GetTime()</code> alone. It returns the number that ran: in <code>None</code> mode that is 0 while <code>timeScale</code> is 0, and the attach queue is processed once before the first tick, as a frame would; a network mode processes it at every tick boundary. For whole frames use <code>Tick</code> with <code>TickOptions::deltaSeconds</code>.</p>
+<div class="callout guarantee">
+<p class="callout-title">Guarantee <span class="badge">PR #186</span></p>
+<p>With the mode <code>None</code>, which nothing sets by default, the fixed-step loop does what it did before the clock existed: the same accumulator arithmetic (<code>min(float delta, 0.25)</code> added; <code>while (acc &gt;= float(step))</code>, the step skipped while the scaled fixed delta is 0, <code>acc -= float(step)</code>), the same attach-queue call once per frame before the steps, the same fixed delta (<code>fixedUnscaled &times; timeScale</code>). The tick counter is the only addition, and it only counts. Test: <code>SimulationClockTest.NoneModeKeepsTheLoopOfBeforeTheClock</code> feeds ten frame deltas (including a frame of no time and two over the clamp) at <code>timeScale</code> 1, 0.5, 2 and 0 and compares each frame's step count, accumulator and fixed delta with constants worked out from the old loop's arithmetic.</p>
+</div>
+<div class="callout note" id="design-sim-clock">
+<p class="callout-title">Design decision: the network modes own the tick, and <code>timeScale</code> becomes presentation-only <span class="badge">PR #186</span></p>
+<p>Two peers (or a client and a server) that pause or slow time differently would step their physics by different amounts and diverge, and a loop that drops time past 0.25 s or attaches components once per frame gives each peer a different tick for the same event. So in the network modes the step length is the project's fixed timestep and nothing else, no time is dropped (a clock too far behind is reported so the netcode can resync, rather than the loop deciding), and attachment happens at tick boundaries. <code>timeScale</code> is allowed, not refused: it still scales <code>Update</code>'s delta and <code>Time.time</code>, so slow-motion effects, animation and UI keep working, but it cannot pause or stretch the simulation. The offline loop is untouched because a change there would alter every existing game (a paused game, a slow-motion game, the editor's play mode). Decided on <a href="https://github.com/EpicNicks/N2Engine/issues/157">#157</a> and the netcode runtime design (<code>None</code> keeps today's loop byte for byte).</p>
+</div>
+<p><strong>What the network modes mean for game code.</strong> Anything that must be the same on every peer (spawns, despawns, gameplay changes to physics bodies) belongs in <code>FixedUpdate</code>: it runs once per tick with the fixed delta, and what it creates attaches at the next tick. Something created in <code>Update</code> attaches at the next tick boundary after the frame that made it, which depends on the frame timing; <code>Update</code> is for presentation. A scene that loads gets its first components attached at its first tick boundary, so a frame that runs no tick shows them unattached.</p>
+<p><strong>What is not there yet.</strong> The mode is set by a host or a test through <code>SetSimulationMode</code>; nothing reads a project setting for it yet (the <code>network</code> settings block and the startup validation are separate items), so a project has the <code>None</code> loop until they land. No network traffic exists yet: the clock decides ticks from the frame delta it is given, and the netcode that will feed it a network clock comes later.</p>
+<p class="src">Source: <code>engine/include/engine/SimulationClock.hpp</code>, <code>engine/src/SimulationClock.cpp</code>; <code>engine/src/Application.cpp</code> &mdash; <code>Application::Tick</code>, <code>RunFixedTick</code>, <code>StepTicks</code>; <code>engine/src/Time.cpp</code> &mdash; <code>GetTick</code>, <code>SetFixedIgnoresTimeScale</code>; tests: <code>SimulationClockTest.*</code>, <code>SimulationClockUnitTest.*</code> (<code>tests/engine/SimulationClockTests.cpp</code>), <code>LuaTest.TimeTickIsTheEnginesTickCounterAsAReadOnlyInteger</code></p>
+
 <h2 id="time">Time</h2>
 <p><code>Time</code> is a static class. <code>Init</code> and <code>Update</code> are private and called only by <code>Application</code>. All getters return <code>float</code>; the state is kept in <code>double</code>.</p>
 <div class="table-wrap">
@@ -459,7 +494,8 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <tr><td><code>GetDeltaTime()</code></td><td>Unscaled delta × <code>timeScale</code>.</td></tr>
 <tr><td><code>GetUnscaledTime()</code> / <code>GetTime()</code></td><td>Sums of the unscaled / scaled deltas since <code>Init</code>.</td></tr>
 <tr><td><code>GetFixedUnscaledDeltaTime()</code></td><td>0.02 s (50 Hz). There is no setter.</td></tr>
-<tr><td><code>GetFixedDeltaTime()</code></td><td>0.02 × <code>timeScale</code>, recomputed by <code>SetTimeScale</code>.</td></tr>
+<tr><td><code>GetFixedDeltaTime()</code></td><td>0.02 &times; <code>timeScale</code>, recomputed by <code>SetTimeScale</code>. In a network <a href="#sim-clock">simulation mode</a>: 0.02, whatever the time scale <span class="badge">PR #186</span>.</td></tr>
+<tr><td><code>GetTick()</code> <span class="badge">PR #186</span></td><td>A 64-bit integer: the fixed ticks begun since <code>Init</code>; 0 before the first. See <a href="#sim-clock">the simulation clock</a>.</td></tr>
 <tr><td><code>GetTimeScale()</code> / <code>SetTimeScale(s)</code></td><td>Default 1. Takes effect from the next <code>Time::Update</code> for the frame delta, immediately for the fixed delta. Negative values are clamped to 0; NaN and infinity are ignored with a warning <span class="badge">PR #34</span>.</td></tr>
 </tbody>
 </table>
@@ -561,7 +597,7 @@ app.Run(); // returns after OnApplicationQuit and Shutdown
 <p><code>Init</code> needs a window, so tests never call it. The pieces a test needs are installed directly:</p>
 <ul>
 <li><code>Set3DPhysicsBackend(std::unique_ptr&lt;IPhysicsBackend&gt;)</code> installs a backend without Init. It replaces and destroys any existing backend; <code>nullptr</code> removes it. Unload or replace scenes holding bodies first, because the old backend is destroyed immediately.</li>
-<li>Fixed steps are driven by hand the way <code>PhysicsUpdate</code> does (<code>PhysicsUpdate</code> itself is private).</li>
+<li>Fixed steps are driven by hand the way <code>PhysicsUpdate</code> does (<code>PhysicsUpdate</code> itself is private), or with <code>Application::StepTicks(n)</code>, which runs exactly n fixed ticks of the current scene, or <code>Tick</code> with <code>deltaSeconds</code> for whole frames <span class="badge">PR #186</span> (<a href="#sim-clock">the simulation clock</a>).</li>
 <li><code>GetHealth()</code> is empty and healthy; <code>Shutdown()</code> is a safe no-op.</li>
 </ul>
 <pre class="lang-cpp"><code>static void SetUpTestSuite()

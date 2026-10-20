@@ -8,6 +8,7 @@
 #include "engine/Window.hpp"
 #include "engine/Camera.hpp"
 #include "engine/Health.hpp"
+#include "engine/SimulationClock.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include "engine/input/PointerDispatcher.hpp"
 
@@ -42,8 +43,9 @@ namespace N2Engine
         static inline bool _scriptQuitAllowed = true;
         static inline bool _scriptQuitWarned = false;
         bool _initialized = false; // from Init until Shutdown
-        // The fixed-step loop's catch-up time, carried from one Tick to the next
-        double _fixedTimestepAccumulator = 0.0;
+        // Decides how many fixed ticks each Tick runs (its accumulator is the catch-up time carried from one Tick to the
+        // next) and owns the tick counter
+        SimulationClock _simulationClock;
 
     private:
         /// Installs the UI hit provider (UI::UISystem) on the pointer dispatcher
@@ -53,6 +55,10 @@ namespace N2Engine
         /// (what Render does with the main camera). World-space canvases are part of the scene and always draw.
         void Render(const Camera &camera, bool screenSpaceUI = true);
         void PhysicsUpdate(const Scene &scene) const;
+        /// One fixed tick of `scene`: in None mode the physics step (FixedUpdate, the backend, the transform sync),
+        /// unless the time scale is 0; in a network mode the same after the tick counter moves on and the attach queue is
+        /// processed. True if a step ran.
+        bool RunFixedTick(Scene &scene);
 
     public:
         Application(const Application &) = delete;
@@ -87,6 +93,27 @@ namespace N2Engine
          * Without a current scene it still advances time and draws.
          */
         void Tick(const TickOptions &options = TickOptions{});
+        /**
+         * How the fixed-step loop runs (see SimulationClock): None, the default, is the offline loop exactly as it has
+         * always been. Authoritative and Deterministic are the tick-owned loop of the network presets: the fixed delta
+         * ignores the time scale (which then only scales what Update sees), the attach queue is processed at each tick
+         * boundary instead of once per frame, and no frame time is dropped (a clock too far behind reports it through
+         * the SimulationClock's behind handler). The network presets will set this when the project's settings do;
+         * until then a host or a test does. Does not touch the tick counter; going to None keeps at most 0.25 s of carried time.
+         */
+        void SetSimulationMode(SimulationMode mode);
+        [[nodiscard]] SimulationMode GetSimulationMode() const { return _simulationClock.GetMode(); }
+        /// The clock that decides the ticks: its catch-up limit, behind handler and accumulator
+        [[nodiscard]] SimulationClock& GetSimulationClock() { return _simulationClock; }
+        [[nodiscard]] const SimulationClock& GetSimulationClock() const { return _simulationClock; }
+        /**
+         * Runs exactly `count` fixed ticks of the current scene, headless: no window events, no clock, no Update,
+         * coroutines, LateUpdate, drawing or destroyed-object cleanup, and the accumulator is not touched. Each tick is
+         * the one a Tick runs. In None mode the attach queue is processed once first (as a frame would) and no tick runs
+         * while the time scale is 0; a network mode processes it at every tick boundary and has no such pause. Returns the
+         * ticks that ran (0 without a current scene).
+         */
+        std::uint32_t StepTicks(std::uint32_t count);
         /// Makes the next Tick measure its frame from now rather than from the last Tick: call it when ticking resumes
         /// after a pause, so the pause isn't one long frame
         void ResetFrameClock();

@@ -349,7 +349,7 @@ bool Application::BeginRun()
         return false;
     }
 
-    _fixedTimestepAccumulator = 0.0;
+    _simulationClock.ResetAccumulator();
     return true;
 }
 
@@ -375,10 +375,6 @@ void Application::EndRun()
 
 void Application::Tick(const TickOptions &options)
 {
-    // Longest frame the fixed-step loop catches up on; after a long stall (debugger, loading) it would
-    // otherwise queue hundreds of physics steps and fall further behind while running them
-    constexpr double MaxFrameTime = 0.25;
-
     if (options.pollEvents)
     {
         _window.PollEvents();
@@ -393,22 +389,28 @@ void Application::Tick(const TickOptions &options)
         Time::Update();
     }
     // The frame delta itself, not a difference of float absolute times (which lost precision: ~1 ms
-    // steps after 3 hours of running, 8 ms after 18)
-    _fixedTimestepAccumulator += std::min(static_cast<double>(Time::GetUnscaledDeltaTime()), MaxFrameTime);
+    // steps after 3 hours of running, 8 ms after 18). In None mode the clock keeps at most 0.25 s of it: the longest
+    // frame the fixed-step loop catches up on; after a long stall (debugger, loading) it would otherwise queue hundreds
+    // of physics steps and fall further behind while running them. Network modes keep all of it.
+    // The fixed dt follows the clock mode every frame, so GetSimulationClock().SetMode() cannot leave the mode and
+    // Time::GetFixedDeltaTime() disagreeing
+    Time::SetFixedIgnoresTimeScale(_simulationClock.IsNetworked());
+    _simulationClock.BeginFrame(static_cast<double>(Time::GetUnscaledDeltaTime()));
     if (SceneManager::GetCurSceneIndex() != -1)
     {
         Scene &curScene = SceneManager::GetCurSceneRef();
-        curScene.ProcessAttachQueue();
-
-        while (_fixedTimestepAccumulator >= Time::GetFixedUnscaledDeltaTime())
+        // None: once per frame, before the fixed steps. A network mode processes it at each tick boundary instead.
+        if (!_simulationClock.IsNetworked())
         {
-            // Paused (timeScale 0): no fixed steps, as in Unity; stepping PhysX by 0 is an error
-            if (Time::GetFixedDeltaTime() > 0.0f)
-            {
-                PhysicsUpdate(curScene);
-            }
-            _fixedTimestepAccumulator -= Time::GetFixedUnscaledDeltaTime();
+            curScene.ProcessAttachQueue();
         }
+
+        while (_simulationClock.TickDue(Time::GetFixedUnscaledDeltaTime()))
+        {
+            RunFixedTick(curScene);
+            _simulationClock.CompleteTick(Time::GetFixedUnscaledDeltaTime());
+        }
+        _simulationClock.EndFrame(Time::GetFixedUnscaledDeltaTime());
         // OnMouse*: after the fixed steps (so it picks against this frame's physics) and before Update,
         // where Unity sends them
         _pointerDispatcher.Update();
@@ -420,7 +422,7 @@ void Application::Tick(const TickOptions &options)
     {
         // Nothing to step. It used to keep accumulating, so the first scene to load ran a burst of
         // catch-up fixed steps.
-        _fixedTimestepAccumulator = 0.0;
+        _simulationClock.ResetAccumulator();
     }
     // After LateUpdate, where listeners and sources push their positions. A loopback device (headless) only
     // mixes when asked, so it is paced here by real elapsed time (no-op with a sound card), then Update
@@ -437,6 +439,54 @@ void Application::Tick(const TickOptions &options)
         curScene.ProcessDestroyed();
     }
     SceneManager::ProcessAnyPendingSceneChange();
+}
+
+bool Application::RunFixedTick(Scene &scene)
+{
+    if (_simulationClock.IsNetworked())
+    {
+        // The tick starts: the counter moves on, then what was created during the last tick (or since) joins the
+        // simulation, so it always does so at the same tick whatever the frame timing was
+        _simulationClock.BeginTick();
+        scene.ProcessAttachQueue();
+        PhysicsUpdate(scene);
+        return true;
+    }
+    // Paused (timeScale 0): no fixed steps, as in Unity; stepping PhysX by 0 is an error
+    if (Time::GetFixedDeltaTime() > 0.0f)
+    {
+        _simulationClock.BeginTick();
+        PhysicsUpdate(scene);
+        return true;
+    }
+    return false;
+}
+
+std::uint32_t Application::StepTicks(const std::uint32_t count)
+{
+    if (SceneManager::GetCurSceneIndex() == -1)
+    {
+        return 0;
+    }
+    Time::SetFixedIgnoresTimeScale(_simulationClock.IsNetworked());
+    Scene &curScene = SceneManager::GetCurSceneRef();
+    if (!_simulationClock.IsNetworked())
+    {
+        curScene.ProcessAttachQueue();
+    }
+    std::uint32_t ran = 0;
+    for (std::uint32_t i = 0; i < count; ++i)
+    {
+        if (SceneManager::GetCurSceneIndex() == -1 || &SceneManager::GetCurSceneRef() != &curScene)
+        {
+            break;
+        }
+        if (RunFixedTick(curScene))
+        {
+            ++ran;
+        }
+    }
+    return ran;
 }
 
 void Application::ResetFrameClock()
@@ -614,6 +664,13 @@ const EngineHealth& Application::GetHealth() const
 Physics::IPhysicsBackend* Application::Get3DPhysicsBackend() const
 {
     return _3DphysicsBackend.get();
+}
+
+void Application::SetSimulationMode(const SimulationMode mode)
+{
+    _simulationClock.SetMode(mode);
+    // Global Time state follows the Application's mode, not any SimulationClock instance's
+    Time::SetFixedIgnoresTimeScale(_simulationClock.IsNetworked());
 }
 
 void Application::Set3DPhysicsBackend(std::unique_ptr<Physics::IPhysicsBackend> backend)

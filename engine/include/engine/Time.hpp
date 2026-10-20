@@ -1,13 +1,16 @@
 #pragma once
 #include <chrono>
+#include <cstdint>
 
 namespace N2Engine
 {
     class Application;
+    class SimulationClock;
 
     class Time
     {
         friend class Application;
+        friend class SimulationClock;
 
         using TimePoint = std::chrono::high_resolution_clock::time_point;
 
@@ -22,6 +25,10 @@ namespace N2Engine
 
         static double fixedDeltaTime;
         static double fixedUnscaledDeltaTime;
+        /// Network simulation modes: the fixed delta is the unscaled one whatever the time scale
+        static bool fixedIgnoresTimeScale;
+        /// Fixed ticks begun (see SimulationClock)
+        static std::uint64_t tick;
 
         static TimePoint lastFrameTime;
 
@@ -30,6 +37,9 @@ namespace N2Engine
         /// A frame of exactly `seconds` instead of the clock's (Application::Tick with a delta: the editor's Step); the
         /// clock itself is left alone
         static void Advance(double seconds);
+        /// Makes GetFixedDeltaTime() follow (false, the default) or ignore (true) the time scale
+        static void SetFixedIgnoresTimeScale(bool ignores);
+        static double ScaledFixedDelta();
         /// Makes the next Update measure from now (after a pause, so the pause isn't one long frame)
         static void ResetFrameClock();
 
@@ -40,6 +50,9 @@ namespace N2Engine
         static float GetTime();
         static float GetUnscaledTime();
         static float GetFixedUnscaledDeltaTime();
+        /// The number of fixed ticks begun: 0 before the first, incremented once at the start of each (so inside
+        /// tick N's FixedUpdate it is N). Never wraps in practice. See SimulationClock.
+        static std::uint64_t GetTick();
 
         static void SetTimeScale(float scale);
         static float GetTimeScale();
