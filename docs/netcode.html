@@ -67,7 +67,7 @@
 <div class="content">
 
 <h1>Netcode: the n2net library</h1>
-<p class="lead">n2net is the netcode's lowest layer: a transport interface, an in-memory network simulator, and a packet layer on top of datagrams (acknowledgements, a reliable-ordered channel, an unreliable-sequenced channel, fragmentation of large reliable messages). This page describes what exists in <code>master</code> now. Its one real network transport is <code>UdpTransport</code> (native UDP sockets, Windows and Linux); there is no encryption and no engine integration yet (see <a href="#not-yet">What is not there yet</a>).</p>
+<p class="lead">n2net is the netcode's lowest layer: a transport interface, an in-memory network simulator, and a packet layer on top of datagrams (acknowledgements, a reliable-ordered channel, an unreliable-sequenced channel, fragmentation of large reliable messages). This page describes what exists in <code>master</code> now. Its one real network transport is <code>UdpTransport</code> (native UDP sockets, Windows and Linux), and <code>SecureTransport</code> puts a connection handshake, join tokens and authenticated encryption of every packet over it (<a href="#secure">The secure layer</a>); there is no engine integration yet (see <a href="#not-yet">What is not there yet</a>).</p>
 
 <div class="toc">
 <p class="toc-title">On this page</p>
@@ -101,13 +101,27 @@
 <li><a href="#udp-limits">Limits</a></li>
 </ol>
 </li>
+<li><a href="#secure">The secure layer: handshake, sealed packets, join tokens</a>
+<ol>
+<li><a href="#secure-handshake">The handshake</a></li>
+<li><a href="#secure-packets">Sealed packets</a></li>
+<li><a href="#secure-admission">Admission: rates, slots and backoff</a></li>
+<li><a href="#secure-tokens">Join tokens</a></li>
+<li><a href="#secure-crypto">The cryptographic choices</a></li>
+<li><a href="#secure-trust">What each side can and cannot trust</a></li>
+<li><a href="#secure-threats">The threat model, covered and not</a></li>
+<li><a href="#secure-udp">Over UDP, and the fail-closed rule</a></li>
+<li><a href="#n2security">n2security: the shared policy library and the crypto build</a></li>
+<li><a href="#secure-limits">Limits</a></li>
+</ol>
+</li>
 <li><a href="#tests">Tests</a></li>
 <li><a href="#not-yet">What is not there yet</a></li>
 </ol>
 </div>
 
 <h2 id="overview">What exists and where it lives <span class="badge">PR #197</span></h2>
-<p>The library is the CMake target <code>n2net</code> (alias <code>N2Engine::n2net</code>), a static library defined in <code>engine/CMakeLists.txt</code>. Its headers are under <code>engine/include/engine/network/n2net/</code> and its sources under <code>engine/src/network/n2net/</code>. The <code>engine</code> target excludes that source directory from its glob and does not link <code>n2net</code>; only <code>engine_tests</code> does. Apart from <code>UdpTransport</code> it uses the standard library only: no sockets, no threads, no platform headers, no engine types, no global state, no exceptions across its API (errors are return codes), and it reads no clock (every time is passed in as microseconds). <code>UdpTransport</code> is the one exception: it includes the BSD socket or Winsock headers (<code>ws2_32</code> is linked on Windows), still starts no thread, and reads the steady clock only to age out idle peers. Its whole class is compiled out under Emscripten (<code>N2NET_HAS_UDP</code> is 0), so the library, apart from that class, still builds the same on Windows, Linux x86_64 and arm64, and in the single-threaded web build.</p>
+<p>The library is the CMake target <code>n2net</code> (alias <code>N2Engine::n2net</code>), a static library defined in <code>engine/CMakeLists.txt</code>. Its headers are under <code>engine/include/engine/network/n2net/</code> and its sources under <code>engine/src/network/n2net/</code>. The <code>engine</code> target excludes that source directory from its glob and does not link <code>n2net</code>; only <code>engine_tests</code> does. Apart from <code>UdpTransport</code>, <code>SecureTransport</code> and the join tokens (which use n2security, <a href="#n2security">below</a>) it uses the standard library only: no sockets, no threads, no platform headers, no engine types, no global state, no exceptions across its API (errors are return codes), and it reads no clock (every time is passed in as microseconds). <code>UdpTransport</code> is the one exception: it includes the BSD socket or Winsock headers (<code>ws2_32</code> is linked on Windows), still starts no thread, and reads the steady clock only to age out idle peers. Its whole class is compiled out under Emscripten (<code>N2NET_HAS_UDP</code> is 0), so the library, apart from that class, still builds the same on Windows, Linux x86_64 and arm64, and in the single-threaded web build.</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Header</th><th>What it holds</th></tr></thead>
@@ -117,6 +131,7 @@
 <tr><td><code>Connection.hpp</code> (+ <code>RttEstimator.hpp</code>)</td><td><code>Connection</code>: one end of a connection, its configuration, statistics and failure reasons</td></tr>
 <tr><td><code>SimTransport.hpp</code> (+ <code>SimRandom.hpp</code>)</td><td><code>SimNetwork</code> and <code>SimTransport</code>: the deterministic in-memory network, and its portable random number generator</td></tr>
 <tr><td><code>UdpTransport.hpp</code></td><td><code>UdpTransport</code>, <code>UdpTransportOptions</code>, <code>UdpError</code>, <code>UdpTransportStats</code>, <code>IsLoopbackAddressText</code>: the native transport, see <a href="#udp">The native UDP transport</a> <span class="badge">PR #203</span></td></tr>
+<tr><td><code>SecureTransport.hpp</code>, <code>JoinTokens.hpp</code></td><td><code>SecureTransport</code>, <code>SecureTransportOptions</code>, <code>SecureTransportStats</code>, <code>ReplayWindow</code>, the wire constants (<code>SecureWire</code>); <code>JoinRole</code>, <code>JoinTokenTable</code>, <code>HashJoinToken</code>: see <a href="#secure">The secure layer</a> <span class="badge">PR #210</span></td></tr>
 <tr><td><code>FunctionRef.hpp</code></td><td>A non-owning callable reference used for every callback (it never allocates and never throws, unlike <code>std::function</code>); the callable must outlive the call it is passed to</td></tr>
 </tbody>
 </table>
@@ -139,6 +154,7 @@
 <tr><td><code>IsReliableStream()</code></td><td><code>true</code> for a stream transport (WebSocket over TCP): it already delivers every datagram once, in order. See <a href="#stream">Stream transports</a>.</td><td>Lets the upper layer skip its own resends while keeping sequencing.</td></tr>
 <tr><td><code>Send(peer, bytes)</code></td><td>Queues one datagram and never blocks. Returns <code>Sent</code> (a datagram transport may still lose it), <code>UnknownPeer</code>, <code>PacketTooLarge</code> or <code>EmptyPacket</code>.</td><td>The only way out.</td></tr>
 <tr><td><code>Poll(handler)</code></td><td>Delivers every event that is due, in order, to the handler, then returns. The handler may call <code>Send</code> but not <code>Poll</code> or <code>Disconnect</code> on the same transport. The event's bytes are valid only during the callback.</td><td>The only way in; one call per tick on the main thread.</td></tr>
+<tr><td><code>GetPeerEndpoint(peer, endpoint)</code> <span class="badge">PR #210</span></td><td>The peer's network address and port (<code>PeerEndpoint</code>: IPv4 or IPv6 bytes, an IPv4-mapped address as IPv4); false for an unknown peer. The default returns false; <code>UdpTransport</code> reports the real source, <code>SimTransport</code> a simulated one (<code>SimNetwork::SetEndpointAddress</code>; by default 10.x.y.z holding the endpoint id, port 7777).</td><td><code>SecureTransport</code> binds its cookie to it and keys its rate limits on it.</td></tr>
 <tr><td><code>Disconnect(peer)</code></td><td>Drops the link to <code>peer</code> (no-op if none); the other side then sees <code>PeerDisconnected</code> (<code>SimTransport</code>; <code>UdpTransport</code> only forgets the peer locally, see <a href="#udp-peers">Peers, caps and unknown sources</a>).</td><td>A session must be able to end a link deliberately.</td></tr>
 </tbody>
 </table>
@@ -207,7 +223,7 @@
 </div>
 
 <h3 id="fragmentation">Fragmentation and its limits</h3>
-<p>A reliable message larger than one unit is cut into units of up to 1177 bytes; the first carries the "first" flag, the last the "last" flag, and a message that fits in one unit has both (the smallest message, 1 byte, is a 24-byte packet: 17 + 6 + 1). Units are numbered in sequence, so the receiver reassembles by delivering them in order; units that arrive out of order wait in the window until the gap fills. Every limit below is enforced, and a configuration that asks for more is clamped.</p>
+<p>A reliable message larger than one unit is cut into units of up to 1177 bytes (with a smaller <code>ConnectionConfig::maxPacketSize</code> <span class="badge">PR #210</span>, up to that size less 23: 1152 over <code>SecureTransport</code>, whose packets have 25 bytes of their own; an unreliable message may then be up to that size less 22, <code>MaxUnreliableMessageSize()</code>, and the setting is clamped to 128 - 1200 bytes); the first carries the "first" flag, the last the "last" flag, and a message that fits in one unit has both (the smallest message, 1 byte, is a 24-byte packet: 17 + 6 + 1). Units are numbered in sequence, so the receiver reassembles by delivering them in order; units that arrive out of order wait in the window until the gap fills. Every limit below is enforced, and a configuration that asks for more is clamped.</p>
 <div class="table-wrap">
 <table>
 <thead><tr><th>Limit</th><th>Default</th><th>Hard cap</th><th>What happens at the limit</th></tr></thead>
@@ -259,8 +275,8 @@
 <li><strong>Errors are values.</strong> Nothing throws on bad input. A bad datagram is a <code>PacketStatus</code>; a peer that breaks the stream rules ends its connection with a <code>FailureReason</code>.</li>
 </ul>
 <div class="callout warning">
-<p class="callout-title">The ids are not secrets and nothing is authenticated yet</p>
-<p>The protocol id and connection id only filter out stray traffic; they are not keys. Anyone who can send datagrams to a connection and knows or guesses the two ids and a plausible sequence number can inject packets. Authentication, encryption and the handshake that agrees the connection id are later work (see <a href="#not-yet">What is not there yet</a>); until then this layer is for tests and for loopback development, not for an exposed port.</p>
+<p class="callout-title">The ids are not secrets: authentication is the secure layer's job</p>
+<p>The protocol id and connection id only filter out stray traffic; they are not keys. Over a plain transport, anyone who can send datagrams to a connection and knows or guesses the two ids and a plausible sequence number can inject packets. Over <code>SecureTransport</code> <span class="badge">PR #210</span> every datagram the <code>Connection</code> sees has passed an authentication tag (<a href="#secure">The secure layer</a>); over a plain one this layer is for tests and loopback development, not for an exposed port. The handshake does not agree the connection id yet: both sides still configure it.</p>
 </div>
 <p class="src">Source: <code>engine/include/engine/network/n2net/ByteIO.hpp</code>; <code>engine/src/network/n2net/Connection.cpp</code> &mdash; <code>Sanitize</code>, <code>OnPacket</code>, <code>MemoryBoundBytes</code>; tests: <code>ReaderChecksEveryRead</code>, <code>WriterIsLittleEndianAndNeverOverflows</code>, <code>RandomTruncatedAndMutatedPacketsNeverBreakAConnection</code>, <code>EveryPrefixOfAValidPacketIsHandled</code>, <code>EverySingleByteChangeOfAValidPacketIsHandled</code>, <code>AFloodOfMaxSizeUnitsAtEveryIdStaysInsideTheWindowBudget</code>, <code>AnEndlessMessageEndsAtTheCapNotWhenMemoryRunsOut</code>, <code>AFullPacketOfTinyBlocksIsParsedInBoundedTime</code>, <code>MemoryStaysUnderTheBoundWithAFullWindowOfMaxSizeUnits</code></p>
 
@@ -345,7 +361,7 @@ for (int step = 0; step &lt; 2000; ++step)
 <div class="callout guarantee" id="udp-fail-closed">
 <p class="callout-title">Fail closed: a non-loopback bind needs encryption or an explicit override <span class="badge">PR #203</span></p>
 <p><code>Open</code> refuses (<code>NonLoopbackRefused</code>, before any socket is created) every address that is not loopback unless the caller passes <code>encryptionAvailable = true</code> or sets <code>options.insecureBind</code>. Loopback means an IPv4 address in 127.0.0.0/8, <code>::1</code>, or an IPv4-mapped 127/8 address (<code>IsLoopbackAddressText</code> is the same test); <code>0.0.0.0</code> and <code>::</code> (all interfaces) are not loopback, and neither is any text that is not an exact numeric address. <code>insecureBind</code> is the transport-level form of the editor host's <code>--insecure-bind</code>: when it actually overrides the rule, the transport reports <code>InsecureOverrideUsed()</code> and sends one warning line (about the address, port and the missing encryption) to <code>options.warningSink</code>, or to <code>stderr</code> when none is set; a loopback bind with the flag set is quiet. <code>Connect</code> to a non-loopback address is held to the same rule.</p>
-<p>No encryption exists yet, so every caller passes <code>encryptionAvailable = false</code> today. The handshake and per-packet encryption layer (stage A5) must pass <code>true</code> only when it encrypts and authenticates every datagram. Until then a game can only listen on, and talk to, loopback, or opt in loudly.</p>
+<p>Since <span class="badge">PR #210</span> the only caller that passes <code>encryptionAvailable = true</code> is <code>SecureTransport::OpenUdp</code>, which puts the handshake and the sealed packets over every datagram the transport carries (<a href="#secure-udp">Over UDP</a>). So a game listens on, or talks to, a non-loopback address only through the secure layer, or by opting in loudly with <code>insecureBind</code>.</p>
 </div>
 <p class="src">Source: <code>UdpTransport.cpp</code> &mdash; <code>UdpTransport::Open</code>, <code>IsLoopbackAddressText</code>; tests: <code>NonLoopbackBindIsRefusedWithoutEncryptionOrTheFlag</code>, <code>HostNamesAndOddSpellingsAreNeverTreatedAsLoopback</code>, <code>LoopbackSpellings</code>, <code>InsecureBindOverridesWithOneLoudWarning</code>, <code>EncryptionAvailableAllowsANonLoopbackBindWithoutTheFlagOrAWarning</code>, <code>TheFlagOnALoopbackBindIsQuiet</code>, <code>ConnectToANonLoopbackAddressFollowsTheSameRule</code></p>
 
@@ -353,7 +369,7 @@ for (int step = 0; step &lt; 2000; ++step)
 <p>A peer is a remote address and port, and its <code>PeerId</code> is a counter (from 1; 0 and ids still in use are skipped if it ever wraps). A peer comes from <code>Connect(address, port)</code> (numeric addresses only; <code>PeerConnected</code> is delivered by the next <code>Poll</code>, and nothing is sent) or, when <code>options.acceptUnknownPeers</code> is true (the default, for a server), from the first datagram of an unknown source (<code>PeerConnected</code>, then the <code>Datagram</code>). A client sets it false: everything not from a connected peer is dropped and counted. Sources that are not usable endpoints (port 0; IPv4 0.0.0.0/8 and 224.0.0.0 upward, which covers multicast, reserved and broadcast; IPv6 <code>::</code> and <code>ff00::/8</code>; the same ranges inside an IPv4-mapped address) are dropped before they can make a peer, and <code>Connect</code> refuses them as <code>InvalidAddress</code>.</p>
 <ul>
 <li><strong>The peer table is bounded.</strong> <code>maxPeers</code> (default 256, clamped to 1 to 4096) counts peers from <code>Connect</code> and from unknown sources together; a new source beyond it is dropped (<code>droppedPeerLimit</code>), and peers already in keep working. A peer that receives nothing for <code>peerIdleTimeoutMs</code> (default 30,000; 0 never) is removed and reported as <code>PeerDisconnected</code>, so spoofed sources cannot fill the table forever. Per-peer state is a fixed-size record: the address, the last-receive time and the counters of <code>UdpPeerInfo</code>.</li>
-<li><strong>The transport never speaks first.</strong> It sends only what <code>Send</code> is given, only to a known peer. An unknown or spoofed source cannot make it transmit anything, so there is no amplification at this layer. A peer made by an unknown source's first datagram is not vetted: <code>GetPeerInfo</code> returns its address and byte and datagram counters, so the handshake layer can keep what it sends to an unauthenticated address no larger than what it received (the cookie handshake is stage A5).</li>
+<li><strong>The transport never speaks first.</strong> It sends only what <code>Send</code> is given, only to a known peer. An unknown or spoofed source cannot make it transmit anything, so there is no amplification at this layer. A peer made by an unknown source's first datagram is not vetted: <code>GetPeerInfo</code> returns its address and byte and datagram counters, so a layer above can check what it sends to an unauthenticated address against what it received (the secure layer's handshake keeps every such reply no larger than its request by construction, <a href="#secure-handshake">The handshake</a>).</li>
 <li><strong>Peers are attributed by source address and port only.</strong> A datagram that merely claims to belong to a connection is another peer if it comes from another source. Nothing here proves a source address is genuine (UDP source addresses can be forged); that is what the handshake is for.</li>
 <li><strong><code>Disconnect</code> is local.</strong> It forgets the peer and sends no packet, so the other side finds out through its own idle timeout (or the <code>Connection</code>'s). This differs from the interface's wording for <code>SimTransport</code>. A later datagram from the same address makes a new peer with a new <code>PeerId</code>. Called from inside the <code>Poll</code> handler, which the interface forbids, <code>Disconnect</code> does nothing and <code>Connect</code> returns <code>Busy</code>.</li>
 </ul>
@@ -373,25 +389,175 @@ for (int step = 0; step &lt; 2000; ++step)
 <ul>
 <li>IPv4 and IPv6 sockets only; no multicast, no host-name resolution, no IPv6 zones. A datagram over 1200 bytes is dropped, never reassembled by this layer.</li>
 <li>One socket, used from one thread. There is no I/O thread, no send queue (a datagram goes straight to <code>sendto</code>) and no pacing.</li>
-<li>A flood of spoofed sources can fill the peer table (<code>maxPeers</code>) until they idle out, and then new genuine sources are dropped; the per-address and global limits that fix this belong to the handshake layer.</li>
+<li>A flood of spoofed sources can fill the peer table (<code>maxPeers</code>) until they idle out, and then new genuine sources are dropped. The secure layer's per-address and global limits bound the work and the state such sources cause above this transport, not this table.</li>
 <li>Dual stack depends on the system: where it cannot be enabled, <code>DualStack()</code> is false and an IPv4 <code>Connect</code> on that socket returns <code>FamilyMismatch</code>.</li>
-<li>Nothing is encrypted or authenticated (see the fail-closed rule above); a NAT, a firewall or a path that drops UDP is not handled.</li>
+<li>Nothing is encrypted or authenticated by this class itself (that is <code>SecureTransport</code>, see the fail-closed rule above); a NAT, a firewall or a path that drops UDP is not handled.</li>
+</ul>
+
+<h2 id="secure">The secure layer: handshake, sealed packets, join tokens <span class="badge">PR #210</span></h2>
+<p><code>SecureTransport</code> is an <code>ITransport</code> that runs over another <code>ITransport</code> (a <code>UdpTransport</code>, or a <code>SimTransport</code> in the tests) and adds the connection handshake and per-packet authenticated encryption. The layers above it (a <code>Connection</code> and its channels) see only authenticated peers: <code>PeerConnected</code> only after a handshake has completed, <code>Datagram</code> only for packets whose tag verified, <code>PeerDisconnected</code> when a session ends. Its <code>MaxPacketSize()</code> is the inner transport's less 25 bytes (1175 over UDP); pass it to <code>ConnectionConfig::maxPacketSize</code> so the packet layer builds packets that still fit once sealed. It is native only: the class exists when n2security has its crypto library (<code>N2NET_HAS_SECURE</code> is 1), which the web build does not have. Like every transport here it is single-threaded and polled, never throws and never logs; its <code>Stats()</code> counters are the only record of what it dropped and why.</p>
+<p class="src">Source: <code>engine/include/engine/network/n2net/SecureTransport.hpp</code>, <code>engine/src/network/n2net/SecureTransport.cpp</code>; <code>engine/include/engine/network/n2net/JoinTokens.hpp</code>; <code>engine/include/engine/security/</code> (n2security); tests: <code>tests/engine/network/n2net/N2NetSecureTransportTests.cpp</code></p>
+
+<h3 id="secure-handshake">The handshake</h3>
+<p>A client <code>SecureTransport</code> (<code>SecureRole::Client</code>, with a join token) calls <code>Connect(serverPeer)</code> with the inner transport's peer id of the server (over UDP, from <code>UdpTransport::Connect</code>). Every handshake packet is little-endian and starts with a one-byte type. <em>K</em> below is the SHA-256 of the client's join token, which is what the server's tokens file holds; the token itself never leaves the client, and neither does <em>K</em>.</p>
+<pre><code>client C                                                           server S
+--------                                                           --------
+fresh X25519 key pair (xc, Xc)
+proof1 = HMAC-SHA-256(K, "n2net v1 request proof" | version | protocolId | Xc)
+
+1  ConnectRequest, exactly 256 bytes -----------------------------&gt;  size, zero padding, version, protocol id,
+   type 0x01 | version 1 | u32 protocolId | Xc | proof1 | zeros      address not backed off, challenge rate
+                                                                     cookie = HMAC-SHA-256(secret[epoch],
+                                                                       "n2net v1 cookie" | family | address |
+                                                                       port | t | version | protocolId | Xc |
+                                                                       proof1)   (t = S's clock in ms)
+                                                                     NOTHING IS KEPT
+2  &lt;--------------------------------------- Challenge, 41 bytes
+   type 0x02 | u64 t | cookie
+
+proof2 = HMAC-SHA-256(K, "n2net v1 cookie proof" | t | cookie)
+3  ConnectResponse, exactly 256 bytes ----------------------------&gt;  as for 1, then the connect rate, then the
+   type 0x03 | the request's fields | u64 t | cookie | proof2        cookie: a secret S still holds, the MAC
+   | zeros                                                           equal (constant time), t at most 5 s old
+                                                                     only now: a session and a pre-auth slot
+                                                                     proof1 and proof2 against EVERY token's K
+                                                                     (constant time); none matches: silence
+                                                                     fresh X25519 key pair (xs, Xs)
+                                                                     Z = X25519(xs, Xc), refused if all zero
+                                                                     T = SHA-256("n2net v1 transcript" |
+                                                                       bytes 1-141 of the response | Xs)
+                                                                     keys = HKDF-SHA-256(salt T, Z, one label
+                                                                       per direction), 32 bytes each
+                                                                     proofS = HMAC-SHA-256(K,
+                                                                       "n2net v1 server proof" | T)
+4  &lt;-------------------------------------------- Accept, 82 bytes
+   type 0x04 | Xs | seal(server-to-client key, sequence 0,
+                         ad = type | version | protocolId | Xs,
+                         role | proofS)
+Z, T and the keys as S did; open the seal; proofS equal (constant time)
+PeerConnected; xc wiped
+5  sealed keep-alive (sequence 0) --------------------------------&gt;  tag verifies: established, the slot is
+                                                                     given back, PeerConnected
+</code></pre>
+<ul>
+<li><strong>Stateless until the echo.</strong> A ConnectRequest costs the server a rate-limit token and one HMAC, and it keeps nothing: no session, no slot, no table entry (the inner <code>UdpTransport</code> does keep its own record of the source, bounded by its peer cap and idle timeout, see <a href="#udp-peers">Peers, caps and unknown sources</a>). The cookie is a MAC of everything the server needs to check the echo, so the echo carries the state. The cookie secret is 32 random bytes per process, replaced every <code>cookieSecretRotationMicros</code> (default 60 s, never less than twice the cookie lifetime); the secret of the epoch just ended still verifies, any older one is gone. The cookie time is inside the MAC, so it cannot be moved.</li>
+<li><strong>No amplification.</strong> Both client handshake packets are exactly 256 bytes, and the server drops any other size before doing anything else. The only replies a peer without a session can get are the 41-byte Challenge and the 82-byte Accept (sent again, byte for byte and at most 8 times, when a repeated ConnectResponse shows the first was lost). Static assertions in the header pin this, <code>SendPreAuthReply</code> refuses a reply larger than its request, and <code>Stats()</code> keeps the largest reply and the smallest request answered.</li>
+<li><strong>Silent refusal.</strong> A wrong size, a nonzero padding byte, another version or protocol id, a backed-off address, a spent rate limit, a bad or expired cookie, no free slot, a token that matches nothing: each is dropped without a reply and counted. There is no "denied" packet: it could not be authenticated (a server that does not recognise the token has no key in common with the client), so anyone could forge one to abort other people's handshakes. A client with a wrong token therefore sees exactly what it sees when the server is unreachable: <code>ClientState()</code> becomes <code>Failed</code> with <code>HandshakeTimeout</code> after <code>handshakeTimeoutMicros</code> (5 s).</li>
+<li><strong>Retries.</strong> The client sends its current handshake packet again every 250 ms (<code>resendIntervalMicros</code>), goes back to a ConnectRequest when it has had no Accept for a cookie lifetime, and gives up after 5 s. A pending session (between the Accept and the client's first sealed packet) is dropped after the same 5 s, and a non-loopback address is charged one failure for it.</li>
+</ul>
+<p class="src">Source: <code>SecureTransport.cpp</code> &mdash; <code>Connect</code>, <code>SendClientHandshake</code>, <code>OnConnectRequest</code>, <code>ComputeCookie</code>, <code>RotateCookieSecret</code>, <code>OnConnectResponse</code>, <code>SendPreAuthReply</code>, <code>OnChallenge</code>, <code>OnAccept</code>, <code>RunTimers</code>; tests: <code>HandshakeSucceedsAndCarriesSealedDatagramsBothWays</code>, <code>AWrongTokenIsRefusedSilentlyAndTheClientTimesOut</code>, <code>NoSlotOrSessionExistsBeforeTheCookieEcho</code>, <code>APendingSessionThatNeverAnswersGivesItsSlotBack</code>, <code>ForgedExpiredAndBorrowedCookiesAreRefused</code>, <code>ACookieMadeWithTheRotatedOutSecretStillVerifiesUntilTheNextRotation</code>, <code>NoPreAuthReplyIsEverLargerThanTheRequestItAnswers</code>, <code>ALostAcceptIsSentAgainByteForByte</code></p>
+
+<h3 id="secure-packets">Sealed packets</h3>
+<p>After the handshake every datagram is <code>u8 type | u64 sequence | ciphertext | 16-byte tag</code>: type 0x10 carries data for the layer above, 0x11 is a keep-alive (empty) and 0x12 a disconnect (empty). The cipher is ChaCha20-Poly1305 (RFC 8439) with the session key of the sending direction. The 12-byte nonce is one direction byte (0x43 client to server, 0x53 server to client), three zero bytes and the 64-bit sequence; the associated data is the type, the version, the protocol id and the sequence, so none of them can be changed without failing the tag.</p>
+<div class="callout guarantee" id="secure-nonce">
+<p class="callout-title">Guarantee: a nonce is never used twice with one key <span class="badge">PR #210</span></p>
+<p>Each session derives two fresh keys from its own ephemeral X25519 exchange, one per direction, so no key is ever shared by two sessions or two directions. Within a direction the sequence is taken and incremented <em>before</em> sealing, whatever happens to the packet afterwards, and it only ever rises: the server's Accept is sequence 0 of its key and its data starts at 1, the client starts at 0. At the last value (2<sup>64</sup> - 1) the layer refuses to seal instead of wrapping (and a keep-alive due then ends the session). The one packet that is sent twice, a lost Accept, is the same bytes, not a new plaintext under the same nonce.</p>
+</div>
+<p>On receipt the sequence is checked against a 256-packet replay window (<code>ReplayWindow</code>: the newest authenticated sequence and a bitmap of the 255 before it) before the packet is opened, and recorded only after its tag verified, so a forged packet can never move the window. A sequence seen before is dropped (<code>droppedReplay</code>), one 256 or more behind the newest is dropped as too old (<code>droppedTooOld</code>), a tag that does not verify is dropped (<code>droppedAuthFailed</code>), and a sealed packet from a peer with no keys is dropped (<code>droppedNoSession</code>); none of these ends the session or gets a reply. Only an authenticated packet refreshes the session's idle clock. A side sends a keep-alive when it has sent nothing for <code>keepAliveMicros</code> (1 s) and drops a session that has authenticated nothing for <code>idleTimeoutMicros</code> (10 s). <code>Disconnect(peer)</code> sends a sealed disconnect (best effort) and forgets the session.</p>
+<p class="src">Source: <code>SecureTransport.cpp</code> &mdash; <code>SendSealed</code>, <code>OnSealed</code>, <code>ReplayWindow</code>, <code>Disconnect</code>; <code>engine/src/security/Crypto.cpp</code> &mdash; <code>ChaCha20Poly1305</code>; tests: <code>AReplayedSealedPacketIsDropped</code>, <code>ATamperedPacketIsDroppedSilently</code>, <code>EverySealedPacketUsesANewSequence</code>, <code>N2NetReplayWindowTest.FreshReplayAndTooOld</code>, <code>ChannelsOverLoopbackUdpThroughTheSecureLayer</code></p>
+
+<h3 id="secure-admission">Admission: rates, slots and backoff</h3>
+<p>The server reuses the editor host's admission policy, now the shared n2security library (below), keyed on the source IP address that the inner transport reports (<code>ITransport::GetPeerEndpoint</code>; a peer it has no address for is dropped):</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Check</th><th>Applies to</th><th>Default</th></tr></thead>
+<tbody>
+<tr><td><code>RateLimiter</code>: an address with failed handshakes is backed off (two free failures, then 1 s doubling to 5 min). A failure is a token that matches nothing, or an Accept never answered with a sealed packet.</td><td>ConnectRequest and ConnectResponse</td><td><code>RateLimitPolicy</code> defaults</td></tr>
+<tr><td><code>TokenBucket</code> for Challenges</td><td>ConnectRequest</td><td>200/s overall, 10/s per address</td></tr>
+<tr><td><code>TokenBucket</code> for the work of an echo (cookie check, token check, X25519)</td><td>ConnectResponse</td><td>50/s overall, 5/s per address</td></tr>
+<tr><td><code>PreAuthSlots</code>: held from a valid echo until the client's first sealed packet</td><td>pending sessions</td><td>16 in all, 2 per address</td></tr>
+<tr><td><code>maxSessions</code></td><td>pending and established sessions</td><td>64</td></tr>
+</tbody>
+</table>
+</div>
+<p>Loopback is treated as the editor host treats it: no per-address bucket, no per-address backoff, and it may use every slot (a proxy on the same machine makes every peer loopback). The token check compares both proofs of the echo against every entry of the table, in full, and selects the match with a mask, so its time depends on the size of the table and not on which entry matched.</p>
+<p class="src">Source: <code>SecureTransport.cpp</code> &mdash; <code>Initialise</code>, <code>OnConnectRequest</code>, <code>OnConnectResponse</code>, <code>OnSealed</code>; <code>SecureTransportOptions</code>; tests: <code>ConnectFloodsAreRateLimited</code>, <code>AWrongTokenIsRefusedSilentlyAndTheClientTimesOut</code></p>
+
+<h3 id="secure-tokens">Join tokens</h3>
+<p>Who may join is a static tokens file (v1): the editor host's <code>--tokens-file</code> format and checks (see <a href="logging-and-editor.html">Logging &amp; editor host</a>), with the game's roles. It is a JSON array of <code>{"user", "role", "hash"}</code> objects; <code>role</code> is <code>player</code>, <code>spectator</code> or <code>admin</code> (<code>JoinRole</code>), and <code>hash</code> is <code>"sha256:"</code> and the 64 lowercase hex digits of the SHA-256 of the token's text (<code>HashJoinToken</code>). <code>JoinTokenTable::Load(path)</code> refuses a file larger than 1 MiB and, on POSIX, a file its group or others can read or write; its errors name the file and the entry and never repeat a hash or the file's text. The server takes the table in <code>SecureTransportOptions::tokens</code>, and <code>SetTokens</code> swaps in a reloaded one (sessions already established are kept); <code>GetPeerIdentity</code> gives the user and role an established peer proved, and the Accept tells the client its role (<code>GrantedRole</code>). A server without a table admits nobody.</p>
+<p>The client's token is given in <code>SecureTransportOptions::joinToken</code>; the transport hashes it when it is made and wipes the text from its copy of the options (<code>Options().joinToken</code> is empty afterwards). Neither the token nor its hash is ever sent or logged (the layer has no log output at all) or put in an error. There is no token generator yet: the dedicated server (A6) adds one, as the editor host has <code>--new-token</code>.</p>
+<p class="src">Source: <code>engine/include/engine/network/n2net/JoinTokens.hpp</code>, <code>engine/src/network/n2net/JoinTokens.cpp</code>; <code>engine/include/engine/security/TokenTable.hpp</code>; tests: <code>N2NetJoinTokensTest.RolesHashesAndTheFileFormat</code>, <code>HandshakeSucceedsAndCarriesSealedDatagramsBothWays</code></p>
+
+<h3 id="secure-crypto">The cryptographic choices</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Use</th><th>Primitive (Mbed TLS 3.6.7, crypto modules only)</th><th>Parameters</th></tr></thead>
+<tbody>
+<tr><td>Key exchange</td><td>X25519 (RFC 7748; Mbed TLS's Curve25519 ECDH, <code>MBEDTLS_ECP_DP_CURVE25519_ENABLED</code>)</td><td>One ephemeral key pair per handshake on each side; an all-zero shared secret is refused; private keys wiped after use</td></tr>
+<tr><td>Session keys</td><td>HKDF-SHA-256 (RFC 5869)</td><td>Salt: the transcript hash. Input: the X25519 secret. Info: <code>"n2net v1 client to server key"</code> or <code>"n2net v1 server to client key"</code>. 32 bytes each.</td></tr>
+<tr><td>Packets</td><td>ChaCha20-Poly1305 (RFC 8439)</td><td>32-byte key, 12-byte nonce (direction byte, 3 zero bytes, 64-bit sequence), 16-byte tag, the header as associated data</td></tr>
+<tr><td>Cookie</td><td>HMAC-SHA-256</td><td>Key: a 32-byte per-process random secret, rotated every 60 s; 32-byte MAC; lifetime 5 s</td></tr>
+<tr><td>Token proofs (client and server)</td><td>HMAC-SHA-256</td><td>Key: <em>K</em> = SHA-256 of the token; over labelled public handshake data (the request, the cookie, the transcript)</td></tr>
+<tr><td>Transcript</td><td>SHA-256</td><td>Over a label, every response field from the version to proof2, and the server's public key</td></tr>
+<tr><td>Randomness</td><td>CTR_DRBG (AES-256) seeded from the system's entropy source (BCrypt on Windows, the kernel on Linux)</td><td>One generator per process, behind a lock</td></tr>
+<tr><td>Comparisons of secrets</td><td><code>Security::ConstantTimeEqual</code> (every byte OR-ed together, no early exit); Poly1305 tags inside the library</td><td>Time depends on the length only</td></tr>
+</tbody>
+</table>
+</div>
+<p>Every value that is hashed or MACed starts with its own label (<code>"n2net v1 request proof"</code>, <code>"n2net v1 cookie"</code>, <code>"n2net v1 cookie proof"</code>, <code>"n2net v1 transcript"</code>, <code>"n2net v1 server proof"</code>), so no value made for one purpose can be presented as another. Every Mbed TLS return code is checked, contexts are freed on every path, and secret intermediates (shared secrets, keys, ephemeral private keys, the token's text) are wiped with <code>mbedtls_platform_zeroize</code>. The wrappers are n2security's <code>Crypto.hpp</code>; the known-answer test runs a published vector of each primitive (FIPS 180-2, RFC 4231, RFC 5869, RFC 7748, RFC 8439).</p>
+<div class="callout note" id="design-secure-own-layer">
+<p class="callout-title">Design decision: our own AEAD layer on Mbed TLS primitives, after netcode.io, with an ECDHE handshake <span class="badge">PR #210</span></p>
+<p>The netcode design (2.1.3) weighed DTLS 1.2 through Mbed TLS against a small layer of our own and chose the latter, reviewed against the netcode.io standard. What is the same as netcode.io: a padded connect request no smaller than any reply, a challenge before any server state, ChaCha20-Poly1305 per packet with the packet sequence in the nonce, per-direction keys, a 256-entry replay window, silent drops. What differs, and why: netcode.io's keys and identity come from a connect token that a web backend encrypts with a key it shares with the server; v1 has no backend, only a static tokens file, so the keys come from an ephemeral X25519 exchange and the token is proved with HMACs instead of carried. netcode.io's challenge token is encrypted; ours is an HMAC cookie, because the echo carries the request fields themselves and nothing in it is secret. netcode.io has a connection-denied packet; ours has none (above). netcode.io writes sequences in 1 to 8 bytes; ours are always 8. ChaCha20-Poly1305 rather than AES-GCM (both are in the vendored configuration) because it is constant-time in software on every leg, with no dependence on AES instructions.</p>
+</div>
+
+<h3 id="secure-trust">What each side can and cannot trust</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th></th><th>Can trust</th><th>Cannot trust</th></tr></thead>
+<tbody>
+<tr><td>Client, once <code>Connected</code></td><td>The other end holds <em>K</em> for its token: the server's tokens file entry, or the token itself. Every datagram delivered came from that same party in this session, unmodified, at most once; what it sends can be read only by that party.</td><td>That the other end is the server it meant to reach: there is no certificate and no server identity beyond knowing <em>K</em>, so anyone holding the tokens file (or the token) can play the server. Delivery and order (UDP; the <code>Connection</code> above handles them). That sizes and timing are hidden.</td></tr>
+<tr><td>Server, once a peer is established</td><td>The peer knows the <em>K</em> of the entry <code>GetPeerIdentity</code> names (user, role) and holds this session's keys; at handshake time its source address and port received the Challenge (the cookie binds them).</td><td>That the user is a particular person: anyone with the token, or with the tokens file, is that user. A session is tied to the inner peer (address and port); a client that changes address must handshake again.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Forward secrecy: each session's keys come from ephemeral X25519 keys that are wiped once the keys are derived (on the client when the Accept verifies), so a token or tokens file stolen later does not decrypt recorded sessions. There is no re-keying within a session.</p>
+
+<h3 id="secure-threats">The threat model, covered and not</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Threat (netcode design 1.3)</th><th>What this layer does</th></tr></thead>
+<tbody>
+<tr><td>Spoofed source, reflection amplification</td><td>Covered: no reply larger than its request; nothing kept before a valid echo; the cookie binds the address and port, and expires.</td></tr>
+<tr><td>Connection exhaustion</td><td>Covered as the editor host is: the slots, the two buckets, the failure backoff and <code>maxSessions</code>. Not covered: the inner <code>UdpTransport</code> still makes a peer record for every new source (its cap and idle timeout bound it), so a spoofed flood can fill that table.</td></tr>
+<tr><td>Eavesdropping, tampering, replay of packets</td><td>Covered after the handshake: AEAD per packet, the header in the associated data, the replay window.</td></tr>
+<tr><td>Token theft and reuse</td><td>Partly: the token is never sent, and a captured handshake proves nothing for a new cookie (proof2 covers the cookie, which binds address, port and a 5 s window). Not covered: the proofs are MACs of public data keyed with <em>K</em>, so an eavesdropper can test guesses of a <em>low-entropy</em> token offline. Tokens must be long random strings (the editor host's <code>--new-token</code> makes 256-bit ones); a short password is not safe here. Whoever has the tokens file can impersonate any user and the server.</td></tr>
+<tr><td>Expensive messages (CPU)</td><td>The costly steps (X25519, two HMACs per token entry) run only after a valid cookie, inside the connect rate and a slot.</td></tr>
+<tr><td>Denial by an attacker on the path, or one who can spoof the server's address</td><td>Not covered: such an attacker can drop packets, or send forged Challenges that make a handshake fail (a forged Challenge that arrives after the real one replaces its cookie, and the client's responses then fail the cookie check until it times out); it cannot make the client accept a forged Accept.</td></tr>
+<tr><td>Traffic analysis</td><td>Not covered: packet sizes, timing, types and sequences are visible.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="secure-udp">Over UDP, and the fail-closed rule</h3>
+<p><code>SecureTransport::OpenUdp(udpOptions, options)</code> opens a <code>UdpTransport</code> with <code>encryptionAvailable = true</code> and puts this layer over it, owning it (<code>result.udp</code> points at it, for <code>Connect</code>, <code>LocalPort</code> and its counters). It is the only caller that passes <code>true</code>, so the A4 rule now reads: a non-loopback bind (or <code>Connect</code>) is allowed when the secure layer is on; without it, <code>insecureBind</code> is still required (<a href="#udp-fail-closed">Fail closed</a>).</p>
+<p class="src">Source: <code>SecureTransport.cpp</code> &mdash; <code>OpenUdp</code>; tests: <code>TheSecureLayerAllowsANonLoopbackBindWithoutTheInsecureFlag</code>, <code>ChannelsOverLoopbackUdpThroughTheSecureLayer</code></p>
+
+<h3 id="n2security">n2security: the shared policy library and the crypto build</h3>
+<p>n2security (CMake target <code>n2security</code>, headers <code>engine/include/engine/security/</code>, sources <code>engine/src/security/</code>) holds what the editor host and the netcode share: <code>PeerAddress</code> and <code>RateLimiter</code>, <code>TokenBucket</code>, <code>PreAuthSlots</code>, the token-file core (<code>TokenTable.hpp</code>: <code>ParseTokenRecords</code>, <code>ReadTokensFileText</code>, <code>BasicTokenTable</code>, generic over the role names) and <code>Crypto.hpp</code>. <code>PeerAddress</code>, <code>RateLimiter</code>, <code>TokenBucket</code> and <code>PreAuthSlots</code> moved from <code>editor-server/</code> with only their namespace changed (<code>N2Engine::Security</code>, plus a header comment), and the <code>editor-server/</code> headers of the same names re-export them into <code>N2Engine::Editor</code>. <code>TokenTable</code>'s parsing, file checks and constant-time matching moved into the generic core, and the editor's <code>TokenTable</code> is now <code>BasicTokenTable</code> with its own roles (viewer, editor, admin) and its own error hint; its <code>HashToken</code> and <code>GenerateToken</code> stay in the editor host (they still need <code>N2ENGINE_EDITOR_TLS</code>). The editor host's behaviour and its tests are unchanged. <code>n2net</code> and <code>N2EditorServer</code> both link it.</p>
+<p>Mbed TLS is built once for the tree by <code>cmake/mbedtls/CMakeLists.txt</code>: <code>n2_mbedcrypto</code> (its crypto modules, no X.509 or TLS) in every native build, and <code>n2_mbedtls_tls</code> (X.509 and TLS on top) only with <code>N2ENGINE_EDITOR_TLS</code>, for the editor host's <code>--tls</code>. Both use one configuration: the library's default plus <code>cmake/mbedtls/config/n2_mbedtls_user_config.h</code> (threading on, with <code>std::mutex</code> callbacks that <code>Security::InitializeCrypto</code> installs once per process). The web build adds neither: there <code>N2SECURITY_HAS_CRYPTO</code> is 0, <code>CryptoAvailable()</code> is false, every crypto function reports failure, and <code>SecureTransport</code> does not exist.</p>
+<p class="src">Source: <code>engine/CMakeLists.txt</code> (<code>n2security</code>); <code>cmake/mbedtls/CMakeLists.txt</code>; <code>CMakeLists.txt</code> (<code>N2ENGINE_EDITOR_TLS</code>, the <code>cmake/mbedtls</code> directory on native builds); <code>engine/src/security/Crypto.cpp</code>; <code>editor-server/include/editor-server/RateLimiter.hpp</code>, <code>TokenBucket.hpp</code>, <code>PreAuthSlots.hpp</code>, <code>TokenTable.hpp</code>; tests: <code>N2SecurityCryptoTest.KnownAnswerVectors</code>, and the editor host's unchanged <code>RateLimiterTest</code>, <code>TokenBucketTest</code>, <code>PreAuthSlotsTest</code>, <code>TokenTableTest</code></p>
+
+<h3 id="secure-limits">Limits</h3>
+<ul>
+<li>No server identity beyond <em>K</em>, no certificates, no re-keying, no address migration, no token generator (A6), and no ending of an established session when its token is revoked (<code>SetTokens</code> affects new handshakes only).</li>
+<li>The browser build has no secure layer: a browser transport (B10) gets its security from the browser's TLS.</li>
+<li>Reviewed so far only by its tests and its author: the user's security review is required before merge.</li>
 </ul>
 
 <h2 id="tests">Tests <span class="badge">PR #197</span></h2>
-<p>The tests are in <code>tests/engine/network/n2net/</code> and run in <code>engine_tests</code> on every leg, including the web (node) leg and arm64. All but one file need no sockets, threads or files, and the fuzz test's iteration counts are fixed and small enough for the wasm leg. The exception is <code>N2NetUdpTransportTests.cpp</code> <span class="badge">PR #203</span>: it uses real loopback sockets, runs on the native legs, is empty on the web leg (no sockets there), and skips its IPv6 tests where the machine has no IPv6 loopback or dual-stack socket. See <a href="testing.html#n2net-tests">Testing &amp; CI</a> for the list of suites and how the golden hashes work.</p>
+<p>The tests are in <code>tests/engine/network/n2net/</code> and run in <code>engine_tests</code> on every leg, including the web (node) leg and arm64. All but one file need no sockets, threads or files, and the fuzz test's iteration counts are fixed and small enough for the wasm leg. The exception is <code>N2NetUdpTransportTests.cpp</code> <span class="badge">PR #203</span>: it uses real loopback sockets, runs on the native legs, is empty on the web leg (no sockets there), and skips its IPv6 tests where the machine has no IPv6 loopback or dual-stack socket. <code>N2NetSecureTransportTests.cpp</code> <span class="badge">PR #210</span> runs the secure layer over the simulator with a virtual clock and once over loopback UDP; everything in it but its <code>Connection</code> packet-size test needs the crypto library, so on the web leg only that test runs. See <a href="testing.html#n2net-tests">Testing &amp; CI</a> for the list of suites and how the golden hashes work.</p>
 
 <h2 id="not-yet">What is not there yet</h2>
 <ul>
-<li><strong>No browser transport.</strong> The implementations are <code>SimTransport</code> and the native <code>UdpTransport</code>; the browser WebSocket transport is later (B10). <code>UdpTransport</code> has no encryption, so only loopback is open without an explicit <code>insecureBind</code> (<a href="#udp-fail-closed">Fail closed</a>).</li>
-<li><strong>No encryption, authentication or handshake.</strong> Packets are plain; the connection id is configured, not negotiated, and nothing proves who sent a packet. The handshake (challenge cookie, join token) and per-packet AEAD are stage A5.</li>
+<li><strong>No browser transport.</strong> The implementations are <code>SimTransport</code> and the native <code>UdpTransport</code> (with <code>SecureTransport</code> over it); the browser WebSocket transport is later (B10), and the web build has no secure layer.</li>
+<li><strong>The handshake agrees no connection id and no settings.</strong> <code>ConnectionConfig</code>'s ids and window are still configured on both sides; the scene and build fingerprint check is later (B1). See also <a href="#secure-limits">the secure layer's limits</a>.</li>
 <li><strong>No engine integration.</strong> The <code>engine</code> target does not link <code>n2net</code>. Sessions, replication, <code>NetworkObject</code>, RPCs, prediction and lockstep are the netcode's later tracks.</li>
-<li><strong>No transport-to-connection glue.</strong> There is no class that owns a <code>Connection</code> per <code>PeerId</code> and pumps an <code>ITransport</code> into it; the example above is the pattern, and the tests' <code>TwoPeers</code> and the UDP tests' <code>Side</code> are its only implementations. There is no dedicated server (<code>N2Server</code>, stage A6) to run a <code>UdpTransport</code> in a process of its own.</li>
+<li><strong>No transport-to-connection glue.</strong> There is no class that owns a <code>Connection</code> per <code>PeerId</code> and pumps an <code>ITransport</code> into it; the example above is the pattern, and the tests' <code>TwoPeers</code> and the UDP tests' <code>Side</code> are its only implementations. There is no dedicated server (<code>N2Server</code>, stage A6) to run a <code>SecureTransport</code> in a process of its own, and no join token generator (A6).</li>
 <li><strong>No congestion control and no flow control beyond the unit window.</strong></li>
 </ul>
 <div class="callout open-question">
 <p class="callout-title">Not verified</p>
-<p>Real network behaviour and performance on real links: the packet layer has run over the simulator, whose impairments are a model, and <code>UdpTransport</code> only over loopback (with a seeded loss shim), never across machines, a NAT or a congested path. Whether the window, the 32-packets-per-round-trip rule and the timeouts are good defaults for real games is untested.</p>
+<p>Real network behaviour and performance on real links: the packet layer has run over the simulator, whose impairments are a model, and <code>UdpTransport</code> (with and without <code>SecureTransport</code>) only over loopback (with a seeded loss shim), never across machines, a NAT or a congested path. The secure layer has had no review beyond its tests and its author yet. Whether the window, the 32-packets-per-round-trip rule and the timeouts are good defaults for real games is untested.</p>
 </div>
 
 <div class="page-footer">

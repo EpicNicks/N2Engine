@@ -18,6 +18,9 @@ namespace N2Engine::N2Net
     /// The most reliable units in flight (and buffered on the receiving side) a configured window may be
     inline constexpr std::uint16_t kHardMaxReliableWindow = 1024;
 
+    /// The smallest ConnectionConfig::maxPacketSize: the header and room for a unit or an unreliable block of 64 bytes
+    inline constexpr std::uint32_t kMinConfiguredPacketSize = 128;
+
     struct ConnectionConfig
     {
         /// Identifies the protocol version and game build: a packet with any other id is dropped
@@ -39,10 +42,8 @@ namespace N2Engine::N2Net
         std::uint32_t maxMessageSize = 64 * 1024;
         /// The most reliable bytes queued and not yet packetised; SendReliable returns QueueFull beyond it
         std::uint32_t maxSendQueueBytes = 256 * 1024;
-        /// The smallest ConnectionConfig::maxPacketSize: the header and room for a unit or an unreliable block of 64 bytes
-    inline constexpr std::uint32_t kMinConfiguredPacketSize = 128;
-    /// The most units in flight (sender) and the units ahead of the next one the receiver will buffer. Clamped to
-        /// [1, kHardMaxReliableWindow]. Both peers must use the same value (not negotiated until A5): a unit beyond the
+        /// The most units in flight (sender) and the units ahead of the next one the receiver will buffer. Clamped to
+        /// [1, kHardMaxReliableWindow]. Both peers must use the same value (not negotiated: the A5 handshake does not agree it): a unit beyond the
         /// receiver's window is dropped but its packet is still acknowledged, so it is never resent.
         std::uint16_t reliableWindow = 256;
         /// Unreliable messages waiting for the next Update: beyond either limit the oldest is dropped

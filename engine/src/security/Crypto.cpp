@@ -7,7 +7,6 @@
 #if N2SECURITY_HAS_CRYPTO
 #include <mbedtls/bignum.h>
 #include <mbedtls/chachapoly.h>
-#include <mbedtls/constant_time.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecdh.h>
 #include <mbedtls/ecp.h>
@@ -280,11 +279,13 @@ namespace N2Engine::Security
         {
             return false;
         }
-        if (a.empty())
+        // Every byte, whatever they hold: no early exit. (Not mbedtls_ct_memcmp: its header has no C++ linkage guard.)
+        volatile std::uint8_t difference = 0;
+        for (std::size_t i = 0; i < a.size(); ++i)
         {
-            return true;
+            difference = static_cast<std::uint8_t>(difference | (a[i] ^ b[i]));
         }
-        return mbedtls_ct_memcmp(a.data(), b.data(), a.size()) == 0;
+        return difference == 0;
     }
 
     void SecureZero(void *data, std::size_t size) noexcept
