@@ -4015,9 +4015,9 @@ namespace N2Engine::Editor
         {CommandType::GetLuaFields, "GetLuaFields", EditorServer::CommandClass::Read},
         {CommandType::GetProjectInfo, "GetProjectInfo", EditorServer::CommandClass::Read},
         {CommandType::GetHistory, "GetHistory", EditorServer::CommandClass::Read},
-        // The extension lists answer from what was captured at load: they run no Lua. 0x82 and 0x83 are reserved for
-        // InvokeMenuItem and InvokeInspectorAction (Write); nothing is classified for them until they exist, so they are
-        // refused as unknown ids (default deny).
+        // The extension lists answer from what was captured at load: they run no Lua. 0x83 is reserved for
+        // InvokeInspectorAction (Write); nothing is classified for it until it exists, so it is refused as an unknown id
+        // (default deny). InvokeMenuItem (0x82) runs extension code, so it is a Write below.
         {CommandType::ListEditorExtensions, "ListEditorExtensions", EditorServer::CommandClass::Read},
         {CommandType::GetEditorUi, "GetEditorUi", EditorServer::CommandClass::Read},
         {CommandType::GetAutosave, "GetAutosave", EditorServer::CommandClass::Read},
@@ -4061,6 +4061,8 @@ namespace N2Engine::Editor
         {CommandType::SetPaused, "SetPaused", EditorServer::CommandClass::Write},
         {CommandType::Step, "Step", EditorServer::CommandClass::Write},
         {CommandType::SendInput, "SendInput", EditorServer::CommandClass::Write},
+        // Write: runs the code of an editor extension, which changes the scene as the invoking user (one edit group)
+        {CommandType::InvokeMenuItem, "InvokeMenuItem", EditorServer::CommandClass::Write},
         // Admin: controls the host itself
         {CommandType::Shutdown, "Shutdown", EditorServer::CommandClass::Admin},
         // Admin: reloading runs every extension file again, as the host's operator would by restarting it
@@ -4194,8 +4196,9 @@ namespace N2Engine::Editor
         // A role may run only what its class of commands allows (default deny, as the read-only gate above)
         if (hasRoles && !RoleAllows(identity.role, commandType))
         {
-            ServerLog::Warn(std::format("audit: denied user={} role={} command={}{}", identity.user,
-                                     TokenRoleName(identity.role), CommandName(commandType), PeerSuffix()));
+            ServerLog::Warn(std::format("audit: denied user={} role={} command={}{}{}", identity.user,
+                                     TokenRoleName(identity.role), CommandName(commandType), PeerSuffix(),
+                                     _invocation != nullptr ? " via=" + _invocation->via : std::string{}));
             SendResponse(clientSocket,
                          BuildDenial(Protocol::ErrorCodeForbidden, RoleDeniedMessage(identity.role, commandType)));
             return;
@@ -4215,8 +4218,10 @@ namespace N2Engine::Editor
             const std::optional<CommandClass> commandClass = ClassifyCommand(commandType);
             if (commandClass.has_value() && *commandClass != CommandClass::Read)
             {
-                ServerLog::Info(std::format("audit: user={} role={} command={}{}", identity.user, TokenRoleName(identity.role),
-                                         CommandName(commandType), PeerSuffix()));
+                // A command an editor extension's script sent says which one (via=), so the line names both who and what
+                ServerLog::Info(std::format("audit: user={} role={} command={}{}{}", identity.user, TokenRoleName(identity.role),
+                                         CommandName(commandType), PeerSuffix(),
+                                         _invocation != nullptr ? " via=" + _invocation->via : std::string{}));
             }
         }
 
@@ -4371,6 +4376,9 @@ namespace N2Engine::Editor
             break;
         case CommandType::ReloadEditorExtensions:
             HandleReloadEditorExtensions(clientSocket);
+            break;
+        case CommandType::InvokeMenuItem:
+            HandleInvokeMenuItem(clientSocket, payload);
             break;
         case CommandType::CreateScript:
             HandleCreateScript(clientSocket, payload);
@@ -5562,9 +5570,10 @@ namespace N2Engine::Editor
         case CommandType::WriteTextAsset:
         case CommandType::CreateScriptAsset:
         case CommandType::CreateFolder:
-        // Reloading runs the project's extension files again, which a play host (it plays a snapshot, and runs no
-        // extension) never does
+        // Reloading runs the project's extension files again, and invoking runs one's code, which a play host (it plays a
+        // snapshot, and runs no extension) never does
         case CommandType::ReloadEditorExtensions:
+        case CommandType::InvokeMenuItem:
             return true;
         default:
             return false;
@@ -7738,7 +7747,9 @@ namespace N2Engine::Editor
 
     void EditorServer::FlushAutosave(const bool force)
     {
-        if (!_autosavePending || _playMode)
+        // Nothing is written while an editor extension's call is in progress: its group is not a step yet, and the call
+        // ends with the one flush ExecuteCommand makes
+        if (!_autosavePending || _playMode || _invocation != nullptr)
         {
             return;
         }

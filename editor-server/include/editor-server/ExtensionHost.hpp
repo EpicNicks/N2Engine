@@ -25,6 +25,8 @@ namespace N2Engine::Editor
 {
     /// One file's evaluation on a worker thread (ExtensionHost.cpp)
     struct ExtensionLoadJob;
+    /// One invocation of a menu item on a worker thread (ExtensionHost.cpp)
+    struct ExtensionInvokeJob;
 
     /// How an extension file stands (design lua-editor-extensions 5.2). `Failed` covers every way a file does not load:
     /// it could not be read, it is too large, its chunk raised an error or ran out of budget or time, its declaration
@@ -48,8 +50,10 @@ namespace N2Engine::Editor
      * read commands (ListEditorExtensions, GetEditorUi) answer from. Nothing runs Lua when those commands are served:
      * the registry holds plain data captured at load time.
      *
-     * What this PR has of the `Editor` namespace is `Editor.Extension` and nothing else: no invocation, no
-     * `Editor.Scene` (E-X3). The state a loaded file keeps is therefore idle until then.
+     * The `Editor` namespace of a state is `Editor.Extension`, `Editor.Log` (and `print`, which writes to it) and, for
+     * the capabilities the file declared and the host granted, `Editor.Scene`: scene.read installs the readers,
+     * scene.write the writers, and a state without a capability does not have the functions at all (absent, not
+     * refused). A state is idle between invocations; Invoke (E-X3) runs one menu item's `run(ctx, params)` in it.
      *
      * Lifecycle: Load at host start (only when the host was started with --editor-extensions) and Reload (the
      * ReloadEditorExtensions command), and nowhere else: opening or loading a scene never touches an extension. A broken
@@ -66,7 +70,16 @@ namespace N2Engine::Editor
      * Shutdown stops new evaluations and waits a bounded time for the running workers; a thread cannot be interrupted,
      * so one still running after that is left, holding nothing of the host.
      *
-     * Calls are made from the command thread (Load, Reload, the readers); the registry is also guarded by a mutex, so a
+     * An invocation (Invoke) runs the same way: the item's function runs on a WORKER thread under the invocation budget
+     * (SandboxDefaults::InvocationBudget: 200 million instructions and 5 s of wall clock) while the command thread
+     * waits. The worker never touches the editor: every `Editor.Scene` and `Editor.Log` call of the script is a request
+     * the worker hands to the command thread, which answers it through the handler it was given (the EditorServer's
+     * nested dispatch) and wakes the worker with the answer, so every scene change is made on the command thread, one at
+     * a time, through the same command layer as any client. A worker that does not ask or finish within its wall budget
+     * plus InvokeGraceMillis is ABANDONED as a load worker is (it owns a copy of what it touches, the state moves into
+     * its job and is closed by whichever side lets go last, and the extension is faulted until the next reload).
+     *
+     * Calls are made from the command thread (Load, Reload, Invoke, the readers); the registry is also guarded by a mutex, so a
      * reader on another thread sees either the old or the new registry, never a half-built one. Every read of the
      * registry, the log lines of Load included, happens under that mutex; only the logging itself and the changed
      * callback run after it is released.
@@ -110,6 +123,24 @@ namespace N2Engine::Editor
         /// Failures (NoteFailure) within FaultWindow that make an extension faulted (design 5.2: 3 in 10 minutes)
         static constexpr int FaultThreshold = 3;
         static constexpr std::chrono::minutes FaultWindow{10};
+
+        // ---- Invocation limits (design 6.4, decision D7) ----
+
+        /// Commands one invocation may send to the host (Editor.Scene calls; Editor.Log lines are not counted)
+        static constexpr std::uint32_t MaxNestedCommands = Scripting::SandboxDefaults::MaxNestedCommands;
+        /// Bytes of requests and answers one invocation may move between its script and the host, together
+        static constexpr std::uint64_t MaxInvocationBytes = std::uint64_t{64} * 1024 * 1024;
+        /// Editor.Log lines one invocation may write; later ones are dropped (one line says so)
+        static constexpr std::uint32_t MaxLogLines = 1000;
+        /// A line's text is cut to this many bytes
+        static constexpr std::size_t MaxLogLineBytes = 1024;
+        /// Selection entries in a result, warnings in a result, and the bytes of a text in one
+        static constexpr std::size_t MaxResultSelect = 4096;
+        static constexpr std::size_t MaxResultWarnings = 100;
+        static constexpr std::size_t MaxResultTextBytes = 1024;
+        /// How long past its wall budget the command thread waits for a worker that has neither asked nor finished before it
+        /// abandons it
+        static constexpr std::uint64_t InvokeGraceMillis = 1000;
 
         // ---- Shape limits of Editor.Extension{...} (design 4.1, 4.4) ----
 
@@ -189,6 +220,95 @@ namespace N2Engine::Editor
         /// The sha256 of `data` as 64 lowercase hex digits (what the registry shows for a source)
         [[nodiscard]] static std::string Sha256Hex(std::string_view data);
 
+        // ---- Invocation (E-X3) ----
+
+        /// A menu item as the registry holds it, for the host that is asked to run it
+        struct MenuItemRef
+        {
+            std::string extensionId;
+            std::string extensionName;
+            /// The first 8 hex digits of the file's sha256 (what the audit line and the load log name)
+            std::string sha8;
+            /// Loaded or Faulted (a failed extension has no items)
+            ExtensionState state = ExtensionState::Failed;
+            std::vector<std::string> capabilities;
+            std::string itemId;
+            std::string title;
+            /// "editor" or "admin": the least role that may invoke it
+            std::string minRole;
+            /// The item's form (MenuForm: {fields, defaults}); null for an item without params
+            nlohmann::json form;
+        };
+
+        /// What the worker asks the command thread to do for a script (an Editor.Scene or Editor.Log call), and the answer
+        struct NestedAnswer
+        {
+            bool ok = true;
+            /// What the call returns to the script (null for nothing)
+            nlohmann::json value;
+            /// ok false: the text of the Lua error the script gets
+            std::string error;
+        };
+        /// Answers one request of the script: `op` ("log", "scene.getEntity", ...) and its arguments as JSON. Called on the
+        /// thread that called Invoke, one request at a time, while the worker waits. An exception it throws is an error of
+        /// the call.
+        using NestedHandler = std::function<NestedAnswer(const std::string &op, const nlohmann::json &args)>;
+
+        /// How an invocation went wrong
+        enum class InvokeFailure
+        {
+            None,
+            /// The item raised a Lua error (or a command it sent that the host refused went uncaught)
+            LuaError,
+            /// The instruction budget or the wall clock ended it: the extension is faulted until the next reload
+            BudgetExceeded,
+            /// The state's memory cap was reached: faulted as well
+            MemoryExhausted,
+            /// The worker neither asked nor finished in time and was abandoned: faulted as well
+            Abandoned,
+            /// What the item returned is not a result ({message, select, warnings})
+            BadResult,
+            /// The host could not run it (no state, shutting down, no worker free, no thread): nothing is counted against
+            /// the extension
+            HostError,
+        };
+
+        struct InvokeOutcome
+        {
+            InvokeFailure failure = InvokeFailure::None;
+            [[nodiscard]] bool Ok() const { return failure == InvokeFailure::None; }
+            /// On success: {message?, select?, warnings?}, each left out when empty
+            nlohmann::json result = nlohmann::json::object();
+            /// On failure: what went wrong, printable and with no host path (without the extension's name)
+            std::string error;
+            /// The extension is Faulted after this call
+            bool faulted = false;
+            /// Requests of the script the handler answered, Editor.Log lines not counted
+            std::uint32_t nestedCommands = 0;
+        };
+
+        /// The loaded or faulted extension's menu item with this id, or nullopt (ids are unique across the host)
+        [[nodiscard]] std::optional<MenuItemRef> FindMenuItem(std::string_view itemId) const;
+
+        /// Whether `text` is a UUID in its written form (8-4-4-4-12 hex digits): what an entity id is
+        [[nodiscard]] static bool IsUuidText(std::string_view text);
+        /// The commands one invocation may send: MaxNestedCommands unless a test replaced it
+        [[nodiscard]] static std::uint32_t MaxNested();
+
+        /// Runs the item's run(ctx, params) on a worker (see the class comment) with the invocation budget, with
+        /// ctx = {itemId, selection} and `params` (a JSON object the caller validated against the item's form). Blocks the
+        /// caller until the item has finished or its worker was abandoned, answering each request of the script through
+        /// `handler`. A failure counts against the extension (NoteFailure for an error or a bad result; a budget trip, a
+        /// memory trip and an abandon fault it at once, FaultNow); the caller undoes what the handler did. The extension
+        /// must be Loaded: a faulted one is refused with HostError, so the caller checks first.
+        [[nodiscard]] InvokeOutcome Invoke(const MenuItemRef &item, const nlohmann::json &selection,
+                                           const nlohmann::json &params, const NestedHandler &handler);
+
+        /// Disables the extension until the next reload, whatever its failure count (a budget trip, an abandoned worker).
+        /// Moves uiRevision and tells the changed callback, as NoteFailure does when it makes one faulted. A no-op for an
+        /// unknown id or one that is not Loaded. Returns the state after.
+        ExtensionState FaultNow(std::string_view id, std::string_view reason);
+
         /// Worker threads of every ExtensionHost that are running right now (abandoned ones included)
         [[nodiscard]] static int LiveWorkers();
         /// The wall-clock time the caller waits for one file before abandoning its worker
@@ -210,6 +330,19 @@ namespace N2Engine::Editor
         static void SetWorkerHookForTest(std::function<void(const std::string &id)> hook);
         /// Calls `visit` with the id and the Lua state of every extension that kept one, in the registry's order
         void ForEachStateForTest(const std::function<void(const std::string &id, lua_State *state)> &visit) const;
+        /// Replaces the invocation budget (0 in both restores the default SandboxDefaults::InvocationBudget): a test runs a
+        /// runaway script in milliseconds instead of seconds
+        static void SetInvocationBudgetForTest(std::uint64_t instructions, std::uint64_t maxMillis);
+        /// Replaces InvokeGraceMillis (negative restores the default)
+        static void SetInvokeGraceMillisForTest(std::int64_t millis);
+        /// Replaces MaxNestedCommands (0 restores the default)
+        static void SetMaxNestedCommandsForTest(std::uint32_t limit);
+        /// Runs at the start of every invocation's worker with the extension's id, before any Lua: a test blocks here to
+        /// stand for a call into C that never returns. An empty function removes it.
+        static void SetInvokeHookForTest(std::function<void(const std::string &id)> hook);
+        /// The wall-clock time Invoke waits for a worker that is silent before it abandons it (the budget's wall clock plus
+        /// the grace)
+        [[nodiscard]] static std::uint64_t InvokeAbandonMillis();
 
     private:
         struct Entry;

@@ -235,6 +235,52 @@ namespace N2Engine::Editor
         return FinishGroup();
     }
 
+    std::expected<EditEffect, std::string> EditHistory::AbortGroup()
+    {
+        if (_groupDepth == 0)
+        {
+            return EditEffect{};
+        }
+        // The group is closed first, with its ops in hand: an op that fails must not leave it open
+        const std::string label = std::move(_groupLabel);
+        std::vector<EditOp> ops = std::move(_groupOps);
+        _groupDepth = 0;
+        _groupLabel.clear();
+        _groupOps.clear();
+        _groupBytes = 0;
+
+        EditEffect effect;
+        for (size_t n = ops.size(); n-- > 0;)
+        {
+            // Last to first, as the edits were made
+            std::string failure;
+            try
+            {
+                const EditOutcome outcome = ops[n].undo();
+                if (outcome)
+                {
+                    effect.Merge(*outcome);
+                    continue;
+                }
+                failure = outcome.error();
+            }
+            catch (const std::exception &error)
+            {
+                // The engine's own text stays in the log for a remote client (audit F10)
+                failure = ClientText::Failure("", "the engine refused it", error.what());
+            }
+            catch (...)
+            {
+                failure = "unknown exception";
+            }
+
+            Clear();
+            return std::unexpected(std::format("Couldn't take back '{}': {} (the edit history was cleared)", label,
+                                               failure));
+        }
+        return effect;
+    }
+
     std::expected<EditHistory::Applied, std::string> EditHistory::Run(const bool undo)
     {
         if (_groupDepth > 0)

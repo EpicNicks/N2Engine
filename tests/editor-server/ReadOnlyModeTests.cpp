@@ -65,6 +65,8 @@ namespace
             {"RestoreAutosave", Class::Write}, {"DiscardAutosave", Class::Write},
             {"WritePlaySnapshot", Class::Write}, {"SetPaused", Class::Write}, {"Step", Class::Write},
             {"SendInput", Class::Write},
+            // Runs an extension's code, which changes the scene as the invoking user
+            {"InvokeMenuItem", Class::Write},
             // Admin: the host itself
             {"Shutdown", Class::Admin}, {"ReloadEditorExtensions", Class::Admin},
         };

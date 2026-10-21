@@ -359,6 +359,11 @@ namespace ProtocolVectors
             {"LuaFields", [](BufferWriter &w, const json &f) { WriteLuaFields(w, f.at("schema")); }},
             {"EditorExtensions", [](BufferWriter &w, const json &f) { WriteEditorExtensions(w, f.at("info")); }},
             {"EditorUi", [](BufferWriter &w, const json &f) { WriteEditorUi(w, f.at("ui")); }},
+            {"ExtensionResult", [](BufferWriter &w, const json &f)
+            {
+                WriteExtensionResult(w, StringField(f, "label"), Uint32Field(f, "revision"), f.at("canUndo").get<bool>(),
+                                     f.at("canRedo").get<bool>(), Uint32Field(f, "savedRevision"), f.at("result"));
+            }},
             {"EditResult", [](BufferWriter &w, const json &f)
             {
                 WriteEditResult(w, StringField(f, "label"), Uint32Field(f, "revision"), f.at("canUndo").get<bool>(),

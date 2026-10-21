@@ -139,6 +139,12 @@ namespace N2Engine::Editor
         GroupEnd EndGroup();
         /// Ends every open group (a client that went away without ending its group). NotOpen when none was open.
         GroupEnd CloseGroups();
+        /// Takes back an open group instead of ending it: its ops are undone, last to first, and no step is made, so
+        /// the done steps, the redo steps and the saved state are exactly as they were when the group began (a group
+        /// opened with a redo stack leaves it standing). Closes every open level, as CloseGroups does. When an op
+        /// cannot be undone the history is cleared (the scene may be in a state no step describes) and the error says
+        /// so, as for Undo. An empty effect, with nothing changed, when no group is open.
+        std::expected<EditEffect, std::string> AbortGroup();
         [[nodiscard]] bool InGroup() const { return _groupDepth > 0; }
         /// What the open group's ops hold (0 without one); it counts against no limit until the group ends, so a caller
         /// that records big ops into a group (snapshots) checks it against GetMaxBytes itself
