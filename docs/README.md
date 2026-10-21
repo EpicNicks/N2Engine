@@ -33,6 +33,7 @@ The pages describe `master`. PRs #26–#34 have all merged; their `PR #nn` badge
 | `serialization.html` | Scene/component JSON, references, failure handling |
 | `math.html` | Math types, SIMD tiers, correctness guarantees |
 | `scripting-lua.html` | `LuaComponent`, fields, checked handles, subscriptions, `engine-api.lua` |
+| `editor-extensions.html` | Lua editor extensions: the model (Lua in the edit host, the UI as data, no code in the editor), `--editor-extensions`, the trust prompt and `--editor-extensions-watch`, the file layout, what a file declares, forms and field kinds, menu items, inspector sections, hooks, the whole `Editor` API, capabilities and the role table, budgets, workers and the fault flag, the sandbox, security notes, troubleshooting (states and messages), the AlignTools example, `editor-api.lua` |
 | `logging-and-editor.html` | Logger, engine health, the editor host |
 | `editor.html` | Editor projects: `project.n2proj`, `--create`, opening a project, scene files, unsaved changes, the hierarchy and entity commands, project settings, per-project `user://` |
 | `netcode.html` | n2net, the netcode packet layer: the `ITransport` interface, the packet byte layout, acks, the reliable-ordered and unreliable-sequenced channels, fragmentation and its limits, bounded parsing of untrusted input, the deterministic network simulator and how to use it in tests, what is not built yet (sockets, encryption, engine integration) |

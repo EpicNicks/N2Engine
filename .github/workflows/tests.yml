@@ -124,6 +124,7 @@ jobs:
             freetype: "OFF"
             ufbx: "OFF"
             tls: "OFF"
+            strict: "OFF"
           # OFF keeps the no-physics build compiling and running (the engine then has no physics backend).
           # This leg also builds the optional FreeType font backend, so the text tests run against both
           # stb_truetype and FreeType (and compare them) without a fourth full build. It builds the optional ufbx
@@ -134,13 +135,16 @@ jobs:
             freetype: "ON"
             ufbx: "ON"
             tls: "ON"
+            strict: "OFF"
           # Release catches what Debug hides (NDEBUG, optimised SIMD paths) and confirms the forced sol2 safeties still hold in Release.
           # The PhysX release zip ships both debug/ and release/ libraries, so PhysX stays ON here.
+          # N2ENGINE_STRICT_FP=ON on the Release leg only (stage J7: its corpus hashes go to the `determinism` job); Debug stays as it was
           - config: Release
             physx: "ON"
             freetype: "OFF"
             ufbx: "OFF"
             tls: "OFF"
+            strict: "ON"
 
     steps:
       - uses: actions/checkout@v7
@@ -245,7 +249,7 @@ jobs:
           if (Get-Command ccache -ErrorAction SilentlyContinue) {
             $launcher = @('-DCMAKE_C_COMPILER_LAUNCHER=ccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache')
           }
-          cmake -S . -B build -G 'Ninja Multi-Config' -DCMAKE_CONFIGURATION_TYPES=${{ matrix.config }} -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_POLICY_DEFAULT_CMP0141=NEW '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=$<$<CONFIG:Debug>:Embedded>' $launcher -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} -DN2ENGINE_EDITOR_TLS=${{ matrix.tls }}
+          cmake -S . -B build -G 'Ninja Multi-Config' -DCMAKE_CONFIGURATION_TYPES=${{ matrix.config }} -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_POLICY_DEFAULT_CMP0141=NEW '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=$<$<CONFIG:Debug>:Embedded>' $launcher -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} -DN2ENGINE_EDITOR_TLS=${{ matrix.tls }} -DN2ENGINE_STRICT_FP=${{ matrix.strict }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
@@ -339,6 +343,28 @@ jobs:
         env:
           N2_SMOKE_CONFIG: ${{ matrix.config }}
         run: ./tests/editor-server/PlaySmokeTest.ps1 -Config $env:N2_SMOKE_CONFIG
+
+      # The physics determinism corpus (stage J7), on the strict Release leg only: the same steps as the Linux legs. The hashes
+      # go to the `determinism` job as an artifact.
+      - name: Physics determinism corpus
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON' && !cancelled()
+        shell: pwsh
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_DETERMINISM_LEG: windows-release
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}\determinism-hashes.json
+        run: |
+          & "./build/bin/Release/engine_tests.exe" --gtest_filter='PhysicsDeterminismCorpusTest.*'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload the determinism hashes
+        if: needs.changes.outputs.docs_only != 'true' && matrix.config == 'Release' && matrix.physx == 'ON' && !cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-windows-release
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
 
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
       - name: ccache statistics
@@ -437,7 +463,7 @@ jobs:
           ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client jolt_smoke_tests -- -k 0
@@ -494,6 +520,27 @@ jobs:
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
+
+      # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
+      # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
+      # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
+      # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
+      - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
+        run: ./build/bin/engine_tests --gtest_filter='PhysicsDeterminismCorpusTest.*'
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_DETERMINISM_LEG: linux-x86_64-clang
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}/determinism-hashes.json
+
+      - name: Upload the determinism hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-linux-x86_64-clang
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
 
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
       - name: ccache statistics
@@ -586,7 +633,7 @@ jobs:
           ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost N2Server math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests n2server_tests n2server_smoke_client jolt_smoke_tests -- -k 0
@@ -634,6 +681,27 @@ jobs:
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
+
+      # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
+      # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
+      # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
+      # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
+      - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
+        run: ./build/bin/engine_tests --gtest_filter='PhysicsDeterminismCorpusTest.*'
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_DETERMINISM_LEG: linux-arm64-clang
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}/determinism-hashes.json
+
+      - name: Upload the determinism hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-linux-arm64-clang
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
 
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
       - name: ccache statistics
@@ -750,6 +818,27 @@ jobs:
         env:
           ALSOFT_DRIVERS: "null"
           PYTHONDONTWRITEBYTECODE: "1"
+
+      # The physics determinism corpus (stage J7): ten scenes on Jolt, 600 ticks each, hashed every 60 ticks; the hashes are
+      # written to determinism-hashes.json and uploaded for the `determinism` job, which compares every leg with the others and
+      # with tests/golden/physics-determinism.json. ctest ran the same tests above (what they assert concerns this binary
+      # alone); this run is the one that writes the file. A failed corpus test fails this leg, and the file is uploaded anyway.
+      - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
+        run: ./build/bin/engine_tests --gtest_filter='PhysicsDeterminismCorpusTest.*'
+        env:
+          ALSOFT_DRIVERS: "null"
+          N2_DETERMINISM_LEG: linux-x86_64-gcc
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}/determinism-hashes.json
+
+      - name: Upload the determinism hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-linux-x86_64-gcc
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
 
       # Runs after a failed build or test too (not when cancelled): the hit rate of this run, from zeroed statistics
       - name: ccache statistics
@@ -927,7 +1016,7 @@ jobs:
           set -e -o pipefail
           . "$HOME/emsdk/emsdk_env.sh"
           start=$(date +%s)
-          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev -DN2ENGINE_USE_JOLT=ON 2>&1 | tee configure-dev.log
+          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_STRICT_FP=ON 2>&1 | tee configure-dev.log
           echo "configure took $(( $(date +%s) - start )) s (PhysX cache hit: ${{ steps.physx-web-cache.outputs.cache-hit }})"
           # PhysX failing to build turns it OFF with a warning in every other configuration; on the web that would only
           # skip the physics tests, so the job insists that it is on
@@ -973,6 +1062,27 @@ jobs:
           . "$HOME/emsdk/emsdk_env.sh"
           node build-web/bin/engine_tests.js --gtest_filter='JoltBackendDeterminismTest.*' | tee jolt-backend.log
           { echo; echo "web (node):"; echo; grep '^\[JOLT-BACKEND-DETERMINISM\]' jolt-backend.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The physics determinism corpus (stage J7) under node (single-threaded; the dev profile, strict floating point): the same
+      # file and artifact as the native legs, compared by the `determinism` job. NODERAWFS makes the file a real one.
+      - name: Physics determinism corpus
+        if: ${{ !cancelled() }}
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          node build-web/bin/engine_tests.js --gtest_filter='PhysicsDeterminismCorpusTest.*'
+        env:
+          N2_DETERMINISM_LEG: web-node
+          N2_DETERMINISM_HASHES_OUT: ${{ github.workspace }}/determinism-hashes.json
+
+      - name: Upload the determinism hashes
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: determinism-hashes-web-node
+          path: determinism-hashes.json
+          if-no-files-found: warn
+          retention-days: 30
 
       # Only reports (raw and gzip sizes in the job summary); the budgets are checked on the package below
       - name: Report artifact sizes
@@ -1076,6 +1186,53 @@ jobs:
             fi
             echo "$dir: the WebGPU backend is linked into the player"
           done
+
+  # The cross-leg determinism comparison of the Jolt backend (stage J7, docs/physics.html "Determinism proof in CI"). Every leg
+  # (windows Release, linux x86_64 Clang, linux arm64 Clang, linux x86_64 GCC 14, web under node) ran the physics scene corpus
+  # on a strict floating-point build and uploaded determinism-hashes-<leg>; this job needs all of them, downloads the files and
+  # compares them with each other and with tests/golden/physics-determinism.json (scripts/physics-determinism.py). It runs
+  # when a leg failed too (a missing or incomplete leg is a finding, never a silent skip), and not on a docs-only pull
+  # request. NOT a required check: make it required only after two weeks green (design P9; Settings, Branches, the master
+  # rule, add "determinism (cross-leg physics hashes)").
+  determinism:
+    name: determinism (cross-leg physics hashes)
+    needs: [changes, windows, linux, linux-arm64, linux-gcc, web]
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      # Proves the comparison can fail (a differing record, a missing record, scene or leg, a golden mismatch)
+      - name: Self-test the comparison
+        run: python3 scripts/physics-determinism.py self-test
+
+      # A leg that uploaded nothing leaves no folder here: the comparison names it as missing
+      - name: Download the legs' hashes
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: determinism-hashes-*
+          path: determinism-legs
+
+      # What the golden would hold, made from the Linux x86_64 Clang leg: download it from this run and commit it as
+      # tests/golden/physics-determinism.json only from a green run, in a pull request that says why (the first run has no
+      # golden, so this is how it is created)
+      - name: Make the golden candidate
+        continue-on-error: true
+        run: python3 scripts/physics-determinism.py golden --from determinism-legs/determinism-hashes-linux-x86_64-clang/determinism-hashes.json --out golden-candidate/physics-determinism.json
+
+      - name: Upload the golden candidate
+        if: "!cancelled()"
+        uses: actions/upload-artifact@v7
+        with:
+          name: physics-determinism-golden-candidate
+          path: golden-candidate/physics-determinism.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Compare the legs with each other and with the golden
+        run: python3 scripts/physics-determinism.py compare --legs-dir determinism-legs --expect windows-release,linux-x86_64-clang,linux-arm64-clang,linux-x86_64-gcc,web-node --golden tests/golden/physics-determinism.json
 
   # WebGPU backend, stage G1 (#155): the hand-written WGSL shaders (renderer/shaders/webgpu/*.wgsl) are validated by Tint (the
   # WGSL compiler of Chrome and Edge) and by naga (Firefox's; Safari's WebKit compiler has no CI path), the pinned versions in scripts/install-wgsl-validators.sh
