@@ -82,8 +82,7 @@ namespace N2Engine::Editor::ClientText
 
         /// Whether the folder found at `at` of the normalised text is only the tail of something longer, so it is not
         /// the host's folder: a name ("/p/xgame"), a path that goes on from further left ("/data/srv/game", a client's
-        /// own "res://a/srv/game/b.txt"), a drive ("D:/srv/game" is not "/srv/game"), a relative path ("../srv/game") or
-        /// the client's own res:// or user:// path ("res://srv/game/a.txt"). A folder after anything else is the host's:
+        /// own "res://a/srv/game/b.txt"), a relative path ("../srv/game") or the client's own res:// or user:// path ("res://srv/game/a.txt"). A folder after anything else is the host's:
         /// a space, a quote, a bracket, '=', ':' ("open:/srv/game"), a full stop ("failed./srv/game") or a slash run
         /// that is file:// or a Windows long-path prefix, so those are replaced.
         bool StartsInsideName(const std::string &t, const size_t at, const bool folderStartsWithSlash)
@@ -113,9 +112,9 @@ namespace N2Engine::Editor::ClientText
             }
             if (c == ':')
             {
-                // Only a drive letter makes "X:/srv/game" another path than "/srv/game"
-                return folderStartsWithSlash && at >= 2 && std::isalpha(static_cast<unsigned char>(t[at - 2])) != 0 &&
-                       (at == 2 || !IsNameChar(t[at - 3]));
+                // "open:/srv/game", "k:/srv/game": a folder that starts with '/' is a POSIX path and has no drives, so
+                // a letter before the colon is only a word
+                return false;
             }
             if (c != '/')
             {
@@ -147,7 +146,7 @@ namespace N2Engine::Editor::ClientText
                 std::string scheme = t.substr(s, k - 1 - s);
                 std::ranges::transform(scheme, scheme.begin(),
                                        [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-                return scheme == "res" || scheme == "user" || (scheme.size() == 1 && folderStartsWithSlash);
+                return scheme == "res" || scheme == "user";
             }
             return IsNameChar(before) || before == '.';
         }
@@ -190,10 +189,12 @@ namespace N2Engine::Editor::ClientText
             return -1;
         }
 
-        Normalised Normalise(const std::string &text, const bool collapse)
+        /// One round of percent-decoding: `where[i]` is where character i of `text` starts in the original, and the
+        /// result's is built the same way
+        void DecodeOnce(std::string &text, std::vector<size_t> &where)
         {
             std::string decoded;
-            std::vector<size_t> where;
+            std::vector<size_t> decodedWhere;
             for (size_t i = 0; i < text.size();)
             {
                 if (text[i] == '%' && i + 2 < text.size())
@@ -203,15 +204,30 @@ namespace N2Engine::Editor::ClientText
                     if (high >= 0 && low >= 0 && (high != 0 || low != 0))
                     {
                         decoded.push_back(static_cast<char>(high * 16 + low));
-                        where.push_back(i);
+                        decodedWhere.push_back(where[i]);
                         i += 3;
                         continue;
                     }
                 }
                 decoded.push_back(text[i]);
-                where.push_back(i);
+                decodedWhere.push_back(where[i]);
                 ++i;
             }
+            text = std::move(decoded);
+            where = std::move(decodedWhere);
+        }
+
+        Normalised Normalise(const std::string &text, const bool collapse)
+        {
+            std::string decoded = text;
+            std::vector<size_t> where(text.size());
+            for (size_t i = 0; i < where.size(); ++i)
+            {
+                where[i] = i;
+            }
+            // Twice, so a path encoded twice ("%255C") is found too
+            DecodeOnce(decoded, where);
+            DecodeOnce(decoded, where);
 
             Normalised result;
             for (size_t i = 0; i < decoded.size();)

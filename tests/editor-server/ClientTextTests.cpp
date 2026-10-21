@@ -124,7 +124,8 @@ namespace
                 mixed,
                 ReplaceAll(ReplaceAll(generic, ":", "%3A"), "/", "%2F"),
                 ReplaceAll(ReplaceAll(generic, ":", "%3a"), "/", "%2f"),
-                ReplaceAll(ReplaceAll(generic, ":", "%3A"), "/", "%5C")};
+                ReplaceAll(ReplaceAll(generic, ":", "%3A"), "/", "%5C"),
+                ReplaceAll(ReplaceAll(generic, ":", "%253A"), "/", "%255C")};
     }
 }
 
@@ -187,8 +188,8 @@ TEST(ClientTextRedactTest, AFolderAtTheTopOfADriveOrTheFileSystemIsNeverReplaced
 TEST(ClientTextRedactTest, AFolderIsOnlyReplacedWhereItStartsAPath)
 {
     const std::vector<ClientText::HostRoot> roots{{fs::path("/srv/game"), "<project>"}};
-    // The client's own res:// and user:// paths, a deeper folder and another drive are not the host's /srv/game
-    const std::string clientPaths = "res://srv/game/a.txt, user://srv/game/b.bin, /data/srv/game/c and D:/srv/game/d";
+    // The client's own res:// and user:// paths and a deeper folder are not the host's /srv/game
+    const std::string clientPaths = "res://srv/game/a.txt, user://srv/game/b.bin and /data/srv/game/c";
     EXPECT_EQ(ClientText::RedactHostPaths(clientPaths, roots), clientPaths);
     EXPECT_EQ(ClientText::RedactHostPaths("x/srv/game/e", roots), "x/srv/game/e");
     // After a space, a quote, a bracket or '=' it is the host's folder, and so is a file:// URL to it
@@ -223,9 +224,12 @@ TEST(ClientTextRedactTest, OnlyTheClientsOwnResAndUserPathsProtectAFolderAndNoth
     // The client's own paths, glued on however they are
     const std::string own = "open:res://srv/game/a.txt key=user://srv/game/b \"RES://srv/game/c\" [res://x/srv/game/d]";
     EXPECT_EQ(ClientText::RedactHostPaths(own, roots), own);
-    // A drive and a relative path are not the host's folder
-    const std::string other = "D:/srv/game/a open:D:/srv/game/b ./srv/game/c ../srv/game/d";
+    // A relative path is not the host's folder
+    const std::string other = "./srv/game/c ../srv/game/d";
     EXPECT_EQ(ClientText::RedactHostPaths(other, roots), other);
+    // A POSIX folder has no drives: a letter before the colon is only a word, however short
+    EXPECT_EQ(ClientText::RedactHostPaths("k:/srv/game/x, x k:/srv/game and a:///srv/game/y D:/srv/game/z", roots),
+              "k:<project>/x, x k:<project> and a://<project>/y D:<project>/z");
     // But a host folder that follows one of them after a separator is replaced
     EXPECT_EQ(ClientText::RedactHostPaths("res://a.txt then /srv/game/x, user://bb:/srv/game/y", roots),
               "res://a.txt then <project>/x, user://bb:<project>/y");
@@ -247,6 +251,9 @@ TEST(ClientTextRedactTest, AnEscapedOrEncodedSpellingOfAFolderIsFoundAndWrittenA
     EXPECT_EQ(ClientText::RedactHostPaths("file:///C:/proj/a%20b.txt", roots), "file:///<project>/a%20b.txt");
     const std::vector<ClientText::HostRoot> spaced{{fs::path("/srv/my game"), "<project>"}};
     EXPECT_EQ(ClientText::RedactHostPaths("in %2Fsrv%2Fmy%20game%2Fx", spaced), "in <project>/x");
+    // Encoded twice, in a drive path and a POSIX one
+    EXPECT_EQ(ClientText::RedactHostPaths("C%253A%255Cproj%255Cassets%255Ca.txt", roots), "res://a.txt");
+    EXPECT_EQ(ClientText::RedactHostPaths("in %252Fsrv%252Fmy%2520game%252Fx", spaced), "in <project>/x");
     // The text around it is as it was, and a name that only starts like the folder is still not it
     const std::string kept = "100%25 sure: C%3A%5Cproj2%5Cx and C:\\\\proj.bak";
     EXPECT_EQ(ClientText::RedactHostPaths(kept, roots), kept);
