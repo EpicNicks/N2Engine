@@ -554,6 +554,20 @@ namespace N2Engine::Server
             // Poll's handler)
             std::vector<N2Net::PeerId> dropAfterPoll;
             std::uint64_t clientsEverConnected = 0;
+            // A client leaves the list when its transport peer goes: remotely (PeerDisconnected) or because the world
+            // dropped it (a local Disconnect raises no event, so the network server's Left event calls this too)
+            const auto forgetClient = [&](const N2Net::PeerId peer)
+            {
+                const auto found = clients.find(peer);
+                if (found == clients.end())
+                {
+                    return;
+                }
+                const ClientInfo info = found->second;
+                clients.erase(found);
+                LogAdmin(std::format("Client disconnected: user={} role={} peer={} ({}/{})", info.user,
+                                     N2Net::JoinRoleName(info.role), peer, clients.size(), options.maxClients));
+            };
             const auto onEvent = [&](const N2Net::TransportEvent &event)
             {
                 if (event.type == N2Net::TransportEventType::PeerConnected)
@@ -584,15 +598,7 @@ namespace N2Engine::Server
                 }
                 else if (event.type == N2Net::TransportEventType::PeerDisconnected)
                 {
-                    const auto found = clients.find(event.peer);
-                    if (found == clients.end())
-                    {
-                        return;
-                    }
-                    const ClientInfo info = found->second;
-                    clients.erase(found);
-                    LogAdmin(std::format("Client disconnected: user={} role={} peer={} ({}/{})", info.user,
-                                         N2Net::JoinRoleName(info.role), event.peer, clients.size(), options.maxClients));
+                    forgetClient(event.peer);
                 }
                 // Datagrams are the network server's: it runs a Connection per client over the same events
             };
@@ -608,7 +614,7 @@ namespace N2Engine::Server
             Network::NetworkServer netServer(secure, world, std::move(netOptions));
             netServer.SetTransportObserver(onEvent);
             netServer.SetClientObserver(
-                [](const Network::NetworkClientEvent &event)
+                [&forgetClient](const Network::NetworkClientEvent &event)
                 {
                     if (event.type == Network::NetworkClientEvent::Type::Joined)
                     {
@@ -619,6 +625,7 @@ namespace N2Engine::Server
                     {
                         LogAdmin(std::format("Network client left the world: client={} peer={} joined={} ({})",
                                              event.client, event.peer, event.wasJoined ? "yes" : "no", event.reason));
+                        forgetClient(event.peer);
                     }
                 });
             const auto loopStart = std::chrono::steady_clock::now();

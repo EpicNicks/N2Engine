@@ -321,6 +321,9 @@ namespace N2Engine::Network
         {
             return std::unexpected(std::string("the network world has no scene"));
         }
+        // Clients must see the despawns of objects the game already destroyed before this spawn (the capacity of the
+        // world counts them as gone)
+        FlushPendingDespawns();
         const std::optional<std::uint16_t> index = _options.prefabs.IndexOf(prefabName);
         if (!index.has_value())
         {
