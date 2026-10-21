@@ -501,12 +501,9 @@ TEST_F(EditorExtensionHooksTest, OnBeforePlayIsGivenTheScenePlayedWhenOneIsNamed
 TEST_F(EditorExtensionHooksTest, OnBeforePlayRunsOnlyForARequestThatValidates)
 {
     WriteExtension("a.lua", HookExtension("Checker", "\"scene.read\"",
-                                          "    OnBeforePlay = function(info)
-"
-                                          "      Editor.Log.Info('hook ran for ' .. info.scene)
-"
-                                          "      return { warnings = { 'seen ' .. info.scene } }
-"
+                                          "    OnBeforePlay = function(info)\n"
+                                          "      Editor.Log.Info('hook ran for ' .. info.scene)\n"
+                                          "      return { warnings = { 'seen ' .. info.scene } }\n"
                                           "    end,"));
     Start();
 
@@ -522,8 +519,8 @@ TEST_F(EditorExtensionHooksTest, OnBeforePlayRunsOnlyForARequestThatValidates)
 
     // A valid one runs it, once
     ASSERT_EQ(Execute(server, CommandType::WritePlaySnapshot, Strings({"res://scenes/Hooks.scene"})).type, PlaySnapshotType);
-    ASSERT_EQ(Messages(server).size(), 1u);
-    EXPECT_EQ(Messages(server)[0], "hook ran for res://scenes/Hooks.scene");
+    EXPECT_EQ(Messages(server),
+              (std::vector<std::string>{"hook ran for res://scenes/Hooks.scene", "seen res://scenes/Hooks.scene"}));
     EXPECT_EQ(EventsOfKind(server, "extensionOutput", EventView::PublicOnly).size(), 1u);
 }
 
