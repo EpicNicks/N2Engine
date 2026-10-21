@@ -997,6 +997,32 @@ namespace N2Engine::N2Net
         info = found->second.counters;
         return true;
     }
+
+    bool UdpTransport::GetPeerEndpoint(PeerId peer, PeerEndpoint &endpoint) const
+    {
+        const auto found = impl_->peers.find(peer);
+        if (found == impl_->peers.end())
+        {
+            return false;
+        }
+        const Address &address = found->second.address;
+        endpoint = PeerEndpoint{};
+        endpoint.port = address.port;
+        if (!address.v6)
+        {
+            std::copy(address.bytes.begin(), address.bytes.begin() + 4, endpoint.bytes.begin());
+        }
+        else if (IsV4Mapped(address.bytes))
+        {
+            std::copy(address.bytes.begin() + 12, address.bytes.end(), endpoint.bytes.begin());
+        }
+        else
+        {
+            endpoint.ipv6 = true;
+            endpoint.bytes = address.bytes;
+        }
+        return true;
+    }
 } // namespace N2Engine::N2Net
 
 #endif // N2NET_HAS_UDP

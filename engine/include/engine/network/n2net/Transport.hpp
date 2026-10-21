@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -47,10 +48,25 @@ namespace N2Engine::N2Net
         EmptyPacket,
     };
 
+    /// Where a peer's datagrams come from, as the network sees it: what SecureTransport binds its challenge cookie to
+    /// and keys its rate limits on. Not a secret and not authenticated (a source address can be spoofed: that is what
+    /// the cookie checks).
+    struct PeerEndpoint
+    {
+        /// False: an IPv4 address in bytes[0..3]. True: an IPv6 address in all 16 bytes. Network byte order. An
+        /// IPv4-mapped IPv6 address (::ffff:a.b.c.d) is reported as the IPv4 address, so one peer has one spelling.
+        bool ipv6 = false;
+        std::array<std::uint8_t, 16> bytes{};
+        std::uint16_t port = 0;
+
+        [[nodiscard]] bool operator==(const PeerEndpoint &other) const = default;
+    };
+
     /// The seam between the packet layer and a network: datagram-oriented, non-blocking and polled on one thread (the
     /// web build has no threads, so nothing here may block or need one). An implementation never throws across this
-    /// interface. This library has no sockets: SimTransport is the in-memory implementation; the native UDP and the
-    /// browser WebSocket transports are later work that implement this same interface.
+    /// interface. SimTransport is the in-memory implementation, UdpTransport the native one, and SecureTransport a layer
+    /// that implements it over another transport (the handshake and sealed packets); the browser WebSocket transport is
+    /// later work that implements this same interface.
     class ITransport
     {
     public:
@@ -74,5 +90,14 @@ namespace N2Engine::N2Net
 
         /// Drops the link to `peer` (no-op if there is none). The other side sees PeerDisconnected.
         virtual void Disconnect(PeerId peer) = 0;
+
+        /// The network address of `peer`; false when the peer is unknown or this transport has no addresses. The
+        /// default has none: a layer that needs one (SecureTransport's server) refuses such peers.
+        [[nodiscard]] virtual bool GetPeerEndpoint(PeerId peer, PeerEndpoint &endpoint) const
+        {
+            (void)peer;
+            (void)endpoint;
+            return false;
+        }
     };
 } // namespace N2Engine::N2Net

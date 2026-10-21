@@ -16,10 +16,9 @@ target_include_directories(editor_server_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests
 # Mbed TLS's headers (its code is in N2EditorServer). Without it that file is empty and the host tests only check that
 # --tls is refused.
 if (N2ENGINE_EDITOR_TLS)
-    target_compile_definitions(editor_server_tests PRIVATE N2ENGINE_EDITOR_TLS=1
-        MBEDTLS_USER_CONFIG_FILE="n2_mbedtls_user_config.h")
-    target_include_directories(editor_server_tests PRIVATE ${CMAKE_SOURCE_DIR}/external/mbedtls/include
-        ${CMAKE_SOURCE_DIR}/editor-server/mbedtls-config)
+    # n2_mbedtls_tls (cmake/mbedtls/) carries the include directories and MBEDTLS_USER_CONFIG_FILE
+    target_compile_definitions(editor_server_tests PRIVATE N2ENGINE_EDITOR_TLS=1)
+    target_link_libraries(editor_server_tests PRIVATE n2_mbedtls_tls)
 endif()
 
 target_link_libraries(editor_server_tests

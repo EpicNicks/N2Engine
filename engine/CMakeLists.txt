@@ -7,6 +7,8 @@ file(GLOB_RECURSE ENGINE_SOURCES
 # n2net (the netcode's packet layer and network simulator) has no engine dependency: it is its own library, below, and
 # the engine does not link it yet. Keep its sources out of the engine's glob.
 list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/network/n2net/")
+# n2security (the shared admission policy, token files and crypto wrappers) is its own library too, below
+list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/security/")
 
 add_library(engine STATIC
     ${ENGINE_SOURCES}
@@ -98,10 +100,12 @@ target_link_libraries(engine
 )
 
 # == n2net: ITransport, the in-memory SimTransport, the packet layer (acks, reliable and unreliable channels,
-# fragmentation) and, on native platforms only, UdpTransport. Everything but UdpTransport is standard library only: no
-# sockets, no threads, no platform headers, no engine types, so it builds the same on Windows, Linux, arm64 and the
-# single-threaded web build. UdpTransport.cpp uses BSD sockets or Winsock and compiles to nothing under Emscripten
-# (N2NET_HAS_UDP is 0 there). Headers are under include/engine/network/n2net/.
+# fragmentation), the join tokens and, on native platforms only, UdpTransport and SecureTransport (the handshake and the
+# sealed packets). Everything but those two is standard library only (plus n2security, below): no sockets, no threads, no
+# platform headers, no engine types, so it builds the same on Windows, Linux, arm64 and the single-threaded web build.
+# UdpTransport.cpp uses BSD sockets or Winsock and compiles to nothing under Emscripten (N2NET_HAS_UDP is 0 there);
+# SecureTransport.cpp needs n2security's crypto and compiles to nothing without it (N2NET_HAS_SECURE is 0 on the web
+# build). Headers are under include/engine/network/n2net/.
 file(GLOB N2NET_SOURCES "src/network/n2net/*.cpp")
 add_library(n2net STATIC ${N2NET_SOURCES})
 add_library(N2Engine::n2net ALIAS n2net)
@@ -117,6 +121,9 @@ set_target_properties(n2net PROPERTIES
     CXX_EXTENSIONS OFF
 )
 
+# n2security: Security::Crypto (it wraps n2_mbedcrypto) and the admission policy SecureTransport uses
+target_link_libraries(n2net PUBLIC n2security)
+
 # Winsock for UdpTransport (the web build has no UdpTransport and no Winsock)
 if (WIN32)
     target_link_libraries(n2net PUBLIC ws2_32)
@@ -126,4 +133,45 @@ if (MSVC)
     target_compile_options(n2net PRIVATE /W4)
 else ()
     target_compile_options(n2net PRIVATE -Wall -Wextra)
+endif ()
+
+# == n2security: the socket-free admission policy (PeerAddress, RateLimiter, TokenBucket, PreAuthSlots), the token files
+# (TokenTable) shared by the editor host and the netcode, and Security::Crypto, thin wrappers over the vendored Mbed TLS's
+# crypto modules (n2_mbedcrypto). Native builds link the crypto library and define N2SECURITY_HAS_CRYPTO=1; the web build
+# has none (cmake/mbedtls is not added there), so there Crypto.cpp compiles to functions that report failure and
+# N2SECURITY_HAS_CRYPTO is 0. No Mbed TLS type reaches a header here, so the library's include directories stay private.
+file(GLOB N2SECURITY_SOURCES "src/security/*.cpp")
+add_library(n2security STATIC ${N2SECURITY_SOURCES})
+add_library(N2Engine::n2security ALIAS n2security)
+
+target_include_directories(n2security
+    PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    PRIVATE
+    ${CMAKE_SOURCE_DIR}/external/nlohmann/include
+)
+
+set_target_properties(n2security PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+)
+
+if (TARGET n2_mbedcrypto)
+    target_link_libraries(n2security PRIVATE n2_mbedcrypto)
+    target_compile_definitions(n2security PUBLIC N2SECURITY_HAS_CRYPTO=1)
+else ()
+    target_compile_definitions(n2security PUBLIC N2SECURITY_HAS_CRYPTO=0)
+endif ()
+
+if (WIN32)
+    set_target_properties(n2security PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+endif ()
+
+if (MSVC)
+    target_compile_options(n2security PRIVATE /W4)
+else ()
+    target_compile_options(n2security PRIVATE -Wall -Wextra)
 endif ()
