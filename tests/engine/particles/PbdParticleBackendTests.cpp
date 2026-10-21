@@ -579,7 +579,9 @@ TEST(ParticleHandleTest, PacksTheGenerationAndTheIndexAndNeverIssuesGenerationZe
     EXPECT_EQ(Physics::ParticleHandleIndex(handle), 0x1234u);
     EXPECT_NE(handle, Physics::kInvalidParticleSystem);
     EXPECT_NE(Physics::NextParticleBackendGeneration(), 0u);
-    EXPECT_NE(Physics::NextParticleBackendGeneration(), Physics::NextParticleBackendGeneration());
+    const auto first = Physics::NextParticleBackendGeneration();
+    const auto second = Physics::NextParticleBackendGeneration();
+    EXPECT_NE(first, second);
 }
 
 // ---------------------------------------------------------------- soft failure

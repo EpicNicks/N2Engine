@@ -84,9 +84,11 @@ namespace
     /// The right ids and header, then `length` random bytes
     std::vector<std::uint8_t> HeaderThenRandom(SimRandom &random, std::size_t length)
     {
-        std::vector<std::uint8_t> packet = PacketBuilder(static_cast<std::uint16_t>(random.NextBelow(65536)))
-                                               .Ack(static_cast<std::uint16_t>(random.NextBelow(65536)), static_cast<std::uint32_t>(random.Next()))
-                                               .Build();
+        // one draw per statement: the evaluation order of function arguments is unspecified
+        const auto packetSeq = static_cast<std::uint16_t>(random.NextBelow(65536));
+        const auto ackSeq = static_cast<std::uint16_t>(random.NextBelow(65536));
+        const auto ackBits = static_cast<std::uint32_t>(random.Next());
+        std::vector<std::uint8_t> packet = PacketBuilder(packetSeq).Ack(ackSeq, ackBits).Build();
         const std::vector<std::uint8_t> tail = RandomBytes(random, length);
         packet.insert(packet.end(), tail.begin(), tail.end());
         return packet;
@@ -98,7 +100,9 @@ namespace
         PacketBuilder builder(static_cast<std::uint16_t>(random.NextBelow(65536)));
         if (random.NextBelow(2) == 0)
         {
-            builder.Ack(static_cast<std::uint16_t>(random.NextBelow(65536)), static_cast<std::uint32_t>(random.Next()));
+            const auto ackSeq = static_cast<std::uint16_t>(random.NextBelow(65536));
+            const auto ackBits = static_cast<std::uint32_t>(random.Next());
+            builder.Ack(ackSeq, ackBits);
         }
         const std::uint32_t blocks = random.NextBelow(6);
         for (std::uint32_t i = 0; i < blocks; ++i)
@@ -136,7 +140,10 @@ namespace
         {
             for (std::uint32_t i = 0, flips = 1 + random.NextBelow(8); i < flips; ++i)
             {
-                packet[random.NextBelow(static_cast<std::uint32_t>(packet.size()))] ^= static_cast<std::uint8_t>(1 + random.NextBelow(255));
+                // the mask is drawn first, as C++17 sequences the right operand of ^= before the left
+                const auto mask = static_cast<std::uint8_t>(1 + random.NextBelow(255));
+                const std::uint32_t at = random.NextBelow(static_cast<std::uint32_t>(packet.size()));
+                packet[at] ^= mask;
             }
         }
         else if (kind == 2)
