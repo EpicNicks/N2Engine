@@ -1,6 +1,7 @@
 #include "math/Random.hpp"
 #include "math/Vector2.hpp"
 #include "math/Constants.hpp"
+#include "math/DeterministicMath.hpp"
 
 namespace N2Engine
 {
@@ -15,7 +16,7 @@ namespace N2Engine
                     return seeded->OnUnitCircle();
                 }
                 float angle = RandomRange(0.0f, Constants::TWO_PI);
-                return Vector2(std::cos(angle), std::sin(angle));
+                return Vector2(Math::Cos(angle), Math::Sin(angle));
             }
 
             Vector2 RandomInUnitCircle()
@@ -26,7 +27,7 @@ namespace N2Engine
                 }
                 float angle = RandomRange(0.0f, Constants::TWO_PI);
                 float r = std::sqrt(RandomFloat());
-                return Vector2(std::cos(angle) * r, std::sin(angle) * r);
+                return Vector2(Math::Cos(angle) * r, Math::Sin(angle) * r);
             }
         }
     }

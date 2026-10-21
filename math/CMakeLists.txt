@@ -54,5 +54,19 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|AARCH64|arm64|ARM64)$")
     )
 endif()
 
+# The engine-owned transcendental functions (netcode C1): one source file, always compiled without floating-point
+# contraction, whether or not N2ENGINE_STRICT_FP is on, because their results must be bit-identical on every compiler and
+# architecture (an FMA-fused multiply-add would change the last bit on the targets that have one). The file is
+# self-checking at run time (Math::IsContractionFree runs a multiply-add whose fused result differs).
+if(MSVC)
+    set_source_files_properties(src/math/DeterministicMath.cpp PROPERTIES COMPILE_OPTIONS "/fp:precise")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # clang-cl still contracts under /fp:precise unless told not to
+        set_property(SOURCE src/math/DeterministicMath.cpp APPEND PROPERTY COMPILE_OPTIONS "-ffp-contract=off")
+    endif()
+else()
+    set_source_files_properties(src/math/DeterministicMath.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
+
 # Add any necessary libraries
 target_compile_definitions(math PRIVATE _USE_MATH_DEFINES)

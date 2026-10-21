@@ -10,6 +10,8 @@
 #include <map>
 #include <utility>
 
+#include <math/DeterministicMath.hpp>
+
 #include "engine/rendering/Mesh.hpp"
 
 namespace N2Engine::SoftBodies
@@ -405,7 +407,7 @@ namespace N2Engine::SoftBodies
                                            resolution, tetCount, settings.maxTets);
                 return result;
             }
-            const double scale = std::cbrt(static_cast<double>(settings.maxTets) / static_cast<double>(tetCount));
+            const double scale = Math::Exp(Math::Log(static_cast<double>(settings.maxTets) / static_cast<double>(tetCount)) / 3.0);
             resolution = std::clamp(std::min(resolution - 1, static_cast<int>(std::floor(resolution * scale))),
                                     Physics::kMinTetResolution, Physics::kMaxTetResolution);
         }
