@@ -857,8 +857,9 @@ for _, k in ipairs(keys) do
     local editorKeys = {}
     for name in next, Editor do editorKeys[#editorKeys + 1] = name end
     table.sort(editorKeys)
-    -- Before the file declares anything: the constructor and the log (Editor.Scene comes with a declared capability)
-    if table.concat(editorKeys, ",") ~= "Extension,Log" then error("Editor has: " .. table.concat(editorKeys, ",")) end
+    -- Before the file declares anything: the constructor, Editor.Inspector (E-X5) and the log (Editor.Scene comes with a
+    -- declared capability)
+    if table.concat(editorKeys, ",") ~= "Extension,Inspector,Log" then error("Editor has: " .. table.concat(editorKeys, ",")) end
   end
 end
 return Editor.Extension { name = "Other", apiVersion = 1 }

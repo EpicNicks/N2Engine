@@ -50,10 +50,12 @@ namespace N2Engine::Editor
      * read commands (ListEditorExtensions, GetEditorUi) answer from. Nothing runs Lua when those commands are served:
      * the registry holds plain data captured at load time.
      *
-     * The `Editor` namespace of a state is `Editor.Extension`, `Editor.Log` (and `print`, which writes to it) and, for
-     * the capabilities the file declared and the host granted, `Editor.Scene`: scene.read installs the readers,
-     * scene.write the writers, and a state without a capability does not have the functions at all (absent, not
-     * refused). A state is idle between invocations; Invoke (E-X3) runs one menu item's `run(ctx, params)` in it.
+     * The `Editor` namespace of a state is `Editor.Extension`, `Editor.Log` (and `print`, which writes to it),
+     * `Editor.Inspector.Register` (E-X5: inspector sections for a component type, callable only while the file loads)
+     * and, for the capabilities the file declared and the host granted, `Editor.Scene`: scene.read installs the
+     * readers, scene.write the writers, and a state without a capability does not have the functions at all (absent,
+     * not refused). A state is idle between invocations; Invoke (E-X3) runs one menu item's `run(ctx, params)` in it,
+     * InvokeAction (E-X5) one inspector button's.
      *
      * Lifecycle: Load at host start (only when the host was started with --editor-extensions) and Reload (the
      * ReloadEditorExtensions command), and nowhere else: opening or loading a scene never touches an extension. A broken
@@ -158,6 +160,17 @@ namespace N2Engine::Editor
         static constexpr std::size_t MaxEnumOptions = 64;
         static constexpr std::size_t MaxFieldNameBytes = 64;
 
+        // ---- Shape limits of Editor.Inspector.Register (design 4.2, E-X5) ----
+
+        /// Calls of Editor.Inspector.Register one file may make while it loads
+        static constexpr std::size_t MaxInspectorRegistrations = 64;
+        /// Inspector sections of one extension, all its registrations together
+        static constexpr std::size_t MaxInspectorSections = 32;
+        /// Buttons of one section
+        static constexpr std::size_t MaxSectionButtons = 16;
+        /// A component type name (an identifier: letters, digits and '_', not starting with a digit)
+        static constexpr std::size_t MaxComponentTypeBytes = 64;
+
         /// What the host grants a state (v1; reserved for later: project.write, import.hooks)
         static constexpr std::string_view CapabilityNames[] = {"scene.read", "scene.write", "assets.read",
                                                                "assets.write"};
@@ -188,8 +201,9 @@ namespace N2Engine::Editor
         /// ListEditorExtensions' answer: {"enabled": true, "uiRevision", "extensions": [{id, name, sha256, apiVersion,
         /// state, error?, capabilities, itemCount}]}, in the files' sorted order. Reads the registry only.
         [[nodiscard]] nlohmann::json DescribeJson() const;
-        /// GetEditorUi's answer: {"uiRevision", "menuItems": [...], "inspectorSections": []}. The items of every loaded or
-        /// faulted extension, in the files' sorted order then as declared. Reads the registry only.
+        /// GetEditorUi's answer: {"uiRevision", "menuItems": [...], "inspectorSections": [...]}. The menu items and the
+        /// inspector sections of every loaded or faulted extension, in the files' sorted order then as declared (the
+        /// sections in the order of the file's Editor.Inspector.Register calls). Reads the registry only.
         [[nodiscard]] nlohmann::json UiJson() const;
         /// What a host without the flag answers ListEditorExtensions with: enabled false, revision 0, nothing listed
         [[nodiscard]] static nlohmann::json DisabledDescribeJson();
@@ -222,9 +236,14 @@ namespace N2Engine::Editor
 
         // ---- Invocation (E-X3) ----
 
-        /// A menu item as the registry holds it, for the host that is asked to run it
+        /// A menu item, or a button of an inspector section (E-X5), as the registry holds it, for the host that is asked to
+        /// run it
         struct MenuItemRef
         {
+            /// false: a menu item (InvokeMenuItem); true: an inspector section's button (InvokeInspectorAction), whose
+            /// itemId is the button's id, title its label and componentType its section's
+            bool inspectorAction = false;
+            std::string componentType;
             std::string extensionId;
             std::string extensionName;
             /// The first 8 hex digits of the file's sha256 (what the audit line and the load log name)
@@ -289,6 +308,9 @@ namespace N2Engine::Editor
 
         /// The loaded or faulted extension's menu item with this id, or nullopt (ids are unique across the host)
         [[nodiscard]] std::optional<MenuItemRef> FindMenuItem(std::string_view itemId) const;
+        /// The loaded or faulted extension's inspector button with this id (inspectorAction true), or nullopt (button ids
+        /// are unique across the host, apart from the menu item ids)
+        [[nodiscard]] std::optional<MenuItemRef> FindInspectorAction(std::string_view actionId) const;
 
         /// Whether `text` is a UUID in its written form (8-4-4-4-12 hex digits): what an entity id is
         [[nodiscard]] static bool IsUuidText(std::string_view text);
@@ -303,6 +325,13 @@ namespace N2Engine::Editor
         /// must be Loaded: a faulted one is refused with HostError, so the caller checks first.
         [[nodiscard]] InvokeOutcome Invoke(const MenuItemRef &item, const nlohmann::json &selection,
                                            const nlohmann::json &params, const NestedHandler &handler);
+        /// The same for an inspector section's button (FindInspectorAction): its run(ctx, params) runs exactly as a menu
+        /// item's does (the same worker, budget, abandon deadline and failure counting), with ctx = {actionId,
+        /// componentId, entityId}: the component the client's inspector shows and the object that has it, which the
+        /// caller found in the scene and checked is of the section's componentType.
+        [[nodiscard]] InvokeOutcome InvokeAction(const MenuItemRef &action, const std::string &componentId,
+                                                 const std::string &entityId, const nlohmann::json &params,
+                                                 const NestedHandler &handler);
 
         /// Disables the extension until the next reload, whatever its failure count (a budget trip, an abandoned worker).
         /// Moves uiRevision and tells the changed callback, as NoteFailure does when it makes one faulted. A no-op for an
@@ -362,6 +391,9 @@ namespace N2Engine::Editor
         /// What the host logs for an entry: whether it loaded, and the line. Pure formatting of the entry it is given,
         /// so a caller holding the registry's mutex can take it and log after letting go.
         [[nodiscard]] static std::pair<bool, std::string> FormatLogLine(const Entry &entry);
+        /// Invoke and InvokeAction: runs the item's or the button's function with `context` as its ctx
+        [[nodiscard]] InvokeOutcome InvokeWith(const MenuItemRef &item, nlohmann::json context,
+                                               const nlohmann::json &params, const NestedHandler &handler);
 
         std::filesystem::path _root;
         std::shared_ptr<Tracker> _tracker;

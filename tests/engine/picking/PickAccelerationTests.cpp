@@ -56,7 +56,14 @@ namespace
             return lo + unit * (hi - lo);
         }
 
-        Vector3 NextPoint(const float lo, const float hi) { return Vector3(Next(lo, hi), Next(lo, hi), Next(lo, hi)); }
+        /// x, y, z drawn in that order (each its own statement: the evaluation order of function arguments is unspecified)
+        Vector3 NextPoint(const float lo, const float hi)
+        {
+            const float x = Next(lo, hi);
+            const float y = Next(lo, hi);
+            const float z = Next(lo, hi);
+            return Vector3(x, y, z);
+        }
 
     private:
         std::uint32_t _state;
