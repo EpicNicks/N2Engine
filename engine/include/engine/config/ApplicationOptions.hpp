@@ -22,6 +22,10 @@ namespace N2Engine::Config
             OPENGL,
             VULKAN,
             SOFTWARE,
+            /// The WebGPU backend (#155): only in the web build, and only windowless (isHeadless), as the web player's
+            /// --renderer webgpu. Natively the backend is a CI test harness and Window refuses it (design decision W8). Until
+            /// stage G5 hands the page's device in, the browser build cannot start it either (Window::InitWindow fails)
+            WEBGPU,
             /// No renderer and no window at all (a dedicated server, N2Server): Window::InitWindow creates neither, so
             /// Window::IsValid() stays false and nothing is ever drawn. Meant with isHeadless; GLFW is not initialised.
             NONE

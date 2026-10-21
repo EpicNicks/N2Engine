@@ -21,7 +21,8 @@ file(GLOB_RECURSE RENDERER_SOURCES
 if(NOT N2ENGINE_RENDERER_VULKAN)
     list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/vulkan/")
 endif()
-# Likewise the WebGPU backend (CI harness only: cmake/DawnPrebuilt.cmake)
+# Likewise the WebGPU backend (natively the CI harness only, cmake/DawnPrebuilt.cmake; in the web build the backend the player
+# links, cmake/EmdawnwebgpuPort.cmake)
 if(NOT N2ENGINE_RENDERER_WEBGPU)
     list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/webgpu/")
 endif()
@@ -95,12 +96,22 @@ if(N2ENGINE_RENDERER_VULKAN)
     target_include_directories(renderer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/external/VulkanMemoryAllocator)
 endif()
 
-# WebGPU backend: the pinned prebuilt Dawn (target n2_dawn, defined GLOBAL so the tests see it). PRIVATE: nothing that links
-# the renderer gets Dawn's headers, and the static library is only pulled in by what references it
+# WebGPU backend. Natively: the pinned prebuilt Dawn (target n2_dawn, defined GLOBAL so the tests see it). PRIVATE: nothing that
+# links the renderer gets Dawn's headers, and the static library is only pulled in by what references it. In the web build
+# (stage G4): Emscripten's emdawnwebgpu port of the same Dawn release (target n2_emdawnwebgpu): its compile option gives the
+# renderer webgpu.h, and its link option, which reaches every executable linking the renderer (a static library's private
+# dependencies are linked by its users), adds the port's implementation. Nothing outside the renderer includes webgpu.h: the
+# engine makes the backend through renderer/webgpu/WebGpuFactory.hpp
 if(N2ENGINE_RENDERER_WEBGPU)
-    include(${CMAKE_SOURCE_DIR}/cmake/DawnPrebuilt.cmake)
-    # renderer_webgpu_shaders (defined further down) is the generated WgslSources.hpp the backend's unlit shader module is made from
-    target_link_libraries(renderer PRIVATE n2_dawn renderer_webgpu_shaders)
+    if(N2ENGINE_PLATFORM_WEB)
+        include(${CMAKE_SOURCE_DIR}/cmake/EmdawnwebgpuPort.cmake)
+        set(N2_WEBGPU_IMPLEMENTATION n2_emdawnwebgpu)
+    else()
+        include(${CMAKE_SOURCE_DIR}/cmake/DawnPrebuilt.cmake)
+        set(N2_WEBGPU_IMPLEMENTATION n2_dawn)
+    endif()
+    # renderer_webgpu_shaders (defined further down) is the generated WgslSources.hpp the backend's shader modules are made from
+    target_link_libraries(renderer PRIVATE ${N2_WEBGPU_IMPLEMENTATION} renderer_webgpu_shaders)
 endif()
 
 # Compile definitions

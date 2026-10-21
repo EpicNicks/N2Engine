@@ -82,7 +82,9 @@ namespace N2Engine
          * True when InitWindow creates no window: a headless application on the software renderer. That renderer
          * draws into a CPU buffer, so a hidden window would only give it a GL context to blit to and nothing would
          * ever see it. Without a window GLFW isn't initialised at all, so this works on a machine with no display
-         * or GPU (the CI runner): frames are read back with IRenderer::ReadFramebuffer.
+         * or GPU (the CI runner): frames are read back with IRenderer::ReadFramebuffer. Also true for a headless
+         * application on WebGPU (stage G4 of #155), which has no window path at all: in the web build it renders offscreen
+         * the same way (InitWindow refuses WebGPU with a window, and natively, where the backend is a CI harness only).
          */
         [[nodiscard]] static bool UsesNoWindow(const Config::ApplicationOptions &options);
 
@@ -93,7 +95,9 @@ namespace N2Engine
 
         /// @returns false if the window or renderer failed to start; see GetInitError(). With UsesNoWindow(options)
         /// no window is created: the software renderer starts headless at FallbackWidth x FallbackHeight
-        /// (SoftwareRenderer::Initialize(nullptr, ...)), and the input system is created as usual. With
+        /// (SoftwareRenderer::Initialize(nullptr, ...)), and the input system is created as usual. WEBGPU: false, before
+        /// any GLFW call, with a window (not headless) or natively; in the web build the WebGPU renderer is made and
+        /// initialized headless the same way, which fails until the page hands its device in (stage G5). With
         /// RenderBackend::NONE there is neither a window nor a renderer: it succeeds, IsWindowless() is true,
         /// IsValid() is false and GetRenderer() is null.
         bool InitWindow(const Config::ApplicationOptions &options);

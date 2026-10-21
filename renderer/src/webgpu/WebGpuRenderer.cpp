@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "renderer/webgpu/WebGpuRenderer.hpp"
+#include "renderer/webgpu/WebGpuFactory.hpp"
 
 #include "WebGpuInternal.hpp"
 
@@ -17,10 +18,17 @@
 // the samplers are in WebGpuResources.cpp and the shaders, materials, pipelines, uniform ring and draws in WebGpuDraw.cpp
 // (stages G3a and G3b).
 //
-// Written against webgpu.h (the C API) only, so that stage G4 can compile this file with Emscripten's emdawnwebgpu port. What
-// exists only natively is marked "NATIVE ONLY": asking for the Vulkan backend by type, and the blocking waits
-// (wgpuInstanceWaitAny with a timeout needs the TimedWaitAny instance feature, which a browser does not have: there a
-// readback cannot block at all, see the design in the proposal's section 4.3).
+// Written against webgpu.h (the C API) only: the same file compiles natively against Dawn (the CI harness) and, since stage
+// G4, for the browser with Emscripten's emdawnwebgpu port (__EMSCRIPTEN__). What exists only natively is marked "NATIVE ONLY"
+// and compiled only natively: asking for the Vulkan backend by type, and every blocking wait (wgpuInstanceWaitAny with a
+// timeout needs the TimedWaitAny instance feature, which emdawnwebgpu refuses without ASYNCIFY or JSPI, and the web build
+// has neither: a browser completes a request or a buffer map only after control returns to its event loop). So in the
+// browser build:
+//   - Initialize creates the instance and then FAILS: the device is acquired by the page in JavaScript before the engine
+//     starts and handed in (design section 5), which is stage G5; nothing in the player asks for WebGPU in G4.
+//   - ReadFramebuffer is asynchronous (AdvanceAsyncReadback): it returns the last frame whose copy has completed and
+//     starts the next copy; the synchronous test readbacks (ReadDepthForTest, ReadMeshForTest, ReadTextureForTest) fail.
+//   - Errors are delivered by the browser on its own (AllowSpontaneous); a flush only processes events.
 //
 // Object lifetimes, in creation order (ShutdownLocked releases them in reverse):
 //   instance -> adapter -> device (+ its queue) -> colour and depth textures with a view each -> the draw resources (shader
@@ -38,14 +46,17 @@ namespace Renderer::WebGpu
     namespace
     {
         constexpr std::size_t MaxStoredMessages = 32;
+#ifndef __EMSCRIPTEN__
         constexpr std::uint64_t MapTimeoutNanoseconds = 10ull * 1000ull * 1000ull * 1000ull;
         constexpr std::uint64_t RequestTimeoutNanoseconds = 30ull * 1000ull * 1000ull * 1000ull;
         constexpr std::uint64_t FlushTimeoutNanoseconds = 5ull * 1000ull * 1000ull * 1000ull;
+#endif
         // The core defaults, used only if the device cannot say (wgpuDeviceGetLimits failing)
         constexpr std::uint32_t DefaultMaxTextureDimension = 8192;
         constexpr std::uint64_t DefaultMaxBufferSize = 268435456;
         constexpr std::uint32_t DefaultUniformAlignment = 256;
 
+#ifndef __EMSCRIPTEN__
         std::string GetEnvironment(const char* name)
         {
             std::string value;
@@ -65,6 +76,7 @@ namespace Renderer::WebGpu
 #endif
             return value;
         }
+#endif
 
         const char* ErrorTypeName(WGPUErrorType type)
         {
@@ -129,7 +141,10 @@ namespace Renderer::WebGpu
         }
 
         // The results of the asynchronous calls. Each callback gets a heap copy of the shared pointer as its userdata, so
-        // the result is still there for a callback that runs after the waiter gave up (the copy is freed by the callback)
+        // the result is still there for a callback that runs after the waiter gave up (the copy is freed by the callback).
+        // The adapter, device and queue results are waited for, so they are NATIVE ONLY; a map result is also how the
+        // browser's asynchronous ReadFramebuffer learns that its copy is readable
+#ifndef __EMSCRIPTEN__
         struct AdapterResult
         {
             bool done = false;
@@ -144,17 +159,12 @@ namespace Renderer::WebGpu
             WGPUDevice device = nullptr;
             std::string message;
         };
-        struct MapResult
-        {
-            bool done = false;
-            WGPUMapAsyncStatus status = WGPUMapAsyncStatus_Error;
-            std::string message;
-        };
         struct QueueResult
         {
             bool done = false;
             WGPUQueueWorkDoneStatus status = WGPUQueueWorkDoneStatus_Error;
         };
+#endif
 
         template <typename Result>
         std::shared_ptr<Result>* NewUserdata(const std::shared_ptr<Result>& result)
@@ -162,6 +172,7 @@ namespace Renderer::WebGpu
             return new std::shared_ptr<Result>(result);
         }
 
+#ifndef __EMSCRIPTEN__
         void OnAdapter(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView message, void* userdata1,
                        void*)
         {
@@ -182,6 +193,7 @@ namespace Renderer::WebGpu
             result.message = ToString(message);
             result.done = true;
         }
+#endif
 
         void OnMapped(WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1, void*)
         {
@@ -192,6 +204,7 @@ namespace Renderer::WebGpu
             result.done = true;
         }
 
+#ifndef __EMSCRIPTEN__
         void OnQueueDone(WGPUQueueWorkDoneStatus status, WGPUStringView, void* userdata1, void*)
         {
             std::unique_ptr<std::shared_ptr<QueueResult>> holder(static_cast<std::shared_ptr<QueueResult>*>(userdata1));
@@ -208,11 +221,153 @@ namespace Renderer::WebGpu
             const WGPUWaitStatus status = wgpuInstanceWaitAny(instance, 1, &info, timeoutNanoseconds);
             return status == WGPUWaitStatus_Success;
         }
+#endif
+
+        /// Writes `source` (RGBA8, sourceWidth x sourceHeight, tightly packed, row 0 the top of the picture) into `buffer` as
+        /// ReadFramebuffer promises it: width x height, the bottom row first. A different size is resampled (nearest, from pixel
+        /// centres), as the software and Vulkan renderers do
+        void WriteBottomFirst(const std::uint8_t* source, const std::uint32_t sourceWidth, const std::uint32_t sourceHeight,
+                              std::uint8_t* buffer, const int width, const int height)
+        {
+            const std::size_t outputWidth = static_cast<std::size_t>(width);
+            const std::size_t outputHeight = static_cast<std::size_t>(height);
+            if (outputWidth == sourceWidth && outputHeight == sourceHeight)
+            {
+                const std::size_t rowBytes = static_cast<std::size_t>(sourceWidth) * 4;
+                for (std::size_t y = 0; y < outputHeight; ++y)
+                {
+                    std::memcpy(buffer + y * rowBytes, source + (outputHeight - 1 - y) * rowBytes, rowBytes);
+                }
+                return;
+            }
+            for (std::size_t y = 0; y < outputHeight; ++y)
+            {
+                const std::size_t sourceYFromBottom = (2 * y + 1) * sourceHeight / (2 * outputHeight);
+                const std::size_t sourceRow = sourceHeight - 1 - sourceYFromBottom;
+                for (std::size_t x = 0; x < outputWidth; ++x)
+                {
+                    const std::size_t sourceX = (2 * x + 1) * sourceWidth / (2 * outputWidth);
+                    std::memcpy(buffer + (y * outputWidth + x) * 4, source + (sourceRow * sourceWidth + sourceX) * 4, 4);
+                }
+            }
+        }
+
+#ifdef __EMSCRIPTEN__
+        /// The browser's readback (stage G4), with the renderer's mutex held: a buffer map completes only after control returns
+        /// to the browser's event loop, so nothing here waits. First, a copy in flight whose map has completed becomes the last
+        /// completed frame (its row padding stripped; a failed map is logged and dropped). Then, when no copy is in flight, a
+        /// copy of the colour target as it is now starts: a buffer with rows padded to 256 bytes, a copy command, a submit and
+        /// a map whose callback may run whenever the browser delivers it (AllowSpontaneous). A callback that arrives after the
+        /// copy was dropped (Shutdown) only writes the result block it holds a reference to
+        void AdvanceAsyncReadback(WebGpuRenderer::State& state, const std::uint32_t width, const std::uint32_t height)
+        {
+            if (state.pendingReadback && state.pendingReadbackMap && state.pendingReadbackMap->done)
+            {
+                const std::uint32_t copyWidth = state.pendingReadbackWidth;
+                const std::uint32_t copyHeight = state.pendingReadbackHeight;
+                const std::uint32_t rowBytes = copyWidth * 4;
+                const std::uint32_t paddedRowBytes = AlignUp(rowBytes, RowAlignment);
+                const std::size_t size = static_cast<std::size_t>(paddedRowBytes) * copyHeight;
+                if (state.pendingReadbackMap->status == WGPUMapAsyncStatus_Success)
+                {
+                    const auto* mapped =
+                        static_cast<const std::uint8_t*>(wgpuBufferGetConstMappedRange(state.pendingReadback.Get(), 0, size));
+                    if (mapped != nullptr)
+                    {
+                        state.lastReadback.resize(static_cast<std::size_t>(rowBytes) * copyHeight);
+                        for (std::uint32_t y = 0; y < copyHeight; ++y)
+                        {
+                            std::memcpy(state.lastReadback.data() + static_cast<std::size_t>(y) * rowBytes,
+                                        mapped + static_cast<std::size_t>(y) * paddedRowBytes, rowBytes);
+                        }
+                        state.lastReadbackWidth = copyWidth;
+                        state.lastReadbackHeight = copyHeight;
+                    }
+                    else
+                    {
+                        std::cerr << "WebGPU renderer: the readback buffer has no mapped range" << std::endl;
+                    }
+                    wgpuBufferUnmap(state.pendingReadback.Get());
+                }
+                else
+                {
+                    std::cerr << "WebGPU renderer: mapping the readback buffer failed: " << state.pendingReadbackMap->message
+                              << std::endl;
+                }
+                state.pendingReadback.Reset();
+                state.pendingReadbackMap.reset();
+            }
+            if (state.pendingReadback)
+            {
+                return; // the copy in flight has not completed yet: the caller gets the last completed frame
+            }
+
+            const std::uint32_t rowBytes = width * 4;
+            const std::uint32_t paddedRowBytes = AlignUp(rowBytes, RowAlignment);
+            const std::uint64_t size = static_cast<std::uint64_t>(paddedRowBytes) * height;
+            if (size > state.maxBufferSize)
+            {
+                std::cerr << "WebGPU renderer: the readback buffer would be over the device's buffer limit" << std::endl;
+                return;
+            }
+            WGPUBufferDescriptor bufferDescriptor = WGPU_BUFFER_DESCRIPTOR_INIT;
+            bufferDescriptor.label = ToView("N2Engine readback");
+            bufferDescriptor.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst;
+            bufferDescriptor.size = size;
+            BufferRef buffer(wgpuDeviceCreateBuffer(state.device.Get(), &bufferDescriptor));
+            if (!buffer)
+            {
+                std::cerr << "WebGPU renderer: could not create the readback buffer" << std::endl;
+                return;
+            }
+            {
+                CommandEncoderRef encoder(wgpuDeviceCreateCommandEncoder(state.device.Get(), nullptr));
+                if (!encoder)
+                {
+                    std::cerr << "WebGPU renderer: could not create a command encoder for the readback" << std::endl;
+                    return;
+                }
+                WGPUTexelCopyTextureInfo source = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
+                source.texture = state.color.Get();
+                source.aspect = WGPUTextureAspect_All;
+                WGPUTexelCopyBufferInfo destination = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
+                destination.buffer = buffer.Get();
+                destination.layout.offset = 0;
+                destination.layout.bytesPerRow = paddedRowBytes;
+                destination.layout.rowsPerImage = height;
+                const WGPUExtent3D extent = {width, height, 1};
+                wgpuCommandEncoderCopyTextureToBuffer(encoder.Get(), &source, &destination, &extent);
+                CommandBufferRef commands(wgpuCommandEncoderFinish(encoder.Get(), nullptr));
+                if (!commands)
+                {
+                    std::cerr << "WebGPU renderer: could not finish the readback commands" << std::endl;
+                    return;
+                }
+                const WGPUCommandBuffer handle = commands.Get();
+                wgpuQueueSubmit(state.queue.Get(), 1, &handle);
+            }
+            auto result = std::make_shared<MapResult>();
+            WGPUBufferMapCallbackInfo callback = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+            callback.mode = WGPUCallbackMode_AllowSpontaneous;
+            callback.callback = OnMapped;
+            callback.userdata1 = NewUserdata(result);
+            wgpuBufferMapAsync(buffer.Get(), WGPUMapMode_Read, 0, static_cast<std::size_t>(size), callback);
+            state.pendingReadback = std::move(buffer);
+            state.pendingReadbackMap = std::move(result);
+            state.pendingReadbackWidth = width;
+            state.pendingReadbackHeight = height;
+        }
+#endif
     }
 
     // -----------------------------------------------------------------------------------------------------------------
     // Construction and state
     // -----------------------------------------------------------------------------------------------------------------
+
+    std::unique_ptr<Common::IRenderer> CreateWebGpuRenderer()
+    {
+        return std::make_unique<WebGpuRenderer>();
+    }
 
     WebGpuRenderer::WebGpuRenderer() : _state(std::make_shared<State>()) {}
 
@@ -445,11 +600,14 @@ namespace Renderer::WebGpu
 
     bool WebGpuRenderer::CreateInstance()
     {
-        // TimedWaitAny lets wgpuInstanceWaitAny block with a timeout: how the synchronous waits of this file work (NATIVE ONLY)
-        const WGPUInstanceFeatureName features[] = {WGPUInstanceFeatureName_TimedWaitAny};
         WGPUInstanceDescriptor descriptor = WGPU_INSTANCE_DESCRIPTOR_INIT;
+#ifndef __EMSCRIPTEN__
+        // TimedWaitAny lets wgpuInstanceWaitAny block with a timeout: how the synchronous waits of this file work (NATIVE ONLY:
+        // emdawnwebgpu refuses the feature without ASYNCIFY or JSPI, so the browser build asks for none)
+        const WGPUInstanceFeatureName features[] = {WGPUInstanceFeatureName_TimedWaitAny};
         descriptor.requiredFeatureCount = 1;
         descriptor.requiredFeatures = features;
+#endif
         _state->instance.Reset(wgpuCreateInstance(&descriptor));
         if (!_state->instance)
         {
@@ -460,6 +618,15 @@ namespace Renderer::WebGpu
 
     bool WebGpuRenderer::PickAdapter()
     {
+#ifdef __EMSCRIPTEN__
+        // A browser completes an adapter request only after control returns to its event loop, so C++ cannot wait for one here.
+        // The design acquires the adapter and the device in the page's JavaScript before the engine starts and hands the device
+        // in (proposal section 5): that is stage G5. Until then the browser build fails here, and the player starts on the
+        // software renderer
+        return Fail(InitStatus::Failed, "the web build cannot request a WebGPU adapter from C++: the page acquires the device "
+                                        "before the engine starts, which is not wired yet (stage G5 of #155); run the player "
+                                        "with --renderer software");
+#else
         AdapterPreference preference = _preference;
         if (preference == AdapterPreference::Default)
         {
@@ -539,10 +706,15 @@ namespace Renderer::WebGpu
                         (preference == AdapterPreference::CpuOnly
                              ? " (N2_WEBGPU_EXPECT_CPU_DEVICE=1 asks for a CPU adapter such as Mesa lavapipe)"
                              : ""));
+#endif
     }
 
     bool WebGpuRenderer::CreateDevice()
     {
+#ifdef __EMSCRIPTEN__
+        // Not reached in the browser build (PickAdapter fails first): the device will come from the page (stage G5)
+        return Fail(InitStatus::Failed, "the web build gets its WebGPU device from the page (stage G5 of #155)");
+#else
         // The two callbacks count every error and every loss the renderer did not cause (ErrorCounters). A loss while the
         // renderer destroys its own device is expected (Shutdown sets expectedLoss first)
         WGPUDeviceDescriptor descriptor = WGPU_DEVICE_DESCRIPTOR_INIT;
@@ -609,6 +781,7 @@ namespace Renderer::WebGpu
             _state->uniformAlignment = DefaultUniformAlignment;
         }
         return true;
+#endif
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -740,6 +913,15 @@ namespace Renderer::WebGpu
         _frameOpen = false;
         state.pass.Reset();
         state.encoder.Reset();
+        // The browser's readback (stage G4): a copy in flight is dropped (its map callback, if it still comes, writes only the
+        // result block it holds) and the last completed frame is forgotten
+        state.pendingReadback.Reset();
+        state.pendingReadbackMap.reset();
+        state.pendingReadbackWidth = 0;
+        state.pendingReadbackHeight = 0;
+        state.lastReadback.clear();
+        state.lastReadbackWidth = 0;
+        state.lastReadbackHeight = 0;
         DestroyAllResources(); // meshes, textures, materials, pipelines, the ring: all released before the device is
         DestroyTargets();
         state.queue.Reset();
@@ -781,11 +963,13 @@ namespace Renderer::WebGpu
             return;
         }
         wgpuInstanceProcessEvents(state.instance.Get());
+#ifndef __EMSCRIPTEN__
         if (!state.queue || state.lost.load())
         {
             return;
         }
-        // Errors found while the queue runs its work (and errors of calls not yet processed) arrive once it is idle
+        // NATIVE ONLY: errors found while the queue runs its work (and errors of calls not yet processed) arrive once it is
+        // idle. In the browser nothing can wait: the device's callbacks run when the browser delivers them
         auto result = std::make_shared<QueueResult>();
         WGPUQueueWorkDoneCallbackInfo callback = WGPU_QUEUE_WORK_DONE_CALLBACK_INFO_INIT;
         callback.mode = WGPUCallbackMode_WaitAnyOnly;
@@ -794,6 +978,7 @@ namespace Renderer::WebGpu
         const WGPUFuture future = wgpuQueueOnSubmittedWorkDone(state.queue.Get(), callback);
         WaitFor(state.instance.Get(), future, FlushTimeoutNanoseconds);
         wgpuInstanceProcessEvents(state.instance.Get());
+#endif
     }
 
     bool WebGpuRenderer::BeginPass()
@@ -927,6 +1112,19 @@ namespace Renderer::WebGpu
                                                  std::uint32_t width, std::uint32_t height,
                                                  std::vector<std::uint8_t>& pixels, std::uint32_t mipLevel) const
     {
+#ifdef __EMSCRIPTEN__
+        // NATIVE ONLY: the copy below waits for a buffer map, which a browser completes only after control returns to its
+        // event loop. The browser's ReadFramebuffer is asynchronous instead (AdvanceAsyncReadback)
+        static_cast<void>(texture);
+        static_cast<void>(aspect);
+        static_cast<void>(bytesPerPixel);
+        static_cast<void>(width);
+        static_cast<void>(height);
+        static_cast<void>(pixels);
+        static_cast<void>(mipLevel);
+        LogOnce("a synchronous readback is not possible in the browser (the test readbacks are native only)");
+        return false;
+#else
         State& state = *_state;
         const std::uint32_t rowBytes = width * bytesPerPixel;
         const std::uint32_t paddedRowBytes = AlignUp(rowBytes, RowAlignment);
@@ -1012,11 +1210,20 @@ namespace Renderer::WebGpu
         }
         wgpuBufferUnmap(buffer.Get());
         return true;
+#endif
     }
 
     bool WebGpuRenderer::CopyBufferToHostLocked(WGPUBuffer buffer, std::uint64_t size,
                                                 std::vector<std::uint8_t>& bytes) const
     {
+#ifdef __EMSCRIPTEN__
+        // NATIVE ONLY, like CopyTextureToHostLocked
+        static_cast<void>(buffer);
+        static_cast<void>(size);
+        static_cast<void>(bytes);
+        LogOnce("a synchronous readback is not possible in the browser (the test readbacks are native only)");
+        return false;
+#else
         State& state = *_state;
         if (size == 0 || size % 4 != 0 || size > state.maxBufferSize)
         {
@@ -1079,6 +1286,7 @@ namespace Renderer::WebGpu
         bytes.assign(mapped, mapped + size);
         wgpuBufferUnmap(staging.Get());
         return true;
+#endif
     }
 
     void WebGpuRenderer::ReadFramebuffer(std::uint8_t* buffer, int width, int height) const
@@ -1094,39 +1302,27 @@ namespace Renderer::WebGpu
             return;
         }
 
-        const std::uint32_t sourceWidth = _targetWidth;
-        const std::uint32_t sourceHeight = _targetHeight;
+#ifdef __EMSCRIPTEN__
+        // The browser: the last frame whose copy has completed (an earlier frame than the last one drawn, or nothing written
+        // before the first copy completes), and the next copy started. Showing frames in the browser is not a readback: stage
+        // G5 presents them to the canvas
+        AdvanceAsyncReadback(state, _targetWidth, _targetHeight);
+        if (state.lastReadback.empty())
+        {
+            return;
+        }
+        WriteBottomFirst(state.lastReadback.data(), state.lastReadbackWidth, state.lastReadbackHeight, buffer, width, height);
+#else
+        // NATIVE ONLY: the last frame, copied and waited for now
         std::vector<std::uint8_t> pixels;
-        if (!CopyTextureToHostLocked(state.color.Get(), WGPUTextureAspect_All, 4, sourceWidth, sourceHeight, pixels))
+        if (!CopyTextureToHostLocked(state.color.Get(), WGPUTextureAspect_All, 4, _targetWidth, _targetHeight, pixels))
         {
             std::cerr << "WebGPU renderer: ReadFramebuffer could not copy the frame" << std::endl;
             return;
         }
-
-        // The texture's row 0 is the top of the picture; the interface wants the bottom row first. A different size is
-        // resampled (nearest, from pixel centres), as the software and Vulkan renderers do.
-        const std::uint8_t* source = pixels.data();
-        const std::size_t outputWidth = static_cast<std::size_t>(width);
-        const std::size_t outputHeight = static_cast<std::size_t>(height);
-        if (outputWidth == sourceWidth && outputHeight == sourceHeight)
-        {
-            const std::size_t rowBytes = static_cast<std::size_t>(sourceWidth) * 4;
-            for (std::size_t y = 0; y < outputHeight; ++y)
-            {
-                std::memcpy(buffer + y * rowBytes, source + (outputHeight - 1 - y) * rowBytes, rowBytes);
-            }
-            return;
-        }
-        for (std::size_t y = 0; y < outputHeight; ++y)
-        {
-            const std::size_t sourceYFromBottom = (2 * y + 1) * sourceHeight / (2 * outputHeight);
-            const std::size_t sourceRow = sourceHeight - 1 - sourceYFromBottom;
-            for (std::size_t x = 0; x < outputWidth; ++x)
-            {
-                const std::size_t sourceX = (2 * x + 1) * sourceWidth / (2 * outputWidth);
-                std::memcpy(buffer + (y * outputWidth + x) * 4, source + (sourceRow * sourceWidth + sourceX) * 4, 4);
-            }
-        }
+        // The texture's row 0 is the top of the picture; the interface wants the bottom row first
+        WriteBottomFirst(pixels.data(), _targetWidth, _targetHeight, buffer, width, height);
+#endif
     }
 
     bool WebGpuRenderer::ReadDepthForTest(std::vector<float>& depth, std::uint32_t* width, std::uint32_t* height) const

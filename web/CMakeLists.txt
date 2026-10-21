@@ -1,9 +1,11 @@
 # The web player (stage 2 of issue #155; docs/web-build.html). Added by the root CMakeLists.txt only under
 # N2ENGINE_PLATFORM_WEB.
 #
-#   n2_web_input   the pure translation from browser events to the engine's input types (no DOM, so it is unit tested
-#                  under node: tests/web)
-#   N2WebPlayer    the player: the engine on the software renderer, drawing to the page's canvas. It links straight into
+#   n2_web_input   the pure translation from browser events to the engine's input types, and the parsing of the player's
+#                  --renderer argument (no DOM, so it is unit tested under node: tests/web)
+#   N2WebPlayer    the player: the engine on the software renderer, drawing to the page's canvas. The WebGPU backend is
+#                  linked in too (stage G4 of #155, through the renderer: cmake/EmdawnwebgpuPort.cmake), but the player
+#                  still starts on the software renderer; --renderer webgpu cannot start until stage G5. It links straight into
 #                  the package folder, ${CMAKE_BINARY_DIR}/web-package, as index.html + index.js + index.wasm + index.data
 #                  (+ n2-loader.js and manifest.json from web-package):
 #                  static files only, every URL relative, nothing the host has to be configured for
@@ -13,7 +15,7 @@
 # The page (shell.html) is emcc's --shell-file: emcc fills in the script tag, which names index.js relative to the page,
 # and index.js finds index.wasm and index.data the same way, so the folder works from any path or subdomain.
 
-add_library(n2_web_input STATIC player/WebInputMap.cpp)
+add_library(n2_web_input STATIC player/WebInputMap.cpp player/WebRendererOption.cpp)
 target_include_directories(n2_web_input PUBLIC player)
 target_link_libraries(n2_web_input PUBLIC engine)
 set_target_properties(n2_web_input PROPERTIES

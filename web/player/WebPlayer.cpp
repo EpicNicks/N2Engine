@@ -12,7 +12,9 @@
 //
 // Arguments (Module.arguments, or callMain's): [--project DIR] (default /project, the preloaded folder),
 // [--frames N] (run N frames, then stop: the node smoke test, which also skips the DOM and takes its size from --size),
-// [--size WxH] (the render size when there is no canvas to measure).
+// [--size WxH] (the render size when there is no canvas to measure), [--renderer software|webgpu] (default software;
+// parsed by WebRendererOption.hpp). Stage G4 of #155 links the WebGPU backend into the player, but
+// --renderer webgpu cannot start yet (the page hands its device in at stage G5) and the page passes no --renderer.
 #include <emscripten.h>
 #include <emscripten/html5.h>
 
@@ -29,6 +31,7 @@
 #include <renderer/common/FrameRows.hpp>
 
 #include "WebInputMap.hpp"
+#include "WebRendererOption.hpp"
 #include "engine/Application.hpp"
 #include "engine/Logger.hpp"
 #include "engine/ProjectSettings.hpp"
@@ -337,6 +340,7 @@ int main(int argc, char *argv[])
 {
     std::filesystem::path projectDir = "/project";
     Web::RenderSize startSize{1280, 720};
+    auto renderBackend = Config::ApplicationOptions::RenderBackend::SOFTWARE;
     for (int i = 1; i < argc; ++i)
     {
         const std::string_view arg = argv[i];
@@ -357,9 +361,23 @@ int main(int argc, char *argv[])
                 return Fail("--size needs WIDTHxHEIGHT");
             }
         }
+        else if (arg == "--renderer")
+        {
+            if (!hasValue)
+            {
+                return Fail("--renderer needs a value (software or webgpu)");
+            }
+            const auto backend = Web::ParseWebRenderer(argv[++i]);
+            if (!backend)
+            {
+                return Fail(backend.error());
+            }
+            renderBackend = *backend;
+        }
         else
         {
-            return Fail(std::format("Unknown option '{}'. Usage: [--project DIR] [--frames N] [--size WxH]", arg));
+            return Fail(std::format(
+                "Unknown option '{}'. Usage: [--project DIR] [--frames N] [--size WxH] [--renderer software|webgpu]", arg));
         }
     }
 
@@ -372,7 +390,9 @@ int main(int argc, char *argv[])
     const EngineHealth health = application.Init({
         .projectPath = projectDir.string(),
         .physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX,
-        .renderBackend = Config::ApplicationOptions::RenderBackend::SOFTWARE,
+        // software unless --renderer webgpu: the engine then makes the WebGPU backend (Window's no-window path), whose
+        // Initialize fails in this stage, so Init reports no renderer and the player stops below with the reason
+        .renderBackend = renderBackend,
         .isHeadless = true,
     });
     // A refused project (network.preset deterministic with unmet requirements) starts nothing: show why, not the

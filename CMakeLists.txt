@@ -32,10 +32,10 @@ option(N2ENGINE_USE_JOLT "Build the vendored Jolt Physics library and the engine
 # VULKAN render backend fail with a clear message. ON (the default) needs the Vulkan SDK (Windows) or libvulkan-dev (Linux).
 option(N2ENGINE_RENDERER_VULKAN "Build the Vulkan renderer backend" ON)
 # ON builds the WebGPU renderer backend (#155, stage G2) against a pinned prebuilt Dawn (cmake/DawnPrebuilt.cmake). OFF by
-# default and CI-ONLY: it is the native test harness of the backend the web player will use, Linux x86_64 only, and it is not
-# selectable at run time (not from the editor host, lua_project or a project's settings: design decision W8). It needs a
-# Vulkan driver at run time (Mesa lavapipe in CI) but no Vulkan headers to build. It is always OFF for the web build, whose
-# WebGPU comes from Emscripten's emdawnwebgpu port in stage G4.
+# default and CI-ONLY natively: it is the native test harness of the backend the web player uses, Linux x86_64 only, and it is
+# not selectable at run time (not from the editor host, lua_project or a project's settings: design decision W8). It needs a
+# Vulkan driver at run time (Mesa lavapipe in CI) but no Vulkan headers to build. It is always ON for the web build (stage G4),
+# whose WebGPU comes from Emscripten's emdawnwebgpu port of the same Dawn release (cmake/EmdawnwebgpuPort.cmake).
 option(N2ENGINE_RENDERER_WEBGPU "Build the WebGPU renderer backend on Dawn (CI test harness only, Linux x86_64)" OFF)
 
 # ON builds every target with the strict floating-point profile: the same source then compiles to the same float
@@ -91,8 +91,10 @@ if(N2ENGINE_PLATFORM_WEB)
     # a web build with no physics backend
     message(STATUS "Web: Vulkan renderer off (no Vulkan in the browser)")
     set(N2ENGINE_RENDERER_VULKAN OFF)
-    message(STATUS "Web: WebGPU renderer off (its browser build, with emdawnwebgpu, is stage G4 of #155)")
-    set(N2ENGINE_RENDERER_WEBGPU OFF)
+    # Stage G4 of #155: the WebGPU backend is compiled into the web build (emdawnwebgpu), but the player still starts on the
+    # software renderer; attaching the canvas and choosing WebGPU at load are stage G5
+    message(STATUS "Web: WebGPU renderer compiled in (emdawnwebgpu); the player starts on the software renderer")
+    set(N2ENGINE_RENDERER_WEBGPU ON)
     message(STATUS "Web: no GLFW window or GL context (external/web-stubs stands in for GLFW; the player shows frames on a canvas and reads input from the page), audio is Emscripten's OpenAL on WebAudio (N2ENGINE_WEB_AUDIO, or a no-op stub); the editor host (sockets, TLS), test_project and lua_project are not built")
 endif()
 
