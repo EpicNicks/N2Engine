@@ -802,7 +802,7 @@ function GameObject:FindChildRecursive(name) end
 function GameObject:Destroy() end
 
 ---Add a component by type name and return it.
----Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CubeRenderer",
+---Types: "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider", "CharacterController", "CubeRenderer",
 ---"SphereRenderer", "QuadRenderer", "MeshRenderer", "TextRenderer", "ParticleSystem", "SoftBody", "Light", "AudioSource", "AudioListener",
 ---"LuaComponent", "RectTransform", "Canvas", "Image", "UIText", "Button". Unknown names raise an error.
 ---@param typeName string
@@ -2130,6 +2130,102 @@ function CapsuleCollider:SetOffset(offset) end
 ---Get the offset
 ---@return Vector3
 function CapsuleCollider:GetOffset() end
+
+---An engine-owned character controller (docs/physics.html, "Character controller"): an upright capsule moved once per
+---fixed tick over the physics backend's capsule casts, so it behaves the same on PhysX and Jolt. It has no body of its
+---own (other bodies do not see it) and moves the object. Leave the layer of the object's own colliders out of its
+---layer mask. The input is held until the next SetInput, except the jump, which is one press. Settings are read at
+---every step; a value that is not a finite number in the setting's range raises an error.
+---@class CharacterController : Component
+CharacterController = {}
+
+---The input of the next ticks
+---@param move Vector3 the wanted horizontal velocity in world units per second (y is ignored)
+---@param jump boolean|nil jump on the next tick (only a grounded character jumps); nil is false
+function CharacterController:SetInput(move, jump) end
+
+---@return {move: Vector3, jump: boolean}
+function CharacterController:GetInput() end
+
+---A copy of the state (what a prediction saves)
+---@return {position: Vector3, velocity: Vector3, grounded: boolean, groundNormal: Vector3}
+function CharacterController:GetState() end
+
+---Restores a saved state (what a server correction does) and moves the object to its position
+---@param state {position: Vector3, velocity: Vector3|nil, grounded: boolean|nil, groundNormal: Vector3|nil} position is required; velocity defaults to rest, grounded to false, groundNormal to up
+function CharacterController:SetState(state) end
+
+---The state at `position`, at rest and not grounded (the next step finds the ground)
+---@param position Vector3
+function CharacterController:Teleport(position) end
+
+---One step now with the held input (what the fixed tick does)
+---@param dt number seconds, above 0
+---@return boolean ran false when there is no physics backend or the settings are not valid
+function CharacterController:Step(dt) end
+
+---@return boolean
+function CharacterController:IsGrounded() end
+
+---@return Vector3 the centre of the capsule
+function CharacterController:GetPosition() end
+
+---@return Vector3 x and z: the horizontal velocity the last step achieved; y: the vertical velocity
+function CharacterController:GetVelocity() end
+
+---@param radius number 0.01 to 100 (default 0.5)
+function CharacterController:SetRadius(radius) end
+
+---@return number
+function CharacterController:GetRadius() end
+
+---@param height number the whole height, caps included, 0.02 to 1000 (default 2); a height under twice the radius is a sphere
+function CharacterController:SetHeight(height) end
+
+---@return number
+function CharacterController:GetHeight() end
+
+---@param stepOffset number the tallest step it walks up, 0 to 100 (default 0.3)
+function CharacterController:SetStepOffset(stepOffset) end
+
+---@return number
+function CharacterController:GetStepOffset() end
+
+---@param degrees number the steepest ground it stands on or walks up, 0 to 89 (default 45)
+function CharacterController:SetSlopeLimit(degrees) end
+
+---@return number
+function CharacterController:GetSlopeLimit() end
+
+---@param skinWidth number the gap kept to what it touches, 0.0001 to 1 (default 0.02); at most half the radius is used
+function CharacterController:SetSkinWidth(skinWidth) end
+
+---@return number
+function CharacterController:GetSkinWidth() end
+
+---@param speed number the upward speed of a jump, 0 to 1000 (default 5)
+function CharacterController:SetJumpSpeed(speed) end
+
+---@return number
+function CharacterController:GetJumpSpeed() end
+
+---@param scale number multiplies the physics gravity's y, -100 to 100 (default 1)
+function CharacterController:SetGravityScale(scale) end
+
+---@return number
+function CharacterController:GetGravityScale() end
+
+---@param speed number the fastest it falls, 0.01 to 100000 (default 50)
+function CharacterController:SetMaxFallSpeed(speed) end
+
+---@return number
+function CharacterController:GetMaxFallSpeed() end
+
+---@param layerMask integer the layers it collides with, cut to 32 bits so -1 means every layer (default: every layer but Ignore Raycast)
+function CharacterController:SetLayerMask(layerMask) end
+
+---@return integer
+function CharacterController:GetLayerMask() end
 
 -- ===== AUDIO =====
 
