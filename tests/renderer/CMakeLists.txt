@@ -55,7 +55,7 @@ target_include_directories(renderer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_test(NAME renderer_tests COMMAND renderer_tests)
 
-# The WebGPU backend's tests (stage G2 of #155): a program of their own, so the CI job for them builds the renderer and these
+# The WebGPU backend's tests (stages G2 and G3a of #155): a program of their own, so the CI job for them builds the renderer and these
 # tests and no more. They need Dawn (n2_dawn, from cmake/DawnPrebuilt.cmake) and a Vulkan driver at run time; where there is
 # no adapter they skip, unless N2_REQUIRE_WEBGPU=1 (tests/renderer/webgpu/WebGpuTestFixture.hpp)
 if(N2ENGINE_RENDERER_WEBGPU)
@@ -79,5 +79,7 @@ if(N2ENGINE_RENDERER_WEBGPU)
     else()
         target_compile_options(webgpu_tests PRIVATE -Wall -Wextra)
     endif()
+    # tests/renderer/common has the cross-backend test helpers (CrossBackendDiff.hpp), included as "common/<name>.hpp"
+    target_include_directories(webgpu_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(NAME webgpu_tests COMMAND webgpu_tests)
 endif()

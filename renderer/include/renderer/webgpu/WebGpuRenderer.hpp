@@ -9,6 +9,7 @@
 
 // Renderer.hpp first: it includes glad, which must come before GLFW's header (that one pulls in GL itself otherwise)
 #include "renderer/common/Renderer.hpp"
+#include "renderer/common/GpuShaderInterface.hpp"
 
 // The C API only (webgpu.h, as Dawn ships it): no Dawn C++ header (webgpu_cpp.h, dawn/native/*) may be included from
 // here or from renderer/src/webgpu/, because stage G4 compiles the same files with Emscripten's emdawnwebgpu port.
@@ -18,6 +19,11 @@ namespace Renderer
 {
     namespace WebGpu
     {
+        // The shader interface table is shared by the GPU backends (renderer/common/GpuShaderInterface.hpp)
+        namespace ShaderInterface = Gpu::ShaderInterface;
+
+        class WebGpuTexture; // a texture (private header)
+
         /// Which adapters Initialize may take. Default asks the environment: N2_WEBGPU_EXPECT_CPU_DEVICE=1 means CpuOnly,
         /// anything else means Any.
         enum class AdapterPreference
@@ -38,16 +44,48 @@ namespace Renderer
             Failed,     // anything else: no device, no queue, no target, or an error reported while creating them
         };
 
+        /// What a test can ask about a mesh (GetMeshInfoForTest); `valid` is false for a pointer this renderer did not make (or
+        /// already destroyed). The buffers are borrowed: the mesh owns them
+        struct MeshInfoForTest
+        {
+            bool valid = false;
+            WGPUBuffer vertexBuffer = nullptr;
+            WGPUBuffer indexBuffer = nullptr; // null for a mesh with no indices
+            uint32_t vertexCount = 0;
+            uint32_t indexCount = 0;
+        };
+
+        /// What a test can ask about a texture (GetTextureInfoForTest); `valid` is false for a pointer this renderer did not
+        /// make (or already destroyed)
+        struct TextureInfoForTest
+        {
+            bool valid = false;
+            WGPUTextureFormat format = WGPUTextureFormat_Undefined; // 3 channels are stored as RGBA8
+            uint32_t width = 0;
+            uint32_t height = 0;
+            uint32_t channels = 0; // as given to CreateTexture
+            uint32_t mipLevels = 0;
+            WGPUFilterMode filter = WGPUFilterMode_Nearest;                     // min and mag filter of the sampler
+            WGPUMipmapFilterMode mipmapFilter = WGPUMipmapFilterMode_Nearest;
+            WGPUAddressMode addressMode = WGPUAddressMode_Repeat;               // U, V and W
+            WGPUSampler sampler = nullptr; // the cached sampler (shared between textures with equal options); borrowed
+        };
+
         /**
-         * The WebGPU backend, stage G2 of #155: the core of a renderer that runs on Dawn (natively, for the CI harness only).
+         * The WebGPU backend, stages G2 and G3a of #155: a renderer that runs on Dawn (natively, for the CI harness only).
          * Headless initialisation (instance, adapter, device, queue), an offscreen RGBA8 colour target and a Depth32Float
          * depth target, a frame that clears them, a synchronous ReadFramebuffer, SetRenderTargetSize and Shutdown, plus
-         * counting of every error the device reports. There is no window and no swapchain: Present only warns.
+         * counting of every error the device reports (stage G2); meshes (with the in-frame UpdateMesh rule), textures
+         * (RGBA8 or R8/RG8, sRGB, samplers, CPU-generated mipmaps), materials, a pipeline cache, a bind-group cache, a
+         * per-draw uniform ring and the unlit shader with DrawMesh, IndexRange and DrawObjects (stage G3a). There is no window
+         * and no swapchain: Present only warns.
          *
-         * NOT here yet: meshes, textures, materials, shaders and every draw (stages G3a and G3b). CreateMesh, CreateTexture,
-         * CreateMaterial and CreateShaderProgram return nullptr, GetStandardUnlitShader, GetStandardLitShader and
-         * GetStandardTextShader return nullptr, and DrawMesh, DrawObjects, UpdateMesh and SetWireframe do nothing; each logs
-         * one warning per renderer. A frame still renders (it clears).
+         * What draws: the UNLIT built-in shader (GetStandardUnlitShader) with the depth, depth write and cull state of every
+         * RenderState. NOT here yet (stage G3b): the lit and text shaders (GetStandardLitShader and GetStandardTextShader
+         * return nullptr, logged once), blending (RenderState::blend and additive are part of the pipeline cache key but every
+         * pipeline is opaque; logged once) and the scene lighting (UpdateSceneLighting is ignored). Custom shaders are not
+         * supported (CreateShaderProgram returns nullptr, as on the other GPU backends) and wireframe is not in core WebGPU
+         * (SetWireframe is ignored with one log line). Stage G4 compiles the backend for the browser.
          *
          * Written against the C API (webgpu.h) alone, so the same file compiles with Emscripten's emdawnwebgpu in stage G4.
          * The pieces that exist only natively (the Vulkan backend request, the blocking waits) are marked in the source.
@@ -85,38 +123,77 @@ namespace Renderer
             /// Nothing to present (no swapchain, no window): logs a warning to stderr the first time, once per renderer
             void Present() override;
 
-            // Not implemented until G3a/G3b: nullptr / false / no-op, one warning per renderer and call
+            /// Custom shaders are not supported in v1: logs one warning and returns nullptr. The shaders are the built-ins
             Common::IShader* CreateShaderProgram(const char* vertexSource, const char* fragmentSource) override;
+            /// A no-op: a draw takes its shader from its material
             void UseShaderProgram(Common::IShader* shader) override;
+            /// Always false: the built-in shaders belong to the renderer and are never destroyed by a caller
             bool DestroyShaderProgram(Common::IShader* shader) override;
+            /// True only for this renderer's built-in shaders that exist (the unlit one in G3a)
             bool IsValidShader(Common::IShader* shader) const override;
+
+            // Meshes and textures. Uploads are queue writes (they work inside or outside a frame). Destroying a mesh or a
+            // texture only releases it: WebGPU keeps an object alive for every recorded or submitted command that uses it.
+            /// A vertex buffer (64-byte Vertex) and a uint32 index buffer. nullptr for no vertices, for data over the device's
+            /// buffer limit, or when the renderer is not initialized or the device is lost. A mesh with vertices and no
+            /// indices has an index count of 0 and no index buffer (it draws nothing)
             Common::IMesh* CreateMesh(const Common::MeshData& meshData) override;
+            /// Ignores nullptr and any pointer this renderer did not make (another renderer's, another backend's, a fake)
             void DestroyMesh(Common::IMesh* mesh) override;
+            /// CreateTexture with TextureOptions::Default()
             Common::ITexture*
             CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels) override;
+            /// 1 channel: R8Unorm (samples (r,0,0,1)); 2: RG8Unorm ((r,g,0,1)); 3: expanded to RGBA8 with alpha 255; 4: RGBA8.
+            /// srgb picks RGBA8UnormSrgb for 3 and 4 channels (1 and 2 channels ignore it). Rows are tightly packed. With
+            /// options.mipmaps a full mip chain, generated on the CPU (a box filter, in linear light for sRGB textures: core
+            /// WebGPU has no blit), else one level. nullptr for null data, a zero size, channels outside 1-4, a size over the
+            /// device's limit, a lost device or an uninitialized renderer
             Common::ITexture* CreateTexture(const uint8_t* data, uint32_t width, uint32_t height, uint32_t channels,
                                             const Common::TextureOptions& options) override;
+            /// Ignores nullptr and pointers this renderer did not make, like DestroyMesh
             void DestroyTexture(Common::ITexture* texture) override;
+            /// A material of a built-in shader that exists (the unlit one in G3a): the OpenGL defaults (uAlbedo white,
+            /// uHasTexture 1 with a texture, uAlphaCutoff 0), values set by name (the names of the shader's material block; any
+            /// other name, or the wrong type, is logged once and ignored), the base texture. DrawMesh takes a snapshot of its
+            /// values and textures, so a change after a draw does not affect that draw. nullptr for a null shader or one this
+            /// renderer did not make
             Common::IMaterial* CreateMaterial(Common::IShader* shader) override;
             Common::IMaterial* CreateMaterial(Common::IShader* shader, Common::ITexture* texture) override;
+            /// Ignores nullptr and any pointer this renderer did not make; Shutdown frees the rest
             void DestroyMaterial(Common::IMaterial* material) override;
+            /// Replaces the mesh's vertices and indices, keeping the same IMesh*. The IN-FRAME RULE: a queue write runs on the
+            /// queue's timeline at once, before the open frame's commands are submitted, so a mesh already drawn in the frame
+            /// being recorded gets NEW buffers (the earlier draws keep the old ones and read the old vertices). A mesh not yet
+            /// drawn in this frame, or any mesh outside a frame, is written in place when the vertex and index counts are
+            /// unchanged, and gets new buffers otherwise. False, with the mesh unchanged, for nullptr, a pointer this renderer
+            /// did not make, data with no vertices, or a lost device
             bool UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData) override;
-            /// Ignored (the view and projection matter once there are draws)
+            /// The row-major view and projection of the draws that follow (until the next call): each draw copies the values
+            /// current when it is made. Null arguments are ignored. Identity until set
             void SetViewProjection(const float* view, const float* projection) override;
-            /// Ignored (lighting matters once there are lit draws)
+            /// Ignored until stage G3b (the lit shader reads the lighting)
             void UpdateSceneLighting(const Common::SceneLightingData& lighting,
                                      const N2Engine::Math::Vector3& cameraPosition) override;
             using Common::IRenderer::DrawMesh; // the default-state overload
+            /// Draws the whole index buffer with the material's shader and this draw's depth test, depth write and cull state
+            /// (blend and additive are not drawn in G3a: opaque, logged once). Recorded into the open frame, in submission
+            /// order, taking a snapshot of the material's values and of the view and projection. Ignored (nothing drawn, no
+            /// error) outside BeginFrame..EndFrame, for a null or foreign mesh, material or model matrix, and for a mesh
+            /// without indices
             void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
                           const Common::RenderState& state) override;
+            /// Draws the indices [range.first, range.first + range.count), as OpenGL and Vulkan do: NOTHING for a count of 0 or
+            /// a range that is not inside the mesh's indices (the software renderer clips such a range to the mesh instead)
             void DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
                           const Common::RenderState& state, const Common::IndexRange& range) override;
+            /// DrawMesh of each object's mesh, transform.model, material and state, in order
             void DrawObjects(const std::vector<Common::RenderObject>& objects) override;
             /// Like Resize, from a window's framebuffer-size callback
             void OnResize(int width, int height) override;
+            /// Not in core WebGPU (no polygon mode): ignored, one log line
             void SetWireframe(bool enabled) override;
             [[nodiscard]] const char* GetRendererName() const override { return "WebGPU Renderer"; }
-            /// nullptr until G3a (unlit) and G3b (lit, text)
+            /// The unlit built-in; nullptr before Initialize. The lit and text built-ins are stage G3b: nullptr, logged once
             [[nodiscard]] Common::IShader* GetStandardUnlitShader() const override;
             [[nodiscard]] Common::IShader* GetStandardLitShader() const override;
             [[nodiscard]] Common::IShader* GetStandardTextShader() const override;
@@ -132,6 +209,8 @@ namespace Renderer
             /// buffer limits, an uninitialized or lost device, or an allocation failure (then the old target is gone and
             /// frames are skipped until a later call succeeds). The same size again keeps the target.
             [[nodiscard]] bool SetRenderTargetSize(uint32_t width, uint32_t height) override;
+
+            struct State; // the WebGPU handles, the error counters and the resources (opaque here; defined in a private header)
 
             // State for tests and diagnostics
             [[nodiscard]] InitStatus GetInitStatus() const;
@@ -184,9 +263,49 @@ namespace Renderer
             /// It returns to its baseline once every renderer is shut down: a count that does not is a leaked reference
             [[nodiscard]] static std::int64_t GetLiveObjectCountForTest();
 
-        private:
-            struct State; // the WebGPU handles and the error counters (private, in the .cpp)
+            // Test hooks for G3a
+            /// The buffers and counts of a mesh this renderer made
+            [[nodiscard]] MeshInfoForTest GetMeshInfoForTest(const Common::IMesh* mesh) const;
+            /// Copies a mesh's vertex and index buffers back. False for a pointer that is not this renderer's
+            bool ReadMeshForTest(const Common::IMesh* mesh, Common::MeshData& out) const;
+            /// Format, size, mip count and sampler of a texture this renderer made
+            [[nodiscard]] TextureInfoForTest GetTextureInfoForTest(const Common::ITexture* texture) const;
+            /// Copies mip level `mipLevel` of a texture into `bytes`, tightly packed in the texture's format (RGBA8 for 3 and 4
+            /// channels, R8, RG8). False for a pointer that is not this renderer's or a level that does not exist
+            bool ReadTextureForTest(const Common::ITexture* texture, uint32_t mipLevel, std::vector<uint8_t>& bytes,
+                                    uint32_t* levelWidth = nullptr, uint32_t* levelHeight = nullptr) const;
+            /// The id of a live texture (unique for the renderer's life, never reused); 0 for any other pointer
+            [[nodiscard]] uint64_t GetTextureIdForTest(const Common::ITexture* texture) const;
+            [[nodiscard]] uint32_t GetLiveMeshCountForTest() const;
+            /// Textures made through CreateTexture (the renderer's own 1x1 defaults are not counted)
+            [[nodiscard]] uint32_t GetLiveTextureCountForTest() const;
+            [[nodiscard]] uint32_t GetLiveMaterialCountForTest() const;
+            /// The pipelines made since the last Initialize (one per distinct (shader, vertex layout, RenderState) used)
+            [[nodiscard]] uint32_t GetPipelineCountForTest() const;
+            /// How many times a pipeline was actually attempted since the last Initialize (a cache hit or a remembered failure
+            /// is not an attempt)
+            [[nodiscard]] uint32_t GetPipelineCreateAttemptCountForTest() const;
+            /// Makes (or finds) the pipeline for (shader, state) now, as a draw would. False when there is no such shader
+            bool CreatePipelineForTest(ShaderInterface::BuiltInShader shader, const Common::RenderState& state);
+            /// Makes every pipeline creation fail (without calling the device) while set
+            void SetFailPipelineCreationForTest(bool fail);
+            /// The material bind groups cached (one per distinct (ring chunk, five textures) drawn with)
+            [[nodiscard]] uint32_t GetBindGroupCountForTest() const;
+            /// The uniform ring buffers the renderer holds (they grow when a frame needs more room and are kept)
+            [[nodiscard]] uint32_t GetRingChunkCountForTest() const;
+            /// The size a NEW ring chunk gets (at least what one draw needs), so a test can reach the chunk-growth path
+            void SetRingChunkBytesForTest(uint64_t bytes);
+            /// The device's minUniformBufferOffsetAlignment, which every per-draw offset is a multiple of
+            [[nodiscard]] uint32_t GetUniformAlignmentForTest() const;
+            /// A copy of the material's std140 block (kMaterialBlockRange bytes: the shader's block, then zeros) as a draw would
+            /// snapshot it now; false for a material that is not this renderer's
+            bool GetMaterialBlockForTest(const Common::IMaterial* material, std::vector<uint8_t>& bytes) const;
+            /// Replaces the texture id a material holds for a slot (0 the base texture, 1-4 the AuxTexture slots in enum order), so
+            /// a test can put a stale (pointer, id) pair into a material, which is what a texture made at the address of a
+            /// destroyed one looks like to the draw. False for a material that is not this renderer's or a bad slot
+            bool SetMaterialTextureIdForTest(Common::IMaterial* material, std::size_t slot, std::uint64_t id);
 
+        private:
             // Everything below with "Locked" in a comment runs with _mutex held
             bool Fail(InitStatus status, const std::string& message);
             void ShutdownLocked();
@@ -199,12 +318,26 @@ namespace Renderer
             bool BeginPass();
             void EndPass();
             void AbandonOpenFrame();
+            // G3a: WebGpuDraw.cpp
+            bool CreateDrawResources();
+            /// Releases every mesh, texture, material, pipeline, bind group and ring chunk (device-free: handles only)
+            void DestroyAllResources();
+            void BeginDrawFrame();
+            void EndDrawFrame();
+            WGPURenderPipeline GetPipelineLocked(ShaderInterface::BuiltInShader shader, const Common::RenderState& state);
+            bool AddRingChunk(uint64_t minimumSize);
+            bool AllocateRing(uint64_t bytes, std::size_t& chunkIndex, uint64_t& offset);
+            void DrawLocked(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
+                            const Common::RenderState& state, uint32_t first, uint32_t count, bool wholeMesh);
             /// Makes the device deliver the errors it holds (events, then a wait for the queue), then returns
             void FlushLocked() const;
-            /// Copies `texture` (all of it, one aspect) into a temporary buffer with 256-byte aligned rows and returns it
-            /// tightly packed. False on any failure (logged)
+            /// Copies mip level `mipLevel` of `texture` (all of it, one aspect; width and height are the level's) into a
+            /// temporary buffer with 256-byte aligned rows and returns it tightly packed. False on any failure (logged)
             bool CopyTextureToHostLocked(WGPUTexture texture, WGPUTextureAspect aspect, uint32_t bytesPerPixel,
-                                         uint32_t width, uint32_t height, std::vector<std::uint8_t>& pixels) const;
+                                         uint32_t width, uint32_t height, std::vector<std::uint8_t>& pixels,
+                                         uint32_t mipLevel = 0) const;
+            /// Copies `size` bytes of `buffer` (which needs CopySrc) into `bytes`. False on any failure (logged)
+            bool CopyBufferToHostLocked(WGPUBuffer buffer, uint64_t size, std::vector<std::uint8_t>& bytes) const;
             void LogUnsupportedOnce(const char* what) const;
             void LogOnce(const std::string& message) const;
 
