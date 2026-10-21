@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -14,9 +15,11 @@
 
 #include <editor-server/Commands.hpp>
 #include <editor-server/EditorServer.hpp>
+#include <editor-server/EditorTls.hpp>
 #include <editor-server/ExtensionHost.hpp>
 #include <editor-server/Protocol.hpp>
 #include <editor-server/Serialization.hpp>
+#include <editor-server/TokenTable.hpp>
 #include <engine/scripting/LuaSandbox.hpp>
 
 using namespace N2Engine;
@@ -27,7 +30,9 @@ namespace fs = std::filesystem;
 
 // The Lua editor extension commands (protocol 1.14.0) through EditorServer::ExecuteCommand: what a host without
 // --editor-extensions answers, what one with it lists, ReloadEditorExtensions and its event, the read-only gate and the
-// roles, the reserved ids, and the proof that the two reads run no Lua. ExtensionHostTests.cpp covers the host itself.
+// roles (a Hello with a tokens file binds the role, then the commands really run), the reserved ids, and the proof that
+// the two reads run no Lua. ExtensionHostTests.cpp covers the host itself; the play host's refusal runs in
+// project/EditorExtensionPlayTests.cpp, which has the project and the scene a play host needs.
 namespace
 {
     constexpr uint8_t ErrorType = static_cast<uint8_t>(ResponseType::Error);
@@ -154,6 +159,69 @@ namespace
                 found.push_back(event);
         }
         return found;
+    }
+
+    struct TokenUser
+    {
+        std::string name;
+        std::string token;
+        TokenRole role;
+    };
+
+    const TokenUser Admin{"ann", "ann-admin-token-0001", TokenRole::Admin};
+    const TokenUser EditorUser{"ed", "ed-editor-token-0002", TokenRole::Editor};
+    const TokenUser Viewer{"vic", "vic-viewer-token-0003", TokenRole::Viewer};
+
+    // A tokens file of the three users (private to its owner on POSIX), in the project's own temp folder
+    bool WriteTokens(const fs::path &file)
+    {
+        std::string text = "[";
+        bool first = true;
+        for (const TokenUser &user : {Admin, EditorUser, Viewer})
+        {
+            const auto hash = HashToken(user.token);
+            if (!hash.has_value())
+                return false;
+            text += (first ? "" : ",\n ") + std::string("{\"user\":\"") + user.name + "\",\"role\":\"" +
+                    std::string(TokenRoleName(user.role)) + "\",\"hash\":\"" + FormatTokenHash(*hash) + "\"}";
+            first = false;
+        }
+        text += "]\n";
+        {
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            out << text;
+        }
+#ifndef _WIN32
+        fs::permissions(file, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
+#endif
+        return true;
+    }
+
+    // Hello as a 1.12 client: error codes on, naming its user
+    std::vector<uint8_t> HelloAs(const TokenUser &user)
+    {
+        BufferWriter w;
+        w.WriteString("extension role test");
+        w.WriteString(std::string{ProtocolVersion});
+        w.WriteString(user.token);
+        w.WriteBool(true);
+        w.WriteString(user.name);
+        return w.Release();
+    }
+
+    std::string RoleOfServerInfo(const Frame &frame)
+    {
+        EXPECT_EQ(frame.type, ServerInfoType) << frame.Text();
+        if (frame.type != ServerInfoType)
+            return {};
+        BufferReader r(frame.payload);
+        (void)r.ReadString();
+        (void)r.ReadString();
+        (void)ReadJson(r);
+        (void)r.ReadBool();
+        (void)r.ReadBool();
+        (void)r.ReadString();
+        return r.ReadString();
     }
 
     std::atomic<long> g_instructions{0};
@@ -375,11 +443,117 @@ TEST(EditorExtensionCommandsTest, AViewerAndAnEditorMayListOnlyAnAdminMayReload)
     EXPECT_EQ(EditorServer::CommandName(id(CommandType::GetEditorUi)), "GetEditorUi");
 }
 
-TEST(EditorExtensionCommandsTest, APlayHostRefusesTheReloadAndAnswersTheLists)
+TEST(EditorExtensionCommandsTest, ThePlayHostsGateIsInTheTableAndItsAnswersAreInTheProjectTests)
 {
+    // The table; the play host that answers (EditorExtensionPlayTests.cpp) needs a project and a scene
     EXPECT_TRUE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(CommandType::ReloadEditorExtensions)));
     EXPECT_FALSE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(CommandType::ListEditorExtensions)));
     EXPECT_FALSE(EditorServer::IsEditOnlyCommand(static_cast<uint8_t>(CommandType::GetEditorUi)));
+}
+
+// ==================== Sessions bound to a role by Hello (a tokens file) ====================
+
+namespace
+{
+    class ExtensionRoleTest : public ::testing::Test
+    {
+    protected:
+        void SetUp() override
+        {
+            if (!EditorTlsServer::IsAvailable())
+            {
+                GTEST_SKIP() << "a tokens file needs the TLS library's SHA-256 (N2ENGINE_EDITOR_TLS)";
+            }
+            _project.emplace();
+            _project->Write("a.lua", ExtensionText("A", "a.item"));
+            _tokens = _project->Root() / "tokens.json";
+            ASSERT_TRUE(WriteTokens(_tokens));
+        }
+
+        // A server that gates Hello with the tokens file
+        void Gate(EditorServer &server) const
+        {
+            const auto set = server.SetTokensFile(_tokens);
+            ASSERT_TRUE(set) << set.error();
+        }
+
+        std::optional<TempProject> _project;
+        fs::path _tokens;
+    };
+}
+
+TEST_F(ExtensionRoleTest, AViewerAndAnEditorMayListAndGetTheUiButReloadIsForbiddenForThemAndAllowedForAnAdmin)
+{
+    EditorServer server;
+    Gate(server);
+    ASSERT_TRUE(server.EnableEditorExtensions(_project->Root()));
+
+    // Nothing runs before a Hello
+    EXPECT_EQ(Execute(server, CommandType::ListEditorExtensions).Text(), EditorServer::HelloRequiredError);
+
+    for (const TokenUser &user : {Viewer, EditorUser})
+    {
+        const std::string role{TokenRoleName(user.role)};
+        ASSERT_EQ(RoleOfServerInfo(Execute(server, CommandType::Hello, HelloAs(user))), role);
+
+        const json list = DecodeJson(Execute(server, CommandType::ListEditorExtensions), EditorExtensionsType);
+        EXPECT_TRUE(list.at("enabled").get<bool>()) << role;
+        EXPECT_EQ(list.at("extensions").size(), 1u) << role;
+        const json ui = DecodeJson(Execute(server, CommandType::GetEditorUi), EditorUiType);
+        EXPECT_EQ(ui.at("menuItems").size(), 1u) << role;
+
+        const Coded denied = DecodeErrorCoded(Execute(server, CommandType::ReloadEditorExtensions));
+        EXPECT_EQ(denied.code, "forbidden") << role;
+        EXPECT_EQ(denied.message, "forbidden: role " + role + " is not allowed to run ReloadEditorExtensions");
+    }
+    EXPECT_TRUE(EventsOfKind(server, "extensionsChanged").empty()) << "a refused reload changed nothing";
+    EXPECT_EQ(server.GetEditorExtensions()->UiRevision(), 1u);
+
+    // An admin's reload runs: the files are read again, the revision moves and the event goes out
+    ASSERT_EQ(RoleOfServerInfo(Execute(server, CommandType::Hello, HelloAs(Admin))), "admin");
+    _project->Write("b.lua", ExtensionText("B", "b.item"));
+    const json reloaded = DecodeJson(Execute(server, CommandType::ReloadEditorExtensions), EditorExtensionsType);
+    EXPECT_EQ(reloaded.at("uiRevision"), 2);
+    EXPECT_EQ(reloaded.at("extensions").size(), 2u);
+    EXPECT_EQ(EventsOfKind(server, "extensionsChanged").size(), 1u);
+
+    // And back to a viewer on the same server: the rights are the new session's
+    ASSERT_EQ(RoleOfServerInfo(Execute(server, CommandType::Hello, HelloAs(Viewer))), "viewer");
+    EXPECT_EQ(DecodeErrorCoded(Execute(server, CommandType::ReloadEditorExtensions)).code, "forbidden");
+    EXPECT_EQ(EventsOfKind(server, "extensionsChanged").size(), 1u);
+}
+
+TEST_F(ExtensionRoleTest, OnAHostWithoutTheFlagTheRoleGateComesFirstThenTheDisabledAnswer)
+{
+    EditorServer server;
+    Gate(server);
+
+    ASSERT_EQ(RoleOfServerInfo(Execute(server, CommandType::Hello, HelloAs(Viewer))), "viewer");
+    EXPECT_EQ(DecodeErrorCoded(Execute(server, CommandType::ReloadEditorExtensions)).code, "forbidden");
+    EXPECT_FALSE(DecodeJson(Execute(server, CommandType::ListEditorExtensions), EditorExtensionsType)
+                     .at("enabled").get<bool>());
+
+    ASSERT_EQ(RoleOfServerInfo(Execute(server, CommandType::Hello, HelloAs(Admin))), "admin");
+    const Coded disabled = DecodeErrorCoded(Execute(server, CommandType::ReloadEditorExtensions));
+    EXPECT_EQ(disabled.code, "extensionsDisabled");
+    EXPECT_NE(disabled.message.find("--editor-extensions"), std::string::npos) << disabled.message;
+}
+
+TEST_F(ExtensionRoleTest, AReadOnlyHostRefusesTheReloadToAnAdminToo)
+{
+    EditorServer server;
+    ASSERT_TRUE(server.SetReadOnly(true));
+    Gate(server);
+    ASSERT_TRUE(server.EnableEditorExtensions(_project->Root()));
+
+    ASSERT_EQ(RoleOfServerInfo(Execute(server, CommandType::Hello, HelloAs(Admin))), "admin");
+    EXPECT_EQ(DecodeErrorCoded(Execute(server, CommandType::ReloadEditorExtensions)).code, "readOnly");
+    // The reads still answer
+    EXPECT_EQ(DecodeJson(Execute(server, CommandType::ListEditorExtensions), EditorExtensionsType)
+                  .at("extensions").size(), 1u);
+    ASSERT_EQ(RoleOfServerInfo(Execute(server, CommandType::Hello, HelloAs(Viewer))), "viewer");
+    EXPECT_EQ(DecodeJson(Execute(server, CommandType::GetEditorUi), EditorUiType).at("menuItems").size(), 1u);
+    EXPECT_TRUE(EventsOfKind(server, "extensionsChanged").empty());
 }
 
 TEST(EditorExtensionCommandsTest, TheIdsOfTheLaterInvokeCommandsAreReservedAndRefused)

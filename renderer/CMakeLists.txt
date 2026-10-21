@@ -21,6 +21,10 @@ file(GLOB_RECURSE RENDERER_SOURCES
 if(NOT N2ENGINE_RENDERER_VULKAN)
     list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/vulkan/")
 endif()
+# Likewise the WebGPU backend (CI harness only: cmake/DawnPrebuilt.cmake)
+if(NOT N2ENGINE_RENDERER_WEBGPU)
+    list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/src/webgpu/")
+endif()
 
 # Only create library if we have source files
 if(RENDERER_SOURCES)
@@ -91,6 +95,13 @@ if(N2ENGINE_RENDERER_VULKAN)
     target_include_directories(renderer SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/external/VulkanMemoryAllocator)
 endif()
 
+# WebGPU backend: the pinned prebuilt Dawn (target n2_dawn, defined GLOBAL so the tests see it). PRIVATE: nothing that links
+# the renderer gets Dawn's headers, and the static library is only pulled in by what references it
+if(N2ENGINE_RENDERER_WEBGPU)
+    include(${CMAKE_SOURCE_DIR}/cmake/DawnPrebuilt.cmake)
+    target_link_libraries(renderer PRIVATE n2_dawn)
+endif()
+
 # Compile definitions
 target_compile_definitions(renderer PRIVATE 
     GLFW_INCLUDE_NONE
@@ -104,6 +115,7 @@ if(N2ENGINE_RENDERER_VULKAN)
 endif()
 # 1 or 0 for everything that links the renderer (renderer/common/RendererConfig.hpp)
 target_compile_definitions(renderer PUBLIC N2ENGINE_RENDERER_VULKAN=$<BOOL:${N2ENGINE_RENDERER_VULKAN}>)
+target_compile_definitions(renderer PUBLIC N2ENGINE_RENDERER_WEBGPU=$<BOOL:${N2ENGINE_RENDERER_WEBGPU}>)
 
 # Link libraries
 target_link_libraries(renderer
@@ -221,8 +233,8 @@ endif()
 # CMAKE_CONFIGURE_DEPENDS); the file is rewritten only when its text changes, so an unchanged shader rebuilds nothing.
 # Each shader goes in as raw string literals of at most 8000 characters, concatenated (MSVC limits a literal to 16380).
 #
-# Nothing uses it yet: there is no WebGPU backend and no N2ENGINE_RENDERER_WEBGPU option (stage G2 adds them and links this
-# target); renderer_tests links it to check the embedded text is the files'. The shaders are validated by Tint and naga in CI
+# Nothing draws with it yet: the WebGPU backend (N2ENGINE_RENDERER_WEBGPU, stage G2) has no shaders in use until stage G3a, which
+# links this target; renderer_tests links it to check the embedded text is the files'. The shaders are validated by Tint and naga in CI
 # (scripts/validate-wgsl.sh) and parsed by tests/renderer/webgpu/WebGpuShaderParityTests.cpp.
 # ---------------------------------------------------------------------------------------------------------------------
 set(N2_WGSL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders/webgpu")
