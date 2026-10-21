@@ -753,6 +753,30 @@ namespace N2Engine::Editor
         /// in C and cannot be stopped); how many are left. 0 without extensions.
         int ShutdownEditorExtensions(std::chrono::milliseconds maxWait);
 
+        /**
+         * --editor-extensions-watch (OFF by default; of no effect without EnableEditorExtensions): ProcessCommands calls
+         * PollEditorExtensionsIfDue, which checks the project's editor/ folder (ExtensionHost::ReloadChanged: modification
+         * time and size, then a content hash) and reloads only the file that changed, pushing extensionsChanged. A play
+         * host never does. Main thread.
+         */
+        void SetEditorExtensionsWatching(const bool enabled) { _watchExtensions = enabled; }
+        [[nodiscard]] bool IsWatchingEditorExtensions() const { return _watchExtensions; }
+        /// The time between the editor/ watcher's checks (DefaultAssetPollInterval); zero checks on every call
+        void SetEditorExtensionsPollInterval(const std::chrono::milliseconds interval) { _extensionPollInterval = interval; }
+        /// One check of the editor/ folder when watching is on, extensions are enabled, this is not a play host and the
+        /// poll interval has passed since the last check (measured with the clock SetAssetPollClock sets, like the asset
+        /// watcher's). Unlike the asset watcher it does not wait for a client: a file changed while nobody is connected is
+        /// loaded all the same. True when it loaded, added or dropped an extension.
+        bool PollEditorExtensionsIfDue();
+
+        /**
+         * Runs the extensions' hook of this name (ExtensionHost::HookNames) with `info`, as the host does at the point the
+         * hook belongs to (a save, an open, a play snapshot, an asset change), and returns how many warnings the
+         * OnBeforePlay hooks returned (always 0 for another hook). Every failure is logged and counted against the
+         * extension, never thrown. For tests; the host's own points call the same function.
+         */
+        std::size_t RunExtensionHookForTest(std::string_view hook, const nlohmann::json &info);
+
         // ==================== Commands an extension may send (E-X3) ====================
 
         /**
@@ -994,6 +1018,9 @@ namespace N2Engine::Editor
             /// The name as written, for the extensionOutput event
             std::string name;
             std::vector<std::string> capabilities;
+            /// A hook run (E-X6): read-only. Only Read commands go through DispatchNested, and the commands run with a
+            /// viewer's identity, whatever connection is being served (a poll or a save has none that matters).
+            bool hook = false;
             std::uint32_t sent = 0;
             /// Non-empty: the invocation fails whatever the script returns (a call that sent several commands could not
             /// be taken back alone, so the group is taken back as a whole); the reason
@@ -1007,6 +1034,13 @@ namespace N2Engine::Editor
         [[nodiscard]] std::vector<uint8_t> DispatchNested(uint8_t commandType, const std::vector<uint8_t> &payload);
         /// Answers one request of a script (op "log" or "scene.*") through DispatchNested: its value, or `error` set
         [[nodiscard]] nlohmann::json ExtensionRequest(const std::string &op, const nlohmann::json &args, std::string &error);
+        /// Calls every extension's hook of this name, one after the other, each as a separate budgeted call after the work
+        /// that triggered it is done (never inside a scene load): see ExtensionHost::InvokeHook. A hook failure is logged
+        /// and counted towards the extension's fault flag and changes nothing else. The warnings of OnBeforePlay hooks are
+        /// pushed as extensionOutput events (level warn, with the hook's name) that every role receives, and the count is
+        /// returned. Does nothing without extensions, in a play host, or inside another extension call (an extension's own
+        /// asset write does not call OnAssetsChanged), and nothing costs anything when no extension has the hook.
+        std::size_t RunExtensionHook(std::string_view hook, const nlohmann::json &info);
 
         void HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleRescanAssets(int clientSocket);
@@ -1176,6 +1210,8 @@ namespace N2Engine::Editor
         /// time compare) the Hello handler uses, nothing is recorded.
         [[nodiscard]] bool HelloTokenIsValid(const std::vector<uint8_t> &payload) const;
         [[nodiscard]] ConnectionIdentity CurrentIdentity() const;
+        /// The identity the commands of a hook run with: a viewer, which may run Read commands only
+        [[nodiscard]] static ConnectionIdentity HookIdentity();
         /// Whether the connection reads every event and the full health detail: an admin, or any client of a host with
         /// no authentication (no roles; its single local user). Every other role reads the Public view of the log.
         [[nodiscard]] bool SeesEveryEvent() const;
@@ -1417,5 +1453,9 @@ namespace N2Engine::Editor
         std::optional<std::chrono::steady_clock::time_point> _lastAssetPoll;
         AssetPollClock _assetPollClock;
         bool _assetPollFailureLogged{false};
+        // The editor/ watcher (--editor-extensions-watch): off by default
+        bool _watchExtensions{false};
+        std::chrono::milliseconds _extensionPollInterval{DefaultAssetPollInterval};
+        std::optional<std::chrono::steady_clock::time_point> _lastExtensionPoll;
     };
 }

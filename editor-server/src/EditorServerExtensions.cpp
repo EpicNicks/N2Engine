@@ -126,16 +126,19 @@ namespace N2Engine::Editor
             {CommandType::GetEntityTransform, false},
             {CommandType::GetAllEntities, false},
             {CommandType::GetLuaFields, false},
-            // Assets: assets.read and assets.write are a later capability (E-X6)
+            // What Editor.Assets sends (E-X6): List and ReadText need the capability assets.read, WriteText and CreateFolder
+            // assets.write; ExtensionRequest checks the capability, and the command's own handler the path (res:// only,
+            // the same resolver as a client's), the size caps and the text rules
+            {CommandType::ListAssets, true},
+            {CommandType::ReadTextAsset, true},
+            {CommandType::WriteTextAsset, true},
+            {CommandType::CreateFolder, true},
+            // The rest of the assets: not offered
             {CommandType::CreateScript, false},
             {CommandType::RescanAssets, false},
-            {CommandType::ListAssets, false},
             {CommandType::GetAssetInfo, false},
             {CommandType::SetImportSettings, false},
-            {CommandType::ReadTextAsset, false},
-            {CommandType::WriteTextAsset, false},
             {CommandType::CreateScriptAsset, false},
-            {CommandType::CreateFolder, false},
             {CommandType::GetEngineHealth, false},
         };
     }
@@ -171,6 +174,12 @@ namespace N2Engine::Editor
             ServerLog::Warn(std::format("audit: extension {} sent {}, which an editor extension may not send (refused)", via,
                                      name));
             return refuse(std::format("An editor extension may not send {}", name));
+        }
+        // A hook is read-only: only a command the host classifies as a Read goes through, whatever the policy table says
+        if (_invocation != nullptr && _invocation->hook && !IsReadCommand(commandType))
+        {
+            ServerLog::Warn(std::format("audit: extension {} sent {} from a hook, which is read-only (refused)", via, name));
+            return refuse(std::format("A hook is read-only: it may not send {}", name));
         }
         if (_invocation != nullptr && ++_invocation->sent > ExtensionHost::MaxNested())
         {
@@ -341,7 +350,7 @@ namespace N2Engine::Editor
                 }
                 return nullptr;
             }
-            if (!op.starts_with("scene."))
+            if (!op.starts_with("scene.") && !op.starts_with("assets."))
             {
                 throw std::runtime_error("the host has no operation " + SanitizeForLog(op, 64));
             }
@@ -489,11 +498,81 @@ namespace N2Engine::Editor
                 }
             };
 
+            // Editor.Assets (E-X6). Every call is one command of the asset family, sent as the invoker: the handler resolves
+            // the path (res:// only, inside assets/, no link followed out, no editor/ folder), caps the sizes, and the
+            // read-only gate, the role table and the audit line apply as for a client's own WriteTextAsset
+            if (op.starts_with("assets."))
+            {
+                const bool assetsRead = op == "assets.list" || op == "assets.readText";
+                const bool assetsWrite = op == "assets.writeText" || op == "assets.createFolder";
+                if (!assetsRead && !assetsWrite)
+                {
+                    throw std::runtime_error("the host has no operation " + SanitizeForLog(op, 64));
+                }
+                // A state without the capability has no such function at all (the prelude does not install it); this is the
+                // host's own check, in case a call reaches it anyway
+                if (assetsRead && !granted("assets.read"))
+                {
+                    throw std::runtime_error("the extension did not declare the capability assets.read");
+                }
+                if (assetsWrite && !granted("assets.write"))
+                {
+                    throw std::runtime_error("the extension did not declare the capability assets.write");
+                }
+                if (assetsWrite && _invocation != nullptr && _invocation->hook)
+                {
+                    throw std::runtime_error("a hook is read-only: it cannot change the assets");
+                }
+
+                if (op == "assets.list")
+                {
+                    std::string folder = optionalStr("folder");
+                    if (folder.empty())
+                    {
+                        folder = "res://";
+                    }
+                    BufferWriter request;
+                    request.WriteString(folder);
+                    request.WriteBool(false); // this folder only, not what is below it
+                    const std::vector<uint8_t> body = send(CommandType::ListAssets, request, ResponseType::AssetList);
+                    BufferReader reader(body);
+                    json folders = ReadJson(reader);
+                    json assets = ReadJson(reader);
+                    if (folders.size() + assets.size() > ExtensionHost::MaxAssetListEntries)
+                    {
+                        throw std::runtime_error(std::format("the folder has more than {} entries: list a folder below it",
+                                                             ExtensionHost::MaxAssetListEntries));
+                    }
+                    return json{{"folders", std::move(folders)}, {"assets", std::move(assets)}};
+                }
+                if (op == "assets.readText")
+                {
+                    const std::vector<uint8_t> body =
+                        sendWithId(CommandType::ReadTextAsset, str("path"), ResponseType::TextData);
+                    BufferReader reader(body);
+                    return reader.ReadString();
+                }
+                if (op == "assets.writeText")
+                {
+                    BufferWriter request;
+                    request.WriteString(str("path"));
+                    request.WriteString(str("text"));
+                    (void)send(CommandType::WriteTextAsset, request, ResponseType::Ok);
+                    return nullptr;
+                }
+                (void)sendWithId(CommandType::CreateFolder, str("path"), ResponseType::Ok);
+                return nullptr;
+            }
+
             // Reads need scene.read, changes scene.write. A state without the capability has no such function at all (the
             // prelude does not install it); this is the host's own check, in case a call reaches it anyway.
             const bool isRead = op == "scene.getHierarchy" || op == "scene.getEntity" || op == "scene.getComponent" ||
                                 op == "scene.getLocalTransform" || op == "scene.findByName" ||
                                 op == "scene.getComponentTypes";
+            if (!isRead && _invocation != nullptr && _invocation->hook)
+            {
+                throw std::runtime_error("a hook is read-only: it cannot change the scene");
+            }
             if (isRead && !granted("scene.read"))
             {
                 throw std::runtime_error("the extension did not declare the capability scene.read");
@@ -1240,5 +1319,181 @@ namespace N2Engine::Editor
                                              "back: {}{}",
                                              noun, item.itemId, item.extensionName, failureText,
                                              outcome.faulted ? " (the extension is now disabled until reload)" : "")));
+    }
+
+    // ==================== Hooks (E-X6) ====================
+
+    EditorServer::ConnectionIdentity EditorServer::HookIdentity()
+    {
+        // The commands of a hook are a viewer's: what a viewer may not run is refused by the role gate, whoever is connected
+        // (a hook that runs on the watcher's poll or inside a save has no client that matters)
+        ConnectionIdentity identity;
+        identity.authenticated = true;
+        identity.user = "extension-hook";
+        identity.role = TokenRole::Viewer;
+        return identity;
+    }
+
+    std::size_t EditorServer::RunExtensionHookForTest(const std::string_view hook, const json &info)
+    {
+        return RunExtensionHook(hook, info);
+    }
+
+    std::size_t EditorServer::RunExtensionHook(const std::string_view hook, const json &info)
+    {
+        // Not in a play host (it loads none), and not inside an extension's own call: an asset the extension wrote does not
+        // call OnAssetsChanged, so a hook can never start another run of itself
+        if (!_extensions || _playMode || _invocation != nullptr)
+        {
+            return 0;
+        }
+        const std::vector<ExtensionHost::MenuItemRef> targets = _extensions->FindHooks(hook);
+        if (targets.empty())
+        {
+            return 0;
+        }
+
+        std::size_t warnings = 0;
+        const auto started = std::chrono::steady_clock::now();
+        for (const ExtensionHost::MenuItemRef &target : targets)
+        {
+            const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+            if (static_cast<std::uint64_t>(spent.count()) >= ExtensionHost::HookTotalMillis)
+            {
+                ServerLog::Warn(std::format("The {} hooks used the {} ms all of them may take together: the extension {} and "
+                                         "the ones after it are skipped this time",
+                                         std::string(hook), ExtensionHost::HookTotalMillis, SanitizeForLog(target.extensionName, 64)));
+                break;
+            }
+
+            std::string via = target.extensionName;
+            std::ranges::replace(via, ' ', '_');
+            ExtensionInvocation invocation;
+            invocation.via = via;
+            invocation.name = target.extensionName;
+            invocation.capabilities = target.capabilities;
+            invocation.hook = true;
+
+            ExtensionHost::InvokeOutcome outcome;
+            const auto callStarted = std::chrono::steady_clock::now();
+            {
+                // Set for the call and cleared on every way out of it
+                struct InvocationScope
+                {
+                    ExtensionInvocation *&slot;
+                    InvocationScope(ExtensionInvocation *&where, ExtensionInvocation *value) : slot(where) { slot = value; }
+                    ~InvocationScope() { slot = nullptr; }
+                    InvocationScope(const InvocationScope &) = delete;
+                    InvocationScope &operator=(const InvocationScope &) = delete;
+                } scope(_invocation, &invocation);
+
+                try
+                {
+                    outcome = _extensions->InvokeHook(
+                        target, info,
+                        [this](const std::string &op, const json &args) -> ExtensionHost::NestedAnswer
+                        {
+                            ExtensionHost::NestedAnswer answer;
+                            std::string error;
+                            answer.value = ExtensionRequest(op, args, error);
+                            if (!error.empty())
+                            {
+                                answer.ok = false;
+                                answer.error = std::move(error);
+                            }
+                            return answer;
+                        });
+                }
+                catch (const std::exception &e)
+                {
+                    outcome = ExtensionHost::InvokeOutcome{};
+                    outcome.failure = ExtensionHost::InvokeFailure::HostError;
+                    outcome.error = SanitizeForLog(e.what(), 300);
+                }
+                catch (...)
+                {
+                    outcome = ExtensionHost::InvokeOutcome{};
+                    outcome.failure = ExtensionHost::InvokeFailure::HostError;
+                    outcome.error = "the hook failed";
+                }
+            }
+            const auto elapsedMillis =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - callStarted).count();
+
+            if (!outcome.Ok())
+            {
+                // A hook never fails what triggered it: the failure is logged (it was counted against the extension by the
+                // host, which faults it after too many or at once for a budget trip) and the work goes on
+                ServerLog::Warn(std::format("Editor extension {}@{} hook {} failed after {} ms{}: {}", target.extensionName,
+                                         target.sha8, std::string(hook), elapsedMillis,
+                                         outcome.faulted ? " (the extension is now disabled until reload)" : "",
+                                         outcome.error));
+                continue;
+            }
+            ServerLog::Info(std::format("Editor extension {}@{} hook {} finished in {} ms: {} request(s)", target.extensionName,
+                                     target.sha8, std::string(hook), elapsedMillis, outcome.nestedCommands));
+
+            if (hook != "OnBeforePlay")
+            {
+                continue;
+            }
+            // OnBeforePlay: what it returned is validation, shown and never blocking (decision D10). The client that asked
+            // to play receives each as an extensionOutput event of level warn (every role gets this one, unlike the
+            // Admin-tagged Editor.Log lines: the person who pressed Play has to see it), with the hook's name; the host's
+            // log has it too.
+            std::vector<std::string> texts;
+            if (const auto found = outcome.result.find("message"); found != outcome.result.end() && found->is_string())
+            {
+                texts.push_back(found->get<std::string>());
+            }
+            if (const auto found = outcome.result.find("warnings"); found != outcome.result.end() && found->is_array())
+            {
+                for (const json &warning : *found)
+                {
+                    if (warning.is_string())
+                    {
+                        texts.push_back(warning.get<std::string>());
+                    }
+                }
+            }
+            for (const std::string &text : texts)
+            {
+                const std::string shown = SanitizeForLog(text, ExtensionHost::MaxResultTextBytes);
+                _events.Push("extensionOutput",
+                             json{{"extension", target.extensionName},
+                                  {"level", "warn"},
+                                  {"message", shown},
+                                  {"hook", std::string(hook)},
+                                  {"time", EventRing::NowUnixMilliseconds()}});
+                ServerLog::Warn(std::format("extension {}: {}: {}", target.extensionName, std::string(hook), shown));
+                ++warnings;
+            }
+        }
+        return warnings;
+    }
+
+    bool EditorServer::PollEditorExtensionsIfDue()
+    {
+        // A play host runs no extensions, and a host without the flag has none to watch
+        if (!_watchExtensions || !_extensions || _playMode || _invocation != nullptr)
+        {
+            return false;
+        }
+        const auto now = _assetPollClock ? _assetPollClock() : std::chrono::steady_clock::now();
+        if (_lastExtensionPoll && now - *_lastExtensionPoll < _extensionPollInterval)
+        {
+            return false;
+        }
+        _lastExtensionPoll = now;
+        try
+        {
+            return _extensions->ReloadChanged().Changed();
+        }
+        catch (const std::exception &e)
+        {
+            ServerLog::Warn(std::format("The editor extensions watcher could not check the editor folder: {}",
+                                     SanitizeForLog(e.what(), 300)));
+            return false;
+        }
     }
 }

@@ -637,7 +637,7 @@ namespace
         add("an apiVersion this host does not speak", Declaration("", "\"Shape\"", "2"), "apiVersion 2 is not supported");
         add("an apiVersion that is a string", Declaration("", "\"Shape\"", "\"1\""), "'apiVersion' must be an integer");
         add("an apiVersion with a fraction", Declaration("", "\"Shape\"", "1.5"), "'apiVersion' must be an integer");
-        add("a key this API version does not know", Declaration("  hooks = {},"), "unknown key 'hooks'");
+        add("a key this API version does not know", Declaration("  gizmos = {},"), "unknown key 'gizmos'");
         add("a menu that is not a list", Declaration("  menu = 5,"), "'menu' must be a list");
         add("a menu that mixes a list and names", Declaration("  menu = { { id = \"a\", path = \"T/a\", run = function() end }, extra = 1 },"),
             "mixes a list and named entries");

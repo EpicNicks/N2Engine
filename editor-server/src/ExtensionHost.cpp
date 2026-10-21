@@ -317,6 +317,8 @@ local runs = {}
 -- registration is accepted only while the file loads: the reader below ends that
 local inspectors = {}
 local actions = {}
+-- The functions of the declared hooks by name (E-X6), taken when the declaration is read back
+local hookRuns = {}
 local loading = true
 -- What the host gave this state to reach it with, taken before any file code runs and then removed from the globals:
 -- the only way out of the state is these wrappers
@@ -474,6 +476,38 @@ local function sceneApi(read, write)
     return Scene
 end
 
+-- Editor.Assets: installed by Editor.Extension for the capabilities the file declared (assets.read: List and ReadText;
+-- assets.write: WriteText and CreateFolder). Every function is a request the host answers through the same commands as a
+-- client's, so res:// paths only, the same size caps and the same role and read-only rules.
+local function assetsApi(read, write)
+    local Assets = {}
+    if read then
+        function Assets.List(folder)
+            if folder == nil then
+                folder = 'res://'
+            end
+            expect(folder, 'string', 'Editor.Assets.List', 'a folder path (a string such as res://Textures)')
+            return host('assets.list', { folder = folder })
+        end
+        function Assets.ReadText(path)
+            expect(path, 'string', 'Editor.Assets.ReadText', 'an asset path (a string such as res://notes.txt)')
+            return host('assets.readText', { path = path })
+        end
+    end
+    if write then
+        function Assets.WriteText(path, text)
+            expect(path, 'string', 'Editor.Assets.WriteText', 'an asset path (a string such as res://notes.txt)')
+            expect(text, 'string', 'Editor.Assets.WriteText', 'the text to write (a string)')
+            host('assets.writeText', { path = path, text = text })
+        end
+        function Assets.CreateFolder(path)
+            expect(path, 'string', 'Editor.Assets.CreateFolder', 'a folder path (a string such as res://Textures/New)')
+            host('assets.createFolder', { path = path })
+        end
+    end
+    return Assets
+end
+
 Editor = {
     Extension = function(declaration)
         if type(declaration) ~= "table" then
@@ -481,6 +515,7 @@ Editor = {
         end
         declared = declaration
         local read, write = false, false
+        local assetsRead, assetsWrite = false, false
         local capabilities = rawget(declaration, "capabilities")
         if type(capabilities) == "table" then
             for _, capability in next, capabilities do
@@ -488,6 +523,10 @@ Editor = {
                     read = true
                 elseif capability == "scene.write" then
                     write = true
+                elseif capability == "assets.read" then
+                    assetsRead = true
+                elseif capability == "assets.write" then
+                    assetsWrite = true
                 end
             end
         end
@@ -495,6 +534,11 @@ Editor = {
             Editor.Scene = sceneApi(read, write)
         else
             Editor.Scene = nil
+        end
+        if assetsRead or assetsWrite then
+            Editor.Assets = assetsApi(assetsRead, assetsWrite)
+        else
+            Editor.Assets = nil
         end
         return declaration
     end,
@@ -574,8 +618,34 @@ return function(returned)
             end
         end
     end
+    hookRuns = {}
+    local hooks = rawget(declared, "hooks")
+    if type(hooks) == "table" then
+        for name, run in next, hooks do
+            if type(name) == "string" and type(run) == "function" then
+                hookRuns[name] = run
+            end
+        end
+    end
     return snapshot, registered
 end, function(kind, id, ctx, params)
+    if kind == "hook" then
+        -- A hook: OnAssetsChanged gets its three lists, the others their info table. What it returns is dropped, except
+        -- OnBeforePlay's, whose warnings the host reads
+        local hook = hookRuns[id]
+        if hook == nil then
+            error("the extension has no hook " .. tostring(id), 0)
+        end
+        if id == "OnAssetsChanged" then
+            hook(ctx.added, ctx.removed, ctx.modified)
+            return nil
+        end
+        local returned = hook(ctx)
+        if id == "OnBeforePlay" then
+            return returned
+        end
+        return nil
+    end
     local run
     if kind == "inspector" then
         run = actions[id]
@@ -1442,6 +1512,8 @@ end
             std::vector<std::string> capabilities;
             std::vector<json> items;
             std::vector<json> sections;
+            /// The hooks it declared (HookNames), in name order
+            std::vector<std::string> hooks;
         };
 
         // The shape of what Editor.Extension{...} was given (the copy ReadSnapshot made), and of what
@@ -1454,7 +1526,7 @@ end
                 Bad("", std::format("Editor.Extension must be given a table of name, apiVersion, capabilities and menu, "
                                     "not {}", TypeOf(declaration)));
             }
-            CheckKeys(declaration, {"name", "apiVersion", "capabilities", "menu"}, "");
+            CheckKeys(declaration, {"name", "apiVersion", "capabilities", "menu", "hooks"}, "");
 
             ParsedDeclaration parsed;
             parsed.name = RequireString(declaration, "name", "", ExtensionHost::MaxNameBytes);
@@ -1536,6 +1608,36 @@ end
                 }
             }
             parsed.sections = BuildInspectorSections(inspector, extensionId, parsed.capabilities);
+
+            // Hooks (design 4.5): a table of hook name = function. A hook reads (it cannot change anything), so it needs the
+            // capability of what it reads: the scene for the three scene hooks, the assets for OnAssetsChanged.
+            if (const json *hooks = Find(declaration, "hooks"))
+            {
+                if (!hooks->is_object())
+                {
+                    Bad("", std::format("'hooks' must be a table of hook name = function, not {}", TypeOf(*hooks)));
+                }
+                for (const auto &[name, run] : hooks->items())
+                {
+                    if (!ExtensionHost::IsHookName(name))
+                    {
+                        Bad("", std::format("unknown hook '{}' (this host calls: OnSceneOpened, OnSceneSaved, "
+                                            "OnBeforePlay, OnAssetsChanged)",
+                                            Printable(name, 64)));
+                    }
+                    if (!IsFunction(run))
+                    {
+                        Bad("", std::format("the hook {} must be a function, not {}", name, TypeOf(run)));
+                    }
+                    const std::string needed = name == "OnAssetsChanged" ? "assets.read" : "scene.read";
+                    if (std::ranges::find(parsed.capabilities, needed) == parsed.capabilities.end())
+                    {
+                        Bad("", std::format("the hook {} needs the capability {} (declare it in 'capabilities')", name,
+                                            needed));
+                    }
+                    parsed.hooks.push_back(name);
+                }
+            }
             return parsed;
         }
     }
@@ -1619,6 +1721,12 @@ end
         std::vector<json> items;
         /// Its inspector sections (InspectorSectionInfo, each with its buttons), in the order they were registered
         std::vector<json> sections;
+        /// The hooks it declared (ExtensionHost::HookNames), in name order
+        std::vector<std::string> hooks;
+        /// What the watcher compares: the file's modification time and size when it was read (the sha256 above is the
+        /// content's)
+        fs::file_time_type modified{};
+        std::uintmax_t fileSize = 0;
         /// The state the file ran in (idle between invocations; null while an invocation owns it, and for good once one
         /// was abandoned)
         std::unique_ptr<Scripting::LuaSandbox> sandbox;
@@ -1664,6 +1772,10 @@ end
         bool abandoned = false;
         std::optional<Request> request;
         std::optional<ExtensionHost::NestedAnswer> answer;
+
+        /// A hook run: only the read ops of ExtensionHost::IsReadOnlyOp are sent, and at most `nestedLimit` of them
+        bool readOnly = false;
+        std::uint32_t nestedLimit = 0;
 
         // Worker thread only
         std::uint32_t nested = 0;
@@ -2058,8 +2170,13 @@ end
                     {
                         return step; // while the file loads no menu item runs: there is nobody to write to
                     }
-                    refuse("Editor.Scene can be used only while a menu item or an inspector button runs, not while its "
-                           "file loads");
+                    refuse("Editor.Scene and Editor.Assets can be used only while a menu item, an inspector button or a hook "
+                           "runs, not while its file loads");
+                    return step;
+                }
+                if (job->readOnly && !ExtensionHost::IsReadOnlyOp(op))
+                {
+                    refuse("a hook is read-only: it cannot change the scene or the assets");
                     return step;
                 }
 
@@ -2086,9 +2203,9 @@ end
                                                          ExtensionHost::MaxLogLines)}};
                     }
                 }
-                else if (++job->nested > ExtensionHost::MaxNested())
+                else if (++job->nested > job->nestedLimit)
                 {
-                    refuse(std::format("the call sent more than {} commands to the host", ExtensionHost::MaxNested()));
+                    refuse(std::format("the call sent more than {} commands to the host", job->nestedLimit));
                     return step;
                 }
                 if (job->bytes > ExtensionHost::MaxInvocationBytes)
@@ -2263,6 +2380,8 @@ end
 
         std::atomic<std::uint64_t> g_invokeInstructionsOverride{0};
         std::atomic<std::uint64_t> g_invokeMillisOverride{0};
+        std::atomic<std::uint64_t> g_hookInstructionsOverride{0};
+        std::atomic<std::uint64_t> g_hookMillisOverride{0};
         std::atomic<std::int64_t> g_invokeGraceOverride{-1};
         std::atomic<std::uint32_t> g_maxNestedOverride{0};
         std::function<void(const std::string &)> g_invokeHook;
@@ -2281,6 +2400,20 @@ end
                 budget.instructions = instructions;
             }
             if (const std::uint64_t millis = g_invokeMillisOverride.load(); millis != 0)
+            {
+                budget.maxMillis = millis;
+            }
+            return budget;
+        }
+
+        Scripting::SandboxBudget CurrentHookBudget()
+        {
+            Scripting::SandboxBudget budget = Scripting::SandboxDefaults::HookBudget;
+            if (const std::uint64_t instructions = g_hookInstructionsOverride.load(); instructions != 0)
+            {
+                budget.instructions = instructions;
+            }
+            if (const std::uint64_t millis = g_hookMillisOverride.load(); millis != 0)
             {
                 budget.maxMillis = millis;
             }
@@ -2616,6 +2749,7 @@ end
             entry.sandbox.reset();
             entry.items.clear();
             entry.sections.clear();
+            entry.hooks.clear();
             entry.capabilities.clear();
         };
 
@@ -2625,6 +2759,17 @@ end
         {
             fail("The file could not be read");
             return entry;
+        }
+        // What the watcher compares with: taken before the file is read, so a write that lands during the read moves the
+        // time on and the next check sees it
+        entry.fileSize = size;
+        {
+            std::error_code timeError;
+            entry.modified = fs::last_write_time(file.path, timeError);
+            if (timeError)
+            {
+                entry.modified = fs::file_time_type{};
+            }
         }
         if (size > MaxFileBytes)
         {
@@ -2825,6 +2970,7 @@ end
             entry.capabilities = std::move(parsed.capabilities);
             entry.items = std::move(parsed.items);
             entry.sections = std::move(parsed.sections);
+            entry.hooks = std::move(parsed.hooks);
             entry.sandbox = std::move(job->sandbox);
             entry.invokeRef = job->invokeRef;
             entry.chargedBytes = entry.sandbox != nullptr ? entry.sandbox->Counters().peakBytes : 0;
@@ -2850,9 +2996,16 @@ end
             {
                 capabilities += (capabilities.empty() ? "" : ",") + capability;
             }
-            return {true, std::format("Editor extension: {}@{} capabilities=[{}] menu items={} inspector sections={} ({})",
+            std::string hooks;
+            for (const std::string &hook : entry.hooks)
+            {
+                hooks += (hooks.empty() ? "" : ",") + hook;
+            }
+            // The hooks are named only when there are some, so the line of an extension without any is as it was
+            return {true, std::format("Editor extension: {}@{} capabilities=[{}] menu items={} inspector sections={}{} ({})",
                                       entry.name, entry.sha256.substr(0, 8), capabilities, entry.items.size(),
-                                      entry.sections.size(), entry.id)};
+                                      entry.sections.size(), hooks.empty() ? std::string() : " hooks=[" + hooks + "]",
+                                      entry.id)};
         }
         return {false, std::format("Editor extension {} did not load: {}", Printable(entry.id, 120),
                                    Printable(entry.error))};
@@ -2890,6 +3043,7 @@ end
                     entry.sandbox.reset();
                     entry.items.clear();
                     entry.sections.clear();
+                    entry.hooks.clear();
                     entry.capabilities.clear();
                 };
                 // Inspector button ids are global the same way (InvokeInspectorAction names a button and a component),
@@ -2990,6 +3144,305 @@ end
         {
             changed(revision);
         }
+    }
+
+    // The file's bytes, or nothing when it cannot be read or is not `size` bytes (it changed while it was read)
+    namespace
+    {
+        std::optional<std::string> ReadFileExactly(const fs::path &path, const std::uintmax_t size)
+        {
+            std::ifstream stream(path, std::ios::binary);
+            if (!stream)
+            {
+                return std::nullopt;
+            }
+            std::string text(static_cast<std::size_t>(size), '\0');
+            stream.read(text.data(), static_cast<std::streamsize>(size));
+            if (static_cast<std::uintmax_t>(stream.gcount()) != size)
+            {
+                return std::nullopt;
+            }
+            return text;
+        }
+    }
+
+    ExtensionHost::WatchOutcome ExtensionHost::ReloadChanged()
+    {
+        WatchOutcome outcome;
+        {
+            const std::lock_guard lock(_mutex);
+            if (_stopping)
+            {
+                return outcome;
+            }
+        }
+        std::vector<FoundFile> files = Discover();
+        if (files.size() > MaxFiles)
+        {
+            files.resize(MaxFiles); // as Load does: the same files are the ones that count
+        }
+
+        // What the registry recorded about each file when it loaded it
+        struct Known
+        {
+            fs::file_time_type modified{};
+            std::uintmax_t fileSize = 0;
+            std::string sha256;
+        };
+        std::map<std::string, Known> known;
+        {
+            const std::lock_guard lock(_mutex);
+            for (const Entry &entry : _entries)
+            {
+                known[entry.id] = Known{entry.modified, entry.fileSize, entry.sha256};
+            }
+        }
+
+        std::vector<FoundFile> toLoad;
+        std::set<std::string> found;
+        // Files whose time or size moved but whose content did not: the registry takes the new stamp
+        std::map<std::string, std::pair<fs::file_time_type, std::uintmax_t>> restamp;
+        for (const FoundFile &file : files)
+        {
+            found.insert(file.id);
+            const auto entry = known.find(file.id);
+            if (entry == known.end())
+            {
+                toLoad.push_back(file); // new since the last load
+                continue;
+            }
+            std::error_code sizeError;
+            std::error_code timeError;
+            const std::uintmax_t size = fs::file_size(file.path, sizeError);
+            const fs::file_time_type modified = fs::last_write_time(file.path, timeError);
+            if (sizeError || timeError)
+            {
+                continue; // it cannot be looked at now (a write is under way): the next check tries again
+            }
+            if (size == entry->second.fileSize && modified == entry->second.modified)
+            {
+                continue; // nothing moved
+            }
+            if (size <= MaxFileBytes)
+            {
+                // Something moved: the content decides. The same bytes (a touch, a copy over itself, an editor that saves
+                // the file as it was) is no reload.
+                const std::optional<std::string> text = ReadFileExactly(file.path, size);
+                if (!text.has_value())
+                {
+                    continue; // changed while it was read: the next check sees it whole
+                }
+                if (Sha256Hex(*text) == entry->second.sha256)
+                {
+                    restamp[file.id] = {modified, size};
+                    continue;
+                }
+            }
+            // A changed file, or one now over the size limit (the load fails it with its reason, once)
+            toLoad.push_back(file);
+        }
+        std::vector<std::string> gone;
+        for (const auto &[id, details] : known)
+        {
+            (void)details;
+            if (!found.contains(id))
+            {
+                gone.push_back(id);
+            }
+        }
+        outcome.touched = restamp.size();
+        if (toLoad.empty() && gone.empty())
+        {
+            if (!restamp.empty())
+            {
+                const std::lock_guard lock(_mutex);
+                for (Entry &entry : _entries)
+                {
+                    if (const auto stamp = restamp.find(entry.id); stamp != restamp.end())
+                    {
+                        entry.modified = stamp->second.first;
+                        entry.fileSize = stamp->second.second;
+                    }
+                }
+            }
+            return outcome;
+        }
+
+        // The memory the other extensions' states keep counts against the total; the files to load again give theirs back
+        std::set<std::string> replaced;
+        for (const FoundFile &file : toLoad)
+        {
+            replaced.insert(file.id);
+        }
+        std::size_t memoryUsed = 0;
+        {
+            const std::lock_guard lock(_mutex);
+            for (const Entry &entry : _entries)
+            {
+                if (entry.state != ExtensionState::Failed && !replaced.contains(entry.id) && found.contains(entry.id))
+                {
+                    memoryUsed += entry.chargedBytes;
+                }
+            }
+        }
+
+        // Each file alone, in its own state, under the same limits as in a Load (each bounded by the abandon deadline, the
+        // whole check by the reload budget)
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ReloadBudget());
+        const std::size_t totalBytes = TotalBytesBudget();
+        std::vector<Entry> fresh;
+        fresh.reserve(toLoad.size());
+        for (const FoundFile &file : toLoad)
+        {
+            Entry entry = LoadOne(file, totalBytes - std::min(memoryUsed, totalBytes), deadline);
+            if (entry.state == ExtensionState::Loaded)
+            {
+                memoryUsed += entry.chargedBytes;
+            }
+            fresh.push_back(std::move(entry));
+        }
+
+        std::vector<std::pair<bool, std::string>> lines;
+        std::vector<Entry> previous;
+        std::function<void(std::uint32_t)> changed;
+        std::uint32_t revision = 0;
+        {
+            const std::lock_guard lock(_mutex);
+            // The registry as it is now, less what is gone and what is loaded again, then the new entries, in id order
+            std::vector<Entry> next;
+            next.reserve(_entries.size() + fresh.size());
+            for (Entry &entry : _entries)
+            {
+                if (replaced.contains(entry.id) || !found.contains(entry.id))
+                {
+                    previous.push_back(std::move(entry));
+                    continue;
+                }
+                if (const auto stamp = restamp.find(entry.id); stamp != restamp.end())
+                {
+                    entry.modified = stamp->second.first;
+                    entry.fileSize = stamp->second.second;
+                }
+                next.push_back(std::move(entry));
+            }
+            _entries.clear();
+
+            // Ids are global (item ids, inspector button ids): a loaded file whose id is taken by an extension that was not
+            // touched fails, as in a Load, where the first one in file order keeps it
+            std::map<std::string, std::string> itemOwners;
+            std::map<std::string, std::string> buttonOwners;
+            for (const Entry &entry : next)
+            {
+                if (entry.state == ExtensionState::Failed)
+                {
+                    continue;
+                }
+                for (const json &item : entry.items)
+                {
+                    itemOwners[item.at("id").get<std::string>()] = entry.id;
+                }
+                for (const json &section : entry.sections)
+                {
+                    for (const json &button : section.at("buttons"))
+                    {
+                        buttonOwners[button.at("id").get<std::string>()] = entry.id;
+                    }
+                }
+            }
+            for (Entry &entry : fresh)
+            {
+                if (entry.state == ExtensionState::Loaded)
+                {
+                    std::string clashText;
+                    for (const json &item : entry.items)
+                    {
+                        const std::string id = item.at("id").get<std::string>();
+                        if (const auto owner = itemOwners.find(id); owner != itemOwners.end())
+                        {
+                            clashText = std::format("The menu item id \"{}\" is already used by the extension {}", id,
+                                                    owner->second);
+                            break;
+                        }
+                    }
+                    for (const json &section : entry.sections)
+                    {
+                        for (const json &button : section.at("buttons"))
+                        {
+                            const std::string id = button.at("id").get<std::string>();
+                            if (const auto owner = buttonOwners.find(id); clashText.empty() && owner != buttonOwners.end())
+                            {
+                                clashText = std::format(
+                                    "The inspector button id \"{}\" is already used by the extension {}", id, owner->second);
+                            }
+                        }
+                    }
+                    if (!clashText.empty())
+                    {
+                        entry.state = ExtensionState::Failed;
+                        entry.error = Printable(clashText);
+                        entry.sandbox.reset();
+                        entry.items.clear();
+                        entry.sections.clear();
+                        entry.hooks.clear();
+                        entry.capabilities.clear();
+                        entry.chargedBytes = 0;
+                    }
+                    else
+                    {
+                        for (const json &item : entry.items)
+                        {
+                            itemOwners[item.at("id").get<std::string>()] = entry.id;
+                        }
+                        for (const json &section : entry.sections)
+                        {
+                            for (const json &button : section.at("buttons"))
+                            {
+                                buttonOwners[button.at("id").get<std::string>()] = entry.id;
+                            }
+                        }
+                    }
+                }
+                if (known.contains(entry.id))
+                {
+                    ++outcome.reloaded;
+                }
+                else
+                {
+                    ++outcome.added;
+                }
+                lines.push_back(FormatLogLine(entry));
+                next.push_back(std::move(entry));
+            }
+            outcome.removed = gone.size();
+            std::ranges::sort(next, [](const Entry &a, const Entry &b) { return a.id < b.id; });
+            _entries = std::move(next);
+            ++_uiRevision;
+            revision = _uiRevision;
+            changed = _changed;
+        }
+        // The old states close here, outside the registry's mutex
+
+        for (const std::string &id : gone)
+        {
+            ServerLog::Info(std::format("Editor extension watcher: {} was removed: the extension is dropped",
+                                     Printable(id, 120)));
+        }
+        for (const auto &[isLoaded, text] : lines)
+        {
+            if (isLoaded)
+            {
+                ServerLog::Info("Editor extension watcher: " + text);
+            }
+            else
+            {
+                ServerLog::Warn("Editor extension watcher: " + text);
+            }
+        }
+        if (changed)
+        {
+            changed(revision);
+        }
+        return outcome;
     }
 
     json ExtensionHost::DescribeJson() const
@@ -3278,6 +3731,26 @@ end
         }
     }
 
+    namespace
+    {
+        // What OnBeforePlay returned: nothing, or { warnings = {...}, message = "..." } and no other key (a hook selects and
+        // changes nothing), shaped as a menu item's result is
+        json ShapeHookResult(const json &raw)
+        {
+            if (raw.is_object() && !IsList(raw))
+            {
+                CheckKeys(raw, {"message", "warnings"}, "result");
+            }
+            return ShapeInvokeResult(raw);
+        }
+    }
+
+    void ExtensionHost::SetHookBudgetForTest(const std::uint64_t instructions, const std::uint64_t maxMillis)
+    {
+        g_hookInstructionsOverride.store(instructions);
+        g_hookMillisOverride.store(maxMillis);
+    }
+
     void ExtensionHost::SetInvocationBudgetForTest(const std::uint64_t instructions, const std::uint64_t maxMillis)
     {
         g_invokeInstructionsOverride.store(instructions);
@@ -3378,6 +3851,70 @@ end
         return std::nullopt;
     }
 
+    bool ExtensionHost::IsHookName(const std::string_view name)
+    {
+        return std::ranges::find(HookNames, name) != std::end(HookNames);
+    }
+
+    bool ExtensionHost::IsReadOnlyOp(const std::string_view op)
+    {
+        static constexpr std::string_view Reads[] = {
+            "log",
+            "scene.getHierarchy",
+            "scene.getEntity",
+            "scene.getComponent",
+            "scene.getLocalTransform",
+            "scene.findByName",
+            "scene.getComponentTypes",
+            "assets.list",
+            "assets.readText",
+        };
+        return std::ranges::find(Reads, op) != std::end(Reads);
+    }
+
+    std::vector<ExtensionHost::MenuItemRef> ExtensionHost::FindHooks(const std::string_view hook) const
+    {
+        std::vector<MenuItemRef> found;
+        if (!IsHookName(hook))
+        {
+            return found;
+        }
+        const std::lock_guard lock(_mutex);
+        for (const Entry &entry : _entries)
+        {
+            if (entry.state != ExtensionState::Loaded ||
+                std::ranges::find(entry.hooks, std::string(hook)) == entry.hooks.end())
+            {
+                continue;
+            }
+            MenuItemRef ref;
+            ref.hook = true;
+            ref.extensionId = entry.id;
+            ref.extensionName = entry.name;
+            ref.sha8 = entry.sha256.substr(0, 8);
+            ref.state = entry.state;
+            ref.capabilities = entry.capabilities;
+            ref.itemId = std::string(hook);
+            ref.title = std::string(hook);
+            ref.minRole = "editor";
+            found.push_back(std::move(ref));
+        }
+        return found;
+    }
+
+    ExtensionHost::InvokeOutcome ExtensionHost::InvokeHook(const MenuItemRef &hook, const json &info,
+                                                           const NestedHandler &handler)
+    {
+        if (!hook.hook || !IsHookName(hook.itemId))
+        {
+            InvokeOutcome outcome;
+            outcome.failure = InvokeFailure::HostError;
+            outcome.error = "Not a hook";
+            return outcome;
+        }
+        return InvokeWith(hook, info, json(nullptr), handler);
+    }
+
     ExtensionState ExtensionHost::FaultNow(const std::string_view id, const std::string_view reason)
     {
         std::function<void(std::uint32_t)> changed;
@@ -3444,7 +3981,7 @@ end
                                                            const NestedHandler &handler)
     {
         InvokeOutcome outcome;
-        const std::string noun = item.inspectorAction ? "The inspector button" : "The menu item";
+        const std::string noun = item.hook ? "The hook" : (item.inspectorAction ? "The inspector button" : "The menu item");
         const auto refuse = [this, &outcome](std::string text)
         {
             outcome.failure = InvokeFailure::HostError;
@@ -3533,9 +4070,11 @@ end
             // Whatever the registry did not take closes here, outside its mutex
         };
 
-        const Scripting::SandboxBudget budget = CurrentInvocationBudget();
+        const Scripting::SandboxBudget budget = item.hook ? CurrentHookBudget() : CurrentInvocationBudget();
         job->id = item.extensionId;
-        job->kind = item.inspectorAction ? "inspector" : "menu";
+        job->kind = item.hook ? "hook" : (item.inspectorAction ? "inspector" : "menu");
+        job->readOnly = item.hook;
+        job->nestedLimit = item.hook ? std::min(MaxNested(), MaxHookNestedCommands) : MaxNested();
         job->itemId = item.itemId;
         job->noun = noun;
         job->context = std::move(context);
@@ -3575,7 +4114,8 @@ end
 
         // The conversation: the worker asks, the command thread answers, until the worker is done. A worker that is
         // silent for the wall budget plus the grace is abandoned.
-        const std::chrono::milliseconds silenceLimit(InvokeAbandonMillis());
+        // The wall budget of the call's kind plus the grace
+        const std::chrono::milliseconds silenceLimit(budget.maxMillis + CurrentInvokeGraceMillis());
         bool abandoned = false;
         std::uint32_t answered = 0;
         {
@@ -3638,7 +4178,7 @@ end
         {
             try
             {
-                outcome.result = ShapeInvokeResult(job->rawResult);
+                outcome.result = item.hook ? ShapeHookResult(job->rawResult) : ShapeInvokeResult(job->rawResult);
             }
             catch (const ShapeError &e)
             {

@@ -88,6 +88,10 @@ namespace N2Engine::Editor
         /// a project. ParseHostArguments refuses it with --play (a play host never loads extensions) and with a
         /// non-loopback --bind unless --tokens-file is given (so roles exist). Allowed with --read-only.
         bool editorExtensions = false;
+        /// --editor-extensions-watch: poll the project's editor/ folder (about once a second) and reload only the extension
+        /// file that changed (EditorServer::SetEditorExtensionsWatching, ExtensionHost::ReloadChanged). OFF by default, and
+        /// meaningful only with --editor-extensions: ParseHostArguments refuses it without.
+        bool editorExtensionsWatch = false;
         /// --no-rate-limit: turns off the failed-Hello rate limiting (EditorServer::SetRateLimiting) that a host with
         /// an access token has by default; for test rigs that fail Hellos on purpose. It changes nothing on a host
         /// without a token, which has no failed Hellos to count.

@@ -158,6 +158,11 @@ namespace N2Engine::Editor
                 options.editorExtensions = true;
                 continue;
             }
+            if (arg == "--editor-extensions-watch")
+            {
+                options.editorExtensionsWatch = true;
+                continue;
+            }
             if (arg == "--no-rate-limit")
             {
                 options.noRateLimit = true;
@@ -374,6 +379,11 @@ namespace N2Engine::Editor
             return std::unexpected("--editor-extensions and --play can't be combined: a play host never loads editor "
                                    "extensions");
         }
+        if (options.editorExtensionsWatch && !options.editorExtensions)
+        {
+            return std::unexpected("--editor-extensions-watch needs --editor-extensions: it only watches the files that "
+                                   "flag loads");
+        }
         if (options.createPath.empty() && (givenName || givenId))
         {
             return std::unexpected(std::string(givenName ? "--name" : "--project-id") + " only goes with --create");
@@ -539,6 +549,10 @@ Options:
                             starts it. Can't be combined with --play, nor with a --bind outside 127.0.0.0/8
                             unless --tokens-file is given (--insecure-bind does not lift that). Works with
                             --read-only (the extensions are listed). Without --project there is nothing to load
+  --editor-extensions-watch Watch the project's editor/ folder (about once a second: modification time and
+                            size, then a content hash) and reload only the extension file that changed, or
+                            load one that was added and drop one that was removed; each change tells the
+                            clients with extensionsChanged. OFF by default. Needs --editor-extensions
   --no-rate-limit           Turn off the failed-Hello rate limiting. By default, with --token-env or
                             --tokens-file, an address that fails 3 Hellos is backed off (1 s, doubling to
                             5 min; its connections are closed at once, before any TLS handshake), and with

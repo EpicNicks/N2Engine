@@ -433,6 +433,12 @@ namespace N2Engine::Editor
                 {
                     ServerLog::Warn("The editor extensions could not be enabled");
                 }
+                else if (options.editorExtensionsWatch)
+                {
+                    server.SetEditorExtensionsWatching(true);
+                    ServerLog::Info("The editor extensions watcher is on (--editor-extensions-watch): a changed file in "
+                                    "editor/ is reloaded");
+                }
             }
 
             // --play: the game is the snapshot (a file a launcher got from WritePlaySnapshot, or a res:// scene of the
