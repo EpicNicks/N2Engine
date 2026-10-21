@@ -26,7 +26,8 @@ using nlohmann::json;
 namespace fs = std::filesystem;
 
 // The Lua editor extension commands on a PLAY host (protocol 1.14.0), really executed through ExecuteCommand: a play
-// host plays a snapshot and runs no extension, so ReloadEditorExtensions is refused there (the edit-only gate), while
+// host plays a snapshot and runs no extension, so ReloadEditorExtensions, InvokeMenuItem and InvokeInspectorAction are
+// refused there (the edit-only gate), while
 // the two reads still answer. This is its own program (editor_project_tests) because a play host loads a scene into
 // SceneManager and needs a project; the role, read-only and flag cases are in EditorExtensionCommandsTests.cpp.
 namespace
@@ -217,6 +218,24 @@ TEST_F(EditorExtensionPlayTest, APlayHostRefusesInvokeMenuItemBeforeAnyLuaRuns)
     EXPECT_TRUE(EventsOfKind(*play, "extensionOutput").empty());
     EXPECT_FALSE(play->GetHistory().InGroup());
     EXPECT_EQ(play->GetEditorExtensions()->StateOf("a.lua"), ExtensionState::Loaded) << "nothing ran or failed";
+}
+
+TEST_F(EditorExtensionPlayTest, APlayHostRefusesInvokeInspectorActionBeforeAnyLuaRuns)
+{
+    StartPlaying(true);
+    ASSERT_NE(play->GetEditorExtensions(), nullptr);
+    BufferWriter w;
+    w.WriteString("01234567-89ab-cdef-0123-456789abcdef");
+    w.WriteString("a.button");
+    WriteJson(w, json::object());
+    w.WriteU32(play->GetEditorExtensions()->UiRevision());
+
+    // InvokeInspectorAction is edit-only (since 1.16.0), like InvokeMenuItem: the play gate answers first
+    const Frame refused = Execute(*play, CommandType::InvokeInspectorAction, w.Release());
+    EXPECT_EQ(refused.type, ErrorType) << refused.Text();
+    EXPECT_NE(refused.Text().find("Not available in a play host"), std::string::npos) << refused.Text();
+    EXPECT_TRUE(EventsOfKind(*play, "extensionOutput").empty());
+    EXPECT_FALSE(play->GetHistory().InGroup());
 }
 
 TEST_F(EditorExtensionPlayTest, APlayHostWithoutTheFlagAnswersDisabledAndRefusesTheReloadAsAPlayHost)
