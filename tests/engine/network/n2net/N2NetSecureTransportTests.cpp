@@ -674,6 +674,41 @@ TEST(N2NetSecureTransportTest, APendingSessionThatNeverAnswersGivesItsSlotBack)
     EXPECT_EQ(pair.server->Stats().handshakeTimeouts, 1u);
 }
 
+TEST(N2NetSecureTransportTest, AStallLongerThanTheIdleTimeoutKeepsASessionWhosePacketsAreQueued)
+{
+    // Poll drains the inner transport before it sweeps idle sessions: a caller that stalls between Polls for longer
+    // than idleTimeoutMicros keeps a session whose authenticated packet is queued, and still loses one that sent nothing
+    SecurePair pair;
+    ASSERT_TRUE(pair.Handshake());
+    ASSERT_EQ(pair.server->EstablishedSessionCount(), 1u);
+    const std::uint64_t idle = pair.server->Options().idleTimeoutMicros;
+    const std::uint64_t stall = 3 * idle;
+    pair.serverEvents.clear();
+
+    // The stall: the client sends one datagram, then neither side is polled for three idle timeouts
+    const std::vector<std::uint8_t> message = MakeMessage(5, 200);
+    ASSERT_EQ(pair.client->Send(pair.serverEnd.Id(), message), TransportSendResult::Sent);
+    pair.clock += stall;
+    pair.net.Advance(stall);
+
+    // One Poll: the datagram is delivered and the session is not ended
+    PollInto(*pair.server, pair.serverEvents);
+    ASSERT_EQ(CountOf(pair.serverEvents, TransportEventType::Datagram), 1u);
+    EXPECT_EQ(pair.serverEvents[0].data, message);
+    EXPECT_EQ(CountOf(pair.serverEvents, TransportEventType::PeerDisconnected), 0u);
+    EXPECT_EQ(pair.server->EstablishedSessionCount(), 1u);
+    EXPECT_EQ(pair.server->Stats().idleTimeouts, 0u);
+
+    // The client sends nothing more and is not polled, so no keep-alive comes: after one more idle timeout the
+    // server ends the session
+    pair.clock += idle + 1'000;
+    pair.net.Advance(idle + 1'000);
+    PollInto(*pair.server, pair.serverEvents);
+    EXPECT_EQ(CountOf(pair.serverEvents, TransportEventType::PeerDisconnected), 1u);
+    EXPECT_EQ(pair.server->EstablishedSessionCount(), 0u);
+    EXPECT_EQ(pair.server->Stats().idleTimeouts, 1u);
+}
+
 TEST(N2NetSecureTransportTest, ForgedExpiredAndBorrowedCookiesAreRefused)
 {
     SecurePair pair;
