@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -974,6 +975,12 @@ namespace N2Engine::Editor
             // saved as it was (a scene that was not at its saved state is still not)
             ++_sceneRevision;
             NoteSceneChanged();
+            if (aborted->inexact)
+            {
+                // As after an undo: an object cannot lose the transform a write gave it, so the scene is not exactly
+                // what was saved even when the history says it is
+                _history.ForgetSaved();
+            }
             if (_history.IsAtSavedState())
             {
                 _savedRevision = _sceneRevision;

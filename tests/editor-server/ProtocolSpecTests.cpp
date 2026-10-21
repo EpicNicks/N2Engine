@@ -212,6 +212,7 @@ namespace
             {"SetProjectSettings", [](BufferReader &r) { (void)SetProjectSettingsCmd::Deserialize(r); }},
             {"SetStartupScene", [](BufferReader &r) { (void)SetStartupSceneCmd::Deserialize(r); }},
             {"BeginEditGroup", [](BufferReader &r) { (void)BeginEditGroupCmd::Deserialize(r); }},
+            {"InvokeMenuItem", [](BufferReader &r) { (void)InvokeMenuItemCmd::Deserialize(r); }},
         };
         return deserializers;
     }

@@ -1800,16 +1800,27 @@ end
         // positioned at the script's call, for anything the host refuses.
         int HostCall(lua_State *L)
         {
+            // The message is pushed under a protected call (PushJson) while the C++ objects live; everything that can
+            // raise a Lua error (a refused allocation included) runs after they are gone, so no error leaves past one
+            bool pushed = false;
             {
                 HostStep step = PerformHostCall(L);
                 if (step.results >= 0)
                 {
                     return step.results;
                 }
-                luaL_where(L, 2);
-                lua_pushlstring(L, step.error.data(), step.error.size());
+                pushed = PushJson(L, json(std::move(step.error)));
             }
-            lua_concat(L, 2);
+            if (pushed)
+            {
+                luaL_where(L, 2);
+                lua_insert(L, -2);
+                lua_concat(L, 2);
+            }
+            else
+            {
+                lua_pushliteral(L, "the host refused the call");
+            }
             return lua_error(L);
         }
 
@@ -1844,16 +1855,17 @@ end
                     fail(Failure::HostError, "The extension's state is closed");
                     return;
                 }
+                // The job's slot exists since the file loaded (false), so setting it never allocates
                 lua_settop(L, 0);
                 lua_pushlightuserdata(L, &job);
                 lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
 
+                // The arguments are pushed under protected calls (PushJson): the state's cap may refuse them
                 lua_rawgeti(L, LUA_REGISTRYINDEX, job.invokeRef);
-                lua_pushlstring(L, job.itemId.data(), job.itemId.size());
-                if (!PushJson(L, job.context) || !PushJson(L, job.params))
+                if (!PushJson(L, json(job.itemId)) || !PushJson(L, job.context) || !PushJson(L, job.params))
                 {
                     lua_settop(L, 0);
-                    lua_pushnil(L);
+                    lua_pushboolean(L, 0);
                     lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
                     fail(Failure::MemoryExhausted, "The extension's state has no room for the call's arguments");
                     return;
@@ -1862,7 +1874,7 @@ end
                 job.sandbox->Arm(job.budget);
                 const int status = lua_pcall(L, 3, 1, 0);
                 job.sandbox->Disarm();
-                lua_pushnil(L);
+                lua_pushboolean(L, 0);
                 lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
                 if (status != LUA_OK)
                 {
@@ -1987,6 +1999,10 @@ end
                 }
                 const int invoker = luaL_ref(L, LUA_REGISTRYINDEX);
                 const int reader = luaL_ref(L, LUA_REGISTRYINDEX);
+                // The registry slot of the running invocation's job, made now (false: no menu item runs), so an
+                // invocation sets it without an allocation
+                lua_pushboolean(L, 0);
+                lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
 
                 // The file's chunk. Its name is the file's path inside editor/ (never a host path)
                 if (const SandboxOutcome run = sandbox->RunChunk(job.source, "=" + job.id, SandboxDefaults::LoadBudget, 1);
