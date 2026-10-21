@@ -1,11 +1,11 @@
-#include "editor-server/TokenBucket.hpp"
+#include "engine/security/TokenBucket.hpp"
 
 #include <algorithm>
 #include <iterator>
 #include <limits>
 #include <utility>
 
-namespace N2Engine::Editor
+namespace N2Engine::Security
 {
     namespace
     {

@@ -75,6 +75,11 @@ namespace N2Engine::N2Net
         }
     }
 
+    bool SimTransport::GetPeerEndpoint(PeerId peer, PeerEndpoint &endpoint) const
+    {
+        return peer != self_ && network_->EndpointAddress(peer, endpoint);
+    }
+
     // ---- SimNetwork ----
 
     SimNetwork::SimNetwork(std::uint64_t seed) : seed_(seed) {}
@@ -86,6 +91,38 @@ namespace N2Engine::N2Net
         const PeerId id = static_cast<PeerId>(endpoints_.size() + 1);
         endpoints_.push_back(std::unique_ptr<SimTransport>(new SimTransport(this, id)));
         return *endpoints_.back();
+    }
+
+    bool SimNetwork::SetEndpointAddress(PeerId id, const PeerEndpoint &endpoint)
+    {
+        if (id == kInvalidPeer || id > endpoints_.size())
+        {
+            return false;
+        }
+        addresses_[id] = endpoint;
+        return true;
+    }
+
+    bool SimNetwork::EndpointAddress(PeerId id, PeerEndpoint &endpoint) const
+    {
+        if (id == kInvalidPeer || id > endpoints_.size())
+        {
+            return false;
+        }
+        const auto found = addresses_.find(id);
+        if (found != addresses_.end())
+        {
+            endpoint = found->second;
+            return true;
+        }
+        endpoint = PeerEndpoint{};
+        endpoint.ipv6 = false;
+        endpoint.bytes[0] = 10;
+        endpoint.bytes[1] = static_cast<std::uint8_t>((id >> 16) & 0xFF);
+        endpoint.bytes[2] = static_cast<std::uint8_t>((id >> 8) & 0xFF);
+        endpoint.bytes[3] = static_cast<std::uint8_t>(id & 0xFF);
+        endpoint.port = 7777;
+        return true;
     }
 
     SimTransport *SimNetwork::GetEndpoint(PeerId id) noexcept

@@ -18,6 +18,9 @@ namespace N2Engine::N2Net
     /// The most reliable units in flight (and buffered on the receiving side) a configured window may be
     inline constexpr std::uint16_t kHardMaxReliableWindow = 1024;
 
+    /// The smallest ConnectionConfig::maxPacketSize: the header and room for a unit or an unreliable block of 64 bytes
+    inline constexpr std::uint32_t kMinConfiguredPacketSize = 128;
+
     struct ConnectionConfig
     {
         /// Identifies the protocol version and game build: a packet with any other id is dropped
@@ -29,12 +32,18 @@ namespace N2Engine::N2Net
         /// exactly in order
         bool reliableStream = false;
 
+        /// The largest packet this side builds, in bytes. Set it to the transport's MaxPacketSize() when that is smaller
+        /// than kMaxPacketSize (SecureTransport's is, by its header and tag). Reliable messages are then cut into units
+        /// that fit, and an unreliable message may be at most maxPacketSize - kHeaderSize - kUnreliableHeaderSize
+        /// bytes. Received packets are accepted up to kMaxPacketSize whatever this says. Clamped to
+        /// [kMinConfiguredPacketSize, kMaxPacketSize].
+        std::uint32_t maxPacketSize = static_cast<std::uint32_t>(kMaxPacketSize);
         /// The largest reliable message, sent or received. Clamped to [1, kHardMaxMessageSize].
         std::uint32_t maxMessageSize = 64 * 1024;
         /// The most reliable bytes queued and not yet packetised; SendReliable returns QueueFull beyond it
         std::uint32_t maxSendQueueBytes = 256 * 1024;
         /// The most units in flight (sender) and the units ahead of the next one the receiver will buffer. Clamped to
-        /// [1, kHardMaxReliableWindow]. Both peers must use the same value (not negotiated until A5): a unit beyond the
+        /// [1, kHardMaxReliableWindow]. Both peers must use the same value (not negotiated: the A5 handshake does not agree it): a unit beyond the
         /// receiver's window is dropped but its packet is still acknowledged, so it is never resent.
         std::uint16_t reliableWindow = 256;
         /// Unreliable messages waiting for the next Update: beyond either limit the oldest is dropped
@@ -184,6 +193,9 @@ namespace N2Engine::N2Net
         [[nodiscard]] const ConnectionStats &Stats() const noexcept { return stats_; }
         [[nodiscard]] const RttEstimator &Rtt() const noexcept { return rtt_; }
         [[nodiscard]] const ConnectionConfig &Config() const noexcept { return config_; }
+
+        /// The largest unreliable message SendUnreliable accepts under this config (maxPacketSize less the headers)
+        [[nodiscard]] std::size_t MaxUnreliableMessageSize() const noexcept;
 
         /// Our packets declared lost as a share of those settled (acked or lost), in parts per million
         [[nodiscard]] std::uint32_t LossRatePpm() const noexcept;

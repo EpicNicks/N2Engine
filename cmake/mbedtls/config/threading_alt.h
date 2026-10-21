@@ -1,4 +1,4 @@
-// Mutex type for MBEDTLS_THREADING_ALT: a pointer to a std::mutex owned by the callbacks in EditorTls.cpp.
+// Mutex type for MBEDTLS_THREADING_ALT: a pointer to a std::mutex owned by the callbacks in engine/src/security/Crypto.cpp.
 #ifndef N2_MBEDTLS_THREADING_ALT_H
 #define N2_MBEDTLS_THREADING_ALT_H
 

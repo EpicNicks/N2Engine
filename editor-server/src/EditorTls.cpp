@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "engine/io/ProjectFile.hpp"
+#include "engine/security/Crypto.hpp"
 
 #ifdef N2ENGINE_EDITOR_TLS
 
@@ -189,40 +190,13 @@ namespace N2Engine::Editor
             return TlsStep::Failed;
         }
 
-        // Mbed TLS threading callbacks (MBEDTLS_THREADING_ALT, see mbedtls-config/): a std::mutex per library mutex
-        void MutexInit(mbedtls_threading_mutex_t *mutex)
-        {
-            mutex->impl = new std::mutex();
-        }
-
-        void MutexFree(mbedtls_threading_mutex_t *mutex)
-        {
-            delete static_cast<std::mutex *>(mutex->impl);
-            mutex->impl = nullptr;
-        }
-
-        int MutexLock(mbedtls_threading_mutex_t *mutex)
-        {
-            static_cast<std::mutex *>(mutex->impl)->lock();
-            return 0;
-        }
-
-        int MutexUnlock(mbedtls_threading_mutex_t *mutex)
-        {
-            static_cast<std::mutex *>(mutex->impl)->unlock();
-            return 0;
-        }
-
         /// The library's one-time setup: threading (enabled because the tests run a client and the server's network
-        /// thread in one process, and PSA's global key slots need it), then PSA crypto, which TLS 1.3 needs
+        /// thread in one process, and PSA's global key slots need it), then PSA crypto, which TLS 1.3 needs. The library
+        /// is shared with n2security (the netcode's crypto), which owns the setup and its std::mutex callbacks
+        /// (cmake/mbedtls/config/), so a process installs them once whichever part uses the library first.
         bool InitializeCrypto()
         {
-            static const bool ok = []
-            {
-                mbedtls_threading_set_alt(MutexInit, MutexFree, MutexLock, MutexUnlock);
-                return psa_crypto_init() == PSA_SUCCESS;
-            }();
-            return ok;
+            return Security::InitializeCrypto();
         }
 
         std::string ToHex(const unsigned char *bytes, const size_t count)

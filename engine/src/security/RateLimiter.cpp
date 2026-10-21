@@ -1,4 +1,4 @@
-#include "editor-server/RateLimiter.hpp"
+#include "engine/security/RateLimiter.hpp"
 
 #include <algorithm>
 #include <format>
@@ -6,7 +6,7 @@
 #include <limits>
 #include <utility>
 
-namespace N2Engine::Editor
+namespace N2Engine::Security
 {
     // ==================== PeerAddress ====================
 

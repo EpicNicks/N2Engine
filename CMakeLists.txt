@@ -317,6 +317,15 @@ if(N2ENGINE_USE_JOLT)
     add_subdirectory(cmake/jolt)
 endif()
 
+# == Mbed TLS (vendored; native builds only) ==
+# n2_mbedcrypto (crypto only) for every native build: the netcode's handshake and packet sealing, and the token hashes
+# (n2security). With N2ENGINE_EDITOR_TLS also n2_mbedtls_tls (X.509 and TLS) for the editor host's --tls. The web build
+# skips both: it has no UDP transport, and a browser transport gets its security from the browser.
+option(N2ENGINE_EDITOR_TLS "Build TLS support (--tls) for the editor host (Mbed TLS, vendored in external/mbedtls)" OFF)
+if(NOT N2ENGINE_PLATFORM_WEB)
+    add_subdirectory(cmake/mbedtls)
+endif()
+
 file(GLOB LUA_SOURCES
         ${CMAKE_SOURCE_DIR}/external/lua/*.c
 )
