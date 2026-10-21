@@ -44,7 +44,8 @@ namespace N2Engine::N2Net
         AlreadyConnected,
         /// Connect: the port is 0
         InvalidPort,
-        /// Connect: the address is of the other family than the socket (an IPv4 address on an IPv6-only socket)
+        /// Connect: the address is of the other family than the socket (an IPv6 address on an IPv4 socket, or an IPv4
+        /// address on an IPv6 socket that is not dual-stack: see DualStack())
         FamilyMismatch,
     };
 
@@ -55,8 +56,9 @@ namespace N2Engine::N2Net
         std::string bindAddress = "127.0.0.1";
         /// 0 picks a free port (read it back with LocalPort())
         std::uint16_t port = 0;
-        /// An IPv6 socket accepts IPv4 peers too (as IPv4-mapped addresses) when the system allows it; DualStack()
-        /// tells whether it did. Ignored for an IPv4 bind address. False sets IPV6_V6ONLY.
+        /// An IPv6 socket bound to the wildcard "::" accepts IPv4 peers too (as IPv4-mapped addresses) when the system
+        /// allows it; DualStack() tells whether it did. A socket bound to one IPv6 address (such as ::1) is never dual
+        /// stack. Ignored for an IPv4 bind address. False sets IPV6_V6ONLY.
         bool dualStack = true;
 
         /// Permits a non-loopback bind (and a non-loopback Connect) while encryption is not available: the explicit
@@ -195,7 +197,8 @@ namespace N2Engine::N2Net
         /// The bound address as text
         [[nodiscard]] const std::string &LocalAddress() const noexcept;
         [[nodiscard]] bool IsIpv6() const noexcept;
-        /// True when an IPv6 socket also reaches IPv4 peers
+        /// True when an IPv6 socket also reaches IPv4 peers: only a "::" bind with options.dualStack that the system
+        /// accepted. When false, Connect to an IPv4 address on an IPv6 socket returns FamilyMismatch.
         [[nodiscard]] bool DualStack() const noexcept;
         /// True when the fail-closed rule was overridden by insecureBind for this transport
         [[nodiscard]] bool InsecureOverrideUsed() const noexcept;

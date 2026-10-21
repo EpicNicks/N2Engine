@@ -556,24 +556,24 @@ TEST_F(ExtensionRoleTest, AReadOnlyHostRefusesTheReloadToAnAdminToo)
     EXPECT_TRUE(EventsOfKind(server, "extensionsChanged").empty());
 }
 
-TEST(EditorExtensionCommandsTest, TheIdOfTheLaterInspectorCommandIsReservedAndRefused)
+TEST(EditorExtensionCommandsTest, TheInspectorCommandOnceReservedIsNowAnEditOnlyWrite)
 {
-    // 0x82 is InvokeMenuItem since 1.15.0; 0x83 stays reserved for InvokeInspectorAction
-    for (const uint8_t reserved : {uint8_t{0x83}})
+    // 0x82 is InvokeMenuItem since 1.15.0, 0x83 InvokeInspectorAction since 1.16.0 (its own tests are in
+    // ExtensionInspectorTests.cpp); 0x85 and 0x86 stay free (design: GetMenuItemForm and NotifyPlayEnded, deferred)
+    const auto id = static_cast<uint8_t>(CommandType::InvokeInspectorAction);
+    EXPECT_EQ(id, 0x83);
+    EXPECT_EQ(EditorServer::ClassifyCommand(id), EditorServer::CommandClass::Write);
+    EXPECT_FALSE(EditorServer::IsReadCommand(id));
+    EXPECT_TRUE(EditorServer::IsEditOnlyCommand(id));
+    EXPECT_TRUE(EditorServer::RoleAllows(TokenRole::Editor, id));
+    EXPECT_FALSE(EditorServer::RoleAllows(TokenRole::Viewer, id));
+    for (const uint8_t unused : {uint8_t{0x85}, uint8_t{0x86}})
     {
-        EXPECT_FALSE(EditorServer::ClassifyCommand(reserved).has_value()) << int{reserved};
-        EXPECT_FALSE(EditorServer::IsReadCommand(reserved)) << int{reserved};
-        EXPECT_FALSE(EditorServer::RoleAllows(TokenRole::Editor, reserved)) << int{reserved};
-        EXPECT_FALSE(EditorServer::RoleAllows(TokenRole::Viewer, reserved)) << int{reserved};
-
+        EXPECT_FALSE(EditorServer::ClassifyCommand(unused).has_value()) << int{unused};
         EditorServer server;
-        const Frame unknown = Execute(server, reserved);
+        const Frame unknown = Execute(server, unused);
         EXPECT_EQ(unknown.type, ErrorType);
-        EXPECT_EQ(unknown.Text(), "Unknown command") << "nothing implements it yet";
-
-        EditorServer readOnly;
-        ASSERT_TRUE(readOnly.SetReadOnly(true));
-        EXPECT_EQ(Execute(readOnly, reserved).Text(), EditorServer::ReadOnlyMessage(reserved));
+        EXPECT_EQ(unknown.Text(), "Unknown command");
     }
 }
 
@@ -584,26 +584,28 @@ TEST(EditorExtensionCommandsTest, TheSpecHasTheEventKeyTheShapesAndTheResponsesT
     const json spec = json::parse(file);
     for (const auto &[code, meaning] : spec.at("errorCodes").items())
         EXPECT_FALSE(meaning.get<std::string>().empty()) << code;
-    EXPECT_EQ(spec.at("version"), "1.15.0");
+    EXPECT_EQ(spec.at("version"), "1.16.0");
 
     // The event keys and the JSON shapes the extension commands answer with
     EXPECT_TRUE(spec.at("jsonTypes").at("EditorEvent").contains("uiRevision?"));
     EXPECT_TRUE(spec.at("jsonTypes").at("EditorEvent").contains("extension?"));
     for (const char *shape : {"ExtensionInfo", "EditorExtensionsInfo", "MenuForm", "MenuItemInfo", "EditorUiInfo",
-                              "ExtensionResultInfo"})
+                              "ExtensionResultInfo", "InspectorSectionInfo", "InspectorButtonInfo"})
         EXPECT_TRUE(spec.at("jsonTypes").contains(shape)) << shape;
+    EXPECT_EQ(spec.at("jsonTypes").at("EditorUiInfo").at("inspectorSections"), "InspectorSectionInfo[]");
+    EXPECT_EQ(spec.at("commands").at("InvokeInspectorAction").at("response").at("type"), "ExtensionResult");
     EXPECT_EQ(spec.at("responses").at("EditorExtensions"), "0x1D");
     EXPECT_EQ(spec.at("responses").at("EditorUi"), "0x1E");
     EXPECT_EQ(spec.at("responses").at("ExtensionResult"), "0x1F");
 }
 
-TEST(EditorExtensionCommandsTest, TheProtocolVersionAndCapabilityAreThoseOf1_15_0)
+TEST(EditorExtensionCommandsTest, TheProtocolVersionAndCapabilityAreThoseOf1_16_0)
 {
-    EXPECT_EQ(std::string{ProtocolVersion}, "1.15.0");
+    EXPECT_EQ(std::string{ProtocolVersion}, "1.16.0");
     const std::vector<std::string> capabilities = EditorServer::Capabilities();
     ASSERT_EQ(capabilities.size(), 1u);
     EXPECT_EQ(capabilities[0], "editorExtensions");
-    // The codes a client branches on (InvokeMenuItem answers the last four)
+    // The codes a client branches on (InvokeMenuItem and InvokeInspectorAction answer the last four)
     EXPECT_EQ(std::string{ErrorCodeExtensionsDisabled}, "extensionsDisabled");
     EXPECT_EQ(std::string{ErrorCodeExtensionFailed}, "extensionFailed");
     EXPECT_EQ(std::string{ErrorCodeExtensionFaulted}, "extensionFaulted");
@@ -612,5 +614,6 @@ TEST(EditorExtensionCommandsTest, TheProtocolVersionAndCapabilityAreThoseOf1_15_
     EXPECT_EQ(static_cast<int>(CommandType::ListEditorExtensions), 0x80);
     EXPECT_EQ(static_cast<int>(CommandType::GetEditorUi), 0x81);
     EXPECT_EQ(static_cast<int>(CommandType::InvokeMenuItem), 0x82);
+    EXPECT_EQ(static_cast<int>(CommandType::InvokeInspectorAction), 0x83);
     EXPECT_EQ(static_cast<int>(CommandType::ReloadEditorExtensions), 0x84);
 }

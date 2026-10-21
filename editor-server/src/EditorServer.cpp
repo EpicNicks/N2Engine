@@ -4015,9 +4015,8 @@ namespace N2Engine::Editor
         {CommandType::GetLuaFields, "GetLuaFields", EditorServer::CommandClass::Read},
         {CommandType::GetProjectInfo, "GetProjectInfo", EditorServer::CommandClass::Read},
         {CommandType::GetHistory, "GetHistory", EditorServer::CommandClass::Read},
-        // The extension lists answer from what was captured at load: they run no Lua. 0x83 is reserved for
-        // InvokeInspectorAction (Write); nothing is classified for it until it exists, so it is refused as an unknown id
-        // (default deny). InvokeMenuItem (0x82) runs extension code, so it is a Write below.
+        // The extension lists answer from what was captured at load: they run no Lua. InvokeMenuItem (0x82) and
+        // InvokeInspectorAction (0x83) run extension code, so they are Writes below.
         {CommandType::ListEditorExtensions, "ListEditorExtensions", EditorServer::CommandClass::Read},
         {CommandType::GetEditorUi, "GetEditorUi", EditorServer::CommandClass::Read},
         {CommandType::GetAutosave, "GetAutosave", EditorServer::CommandClass::Read},
@@ -4063,6 +4062,8 @@ namespace N2Engine::Editor
         {CommandType::SendInput, "SendInput", EditorServer::CommandClass::Write},
         // Write: runs the code of an editor extension, which changes the scene as the invoking user (one edit group)
         {CommandType::InvokeMenuItem, "InvokeMenuItem", EditorServer::CommandClass::Write},
+        // Write: the same for a button of an inspector section, on the component the client's inspector shows
+        {CommandType::InvokeInspectorAction, "InvokeInspectorAction", EditorServer::CommandClass::Write},
         // Admin: controls the host itself
         {CommandType::Shutdown, "Shutdown", EditorServer::CommandClass::Admin},
         // Admin: reloading runs every extension file again, as the host's operator would by restarting it
@@ -4379,6 +4380,9 @@ namespace N2Engine::Editor
             break;
         case CommandType::InvokeMenuItem:
             HandleInvokeMenuItem(clientSocket, payload);
+            break;
+        case CommandType::InvokeInspectorAction:
+            HandleInvokeInspectorAction(clientSocket, payload);
             break;
         case CommandType::CreateScript:
             HandleCreateScript(clientSocket, payload);
@@ -5574,6 +5578,7 @@ namespace N2Engine::Editor
         // snapshot, and runs no extension) never does
         case CommandType::ReloadEditorExtensions:
         case CommandType::InvokeMenuItem:
+        case CommandType::InvokeInspectorAction:
             return true;
         default:
             return false;

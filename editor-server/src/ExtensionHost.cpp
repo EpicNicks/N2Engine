@@ -313,6 +313,11 @@ local FN = {}
 local MAX_DEPTH, MAX_NODES, MAX_STRING = 8, 4000, 4096
 local declared = nil
 local runs = {}
+-- Editor.Inspector.Register's calls ({ componentType, spec }, in order) and the functions of their buttons by id. A
+-- registration is accepted only while the file loads: the reader below ends that
+local inspectors = {}
+local actions = {}
+local loading = true
 -- What the host gave this state to reach it with, taken before any file code runs and then removed from the globals:
 -- the only way out of the state is these wrappers
 local host = __n2_host
@@ -494,6 +499,24 @@ Editor = {
         return declaration
     end,
     Log = Log,
+    -- Inspector sections for a component type (E-X5): recorded now, read back with the declaration
+    Inspector = {
+        Register = function(componentType, spec)
+            if not loading then
+                error("Editor.Inspector.Register can be called only while the file loads", 2)
+            end
+            if type(componentType) ~= "string" then
+                error("Editor.Inspector.Register expects a component type name (a string), got " .. type(componentType), 2)
+            end
+            if type(spec) ~= "table" then
+                error("Editor.Inspector.Register expects a table such as { sections = { ... } }, got " .. type(spec), 2)
+            end
+            if #inspectors >= 64 then
+                error("Editor.Inspector.Register was called more than 64 times", 2)
+            end
+            inspectors[#inspectors + 1] = { componentType = componentType, spec = spec }
+        end,
+    },
 }
 
 -- The host's print is gone from the state (the profile removes it): print writes to the log, as Editor.Log.Info
@@ -501,8 +524,10 @@ print = function(...)
     Log.Info(...)
 end
 
--- The first function reads the declaration back and keeps the functions of the menu; the second runs one of them
+-- The first function reads the declaration back (and the inspector registrations, as a second value) and keeps the
+-- functions of the menu and of the inspector buttons; the second runs one of them ("menu" or "inspector", and its id)
 return function(returned)
+    loading = false
     if declared == nil then
         error("the file did not call Editor.Extension{...}", 0)
     end
@@ -510,6 +535,13 @@ return function(returned)
         error("the file must return the table that Editor.Extension{...} gave it", 0)
     end
     local snapshot = copy(declared, 0, { 0 })
+    -- Each registration's spec is copied on its own (so its depth counts from it), under one count of entries
+    local registered = {}
+    local count = { 0 }
+    for i = 1, #inspectors do
+        local registration = inspectors[i]
+        registered[i] = { componentType = registration.componentType, spec = copy(registration.spec, 0, count) }
+    end
     -- The functions are taken now: what the file does to its own tables afterwards cannot change what runs
     runs = {}
     local menu = rawget(declared, "menu")
@@ -523,11 +555,38 @@ return function(returned)
             end
         end
     end
-    return snapshot
-end, function(itemId, ctx, params)
-    local run = runs[itemId]
-    if run == nil then
-        error("the extension has no menu item " .. tostring(itemId), 0)
+    actions = {}
+    for i = 1, #inspectors do
+        local sections = rawget(inspectors[i].spec, "sections")
+        if type(sections) == "table" then
+            for _, section in next, sections do
+                local buttons = type(section) == "table" and rawget(section, "buttons") or nil
+                if type(buttons) == "table" then
+                    for _, button in next, buttons do
+                        if type(button) == "table" then
+                            local id, run = rawget(button, "id"), rawget(button, "run")
+                            if type(id) == "string" and type(run) == "function" then
+                                actions[id] = run
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return snapshot, registered
+end, function(kind, id, ctx, params)
+    local run
+    if kind == "inspector" then
+        run = actions[id]
+        if run == nil then
+            error("the extension has no inspector button " .. tostring(id), 0)
+        end
+    else
+        run = runs[id]
+        if run == nil then
+            error("the extension has no menu item " .. tostring(id), 0)
+        end
     end
     return run(ctx, params)
 end
@@ -1204,17 +1263,191 @@ end
             return result;
         }
 
+        // A component type name as Component::GetTypeName spells it: an identifier
+        bool IsValidComponentTypeName(const std::string_view name)
+        {
+            return name.size() <= ExtensionHost::MaxComponentTypeBytes && IsValidFieldName(name);
+        }
+
+        // One button of an inspector section: {id, label, minRole, form?}, the shape of InspectorButtonInfo
+        json BuildInspectorButton(const json &button, const std::string &where, std::set<std::string> &ids)
+        {
+            if (!button.is_object() || IsList(button))
+            {
+                Bad(where, std::format("a button must be a table, not {}", TypeOf(button)));
+            }
+            CheckKeys(button, {"id", "label", "minRole", "params", "run"}, where);
+            const std::string id = RequireString(button, "id", where, ExtensionHost::MaxItemIdBytes);
+            if (!IsValidItemId(id))
+            {
+                Bad(where, std::format("the id \"{}\" must be letters, digits, '.', '_' and '-', starting with a letter "
+                                       "or digit, at most {} bytes",
+                                       Printable(id, 64), ExtensionHost::MaxItemIdBytes));
+            }
+            if (!ids.insert(id).second)
+            {
+                Bad(where, std::format("the id \"{}\" is used by two inspector buttons of this extension", id));
+            }
+            const std::string buttonWhere = std::format("inspector button '{}'", id);
+            const std::string label = RequireString(button, "label", buttonWhere, ExtensionHost::MaxTitleBytes);
+
+            std::string minRole = "editor";
+            if (const auto given = OptionalString(button, "minRole", buttonWhere, 16))
+            {
+                if (*given != "editor" && *given != "admin")
+                {
+                    Bad(buttonWhere, "'minRole' must be \"editor\" or \"admin\" (a viewer never invokes)");
+                }
+                minRole = *given;
+            }
+            const json *run = Find(button, "run");
+            if (run == nullptr || !IsFunction(*run))
+            {
+                Bad(buttonWhere, "'run' must be a function");
+            }
+            json result = {{"id", id}, {"label", label}, {"minRole", minRole}};
+            if (const json *params = Find(button, "params"))
+            {
+                result["form"] = BuildForm(*params, buttonWhere + ".params");
+            }
+            return result;
+        }
+
+        // What Editor.Inspector.Register was given while the file loaded (a list of {componentType, spec}) as the
+        // extension's InspectorSectionInfo list. A spec is { sections = { { label, fields?, buttons? }, ... } }; a
+        // section's fields have the shape of a menu item's params (no default: the client shows the component's own
+        // values) and become FieldSchema; its buttons have an id, a label, an optional minRole and params, and run.
+        std::vector<json> BuildInspectorSections(const json &registrations, const std::string &extensionId,
+                                                 const std::vector<std::string> &capabilities)
+        {
+            std::vector<json> sections;
+            if (!IsList(registrations) || registrations.empty())
+            {
+                return sections;
+            }
+            if (registrations.size() > ExtensionHost::MaxInspectorRegistrations)
+            {
+                Bad("", std::format("Editor.Inspector.Register was called more than {} times",
+                                    ExtensionHost::MaxInspectorRegistrations));
+            }
+            // A section reads the component it is shown for: the design grants it with scene.read
+            if (std::ranges::find(capabilities, std::string("scene.read")) == capabilities.end())
+            {
+                Bad("", "inspector sections need the capability scene.read (declare it in 'capabilities')");
+            }
+            std::set<std::string> buttonIds;
+            std::size_t number = 1;
+            for (const json &registration : registrations)
+            {
+                const std::string where = std::format("Editor.Inspector.Register call {}", number++);
+                if (!registration.is_object())
+                {
+                    Bad(where, "not a registration");
+                }
+                const std::string componentType =
+                    RequireString(registration, "componentType", where, ExtensionHost::MaxComponentTypeBytes);
+                if (!IsValidComponentTypeName(componentType))
+                {
+                    Bad(where, std::format("the component type \"{}\" must be a type name (letters, digits and '_', not "
+                                           "starting with a digit, at most {} bytes)",
+                                           Printable(componentType, 64), ExtensionHost::MaxComponentTypeBytes));
+                }
+                const std::string typeWhere = std::format("Editor.Inspector.Register(\"{}\")", componentType);
+                const json *spec = Find(registration, "spec");
+                if (spec == nullptr || !spec->is_object() || IsList(*spec))
+                {
+                    Bad(typeWhere, "the second argument must be a table such as { sections = { ... } }");
+                }
+                CheckKeys(*spec, {"sections"}, typeWhere);
+                const json *list = Find(*spec, "sections");
+                if (list == nullptr || !IsList(*list) || list->empty())
+                {
+                    Bad(typeWhere, "'sections' must be a list of at least one section");
+                }
+                std::size_t sectionNumber = 1;
+                for (const json &section : *list)
+                {
+                    const std::string sectionWhere = std::format("{}.sections[{}]", typeWhere, sectionNumber++);
+                    if (sections.size() >= ExtensionHost::MaxInspectorSections)
+                    {
+                        Bad(sectionWhere, std::format("an extension may have at most {} inspector sections",
+                                                      ExtensionHost::MaxInspectorSections));
+                    }
+                    if (!section.is_object() || IsList(section))
+                    {
+                        Bad(sectionWhere, std::format("a section must be a table, not {}", TypeOf(section)));
+                    }
+                    CheckKeys(section, {"label", "fields", "buttons"}, sectionWhere);
+                    const std::string label = RequireString(section, "label", sectionWhere, ExtensionHost::MaxTitleBytes);
+
+                    json fields = json::array();
+                    if (const json *given = Find(section, "fields"))
+                    {
+                        if (!given->is_object())
+                        {
+                            Bad(sectionWhere, std::format("'fields' must be a table of name = {{ type = .. }}, not {}",
+                                                          TypeOf(*given)));
+                        }
+                        for (const auto &[name, fieldSpec] : given->items())
+                        {
+                            if (fieldSpec.is_object() && fieldSpec.contains("default"))
+                            {
+                                Bad(sectionWhere, std::format("the field '{}' has a 'default': a section's field shows "
+                                                              "the component's own value",
+                                                              Printable(name, 64)));
+                            }
+                        }
+                        fields = BuildForm(*given, sectionWhere + ".fields").at("fields");
+                    }
+
+                    json buttons = json::array();
+                    if (const json *given = Find(section, "buttons"))
+                    {
+                        if (!IsList(*given))
+                        {
+                            Bad(sectionWhere, std::format("'buttons' must be a list of buttons, not {}", TypeOf(*given)));
+                        }
+                        if (given->size() > ExtensionHost::MaxSectionButtons)
+                        {
+                            Bad(sectionWhere, std::format("'buttons' has more than {} buttons",
+                                                          ExtensionHost::MaxSectionButtons));
+                        }
+                        std::size_t buttonNumber = 1;
+                        for (const json &button : *given)
+                        {
+                            buttons.push_back(BuildInspectorButton(
+                                button, std::format("{}.buttons[{}]", sectionWhere, buttonNumber++), buttonIds));
+                        }
+                    }
+                    if (fields.empty() && buttons.empty())
+                    {
+                        Bad(sectionWhere, "a section needs 'fields' or 'buttons'");
+                    }
+                    sections.push_back(json{
+                        {"componentType", componentType},
+                        {"extension", extensionId},
+                        {"label", label},
+                        {"fields", std::move(fields)},
+                        {"buttons", std::move(buttons)},
+                    });
+                }
+            }
+            return sections;
+        }
+
         struct ParsedDeclaration
         {
             std::string name;
             int apiVersion = 0;
             std::vector<std::string> capabilities;
             std::vector<json> items;
+            std::vector<json> sections;
         };
 
-        // The shape of what Editor.Extension{...} was given (the copy ReadSnapshot made). Throws ShapeError, whose
-        // text says which part is wrong; the host records it as the file's error.
-        ParsedDeclaration ValidateDeclaration(const json &declaration, const std::string &extensionId)
+        // The shape of what Editor.Extension{...} was given (the copy ReadSnapshot made), and of what
+        // Editor.Inspector.Register was given (`inspector`). Throws ShapeError, whose text says which part is wrong; the
+        // host records it as the file's error.
+        ParsedDeclaration ValidateDeclaration(const json &declaration, const json &inspector, const std::string &extensionId)
         {
             if (!declaration.is_object() || IsList(declaration))
             {
@@ -1302,6 +1535,7 @@ end
                     parsed.items.push_back(BuildMenuItem(item, extensionId, number++, ids));
                 }
             }
+            parsed.sections = BuildInspectorSections(inspector, extensionId, parsed.capabilities);
             return parsed;
         }
     }
@@ -1366,8 +1600,10 @@ end
         /// The failure was the state's memory cap
         bool memoryExhausted = false;
         json snapshot;
+        /// What Editor.Inspector.Register was given while the file loaded: a list of {componentType, spec}
+        json inspector;
         std::unique_ptr<Scripting::LuaSandbox> sandbox;
-        /// The registry reference of the prelude's invoker (runs one menu item), kept for the state's life
+        /// The registry reference of the prelude's invoker (runs one menu item or inspector button), kept for the state's life
         int invokeRef = LUA_NOREF;
     };
 
@@ -1381,10 +1617,12 @@ end
         std::string error;
         std::vector<std::string> capabilities;
         std::vector<json> items;
+        /// Its inspector sections (InspectorSectionInfo, each with its buttons), in the order they were registered
+        std::vector<json> sections;
         /// The state the file ran in (idle between invocations; null while an invocation owns it, and for good once one
         /// was abandoned)
         std::unique_ptr<Scripting::LuaSandbox> sandbox;
-        /// The registry reference, in that state, of the function that runs one menu item
+        /// The registry reference, in that state, of the function that runs one menu item or inspector button
         int invokeRef = LUA_NOREF;
         /// What the state held at its most while it loaded: its share of the total memory budget
         std::size_t chargedBytes = 0;
@@ -1400,8 +1638,12 @@ end
     {
         // Inputs: copies, the worker may outlive the caller
         std::string id;
+        /// "menu" (a menu item) or "inspector" (an inspector button): which of the prelude's tables the invoker looks in
+        std::string kind;
         std::string itemId;
-        /// What the script gets as ctx: {itemId, selection}
+        /// "The menu item" or "The inspector button", for the texts of a failure
+        std::string noun;
+        /// What the script gets as ctx: {itemId, selection} for a menu item, {actionId, componentId, entityId} for a button
         json context;
         json params;
         Scripting::SandboxBudget budget;
@@ -1816,7 +2058,8 @@ end
                     {
                         return step; // while the file loads no menu item runs: there is nobody to write to
                     }
-                    refuse("Editor.Scene can be used only while a menu item runs, not while its file loads");
+                    refuse("Editor.Scene can be used only while a menu item or an inspector button runs, not while its "
+                           "file loads");
                     return step;
                 }
 
@@ -1961,7 +2204,8 @@ end
 
                 // The arguments are pushed under protected calls (PushJson): the state's cap may refuse them
                 lua_rawgeti(L, LUA_REGISTRYINDEX, job.invokeRef);
-                if (!PushJson(L, json(job.itemId)) || !PushJson(L, job.context) || !PushJson(L, job.params))
+                if (!PushJson(L, json(job.kind)) || !PushJson(L, json(job.itemId)) || !PushJson(L, job.context) ||
+                    !PushJson(L, job.params))
                 {
                     lua_settop(L, 0);
                     lua_pushboolean(L, 0);
@@ -1971,13 +2215,13 @@ end
                 }
 
                 job.sandbox->Arm(job.budget);
-                const int status = lua_pcall(L, 3, 1, 0);
+                const int status = lua_pcall(L, 4, 1, 0);
                 job.sandbox->Disarm();
                 lua_pushboolean(L, 0);
                 lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
                 if (status != LUA_OK)
                 {
-                    const SandboxOutcome outcome = job.sandbox->FailureOutcome(status, "The menu item failed");
+                    const SandboxOutcome outcome = job.sandbox->FailureOutcome(status, (job.noun + " failed").c_str());
                     lua_settop(L, 0);
                     if (outcome.budgetExceeded)
                     {
@@ -2002,18 +2246,18 @@ end
                 catch (const std::exception &e)
                 {
                     lua_settop(L, 0);
-                    fail(Failure::BadResult, std::string("The menu item returned something that is not a result: ") + e.what());
+                    fail(Failure::BadResult, job.noun + " returned something that is not a result: " + e.what());
                     return;
                 }
                 lua_settop(L, 0);
             }
             catch (const std::exception &e)
             {
-                fail(Failure::HostError, std::string("The menu item could not be run: ") + e.what());
+                fail(Failure::HostError, job.noun + " could not be run: " + e.what());
             }
             catch (...)
             {
-                fail(Failure::HostError, "The menu item could not be run");
+                fail(Failure::HostError, job.noun + " could not be run");
             }
         }
 
@@ -2153,7 +2397,7 @@ end
                 lua_rawgeti(L, LUA_REGISTRYINDEX, reader);
                 lua_insert(L, -2);
                 sandbox->Arm(SandboxDefaults::LoadBudget);
-                const int status = lua_pcall(L, 1, 1, 0);
+                const int status = lua_pcall(L, 1, 2, 0);
                 sandbox->Disarm();
                 if (status != LUA_OK)
                 {
@@ -2162,8 +2406,11 @@ end
                     Fail(job, failure.error, failure.memoryExhausted);
                     return;
                 }
+                // The declaration, then the inspector registrations (E-X5), each read with its own count of entries
                 std::size_t nodes = 0;
-                job.snapshot = ReadSnapshot(L, -1, 0, nodes);
+                job.snapshot = ReadSnapshot(L, -2, 0, nodes);
+                std::size_t inspectorNodes = 0;
+                job.inspector = ReadSnapshot(L, -1, 0, inspectorNodes);
                 lua_settop(L, 0);
                 luaL_unref(L, LUA_REGISTRYINDEX, reader);
 
@@ -2368,6 +2615,7 @@ end
             entry.error = Printable(StripHostPaths(std::move(text), _root));
             entry.sandbox.reset();
             entry.items.clear();
+            entry.sections.clear();
             entry.capabilities.clear();
         };
 
@@ -2571,11 +2819,12 @@ end
         }
         try
         {
-            ParsedDeclaration parsed = ValidateDeclaration(job->snapshot, file.id);
+            ParsedDeclaration parsed = ValidateDeclaration(job->snapshot, job->inspector, file.id);
             entry.name = std::move(parsed.name);
             entry.apiVersion = parsed.apiVersion;
             entry.capabilities = std::move(parsed.capabilities);
             entry.items = std::move(parsed.items);
+            entry.sections = std::move(parsed.sections);
             entry.sandbox = std::move(job->sandbox);
             entry.invokeRef = job->invokeRef;
             entry.chargedBytes = entry.sandbox != nullptr ? entry.sandbox->Counters().peakBytes : 0;
@@ -2601,8 +2850,9 @@ end
             {
                 capabilities += (capabilities.empty() ? "" : ",") + capability;
             }
-            return {true, std::format("Editor extension: {}@{} capabilities=[{}] menu items={} ({})", entry.name,
-                                      entry.sha256.substr(0, 8), capabilities, entry.items.size(), entry.id)};
+            return {true, std::format("Editor extension: {}@{} capabilities=[{}] menu items={} inspector sections={} ({})",
+                                      entry.name, entry.sha256.substr(0, 8), capabilities, entry.items.size(),
+                                      entry.sections.size(), entry.id)};
         }
         return {false, std::format("Editor extension {} did not load: {}", Printable(entry.id, 120),
                                    Printable(entry.error))};
@@ -2622,7 +2872,8 @@ end
 
         std::vector<Entry> entries;
         entries.reserve(files.size());
-        std::map<std::string, std::string> itemOwners; // item id -> the extension that has it
+        std::map<std::string, std::string> itemOwners;   // item id -> the extension that has it
+        std::map<std::string, std::string> buttonOwners; // inspector button id -> the extension that has it
         const std::size_t totalBytes = TotalBytesBudget();
         std::size_t memoryUsed = 0; // what the states kept so far held at their most
         for (const FoundFile &file : files)
@@ -2632,19 +2883,46 @@ end
             {
                 // Item ids are global: InvokeMenuItem names an item and nothing else. The first extension (in file order)
                 // keeps an id; a later one that uses it fails, as one whose own items clash does.
+                const auto clash = [&entry](const std::string &text)
+                {
+                    entry.state = ExtensionState::Failed;
+                    entry.error = Printable(text);
+                    entry.sandbox.reset();
+                    entry.items.clear();
+                    entry.sections.clear();
+                    entry.capabilities.clear();
+                };
+                // Inspector button ids are global the same way (InvokeInspectorAction names a button and a component),
+                // in a namespace of their own. Taken before a clash clears the sections.
+                std::vector<std::string> buttonIds;
+                for (const json &section : entry.sections)
+                {
+                    for (const json &button : section.at("buttons"))
+                    {
+                        buttonIds.push_back(button.at("id").get<std::string>());
+                    }
+                }
                 for (const json &item : entry.items)
                 {
                     const std::string id = item.at("id").get<std::string>();
                     const auto owner = itemOwners.find(id);
                     if (owner != itemOwners.end())
                     {
-                        entry.state = ExtensionState::Failed;
-                        entry.error = Printable(std::format("The menu item id \"{}\" is already used by the extension {}",
-                                                            id, owner->second));
-                        entry.sandbox.reset();
-                        entry.items.clear();
-                        entry.capabilities.clear();
+                        clash(std::format("The menu item id \"{}\" is already used by the extension {}", id, owner->second));
                         break;
+                    }
+                }
+                if (entry.state == ExtensionState::Loaded)
+                {
+                    for (const std::string &id : buttonIds)
+                    {
+                        const auto owner = buttonOwners.find(id);
+                        if (owner != buttonOwners.end())
+                        {
+                            clash(std::format("The inspector button id \"{}\" is already used by the extension {}", id,
+                                              owner->second));
+                            break;
+                        }
                     }
                 }
                 if (entry.state == ExtensionState::Loaded)
@@ -2652,6 +2930,10 @@ end
                     for (const json &item : entry.items)
                     {
                         itemOwners[item.at("id").get<std::string>()] = entry.id;
+                    }
+                    for (const std::string &id : buttonIds)
+                    {
+                        buttonOwners[id] = entry.id;
                     }
                     memoryUsed += entry.chargedBytes; // a state dropped above (a clash) gives its share back
                 }
@@ -2738,6 +3020,7 @@ end
     {
         const std::lock_guard lock(_mutex);
         json items = json::array();
+        json sections = json::array();
         for (const Entry &entry : _entries)
         {
             if (entry.state == ExtensionState::Failed)
@@ -2748,8 +3031,12 @@ end
             {
                 items.push_back(item);
             }
+            for (const json &section : entry.sections)
+            {
+                sections.push_back(section);
+            }
         }
-        return {{"uiRevision", _uiRevision}, {"menuItems", std::move(items)}, {"inspectorSections", json::array()}};
+        return {{"uiRevision", _uiRevision}, {"menuItems", std::move(items)}, {"inspectorSections", std::move(sections)}};
     }
 
     json ExtensionHost::DisabledDescribeJson()
@@ -3055,6 +3342,42 @@ end
         return std::nullopt;
     }
 
+    std::optional<ExtensionHost::MenuItemRef> ExtensionHost::FindInspectorAction(const std::string_view actionId) const
+    {
+        const std::lock_guard lock(_mutex);
+        for (const Entry &entry : _entries)
+        {
+            if (entry.state == ExtensionState::Failed)
+            {
+                continue;
+            }
+            for (const json &section : entry.sections)
+            {
+                for (const json &button : section.at("buttons"))
+                {
+                    if (button.at("id").get_ref<const std::string &>() != actionId)
+                    {
+                        continue;
+                    }
+                    MenuItemRef ref;
+                    ref.inspectorAction = true;
+                    ref.componentType = section.at("componentType").get<std::string>();
+                    ref.extensionId = entry.id;
+                    ref.extensionName = entry.name;
+                    ref.sha8 = entry.sha256.substr(0, 8);
+                    ref.state = entry.state;
+                    ref.capabilities = entry.capabilities;
+                    ref.itemId = std::string(actionId);
+                    ref.title = button.at("label").get<std::string>();
+                    ref.minRole = button.at("minRole").get<std::string>();
+                    ref.form = button.contains("form") ? button.at("form") : json(nullptr);
+                    return ref;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
     ExtensionState ExtensionHost::FaultNow(const std::string_view id, const std::string_view reason)
     {
         std::function<void(std::uint32_t)> changed;
@@ -3099,7 +3422,29 @@ end
     ExtensionHost::InvokeOutcome ExtensionHost::Invoke(const MenuItemRef &item, const json &selection, const json &params,
                                                        const NestedHandler &handler)
     {
+        return InvokeWith(item, json{{"itemId", item.itemId}, {"selection", selection}}, params, handler);
+    }
+
+    ExtensionHost::InvokeOutcome ExtensionHost::InvokeAction(const MenuItemRef &action, const std::string &componentId,
+                                                             const std::string &entityId, const json &params,
+                                                             const NestedHandler &handler)
+    {
+        if (!action.inspectorAction)
+        {
+            InvokeOutcome outcome;
+            outcome.failure = InvokeFailure::HostError;
+            outcome.error = "Not an inspector button";
+            return outcome;
+        }
+        return InvokeWith(action, json{{"actionId", action.itemId}, {"componentId", componentId}, {"entityId", entityId}},
+                          params, handler);
+    }
+
+    ExtensionHost::InvokeOutcome ExtensionHost::InvokeWith(const MenuItemRef &item, json context, const json &params,
+                                                           const NestedHandler &handler)
+    {
         InvokeOutcome outcome;
+        const std::string noun = item.inspectorAction ? "The inspector button" : "The menu item";
         const auto refuse = [this, &outcome](std::string text)
         {
             outcome.failure = InvokeFailure::HostError;
@@ -3190,8 +3535,10 @@ end
 
         const Scripting::SandboxBudget budget = CurrentInvocationBudget();
         job->id = item.extensionId;
+        job->kind = item.inspectorAction ? "inspector" : "menu";
         job->itemId = item.itemId;
-        job->context = json{{"itemId", item.itemId}, {"selection", selection}};
+        job->noun = noun;
+        job->context = std::move(context);
         job->params = params;
         job->budget = budget;
         job->hook = CurrentInvokeHook();
@@ -3223,7 +3570,7 @@ end
         {
             releaseSlot();
             giveBack(std::move(job->sandbox));
-            return refuse("A thread could not be started to run the menu item");
+            return refuse("A thread could not be started to run " + Lower(noun));
         }
 
         // The conversation: the worker asks, the command thread answers, until the worker is done. A worker that is
@@ -3284,7 +3631,7 @@ end
         }
 
         InvokeFailure failure = abandoned ? InvokeFailure::Abandoned : job->failure;
-        std::string text = abandoned ? std::format("The menu item did not answer within {} ms and was abandoned",
+        std::string text = abandoned ? std::format("{} did not answer within {} ms and was abandoned", noun,
                                                    silenceLimit.count())
                                      : job->error;
         if (failure == InvokeFailure::None)
@@ -3296,7 +3643,7 @@ end
             catch (const ShapeError &e)
             {
                 failure = InvokeFailure::BadResult;
-                text = std::string("The menu item returned something that is not a result: ") + e.what();
+                text = noun + " returned something that is not a result: " + e.what();
             }
         }
 
@@ -3314,14 +3661,14 @@ end
             outcome.faulted = NoteFailure(item.extensionId) == ExtensionState::Faulted;
             break;
         case InvokeFailure::BudgetExceeded:
-            outcome.faulted = FaultNow(item.extensionId, "the menu item ran out of its budget") == ExtensionState::Faulted;
+            outcome.faulted = FaultNow(item.extensionId, Lower(noun) + " ran out of its budget") == ExtensionState::Faulted;
             break;
         case InvokeFailure::MemoryExhausted:
-            outcome.faulted = FaultNow(item.extensionId, "the menu item used all the memory of its state") ==
+            outcome.faulted = FaultNow(item.extensionId, Lower(noun) + " used all the memory of its state") ==
                               ExtensionState::Faulted;
             break;
         case InvokeFailure::Abandoned:
-            outcome.faulted = FaultNow(item.extensionId, "the menu item stopped answering and was abandoned") ==
+            outcome.faulted = FaultNow(item.extensionId, Lower(noun) + " stopped answering and was abandoned") ==
                               ExtensionState::Faulted;
             break;
         case InvokeFailure::HostError:
