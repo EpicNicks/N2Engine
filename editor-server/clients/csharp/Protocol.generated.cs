@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.15.0";
+        public const string ProtocolVersion = "1.16.0";
     }
 
     public enum CommandType : byte
@@ -70,6 +70,7 @@ namespace N2Engine.Editor.Protocol
         GetEditorUi = 0x81,
         ReloadEditorExtensions = 0x84,
         InvokeMenuItem = 0x82,
+        InvokeInspectorAction = 0x83,
         Undo = 0x90,
         Redo = 0x91,
         BeginEditGroup = 0x92,
@@ -508,6 +509,32 @@ namespace N2Engine.Editor.Protocol
         public MenuForm? Form { get; set; }
     }
 
+    public class InspectorButtonInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("label")]
+        public string Label { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("minRole")]
+        public string MinRole { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("form")]
+        public MenuForm? Form { get; set; }
+    }
+
+    public class InspectorSectionInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("componentType")]
+        public string ComponentType { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("extension")]
+        public string Extension { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("label")]
+        public string Label { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("fields")]
+        public FieldSchema[] Fields { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("buttons")]
+        public InspectorButtonInfo[] Buttons { get; set; }
+    }
+
     public class EditorUiInfo
     {
         [System.Text.Json.Serialization.JsonPropertyName("uiRevision")]
@@ -515,7 +542,7 @@ namespace N2Engine.Editor.Protocol
         [System.Text.Json.Serialization.JsonPropertyName("menuItems")]
         public MenuItemInfo[] MenuItems { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("inspectorSections")]
-        public System.Text.Json.JsonElement[] InspectorSections { get; set; }
+        public InspectorSectionInfo[] InspectorSections { get; set; }
     }
 
     public class ExtensionResultInfo
@@ -776,6 +803,15 @@ namespace N2Engine.Editor.Protocol
         public string ItemId;
         /// <summary>JSON text: any JSON value</summary>
         public string Selection;
+        /// <summary>JSON text: any JSON value</summary>
+        public string Params;
+        public uint UiRevision;
+    }
+
+    public struct InvokeInspectorActionRequest
+    {
+        public string ComponentId;
+        public string ActionId;
         /// <summary>JSON text: any JSON value</summary>
         public string Params;
         public uint UiRevision;

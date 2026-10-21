@@ -119,7 +119,7 @@ for (const vector of vectors.shortPayloads ?? []) {
 }
 
 test("a 1.10 or 1.11 ServerInfo and Hello decode with the optional trailing fields defaulted", realProtocol, () => {
-  const info = { protocolVersion: "1.15.0", engineVersion: "0.1", capabilities: ["scene"], projectLoaded: true, readOnly: true, user: "alice", role: "editor" }
+  const info = { protocolVersion: "1.16.0", engineVersion: "0.1", capabilities: ["scene"], projectLoaded: true, readOnly: true, user: "alice", role: "editor" }
   const full = protocol.encodeServerInfoResponse(info)
   assert.deepEqual(protocol.decodeServerInfoResponse(full), info)
   // With empty user and role the two trailing strings are 4 zero bytes each: a 1.11 host's ServerInfo ends before them, a
@@ -132,7 +132,7 @@ test("a 1.10 or 1.11 ServerInfo and Hello decode with the optional trailing fiel
   // ... and a string cut short is malformed, not defaulted
   assert.throws(() => protocol.decodeServerInfoResponse(full.subarray(0, full.length - 2)), RangeError)
 
-  const hello = { clientName: "editor", protocolVersion: "1.15.0", token: "t", errorCodes: true, user: "alice" }
+  const hello = { clientName: "editor", protocolVersion: "1.16.0", token: "t", errorCodes: true, user: "alice" }
   const helloFull = protocol.encodeHelloRequest(hello)
   assert.deepEqual(protocol.decodeHelloRequest(helloFull), hello)
   const helloBare = protocol.encodeHelloRequest({ ...hello, user: "" })

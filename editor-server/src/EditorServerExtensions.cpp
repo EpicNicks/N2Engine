@@ -1,5 +1,6 @@
-// InvokeMenuItem (protocol 1.15.0) and the nested dispatch the scripts of editor extensions reach the editor through
-// (design: lua-editor-extensions sections 4.2, 4.3, 6 and 7.1). The ExtensionHost runs the script on a worker thread and
+// InvokeMenuItem (protocol 1.15.0), InvokeInspectorAction (1.16.0) and the nested dispatch the scripts of editor
+// extensions reach the editor through (design: lua-editor-extensions sections 4.2, 4.3, 6 and 7.1). Both commands run
+// through one function (RunExtensionCall). The ExtensionHost runs the script on a worker thread and
 // hands every Editor.Scene or Editor.Log call to the handler built here, which runs on the command thread: so every scene
 // change an extension makes is a command, sent through EditorServer::ProcessCommand like a client's, with that client's
 // role, the read-only gate and the audit line, inside one edit group.
@@ -10,6 +11,8 @@
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <functional>
+#include <memory>
 #include <initializer_list>
 #include <optional>
 #include <span>
@@ -21,7 +24,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include "engine/GameObjectScene.hpp"
 #include "engine/Logger.hpp"
+#include "engine/sceneManagement/SceneManager.hpp"
 #include "engine/serialization/FieldInfo.hpp"
 
 #include "editor-server/ClientText.hpp"
@@ -74,6 +79,7 @@ namespace N2Engine::Editor
             {CommandType::ListEditorExtensions, false},
             {CommandType::GetEditorUi, false},
             {CommandType::InvokeMenuItem, false},
+            {CommandType::InvokeInspectorAction, false},
             {CommandType::ReloadEditorExtensions, false},
             // The open scene and the project's files: opening, loading, creating, saving and deleting scenes
             {CommandType::CreateScene, false},
@@ -719,10 +725,28 @@ namespace N2Engine::Editor
         }
     }
 
-    // ==================== InvokeMenuItem ====================
+    // ==================== InvokeMenuItem and InvokeInspectorAction ====================
+
+    // What one of the two invoke commands runs: everything after the item was found and its own request checked goes
+    // through RunExtensionCall, so a menu item and an inspector button share the edit group, the nested dispatch with the
+    // invoker's role, the budgets, the rollback and the answer
+    struct EditorServer::ExtensionCall
+    {
+        const ExtensionHost::MenuItemRef *item = nullptr;
+        /// The command's name (InvokeMenuItem or InvokeInspectorAction), for the audit line of a refusal
+        std::string command;
+        /// Runs the item or the button through the extension host with the handler it is given
+        std::function<ExtensionHost::InvokeOutcome(const ExtensionHost::NestedHandler &)> invoke;
+    };
 
     namespace
     {
+        // "menu item" or "inspector button", for the texts a client and the log get
+        std::string NounOf(const ExtensionHost::MenuItemRef &item)
+        {
+            return item.inspectorAction ? "inspector button" : "menu item";
+        }
+
         // The field of a form's schema (the FieldSchema the host built when the file loaded) as the engine's FieldInfo, so
         // the same ValidateFieldValue and ClampFieldValue that check a component's fields check the form's
         FieldInfo FieldOfSchema(const json &schema)
@@ -772,12 +796,14 @@ namespace N2Engine::Editor
 
         // The values a form was filled with, checked against it: every name a field of the form, each value valid for
         // its field (ValidateFieldValue) and clamped to its range (ClampFieldValue), a field left out given its default.
-        // The object the script receives as `params`, or why it cannot be.
+        // The object the script receives as `params`, or why it cannot be. The same for a menu item's form and an
+        // inspector button's.
         std::expected<json, std::string> CheckInvokeParams(const ExtensionHost::MenuItemRef &item, const json &given)
         {
+            const char *owner = item.inspectorAction ? "button" : "item";
             if (!given.is_null() && !given.is_object())
             {
-                return std::unexpected(std::string("params must be a JSON object (the values of the item's form)"));
+                return std::unexpected(std::format("params must be a JSON object (the values of the {}'s form)", owner));
             }
             const json none = json::object();
             const json &values = given.is_null() ? none : given;
@@ -785,7 +811,7 @@ namespace N2Engine::Editor
             {
                 if (!values.empty())
                 {
-                    return std::unexpected(std::format("The menu item '{}' takes no parameters", item.itemId));
+                    return std::unexpected(std::format("The {} '{}' takes no parameters", NounOf(item), item.itemId));
                 }
                 return json::object();
             }
@@ -803,8 +829,8 @@ namespace N2Engine::Editor
                 const std::string name = key;
                 if (std::ranges::none_of(fields, [&name](const FieldInfo &field) { return field.name == name; }))
                 {
-                    return std::unexpected(std::format("Unknown parameter '{}' (the item's form has: {})",
-                                                       EditorServer::SanitizeForLog(name, 64), names));
+                    return std::unexpected(std::format("Unknown parameter '{}' (the {}'s form has: {})",
+                                                       EditorServer::SanitizeForLog(name, 64), owner, names));
                 }
             }
             json result = json::object();
@@ -827,6 +853,111 @@ namespace N2Engine::Editor
             }
             return result;
         }
+
+        struct FoundComponent
+        {
+            /// The UUID string of the object that has the component
+            std::string entityId;
+            /// Component::GetTypeName of the component
+            std::string typeName;
+        };
+
+        // The component of the open scene with this UUID string, wherever it is, or the message that says why not
+        std::expected<FoundComponent, std::string> FindSceneComponent(const std::string &componentId)
+        {
+            Scene *scene = SceneManager::GetCurScene();
+            if (scene == nullptr)
+            {
+                return std::unexpected(std::string("No scene loaded"));
+            }
+            const auto uuid = Math::UUID::FromString(componentId);
+            if (!uuid.has_value())
+            {
+                return std::unexpected("Component not found: " + EditorServer::SanitizeForLog(componentId));
+            }
+            std::optional<FoundComponent> found;
+            scene->TraverseAll([&found, &uuid](const std::shared_ptr<GameObject> &gameObject)
+            {
+                if (found.has_value())
+                {
+                    return;
+                }
+                for (const auto &component : gameObject->GetAllComponents())
+                {
+                    if (component->GetUUID() == uuid.value())
+                    {
+                        found = FoundComponent{gameObject->GetUUID().ToString(), component->GetTypeName()};
+                        return;
+                    }
+                }
+            });
+            if (!found.has_value())
+            {
+                return std::unexpected("Component not found: " + EditorServer::SanitizeForLog(componentId));
+            }
+            return *found;
+        }
+    }
+
+    bool EditorServer::PassExtensionGates(int clientSocket, const uint32_t uiRevision)
+    {
+        // The gates, in the order a client can act on them. Nothing here runs a line of Lua.
+        if (!_extensions)
+        {
+            SendResponse(clientSocket, BuildDenial(ErrorCodeExtensionsDisabled,
+                                                   "Editor extensions are not enabled on this host (it was not started "
+                                                   "with --editor-extensions)"));
+            return false;
+        }
+        if (uiRevision != _extensions->UiRevision())
+        {
+            SendResponse(clientSocket,
+                         BuildDenial(ErrorCodeStaleUiRevision,
+                                     std::format("The editor extensions changed (the request was built for UI revision {}, "
+                                                 "the host is at {}): fetch GetEditorUi again",
+                                                 uiRevision, _extensions->UiRevision())));
+            return false;
+        }
+        return true;
+    }
+
+    bool EditorServer::PassExtensionCallGates(int clientSocket, const ExtensionCall &call)
+    {
+        const ExtensionHost::MenuItemRef &item = *call.item;
+        const std::string noun = NounOf(item);
+        const bool hasRoles = RequiresAccessToken();
+        const ConnectionIdentity identity = CurrentIdentity();
+        if (item.minRole == "admin" && hasRoles && identity.role != TokenRole::Admin)
+        {
+            ServerLog::Warn(std::format("audit: denied user={} role={} command={} {}={}{}", identity.user,
+                                     TokenRoleName(identity.role), call.command, item.inspectorAction ? "action" : "item",
+                                     item.itemId, PeerSuffix()));
+            SendResponse(clientSocket,
+                         BuildDenial(ErrorCodeForbidden,
+                                     std::format("forbidden: the {} {} may only be run by an admin (role {})", noun,
+                                                 item.itemId, TokenRoleName(identity.role))));
+            return false;
+        }
+        if (item.state == ExtensionState::Faulted)
+        {
+            SendResponse(clientSocket,
+                         BuildDenial(ErrorCodeExtensionFaulted,
+                                     std::format("The extension {} is disabled until the extensions are reloaded (it "
+                                                 "failed too often, ran out of its budget or stopped answering)",
+                                                 item.extensionName)));
+            return false;
+        }
+        if (_history.InGroup())
+        {
+            SendResponse(clientSocket,
+                         BuildDenial(ErrorCodeEditGroupOpen,
+                                     std::format("An edit group is open: end it before running {} {}, so the {}'s step "
+                                                 "is not merged into it",
+                                                 item.inspectorAction ? "an" : "a", noun,
+                                                 item.inspectorAction ? "button" : "item")));
+            return false;
+        }
+        return true;
     }
 
     void EditorServer::HandleInvokeMenuItem(int clientSocket, const std::vector<uint8_t> &payload)
@@ -834,21 +965,8 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         const InvokeMenuItemCmd cmd = InvokeMenuItemCmd::Deserialize(reader);
 
-        // The gates, in the order a client can act on them. Nothing below runs a line of Lua.
-        if (!_extensions)
+        if (!PassExtensionGates(clientSocket, cmd.uiRevision))
         {
-            SendResponse(clientSocket, BuildDenial(ErrorCodeExtensionsDisabled,
-                                                   "Editor extensions are not enabled on this host (it was not started "
-                                                   "with --editor-extensions)"));
-            return;
-        }
-        if (cmd.uiRevision != _extensions->UiRevision())
-        {
-            SendResponse(clientSocket,
-                         BuildDenial(ErrorCodeStaleUiRevision,
-                                     std::format("The editor extensions changed (the request was built for UI revision {}, "
-                                                 "the host is at {}): fetch GetEditorUi again",
-                                                 cmd.uiRevision, _extensions->UiRevision())));
             return;
         }
         const std::optional<ExtensionHost::MenuItemRef> item = _extensions->FindMenuItem(cmd.itemId);
@@ -857,33 +975,11 @@ namespace N2Engine::Editor
             SendError(clientSocket, "Unknown menu item: " + SanitizeForLog(cmd.itemId));
             return;
         }
-        const bool hasRoles = RequiresAccessToken();
-        const ConnectionIdentity identity = CurrentIdentity();
-        if (item->minRole == "admin" && hasRoles && identity.role != TokenRole::Admin)
+        ExtensionCall call;
+        call.item = &*item;
+        call.command = "InvokeMenuItem";
+        if (!PassExtensionCallGates(clientSocket, call))
         {
-            ServerLog::Warn(std::format("audit: denied user={} role={} command=InvokeMenuItem item={}{}", identity.user,
-                                     TokenRoleName(identity.role), item->itemId, PeerSuffix()));
-            SendResponse(clientSocket,
-                         BuildDenial(ErrorCodeForbidden,
-                                     std::format("forbidden: the menu item {} may only be run by an admin (role {})",
-                                                 item->itemId, TokenRoleName(identity.role))));
-            return;
-        }
-        if (item->state == ExtensionState::Faulted)
-        {
-            SendResponse(clientSocket,
-                         BuildDenial(ErrorCodeExtensionFaulted,
-                                     std::format("The extension {} is disabled until the extensions are reloaded (it "
-                                                 "failed too often, ran out of its budget or stopped answering)",
-                                                 item->extensionName)));
-            return;
-        }
-        if (_history.InGroup())
-        {
-            SendResponse(clientSocket,
-                         BuildDenial(ErrorCodeEditGroupOpen,
-                                     "An edit group is open: end it before running a menu item, so the item's step is "
-                                     "not merged into it"));
             return;
         }
 
@@ -918,22 +1014,96 @@ namespace N2Engine::Editor
             return;
         }
 
-        // One invocation is one undo step, labelled with the item's title
-        std::string label = SanitizeForLog(item->title, 100);
-        if (label.empty())
-        {
-            label = "Edit";
-        }
-        std::string via = item->extensionName;
-        std::ranges::replace(via, ' ', '_');
+        const bool hasRoles = RequiresAccessToken();
+        const ConnectionIdentity identity = CurrentIdentity();
         ServerLog::Info(std::format("audit: user={} role={} extension={}@{} item={}{}", hasRoles ? identity.user : "-",
                                  hasRoles ? std::string(TokenRoleName(identity.role)) : "-", item->extensionName, item->sha8,
                                  item->itemId, PeerSuffix()));
 
+        const json paramsValue = *params;
+        call.invoke = [this, &item, &selection, &paramsValue](const ExtensionHost::NestedHandler &handler)
+        { return _extensions->Invoke(*item, selection, paramsValue, handler); };
+        RunExtensionCall(clientSocket, call);
+    }
+
+    void EditorServer::HandleInvokeInspectorAction(int clientSocket, const std::vector<uint8_t> &payload)
+    {
+        BufferReader reader(payload);
+        const InvokeInspectorActionCmd cmd = InvokeInspectorActionCmd::Deserialize(reader);
+
+        if (!PassExtensionGates(clientSocket, cmd.uiRevision))
+        {
+            return;
+        }
+        const std::optional<ExtensionHost::MenuItemRef> action = _extensions->FindInspectorAction(cmd.actionId);
+        if (!action.has_value())
+        {
+            SendError(clientSocket, "Unknown inspector button: " + SanitizeForLog(cmd.actionId));
+            return;
+        }
+        ExtensionCall call;
+        call.item = &*action;
+        call.command = "InvokeInspectorAction";
+        if (!PassExtensionCallGates(clientSocket, call))
+        {
+            return;
+        }
+
+        // The component: it exists in the open scene and is of the type the button's section was registered for, so a
+        // button only ever runs on the component its section is shown for
+        const std::expected<FoundComponent, std::string> component = FindSceneComponent(cmd.componentId);
+        if (!component)
+        {
+            SendError(clientSocket, component.error());
+            return;
+        }
+        if (component->typeName != action->componentType)
+        {
+            SendError(clientSocket, std::format("The component {} is a {}; the inspector button {} is for a {}",
+                                                SanitizeForLog(cmd.componentId), SanitizeForLog(component->typeName),
+                                                action->itemId, action->componentType));
+            return;
+        }
+        const std::expected<json, std::string> params = CheckInvokeParams(*action, cmd.params);
+        if (!params)
+        {
+            SendError(clientSocket, params.error());
+            return;
+        }
+        // The UUID as the scene writes it (one spelling), not as the client sent it
+        const std::string componentId = Math::UUID::FromString(cmd.componentId)->ToString();
+
+        const bool hasRoles = RequiresAccessToken();
+        const ConnectionIdentity identity = CurrentIdentity();
+        ServerLog::Info(std::format("audit: user={} role={} extension={}@{} action={} component={}{}",
+                                 hasRoles ? identity.user : "-", hasRoles ? std::string(TokenRoleName(identity.role)) : "-",
+                                 action->extensionName, action->sha8, action->itemId, componentId, PeerSuffix()));
+
+        const json paramsValue = *params;
+        const std::string entityId = component->entityId;
+        call.invoke = [this, &action, &componentId, &entityId, &paramsValue](const ExtensionHost::NestedHandler &handler)
+        { return _extensions->InvokeAction(*action, componentId, entityId, paramsValue, handler); };
+        RunExtensionCall(clientSocket, call);
+    }
+
+    void EditorServer::RunExtensionCall(int clientSocket, const ExtensionCall &call)
+    {
+        const ExtensionHost::MenuItemRef &item = *call.item;
+        const std::string noun = NounOf(item);
+
+        // One invocation is one undo step, labelled with the item's title (a button's label)
+        std::string label = SanitizeForLog(item.title, 100);
+        if (label.empty())
+        {
+            label = "Edit";
+        }
+        std::string via = item.extensionName;
+        std::ranges::replace(via, ' ', '_');
+
         ExtensionInvocation invocation;
         invocation.via = via;
-        invocation.name = item->extensionName;
-        invocation.capabilities = item->capabilities;
+        invocation.name = item.extensionName;
+        invocation.capabilities = item.capabilities;
 
         const uint32_t revisionBefore = _sceneRevision;
         const auto started = std::chrono::steady_clock::now();
@@ -957,8 +1127,7 @@ namespace N2Engine::Editor
 
             try
             {
-                outcome = _extensions->Invoke(
-                    *item, selection, *params,
+                outcome = call.invoke(
                     [this](const std::string &op, const json &args) -> ExtensionHost::NestedAnswer
                     {
                         ExtensionHost::NestedAnswer answer;
@@ -1016,8 +1185,9 @@ namespace N2Engine::Editor
             {
                 NoteGroupWithoutChange();
             }
-            ServerLog::Info(std::format("Editor extension {}@{} item {} finished in {} ms: {} command(s){}", item->extensionName,
-                                     item->sha8, item->itemId, elapsedMillis, outcome.nestedCommands,
+            ServerLog::Info(std::format("Editor extension {}@{} {} {} finished in {} ms: {} command(s){}",
+                                     item.extensionName, item.sha8, item.inspectorAction ? "action" : "item", item.itemId,
+                                     elapsedMillis, outcome.nestedCommands,
                                      ended == EditHistory::GroupEnd::Committed ? ", one undo step" : ", no undo step"));
 
             BufferWriter response;
@@ -1060,14 +1230,15 @@ namespace N2Engine::Editor
 
         // The detail goes to the Admin log; the client's message has no host path (the extension host stripped them, and
         // ExecuteCommand redacts a remote client's frame as well)
-        ServerLog::Warn(std::format("Editor extension {}@{} item {} failed after {} ms and was taken back{}: {}",
-                                 item->extensionName, item->sha8, item->itemId, elapsedMillis,
-                                 outcome.faulted ? " (the extension is now disabled until reload)" : "", failureText));
+        ServerLog::Warn(std::format("Editor extension {}@{} {} {} failed after {} ms and was taken back{}: {}",
+                                 item.extensionName, item.sha8, item.inspectorAction ? "action" : "item", item.itemId,
+                                 elapsedMillis, outcome.faulted ? " (the extension is now disabled until reload)" : "",
+                                 failureText));
         SendResponse(clientSocket,
                      BuildDenial(ErrorCodeExtensionFailed,
-                                 std::format("The menu item {} of the extension {} failed and its changes were taken "
+                                 std::format("The {} {} of the extension {} failed and its changes were taken "
                                              "back: {}{}",
-                                             item->itemId, item->extensionName, failureText,
+                                             noun, item.itemId, item.extensionName, failureText,
                                              outcome.faulted ? " (the extension is now disabled until reload)" : "")));
     }
 }

@@ -256,6 +256,12 @@ namespace ProtocolVectors
                 return json{{"itemId", cmd.itemId}, {"selection", cmd.selection}, {"params", cmd.params},
                             {"uiRevision", cmd.uiRevision}};
             }},
+            {"InvokeInspectorAction", [](BufferReader &r)
+            {
+                const auto cmd = InvokeInspectorActionCmd::Deserialize(r);
+                return json{{"componentId", cmd.componentId}, {"actionId", cmd.actionId}, {"params", cmd.params},
+                            {"uiRevision", cmd.uiRevision}};
+            }},
         };
         return decoders;
     }

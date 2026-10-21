@@ -731,7 +731,7 @@ namespace N2Engine::Editor
         /// host has no autosave and removes none: the files under .n2/autosave are the edit host's. Public for tests.
         void PrepareForShutdown();
 
-        /// The commands a play host answers with an Error: the ones that write project files or swap the scene, and the two
+        /// The commands a play host answers with an Error: the ones that write project files or swap the scene, and the three
         /// that run or reload editor extensions (a play host runs none)
         [[nodiscard]] static bool IsEditOnlyCommand(uint8_t commandType);
 
@@ -756,9 +756,9 @@ namespace N2Engine::Editor
         // ==================== Commands an extension may send (E-X3) ====================
 
         /**
-         * Whether a command may be sent from the script of an editor extension (InvokeMenuItem's nested dispatch), as
-         * true; false for a command that may not; nullopt for an id nobody listed, which is refused like a false (a new
-         * command is denied until someone decides). The table lists every command of protocol.json (a test requires it).
+         * Whether a command may be sent from the script of an editor extension (the nested dispatch of InvokeMenuItem and
+         * InvokeInspectorAction), as true; false for a command that may not; nullopt for an id nobody listed, which is
+         * refused like a false (a new command is denied until someone decides). The table lists every command of protocol.json (a test requires it).
          * Only what Editor.Scene needs is allowed: GetHierarchy, GetEntity, GetComponentTypes, GetComponent and the
          * writers CreateEntityEx, DestroyEntity, DuplicateEntity, SetEntityParent, SetEntityProperties, SetLocalTransform,
          * AddComponent, RemoveComponent and SetComponentFields. Denied: everything that opens, loads, creates, saves or
@@ -790,7 +790,8 @@ namespace N2Engine::Editor
 
         /// The class of a command id, or nullopt for an id nobody classified (every command of protocol.json is
         /// classified: a test requires it, so a new command can't ship without a decision). Not IsEditOnlyCommand,
-        /// which is a play host's deny list of 15 commands (the ones that write files, ReloadEditorExtensions and InvokeMenuItem).
+        /// which is a play host's deny list of 16 commands (the ones that write files, ReloadEditorExtensions, InvokeMenuItem
+        /// and InvokeInspectorAction).
         [[nodiscard]] static std::optional<CommandClass> ClassifyCommand(uint8_t commandType);
 
         /// An allow list with default deny: true only for a command classified Read. An id that is no command, or that
@@ -966,6 +967,23 @@ namespace N2Engine::Editor
         /// InvokeMenuItem (EditorServerExtensions.cpp): gates, one edit group, the call on the extension's worker, the
         /// rollback of a failed one
         void HandleInvokeMenuItem(int clientSocket, const std::vector<uint8_t> &payload);
+        /// InvokeInspectorAction (EditorServerExtensions.cpp, since 1.16.0): the same gates, the component checked against
+        /// the button's section, then the same machinery as InvokeMenuItem (RunExtensionCall)
+        void HandleInvokeInspectorAction(int clientSocket, const std::vector<uint8_t> &payload);
+
+        /// What one of the two invoke commands runs (EditorServerExtensions.cpp): the menu item or the button, the
+        /// command's name, and the call into the extension host
+        struct ExtensionCall;
+        /// The gates of both invoke commands that come before the item is looked up: the flag, then the uiRevision.
+        /// False when it answered the client (a refusal).
+        [[nodiscard]] bool PassExtensionGates(int clientSocket, uint32_t uiRevision);
+        /// The gates of both invoke commands for the item found: its minRole, a faulted extension, an open edit group.
+        /// False when it answered the client (a refusal).
+        [[nodiscard]] bool PassExtensionCallGates(int clientSocket, const ExtensionCall &call);
+        /// The one way an extension's code runs for a client: one edit group labelled with the item's title (or the
+        /// button's label), the call on the extension's worker with the nested dispatch as its handler, then the end of
+        /// the group (one undo step, or none) or, on a failure, the rollback; and the answer
+        void RunExtensionCall(int clientSocket, const ExtensionCall &call);
 
         /// The invocation in progress (main thread; null between invocations): what the nested dispatch and the audit line
         /// name, and how many commands it has sent
