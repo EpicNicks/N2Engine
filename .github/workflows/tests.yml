@@ -1005,7 +1005,7 @@ jobs:
       # WebGPU stage G4 (#155): the WebGPU backend is linked into the player of every profile (built against Emscripten's
       # emdawnwebgpu port, cmake/EmdawnwebgpuPort.cmake, which emcc fetches at the first compile), while the player still starts
       # on the software renderer (the smokes above run that path). The proof that it is linked is the port's JavaScript in
-      # index.js: the call that makes a render pipeline on the browser's GPUDevice, which only the backend's draws reach
+      # index.js: the call that makes a render pipeline on the browser's GPUDevice, which only the backend's pipeline cache reaches
       - name: Check that the WebGPU backend is linked into the player (all profiles)
         run: |
           set -e
@@ -1069,8 +1069,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The renderer's Dawn and the shader validators' Tint must be one revision: the two pins name the same Dawn release
-      - name: Dawn and Tint pins agree
+      # The renderer's Dawn and the shader validators' Tint must be one revision: the two pins name the same Dawn release. So
+      # must the web build's emdawnwebgpu (stage G4: cmake/EmdawnwebgpuPort.cmake), so that both builds compile the backend
+      # against the same webgpu.h
+      - name: Dawn, Tint and emdawnwebgpu pins agree
         run: |
           set -eu
           cmake_pin() { sed -n "s/^set($1 \"\(.*\)\")\$/\1/p" cmake/DawnPrebuilt.cmake; }
@@ -1082,6 +1084,9 @@ jobs:
             test -n "$a"
             test "$a" = "$b"
           done
+          web_tag=$(sed -n "s/^set(N2_EMDAWNWEBGPU_TAG \"\(.*\)\")\$/\1/p" cmake/EmdawnwebgpuPort.cmake)
+          echo "N2_EMDAWNWEBGPU_TAG = $web_tag"
+          test "$web_tag" = "$(cmake_pin N2_DAWN_TAG)"
 
       # Dawn's Vulkan backend needs a Vulkan loader and a driver at run time, not the headers: libvulkan1 and Mesa lavapipe
       # (mesa-vulkan-drivers). The Vulkan renderer is compiled out of this job (N2ENGINE_RENDERER_VULKAN=OFF), so no libvulkan-dev.

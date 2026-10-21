@@ -16,8 +16,9 @@
 # SHA-256 below, and kept in the build folder; emcc downloads the package itself (into its cache) the first time it compiles
 # with the flag. The old -sUSE_WEBGPU bindings are not used.
 #
-# To bump: take the tag of cmake/DawnPrebuilt.cmake (both move together), set N2_EMDAWNWEBGPU_TAG and the SHA-256 of the
-# release's emdawnwebgpu-<tag>.remoteport.py (the release page lists a digest per asset), and run the web CI job.
+# To bump: take the tag of cmake/DawnPrebuilt.cmake (both move together: the "Dawn, Tint and emdawnwebgpu pins agree" step of
+# the webgpu CI job fails when the tags differ), set N2_EMDAWNWEBGPU_TAG and the SHA-256 of the release's
+# emdawnwebgpu-<tag>.remoteport.py (the release page lists a digest per asset), and run the web CI job.
 set(N2_EMDAWNWEBGPU_TAG "v20261016.190333")
 set(N2_EMDAWNWEBGPU_SHA256 "725a0174df01e80bab07134ea28c929126a6f7bf41c858ad1702b025fb5e10e4")
 
