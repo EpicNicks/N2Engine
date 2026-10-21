@@ -32,8 +32,6 @@ namespace
         {"src/particles/ParticleEmitter.cpp",
          "std::sin, std::cos and std::cbrt placing cosmetic particles: they are not part of the simulation state, which "
          "gameplay never reads, and an emitter has its own seeded generator for one machine"},
-        {"src/softbody/Tetrahedraliser.cpp",
-         "std::cbrt scaling the voxel grid while meshing a soft body: a one-off authoring step, not a per-tick value"},
     };
 
     std::string ReadFile(const fs::path &path)

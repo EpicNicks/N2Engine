@@ -24,7 +24,7 @@
 //    library and a 90-digit reference (every entry but the two arguments beyond 2^20 is the correctly rounded float, or
 //    within 4 ulp for double). They are the same on every leg of the CI matrix (MSVC, GCC, Clang, arm64, wasm): that
 //    identical-everywhere is the point, so a result that differs in one bit on one platform fails here.
-//  - Accuracy: bounds against the C library on sweeps. The C library is the REFERENCE here only, never the implementation.
+//  - Accuracy: the documented bounds against a double-double (about 106 bit) reference computed in this file, on sweeps.
 //  - Special values and structure: NaN, infinities, zeros, domain errors, symmetry, monotonicity, periodicity.
 //
 // To regenerate a table after a deliberate change to an algorithm, print the bits of the new results and replace the table
@@ -92,6 +92,203 @@ namespace
     private:
         std::uint64_t _state;
     };
+
+    // -- A high-precision reference: double-double arithmetic (about 106 bits). The C library's value is only the starting
+    // guess of a Newton step (or the log mantissa), which the step then corrects to double-double accuracy, so the
+    // platform's own last-bit error does not reach the reference. Only additions, std::fma and divisions are used
+    // otherwise, so the reference is the same on every platform.
+    struct DD
+    {
+        double hi;
+        double lo;
+    };
+
+    DD TwoSum(const double a, const double b)
+    {
+        const double s = a + b;
+        const double bb = s - a;
+        return {s, (a - (s - bb)) + (b - bb)};
+    }
+
+    DD QuickTwoSum(const double a, const double b)
+    {
+        const double s = a + b;
+        return {s, b - (s - a)};
+    }
+
+    DD DDAdd(const DD a, const DD b)
+    {
+        DD s = TwoSum(a.hi, b.hi);
+        const DD t = TwoSum(a.lo, b.lo);
+        s = QuickTwoSum(s.hi, s.lo + t.hi);
+        return QuickTwoSum(s.hi, s.lo + t.lo);
+    }
+
+    DD DDNeg(const DD a) { return {-a.hi, -a.lo}; }
+
+    DD DDSub(const DD a, const DD b) { return DDAdd(a, DDNeg(b)); }
+
+    DD DDMul(const DD a, const DD b)
+    {
+        const double p = a.hi * b.hi;
+        const double e = std::fma(a.hi, b.hi, -p);
+        return QuickTwoSum(p, e + (a.hi * b.lo + a.lo * b.hi));
+    }
+
+    DD DDMulD(const DD a, const double b) { return DDMul(a, DD{b, 0.0}); }
+
+    DD DDDiv(const DD a, const DD b)
+    {
+        const double q1 = a.hi / b.hi;
+        DD r = DDSub(a, DDMulD(b, q1));
+        const double q2 = r.hi / b.hi;
+        r = DDSub(r, DDMulD(b, q2));
+        const double q3 = r.hi / b.hi;
+        const DD q = QuickTwoSum(q1, q2);
+        return DDAdd(q, DD{q3, 0.0});
+    }
+
+    // pi/2 and ln 2 to about 1e-49 (three doubles each)
+    constexpr double kHalfPiHi = 1.5707963267948965580e+00;
+    constexpr double kHalfPiMid = 6.1232339957367660359e-17;
+    constexpr double kHalfPiLo = -1.4973849048591698e-33;
+    constexpr double kLn2Hi = 6.9314718055994528623e-01;
+    constexpr double kLn2Mid = 2.3190468138462995584e-17;
+    constexpr double kLn2Lo = 5.7077084384162120658e-34;
+
+    // sin r and cos r for |r| <= 0.8, Taylor series summed in double-double
+    void SinCosSmall(const DD r, DD &sine, DD &cosine)
+    {
+        const DD r2 = DDMul(r, r);
+        DD term = r;
+        sine = r;
+        for (int n = 1; n < 40; ++n)
+        {
+            term = DDNeg(DDDiv(DDMul(term, r2), DD{static_cast<double>((2 * n) * (2 * n + 1)), 0.0}));
+            sine = DDAdd(sine, term);
+        }
+        term = DD{1.0, 0.0};
+        cosine = term;
+        for (int n = 1; n < 40; ++n)
+        {
+            term = DDNeg(DDDiv(DDMul(term, r2), DD{static_cast<double>((2 * n - 1) * (2 * n)), 0.0}));
+            cosine = DDAdd(cosine, term);
+        }
+    }
+
+    // sin x and cos x of a double, |x| up to a few million
+    void SinCosDD(const double x, DD &sine, DD &cosine)
+    {
+        const double k = std::nearbyint(x / kHalfPiHi);
+        DD r = DDSub(DD{x, 0.0}, DDMulD(DD{kHalfPiHi, kHalfPiMid}, k));
+        r = DDSub(r, DD{k * kHalfPiLo, 0.0});
+        DD s;
+        DD c;
+        SinCosSmall(r, s, c);
+        long long quadrant = static_cast<long long>(k) % 4;
+        if (quadrant < 0)
+        {
+            quadrant += 4;
+        }
+        switch (quadrant)
+        {
+        case 0: sine = s; cosine = c; break;
+        case 1: sine = c; cosine = DDNeg(s); break;
+        case 2: sine = DDNeg(s); cosine = DDNeg(c); break;
+        default: sine = DDNeg(c); cosine = s; break;
+        }
+    }
+
+    DD RefSin(const double x) { DD s; DD c; SinCosDD(x, s, c); return s; }
+    DD RefCos(const double x) { DD s; DD c; SinCosDD(x, s, c); return c; }
+    DD RefTan(const double x) { DD s; DD c; SinCosDD(x, s, c); return DDDiv(s, c); }
+
+    // exp x for |x| below 745: x = k ln2 + r, Taylor series of r, scaled by 2^k
+    DD RefExp(const double x)
+    {
+        const double k = std::nearbyint(x / kLn2Hi);
+        DD r = DDSub(DD{x, 0.0}, DDMulD(DD{kLn2Hi, kLn2Mid}, k));
+        r = DDSub(r, DD{k * kLn2Lo, 0.0});
+        DD term{1.0, 0.0};
+        DD sum{1.0, 0.0};
+        for (int n = 1; n < 40; ++n)
+        {
+            term = DDDiv(DDMul(term, r), DD{static_cast<double>(n), 0.0});
+            sum = DDAdd(sum, term);
+        }
+        const int e = static_cast<int>(k);
+        return {std::ldexp(sum.hi, e), std::ldexp(sum.lo, e)};
+    }
+
+    // ln x for a positive finite x: x = m 2^e, one Newton step on exp from the C library's guess for ln m
+    DD RefLog(const double x)
+    {
+        int e = 0;
+        const double m = std::frexp(x, &e); // [0.5, 1)
+        const double guess = std::log(m);
+        const DD t = DDSub(DDMul(DD{m, 0.0}, RefExp(-guess)), DD{1.0, 0.0});
+        DD y = DDAdd(DD{guess, 0.0}, t);
+        y = DDSub(y, DDMulD(DDMul(t, t), 0.5));
+        return DDAdd(y, DDMulD(DD{kLn2Hi, kLn2Mid}, static_cast<double>(e)));
+    }
+
+    DD RefLog2(const double x) { return DDDiv(RefLog(x), DD{kLn2Hi, kLn2Mid}); }
+
+    // One Newton step t - f(t) / f'(t) in double-double from a double guess t
+    DD Newton(const double t, const DD f, const DD fprime)
+    {
+        return DDSub(DD{t, 0.0}, DDDiv(f, fprime));
+    }
+
+    DD RefAtan(const double x)
+    {
+        const double t = std::atan(x);
+        DD s;
+        DD c;
+        SinCosDD(t, s, c);
+        return Newton(t, DDSub(s, DDMulD(c, x)), DDAdd(c, DDMulD(s, x)));
+    }
+
+    DD RefAtan2(const double y, const double x)
+    {
+        const double t = std::atan2(y, x);
+        DD s;
+        DD c;
+        SinCosDD(t, s, c);
+        return Newton(t, DDSub(DDMulD(s, x), DDMulD(c, y)), DDAdd(DDMulD(c, x), DDMulD(s, y)));
+    }
+
+    DD RefAsin(const double x)
+    {
+        const double t = std::asin(x);
+        DD s;
+        DD c;
+        SinCosDD(t, s, c);
+        return Newton(t, DDSub(s, DD{x, 0.0}), c);
+    }
+
+    DD RefAcos(const double x)
+    {
+        const double t = std::acos(x);
+        DD s;
+        DD c;
+        SinCosDD(t, s, c);
+        return Newton(t, DDSub(c, DD{x, 0.0}), DDNeg(s));
+    }
+
+    // The distance between a result and a double-double reference, in units in the last place of the reference
+    double UlpErrorDD(const double value, const DD reference)
+    {
+        const double magnitude = std::fabs(reference.hi);
+        const double ulp = std::nextafter(magnitude, std::numeric_limits<double>::infinity()) - magnitude;
+        return std::fabs((value - reference.hi) - reference.lo) / ulp;
+    }
+
+    // The same for a float result: the reference is rounded once to float, the distance is in float ulps
+    double UlpErrorfDD(const float value, const DD reference)
+    {
+        return UlpErrorf(value, static_cast<float>(reference.hi));
+    }
 
     struct FloatCase { std::uint32_t x; std::uint32_t expected; };
     struct Float2Case { std::uint32_t y; std::uint32_t x; std::uint32_t expected; };
@@ -543,79 +740,76 @@ TEST(DeterministicMathTest, TheFloatFunctionsAreTheDoubleFunctionsRoundedOnce)
 
 // -- accuracy --------------------------------------------------------------------------------------------------------
 
-// The C library is the reference (its own error is under 1 ulp of a double on every platform we run, far below these
-// bounds); the bounds are the ones documented in math/DeterministicMath.hpp
+// The reference is the double-double one above (about 106 bits; the C library's value only seeds a Newton step); the bound
+// is the documented one of math/DeterministicMath.hpp: a float result is within 1 ulp of the exact result
 TEST(DeterministicMathTest, FloatResultsAreWithinOneUlpOfTheReference)
 {
     Sweep sweep(11);
     double worst = 0.0;
-    auto check = [&worst](const char *name, const float x, const float actual, const double reference) {
-        const double error = UlpErrorf(actual, static_cast<float>(reference));
+    auto check = [&worst](const char *name, const float x, const float actual, const DD reference) {
+        const double error = UlpErrorfDD(actual, reference);
         worst = std::max(worst, error);
-        EXPECT_LE(error, 1.0) << name << "(" << x << ") = " << actual << ", reference " << reference;
+        EXPECT_LE(error, 1.0) << name << "(" << x << ") = " << actual << ", reference " << reference.hi;
     };
     for (int i = 0; i < 20000; ++i)
     {
         const float x = static_cast<float>(sweep.Uniform(-100.0, 100.0));
-        check("Sin", x, Math::Sin(x), std::sin(static_cast<double>(x)));
-        check("Cos", x, Math::Cos(x), std::cos(static_cast<double>(x)));
-        check("Tan", x, Math::Tan(x), std::tan(static_cast<double>(x)));
+        check("Sin", x, Math::Sin(x), RefSin(static_cast<double>(x)));
+        check("Cos", x, Math::Cos(x), RefCos(static_cast<double>(x)));
+        check("Tan", x, Math::Tan(x), RefTan(static_cast<double>(x)));
         const float unit = static_cast<float>(sweep.Uniform(-1.0, 1.0));
-        check("Asin", unit, Math::Asin(unit), std::asin(static_cast<double>(unit)));
-        check("Acos", unit, Math::Acos(unit), std::acos(static_cast<double>(unit)));
+        check("Asin", unit, Math::Asin(unit), RefAsin(static_cast<double>(unit)));
+        check("Acos", unit, Math::Acos(unit), RefAcos(static_cast<double>(unit)));
         const float wide = static_cast<float>(sweep.Uniform(-1.0e6, 1.0e6));
-        check("Atan", wide, Math::Atan(wide), std::atan(static_cast<double>(wide)));
-        check("Sin(wide)", wide, Math::Sin(wide), std::sin(static_cast<double>(wide)));
+        check("Atan", wide, Math::Atan(wide), RefAtan(static_cast<double>(wide)));
+        check("Sin(wide)", wide, Math::Sin(wide), RefSin(static_cast<double>(wide)));
         const float e = static_cast<float>(sweep.Uniform(-80.0, 80.0));
-        check("Exp", e, Math::Exp(e), std::exp(static_cast<double>(e)));
+        check("Exp", e, Math::Exp(e), RefExp(static_cast<double>(e)));
         const float positive = std::ldexp(static_cast<float>(sweep.Uniform(1.0, 2.0)), static_cast<int>(sweep.Uniform(-100.0, 100.0)));
-        check("Log", positive, Math::Log(positive), std::log(static_cast<double>(positive)));
-        check("Log2", positive, Math::Log2(positive), std::log2(static_cast<double>(positive)));
+        check("Log", positive, Math::Log(positive), RefLog(static_cast<double>(positive)));
+        check("Log2", positive, Math::Log2(positive), RefLog2(static_cast<double>(positive)));
         const float y = static_cast<float>(sweep.Uniform(-10.0, 10.0));
         const float xx = static_cast<float>(sweep.Uniform(-10.0, 10.0));
-        const float atan2Actual = Math::Atan2(y, xx);
-        const double atan2Error = UlpErrorf(atan2Actual, static_cast<float>(std::atan2(static_cast<double>(y), static_cast<double>(xx))));
-        worst = std::max(worst, atan2Error);
-        EXPECT_LE(atan2Error, 1.0) << "Atan2(" << y << ", " << xx << ")";
+        check("Atan2", y, Math::Atan2(y, xx), RefAtan2(static_cast<double>(y), static_cast<double>(xx)));
     }
     RecordProperty("worst_float_ulp", std::to_string(worst));
 }
 
 TEST(DeterministicMathTest, DoubleResultsAreWithinTheDocumentedUlpOfTheReference)
 {
-    // The documented bounds are 2 ulp (Sin, Cos, Exp, Log, Log2), 3 (Tan) and 4 (Atan, Atan2, Asin, Acos) against the exact
-    // value; the reference here is the C library's, itself within 1 ulp, so the allowed distance has 1 more
+    // The documented bounds, asserted as they are written in math/DeterministicMath.hpp against the double-double
+    // reference: 2 ulp (Sin, Cos, Exp, Log, Log2), 3 (Tan), 4 (Atan, Atan2, Asin, Acos)
     Sweep sweep(13);
-    auto check = [](const char *name, const double x, const double actual, const double reference, const double bound) {
-        if (reference == 0.0)
+    auto check = [](const char *name, const double x, const double actual, const DD reference, const double bound) {
+        if (reference.hi == 0.0)
         {
             EXPECT_EQ(actual, 0.0) << name << "(" << x << ")";
             return;
         }
-        EXPECT_LE(UlpError(actual, reference), bound) << name << "(" << x << ") = " << actual << ", reference " << reference;
+        EXPECT_LE(UlpErrorDD(actual, reference), bound) << name << "(" << x << ") = " << actual << ", reference " << reference.hi;
     };
     for (int i = 0; i < 20000; ++i)
     {
         const double x = sweep.Uniform(-1000.0, 1000.0);
-        check("Sin", x, Math::Sin(x), std::sin(x), 3.0);
-        check("Cos", x, Math::Cos(x), std::cos(x), 3.0);
-        check("Tan", x, Math::Tan(x), std::tan(x), 4.0);
+        check("Sin", x, Math::Sin(x), RefSin(x), 2.0);
+        check("Cos", x, Math::Cos(x), RefCos(x), 2.0);
+        check("Tan", x, Math::Tan(x), RefTan(x), 3.0);
         const double big = sweep.Uniform(-1.0e6, 1.0e6); // under 2^20, so still the accurate reduction
-        check("Sin(big)", big, Math::Sin(big), std::sin(big), 3.0);
-        check("Cos(big)", big, Math::Cos(big), std::cos(big), 3.0);
+        check("Sin(big)", big, Math::Sin(big), RefSin(big), 2.0);
+        check("Cos(big)", big, Math::Cos(big), RefCos(big), 2.0);
         const double unit = sweep.Uniform(-1.0, 1.0);
-        check("Asin", unit, Math::Asin(unit), std::asin(unit), 5.0);
-        check("Acos", unit, Math::Acos(unit), std::acos(unit), 5.0);
+        check("Asin", unit, Math::Asin(unit), RefAsin(unit), 4.0);
+        check("Acos", unit, Math::Acos(unit), RefAcos(unit), 4.0);
         const double wide = std::tan(sweep.Uniform(-1.5707, 1.5707));
-        check("Atan", wide, Math::Atan(wide), std::atan(wide), 5.0);
+        check("Atan", wide, Math::Atan(wide), RefAtan(wide), 4.0);
         const double e = sweep.Uniform(-700.0, 700.0);
-        check("Exp", e, Math::Exp(e), std::exp(e), 3.0);
+        check("Exp", e, Math::Exp(e), RefExp(e), 2.0);
         const double positive = std::ldexp(sweep.Uniform(1.0, 2.0), static_cast<int>(sweep.Uniform(-1000.0, 1000.0)));
-        check("Log", positive, Math::Log(positive), std::log(positive), 3.0);
-        check("Log2", positive, Math::Log2(positive), std::log2(positive), 3.0);
+        check("Log", positive, Math::Log(positive), RefLog(positive), 2.0);
+        check("Log2", positive, Math::Log2(positive), RefLog2(positive), 2.0);
         const double y = sweep.Uniform(-1000.0, 1000.0);
         const double xx = sweep.Uniform(-1000.0, 1000.0);
-        check("Atan2", y, Math::Atan2(y, xx), std::atan2(y, xx), 5.0);
+        check("Atan2", y, Math::Atan2(y, xx), RefAtan2(y, xx), 4.0);
     }
 }
 
@@ -630,11 +824,11 @@ TEST(DeterministicMathTest, SineAndCosineStayAccurateNextToMultiplesOfHalfPi)
         const double cosine = Math::Cos(x);
         if (std::fabs(sine) < 1e-3)
         {
-            EXPECT_LE(UlpError(sine, std::sin(x)), 4.0) << "Sin(" << x << ")";
+            EXPECT_LE(UlpErrorDD(sine, RefSin(x)), 2.0) << "Sin(" << x << ")";
         }
         if (std::fabs(cosine) < 1e-3)
         {
-            EXPECT_LE(UlpError(cosine, std::cos(x)), 4.0) << "Cos(" << x << ")";
+            EXPECT_LE(UlpErrorDD(cosine, RefCos(x)), 2.0) << "Cos(" << x << ")";
         }
     }
     // The classic values: the double nearest pi has a sine of 1.2246467991473532e-16, the double nearest pi/2 a cosine of
@@ -788,7 +982,7 @@ TEST(DeterministicMathTest, ExpAndLogCoverTheWholeRange)
     EXPECT_EQ(Bits(Math::Exp(-800.0)), Bits(0.0));
     EXPECT_EQ(Bits(Math::Exp(-1.0e6)), Bits(0.0));
     // Just under the overflow limit and the underflow through the denormals (no flush: the guard keeps FTZ off)
-    EXPECT_LE(UlpError(Math::Exp(709.78), std::exp(709.78)), 3.0);
+    EXPECT_LE(UlpErrorDD(Math::Exp(709.78), RefExp(709.78)), 2.0);
     EXPECT_TRUE(std::isfinite(Math::Exp(709.78)));
     const double denormal = Math::Exp(-740.0);
     EXPECT_GT(denormal, 0.0);
@@ -805,9 +999,9 @@ TEST(DeterministicMathTest, ExpAndLogCoverTheWholeRange)
     EXPECT_EQ(Bits(Math::Log2(0.0)), Bits(-inf));
     EXPECT_EQ(Bits(Math::Log2(inf)), Bits(inf));
     // A denormal: Log keeps its accuracy there
-    EXPECT_LE(UlpError(Math::Log(5e-324), std::log(5e-324)), 3.0);
-    EXPECT_LE(UlpError(Math::Log(1e-310), std::log(1e-310)), 3.0);
-    EXPECT_LE(UlpError(Math::Log(1.7976931348623157e308), std::log(1.7976931348623157e308)), 3.0);
+    EXPECT_LE(UlpErrorDD(Math::Log(5e-324), RefLog(5e-324)), 2.0);
+    EXPECT_LE(UlpErrorDD(Math::Log(1e-310), RefLog(1e-310)), 2.0);
+    EXPECT_LE(UlpErrorDD(Math::Log(1.7976931348623157e308), RefLog(1.7976931348623157e308)), 2.0);
 }
 
 TEST(DeterministicMathTest, Log2OfAPowerOfTwoIsExact)
