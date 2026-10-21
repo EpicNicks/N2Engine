@@ -304,6 +304,15 @@ return Editor.Extension {
         return { message = "clean" }
       end,
     },
+    {
+      id = "partial.only",
+      path = "Tools/Partial only",
+      run = function(ctx, p)
+        local ok = pcall(Editor.Scene.CreateEntity, { name = "Half", components = { "NoSuchComponent" } })
+        if ok then error("CreateEntity with an unknown component succeeded") end
+        return { message = "nothing" }
+      end,
+    },
   },
 }
 )LUA";
@@ -677,4 +686,37 @@ TEST_F(EditorExtensionInvokeTest, AFailureAfterEditsUndoneFromSnapshotsRestoresT
     EXPECT_EQ(after.entries, before.entries) << "no step was made";
     EXPECT_EQ(after.cursor, before.cursor);
     EXPECT_FALSE(server.GetHistory().InGroup());
+}
+
+TEST_F(EditorExtensionInvokeTest, AnItemWhoseOnlyWritesWereTakenBackLeavesASavedSceneSaved)
+{
+    // A new scene is the saved state
+    ASSERT_EQ(server.GetSavedRevision(), server.GetSceneRevision());
+    ASSERT_TRUE(server.GetHistory().IsAtSavedState());
+    const uint32_t revisionBefore = server.GetSceneRevision();
+    const std::size_t objects = ObjectCount();
+    const std::size_t historyEvents = EventCount("historyChanged");
+
+    // The item's only writes (CreateEntityEx, then a refused AddComponent) are taken back inside the call
+    const Result result = DecodeResult(Invoke("partial.only", json::array()));
+    EXPECT_EQ(result.result.at("message"), "nothing");
+    EXPECT_EQ(ObjectCount(), objects);
+    EXPECT_TRUE(History().entries.empty()) << "no step";
+    EXPECT_FALSE(result.canUndo);
+
+    // The revision moved (the write and its take-back), and the scene is still the saved one
+    EXPECT_GT(result.revision, revisionBefore);
+    EXPECT_EQ(result.savedRevision, result.revision) << "not dirty";
+    EXPECT_EQ(server.GetSavedRevision(), server.GetSceneRevision());
+    EXPECT_TRUE(server.GetHistory().IsAtSavedState());
+    EXPECT_GT(EventCount("historyChanged"), historyEvents);
+    // The last sceneChanged says so too
+    json lastScene;
+    for (const json &event : server.GetEvents().Read(0, 4096, 0).events)
+    {
+        if (event.value("kind", "") == "sceneChanged")
+            lastScene = event;
+    }
+    ASSERT_FALSE(lastScene.is_null());
+    EXPECT_EQ(lastScene.at("savedRevision"), lastScene.at("revision")) << lastScene.dump();
 }

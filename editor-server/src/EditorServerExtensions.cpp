@@ -496,6 +496,12 @@ namespace N2Engine::Editor
             {
                 throw std::runtime_error("the extension did not declare the capability scene.write");
             }
+            if (!isRead && _invocation != nullptr && !_invocation->fatal.empty())
+            {
+                // A multi-command call could not be taken back alone, so the invocation fails as a whole: a write now
+                // (the history may have been cleared, with no group to take it back) must not outlive that answer
+                throw std::runtime_error("the call can no longer change the scene: " + _invocation->fatal);
+            }
 
             if (op == "scene.getHierarchy")
             {
@@ -994,7 +1000,11 @@ namespace N2Engine::Editor
         {
             // The group ends as EndEditGroup ends one: a step, no step for writes that left the scene as it was, or none
             const EditHistory::GroupEnd ended = _history.EndGroup();
-            if (ended == EditHistory::GroupEnd::Committed || ended == EditHistory::GroupEnd::NoChange)
+            // An empty group whose writes moved the revision (a multi-command call taken back, all the script changed)
+            // left the scene as it was: as for NoChange, it is as saved as it was
+            const bool restored = ended == EditHistory::GroupEnd::NoChange ||
+                                  (ended == EditHistory::GroupEnd::Empty && _sceneRevision != revisionBefore);
+            if (ended == EditHistory::GroupEnd::Committed || restored)
             {
                 PushHistoryChanged();
             }
@@ -1002,7 +1012,7 @@ namespace N2Engine::Editor
             {
                 NoteEditStepEnded();
             }
-            else if (ended == EditHistory::GroupEnd::NoChange)
+            else if (restored)
             {
                 NoteGroupWithoutChange();
             }

@@ -2066,6 +2066,14 @@ end
         // Runs under lua_pcall with the prelude's two functions (1: the declaration reader, 2: the invoker): makes the
         // registry slot of the running invocation's job (false: no menu item runs), so an invocation later sets it
         // without an allocation, and references both functions. Returns the invoker's reference, then the reader's.
+        int InstallHostCall(lua_State *L)
+        {
+            // Under lua_pcall: the global's key may need an allocation the state's cap refuses
+            lua_pushcfunction(L, &HostCall);
+            lua_setglobal(L, "__n2_host");
+            return 0;
+        }
+
         int RegisterPrelude(lua_State *L)
         {
             lua_pushboolean(L, 0);
@@ -2103,8 +2111,14 @@ end
                 // The Editor namespace. The host's one entry point is a global the prelude takes into a local and removes
                 // before any file code runs; the prelude returns the function that reads the declaration back and the
                 // one that runs a menu item (on top)
-                lua_pushcfunction(L, &HostCall);
-                lua_setglobal(L, "__n2_host");
+                lua_pushcfunction(L, &InstallHostCall);
+                if (const int status = lua_pcall(L, 0, 0, 0); status != LUA_OK)
+                {
+                    const SandboxOutcome failure = sandbox->FailureOutcome(status, "The editor API could not be set up");
+                    lua_settop(L, 0);
+                    Fail(job, failure.error, failure.memoryExhausted);
+                    return;
+                }
                 if (const SandboxOutcome prelude = sandbox->RunChunk(EditorPrelude, "=editor-prelude",
                                                                       SandboxDefaults::LoadBudget, 2);
                     !prelude.ok)
