@@ -218,15 +218,18 @@ namespace N2PhysicsTests
     // Which pairs raise events, and when a pair ends
     // ============================================================================
 
-    TYPED_TEST(PhysicsEventTest, AKinematicBodyRaisesNoEventsWithAStaticTrigger)
+    TYPED_TEST(PhysicsEventTest, AKinematicBodyTriggersAStaticZoneAndMeetsASolidBoxSilently)
     {
-        // Both backends: a kinematic body is not paired with a static one, triggers included (PhysX's default filtering,
-        // which Jolt follows by leaving mCollideKinematicVsNonDynamic off). A dynamic visitor is what sees a static zone.
+        // Both backends: a kinematic body entering and leaving a static trigger zone raises trigger events, and meets a
+        // static solid box (also in its path) with no collision events.
         const auto zone = this->Spawn("Zone", Vector3(0.0f, 0.0f, 0.0f));
         auto *zoneCollider = zone->template AddComponent<BoxCollider>();
         zoneCollider->SetSize(Vector3(4.0f, 4.0f, 4.0f));
         zoneCollider->SetIsTrigger(true);
         auto *zoneEvents = zone->template AddComponent<ContactRecorder>();
+        const auto wall = this->Spawn("Wall", Vector3(0.0f, 0.0f, 4.5f));
+        wall->template AddComponent<BoxCollider>()->SetSize(Vector3(1.0f, 1.0f, 1.0f));
+        auto *wallEvents = wall->template AddComponent<ContactRecorder>();
         const auto mover = this->Spawn("Mover", Vector3(0.0f, 0.0f, -5.0f));
         mover->template AddComponent<SphereCollider>()->SetRadius(0.5f);
         mover->template AddComponent<Rigidbody>()->SetBodyType(BodyType::Kinematic);
@@ -238,9 +241,13 @@ namespace N2PhysicsTests
             this->Step(1);
         }
 
-        EXPECT_EQ(zoneEvents->triggerEnter, 0);
-        EXPECT_EQ(moverEvents->triggerEnter, 0);
-        EXPECT_EQ(zoneEvents->triggerStay, 0);
+        EXPECT_EQ(zoneEvents->triggerEnter, 1);
+        EXPECT_EQ(moverEvents->triggerEnter, 1);
+        EXPECT_GE(zoneEvents->triggerStay, 5);
+        EXPECT_EQ(zoneEvents->triggerExit, 1);
+        EXPECT_EQ(moverEvents->triggerExit, 1);
+        EXPECT_EQ(wallEvents->collisionEnter, 0);
+        EXPECT_EQ(moverEvents->collisionEnter, 0);
     }
 
     TYPED_TEST(PhysicsEventTest, DisablingABodyEndsItsPairsWithAnExit)
@@ -284,6 +291,10 @@ namespace N2PhysicsTests
         // Exit and bounces. The events (with the step each came in) are returned in the order they were delivered.
         std::vector<std::string> RunScene(const bool deterministic)
         {
+            // The previous run's backend goes first: PhysX allows one foundation per process
+            SceneManager::AddScene(Scene::Create("PhysicsEventSequence_Between"), true);
+            SceneManager::ProcessAnyPendingSceneChange();
+            Application::GetInstance().Set3DPhysicsBackend(nullptr);
             auto backend = std::make_unique<Backend>();
             backend->SetDeterministic(deterministic);
             EXPECT_TRUE(backend->Initialize());

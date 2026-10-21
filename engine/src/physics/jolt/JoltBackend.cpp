@@ -565,8 +565,10 @@ namespace N2Engine::Physics
             Impl &_impl;
         };
 
-        // Decides per pair of leaf shapes (colliders) whether they collide: the layer matrix, and no trigger against
-        // trigger (PhysX never pairs two trigger shapes either). Called on worker threads: reads only.
+        // Decides per pair of leaf shapes (colliders) whether they collide: the layer matrix, no trigger against
+        // trigger (PhysX never pairs two trigger shapes either), and no solid pair of which neither body is dynamic
+        // (a kinematic body is let into the pair search so that it can trigger, see CreateBody). Called on worker
+        // threads: reads only.
         class PairShapeFilter final : public JPH::SimShapeFilter
         {
         public:
@@ -591,6 +593,10 @@ namespace N2Engine::Physics
                     return false; // triggers never see each other
                 }
                 if (!_impl.matrix.Collide(collider1->layer, collider2->layer))
+                {
+                    return false;
+                }
+                if (!collider1->isTrigger && !collider2->isTrigger && !body1.IsDynamic() && !body2.IsDynamic())
                 {
                     return false;
                 }
@@ -813,8 +819,10 @@ namespace N2Engine::Physics
             settings.mFriction = defaults.dynamicFriction;
             settings.mRestitution = defaults.restitution;
             settings.mAllowSleeping = true;
-            // mCollideKinematicVsNonDynamic stays off: a kinematic body is not paired with a static or another
-            // kinematic one, which is PhysX's default (no events between them, triggers included)
+            // A kinematic body generates contacts against static and kinematic bodies too: that is how a moving
+            // kinematic body triggers a static trigger zone, as it does in PhysX. PairShapeFilter drops the solid pairs
+            // among them (PhysX gives no contact events there), so only trigger contacts come of it.
+            settings.mCollideKinematicVsNonDynamic = motion == MotionKind::Kinematic;
             // The PhysX defaults for a rigid dynamic (PxRigidBody.h): no linear damping, angular damping 0.05 (also
             // Jolt's), a maximum angular velocity of 100 rad/s. Jolt's maximum linear velocity (500 m/s) stays: PhysX's
             // is 1e16 and not a limit anyone relies on.
@@ -1200,11 +1208,13 @@ namespace N2Engine::Physics
             }
         }
 
-        bool FellAsleep(const PhysicsBodyHandle handle) const
+        // A static body, or one that is not awake now. Jolt reports a sleeping body's contacts removed (in the step it
+        // fell asleep or the next one), so a removal whose non-static bodies are all asleep is a sleep, not a
+        // separation: a body that moved away is awake.
+        bool AsleepOrStatic(const PhysicsBodyHandle handle) const
         {
             const BodyData *data = GetData(handle);
-            return data && data->enabled && data->motion != MotionKind::Static && data->wasActive &&
-                   !Bodies().IsActive(data->id);
+            return !data || data->motion == MotionKind::Static || !data->enabled || !Bodies().IsActive(data->id);
         }
 
         // Whether Jolt looked at every contact of the body in the step that just ran: a static body has none of its own to
@@ -1342,9 +1352,9 @@ namespace N2Engine::Physics
                 {
                     contacts.erase(it);
                 }
-                else if (FellAsleep(info.low) || FellAsleep(info.high))
+                else if (AsleepOrStatic(info.low) && AsleepOrStatic(info.high))
                 {
-                    // Jolt reports no contacts of a body that fell asleep: the pair still touches (as in PhysX, where a
+                    // Jolt reports no contacts of a body that is asleep: the pair still touches (as in PhysX, where a
                     // sleeping body in contact is in contact), until the body is awake and does not find it again
                     info.dormant = true;
                 }
