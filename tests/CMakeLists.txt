@@ -25,4 +25,6 @@ endif()
 if(NOT N2ENGINE_PLATFORM_WEB)
 # The editor host (raw sockets, TLS) is not part of a player
 add_subdirectory(editor-server)
+# N2Server's tests and smoke test (UDP sockets and the crypto library: not in the web build either)
+add_subdirectory(n2server)
 endif()

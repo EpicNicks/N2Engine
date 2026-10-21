@@ -71,6 +71,18 @@ bool Window::InitWindow(const Config::ApplicationOptions &options)
     _windowless = false;
     _windowlessSize = {0, 0};
 
+    if (options.renderBackend == Config::ApplicationOptions::RenderBackend::NONE)
+    {
+        // A dedicated server: no GLFW, no window and no renderer. IsValid() stays false (it needs a renderer), so a host
+        // that would draw checks it; Tick with render off and no event polling runs as usual. The input system exists
+        // (scripts may ask for a key and get nothing), exactly as it does on a windowless renderer.
+        _windowless = true;
+        _windowlessSize = {0, 0};
+        Logger::Log("No renderer and no window (headless server)", Logger::LogLevel::Info);
+        _inputSystem = std::make_unique<Input::InputSystem>(*this);
+        return true;
+    }
+
     if (UsesNoWindow(options))
     {
         // No GLFW at all (glfwInit needs a display on some platforms): the renderer draws into its CPU buffer, and
@@ -260,8 +272,8 @@ bool Window::ShouldClose() const
         return glfwWindowShouldClose(_window);
     }
     // A window that failed to open (or was shut down) has nothing to keep running for; a windowless one has
-    // nothing that could close
-    return !IsValid();
+    // nothing that could close (RenderBackend::NONE is windowless without being valid: it never closes either)
+    return !IsValid() && !_windowless;
 }
 
 void Window::SetTitle(const std::string &title)
