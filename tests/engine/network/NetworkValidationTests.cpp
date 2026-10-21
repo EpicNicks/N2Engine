@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <format>
 #include <optional>
 #include <string>
 #include <vector>
@@ -14,6 +15,8 @@
 #include "engine/physics/DeterminismLevel.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
+#include "engine/physics/PhysicsFeatures.hpp"
+#include "engine/physics/jolt/JoltBackend.hpp"
 #include "engine/physics/physx/PhysXBackend.hpp"
 #include "../particles/FakePhysicsBackend.hpp"
 
@@ -25,6 +28,8 @@ using namespace N2Engine;
 using namespace N2Engine::Network;
 using Physics::DeterminismLevel;
 using Physics::GpuMode;
+using Physics::PhysicsFeature;
+using Physics::PhysicsFeatureSet;
 
 namespace
 {
@@ -45,6 +50,7 @@ namespace
         env.backendLevel = DeterminismLevel::CrossPlatform;
         env.backendSupportsSnapshot = true;
         env.backendSupportsSetState = true;
+        env.backendFeatures = PhysicsFeatureSet::All();
         env.strictFp = true;
         env.simdTier = Math::SIMDTierRequest::Scalar;
         env.luaSeedSet = true;
@@ -75,6 +81,7 @@ namespace
         env.backendName = "physx";
         env.backendLevel = DeterminismLevel::None;
         env.backendSupportsSetState = true;
+        env.backendFeatures = Physics::PhysXBackend::kImplementedFeatures;
         env.strictFp = false;
         env.simdTier = Math::SIMDTierRequest::Auto;
         env.ownedTickLoop = true;
@@ -174,8 +181,9 @@ TEST(NetworkValidationTest, DeterministicTodayNamesEveryUnmetRequirement)
     EXPECT_EQ(UnmetIds(validation),
               (std::vector<std::string>{"physics-backend", "strict-fp", "simd-scalar", "lua-seed", "engine-trig",
                                         "physics-threads"}));
-    // gpu-physics-off and fixed-timestep are met and listed as met; lockstep has no snapshot requirement
-    EXPECT_EQ(validation.requirements.size(), 9u);
+    // physics-features (PhysX implements every group), gpu-physics-off and fixed-timestep are met and listed as met;
+    // lockstep has no snapshot requirement
+    EXPECT_EQ(validation.requirements.size(), 10u);
     for (const NetworkRequirement &requirement : validation.requirements)
     {
         EXPECT_EQ(requirement.detail.empty(), requirement.met) << requirement.id;
@@ -248,7 +256,7 @@ TEST(NetworkValidationTest, DeterministicWithEverythingMetIsNotRefused)
     const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), EverythingMet());
     EXPECT_FALSE(validation.Refused());
     EXPECT_TRUE(validation.Unmet().empty());
-    EXPECT_EQ(validation.requirements.size(), 9u);
+    EXPECT_EQ(validation.requirements.size(), 10u);
     const SubsystemStatus row = MakeNetworkStatus(Preset(NetworkPreset::Deterministic), validation);
     EXPECT_EQ(row.state, SubsystemState::Disabled);
 }
@@ -263,6 +271,10 @@ TEST(NetworkValidationTest, EachDeterministicRequirementCanRefuseOnItsOwn)
     const Case cases[] = {
         {"physics-backend", [](NetworkEnvironment &e) { e.backendLevel = DeterminismLevel::SameBinary; }},
         {"physics-backend", [](NetworkEnvironment &e) { e.hasBackend = false; }},
+        {"physics-features", [](NetworkEnvironment &e) { e.hasBackend = false; }},
+        {"physics-features", [](NetworkEnvironment &e) { e.backendFeatures = PhysicsFeatureSet::None(); }},
+        {"physics-features",
+         [](NetworkEnvironment &e) { e.backendFeatures = PhysicsFeatureSet::None().With(PhysicsFeature::Layers); }},
         {"strict-fp", [](NetworkEnvironment &e) { e.strictFp = false; }},
         {"simd-scalar", [](NetworkEnvironment &e) { e.simdTier = Math::SIMDTierRequest::Auto; }},
         {"simd-scalar", [](NetworkEnvironment &e) { e.simdTier = Math::SIMDTierRequest::AVX; }},
@@ -288,6 +300,103 @@ TEST(NetworkValidationTest, EachDeterministicRequirementCanRefuseOnItsOwn)
     none.backendLevel = DeterminismLevel::None;
     EXPECT_EQ(UnmetIds(ValidateNetwork(Preset(NetworkPreset::Deterministic), none)),
               (std::vector<std::string>{"physics-backend", "physics-threads"}));
+}
+
+// ===== deterministic: the backend's feature groups =====
+
+TEST(NetworkValidationTest, ABackendMissingAnyFeatureGroupIsRefusedAndTheGroupsAreNamed)
+{
+    // Everything else is met: a CrossPlatform backend that lacks one group still cannot start a Deterministic project
+    for (const PhysicsFeature missing : Physics::kAllPhysicsFeatures)
+    {
+        NetworkEnvironment env = EverythingMet();
+        env.backendName = "jolt";
+        env.backendFeatures = PhysicsFeatureSet::None();
+        for (const PhysicsFeature feature : Physics::kAllPhysicsFeatures)
+        {
+            if (feature != missing)
+            {
+                env.backendFeatures = env.backendFeatures.With(feature);
+            }
+        }
+        const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
+        EXPECT_TRUE(validation.Refused()) << Physics::ToString(missing);
+        ASSERT_EQ(UnmetIds(validation), (std::vector<std::string>{"physics-features"})) << Physics::ToString(missing);
+        const std::string &detail = validation.Unmet()[0]->detail;
+        EXPECT_EQ(detail, std::format("the selected backend (jolt) does not implement {} yet",
+                                      Physics::ToString(missing)));
+    }
+}
+
+TEST(NetworkValidationTest, TheJoltBackendOfTodayIsRefusedForItsMissingGroupsEvenWithEverythingElseMet)
+{
+    // What Application::Init fills in for physics.backend jolt (or the host option JOLT) once the build is strict-FP
+    // and physics.deterministic is on: CrossPlatform, but layers, triggers, events and queries are J4/J5
+    NetworkEnvironment env = EverythingMet();
+    env.backendName = "jolt";
+    env.backendSupportsSnapshot = false;
+    env.backendFeatures = PhysicsFeatureSet::None();
+    const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
+    EXPECT_TRUE(validation.Refused());
+    EXPECT_EQ(UnmetIds(validation), (std::vector<std::string>{"physics-features"}));
+    const std::string &detail = validation.Unmet()[0]->detail;
+    EXPECT_EQ(detail, "the selected backend (jolt) does not implement layers and the collision matrix, triggers, "
+                      "contact and trigger events, scene queries yet");
+    const SubsystemStatus row = MakeNetworkStatus(Preset(NetworkPreset::Deterministic), validation);
+    EXPECT_EQ(row.state, SubsystemState::Failed);
+    EXPECT_NE(row.detail.find("1 unmet requirement:"), std::string::npos) << row.detail;
+    EXPECT_NE(row.detail.find(detail), std::string::npos) << row.detail;
+}
+
+TEST(NetworkValidationTest, ABackendDeclaringEveryFeatureGroupIsAccepted)
+{
+    // The acceptance path, with the declaration read from a backend object (a fake that declares every group)
+    TestSupport::FakePhysicsBackend fake(false);
+    fake.implementedFeatures = PhysicsFeatureSet::All();
+    NetworkEnvironment env = EverythingMet();
+    env.backendFeatures = fake.GetImplementedFeatures();
+    const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
+    EXPECT_FALSE(validation.Refused());
+    EXPECT_TRUE(validation.Unmet().empty());
+    const auto features = std::ranges::find_if(validation.requirements, [](const NetworkRequirement &r)
+                                               { return r.id == "physics-features"; });
+    ASSERT_NE(features, validation.requirements.end());
+    EXPECT_TRUE(features->met);
+    EXPECT_TRUE(features->detail.empty());
+
+    // The same fake without its declaration is refused
+    fake.implementedFeatures = PhysicsFeatureSet::None();
+    env.backendFeatures = fake.GetImplementedFeatures();
+    EXPECT_EQ(UnmetIds(ValidateNetwork(Preset(NetworkPreset::Deterministic), env)),
+              (std::vector<std::string>{"physics-features"}));
+}
+
+TEST(NetworkValidationTest, TheFeatureRequirementIsOnlyForTheDeterministicPreset)
+{
+    NetworkEnvironment env = EverythingMet();
+    env.backendFeatures = PhysicsFeatureSet::None();
+    EXPECT_TRUE(ValidateNetwork(Preset(NetworkPreset::None), env).requirements.empty());
+    const NetworkValidation authoritative = ValidateNetwork(Preset(NetworkPreset::Authoritative), env);
+    EXPECT_FALSE(authoritative.Refused());
+    EXPECT_TRUE(authoritative.warnings.empty());
+}
+
+TEST(NetworkValidationTest, AnUnavailableBackendAskedForByTheHostIsNamedAsTheHostOption)
+{
+    // The host's ApplicationOptions::physicsBackend asked for jolt and the project sets no physics.backend
+    NetworkEnvironment env = EverythingMet();
+    env.hasBackend = false;
+    env.backendUnavailable = true;
+    env.backendRequested = "jolt";
+    env.backendRequestSource = Physics::BackendRequestSource::HostOption;
+    const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
+    const auto &backend = validation.requirements.front();
+    ASSERT_EQ(backend.id, "physics-backend");
+    EXPECT_NE(backend.detail.find("the host option (ApplicationOptions::physicsBackend) is jolt and the project sets "
+                                  "no physics.backend but this build has no such backend"),
+              std::string::npos)
+        << backend.detail;
+    EXPECT_EQ(backend.detail.find("physics.backend is"), std::string::npos) << backend.detail;
 }
 
 TEST(NetworkValidationTest, TheFixedTimestepMustMatchTheTickRate)
@@ -340,7 +449,7 @@ TEST(NetworkValidationTest, RollbackAlsoNeedsASnapshotLockstepDoesNot)
         ValidateNetwork(Preset(NetworkPreset::Deterministic, DeterministicMode::Rollback), env);
     EXPECT_TRUE(rollback.Refused());
     EXPECT_EQ(UnmetIds(rollback), (std::vector<std::string>{"snapshot"}));
-    EXPECT_EQ(rollback.requirements.size(), 10u);
+    EXPECT_EQ(rollback.requirements.size(), 11u);
 
     env.backendSupportsSnapshot = true;
     EXPECT_FALSE(ValidateNetwork(Preset(NetworkPreset::Deterministic, DeterministicMode::Rollback), env).Refused());
@@ -416,6 +525,29 @@ TEST(PhysicsBackendDeclarationTest, ABackendThatOverridesNothingNewKeepsTheSafeD
     EXPECT_FALSE(fake.RestoreState(bytes));
     EXPECT_FALSE(fake.HashState().has_value());
 }
+
+TEST(PhysicsBackendDeclarationTest, FeatureGroupsDefaultToNoneAndPhysXDeclaresThemAll)
+{
+    const TestSupport::FakePhysicsBackend fake(false);
+    EXPECT_EQ(fake.GetImplementedFeatures(), PhysicsFeatureSet::None());
+    EXPECT_FALSE(PhysicsFeatureSet::None().IsComplete());
+    EXPECT_EQ(PhysicsFeatureSet::None().Missing().size(), Physics::kAllPhysicsFeatures.size());
+    EXPECT_TRUE(PhysicsFeatureSet::All().IsComplete());
+    EXPECT_TRUE(PhysicsFeatureSet::All().Missing().empty());
+    EXPECT_EQ(PhysicsFeatureSet::All().MissingText(), "");
+    EXPECT_EQ(PhysicsFeatureSet::None().With(PhysicsFeature::Layers).With(PhysicsFeature::Events).MissingText(),
+              "triggers, scene queries");
+    // PhysX implements layers and the matrix, triggers, contact and trigger events, and scene queries
+    EXPECT_TRUE(Physics::PhysXBackend::kImplementedFeatures.IsComplete());
+}
+
+#ifdef N2ENGINE_JOLT_ENABLED
+TEST(PhysicsBackendDeclarationTest, JoltDeclaresOnlyTheFeatureGroupsItHas)
+{
+    // J3: none of the four groups (layers and triggers and events are J4, queries J5)
+    EXPECT_EQ(Physics::JoltBackend::kImplementedFeatures, PhysicsFeatureSet::None());
+}
+#endif
 
 TEST(PhysicsBackendDeclarationTest, DeterminismLevelsAreOrderedAndNamed)
 {

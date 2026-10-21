@@ -21,7 +21,9 @@
 namespace
 {
     using json = nlohmann::json;
+    using N2Engine::Physics::BackendAvailability;
     using N2Engine::Physics::BackendChoice;
+    using N2Engine::Physics::BackendRequestSource;
     using N2Engine::Physics::ChooseBackend;
     using N2Engine::Physics::PhysicsBackendKind;
 
@@ -77,13 +79,29 @@ TEST(PhysicsBackendKindTest, EachBackendIsInTheBuildOnlyWithItsOption)
 #endif
 }
 
-TEST(PhysicsBackendKindTest, ASelectedJoltIsRefusedForADeterministicProjectOnlyWhenTheBuildLacksIt)
+TEST(PhysicsBackendKindTest, CompiledInBackendsIsWhatEachOptionPutsIntoTheBuild)
 {
     using N2Engine::Physics::IsBackendCompiledIn;
-    const N2Engine::Physics::BackendChoice choice =
-        N2Engine::Physics::ChooseBackend(PhysicsBackendKind::Jolt, true, IsBackendCompiledIn(PhysicsBackendKind::Jolt));
-    EXPECT_EQ(choice.refused, !IsBackendCompiledIn(PhysicsBackendKind::Jolt));
-    EXPECT_EQ(choice.selected, PhysicsBackendKind::Jolt);
+    const N2Engine::Physics::BackendAvailability available = N2Engine::Physics::CompiledInBackends();
+    EXPECT_EQ(available.physx, IsBackendCompiledIn(PhysicsBackendKind::PhysX));
+    EXPECT_EQ(available.jolt, IsBackendCompiledIn(PhysicsBackendKind::Jolt));
+    // In this build, a selection only ever names a backend that is in it
+    for (const bool deterministic : {false, true})
+    {
+        for (const auto source : {BackendRequestSource::HostOption, BackendRequestSource::ProjectSetting})
+        {
+            for (const PhysicsBackendKind kind : {PhysicsBackendKind::PhysX, PhysicsBackendKind::Jolt})
+            {
+                const BackendChoice choice = ChooseBackend(kind, source, deterministic, available);
+                if (choice.selected)
+                {
+                    EXPECT_TRUE(IsBackendCompiledIn(*choice.selected));
+                }
+            }
+        }
+        const BackendChoice automatic = ChooseBackend(std::nullopt, BackendRequestSource::Auto, deterministic, available);
+        EXPECT_EQ(automatic.selected.has_value(), available.Any());
+    }
 }
 
 // ===== the setting =====
@@ -136,55 +154,167 @@ TEST(PhysicsBackendSettingTest, ApplyProjectSettingsValidatesItAndNeedsNoBackend
 }
 
 // ===== the selection rule =====
+//
+// ChooseBackend over every build ChooseBackend can see (PhysX and Jolt each in or out of the build), every request
+// (nobody, the host option, the project setting; PhysX or Jolt) and both kinds of preset (Deterministic or not).
 
-TEST(ChooseBackendTest, ABackendInTheBuildIsSelectedAsAskedForEveryPreset)
+namespace
+{
+    constexpr BackendAvailability kBoth{.physx = true, .jolt = true};
+    constexpr BackendAvailability kPhysXOnly{.physx = true, .jolt = false};
+    constexpr BackendAvailability kJoltOnly{.physx = false, .jolt = true};
+    constexpr BackendAvailability kNeither{.physx = false, .jolt = false};
+    constexpr BackendAvailability kEveryBuild[] = {kBoth, kPhysXOnly, kJoltOnly, kNeither};
+    constexpr BackendRequestSource kRequestSources[] = {BackendRequestSource::HostOption,
+                                                        BackendRequestSource::ProjectSetting};
+
+    std::string Contains(const std::string &message, const std::string &part)
+    {
+        return message.find(part) != std::string::npos ? std::string{} : "'" + message + "' lacks '" + part + "'";
+    }
+}
+
+TEST(ChooseBackendTest, NobodyAskingSelectsPhysxThenJoltThenNone)
 {
     for (const bool deterministic : {false, true})
     {
-        for (const PhysicsBackendKind kind : {PhysicsBackendKind::PhysX, PhysicsBackendKind::Jolt})
+        const BackendChoice both = ChooseBackend(std::nullopt, BackendRequestSource::Auto, deterministic, kBoth);
+        EXPECT_EQ(both.selected, PhysicsBackendKind::PhysX);
+        EXPECT_TRUE(both.message.empty()) << both.message;
+
+        EXPECT_EQ(ChooseBackend(std::nullopt, BackendRequestSource::Auto, deterministic, kPhysXOnly).selected,
+                  PhysicsBackendKind::PhysX);
+
+        // A Jolt-only build runs Jolt for a project that does not say (it used to get no physics at all)
+        const BackendChoice jolt = ChooseBackend(std::nullopt, BackendRequestSource::Auto, deterministic, kJoltOnly);
+        EXPECT_EQ(jolt.selected, PhysicsBackendKind::Jolt);
+        EXPECT_FALSE(jolt.fellBack);
+        EXPECT_FALSE(jolt.refused);
+        EXPECT_TRUE(jolt.message.empty()) << jolt.message;
+
+        const BackendChoice none = ChooseBackend(std::nullopt, BackendRequestSource::Auto, deterministic, kNeither);
+        EXPECT_FALSE(none.selected.has_value());
+        EXPECT_FALSE(none.fellBack);
+        EXPECT_FALSE(none.refused);
+        EXPECT_EQ(Contains(none.message, "this build has no physics backend"), "");
+        for (const BackendChoice &choice : {both, jolt, none})
         {
-            const BackendChoice choice = ChooseBackend(kind, deterministic, true);
-            EXPECT_EQ(choice.requested, kind);
-            EXPECT_EQ(choice.selected, kind);
-            EXPECT_FALSE(choice.fellBack);
-            EXPECT_FALSE(choice.refused);
-            EXPECT_TRUE(choice.message.empty()) << choice.message;
+            EXPECT_FALSE(choice.requested.has_value());
+            EXPECT_EQ(choice.source, BackendRequestSource::Auto);
         }
     }
 }
 
-TEST(ChooseBackendTest, AnUnavailableJoltFallsBackToPhysxWithAWarningOutsideDeterministic)
+TEST(ChooseBackendTest, ABackendInTheBuildIsSelectedAsAskedWhateverTheOtherOne)
 {
-    const BackendChoice choice = ChooseBackend(PhysicsBackendKind::Jolt, false, false);
-    EXPECT_EQ(choice.requested, PhysicsBackendKind::Jolt);
-    EXPECT_EQ(choice.selected, PhysicsBackendKind::PhysX);
-    EXPECT_TRUE(choice.fellBack);
-    EXPECT_FALSE(choice.refused);
-    EXPECT_NE(choice.message.find("physics.backend is jolt"), std::string::npos) << choice.message;
-    EXPECT_NE(choice.message.find("using physx instead"), std::string::npos) << choice.message;
+    for (const BackendAvailability available : kEveryBuild)
+    {
+        for (const BackendRequestSource source : kRequestSources)
+        {
+            for (const bool deterministic : {false, true})
+            {
+                for (const PhysicsBackendKind kind : {PhysicsBackendKind::PhysX, PhysicsBackendKind::Jolt})
+                {
+                    if (!available.Has(kind))
+                    {
+                        continue;
+                    }
+                    const BackendChoice choice = ChooseBackend(kind, source, deterministic, available);
+                    EXPECT_EQ(choice.requested, kind);
+                    EXPECT_EQ(choice.source, source);
+                    EXPECT_EQ(choice.selected, kind);
+                    EXPECT_FALSE(choice.fellBack);
+                    EXPECT_FALSE(choice.refused);
+                    EXPECT_TRUE(choice.message.empty()) << choice.message;
+                }
+            }
+        }
+    }
 }
 
-TEST(ChooseBackendTest, AnUnavailableJoltRefusesADeterministicProjectAndNeverFallsBack)
+TEST(ChooseBackendTest, AMissingBackendFallsBackOnlyToOneThatIsInTheBuild)
 {
-    const BackendChoice choice = ChooseBackend(PhysicsBackendKind::Jolt, true, false);
-    EXPECT_TRUE(choice.refused);
-    EXPECT_FALSE(choice.fellBack);
-    // Nothing else is put in its place
-    EXPECT_EQ(choice.selected, PhysicsBackendKind::Jolt);
-    EXPECT_NE(choice.message.find("Deterministic"), std::string::npos) << choice.message;
-    EXPECT_NE(choice.message.find("never falls back"), std::string::npos) << choice.message;
+    // Not Deterministic: Jolt missing -> PhysX, PhysX missing -> Jolt, each with a warning that names it
+    const BackendChoice toPhysx = ChooseBackend(PhysicsBackendKind::Jolt, BackendRequestSource::ProjectSetting, false,
+                                                kPhysXOnly);
+    EXPECT_EQ(toPhysx.selected, PhysicsBackendKind::PhysX);
+    EXPECT_TRUE(toPhysx.fellBack);
+    EXPECT_FALSE(toPhysx.refused);
+    EXPECT_EQ(Contains(toPhysx.message, "physics.backend is jolt but this build has no Jolt backend"), "");
+    EXPECT_EQ(Contains(toPhysx.message, "using physx instead"), "");
+
+    const BackendChoice toJolt = ChooseBackend(PhysicsBackendKind::PhysX, BackendRequestSource::ProjectSetting, false,
+                                               kJoltOnly);
+    EXPECT_EQ(toJolt.selected, PhysicsBackendKind::Jolt);
+    EXPECT_TRUE(toJolt.fellBack);
+    EXPECT_FALSE(toJolt.refused);
+    EXPECT_EQ(Contains(toJolt.message, "physics.backend is physx but this build has no PhysX backend"), "");
+    EXPECT_EQ(Contains(toJolt.message, "using jolt instead"), "");
 }
 
-TEST(ChooseBackendTest, APhysxRequestIsLeftToInitsBuiltWithoutPhysxPath)
+TEST(ChooseBackendTest, AMissingBackendWithNoOtherInTheBuildIsRefusedAndNamesNoBackend)
 {
-    // A build without PhysX has nothing to fall back to: the choice stays PhysX (Init reports "Built without PhysX"
-    // and the Deterministic check finds no backend), it never becomes a refusal of its own
+    for (const BackendRequestSource source : kRequestSources)
+    {
+        for (const PhysicsBackendKind kind : {PhysicsBackendKind::PhysX, PhysicsBackendKind::Jolt})
+        {
+            const BackendChoice choice = ChooseBackend(kind, source, false, kNeither);
+            EXPECT_FALSE(choice.selected.has_value());
+            EXPECT_TRUE(choice.refused);
+            EXPECT_FALSE(choice.fellBack);
+            EXPECT_EQ(Contains(choice.message, "this build has no physics backend at all"), "");
+            // Never "using ... instead": there is nothing to use
+            EXPECT_EQ(choice.message.find("instead"), std::string::npos) << choice.message;
+        }
+    }
+}
+
+TEST(ChooseBackendTest, AMissingBackendRefusesADeterministicProjectAndNeverFallsBack)
+{
+    for (const BackendAvailability available : kEveryBuild)
+    {
+        for (const BackendRequestSource source : kRequestSources)
+        {
+            for (const PhysicsBackendKind kind : {PhysicsBackendKind::PhysX, PhysicsBackendKind::Jolt})
+            {
+                if (available.Has(kind))
+                {
+                    continue;
+                }
+                const BackendChoice choice = ChooseBackend(kind, source, true, available);
+                EXPECT_TRUE(choice.refused);
+                EXPECT_FALSE(choice.fellBack);
+                // Nothing else is put in its place, even when the other backend is in the build
+                EXPECT_FALSE(choice.selected.has_value());
+                EXPECT_EQ(choice.requested, kind);
+                EXPECT_EQ(Contains(choice.message, "Deterministic"), "");
+                EXPECT_EQ(Contains(choice.message, "never falls back"), "");
+            }
+        }
+    }
+}
+
+TEST(ChooseBackendTest, EveryMessageNamesWhereTheRequestCameFrom)
+{
+    // The host option (no physics.backend) is not called a project setting, and the other way round
+    const BackendChoice host = ChooseBackend(PhysicsBackendKind::Jolt, BackendRequestSource::HostOption, false,
+                                             kPhysXOnly);
+    EXPECT_EQ(Contains(host.message, "the host option (ApplicationOptions::physicsBackend) is jolt and the project "
+                                     "sets no physics.backend"),
+              "");
+    EXPECT_EQ(host.message.find("physics.backend is"), std::string::npos) << host.message;
+
+    const BackendChoice project = ChooseBackend(PhysicsBackendKind::Jolt, BackendRequestSource::ProjectSetting, false,
+                                                kPhysXOnly);
+    EXPECT_EQ(Contains(project.message, "physics.backend is jolt"), "");
+    EXPECT_EQ(project.message.find("host option"), std::string::npos) << project.message;
+
     for (const bool deterministic : {false, true})
     {
-        const BackendChoice choice = ChooseBackend(PhysicsBackendKind::PhysX, deterministic, false);
-        EXPECT_EQ(choice.selected, PhysicsBackendKind::PhysX);
-        EXPECT_FALSE(choice.fellBack);
-        EXPECT_FALSE(choice.refused);
-        EXPECT_TRUE(choice.message.empty());
+        const BackendChoice refused =
+            ChooseBackend(PhysicsBackendKind::PhysX, BackendRequestSource::HostOption, deterministic, kNeither);
+        EXPECT_EQ(Contains(refused.message, "the host option (ApplicationOptions::physicsBackend) is physx"), "");
     }
+    EXPECT_EQ(N2Engine::Physics::DescribeBackendRequest("jolt", BackendRequestSource::ProjectSetting),
+              "physics.backend is jolt");
 }

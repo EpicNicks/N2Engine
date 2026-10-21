@@ -82,12 +82,20 @@ namespace N2Engine::Network
             "physics-backend", "the physics backend declares CrossPlatform determinism",
             env.hasBackend && env.backendLevel == Physics::DeterminismLevel::CrossPlatform,
             env.backendUnavailable
-                ? std::format("physics.backend is {} but this build has no such backend", env.backendRequested)
+                ? std::format("{} but this build has no such backend",
+                              Physics::DescribeBackendRequest(env.backendRequested, env.backendRequestSource))
             : env.hasBackend
                 ? std::format("{} declares {}; only the Jolt backend can declare CrossPlatform, in a build made with "
                               "N2ENGINE_STRICT_FP and run single-threaded",
                               selected, Physics::ToString(env.backendLevel))
                 : std::string("there is no physics backend")));
+        requirements.push_back(Requirement(
+            "physics-features",
+            "the physics backend implements layers and the collision matrix, triggers, contact and trigger events, "
+            "and scene queries",
+            env.hasBackend && env.backendFeatures.IsComplete(),
+            env.hasBackend ? std::format("{} does not implement {} yet", selected, env.backendFeatures.MissingText())
+                           : std::string("there is no physics backend")));
         requirements.push_back(Requirement(
             "strict-fp", "the build has the strict floating-point profile (N2ENGINE_STRICT_FP)", env.strictFp,
             "this build was not made with N2ENGINE_STRICT_FP"));

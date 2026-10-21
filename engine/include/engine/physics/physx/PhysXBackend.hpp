@@ -103,6 +103,9 @@ namespace N2Engine::Physics
         [[nodiscard]] bool SupportsSnapshot() const override { return kSupportsSnapshot; }
         /// True: GetBodyState and SetBodyState teleport a dynamic body and set its velocities and sleep state
         [[nodiscard]] bool SupportsSetState() const override { return kSupportsSetState; }
+        /// Every feature group: layers and the collision matrix, triggers, contact and trigger events, scene queries
+        static constexpr PhysicsFeatureSet kImplementedFeatures = PhysicsFeatureSet::All();
+        [[nodiscard]] PhysicsFeatureSet GetImplementedFeatures() const override { return kImplementedFeatures; }
         /// "physx"
         [[nodiscard]] std::string_view BackendId() const override { return "physx"; }
         /// For tests: the dispatcher worker-thread count to use instead of the one SetDeterministic implies (4 by

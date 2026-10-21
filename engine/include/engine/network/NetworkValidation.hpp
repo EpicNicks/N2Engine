@@ -10,6 +10,8 @@
 #include "engine/network/NetworkSettings.hpp"
 #include "engine/physics/DeterminismLevel.hpp"
 #include "engine/physics/GpuStatus.hpp"
+#include "engine/physics/PhysicsBackendKind.hpp"
+#include "engine/physics/PhysicsFeatures.hpp"
 
 namespace N2Engine::Network
 {
@@ -27,6 +29,11 @@ namespace N2Engine::Network
         bool backendUnavailable = false;
         /// The backend named by backendUnavailable
         std::string backendRequested;
+        /// Who asked for backendRequested: the project's physics.backend or the host's option (the message names it)
+        Physics::BackendRequestSource backendRequestSource = Physics::BackendRequestSource::ProjectSetting;
+        /// The feature groups the backend implements (its GetImplementedFeatures, or the class's kImplementedFeatures
+        /// before it exists); the Deterministic preset needs all of them
+        Physics::PhysicsFeatureSet backendFeatures;
         Physics::DeterminismLevel backendLevel = Physics::DeterminismLevel::None;
         bool backendSupportsSnapshot = false;
         bool backendSupportsSetState = false;
@@ -82,7 +89,9 @@ namespace N2Engine::Network
      *   authoritative  warnings only: GPU physics on (a dedicated server runs the CPU scene), and a physics backend
      *                  that does not support set-state (it cannot correct a predicted entity)
      *   deterministic  every requirement below; any unmet one refuses the start (Refused). Requirements, in order:
-     *                  physics-backend (the SELECTED backend declares CrossPlatform), strict-fp, simd-scalar (math.simdTier
+     *                  physics-backend (the SELECTED backend declares CrossPlatform), physics-features (it implements
+     *                  every feature group: layers and the collision matrix, triggers, contact and trigger events, scene
+     *                  queries; the unmet text names the missing ones), strict-fp, simd-scalar (math.simdTier
      *                  is scalar), lua-seed, engine-trig, physics-threads (the backend's results do not depend on the
      *                  thread count: it declares at least SameBinary, which PhysX does only with 0 worker threads),
      *                  gpu-physics-off, fixed-timestep, tick-loop, and, only in rollback mode, snapshot (the backend
