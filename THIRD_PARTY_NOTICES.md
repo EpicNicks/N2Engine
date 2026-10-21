@@ -38,6 +38,7 @@ configure time into the build tree). This file is a record of what the repositor
 | NVIDIA PhysX 5.6.1 (libraries and DLLs; Copyright (c) 2008-2025 NVIDIA Corporation) | Downloaded from this repository's `physx-dependencies-windows-5.6.1` release (Windows: the slim `physx-windows-x86_64-5.6.1-slim.zip`, derived from the original `bin.zip` whose build recipe is unknown, SHA256 pinned in `cmake/PhysXWindowsHashes.cmake`) or `physx-dependencies-linux-5.6.1` release (Linux: static libraries built from the PhysX 107.3-omni-and-physx-5.6.1 tag, SHA256 pinned in `cmake/PhysXLinuxHashes.cmake`; each archive carries PhysX's `LICENSE.md`) into `external/PhysX/` when `N2ENGINE_USE_PHYSX` is ON (the headers are vendored in `external/PhysX/physx/include/`, see above), or, for the web (Emscripten) build, compiled from source by `scripts/web-build-physx.sh` (see "PhysX on the web" below). Any third-party notices shipped inside the native PhysX archives have not been verified | BSD 3-Clause |
 | FreeType 2.13.3 (optional) | `FetchContent` in `text/CMakeLists.txt` when `N2ENGINE_TEXT_FREETYPE` is ON | FreeType License (FTL), chosen from FreeType's FTL / GPLv2 dual licence; credit below |
 | GoogleTest 1.17.0 (tests only, not shipped) | `FetchContent` in the root `CMakeLists.txt` when `N2ENGINE_BUILD_TESTS` is ON | BSD 3-Clause |
+| Dawn (prebuilt `libwebgpu_dawn.a` and headers, release `v20261016.190333`, commit `67d4d6e64b0755d638f76549794692badfdbc8ab`; the WebGPU CI harness only, not shipped) | Downloaded by `cmake/DawnPrebuilt.cmake` when `N2ENGINE_RENDERER_WEBGPU` is ON (OFF by default, Linux x86_64 only), checked against a pinned SHA-256; see "Dawn (WebGPU CI harness)" below | BSD 3-Clause (Copyright The Dawn & Tint Authors), with the licences of the dependencies linked into the library |
 
 ## FreeType (optional)
 
@@ -88,6 +89,37 @@ not built (found with `grep -rIl Copyright source include | xargs grep -L "NVIDI
 PhysXCommon, `GuCookingVolumeIntegration.cpp`, says it is based on public domain code by Brian Mirtich and David Eberly,
 which needs no notice. That search found no other third-party notice in the PhysX source the five libraries are built from.
 
+## Dawn (WebGPU CI harness)
+
+The option `N2ENGINE_RENDERER_WEBGPU` (OFF by default, and always OFF for the web build) builds the WebGPU renderer (`renderer/src/webgpu/`)
+and its test program `webgpu_tests` against Dawn, the WebGPU implementation of Chrome. It is the native test harness of the backend
+(design decision W8 of #155): no shipped binary (the editor host, the Docker image, the web package) is built with it, and the
+backend cannot be selected at run time. `cmake/DawnPrebuilt.cmake` downloads Dawn's own prebuilt release archive for Linux
+(<https://github.com/google/dawn/releases/tag/v20261016.190333>, `Dawn-67d4d6e64b0755d638f76549794692badfdbc8ab-ubuntu-latest-Release.tar.gz`,
+SHA-256 `20ff88448def9645ceeff30911e07295aeb433be23e26180c96019b4300bff5a`, checked before it is used) and links only
+`lib64/libwebgpu_dawn.a` with the `include/dawn` and `include/webgpu` headers: nothing of Dawn is vendored in this repository and
+nothing is patched. Dawn is BSD 3-Clause, Copyright The Dawn & Tint Authors (the licence text is the header of every one of its files):
+
+> Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following
+> conditions are met: (1) Redistributions of source code must retain the above copyright notice, this list of conditions and the
+> following disclaimer. (2) Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the
+> following disclaimer in the documentation and/or other materials provided with the distribution. (3) Neither the name of the
+> copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without
+> specific prior written permission. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+> IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+> DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+> OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+> OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+> NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+What else is inside `libwebgpu_dawn.a`, by the names of its object files (the archive holds 946; the list was read, not matched
+against Dawn's `third_party` licence files one by one): Dawn's own code, with its Vulkan backend (the one the harness uses), its
+OpenGL ES and Null backends (compiled in, not used); Tint, Dawn's shader compiler (BSD 3-Clause, the same authors); Abseil
+(`cord`, `hash`, `city` and others: Apache 2.0); and SPIRV-Tools (the optimizer and validator: Apache 2.0) with the SPIRV-Headers
+and Vulkan-Headers and the Khronos EGL headers it was compiled against (header-only: Apache 2.0, MIT or a Khronos licence, as each
+header says). The archive has no Direct3D, Metal or Windows code. At run time Dawn loads `libvulkan` (the system's loader) and, in
+CI, Mesa lavapipe (MIT) as the driver: CI tools, not shipped (see below).
+
 ## Not shipped
 
 The Vulkan SDK and loader headers, Mesa lavapipe, the Khronos validation layers and glslang are build
@@ -98,9 +130,9 @@ licences, plus the engine host and the OpenAL Soft library.
 Tint and naga validate the WebGPU shaders (`renderer/shaders/webgpu/*.wgsl`) in the CI job `wgsl (Tint, naga)` and are CI tools
 only: nothing of them is vendored, fetched at configure time, linked into or shipped with the engine. Tint is the `bin/tint`
 of Dawn's prebuilt release archive (tag `v20261016.190333`, commit `67d4d6e64b0755d638f76549794692badfdbc8ab`, downloaded by
-`scripts/install-wgsl-validators.sh` and checked against a pinned SHA-256); Dawn and Tint are BSD 3-Clause, Copyright The Dawn &
-Tint Authors, and the prebuilt binary links Dawn's own dependencies (for example SPIRV-Tools and Abseil, under their own licences;
-not verified one by one). naga is naga-cli 30.0.1 (the wgpu project), built in the job from its crates.io source package, whose
+`scripts/install-wgsl-validators.sh` and checked against a pinned SHA-256; the same archive the WebGPU CI harness links Dawn from,
+see "Dawn (WebGPU CI harness)" above); Dawn and Tint are BSD 3-Clause, Copyright The Dawn & Tint Authors, and the prebuilt binary
+links Dawn's own dependencies (for example SPIRV-Tools and Abseil, under their own licences; not verified one by one). naga is naga-cli 30.0.1 (the wgpu project), built in the job from its crates.io source package, whose
 SHA-256 is pinned, with `cargo install --locked`; MIT or Apache-2.0 (the `license` field of its `Cargo.toml`), and its dependencies
 come from the package's own `Cargo.lock`.
 
