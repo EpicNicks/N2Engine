@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 // The Jolt backend exists only in a build with N2ENGINE_USE_JOLT (the engine target then defines
@@ -21,16 +22,20 @@ namespace N2Engine::Physics
     /**
      * IPhysicsBackend on Jolt Physics (external/JoltPhysics, built cross-platform deterministic).
      *
-     * Stage J3 of the physics plan: the core. Implemented: bodies (static, dynamic, kinematic), ONE shape per body
-     * (a compound of the body's non-trigger colliders; a single collider at the origin is a plain shape), mass,
-     * gravity, forces, impulses and velocities, enable and disable, kinematic and static moves, transform sync, and the
-     * set-state calls. NOT implemented yet (each logs ONE warning when first used and otherwise does nothing or
-     * answers "nothing found"): layers and the collision matrix (J4), triggers (J4: a trigger collider has no shape
-     * and no effect for now), contact and trigger events (J4), scene queries (J5), snapshot (J6).
+     * Stages J3 (the core), J4 (layers, triggers, events) and J5 (scene queries) of the physics plan. Implemented:
+     * bodies (static, dynamic, kinematic), ONE shape per body (a compound of all the body's colliders, trigger ones
+     * included as sub-shapes; a single collider at the origin is a plain shape), mass (from the solid colliders only),
+     * gravity, forces, impulses and velocities, enable and disable, kinematic and static moves, transform sync, the
+     * set-state calls, the 32 layers and the collision matrix, trigger colliders, OnCollision* / OnTrigger* events
+     * through the ContactTracker that the PhysX backend uses too, and the scene queries (raycast, raycast-all, sphere
+     * and capsule casts, overlaps). NOT implemented yet (logs ONE warning when first used and otherwise refuses):
+     * snapshot (J6).
      *
      * Determinism: body ids are the engine's deterministic handles, index and generation (CreateBodyWithID), transforms are synced in
      * handle order (never in Jolt's active-body order), and the job system is single-threaded on the web and whenever
-     * physics.deterministic asks for it (SetDeterministic).
+     * physics.deterministic asks for it (SetDeterministic). Jolt reports contacts from worker threads in no fixed order:
+     * they are buffered and sorted by (handle pair, sub-shape pair) before they become touches, so the events of a
+     * step come out in one order whatever the thread count.
      */
     class JoltBackend final : public IPhysicsBackend
     {
@@ -77,6 +82,14 @@ namespace N2Engine::Physics
         static constexpr bool kSupportsSetState = true;
         [[nodiscard]] bool SupportsSnapshot() const override { return kSupportsSnapshot; }
         [[nodiscard]] bool SupportsSetState() const override { return kSupportsSetState; }
+        /// Every group: J4's (layers and the collision matrix, triggers, and contact and trigger events) and J5's (scene
+        /// queries). The Deterministic preset no longer refuses Jolt for a missing group.
+        static constexpr PhysicsFeatureSet kImplementedFeatures = PhysicsFeatureSet::None()
+                                                                      .With(PhysicsFeature::Layers)
+                                                                      .With(PhysicsFeature::Triggers)
+                                                                      .With(PhysicsFeature::Events)
+                                                                      .With(PhysicsFeature::Queries);
+        [[nodiscard]] PhysicsFeatureSet GetImplementedFeatures() const override { return kImplementedFeatures; }
         /// "jolt"
         [[nodiscard]] std::string_view BackendId() const override { return "jolt"; }
 
@@ -86,7 +99,10 @@ namespace N2Engine::Physics
 
         void ApplyPendingChanges() override;
         void SyncTransforms() override;
-        /// Does nothing until J4 (no contact or trigger events yet)
+        /// Delivers the events of the last Update (OnCollisionEnter/Stay/Exit, OnTriggerEnter/Stay/Exit) through the
+        /// ContactTracker: forgotten pairs' Exit, collision Enter, Stay, Exit, then the trigger events. A solid contact's
+        /// Enter carries the contact points, separation, relative velocity, and an ESTIMATE of the impulse: Jolt calls
+        /// its contact listener before the solver, so the applied impulse does not exist yet (docs/physics.html).
         void ProcessCollisionCallbacks() override;
 
         PhysicsBodyHandle CreateDynamicBody(const Math::Vector3 &position, const Math::Quaternion &rotation,
@@ -131,11 +147,21 @@ namespace N2Engine::Physics
         void UpdateCapsuleCollider(PhysicsBodyHandle body, ICollider *collider, float radius, float height,
                                    const Math::Vector3 &localOffset, const PhysicsMaterial &material) override;
 
-        /// J3: the collider's flag is recorded and its shape leaves the body (a trigger has no effect yet); one warning
+        /// A trigger collider stays a sub-shape of its body's Jolt shape; its contacts are sensor contacts (no collision
+        /// response) that become trigger events, and it adds nothing to the mass. Toggling it ends the collider's
+        /// touches (they begin again as the other kind).
         void SetIsTrigger(PhysicsBodyHandle body, ICollider *collider, bool isTrigger) override;
-        /// J3: not implemented (every body is in one of two object layers: static and moving); one warning
+        /// The collider's layer (its object layer is the layer when all the body's colliders share it). A touch the
+        /// matrix now rules out ends with an Exit at the next ProcessCollisionCallbacks; one it still allows is
+        /// undisturbed. The bodies involved wake up so Jolt looks at their pairs again.
         void SetColliderLayer(PhysicsBodyHandle body, ICollider *collider, int layer) override;
+        /// Takes the engine's matrix (Layers::CollisionMaskFor) as the filters' copy; ends the touches it rules out
         void RefreshCollisionMatrix() override;
+
+        /// Test seam, as on the PhysX backend: called once per body that RefreshCollisionMatrix re-filters (one with a
+        /// collider on a layer whose row changed), in handle order, with the object that owns the body's first collider.
+        /// Pass an empty function to remove it.
+        void SetRefilterObserver(std::function<void(const GameObject &)> observer);
 
         void AddForce(PhysicsBodyHandle body, const Math::Vector3 &force) override;
         void AddImpulse(PhysicsBodyHandle body, const Math::Vector3 &impulse) override;
@@ -154,13 +180,22 @@ namespace N2Engine::Physics
         void SetGravity(const Math::Vector3 &gravity) override;
         [[nodiscard]] Math::Vector3 GetGravity() const override;
 
-        /// J5: not implemented. Answer "nothing hit" (false, 0) with one warning.
+        /// Scene queries (J5), through Jolt's NarrowPhaseQuery only, all following QueryRules (Raycast.hpp): hits are
+        /// ordered by distance, body handle and collider order, never by Jolt's own order. The layer mask is tested
+        /// against each collider's layer as SetColliderLayer last gave it (the layer the simulation uses too). A trigger
+        /// collider is a sub-shape of its body like a solid one: a query hits it unless QueryTriggers::Ignore says not
+        /// to (SphereCast, which takes no QueryTriggers, hits triggers, as on PhysX).
         bool Raycast(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit &hit, float maxDistance,
                      std::uint32_t layerMask, QueryTriggers triggers) override;
         int RaycastAll(const Math::Vector3 &origin, const Math::Vector3 &direction, std::vector<RaycastHit> &hits,
                        float maxDistance, std::uint32_t layerMask, QueryTriggers triggers) override;
         bool SphereCast(const Math::Vector3 &origin, float radius, const Math::Vector3 &direction, RaycastHit &hit,
                         float maxDistance, std::uint32_t layerMask) override;
+        bool CapsuleCast(const Math::Vector3 &point0, const Math::Vector3 &point1, float radius,
+                         const Math::Vector3 &direction, RaycastHit &hit, float maxDistance, std::uint32_t layerMask,
+                         QueryTriggers triggers) override;
+        int Overlap(const OverlapShape &shape, std::vector<OverlapHit> &hits, std::uint32_t layerMask,
+                    QueryTriggers triggers) override;
 
         /// J6: not implemented. Refused (false, nullopt) with one warning; SupportsSnapshot is false.
         bool SaveState(std::vector<std::byte> &out) const override;
@@ -185,7 +220,7 @@ namespace N2Engine::Physics
         [[nodiscard]] bool IsBodyEnabled(PhysicsBodyHandle body) const;
         /// Initialize chose the single-threaded job system (the web build, or SetDeterministic(true))
         [[nodiscard]] bool UsesSingleThreadedJobSystem() const;
-        /// How many "not implemented yet" warnings this backend has logged (one per feature, ever)
+        /// How many "not implemented yet" warnings this backend has logged (one per feature, ever: only snapshot is left)
         [[nodiscard]] unsigned GetNotImplementedWarningCount() const;
         /// How many backends hold Jolt's process-wide state (allocator, type factory, registered types) right now
         [[nodiscard]] static int GlobalInitCount();

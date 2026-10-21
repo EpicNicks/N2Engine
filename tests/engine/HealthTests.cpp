@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <utility>
 
 #include <math/MathRegistrar.hpp>
 #include <nlohmann/json.hpp>
@@ -185,7 +186,9 @@ namespace
         /// Init on a project with these settings. Only a REFUSED start is run in this process: a start that goes ahead
         /// would open a window, an audio device and a physics scene, and change the process-wide SIMD tier and Lua seed
         /// that every other test relies on (docs/testing.html).
-        EngineHealth InitWith(const nlohmann::json &settings)
+        EngineHealth InitWith(const nlohmann::json &settings,
+                              const Config::ApplicationOptions::PhysicsBackend hostBackend =
+                                  Config::ApplicationOptions::PhysicsBackend::PHYSX)
         {
             const nlohmann::json file = {
                 {"formatVersion", 1},
@@ -202,7 +205,7 @@ namespace
             }
             Config::ApplicationOptions options;
             options.projectPath = _root.string();
-            options.physicsBackend = Config::ApplicationOptions::PhysicsBackend::PHYSX;
+            options.physicsBackend = hostBackend;
             options.renderBackend = Config::ApplicationOptions::RenderBackend::SOFTWARE;
             options.isHeadless = true;
             return Application::GetInstance().Init(options);
@@ -302,6 +305,45 @@ TEST_F(NetworkPresetInitTest, TheRefusalListsEveryRequirementTheProjectCouldNotM
     EXPECT_FALSE(Mentions(health, "physics results do not depend on the thread count"));
 #endif
 }
+
+#ifdef N2ENGINE_JOLT_ENABLED
+TEST_F(NetworkPresetInitTest, JoltMeetsTheFeatureRequirementWhetherTheProjectOrTheHostAskedForIt)
+{
+    // A Deterministic project on Jolt: the project's physics.backend, or no setting and the host's option. Jolt has
+    // every feature group (layers, triggers and events from J4, scene queries from J5), so the feature requirement is
+    // met either way. determinism.luaSeed is left unset on purpose so that the start is still refused: on the strict-FP
+    // Jolt leg everything else is met, and a start that goes ahead must not run in this process (see InitWith).
+    auto &app = Application::GetInstance();
+    const nlohmann::json common = {
+        {"network", {{"preset", "deterministic"}}},
+        {"math", {{"simdTier", "scalar"}}},
+    };
+    nlohmann::json byProject = common;
+    byProject["physics"] = {{"gpu", "off"}, {"deterministic", true}, {"backend", "jolt"}};
+    nlohmann::json byHost = common;
+    byHost["physics"] = {{"gpu", "off"}, {"deterministic", true}};
+    const std::pair<nlohmann::json, Config::ApplicationOptions::PhysicsBackend> cases[] = {
+        {byProject, Config::ApplicationOptions::PhysicsBackend::PHYSX},
+        {byProject, Config::ApplicationOptions::PhysicsBackend::AUTO},
+        {byHost, Config::ApplicationOptions::PhysicsBackend::JOLT},
+    };
+    for (const auto &[settings, host] : cases)
+    {
+        const EngineHealth health = InitWith(settings, host);
+        const SubsystemStatus *network = health.Find("Network");
+        ASSERT_NE(network, nullptr);
+        EXPECT_EQ(network->state, SubsystemState::Failed);
+        EXPECT_TRUE(Mentions(health, "determinism.luaSeed is set")) << network->detail;
+        EXPECT_FALSE(Mentions(health, "the physics backend implements layers and the collision matrix"))
+            << network->detail;
+        EXPECT_FALSE(Mentions(health, "does not implement")) << network->detail;
+        // Jolt was selected (the project's or the host's request was honoured, not refused as unavailable)
+        EXPECT_FALSE(Mentions(health, "no such backend")) << network->detail;
+        EXPECT_EQ(app.Get3DPhysicsBackend(), nullptr);
+        EXPECT_FALSE(app.GetWindow().IsValid());
+    }
+}
+#endif
 
 TEST_F(NetworkPresetInitTest, TheRollbackModeAlsoNamesTheSnapshotRequirement)
 {

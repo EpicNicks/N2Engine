@@ -12,6 +12,7 @@
 #include "engine/physics/BodyState.hpp"
 #include "engine/physics/DeterminismLevel.hpp"
 #include "engine/physics/GpuStatus.hpp"
+#include "engine/physics/PhysicsFeatures.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
 
@@ -22,6 +23,8 @@ namespace N2Engine::Physics
     class Rigidbody;
     class ICollider;
     struct RaycastHit;
+    struct OverlapShape;
+    struct OverlapHit;
     enum class QueryTriggers : std::uint8_t; // Raycast.hpp
 
     class IPhysicsBackend
@@ -46,6 +49,10 @@ namespace N2Engine::Physics
         /// Whether a body's full state (pose, velocities, sleep state) can be written back, including a dynamic
         /// body (what client reconciliation needs). False by default.
         [[nodiscard]] virtual bool SupportsSetState() const { return false; }
+        /// Which feature groups this backend implements (layers and the collision matrix, triggers, contact and trigger
+        /// events, scene queries; PhysicsFeatures.hpp). None by default, like the other declarations: a backend
+        /// declares a group only once it works. The Deterministic preset refuses to start unless every group is there.
+        [[nodiscard]] virtual PhysicsFeatureSet GetImplementedFeatures() const { return PhysicsFeatureSet::None(); }
 
         /// Which backend this is: "physx" or "jolt" (the physics.backend setting's values, PhysicsBackendKind), or
         /// "unknown" for a backend that does not say (the default, so mocks keep compiling). It is the name the Physics
@@ -221,7 +228,8 @@ namespace N2Engine::Physics
 
         // Queries: layerMask selects the layers hit (see Layers); 0 hits nothing. Raycast's wrappers default
         // it to Layers::DefaultRaycastMask. `triggers` (QueryTriggers::Ignore) skips trigger colliders; the
-        // wrappers default it to Collide.
+        // wrappers default it to Collide. Every backend follows QueryRules (Raycast.hpp): degenerate input finds
+        // nothing, a start inside a collider is a hit at distance 0, ties and lists are ordered by body handle.
         virtual bool Raycast(
             const Math::Vector3& origin,
             const Math::Vector3& direction,
@@ -245,5 +253,25 @@ namespace N2Engine::Physics
             RaycastHit& hit,
             float maxDistance,
             uint32_t layerMask) = 0;
+
+        /// Sweeps a capsule: the segment point0-point1 (the centres of its end spheres) with `radius`. The default
+        /// (a backend without it) finds nothing; both engine backends have it.
+        virtual bool CapsuleCast(
+            const Math::Vector3& point0,
+            const Math::Vector3& point1,
+            float radius,
+            const Math::Vector3& direction,
+            RaycastHit& hit,
+            float maxDistance,
+            uint32_t layerMask,
+            QueryTriggers triggers);
+
+        /// Replaces `hits` with every collider overlapping `shape` (each once, sorted by body handle, then collider
+        /// order) and returns how many. The default finds nothing; both engine backends have it.
+        virtual int Overlap(
+            const OverlapShape& shape,
+            std::vector<OverlapHit>& hits,
+            uint32_t layerMask,
+            QueryTriggers triggers);
     };
 }
