@@ -2196,7 +2196,8 @@ namespace N2Engine::Physics
 
             // The collider pairs Jolt reported present in this step. A contact's key holds sub-shape ids, which change when a
             // body's shape is rebuilt (a collider added or removed): Jolt then reports the old key Removed and the new key
-            // Added for the same collider pair, and the old key must not end the touch. Only membership is tested.
+            // Added for the same collider pair, and the old key must not end the touch. Only membership is tested, and
+            // only touching pairs count (a trigger pair that is only speculative does not hold the old touch).
             std::set<std::tuple<std::uint64_t, std::uint64_t, const ICollider *, const ICollider *>> presentPairs;
 
             std::vector<ContactKey> ended;  // a Removed with nothing else for the contact
@@ -2240,9 +2241,14 @@ namespace N2Engine::Physics
                 info.triggerOnHigh = specHigh->isTrigger;
                 info.seen = true;
                 info.dormant = false;
-                presentPairs.insert({HandleOrder(info.low), HandleOrder(info.high), colliderLow, colliderHigh});
 
                 const bool touching = !info.trigger || present->raw->overlapping;
+                if (touching)
+                {
+                    // A trigger contact inside the speculative distance only is not present: a tracked touch under the
+                    // old key must end with an Exit, not be taken over by a key that never reports it
+                    presentPairs.insert({HandleOrder(info.low), HandleOrder(info.high), colliderLow, colliderHigh});
+                }
                 if (touching && !info.reported)
                 {
                     info.reported = true;
@@ -3632,7 +3638,7 @@ namespace N2Engine::Physics
         {
             keys.push_back(Impl::KeyOfRaw(raw));
         }
-        QueryUtil::SortByKeys(raws, keys, QueryUtil::DistanceThenHandleLess);
+        QueryUtil::SortByPick(raws, keys);
         hits.reserve(raws.size());
         for (const Impl::RawHit &raw : raws)
         {

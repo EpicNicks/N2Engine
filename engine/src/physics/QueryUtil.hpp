@@ -95,13 +95,6 @@ namespace N2Engine::Physics::QueryUtil
         return HitKey{distance, handle.index, handle.generation, colliderOrder};
     }
 
-    /// RaycastAll's order: distance, then handle, then collider
-    inline bool DistanceThenHandleLess(const HitKey &a, const HitKey &b)
-    {
-        return std::tie(a.distance, a.index, a.generation, a.colliderOrder) <
-               std::tie(b.distance, b.index, b.generation, b.colliderOrder);
-    }
-
     /// Overlap's order (and the tie-break of the single-hit queries): handle, then collider, then distance
     inline bool HandleThenDistanceLess(const HitKey &a, const HitKey &b)
     {
@@ -146,6 +139,44 @@ namespace N2Engine::Physics::QueryUtil
         sortedItems.reserve(items.size());
         sortedKeys.reserve(keys.size());
         for (const std::size_t i : order)
+        {
+            sortedItems.push_back(items[i]);
+            sortedKeys.push_back(keys[i]);
+        }
+        items = std::move(sortedItems);
+        keys = std::move(sortedKeys);
+    }
+
+    /// RaycastAll's order: the single-hit pick (PickClosest) taken again and again from what is left, so the first hit
+    /// is the one Raycast returns and hits within kQueryTieTolerance of the nearest come in handle (then collider)
+    /// order, not in the order of float noise. (A plain sort by distance with a tolerance is not a strict ordering.)
+    template <typename T>
+    void SortByPick(std::vector<T> &items, std::vector<HitKey> &keys)
+    {
+        std::vector<T> sortedItems;
+        std::vector<HitKey> sortedKeys;
+        sortedItems.reserve(items.size());
+        sortedKeys.reserve(keys.size());
+        std::vector<HitKey> left = keys;
+        std::vector<std::size_t> leftIndex(items.size());
+        for (std::size_t i = 0; i < leftIndex.size(); ++i)
+        {
+            leftIndex[i] = i;
+        }
+        while (!left.empty())
+        {
+            const std::size_t pick = PickClosest(left);
+            if (pick == SIZE_MAX)
+            {
+                break; // only NaN distances get here
+            }
+            sortedItems.push_back(items[leftIndex[pick]]);
+            sortedKeys.push_back(left[pick]);
+            left.erase(left.begin() + static_cast<std::ptrdiff_t>(pick));
+            leftIndex.erase(leftIndex.begin() + static_cast<std::ptrdiff_t>(pick));
+        }
+        // Whatever PickClosest could not place (only NaN distances) keeps its order, at the end
+        for (const std::size_t i : leftIndex)
         {
             sortedItems.push_back(items[i]);
             sortedKeys.push_back(keys[i]);

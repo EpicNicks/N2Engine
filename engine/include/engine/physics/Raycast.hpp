@@ -53,8 +53,9 @@ namespace N2Engine::Physics
     ///  - The single-hit queries (Raycast, SphereCast, CapsuleCast) take the nearest hit; hits within
     ///    kQueryTieTolerance of it count as ties, and the tie with the lowest body handle (index, then generation),
     ///    then the collider registered first on that body, wins.
-    ///  - RaycastAll is sorted by distance, then body handle, then collider order; Overlap reports each collider once,
-    ///    sorted by body handle, then collider order. A collider whose shape only touches the query shape is not
+    ///  - RaycastAll comes in the order of the single-hit pick taken again and again (so its first hit is the one
+    ///    Raycast returns): nearest first, then hits within kQueryTieTolerance of the nearest by body handle, then collider
+    ///    order; Overlap reports each collider once, sorted by body handle, then collider order. A collider whose shape only touches the query shape is not
     ///    promised to be reported.
     struct QueryRules
     {

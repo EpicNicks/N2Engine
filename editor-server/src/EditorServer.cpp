@@ -5682,18 +5682,22 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         const WritePlaySnapshotCmd cmd = WritePlaySnapshotCmd::Deserialize(reader);
 
-        if (_extensions != nullptr)
-        {
-            // OnBeforePlay (E-X6): validation before the snapshot is written. Its warnings reach the client as extensionOutput
-            // events; play is never blocked by it (decision D10), and a hook that fails changes nothing here.
-            const std::string scene = cmd.scenePath.empty() ? OpenScenePath() : cmd.scenePath;
-            (void)RunExtensionHook("OnBeforePlay", nlohmann::json{{"scene", SanitizeForLog(scene, 300)}});
-        }
         const auto written = WritePlaySnapshot(cmd.scenePath);
         if (!written)
         {
+            // A request that does not validate (a path outside the project, no scene, a play host) runs no hook: the
+            // unvalidated path of a client never reaches an extension or the warnings broadcast to the other clients
             SendError(clientSocket, written.error());
             return;
+        }
+        if (_extensions != nullptr)
+        {
+            // OnBeforePlay (E-X6): validation of a request that WritePlaySnapshot accepted, so the scene path is one it
+            // resolved, run before the response (the launcher starts the play host only on it). Its warnings reach the
+            // client as extensionOutput events; play is never blocked by it (decision D10), and a hook that fails changes
+            // nothing here
+            const std::string scene = cmd.scenePath.empty() ? OpenScenePath() : cmd.scenePath;
+            (void)RunExtensionHook("OnBeforePlay", nlohmann::json{{"scene", SanitizeForLog(scene, 300)}});
         }
         ServerLog::Info("Wrote the play snapshot " + Utf8(*written));
         BufferWriter response;
