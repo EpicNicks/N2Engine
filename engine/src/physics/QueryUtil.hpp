@@ -148,7 +148,7 @@ namespace N2Engine::Physics::QueryUtil
     }
 
     /// RaycastAll's order: the single-hit pick (PickClosest) taken again and again from what is left, so the first hit
-    /// is the one Raycast returns and hits within kQueryTieTolerance of each other come in handle (then collider)
+    /// is the one Raycast returns and hits within kQueryTieTolerance of the nearest come in handle (then collider)
     /// order, not in the order of float noise. (A plain sort by distance with a tolerance is not a strict ordering.)
     template <typename T>
     void SortByPick(std::vector<T> &items, std::vector<HitKey> &keys)
