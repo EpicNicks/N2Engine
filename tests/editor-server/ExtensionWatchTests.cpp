@@ -393,6 +393,75 @@ TEST_F(ExtensionWatchTest, ALoadedAgainFileCannotTakeAnIdAnotherExtensionHas)
     EXPECT_EQ(host.UiJson().at("menuItems").size(), 2u);
 }
 
+// A file that failed on an id another extension held is tried again when that extension changes or goes
+TEST_F(ExtensionWatchTest, AFileThatFailedOnAnIdClashLoadsWhenTheOwnerGivesTheIdUp)
+{
+    TempProject project;
+    project.Write("a.lua", Extension("Alpha", "shared.item"));
+    project.Write("b.lua", Extension("Beta", "shared.item"));
+    EditorServer server;
+    StartWatching(server, project);
+    ExtensionHost &host = *server.GetEditorExtensions();
+    ASSERT_EQ(StateOf(host.DescribeJson(), "b.lua"), "failed");
+    ASSERT_NE(ErrorOf(host.DescribeJson(), "b.lua").find("already used by the extension a.lua"), std::string::npos);
+
+    // b.lua itself is untouched: the owner changing is what lets it load
+    project.Write("a.lua", Extension("Alpha", "a.item"));
+    EXPECT_TRUE(server.PollEditorExtensionsIfDue());
+    EXPECT_EQ(StateOf(host.DescribeJson(), "a.lua"), "loaded");
+    EXPECT_EQ(StateOf(host.DescribeJson(), "b.lua"), "loaded") << ErrorOf(host.DescribeJson(), "b.lua");
+    EXPECT_EQ(host.UiJson().at("menuItems").size(), 2u);
+    EXPECT_FALSE(server.PollEditorExtensionsIfDue()) << "nothing moved since: no further reload";
+}
+
+TEST_F(ExtensionWatchTest, AFileThatFailedOnAnIdClashLoadsWhenTheOwnerIsRemoved)
+{
+    TempProject project;
+    project.Write("a.lua", Extension("Alpha", "shared.item"));
+    project.Write("b.lua", Extension("Beta", "shared.item"));
+    EditorServer server;
+    StartWatching(server, project);
+    ExtensionHost &host = *server.GetEditorExtensions();
+    ASSERT_EQ(StateOf(host.DescribeJson(), "b.lua"), "failed");
+
+    project.Remove("a.lua");
+    EXPECT_TRUE(server.PollEditorExtensionsIfDue());
+    EXPECT_EQ(StateOf(host.DescribeJson(), "a.lua"), "(absent)");
+    EXPECT_EQ(StateOf(host.DescribeJson(), "b.lua"), "loaded") << ErrorOf(host.DescribeJson(), "b.lua");
+    EXPECT_EQ(host.UiJson().at("menuItems").size(), 1u);
+}
+
+TEST_F(ExtensionWatchTest, AFileThatFailedOnAnIdClashIsNotTriedAgainWhileTheOwnerIsUnchangedOrKeepsTheId)
+{
+    TempProject project;
+    project.Write("a.lua", Extension("Alpha", "shared.item"));
+    project.Write("b.lua", Extension("Beta", "shared.item"));
+    EditorServer server;
+    StartWatching(server, project);
+    ExtensionHost &host = *server.GetEditorExtensions();
+    ASSERT_EQ(StateOf(host.DescribeJson(), "b.lua"), "failed");
+    const uint32_t revision = host.UiRevision();
+
+    // Nothing moved, and an unrelated file is added: b.lua is not loaded again (it was not counted as reloaded)
+    EXPECT_FALSE(server.PollEditorExtensionsIfDue());
+    EXPECT_EQ(host.UiRevision(), revision);
+    project.Write("c.lua", Extension("Gamma", "c.item"));
+    EXPECT_TRUE(server.PollEditorExtensionsIfDue());
+    EXPECT_EQ(StateOf(host.DescribeJson(), "b.lua"), "failed");
+    EXPECT_EQ(StateOf(host.DescribeJson(), "c.lua"), "loaded");
+
+    // The owner changes but keeps the id: b.lua is tried once, fails on the id again, and waits for the owner's next change
+    project.Write("a.lua", Extension("Alpha Two", "shared.item"));
+    EXPECT_TRUE(server.PollEditorExtensionsIfDue());
+    EXPECT_EQ(StateOf(host.DescribeJson(), "a.lua"), "loaded");
+    EXPECT_EQ(StateOf(host.DescribeJson(), "b.lua"), "failed");
+    EXPECT_NE(ErrorOf(host.DescribeJson(), "b.lua").find("already used by the extension a.lua"), std::string::npos);
+    const uint32_t settled = host.UiRevision();
+    EXPECT_FALSE(server.PollEditorExtensionsIfDue());
+    EXPECT_FALSE(server.PollEditorExtensionsIfDue());
+    EXPECT_EQ(host.UiRevision(), settled);
+}
+
 TEST_F(ExtensionWatchTest, TheOtherExtensionsKeepTheirFailureCountsWhenOneFileIsLoadedAgain)
 {
     TempProject project;

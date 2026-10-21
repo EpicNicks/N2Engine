@@ -498,6 +498,35 @@ TEST_F(EditorExtensionHooksTest, OnBeforePlayIsGivenTheScenePlayedWhenOneIsNamed
     EXPECT_EQ(warnings[0].at("message"), "playing res://scenes/Hooks.scene");
 }
 
+TEST_F(EditorExtensionHooksTest, OnBeforePlayRunsOnlyForARequestThatValidates)
+{
+    WriteExtension("a.lua", HookExtension("Checker", "\"scene.read\"",
+                                          "    OnBeforePlay = function(info)
+"
+                                          "      Editor.Log.Info('hook ran for ' .. info.scene)
+"
+                                          "      return { warnings = { 'seen ' .. info.scene } }
+"
+                                          "    end,"));
+    Start();
+
+    // A path outside the project, a path that is no scene path and a scene that does not exist: each is refused by the
+    // snapshot's own validation, and neither the hook nor the warnings broadcast to the clients see the client's text
+    for (const char *bad : {"res://../outside.scene", "not-a-path", "res://scenes/Missing.scene"})
+    {
+        const Frame refused = Execute(server, CommandType::WritePlaySnapshot, Strings({bad}));
+        EXPECT_NE(refused.type, PlaySnapshotType) << bad;
+    }
+    EXPECT_TRUE(Messages(server).empty()) << "the hook ran for a request that did not validate";
+    EXPECT_TRUE(EventsOfKind(server, "extensionOutput", EventView::PublicOnly).empty());
+
+    // A valid one runs it, once
+    ASSERT_EQ(Execute(server, CommandType::WritePlaySnapshot, Strings({"res://scenes/Hooks.scene"})).type, PlaySnapshotType);
+    ASSERT_EQ(Messages(server).size(), 1u);
+    EXPECT_EQ(Messages(server)[0], "hook ran for res://scenes/Hooks.scene");
+    EXPECT_EQ(EventsOfKind(server, "extensionOutput", EventView::PublicOnly).size(), 1u);
+}
+
 // ==================== OnAssetsChanged ====================
 
 TEST_F(EditorExtensionHooksTest, OnAssetsChangedRunsAfterARescanAndAClientsWrite)

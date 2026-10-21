@@ -1727,6 +1727,9 @@ end
         /// content's)
         fs::file_time_type modified{};
         std::uintmax_t fileSize = 0;
+        /// For a file that failed because an id (a menu item's or an inspector button's) is taken by another extension: that
+        /// extension's file id, else empty. The watcher loads such a file again when that extension changes or goes
+        std::string clashOwner;
         /// The state the file ran in (idle between invocations; null while an invocation owns it, and for good once one
         /// was abandoned)
         std::unique_ptr<Scripting::LuaSandbox> sandbox;
@@ -3036,10 +3039,11 @@ end
             {
                 // Item ids are global: InvokeMenuItem names an item and nothing else. The first extension (in file order)
                 // keeps an id; a later one that uses it fails, as one whose own items clash does.
-                const auto clash = [&entry](const std::string &text)
+                const auto clash = [&entry](const std::string &text, const std::string &ownerId)
                 {
                     entry.state = ExtensionState::Failed;
                     entry.error = Printable(text);
+                    entry.clashOwner = ownerId;
                     entry.sandbox.reset();
                     entry.items.clear();
                     entry.sections.clear();
@@ -3062,7 +3066,8 @@ end
                     const auto owner = itemOwners.find(id);
                     if (owner != itemOwners.end())
                     {
-                        clash(std::format("The menu item id \"{}\" is already used by the extension {}", id, owner->second));
+                        clash(std::format("The menu item id \"{}\" is already used by the extension {}", id, owner->second),
+                              owner->second);
                         break;
                     }
                 }
@@ -3074,7 +3079,8 @@ end
                         if (owner != buttonOwners.end())
                         {
                             clash(std::format("The inspector button id \"{}\" is already used by the extension {}", id,
-                                              owner->second));
+                                              owner->second),
+                                  owner->second);
                             break;
                         }
                     }
@@ -3188,13 +3194,15 @@ end
             fs::file_time_type modified{};
             std::uintmax_t fileSize = 0;
             std::string sha256;
+            std::string clashOwner; // set for a file that failed on an id another extension holds
         };
         std::map<std::string, Known> known;
         {
             const std::lock_guard lock(_mutex);
             for (const Entry &entry : _entries)
             {
-                known[entry.id] = Known{entry.modified, entry.fileSize, entry.sha256};
+                known[entry.id] = Known{entry.modified, entry.fileSize, entry.sha256,
+                                        entry.state == ExtensionState::Failed ? entry.clashOwner : std::string()};
             }
         }
 
@@ -3248,6 +3256,41 @@ end
             if (!found.contains(id))
             {
                 gone.push_back(id);
+            }
+        }
+        // A file that failed on an id clash is tried again when the extension that held the id changes (it is loaded again
+        // now) or goes (it is dropped now): the id may be free. Only then, so a file whose owner did not move is not read or
+        // loaded on any check, and one that clashes again waits for the owner's next change. The files are kept in the order
+        // Load uses, so the first one in it that declares an id still keeps it
+        {
+            std::set<std::string> moved(gone.begin(), gone.end());
+            std::set<std::string> loading;
+            for (const FoundFile &file : toLoad)
+            {
+                moved.insert(file.id);
+                loading.insert(file.id);
+            }
+            bool retry = false;
+            for (const FoundFile &file : files)
+            {
+                const auto entry = known.find(file.id);
+                if (entry != known.end() && !entry->second.clashOwner.empty() && !loading.contains(file.id) &&
+                    moved.contains(entry->second.clashOwner))
+                {
+                    loading.insert(file.id);
+                    retry = true;
+                }
+            }
+            if (retry)
+            {
+                toLoad.clear();
+                for (const FoundFile &file : files)
+                {
+                    if (loading.contains(file.id))
+                    {
+                        toLoad.push_back(file);
+                    }
+                }
             }
         }
         outcome.touched = restamp.size();
@@ -3354,6 +3397,7 @@ end
                 if (entry.state == ExtensionState::Loaded)
                 {
                     std::string clashText;
+                    std::string clashOwnerId;
                     for (const json &item : entry.items)
                     {
                         const std::string id = item.at("id").get<std::string>();
@@ -3361,6 +3405,7 @@ end
                         {
                             clashText = std::format("The menu item id \"{}\" is already used by the extension {}", id,
                                                     owner->second);
+                            clashOwnerId = owner->second;
                             break;
                         }
                     }
@@ -3373,6 +3418,7 @@ end
                             {
                                 clashText = std::format(
                                     "The inspector button id \"{}\" is already used by the extension {}", id, owner->second);
+                                clashOwnerId = owner->second;
                             }
                         }
                     }
@@ -3380,6 +3426,7 @@ end
                     {
                         entry.state = ExtensionState::Failed;
                         entry.error = Printable(clashText);
+                        entry.clashOwner = clashOwnerId;
                         entry.sandbox.reset();
                         entry.items.clear();
                         entry.sections.clear();
