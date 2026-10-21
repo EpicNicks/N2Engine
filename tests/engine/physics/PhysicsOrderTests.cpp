@@ -18,7 +18,7 @@
 #include "engine/sceneManagement/SceneManager.hpp"
 
 // Iteration order of the PhysX backend's re-filtering and touch maps: by body creation, not by address or hash.
-// Only built on legs that have PhysX.
+// Only built on legs that have PhysX. PhysX-ONLY until the Jolt backend has events (stage J4 of the physics plan).
 #ifdef N2ENGINE_PHYSX_ENABLED
 
 using namespace N2Engine;

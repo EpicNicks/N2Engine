@@ -326,6 +326,10 @@ namespace N2Engine::Physics
         /// For diagnostics and tests. A dynamic body's centre of mass relative to the actor (the position
         /// of the mass pose; its rotation isn't returned). Zero for a static or unknown body.
         [[nodiscard]] Math::Vector3 GetCenterOfMass(PhysicsBodyHandle body) const;
+        /// For diagnostics and tests. How many shapes the body's actor holds, trigger shapes included (zero for an
+        /// unknown body). The typed physics tests read it through the same name on JoltBackend, where it counts the
+        /// solid colliders only: they compare it only for bodies without triggers.
+        [[nodiscard]] std::size_t GetShapeCount(PhysicsBodyHandle body) const;
 
     private:
         physx::PxDefaultAllocator _allocator;
