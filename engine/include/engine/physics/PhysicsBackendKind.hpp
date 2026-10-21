@@ -12,7 +12,7 @@ namespace N2Engine::Physics
     /// chosen once in Application::Init and lives across scene switches.
     enum class PhysicsBackendKind
     {
-        PhysX, // the default
+        PhysX, // the default when it is in the build (ChooseBackend)
         Jolt   // the deterministic backend (JoltBackend, in a build with N2ENGINE_USE_JOLT)
     };
 
@@ -84,54 +84,134 @@ namespace N2Engine::Physics
         return false;
     }
 
-    /// What Application::Init does with the backend a project asked for
+    /// Which backends this build contains (IsBackendCompiledIn for each); a parameter of ChooseBackend so every
+    /// combination of build flags can be tested in any build
+    struct BackendAvailability
+    {
+        bool physx = false;
+        bool jolt = false;
+
+        [[nodiscard]] constexpr bool Has(const PhysicsBackendKind kind) const
+        {
+            return kind == PhysicsBackendKind::PhysX ? physx : jolt;
+        }
+        [[nodiscard]] constexpr bool Any() const { return physx || jolt; }
+    };
+
+    /// The backends of this build
+    [[nodiscard]] constexpr BackendAvailability CompiledInBackends()
+    {
+        return {.physx = IsBackendCompiledIn(PhysicsBackendKind::PhysX),
+                .jolt = IsBackendCompiledIn(PhysicsBackendKind::Jolt)};
+    }
+
+    /// Where a backend request comes from, so a message names the right source
+    enum class BackendRequestSource
+    {
+        Auto,           // nobody asked: no physics.backend and the host's ApplicationOptions::physicsBackend is AUTO
+        HostOption,     // the host's ApplicationOptions::physicsBackend (PHYSX or JOLT); no physics.backend is set
+        ProjectSetting  // the project's physics.backend (it wins over the host option)
+    };
+
+    /// How a message names a request: "physics.backend is jolt" or "the host option (ApplicationOptions::physicsBackend)
+    /// is jolt and the project sets no physics.backend". `name` is ToString of the backend.
+    [[nodiscard]] inline std::string DescribeBackendRequest(const std::string_view name,
+                                                            const BackendRequestSource source)
+    {
+        if (source == BackendRequestSource::HostOption)
+        {
+            return std::format("the host option (ApplicationOptions::physicsBackend) is {} and the project sets no "
+                               "physics.backend",
+                               name);
+        }
+        return std::format("physics.backend is {}", name);
+    }
+
+    /// What Application::Init does with the backend a project (or its host) asked for
     struct BackendChoice
     {
-        /// What the project (or, without a setting, the host) asked for
-        PhysicsBackendKind requested = PhysicsBackendKind::PhysX;
-        /// The backend Init creates; equals requested unless fellBack
-        PhysicsBackendKind selected = PhysicsBackendKind::PhysX;
-        /// The requested backend is not in this build and the project is not Deterministic: PhysX is used instead
+        /// What was asked for; nullopt when nobody asked (source Auto)
+        std::optional<PhysicsBackendKind> requested;
+        BackendRequestSource source = BackendRequestSource::Auto;
+        /// The backend Init creates; nullopt: none (the build has no usable backend, or the start is refused)
+        std::optional<PhysicsBackendKind> selected;
+        /// The requested backend is not in this build and the preset is not Deterministic: the other backend, which
+        /// is in the build, is used instead (warning)
         bool fellBack = false;
-        /// The requested backend is not in this build and the project is Deterministic: the start is refused (a
-        /// Deterministic project is never silently moved to a backend that cannot keep its promise)
+        /// The requested backend is not in this build and nothing is put in its place (error): the Deterministic
+        /// preset never moves to another backend (Init then refuses the project), and in any other preset there is no
+        /// other backend in the build (Init runs without physics)
         bool refused = false;
-        /// Empty when nothing was unusual; otherwise the one line Init logs (an error when refused, else a warning)
+        /// Empty when nothing was unusual; otherwise the one line Init logs (an error when refused, a warning when it
+        /// fell back, information when nobody asked and the build has no backend)
         std::string message;
     };
 
     /**
      * The selection rule, a pure function (Application::Init applies it before any backend exists):
-     *   requested backend in the build            -> it is selected, no message
-     *   not in the build, Deterministic preset    -> refused (the Network row names it; nothing starts)
-     *   not in the build, any other preset        -> falls back to PhysX with a warning (a PhysX request that PhysX
-     *                                                itself cannot serve is left to Init's "built without PhysX" path)
-     * `requestedCompiledIn` is IsBackendCompiledIn(requested), a parameter so every combination can be tested.
+     *   nobody asked (Auto)                        -> PhysX when it is in the build, else Jolt when it is, else none
+     *                                                 (with an information message)
+     *   the requested backend is in the build      -> it is selected, no message
+     *   not in the build, Deterministic preset     -> refused (the Network row names it; nothing starts)
+     *   not in the build, another one is           -> falls back to that one with a warning
+     *   not in the build, no backend in the build  -> refused: no physics, with an error
+     * A fallback only ever names a backend that is in the build. `available` is CompiledInBackends() in Init, a
+     * parameter so every combination of build flags can be tested.
      */
-    [[nodiscard]] inline BackendChoice ChooseBackend(const PhysicsBackendKind requested, const bool deterministicPreset,
-                                                     const bool requestedCompiledIn)
+    [[nodiscard]] inline BackendChoice ChooseBackend(const std::optional<PhysicsBackendKind> requested,
+                                                     const BackendRequestSource source,
+                                                     const bool deterministicPreset,
+                                                     const BackendAvailability available)
     {
         BackendChoice choice;
         choice.requested = requested;
-        choice.selected = requested;
-        if (requestedCompiledIn || requested == PhysicsBackendKind::PhysX)
+        choice.source = requested ? source : BackendRequestSource::Auto;
+        if (!requested)
         {
+            if (available.physx)
+            {
+                choice.selected = PhysicsBackendKind::PhysX;
+            }
+            else if (available.jolt)
+            {
+                choice.selected = PhysicsBackendKind::Jolt;
+            }
+            else
+            {
+                choice.message = "this build has no physics backend (N2ENGINE_USE_PHYSX and N2ENGINE_USE_JOLT are "
+                                 "off): physics is disabled";
+            }
             return choice;
         }
+        const PhysicsBackendKind kind = *requested;
+        if (available.Has(kind))
+        {
+            choice.selected = kind;
+            return choice;
+        }
+        const std::string asked = DescribeBackendRequest(ToString(kind), choice.source);
         if (deterministicPreset)
         {
             choice.refused = true;
-            choice.message = std::format(
-                "physics.backend is {} but this build has no {} backend: the Deterministic preset needs it, so the "
-                "project is refused (it never falls back to another backend)",
-                ToString(requested), DisplayName(requested));
+            choice.message = std::format("{} but this build has no {} backend: the Deterministic preset never falls "
+                                         "back to another backend, so the project is refused",
+                                         asked, DisplayName(kind));
             return choice;
         }
-        choice.fellBack = true;
-        choice.selected = PhysicsBackendKind::PhysX;
-        choice.message = std::format("physics.backend is {} but this build has no {} backend; using {} instead",
-                                     ToString(requested), DisplayName(requested),
-                                     ToString(PhysicsBackendKind::PhysX));
+        const PhysicsBackendKind other =
+            kind == PhysicsBackendKind::PhysX ? PhysicsBackendKind::Jolt : PhysicsBackendKind::PhysX;
+        if (available.Has(other))
+        {
+            choice.fellBack = true;
+            choice.selected = other;
+            choice.message = std::format("{} but this build has no {} backend; using {} instead", asked,
+                                         DisplayName(kind), ToString(other));
+            return choice;
+        }
+        choice.refused = true;
+        choice.message = std::format("{} but this build has no physics backend at all (N2ENGINE_USE_PHYSX and "
+                                     "N2ENGINE_USE_JOLT are off): physics is disabled",
+                                     asked);
         return choice;
     }
 }

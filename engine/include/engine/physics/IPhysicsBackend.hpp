@@ -12,6 +12,7 @@
 #include "engine/physics/BodyState.hpp"
 #include "engine/physics/DeterminismLevel.hpp"
 #include "engine/physics/GpuStatus.hpp"
+#include "engine/physics/PhysicsFeatures.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
 
@@ -46,6 +47,10 @@ namespace N2Engine::Physics
         /// Whether a body's full state (pose, velocities, sleep state) can be written back, including a dynamic
         /// body (what client reconciliation needs). False by default.
         [[nodiscard]] virtual bool SupportsSetState() const { return false; }
+        /// Which feature groups this backend implements (layers and the collision matrix, triggers, contact and trigger
+        /// events, scene queries; PhysicsFeatures.hpp). None by default, like the other declarations: a backend
+        /// declares a group only once it works. The Deterministic preset refuses to start unless every group is there.
+        [[nodiscard]] virtual PhysicsFeatureSet GetImplementedFeatures() const { return PhysicsFeatureSet::None(); }
 
         /// Which backend this is: "physx" or "jolt" (the physics.backend setting's values, PhysicsBackendKind), or
         /// "unknown" for a backend that does not say (the default, so mocks keep compiling). It is the name the Physics
