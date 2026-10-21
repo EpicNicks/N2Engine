@@ -128,7 +128,9 @@ namespace
         TempDirectory()
         {
             std::random_device random;
-            _path = fs::temp_directory_path() / ("n2-tls-test-" + std::to_string(random()) + std::to_string(random()));
+            const auto first = random();
+            const auto second = random();
+            _path = fs::temp_directory_path() / ("n2-tls-test-" + std::to_string(first) + std::to_string(second));
             fs::create_directories(_path);
         }
 
