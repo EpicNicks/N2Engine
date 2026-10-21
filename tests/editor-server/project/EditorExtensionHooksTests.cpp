@@ -427,6 +427,7 @@ TEST_F(EditorExtensionHooksTest, OnSceneSavedRunsAfterTheFileIsWrittenAndTheScen
                                           "      local l = Editor.Assets.List('res://scenes')\n"
                                           "      local names = {}\n"
                                           "      for _, a in ipairs(l.assets) do names[#names + 1] = a.path end\n"
+                                          "      table.sort(names)\n"
                                           "      Editor.Log.Info('saved ' .. info.scene .. ' in ' .. table.concat(names, ','))\n"
                                           "    end,"));
     WriteExtension("b.lua", HookExtension("Broken", "\"scene.read\"",
@@ -443,7 +444,9 @@ TEST_F(EditorExtensionHooksTest, OnSceneSavedRunsAfterTheFileIsWrittenAndTheScen
     const SceneInfo saved = DecodeSceneInfo(Execute(server, CommandType::SaveSceneToFile, Strings({""})));
     EXPECT_EQ(saved.path, "res://scenes/Hooks.scene") << "a hook that errors does not fail the save";
     EXPECT_EQ(saved.savedRevision, saved.revision) << "the scene is saved";
-    EXPECT_EQ(Messages(server), (std::vector<std::string>{"saved res://scenes/Hooks.scene in res://scenes/Hooks.scene"}));
+    // CreateProject made the startup scene Main.scene in the same folder
+    EXPECT_EQ(Messages(server),
+              (std::vector<std::string>{"saved res://scenes/Hooks.scene in res://scenes/Hooks.scene,res://scenes/Main.scene"}));
     EXPECT_TRUE(fs::exists(Assets() / "scenes" / "Hooks.scene"));
 }
 
@@ -617,14 +620,18 @@ TEST_F(EditorExtensionHooksTest, EditorAssetsRefusesAnythingButAPathInsideAssets
 
     const std::vector<std::string> paths = {"res://../escape.txt", "res://a/../../escape.txt", "res://..",
                                             "C:/escape.txt",       "/escape.txt",              "escape.txt",
-                                            "res://a\\..\\b.txt",  "res://con.txt",            "res://x:y.txt",
+                                            "res://a\\..\\..\\escape.txt", "res://con.txt",    "res://x:y.txt",
                                             "file:///escape.txt"};
     const std::string host = Root().generic_string();
     for (const std::string &path : paths)
     {
         for (const char *item : {"t.write", "t.read", "t.folder", "t.list"})
         {
-            const std::string message = ResultMessage(Invoke(item, json{{"path", path}, {"text", "x"}}));
+            // Only TryWrite has a text in its form: an unknown parameter is refused before the item runs
+            json params = json{{"path", path}};
+            if (std::string_view(item) == "t.write")
+                params["text"] = "x";
+            const std::string message = ResultMessage(Invoke(item, params));
             EXPECT_EQ(message.rfind("error: ", 0), 0u) << item << " " << path << ": " << message;
             EXPECT_EQ(message.find(host), std::string::npos) << "no host path: " << message;
         }
@@ -650,6 +657,9 @@ TEST_F(EditorExtensionHooksTest, EditorAssetsCannotReachTheEditorFolderThatHolds
     ASSERT_NE(before.find("Assets Tools"), std::string::npos);
 
     // res:// is the assets folder: res://editor/evil.lua is assets/editor/evil.lua, never <project>/editor/evil.lua
+    // (a write does not make its folder, so assets/editor is made first)
+    EXPECT_EQ(ResultMessage(Invoke("a.folder", json{{"path", "res://editor"}})), "made");
+    EXPECT_TRUE(fs::is_directory(Assets() / "editor"));
     EXPECT_EQ(ResultMessage(Invoke("a.write", json{{"path", "res://editor/evil.lua"}, {"text", "return 1"}})), "written");
     EXPECT_TRUE(fs::exists(Assets() / "editor" / "evil.lua"));
     EXPECT_FALSE(fs::exists(Root() / "editor" / "evil.lua"));
