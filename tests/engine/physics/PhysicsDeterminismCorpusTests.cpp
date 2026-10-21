@@ -4,7 +4,7 @@
 // query results too, where a scene has them). The hashes are written to a JSON file when the environment variable
 // N2_DETERMINISM_HASHES_OUT names one (CI sets it; N2_DETERMINISM_LEG names the leg), and printed on lines that start with
 // "[CORPUS]". The CI job "determinism" compares the files of all legs with each other and with tests/golden/
-// physics-determinism.json (scripts/compare-physics-determinism.py). Nothing in this file compares a hash with another
+// physics-determinism.json (scripts/physics-determinism.py). Nothing in this file compares a hash with another
 // platform's hash: what the tests ASSERT are the properties of one binary in one process (a snapshot round trip and a
 // rollback give the straight run's hashes, the same scene run twice gives the same hash). Where PhysX is built, the first
 // three scenes also run on it and its hashes go into the file as the "control" (it is expected to differ between legs).
@@ -808,7 +808,11 @@ namespace N2PhysicsTests
     public:
         static void SetUpTestSuite()
         {
-            PhysicsCoreFixture<JoltTag>::SetUpTestSuite();
+            // The suite's own backend, single-threaded like every other scene (the base installs a thread-pool one)
+            auto backend = std::make_unique<JoltBackend>();
+            backend->SetDeterministic(true);
+            ASSERT_TRUE(backend->Initialize());
+            Application::GetInstance().Set3DPhysicsBackend(std::move(backend));
             JoltRecords().clear();
             ControlRecords().clear();
         }

@@ -48,10 +48,14 @@ def records_to_map(records):
     """{(scene, kind, tick): hash}; a key twice is an error (raised as ValueError)."""
     result = {}
     for record in records:
-        key = (record["scene"], record["kind"], int(record["tick"]))
+        try:
+            key = (record["scene"], record["kind"], int(record["tick"]))
+            value = str(record["hash"])
+        except (KeyError, TypeError) as error:
+            raise ValueError("malformed record %r: %s" % (record, error))
         if key in result:
             raise ValueError("record twice: %s %s tick %d" % key)
-        result[key] = str(record["hash"])
+        result[key] = value
     return result
 
 
