@@ -1,5 +1,5 @@
 // What is specific to the Jolt backend (stages J3 and J4): its declarations, its job system choice, the process-wide
-// state it shares between backends, the "not implemented yet" members, the body ids, enable and disable, set-state,
+// state it shares between backends, an empty world, the body ids, enable and disable, set-state,
 // how trigger colliders are built into a body, and the determinism smoke (a scene stepped twice in one process gives one state hash; the hashes are printed for the CI
 // step "Jolt backend determinism numbers"). The behaviour both backends share is PhysicsCoreTests.cpp.
 
@@ -257,7 +257,7 @@ namespace N2PhysicsTests
         JoltBackend backend;
         EXPECT_EQ(backend.BackendId(), "jolt");
         EXPECT_TRUE(backend.SupportsSetState());
-        EXPECT_FALSE(backend.SupportsSnapshot());
+        EXPECT_TRUE(backend.SupportsSnapshot());
         EXPECT_EQ(JoltBackend::kSupportsSetState, backend.SupportsSetState());
         EXPECT_EQ(JoltBackend::kSupportsSnapshot, backend.SupportsSnapshot());
         EXPECT_EQ(backend.GetGpuStatus().state, GpuState::Disabled);
@@ -346,14 +346,12 @@ namespace N2PhysicsTests
         EXPECT_TRUE(backend.CreateStaticBody(Vector3::Zero, Math::Quaternion::Identity, nullptr).IsValid());
     }
 
-    // ===== members that are not implemented yet (queries are: PhysicsQueryTests.cpp) =====
+    // ===== an empty world (the queries are: PhysicsQueryTests.cpp, the snapshot: JoltSnapshotTests.cpp) =====
 
-    TEST(JoltBackendTest, UnimplementedMembersWarnOnceAndNeverCrash)
+    TEST(JoltBackendTest, AnEmptyWorldAnswersEveryCallWithoutCrashing)
     {
         JoltBackend backend;
         ASSERT_TRUE(backend.Initialize());
-        // Layers, triggers and events are implemented (J4): Initialize has nothing to warn about
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 0u);
 
         RaycastHit hit;
         std::vector<RaycastHit> hits(3);
@@ -362,18 +360,17 @@ namespace N2PhysicsTests
                   0);
         EXPECT_TRUE(hits.empty());
         EXPECT_FALSE(backend.SphereCast(Vector3::Zero, 0.5f, Vector3(0.0f, -1.0f, 0.0f), hit, 10.0f, ~0u));
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 0u) << "queries are implemented (J5): they warn about nothing";
 
         backend.RefreshCollisionMatrix();
         backend.SetColliderLayer(INVALID_PHYSICS_HANDLE, nullptr, 3);
         backend.ProcessCollisionCallbacks();
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 0u) << "layers and events are implemented (J4): no warning";
 
-        std::vector<std::byte> bytes{std::byte{1}};
-        EXPECT_FALSE(backend.SaveState(bytes));
-        EXPECT_FALSE(backend.RestoreState(bytes));
-        EXPECT_FALSE(backend.HashState().has_value());
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 1u) << "three snapshot calls, one warning (the only one left)";
+        // The snapshot hooks work on an empty world too (J6)
+        std::vector<std::byte> bytes;
+        EXPECT_TRUE(backend.SaveState(bytes));
+        EXPECT_FALSE(bytes.empty());
+        EXPECT_TRUE(backend.RestoreState(bytes));
+        EXPECT_TRUE(backend.HashState().has_value());
     }
 
     // ===== body ids =====
@@ -613,9 +610,8 @@ namespace N2PhysicsTests
         int enter = 0, stay = 0, exit = 0;
     };
 
-    TEST_F(JoltSceneTest, ATriggerColliderIsASubShapeThatIsNotCountedAndNeverWarns)
+    TEST_F(JoltSceneTest, ATriggerColliderIsASubShapeThatIsNotCounted)
     {
-        const unsigned before = Native().GetNotImplementedWarningCount();
         const auto go = Spawn("Volume", Vector3(0.0f, 0.0f, 0.0f));
         auto *solid = go->AddComponent<BoxCollider>();
         solid->SetSize(Vector3(1.0f, 1.0f, 1.0f));
@@ -631,7 +627,6 @@ namespace N2PhysicsTests
         another->AddComponent<SphereCollider>()->SetIsTrigger(true);
         another->AddComponent<Rigidbody>()->SetBodyType(BodyType::Kinematic);
         Step(1);
-        EXPECT_EQ(Native().GetNotImplementedWarningCount(), before) << "triggers are implemented: no warning";
     }
 
     TEST_F(JoltSceneTest, TogglingATriggerEndsItsTouchesWithAnExit)
@@ -700,8 +695,8 @@ namespace N2PhysicsTests
 
     TEST(JoltBackendDeterminismTest, TheThreadPoolSceneIsRunAndItsHashPrinted)
     {
-        // Printed, not compared: thread-count independence is proven in J6 (until then the Deterministic preset uses the
-        // single-threaded job system). On the web this is the single-threaded scene again.
+        // Printed, not compared: thread-count independence of the state is proven in JoltSnapshotTests.cpp (J6), and the
+        // Deterministic preset still uses the single-threaded job system. On the web this is the single-threaded scene again.
         const SceneResult pool = RunScene(false);
         PrintHash(kSingleThreadedBuild ? "single-threaded (web)" : "thread-pool", pool);
         EXPECT_TRUE(pool.finite);

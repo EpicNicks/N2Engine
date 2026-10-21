@@ -22,14 +22,27 @@ namespace N2Engine::Physics
     /**
      * IPhysicsBackend on Jolt Physics (external/JoltPhysics, built cross-platform deterministic).
      *
-     * Stages J3 (the core), J4 (layers, triggers, events) and J5 (scene queries) of the physics plan. Implemented:
+     * Stages J3 (the core), J4 (layers, triggers, events), J5 (scene queries) and J6 (snapshots) of the physics plan.
+     * Implemented:
      * bodies (static, dynamic, kinematic), ONE shape per body (a compound of all the body's colliders, trigger ones
      * included as sub-shapes; a single collider at the origin is a plain shape), mass (from the solid colliders only),
      * gravity, forces, impulses and velocities, enable and disable, kinematic and static moves, transform sync, the
      * set-state calls, the 32 layers and the collision matrix, trigger colliders, OnCollision* / OnTrigger* events
      * through the ContactTracker that the PhysX backend uses too, and the scene queries (raycast, raycast-all, sphere
-     * and capsule casts, overlaps). NOT implemented yet (logs ONE warning when first used and otherwise refuses):
-     * snapshot (J6).
+     * and capsule casts, overlaps), and SaveState, RestoreState and HashState (what rollback needs).
+     *
+     * Snapshots (J6). SaveState writes Jolt's own state (PhysicsSystem::SaveState, everything: global, bodies,
+     * contacts, constraints) plus what the backend keeps that changes future results or events: gravity, the layer
+     * matrix, every body's collider specs, mass, gravity flag and kinematic target, the contact map and the
+     * ContactTracker's touches and undelivered events. RestoreState validates first and changes nothing when it
+     * refuses. THE PARKED-BODY CONTRACT: the bodies in the simulation (enabled) must be the same ones, with the same
+     * handles, as when the state was saved. A body that was spawned or despawned inside the rollback window must
+     * therefore be parked, not created or destroyed: SetBodyEnabled(false) takes it out of the simulation and keeps its
+     * handle and Jolt id, SetBodyEnabled(true) brings it back. A disabled body is not part of the simulation, so any
+     * number of them may differ between save and restore; an enabled body that is missing, new, or of another kind
+     * makes RestoreState return false and log an Error. Not captured (the caller replays it): the creation and
+     * destruction of bodies and colliders, the handle allocator, and everything outside the backend (GameObject poses,
+     * components).
      *
      * Determinism: body ids are the engine's deterministic handles, index and generation (CreateBodyWithID), transforms are synced in
      * handle order (never in Jolt's active-body order), and the job system is single-threaded on the web and whenever
@@ -51,6 +64,9 @@ namespace N2Engine::Physics
         /// Native worker threads of the thread-pool job system: -1 is Jolt's own choice (the hardware thread count
         /// minus one, at least one). Not used on the web and while the job system is single-threaded.
         static constexpr int kWorkerThreads = -1;
+        /// For tests: the worker threads to use instead of kWorkerThreads (call before Initialize). It only matters
+        /// for the thread-pool job system, so it does nothing after SetDeterministic(true) or on the web.
+        void SetWorkerThreadsForTesting(int workerThreads) { _workerThreads = workerThreads; }
         /// Jolt's scratch memory for one Update (TempAllocatorImpl), in bytes
         static constexpr std::size_t kTempAllocatorBytes = 16u * 1024u * 1024u;
         /// The collision steps of one Update. Always 1: the engine's fixed step is already the physics step.
@@ -77,8 +93,8 @@ namespace N2Engine::Physics
         ///                  strict floating-point profile on: the conditions of the design (docs/physics.html)
         [[nodiscard]] static DeterminismLevel DeclaredDeterminism(bool deterministic);
         [[nodiscard]] DeterminismLevel GetDeterminism() const override { return DeclaredDeterminism(_deterministic); }
-        /// Set-state yes (GetBodyState, SetBodyState); snapshot not until J6 (SaveState, RestoreState, HashState)
-        static constexpr bool kSupportsSnapshot = false;
+        /// Set-state (GetBodyState, SetBodyState) and snapshot (SaveState, RestoreState, HashState, J6) both work
+        static constexpr bool kSupportsSnapshot = true;
         static constexpr bool kSupportsSetState = true;
         [[nodiscard]] bool SupportsSnapshot() const override { return kSupportsSnapshot; }
         [[nodiscard]] bool SupportsSetState() const override { return kSupportsSetState; }
@@ -197,9 +213,23 @@ namespace N2Engine::Physics
         int Overlap(const OverlapShape &shape, std::vector<OverlapHit> &hits, std::uint32_t layerMask,
                     QueryTriggers triggers) override;
 
-        /// J6: not implemented. Refused (false, nullopt) with one warning; SupportsSnapshot is false.
+        /// Snapshots (J6), main thread, between steps only. The bytes are for the same build and the same backend
+        /// configuration (they hold Jolt's own state layout), not an interchange format.
+        ///
+        /// SaveState replaces `out` with the state; false (with an Error, and `out` untouched) for a backend that is
+        /// not initialized, or when an undelivered Exit belongs to a body that is already gone (call
+        /// ProcessCollisionCallbacks first, as every step does).
+        ///
+        /// RestoreState puts a saved state back; true only when all of it was applied. It returns false and logs an
+        /// Error naming the reason, with the simulation as it was, for bytes that are not a snapshot of this backend
+        /// (wrong size, checksum, version), and when the enabled bodies are not the ones the state was saved with (see the
+        /// parked-body contract in the class comment). It does not touch GameObjects: call SyncTransforms afterwards to
+        /// bring the poses of the dynamic bodies' objects back.
         bool SaveState(std::vector<std::byte> &out) const override;
         bool RestoreState(std::span<const std::byte> in) override;
+        /// FNV-1a over the bodies in handle order (index, generation, enabled flag, kind, and for a body in the
+        /// simulation its pose, its velocities and whether it is awake), with every float canonicalised: any NaN is one
+        /// value and -0 is +0. It does not read Jolt's byte layout. nullopt before Initialize.
         [[nodiscard]] std::optional<std::uint64_t> HashState() const override;
 
         // ===== For diagnostics and tests =====
@@ -220,8 +250,12 @@ namespace N2Engine::Physics
         [[nodiscard]] bool IsBodyEnabled(PhysicsBodyHandle body) const;
         /// Initialize chose the single-threaded job system (the web build, or SetDeterministic(true))
         [[nodiscard]] bool UsesSingleThreadedJobSystem() const;
-        /// How many "not implemented yet" warnings this backend has logged (one per feature, ever: only snapshot is left)
-        [[nodiscard]] unsigned GetNotImplementedWarningCount() const;
+        /// The most jobs Initialize's job system runs at once (1 for the single-threaded one, the worker threads plus the
+        /// calling thread for the thread pool), 0 before Initialize
+        [[nodiscard]] int GetJobSystemConcurrency() const;
+        /// How many distinct threads have run the contact listener since Initialize: more than one only when workers
+        /// really took part in the steps (the thread-count test asserts it)
+        [[nodiscard]] std::size_t GetContactThreadCount() const;
         /// How many backends hold Jolt's process-wide state (allocator, type factory, registered types) right now
         [[nodiscard]] static int GlobalInitCount();
 
@@ -230,6 +264,7 @@ namespace N2Engine::Physics
         std::unique_ptr<Impl> _impl;
         bool _deterministic = false;
         std::uint32_t _maxBodies = kMaxBodies;
+        int _workerThreads = kWorkerThreads;
     };
 }
 

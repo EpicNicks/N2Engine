@@ -332,10 +332,10 @@ TEST(NetworkValidationTest, TheJoltBackendOfTodayMeetsTheFeatureRequirementWithE
 {
     // What Application::Init fills in for physics.backend jolt (or the host option JOLT) once the build is strict-FP
     // and physics.deterministic is on: CrossPlatform, with every group (layers, triggers and events from J4, scene
-    // queries from J5) and no snapshot (J6). Lockstep starts; rollback is refused for the snapshot alone.
+    // queries from J5) and the snapshot (J6). Lockstep and rollback both start as far as the backend goes.
     NetworkEnvironment env = EverythingMet();
     env.backendName = "jolt";
-    env.backendSupportsSnapshot = false;
+    env.backendSupportsSnapshot = true;
     env.backendFeatures = PhysicsFeatureSet::None()
                               .With(PhysicsFeature::Layers)
                               .With(PhysicsFeature::Triggers)
@@ -352,8 +352,8 @@ TEST(NetworkValidationTest, TheJoltBackendOfTodayMeetsTheFeatureRequirementWithE
 
     const NetworkValidation rollback =
         ValidateNetwork(Preset(NetworkPreset::Deterministic, DeterministicMode::Rollback), env);
-    EXPECT_TRUE(rollback.Refused());
-    EXPECT_EQ(UnmetIds(rollback), (std::vector<std::string>{"snapshot"}));
+    EXPECT_FALSE(rollback.Refused()) << "Jolt declares SupportsSnapshot since J6: rollback is not refused for it";
+    EXPECT_TRUE(rollback.Unmet().empty());
 }
 
 TEST(NetworkValidationTest, ABackendDeclaringEveryFeatureGroupIsAccepted)
@@ -561,6 +561,20 @@ TEST(PhysicsBackendDeclarationTest, JoltDeclaresEveryFeatureGroup)
     EXPECT_TRUE(Physics::JoltBackend::kImplementedFeatures.Has(PhysicsFeature::Queries));
     EXPECT_TRUE(Physics::JoltBackend::kImplementedFeatures.IsComplete());
     EXPECT_EQ(Physics::JoltBackend::kImplementedFeatures.MissingText(), "");
+}
+
+TEST(PhysicsBackendDeclarationTest, JoltDeclaresSnapshotAndTheRollbackRequirementIsMetFromIt)
+{
+    // J6: SaveState, RestoreState and HashState work, so the rollback mode's snapshot requirement reads this value
+    EXPECT_TRUE(Physics::JoltBackend::kSupportsSnapshot);
+    Physics::JoltBackend backend;
+    EXPECT_TRUE(backend.SupportsSnapshot());
+
+    NetworkEnvironment env = EverythingMet();
+    env.backendName = "jolt";
+    env.backendSupportsSnapshot = backend.SupportsSnapshot();
+    env.backendFeatures = backend.GetImplementedFeatures();
+    EXPECT_FALSE(ValidateNetwork(Preset(NetworkPreset::Deterministic, DeterministicMode::Rollback), env).Refused());
 }
 #endif
 
