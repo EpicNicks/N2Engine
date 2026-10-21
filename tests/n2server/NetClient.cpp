@@ -357,5 +357,9 @@ int main(int argc, char *argv[])
         exitCode = RunClient(*arguments, *started, token);
     }
     Application::GetInstance().Shutdown();
-    return exitCode;
+    // The thread that reads stdin is blocked in a read that holds stdin's lock, and the C library's exit takes every
+    // stream's lock: returning from main would hang. The engine is shut down and the output flushed, so end here.
+    std::fflush(stdout);
+    std::fflush(stderr);
+    std::_Exit(exitCode);
 }

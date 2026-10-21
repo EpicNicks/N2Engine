@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -117,5 +118,10 @@ int main(int argc, char *argv[])
         // A "quit", or stdin ended and everything it said has been run
         return !stop && !closed;
     };
-    return Server::RunServer(*parsed, hooks);
+    const int exitCode = Server::RunServer(*parsed, hooks);
+    // The thread that reads stdin is blocked in a read that holds stdin's lock, and the C library's exit takes every
+    // stream's lock: returning from main would hang. RunServer has shut everything down, so end here.
+    std::fflush(stdout);
+    std::fflush(stderr);
+    std::_Exit(exitCode);
 }
