@@ -132,6 +132,12 @@ namespace N2PhysicsTests
         EXPECT_TRUE(this->Raises("Physics.SphereCast(Vector3(0, 0, 0), 'wide', Vector3(0, 0, 1), 100)"));
         EXPECT_TRUE(this->Raises("Physics.CapsuleCast(Vector3(0, 0, 0), 5, 0.5, Vector3(0, 0, 1), 100)"));
         EXPECT_TRUE(this->Raises("Physics.SphereCast(Vector3(0, 0, 0), 0.5)")) << "missing arguments";
+        // The optional arguments are checked too: a string is an error, not the default
+        EXPECT_TRUE(this->Raises("Physics.SphereCast(Vector3(0, 0, 0), 0.5, Vector3(0, 0, 1), 'far')"));
+        EXPECT_TRUE(this->Raises("Physics.SphereCast(Vector3(0, 0, 0), 0.5, Vector3(0, 0, 1), 100, 'all')"));
+        EXPECT_TRUE(this->Raises("Physics.CapsuleCast(Vector3(0, 0, 0), Vector3(0, 1, 0), 0.5, Vector3(0, 0, 1), {})"));
+        EXPECT_TRUE(this->Raises(
+            "Physics.CapsuleCast(Vector3(0, 0, 0), Vector3(0, 1, 0), 0.5, Vector3(0, 0, 1), 100, 'all')"));
     }
 
     TYPED_TEST(LuaPhysicsQueryTest, CastsTakeALayerMask)
@@ -264,6 +270,9 @@ namespace N2PhysicsTests
         EXPECT_TRUE(this->Raises("Physics.OverlapBox(Vector3(0, 0, 0), Vector3(1, 1, 1), 'turned')"));
         EXPECT_TRUE(this->Raises("Physics.OverlapCapsule(Vector3(0, 0, 0), 2, 1)"));
         EXPECT_TRUE(this->Raises("Physics.OverlapSphere(Vector3(0, 0, 0))")) << "missing arguments";
+        EXPECT_TRUE(this->Raises("Physics.OverlapSphere(Vector3(0, 0, 0), 1, 'all')")) << "a string is not a mask";
+        EXPECT_TRUE(this->Raises("Physics.OverlapBox(Vector3(0, 0, 0), Vector3(1, 1, 1), nil, 'all')"));
+        EXPECT_TRUE(this->Raises("Physics.OverlapCapsule(Vector3(0, 0, 0), Vector3(0, 1, 0), 1, 'all')"));
     }
 }
 
