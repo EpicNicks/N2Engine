@@ -23,7 +23,8 @@
 
 // These drive a real PhysX scene; a build without PhysX (N2ENGINE_USE_PHYSX=OFF) has nothing to test here.
 // PhysX-ONLY on purpose: what is left in this file needs trigger events, collision events, layers or scene queries,
-// which the Jolt backend does not have until stages J4 and J5 of the physics plan. The core behaviour (bodies, mass,
+// and is not converted (Jolt has layers, triggers and events since J4, covered by the typed LayerPhysicsTests.cpp and
+// PhysicsEventTests.cpp; queries come with J5). The core behaviour (bodies, mass,
 // forces, kinematic and static moves, shapes, enable and disable) is in PhysicsCoreTests.cpp, run on every backend.
 #ifdef N2ENGINE_PHYSX_ENABLED
 

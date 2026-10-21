@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/physics/ContactTracker.hpp"
 #include "engine/physics/IPhysicsBackend.hpp"
 #include <vector>
 #include <map>
@@ -401,13 +402,6 @@ namespace N2Engine::Physics
         void ForgetPairsWithBody(PhysicsBodyHandle handle, bool shapesReleased);
         /// The GameObject a body belongs to: its Rigidbody's, else its first collider's
         [[nodiscard]] GameObject* GetBodyOwner(PhysicsBodyHandle handle) const;
-        /// Calls fn on each component (enabled or not, as in Unity; none while the object is inactive in the
-        /// hierarchy) of the body's GameObject, or of
-        /// fallbackOwner if the body is gone and that object survives (see PairOwners). Uses a snapshot
-        /// and re-checks ownership, so handlers can add or remove components (or destroy the body) safely
-        void DispatchToBody(PhysicsBodyHandle handle, const std::function<void(Component&)>& fn,
-                            const std::weak_ptr<GameObject>& fallbackOwner = {});
-
         BodyData* GetBodyData(PhysicsBodyHandle handle);
         [[nodiscard]] const BodyData* GetBodyData(PhysicsBodyHandle handle) const;
 
@@ -446,92 +440,15 @@ namespace N2Engine::Physics
         std::unordered_map<ChangeType, std::function<void()>> _pendingChanges;
         Math::Vector3 _currentGravity{0.0f, -9.81f, 0.0f};
 
-        struct CollisionPair
-        {
-            PhysicsBodyHandle bodyA;
-            PhysicsBodyHandle bodyB;
-
-            bool operator==(const CollisionPair& other) const
-            {
-                return (bodyA == other.bodyA && bodyB == other.bodyB) ||
-                       (bodyA == other.bodyB && bodyB == other.bodyA);
-            }
-        };
-
-        // Orders pairs by their bodies' handles, smaller side first (A,B and B,A are the same key, like
-        // operator==). Handle indices come from a deterministic free list, so iteration order depends only
-        // on the sequence of body creations and destructions, never on addresses or the standard library's
-        // hash. (Slot reuse means it follows the slot, not strictly the age, of a body.)
-        struct CollisionPairLess
-        {
-            bool operator()(const CollisionPair& a, const CollisionPair& b) const
-            {
-                const auto key = [](const CollisionPair& pair)
-                {
-                    const auto lessHandle = [](const PhysicsBodyHandle& x, const PhysicsBodyHandle& y)
-                    {
-                        return x.index != y.index ? x.index < y.index : x.generation < y.generation;
-                    };
-                    return lessHandle(pair.bodyB, pair.bodyA) ? std::pair{pair.bodyB, pair.bodyA}
-                                                              : std::pair{pair.bodyA, pair.bodyB};
-                };
-                const auto [a0, a1] = key(a);
-                const auto [b0, b1] = key(b);
-                if (a0.index != b0.index) return a0.index < b0.index;
-                if (a0.generation != b0.generation) return a0.generation < b0.generation;
-                if (a1.index != b1.index) return a1.index < b1.index;
-                return a1.generation < b1.generation;
-            }
-        };
-
-        // The GameObjects that owned each body when a pair was ended by removing a body or collider. A
-        // side whose body is gone by dispatch (destroyed, or re-created by SetBodyType / adding or removing
-        // a Rigidbody) still gets its Exit through its GameObject, unless that is being destroyed. With the
-        // re-created body's later Enter, Enter and Exit stay balanced on both sides.
-        struct PairOwners
-        {
-            std::weak_ptr<GameObject> a;
-            std::weak_ptr<GameObject> b;
-        };
-
-        struct CollisionEvent
-        {
-            CollisionPair pair;
-            Collision* data = nullptr; // collider/otherCollider are pair.bodyA's and pair.bodyB's
-            PairOwners owners;         // only for forgotten pairs
-        };
-
-        struct TriggerEvent
-        {
-            CollisionPair pair;
-            ICollider* colliderA = nullptr; // on pair.bodyA
-            ICollider* colliderB = nullptr; // on pair.bodyB
-            PairOwners owners;              // only for forgotten pairs
-        };
-
-        // Events are per body pair, but PhysX reports touches per shape pair. Each body pair maps to
-        // the shape pairs currently touching (oriented to the key's bodyA/bodyB): Enter fires when the
-        // first starts touching and Exit when the last stops, so a compound body touching through two
-        // shapes no longer exits while one is still in contact.
-        struct ShapePair
-        {
-            const physx::PxShape* onA;
-            const physx::PxShape* onB;
-        };
-        // std::map, not unordered_map: the touch maps are iterated to wake partners of re-filtered shapes and to
-        // emit the Exit events of removed bodies and shapes, and that order must not depend on hashing.
-        using TouchMap = std::map<CollisionPair, std::vector<ShapePair>, CollisionPairLess>;
-
-        std::vector<CollisionEvent> _newCollisions;
-        TouchMap _collisionTouches;
-        std::vector<CollisionEvent> _endedCollisions;
-        std::vector<TriggerEvent> _newTriggers;
-        TouchMap _triggerTouches;
-        std::vector<TriggerEvent> _endedTriggers;
-        // Ended by removing a body or collider rather than reported by PhysX; dispatched before the
-        // step's Enter events
-        std::vector<CollisionEvent> _forgottenCollisions;
-        std::vector<TriggerEvent> _forgottenTriggers;
+        // The touch bookkeeping and event delivery (Enter/Stay/Exit per body pair) are the ContactTracker's, shared with
+        // the Jolt backend; this backend feeds it from onContact/onTrigger and settles re-filtered pairs (below). Its
+        // shape key is the PxShape.
+        using Tracker = ContactTracker<const physx::PxShape*>;
+        using ShapePair = Tracker::ShapePair;
+        using TouchMap = Tracker::TouchMap;
+        using CollisionEvent = Tracker::CollisionEvent;
+        using TriggerEvent = Tracker::TriggerEvent;
+        Tracker _tracker;
 
         // ===== Layer re-filtering =====
         // resetFiltering makes PhysX report every pair of a re-filtered shape as lost, and the pairs the
@@ -568,43 +485,11 @@ namespace N2Engine::Physics
         /// Forgets deferred "lost" reports involving a shape that's going away
         void DropDeferred(const physx::PxShape* shape);
 
-        /// Dispatches and clears a queue of ended pairs (OnCollisionExit / OnTriggerExit to both sides)
-        void DispatchCollisionExits(std::vector<CollisionEvent>& queue);
-        void DispatchTriggerExits(std::vector<TriggerEvent>& queue);
-
-        /// @returns true if this is the body pair's first touching shape pair
-        static bool AddTouch(TouchMap& touches, const CollisionPair& pair,
-                             const physx::PxShape* shapeOnA, const physx::PxShape* shapeOnB);
-        /// @returns true if the body pair has no touching shape pairs left
-        static bool RemoveTouch(TouchMap& touches, const CollisionPair& pair,
-                                const physx::PxShape* shapeOnA, const physx::PxShape* shapeOnB);
         /// Drops a shape that's being removed from every touch list (PhysX's later "lost" event for it
         /// refers to a removed shape and is ignored). A body pair left with nothing queues its Exit.
         void ForgetShape(const physx::PxShape* shape);
         /// The collider that owns a shape (stored in the shape's userData)
         static ICollider* ColliderOf(const physx::PxShape* shape);
-        /// The collider if it's still registered on the body, else null (a handler may have removed it)
-        [[nodiscard]] ICollider* LiveCollider(PhysicsBodyHandle body, ICollider* collider) const;
-        /// Records who owns each body of a pair that's being forgotten
-        [[nodiscard]] PairOwners OwnersOf(const CollisionPair& pair) const;
-        /// The GameObject and Rigidbody to report for one side of a pair: the body's, or if the body is gone,
-        /// the recorded owner's (with no Rigidbody)
-        void DescribeSide(PhysicsBodyHandle handle, const std::weak_ptr<GameObject>& fallbackOwner,
-                          GameObject*& gameObject, Rigidbody*& rigidbody) const;
-
-        Collision CreateCollisionData(
-            const CollisionPair& pair,
-            const Collision& baseData,
-            bool isForBodyA,
-            const PairOwners& owners = {});
-
-        Trigger CreateTriggerData(
-            const CollisionPair& pair,
-            ICollider* colliderA,
-            ICollider* colliderB,
-            bool isForBodyA,
-            const PairOwners& owners = {});
-
         /// Fills a query hit from scratch (no field of a reused RaycastHit survives), reporting the collider
         /// that owns the hit shape. Raycast and sweep hits both carry a location and an actor/shape.
         void FillRaycastHit(
