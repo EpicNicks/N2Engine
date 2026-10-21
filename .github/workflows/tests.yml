@@ -1032,7 +1032,7 @@ jobs:
           bash scripts/web-size-report.sh build-web-size/web-package
           node scripts/web-budget-check.mjs build-web-size/web-package size
 
-      # Jolt Physics (N2ENGINE_USE_JOLT) IS linked into the player since the Jolt backend (PR #202): the player's budgets were raised
+      # Jolt Physics (N2ENGINE_USE_JOLT) IS linked into the player since the Jolt backend (PR #205): the player's budgets were raised
       # for it. Two small programs of its own (cmake/jolt/probe) still give the library's weight in this profile (the .wasm of
       # the probe minus the baseline's), and the probe, which runs the smoke test's scenario, must print the golden state hash
       # (it exits non-zero otherwise)

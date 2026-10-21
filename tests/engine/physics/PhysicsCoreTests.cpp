@@ -74,9 +74,9 @@ namespace N2PhysicsTests
     TYPED_TEST(PhysicsCoreTest, SetGravityChangesTheDirectionOfFall)
     {
         const auto ball = this->SpawnBall("Sideways", Vector3(0.0f, 0.0f, 0.0f));
-        this->Step(1);
         EXPECT_EQ(this->BackendRef().GetGravity().y, -9.81f);
 
+        // Deferred to the next step, which also creates the body: it never falls along y
         this->BackendRef().SetGravity(Vector3(0.0f, 0.0f, -9.81f));
         this->Step(30);
 

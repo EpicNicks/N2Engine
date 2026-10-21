@@ -84,8 +84,9 @@ namespace N2Engine::Network
             env.backendUnavailable
                 ? std::format("physics.backend is {} but this build has no such backend", env.backendRequested)
             : env.hasBackend
-                ? std::format("{} declares {}, and no backend declares CrossPlatform yet", selected,
-                              Physics::ToString(env.backendLevel))
+                ? std::format("{} declares {}; only the Jolt backend can declare CrossPlatform, in a build made with "
+                              "N2ENGINE_STRICT_FP and run single-threaded",
+                              selected, Physics::ToString(env.backendLevel))
                 : std::string("there is no physics backend")));
         requirements.push_back(Requirement(
             "strict-fp", "the build has the strict floating-point profile (N2ENGINE_STRICT_FP)", env.strictFp,
@@ -104,7 +105,7 @@ namespace N2Engine::Network
             "physics-threads", "physics results do not depend on the thread count",
             env.hasBackend && env.backendLevel >= Physics::DeterminismLevel::SameBinary,
             "the backend does not declare reproducible results (PhysX does with physics.deterministic, which "
-            "runs it with 0 worker threads)"));
+            "runs it with 0 worker threads; Jolt does with a single-threaded job system)"));
         requirements.push_back(Requirement(
             "gpu-physics-off", "physics.gpu is off", env.gpuMode == Physics::GpuMode::Off,
             std::format("physics.gpu is {}", Physics::ToString(env.gpuMode))));

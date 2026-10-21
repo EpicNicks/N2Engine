@@ -151,15 +151,15 @@ namespace N2PhysicsTests
         GameObject::Ptr SpawnFloor()
         {
             const auto floor = Spawn("Floor", Vector3(0.0f, 0.0f, 0.0f));
-            floor->AddComponent<BoxCollider>()->SetSize(Vector3(10.0f, 1.0f, 10.0f));
+            floor->template AddComponent<BoxCollider>()->SetSize(Vector3(10.0f, 1.0f, 10.0f));
             return floor;
         }
 
         GameObject::Ptr SpawnBall(const std::string &name, const Vector3 &position)
         {
             const auto ball = Spawn(name, position);
-            ball->AddComponent<SphereCollider>()->SetRadius(0.5f);
-            auto *body = ball->AddComponent<Rigidbody>();
+            ball->template AddComponent<SphereCollider>()->SetRadius(0.5f);
+            auto *body = ball->template AddComponent<Rigidbody>();
             body->SetBodyType(BodyType::Dynamic);
             body->SetGravityEnabled(true);
             return ball;
