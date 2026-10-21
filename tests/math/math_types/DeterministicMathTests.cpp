@@ -22,7 +22,7 @@
 // Three kinds of check:
 //  - Exact bit patterns. The tables below were computed once from the implementation and cross-checked against the C
 //    library and a 90-digit reference (every entry but the two arguments beyond 2^20 is the correctly rounded float, or
-//    within 4 ulp for double). They are the same on every leg of the CI matrix (MSVC, GCC, Clang, arm64, wasm): that
+//    within 2 ulp for double). They are the same on every leg of the CI matrix (MSVC, GCC, Clang, arm64, wasm): that
 //    identical-everywhere is the point, so a result that differs in one bit on one platform fails here.
 //  - Accuracy: the documented bounds against a double-double (about 106 bit) reference computed in this file, on sweeps.
 //  - Special values and structure: NaN, infinities, zeros, domain errors, symmetry, monotonicity, periodicity.
@@ -176,11 +176,21 @@ namespace
         }
     }
 
-    // sin x and cos x of a double, |x| up to a few million
+    // a * b exactly, as the rounded product and its error
+    DD TwoProduct(const double a, const double b)
+    {
+        const double p = a * b;
+        return {p, std::fma(a, b, -p)};
+    }
+
+    // sin x and cos x of a double, |x| up to a few million. k times each part of pi/2 is taken exactly (TwoProduct): a
+    // rounded k * kHalfPiMid would leave an error of about k * 1e-32, which is hundreds of ulp of the reduced argument
+    // next to a multiple of pi/2 (where it is about 1e-18)
     void SinCosDD(const double x, DD &sine, DD &cosine)
     {
         const double k = std::nearbyint(x / kHalfPiHi);
-        DD r = DDSub(DD{x, 0.0}, DDMulD(DD{kHalfPiHi, kHalfPiMid}, k));
+        DD r = DDSub(DD{x, 0.0}, TwoProduct(k, kHalfPiHi));
+        r = DDSub(r, TwoProduct(k, kHalfPiMid));
         r = DDSub(r, DD{k * kHalfPiLo, 0.0});
         DD s;
         DD c;
@@ -475,10 +485,10 @@ namespace
         {0x3FB999999999999Aull, 0x3FB98EAECB8BCB2Cull},
         {0x3FE0000000000000ull, 0x3FDEAEE8744B05F0ull},
         {0x3FF0000000000000ull, 0x3FEAED548F090CEEull},
-        {0x4000000000000000ull, 0x3FED18F6EAD1B445ull},
+        {0x4000000000000000ull, 0x3FED18F6EAD1B446ull},
         {0x400921FB54442D18ull, 0x3CA1A62633145C07ull},
         {0x4012000000000000ull, 0xBFEF47ED3DC74080ull},
-        {0x4024000000000000ull, 0xBFE1689EF5F34F53ull},
+        {0x4024000000000000ull, 0xBFE1689EF5F34F52ull},
         {0x4059000000000000ull, 0xBFE03425B78C4DB8ull},
         {0x408F440000000000ull, 0x3FEFD948C50A7A0Dull},
         {0x40C81CD6C8B43958ull, 0xBFE687D5890974A5ull},
@@ -496,48 +506,48 @@ namespace
     };
 
     constexpr DoubleCase kDoubleCos[] = {
-        {0x3FB999999999999Aull, 0x3FEFD712F9A817C0ull},
+        {0x3FB999999999999Aull, 0x3FEFD712F9A817C1ull},
         {0x3FE0000000000000ull, 0x3FEC1528065B7D50ull},
         {0x3FF0000000000000ull, 0x3FE14A280FB5068Cull},
         {0x4000000000000000ull, 0xBFDAA22657537205ull},
         {0x400921FB54442D18ull, 0xBFF0000000000000ull},
-        {0x4012000000000000ull, 0xBFCAFB5B54583D6Bull},
+        {0x4012000000000000ull, 0xBFCAFB5B54583D6Aull},
         {0x4024000000000000ull, 0xBFEAD9AC890C6B1Full},
         {0x4059000000000000ull, 0x3FEB981DBF665FDFull},
-        {0x408F440000000000ull, 0x3FB8DBFF75EB6650ull},
-        {0x40C81CD6C8B43958ull, 0x3FE6B94C3BBE24B7ull},
-        {0xBFE6666666666666ull, 0x3FE87996529F9D92ull},
+        {0x408F440000000000ull, 0x3FB8DBFF75EB664Full},
+        {0x40C81CD6C8B43958ull, 0x3FE6B94C3BBE24B8ull},
+        {0xBFE6666666666666ull, 0x3FE87996529F9D93ull},
         {0xC008000000000000ull, 0xBFEFAE04BE85E5D2ull},
         {0x3EE4F8B588E368F1ull, 0x3FEFFFFFFFF920C8ull},
         {0x3E45798EE2308C3Aull, 0x3FF0000000000000ull},
         {0x40F0000000000000ull, 0xBFE719453109288Bull},
         {0x4130000000000000ull, 0x3FEE33ADA92FE2AEull},
         {0x413E848000000000ull, 0x3FE82908D66F77F2ull},
-        {0x41CDCD6500000000ull, 0x3FEACFF8BBC9D815ull},
+        {0x41CDCD6500000000ull, 0x3FEACFF8BBC9D814ull},
         {0x3FE921FB54442D18ull, 0x3FE6A09E667F3BCDull},
         {0x401921FB54442D18ull, 0x3FF0000000000000ull},
         {0x3FF921FB54442D18ull, 0x3C91A62633145C07ull},
     };
 
     constexpr DoubleCase kDoubleTan[] = {
-        {0x3FB999999999999Aull, 0x3FB9AF8877430B80ull},
+        {0x3FB999999999999Aull, 0x3FB9AF8877430B7Full},
         {0x3FE0000000000000ull, 0x3FE17B4F5BF3474Aull},
         {0x3FF0000000000000ull, 0x3FF8EB245CBEE3A5ull},
-        {0x4000000000000000ull, 0xC0017AF62E0950F7ull},
+        {0x4000000000000000ull, 0xC0017AF62E0950F8ull},
         {0x400921FB54442D18ull, 0xBCA1A62633145C07ull},
-        {0x4012000000000000ull, 0x40128CA0C62BF594ull},
-        {0x4024000000000000ull, 0x3FE4BF5F34BE3783ull},
+        {0x4012000000000000ull, 0x40128CA0C62BF595ull},
+        {0x4024000000000000ull, 0x3FE4BF5F34BE3782ull},
         {0x4059000000000000ull, 0xBFE2CA74D62B5D38ull},
-        {0x408F440000000000ull, 0x40247F9F1C1F4870ull},
-        {0x40C81CD6C8B43958ull, 0xBFEFBA5836323A4Eull},
-        {0xBFE6666666666666ull, 0xBFEAF406C2FC78AEull},
+        {0x408F440000000000ull, 0x40247F9F1C1F4871ull},
+        {0x40C81CD6C8B43958ull, 0xBFEFBA5836323A4Dull},
+        {0xBFE6666666666666ull, 0xBFEAF406C2FC78ADull},
         {0xC008000000000000ull, 0x3FC23EF71254B86Full},
         {0x3EE4F8B588E368F1ull, 0x3EE4F8B588E6698Eull},
         {0x3E45798EE2308C3Aull, 0x3E45798EE2308C3Aull},
         {0x40F0000000000000ull, 0xBFEEAE2708CF5425ull},
         {0x4130000000000000ull, 0x3FD6692E57792070ull},
         {0x413E848000000000ull, 0xBFEBCAA1B8A38A29ull},
-        {0x41CDCD6500000000ull, 0x3FE4D8B267B32DE4ull},
+        {0x41CDCD6500000000ull, 0x3FE4D8B267B32DE5ull},
         {0x3FE921FB54442D18ull, 0x3FEFFFFFFFFFFFFFull},
         {0x401921FB54442D18ull, 0xBCB1A62633145C07ull},
         {0x3FF921FB54442D18ull, 0x434D02967C31CDB5ull},
@@ -546,12 +556,12 @@ namespace
     constexpr DoubleCase kDoubleAsin[] = {
         {0xBFF0000000000000ull, 0xBFF921FB54442D18ull},
         {0xBFECCCCCCCCCCCCDull, 0xBFF1EA93705FA172ull},
-        {0xBFE0000000000000ull, 0xBFE0C152382D7367ull},
-        {0xBFB999999999999Aull, 0xBFB9A49276037885ull},
+        {0xBFE0000000000000ull, 0xBFE0C152382D7366ull},
+        {0xBFB999999999999Aull, 0xBFB9A49276037884ull},
         {0x0000000000000000ull, 0x0000000000000000ull},
-        {0x3FB999999999999Aull, 0x3FB9A49276037885ull},
-        {0x3FD3333333333333ull, 0x3FD380159E14F6FEull},
-        {0x3FE0000000000000ull, 0x3FE0C152382D7367ull},
+        {0x3FB999999999999Aull, 0x3FB9A49276037884ull},
+        {0x3FD3333333333333ull, 0x3FD380159E14F6FFull},
+        {0x3FE0000000000000ull, 0x3FE0C152382D7366ull},
         {0x3FE6A09E667F3BCDull, 0x3FE921FB54442D19ull},
         {0x3FECCCCCCCCCCCCDull, 0x3FF1EA93705FA172ull},
         {0x3FEFFFEB074A771Dull, 0x3FF90FA9F3695AA5ull},
@@ -566,25 +576,25 @@ namespace
         {0x0000000000000000ull, 0x3FF921FB54442D18ull},
         {0x3FB999999999999Aull, 0x3FF787B22CE3F590ull},
         {0x3FD3333333333333ull, 0x3FF441F5ECBEEF58ull},
-        {0x3FE0000000000000ull, 0x3FF0C152382D7364ull},
+        {0x3FE0000000000000ull, 0x3FF0C152382D7365ull},
         {0x3FE6A09E667F3BCDull, 0x3FE921FB54442D18ull},
-        {0x3FECCCCCCCCCCCCDull, 0x3FDCDD9F8F922E97ull},
+        {0x3FECCCCCCCCCCCCDull, 0x3FDCDD9F8F922E98ull},
         {0x3FEFFFEB074A771Dull, 0x3F725160DAD27315ull},
         {0x3FF0000000000000ull, 0x0000000000000000ull},
     };
 
     constexpr DoubleCase kDoubleAtan[] = {
-        {0xC08F400000000000ull, 0xBFF91DE2C0E658BCull},
+        {0xC08F400000000000ull, 0xBFF91DE2C0E658BDull},
         {0xC008000000000000ull, 0xBFF3FC176B7A8560ull},
         {0xBFF0000000000000ull, 0xBFE921FB54442D18ull},
-        {0xBFE0000000000000ull, 0xBFDDAC670561BB4Eull},
-        {0x3FB999999999999Aull, 0x3FB983E282E2CC4Cull},
-        {0x3FE0000000000000ull, 0x3FDDAC670561BB4Eull},
+        {0xBFE0000000000000ull, 0xBFDDAC670561BB4Full},
+        {0x3FB999999999999Aull, 0x3FB983E282E2CC4Dull},
+        {0x3FE0000000000000ull, 0x3FDDAC670561BB4Full},
         {0x3FF0000000000000ull, 0x3FE921FB54442D18ull},
         {0x4000000000000000ull, 0x3FF1B6E192EBBE44ull},
         {0x4024000000000000ull, 0x3FF789BD2C160053ull},
         {0x412E848000000000ull, 0x3FF921FA47D4B30Dull},
-        {0x3EE4F8B588E368F1ull, 0x3EE4F8B588E06853ull},
+        {0x3EE4F8B588E368F1ull, 0x3EE4F8B588E06854ull},
     };
 
     constexpr DoubleCase kDoubleExp[] = {
@@ -646,7 +656,7 @@ namespace
         {0x3FE0000000000000ull, 0x4000000000000000ull, 0x3FCF5B75F92C80DDull},
         {0x4008000000000000ull, 0x3FB999999999999Aull, 0x3FF8997FBB8B19C0ull},
         {0xC01C000000000000ull, 0x4010000000000000ull, 0xBFF0D38F2C5BA09Eull},
-        {0x3F50624DD2F1A9FCull, 0x3FF0000000000000ull, 0x3F50624D77516E15ull},
+        {0x3F50624DD2F1A9FCull, 0x3FF0000000000000ull, 0x3F50624D77516E16ull},
         {0x4000000000000000ull, 0x0000000000000000ull, 0x3FF921FB54442D18ull},
         {0x0000000000000000ull, 0xBFF0000000000000ull, 0x400921FB54442D18ull},
         {0x01A56E1FC2F8F359ull, 0xFE37E43C8800759Cull, 0x400921FB54442D18ull},
@@ -778,7 +788,7 @@ TEST(DeterministicMathTest, FloatResultsAreWithinOneUlpOfTheReference)
 TEST(DeterministicMathTest, DoubleResultsAreWithinTheDocumentedUlpOfTheReference)
 {
     // The documented bounds, asserted as they are written in math/DeterministicMath.hpp against the double-double
-    // reference: 2 ulp (Sin, Cos, Exp, Log, Log2), 3 (Tan), 4 (Atan, Atan2, Asin, Acos)
+    // reference: 1 ulp (Sin, Cos, Atan), 2 (Exp, Log, Log2), 3 (Tan, Atan2, Asin, Acos)
     Sweep sweep(13);
     auto check = [](const char *name, const double x, const double actual, const DD reference, const double bound) {
         if (reference.hi == 0.0)
@@ -791,17 +801,17 @@ TEST(DeterministicMathTest, DoubleResultsAreWithinTheDocumentedUlpOfTheReference
     for (int i = 0; i < 20000; ++i)
     {
         const double x = sweep.Uniform(-1000.0, 1000.0);
-        check("Sin", x, Math::Sin(x), RefSin(x), 2.0);
-        check("Cos", x, Math::Cos(x), RefCos(x), 2.0);
+        check("Sin", x, Math::Sin(x), RefSin(x), 1.0);
+        check("Cos", x, Math::Cos(x), RefCos(x), 1.0);
         check("Tan", x, Math::Tan(x), RefTan(x), 3.0);
         const double big = sweep.Uniform(-1.0e6, 1.0e6); // under 2^20, so still the accurate reduction
-        check("Sin(big)", big, Math::Sin(big), RefSin(big), 2.0);
-        check("Cos(big)", big, Math::Cos(big), RefCos(big), 2.0);
+        check("Sin(big)", big, Math::Sin(big), RefSin(big), 1.0);
+        check("Cos(big)", big, Math::Cos(big), RefCos(big), 1.0);
         const double unit = sweep.Uniform(-1.0, 1.0);
-        check("Asin", unit, Math::Asin(unit), RefAsin(unit), 4.0);
-        check("Acos", unit, Math::Acos(unit), RefAcos(unit), 4.0);
+        check("Asin", unit, Math::Asin(unit), RefAsin(unit), 3.0);
+        check("Acos", unit, Math::Acos(unit), RefAcos(unit), 3.0);
         const double wide = std::tan(sweep.Uniform(-1.5707, 1.5707));
-        check("Atan", wide, Math::Atan(wide), RefAtan(wide), 4.0);
+        check("Atan", wide, Math::Atan(wide), RefAtan(wide), 1.0);
         const double e = sweep.Uniform(-700.0, 700.0);
         check("Exp", e, Math::Exp(e), RefExp(e), 2.0);
         const double positive = std::ldexp(sweep.Uniform(1.0, 2.0), static_cast<int>(sweep.Uniform(-1000.0, 1000.0)));
@@ -809,7 +819,7 @@ TEST(DeterministicMathTest, DoubleResultsAreWithinTheDocumentedUlpOfTheReference
         check("Log2", positive, Math::Log2(positive), RefLog2(positive), 2.0);
         const double y = sweep.Uniform(-1000.0, 1000.0);
         const double xx = sweep.Uniform(-1000.0, 1000.0);
-        check("Atan2", y, Math::Atan2(y, xx), RefAtan2(y, xx), 4.0);
+        check("Atan2", y, Math::Atan2(y, xx), RefAtan2(y, xx), 3.0);
     }
 }
 
@@ -824,11 +834,11 @@ TEST(DeterministicMathTest, SineAndCosineStayAccurateNextToMultiplesOfHalfPi)
         const double cosine = Math::Cos(x);
         if (std::fabs(sine) < 1e-3)
         {
-            EXPECT_LE(UlpErrorDD(sine, RefSin(x)), 2.0) << "Sin(" << x << ")";
+            EXPECT_LE(UlpErrorDD(sine, RefSin(x)), 1.0) << "Sin(" << x << ")";
         }
         if (std::fabs(cosine) < 1e-3)
         {
-            EXPECT_LE(UlpErrorDD(cosine, RefCos(x)), 2.0) << "Cos(" << x << ")";
+            EXPECT_LE(UlpErrorDD(cosine, RefCos(x)), 1.0) << "Cos(" << x << ")";
         }
     }
     // The classic values: the double nearest pi has a sine of 1.2246467991473532e-16, the double nearest pi/2 a cosine of

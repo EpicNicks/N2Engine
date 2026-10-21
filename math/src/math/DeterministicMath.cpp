@@ -95,7 +95,7 @@ namespace N2Engine::Math
             FromBits(0x3DE6124613A86D09ull), // 1.6059043836821613e-10
             FromBits(0x3DA93974A8C07C9Dull) // 1.1470745597729725e-11
         };
-        // atan t = t + t*z*P(z), z = t*t: P = -1/3, 1/5, -1/7, ... (to t^27)
+        // atan t = t + t*z*P(z), z = t*t: P = -1/3, 1/5, -1/7, ... (to t^45; |t| < 7/16 leaves under 1e-18 relative)
         constexpr double kAtanP[] = {
             FromBits(0xBFD5555555555555ull), // -0.3333333333333333
             FromBits(0x3FC999999999999Aull), // 0.2
@@ -109,8 +109,24 @@ namespace N2Engine::Math
             FromBits(0x3FA8618618618618ull), // 0.047619047619047616
             FromBits(0xBFA642C8590B2164ull), // -0.043478260869565216
             FromBits(0x3FA47AE147AE147Bull), // 0.04
-            FromBits(0xBFA2F684BDA12F68ull) // -0.037037037037037035
+            FromBits(0xBFA2F684BDA12F68ull), // -0.037037037037037035
+            FromBits(0x3FA1A7B9611A7B96ull), // 0.034482758620689655
+            FromBits(0xBFA0842108421084ull), // -0.03225806451612903
+            FromBits(0x3F9F07C1F07C1F08ull), // 0.030303030303030304
+            FromBits(0xBF9D41D41D41D41Dull), // -0.02857142857142857
+            FromBits(0x3F9BACF914C1BAD0ull), // 0.02702702702702703
+            FromBits(0xBF9A41A41A41A41Aull), // -0.02564102564102564
+            FromBits(0x3F98F9C18F9C18FAull), // 0.024390243902439025
+            FromBits(0xBF97D05F417D05F4ull), // -0.023255813953488372
+            FromBits(0x3F96C16C16C16C17ull) // 0.022222222222222223
         };
+        // atan c for the reduction points c = 1/2, 1, 3/2, as the double nearest and the double that is the rest
+        constexpr double kAtanHalfHi = FromBits(0x3FDDAC670561BB4Full);
+        constexpr double kAtanHalfLo = FromBits(0x3C7A2B7F222F65E2ull);
+        constexpr double kAtanOneHi = FromBits(0x3FE921FB54442D18ull); // pi/4
+        constexpr double kAtanOneLo = FromBits(0x3C81A62633145C07ull);
+        constexpr double kAtanThreeHalvesHi = FromBits(0x3FEF730BD281F69Bull);
+        constexpr double kAtanThreeHalvesLo = FromBits(0x3C7007887AF0CBBDull);
         // log m = 2s + 2s*z*P(z), s = (m-1)/(m+1), z = s*s: P = 1/3, 1/5, ... (to s^25)
         constexpr double kLogP[] = {
             FromBits(0x3FD5555555555555ull), // 0.3333333333333333
@@ -151,9 +167,24 @@ namespace N2Engine::Math
             return static_cast<std::int64_t>(v < 0.0 ? v - 0.5 : v + 0.5);
         }
 
+        // a + b as the rounded sum and its exact rounding error (Knuth's TwoSum: no condition on the magnitudes)
+        struct Sum
+        {
+            double hi;
+            double lo;
+        };
+
+        Sum TwoSum(const double a, const double b)
+        {
+            const double s = a + b;
+            const double bb = s - a;
+            return {s, (a - (s - bb)) + (b - bb)};
+        }
+
         struct Reduced
         {
-            double r;          // x - n * pi/2, |r| <= about pi/4
+            double r;          // x - n * pi/2 as r + tail, |r| <= about pi/4
+            double tail;       // the part of the reduced argument below r's last bit
             unsigned quadrant; // n mod 4
         };
 
@@ -161,7 +192,7 @@ namespace N2Engine::Math
         {
             if (std::fabs(x) <= kPio4)
             {
-                return {x, 0u};
+                return {x, 0.0, 0u};
             }
             if (std::fabs(x) > kReduceLimit)
             {
@@ -169,50 +200,71 @@ namespace N2Engine::Math
             }
             const std::int64_t n = RoundToInt(x * kInvPio2);
             const double dn = static_cast<double>(n);
-            double r = x - dn * kPio2_1;
-            r = r - dn * kPio2_2;
-            r = r - dn * kPio2_3;
-            r = r - dn * kPio2_3t;
-            return {r, static_cast<unsigned>(n & 3)};
+            // dn times each piece is exact; x - dn * kPio2_1 is exact (the two are within a factor of 2), and the two
+            // subtractions after it keep their rounding errors, so r + tail carries the reduced argument to far below r's
+            // last bit (no reduction error reaches the result, also next to a multiple of pi/2)
+            const double r1 = x - dn * kPio2_1;
+            const Sum s1 = TwoSum(r1, -(dn * kPio2_2));
+            const Sum s2 = TwoSum(s1.hi, -(dn * kPio2_3));
+            const double tail = (s1.lo + s2.lo) - dn * kPio2_3t;
+            const Sum r = TwoSum(s2.hi, tail);
+            return {r.hi, r.lo, static_cast<unsigned>(n & 3)};
         }
 
-        double SinKernel(const double r)
+        // sin(r + tail) = r + r^3 P(r^2) + tail (1 - r^2/2), the tail's higher terms being below the last bit
+        double SinKernel(const double r, const double tail)
         {
             const double z = r * r;
-            return r + (r * z) * Horner(kSinP, z);
+            const double v = z * r;
+            return r + ((v * Horner(kSinP, z) - (0.5 * z) * tail) + tail);
         }
 
-        double CosKernel(const double r)
+        // cos(r + tail) = 1 - r^2/2 + r^4 P(r^2) - r tail. 1 - r^2/2 is rounded once to w and its rounding error,
+        // ((1 - w) - r^2/2) (both steps exact), is added back with the small terms
+        double CosKernel(const double r, const double tail)
         {
             const double z = r * r;
-            return (1.0 - 0.5 * z) + (z * z) * Horner(kCosP, z);
+            const double hz = 0.5 * z;
+            const double w = 1.0 - hz;
+            return w + (((1.0 - w) - hz) + ((z * z) * Horner(kCosP, z) - r * tail));
         }
 
-        // atan of a in [0, 1]: two argument halvings (atan a = 2 atan(a / (1 + sqrt(1 + a^2)))), then the series
-        double AtanUnit(const double a)
+        // atan t = t + t^3 P(t^2) for |t| < 7/16
+        double AtanSeries(const double t)
         {
-            if (a < kTiny)
-            {
-                return a; // atan a = a to double precision (and the halvings below would lose a denormal's digits)
-            }
-            if (a == 1.0)
-            {
-                return kPio4; // 45 degrees exactly, so Atan2(y, y) is the double nearest pi/4
-            }
-            const double t1 = a / (1.0 + std::sqrt(1.0 + a * a));
-            const double t2 = t1 / (1.0 + std::sqrt(1.0 + t1 * t1));
-            const double z = t2 * t2;
-            return 4.0 * (t2 + (t2 * z) * Horner(kAtanP, z));
+            const double z = t * t;
+            return t + (t * z) * Horner(kAtanP, z);
         }
 
-        // atan of a >= 0 (a may be +inf)
+        // atan of a >= 0 (a may be +inf), reduced to |t| < 7/16 around c = 0, 1/2, 1, 3/2 or infinity:
+        // atan a = atan c + atan((a - c) / (1 + a c)), with atan c a double and the rest of it (the fdlibm intervals).
+        // a - c (2a - 1 for c = 1/2) is exact in its interval, so the reduced argument has at most three roundings and
+        // is small next to atan c
         double AtanPositive(const double a)
         {
-            if (a > 1.0)
+            if (a < 0.4375)
             {
-                return (kPio2Hi - AtanUnit(1.0 / a)) + kPio2Lo;
+                if (a < kTiny)
+                {
+                    return a; // atan a = a to double precision
+                }
+                return AtanSeries(a);
             }
-            return AtanUnit(a);
+            if (a < 0.6875)
+            {
+                return kAtanHalfHi + (kAtanHalfLo + AtanSeries((2.0 * a - 1.0) / (2.0 + a)));
+            }
+            if (a < 1.1875)
+            {
+                // a = 1 gives t = 0 and exactly kAtanOneHi, the double nearest pi/4, so Atan2(y, y) is that double
+                return kAtanOneHi + (kAtanOneLo + AtanSeries((a - 1.0) / (a + 1.0)));
+            }
+            if (a < 2.4375)
+            {
+                return kAtanThreeHalvesHi + (kAtanThreeHalvesLo + AtanSeries((a - 1.5) / (1.0 + 1.5 * a)));
+            }
+            // atan a = pi/2 - atan(1/a); a = +inf gives t = -0, a series of 0 and exactly kPio2Hi
+            return kPio2Hi + (kPio2Lo + AtanSeries(-1.0 / a));
         }
 
         // Splits a positive finite x into m * 2^e with m in [1/sqrt2, sqrt2]
@@ -275,13 +327,13 @@ namespace N2Engine::Math
         switch (red.quadrant)
         {
         case 0u:
-            return SinKernel(red.r);
+            return SinKernel(red.r, red.tail);
         case 1u:
-            return CosKernel(red.r);
+            return CosKernel(red.r, red.tail);
         case 2u:
-            return -SinKernel(red.r);
+            return -SinKernel(red.r, red.tail);
         default:
-            return -CosKernel(red.r);
+            return -CosKernel(red.r, red.tail);
         }
     }
 
@@ -299,13 +351,13 @@ namespace N2Engine::Math
         switch (red.quadrant)
         {
         case 0u:
-            return CosKernel(red.r);
+            return CosKernel(red.r, red.tail);
         case 1u:
-            return -SinKernel(red.r);
+            return -SinKernel(red.r, red.tail);
         case 2u:
-            return -CosKernel(red.r);
+            return -CosKernel(red.r, red.tail);
         default:
-            return SinKernel(red.r);
+            return SinKernel(red.r, red.tail);
         }
     }
 
@@ -320,8 +372,8 @@ namespace N2Engine::Math
             return x;
         }
         const Reduced red = ReducePio2(x);
-        const double s = SinKernel(red.r);
-        const double c = CosKernel(red.r);
+        const double s = SinKernel(red.r, red.tail);
+        const double c = CosKernel(red.r, red.tail);
         return (red.quadrant & 1u) == 0u ? s / c : -(c / s);
     }
 

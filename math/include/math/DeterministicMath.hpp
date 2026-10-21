@@ -16,16 +16,20 @@ namespace N2Engine::Math
      * Two precisions. The double functions are the definition (Lua numbers are doubles). The float functions compute
      * the double result and round it once to float, so they are the double function's value, not a separate algorithm.
      *
-     * Accuracy, measured against a 90-digit reference over about 72000 sampled arguments (the sweeps are in
-     * docs/math.html) and asserted as bounds by the tests:
+     * Accuracy, measured against a 160-bit reference over 80000 sampled arguments per function (the sweeps of the
+     * tests, see docs/math.html) and asserted as bounds by the tests:
      *   float:  within 1 ulp of the exact result (every sampled result was the correctly rounded float, 0.5 ulp).
-     *   double: Sin, Cos 2 ulp (measured 1.8), Tan 3 (2.8), Exp, Log, Log2 2 (1.3), Atan, Atan2, Asin, Acos 4 (3.9).
-     *   This includes arguments within 1e-18 of a multiple of pi/2: the reduction below keeps a relative error of a
-     *   few ulp there too (pi/2 is carried to about 1e-47).
+     *   double: Sin, Cos 1 ulp (measured 0.81), Atan 1 (0.84), Exp, Log, Log2 2 (1.8), Tan 3 (2.1),
+     *   Atan2, Asin, Acos 3 (1.9).
+     *   This includes arguments within 1e-18 of a multiple of pi/2: the reduction below keeps the full relative
+     *   accuracy there too (pi/2 is carried to about 1e-47).
      * They are documented bounds, not exact-rounding guarantees.
      *
      * Argument reduction (Sin, Cos, Tan): |x| up to 2^20 (1048576) is reduced by a three-part Cody-Waite subtraction of
-     * the nearest multiple of pi/2, accurate as stated above. Beyond that the argument is first reduced by
+     * the nearest multiple of pi/2 whose rounding errors are kept as a second double (the kernels take the reduced
+     * argument as that pair), accurate as stated above. Atan is reduced to |t| < 7/16 around 0, 1/2, 1, 3/2 or
+     * infinity (atan a = atan c + atan((a - c) / (1 + a c))) before its series. Beyond 2^20 the argument is first
+     * reduced by
      * fmod(x, 2*pi) with the double nearest 2*pi (fmod is exact on every platform), so the result is the same
      * everywhere but is only accurate to about |x| * 4e-17 in absolute terms (the error of that double as 2*pi, per radian); it
      * is not the sine of the exact argument. Game angles never get there.
