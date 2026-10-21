@@ -67,6 +67,8 @@ namespace
             {"SendInput", Class::Write},
             // Runs an extension's code, which changes the scene as the invoking user
             {"InvokeMenuItem", Class::Write},
+            // The same for a button of an inspector section (since 1.16.0)
+            {"InvokeInspectorAction", Class::Write},
             // Admin: the host itself
             {"Shutdown", Class::Admin}, {"ReloadEditorExtensions", Class::Admin},
         };
