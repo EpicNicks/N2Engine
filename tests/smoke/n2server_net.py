@@ -299,8 +299,8 @@ def scenario_real_server(run, work, tokens):
     expect_refusal(run, port, tokens[3], project, "refused-registry", "registry")
 
     # The server saw the refusals as refusals, kept running, and the first client is still in
-    wait_for(lambda: server.err().count("it refused to join (scene-content)") == 1 and
-             server.err().count("it refused to join (registry)") == 1, 30, "the refusals in the server's log", server)
+    wait_for(lambda: "is dropped: it refused to join (scene-content)" in server.err() and
+             "is dropped: it refused to join (registry)" in server.err(), 30, "the refusals in the server's log", server)
     check(not server.exited(), "the server must still be running")
     check(tokens[0] not in server.err() + server.out(), "a token reached the server's output")
     stop_client(client)
