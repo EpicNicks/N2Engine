@@ -1833,6 +1833,8 @@ namespace N2Engine::Editor
         FlushAutosave();
         // Asset files changed outside the editor (a no-op unless a client is connected and the interval has passed)
         (void)PollAssetsIfDue();
+        // The extension files changed outside the editor (a no-op unless --editor-extensions-watch is on)
+        (void)PollEditorExtensionsIfDue();
         return processed;
     }
 
@@ -4175,7 +4177,8 @@ namespace N2Engine::Editor
         ConnectionIdentity identity;
         if (hasRoles)
         {
-            identity = CurrentIdentity();
+            // A hook's commands run as a viewer, whoever is connected: the role table is what keeps a hook read-only
+            identity = _invocation != nullptr && _invocation->hook ? HookIdentity() : CurrentIdentity();
             if (!identity.authenticated && cmd != CommandType::Hello)
             {
                 // The network thread never lets this through; it is for a caller that reaches the command another way
@@ -5679,6 +5682,13 @@ namespace N2Engine::Editor
         BufferReader reader(payload);
         const WritePlaySnapshotCmd cmd = WritePlaySnapshotCmd::Deserialize(reader);
 
+        if (_extensions != nullptr)
+        {
+            // OnBeforePlay (E-X6): validation before the snapshot is written. Its warnings reach the client as extensionOutput
+            // events; play is never blocked by it (decision D10), and a hook that fails changes nothing here.
+            const std::string scene = cmd.scenePath.empty() ? OpenScenePath() : cmd.scenePath;
+            (void)RunExtensionHook("OnBeforePlay", nlohmann::json{{"scene", SanitizeForLog(scene, 300)}});
+        }
         const auto written = WritePlaySnapshot(cmd.scenePath);
         if (!written)
         {
@@ -6929,6 +6939,22 @@ namespace N2Engine::Editor
         _events.Push("assetsChanged", nlohmann::json{{"added", PathStrings(changes.added)},
                                                      {"removed", PathStrings(changes.removed)},
                                                      {"modified", PathStrings(changes.modified)}});
+        if (_extensions != nullptr)
+        {
+            // OnAssetsChanged (E-X6): after the reload and the event, as a call of its own; each list is cut to what a hook is
+            // given. A hook cannot fail this: RunExtensionHook logs and counts, and returns.
+            const auto capped = [](std::vector<std::string> paths)
+            {
+                if (paths.size() > ExtensionHost::MaxHookAssetPaths)
+                {
+                    paths.resize(ExtensionHost::MaxHookAssetPaths);
+                }
+                return paths;
+            };
+            (void)RunExtensionHook("OnAssetsChanged", nlohmann::json{{"added", capped(PathStrings(changes.added))},
+                                                                     {"removed", capped(PathStrings(changes.removed))},
+                                                                     {"modified", capped(PathStrings(changes.modified))}});
+        }
     }
 
     void EditorServer::NoteAssetWritten(const IO::ResourcePath &path, const bool force)
@@ -8144,6 +8170,11 @@ namespace N2Engine::Editor
 
         LoadOpenedScene(std::move(scene), resourcePath);
         ServerLog::PublicInfo("Opened scene " + resourcePath);
+        if (_extensions != nullptr)
+        {
+            // OnSceneOpened (E-X6): after the scene is loaded and the host's state is whole, never inside the load
+            (void)RunExtensionHook("OnSceneOpened", nlohmann::json{{"scene", resourcePath}});
+        }
         return GetOpenSceneInfo();
     }
 
@@ -8197,6 +8228,11 @@ namespace N2Engine::Editor
         LoadOpenedScene(std::move(scene), resourcePath);
         ServerLog::Info(resourcePath.empty() ? "New scene " + SanitizeForLog(sceneName) + " (not saved to a file yet)"
                                           : "New scene " + SanitizeForLog(sceneName) + " at " + resourcePath);
+        if (_extensions != nullptr)
+        {
+            // OnSceneOpened (E-X6) for a new scene too: its path is empty when it has no file yet
+            (void)RunExtensionHook("OnSceneOpened", nlohmann::json{{"scene", resourcePath}});
+        }
         return GetOpenSceneInfo();
     }
 
@@ -8257,6 +8293,11 @@ namespace N2Engine::Editor
         _autosaveProtected = false;
         PushSceneChanged();
         ServerLog::PublicInfo("Saved scene " + resourcePath);
+        if (_extensions != nullptr)
+        {
+            // OnSceneSaved (E-X6): the file is written and the history marked saved; the hook reads and cannot fail the save
+            (void)RunExtensionHook("OnSceneSaved", nlohmann::json{{"scene", resourcePath}});
+        }
         return GetOpenSceneInfo();
     }
 

@@ -1070,6 +1070,35 @@ TEST(HostOptionsTest, EditorExtensionsIsAFlagAndOffByDefault)
     EXPECT_TRUE(last->editorExtensions);
 }
 
+TEST(HostOptionsTest, EditorExtensionsWatchIsOffByDefaultAndNeedsEditorExtensions)
+{
+    const auto defaults = ParseHostArguments({});
+    ASSERT_TRUE(defaults) << defaults.error();
+    EXPECT_FALSE(defaults->editorExtensionsWatch);
+    const auto only = ParseHostArguments({"--editor-extensions"});
+    ASSERT_TRUE(only) << only.error();
+    EXPECT_FALSE(only->editorExtensionsWatch) << "--editor-extensions alone does not watch";
+
+    // A flag without a value, in either order
+    const auto both = ParseHostArguments({"--editor-extensions", "--editor-extensions-watch", "--port", "1234"});
+    ASSERT_TRUE(both) << both.error();
+    EXPECT_TRUE(both->editorExtensions);
+    EXPECT_TRUE(both->editorExtensionsWatch);
+    EXPECT_EQ(both->port, 1234);
+    const auto reversed = ParseHostArguments({"--editor-extensions-watch", "--editor-extensions"});
+    ASSERT_TRUE(reversed) << reversed.error();
+    EXPECT_TRUE(reversed->editorExtensionsWatch);
+
+    // Without the flag that loads extensions there is nothing to watch: refused, with the reason
+    const auto alone = ParseHostArguments({"--editor-extensions-watch"});
+    ASSERT_FALSE(alone);
+    EXPECT_NE(alone.error().find("--editor-extensions-watch needs --editor-extensions"), std::string::npos) << alone.error();
+    EXPECT_FALSE(ParseHostArguments({"--editor-extensions-watch", "--project", "proj"}));
+
+    // --play refuses --editor-extensions, so the watcher cannot reach a play host either
+    EXPECT_FALSE(ParseHostArguments({"--editor-extensions", "--editor-extensions-watch", "--play", "snapshot.json"}));
+}
+
 TEST(HostOptionsTest, EditorExtensionsIsRefusedWithPlayInEitherOrder)
 {
     const auto play = ParseHostArguments({"--editor-extensions", "--play", "snapshot.json"});

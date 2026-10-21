@@ -358,6 +358,8 @@ namespace
             "CreateEntityEx", "DestroyEntity",       "DuplicateEntity",    "SetEntityParent",
             "SetEntityProperties", "SetLocalTransform", "AddComponent",    "RemoveComponent",
             "SetComponentFields",
+            // What Editor.Assets sends (E-X6)
+            "ListAssets",     "ReadTextAsset",       "WriteTextAsset",     "CreateFolder",
         };
         return allowed;
     }
@@ -396,7 +398,9 @@ TEST(ExtensionNestedPolicyTest, EveryCommandOfTheSpecIsDecidedAndOnlyWhatEditorS
         const std::optional<EditorServer::CommandClass> commandClass = EditorServer::ClassifyCommand(id);
         ASSERT_TRUE(commandClass.has_value()) << name;
         EXPECT_NE(*commandClass, EditorServer::CommandClass::Admin) << name;
-        EXPECT_FALSE(EditorServer::IsEditOnlyCommand(id)) << name;
+        // The two asset writes are edit-only like the client's own (a play host refuses them); it runs no extension anyway
+        const bool assetWrite = name == "WriteTextAsset" || name == "CreateFolder";
+        EXPECT_EQ(EditorServer::IsEditOnlyCommand(id), assetWrite) << name;
     }
 }
 

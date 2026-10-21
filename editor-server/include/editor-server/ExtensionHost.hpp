@@ -171,6 +171,22 @@ namespace N2Engine::Editor
         /// A component type name (an identifier: letters, digits and '_', not starting with a digit)
         static constexpr std::size_t MaxComponentTypeBytes = 64;
 
+        // ---- Hooks (design 4.5, E-X6) ----
+
+        /// The hooks an extension may declare with `hooks = { OnSceneOpened = function(info) ... end, ... }`, in the order
+        /// the host documents them
+        static constexpr std::string_view HookNames[] = {"OnSceneOpened", "OnSceneSaved", "OnBeforePlay", "OnAssetsChanged"};
+        /// Requests (Editor.Scene and Editor.Assets reads) one run of a hook may send: far under an invocation's cap,
+        /// because a hook runs inside a save, an open, a play or an asset change
+        static constexpr std::uint32_t MaxHookNestedCommands = 1000;
+        /// Paths in each of the three lists OnAssetsChanged is given; a longer list is cut to this many
+        static constexpr std::size_t MaxHookAssetPaths = 1000;
+        /// The wall-clock time the hooks of one trigger (one save, one open, one play, one asset change) may take together,
+        /// all extensions counted; once it is spent the extensions not yet run are skipped, and the host logs it
+        static constexpr std::uint64_t HookTotalMillis = 2000;
+        /// Entries (folders and assets together) Editor.Assets.List returns; a folder with more is an error of the call
+        static constexpr std::size_t MaxAssetListEntries = 10000;
+
         /// What the host grants a state (v1; reserved for later: project.write, import.hooks)
         static constexpr std::string_view CapabilityNames[] = {"scene.read", "scene.write", "assets.read",
                                                                "assets.write"};
@@ -243,6 +259,9 @@ namespace N2Engine::Editor
             /// false: a menu item (InvokeMenuItem); true: an inspector section's button (InvokeInspectorAction), whose
             /// itemId is the button's id, title its label and componentType its section's
             bool inspectorAction = false;
+            /// true: a hook of the extension (FindHooks, InvokeHook), whose itemId is the hook's name ("OnSceneSaved") and
+            /// whose title is the same; it is read-only and runs under the hook budget
+            bool hook = false;
             std::string componentType;
             std::string extensionId;
             std::string extensionName;
@@ -333,6 +352,53 @@ namespace N2Engine::Editor
                                                  const std::string &entityId, const nlohmann::json &params,
                                                  const NestedHandler &handler);
 
+        // ---- Hooks (E-X6) ----
+
+        /// Whether `name` is one of HookNames
+        [[nodiscard]] static bool IsHookName(std::string_view name);
+        /// Whether a script may send `op` while a hook runs: "log", the Editor.Scene readers and Editor.Assets.List and
+        /// ReadText. Every other op (a write, an unknown one) is refused in the worker, before it reaches the host.
+        [[nodiscard]] static bool IsReadOnlyOp(std::string_view op);
+        /// The Loaded extensions that declared this hook, in the files' sorted order, each as a MenuItemRef with hook true
+        /// (a Failed or Faulted extension runs none). Empty for a name that is not a hook.
+        [[nodiscard]] std::vector<MenuItemRef> FindHooks(std::string_view hook) const;
+        /// Runs the hook's function on a worker, as Invoke runs a menu item (the same worker slot, abandon deadline,
+        /// state hand-over and failure counting: an error counts as a failure, a budget trip, a memory trip and an abandon
+        /// fault the extension at once), under SandboxDefaults::HookBudget (20 million instructions, 0.5 s) and read-only:
+        /// the worker refuses every op but IsReadOnlyOp's before it reaches `handler`, and at most MaxHookNestedCommands
+        /// of them are sent. `info` is the hook's argument as JSON (an object; for OnAssetsChanged {added, removed,
+        /// modified}, each a list of res:// paths). What the function returns is ignored, except for OnBeforePlay, whose
+        /// result may be {warnings = {...}, message = "..."} (and nothing else): then outcome.result is that, shaped as a menu
+        /// item's result is. The caller never fails its own work for a hook failure.
+        [[nodiscard]] InvokeOutcome InvokeHook(const MenuItemRef &hook, const nlohmann::json &info,
+                                               const NestedHandler &handler);
+
+        // ---- The watcher (E-X6) ----
+
+        /// What one ReloadChanged did
+        struct WatchOutcome
+        {
+            /// Files whose content changed and that were loaded again (loaded or failed, as a load decides)
+            std::size_t reloaded = 0;
+            /// Files that are new since the last load, loaded now
+            std::size_t added = 0;
+            /// Extensions whose file is gone, dropped now
+            std::size_t removed = 0;
+            /// Files whose modification time or size moved but whose content hash did not: not reloaded
+            std::size_t touched = 0;
+            [[nodiscard]] bool Changed() const { return reloaded + added + removed > 0; }
+        };
+        /// The editor/ watcher's one check (design 5.2: --editor-extensions-watch): finds the files as Load does (the same
+        /// walk, so nothing outside editor/ and no link is ever read), compares each one's modification time and size with
+        /// what the registry recorded when it loaded the file, and for a file that moved reads it and compares its sha256:
+        /// a file whose hash is the one the registry holds is only recorded (touched), a file whose hash changed is
+        /// loaded again, alone, in a state of its own, and the others keep their states and their failure counts. A file
+        /// that is new is loaded; an extension whose file is gone is dropped. A file that failed to load is not tried
+        /// again until it changes. When anything was loaded again, added or removed the uiRevision moves once and the
+        /// changed callback is told (extensionsChanged). Called from the command thread, like Load; blocks for the time the
+        /// loads take (each file is bounded as in Load).
+        WatchOutcome ReloadChanged();
+
         /// Disables the extension until the next reload, whatever its failure count (a budget trip, an abandoned worker).
         /// Moves uiRevision and tells the changed callback, as NoteFailure does when it makes one faulted. A no-op for an
         /// unknown id or one that is not Loaded. Returns the state after.
@@ -362,6 +428,8 @@ namespace N2Engine::Editor
         /// Replaces the invocation budget (0 in both restores the default SandboxDefaults::InvocationBudget): a test runs a
         /// runaway script in milliseconds instead of seconds
         static void SetInvocationBudgetForTest(std::uint64_t instructions, std::uint64_t maxMillis);
+        /// Replaces the hook budget (0 in both restores the default SandboxDefaults::HookBudget)
+        static void SetHookBudgetForTest(std::uint64_t instructions, std::uint64_t maxMillis);
         /// Replaces InvokeGraceMillis (negative restores the default)
         static void SetInvokeGraceMillisForTest(std::int64_t millis);
         /// Replaces MaxNestedCommands (0 restores the default)
