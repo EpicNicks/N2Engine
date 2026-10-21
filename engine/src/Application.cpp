@@ -149,24 +149,36 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     // the start goes ahead); none keeps the offline loop
     const SimulationMode presetMode = Network::SimulationModeFor(networkSettings.preset);
     networkEnv.ownedTickLoop = presetMode != SimulationMode::None;
-    // physics.backend: the project's setting, else the host's default (ApplicationOptions::PhysicsBackend). Chosen here,
-    // before anything is started, because the Deterministic preset is checked against the SELECTED backend's
-    // declarations. A backend that is not in this build refuses a Deterministic project and falls back to PhysX (with a
-    // warning) for any other (Physics::ChooseBackend).
-    Physics::PhysicsBackendKind requestedBackend =
-        options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::JOLT ? Physics::PhysicsBackendKind::Jolt
-                                                                                    : Physics::PhysicsBackendKind::PhysX;
+    // physics.backend: the project's setting, else the host's option (ApplicationOptions::PhysicsBackend; AUTO is no
+    // request). Chosen here, before anything is started, because the Deterministic preset is checked against the
+    // SELECTED backend's declarations. Physics::ChooseBackend: nobody asked -> PhysX if it is in the build, else Jolt,
+    // else none; a requested backend that is not in the build refuses a Deterministic project, and for any other
+    // preset falls back (with a warning) to the other backend when that one is in the build, else runs without physics.
+    std::optional<Physics::PhysicsBackendKind> requestedBackend;
+    Physics::BackendRequestSource requestSource = Physics::BackendRequestSource::Auto;
+    if (options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::JOLT)
+    {
+        requestedBackend = Physics::PhysicsBackendKind::Jolt;
+        requestSource = Physics::BackendRequestSource::HostOption;
+    }
+    else if (options.physicsBackend == Config::ApplicationOptions::PhysicsBackend::PHYSX)
+    {
+        requestedBackend = Physics::PhysicsBackendKind::PhysX;
+        requestSource = Physics::BackendRequestSource::HostOption;
+    }
     if (project)
     {
         if (const auto setting = ReadPhysicsBackend(project->settings))
         {
             requestedBackend = *setting;
+            requestSource = Physics::BackendRequestSource::ProjectSetting;
         }
     }
-    const Physics::BackendChoice backendChoice = Physics::ChooseBackend(
-        requestedBackend, networkSettings.preset == Network::NetworkPreset::Deterministic,
-        Physics::IsBackendCompiledIn(requestedBackend));
-    const Physics::PhysicsBackendKind backendKind = backendChoice.selected;
+    const Physics::BackendChoice backendChoice =
+        Physics::ChooseBackend(requestedBackend, requestSource,
+                               networkSettings.preset == Network::NetworkPreset::Deterministic,
+                               Physics::CompiledInBackends());
+    const std::optional<Physics::PhysicsBackendKind> backendKind = backendChoice.selected;
     if (backendChoice.refused)
     {
         Logger::Error(backendChoice.message);
@@ -175,11 +187,16 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     {
         Logger::Warn(backendChoice.message);
     }
-    networkEnv.backendName = std::string(Physics::ToString(backendKind));
-    if (backendChoice.refused)
+    else if (!backendChoice.message.empty())
+    {
+        Logger::Info(backendChoice.message);
+    }
+    networkEnv.backendName = backendKind ? std::string(Physics::ToString(*backendKind)) : std::string{};
+    if (backendChoice.refused && backendChoice.requested)
     {
         networkEnv.backendUnavailable = true;
-        networkEnv.backendRequested = std::string(Physics::ToString(backendChoice.requested));
+        networkEnv.backendRequested = std::string(Physics::ToString(*backendChoice.requested));
+        networkEnv.backendRequestSource = backendChoice.source;
     }
 #ifdef N2ENGINE_PHYSX_ENABLED
     else if (backendKind == Physics::PhysicsBackendKind::PhysX)
@@ -189,6 +206,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
             project && ReadPhysicsDeterministic(project->settings));
         networkEnv.backendSupportsSnapshot = Physics::PhysXBackend::kSupportsSnapshot;
         networkEnv.backendSupportsSetState = Physics::PhysXBackend::kSupportsSetState;
+        networkEnv.backendFeatures = Physics::PhysXBackend::kImplementedFeatures;
     }
 #endif
 #ifdef N2ENGINE_JOLT_ENABLED
@@ -199,6 +217,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
             project && ReadPhysicsDeterministic(project->settings));
         networkEnv.backendSupportsSnapshot = Physics::JoltBackend::kSupportsSnapshot;
         networkEnv.backendSupportsSetState = Physics::JoltBackend::kSupportsSetState;
+        networkEnv.backendFeatures = Physics::JoltBackend::kImplementedFeatures;
     }
 #endif
     Network::NetworkValidation networkValidation = Network::ValidateNetwork(networkSettings, networkEnv);
@@ -334,8 +353,33 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         deterministicPhysics = ReadPhysicsDeterministic(project->settings);
     }
 
+    // A fallback says so on the Physics row: "Jolt (CPU) (physics.backend is physx but this build has no PhysX
+    // backend: fell back to Jolt)"
+    [[maybe_unused]] const auto runningDetail = [&backendChoice](const std::string &plain)
+    {
+        if (!backendChoice.fellBack || !backendChoice.requested || !backendChoice.selected)
+        {
+            return plain;
+        }
+        return std::format("{} ({} but this build has no {} backend: fell back to {})", plain,
+                           Physics::DescribeBackendRequest(Physics::ToString(*backendChoice.requested),
+                                                           backendChoice.source),
+                           Physics::DisplayName(*backendChoice.requested),
+                           Physics::DisplayName(*backendChoice.selected));
+    };
+    if (!backendKind)
+    {
+        // Nothing selected: the build has no backend that could serve this project (ChooseBackend's message, already
+        // logged). A refused Deterministic project never gets here.
+        physicsStatus.state = SubsystemState::Disabled;
+        physicsStatus.detail = backendChoice.requested
+                                   ? std::format("No physics: {} but this build has no physics backend",
+                                                 Physics::DescribeBackendRequest(
+                                                     Physics::ToString(*backendChoice.requested), backendChoice.source))
+                                   : std::string("Built without a physics backend");
+    }
 #ifdef N2ENGINE_JOLT_ENABLED
-    if (backendKind == Physics::PhysicsBackendKind::Jolt)
+    else if (*backendKind == Physics::PhysicsBackendKind::Jolt)
     {
         _3DphysicsBackend = std::make_unique<Physics::JoltBackend>();
         // Before Initialize: it picks the job system (single-threaded when deterministic). physics.gpu does not apply: Jolt
@@ -353,13 +397,12 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         {
             Logger::Info("3D Physics backend initialized successfully");
             physicsStatus.state = SubsystemState::Running;
-            physicsStatus.detail = "Jolt (CPU)";
+            physicsStatus.detail = runningDetail("Jolt (CPU)");
         }
     }
-    else
 #endif
 #ifdef N2ENGINE_PHYSX_ENABLED
-    if (backendKind == Physics::PhysicsBackendKind::PhysX)
+    else if (*backendKind == Physics::PhysicsBackendKind::PhysX)
     {
         _3DphysicsBackend = std::make_unique<Physics::PhysXBackend>();
         // Before Initialize: the scene's GPU flag is fixed when it is created
@@ -377,25 +420,17 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         {
             Logger::Info("3D Physics backend initialized successfully");
             physicsStatus.state = SubsystemState::Running;
-            physicsStatus.detail = backendChoice.fellBack
-                                       ? std::format("PhysX (physics.backend {} is not in this build: fell back to PhysX)",
-                                                     Physics::ToString(backendChoice.requested))
-                                       : std::string("PhysX");
+            physicsStatus.detail = runningDetail("PhysX");
         }
     }
+#endif
     else
     {
-        Logger::Error(std::format("physics.backend {} is not currently supported", Physics::ToString(backendKind)));
+        // Unreachable: ChooseBackend selects only a backend that is in the build (CompiledInBackends)
+        Logger::Error(std::format("physics.backend {} is not in this build", Physics::ToString(*backendKind)));
         physicsStatus.state = SubsystemState::Disabled;
-        physicsStatus.detail = "Selected physics backend is not supported";
+        physicsStatus.detail = "Selected physics backend is not in this build";
     }
-#else
-    {
-        Logger::Info("Built without PhysX (N2ENGINE_USE_PHYSX=OFF); physics is disabled");
-        physicsStatus.state = SubsystemState::Disabled;
-        physicsStatus.detail = "Built without PhysX";
-    }
-#endif
 
 #ifdef N2ENGINE_PLATFORM_WEB
     // The web player runs "headless" (no window: the page shows the frames), but its sound is meant to be heard, so it

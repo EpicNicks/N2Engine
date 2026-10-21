@@ -677,10 +677,7 @@ namespace N2PhysicsTests
 
     TYPED_TEST(PhysicsQueryTest, TriggersAreHitUnlessIgnored)
     {
-        if constexpr (TypeParam::kIsJolt)
-        {
-            GTEST_SKIP() << "a trigger collider has no Jolt shape until J4, so no query hits one yet";
-        }
+        // On Jolt a trigger collider is a sub-shape of its body's shape (J4), so the queries hit it as on PhysX
         const auto zone = this->Spawn("Zone", Vector3(0.0f, 0.0f, 5.0f));
         auto *trigger = zone->template AddComponent<SphereCollider>();
         trigger->SetRadius(1.0f);

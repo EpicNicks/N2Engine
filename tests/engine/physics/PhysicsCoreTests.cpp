@@ -1,8 +1,8 @@
 // The core physics conformance tests, run as TYPED tests over every backend this build has (PhysX and Jolt): bodies,
 // colliders, mass properties, gravity, forces and velocities, kinematic and static moves, transform sync, disabled
-// bodies. The scene queries are typed over both backends too (PhysicsQueryTests.cpp, J5). The suites for layers,
-// triggers and events stay PhysX-only until the Jolt backend has them (stage J4): they are PhysicsTests.cpp,
-// LayerPhysicsTests.cpp and PhysicsOrderTests.cpp, each marked as such.
+// bodies. Layers, triggers and events (J4) are typed in LayerPhysicsTests.cpp, PhysicsOrderTests.cpp and
+// PhysicsEventTests.cpp, and the scene queries (J5) in PhysicsQueryTests.cpp and LayerPhysicsTests.cpp (the query
+// masks); PhysicsTests.cpp stays PhysX-only.
 //
 // A difference between the backends that a test has to allow for is written next to the assertion and listed in
 // docs/physics.html ("Jolt backend", differences).

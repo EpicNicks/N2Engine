@@ -165,9 +165,9 @@ namespace N2Engine::N2Net
     /// sends back to what it received.
     ///
     /// Fail closed: Open refuses a non-loopback bind unless `encryptionAvailable` is true or options.insecureBind is
-    /// set. No encryption exists yet, so every caller passes false today; the handshake and AEAD layer is separate
-    /// work and must pass true only when it is encrypting and authenticating every datagram. Connect to a non-loopback
-    /// address follows the same rule.
+    /// set. Only SecureTransport::OpenUdp passes true: it puts the handshake and the sealed packets (SecureTransport.hpp)
+    /// over the transport it opens, so every datagram it carries for the layers above is encrypted and authenticated.
+    /// Any other caller passes false. Connect to a non-loopback address follows the same rule.
     ///
     /// Disconnect only forgets the peer locally: no packet is sent, so the other side finds out by its own idle
     /// timeout. A later datagram from that address makes a new peer with a new PeerId (when unknown sources are
@@ -206,6 +206,8 @@ namespace N2Engine::N2Net
         [[nodiscard]] const UdpTransportStats &Stats() const noexcept;
         /// False for an unknown peer
         [[nodiscard]] bool GetPeerInfo(PeerId peer, UdpPeerInfo &info) const;
+        /// The peer's address and port (an IPv4-mapped address as IPv4); false for an unknown peer
+        [[nodiscard]] bool GetPeerEndpoint(PeerId peer, PeerEndpoint &endpoint) const override;
 
     private:
         struct Impl;

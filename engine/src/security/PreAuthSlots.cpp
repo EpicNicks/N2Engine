@@ -1,10 +1,10 @@
-#include "editor-server/PreAuthSlots.hpp"
+#include "engine/security/PreAuthSlots.hpp"
 
 #include <algorithm>
 #include <limits>
 #include <utility>
 
-namespace N2Engine::Editor
+namespace N2Engine::Security
 {
     namespace
     {

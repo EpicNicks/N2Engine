@@ -1,6 +1,6 @@
-// What is specific to the Jolt backend (stage J3): its declarations, its job system choice, the process-wide state it
-// shares between backends, the "not implemented yet" members, the body ids, enable and disable, set-state, and the
-// determinism smoke (a scene stepped twice in one process gives one state hash; the hashes are printed for the CI
+// What is specific to the Jolt backend (stages J3 and J4): its declarations, its job system choice, the process-wide
+// state it shares between backends, the "not implemented yet" members, the body ids, enable and disable, set-state,
+// how trigger colliders are built into a body, and the determinism smoke (a scene stepped twice in one process gives one state hash; the hashes are printed for the CI
 // step "Jolt backend determinism numbers"). The behaviour both backends share is PhysicsCoreTests.cpp.
 
 #include "PhysicsTestFixture.hpp"
@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "engine/Component.hpp"
 #include "engine/physics/PhysicsMaterial.hpp"
 #include "engine/physics/Raycast.hpp"
 
@@ -351,8 +352,8 @@ namespace N2PhysicsTests
     {
         JoltBackend backend;
         ASSERT_TRUE(backend.Initialize());
-        // Initialize warns once that events are not delivered
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 1u);
+        // Layers, triggers and events are implemented (J4): Initialize has nothing to warn about
+        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 0u);
 
         RaycastHit hit;
         std::vector<RaycastHit> hits(3);
@@ -361,20 +362,18 @@ namespace N2PhysicsTests
                   0);
         EXPECT_TRUE(hits.empty());
         EXPECT_FALSE(backend.SphereCast(Vector3::Zero, 0.5f, Vector3(0.0f, -1.0f, 0.0f), hit, 10.0f, ~0u));
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 1u) << "queries are implemented (J5): they warn about nothing";
+        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 0u) << "queries are implemented (J5): they warn about nothing";
 
         backend.RefreshCollisionMatrix();
         backend.SetColliderLayer(INVALID_PHYSICS_HANDLE, nullptr, 3);
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 2u) << "two layer calls, one warning";
+        backend.ProcessCollisionCallbacks();
+        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 0u) << "layers and events are implemented (J4): no warning";
 
         std::vector<std::byte> bytes{std::byte{1}};
         EXPECT_FALSE(backend.SaveState(bytes));
         EXPECT_FALSE(backend.RestoreState(bytes));
         EXPECT_FALSE(backend.HashState().has_value());
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 3u) << "three snapshot calls, one warning";
-
-        backend.ProcessCollisionCallbacks(); // nothing to do, nothing to say
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 3u);
+        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 1u) << "three snapshot calls, one warning (the only one left)";
     }
 
     // ===== body ids =====
@@ -602,7 +601,19 @@ namespace N2PhysicsTests
     {
     };
 
-    TEST_F(JoltSceneTest, ATriggerColliderHasNoShapeYetAndWarnsOnce)
+    // Counts the trigger events its object gets
+    class TriggerCounter final : public Component
+    {
+    public:
+        explicit TriggerCounter(GameObject &gameObject) : Component(gameObject) {}
+        [[nodiscard]] std::string GetTypeName() const override { return "TriggerCounter"; }
+        void OnTriggerEnter(const Trigger) override { ++enter; }
+        void OnTriggerStay(const Trigger) override { ++stay; }
+        void OnTriggerExit(const Trigger) override { ++exit; }
+        int enter = 0, stay = 0, exit = 0;
+    };
+
+    TEST_F(JoltSceneTest, ATriggerColliderIsASubShapeThatIsNotCountedAndNeverWarns)
     {
         const unsigned before = Native().GetNotImplementedWarningCount();
         const auto go = Spawn("Volume", Vector3(0.0f, 0.0f, 0.0f));
@@ -614,13 +625,41 @@ namespace N2PhysicsTests
         auto *body = AddFloatingBody(*go, 1.0f);
         Step(1);
 
-        EXPECT_EQ(Native().GetShapeCount(body->GetHandle()), 1u) << "the trigger's shape is left out until J4";
+        // GetShapeCount counts the solid colliders: the trigger is a sub-shape of the body's shape too, but not one of them
+        EXPECT_EQ(Native().GetShapeCount(body->GetHandle()), 1u);
         const auto another = Spawn("Another", Vector3(5.0f, 0.0f, 0.0f));
         another->AddComponent<SphereCollider>()->SetIsTrigger(true);
         another->AddComponent<Rigidbody>()->SetBodyType(BodyType::Kinematic);
         Step(1);
-        EXPECT_GE(Native().GetNotImplementedWarningCount(), 1u);
-        EXPECT_LE(Native().GetNotImplementedWarningCount(), before + 1u) << "one warning for triggers, however many";
+        EXPECT_EQ(Native().GetNotImplementedWarningCount(), before) << "triggers are implemented: no warning";
+    }
+
+    TEST_F(JoltSceneTest, TogglingATriggerEndsItsTouchesWithAnExit)
+    {
+        // A weightless visitor inside a static trigger zone; the zone's collider then becomes solid. Its touches were
+        // trigger overlaps: they end with an Exit (and are not turned into collision events by the toggle)
+        const auto zone = Spawn("Zone", Vector3(0.0f, 0.0f, 0.0f));
+        auto *zoneCollider = zone->AddComponent<BoxCollider>();
+        zoneCollider->SetSize(Vector3(4.0f, 4.0f, 4.0f));
+        zoneCollider->SetIsTrigger(true);
+        auto *zoneEvents = zone->AddComponent<TriggerCounter>();
+        const auto visitor = Spawn("Visitor", Vector3(0.0f, 0.0f, 0.0f));
+        visitor->AddComponent<SphereCollider>()->SetRadius(0.25f);
+        AddFloatingBody(*visitor, 1.0f);
+        auto *visitorEvents = visitor->AddComponent<TriggerCounter>();
+
+        Step(5);
+        ASSERT_EQ(zoneEvents->enter, 1);
+        ASSERT_EQ(visitorEvents->enter, 1);
+
+        zoneCollider->SetIsTrigger(false);
+        Step(1);
+        EXPECT_EQ(zoneEvents->exit, 1);
+        EXPECT_EQ(visitorEvents->exit, 1);
+        const int stays = zoneEvents->stay;
+        Step(5);
+        EXPECT_EQ(zoneEvents->stay, stays) << "the pair that ended still stays";
+        EXPECT_EQ(zoneEvents->enter, 1) << "a solid collider raises no trigger event";
     }
 
     TEST_F(JoltSceneTest, EveryRigidbodyHasTheJoltIdOfItsHandle)

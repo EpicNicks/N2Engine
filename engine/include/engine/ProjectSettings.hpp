@@ -91,8 +91,9 @@ namespace N2Engine
                                                 std::vector<std::string> *problems = nullptr);
 
     /**
-     * physics.backend from a project's settings object: empty when it is absent or null (the host's default applies,
-     * which is PhysX), "physx" or "jolt" (case-insensitive) as written, and PhysX for anything else, with one message
+     * physics.backend from a project's settings object: empty when it is absent or null (the host's option applies,
+     * and with AUTO PhysX when it is in the build, else Jolt), "physx" or "jolt" (case-insensitive) as written, and
+     * PhysX for anything else, with one message
      * in `problems` (when given). Application::Init calls it before the physics backend is created and applies
      * Physics::ChooseBackend to the result.
      */

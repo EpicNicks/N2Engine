@@ -24,6 +24,8 @@ namespace N2Engine::N2Net
 
         ConnectionConfig Sanitize(ConnectionConfig config) noexcept
         {
+            config.maxPacketSize = std::clamp<std::uint32_t>(config.maxPacketSize, kMinConfiguredPacketSize,
+                                                             static_cast<std::uint32_t>(kMaxPacketSize));
             config.maxMessageSize = std::clamp<std::uint32_t>(config.maxMessageSize, 1, kHardMaxMessageSize);
             config.maxSendQueueBytes = std::max(config.maxSendQueueBytes, config.maxMessageSize);
             config.reliableWindow =
@@ -106,7 +108,7 @@ namespace N2Engine::N2Net
         {
             return SendResult::Empty;
         }
-        if (message.size() > kMaxUnreliablePayload)
+        if (message.size() > MaxUnreliableMessageSize())
         {
             return SendResult::TooLarge;
         }
@@ -133,8 +135,16 @@ namespace N2Engine::N2Net
     bool Connection::HeadUnitFits(std::size_t room, std::size_t &unitLength) const noexcept
     {
         const std::size_t remaining = sendQueue_.front().size() - headOffset_;
-        unitLength = std::min(remaining, kMaxUnitPayload);
+        // A unit never needs more than an empty packet of this config's size has room for, so a fresh packet always
+        // takes one, and its resend fits too
+        const std::size_t maxUnit = std::min<std::size_t>(kMaxUnitPayload, config_.maxPacketSize - kHeaderSize - kUnitHeaderSize);
+        unitLength = std::min(remaining, maxUnit);
         return room >= kUnitHeaderSize + unitLength;
+    }
+
+    std::size_t Connection::MaxUnreliableMessageSize() const noexcept
+    {
+        return std::min<std::size_t>(kMaxUnreliablePayload, config_.maxPacketSize - kHeaderSize - kUnreliableHeaderSize);
     }
 
     std::uint32_t Connection::Update(std::uint64_t nowMicros, PacketSender sender)
@@ -167,7 +177,7 @@ namespace N2Engine::N2Net
         while (produced < config_.maxPacketsPerUpdate)
         {
             std::size_t size = 0;
-            if (!BuildPacket(nowMicros, buffer, size))
+            if (!BuildPacket(nowMicros, std::span<std::uint8_t>(buffer.data(), config_.maxPacketSize), size))
             {
                 break;
             }
