@@ -99,8 +99,8 @@ namespace N2Engine::Network
             "determinism.luaSeed is not set, so Lua string hash seed and math.random differ per run"));
         requirements.push_back(Requirement(
             "engine-trig", "engine-owned trig (C1)", env.engineOwnedTrig,
-            "not built yet: math and Lua still call the C library sin, cos and atan2, which differ between "
-            "platforms"));
+            "this build runs the engine-owned Sin, Cos, Atan2 and the rest with floating-point contraction on "
+            "(Math::IsContractionFree is false), so their last bits differ between platforms"));
         requirements.push_back(Requirement(
             "physics-threads", "physics results do not depend on the thread count",
             env.hasBackend && env.backendLevel >= Physics::DeterminismLevel::SameBinary,

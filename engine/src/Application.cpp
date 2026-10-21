@@ -5,6 +5,8 @@
 #include <optional>
 #include <vector>
 
+#include <math/DeterministicMath.hpp>
+#include <math/FloatEnvironment.hpp>
 #include <math/MathRegistrar.hpp>
 
 #include "engine/Application.hpp"
@@ -140,6 +142,9 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
         }
     }
     networkEnv.strictFp = Math::IsStrictFp();
+    // The engine-owned Sin/Cos/Atan2/... exist in every build; what is checked is that this build runs them without
+    // floating-point contraction (they are compiled that way, and the answer is measured, not assumed)
+    networkEnv.engineOwnedTrig = Math::IsContractionFree();
     // A network preset runs the fixed-step loop as the tick loop (SimulationClock's network modes, applied below once
     // the start goes ahead); none keeps the offline loop
     const SimulationMode presetMode = Network::SimulationModeFor(networkSettings.preset);
@@ -622,6 +627,21 @@ bool Application::RunFixedTick(Scene &scene)
 {
     if (_simulationClock.IsNetworked())
     {
+        // The floating-point control state is the policy's (round to nearest, denormals kept, no traps) for the whole
+        // tick and what it was before is put back after it: a library called between ticks (audio, a driver) may have
+        // changed it, and a tick that rounds differently is a different simulation. None mode has no guard.
+        const Math::FloatEnvironmentGuard floatEnvironment;
+        if (!floatEnvironment.Verified())
+        {
+            static bool warned = false;
+            if (!warned)
+            {
+                warned = true;
+                Logger::Error("The floating-point environment could not be set to the deterministic policy (round to "
+                              "nearest, no flush-to-zero): this target ignores the write, so ticks may not match "
+                              "other peers");
+            }
+        }
         // The tick starts: the counter moves on, then what was created during the last tick (or since) joins the
         // simulation, so it always does so at the same tick whatever the frame timing was
         _simulationClock.BeginTick();

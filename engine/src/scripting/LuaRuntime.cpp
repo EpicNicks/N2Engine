@@ -1,5 +1,6 @@
 #include "engine/scripting/LuaRuntime.hpp"
 #include "LuaGuard.hpp"
+#include "engine/scripting/LuaDeterministic.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -290,6 +291,12 @@ namespace N2Engine::Scripting
 
         // pcall, xpcall and setmetatable (shared with the declaration evaluator, which has its own state)
         Detail::InstallBudgetSandbox(_lua);
+
+        // The order-stable iteration helper is in every state. The engine-owned math functions replace Lua's own (the C
+        // library's, whose last bits differ between platforms) exactly when the seed is set: determinism.luaSeed is the
+        // project's switch for reproducible Lua, and the Deterministic network preset requires it
+        InstallOrderedPairs(_lua);
+        _deterministicMath = InstallDeterministicMathIfSeeded(_lua);
     }
 
     LuaRuntime::~LuaRuntime() = default;

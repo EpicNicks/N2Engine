@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <sstream>
+#include "math/DeterministicMath.hpp"
 
 namespace N2Engine::Math
 {
@@ -136,9 +137,9 @@ namespace N2Engine::Math
                 return Lerp(a, b, t);
             }
 
-            T theta = std::acos(dot) * t;
+            T theta = Math::Acos(dot) * t;
             VectorN relative = (b - a * dot).Normalized();
-            return a * std::cos(theta) + relative * std::sin(theta);
+            return a * Math::Cos(theta) + relative * Math::Sin(theta);
         }
 
         VectorN Lerp(const VectorN &other, T t) const

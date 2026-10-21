@@ -20,6 +20,7 @@
 #include <functional>
 #include "math/VectorN.hpp" // For VectorN compatibility
 #include "math/Constants.hpp"
+#include "math/DeterministicMath.hpp"
 #include "math/CpuInfo.hpp"
 
 namespace N2Engine::Math
@@ -342,7 +343,7 @@ namespace N2Engine::Math
             float magProduct = Length() * other.Length();
             if (magProduct == 0.0f)
                 return 0.0f;
-            return std::acos(std::clamp(dot / magProduct, -1.0f, 1.0f));
+            return Math::Acos(std::clamp(dot / magProduct, -1.0f, 1.0f));
         }
 
         [[nodiscard]] Vector3 Project(const Vector3 &onto) const
@@ -422,10 +423,10 @@ namespace N2Engine::Math
             float dot = a.Dot(b);
             dot = std::clamp(dot, -1.0f, 1.0f);
 
-            const float theta = std::acos(dot) * t;
+            const float theta = Math::Acos(dot) * t;
             const Vector3 relativeVec = (b - a * dot).Normalized();
 
-            return a * std::cos(theta) + relativeVec * std::sin(theta);
+            return a * Math::Cos(theta) + relativeVec * Math::Sin(theta);
         }
 
         [[nodiscard]] Vector3 Slerp(const Vector3 &other, float t) const
