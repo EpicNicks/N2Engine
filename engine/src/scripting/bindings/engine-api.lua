@@ -1850,7 +1850,7 @@ RaycastHit = {}
 Physics = {}
 
 ---The closest hit along a ray, or nil. Without physics (no backend, or built without PhysX) nothing is hit.
----A zero direction or a negative distance hits nothing.
+---A zero direction or a distance that is not above 0 hits nothing; a ray that starts inside a collider hits it at distance 0.
 ---@param origin Vector3
 ---@param direction Vector3 normalised internally
 ---@param maxDistance number|nil default and maximum (longer ones, math.huge included, are clamped): 1e9
@@ -1865,6 +1865,65 @@ function Physics.Raycast(origin, direction, maxDistance, layerMask) end
 ---@param layerMask integer|nil
 ---@return RaycastHit[]
 function Physics.RaycastAll(origin, direction, maxDistance, layerMask) end
+
+---The closest hit of a sphere swept along a direction, or nil. The same hit table as Physics.Raycast: `point` is on the
+---surface that was hit and `distance` is how far the sphere's centre travelled. A sphere that starts inside a collider
+---hits it at distance 0 (the normal is the opposite of the direction, the point is `origin`). A zero direction, a
+---negative distance or a radius that is not above zero hits nothing. Sweeps are limited to a distance of 1e7.
+---@param origin Vector3 the sphere's centre
+---@param radius number above 0
+---@param direction Vector3 normalised internally
+---@param maxDistance number|nil default and maximum (longer ones, math.huge included, are clamped): 1e7
+---@param layerMask integer|nil as Physics.Raycast
+---@return RaycastHit|nil
+function Physics.SphereCast(origin, radius, direction, maxDistance, layerMask) end
+
+---The closest hit of a capsule swept along a direction, or nil. The capsule is the segment point0-point1 (the centres
+---of its two end spheres) with a radius, as in Unity; equal points make a sphere. The hit table, the start-inside
+---rule and the limits are those of Physics.SphereCast; `distance` is how far the capsule's centre (the middle of the
+---segment) travelled.
+---@param point0 Vector3
+---@param point1 Vector3
+---@param radius number above 0
+---@param direction Vector3 normalised internally
+---@param maxDistance number|nil default and maximum (longer ones, math.huge included, are clamped): 1e7
+---@param layerMask integer|nil as Physics.Raycast
+---@return RaycastHit|nil
+function Physics.CapsuleCast(point0, point1, radius, direction, maxDistance, layerMask) end
+
+---One collider an overlap query found
+---@class OverlapHit
+---@field gameObject GameObject|nil The collider's body's object (its Rigidbody's object for a compound body)
+---@field collider Component|nil The collider, as its own type (BoxCollider, ...)
+---@field rigidbody Rigidbody|nil nil for a static collider
+OverlapHit = {}
+
+---Every collider that overlaps a sphere, each once, as an array ordered by body, then by the order the colliders were
+---added to it (an empty table for none, or for a radius that is not above 0). A collider that only touches the
+---sphere's surface may or may not be found.
+---@param center Vector3
+---@param radius number above 0
+---@param layerMask integer|nil as Physics.Raycast
+---@return OverlapHit[]
+function Physics.OverlapSphere(center, radius, layerMask) end
+
+---Every collider that overlaps a box, as Physics.OverlapSphere. The box has the given half extents (each above 0)
+---around `center`, turned by `rotation`.
+---@param center Vector3
+---@param halfExtents Vector3 half the box's size on each axis
+---@param rotation Quaternion|nil default: Quaternion.Identity
+---@param layerMask integer|nil as Physics.Raycast
+---@return OverlapHit[]
+function Physics.OverlapBox(center, halfExtents, rotation, layerMask) end
+
+---Every collider that overlaps a capsule (the segment point0-point1 with a radius, as Physics.CapsuleCast), as
+---Physics.OverlapSphere.
+---@param point0 Vector3
+---@param point1 Vector3
+---@param radius number above 0
+---@param layerMask integer|nil as Physics.Raycast
+---@return OverlapHit[]
+function Physics.OverlapCapsule(point0, point1, radius, layerMask) end
 
 ---True only when the GPU physics scene is up (physics.gpu is auto or on, and the CUDA probe succeeded).
 ---@return boolean

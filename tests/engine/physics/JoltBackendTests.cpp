@@ -346,7 +346,7 @@ namespace N2PhysicsTests
         EXPECT_TRUE(backend.CreateStaticBody(Vector3::Zero, Math::Quaternion::Identity, nullptr).IsValid());
     }
 
-    // ===== members that are not implemented yet =====
+    // ===== members that are not implemented yet (queries are: PhysicsQueryTests.cpp) =====
 
     TEST(JoltBackendTest, UnimplementedMembersWarnOnceAndNeverCrash)
     {
@@ -362,18 +362,18 @@ namespace N2PhysicsTests
                   0);
         EXPECT_TRUE(hits.empty());
         EXPECT_FALSE(backend.SphereCast(Vector3::Zero, 0.5f, Vector3(0.0f, -1.0f, 0.0f), hit, 10.0f, ~0u));
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 1u) << "three query calls, one warning";
+        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 0u) << "queries are implemented (J5): they warn about nothing";
 
         backend.RefreshCollisionMatrix();
         backend.SetColliderLayer(INVALID_PHYSICS_HANDLE, nullptr, 3);
         backend.ProcessCollisionCallbacks();
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 1u) << "layers and events are implemented: no warning";
+        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 0u) << "layers and events are implemented (J4): no warning";
 
         std::vector<std::byte> bytes{std::byte{1}};
         EXPECT_FALSE(backend.SaveState(bytes));
         EXPECT_FALSE(backend.RestoreState(bytes));
         EXPECT_FALSE(backend.HashState().has_value());
-        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 2u) << "three snapshot calls, one warning";
+        EXPECT_EQ(backend.GetNotImplementedWarningCount(), 1u) << "three snapshot calls, one warning (the only one left)";
     }
 
     // ===== body ids =====

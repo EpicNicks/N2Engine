@@ -22,13 +22,14 @@ namespace N2Engine::Physics
     /**
      * IPhysicsBackend on Jolt Physics (external/JoltPhysics, built cross-platform deterministic).
      *
-     * Stages J3 (the core) and J4 (layers, triggers, events) of the physics plan. Implemented: bodies (static,
-     * dynamic, kinematic), ONE shape per body (a compound of all the body's colliders, trigger ones included as
-     * sub-shapes; a single collider at the origin is a plain shape), mass (from the solid colliders only), gravity,
-     * forces, impulses and velocities, enable and disable, kinematic and static moves, transform sync, the set-state
-     * calls, the 32 layers and the collision matrix, trigger colliders, and OnCollision* / OnTrigger* events through the
-     * ContactTracker that the PhysX backend uses too. NOT implemented yet (each logs ONE warning when first used and
-     * otherwise answers "nothing found"): scene queries (J5), snapshot (J6).
+     * Stages J3 (the core), J4 (layers, triggers, events) and J5 (scene queries) of the physics plan. Implemented:
+     * bodies (static, dynamic, kinematic), ONE shape per body (a compound of all the body's colliders, trigger ones
+     * included as sub-shapes; a single collider at the origin is a plain shape), mass (from the solid colliders only),
+     * gravity, forces, impulses and velocities, enable and disable, kinematic and static moves, transform sync, the
+     * set-state calls, the 32 layers and the collision matrix, trigger colliders, OnCollision* / OnTrigger* events
+     * through the ContactTracker that the PhysX backend uses too, and the scene queries (raycast, raycast-all, sphere
+     * and capsule casts, overlaps). NOT implemented yet (logs ONE warning when first used and otherwise refuses):
+     * snapshot (J6).
      *
      * Determinism: body ids are the engine's deterministic handles, index and generation (CreateBodyWithID), transforms are synced in
      * handle order (never in Jolt's active-body order), and the job system is single-threaded on the web and whenever
@@ -81,12 +82,13 @@ namespace N2Engine::Physics
         static constexpr bool kSupportsSetState = true;
         [[nodiscard]] bool SupportsSnapshot() const override { return kSupportsSnapshot; }
         [[nodiscard]] bool SupportsSetState() const override { return kSupportsSetState; }
-        /// J4's groups: layers and the collision matrix, triggers, and contact and trigger events. Scene queries come
-        /// with J5 (each stage adds its groups here). The Deterministic preset refuses Jolt until every group is in.
+        /// Every group: J4's (layers and the collision matrix, triggers, and contact and trigger events) and J5's (scene
+        /// queries). The Deterministic preset no longer refuses Jolt for a missing group.
         static constexpr PhysicsFeatureSet kImplementedFeatures = PhysicsFeatureSet::None()
                                                                       .With(PhysicsFeature::Layers)
                                                                       .With(PhysicsFeature::Triggers)
-                                                                      .With(PhysicsFeature::Events);
+                                                                      .With(PhysicsFeature::Events)
+                                                                      .With(PhysicsFeature::Queries);
         [[nodiscard]] PhysicsFeatureSet GetImplementedFeatures() const override { return kImplementedFeatures; }
         /// "jolt"
         [[nodiscard]] std::string_view BackendId() const override { return "jolt"; }
@@ -178,13 +180,22 @@ namespace N2Engine::Physics
         void SetGravity(const Math::Vector3 &gravity) override;
         [[nodiscard]] Math::Vector3 GetGravity() const override;
 
-        /// J5: not implemented. Answer "nothing hit" (false, 0) with one warning.
+        /// Scene queries (J5), through Jolt's NarrowPhaseQuery only, all following QueryRules (Raycast.hpp): hits are
+        /// ordered by distance, body handle and collider order, never by Jolt's own order. The layer mask is tested
+        /// against each collider's layer as SetColliderLayer last gave it (the layer the simulation uses too). A trigger
+        /// collider is a sub-shape of its body like a solid one: a query hits it unless QueryTriggers::Ignore says not
+        /// to (SphereCast, which takes no QueryTriggers, hits triggers, as on PhysX).
         bool Raycast(const Math::Vector3 &origin, const Math::Vector3 &direction, RaycastHit &hit, float maxDistance,
                      std::uint32_t layerMask, QueryTriggers triggers) override;
         int RaycastAll(const Math::Vector3 &origin, const Math::Vector3 &direction, std::vector<RaycastHit> &hits,
                        float maxDistance, std::uint32_t layerMask, QueryTriggers triggers) override;
         bool SphereCast(const Math::Vector3 &origin, float radius, const Math::Vector3 &direction, RaycastHit &hit,
                         float maxDistance, std::uint32_t layerMask) override;
+        bool CapsuleCast(const Math::Vector3 &point0, const Math::Vector3 &point1, float radius,
+                         const Math::Vector3 &direction, RaycastHit &hit, float maxDistance, std::uint32_t layerMask,
+                         QueryTriggers triggers) override;
+        int Overlap(const OverlapShape &shape, std::vector<OverlapHit> &hits, std::uint32_t layerMask,
+                    QueryTriggers triggers) override;
 
         /// J6: not implemented. Refused (false, nullopt) with one warning; SupportsSnapshot is false.
         bool SaveState(std::vector<std::byte> &out) const override;
@@ -209,7 +220,7 @@ namespace N2Engine::Physics
         [[nodiscard]] bool IsBodyEnabled(PhysicsBodyHandle body) const;
         /// Initialize chose the single-threaded job system (the web build, or SetDeterministic(true))
         [[nodiscard]] bool UsesSingleThreadedJobSystem() const;
-        /// How many "not implemented yet" warnings this backend has logged (one per feature, ever: queries, snapshot)
+        /// How many "not implemented yet" warnings this backend has logged (one per feature, ever: only snapshot is left)
         [[nodiscard]] unsigned GetNotImplementedWarningCount() const;
         /// How many backends hold Jolt's process-wide state (allocator, type factory, registered types) right now
         [[nodiscard]] static int GlobalInitCount();
