@@ -182,16 +182,21 @@ namespace N2Engine::Physics
         /// Frees the event data still queued and forgets every touch (Shutdown)
         void Clear();
 
+        // ===== Lookups a backend's query results use too (a raycast hit describes its body the same way) =====
+        /// The collider if it is still registered on the body, else null (a handler may have removed it)
+        [[nodiscard]] ICollider *LiveCollider(PhysicsBodyHandle body, ICollider *collider) const;
+        /// The GameObject and Rigidbody to report for one side of a pair: the body's, or if the body is gone, the
+        /// recorded owner's (with no Rigidbody)
+        void DescribeSide(PhysicsBodyHandle handle, const std::weak_ptr<GameObject> &fallbackOwner,
+                          GameObject *&gameObject, Rigidbody *&rigidbody) const;
+
     private:
         BodyLookup _bodies;
         ColliderLookup _colliders;
 
         [[nodiscard]] ICollider *ColliderOf(ShapeKey shape) const;
         [[nodiscard]] GameObject *GetBodyOwner(PhysicsBodyHandle handle) const;
-        [[nodiscard]] ICollider *LiveCollider(PhysicsBodyHandle body, ICollider *collider) const;
         [[nodiscard]] PairOwners OwnersOf(const CollisionPair &pair) const;
-        void DescribeSide(PhysicsBodyHandle handle, const std::weak_ptr<GameObject> &fallbackOwner,
-                          GameObject *&gameObject, Rigidbody *&rigidbody) const;
         Collision CreateCollisionData(const CollisionPair &pair, const Collision &baseData, bool isForBodyA,
                                       const PairOwners &owners = {}) const;
         Trigger CreateTriggerData(const CollisionPair &pair, ICollider *colliderA, ICollider *colliderB,

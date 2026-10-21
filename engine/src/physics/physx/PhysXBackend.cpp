@@ -1968,9 +1968,9 @@ namespace N2Engine::Physics
         {
             const auto *handle = static_cast<PhysicsBodyHandle*>(actorShape.actor->userData);
             hit.bodyHandle = *handle;
-            DescribeSide(*handle, {}, hit.gameObject, hit.rigidbody);
+            _tracker.DescribeSide(*handle, {}, hit.gameObject, hit.rigidbody);
             // The collider whose shape was hit (not just the body's first), as the contact events report it
-            hit.collider = LiveCollider(*handle, ColliderOf(actorShape.shape));
+            hit.collider = _tracker.LiveCollider(*handle, ColliderOf(actorShape.shape));
         }
     }
 
