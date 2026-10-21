@@ -379,13 +379,22 @@ namespace N2PhysicsTests
     {
         // The same sequence of creations and destructions gives the same handles and the same Jolt ids on every
         // backend instance (and, when PhysX is in the build, the same handles as PhysX), so ids match across peers
+        struct Trace
+        {
+            std::vector<std::uint32_t> handles; // index and generation of every live handle recorded
+            std::vector<std::uint32_t> joltIds; // Jolt's whole id of each (a Jolt backend only)
+        };
         const auto run = []<typename B>(B &backend)
         {
-            std::vector<std::uint32_t> trace;
-            const auto record = [&trace](const PhysicsBodyHandle h)
+            Trace trace;
+            const auto record = [&trace, &backend](const PhysicsBodyHandle h)
             {
-                trace.push_back(h.index);
-                trace.push_back(h.generation);
+                trace.handles.push_back(h.index);
+                trace.handles.push_back(h.generation);
+                if constexpr (requires { backend.GetJoltBodyId(h); })
+                {
+                    trace.joltIds.push_back(backend.GetJoltBodyId(h));
+                }
             };
             const Math::Quaternion identity = Math::Quaternion::Identity;
             const PhysicsBodyHandle a = backend.CreateStaticBody(Vector3(0.0f, 0.0f, 0.0f), identity, nullptr);
@@ -410,27 +419,39 @@ namespace N2PhysicsTests
 
         JoltBackend first;
         ASSERT_TRUE(first.Initialize());
-        const std::vector<std::uint32_t> expected = run(first);
-        ASSERT_EQ(expected.size(), 14u);
+        const Trace expected = run(first);
+        ASSERT_EQ(expected.handles.size(), 14u);
+        ASSERT_EQ(expected.joltIds.size(), 7u);
         // b's slot was reused by d with the next generation; c's slot (freed last) is the first reused after
-        EXPECT_EQ(expected[6], expected[2]);
-        EXPECT_EQ(expected[7], expected[3] + 1);
+        EXPECT_EQ(expected.handles[6], expected.handles[2]);
+        EXPECT_EQ(expected.handles[7], expected.handles[3] + 1);
+        // A Jolt id is the handle's index and its generation as the sequence number (BodyID: sequence in bits 23 and up)
+        for (std::size_t i = 0; i < expected.joltIds.size(); ++i)
+        {
+            EXPECT_EQ(expected.joltIds[i] & 0x7FFFFFu, expected.handles[2 * i]) << "handle " << i;
+            EXPECT_EQ(expected.joltIds[i] >> 23, expected.handles[2 * i + 1] & 0xFFu) << "handle " << i;
+        }
+        // The ids of a reused slot differ, so a body removed and one created in its slot within a step are not the same id
+        EXPECT_NE(expected.joltIds[3], expected.joltIds[1]);
 
         JoltBackend second;
         ASSERT_TRUE(second.Initialize());
-        EXPECT_EQ(run(second), expected);
+        const Trace again = run(second);
+        EXPECT_EQ(again.handles, expected.handles);
+        EXPECT_EQ(again.joltIds, expected.joltIds);
 
 #ifdef N2ENGINE_PHYSX_ENABLED
         PhysXBackend physx;
         ASSERT_TRUE(physx.Initialize());
-        EXPECT_EQ(run(physx), expected) << "PhysX and Jolt hand out different handles for one sequence";
+        EXPECT_EQ(run(physx).handles, expected.handles) << "PhysX and Jolt hand out different handles for one sequence";
 #endif
 
-        // The Jolt id of a live body is the handle's index
+        // The Jolt id of a live body has the handle's index
         const PhysicsBodyHandle live = first.CreateStaticBody(Vector3::Zero, Math::Quaternion::Identity, nullptr);
         EXPECT_EQ(first.GetJoltBodyIndex(live), live.index);
         first.DestroyBody(live);
         EXPECT_EQ(first.GetJoltBodyIndex(live), UINT32_MAX) << "a stale handle has no body";
+        EXPECT_EQ(first.GetJoltBodyId(live), UINT32_MAX);
     }
 
     TEST(JoltBackendTest, RefusesABodyBeyondTheLimit)

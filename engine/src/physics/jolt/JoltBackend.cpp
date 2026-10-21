@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <format>
 #include <memory>
 #include <mutex>
@@ -61,12 +62,27 @@ namespace N2Engine::Physics
 
         int g_globalRefs = 0;
 
+#ifdef JPH_ENABLE_ASSERTS
+        // Jolt's asserts (a Debug build has them) say what failed on stderr before the build breaks into the debugger
+        bool JoltAssertFailed(const char *expression, const char *message, const char *file, JPH::uint line)
+        {
+            std::fprintf(stderr, "[JOLT ASSERT] %s:%u: (%s) %s
+", file, static_cast<unsigned>(line), expression,
+                         message ? message : "");
+            std::fflush(stderr);
+            return true; // break
+        }
+#endif
+
         void AcquireJoltGlobals()
         {
             const std::lock_guard lock(GlobalsMutex());
             if (g_globalRefs++ == 0)
             {
                 JPH::RegisterDefaultAllocator();
+#ifdef JPH_ENABLE_ASSERTS
+                JPH::AssertFailed = &JoltAssertFailed;
+#endif
                 JPH::Factory::sInstance = new JPH::Factory();
                 JPH::RegisterTypes();
             }
@@ -460,7 +476,11 @@ namespace N2Engine::Physics
                 settings.mMassPropertiesOverride = ShapelessMassProperties(data.mass);
             }
 
-            JPH::Body *body = Bodies().CreateBodyWithID(JPH::BodyID(handle.index), settings);
+            // The id is the handle's index plus its generation as the sequence number, which is what Jolt's own ids carry:
+            // its broad phase tells a body that was removed from a new one that reuses the index within one step by the
+            // sequence number (the engine reuses an index at once, so a bare index would be the same id twice in a step)
+            JPH::Body *body = Bodies().CreateBodyWithID(
+                JPH::BodyID(handle.index, static_cast<JPH::uint8>(handle.generation & 0xFFu)), settings);
             if (!body)
             {
                 Logger::Error("Failed to create a physics body: Jolt refused the body id");
@@ -1393,6 +1413,12 @@ namespace N2Engine::Physics
     {
         const Impl::BodyData *data = _impl->GetData(body);
         return data ? data->id.GetIndex() : UINT32_MAX;
+    }
+
+    std::uint32_t JoltBackend::GetJoltBodyId(const PhysicsBodyHandle body) const
+    {
+        const Impl::BodyData *data = _impl->GetData(body);
+        return data ? data->id.GetIndexAndSequenceNumber() : UINT32_MAX;
     }
 
     bool JoltBackend::IsBodyEnabled(const PhysicsBodyHandle body) const

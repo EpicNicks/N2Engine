@@ -28,7 +28,7 @@ namespace N2Engine::Physics
      * answers "nothing found"): layers and the collision matrix (J4), triggers (J4: a trigger collider has no shape
      * and no effect for now), contact and trigger events (J4), scene queries (J5), snapshot (J6).
      *
-     * Determinism: body ids are the engine's deterministic handle indices (CreateBodyWithID), transforms are synced in
+     * Determinism: body ids are the engine's deterministic handles, index and generation (CreateBodyWithID), transforms are synced in
      * handle order (never in Jolt's active-body order), and the job system is single-threaded on the web and whenever
      * physics.deterministic asks for it (SetDeterministic).
      */
@@ -176,8 +176,11 @@ namespace N2Engine::Physics
         [[nodiscard]] Math::Vector3 GetCenterOfMass(PhysicsBodyHandle body) const;
         /// How many collider shapes the body's Jolt shape is made of (trigger colliders are not part of it)
         [[nodiscard]] std::size_t GetShapeCount(PhysicsBodyHandle body) const;
-        /// The Jolt body id (the index part) of a live body, which is the handle's index: UINT32_MAX for a stale handle
+        /// The index part of a live body's Jolt id, which is the handle's index: UINT32_MAX for a stale handle
         [[nodiscard]] std::uint32_t GetJoltBodyIndex(PhysicsBodyHandle body) const;
+        /// A live body's whole Jolt id (index and sequence number, BodyID::GetIndexAndSequenceNumber): the index of the
+        /// handle and its generation (modulo 256) as the sequence number; UINT32_MAX for a stale handle
+        [[nodiscard]] std::uint32_t GetJoltBodyId(PhysicsBodyHandle body) const;
         /// The body is in the simulation (not disabled)
         [[nodiscard]] bool IsBodyEnabled(PhysicsBodyHandle body) const;
         /// Initialize chose the single-threaded job system (the web build, or SetDeterministic(true))
