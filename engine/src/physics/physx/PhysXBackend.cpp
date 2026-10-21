@@ -174,13 +174,23 @@ namespace N2Engine::Physics
             return QueryUtil::KeyOf(located.px.distance, located.handle, located.colliderOrder);
         }
 
-        // Runs a query into a touch buffer and returns every hit it reported, block included
+        // Runs a query into a touch buffer and returns every hit it reported, block included. `full` (when given) tells
+        // whether the buffer filled up, so hits may be missing. The buffer is a per-thread scratch kept between queries
+        // (nothing the query calls uses it, and the hits are copied out before this returns).
         template <typename HitType, typename Buffer, typename Run>
-        std::vector<HitType> CollectHits(Run &&run)
+        std::vector<HitType> CollectHits(Run &&run, bool *full = nullptr)
         {
-            std::vector<HitType> storage(kMaxQueryHits);
+            thread_local std::vector<HitType> storage;
+            if (storage.size() < kMaxQueryHits)
+            {
+                storage.resize(kMaxQueryHits);
+            }
             Buffer result(storage.data(), kMaxQueryHits);
             run(result);
+            if (full)
+            {
+                *full = result.nbTouches >= kMaxQueryHits;
+            }
             std::vector<HitType> hits;
             hits.reserve(static_cast<std::size_t>(result.nbTouches) + 1);
             for (PxU32 i = 0; i < result.nbTouches; ++i)
@@ -212,21 +222,26 @@ namespace N2Engine::Physics
             return located;
         }
 
-        // The nearest hit of a query, ties broken by handle (QueryRules). `blocking(nearest)` runs the query for its
-        // single nearest hit; `touching(maxDistance)` runs it again for every hit up to maxDistance, which gathers the
-        // hits that tie with the nearest (a touch buffer alone is not promised to hold the nearest one when it fills).
+        // The nearest hit of a query, ties broken by handle (QueryRules). `touching(maxDistance, &full)` runs the query
+        // for every hit up to maxDistance; when its buffer did not fill, that is every hit and the nearest is picked from
+        // them with one query. A full buffer is not promised to hold the nearest hit, so then `blocking(nearest)` runs
+        // the query for its single nearest hit and `touching` again up to the tie distance of it.
         template <typename HitType, typename Blocking, typename Touching, typename Locate>
         bool FindNearest(Blocking &&blocking, Touching &&touching, Locate &&locate, const float limit,
                          LocatedHit<HitType> &best)
         {
-            HitType nearest;
-            if (!blocking(nearest))
+            bool full = false;
+            std::vector<HitType> candidates = touching(limit, &full);
+            if (full)
             {
-                return false;
+                HitType nearest;
+                if (!blocking(nearest))
+                {
+                    return false;
+                }
+                candidates = touching((std::min)(nearest.distance + QueryRules::kQueryTieTolerance, limit), &full);
+                candidates.push_back(nearest);
             }
-            std::vector<HitType> candidates =
-                touching((std::min)(nearest.distance + QueryRules::kQueryTieTolerance, limit));
-            candidates.push_back(nearest);
             std::vector<LocatedHit<HitType>> located = LocateHits(candidates, locate);
             std::vector<QueryUtil::HitKey> keys;
             keys.reserve(located.size());
@@ -341,7 +356,7 @@ namespace N2Engine::Physics
                 }
                 return false;
             };
-            const auto touching = [&](const float upTo)
+            const auto touching = [&](const float upTo, bool *full)
             {
                 return CollectHits<PxSweepHit, PxSweepBuffer>([&](PxSweepBuffer &buffer)
                 {
@@ -351,7 +366,7 @@ namespace N2Engine::Physics
                     TouchAllHitsFilter touchAll(ignoreTriggers);
                     scene.sweep(shape.Geometry(), shape.pose, pxDir, upTo, buffer, PxHitFlag::eDEFAULT, filterData,
                                 &touchAll);
-                });
+                }, full);
             };
             return FindNearest<PxSweepHit>(blocking, touching, locate, sweep.distance, best);
         }
@@ -2241,7 +2256,7 @@ namespace N2Engine::Physics
             }
             return false;
         };
-        const auto touching = [&](const float upTo)
+        const auto touching = [&](const float upTo, bool *full)
         {
             return CollectHits<PxRaycastHit, PxRaycastBuffer>([&](PxRaycastBuffer &buffer)
             {
@@ -2250,7 +2265,7 @@ namespace N2Engine::Physics
                 filterData.flags |= PxQueryFlag::ePREFILTER;
                 TouchAllHitsFilter touchAll(ignoreTriggers);
                 _scene->raycast(pxOrigin, pxDir, upTo, buffer, PxHitFlag::eDEFAULT, filterData, &touchAll);
-            });
+            }, full);
         };
         const auto locate = [this](const PxRaycastHit &px, PhysicsBodyHandle &handle, std::size_t &order)
         {
@@ -2309,7 +2324,7 @@ namespace N2Engine::Physics
         {
             keys.push_back(KeyOfLocated(entry));
         }
-        QueryUtil::SortByKeys(located, keys, QueryUtil::DistanceThenHandleLess);
+        QueryUtil::SortByPick(located, keys);
 
         hits.reserve(located.size());
         for (const LocatedHit<PxRaycastHit> &entry : located)

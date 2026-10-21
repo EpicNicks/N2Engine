@@ -250,6 +250,34 @@ namespace N2PhysicsTests
         EXPECT_EQ(moverEvents->collisionEnter, 0);
     }
 
+    TYPED_TEST(PhysicsEventTest, ATriggerThatIsFirstOnlyCloseThenOverlappedThenLeftEntersAndExitsOnce)
+    {
+        // A kinematic body creeps up to a static trigger zone (0.005 a step: Jolt reports it a few steps inside its
+        // speculative distance before the shapes overlap), crosses it and leaves: one Enter and one Exit, whatever a
+        // contact reported before the overlap.
+        const auto zone = this->Spawn("Zone", Vector3(0.0f, 0.0f, 0.0f));
+        auto *zoneCollider = zone->template AddComponent<BoxCollider>();
+        zoneCollider->SetSize(Vector3(2.0f, 2.0f, 2.0f));
+        zoneCollider->SetIsTrigger(true);
+        auto *zoneEvents = zone->template AddComponent<ContactRecorder>();
+        const auto mover = this->Spawn("Mover", Vector3(0.0f, 0.0f, -1.6f));
+        mover->template AddComponent<SphereCollider>()->SetRadius(0.5f);
+        mover->template AddComponent<Rigidbody>()->SetBodyType(BodyType::Kinematic);
+        auto *moverEvents = mover->template AddComponent<ContactRecorder>();
+
+        for (int i = 0; i < 800; ++i) // from z = -1.6 to z = 2.4: the sphere's surface starts 0.1 from the zone
+        {
+            mover->GetPositionable()->SetPosition(Vector3(0.0f, 0.0f, -1.6f + 0.005f * static_cast<float>(i)));
+            this->Step(1);
+        }
+        this->Step(5);
+
+        EXPECT_EQ(zoneEvents->triggerEnter, 1);
+        EXPECT_EQ(moverEvents->triggerEnter, 1);
+        EXPECT_EQ(zoneEvents->triggerExit, 1);
+        EXPECT_EQ(moverEvents->triggerExit, 1);
+    }
+
     TYPED_TEST(PhysicsEventTest, DisablingABodyEndsItsPairsWithAnExit)
     {
         const auto floor = this->SpawnFloor();

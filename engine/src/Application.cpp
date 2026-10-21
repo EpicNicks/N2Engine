@@ -185,7 +185,16 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
                                networkSettings.preset == Network::NetworkPreset::Deterministic,
                                Physics::CompiledInBackends());
     const std::optional<Physics::PhysicsBackendKind> backendKind = backendChoice.selected;
-    if (backendChoice.refused)
+    const Physics::BackendAvailability compiledIn = Physics::CompiledInBackends();
+    if (backendChoice.refused && !compiledIn.physx && !compiledIn.jolt &&
+        networkSettings.preset != Network::NetworkPreset::Deterministic)
+    {
+        // A build with no backend at all (a PhysX-off, Jolt-off build) is what it was built as, not a failure to start
+        // one: a warning, since the project or host did ask for a backend. A refused Deterministic project, and every
+        // other refusal, stays an error.
+        Logger::Warn(backendChoice.message);
+    }
+    else if (backendChoice.refused)
     {
         Logger::Error(backendChoice.message);
     }
