@@ -1575,50 +1575,96 @@ end
             return bytes;
         }
 
-        // JSON as a Lua value on the stack: plain tables and strings, an object's null entries left out. It runs under
-        // lua_pcall (PushJson), because the allocator may refuse a table: the error then leaves through the pcall, past
-        // frames that hold references only, never an object that owns memory.
-        void PushJsonValue(lua_State *L, const json &value, const int depth)
+        // JSON as a Lua value on the stack: plain tables and strings, an object's null entries left out. The value is
+        // first flattened, in C++ and outside any protected call, into a list of steps that point into the JSON; then a
+        // C function run under lua_pcall (PushJson) carries the steps out with raw stack calls. A Lua error there (a
+        // table the allocator refuses at the cap) leaves through that pcall past one frame that holds nothing with a
+        // destructor: no nlohmann iterator, no string, no vector is alive across it.
+        struct PushStep
+        {
+            enum class Kind : std::uint8_t
+            {
+                Nil,
+                Bool,
+                Integer,
+                Number,
+                String,
+                /// lua_createtable with `count` list slots
+                Array,
+                /// lua_createtable with `count` record slots
+                Object,
+                /// The value on top goes into the table below it at index `integer`
+                SetIndex,
+                /// The key and the value on top go into the table below them
+                SetField,
+            };
+            Kind kind = Kind::Nil;
+            bool boolean = false;
+            std::int64_t integer = 0;
+            double number = 0.0;
+            const char *text = nullptr;
+            std::size_t count = 0;
+        };
+
+        void FlattenJson(const json &value, const int depth, std::vector<PushStep> &steps)
         {
             if (depth > MaxValueDepth + 8)
             {
-                luaL_error(L, "the answer is nested too deeply");
+                throw std::runtime_error("the answer is nested too deeply");
             }
-            luaL_checkstack(L, 6, "the answer is nested too deeply");
+            PushStep step;
             switch (value.type())
             {
             case json::value_t::boolean:
-                lua_pushboolean(L, value.get<bool>() ? 1 : 0);
-                break;
+                step.kind = PushStep::Kind::Bool;
+                step.boolean = value.get<bool>();
+                steps.push_back(step);
+                return;
             case json::value_t::number_integer:
-                lua_pushinteger(L, static_cast<lua_Integer>(value.get<std::int64_t>()));
-                break;
+                step.kind = PushStep::Kind::Integer;
+                step.integer = value.get<std::int64_t>();
+                steps.push_back(step);
+                return;
             case json::value_t::number_unsigned:
-                lua_pushnumber(L, static_cast<lua_Number>(value.get<std::uint64_t>()));
-                break;
+                step.kind = PushStep::Kind::Number;
+                step.number = static_cast<double>(value.get<std::uint64_t>());
+                steps.push_back(step);
+                return;
             case json::value_t::number_float:
-                lua_pushnumber(L, static_cast<lua_Number>(value.get<double>()));
-                break;
+                step.kind = PushStep::Kind::Number;
+                step.number = value.get<double>();
+                steps.push_back(step);
+                return;
             case json::value_t::string:
             {
                 const std::string &text = value.get_ref<const std::string &>();
-                lua_pushlstring(L, text.data(), text.size());
-                break;
+                step.kind = PushStep::Kind::String;
+                step.text = text.data();
+                step.count = text.size();
+                steps.push_back(step);
+                return;
             }
             case json::value_t::array:
             {
-                lua_createtable(L, static_cast<int>(std::min<std::size_t>(value.size(), 1u << 20)), 0);
-                lua_Integer slot = 1;
+                step.kind = PushStep::Kind::Array;
+                step.count = std::min<std::size_t>(value.size(), 1u << 20);
+                steps.push_back(step);
+                std::int64_t slot = 1;
                 for (const json &item : value)
                 {
-                    PushJsonValue(L, item, depth + 1);
-                    lua_rawseti(L, -2, slot++);
+                    FlattenJson(item, depth + 1, steps);
+                    PushStep set;
+                    set.kind = PushStep::Kind::SetIndex;
+                    set.integer = slot++;
+                    steps.push_back(set);
                 }
-                break;
+                return;
             }
             case json::value_t::object:
             {
-                lua_createtable(L, 0, static_cast<int>(std::min<std::size_t>(value.size(), 1u << 20)));
+                step.kind = PushStep::Kind::Object;
+                step.count = std::min<std::size_t>(value.size(), 1u << 20);
+                steps.push_back(step);
                 for (auto it = value.begin(); it != value.end(); ++it)
                 {
                     if (it.value().is_null())
@@ -1626,29 +1672,75 @@ end
                         continue;
                     }
                     const std::string &key = it.key();
-                    lua_pushlstring(L, key.data(), key.size());
-                    PushJsonValue(L, it.value(), depth + 1);
-                    lua_rawset(L, -3);
+                    PushStep keyStep;
+                    keyStep.kind = PushStep::Kind::String;
+                    keyStep.text = key.data();
+                    keyStep.count = key.size();
+                    steps.push_back(keyStep);
+                    FlattenJson(it.value(), depth + 1, steps);
+                    PushStep set;
+                    set.kind = PushStep::Kind::SetField;
+                    steps.push_back(set);
                 }
-                break;
+                return;
             }
             default:
-                lua_pushnil(L);
-                break;
+                steps.push_back(step); // nil
+                return;
             }
         }
 
-        int PushJsonThunk(lua_State *L)
+        // Runs under lua_pcall: only raw pointers and integers are alive here
+        int PushStepsThunk(lua_State *L)
         {
-            PushJsonValue(L, *static_cast<const json *>(lua_touserdata(L, 1)), 0);
+            const auto *steps = static_cast<const std::vector<PushStep> *>(lua_touserdata(L, 1));
+            const PushStep *step = steps->data();
+            const PushStep *const end = step + steps->size();
+            for (; step != end; ++step)
+            {
+                luaL_checkstack(L, 3, "the answer is nested too deeply");
+                switch (step->kind)
+                {
+                case PushStep::Kind::Nil:
+                    lua_pushnil(L);
+                    break;
+                case PushStep::Kind::Bool:
+                    lua_pushboolean(L, step->boolean ? 1 : 0);
+                    break;
+                case PushStep::Kind::Integer:
+                    lua_pushinteger(L, static_cast<lua_Integer>(step->integer));
+                    break;
+                case PushStep::Kind::Number:
+                    lua_pushnumber(L, static_cast<lua_Number>(step->number));
+                    break;
+                case PushStep::Kind::String:
+                    lua_pushlstring(L, step->text, step->count);
+                    break;
+                case PushStep::Kind::Array:
+                    lua_createtable(L, static_cast<int>(step->count), 0);
+                    break;
+                case PushStep::Kind::Object:
+                    lua_createtable(L, 0, static_cast<int>(step->count));
+                    break;
+                case PushStep::Kind::SetIndex:
+                    lua_rawseti(L, -2, static_cast<lua_Integer>(step->integer));
+                    break;
+                case PushStep::Kind::SetField:
+                    lua_rawset(L, -3);
+                    break;
+                }
+            }
             return 1;
         }
 
-        // Pushes `value` on the stack. False, with nothing pushed, when the state could not hold it.
+        // Pushes `value` on the stack. False, with nothing pushed, when the state could not hold it. Throws
+        // std::runtime_error for a value nested too deeply (before anything is pushed).
         bool PushJson(lua_State *L, const json &value)
         {
-            lua_pushcfunction(L, &PushJsonThunk);
-            lua_pushlightuserdata(L, const_cast<json *>(&value));
+            std::vector<PushStep> steps;
+            FlattenJson(value, 0, steps);
+            lua_pushcfunction(L, &PushStepsThunk);
+            lua_pushlightuserdata(L, &steps);
             if (lua_pcall(L, 1, 1, 0) != LUA_OK)
             {
                 lua_pop(L, 1); // the error object
@@ -1809,7 +1901,14 @@ end
                 {
                     return step.results;
                 }
-                pushed = PushJson(L, json(std::move(step.error)));
+                try
+                {
+                    pushed = PushJson(L, json(std::move(step.error)));
+                }
+                catch (...)
+                {
+                    pushed = false; // the host's own memory ran out: the fixed text below
+                }
             }
             if (pushed)
             {
@@ -1964,6 +2063,22 @@ end
 
     namespace
     {
+        // Runs under lua_pcall with the prelude's two functions (1: the declaration reader, 2: the invoker): makes the
+        // registry slot of the running invocation's job (false: no menu item runs), so an invocation later sets it
+        // without an allocation, and references both functions. Returns the invoker's reference, then the reader's.
+        int RegisterPrelude(lua_State *L)
+        {
+            lua_pushboolean(L, 0);
+            lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
+            lua_pushvalue(L, 1);
+            const int reader = luaL_ref(L, LUA_REGISTRYINDEX);
+            lua_pushvalue(L, 2);
+            const int invoker = luaL_ref(L, LUA_REGISTRYINDEX);
+            lua_pushinteger(L, invoker);
+            lua_pushinteger(L, reader);
+            return 2;
+        }
+
         // The worker's whole job: a state, the prelude, the file's chunk, the declaration copy, and its reading. Every
         // way it can go wrong is data in the job.
         void EvaluateFile(ExtensionLoadJob &job)
@@ -1997,12 +2112,20 @@ end
                     Fail(job, "The editor API could not be set up: " + prelude.error, prelude.memoryExhausted);
                     return;
                 }
-                const int invoker = luaL_ref(L, LUA_REGISTRYINDEX);
-                const int reader = luaL_ref(L, LUA_REGISTRYINDEX);
-                // The registry slot of the running invocation's job, made now (false: no menu item runs), so an
-                // invocation sets it without an allocation
-                lua_pushboolean(L, 0);
-                lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
+                // The two functions go into the registry, and the slot of the running invocation's job is made, all
+                // under a protected call: each can allocate, and the state's cap may refuse it
+                lua_pushcfunction(L, &RegisterPrelude);
+                lua_insert(L, -3);
+                if (const int status = lua_pcall(L, 2, 2, 0); status != LUA_OK)
+                {
+                    const SandboxOutcome failure = sandbox->FailureOutcome(status, "The editor API could not be set up");
+                    lua_settop(L, 0);
+                    Fail(job, failure.error, failure.memoryExhausted);
+                    return;
+                }
+                const int reader = static_cast<int>(lua_tointeger(L, -1));
+                const int invoker = static_cast<int>(lua_tointeger(L, -2));
+                lua_settop(L, 0);
 
                 // The file's chunk. Its name is the file's path inside editor/ (never a host path)
                 if (const SandboxOutcome run = sandbox->RunChunk(job.source, "=" + job.id, SandboxDefaults::LoadBudget, 1);

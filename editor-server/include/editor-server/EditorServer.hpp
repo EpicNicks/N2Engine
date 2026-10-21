@@ -977,6 +977,9 @@ namespace N2Engine::Editor
             std::string name;
             std::vector<std::string> capabilities;
             std::uint32_t sent = 0;
+            /// Non-empty: the invocation fails whatever the script returns (a call that sent several commands could not
+            /// be taken back alone, so the group is taken back as a whole); the reason
+            std::string fatal;
         };
         ExtensionInvocation *_invocation{nullptr};
         /// Sends one command from an extension's script: the policy of NestedCommandPolicy, the cap on commands per

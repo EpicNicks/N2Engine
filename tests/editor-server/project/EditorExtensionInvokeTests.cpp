@@ -236,7 +236,7 @@ return Editor.Extension {
     {
       id = "fail.run",
       path = "Tools/Fail",
-      params = { how = { type = "enum", options = { "error", "spin", "refused", "caught", "restore" } } },
+      params = { how = { type = "enum", options = { "error", "spin", "refused", "caught", "restore", "snapshot" } } },
       run = function(ctx, p)
         local id = ctx.selection[1]
         local original = Editor.Scene.GetLocalTransform(id)
@@ -252,6 +252,15 @@ return Editor.Extension {
           local ok = pcall(Editor.Scene.Destroy, "00000000-0000-4000-8000-000000000000")
           if ok then error("the refused command succeeded") end
           return { message = "kept" }
+        elseif p.how == "snapshot" then
+          -- Edits whose undo restores a snapshot of the scene, then a failure
+          local b = ctx.selection[2]
+          Editor.Scene.Duplicate(id)
+          for _, c in ipairs(Editor.Scene.GetEntity(b).components) do
+            if c.type == "Light" then Editor.Scene.RemoveComponent(b, c.uuid) end
+          end
+          Editor.Scene.Destroy(id)
+          error("after the snapshots")
         end
         return { message = "done" }
       end,
@@ -265,6 +274,34 @@ return Editor.Extension {
         Editor.Scene.SetLocalTransform(id, { position = { x = 9, y = 9, z = 9 } })
         Editor.Scene.SetLocalTransform(id, original)
         return { message = "restored" }
+      end,
+    },
+  },
+}
+)LUA";
+
+    // Multi-command Editor.Scene calls that fail half-way, caught by the script: nothing of the failed call remains
+    constexpr const char *PartialExtension = R"LUA(
+return Editor.Extension {
+  name = "Partial",
+  apiVersion = 1,
+  capabilities = { "scene.read", "scene.write" },
+  menu = {
+    {
+      id = "partial.run",
+      path = "Tools/Partial",
+      run = function(ctx, p)
+        local id = ctx.selection[1]
+        Editor.Scene.SetLocalTransform(id, { position = { x = 7, y = 8, z = 9 } })
+        local made = pcall(Editor.Scene.CreateEntity, { name = "Half", components = { "Light", "NoSuchComponent" } })
+        if made then error("CreateEntity with an unknown component succeeded") end
+        local added = pcall(Editor.Scene.AddComponent, id, "Light", { range = "far" })
+        if added then error("AddComponent with a refused value succeeded") end
+        if #Editor.Scene.FindByName("Half") ~= 0 then error("a half-made object remains") end
+        for _, c in ipairs(Editor.Scene.GetEntity(id).components) do
+          if c.type == "Light" then error("a component left at its defaults remains") end
+        end
+        return { message = "clean" }
       end,
     },
   },
@@ -285,12 +322,13 @@ return Editor.Extension {
             Write("align.lua", GoldenExtension);
             Write("every.lua", EveryFunctionExtension);
             Write("fail.lua", FailingExtension);
+            Write("partial.lua", PartialExtension);
 
             const Frame made = Execute(server, CommandType::NewScene, Strings({"", "Invoke Test"}));
             ASSERT_EQ(made.type, SceneInfoType) << made.Text();
             server.GetHistory().SetCoalesceWindow(-1ms);
             ASSERT_TRUE(server.EnableEditorExtensions(_root));
-            ASSERT_EQ(server.GetEditorExtensions()->LoadedCount(), 3u);
+            ASSERT_EQ(server.GetEditorExtensions()->LoadedCount(), 4u);
             ASSERT_EQ(Execute(server, CommandType::Hello, HelloWithErrorCodes()).type, ServerInfoType);
         }
 
@@ -589,4 +627,54 @@ TEST_F(EditorExtensionInvokeTest, AnInvocationWithoutWritesMakesNoStep)
     EXPECT_EQ(History().entries.size(), steps);
     EXPECT_EQ(server.GetSceneRevision(), revision);
     (void)a;
+}
+
+TEST_F(EditorExtensionInvokeTest, ACallThatSendsSeveralCommandsIsAllOrNothingEvenWhenTheScriptCatchesItsError)
+{
+    const std::string a = Create("A");
+    SetPosition(a, {1.0, 2.0, 3.0});
+    const std::size_t steps = History().entries.size();
+    const std::size_t objects = ObjectCount();
+
+    // The item moves A, then CreateEntity{Light, NoSuchComponent} and AddComponent(A, Light, {range = "far"}) are
+    // refused half-way and caught: the object, its Light and A's Light are taken back, the move is kept
+    const Result result = DecodeResult(Invoke("partial.run", json::array({a})));
+    EXPECT_EQ(result.result.at("message"), "clean");
+    EXPECT_EQ(ObjectCount(), objects) << "no half-made object";
+    EXPECT_TRUE(Entity(a).at("components").empty()) << Entity(a).dump();
+    ExpectAt(Position(a), {7.0, 8.0, 9.0}, "the move before the failed calls is kept");
+    const HistoryData after = History();
+    ASSERT_EQ(after.entries.size(), steps + 1);
+    EXPECT_EQ(after.entries.back().at("label"), "Partial");
+
+    // One undo takes back the move, and nothing else is left over
+    EXPECT_EQ(UndoOrRedo(CommandType::Undo), "Partial");
+    ExpectAt(Position(a), {1.0, 2.0, 3.0}, "undone");
+    EXPECT_EQ(ObjectCount(), objects);
+}
+
+TEST_F(EditorExtensionInvokeTest, AFailureAfterEditsUndoneFromSnapshotsRestoresTheWholeScene)
+{
+    const std::string a = Create("A");
+    const std::string b = Create("B");
+    SetPosition(a, {1.0, 2.0, 3.0});
+    const Frame added = Execute(server, CommandType::AddComponent, Strings({b, "Light"}));
+    ASSERT_EQ(added.type, static_cast<uint8_t>(ResponseType::ComponentAdded)) << added.Text();
+    const HistoryData before = History();
+    const std::size_t objects = ObjectCount();
+
+    // Duplicate, RemoveComponent and Destroy (whose undo restores a snapshot of the scene), then a Lua error
+    const Coded failed = DecodeErrorCoded(Invoke("fail.run", json::array({a, b}), json{{"how", "snapshot"}}));
+    EXPECT_EQ(failed.code, "extensionFailed");
+    EXPECT_NE(failed.message.find("after the snapshots"), std::string::npos) << failed.message;
+
+    EXPECT_EQ(ObjectCount(), objects) << "the copy and the made object are gone, A is back";
+    ExpectAt(Position(a), {1.0, 2.0, 3.0}, "A restored where it was");
+    const json bEntity = Entity(b);
+    ASSERT_EQ(bEntity.at("components").size(), 1u) << bEntity.dump();
+    EXPECT_EQ(bEntity.at("components")[0].at("type"), "Light");
+    const HistoryData after = History();
+    EXPECT_EQ(after.entries, before.entries) << "no step was made";
+    EXPECT_EQ(after.cursor, before.cursor);
+    EXPECT_FALSE(server.GetHistory().InGroup());
 }

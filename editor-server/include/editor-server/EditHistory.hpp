@@ -145,6 +145,18 @@ namespace N2Engine::Editor
         /// cannot be undone the history is cleared (the scene may be in a state no step describes) and the error says
         /// so, as for Undo. An empty effect, with nothing changed, when no group is open.
         std::expected<EditEffect, std::string> AbortGroup();
+        /// Marks where the open group stands (its op count, returned) for TakeBackGroupTo: what is recorded after the mark
+        /// can be taken back alone, the group staying open (an editor extension's call that sends several commands is all
+        /// or nothing). One mark at a time: a new mark replaces the last. 0 without an open group.
+        size_t MarkGroup();
+        /// Undoes, last to first, the ops the open group recorded after `mark` and drops them; the group stays open and
+        /// the ops before the mark are untouched. An error with nothing changed when an op recorded after the mark merged
+        /// into one before it (that earlier op's redo changed, so taking back the later ops alone would not restore it).
+        /// When an op cannot be undone the history is cleared, the group with it, and the error says so, as for Undo.
+        /// An empty effect when no group is open or nothing was recorded after the mark.
+        std::expected<EditEffect, std::string> TakeBackGroupTo(size_t mark);
+        /// How many ops the open group holds (0 without one)
+        [[nodiscard]] size_t GroupOpCount() const { return _groupOps.size(); }
         [[nodiscard]] bool InGroup() const { return _groupDepth > 0; }
         /// What the open group's ops hold (0 without one); it counts against no limit until the group ends, so a caller
         /// that records big ops into a group (snapshots) checks it against GetMaxBytes itself
@@ -232,5 +244,7 @@ namespace N2Engine::Editor
         std::string _groupLabel;
         std::vector<EditOp> _groupOps;
         size_t _groupBytes = 0;
+        /// The lowest index of the open group's ops that a later op merged into since the last MarkGroup (SIZE_MAX: none)
+        size_t _lowestMergeSinceMark = SIZE_MAX;
     };
 }

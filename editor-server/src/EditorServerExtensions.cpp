@@ -438,6 +438,50 @@ namespace N2Engine::Editor
                 }
                 return componentId;
             };
+            // A call that sends several writes (CreateEntity with components, AddComponent with values) is all or
+            // nothing: when a later command is refused, what the earlier ones recorded in the invocation's group is
+            // taken back before the error reaches the script, so a script that catches it finds the scene as before
+            // the call. If that cannot be done exactly, the whole invocation fails (its group is taken back at the end).
+            const auto allOrNothing = [this](const auto &body) -> json
+            {
+                if (!_history.InGroup())
+                {
+                    return body();
+                }
+                const size_t mark = _history.MarkGroup();
+                try
+                {
+                    return body();
+                }
+                catch (const std::exception &)
+                {
+                    const size_t recorded = _history.GroupOpCount();
+                    const std::expected<EditEffect, std::string> taken = _history.TakeBackGroupTo(mark);
+                    if (!taken)
+                    {
+                        if (!_history.InGroup())
+                        {
+                            // An op could not be undone and the history was cleared: a client refetches everything
+                            MarkSceneChanged({}, true);
+                            PushHistoryChanged();
+                        }
+                        if (_invocation != nullptr && _invocation->fatal.empty())
+                        {
+                            _invocation->fatal = SanitizeForLog(taken.error(), 300);
+                        }
+                    }
+                    else if (recorded > mark)
+                    {
+                        EditEffect effect = *taken;
+                        if (effect.inexact)
+                        {
+                            _history.ForgetSaved();
+                        }
+                        MarkSceneChanged(std::move(effect.entityIds), effect.full);
+                    }
+                    throw;
+                }
+            };
 
             // Reads need scene.read, changes scene.write. A state without the capability has no such function at all (the
             // prelude does not install it); this is the host's own check, in case a call reaches it anyway.
@@ -506,39 +550,42 @@ namespace N2Engine::Editor
             if (op == "scene.createEntity")
             {
                 RejectOtherKeys(a, {"name", "parent", "components"}, "the table given to Editor.Scene.CreateEntity");
-                BufferWriter request;
-                request.WriteString(optionalStr("name"));
-                request.WriteString(optionalStr("parent"));
-                request.WriteI32(-1); // the last place among its siblings
-                request.WriteString(std::string()); // the empty preset
-                const std::vector<uint8_t> body = send(CommandType::CreateEntityEx, request, ResponseType::EntityCreated);
-                BufferReader reader(body);
-                const std::string id = reader.ReadString();
-                if (const auto components = a.find("components"); components != a.end() && !components->is_null())
+                return allOrNothing([&]() -> json
                 {
-                    if (!IsListOrEmpty(*components))
+                    BufferWriter request;
+                    request.WriteString(optionalStr("name"));
+                    request.WriteString(optionalStr("parent"));
+                    request.WriteI32(-1); // the last place among its siblings
+                    request.WriteString(std::string()); // the empty preset
+                    const std::vector<uint8_t> body = send(CommandType::CreateEntityEx, request, ResponseType::EntityCreated);
+                    BufferReader reader(body);
+                    const std::string id = reader.ReadString();
+                    if (const auto components = a.find("components"); components != a.end() && !components->is_null())
                     {
-                        throw std::runtime_error("'components' must be a list of component type names");
+                        if (!IsListOrEmpty(*components))
+                        {
+                            throw std::runtime_error("'components' must be a list of component type names");
+                        }
+                        for (const json &component : *components)
+                        {
+                            if (component.is_string())
+                            {
+                                (void)addComponent(id, component.get<std::string>(), json::object());
+                            }
+                            else if (component.is_object() && component.contains("type") && component.at("type").is_string())
+                            {
+                                RejectOtherKeys(component, {"type", "values"}, "a component of Editor.Scene.CreateEntity");
+                                (void)addComponent(id, component.at("type").get<std::string>(),
+                                                   component.contains("values") ? component.at("values") : json::object());
+                            }
+                            else
+                            {
+                                throw std::runtime_error("'components' entries must be type names, or tables { type = .., values = .. }");
+                            }
+                        }
                     }
-                    for (const json &component : *components)
-                    {
-                        if (component.is_string())
-                        {
-                            (void)addComponent(id, component.get<std::string>(), json::object());
-                        }
-                        else if (component.is_object() && component.contains("type") && component.at("type").is_string())
-                        {
-                            RejectOtherKeys(component, {"type", "values"}, "a component of Editor.Scene.CreateEntity");
-                            (void)addComponent(id, component.at("type").get<std::string>(),
-                                               component.contains("values") ? component.at("values") : json::object());
-                        }
-                        else
-                        {
-                            throw std::runtime_error("'components' entries must be type names, or tables { type = .., values = .. }");
-                        }
-                    }
-                }
-                return id;
+                    return id;
+                });
             }
             if (op == "scene.destroy")
             {
@@ -631,7 +678,10 @@ namespace N2Engine::Editor
                 {
                     throw std::runtime_error("'values' must be a table of field values");
                 }
-                return addComponent(str("id"), str("type"), values != a.end() && values->is_object() ? *values : json::object());
+                const std::string entityId = str("id");
+                const std::string typeName = str("type");
+                const json given = values != a.end() && values->is_object() ? *values : json::object();
+                return allOrNothing([&]() -> json { return addComponent(entityId, typeName, given); });
             }
             if (op == "scene.removeComponent")
             {
@@ -928,6 +978,14 @@ namespace N2Engine::Editor
                 outcome.failure = ExtensionHost::InvokeFailure::HostError;
                 outcome.error = "the call failed";
             }
+        }
+        if (outcome.Ok() && !invocation.fatal.empty())
+        {
+            // A call that sent several commands could not be taken back alone: the whole invocation is, whatever the
+            // script made of the error (not counted against the extension: the host could not do it)
+            outcome = ExtensionHost::InvokeOutcome{};
+            outcome.failure = ExtensionHost::InvokeFailure::HostError;
+            outcome.error = invocation.fatal;
         }
         const auto elapsedMillis =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
