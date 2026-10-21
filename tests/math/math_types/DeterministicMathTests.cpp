@@ -619,15 +619,15 @@ namespace
     constexpr DoubleCase kDoubleLog[] = {
         {0x01A56E1FC2F8F359ull, 0xC085963447F87FB5ull},
         {0x39B4484BFEEBC2A0ull, 0xC05144F69FF9FFC4ull},
-        {0x3F847AE147AE147Bull, 0xC0126BB1BBB55515ull},
+        {0x3F847AE147AE147Bull, 0xC0126BB1BBB55516ull},
         {0x3FB999999999999Aull, 0xC0026BB1BBB55515ull},
         {0x3FE0000000000000ull, 0xBFE62E42FEFA39EFull},
         {0x3FF0000000000000ull, 0x0000000000000000ull},
         {0x3FF8000000000000ull, 0x3FD9F323ECBF984Cull},
         {0x4000000000000000ull, 0x3FE62E42FEFA39EFull},
         {0x4020000000000000ull, 0x4000A2B23F3BAB73ull},
-        {0x4024000000000000ull, 0x40026BB1BBB55515ull},
-        {0x40C81C8000000000ull, 0x4022D78E26AE18E7ull},
+        {0x4024000000000000ull, 0x40026BB1BBB55516ull},
+        {0x40C81C8000000000ull, 0x4022D78E26AE18E8ull},
         {0x4415AF1D78B58C40ull, 0x4047069E2AA2AA5Bull},
         {0x7E37E43C8800759Cull, 0x4085963447F87FB5ull},
     };
@@ -639,7 +639,7 @@ namespace
         {0x3FB999999999999Aull, 0xC00A934F0979A371ull},
         {0x3FE0000000000000ull, 0xBFF0000000000000ull},
         {0x3FF0000000000000ull, 0x0000000000000000ull},
-        {0x3FF8000000000000ull, 0x3FE2B803473F7AD2ull},
+        {0x3FF8000000000000ull, 0x3FE2B803473F7AD1ull},
         {0x4000000000000000ull, 0x3FF0000000000000ull},
         {0x4020000000000000ull, 0x4008000000000000ull},
         {0x4024000000000000ull, 0x400A934F0979A371ull},
@@ -775,7 +775,9 @@ TEST(DeterministicMathTest, FloatResultsAreWithinOneUlpOfTheReference)
         check("Sin(wide)", wide, Math::Sin(wide), RefSin(static_cast<double>(wide)));
         const float e = static_cast<float>(sweep.Uniform(-80.0, 80.0));
         check("Exp", e, Math::Exp(e), RefExp(static_cast<double>(e)));
-        const float positive = std::ldexp(static_cast<float>(sweep.Uniform(1.0, 2.0)), static_cast<int>(sweep.Uniform(-100.0, 100.0)));
+        // Two statements: the evaluation order of a call's arguments is unspecified, and the sweep is a sequence
+        const float mantissa = static_cast<float>(sweep.Uniform(1.0, 2.0));
+        const float positive = std::ldexp(mantissa, static_cast<int>(sweep.Uniform(-100.0, 100.0)));
         check("Log", positive, Math::Log(positive), RefLog(static_cast<double>(positive)));
         check("Log2", positive, Math::Log2(positive), RefLog2(static_cast<double>(positive)));
         const float y = static_cast<float>(sweep.Uniform(-10.0, 10.0));
@@ -788,7 +790,7 @@ TEST(DeterministicMathTest, FloatResultsAreWithinOneUlpOfTheReference)
 TEST(DeterministicMathTest, DoubleResultsAreWithinTheDocumentedUlpOfTheReference)
 {
     // The documented bounds, asserted as they are written in math/DeterministicMath.hpp against the double-double
-    // reference: 1 ulp (Sin, Cos, Atan), 2 (Exp, Log, Log2), 3 (Tan, Atan2, Asin, Acos)
+    // reference: 1 ulp (Sin, Cos, Atan, Log, Log2), 2 (Exp), 3 (Tan, Atan2, Asin, Acos)
     Sweep sweep(13);
     auto check = [](const char *name, const double x, const double actual, const DD reference, const double bound) {
         if (reference.hi == 0.0)
@@ -814,12 +816,52 @@ TEST(DeterministicMathTest, DoubleResultsAreWithinTheDocumentedUlpOfTheReference
         check("Atan", wide, Math::Atan(wide), RefAtan(wide), 1.0);
         const double e = sweep.Uniform(-700.0, 700.0);
         check("Exp", e, Math::Exp(e), RefExp(e), 2.0);
-        const double positive = std::ldexp(sweep.Uniform(1.0, 2.0), static_cast<int>(sweep.Uniform(-1000.0, 1000.0)));
-        check("Log", positive, Math::Log(positive), RefLog(positive), 2.0);
-        check("Log2", positive, Math::Log2(positive), RefLog2(positive), 2.0);
+        // Two statements: the order in which a call's arguments are evaluated is unspecified, and the sweep is a sequence
+        const double mantissa = sweep.Uniform(1.0, 2.0);
+        const double positive = std::ldexp(mantissa, static_cast<int>(sweep.Uniform(-1000.0, 1000.0)));
+        check("Log", positive, Math::Log(positive), RefLog(positive), 1.0);
+        check("Log2", positive, Math::Log2(positive), RefLog2(positive), 1.0);
         const double y = sweep.Uniform(-1000.0, 1000.0);
         const double xx = sweep.Uniform(-1000.0, 1000.0);
         check("Atan2", y, Math::Atan2(y, xx), RefAtan2(y, xx), 3.0);
+    }
+}
+
+// The wide sweep above almost never picks the exponent 0 of Log and Log2 or an Exp argument next to a reduction boundary,
+// so these are dense there: [1/2, 2], within 1e-3 of 1 (log x is tiny there), within a relative 1e-6 of sqrt2 * 2^k (where
+// the mantissa switches between [1/sqrt2, 1) and [1, sqrt2]); Exp on [-1, 1], within a relative 1e-9 of (k + 1/2) ln2
+// (where the reduced argument is largest and the nearest k switches), and within 1e-6 of 0
+TEST(DeterministicMathTest, LogAndExpStayAccurateAtTheirReductionBoundaries)
+{
+    Sweep sweep(29);
+    auto check = [](const char *name, const double x, const double actual, const DD reference, const double bound) {
+        EXPECT_LE(UlpErrorDD(actual, reference), bound) << name << "(" << x << ") = " << actual << ", reference " << reference.hi;
+    };
+    for (int i = 0; i < 20000; ++i)
+    {
+        const double a = sweep.Uniform(0.5, 2.0);
+        check("Log", a, Math::Log(a), RefLog(a), 1.0);
+        check("Log2", a, Math::Log2(a), RefLog2(a), 1.0);
+        const double nearOne = 1.0 + sweep.Uniform(-1e-3, 1e-3);
+        if (nearOne != 1.0)
+        {
+            check("Log", nearOne, Math::Log(nearOne), RefLog(nearOne), 1.0);
+            check("Log2", nearOne, Math::Log2(nearOne), RefLog2(nearOne), 1.0);
+        }
+        const double nearSqrt2 = std::numbers::sqrt2 * (1.0 + sweep.Uniform(-1e-6, 1e-6));
+        const double boundary = std::ldexp(nearSqrt2, static_cast<int>(sweep.Uniform(-3.0, 3.0)));
+        check("Log", boundary, Math::Log(boundary), RefLog(boundary), 1.0);
+        check("Log2", boundary, Math::Log2(boundary), RefLog2(boundary), 1.0);
+        const double unitArgument = sweep.Uniform(-1.0, 1.0);
+        check("Exp", unitArgument, Math::Exp(unitArgument), RefExp(unitArgument), 2.0);
+        const double k = static_cast<double>(static_cast<int>(sweep.Uniform(-1000.0, 1000.0)));
+        const double halfway = (k + 0.5) * 0.6931471805599453 * (1.0 + sweep.Uniform(-1e-9, 1e-9));
+        if (halfway > -708.0 && halfway < 709.0) // normal results: RefExp rounds a denormal result once more
+        {
+            check("Exp", halfway, Math::Exp(halfway), RefExp(halfway), 2.0);
+        }
+        const double nearZero = sweep.Uniform(-1e-6, 1e-6);
+        check("Exp", nearZero, Math::Exp(nearZero), RefExp(nearZero), 2.0);
     }
 }
 

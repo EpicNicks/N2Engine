@@ -44,6 +44,9 @@ namespace N2Engine::Math
         constexpr double kLn2Hi = FromBits(0x3FE62E42FEE00000ull);
         constexpr double kLn2Lo = FromBits(0x3DEA39EF35793C76ull);
         constexpr double kInvLn2 = FromBits(0x3FF71547652B82FEull);
+        // 1/ln2 as a 32-bit piece and the rest (Log2)
+        constexpr double kInvLn2Hi = FromBits(0x3FF7154765200000ull);
+        constexpr double kInvLn2Lo = FromBits(0x3DE705FC2EEFA200ull);
         constexpr double kSqrt2 = FromBits(0x3FF6A09E667F3BCDull);
 
         constexpr double kReduceLimit = 1048576.0;                     // 2^20: Cody-Waite reduction is exact up to here
@@ -286,13 +289,24 @@ namespace N2Engine::Math
             }
         }
 
-        // log m for m in [1/sqrt2, sqrt2]: 2 atanh((m - 1) / (m + 1)) as its series (m - 1 is exact here)
-        double LogMantissa(const double m)
+        // log m for m = 1 + f in [1/sqrt2, sqrt2] (f = m - 1 is exact here), split the fdlibm way so the caller can add
+        // the large part f last: log(1 + f) = f - hfsq + r, hfsq = f^2/2, r = s (hfsq + R), s = f / (2 + f) and
+        // R = 2 z P(z) with z = s^2 (s R is the series of 2 atanh s = log(1 + f) after its first term 2s)
+        struct LogParts
         {
-            const double s = (m - 1.0) / (m + 1.0);
+            double f;
+            double hfsq;
+            double r;
+        };
+
+        LogParts LogMantissa(const double m)
+        {
+            const double f = m - 1.0;
+            const double hfsq = 0.5 * f * f;
+            const double s = f / (2.0 + f);
             const double z = s * s;
-            const double s2 = 2.0 * s;
-            return s2 + (s2 * z) * Horner(kLogP, z);
+            const double bigR = (2.0 * z) * Horner(kLogP, z);
+            return {f, hfsq, s * (hfsq + bigR)};
         }
 
         float ToFloat(const double v)
@@ -500,8 +514,10 @@ namespace N2Engine::Math
         double m;
         int e;
         SplitMantissa(x, m, e);
-        const double de = static_cast<double>(e);
-        return (de * kLn2Hi + LogMantissa(m)) + de * kLn2Lo;
+        const double dk = static_cast<double>(e);
+        const LogParts p = LogMantissa(m);
+        // e ln2 + log m with the small terms summed first and the exact e * kLn2Hi and f last (fdlibm's e_log.c order)
+        return dk * kLn2Hi - ((p.hfsq - (p.r + dk * kLn2Lo)) - p.f);
     }
 
     double Log2(const double x)
@@ -521,7 +537,17 @@ namespace N2Engine::Math
         double m;
         int e;
         SplitMantissa(x, m, e);
-        return static_cast<double>(e) + LogMantissa(m) * kInvLn2;
+        const LogParts p = LogMantissa(m);
+        // log m / ln2 with 1/ln2 as two doubles (fdlibm's e_log2.c): f - hfsq is cut to its top 21 bits (hi, so
+        // hi * kInvLn2Hi is exact) and the rest goes to lo, then e is added with its rounding error kept
+        const double hi = std::bit_cast<double>(std::bit_cast<std::uint64_t>(p.f - p.hfsq) & 0xFFFFFFFF00000000ull);
+        const double lo = ((p.f - hi) - p.hfsq) + p.r;
+        const double valueHi = hi * kInvLn2Hi;
+        double valueLo = (lo + hi) * kInvLn2Lo + lo * kInvLn2Hi;
+        const double y = static_cast<double>(e);
+        const double w = y + valueHi;
+        valueLo = valueLo + ((y - w) + valueHi);
+        return valueLo + w;
     }
 
     float Sin(const float x) { return ToFloat(Sin(static_cast<double>(x))); }
