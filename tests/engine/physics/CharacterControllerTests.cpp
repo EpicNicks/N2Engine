@@ -549,6 +549,34 @@ namespace N2PhysicsTests
         EXPECT_LT(state.position.x, 7.0f);
     }
 
+    TYPED_TEST(CharacterMotorTest, WalksOverTheCrestOfARampOntoAFlatTop)
+    {
+        // A 20 degree ramp from x = 3 rising to a flat platform at its top (surface y = 20 sin 20 = 6.84 at x = 3 + 18.8)
+        this->SpawnGround();
+        this->SpawnRamp(20.0f, 3.0f);
+        this->SpawnBox("Platform", Vector3(31.0f, 6.34f, 0.0f), Vector3(20.0f, 1.0f, 60.0f)); // top y = 6.84
+        this->Build();
+        for (const float stepOffset : {0.0f, 0.3f})
+        {
+            CharacterSettings settings;
+            settings.stepOffset = stepOffset;
+            CharacterState state = this->Settled(settings, Vector3(0.0f, 3.0f, 0.0f));
+            ASSERT_TRUE(state.grounded);
+            CharacterInput walk;
+            walk.move = Vector3(3.0f, 0.0f, 0.0f);
+            float previousX = state.position.x;
+            for (int i = 0; i < 60 * 9; ++i)
+            {
+                state = CharacterMotor::Step(this->BackendRef(), settings, state, walk, kDt);
+                ASSERT_LT(state.position.x - previousX, 0.1f) << "step offset " << stepOffset << ", tick " << i;
+                previousX = state.position.x;
+            }
+            EXPECT_GT(state.position.x, 24.0f) << "step offset " << stepOffset << ": over the crest";
+            EXPECT_NEAR(state.position.y, 6.84f + kRestHeight, 0.1f);
+            EXPECT_TRUE(state.grounded);
+        }
+    }
+
     TYPED_TEST(CharacterMotorTest, DoesNotClimbASlopeSteeperThanTheLimit)
     {
         this->SpawnGround();

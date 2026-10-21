@@ -129,7 +129,24 @@ namespace N2Engine::Physics
                 {
                     return false;
                 }
-                return UnitOr(top.normal, Vector3(0.0f, 1.0f, 0.0f)).y >= 1.0f - kGroundTolerance;
+                if (UnitOr(top.normal, Vector3(0.0f, 1.0f, 0.0f)).y < 1.0f - kGroundTolerance)
+                {
+                    return false;
+                }
+                // The crest of a ramp that ends in a flat top is not a step: just behind the contact the surface is
+                // still there, within the rise of any slope that can be stood on (behind the edge of a step it is
+                // the open face of the riser, nothing within reach)
+                const Vector3 behindOrigin(contact.point.x - across.x * inward, contact.point.y + lift,
+                                           contact.point.z - across.z * inward);
+                RaycastHit behind;
+                if (backend.Raycast(behindOrigin, Vector3(0.0f, -1.0f, 0.0f), behind, 2.0f * lift, layerMask,
+                                    QueryTriggers::Ignore) &&
+                    behind.distance <= lift + 2.0f * inward &&
+                    UnitOr(behind.normal, Vector3(0.0f, 1.0f, 0.0f)).y >= minGroundY)
+                {
+                    return false;
+                }
+                return true;
             }
 
             IPhysicsBackend &backend;
@@ -259,6 +276,13 @@ namespace N2Engine::Physics
             }
             const Vector3 normal = UnitOr(hit.normal, up);
             if (normal.y < c.minGroundY)
+            {
+                return false;
+            }
+            // Perched on the edge of something taller than the step offset (a slanted contact, a flat top beyond):
+            // that is not a landing
+            const Vector3 heading(horizontalDelta.x / length, 0.0f, horizontalDelta.z / length);
+            if (c.IsStepEdge(hit, heading, normal))
             {
                 return false;
             }
