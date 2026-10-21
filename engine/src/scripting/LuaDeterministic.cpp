@@ -89,7 +89,7 @@ namespace N2Engine::Scripting
         // Ordered.pairs, in Lua: the array part, then the other keys by type and value. The locals are captured at load so a
         // script that reassigns type or next later cannot break it. (The string order is Lua's own "<", which compares
         // bytes in the "C" locale, the one the engine never leaves.)
-        constexpr const char *kOrderedPairsSource = R"(
+        constexpr const char *kOrderedPairsSource = R"lua(
             local type, next, rawget, error = type, next, rawget, error
             local sort = table.sort
             local mathType = math.type
@@ -147,7 +147,7 @@ namespace N2Engine::Scripting
                     end
                 end, t, nil
             end
-        )";
+        )lua";
     }
 
     void InstallDeterministicMath(sol::state_view lua)
