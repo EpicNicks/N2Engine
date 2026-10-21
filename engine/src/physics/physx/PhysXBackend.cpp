@@ -154,7 +154,23 @@ namespace N2Engine::Physics
         }
     }
 
-    PhysXBackend::PhysXBackend() = default;
+    PhysXBackend::PhysXBackend()
+    {
+        // The tracker finds a body's Rigidbody and colliders, and a shape's collider, through this backend
+        _tracker.SetHost(
+            [this](const PhysicsBodyHandle handle, Tracker::BodyView &view)
+            {
+                const BodyData *data = GetBodyData(handle);
+                if (!data)
+                {
+                    return false;
+                }
+                view.rigidbody = data->rigidbody;
+                view.colliders = &data->colliders;
+                return true;
+            },
+            [](const PxShape *shape) { return ColliderOf(shape); });
+    }
 
     PhysXBackend::~PhysXBackend()
     {
@@ -498,23 +514,7 @@ namespace N2Engine::Physics
         }
         _materialCache.clear();
 
-        for (const auto& event : _newCollisions)
-        {
-            delete event.data;
-        }
-        _newCollisions.clear();
-
-        for (const auto& event : _endedCollisions)
-        {
-            delete event.data;
-        }
-        _endedCollisions.clear();
-
-        for (const auto& event : _forgottenCollisions)
-        {
-            delete event.data;
-        }
-        _forgottenCollisions.clear();
+        _tracker.Clear();
 
         for (const auto& report : _refilterReports)
         {
@@ -1227,7 +1227,7 @@ namespace N2Engine::Physics
         // resetFiltering wakes only this actor. A sleeping partner (e.g. a ball resting on a floor whose
         // layer changed) would let PhysX re-find the pair only once something woke it, so wake it now.
         const auto isReset = [&shapes](const PxShape *shape) { return std::ranges::find(shapes, shape) != shapes.end(); };
-        for (const TouchMap *touches : {&_collisionTouches, &_triggerTouches})
+        for (const TouchMap *touches : {&_tracker.collisionTouches, &_tracker.triggerTouches})
         {
             for (const auto &shapePairs : *touches | std::views::values)
             {
@@ -1326,7 +1326,7 @@ namespace N2Engine::Physics
                 continue;
             }
 
-            TouchMap &touches = report.trigger ? _triggerTouches : _collisionTouches;
+            TouchMap &touches = report.trigger ? _tracker.triggerTouches : _tracker.collisionTouches;
 
             // Lost, but the new filter data still allows the pair: PhysX may report it found again only
             // in the next step (e.g. a partner that was asleep). Wait a step before calling it an Exit.
@@ -1340,8 +1340,8 @@ namespace N2Engine::Physics
             }
 
             const bool changed = report.found
-                                     ? AddTouch(touches, report.pair, report.onA, report.onB)
-                                     : RemoveTouch(touches, report.pair, report.onA, report.onB);
+                                     ? Tracker::AddTouch(touches, report.pair, report.onA, report.onB)
+                                     : Tracker::RemoveTouch(touches, report.pair, report.onA, report.onB);
             if (!changed)
             {
                 delete report.data; // no change for the body pair (still touching, or other shapes are)
@@ -1351,11 +1351,11 @@ namespace N2Engine::Physics
             if (report.trigger)
             {
                 const TriggerEvent event{report.pair, ColliderOf(report.onA), ColliderOf(report.onB)};
-                (report.found ? _newTriggers : _endedTriggers).push_back(event);
+                (report.found ? _tracker.newTriggers : _tracker.endedTriggers).push_back(event);
             }
             else
             {
-                (report.found ? _newCollisions : _endedCollisions).push_back({report.pair, report.data});
+                (report.found ? _tracker.newCollisions : _tracker.endedCollisions).push_back({report.pair, report.data});
             }
         }
 
@@ -1363,68 +1363,30 @@ namespace N2Engine::Physics
         // One with a report was settled above ("found": still touching; "lost" again: ended there).
         for (RefilterReport &deferred : previouslyDeferred)
         {
-            TouchMap &touches = deferred.trigger ? _triggerTouches : _collisionTouches;
-            if (last.contains(key(deferred)) || !RemoveTouch(touches, deferred.pair, deferred.onA, deferred.onB))
+            TouchMap &touches = deferred.trigger ? _tracker.triggerTouches : _tracker.collisionTouches;
+            if (last.contains(key(deferred)) || !Tracker::RemoveTouch(touches, deferred.pair, deferred.onA, deferred.onB))
             {
                 delete deferred.data;
                 continue;
             }
             if (deferred.trigger)
             {
-                _endedTriggers.push_back({deferred.pair, ColliderOf(deferred.onA), ColliderOf(deferred.onB)});
+                _tracker.endedTriggers.push_back({deferred.pair, ColliderOf(deferred.onA), ColliderOf(deferred.onB)});
             }
             else
             {
-                _endedCollisions.push_back({deferred.pair, deferred.data});
+                _tracker.endedCollisions.push_back({deferred.pair, deferred.data});
             }
         }
 
         // In case PhysX didn't report a touch it no longer allows as lost: end it here, so a pair the
         // matrix now rules out always gets its Exit
-        const auto ruledOut = [this](const ShapePair &shapes)
-        {
-            return (_refiltering.contains(shapes.onA) || _refiltering.contains(shapes.onB)) &&
-                   !LayersCollide(shapes.onA->getSimulationFilterData(), shapes.onB->getSimulationFilterData());
-        };
-        for (auto it = _collisionTouches.begin(); it != _collisionTouches.end();)
-        {
-            const auto removed = std::ranges::find_if(it->second, ruledOut);
-            if (removed == it->second.end())
+        _tracker.EndTouches(
+            [this](const CollisionPair &, const ShapePair &shapes)
             {
-                ++it;
-                continue;
-            }
-            const ShapePair lastPair = *removed;
-            std::erase_if(it->second, ruledOut);
-            if (!it->second.empty())
-            {
-                ++it;
-                continue;
-            }
-            auto *data = new Collision();
-            data->collider = ColliderOf(lastPair.onA);
-            data->otherCollider = ColliderOf(lastPair.onB);
-            _endedCollisions.push_back({it->first, data});
-            it = _collisionTouches.erase(it);
-        }
-        for (auto it = _triggerTouches.begin(); it != _triggerTouches.end();)
-        {
-            const auto removed = std::ranges::find_if(it->second, ruledOut);
-            if (removed == it->second.end())
-            {
-                ++it;
-                continue;
-            }
-            const ShapePair lastPair = *removed;
-            std::erase_if(it->second, ruledOut);
-            if (!it->second.empty())
-            {
-                ++it;
-                continue;
-            }
-            _endedTriggers.push_back({it->first, ColliderOf(lastPair.onA), ColliderOf(lastPair.onB)});
-            it = _triggerTouches.erase(it);
-        }
+                return (_refiltering.contains(shapes.onA) || _refiltering.contains(shapes.onB)) &&
+                       !LayersCollide(shapes.onA->getSimulationFilterData(), shapes.onB->getSimulationFilterData());
+            });
     }
 
     // ========== Forces and Motion ==========
@@ -1750,14 +1712,14 @@ namespace N2Engine::Physics
 
             // Enter on the body pair's first touching shape pair, Exit on its last
             if ((cp.events & PxPairFlag::eNOTIFY_TOUCH_FOUND) &&
-                AddTouch(_collisionTouches, pair, cp.shapes[0], cp.shapes[1]))
+                Tracker::AddTouch(_tracker.collisionTouches, pair, cp.shapes[0], cp.shapes[1]))
             {
-                _newCollisions.push_back({pair, baseCollisionData});
+                _tracker.newCollisions.push_back({pair, baseCollisionData});
             }
             else if ((cp.events & PxPairFlag::eNOTIFY_TOUCH_LOST) &&
-                     RemoveTouch(_collisionTouches, pair, cp.shapes[0], cp.shapes[1]))
+                     Tracker::RemoveTouch(_tracker.collisionTouches, pair, cp.shapes[0], cp.shapes[1]))
             {
-                _endedCollisions.push_back({pair, baseCollisionData});
+                _tracker.endedCollisions.push_back({pair, baseCollisionData});
             }
             else
             {
@@ -1796,98 +1758,16 @@ namespace N2Engine::Physics
             }
 
             if ((pairs[i].status & PxPairFlag::eNOTIFY_TOUCH_FOUND) &&
-                AddTouch(_triggerTouches, pair, triggerShape, otherShape))
+                Tracker::AddTouch(_tracker.triggerTouches, pair, triggerShape, otherShape))
             {
-                _newTriggers.push_back(event);
+                _tracker.newTriggers.push_back(event);
             }
             else if ((pairs[i].status & PxPairFlag::eNOTIFY_TOUCH_LOST) &&
-                     RemoveTouch(_triggerTouches, pair, triggerShape, otherShape))
+                     Tracker::RemoveTouch(_tracker.triggerTouches, pair, triggerShape, otherShape))
             {
-                _endedTriggers.push_back(event);
+                _tracker.endedTriggers.push_back(event);
             }
         }
-    }
-
-    void PhysXBackend::DescribeSide(const PhysicsBodyHandle handle, const std::weak_ptr<GameObject> &fallbackOwner,
-                                    GameObject *&gameObject, Rigidbody *&rigidbody) const
-    {
-        if (const BodyData *data = GetBodyData(handle))
-        {
-            if (data->rigidbody)
-            {
-                gameObject = &data->rigidbody->GetGameObject();
-                rigidbody = data->rigidbody;
-            }
-            else if (!data->colliders.empty())
-            {
-                gameObject = &data->colliders[0]->GetGameObject();
-                rigidbody = nullptr;
-            }
-            return;
-        }
-
-        // The body is gone (destroyed or re-created); the object it belonged to may still be around
-        const auto owner = fallbackOwner.lock();
-        gameObject = owner && !owner->IsDestroyed() ? owner.get() : nullptr;
-        rigidbody = nullptr;
-    }
-
-    // Helper to create collision data with resolved object references
-    Collision PhysXBackend::CreateCollisionData(
-        const CollisionPair &pair,
-        const Collision &baseData,
-        bool isForBodyA,
-        const PairOwners &owners)
-    {
-        Collision collision = baseData;
-
-        DescribeSide(isForBodyA ? pair.bodyA : pair.bodyB, isForBodyA ? owners.a : owners.b,
-                     collision.gameObject, collision.rigidbody);
-        DescribeSide(isForBodyA ? pair.bodyB : pair.bodyA, isForBodyA ? owners.b : owners.a,
-                     collision.otherGameObject, collision.otherRigidbody);
-
-        // baseData's colliders are A's and B's; validate them, then swap for B's view
-        collision.collider = LiveCollider(pair.bodyA, baseData.collider);
-        collision.otherCollider = LiveCollider(pair.bodyB, baseData.otherCollider);
-
-        // Everything directional is from A's point of view; B sees it the other way round
-        if (!isForBodyA)
-        {
-            std::swap(collision.collider, collision.otherCollider);
-            for (auto &contact : collision.contacts)
-            {
-                contact.normal = contact.normal * -1.0f;
-            }
-            collision.impulse = collision.impulse * -1.0f;
-            collision.relativeVelocity = collision.relativeVelocity * -1.0f;
-        }
-
-        return collision;
-    }
-
-    Trigger PhysXBackend::CreateTriggerData(const CollisionPair &pair, ICollider *colliderA, ICollider *colliderB,
-                                            bool isForBodyA, const PairOwners &owners)
-    {
-        Trigger trigger;
-        trigger.collider = LiveCollider(isForBodyA ? pair.bodyA : pair.bodyB, isForBodyA ? colliderA : colliderB);
-        trigger.otherCollider = LiveCollider(isForBodyA ? pair.bodyB : pair.bodyA, isForBodyA ? colliderB : colliderA);
-
-        DescribeSide(isForBodyA ? pair.bodyA : pair.bodyB, isForBodyA ? owners.a : owners.b,
-                     trigger.gameObject, trigger.rigidbody);
-        DescribeSide(isForBodyA ? pair.bodyB : pair.bodyA, isForBodyA ? owners.b : owners.a,
-                     trigger.otherGameObject, trigger.otherRigidbody);
-
-        return trigger;
-    }
-
-    PhysXBackend::PairOwners PhysXBackend::OwnersOf(const CollisionPair &pair) const
-    {
-        const auto ownerOf = [this](const PhysicsBodyHandle handle) -> std::weak_ptr<GameObject>
-        {
-            GameObject *owner = GetBodyOwner(handle);
-            return owner ? owner->weak_from_this() : std::weak_ptr<GameObject>{};
-        };
-        return {ownerOf(pair.bodyA), ownerOf(pair.bodyB)};
     }
 
     GameObject *PhysXBackend::GetBodyOwner(const PhysicsBodyHandle handle) const
@@ -1908,140 +1788,14 @@ namespace N2Engine::Physics
         return nullptr;
     }
 
-    void PhysXBackend::DispatchToBody(const PhysicsBodyHandle handle, const std::function<void(Component &)> &fn,
-                                      const std::weak_ptr<GameObject> &fallbackOwner)
-    {
-        GameObject *owner = GetBodyOwner(handle);
-        const bool viaBody = owner != nullptr;
-        std::shared_ptr<GameObject> keepAlive;
-        if (!viaBody)
-        {
-            // The body is gone. Its GameObject still hears about a forgotten pair unless it's being destroyed.
-            keepAlive = fallbackOwner.lock();
-            if (!keepAlive || keepAlive->IsDestroyed())
-            {
-                return; // destroyed this frame, or never belonged to a GameObject
-            }
-            owner = keepAlive.get();
-        }
-
-        // Snapshot: a handler can add or remove components, which would invalidate the live vector
-        std::vector<Component *> components;
-        for (const auto &component : owner->GetAllComponents())
-        {
-            components.push_back(component.get());
-        }
-
-        for (Component *component : components)
-        {
-            // A handler may have destroyed this body (e.g. removed its Rigidbody) or other components
-            if (viaBody ? GetBodyOwner(handle) != owner : owner->IsDestroyed())
-            {
-                return;
-            }
-            const auto &live = owner->GetAllComponents();
-            if (std::ranges::none_of(live, [component](const auto &c) { return c.get() == component; }))
-            {
-                continue;
-            }
-            // Like Unity: an inactive object gets nothing (its body has left the simulation, and it got
-            // OnDisable instead), but a disabled component on an active object still does, so a script
-            // that disables itself keeps a balanced Enter/Exit count
-            if (component->IsDestroyed() || !owner->IsActiveInHierarchy())
-            {
-                continue;
-            }
-            fn(*component);
-        }
-    }
-
-    bool PhysXBackend::AddTouch(TouchMap &touches, const CollisionPair &pair,
-                                const PxShape *shapeOnA, const PxShape *shapeOnB)
-    {
-        auto [it, inserted] = touches.try_emplace(pair);
-        // The key may have been stored the other way round; keep shapes oriented to the key
-        if (it->first.bodyA != pair.bodyA)
-        {
-            std::swap(shapeOnA, shapeOnB);
-        }
-        auto &shapes = it->second;
-        if (std::ranges::none_of(shapes, [&](const ShapePair &p) { return p.onA == shapeOnA && p.onB == shapeOnB; }))
-        {
-            shapes.push_back({shapeOnA, shapeOnB});
-        }
-        return shapes.size() == 1 && inserted;
-    }
-
-    bool PhysXBackend::RemoveTouch(TouchMap &touches, const CollisionPair &pair,
-                                   const PxShape *shapeOnA, const PxShape *shapeOnB)
-    {
-        const auto it = touches.find(pair);
-        if (it == touches.end())
-        {
-            return false; // already forgotten (body destroyed or shape removed)
-        }
-        if (it->first.bodyA != pair.bodyA)
-        {
-            std::swap(shapeOnA, shapeOnB);
-        }
-        std::erase_if(it->second, [&](const ShapePair &p) { return p.onA == shapeOnA && p.onB == shapeOnB; });
-        if (!it->second.empty())
-        {
-            return false; // other shapes of these bodies are still touching
-        }
-        touches.erase(it);
-        return true;
-    }
-
     void PhysXBackend::ForgetShape(const PxShape *shape)
     {
-        // A body pair whose last touching shape pair goes ends now: PhysX's touch-lost for the removed
-        // shape is skipped, so the other body would otherwise never get Exit, and a re-created shape
-        // would fire a second Enter. Both shapes are still alive here (released after this).
+        // A body pair whose last touching shape pair goes ends now (the tracker): PhysX's touch-lost for the removed
+        // shape is skipped, so the other body would otherwise never get Exit, and a re-created shape would fire a
+        // second Enter. Both shapes are still alive here (released after this).
         _pendingRefilter.erase(shape);
         DropDeferred(shape);
-        const auto involves = [shape](const ShapePair &p) { return p.onA == shape || p.onB == shape; };
-        for (auto it = _collisionTouches.begin(); it != _collisionTouches.end();)
-        {
-            const auto removed = std::ranges::find_if(it->second, involves);
-            if (removed == it->second.end())
-            {
-                ++it;
-                continue;
-            }
-            const ShapePair last = *removed;
-            std::erase_if(it->second, involves);
-            if (!it->second.empty())
-            {
-                ++it;
-                continue;
-            }
-            auto *data = new Collision();
-            data->collider = ColliderOf(last.onA); // LiveCollider nulls the removed one at dispatch
-            data->otherCollider = ColliderOf(last.onB);
-            // Owners too: a collider-only object's body is destroyed right after its shapes are removed
-            _forgottenCollisions.push_back({it->first, data, OwnersOf(it->first)});
-            it = _collisionTouches.erase(it);
-        }
-        for (auto it = _triggerTouches.begin(); it != _triggerTouches.end();)
-        {
-            const auto removed = std::ranges::find_if(it->second, involves);
-            if (removed == it->second.end())
-            {
-                ++it;
-                continue;
-            }
-            const ShapePair last = *removed;
-            std::erase_if(it->second, involves);
-            if (!it->second.empty())
-            {
-                ++it;
-                continue;
-            }
-            _forgottenTriggers.push_back({it->first, ColliderOf(last.onA), ColliderOf(last.onB),
-                                          OwnersOf(it->first)});
-            it = _triggerTouches.erase(it);
-        }
+        _tracker.EndShape(shape);
     }
 
     ICollider *PhysXBackend::ColliderOf(const PxShape *shape)
@@ -2049,166 +1803,14 @@ namespace N2Engine::Physics
         return shape ? static_cast<ICollider *>(shape->userData) : nullptr;
     }
 
-    ICollider *PhysXBackend::LiveCollider(const PhysicsBodyHandle body, ICollider *collider) const
-    {
-        const BodyData *data = GetBodyData(body);
-        return data && collider && std::ranges::find(data->colliders, collider) != data->colliders.end()
-                   ? collider
-                   : nullptr;
-    }
-
     void PhysXBackend::ForgetPairsWithBody(const PhysicsBodyHandle handle, const bool shapesReleased)
     {
-        const auto involves = [handle](const CollisionPair &pair)
-        {
-            return pair.bodyA == handle || pair.bodyB == handle;
-        };
-        // Both sides get their Exit: PhysX's touch-lost for a released or removed actor is skipped by the
-        // callbacks, so nothing else would report it. If this body is being destroyed, its side is reached
-        // through its recorded GameObject (when that survives, e.g. the body is being re-created), and its
-        // shapes are already released, so only the other side's collider is looked up.
-        const auto colliderOn = [handle, shapesReleased](const CollisionPair &pair, const ShapePair &shapes,
-                                                         const bool sideA)
-        {
-            const bool thisIsA = pair.bodyA == handle;
-            return !shapesReleased || sideA != thisIsA ? ColliderOf(sideA ? shapes.onA : shapes.onB) : nullptr;
-        };
-        for (auto it = _collisionTouches.begin(); it != _collisionTouches.end();)
-        {
-            if (!involves(it->first) || it->second.empty())
-            {
-                it = involves(it->first) ? _collisionTouches.erase(it) : std::next(it);
-                continue;
-            }
-            auto *data = new Collision();
-            data->collider = colliderOn(it->first, it->second.front(), true);
-            data->otherCollider = colliderOn(it->first, it->second.front(), false);
-            _forgottenCollisions.push_back({it->first, data, OwnersOf(it->first)});
-            it = _collisionTouches.erase(it);
-        }
-        for (auto it = _triggerTouches.begin(); it != _triggerTouches.end();)
-        {
-            if (!involves(it->first) || it->second.empty())
-            {
-                it = involves(it->first) ? _triggerTouches.erase(it) : std::next(it);
-                continue;
-            }
-            _forgottenTriggers.push_back({it->first, colliderOn(it->first, it->second.front(), true),
-                                          colliderOn(it->first, it->second.front(), false),
-                                          OwnersOf(it->first)});
-            it = _triggerTouches.erase(it);
-        }
+        _tracker.ForgetPairsWithBody(handle, shapesReleased);
     }
 
     void PhysXBackend::ProcessCollisionCallbacks()
     {
-        // Every event goes to *each* body's own GameObject (A's components get A's view, B's get B's).
-        // This used to send both to B's first collider, which could be null or empty.
-        // Take the event lists first so handlers can't disturb what's being iterated.
-
-        // ===== Exits for pairs ended by removing a body or collider =====
-        // First, so a collider re-created in the same step reports Exit(old) before Enter(new)
-        DispatchCollisionExits(_forgottenCollisions);
-        DispatchTriggerExits(_forgottenTriggers);
-
-        // ===== OnCollisionEnter =====
-        std::vector<CollisionEvent> newCollisions;
-        newCollisions.swap(_newCollisions);
-        for (const auto &event : newCollisions)
-        {
-            const Collision forA = CreateCollisionData(event.pair, *event.data, true);
-            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnCollisionEnter(forA); });
-            const Collision forB = CreateCollisionData(event.pair, *event.data, false);
-            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnCollisionEnter(forB); });
-            delete event.data;
-        }
-
-        // ===== OnCollisionStay =====
-        std::vector<CollisionPair> activeCollisions;
-        for (const auto &key : _collisionTouches | std::views::keys)
-        {
-            activeCollisions.push_back(key);
-        }
-        for (const auto &pair : activeCollisions)
-        {
-            const auto touching = _collisionTouches.find(pair);
-            if (touching == _collisionTouches.end() || touching->second.empty())
-            {
-                continue; // a handler destroyed one of the bodies or removed the touching collider
-            }
-            Collision baseData{};
-            baseData.collider = ColliderOf(touching->second.front().onA);
-            baseData.otherCollider = ColliderOf(touching->second.front().onB);
-            const Collision forA = CreateCollisionData(pair, baseData, true);
-            DispatchToBody(pair.bodyA, [&forA](Component &c) { c.OnCollisionStay(forA); });
-            const Collision forB = CreateCollisionData(pair, baseData, false);
-            DispatchToBody(pair.bodyB, [&forB](Component &c) { c.OnCollisionStay(forB); });
-        }
-
-        // ===== OnCollisionExit =====
-        DispatchCollisionExits(_endedCollisions);
-
-        // ===== OnTriggerEnter =====
-        std::vector<TriggerEvent> newTriggers;
-        newTriggers.swap(_newTriggers);
-        for (const auto &event : newTriggers)
-        {
-            const Trigger forA = CreateTriggerData(event.pair, event.colliderA, event.colliderB, true);
-            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnTriggerEnter(forA); });
-            const Trigger forB = CreateTriggerData(event.pair, event.colliderA, event.colliderB, false);
-            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnTriggerEnter(forB); });
-        }
-
-        // ===== OnTriggerStay =====
-        std::vector<CollisionPair> activeTriggers;
-        for (const auto &key : _triggerTouches | std::views::keys)
-        {
-            activeTriggers.push_back(key);
-        }
-        for (const auto &pair : activeTriggers)
-        {
-            const auto touching = _triggerTouches.find(pair);
-            if (touching == _triggerTouches.end() || touching->second.empty())
-            {
-                continue;
-            }
-            ICollider *colliderA = ColliderOf(touching->second.front().onA);
-            ICollider *colliderB = ColliderOf(touching->second.front().onB);
-            const Trigger forA = CreateTriggerData(pair, colliderA, colliderB, true);
-            DispatchToBody(pair.bodyA, [&forA](Component &c) { c.OnTriggerStay(forA); });
-            const Trigger forB = CreateTriggerData(pair, colliderA, colliderB, false);
-            DispatchToBody(pair.bodyB, [&forB](Component &c) { c.OnTriggerStay(forB); });
-        }
-
-        // ===== OnTriggerExit =====
-        DispatchTriggerExits(_endedTriggers);
-    }
-
-    void PhysXBackend::DispatchCollisionExits(std::vector<CollisionEvent> &queue)
-    {
-        std::vector<CollisionEvent> events;
-        events.swap(queue);
-        for (const auto &event : events)
-        {
-            const Collision forA = CreateCollisionData(event.pair, *event.data, true, event.owners);
-            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnCollisionExit(forA); }, event.owners.a);
-            const Collision forB = CreateCollisionData(event.pair, *event.data, false, event.owners);
-            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnCollisionExit(forB); }, event.owners.b);
-            delete event.data;
-        }
-    }
-
-    void PhysXBackend::DispatchTriggerExits(std::vector<TriggerEvent> &queue)
-    {
-        std::vector<TriggerEvent> events;
-        events.swap(queue);
-        for (const auto &event : events)
-        {
-            const Trigger forA = CreateTriggerData(event.pair, event.colliderA, event.colliderB, true, event.owners);
-            DispatchToBody(event.pair.bodyA, [&forA](Component &c) { c.OnTriggerExit(forA); }, event.owners.a);
-            const Trigger forB = CreateTriggerData(event.pair, event.colliderA, event.colliderB, false, event.owners);
-            DispatchToBody(event.pair.bodyB, [&forB](Component &c) { c.OnTriggerExit(forB); }, event.owners.b);
-        }
+        _tracker.Dispatch();
     }
 
     void PhysXBackend::RemoveColliderShapes(PhysicsBodyHandle body, ICollider *collider)

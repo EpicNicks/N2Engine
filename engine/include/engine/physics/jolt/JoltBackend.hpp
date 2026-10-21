@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 // The Jolt backend exists only in a build with N2ENGINE_USE_JOLT (the engine target then defines
@@ -21,16 +22,19 @@ namespace N2Engine::Physics
     /**
      * IPhysicsBackend on Jolt Physics (external/JoltPhysics, built cross-platform deterministic).
      *
-     * Stage J3 of the physics plan: the core. Implemented: bodies (static, dynamic, kinematic), ONE shape per body
-     * (a compound of the body's non-trigger colliders; a single collider at the origin is a plain shape), mass,
-     * gravity, forces, impulses and velocities, enable and disable, kinematic and static moves, transform sync, and the
-     * set-state calls. NOT implemented yet (each logs ONE warning when first used and otherwise does nothing or
-     * answers "nothing found"): layers and the collision matrix (J4), triggers (J4: a trigger collider has no shape
-     * and no effect for now), contact and trigger events (J4), scene queries (J5), snapshot (J6).
+     * Stages J3 (the core) and J4 (layers, triggers, events) of the physics plan. Implemented: bodies (static,
+     * dynamic, kinematic), ONE shape per body (a compound of all the body's colliders, trigger ones included as
+     * sub-shapes; a single collider at the origin is a plain shape), mass (from the solid colliders only), gravity,
+     * forces, impulses and velocities, enable and disable, kinematic and static moves, transform sync, the set-state
+     * calls, the 32 layers and the collision matrix, trigger colliders, and OnCollision* / OnTrigger* events through the
+     * ContactTracker that the PhysX backend uses too. NOT implemented yet (each logs ONE warning when first used and
+     * otherwise answers "nothing found"): scene queries (J5), snapshot (J6).
      *
      * Determinism: body ids are the engine's deterministic handles, index and generation (CreateBodyWithID), transforms are synced in
      * handle order (never in Jolt's active-body order), and the job system is single-threaded on the web and whenever
-     * physics.deterministic asks for it (SetDeterministic).
+     * physics.deterministic asks for it (SetDeterministic). Jolt reports contacts from worker threads in no fixed order:
+     * they are buffered and sorted by (handle pair, sub-shape pair) before they become touches, so the events of a
+     * step come out in one order whatever the thread count.
      */
     class JoltBackend final : public IPhysicsBackend
     {
@@ -86,7 +90,10 @@ namespace N2Engine::Physics
 
         void ApplyPendingChanges() override;
         void SyncTransforms() override;
-        /// Does nothing until J4 (no contact or trigger events yet)
+        /// Delivers the events of the last Update (OnCollisionEnter/Stay/Exit, OnTriggerEnter/Stay/Exit) through the
+        /// ContactTracker: forgotten pairs' Exit, collision Enter, Stay, Exit, then the trigger events. A solid contact's
+        /// Enter carries the contact points, separation, relative velocity, and an ESTIMATE of the impulse: Jolt calls
+        /// its contact listener before the solver, so the applied impulse does not exist yet (docs/physics.html).
         void ProcessCollisionCallbacks() override;
 
         PhysicsBodyHandle CreateDynamicBody(const Math::Vector3 &position, const Math::Quaternion &rotation,
@@ -131,11 +138,21 @@ namespace N2Engine::Physics
         void UpdateCapsuleCollider(PhysicsBodyHandle body, ICollider *collider, float radius, float height,
                                    const Math::Vector3 &localOffset, const PhysicsMaterial &material) override;
 
-        /// J3: the collider's flag is recorded and its shape leaves the body (a trigger has no effect yet); one warning
+        /// A trigger collider stays a sub-shape of its body's Jolt shape; its contacts are sensor contacts (no collision
+        /// response) that become trigger events, and it adds nothing to the mass. Toggling it ends the collider's
+        /// touches (they begin again as the other kind).
         void SetIsTrigger(PhysicsBodyHandle body, ICollider *collider, bool isTrigger) override;
-        /// J3: not implemented (every body is in one of two object layers: static and moving); one warning
+        /// The collider's layer (its object layer is the layer when all the body's colliders share it). A touch the
+        /// matrix now rules out ends with an Exit at the next ProcessCollisionCallbacks; one it still allows is
+        /// undisturbed. The bodies involved wake up so Jolt looks at their pairs again.
         void SetColliderLayer(PhysicsBodyHandle body, ICollider *collider, int layer) override;
+        /// Takes the engine's matrix (Layers::CollisionMaskFor) as the filters' copy; ends the touches it rules out
         void RefreshCollisionMatrix() override;
+
+        /// Test seam, as on the PhysX backend: called once per body that RefreshCollisionMatrix re-filters (one with a
+        /// collider on a layer whose row changed), in handle order, with the object that owns the body's first collider.
+        /// Pass an empty function to remove it.
+        void SetRefilterObserver(std::function<void(const GameObject &)> observer);
 
         void AddForce(PhysicsBodyHandle body, const Math::Vector3 &force) override;
         void AddImpulse(PhysicsBodyHandle body, const Math::Vector3 &impulse) override;
@@ -185,7 +202,7 @@ namespace N2Engine::Physics
         [[nodiscard]] bool IsBodyEnabled(PhysicsBodyHandle body) const;
         /// Initialize chose the single-threaded job system (the web build, or SetDeterministic(true))
         [[nodiscard]] bool UsesSingleThreadedJobSystem() const;
-        /// How many "not implemented yet" warnings this backend has logged (one per feature, ever)
+        /// How many "not implemented yet" warnings this backend has logged (one per feature, ever: queries, snapshot)
         [[nodiscard]] unsigned GetNotImplementedWarningCount() const;
         /// How many backends hold Jolt's process-wide state (allocator, type factory, registered types) right now
         [[nodiscard]] static int GlobalInitCount();
