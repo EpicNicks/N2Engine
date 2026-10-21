@@ -77,6 +77,11 @@ namespace N2Engine::Physics
         static constexpr bool kSupportsSetState = true;
         [[nodiscard]] bool SupportsSnapshot() const override { return kSupportsSnapshot; }
         [[nodiscard]] bool SupportsSetState() const override { return kSupportsSetState; }
+        /// No feature group yet: layers and the collision matrix, triggers, and contact and trigger events come with
+        /// J4, scene queries with J5 (each stage adds its groups here). The Deterministic preset refuses Jolt until
+        /// every group is in.
+        static constexpr PhysicsFeatureSet kImplementedFeatures = PhysicsFeatureSet::None();
+        [[nodiscard]] PhysicsFeatureSet GetImplementedFeatures() const override { return kImplementedFeatures; }
         /// "jolt"
         [[nodiscard]] std::string_view BackendId() const override { return "jolt"; }
 
