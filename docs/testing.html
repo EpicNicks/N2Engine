@@ -509,6 +509,30 @@ build/bin/Debug/engine_tests.exe --gtest_filter=SceneStorageTest.* --gtest_repea
 <p>The rest scenario printed <code>x=-0.000027 y=0.480000 z=0.000038 speed=0.000000</code> on all of them. Do not loosen the comparison: a leg whose hash differs is a finding about the library build on that leg (the flags in <a href="physics.html#jolt-option">the table</a>), to report with the per-leg values. The golden changes only in a change that says why (a Jolt upgrade, another scenario).</p>
 <p>What this shows and what it does not: one short scene of boxes and spheres produces the same bits on three compilers and two architectures, which is the first data point for Jolt's claim in this repository. It does not cover other shapes, constraints, soft bodies, more bodies or a longer run, thread counts other than one, or the speed of any of it.</p>
 
+<h3 id="jolt-backend-numbers">Jolt backend determinism numbers <span class="badge">PR #205</span></h3>
+<p>The smoke test above checks the library alone. <code>JoltBackendDeterminismTest</code> (<code>tests/engine/physics/JoltBackendTests.cpp</code>) checks <a href="physics.html#jolt-backend">the Jolt backend</a>: a scene of 11 bodies built through <code>IPhysicsBackend</code> alone, with no engine component, is stepped 240 times at 1/60 s: a floor, a leaning stack of three boxes, a turned box, a rolling and a landing sphere, a capsule, a compound body (a box and an offset sphere, mass 3), a kinematic platform moved every step with a ball on it, an impulse at step 30, one box disabled at step 90 and enabled at step 120, <code>SetBodyState</code> on a sphere at step 150 and a gravity change at step 200. The state of every body (position, rotation, both velocities and the sleeping flag, read with <code>GetBodyState</code>, in handle order, a disabled body as a marker) is hashed with 64-bit FNV-1a over the bits of the floats after step 60 and after step 240.</p>
+<ul>
+<li><strong><code>TheSameSceneSteppedTwiceGivesTheSameStateHash</code></strong>: two fresh single-threaded backends step the scene, both hashes must be equal and equal to the two golden constants in the file (the values below, which every leg printed in the first green run); every value is finite; the hash changed between steps 60 and 240; the kinematic platform ended at the place its path leads to. It prints a <code>[JOLT-BACKEND-DETERMINISM]</code> line.</li>
+<li><strong><code>TheThreadPoolSceneIsRunAndItsHashPrinted</code></strong>: the same scene on the thread-pool job system (on the web the single-threaded one again), finite and with the platform in place. The hash is <em>printed, not compared</em>: whether the result depends on the thread count is stage J6's test.</li>
+</ul>
+<p>The step <code>Jolt backend determinism numbers</code> runs them directly on every leg (<code>--gtest_filter=JoltBackendDeterminismTest.*</code>; the web job under node), because <code>ctest</code> hides a passing test's output. The numbers of the run that went green (one scene, the same on every leg, the single-threaded and the thread-pool hash alike):</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Leg</th><th>build:</th><th>declared level</th><th>hash after 60 steps</th><th>after 240 (the hash)</th></tr></thead>
+<tbody>
+<tr><td><code>linux (Release, x86_64, Clang)</code></td><td>clang x86_64</td><td>SameBinary</td><td><code>0xe5ec2dc0c12ece48</code></td><td><code>0xfe72e23f28e27c34</code></td></tr>
+<tr><td><code>linux (Release, x86_64, GCC 14)</code> (strict FP on)</td><td>gcc x86_64</td><td><strong>CrossPlatform</strong></td><td><code>0xe5ec2dc0c12ece48</code></td><td><code>0xfe72e23f28e27c34</code></td></tr>
+<tr><td><code>linux (Release, arm64, Clang)</code></td><td>clang arm64</td><td>SameBinary</td><td><code>0xe5ec2dc0c12ece48</code></td><td><code>0xfe72e23f28e27c34</code></td></tr>
+<tr><td><code>windows (Debug, PhysX ON)</code></td><td>msvc x86_64</td><td>SameBinary</td><td><code>0xe5ec2dc0c12ece48</code></td><td><code>0xfe72e23f28e27c34</code></td></tr>
+<tr><td><code>windows (Debug, PhysX OFF, ...)</code></td><td>msvc x86_64</td><td>SameBinary</td><td><code>0xe5ec2dc0c12ece48</code></td><td><code>0xfe72e23f28e27c34</code></td></tr>
+<tr><td><code>windows (Release, PhysX ON)</code></td><td>msvc x86_64</td><td>SameBinary</td><td><code>0xe5ec2dc0c12ece48</code></td><td><code>0xfe72e23f28e27c34</code></td></tr>
+<tr><td><code>web (Emscripten, dev profile, node tests)</code></td><td>emscripten wasm32</td><td>SameBinary</td><td><code>0xe5ec2dc0c12ece48</code></td><td><code>0xfe72e23f28e27c34</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The level column is <code>JoltBackend::DeclaredDeterminism(true)</code> (the test prints it for the single-threaded job system): CrossPlatform only where the build is the strict floating-point one, which is the GCC leg alone today. Do not loosen the comparison: a leg whose hash differs is a finding about that leg's build or about Jolt, to report with the per-leg values. What this shows and what it does not: one scene of boxes, spheres and a capsule, through the backend's own glue, is bit-identical on three compilers (MSVC, Clang, GCC), two architectures (x86-64, arm64), WebAssembly under node, and with one thread or several. It does not cover contacts with layers, events, queries, snapshots, other shapes, many more bodies or a longer run, and the platforms CI does not build.</p>
+<p class="src">Source: <code>tests/engine/physics/JoltBackendTests.cpp</code> - <code>RunScene</code>, <code>JoltBackendDeterminismTest</code>; <code>.github/workflows/tests.yml</code> (<code>Jolt backend determinism numbers</code>).</p>
+
 <h3 id="renderer-tests">Pixels: the headless software renderer <span class="badge">PR #51</span></h3>
 <p>Rendering is tested with real pixels through a <code>SoftwareRenderer</code> started with <code>Initialize(nullptr, width, height)</code>, which never touches GL (<a href="application.html#sw-headless">headless mode</a>), so it runs on the GPU-less CI runner. A test:</p>
 <ol class="steps">

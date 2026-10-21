@@ -113,6 +113,10 @@ namespace N2PhysicsTests
             return hash;
         }
 
+        // The state hashes of RunScene(true) that every CI leg must produce (see JoltBackendDeterminismTest)
+        constexpr std::uint64_t kGoldenHashAfter60 = 0xe5ec2dc0c12ece48ULL;
+        constexpr std::uint64_t kGoldenHash = 0xfe72e23f28e27c34ULL;
+
         struct SceneResult
         {
             bool finite = false;
@@ -645,6 +649,10 @@ namespace N2PhysicsTests
         EXPECT_EQ(first.bodies, second.bodies);
         EXPECT_EQ(first.hashAfter60, second.hashAfter60);
         EXPECT_EQ(first.hash, second.hash);
+        // The values every leg printed in the first green run (MSVC, Clang, GCC, x86-64, arm64, WebAssembly). They change
+        // only in a change that says why: a Jolt upgrade, another scene, a deliberate change of what the backend does.
+        EXPECT_EQ(first.hashAfter60, kGoldenHashAfter60) << "got 0x" << std::hex << first.hashAfter60;
+        EXPECT_EQ(first.hash, kGoldenHash) << "got 0x" << std::hex << first.hash;
         // The scene did something: the state changed between step 60 and 240, the kinematic platform arrived
         EXPECT_NE(first.hashAfter60, first.hash);
         EXPECT_NEAR(first.platformX, -8.0f + 0.02f * 240.0f, 1e-3f);
