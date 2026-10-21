@@ -338,7 +338,7 @@ namespace VulkanTesting::Diff
         {
             return ::testing::AssertionSuccess();
         }
-        return ::testing::AssertionFailure() << "Vulkan and the software renderer disagree: " << result.Describe()
+        return ::testing::AssertionFailure() << "the GPU renderer and the software renderer disagree: " << result.Describe()
                                              << " (tolerance " << options.tolerance << ", mean error limit "
                                              << options.maxMeanError << ", edge border " << options.edgeBorder
                                              << ", at most " << options.maxFractionOverSecond * 100.0 << "% of the pixels over "
