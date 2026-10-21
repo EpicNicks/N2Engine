@@ -937,6 +937,69 @@ TEST(N2NetUdpTransportTest, IdlePeersAreDropped)
     EXPECT_NE(events.back().peer, first);
 }
 
+TEST(N2NetUdpTransportTest, AStallLongerThanTheIdleTimeoutKeepsPeersWhoseDatagramsAreQueued)
+{
+    // Poll drains the socket before it sweeps idle peers: a caller that stalls between Polls for longer than the
+    // timeout loses only the peers that really sent nothing, not one whose datagram waited in the receive buffer
+    constexpr int kTimeoutMs = 300;
+    UdpTransportOptions options;
+    options.peerIdleTimeoutMs = kTimeoutMs;
+    std::unique_ptr<UdpTransport> transport = OpenOrFail(options);
+    RawUdp talker;
+    RawUdp silent;
+    ASSERT_NE(transport, nullptr);
+    ASSERT_TRUE(talker.Ok());
+    ASSERT_TRUE(silent.Ok());
+
+    // Both become peers
+    ASSERT_TRUE(talker.SendToLoopback(transport->LocalPort(), Bytes(4, 1)));
+    ASSERT_TRUE(silent.SendToLoopback(transport->LocalPort(), Bytes(4, 2)));
+    std::vector<Event> events;
+    ASSERT_TRUE(WaitForDatagrams(*transport, events, 2));
+    ASSERT_EQ(CountOf(events, TransportEventType::PeerDisconnected), 0u);
+    PeerId talkerPeer = kInvalidPeer;
+    PeerId silentPeer = kInvalidPeer;
+    for (const Event &event : events)
+    {
+        if (event.type == TransportEventType::Datagram)
+        {
+            (event.data == Bytes(4, 1) ? talkerPeer : silentPeer) = event.peer;
+        }
+    }
+    ASSERT_NE(talkerPeer, kInvalidPeer);
+    ASSERT_NE(silentPeer, kInvalidPeer);
+    ASSERT_NE(talkerPeer, silentPeer);
+
+    // The stall: no Poll for three timeouts, with the talker's datagram queued at its start
+    const auto stallEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(3 * kTimeoutMs);
+    ASSERT_TRUE(talker.SendToLoopback(transport->LocalPort(), Bytes(6, 3)));
+    while (std::chrono::steady_clock::now() < stallEnd)
+    {
+        PauseBriefly();
+    }
+
+    // One Poll: the talker's datagram is delivered to the same peer, and only the silent peer is swept, after it
+    events = PollAll(*transport);
+    ASSERT_EQ(CountOf(events, TransportEventType::Datagram), 1u);
+    ASSERT_EQ(CountOf(events, TransportEventType::PeerDisconnected), 1u);
+    EXPECT_EQ(CountOf(events, TransportEventType::PeerConnected), 0u);
+    ASSERT_EQ(events.size(), 2u);
+    EXPECT_EQ(events[0].type, TransportEventType::Datagram);
+    EXPECT_EQ(events[0].peer, talkerPeer);
+    EXPECT_EQ(events[0].data, Bytes(6, 3));
+    EXPECT_EQ(events[1].type, TransportEventType::PeerDisconnected);
+    EXPECT_EQ(events[1].peer, silentPeer);
+    EXPECT_EQ(transport->PeerCount(), 1u);
+    EXPECT_EQ(transport->Stats().peersTimedOut, 1u);
+    EXPECT_EQ(transport->Send(silentPeer, Bytes(4, 9)), TransportSendResult::UnknownPeer);
+
+    // The surviving peer still works
+    ASSERT_EQ(transport->Send(talkerPeer, Bytes(5, 0x5A)), TransportSendResult::Sent);
+    const auto reply = talker.Receive(kWaitMs);
+    ASSERT_TRUE(reply.has_value());
+    EXPECT_EQ(*reply, Bytes(5, 0x5A));
+}
+
 TEST(N2NetUdpTransportTest, DisconnectForgetsThePeerLocallyAndSendsNothing)
 {
     std::unique_ptr<UdpTransport> transport = OpenOrFail();
@@ -1115,8 +1178,37 @@ TEST(N2NetUdpTransportTest, Ipv6Loopback)
     EXPECT_EQ(*reply, Bytes(5, 0x62));
 
     // An IPv4 destination is not reachable from an IPv6 loopback socket
-    EXPECT_EQ(opened.transport->Connect("127.0.0.1", 4000).error == UdpError::None,
-              opened.transport->DualStack());
+    EXPECT_FALSE(opened.transport->DualStack());
+    EXPECT_EQ(opened.transport->Connect("127.0.0.1", 4000).error, UdpError::FamilyMismatch);
+}
+
+TEST(N2NetUdpTransportTest, ASpecificIpv6BindIsNeverDualStack)
+{
+    // The system accepts IPV6_V6ONLY off on a socket bound to ::1, but that socket can never exchange IPv4 traffic:
+    // DualStack() is false and an IPv4 Connect is refused with a clear error, not accepted and then silently undelivered
+    UdpTransportOptions options;
+    options.bindAddress = "::1";
+    options.dualStack = true;
+    const UdpOpenResult opened = UdpTransport::Open(options, false);
+    if (opened.error != UdpError::None)
+    {
+        GTEST_SKIP() << "no IPv6 loopback here: " << opened.message << " (system error " << opened.systemError << ")";
+    }
+    ASSERT_TRUE(opened.transport->IsIpv6());
+    EXPECT_FALSE(opened.transport->DualStack());
+
+    const UdpConnectResult refused = opened.transport->Connect("127.0.0.1", 4000);
+    EXPECT_EQ(refused.error, UdpError::FamilyMismatch);
+    EXPECT_EQ(refused.peer, kInvalidPeer);
+    EXPECT_NE(refused.message.find("IPv4"), std::string::npos) << refused.message;
+    EXPECT_NE(refused.message.find("::1"), std::string::npos) << refused.message;
+    EXPECT_EQ(opened.transport->PeerCount(), 0u);
+    EXPECT_TRUE(PollAll(*opened.transport).empty());
+
+    // An IPv6 peer is still accepted
+    const UdpConnectResult accepted = opened.transport->Connect("::1", 4000);
+    EXPECT_EQ(accepted.error, UdpError::None) << accepted.message;
+    EXPECT_EQ(opened.transport->PeerCount(), 1u);
 }
 
 TEST(N2NetUdpTransportTest, DualStackSocketServesIpv4PeersAsIpv4)
@@ -1147,6 +1239,9 @@ TEST(N2NetUdpTransportTest, DualStackSocketServesIpv4PeersAsIpv4)
     const auto reply = raw4.Receive(kWaitMs);
     ASSERT_TRUE(reply.has_value());
     EXPECT_EQ(*reply, Bytes(7, 0x42));
+    // The wildcard dual-stack socket accepts an IPv4 Connect too
+    const UdpConnectResult connected4 = opened.transport->Connect("127.0.0.1", 4000);
+    EXPECT_EQ(connected4.error, UdpError::None) << connected4.message;
 
     // The v6-only setting is honoured too
     UdpTransportOptions only6 = options;
