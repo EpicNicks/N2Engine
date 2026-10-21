@@ -731,7 +731,8 @@ namespace N2Engine::Editor
         /// host has no autosave and removes none: the files under .n2/autosave are the edit host's. Public for tests.
         void PrepareForShutdown();
 
-        /// The commands a play host answers with an Error: the ones that write project files or swap the scene
+        /// The commands a play host answers with an Error: the ones that write project files or swap the scene, and the two
+        /// that run or reload editor extensions (a play host runs none)
         [[nodiscard]] static bool IsEditOnlyCommand(uint8_t commandType);
 
         // ==================== Lua editor extensions (main thread, before Start) ====================
@@ -752,6 +753,28 @@ namespace N2Engine::Editor
         /// in C and cannot be stopped); how many are left. 0 without extensions.
         int ShutdownEditorExtensions(std::chrono::milliseconds maxWait);
 
+        // ==================== Commands an extension may send (E-X3) ====================
+
+        /**
+         * Whether a command may be sent from the script of an editor extension (InvokeMenuItem's nested dispatch), as
+         * true; false for a command that may not; nullopt for an id nobody listed, which is refused like a false (a new
+         * command is denied until someone decides). The table lists every command of protocol.json (a test requires it).
+         * Only what Editor.Scene needs is allowed: GetHierarchy, GetEntity, GetComponentTypes, GetComponent and the
+         * writers CreateEntityEx, DestroyEntity, DuplicateEntity, SetEntityParent, SetEntityProperties, SetLocalTransform,
+         * AddComponent, RemoveComponent and SetComponentFields. Denied: everything that opens, loads, creates, saves or
+         * deletes a scene or the project, the history (Undo, Redo, BeginEditGroup, EndEditGroup, RestoreAutosave), the
+         * play commands (WritePlaySnapshot, SetPaused, Step, SendInput), Hello, Shutdown, the viewport and camera, the
+         * asset commands (assets.read and assets.write are a later capability) and the extension commands themselves
+         * (no recursion).
+         */
+        [[nodiscard]] static std::optional<bool> NestedCommandPolicy(uint8_t commandType);
+
+        /// Sends one command as the extension machinery does (the same path as a script's Editor.Scene call: the policy
+        /// above, the nested-call cap, then ProcessCommand with the identity of the connection being served, so the
+        /// read-only gate, the role gate and the audit line apply) and returns its response frame. Main thread. For tests:
+        /// outside an invocation there is no extension to name, so the audit line says via=test.
+        [[nodiscard]] std::vector<uint8_t> DispatchNestedForTest(uint8_t commandType, const std::vector<uint8_t> &payload);
+
         // ==================== Read-only mode ====================
 
         /// What a command does to the host. Read: answers from what the host holds and changes nothing a client could
@@ -767,7 +790,7 @@ namespace N2Engine::Editor
 
         /// The class of a command id, or nullopt for an id nobody classified (every command of protocol.json is
         /// classified: a test requires it, so a new command can't ship without a decision). Not IsEditOnlyCommand,
-        /// which is a play host's deny list of 14 commands (the ones that write files, and ReloadEditorExtensions).
+        /// which is a play host's deny list of 15 commands (the ones that write files, ReloadEditorExtensions and InvokeMenuItem).
         [[nodiscard]] static std::optional<CommandClass> ClassifyCommand(uint8_t commandType);
 
         /// An allow list with default deny: true only for a command classified Read. An id that is no command, or that
@@ -940,6 +963,32 @@ namespace N2Engine::Editor
         void HandleListEditorExtensions(int clientSocket);
         void HandleGetEditorUi(int clientSocket);
         void HandleReloadEditorExtensions(int clientSocket);
+        /// InvokeMenuItem (EditorServerExtensions.cpp): gates, one edit group, the call on the extension's worker, the
+        /// rollback of a failed one
+        void HandleInvokeMenuItem(int clientSocket, const std::vector<uint8_t> &payload);
+
+        /// The invocation in progress (main thread; null between invocations): what the nested dispatch and the audit line
+        /// name, and how many commands it has sent
+        struct ExtensionInvocation
+        {
+            /// The extension's name with spaces made '_', for log lines (via=<name>)
+            std::string via;
+            /// The name as written, for the extensionOutput event
+            std::string name;
+            std::vector<std::string> capabilities;
+            std::uint32_t sent = 0;
+            /// Non-empty: the invocation fails whatever the script returns (a call that sent several commands could not
+            /// be taken back alone, so the group is taken back as a whole); the reason
+            std::string fatal;
+        };
+        ExtensionInvocation *_invocation{nullptr};
+        /// Sends one command from an extension's script: the policy of NestedCommandPolicy, the cap on commands per
+        /// invocation (ExtensionHost::MaxNested), then ProcessCommand(-1, ...) with _response saved and restored (the
+        /// outer command's answer is not touched) and no autosave flush. The response frame; an Error frame for a command
+        /// refused here or one that threw.
+        [[nodiscard]] std::vector<uint8_t> DispatchNested(uint8_t commandType, const std::vector<uint8_t> &payload);
+        /// Answers one request of a script (op "log" or "scene.*") through DispatchNested: its value, or `error` set
+        [[nodiscard]] nlohmann::json ExtensionRequest(const std::string &op, const nlohmann::json &args, std::string &error);
 
         void HandleCreateScript(int clientSocket, const std::vector<uint8_t> &payload);
         void HandleRescanAssets(int clientSocket);

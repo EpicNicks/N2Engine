@@ -28,7 +28,7 @@ using namespace N2Engine::Editor::Protocol;
 using nlohmann::json;
 namespace fs = std::filesystem;
 
-// The Lua editor extension commands (protocol 1.14.0) through EditorServer::ExecuteCommand: what a host without
+// The Lua editor extension commands (protocol 1.14.0; InvokeMenuItem, 1.15.0, has its own tests) through EditorServer::ExecuteCommand: what a host without
 // --editor-extensions answers, what one with it lists, ReloadEditorExtensions and its event, the read-only gate and the
 // roles (a Hello with a tokens file binds the role, then the commands really run), the reserved ids, and the proof that
 // the two reads run no Lua. ExtensionHostTests.cpp covers the host itself; the play host's refusal runs in
@@ -556,9 +556,10 @@ TEST_F(ExtensionRoleTest, AReadOnlyHostRefusesTheReloadToAnAdminToo)
     EXPECT_TRUE(EventsOfKind(server, "extensionsChanged").empty());
 }
 
-TEST(EditorExtensionCommandsTest, TheIdsOfTheLaterInvokeCommandsAreReservedAndRefused)
+TEST(EditorExtensionCommandsTest, TheIdOfTheLaterInspectorCommandIsReservedAndRefused)
 {
-    for (const uint8_t reserved : {uint8_t{0x82}, uint8_t{0x83}})
+    // 0x82 is InvokeMenuItem since 1.15.0; 0x83 stays reserved for InvokeInspectorAction
+    for (const uint8_t reserved : {uint8_t{0x83}})
     {
         EXPECT_FALSE(EditorServer::ClassifyCommand(reserved).has_value()) << int{reserved};
         EXPECT_FALSE(EditorServer::IsReadCommand(reserved)) << int{reserved};
@@ -583,27 +584,33 @@ TEST(EditorExtensionCommandsTest, TheSpecHasTheEventKeyTheShapesAndTheResponsesT
     const json spec = json::parse(file);
     for (const auto &[code, meaning] : spec.at("errorCodes").items())
         EXPECT_FALSE(meaning.get<std::string>().empty()) << code;
-    EXPECT_EQ(spec.at("version"), "1.14.0");
+    EXPECT_EQ(spec.at("version"), "1.15.0");
 
-    // The event key and the JSON shapes the extension commands answer with
+    // The event keys and the JSON shapes the extension commands answer with
     EXPECT_TRUE(spec.at("jsonTypes").at("EditorEvent").contains("uiRevision?"));
-    for (const char *shape : {"ExtensionInfo", "EditorExtensionsInfo", "MenuForm", "MenuItemInfo", "EditorUiInfo"})
+    EXPECT_TRUE(spec.at("jsonTypes").at("EditorEvent").contains("extension?"));
+    for (const char *shape : {"ExtensionInfo", "EditorExtensionsInfo", "MenuForm", "MenuItemInfo", "EditorUiInfo",
+                              "ExtensionResultInfo"})
         EXPECT_TRUE(spec.at("jsonTypes").contains(shape)) << shape;
     EXPECT_EQ(spec.at("responses").at("EditorExtensions"), "0x1D");
     EXPECT_EQ(spec.at("responses").at("EditorUi"), "0x1E");
+    EXPECT_EQ(spec.at("responses").at("ExtensionResult"), "0x1F");
 }
 
-TEST(EditorExtensionCommandsTest, TheProtocolVersionAndCapabilityAreThose1_14_0Adds)
+TEST(EditorExtensionCommandsTest, TheProtocolVersionAndCapabilityAreThoseOf1_15_0)
 {
-    EXPECT_EQ(std::string{ProtocolVersion}, "1.14.0");
+    EXPECT_EQ(std::string{ProtocolVersion}, "1.15.0");
     const std::vector<std::string> capabilities = EditorServer::Capabilities();
     ASSERT_EQ(capabilities.size(), 1u);
     EXPECT_EQ(capabilities[0], "editorExtensions");
-    // The three codes a client branches on (two of them are answered by later commands)
+    // The codes a client branches on (InvokeMenuItem answers the last four)
     EXPECT_EQ(std::string{ErrorCodeExtensionsDisabled}, "extensionsDisabled");
     EXPECT_EQ(std::string{ErrorCodeExtensionFailed}, "extensionFailed");
     EXPECT_EQ(std::string{ErrorCodeExtensionFaulted}, "extensionFaulted");
+    EXPECT_EQ(std::string{ErrorCodeStaleUiRevision}, "staleUiRevision");
+    EXPECT_EQ(std::string{ErrorCodeEditGroupOpen}, "editGroupOpen");
     EXPECT_EQ(static_cast<int>(CommandType::ListEditorExtensions), 0x80);
     EXPECT_EQ(static_cast<int>(CommandType::GetEditorUi), 0x81);
+    EXPECT_EQ(static_cast<int>(CommandType::InvokeMenuItem), 0x82);
     EXPECT_EQ(static_cast<int>(CommandType::ReloadEditorExtensions), 0x84);
 }

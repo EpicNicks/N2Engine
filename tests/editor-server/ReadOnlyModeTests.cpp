@@ -65,6 +65,8 @@ namespace
             {"RestoreAutosave", Class::Write}, {"DiscardAutosave", Class::Write},
             {"WritePlaySnapshot", Class::Write}, {"SetPaused", Class::Write}, {"Step", Class::Write},
             {"SendInput", Class::Write},
+            // Runs an extension's code, which changes the scene as the invoking user
+            {"InvokeMenuItem", Class::Write},
             // Admin: the host itself
             {"Shutdown", Class::Admin}, {"ReloadEditorExtensions", Class::Admin},
         };
@@ -400,7 +402,9 @@ TEST(ErrorCodedTest, TheCodesAreTheSpecsStableWords)
     EXPECT_EQ(codes, (std::set<std::string>{std::string{ErrorCodeReadOnly}, std::string{ErrorCodeForbidden},
                                             std::string{ErrorCodeBusy}, std::string{ErrorCodeExtensionsDisabled},
                                             std::string{ErrorCodeExtensionFailed},
-                                            std::string{ErrorCodeExtensionFaulted}}));
+                                            std::string{ErrorCodeExtensionFaulted},
+                                            std::string{ErrorCodeStaleUiRevision},
+                                            std::string{ErrorCodeEditGroupOpen}}));
     EXPECT_EQ(std::string{ErrorCodeReadOnly}, "readOnly");
     EXPECT_EQ(std::string{ErrorCodeForbidden}, "forbidden");
     EXPECT_EQ(std::string{ErrorCodeBusy}, "busy");

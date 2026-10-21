@@ -731,6 +731,30 @@ namespace N2Engine::Editor::Protocol
         }
     };
 
+    /// The most UUID strings InvokeMenuItem's selection may hold (the same bound as MaxBoundsEntityIds)
+    inline constexpr std::size_t MaxInvokeSelection = 4096;
+
+    struct InvokeMenuItemCmd
+    {
+        /// The item's id (GetEditorUi's menuItems[].id)
+        std::string itemId;
+        /// A JSON array of the UUID strings of the client's selection
+        nlohmann::json selection;
+        /// A JSON object with the values of the item's form
+        nlohmann::json params;
+        /// The uiRevision of the GetEditorUi the request was built from
+        uint32_t uiRevision;
+
+        static InvokeMenuItemCmd Deserialize(BufferReader &r)
+        {
+            std::string id = r.ReadString();
+            nlohmann::json selection = ReadBoundedJson(r);
+            nlohmann::json params = ReadBoundedJson(r);
+            const uint32_t revision = r.ReadU32();
+            return {std::move(id), std::move(selection), std::move(params), revision};
+        }
+    };
+
     struct SetEntityTransformCmd
     {
         /// The GameObject's UUID string
@@ -775,12 +799,16 @@ namespace N2Engine::Editor::Protocol
     inline constexpr std::string_view ErrorCodeBusy = "busy";
     /// Since 1.14.0: the host was not started with --editor-extensions, so it has no editor extensions to reload or run
     inline constexpr std::string_view ErrorCodeExtensionsDisabled = "extensionsDisabled";
-    /// Since 1.14.0: an extension's call failed (a Lua error, a budget trip, or an error of a command it sent). Nothing
-    /// answers it yet: the commands that run an extension come later.
+    /// Since 1.14.0: an extension's call failed (a Lua error, a budget trip, a result of the wrong shape, or an error of
+    /// a command it sent). InvokeMenuItem answers it, since 1.15.0, after taking back what the call changed.
     inline constexpr std::string_view ErrorCodeExtensionFailed = "extensionFailed";
-    /// Since 1.14.0: the extension failed too often in a short time and is disabled until the extensions are reloaded.
-    /// Nothing answers it yet, as above.
+    /// Since 1.14.0: the extension failed too often in a short time, ran out of its budget or stopped answering, and is
+    /// disabled until the extensions are reloaded. InvokeMenuItem answers it, since 1.15.0.
     inline constexpr std::string_view ErrorCodeExtensionFaulted = "extensionFaulted";
+    /// Since 1.15.0: InvokeMenuItem's uiRevision is not the host's current one
+    inline constexpr std::string_view ErrorCodeStaleUiRevision = "staleUiRevision";
+    /// Since 1.15.0: InvokeMenuItem while the client has an edit group open
+    inline constexpr std::string_view ErrorCodeEditGroupOpen = "editGroupOpen";
 
     /// ErrorCoded (since 1.11.0), sent only to a client that asked for it with Hello's errorCodes: the message an Error
     /// would carry, then a code. Unlike Error's, its payload is two length-prefixed strings.
@@ -1211,6 +1239,25 @@ namespace N2Engine::Editor::Protocol
         WriteJson(payload, ui);
 
         w.WriteU8(static_cast<uint8_t>(ResponseType::EditorUi));
+        w.WriteU32(static_cast<uint32_t>(payload.Size()));
+        w.WriteBytes(payload.Data());
+    }
+
+    /// InvokeMenuItem's response: the edit result (as EditResult has it: the item's title as the label, the revision
+    /// after the call, whether a step can be undone and redone, the revision last saved) and the ExtensionResultInfo
+    /// the item returned, as JSON
+    inline void WriteExtensionResult(BufferWriter &w, const std::string &label, uint32_t revision, bool canUndo,
+                                     bool canRedo, uint32_t savedRevision, const nlohmann::json &result)
+    {
+        BufferWriter payload;
+        payload.WriteString(label);
+        payload.WriteU32(revision);
+        payload.WriteBool(canUndo);
+        payload.WriteBool(canRedo);
+        payload.WriteU32(savedRevision);
+        WriteJson(payload, result);
+
+        w.WriteU8(static_cast<uint8_t>(ResponseType::ExtensionResult));
         w.WriteU32(static_cast<uint32_t>(payload.Size()));
         w.WriteBytes(payload.Data());
     }

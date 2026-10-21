@@ -9,7 +9,7 @@ namespace N2Engine.Editor.Protocol
     public static class ProtocolInfo
     {
         /// <summary>protocol.json's version (major.minor.patch); Hello sends it</summary>
-        public const string ProtocolVersion = "1.14.0";
+        public const string ProtocolVersion = "1.15.0";
     }
 
     public enum CommandType : byte
@@ -69,6 +69,7 @@ namespace N2Engine.Editor.Protocol
         ListEditorExtensions = 0x80,
         GetEditorUi = 0x81,
         ReloadEditorExtensions = 0x84,
+        InvokeMenuItem = 0x82,
         Undo = 0x90,
         Redo = 0x91,
         BeginEditGroup = 0x92,
@@ -124,6 +125,7 @@ namespace N2Engine.Editor.Protocol
         ErrorCoded = 0x1C,
         EditorExtensions = 0x1D,
         EditorUi = 0x1E,
+        ExtensionResult = 0x1F,
     }
 
     public struct Vec3
@@ -200,6 +202,8 @@ namespace N2Engine.Editor.Protocol
         public double? Frame { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("uiRevision")]
         public double? UiRevision { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("extension")]
+        public string? Extension { get; set; }
     }
 
     public class InputEvent
@@ -514,6 +518,16 @@ namespace N2Engine.Editor.Protocol
         public System.Text.Json.JsonElement[] InspectorSections { get; set; }
     }
 
+    public class ExtensionResultInfo
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("message")]
+        public string? Message { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("select")]
+        public string[]? Select { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("warnings")]
+        public string[]? Warnings { get; set; }
+    }
+
     public struct SetViewportSizeRequest
     {
         public int Width;
@@ -757,6 +771,16 @@ namespace N2Engine.Editor.Protocol
         public string Path;
     }
 
+    public struct InvokeMenuItemRequest
+    {
+        public string ItemId;
+        /// <summary>JSON text: any JSON value</summary>
+        public string Selection;
+        /// <summary>JSON text: any JSON value</summary>
+        public string Params;
+        public uint UiRevision;
+    }
+
     public struct BeginEditGroupRequest
     {
         public string Label;
@@ -992,6 +1016,17 @@ namespace N2Engine.Editor.Protocol
     {
         /// <summary>JSON text: EditorUiInfo</summary>
         public string Ui;
+    }
+
+    public struct ExtensionResultResponse
+    {
+        public string Label;
+        public uint Revision;
+        public bool CanUndo;
+        public bool CanRedo;
+        public uint SavedRevision;
+        /// <summary>JSON text: ExtensionResultInfo</summary>
+        public string Result;
     }
 
     public struct EditResultResponse

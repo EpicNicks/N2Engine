@@ -834,13 +834,15 @@ TEST_F(ExtensionHostTest, AStateHasNoWayToReachTheHostOrAnotherExtension)
     // that only reads it gets nil. Another file's globals are not visible: states are separate.
     project.Write("a_globals.lua", R"LUA(
 local absent = { "io", "os", "package", "debug", "require", "load", "loadstring", "dofile", "loadfile",
-                 "collectgarbage", "print", "coroutine", "Application", "GameObject" }
+                 "collectgarbage", "coroutine", "Application", "GameObject", "__n2_host" }
 local present = {}
 for _, name in ipairs(absent) do
   if _G[name] ~= nil then present[#present + 1] = name end
 end
 if #present > 0 then error("reachable: " .. table.concat(present, ",")) end
 if string.find ~= nil or string.gsub ~= nil then error("string patterns are reachable") end
+-- print is the host's own: it writes to Editor.Log (E-X3), and Editor.Scene exists only for a declared capability
+if type(print) ~= "function" or type(Editor.Log.Info) ~= "function" or Editor.Scene ~= nil then error("the Editor API is not as expected") end
 Shared = "a"
 return Editor.Extension { name = "Globals", apiVersion = 1 }
 )LUA");
@@ -854,7 +856,9 @@ for _, k in ipairs(keys) do
   if k == "Editor" then
     local editorKeys = {}
     for name in next, Editor do editorKeys[#editorKeys + 1] = name end
-    if #editorKeys ~= 1 or editorKeys[1] ~= "Extension" then error("Editor has: " .. table.concat(editorKeys, ",")) end
+    table.sort(editorKeys)
+    -- Before the file declares anything: the constructor and the log (Editor.Scene comes with a declared capability)
+    if table.concat(editorKeys, ",") ~= "Extension,Log" then error("Editor has: " .. table.concat(editorKeys, ",")) end
   end
 end
 return Editor.Extension { name = "Other", apiVersion = 1 }

@@ -11,7 +11,7 @@ namespace N2Engine::Editor::Protocol
 {
 
 // protocol.json's version (major.minor.patch); Hello sends it
-inline constexpr const char *ProtocolVersion = "1.14.0";
+inline constexpr const char *ProtocolVersion = "1.15.0";
 
 enum class CommandType : uint8_t
 {
@@ -70,6 +70,7 @@ enum class CommandType : uint8_t
     ListEditorExtensions = 0x80,
     GetEditorUi = 0x81,
     ReloadEditorExtensions = 0x84,
+    InvokeMenuItem = 0x82,
     Undo = 0x90,
     Redo = 0x91,
     BeginEditGroup = 0x92,
@@ -125,6 +126,7 @@ enum class ResponseType : uint8_t
     ErrorCoded = 0x1C,
     EditorExtensions = 0x1D,
     EditorUi = 0x1E,
+    ExtensionResult = 0x1F,
 };
 
 // Custom types
@@ -393,6 +395,14 @@ struct SetStartupSceneCmd
     std::string path;
 };
 
+struct InvokeMenuItemCmd
+{
+    std::string itemId;
+    std::string selection; // JSON: any
+    std::string params; // JSON: any
+    uint32_t uiRevision;
+};
+
 struct BeginEditGroupCmd
 {
     std::string label;
@@ -610,6 +620,16 @@ struct EditorExtensionsData
 struct EditorUiData
 {
     std::string ui; // JSON: EditorUiInfo
+};
+
+struct ExtensionResultData
+{
+    std::string label;
+    uint32_t revision;
+    bool canUndo;
+    bool canRedo;
+    uint32_t savedRevision;
+    std::string result; // JSON: ExtensionResultInfo
 };
 
 struct EditResultData
