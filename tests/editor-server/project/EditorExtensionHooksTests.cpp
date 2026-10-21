@@ -482,7 +482,6 @@ TEST_F(EditorExtensionHooksTest, OnBeforePlayWarnsAndNeverBlocksThePlaySnapshot)
     EXPECT_EQ(warnings[1].at("message"), "no light");
     EXPECT_EQ(warnings[0].at("level"), "warn");
     EXPECT_EQ(warnings[0].at("extension"), "Checker");
-    EXPECT_EQ(warnings[0].at("hook"), "OnBeforePlay");
 }
 
 TEST_F(EditorExtensionHooksTest, OnBeforePlayIsGivenTheScenePlayedWhenOneIsNamed)

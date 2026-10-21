@@ -361,7 +361,7 @@ TEST_F(ExtensionHookTest, OnBeforePlayWarningsAreExtensionOutputEventsEveryRoleG
     {
         EXPECT_EQ(event.at("extension"), "Warn Play");
         EXPECT_EQ(event.at("level"), "warn");
-        EXPECT_EQ(event.at("hook"), "OnBeforePlay");
+        EXPECT_FALSE(event.contains("hook")) << "no key the protocol's EditorEvent does not have";
         EXPECT_TRUE(event.contains("time"));
     }
     EXPECT_EQ(publicEvents[0].at("message"), "check the scene");

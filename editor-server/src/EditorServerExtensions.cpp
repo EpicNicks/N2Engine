@@ -1463,7 +1463,6 @@ namespace N2Engine::Editor
                              json{{"extension", target.extensionName},
                                   {"level", "warn"},
                                   {"message", shown},
-                                  {"hook", std::string(hook)},
                                   {"time", EventRing::NowUnixMilliseconds()}});
                 ServerLog::Warn(std::format("extension {}: {}: {}", target.extensionName, std::string(hook), shown));
                 ++warnings;

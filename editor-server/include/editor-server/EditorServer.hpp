@@ -1037,7 +1037,7 @@ namespace N2Engine::Editor
         /// Calls every extension's hook of this name, one after the other, each as a separate budgeted call after the work
         /// that triggered it is done (never inside a scene load): see ExtensionHost::InvokeHook. A hook failure is logged
         /// and counted towards the extension's fault flag and changes nothing else. The warnings of OnBeforePlay hooks are
-        /// pushed as extensionOutput events (level warn, with the hook's name) that every role receives, and the count is
+        /// pushed as extensionOutput events (level warn) that every role receives, and the count is
         /// returned. Does nothing without extensions, in a play host, or inside another extension call (an extension's own
         /// asset write does not call OnAssetsChanged), and nothing costs anything when no extension has the hook.
         std::size_t RunExtensionHook(std::string_view hook, const nlohmann::json &info);
