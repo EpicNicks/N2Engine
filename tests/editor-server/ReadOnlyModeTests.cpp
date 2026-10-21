@@ -402,7 +402,9 @@ TEST(ErrorCodedTest, TheCodesAreTheSpecsStableWords)
     EXPECT_EQ(codes, (std::set<std::string>{std::string{ErrorCodeReadOnly}, std::string{ErrorCodeForbidden},
                                             std::string{ErrorCodeBusy}, std::string{ErrorCodeExtensionsDisabled},
                                             std::string{ErrorCodeExtensionFailed},
-                                            std::string{ErrorCodeExtensionFaulted}}));
+                                            std::string{ErrorCodeExtensionFaulted},
+                                            std::string{ErrorCodeStaleUiRevision},
+                                            std::string{ErrorCodeEditGroupOpen}}));
     EXPECT_EQ(std::string{ErrorCodeReadOnly}, "readOnly");
     EXPECT_EQ(std::string{ErrorCodeForbidden}, "forbidden");
     EXPECT_EQ(std::string{ErrorCodeBusy}, "busy");
