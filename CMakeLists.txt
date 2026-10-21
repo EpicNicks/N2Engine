@@ -359,6 +359,8 @@ if(NOT N2ENGINE_PLATFORM_WEB)
 add_subdirectory(test_project)
 add_subdirectory(lua_project)
 add_subdirectory(editor-server)
+# The dedicated game server (netcode stage A6): UDP sockets and the crypto library, so not part of the web build
+add_subdirectory(n2server)
 endif()
 
 if(TARGET test_project AND N2ENGINE_PHYSX_AVAILABLE)
