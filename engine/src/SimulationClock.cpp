@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <limits>
 
+#include "engine/Logger.hpp"
 #include "engine/Time.hpp"
 
 using namespace N2Engine;
@@ -98,14 +100,31 @@ void SimulationClock::CompleteTick(const double step)
 void SimulationClock::EndFrame(const double step)
 {
     _behind = IsNetworked() && step > 0.0 && _accumulator >= step;
-    if (_behind && _behindHandler)
+    if (!_behind)
+    {
+        return;
+    }
+    const bool beyondLimit = _accumulator > MaxOwedSeconds;
+    if (_behindHandler)
     {
         SimulationBehind report;
         report.tick = Time::GetTick();
         report.ticksOwed = GetTicksOwed(step);
         report.ticksRunThisFrame = _ticksThisFrame;
         report.owedSeconds = _accumulator;
+        report.beyondLimit = beyondLimit;
         _behindHandler(report);
+        return;
+    }
+    if (beyondLimit)
+    {
+        // Nobody is resyncing (no netcode runs yet, or it did not install a handler): a clock this far behind would
+        // otherwise run catch-up ticks for ever, so it drops the debt and says so
+        Logger::Warn(std::format("The {} simulation loop ended a frame {:.2f} s behind (more than {:.2f} s); dropping "
+                                 "the owed time to resync. Install a SimulationClock behind handler to resync "
+                                 "differently.",
+                                 ToString(_mode), _accumulator, MaxOwedSeconds));
+        ResetAccumulator();
     }
 }
 

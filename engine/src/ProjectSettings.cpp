@@ -128,6 +128,7 @@ namespace N2Engine
             // Validated here; the value itself is read before Init (ReadPhysicsGpuMode), so a change needs a restart
             (void)ReadPhysicsGpuMode(nlohmann::json{{"physics", physics}}, &problems);
             (void)ReadPhysicsDeterministic(nlohmann::json{{"physics", physics}}, &problems);
+            (void)ReadPhysicsBackend(nlohmann::json{{"physics", physics}}, &problems);
             if (const auto gravity = physics.find("gravity"); gravity != physics.end() && !gravity->is_null())
             {
                 const bool valid = gravity->is_object() && gravity->contains("x") && gravity->contains("y") &&
@@ -350,6 +351,38 @@ namespace N2Engine
             problems->push_back(std::format("physics.deterministic: {} is not true or false; using false", value->dump()));
         }
         return false;
+    }
+
+    std::optional<Physics::PhysicsBackendKind> ReadPhysicsBackend(const nlohmann::json &settings,
+                                                                  std::vector<std::string> *problems)
+    {
+        if (!settings.is_object())
+        {
+            return std::nullopt;
+        }
+        const auto block = settings.find("physics");
+        if (block == settings.end() || !block->is_object())
+        {
+            return std::nullopt;
+        }
+        const auto value = block->find("backend");
+        if (value == block->end() || value->is_null())
+        {
+            return std::nullopt;
+        }
+        if (value->is_string())
+        {
+            if (const auto kind = Physics::ParsePhysicsBackendKind(value->get<std::string>()))
+            {
+                return kind;
+            }
+        }
+        if (problems)
+        {
+            problems->push_back(
+                std::format("physics.backend: {} is not \"physx\" or \"jolt\"; using physx", value->dump()));
+        }
+        return Physics::PhysicsBackendKind::PhysX;
     }
 
     std::optional<std::uint64_t> ReadDeterminismLuaSeed(const nlohmann::json &settings,

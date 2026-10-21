@@ -8,7 +8,8 @@ namespace N2Engine
 {
     /// How the application's fixed-step loop is driven. None is the offline loop every project has always had; the
     /// two network modes (the Server authoritative and Deterministic presets) are the tick-owned loop of the netcode.
-    /// A host or a test sets it through Application::SetSimulationMode; the network presets will drive it later.
+    /// Application::Init sets it from network.preset (SimulationModeFor); a host or a test may also set it through
+    /// Application::SetSimulationMode.
     enum class SimulationMode
     {
         None,
@@ -20,7 +21,7 @@ namespace N2Engine
     [[nodiscard]] const char *ToString(SimulationMode mode);
 
     /// What a network-mode frame reports when it ends with whole ticks still owed (it ran as many as the catch-up
-    /// limit allows and time is left): nothing of that time has been dropped
+    /// limit allows and time is left): nothing of that time has been dropped by the report itself
     struct SimulationBehind
     {
         /// The tick counter now (Time::GetTick())
@@ -31,6 +32,9 @@ namespace N2Engine
         std::uint32_t ticksRunThisFrame = 0;
         /// The time still owed, in seconds (not a whole number of ticks)
         double owedSeconds = 0.0;
+        /// More than SimulationClock::MaxOwedSeconds is owed: too far behind to catch up. A handler that gets this
+        /// decides (ResetAccumulator to resync); with no handler the clock itself drops the owed time and logs it.
+        bool beyondLimit = false;
     };
 
     /**
@@ -40,9 +44,12 @@ namespace N2Engine
      * ran (CompleteTick) until none is; the clock itself never calls into the scene.
      *
      * None mode is the loop as it has always been: the frame delta is clamped at MaxFrameTime and the rest dropped,
-     * and the number of ticks is not limited. Network modes drop nothing: the whole delta is added, at most
+     * and the number of ticks is not limited. Network modes drop nothing as a rule: the whole delta is added, at most
      * GetMaxCatchUpTicks() ticks run per frame, and what is still owed stays in the accumulator and is reported
      * through the behind handler (and IsBehind) so the netcode can resync instead of the loop silently losing time.
+     * The one bounded exception is MaxOwedSeconds: a frame that ends with more than that owed was never going to catch
+     * up, so with no behind handler installed the clock resyncs by dropping the owed time (ResetAccumulator) with one
+     * logged warning; a handler is told instead (SimulationBehind::beyondLimit) and owns the decision.
      * Network modes also make Time::GetFixedDeltaTime() independent of Time::GetTimeScale().
      *
      * The counter: 0 before the first tick, incremented once per tick at its start (BeginTick), so inside tick N's
@@ -56,6 +63,10 @@ namespace N2Engine
         static constexpr double MaxFrameTime = 0.25;
         /// Network modes: ticks per frame before the rest is left owed and reported
         static constexpr std::uint32_t DefaultMaxCatchUpTicks = 30;
+        /// Network modes: the most time that may stay owed when a frame ends (seconds); beyond it the clock is too far
+        /// behind to catch up (see the class comment for what then happens). None mode never owes more than
+        /// MaxFrameTime, so it is unaffected.
+        static constexpr double MaxOwedSeconds = 1.0;
 
         using BehindHandler = std::function<void(const SimulationBehind &)>;
 
@@ -96,7 +107,8 @@ namespace N2Engine
         /// Takes one tick of `step` seconds out of the accumulator
         void CompleteTick(double step);
         /// Ends a frame whose ticks are done: a network-mode frame that left whole ticks owed sets IsBehind and calls
-        /// the behind handler; any other clears it
+        /// the behind handler; any other clears it. A frame that left more than MaxOwedSeconds owed and has no
+        /// handler resets the accumulator (one warning), which clears IsBehind too.
         void EndFrame(double step);
 
         /// Starts a tick: increments the counter

@@ -610,8 +610,10 @@ TEST_F(SimulationClockTest, LeavingANetworkModeThatIsBehindKeepsOnlyTheNoneClamp
     app.SetSimulationMode(SimulationMode::Authoritative);
     Clock().SetMaxCatchUpTicks(2);
     AddProbe();
-    TickFor(640 * ExactStep);
+    // 40 ticks of time, 2 run: 38 ticks (0.59 s) stay owed, over the None clamp and under MaxOwedSeconds
+    TickFor(40 * ExactStep);
     ASSERT_TRUE(Clock().IsBehind());
+    ASSERT_GT(Clock().GetAccumulator(), SimulationClock::MaxFrameTime);
 
     app.SetSimulationMode(SimulationMode::None);
     EXPECT_LE(Clock().GetAccumulator(), SimulationClock::MaxFrameTime);
@@ -714,6 +716,84 @@ TEST_F(SimulationClockTest, AResyncDiscardsTheOwedTimeOnlyWhenTheNetcodeAsksForI
     EXPECT_FALSE(Clock().IsBehind());
     TickFor(0.0);
     EXPECT_EQ(ClockProbe::fixedTicks.size(), 4u) << "the discarded debt is not run";
+}
+
+TEST_F(SimulationClockTest, AFrameMoreThanTheOwedLimitBehindResyncsWhenNoHandlerIsInstalled)
+{
+    ASSERT_TRUE(Time::SetFixedTimestep(ExactStep));
+    Clock().SetMaxCatchUpTicks(10);
+    AddProbe();
+    for (const SimulationMode mode : {SimulationMode::Authoritative, SimulationMode::Deterministic})
+    {
+        SCOPED_TRACE(ToString(mode));
+        Application::GetInstance().SetSimulationMode(mode);
+        Clock().Reset();
+        ClockProbe::Clear();
+
+        // A 3 s stall: ten ticks run, 182 (2.84 s) stay owed, which is more than MaxOwedSeconds and nobody is
+        // resyncing, so the clock drops the debt (with a warning) instead of running catch-up ticks for ever
+        TickFor(3.0);
+        EXPECT_EQ(ClockProbe::fixedTicks.size(), 10u);
+        EXPECT_EQ(Clock().GetAccumulator(), 0.0);
+        EXPECT_FALSE(Clock().IsBehind());
+        TickFor(0.0);
+        EXPECT_EQ(ClockProbe::fixedTicks.size(), 10u) << "the dropped debt is not run later";
+
+        // Behind by less than the limit is still never dropped (50 ticks = 0.78 s)
+        Clock().Reset();
+        ClockProbe::Clear();
+        TickFor(60 * ExactStep);
+        EXPECT_EQ(ClockProbe::fixedTicks.size(), 10u);
+        EXPECT_TRUE(Clock().IsBehind());
+        EXPECT_NEAR(Clock().GetAccumulator(), 50 * ExactStep, 1e-12);
+        EXPECT_LT(Clock().GetAccumulator(), SimulationClock::MaxOwedSeconds);
+    }
+}
+
+TEST_F(SimulationClockTest, AHandlerThatIsToldAboutAFrameBeyondTheLimitOwnsTheResync)
+{
+    ASSERT_TRUE(Time::SetFixedTimestep(ExactStep));
+    Application::GetInstance().SetSimulationMode(SimulationMode::Deterministic);
+    Clock().SetMaxCatchUpTicks(10);
+    AddProbe();
+
+    std::vector<SimulationBehind> reports;
+    Clock().SetBehindHandler([&reports](const SimulationBehind &report) { reports.push_back(report); });
+
+    // Under the limit: reported as before, not flagged
+    TickFor(60 * ExactStep);
+    ASSERT_EQ(reports.size(), 1u);
+    EXPECT_FALSE(reports[0].beyondLimit);
+
+    // Over it: flagged, and the clock keeps the debt (the handler decided not to resync)
+    Clock().Reset();
+    reports.clear();
+    TickFor(3.0);
+    ASSERT_EQ(reports.size(), 1u);
+    EXPECT_TRUE(reports[0].beyondLimit);
+    EXPECT_GT(reports[0].owedSeconds, SimulationClock::MaxOwedSeconds);
+    EXPECT_TRUE(Clock().IsBehind());
+    EXPECT_GT(Clock().GetAccumulator(), SimulationClock::MaxOwedSeconds);
+
+    // A handler that resyncs does it with ResetAccumulator, as before
+    Clock().SetBehindHandler([&reports](const SimulationBehind &report)
+                             {
+                                 reports.push_back(report);
+                                 Application::GetInstance().GetSimulationClock().ResetAccumulator();
+                             });
+    TickFor(0.0);
+    EXPECT_EQ(Clock().GetAccumulator(), 0.0);
+    EXPECT_FALSE(Clock().IsBehind());
+}
+
+TEST_F(SimulationClockTest, NoneModeNeverResyncsAndReportsNothingBeyondTheLimit)
+{
+    // None keeps at most MaxFrameTime and has no owed state: the new limit never applies to it
+    AddProbe();
+    TickFor(30.0);
+    EXPECT_LT(Clock().GetAccumulator(), 0.02);
+    EXPECT_FALSE(Clock().IsBehind());
+    EXPECT_LE(ClockProbe::fixedTicks.size(), 13u);
 }
 
 TEST_F(SimulationClockTest, ANetworkModeWithNoCatchUpLimitRunsEveryTickOwed)

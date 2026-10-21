@@ -12,6 +12,7 @@
 #include <math/Vector3.hpp>
 #include "engine/network/NetworkSettings.hpp"
 #include "engine/physics/GpuStatus.hpp"
+#include "engine/physics/PhysicsBackendKind.hpp"
 #include <renderer/common/SceneLighting.hpp>
 
 namespace N2Engine
@@ -31,6 +32,10 @@ namespace N2Engine
      *               "deterministic": true | false (default false; a non-boolean is refused and means false) asks the
      *               physics backend for its reproducible-replay configuration (PhysX: enhanced determinism and 0
      *               worker threads); read by ReadPhysicsDeterministic before Application::Init like gpu
+     *               "backend": "physx" | "jolt" (default physx when unset, case-insensitive; anything else is refused
+     *               with a warning and means physx) picks the project's 3D physics backend. Read by ReadPhysicsBackend
+     *               before Application::Init creates the backend, so applying it afterwards only validates it (a change
+     *               needs a restart)
      *     math      {"simdTier": "auto" | "scalar" | "sse2" | "sse4.1" | "avx" | "neon"} (default auto, case-insensitive;
      *               anything else is refused with a warning and means auto). Read by ReadMathSimdTier before
      *               Application::Init selects the math tier, so applying it afterwards only validates it (a change
@@ -84,6 +89,15 @@ namespace N2Engine
      */
     [[nodiscard]] bool ReadPhysicsDeterministic(const nlohmann::json &settings,
                                                 std::vector<std::string> *problems = nullptr);
+
+    /**
+     * physics.backend from a project's settings object: empty when it is absent or null (the host's default applies,
+     * which is PhysX), "physx" or "jolt" (case-insensitive) as written, and PhysX for anything else, with one message
+     * in `problems` (when given). Application::Init calls it before the physics backend is created and applies
+     * Physics::ChooseBackend to the result.
+     */
+    [[nodiscard]] std::optional<Physics::PhysicsBackendKind> ReadPhysicsBackend(
+        const nlohmann::json &settings, std::vector<std::string> *problems = nullptr);
 
     /**
      * math.simdTier from a project's settings object: Auto when it is absent, null or not a known tier name
