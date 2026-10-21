@@ -49,6 +49,7 @@
 #include <format>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -507,9 +508,9 @@ namespace N2Engine::Physics
                     settings.mCombinedRestitution = CombineAverage(std::max(0.0f, collider1->material.restitution),
                                                                    std::max(0.0f, collider2->material.restitution));
                 }
-                if (kind == RawContact::Kind::Persisted && !trigger)
+                if (kind == RawContact::Kind::Persisted && !trigger && _impl.IsReported(body1, body2, manifold))
                 {
-                    return; // a solid contact that carries on is not news
+                    return; // a solid contact that carries on, and that the main thread already knows, is not news
                 }
 
                 RawContact raw;
@@ -553,8 +554,8 @@ namespace N2Engine::Physics
                         raw.contacts.push_back(contact);
                     }
                     raw.impulse = total;
-                    const JPH::Vec3 velocity1 = body1.IsDynamic() ? body1.GetLinearVelocity() : JPH::Vec3::sZero();
-                    const JPH::Vec3 velocity2 = body2.IsDynamic() ? body2.GetLinearVelocity() : JPH::Vec3::sZero();
+                    const JPH::Vec3 velocity1 = !body1.IsStatic() ? body1.GetLinearVelocity() : JPH::Vec3::sZero();
+                    const JPH::Vec3 velocity2 = !body2.IsStatic() ? body2.GetLinearVelocity() : JPH::Vec3::sZero();
                     raw.relativeVelocity = ToEngine(velocity1 - velocity2);
                 }
 
@@ -731,6 +732,27 @@ namespace N2Engine::Physics
         const BodyData *GetData(const PhysicsBodyHandle handle) const
         {
             return const_cast<Impl *>(this)->GetData(handle);
+        }
+
+        // Whether the main thread tracks this contact as touching. Called by the listener on worker threads during Update,
+        // when the main thread does not change `contacts`: concurrent reads only. A Persisted report of a contact that is
+        // not tracked (its touch was ended by a layer, matrix or trigger change while Jolt kept the contact in its cache)
+        // must reach FoldContacts, which then begins the touch again.
+        bool IsReported(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold) const
+        {
+            PhysicsBodyHandle handle1;
+            PhysicsBodyHandle handle2;
+            if (!HandleOfId(body1.GetID().GetIndexAndSequenceNumber(), handle1) ||
+                !HandleOfId(body2.GetID().GetIndexAndSequenceNumber(), handle2))
+            {
+                return true; // nothing to tell about a body that is gone
+            }
+            const bool oneIsLow = HandleOrder(handle1) < HandleOrder(handle2);
+            const ContactKey key{HandleOrder(oneIsLow ? handle1 : handle2), HandleOrder(oneIsLow ? handle2 : handle1),
+                                 oneIsLow ? manifold.mSubShapeID1.GetValue() : manifold.mSubShapeID2.GetValue(),
+                                 oneIsLow ? manifold.mSubShapeID2.GetValue() : manifold.mSubShapeID1.GetValue()};
+            const auto it = contacts.find(key);
+            return it != contacts.end() && it->second.reported && !it->second.dormant;
         }
 
         // The handle of the live body that has this Jolt id (false for a stale id)
@@ -1276,6 +1298,11 @@ namespace N2Engine::Physics
             std::ranges::sort(events, [](const Event &a, const Event &b)
                               { return a.key != b.key ? a.key < b.key : a.kind < b.kind; });
 
+            // The collider pairs Jolt reported present in this step. A contact's key holds sub-shape ids, which change when a
+            // body's shape is rebuilt (a collider added or removed): Jolt then reports the old key Removed and the new key
+            // Added for the same collider pair, and the old key must not end the touch. Only membership is tested.
+            std::set<std::tuple<std::uint64_t, std::uint64_t, const ICollider *, const ICollider *>> presentPairs;
+
             std::vector<ContactKey> ended;  // a Removed with nothing else for the contact
             std::vector<ContactKey> parted; // a trigger contact whose shapes no longer overlap
             for (std::size_t first = 0; first < events.size();)
@@ -1317,6 +1344,7 @@ namespace N2Engine::Physics
                 info.triggerOnHigh = specHigh->isTrigger;
                 info.seen = true;
                 info.dormant = false;
+                presentPairs.insert({HandleOrder(info.low), HandleOrder(info.high), colliderLow, colliderHigh});
 
                 const bool touching = !info.trigger || present->raw->overlapping;
                 if (touching && !info.reported)
@@ -1351,6 +1379,11 @@ namespace N2Engine::Physics
                 if (!info.reported)
                 {
                     contacts.erase(it);
+                }
+                else if (presentPairs.contains({HandleOrder(info.low), HandleOrder(info.high), info.colliderLow,
+                                                info.colliderHigh}))
+                {
+                    contacts.erase(it); // the same collider pair under a new key: still touching
                 }
                 else if (AsleepOrStatic(info.low) && AsleepOrStatic(info.high))
                 {

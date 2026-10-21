@@ -439,6 +439,11 @@ namespace N2PhysicsTests
         {
             EXPECT_FALSE(Raycast::Any(Vector3(0.0f, 5.0f, 0.0f), Downward, 100.0f, Layers::MaskOf(LayerC)));
         }
+        bool queryCheckSkipped = false;
+        if constexpr (TypeParam::kIsJolt)
+        {
+            queryCheckSkipped = true; // reported at the end of the test, once the rest has run
+        }
 
         // And the same through the object: its collider's shapes are re-created on the new layer
         visitor->SetActive(false);
@@ -447,6 +452,11 @@ namespace N2PhysicsTests
         visitor->SetActive(true);
         this->Step(5);
         EXPECT_EQ(zoneEvents->triggerEnter, 2);
+
+        if (queryCheckSkipped)
+        {
+            GTEST_SKIP() << "the Raycast mask check of this test arrives with J5; the rest of the test passed on Jolt";
+        }
     }
 
     TYPED_TEST(LayerPhysicsTest, CollidersAttachedAfterAMatrixChangeUseTheNewMatrix)
