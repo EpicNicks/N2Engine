@@ -1,7 +1,7 @@
 #pragma once
 
 // PRIVATE to renderer/src/webgpu/: the WebGPU backend's handle wrappers, error counters, resource classes and the renderer's
-// State (stages G2 and G3a of #155), shared by WebGpuRenderer.cpp (core: device, targets, frames, readback),
+// State (stages G2, G3a and G3b of #155), shared by WebGpuRenderer.cpp (core: device, targets, frames, readback),
 // WebGpuResources.cpp (meshes, textures, samplers) and WebGpuDraw.cpp (shaders, materials, pipelines, the uniform ring, draws).
 // Never included from a public header.
 //
@@ -27,6 +27,7 @@
 #include <math/Vector4.hpp>
 
 #include "renderer/common/BlockMaterial.hpp"
+#include "renderer/common/GpuLighting.hpp"
 #include "renderer/common/GpuShaderInterface.hpp"
 #include "renderer/common/IMaterial.hpp"
 #include "renderer/common/IMesh.hpp"
@@ -204,9 +205,9 @@ namespace Renderer::WebGpu
     // Drawing (G3a)
     // -----------------------------------------------------------------------------------------------------------------
 
-    /// One of the built-in shaders. All three entry points of a built-in live in ONE WGSL module (vs_main, fs_main). There is
-    /// no custom WGSL in v1, so LoadFromStrings fails and the Set* calls (a shader holds no values, the material does) do
-    /// nothing. In G3a only the unlit one exists
+    /// One of the built-in shaders (unlit, lit, text). The two entry points of a built-in live in ONE WGSL module (vs_main,
+    /// fs_main). There is no custom WGSL in v1, so LoadFromStrings fails and the Set* calls (a shader holds no values, the
+    /// material does) do nothing
     class WebGpuShader final : public Common::IShader
     {
     public:
@@ -235,7 +236,7 @@ namespace Renderer::WebGpu
     /// The pipeline cache key: (shader, vertex layout, RenderState) packed. The vertex layout is the attribute set of the
     /// shader (ShaderInterface::Attributes), so today it follows from the shader; it is a field of its own so a second layout
     /// (a shader reading other attributes, or a second vertex buffer) can never share a pipeline with the first.
-    /// blend and additive are part of the key already, but G3a draws every pipeline opaque (blending is G3b)
+    /// blend and additive select the colour target's blend state (G3b): opaque, alpha blend or additive
     struct PipelineKey
     {
         std::uint8_t shader = 0;
@@ -263,7 +264,12 @@ namespace Renderer::WebGpu
         std::vector<std::uint8_t> staging;
         std::uint64_t size = 0;
         std::uint64_t used = 0;
-        BindGroupRef frameGroup; // group 0 for this chunk: the per-draw block at a dynamic offset; made when first needed
+        BindGroupRef frameGroup; // group 0 for this chunk: the per-draw block and the lighting block, each at a dynamic offset
+        // The copy of the scene lighting block in this chunk this frame (G3b): which State::lightingVersion it holds (0: none
+        // yet this frame) and where. A lit draw names the copy by this offset; an unlit or text draw names offset 0 (in range,
+        // never read)
+        std::uint64_t lightingVersion = 0;
+        std::uint64_t lightingOffset = 0;
     };
 
     /// The renderer's number of built-in shaders and of material textures (base + the four AuxTexture slots)
@@ -308,7 +314,7 @@ namespace Renderer::WebGpu
 
         // ---- G3a: drawing
         std::array<std::unique_ptr<WebGpuShader>, kShaderCount> shaders;
-        BindGroupLayoutRef frameLayout;    // group 0: binding 0 the per-draw block (dynamic offset)
+        BindGroupLayoutRef frameLayout;    // group 0: binding 0 the per-draw block, binding 1 the lighting block (both dynamic)
         BindGroupLayoutRef materialLayout; // group 1: binding 0 the material block (dynamic), 1-5 textures, 6-10 samplers
         PipelineLayoutRef pipelineLayout;
         std::map<std::uint32_t, RenderPipelineRef> pipelines;
@@ -324,6 +330,16 @@ namespace Renderer::WebGpu
         std::uint64_t ringChunkBytes = 256 * 1024; // the size of a new chunk (more when one draw needs more)
         // 1x1 textures for the absent ones (base, emissive, occlusion, normal, metallic-roughness)
         std::array<std::unique_ptr<WebGpuTexture>, kTextureSlots> defaults;
+        // The text shader's base sampler (its SDF atlas) defaults to (0,0,0,0) instead of white: an absent atlas reads sdf 0,
+        // coverage 0 and the fragment is discarded, so atlas-less text draws nothing (as OpenGL, which binds no texture)
+        std::unique_ptr<WebGpuTexture> textBaseDefault;
+
+        // ---- G3b: the scene lighting. UpdateSceneLighting only rewrites this CPU copy and bumps the version; the first lit
+        // draw after that copies it into the frame's ring (RingChunk::lightingVersion says which version a chunk holds), so a
+        // draw uses the lighting set by the last UpdateSceneLighting before it. Before the first update the block holds
+        // SceneLightingData{} seen from the origin, as the software renderer's members do
+        Gpu::LightingBlock lighting = Gpu::BuildLightingBlock(Common::SceneLightingData{}, N2Engine::Math::Vector3(0.0f, 0.0f, 0.0f));
+        std::uint64_t lightingVersion = 1; // never 0 (a chunk with 0 holds no copy)
 
         float view[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         float projection[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};

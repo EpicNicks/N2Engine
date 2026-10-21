@@ -37,7 +37,8 @@
 //     Vulkan; the SOFTWARE renderer clips such a range to the mesh and draws what is inside: a difference on purpose);
 //   - a mesh with vertices and no indices draws nothing;
 //   - the material is a snapshot taken at DrawMesh (a change afterwards does not affect that draw);
-//   - blending is stage G3b: a draw that asks for it is drawn opaque and says so once.
+//   - blending (stage G3b): SRC_ALPHA with ONE_MINUS_SRC_ALPHA (additive: ONE) for colour and alpha, as OpenGL; the full blend
+//     matrix is in WebGpuRendererBlendTests.cpp.
 // The draws are exact: a quad on a pixel boundary covers exactly its pixels, so counts and colours are compared exactly.
 
 using namespace WebGpuTesting;
@@ -290,10 +291,10 @@ TEST_F(WebGpuDrawTest, TheDefaultStateCullsBackFacesAndDepthTestsAndWritesAsTheO
     EXPECT_EQ(back.Count(kRed), 0);
 }
 
-TEST_F(WebGpuDrawTest, ABlendedDrawIsDrawnOpaqueInStageG3aAndSaysSoOnce)
+TEST_F(WebGpuDrawTest, ABlendedDrawBlendsAndAnOpaqueDrawOfTheSameMaterialDoesNot)
 {
-    // Blending is stage G3b. Until then the state is in the pipeline key but every pipeline is opaque: a half-alpha red quad,
-    // blended or additive, REPLACES what is behind it (as an opaque draw does), and the renderer logs it once per renderer
+    // A half-alpha red quad over the black clear: blended it is half red, additive it is half red too (adding to black), and
+    // an OPAQUE draw (blend off) REPLACES what is behind it with the colour, whatever its alpha. No log line is written
     IMaterial* halfRed = Colour(1.0f, 0.0f, 0.0f, 0.5f);
     IMesh* quad = MakeMesh(Quad(-1.0f, -1.0f, 1.0f, 1.0f, 0.0f));
     ASSERT_NE(quad, nullptr);
@@ -306,10 +307,15 @@ TEST_F(WebGpuDrawTest, ABlendedDrawIsDrawnOpaqueInStageG3aAndSaysSoOnce)
     const Frame opaque = RenderFrameOf([&] { R().DrawMesh(quad, Identity, halfRed, RenderState::Opaque()); });
     const std::string output = ::testing::internal::GetCapturedStderr();
 
-    EXPECT_EQ(blended.Count(kRed), Size * Size);
-    EXPECT_EQ(added.Count(kRed), Size * Size);
+    const auto nearHalfRed = [](const Frame& frame)
+    {
+        const Rgb pixel = frame.At(Size / 2, Size / 2);
+        return pixel.r >= 127 && pixel.r <= 128 && pixel.g == 0 && pixel.b == 0;
+    };
+    EXPECT_TRUE(nearHalfRed(blended)) << int(blended.At(Size / 2, Size / 2).r);
+    EXPECT_TRUE(nearHalfRed(added)) << int(added.At(Size / 2, Size / 2).r);
     EXPECT_EQ(opaque.Count(kRed), Size * Size);
-    EXPECT_EQ(CountOccurrences(output, "blending is not implemented yet"), 1) << output;
+    EXPECT_EQ(CountOccurrences(output, "blend"), 0) << output;
 }
 
 // ============================================================================
@@ -1082,9 +1088,10 @@ TEST_F(WebGpuDrawTest, TheUnlitShaderMakesAPipelineForEveryDepthWriteCullAndBlen
         EXPECT_EQ(R().GetPipelineCountForTest(), 27u) << "round " << round;
         EXPECT_EQ(R().GetPipelineCreateAttemptCountForTest(), 27u) << "a state seen again is a cache hit";
     }
-    // The lit and text shaders are stage G3b
-    EXPECT_FALSE(R().CreatePipelineForTest(ShaderInterface::BuiltInShader::Lit, RenderState{}));
-    EXPECT_FALSE(R().CreatePipelineForTest(ShaderInterface::BuiltInShader::Text, RenderState{}));
+    // The lit and text shaders (stage G3b) have pipelines of their own: one more each for this state
+    EXPECT_TRUE(R().CreatePipelineForTest(ShaderInterface::BuiltInShader::Lit, RenderState{}));
+    EXPECT_TRUE(R().CreatePipelineForTest(ShaderInterface::BuiltInShader::Text, RenderState{}));
+    EXPECT_EQ(R().GetPipelineCountForTest(), 29u);
 }
 
 TEST_F(WebGpuDrawTest, ThousandsOfDrawsMakeOnlyThePipelinesTheirStatesNeedAndOneBindGroupPerChunk)

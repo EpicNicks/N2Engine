@@ -15,15 +15,16 @@
 
 #include <renderer/webgpu/WgslSources.hpp>
 
-// Stage G3a of the WebGPU backend (#155): the built-in unlit shader, materials, the pipeline cache, the bind-group cache, the
-// per-draw uniform ring and the draws. Written against webgpu.h (the C API) only.
+// Stages G3a and G3b of the WebGPU backend (#155): the three built-in shaders (unlit, lit, text), materials, the scene lighting,
+// the pipeline cache, the bind-group cache, the per-draw uniform ring and the draws. Written against webgpu.h (the C API) only.
 //
 // Resource layout (the same for every built-in shader, renderer/shaders/webgpu/*.wgsl):
-//   group 0 (the frame): binding 0 the per-draw block (3 matrices, 192 bytes), a UNIFORM buffer with a DYNAMIC offset
+//   group 0 (the frame): binding 0 the per-draw block (3 matrices, 192 bytes) and binding 1 the lighting block (752 bytes, read
+//   by the lit shader only), UNIFORM buffers, each with a DYNAMIC offset
 //   group 1 (the material): binding 0 the material block (a dynamic offset), bindings 1-5 the base texture and the four
 //   AuxTexture slots, bindings 6-10 their samplers (WGSL has no combined image sampler)
-// The pipeline layout is the two groups, for all shaders, so a shader that reads fewer bindings (unlit reads 1 and 6 only) needs
-// no layout of its own and the lit and text shaders (stage G3b) need none either.
+// The pipeline layout is the two groups, for all shaders, so a shader that reads fewer bindings (unlit and text read 0 and 6
+// and 1 only) needs no layout of its own.
 //
 // The uniform ring. A draw needs a per-draw block and a material block. Each draw takes the next slot of the current ring chunk
 // (a uniform buffer; when it is full the frame moves to the next chunk, a new one if there is none) and fills it in a CPU copy
@@ -31,6 +32,13 @@
 // A slot is aligned to the device's minUniformBufferOffsetAlignment (a dynamic offset must be a multiple of it), so no draw of
 // a frame overwrites another's block, and the next frame may reuse the whole chunk: its writes come after this frame's submit
 // on the queue's timeline, so this frame has read its blocks by then. Nothing is mapped and nothing waits.
+//
+// SCENE LIGHTING (G3b). UpdateSceneLighting builds the 752-byte std140 block (GpuLighting.hpp) into a CPU copy and bumps a
+// version; it touches no GPU memory. The first LIT draw after an update copies the block into the ring (after its material
+// block) and every lit draw names that copy with the dynamic offset of group 0's binding 1: one copy per ring chunk per version.
+// So, as on OpenGL, a draw uses the lighting set by the last UpdateSceneLighting BEFORE it, and an update after a draw does not
+// change it. A draw that does not read the lighting (unlit, text) names the chunk's copy if it has one, else offset 0, which is in
+// range (a chunk is never smaller than the block) and is never read.
 //
 // Matrices. WGSL has only column-major matrices; the engine's are row-major. Each matrix is TRANSPOSED once, when the draw
 // fills its per-draw block (WriteTransposed): the bytes become the matrix's columns, which is what mat4x4<f32> reads, and the
@@ -41,7 +49,15 @@
 //
 // Pipelines are cached by (shader, vertex layout, depth test, depth write, cull, blend, additive). Depth: compare LESS (GL's
 // default) with the test on and ALWAYS with it off, depth written only while testing; cull: counter-clockwise front faces, as GL.
-// Blending is stage G3b: blend and additive are in the key already, but G3a draws every pipeline opaque.
+// Blending, exactly as OpenGL's ApplyRenderState and the Vulkan backend: blend -> SRC_ALPHA / ONE_MINUS_SRC_ALPHA (additive:
+// SRC_ALPHA / ONE) for colour AND alpha with equation ADD, so the target's alpha is blended too; additive only counts with
+// blend (additive without blend is an opaque draw and shares the opaque pipeline). The ORDER of transparent draws is the
+// caller's (the engine draws the Transparent queue back to front); the renderer draws in submission order.
+//
+// TEXT (G3b). The text shader is the SDF shader of OpenGL's: antialiased with fwidth; the effects (outline, shadow, softness) are
+// material values snapshotted into the ring at every DrawMesh, so a multi-pass effect (one material and mesh, the uniforms
+// changed between DrawMesh calls) draws each pass with its own values. The atlas is the material's base texture; a text material
+// whose atlas is absent or destroyed gets the renderer's 1x1 (0,0,0,0) texture, so nothing is drawn.
 
 namespace Renderer::WebGpu
 {
@@ -55,6 +71,7 @@ namespace Renderer::WebGpu
     using Common::TextureWrap;
     using ShaderInterface::BuiltInShader;
     using ShaderInterface::kFirstSamplerBinding;
+    using ShaderInterface::kLightingBlockSize;
     using ShaderInterface::kMaterialBlockRange;
     using ShaderInterface::kPerDrawBlockSize;
     using ShaderInterface::kSamplerCount;
@@ -108,35 +125,53 @@ namespace Renderer::WebGpu
     {
         State& state = *_state;
 
-        // The unlit shader: one module holding vs_main and fs_main. A WGSL error is reported by the device (counted by the
-        // error counters, which fail Initialize), not by a null module
+        // The three shaders: one module each, holding vs_main and fs_main. A WGSL error is reported by the device (counted by
+        // the error counters, which fail Initialize), not by a null module
         {
-            auto shader = std::make_unique<WebGpuShader>(BuiltInShader::Unlit);
-            WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
-            source.code = WGPUStringView{Wgsl::kUnlitWgsl.data(), Wgsl::kUnlitWgsl.size()};
-            WGPUShaderModuleDescriptor descriptor = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
-            descriptor.label = ToView("N2Engine unlit shader");
-            descriptor.nextInChain = &source.chain;
-            shader->module.Reset(wgpuDeviceCreateShaderModule(state.device.Get(), &descriptor));
-            if (!shader->module)
+            struct Source
             {
-                return Fail(InitStatus::Failed, "could not create the unlit shader module");
+                BuiltInShader kind;
+                std::string_view code;
+                const char* label;
+            };
+            const std::array<Source, kShaderCount> sources{{
+                {BuiltInShader::Unlit, Wgsl::kUnlitWgsl, "N2Engine unlit shader"},
+                {BuiltInShader::Lit, Wgsl::kLitWgsl, "N2Engine lit shader"},
+                {BuiltInShader::Text, Wgsl::kTextWgsl, "N2Engine text shader"},
+            }};
+            for (const Source& entry : sources)
+            {
+                auto shader = std::make_unique<WebGpuShader>(entry.kind);
+                WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
+                source.code = WGPUStringView{entry.code.data(), entry.code.size()};
+                WGPUShaderModuleDescriptor descriptor = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+                descriptor.label = ToView(entry.label);
+                descriptor.nextInChain = &source.chain;
+                shader->module.Reset(wgpuDeviceCreateShaderModule(state.device.Get(), &descriptor));
+                if (!shader->module)
+                {
+                    return Fail(InitStatus::Failed, std::string("could not create the ") + entry.label + " module");
+                }
+                state.shaders[ShaderIndex(entry.kind)] = std::move(shader);
             }
-            state.shaders[ShaderIndex(BuiltInShader::Unlit)] = std::move(shader);
         }
 
-        // Group 0: the per-draw block
+        // Group 0: the per-draw block, then the lighting block
         {
-            WGPUBindGroupLayoutEntry entry = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
-            entry.binding = 0;
-            entry.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-            entry.buffer.type = WGPUBufferBindingType_Uniform;
-            entry.buffer.hasDynamicOffset = WGPU_TRUE;
-            entry.buffer.minBindingSize = 0;
+            std::array<WGPUBindGroupLayoutEntry, 2> entries;
+            for (std::uint32_t i = 0; i < entries.size(); ++i)
+            {
+                entries[i] = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+                entries[i].binding = i;
+                entries[i].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+                entries[i].buffer.type = WGPUBufferBindingType_Uniform;
+                entries[i].buffer.hasDynamicOffset = WGPU_TRUE;
+                entries[i].buffer.minBindingSize = 0;
+            }
             WGPUBindGroupLayoutDescriptor descriptor = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
             descriptor.label = ToView("N2Engine frame group");
-            descriptor.entryCount = 1;
-            descriptor.entries = &entry;
+            descriptor.entryCount = entries.size();
+            descriptor.entries = entries.data();
             state.frameLayout.Reset(wgpuDeviceCreateBindGroupLayout(state.device.Get(), &descriptor));
         }
 
@@ -213,6 +248,16 @@ namespace Renderer::WebGpu
             texture->id = state.nextTextureId++;
             state.defaults[i] = std::move(texture);
         }
+        {
+            const std::array<std::uint8_t, 4> transparent{0, 0, 0, 0};
+            std::unique_ptr<WebGpuTexture> texture = MakeTexture(state, transparent.data(), 1, 1, 4, options);
+            if (!texture)
+            {
+                return Fail(InitStatus::Failed, "could not create the text default texture");
+            }
+            texture->id = state.nextTextureId++;
+            state.textBaseDefault = std::move(texture);
+        }
         return true;
     }
 
@@ -239,6 +284,7 @@ namespace Renderer::WebGpu
         {
             texture.reset();
         }
+        state.textBaseDefault.reset();
         state.textures.clear();
         state.meshes.clear();
         state.samplers.clear();
@@ -249,6 +295,8 @@ namespace Renderer::WebGpu
         const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         std::memcpy(state.view, identity, sizeof(identity));
         std::memcpy(state.projection, identity, sizeof(identity));
+        state.lighting = Gpu::BuildLightingBlock(Common::SceneLightingData{}, N2Engine::Math::Vector3(0.0f, 0.0f, 0.0f));
+        ++state.lightingVersion;
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -261,6 +309,8 @@ namespace Renderer::WebGpu
         for (RingChunk& chunk : state.chunks)
         {
             chunk.used = 0;
+            chunk.lightingVersion = 0; // the lighting copy of an earlier frame is not this frame's
+            chunk.lightingOffset = 0;
         }
         state.activeChunk = 0;
     }
@@ -278,6 +328,8 @@ namespace Renderer::WebGpu
                                      static_cast<std::size_t>(AlignUp64(chunk.used, 4)));
             }
             chunk.used = 0;
+            chunk.lightingVersion = 0;
+            chunk.lightingOffset = 0;
         }
         state.activeChunk = 0;
     }
@@ -285,8 +337,11 @@ namespace Renderer::WebGpu
     bool WebGpuRenderer::AddRingChunk(const std::uint64_t minimumSize)
     {
         State& state = *_state;
-        // The size of a new chunk, a multiple of the alignment; dynamic offsets are 32-bit, so a chunk stays under 4 GiB
-        const std::uint64_t size = AlignUp64(std::max(state.ringChunkBytes, minimumSize), state.uniformAlignment);
+        // The size of a new chunk, a multiple of the alignment; dynamic offsets are 32-bit, so a chunk stays under 4 GiB. Never
+        // smaller than the lighting block: group 0's binding 1 is bound at offset 0 by a draw that does not read it
+        const std::uint64_t size =
+            AlignUp64(std::max({state.ringChunkBytes, minimumSize, static_cast<std::uint64_t>(kLightingBlockSize)}),
+                      state.uniformAlignment);
         if (size > state.maxBufferSize || size > std::numeric_limits<std::uint32_t>::max())
         {
             LogOnce("the uniform ring cannot grow: a chunk of " + std::to_string(size) +
@@ -371,11 +426,6 @@ namespace Renderer::WebGpu
         {
             return nullptr; // this key failed before (logged once): skipped without retrying
         }
-        if (renderState.blend)
-        {
-            LogOnce("blending is not implemented yet (#155, stage G3b): draws that ask for it are drawn opaque");
-        }
-
         // One interleaved vertex buffer of Common::Vertex (64 bytes); exactly the attributes the shader reads
         std::array<WGPUVertexAttribute, 5> attributes;
         std::uint32_t attributeCount = 0;
@@ -399,9 +449,20 @@ namespace Renderer::WebGpu
         depthStencil.depthWriteEnabled = key.depthWrite ? WGPUOptionalBool_True : WGPUOptionalBool_False;
         depthStencil.depthCompare = key.depthTest ? WGPUCompareFunction_Less : WGPUCompareFunction_Always;
 
+        // Blending exactly as OpenGL's ApplyRenderState (and Vulkan's pipeline): SRC_ALPHA with ONE_MINUS_SRC_ALPHA (additive:
+        // ONE), the same factors for colour and alpha, equation ADD
+        WGPUBlendState blendState = WGPU_BLEND_STATE_INIT;
+        const WGPUBlendFactor destinationFactor = key.additive ? WGPUBlendFactor_One : WGPUBlendFactor_OneMinusSrcAlpha;
+        blendState.color.operation = WGPUBlendOperation_Add;
+        blendState.color.srcFactor = WGPUBlendFactor_SrcAlpha;
+        blendState.color.dstFactor = destinationFactor;
+        blendState.alpha.operation = WGPUBlendOperation_Add;
+        blendState.alpha.srcFactor = WGPUBlendFactor_SrcAlpha;
+        blendState.alpha.dstFactor = destinationFactor;
+
         WGPUColorTargetState target = WGPU_COLOR_TARGET_STATE_INIT;
         target.format = GetColorFormat();
-        target.blend = nullptr; // opaque (blending is stage G3b)
+        target.blend = key.blend ? &blendState : nullptr; // null: opaque
         target.writeMask = WGPUColorWriteMask_All;
 
         WGPUFragmentState fragment = WGPU_FRAGMENT_STATE_INIT;
@@ -486,15 +547,30 @@ namespace Renderer::WebGpu
         return false;
     }
 
-    Common::IShader* WebGpuRenderer::GetStandardUnlitShader() const
+    Common::IShader* WebGpuRenderer::GetStandardShader(const BuiltInShader kind) const
     {
         std::lock_guard lock(_mutex);
-        const WebGpuShader* shader = _state->shaders[ShaderIndex(BuiltInShader::Unlit)].get();
+        const WebGpuShader* shader = _state->shaders[ShaderIndex(kind)].get();
         if (!_initialized || shader == nullptr || !shader->IsValid())
         {
             return nullptr;
         }
         return const_cast<WebGpuShader*>(shader);
+    }
+
+    Common::IShader* WebGpuRenderer::GetStandardUnlitShader() const
+    {
+        return GetStandardShader(BuiltInShader::Unlit);
+    }
+
+    Common::IShader* WebGpuRenderer::GetStandardLitShader() const
+    {
+        return GetStandardShader(BuiltInShader::Lit);
+    }
+
+    Common::IShader* WebGpuRenderer::GetStandardTextShader() const
+    {
+        return GetStandardShader(BuiltInShader::Text);
     }
 
     Common::IMaterial* WebGpuRenderer::CreateMaterial(Common::IShader* shader)
@@ -525,8 +601,7 @@ namespace Renderer::WebGpu
         }
         if (chosen == nullptr)
         {
-            LogOnce("CreateMaterial: only materials of this renderer's built-in shaders (the unlit one in stage G3a) exist; "
-                    "returning null");
+            LogOnce("CreateMaterial: only materials of this renderer's built-in shaders (unlit, lit, text) exist; returning null");
             return nullptr;
         }
 
@@ -576,9 +651,11 @@ namespace Renderer::WebGpu
     void WebGpuRenderer::UpdateSceneLighting(const Common::SceneLightingData& lighting,
                                              const N2Engine::Math::Vector3& cameraPosition)
     {
-        static_cast<void>(lighting);
-        static_cast<void>(cameraPosition);
-        // Only the lit shader reads the lighting, and it is stage G3b: nothing to keep yet
+        // Only the CPU copy changes; the first lit draw after this copies it into the ring (see the header comment)
+        const Gpu::LightingBlock block = Gpu::BuildLightingBlock(lighting, cameraPosition);
+        std::lock_guard lock(_mutex);
+        _state->lighting = block;
+        ++_state->lightingVersion;
     }
 
     void WebGpuRenderer::SetWireframe(bool enabled)
@@ -678,7 +755,8 @@ namespace Renderer::WebGpu
             }
             if (texture == nullptr || !texture->view || texture->sampler == nullptr)
             {
-                texture = state.defaults[i].get();
+                // The text shader's atlas is its base sampler, and an absent one must read sdf 0 (draw nothing), not white
+                texture = (i == 0 && blockMaterial.kind == BuiltInShader::Text) ? state.textBaseDefault.get() : state.defaults[i].get();
             }
             if (texture == nullptr)
             {
@@ -687,14 +765,29 @@ namespace Renderer::WebGpu
             textures[i] = texture;
         }
 
-        // This draw's room in the ring: the per-draw block, then the material block, each at an aligned offset
+        // This draw's room in the ring: the per-draw block, then the material block, each at an aligned offset; and, for a lit
+        // draw whose chunk does not hold the current lighting yet, the lighting block after them
+        const bool lit = blockMaterial.kind == BuiltInShader::Lit;
         const std::uint64_t perDrawBytes = AlignUp64(kPerDrawBlockSize, state.uniformAlignment);
         const std::uint64_t materialBytes = AlignUp64(kMaterialBlockRange, state.uniformAlignment);
+        const std::uint64_t lightingBytes = AlignUp64(kLightingBlockSize, state.uniformAlignment);
         std::size_t chunkIndex = 0;
         std::uint64_t offset = 0;
-        if (!AllocateRing(perDrawBytes + materialBytes, chunkIndex, offset))
+        bool copyLighting = false;
+        for (;;)
         {
-            return;
+            // Ask for the lighting too when the chunk the draw would start in does not hold this version of it. If that chunk
+            // is full the allocation moves to the next, which holds none: then ask again with the lighting included
+            copyLighting = lit &&
+                !(state.activeChunk < state.chunks.size() && state.chunks[state.activeChunk].lightingVersion == state.lightingVersion);
+            if (!AllocateRing(perDrawBytes + materialBytes + (copyLighting ? lightingBytes : 0), chunkIndex, offset))
+            {
+                return;
+            }
+            if (!lit || copyLighting || state.chunks[chunkIndex].lightingVersion == state.lightingVersion)
+            {
+                break;
+            }
         }
         RingChunk& chunk = state.chunks[chunkIndex];
 
@@ -704,20 +797,32 @@ namespace Renderer::WebGpu
         WriteTransposed(perDraw + 64, state.view);
         WriteTransposed(perDraw + 128, state.projection);
         std::memcpy(perDraw + perDrawBytes, snapshot.block.data(), snapshot.block.size());
+        if (copyLighting)
+        {
+            // The first lit draw of this lighting version in this chunk: its copy goes after the material block
+            chunk.lightingOffset = offset + perDrawBytes + materialBytes;
+            chunk.lightingVersion = state.lightingVersion;
+            std::memcpy(chunk.staging.data() + chunk.lightingOffset, state.lighting.data(), state.lighting.size());
+        }
 
-        // Group 0: this chunk's per-draw range at a dynamic offset, made once per chunk
+        // Group 0: this chunk's per-draw range and lighting range, each at a dynamic offset; made once per chunk
         if (!chunk.frameGroup)
         {
-            WGPUBindGroupEntry entry = WGPU_BIND_GROUP_ENTRY_INIT;
-            entry.binding = 0;
-            entry.buffer = chunk.buffer.Get();
-            entry.offset = 0;
-            entry.size = kPerDrawBlockSize;
+            std::array<WGPUBindGroupEntry, 2> entries;
+            for (std::uint32_t i = 0; i < entries.size(); ++i)
+            {
+                entries[i] = WGPU_BIND_GROUP_ENTRY_INIT;
+                entries[i].binding = i;
+                entries[i].buffer = chunk.buffer.Get();
+                entries[i].offset = 0;
+            }
+            entries[0].size = kPerDrawBlockSize;
+            entries[1].size = kLightingBlockSize;
             WGPUBindGroupDescriptor descriptor = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
             descriptor.label = ToView("N2Engine frame group");
             descriptor.layout = state.frameLayout.Get();
-            descriptor.entryCount = 1;
-            descriptor.entries = &entry;
+            descriptor.entryCount = entries.size();
+            descriptor.entries = entries.data();
             chunk.frameGroup.Reset(wgpuDeviceCreateBindGroup(state.device.Get(), &descriptor));
             if (!chunk.frameGroup)
             {
@@ -770,12 +875,15 @@ namespace Renderer::WebGpu
             state.materialGroups.emplace(key, std::move(group));
         }
 
-        // Dynamic offsets, one per group (each group has one dynamic binding)
-        const std::uint32_t frameOffset = static_cast<std::uint32_t>(offset);
+        // Dynamic offsets, in binding order within each group: group 0 the per-draw block, then the lighting block (a draw that
+        // does not read the lighting names the chunk's copy if it has one, else offset 0, which is in range and never read);
+        // group 1 the material block
+        const std::uint32_t frameOffsets[2] = {static_cast<std::uint32_t>(offset),
+                                               static_cast<std::uint32_t>(chunk.lightingOffset)};
         const std::uint32_t materialOffset = static_cast<std::uint32_t>(offset + perDrawBytes);
         const WGPURenderPassEncoder pass = state.pass.Get();
         wgpuRenderPassEncoderSetPipeline(pass, pipeline);
-        wgpuRenderPassEncoderSetBindGroup(pass, 0, chunk.frameGroup.Get(), 1, &frameOffset);
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, chunk.frameGroup.Get(), 2, frameOffsets);
         wgpuRenderPassEncoderSetBindGroup(pass, 1, materialGroup, 1, &materialOffset);
         wgpuRenderPassEncoderSetVertexBuffer(pass, 0, webMesh.vertexBuffer.Get(), 0, WGPU_WHOLE_SIZE);
         wgpuRenderPassEncoderSetIndexBuffer(pass, webMesh.indexBuffer.Get(), WGPUIndexFormat_Uint32, 0, WGPU_WHOLE_SIZE);
@@ -834,6 +942,12 @@ namespace Renderer::WebGpu
     {
         std::lock_guard lock(_mutex);
         _state->ringChunkBytes = bytes;
+    }
+
+    std::vector<std::uint8_t> WebGpuRenderer::GetLightingBlockForTest() const
+    {
+        std::lock_guard lock(_mutex);
+        return std::vector<std::uint8_t>(_state->lighting.begin(), _state->lighting.end());
     }
 
     std::uint32_t WebGpuRenderer::GetUniformAlignmentForTest() const
