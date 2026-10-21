@@ -47,6 +47,12 @@ target_compile_definitions(editor_server_tests PRIVATE
         N2_PROTOCOL_TEST_VECTORS="${CMAKE_CURRENT_SOURCE_DIR}/../../editor-server/protocol/test-vectors.json"
 )
 
+# ExtensionApiAnnotationTests checks the LuaLS annotations of the Editor API of editor extensions against what the host
+# registers
+target_compile_definitions(editor_server_tests PRIVATE
+        N2_EDITOR_API_LUA="${CMAKE_CURRENT_SOURCE_DIR}/../../editor-server/editor-api.lua"
+)
+
 add_test(NAME editor_server_tests COMMAND editor_server_tests)
 
 # The project and scene-file commands (#75): a program of their own, since they load scenes into SceneManager and
@@ -71,6 +77,10 @@ else()
 endif()
 # tests/common has the deep scene JSON builder (EditorSceneDepthTests)
 target_include_directories(editor_project_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/common)
+# EditorExtensionAlignToolsTests loads lua_project/editor/AlignTools.lua through the extension host from where it lies
+target_compile_definitions(editor_project_tests PRIVATE
+        N2_LUA_PROJECT_DIR="${CMAKE_SOURCE_DIR}/lua_project"
+)
 add_test(NAME editor_project_tests COMMAND editor_project_tests)
 
 # The generated C++ client compiles (an object library nothing links: it is never part of a program)
