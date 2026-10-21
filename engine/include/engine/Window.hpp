@@ -97,18 +97,21 @@ namespace N2Engine
         /// no window is created: the software renderer starts headless at FallbackWidth x FallbackHeight
         /// (SoftwareRenderer::Initialize(nullptr, ...)), and the input system is created as usual. WEBGPU: false, before
         /// any GLFW call, with a window (not headless) or natively; in the web build the WebGPU renderer is made and
-        /// initialized headless the same way, which fails until the page hands its device in (stage G5).
+        /// initialized headless the same way, which fails until the page hands its device in (stage G5). With
+        /// RenderBackend::NONE there is neither a window nor a renderer: it succeeds, IsWindowless() is true,
+        /// IsValid() is false and GetRenderer() is null.
         bool InitWindow(const Config::ApplicationOptions &options);
         /// True once InitWindow has succeeded and until Shutdown: a window and a renderer, or (windowless) a
         /// renderer alone
         [[nodiscard]] bool IsValid() const { return (_window != nullptr || _windowless) && _renderer != nullptr; }
-        /// True when InitWindow took the no-window path (UsesNoWindow), until Shutdown
+        /// True when InitWindow took a no-window path (UsesNoWindow, or RenderBackend::NONE), until Shutdown
         [[nodiscard]] bool IsWindowless() const { return _windowless; }
         [[nodiscard]] const std::string& GetInitError() const { return _initError; }
         /// True when the window opened but the renderer failed (the window is then closed again)
         [[nodiscard]] bool RendererFailed() const { return _rendererFailed; }
         /// True when there is a window and it was asked to close, or when there is nothing to keep running for (no
-        /// valid window). A valid windowless window never closes: its host ends on its own conditions.
+        /// valid window). A windowless window (a renderer with no window, or RenderBackend::NONE) never closes: its host
+        /// ends on its own conditions.
         [[nodiscard]] bool ShouldClose() const;
         /// GLFW's events (with a window), then the input system's update (with or without one)
         void PollEvents();

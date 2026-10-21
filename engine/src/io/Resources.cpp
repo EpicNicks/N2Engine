@@ -118,10 +118,13 @@ namespace N2Engine::IO
             std::istreambuf_iterator<char>()
         };
 
-        return Application::GetInstance()
-               .GetWindow()
-               .GetRenderer()
-               ->CreateShaderProgram(vertexSource.c_str(), fragmentSource.c_str());
+        // No renderer (RenderBackend::NONE, a dedicated server): there is no program to make
+        Renderer::Common::IRenderer *renderer = Application::GetInstance().GetWindow().GetRenderer();
+        if (renderer == nullptr)
+        {
+            return nullptr;
+        }
+        return renderer->CreateShaderProgram(vertexSource.c_str(), fragmentSource.c_str());
     }
 
     void Resources::UnregisterAsset(const Math::UUID &uuid)

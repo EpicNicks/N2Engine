@@ -170,6 +170,34 @@ TEST_F(WindowlessWindowTest, InitCreatesARendererAndInputButNoWindow)
     window.Shutdown();
 }
 
+TEST_F(WindowlessWindowTest, NoRendererBackendCreatesNeitherAWindowNorARenderer)
+{
+    Window window;
+    ASSERT_TRUE(window.InitWindow(Options(RenderBackend::NONE, true))) << window.GetInitError();
+
+    // Nothing to draw with, so the window is not valid, but it started: nothing failed and nothing can close
+    EXPECT_FALSE(window.IsValid());
+    EXPECT_TRUE(window.IsWindowless());
+    EXPECT_FALSE(window.RendererFailed());
+    EXPECT_TRUE(window.GetInitError().empty());
+    EXPECT_EQ(window.GetRenderer(), nullptr);
+    EXPECT_NE(window.GetInputSystem(), nullptr);
+    EXPECT_FALSE(window.ShouldClose());
+    EXPECT_EQ(window.GetWindowDimensions()[0], 0);
+    EXPECT_EQ(window.GetWindowDimensions()[1], 0);
+    EXPECT_FALSE(Window::UsesNoWindow(Options(RenderBackend::NONE, true)));
+
+    // GLFW was never initialised and none of these reach it (TearDown fails on any GLFW error)
+    EXPECT_FALSE(Window::HasGlfw());
+    window.PollEvents();
+    window.Clear();
+    EXPECT_FALSE(window.SetRenderSize(8, 4));
+
+    window.Shutdown();
+    EXPECT_FALSE(window.IsWindowless());
+    EXPECT_TRUE(window.ShouldClose());
+}
+
 TEST_F(WindowlessWindowTest, RendersAndReadsBackAtTheRenderSize)
 {
     Window window;

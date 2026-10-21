@@ -549,8 +549,11 @@ namespace N2Engine::N2Net
         }
         inPoll_ = true;
         const std::uint64_t now = NowMicros();
-        RunTimers(now, handler);
+        // Drain first, then sweep, as UdpTransport::Poll does: a caller that stalled for longer than the idle timeout
+        // must not lose sessions whose authenticated packets are already queued. Both steps read the time the Poll
+        // began, so a packet that authenticates here is stamped with it and its session is not idle against it.
         inner_->Poll([this, now, handler](const TransportEvent &event) { OnInnerEvent(event, now, handler); });
+        RunTimers(now, handler);
         inPoll_ = false;
 
         // The inner transport forbids Disconnect from inside its Poll: the sessions that ended are let go here

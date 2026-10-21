@@ -71,6 +71,8 @@ namespace
             return "Software";
         case Config::ApplicationOptions::RenderBackend::WEBGPU:
             return "WebGPU";
+        case Config::ApplicationOptions::RenderBackend::NONE:
+            return "None";
         }
         return "Unknown";
     }
@@ -129,7 +131,9 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     if (project)
     {
         networkSettings = ReadNetworkSettings(project->settings);
-        networkEnv.gpuMode = ReadPhysicsGpuMode(project->settings);
+        // ApplicationOptions::physicsGpu false (a dedicated server): the GPU is off whatever the project says, and a
+        // network preset's requirements are checked against that
+        networkEnv.gpuMode = options.physicsGpu ? ReadPhysicsGpuMode(project->settings) : Physics::GpuMode::Off;
         networkEnv.simdTier = ReadMathSimdTier(project->settings);
         networkEnv.luaSeedSet = ReadDeterminismLuaSeed(project->settings).has_value();
         networkEnv.fixedTimestepSeconds = Time::GetFixedTimestep();
@@ -302,7 +306,15 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     Rendering::RenderSettings::SetForceShaderEncode(false);
 
     const std::string rendererName{RenderBackendName(options.renderBackend)};
-    if (_window.InitWindow(options) && _window.IsWindowless())
+    if (_window.InitWindow(options) && options.renderBackend == Config::ApplicationOptions::RenderBackend::NONE)
+    {
+        // Deliberately no window and no renderer (a dedicated server): nothing failed, nothing is drawn
+        windowStatus.state = SubsystemState::Disabled;
+        windowStatus.detail = "No window: this host draws nothing";
+        rendererStatus.state = SubsystemState::Disabled;
+        rendererStatus.detail = "No renderer: this host draws nothing";
+    }
+    else if (_window.IsWindowless())
     {
         // Deliberately no window (Window::UsesNoWindow): healthy, and frames are read back instead
         windowStatus.state = SubsystemState::Disabled;
@@ -353,7 +365,7 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
     bool deterministicPhysics = false; // physics.deterministic, read here for the same reason
     if (project)
     {
-        gpuMode = ReadPhysicsGpuMode(project->settings);
+        gpuMode = options.physicsGpu ? ReadPhysicsGpuMode(project->settings) : Physics::GpuMode::Off;
         deterministicPhysics = ReadPhysicsDeterministic(project->settings);
     }
 
@@ -445,7 +457,14 @@ EngineHealth Application::Init(const Config::ApplicationOptions &options)
 #else
     const bool audioToLoopback = options.isHeadless;
 #endif
-    if (audioToLoopback)
+    if (!options.audio)
+    {
+        // A dedicated server: no device of any kind is opened, so nothing can fail and nothing is streamed. The Audio
+        // subsystem is never initialised; every AudioSystem call the tick makes is then a no-op, as after a failed open.
+        audioStatus.state = SubsystemState::Disabled;
+        audioStatus.detail = "Audio is off (ApplicationOptions::audio)";
+    }
+    else if (audioToLoopback)
     {
         // Headless audio is mixed into a loopback device (nothing plays locally) and streamed to the editor
         // client; see AudioSystem::AdvanceStream and the editor protocol's GetAudio
