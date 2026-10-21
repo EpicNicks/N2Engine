@@ -956,14 +956,10 @@ namespace N2Engine::N2Net
             ++stats_.droppedBackedOff;
             return;
         }
-        if (!connectBucket_->TryTake(address))
-        {
-            ++stats_.droppedRateLimited;
-            return;
-        }
-
         // 1. The cookie: made by this process (a secret it still holds), for this address and port and these request
-        //    fields, and recent. Nothing has been allocated for the peer up to here.
+        //    fields, and recent. Nothing has been allocated for the peer up to here. It is checked BEFORE the connect
+        //    rate is charged, so echoes from spoofed sources (which cannot hold a valid cookie) cost one HMAC and
+        //    never use up the budget meant for address-validated peers.
         const std::uint64_t nowMillis = now / 1000;
         if (!RotateCookieSecret(nowMillis))
         {
@@ -1001,6 +997,11 @@ namespace N2Engine::N2Net
         if (cookieTime > nowMillis || nowMillis - cookieTime > options_.cookieLifetimeMicros / 1000)
         {
             ++stats_.droppedExpiredCookie;
+            return;
+        }
+        if (!connectBucket_->TryTake(address))
+        {
+            ++stats_.droppedRateLimited;
             return;
         }
 
@@ -1139,7 +1140,11 @@ namespace N2Engine::N2Net
 
     void SecureTransport::OnChallenge(PeerId /*peer*/, std::span<const std::uint8_t> data, std::uint64_t now)
     {
-        if (clientState_ != SecureClientState::Requesting && clientState_ != SecureClientState::Responding)
+        // Only while Requesting. Once Responding the client keeps the cookie it echoed: a later Challenge (the answer
+        // to a resent ConnectRequest when the round trip exceeds resendIntervalMicros) carries another cookie, and
+        // taking it would make the client's transcript differ from the one the server built its session (and its
+        // Accept) from. RunTimers goes back to Requesting when the cookie has expired.
+        if (clientState_ != SecureClientState::Requesting)
         {
             ++stats_.droppedDuplicate;
             return;

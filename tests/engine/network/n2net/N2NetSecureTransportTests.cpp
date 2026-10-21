@@ -842,6 +842,29 @@ TEST(N2NetSecureTransportTest, ALostAcceptIsSentAgainByteForByte)
     EXPECT_EQ(pair.server->EstablishedSessionCount(), 1u);
 }
 
+TEST(N2NetSecureTransportTest, AHandshakeCompletesWhenTheRoundTripExceedsTheResendInterval)
+{
+    SecurePair pair;
+    // A 300 ms round trip, over the 250 ms resend interval: the ConnectRequest goes out twice and two Challenges (two
+    // different cookies) come back; the client must keep the cookie it echoed first, which the server's Accept is for
+    SimLinkConfig slow;
+    slow.latencyMicros = 150'000;
+    pair.net.SetLinkConfig(pair.serverEnd.Id(), pair.clientEnd.Id(), slow);
+    pair.net.SetLinkConfig(pair.clientEnd.Id(), pair.serverEnd.Id(), slow);
+    ASSERT_TRUE(pair.client->Connect(pair.serverEnd.Id()));
+    ASSERT_TRUE(pair.RunUntil(
+        [&]
+        {
+            return pair.client->ClientState() == SecureClientState::Connected &&
+                   CountOf(pair.serverEvents, TransportEventType::PeerConnected) == 1;
+        },
+        4'000));
+    EXPECT_GE(pair.server->Stats().challengesSent, 2u) << "the request was sent again before the first Challenge came back";
+    EXPECT_EQ(pair.server->Stats().acceptsSent, 1u);
+    EXPECT_EQ(pair.client->Stats().droppedBadAccept, 0u);
+    EXPECT_EQ(pair.server->EstablishedSessionCount(), 1u);
+}
+
 // ==================== Sealed packets ====================
 
 TEST(N2NetSecureTransportTest, AReplayedSealedPacketIsDropped)
@@ -971,6 +994,35 @@ TEST(N2NetSecureTransportTest, ConnectFloodsAreRateLimited)
     attacker.Send(pair, RawRequest(0xEE));
     PollInto(*pair.server, pair.serverEvents);
     EXPECT_EQ(stats.challengesSent, 12u) << "the client's one, then the attacker's";
+}
+
+TEST(N2NetSecureTransportTest, SpoofedEchoesDoNotSpendTheConnectRate)
+{
+    SecurePair pair;
+    // 80 echoes with forged cookies (a current time, so the cookie MAC is computed), each from its own address: more
+    // than the connect rate's global burst (50). The cookie is checked before the rate is charged, so none of them
+    // takes a connect token and the legitimate client still gets in.
+    std::vector<std::uint8_t> forgedChallenge(Wire::kChallengeSize, 0x42);
+    forgedChallenge[0] = Wire::kChallenge;
+    const std::uint64_t nowMillis = pair.clock / 1000;
+    for (std::size_t i = 0; i < 8; ++i)
+    {
+        forgedChallenge[1 + i] = static_cast<std::uint8_t>(nowMillis >> (8 * i));
+    }
+    std::vector<std::unique_ptr<Raw>> spoofed;
+    for (std::size_t i = 0; i < 80; ++i)
+    {
+        spoofed.push_back(std::make_unique<Raw>(pair));
+        spoofed.back()->Send(pair, RawResponse(RawRequest(static_cast<std::uint8_t>(i)), forgedChallenge));
+    }
+    PollInto(*pair.server, pair.serverEvents);
+    EXPECT_EQ(pair.server->Stats().droppedBadCookie, 80u);
+    EXPECT_EQ(pair.server->Stats().droppedRateLimited, 0u);
+    EXPECT_EQ(pair.server->PreAuthSlotsInUse(), 0u);
+
+    ASSERT_TRUE(pair.Handshake());
+    EXPECT_EQ(pair.server->Stats().droppedRateLimited, 0u);
+    EXPECT_EQ(pair.server->EstablishedSessionCount(), 1u);
 }
 
 // ==================== End to end over loopback UDP ====================

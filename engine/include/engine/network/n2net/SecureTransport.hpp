@@ -140,7 +140,8 @@ namespace N2Engine::N2Net
         Security::PreAuthSlotsOptions preAuthSlots{.totalSlots = 16, .perAddressSlots = 2};
         /// The rate of Challenges (answers to ConnectRequest), globally and per non-loopback address
         Security::TokenBucketOptions challengeRate{.globalPerSecond = 200, .perAddressPerSecond = 10};
-        /// The rate of ConnectResponses the server does work for (cookie check, slot, token check, X25519)
+        /// The rate of ConnectResponses the server does work for (slot, token check, X25519), charged only once the cookie
+        /// verified, so echoes from spoofed sources cannot spend it
         Security::TokenBucketOptions connectRate{.globalPerSecond = 50, .perAddressPerSecond = 5};
         /// Backoff of addresses whose handshakes failed (a wrong token, or no sealed packet after the Accept)
         Security::RateLimitPolicy failures{};
