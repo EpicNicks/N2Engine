@@ -1,0 +1,2 @@
+# The repository ignores *.cmake (generated files); this vendored script is source, kept as upstream ships it
+!*.cmake

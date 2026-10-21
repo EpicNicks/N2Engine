@@ -43,6 +43,7 @@
 <li><a href="resources.html">Resources &amp; paths</a></li>
 <li><a href="serialization.html">Serialization</a></li>
 <li><a href="math.html">Math &amp; SIMD</a></li>
+<li><a href="netcode.html">Netcode (n2net)</a></li>
 </ul>
 </div>
 <div>
@@ -124,6 +125,7 @@
 <tr><td><code>editor-server/</code></td><td><code>N2EditorHost</code>, a headless engine host that editors talk to over TCP. See <a href="logging-and-editor.html">Logging, health &amp; editor</a>.</td></tr>
 <tr><td><code>test_project/</code>, <code>lua_project/</code></td><td>Example games, in C++ and in Lua.</td></tr>
 <tr><td><code>cmake/N2EngineWeb.cmake</code>, <code>scripts/</code> <span class="badge">PR #163</span></td><td>The WebAssembly (Emscripten) build, issue #155: <code>N2ENGINE_PLATFORM_WEB</code>, the <code>N2ENGINE_WEB_PROFILE</code> profiles and a size report; the engine core, the web player (<code>web/</code>, <span class="badge">PR #170</span>) and a static package that runs the software renderer on a canvas. See <a href="web-build.html">Web build</a> and the <a href="web-checklist.html">manual browser checklist</a>.</td></tr>
+<tr><td><code>engine/include/engine/network/n2net/</code>, <code>engine/src/network/n2net/</code> <span class="badge">PR #197</span></td><td>n2net, the netcode's packet layer: <code>ITransport</code>, the deterministic in-memory <code>SimTransport</code> simulator, packet headers with ack bits, reliable-ordered and unreliable-sequenced channels, fragmentation. Its own static library target (<code>n2net</code>), standard library only: no sockets, no encryption, not linked into the engine yet. See <a href="netcode.html">Netcode (n2net)</a>.</td></tr>
 <tr><td><code>tests/</code></td><td>GoogleTest suites per module (built when <code>N2ENGINE_BUILD_TESTS=ON</code>). See <a href="testing.html">Testing &amp; CI</a>.</td></tr>
 </tbody>
 </table>
@@ -275,6 +277,7 @@
 <tr><td><a href="physics.html#design-physics-deterministic">An opt-in <code>physics.deterministic</code> setting; GPU physics yields to it</a> <span class="badge">PR #161</span></td><td>PhysX enhanced determinism and 0 worker threads cost performance, so they are off by default; with <code>physics.gpu</code> auto/on as well the scene is the CPU scene with a warning, because the flag is not supported on GPU.</td></tr>
 <tr><td><a href="physics.html#design-network-presets-data">The network preset bundles are one table of data in the engine</a> <span class="badge">PR #187</span></td><td>Decided by the user on 2026-10-20: three built-in presets, one table of locked, tunable and startup-checked rows read by both the engine and the editor, so they cannot disagree about what a preset locks; only a Locked (not Tunable) cell can make a project Customised.</td></tr>
 <tr><td><a href="physics.html#design-network-refusal">A Deterministic project is refused before anything starts</a> <span class="badge">PR #187</span></td><td>Decided by the user on 2026-10-20 (refuse, never silently degrade): checked right after the project file is read, naming every unmet requirement in a Failed Network health row; no backend declares CrossPlatform yet, so such a project cannot start.</td></tr>
+<tr><td><a href="physics.html#design-jolt-vendored">Jolt is vendored and always built cross-platform deterministic; no target links it yet</a> <span class="badge">PR #195</span></td><td>The source is pinned in <code>external/JoltPhysics</code>, built only with <code>N2ENGINE_USE_JOLT</code> and only in the deterministic mode, and linked into nothing (no backend; the web player does not carry it) until the measured size is accepted.</td></tr>
 <tr><td><a href="audio.html#design-no-headless-clips">No audio clips without a context</a></td><td>Clips are OpenAL buffers, so they fail to load (with a warning) while the <code>AudioSystem</code> is not initialized, and a clip from an earlier context is never treated as loaded.</td></tr>
 <tr><td><a href="scenes.html#design-dropped-scenes">A dropped scene undoes only what attached</a></td><td>A scene destroyed without being loaded tears down the components that attached to it, and gives no callbacks to those that never did.</td></tr>
 <tr><td><a href="serialization.html#design-prefab-uuids">A prefab instance is a new object tree</a></td><td>Instantiating resolves references inside the prefab to the new objects, then gives every object and component a fresh UUID; references leaving the prefab become null.</td></tr>
@@ -361,6 +364,8 @@
 <tr><td><a href="scripting-lua.html#design-lua-execution-policy">The editor host that edits never runs project Lua</a> <span class="badge">PR #179</span></td><td>A process-wide execution policy: a <code>LuaComponent</code> there reads its script's declarations from a cache keyed by the source text and runs nothing, so a loaded scene, an undo or a reload cannot reach any binding; a game and the play host are unchanged. The cost: engine-derived defaults are unknown, and Lua <code>OnDisable</code>/<code>OnDestroy</code> no longer run on delete.</td></tr>
 <tr><td><a href="scripting-lua.html#design-declaration-worker">Declarations are read on a worker that is abandoned at its deadline</a> <span class="badge">PR #179</span></td><td>A script can stall Lua's collector in one C call that nothing can interrupt, and the host has one command thread, so the evaluation runs on a worker (at most four) and the command answers a failed declaration at the deadline; the vendored Lua is not patched.</td></tr>
 <tr><td><a href="web-build.html#design-web-reduced-set">Stage 0 of the web build builds math and text only</a> <span class="badge">PR #163</span></td><td>The engine core needs source changes (window, threads, files) that belong to later stages; the two CPU-only libraries prove the toolchain, flags and node test runner end to end.</td></tr>
+<tr><td><a href="netcode.html#design-n2net-own-layer">The netcode packet layer is our own, not a networking dependency</a> <span class="badge">PR #197</span></td><td>The browser transports, the security model and the simulator have to be ours anyway, and the reliability layer is the small part.</td></tr>
+<tr><td><a href="netcode.html#design-n2net-integer-sim">The network simulator is integer-only with its own random number generator</a> <span class="badge">PR #197</span></td><td>Its golden traces must be identical on every compiler, standard library and architecture, which floating point and the standard distributions do not promise.</td></tr>
 </tbody>
 </table>
 </div>

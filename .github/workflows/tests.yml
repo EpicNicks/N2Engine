@@ -245,12 +245,27 @@ jobs:
           if (Get-Command ccache -ErrorAction SilentlyContinue) {
             $launcher = @('-DCMAKE_C_COMPILER_LAUNCHER=ccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache')
           }
-          cmake -S . -B build -G 'Ninja Multi-Config' -DCMAKE_CONFIGURATION_TYPES=${{ matrix.config }} -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_POLICY_DEFAULT_CMP0141=NEW '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=$<$<CONFIG:Debug>:Embedded>' $launcher -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} -DN2ENGINE_EDITOR_TLS=${{ matrix.tls }}
+          cmake -S . -B build -G 'Ninja Multi-Config' -DCMAKE_CONFIGURATION_TYPES=${{ matrix.config }} -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_POLICY_DEFAULT_CMP0141=NEW '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=$<$<CONFIG:Debug>:Embedded>' $launcher -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=${{ matrix.physx }} -DN2ENGINE_TEXT_FREETYPE=${{ matrix.freetype }} -DN2ENGINE_MODEL_UFBX=${{ matrix.ufbx }} -DN2ENGINE_EDITOR_TLS=${{ matrix.tls }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build
         if: needs.changes.outputs.docs_only != 'true'
         run: cmake --build build --config ${{ matrix.config }} --parallel
+
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT, no engine target uses it yet): its smoke test run directly, because ctest
+      # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce) is in this
+      # job's log and summary
+      - name: Jolt determinism numbers
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: pwsh
+        run: |
+          & "./build/bin/${{ matrix.config }}/jolt_smoke_tests.exe" | Tee-Object -FilePath jolt-smoke.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Add-Content $env:GITHUB_STEP_SUMMARY 'windows ${{ matrix.config }}, PhysX ${{ matrix.physx }}:'
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Select-String -Path jolt-smoke.log -Pattern '^\[JOLT-DETERMINISM\]' | ForEach-Object { Add-Content $env:GITHUB_STEP_SUMMARY ('    ' + $_.Line) }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
 
       - name: Test
         if: needs.changes.outputs.docs_only != 'true'
@@ -405,10 +420,23 @@ jobs:
           ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests jolt_smoke_tests -- -k 0
+
+      # The vendored Jolt Physics tree is exactly upstream's v5.6.0 (the SHA-256 of every file, no extra file under Jolt/)
+      - name: Check the vendored Jolt Physics tree
+        run: bash scripts/check-jolt-vendor.sh
+
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT, no engine target uses it yet): its smoke test run directly, because ctest
+      # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
+      # first cross-platform determinism data point) is in this job's log and summary
+      - name: Jolt determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 600
@@ -530,10 +558,19 @@ jobs:
           ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="--gcc-install-dir=/usr/lib/gcc/aarch64-linux-gnu/14" -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests jolt_smoke_tests -- -k 0
+
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT, no engine target uses it yet): its smoke test run directly, because ctest
+      # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
+      # first cross-platform determinism data point) is in this job's log and summary
+      - name: Jolt determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 600
@@ -633,10 +670,19 @@ jobs:
           ccache --show-config | grep -E " (cache_dir|max_size|base_dir|hash_dir|compiler_check) = " || true
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_BUILD_TESTS=ON -DN2ENGINE_USE_JOLT=ON -DN2ENGINE_USE_PHYSX=OFF -DN2ENGINE_STRICT_FP=ON -DN2ENGINE_EDITOR_TLS=ON -DN2ENGINE_TEXT_FREETYPE=ON -DN2ENGINE_MODEL_UFBX=ON -DN2ENGINE_RENDERER_VULKAN=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
-        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests -- -k 0
+        run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests jolt_smoke_tests -- -k 0
+
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT, no engine target uses it yet): its smoke test run directly, because ctest
+      # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
+      # first cross-platform determinism data point) is in this job's log and summary
+      - name: Jolt determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 600
@@ -830,7 +876,7 @@ jobs:
           set -e -o pipefail
           . "$HOME/emsdk/emsdk_env.sh"
           start=$(date +%s)
-          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev 2>&1 | tee configure-dev.log
+          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE=dev -DN2ENGINE_USE_JOLT=ON 2>&1 | tee configure-dev.log
           echo "configure took $(( $(date +%s) - start )) s (PhysX cache hit: ${{ steps.physx-web-cache.outputs.cache-hit }})"
           # PhysX failing to build turns it OFF with a warning in every other configuration; on the web that would only
           # skip the physics tests, so the job insists that it is on
@@ -852,14 +898,14 @@ jobs:
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
           for profile in size speed; do
-            emcmake cmake -S . -B "build-web-$profile" -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE="$profile" -DN2ENGINE_BUILD_TESTS=OFF
+            emcmake cmake -S . -B "build-web-$profile" -G Ninja -DCMAKE_BUILD_TYPE=Release -DN2ENGINE_WEB_PROFILE="$profile" -DN2ENGINE_BUILD_TESTS=OFF -DN2ENGINE_USE_JOLT=ON
           done
 
       - name: Build
         run: |
           set -e
           . "$HOME/emsdk/emsdk_env.sh"
-          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests -- -k 0
+          cmake --build build-web --target math_tests text_tests assetimport_tests engine_tests renderer_tests web_tests jolt_smoke_tests -- -k 0
 
       # CMake's Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to node, so ctest runs build-web/bin/<name>.js under node
       - name: Test under node
@@ -927,6 +973,17 @@ jobs:
           bash scripts/web-size-report.sh build-web-size/web-package
           node scripts/web-budget-check.mjs build-web-size/web-package size
 
+      # Jolt Physics (N2ENGINE_USE_JOLT) is NOT linked into the player: two small programs of its own (cmake/jolt/probe) give
+      # its measured weight in this profile (the .wasm of the probe minus the baseline's, next to the player's own), and the
+      # probe, which runs the smoke test's scenario, must print the golden state hash (it exits non-zero otherwise)
+      - name: Measure Jolt Physics (size profile)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web-size --target jolt_size_baseline jolt_size_probe -- -k 0
+          node build-web-size/bin/jolt_size_probe.js
+          node scripts/web-jolt-size-report.mjs build-web-size size
+
       - name: Build and check the web package (speed profile)
         run: |
           set -e
@@ -935,6 +992,14 @@ jobs:
           node scripts/web-package-smoke.mjs build-web-speed/web-package 30 320x180 --precompressed
           bash scripts/web-size-report.sh build-web-speed/web-package
           node scripts/web-budget-check.mjs build-web-speed/web-package speed
+
+      - name: Measure Jolt Physics (speed profile)
+        run: |
+          set -e
+          . "$HOME/emsdk/emsdk_env.sh"
+          cmake --build build-web-speed --target jolt_size_baseline jolt_size_probe -- -k 0
+          node build-web-speed/bin/jolt_size_probe.js
+          node scripts/web-jolt-size-report.mjs build-web-speed speed
 
   # WebGPU backend, stage G1 (#155): the hand-written WGSL shaders (renderer/shaders/webgpu/*.wgsl) are validated by Tint (the
   # WGSL compiler of Chrome and Edge) and by naga (Firefox's; Safari's WebKit compiler has no CI path), the pinned versions in scripts/install-wgsl-validators.sh

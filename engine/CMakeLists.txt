@@ -4,6 +4,10 @@ file(GLOB_RECURSE ENGINE_SOURCES
     "src/*.cxx"
 )
 
+# n2net (the netcode's packet layer and network simulator) has no engine dependency: it is its own library, below, and
+# the engine does not link it yet. Keep its sources out of the engine's glob.
+list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/network/n2net/")
+
 add_library(engine STATIC
     ${ENGINE_SOURCES}
 )
@@ -92,3 +96,27 @@ target_link_libraries(engine
     lua
     N2Engine::text # public: engine/text/Font.hpp exposes the text library's types
 )
+
+# == n2net: ITransport, the in-memory SimTransport, the packet layer (acks, reliable and unreliable channels,
+# fragmentation). Standard library only: no sockets, no threads, no platform headers, no engine types, so it builds the
+# same on Windows, Linux, arm64 and the single-threaded web build. Headers are under include/engine/network/n2net/.
+file(GLOB N2NET_SOURCES "src/network/n2net/*.cpp")
+add_library(n2net STATIC ${N2NET_SOURCES})
+add_library(N2Engine::n2net ALIAS n2net)
+
+target_include_directories(n2net
+    PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+set_target_properties(n2net PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+)
+
+if (MSVC)
+    target_compile_options(n2net PRIVATE /W4)
+else ()
+    target_compile_options(n2net PRIVATE -Wall -Wextra)
+endif ()

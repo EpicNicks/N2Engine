@@ -31,6 +31,7 @@ add_executable(engine_tests ${ENGINE_TEST_SOURCES})
 target_link_libraries(engine_tests
         PRIVATE
         engine
+        n2net # the netcode packet layer and simulator: no engine dependency
         renderer # engine's scene headers include renderer headers
         math
         GTest::gtest
