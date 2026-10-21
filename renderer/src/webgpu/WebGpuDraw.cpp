@@ -23,8 +23,8 @@
 //   by the lit shader only), UNIFORM buffers, each with a DYNAMIC offset
 //   group 1 (the material): binding 0 the material block (a dynamic offset), bindings 1-5 the base texture and the four
 //   AuxTexture slots, bindings 6-10 their samplers (WGSL has no combined image sampler)
-// The pipeline layout is the two groups, for all shaders, so a shader that reads fewer bindings (unlit and text read 0 and 6
-// and 1 only) needs no layout of its own.
+// The pipeline layout is the two groups, for all shaders, so a shader that reads fewer bindings (unlit and text do not read the
+// lighting block and sample only the base texture, binding 1, with its sampler, binding 6) needs no layout of its own.
 //
 // The uniform ring. A draw needs a per-draw block and a material block. Each draw takes the next slot of the current ring chunk
 // (a uniform buffer; when it is full the frame moves to the next chunk, a new one if there is none) and fills it in a CPU copy
