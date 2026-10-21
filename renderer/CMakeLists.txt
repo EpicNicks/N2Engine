@@ -99,7 +99,8 @@ endif()
 # the renderer gets Dawn's headers, and the static library is only pulled in by what references it
 if(N2ENGINE_RENDERER_WEBGPU)
     include(${CMAKE_SOURCE_DIR}/cmake/DawnPrebuilt.cmake)
-    target_link_libraries(renderer PRIVATE n2_dawn)
+    # renderer_webgpu_shaders (defined further down) is the generated WgslSources.hpp the backend's unlit shader module is made from
+    target_link_libraries(renderer PRIVATE n2_dawn renderer_webgpu_shaders)
 endif()
 
 # Compile definitions
@@ -233,8 +234,8 @@ endif()
 # CMAKE_CONFIGURE_DEPENDS); the file is rewritten only when its text changes, so an unchanged shader rebuilds nothing.
 # Each shader goes in as raw string literals of at most 8000 characters, concatenated (MSVC limits a literal to 16380).
 #
-# Nothing draws with it yet: the WebGPU backend (N2ENGINE_RENDERER_WEBGPU, stage G2) has no shaders in use until stage G3a, which
-# links this target; renderer_tests links it to check the embedded text is the files'. The shaders are validated by Tint and naga in CI
+# The WebGPU backend (N2ENGINE_RENDERER_WEBGPU) links this target (stage G3a: its unlit shader module is made from kUnlitWgsl; the lit
+# and text shaders follow in G3b); renderer_tests links it to check the embedded text is the files'. The shaders are validated by Tint and naga in CI
 # (scripts/validate-wgsl.sh) and parsed by tests/renderer/webgpu/WebGpuShaderParityTests.cpp.
 # ---------------------------------------------------------------------------------------------------------------------
 set(N2_WGSL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders/webgpu")

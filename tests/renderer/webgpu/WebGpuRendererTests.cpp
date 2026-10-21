@@ -450,35 +450,34 @@ TEST_F(WebGpuTest, FrameCallsOutOfOrderAreHarmless)
     EXPECT_EQ(R().GetValidationErrorCount(), 0u);
 }
 
-TEST_F(WebGpuTest, EverythingThatWouldDrawFailsCleanlyAndWarnsOncePerCall)
+TEST_F(WebGpuTest, WhatStaysUnimplementedFailsCleanlyAndWarnsOncePerCall)
 {
-    // Stages G3a and G3b add meshes, textures, materials, shaders and draws. Until then each call returns null/false or does
-    // nothing, says so on stderr ONCE per renderer and call name, and a frame still renders (it clears)
-    Renderer::Common::MeshData mesh;
-    mesh.vertices.resize(3);
-    mesh.indices = {0, 1, 2};
-    const std::uint8_t texel[4] = {1, 2, 3, 4};
+    // Stage G3a made meshes, textures, materials, the unlit shader and draws real (WebGpuRendererResourceTests.cpp and
+    // WebGpuRendererUnlitDrawTests.cpp). What is left: the lit and text built-in shaders (stage G3b), custom shaders (not
+    // supported on any GPU backend), wireframe (not in core WebGPU). Each returns null or does nothing, says so on stderr ONCE
+    // per renderer and call name, and a frame still renders (it clears). Calls with null arguments are harmless
+    Renderer::Common::MeshData empty;
     const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
     ::testing::internal::CaptureStderr();
     for (int round = 0; round < 3; ++round)
     {
-        EXPECT_EQ(R().CreateMesh(mesh), nullptr);
-        EXPECT_FALSE(R().UpdateMesh(nullptr, mesh));
-        R().DestroyMesh(nullptr);
-        EXPECT_EQ(R().CreateTexture(texel, 1, 1, 4), nullptr);
-        EXPECT_EQ(R().CreateTexture(texel, 1, 1, 4, Renderer::Common::TextureOptions{}), nullptr);
-        R().DestroyTexture(nullptr);
-        EXPECT_EQ(R().CreateMaterial(nullptr), nullptr);
-        EXPECT_EQ(R().CreateMaterial(nullptr, nullptr), nullptr);
-        R().DestroyMaterial(nullptr);
         EXPECT_EQ(R().CreateShaderProgram("void main(){}", "void main(){}"), nullptr);
         EXPECT_FALSE(R().IsValidShader(nullptr));
         EXPECT_FALSE(R().DestroyShaderProgram(nullptr));
         R().UseShaderProgram(nullptr);
-        EXPECT_EQ(R().GetStandardUnlitShader(), nullptr);
+        EXPECT_NE(R().GetStandardUnlitShader(), nullptr);
         EXPECT_EQ(R().GetStandardLitShader(), nullptr);
         EXPECT_EQ(R().GetStandardTextShader(), nullptr);
+
+        EXPECT_EQ(R().CreateMesh(empty), nullptr);
+        EXPECT_FALSE(R().UpdateMesh(nullptr, empty));
+        R().DestroyMesh(nullptr);
+        EXPECT_EQ(R().CreateTexture(nullptr, 1, 1, 4), nullptr);
+        R().DestroyTexture(nullptr);
+        EXPECT_EQ(R().CreateMaterial(nullptr), nullptr);
+        EXPECT_EQ(R().CreateMaterial(nullptr, nullptr), nullptr);
+        R().DestroyMaterial(nullptr);
 
         R().SetViewProjection(identity, identity);
         R().UpdateSceneLighting(Renderer::Common::SceneLightingData{}, N2Engine::Math::Vector3{});
@@ -503,10 +502,10 @@ TEST_F(WebGpuTest, EverythingThatWouldDrawFailsCleanlyAndWarnsOncePerCall)
         }
         return found;
     };
-    for (const char* name : {"CreateMesh", "UpdateMesh", "CreateTexture", "CreateMaterial", "CreateShaderProgram",
-                             "GetStandardUnlitShader", "GetStandardLitShader", "GetStandardTextShader", "SetWireframe",
-                             "DrawMesh", "DrawObjects"})
+    for (const char* name : {"GetStandardLitShader", "GetStandardTextShader"})
     {
         EXPECT_EQ(count(std::string("WebGPU renderer: ") + name + " is not implemented yet"), 1) << name;
     }
+    EXPECT_EQ(count("WebGPU renderer: CreateShaderProgram: custom shaders are not supported"), 1);
+    EXPECT_EQ(count("WebGPU renderer: SetWireframe: wireframe is not supported"), 1);
 }

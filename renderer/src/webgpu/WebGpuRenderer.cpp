@@ -10,9 +10,12 @@
 
 #include "renderer/webgpu/WebGpuRenderer.hpp"
 
+#include "WebGpuInternal.hpp"
+
 // Stage G2 of the WebGPU backend (#155): headless initialisation, an offscreen colour and depth target, a frame that clears
-// it, a synchronous readback, resizing, shutdown and the counting of every error the device reports. The unimplemented
-// IRenderer calls (everything that needs a mesh, a texture or a shader: stages G3a and G3b) are at the end.
+// it, a synchronous readback, resizing, shutdown and the counting of every error the device reports. Meshes, textures and
+// the samplers are in WebGpuResources.cpp and the shaders, materials, pipelines, uniform ring and draws in WebGpuDraw.cpp
+// (stage G3a); the IRenderer calls that stay unimplemented until stage G3b (lit and text shaders) are at the end of this file.
 //
 // Written against webgpu.h (the C API) only, so that stage G4 can compile this file with Emscripten's emdawnwebgpu port. What
 // exists only natively is marked "NATIVE ONLY": asking for the Vulkan backend by type, and the blocking waits
@@ -20,8 +23,9 @@
 // readback cannot block at all, see the design in the proposal's section 4.3).
 //
 // Object lifetimes, in creation order (ShutdownLocked releases them in reverse):
-//   instance -> adapter -> device (+ its queue) -> colour and depth textures with a view each -> per frame: a command encoder
-//   and a render pass encoder, then a command buffer
+//   instance -> adapter -> device (+ its queue) -> colour and depth textures with a view each -> the draw resources (shader
+//   module, layouts, default textures: WebGpuDraw.cpp) -> meshes, textures, materials, pipelines and ring chunks as they are
+//   made -> per frame: a command encoder and a render pass encoder, then a command buffer
 // Every handle is held by a small reference-counting wrapper (Ref) that also counts the live references of the process
 // (GetLiveObjectCountForTest), which is how the tests see a leak.
 //
@@ -37,10 +41,10 @@ namespace Renderer::WebGpu
         constexpr std::uint64_t MapTimeoutNanoseconds = 10ull * 1000ull * 1000ull * 1000ull;
         constexpr std::uint64_t RequestTimeoutNanoseconds = 30ull * 1000ull * 1000ull * 1000ull;
         constexpr std::uint64_t FlushTimeoutNanoseconds = 5ull * 1000ull * 1000ull * 1000ull;
-        constexpr std::uint32_t RowAlignment = 256; // bytesPerRow of a texture <-> buffer copy
         // The core defaults, used only if the device cannot say (wgpuDeviceGetLimits failing)
         constexpr std::uint32_t DefaultMaxTextureDimension = 8192;
         constexpr std::uint64_t DefaultMaxBufferSize = 268435456;
+        constexpr std::uint32_t DefaultUniformAlignment = 256;
 
         std::string GetEnvironment(const char* name)
         {
@@ -60,20 +64,6 @@ namespace Renderer::WebGpu
             }
 #endif
             return value;
-        }
-
-        std::string ToString(WGPUStringView view)
-        {
-            if (view.data == nullptr)
-            {
-                return {};
-            }
-            return view.length == WGPU_STRLEN ? std::string(view.data) : std::string(view.data, view.length);
-        }
-
-        WGPUStringView ToView(const char* text)
-        {
-            return WGPUStringView{text, std::strlen(text)};
         }
 
         const char* ErrorTypeName(WGPUErrorType type)
@@ -105,85 +95,6 @@ namespace Renderer::WebGpu
                 return "unknown";
             }
         }
-
-        std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment)
-        {
-            return (value + alignment - 1) / alignment * alignment;
-        }
-
-        /// WebGPU references this process holds through a WebGpuRenderer
-        std::atomic<std::int64_t> g_liveObjects{0};
-
-        /// One reference to a WebGPU object, released on destruction or Reset; counted in g_liveObjects
-        template <typename Handle, void (*ReleaseFn)(Handle)>
-        class Ref
-        {
-        public:
-            Ref() = default;
-            explicit Ref(Handle handle) : _handle(handle)
-            {
-                if (_handle != nullptr)
-                {
-                    ++g_liveObjects;
-                }
-            }
-            Ref(const Ref&) = delete;
-            Ref& operator=(const Ref&) = delete;
-            Ref(Ref&& other) noexcept : _handle(other._handle) { other._handle = nullptr; }
-            Ref& operator=(Ref&& other) noexcept
-            {
-                if (this != &other)
-                {
-                    Reset();
-                    _handle = other._handle;
-                    other._handle = nullptr;
-                }
-                return *this;
-            }
-            ~Ref() { Reset(); }
-
-            void Reset(Handle handle = nullptr)
-            {
-                if (_handle != nullptr)
-                {
-                    ReleaseFn(_handle);
-                    --g_liveObjects;
-                }
-                _handle = handle;
-                if (_handle != nullptr)
-                {
-                    ++g_liveObjects;
-                }
-            }
-            [[nodiscard]] Handle Get() const { return _handle; }
-            explicit operator bool() const { return _handle != nullptr; }
-
-        private:
-            Handle _handle = nullptr;
-        };
-
-        using InstanceRef = Ref<WGPUInstance, wgpuInstanceRelease>;
-        using AdapterRef = Ref<WGPUAdapter, wgpuAdapterRelease>;
-        using DeviceRef = Ref<WGPUDevice, wgpuDeviceRelease>;
-        using QueueRef = Ref<WGPUQueue, wgpuQueueRelease>;
-        using TextureRef = Ref<WGPUTexture, wgpuTextureRelease>;
-        using TextureViewRef = Ref<WGPUTextureView, wgpuTextureViewRelease>;
-        using BufferRef = Ref<WGPUBuffer, wgpuBufferRelease>;
-        using CommandEncoderRef = Ref<WGPUCommandEncoder, wgpuCommandEncoderRelease>;
-        using CommandBufferRef = Ref<WGPUCommandBuffer, wgpuCommandBufferRelease>;
-        using RenderPassRef = Ref<WGPURenderPassEncoder, wgpuRenderPassEncoderRelease>;
-
-        /// What the device's two callbacks count into. They may run on any thread, inside any WebGPU call that processes
-        /// events: they take only this block's own mutex, never the renderer's
-        struct ErrorCounters
-        {
-            std::mutex mutex;
-            std::uint32_t errors = 0;     // every uncaptured error and every unexpected loss
-            std::uint32_t lostCount = 0;  // the losses among them
-            std::vector<std::string> messages;
-            std::atomic<bool> lost{false};         // the device was lost and the renderer did not cause it
-            std::atomic<bool> expectedLoss{false}; // the renderer is destroying its device: the loss is not an error
-        };
 
         void OnUncapturedError(const WGPUDevice*, WGPUErrorType type, WGPUStringView message, void* userdata1, void*)
         {
@@ -298,28 +209,6 @@ namespace Renderer::WebGpu
             return status == WGPUWaitStatus_Success;
         }
     }
-
-    /// The WebGPU handles, and the error counters the device's callbacks reach through a raw pointer (the block is the
-    /// callbacks' userdata, so its address must stay put: it lives as long as the renderer)
-    struct WebGpuRenderer::State : ErrorCounters
-    {
-        InstanceRef instance;
-        AdapterRef adapter;
-        DeviceRef device;
-        QueueRef queue;
-        TextureRef color;
-        TextureRef depth;
-        TextureViewRef colorView;
-        TextureViewRef depthView;
-        CommandEncoderRef encoder; // the open frame's, null between frames
-        RenderPassRef pass;        // the open frame's render pass, null between frames
-
-        std::string adapterName;
-        WGPUAdapterType adapterType = WGPUAdapterType_Unknown;
-        WGPUBackendType backendType = WGPUBackendType_Undefined;
-        std::uint32_t maxTextureDimension = 0;
-        std::uint64_t maxBufferSize = 0;
-    };
 
     // -----------------------------------------------------------------------------------------------------------------
     // Construction and state
@@ -483,7 +372,7 @@ namespace Renderer::WebGpu
             }
         }
         std::cerr << "WebGPU renderer: " << what
-                  << " is not implemented yet (#155, stages G3a/G3b); it does nothing and returns null/false" << std::endl;
+                  << " is not implemented yet (#155, stage G3b); it does nothing and returns null/false" << std::endl;
     }
 
     void WebGpuRenderer::LogOnce(const std::string& message) const
@@ -536,7 +425,7 @@ namespace Renderer::WebGpu
             std::lock_guard counterLock(_state->mutex);
             before = _state->errors;
         }
-        bool ok = CreateInstance() && PickAdapter() && CreateDevice() && CreateTargets(width, height);
+        bool ok = CreateInstance() && PickAdapter() && CreateDevice() && CreateTargets(width, height) && CreateDrawResources();
         if (ok)
         {
             // Errors reach the callback asynchronously: have the device deliver what creating all this caused, then count
@@ -703,11 +592,30 @@ namespace Renderer::WebGpu
         {
             _state->maxTextureDimension = limits.maxTextureDimension2D;
             _state->maxBufferSize = limits.maxBufferSize;
+            const bool alignmentKnown =
+                limits.minUniformBufferOffsetAlignment != 0 && limits.minUniformBufferOffsetAlignment != WGPU_LIMIT_U32_UNDEFINED;
+            _state->uniformAlignment = alignmentKnown ? limits.minUniformBufferOffsetAlignment : DefaultUniformAlignment;
+            // What the draws need (WebGpuDraw.cpp): a 192-byte block bound at a dynamic offset in group 0, a material block at a
+            // dynamic offset and five textures with five samplers in group 1. Every WebGPU device offers at least the core
+            // defaults, which are more than this; the check says so rather than assume it
+            const std::uint32_t slots = ShaderInterface::kSamplerCount;
+            if (limits.maxUniformBufferBindingSize < ShaderInterface::kPerDrawBlockSize ||
+                limits.maxDynamicUniformBuffersPerPipelineLayout < 2 || limits.maxBindGroups < 2 ||
+                limits.maxBindingsPerBindGroup < 1 + 2 * slots || limits.maxSampledTexturesPerShaderStage < slots ||
+                limits.maxSamplersPerShaderStage < slots)
+            {
+                return Fail(InitStatus::Failed, "the device's limits are below what the draws need (a uniform binding of " +
+                                                    std::to_string(ShaderInterface::kPerDrawBlockSize) +
+                                                    " bytes, 2 dynamic uniform buffers, 2 bind groups, " +
+                                                    std::to_string(1 + 2 * slots) + " bindings and " + std::to_string(slots) +
+                                                    " textures and samplers per stage)");
+            }
         }
         else
         {
             _state->maxTextureDimension = DefaultMaxTextureDimension;
             _state->maxBufferSize = DefaultMaxBufferSize;
+            _state->uniformAlignment = DefaultUniformAlignment;
         }
         return true;
     }
@@ -841,6 +749,7 @@ namespace Renderer::WebGpu
         _frameOpen = false;
         state.pass.Reset();
         state.encoder.Reset();
+        DestroyAllResources(); // meshes, textures, materials, pipelines, the ring: all released before the device is
         DestroyTargets();
         state.queue.Reset();
         if (state.device)
@@ -860,6 +769,7 @@ namespace Renderer::WebGpu
         state.backendType = WGPUBackendType_Undefined;
         state.maxTextureDimension = 0;
         state.maxBufferSize = 0;
+        state.uniformAlignment = DefaultUniformAlignment;
         state.lost = false;
         state.expectedLoss = false;
         _targetWidth = 0;
@@ -971,6 +881,8 @@ namespace Renderer::WebGpu
             LogOnce("could not begin a frame; frames are skipped");
             return;
         }
+        ++state.frameSerial; // the frame being recorded: the in-frame UpdateMesh rule compares against it
+        BeginDrawFrame();
         _frameOpen = true;
     }
 
@@ -986,6 +898,9 @@ namespace Renderer::WebGpu
         EndPass();
         CommandBufferRef commands(wgpuCommandEncoderFinish(state.encoder.Get(), nullptr));
         state.encoder.Reset();
+        // The draws' uniform data goes to the ring buffers now, before the submit: a queue write runs on the queue's timeline
+        // in call order, so the commands submitted next see it and the frames submitted before it do not
+        EndDrawFrame();
         if (!commands)
         {
             LogOnce("could not finish a frame's commands; the frame is skipped");
@@ -1019,7 +934,7 @@ namespace Renderer::WebGpu
 
     bool WebGpuRenderer::CopyTextureToHostLocked(WGPUTexture texture, WGPUTextureAspect aspect, std::uint32_t bytesPerPixel,
                                                  std::uint32_t width, std::uint32_t height,
-                                                 std::vector<std::uint8_t>& pixels) const
+                                                 std::vector<std::uint8_t>& pixels, std::uint32_t mipLevel) const
     {
         State& state = *_state;
         const std::uint32_t rowBytes = width * bytesPerPixel;
@@ -1051,6 +966,7 @@ namespace Renderer::WebGpu
             }
             WGPUTexelCopyTextureInfo source = WGPU_TEXEL_COPY_TEXTURE_INFO_INIT;
             source.texture = texture;
+            source.mipLevel = mipLevel;
             source.aspect = aspect;
             WGPUTexelCopyBufferInfo destination = WGPU_TEXEL_COPY_BUFFER_INFO_INIT;
             destination.buffer = buffer.Get();
@@ -1104,6 +1020,73 @@ namespace Renderer::WebGpu
                         mapped + static_cast<std::size_t>(y) * paddedRowBytes, rowBytes);
         }
         wgpuBufferUnmap(buffer.Get());
+        return true;
+    }
+
+    bool WebGpuRenderer::CopyBufferToHostLocked(WGPUBuffer buffer, std::uint64_t size,
+                                                std::vector<std::uint8_t>& bytes) const
+    {
+        State& state = *_state;
+        if (size == 0 || size % 4 != 0 || size > state.maxBufferSize)
+        {
+            std::cerr << "WebGPU renderer: the buffer readback is not a non-zero multiple of 4 bytes within the device's "
+                         "buffer limit"
+                      << std::endl;
+            return false;
+        }
+        WGPUBufferDescriptor bufferDescriptor = WGPU_BUFFER_DESCRIPTOR_INIT;
+        bufferDescriptor.label = ToView("N2Engine buffer readback");
+        bufferDescriptor.usage = WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst;
+        bufferDescriptor.size = size;
+        BufferRef staging(wgpuDeviceCreateBuffer(state.device.Get(), &bufferDescriptor));
+        if (!staging)
+        {
+            std::cerr << "WebGPU renderer: could not create the readback buffer" << std::endl;
+            return false;
+        }
+        {
+            CommandEncoderRef encoder(wgpuDeviceCreateCommandEncoder(state.device.Get(), nullptr));
+            if (!encoder)
+            {
+                std::cerr << "WebGPU renderer: could not create a command encoder for the readback" << std::endl;
+                return false;
+            }
+            wgpuCommandEncoderCopyBufferToBuffer(encoder.Get(), buffer, 0, staging.Get(), 0, size);
+            CommandBufferRef commands(wgpuCommandEncoderFinish(encoder.Get(), nullptr));
+            if (!commands)
+            {
+                std::cerr << "WebGPU renderer: could not finish the readback commands" << std::endl;
+                return false;
+            }
+            const WGPUCommandBuffer handle = commands.Get();
+            wgpuQueueSubmit(state.queue.Get(), 1, &handle);
+        }
+
+        // NATIVE ONLY: block until the buffer is mapped (see CopyTextureToHostLocked)
+        auto result = std::make_shared<MapResult>();
+        WGPUBufferMapCallbackInfo callback = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+        callback.mode = WGPUCallbackMode_WaitAnyOnly;
+        callback.callback = OnMapped;
+        callback.userdata1 = NewUserdata(result);
+        const WGPUFuture future =
+            wgpuBufferMapAsync(staging.Get(), WGPUMapMode_Read, 0, static_cast<std::size_t>(size), callback);
+        if (!WaitFor(state.instance.Get(), future, MapTimeoutNanoseconds) || !result->done ||
+            result->status != WGPUMapAsyncStatus_Success)
+        {
+            std::cerr << "WebGPU renderer: mapping the readback buffer did not succeed (" << result->message << ")"
+                      << std::endl;
+            return false;
+        }
+        const auto* mapped = static_cast<const std::uint8_t*>(
+            wgpuBufferGetConstMappedRange(staging.Get(), 0, static_cast<std::size_t>(size)));
+        if (mapped == nullptr)
+        {
+            wgpuBufferUnmap(staging.Get());
+            std::cerr << "WebGPU renderer: the readback buffer has no mapped range" << std::endl;
+            return false;
+        }
+        bytes.assign(mapped, mapped + size);
+        wgpuBufferUnmap(staging.Get());
         return true;
     }
 
@@ -1232,143 +1215,9 @@ namespace Renderer::WebGpu
     }
 
     // -----------------------------------------------------------------------------------------------------------------
-    // Not implemented yet: stages G3a (resources, unlit) and G3b (lit, blending, text). Each fails loudly (a log, once per
-    // renderer) and cleanly (null, false or nothing), never crashes.
+    // Not implemented yet: stage G3b (the lit and text shaders). Each fails loudly (a log, once per renderer) and cleanly
+    // (null), never crashes.
     // -----------------------------------------------------------------------------------------------------------------
-
-    Common::IShader* WebGpuRenderer::CreateShaderProgram(const char* vertexSource, const char* fragmentSource)
-    {
-        static_cast<void>(vertexSource);
-        static_cast<void>(fragmentSource);
-        LogUnsupportedOnce("CreateShaderProgram");
-        return nullptr;
-    }
-
-    void WebGpuRenderer::UseShaderProgram(Common::IShader* shader)
-    {
-        static_cast<void>(shader);
-    }
-
-    bool WebGpuRenderer::DestroyShaderProgram(Common::IShader* shader)
-    {
-        static_cast<void>(shader);
-        return false;
-    }
-
-    bool WebGpuRenderer::IsValidShader(Common::IShader* shader) const
-    {
-        static_cast<void>(shader);
-        return false;
-    }
-
-    Common::IMesh* WebGpuRenderer::CreateMesh(const Common::MeshData& meshData)
-    {
-        static_cast<void>(meshData);
-        LogUnsupportedOnce("CreateMesh");
-        return nullptr;
-    }
-
-    void WebGpuRenderer::DestroyMesh(Common::IMesh* mesh)
-    {
-        static_cast<void>(mesh);
-    }
-
-    Common::ITexture* WebGpuRenderer::CreateTexture(const std::uint8_t* data, std::uint32_t width, std::uint32_t height,
-                                                    std::uint32_t channels)
-    {
-        static_cast<void>(data);
-        static_cast<void>(width);
-        static_cast<void>(height);
-        static_cast<void>(channels);
-        LogUnsupportedOnce("CreateTexture");
-        return nullptr;
-    }
-
-    Common::ITexture* WebGpuRenderer::CreateTexture(const std::uint8_t* data, std::uint32_t width, std::uint32_t height,
-                                                    std::uint32_t channels, const Common::TextureOptions& options)
-    {
-        static_cast<void>(options);
-        return CreateTexture(data, width, height, channels);
-    }
-
-    void WebGpuRenderer::DestroyTexture(Common::ITexture* texture)
-    {
-        static_cast<void>(texture);
-    }
-
-    Common::IMaterial* WebGpuRenderer::CreateMaterial(Common::IShader* shader)
-    {
-        static_cast<void>(shader);
-        LogUnsupportedOnce("CreateMaterial");
-        return nullptr;
-    }
-
-    Common::IMaterial* WebGpuRenderer::CreateMaterial(Common::IShader* shader, Common::ITexture* texture)
-    {
-        static_cast<void>(texture);
-        return CreateMaterial(shader);
-    }
-
-    void WebGpuRenderer::DestroyMaterial(Common::IMaterial* material)
-    {
-        static_cast<void>(material);
-    }
-
-    bool WebGpuRenderer::UpdateMesh(Common::IMesh* mesh, const Common::MeshData& meshData)
-    {
-        static_cast<void>(mesh);
-        static_cast<void>(meshData);
-        LogUnsupportedOnce("UpdateMesh");
-        return false;
-    }
-
-    void WebGpuRenderer::SetViewProjection(const float* view, const float* projection)
-    {
-        static_cast<void>(view);
-        static_cast<void>(projection);
-    }
-
-    void WebGpuRenderer::UpdateSceneLighting(const Common::SceneLightingData& lighting,
-                                             const N2Engine::Math::Vector3& cameraPosition)
-    {
-        static_cast<void>(lighting);
-        static_cast<void>(cameraPosition);
-    }
-
-    void WebGpuRenderer::DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
-                                  const Common::RenderState& state)
-    {
-        static_cast<void>(mesh);
-        static_cast<void>(modelMatrix);
-        static_cast<void>(material);
-        static_cast<void>(state);
-        LogUnsupportedOnce("DrawMesh");
-    }
-
-    void WebGpuRenderer::DrawMesh(Common::IMesh* mesh, const float* modelMatrix, Common::IMaterial* material,
-                                  const Common::RenderState& state, const Common::IndexRange& range)
-    {
-        static_cast<void>(range);
-        DrawMesh(mesh, modelMatrix, material, state);
-    }
-
-    void WebGpuRenderer::DrawObjects(const std::vector<Common::RenderObject>& objects)
-    {
-        static_cast<void>(objects);
-        LogUnsupportedOnce("DrawObjects");
-    }
-
-    void WebGpuRenderer::SetWireframe(bool enabled)
-    {
-        static_cast<void>(enabled);
-        LogUnsupportedOnce("SetWireframe");
-    }
-
-    Common::IShader* WebGpuRenderer::GetStandardUnlitShader() const
-    {
-        LogUnsupportedOnce("GetStandardUnlitShader");
-        return nullptr;
-    }
 
     Common::IShader* WebGpuRenderer::GetStandardLitShader() const
     {
