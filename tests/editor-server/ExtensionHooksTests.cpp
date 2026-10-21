@@ -33,7 +33,7 @@ namespace fs = std::filesystem;
 // read-only (a write is refused before it reaches the host), its smaller budget and request cap, that an error or a
 // budget trip is isolated to the extension and counts towards its fault flag, that OnBeforePlay's warnings become
 // extensionOutput events every role receives, and that a host with authentication runs hooks without a Hello (as a
-// viewer). Where the host calls them (after a save, an open, before a play snapshot, from an asset change) is in
+// viewer). Where the host calls them (after a save, an open, when a play snapshot is written, from an asset change) is in
 // project/EditorExtensionHooksTests.cpp, which has a project and a scene.
 namespace
 {
