@@ -19,6 +19,14 @@ namespace N2Engine::Network
     {
         /// A physics backend exists (it may still declare nothing)
         bool hasBackend = false;
+        /// The backend physics.backend selected, as Physics::ToString names it ("physx"); empty when unknown (a test that
+        /// fills in the environment by hand). Only used in the unmet-requirement text.
+        std::string backendName;
+        /// The project asked for a backend this build does not contain (physics.backend jolt before the Jolt backend
+        /// exists) and no other was put in its place: hasBackend is false and the physics-backend requirement says so
+        bool backendUnavailable = false;
+        /// The backend named by backendUnavailable
+        std::string backendRequested;
         Physics::DeterminismLevel backendLevel = Physics::DeterminismLevel::None;
         bool backendSupportsSnapshot = false;
         bool backendSupportsSetState = false;
@@ -73,7 +81,7 @@ namespace N2Engine::Network
      *   authoritative  warnings only: GPU physics on (a dedicated server runs the CPU scene), and a physics backend
      *                  that does not support set-state (it cannot correct a predicted entity)
      *   deterministic  every requirement below; any unmet one refuses the start (Refused). Requirements, in order:
-     *                  physics-backend (the backend declares CrossPlatform), strict-fp, simd-scalar (math.simdTier
+     *                  physics-backend (the SELECTED backend declares CrossPlatform), strict-fp, simd-scalar (math.simdTier
      *                  is scalar), lua-seed, engine-trig, physics-threads (the backend's results do not depend on the
      *                  thread count: it declares at least SameBinary, which PhysX does only with 0 worker threads),
      *                  gpu-physics-off, fixed-timestep, tick-loop, and, only in rollback mode, snapshot (the backend

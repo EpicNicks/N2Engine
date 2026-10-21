@@ -75,11 +75,16 @@ namespace N2Engine::Network
         }
 
         auto &requirements = result.requirements;
+        const std::string selected = env.backendName.empty()
+                                         ? std::string("the backend")
+                                         : std::format("the selected backend ({})", env.backendName);
         requirements.push_back(Requirement(
             "physics-backend", "the physics backend declares CrossPlatform determinism",
             env.hasBackend && env.backendLevel == Physics::DeterminismLevel::CrossPlatform,
-            env.hasBackend
-                ? std::format("the backend declares {}, and no backend declares CrossPlatform yet",
+            env.backendUnavailable
+                ? std::format("physics.backend is {} but this build has no such backend", env.backendRequested)
+            : env.hasBackend
+                ? std::format("{} declares {}, and no backend declares CrossPlatform yet", selected,
                               Physics::ToString(env.backendLevel))
                 : std::string("there is no physics backend")));
         requirements.push_back(Requirement(

@@ -2,9 +2,14 @@
 
 #include <math/Vector3.hpp>
 #include <math/Quaternion.hpp>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <span>
+#include <string_view>
 #include <vector>
 
+#include "engine/physics/BodyState.hpp"
 #include "engine/physics/DeterminismLevel.hpp"
 #include "engine/physics/GpuStatus.hpp"
 #include "engine/physics/PhysicsHandle.hpp"
@@ -41,6 +46,32 @@ namespace N2Engine::Physics
         /// Whether a body's full state (pose, velocities, sleep state) can be written back, including a dynamic
         /// body (what client reconciliation needs). False by default.
         [[nodiscard]] virtual bool SupportsSetState() const { return false; }
+
+        /// Which backend this is: "physx" or "jolt" (the physics.backend setting's values, PhysicsBackendKind), or
+        /// "unknown" for a backend that does not say (the default, so mocks keep compiling). It is the name the Physics
+        /// and Network health rows give, and the start of the id the determinism fingerprint will carry.
+        [[nodiscard]] virtual std::string_view BackendId() const { return "unknown"; }
+
+        /// Reads a body's full state into `out`: pose, both velocities and whether it is asleep. False (and `out`
+        /// untouched) for a stale or invalid handle, a body that is not in the simulation (disabled), or a backend
+        /// without SupportsSetState (the default). A static body reports zero velocities and awake. Main thread,
+        /// between steps.
+        virtual bool GetBodyState(PhysicsBodyHandle /*body*/, BodyState & /*out*/) const { return false; }
+        /// Writes a body's full state back, including a dynamic body's pose (what a plain SetBodyTransform cannot do: it
+        /// only sets a kinematic target). False, with nothing changed, for the cases GetBodyState refuses and for a
+        /// state with a non-finite value or a rotation of no length (a rotation is normalised). Never call it while
+        /// the backend is stepping. What each body kind takes is up to the backend (PhysXBackend documents it); the
+        /// default does nothing and returns false.
+        virtual bool SetBodyState(PhysicsBodyHandle /*body*/, const BodyState & /*state*/) { return false; }
+
+        /// Snapshot hooks (what rollback needs; SupportsSnapshot says whether they work). SaveState replaces `out` with
+        /// the whole simulation's state, between steps only; RestoreState puts a saved state back into a simulation
+        /// that has the same bodies as at save time. Both return false for "unsupported" (the default).
+        virtual bool SaveState(std::vector<std::byte> & /*out*/) const { return false; }
+        virtual bool RestoreState(std::span<const std::byte> /*in*/) { return false; }
+        /// A canonical hash of the simulation state (bodies in handle order), for desync detection; nullopt for
+        /// "unsupported" (the default). Not 0 for unsupported: 0 is a legal hash.
+        [[nodiscard]] virtual std::optional<std::uint64_t> HashState() const { return std::nullopt; }
         /// What Initialize made of the GPU request: the SCENE (and probe) status, Disabled for a backend that never
         /// asks. It does not change when a feature that runs in the GPU scene (particles, soft bodies) fails, so
         /// Physics.IsGpuAvailable reflects the scene only; a feature's own status is GetParticlesGpuStatus and

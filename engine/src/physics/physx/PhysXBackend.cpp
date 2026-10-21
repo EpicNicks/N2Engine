@@ -872,6 +872,97 @@ namespace N2Engine::Physics
         }
     }
 
+    bool PhysXBackend::GetBodyState(const PhysicsBodyHandle handle, BodyState &out) const
+    {
+        const BodyData *data = GetBodyData(handle);
+        // A disabled body is out of the scene: it has no simulation state, and PhysX refuses isSleeping there
+        if (!data || !data->actor || !data->actor->getScene())
+        {
+            return false;
+        }
+
+        BodyState state;
+        const PxTransform pose = data->actor->getGlobalPose();
+        state.position = Math::Vector3(pose.p.x, pose.p.y, pose.p.z);
+        state.rotation = Math::Quaternion(pose.q.w, pose.q.x, pose.q.y, pose.q.z);
+        if (const auto *dynamic = data->actor->is<PxRigidDynamic>())
+        {
+            state.sleeping = dynamic->isSleeping();
+            // A kinematic body is moved by its target, not by velocities: it has none to report
+            if (!dynamic->getRigidBodyFlags().isSet(PxRigidBodyFlag::eKINEMATIC))
+            {
+                const PxVec3 linear = dynamic->getLinearVelocity();
+                const PxVec3 angular = dynamic->getAngularVelocity();
+                state.linearVelocity = Math::Vector3(linear.x, linear.y, linear.z);
+                state.angularVelocity = Math::Vector3(angular.x, angular.y, angular.z);
+            }
+        }
+        out = state;
+        return true;
+    }
+
+    bool PhysXBackend::SetBodyState(const PhysicsBodyHandle handle, const BodyState &state)
+    {
+        const BodyData *data = GetBodyData(handle);
+        if (!data || !data->actor || !data->actor->getScene())
+        {
+            return false;
+        }
+
+        const auto finite = [](const Math::Vector3 &v)
+        {
+            return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+        };
+        const float qx = state.rotation.GetX();
+        const float qy = state.rotation.GetY();
+        const float qz = state.rotation.GetZ();
+        const float qw = state.rotation.GetW();
+        const float lengthSquared = qx * qx + qy * qy + qz * qz + qw * qw;
+        if (!finite(state.position) || !finite(state.linearVelocity) || !finite(state.angularVelocity) ||
+            !std::isfinite(lengthSquared) || lengthSquared < 1e-12f)
+        {
+            return false;
+        }
+        // PxTransform wants a unit rotation. One that already is (within float rounding, as every rotation read back
+        // from PhysX is) is passed on untouched, so reading a state and writing it back does not nudge it.
+        const float inverseLength = std::abs(lengthSquared - 1.0f) <= 1e-6f ? 1.0f : 1.0f / std::sqrt(lengthSquared);
+        const PxTransform pose(PxVec3(state.position.x, state.position.y, state.position.z),
+                               PxQuat(qx * inverseLength, qy * inverseLength, qz * inverseLength, qw * inverseLength));
+
+        PxRigidActor *actor = data->actor;
+        if (actor->is<PxRigidStatic>())
+        {
+            actor->setGlobalPose(pose);
+            return true;
+        }
+        auto *dynamic = actor->is<PxRigidDynamic>();
+        if (!dynamic)
+        {
+            return false;
+        }
+        if (dynamic->getRigidBodyFlags().isSet(PxRigidBodyFlag::eKINEMATIC))
+        {
+            dynamic->setKinematicTarget(pose);
+            return true;
+        }
+
+        // Pose and velocities first, none of them waking the body on its own; then the sleep state decides
+        dynamic->setGlobalPose(pose, false);
+        dynamic->setLinearVelocity(PxVec3(state.linearVelocity.x, state.linearVelocity.y, state.linearVelocity.z),
+                                   false);
+        dynamic->setAngularVelocity(PxVec3(state.angularVelocity.x, state.angularVelocity.y, state.angularVelocity.z),
+                                    false);
+        if (state.sleeping)
+        {
+            dynamic->putToSleep();
+        }
+        else
+        {
+            dynamic->wakeUp();
+        }
+        return true;
+    }
+
     PxMaterial* PhysXBackend::GetOrCreateMaterial(const PhysicsMaterial &material)
     {
         const MaterialKey key{material.staticFriction, material.dynamicFriction, material.restitution};

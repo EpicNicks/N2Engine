@@ -97,9 +97,11 @@ namespace N2Engine
          * How the fixed-step loop runs (see SimulationClock): None, the default, is the offline loop exactly as it has
          * always been. Authoritative and Deterministic are the tick-owned loop of the network presets: the fixed delta
          * ignores the time scale (which then only scales what Update sees), the attach queue is processed at each tick
-         * boundary instead of once per frame, and no frame time is dropped (a clock too far behind reports it through
-         * the SimulationClock's behind handler). The network presets will set this when the project's settings do;
-         * until then a host or a test does. Does not touch the tick counter; going to None keeps at most 0.25 s of carried time.
+         * boundary instead of once per frame, and no frame time is dropped (a clock behind reports it through the
+         * SimulationClock's behind handler; one more than SimulationClock::MaxOwedSeconds behind with no handler
+         * resyncs by dropping the owed time, with a warning). Init sets it from network.preset (none leaves it alone), Shutdown puts
+         * it back to None, and a host or a test may set it directly. Does not touch the tick counter; going to None
+         * keeps at most 0.25 s of carried time.
          */
         void SetSimulationMode(SimulationMode mode);
         [[nodiscard]] SimulationMode GetSimulationMode() const { return _simulationClock.GetMode(); }

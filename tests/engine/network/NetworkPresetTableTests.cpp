@@ -86,7 +86,16 @@ TEST(NetworkPresetTableTest, DeterministicRowsAreLockedAndStartupChecked)
     const PresetCell &backend = CellOf("physics.backend", Deterministic);
     EXPECT_TRUE(Has(backend.classes, SettingClass::Locked));
     EXPECT_TRUE(Has(backend.classes, SettingClass::StartupChecked));
-    EXPECT_EQ(backend.value, "CrossPlatform");
+    // The preset locks the setting itself to jolt (the only backend that can declare CrossPlatform); the L/T/S class stays
+    EXPECT_EQ(backend.settingKey, "physics.backend");
+    EXPECT_EQ(backend.value, "jolt");
+    EXPECT_EQ(EffectiveValues(Deterministic).at("physics.backend"), "jolt");
+    EXPECT_FALSE(EffectiveValues(Authoritative).contains("physics.backend"));
+    EXPECT_TRUE(IsKnownSettingKey("physics.backend"));
+    // Choosing physx on a Deterministic project loses the guarantee; choosing jolt (any case) does not
+    EXPECT_FALSE(LostGuarantees(Deterministic, json{{"physics.backend", "physx"}}).empty());
+    EXPECT_TRUE(LostGuarantees(Deterministic, json{{"physics.backend", "jolt"}}).empty());
+    EXPECT_TRUE(LostGuarantees(Deterministic, json{{"physics.backend", "JOLT"}}).empty());
 
     // The rows the design marks S for the Deterministic preset, and no others
     std::set<std::string> startupChecked;
