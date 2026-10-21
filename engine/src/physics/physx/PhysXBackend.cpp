@@ -1609,6 +1609,12 @@ namespace N2Engine::Physics
         return Math::Vector3::Zero;
     }
 
+    std::size_t PhysXBackend::GetShapeCount(const PhysicsBodyHandle body) const
+    {
+        const BodyData *data = GetBodyData(body);
+        return data && data->actor ? static_cast<std::size_t>(data->actor->getNbShapes()) : 0;
+    }
+
     void PhysXBackend::SetGravityEnabled(PhysicsBodyHandle body, bool enabled)
     {
         BodyData *data = GetBodyData(body);
