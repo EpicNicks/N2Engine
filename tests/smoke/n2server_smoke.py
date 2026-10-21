@@ -49,7 +49,8 @@ def check(condition, message):
 
 
 def text_of(data):
-    return data.decode("utf-8", errors="replace")
+    # Windows writes text-mode lines with CRLF: compare on LF
+    return data.decode("utf-8", errors="replace").replace("\r\n", "\n")
 
 
 class Servers:

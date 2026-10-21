@@ -165,7 +165,7 @@ TEST(N2ServerOptionsTest, MaxClientsIsAWholeNumberFromOneToTheLimit)
 TEST(N2ServerOptionsTest, ProtocolIdIsDecimalOrHexOfAtMost32Bits)
 {
     EXPECT_EQ(ParseProtocolId("0"), std::optional<std::uint32_t>(0u));
-    EXPECT_EQ(ParseProtocolId("1313426004"), std::optional<std::uint32_t>(0x4E324E54u));
+    EXPECT_EQ(ParseProtocolId("1311919700"), std::optional<std::uint32_t>(0x4E324E54u));
     EXPECT_EQ(ParseProtocolId("4294967295"), std::optional<std::uint32_t>(0xFFFFFFFFu));
     EXPECT_EQ(ParseProtocolId("0x4E324E54"), std::optional<std::uint32_t>(0x4E324E54u));
     EXPECT_EQ(ParseProtocolId("0xffffffff"), std::optional<std::uint32_t>(0xFFFFFFFFu));
