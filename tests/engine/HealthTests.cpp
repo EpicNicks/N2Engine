@@ -310,7 +310,8 @@ TEST_F(NetworkPresetInitTest, TheRefusalListsEveryRequirementTheProjectCouldNotM
 TEST_F(NetworkPresetInitTest, JoltIsRefusedForItsMissingFeatureGroupsWhetherTheProjectOrTheHostAskedForIt)
 {
     // Every setting a Deterministic project can make, on Jolt: the project's physics.backend, or no setting and the
-    // host's option. Jolt has no layers, triggers, events or queries yet (J4/J5), so the start is refused either way.
+    // host's option. Jolt has layers, triggers and events (J4) but no scene queries yet (J5), so the start is refused
+    // either way.
     auto &app = Application::GetInstance();
     const nlohmann::json common = {
         {"network", {{"preset", "deterministic"}}},
@@ -334,8 +335,7 @@ TEST_F(NetworkPresetInitTest, JoltIsRefusedForItsMissingFeatureGroupsWhetherTheP
         EXPECT_EQ(network->state, SubsystemState::Failed);
         EXPECT_TRUE(Mentions(health, "the physics backend implements layers and the collision matrix"))
             << network->detail;
-        EXPECT_TRUE(Mentions(health, "the selected backend (jolt) does not implement layers and the collision matrix, "
-                                     "triggers, contact and trigger events, scene queries yet"))
+        EXPECT_TRUE(Mentions(health, "the selected backend (jolt) does not implement scene queries yet"))
             << network->detail;
         EXPECT_EQ(app.Get3DPhysicsBackend(), nullptr);
         EXPECT_FALSE(app.GetWindow().IsValid());
