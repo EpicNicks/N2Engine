@@ -331,17 +331,19 @@ TEST(NetworkValidationTest, ABackendMissingAnyFeatureGroupIsRefusedAndTheGroupsA
 TEST(NetworkValidationTest, TheJoltBackendOfTodayIsRefusedForItsMissingGroupsEvenWithEverythingElseMet)
 {
     // What Application::Init fills in for physics.backend jolt (or the host option JOLT) once the build is strict-FP
-    // and physics.deterministic is on: CrossPlatform, but layers, triggers, events and queries are J4/J5
+    // and physics.deterministic is on: CrossPlatform, with layers, triggers and events (J4), but queries are J5
     NetworkEnvironment env = EverythingMet();
     env.backendName = "jolt";
     env.backendSupportsSnapshot = false;
-    env.backendFeatures = PhysicsFeatureSet::None();
+    env.backendFeatures = PhysicsFeatureSet::None()
+                              .With(PhysicsFeature::Layers)
+                              .With(PhysicsFeature::Triggers)
+                              .With(PhysicsFeature::Events);
     const NetworkValidation validation = ValidateNetwork(Preset(NetworkPreset::Deterministic), env);
     EXPECT_TRUE(validation.Refused());
     EXPECT_EQ(UnmetIds(validation), (std::vector<std::string>{"physics-features"}));
     const std::string &detail = validation.Unmet()[0]->detail;
-    EXPECT_EQ(detail, "the selected backend (jolt) does not implement layers and the collision matrix, triggers, "
-                      "contact and trigger events, scene queries yet");
+    EXPECT_EQ(detail, "the selected backend (jolt) does not implement scene queries yet");
     const SubsystemStatus row = MakeNetworkStatus(Preset(NetworkPreset::Deterministic), validation);
     EXPECT_EQ(row.state, SubsystemState::Failed);
     EXPECT_NE(row.detail.find("1 unmet requirement:"), std::string::npos) << row.detail;
@@ -544,8 +546,13 @@ TEST(PhysicsBackendDeclarationTest, FeatureGroupsDefaultToNoneAndPhysXDeclaresTh
 #ifdef N2ENGINE_JOLT_ENABLED
 TEST(PhysicsBackendDeclarationTest, JoltDeclaresOnlyTheFeatureGroupsItHas)
 {
-    // J3: none of the four groups (layers and triggers and events are J4, queries J5)
-    EXPECT_EQ(Physics::JoltBackend::kImplementedFeatures, PhysicsFeatureSet::None());
+    // J4: layers, triggers and events; scene queries are J5
+    EXPECT_EQ(Physics::JoltBackend::kImplementedFeatures, PhysicsFeatureSet::None()
+                                                              .With(PhysicsFeature::Layers)
+                                                              .With(PhysicsFeature::Triggers)
+                                                              .With(PhysicsFeature::Events));
+    EXPECT_FALSE(Physics::JoltBackend::kImplementedFeatures.Has(PhysicsFeature::Queries));
+    EXPECT_EQ(Physics::JoltBackend::kImplementedFeatures.MissingText(), "scene queries");
 }
 #endif
 
