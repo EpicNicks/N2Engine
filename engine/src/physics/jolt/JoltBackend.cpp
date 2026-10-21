@@ -66,8 +66,7 @@ namespace N2Engine::Physics
         // Jolt's asserts (a Debug build has them) say what failed on stderr before the build breaks into the debugger
         bool JoltAssertFailed(const char *expression, const char *message, const char *file, JPH::uint line)
         {
-            std::fprintf(stderr, "[JOLT ASSERT] %s:%u: (%s) %s
-", file, static_cast<unsigned>(line), expression,
+            std::fprintf(stderr, "[JOLT ASSERT] %s:%u: (%s) %s\n", file, static_cast<unsigned>(line), expression,
                          message ? message : "");
             std::fflush(stderr);
             return true; // break
