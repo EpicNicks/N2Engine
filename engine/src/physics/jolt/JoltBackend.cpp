@@ -1,5 +1,5 @@
-// The Jolt backend (stages J3, the core; J4, layers, triggers and events; J5, the scene queries). Jolt's headers are
-// included here and nowhere else in the engine.
+// The Jolt backend (stages J3, the core; J4, layers, triggers and events; J5, the scene queries; J6, snapshots). Jolt's
+// headers are included here and nowhere else in the engine.
 // Everything that touches Jolt state lives in JoltBackend::Impl so the public header holds no Jolt type.
 
 #include "engine/physics/jolt/JoltBackend.hpp"
@@ -36,6 +36,7 @@
 #include <Jolt/Physics/EPhysicsUpdateError.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/StateRecorder.h>
 #include <Jolt/RegisterTypes.h>
 #ifndef N2ENGINE_SINGLE_THREADED
 #include <Jolt/Core/JobSystemThreadPool.h>
@@ -54,8 +55,10 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <format>
 #include <functional>
 #include <limits>
@@ -64,7 +67,9 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -356,12 +361,6 @@ namespace N2Engine::Physics
             Kinematic
         };
 
-        // The features this stage does not have yet, one warning each
-        enum NotImplemented : unsigned
-        {
-            kSnapshot = 1u << 0
-        };
-
         // What the contact listener buffers: one report of Jolt's per contact (body and sub-shape pair), with the data
         // the main thread cannot get after the step. Listener callbacks run on worker threads in no fixed order; the
         // main thread sorts them (Impl::FoldContacts).
@@ -396,6 +395,637 @@ namespace N2Engine::Physics
         std::uint64_t HandleOrder(const PhysicsBodyHandle handle)
         {
             return (static_cast<std::uint64_t>(handle.index) << 32) | handle.generation;
+        }
+
+        // ===== Snapshots (J6) =====
+        // The backend's part of a snapshot is a small binary format (native byte order: the bytes are for the same build):
+        //   u32 magic, u32 version
+        //   u32 slot count, then per body slot: bool active, u32 generation and, for an active slot, the body (see
+        //     Impl::WriteSnapshot)
+        //   the layer matrix, gravity, the contact map, the tracker's touches and undelivered events
+        //   u64 size of Jolt's own state, then those bytes (PhysicsSystem::SaveState, everything)
+        //   u64 FNV-1a checksum of all the bytes before it
+        // A collider is written as its index in the owning body's registered colliders (never as a pointer, so the bytes
+        // do not depend on addresses), kNoCollider for none.
+        constexpr std::uint32_t kSnapshotMagic = 0x4A53324Eu; // "N2SJ"
+        constexpr std::uint32_t kSnapshotVersion = 1;
+        constexpr std::uint32_t kNoCollider = UINT32_MAX;
+        constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
+        constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+
+        std::uint64_t Fnv1a(const std::span<const std::byte> bytes)
+        {
+            std::uint64_t hash = kFnvOffset;
+            for (const std::byte byte : bytes)
+            {
+                hash ^= static_cast<std::uint64_t>(byte);
+                hash *= kFnvPrime;
+            }
+            return hash;
+        }
+
+        // The bits a float hashes as: every NaN is one value and -0 is +0, so two states that differ only in the payload of
+        // a NaN or the sign of a zero hash alike
+        std::uint32_t CanonicalFloatBits(const float value)
+        {
+            if (std::isnan(value))
+            {
+                return 0x7FC00000u;
+            }
+            if (value == 0.0f)
+            {
+                return 0u;
+            }
+            return std::bit_cast<std::uint32_t>(value);
+        }
+
+        // FNV-1a over 32-bit words, byte by byte in little-endian order (no std::hash, nothing platform dependent)
+        class StateHasher
+        {
+        public:
+            void Word(const std::uint32_t word)
+            {
+                for (int i = 0; i < 4; ++i)
+                {
+                    _hash ^= static_cast<std::uint64_t>((word >> (8 * i)) & 0xFFu);
+                    _hash *= kFnvPrime;
+                }
+            }
+            void Float(const float value) { Word(CanonicalFloatBits(value)); }
+            [[nodiscard]] std::uint64_t Value() const { return _hash; }
+
+        private:
+            std::uint64_t _hash = kFnvOffset;
+        };
+
+        class SnapshotWriter
+        {
+        public:
+            explicit SnapshotWriter(std::vector<std::byte> &out) : _out(out) {}
+
+            void Bytes(const void *data, const std::size_t count)
+            {
+                if (count == 0)
+                {
+                    return;
+                }
+                const auto *bytes = static_cast<const std::byte *>(data);
+                _out.insert(_out.end(), bytes, bytes + count);
+            }
+            void U8(const std::uint8_t value) { Bytes(&value, sizeof(value)); }
+            void U32(const std::uint32_t value) { Bytes(&value, sizeof(value)); }
+            void I32(const std::int32_t value) { Bytes(&value, sizeof(value)); }
+            void U64(const std::uint64_t value) { Bytes(&value, sizeof(value)); }
+            void F32(const float value) { Bytes(&value, sizeof(value)); }
+            void Bool(const bool value) { U8(static_cast<std::uint8_t>(value ? 1 : 0)); }
+            void Vec3(const Math::Vector3 &value)
+            {
+                F32(value.x);
+                F32(value.y);
+                F32(value.z);
+            }
+            void Quat(const Math::Quaternion &value)
+            {
+                F32(value.GetW());
+                F32(value.GetX());
+                F32(value.GetY());
+                F32(value.GetZ());
+            }
+            void Handle(const PhysicsBodyHandle handle)
+            {
+                U32(handle.index);
+                U32(handle.generation);
+            }
+
+        private:
+            std::vector<std::byte> &_out;
+        };
+
+        // Reads with bounds checks: after the first read past the end every read gives zero and Ok() is false
+        class SnapshotReader
+        {
+        public:
+            explicit SnapshotReader(const std::span<const std::byte> in) : _in(in) {}
+
+            bool Bytes(void *out, const std::size_t count)
+            {
+                if (!_ok || count > _in.size() - _position)
+                {
+                    _ok = false;
+                    return false;
+                }
+                if (count > 0)
+                {
+                    std::memcpy(out, _in.data() + _position, count);
+                }
+                _position += count;
+                return true;
+            }
+            std::uint8_t U8()
+            {
+                std::uint8_t value = 0;
+                Bytes(&value, sizeof(value));
+                return value;
+            }
+            std::uint32_t U32()
+            {
+                std::uint32_t value = 0;
+                Bytes(&value, sizeof(value));
+                return value;
+            }
+            std::int32_t I32()
+            {
+                std::int32_t value = 0;
+                Bytes(&value, sizeof(value));
+                return value;
+            }
+            std::uint64_t U64()
+            {
+                std::uint64_t value = 0;
+                Bytes(&value, sizeof(value));
+                return value;
+            }
+            float F32()
+            {
+                float value = 0.0f;
+                Bytes(&value, sizeof(value));
+                return value;
+            }
+            bool Bool() { return U8() != 0; }
+            Math::Vector3 Vec3()
+            {
+                const float x = F32();
+                const float y = F32();
+                const float z = F32();
+                return Math::Vector3(x, y, z);
+            }
+            Math::Quaternion Quat()
+            {
+                const float w = F32();
+                const float x = F32();
+                const float y = F32();
+                const float z = F32();
+                return Math::Quaternion(w, x, y, z);
+            }
+            PhysicsBodyHandle Handle()
+            {
+                PhysicsBodyHandle handle;
+                handle.index = U32();
+                handle.generation = U32();
+                return handle;
+            }
+            // The next `count` bytes as a view (empty and not Ok when there are fewer)
+            std::span<const std::byte> Take(const std::size_t count)
+            {
+                if (!_ok || count > _in.size() - _position)
+                {
+                    _ok = false;
+                    return {};
+                }
+                const std::span<const std::byte> part = _in.subspan(_position, count);
+                _position += count;
+                return part;
+            }
+            [[nodiscard]] std::size_t Remaining() const { return _in.size() - _position; }
+            [[nodiscard]] bool Ok() const { return _ok; }
+
+        private:
+            std::span<const std::byte> _in;
+            std::size_t _position = 0;
+            bool _ok = true;
+        };
+
+        // Jolt's StateRecorder over a byte vector (to write) or a byte view (to read), without the stringstream of
+        // StateRecorderImpl. A read past the end fails the recorder and gives zeros.
+        class ByteRecorder final : public JPH::StateRecorder
+        {
+        public:
+            explicit ByteRecorder(std::vector<std::byte> &out) : _out(&out) {}
+            explicit ByteRecorder(const std::span<const std::byte> in) : _in(in) {}
+
+            void WriteBytes(const void *data, const std::size_t count) override
+            {
+                if (!_out)
+                {
+                    _failed = true;
+                    return;
+                }
+                if (count > 0)
+                {
+                    const auto *bytes = static_cast<const std::byte *>(data);
+                    _out->insert(_out->end(), bytes, bytes + count);
+                }
+            }
+
+            void ReadBytes(void *data, const std::size_t count) override
+            {
+                if (_failed || _out || count > _in.size() - _position)
+                {
+                    _failed = true;
+                    if (count > 0)
+                    {
+                        std::memset(data, 0, count);
+                    }
+                    return;
+                }
+                if (count > 0)
+                {
+                    std::memcpy(data, _in.data() + _position, count);
+                }
+                _position += count;
+            }
+
+            bool IsEOF() const override { return _out || _position >= _in.size(); }
+            bool IsFailed() const override { return _failed; }
+
+        private:
+            std::vector<std::byte> *_out = nullptr;
+            std::span<const std::byte> _in;
+            std::size_t _position = 0;
+            bool _failed = false;
+        };
+
+        // What a snapshot holds of the backend's own state, parsed (no live pointer in it)
+        struct SnapSpec
+        {
+            std::uint32_t collider = kNoCollider; // index into the body's registered colliders
+            ColliderKind kind = ColliderKind::Sphere;
+            float radius = 0.5f;
+            float height = 2.0f;
+            Math::Vector3 halfExtents{0.5f, 0.5f, 0.5f};
+            Math::Vector3 offset = Math::Vector3::Zero;
+            PhysicsMaterial material;
+            bool isTrigger = false;
+            int layer = Layers::Default;
+        };
+
+        struct SnapBody
+        {
+            bool active = false;
+            std::uint32_t generation = 0;
+            std::uint32_t joltId = 0;
+            MotionKind motion = MotionKind::Static;
+            bool enabled = false;
+            float mass = 1.0f;
+            bool gravityEnabled = true;
+            std::uint32_t colliderCount = 0;
+            bool hasKinematicTarget = false;
+            Math::Vector3 targetPosition = Math::Vector3::Zero;
+            Math::Quaternion targetRotation = Math::Quaternion::Identity;
+            bool kinematicMoving = false;
+            std::vector<SnapSpec> specs;
+        };
+
+        struct SnapContact
+        {
+            ContactKey key;
+            PhysicsBodyHandle low;
+            PhysicsBodyHandle high;
+            std::uint32_t colliderLow = kNoCollider;
+            std::uint32_t colliderHigh = kNoCollider;
+            bool trigger = false;
+            bool triggerOnHigh = false;
+            bool reported = false;
+            bool dormant = false;
+            bool seen = false;
+        };
+
+        struct SnapShapePair
+        {
+            std::uint32_t onA = kNoCollider; // a collider of the touch's bodyA
+            std::uint32_t onB = kNoCollider; // a collider of its bodyB
+        };
+
+        struct SnapTouch
+        {
+            PhysicsBodyHandle bodyA;
+            PhysicsBodyHandle bodyB;
+            std::vector<SnapShapePair> shapes;
+        };
+
+        struct SnapCollisionEvent
+        {
+            PhysicsBodyHandle bodyA;
+            PhysicsBodyHandle bodyB;
+            std::uint32_t colliderA = kNoCollider;
+            std::uint32_t colliderB = kNoCollider;
+            std::vector<ContactPoint> contacts;
+            Math::Vector3 relativeVelocity = Math::Vector3::Zero;
+            Math::Vector3 impulse = Math::Vector3::Zero;
+        };
+
+        struct SnapTriggerEvent
+        {
+            PhysicsBodyHandle bodyA;
+            PhysicsBodyHandle bodyB;
+            std::uint32_t colliderA = kNoCollider;
+            std::uint32_t colliderB = kNoCollider;
+        };
+
+        struct Snapshot
+        {
+            std::vector<SnapBody> bodies; // by handle index
+            std::array<std::uint32_t, static_cast<std::size_t>(Layers::Count)> matrixRows{};
+            Math::Vector3 gravity = Math::Vector3::Zero;
+            bool hasPendingGravity = false;
+            Math::Vector3 pendingGravity = Math::Vector3::Zero;
+            std::vector<SnapContact> contacts;
+            std::vector<SnapTouch> collisionTouches;
+            std::vector<SnapTouch> triggerTouches;
+            std::vector<SnapCollisionEvent> newCollisions;
+            std::vector<SnapCollisionEvent> endedCollisions;
+            std::vector<SnapCollisionEvent> forgottenCollisions;
+            std::vector<SnapTriggerEvent> newTriggers;
+            std::vector<SnapTriggerEvent> endedTriggers;
+            std::vector<SnapTriggerEvent> forgottenTriggers;
+            std::span<const std::byte> jolt; // Jolt's own state, a view into the bytes that were parsed
+        };
+
+        // Whether `index` names a collider of the snapshot's body `handle` (kNoCollider always does)
+        bool SnapColliderOk(const Snapshot &snap, const PhysicsBodyHandle handle, const std::uint32_t index)
+        {
+            if (index == kNoCollider)
+            {
+                return true;
+            }
+            if (handle.index >= snap.bodies.size())
+            {
+                return false;
+            }
+            const SnapBody &body = snap.bodies[handle.index];
+            return body.active && body.generation == handle.generation && index < body.colliderCount;
+        }
+
+        bool ReadTouches(SnapshotReader &reader, const Snapshot &snap, std::vector<SnapTouch> &touches)
+        {
+            const std::uint32_t count = reader.U32();
+            if (!reader.Ok() || count > reader.Remaining())
+            {
+                return false;
+            }
+            touches.reserve(count);
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                SnapTouch touch;
+                touch.bodyA = reader.Handle();
+                touch.bodyB = reader.Handle();
+                const std::uint32_t shapes = reader.U32();
+                if (!reader.Ok() || shapes > reader.Remaining())
+                {
+                    return false;
+                }
+                for (std::uint32_t j = 0; j < shapes; ++j)
+                {
+                    SnapShapePair pair;
+                    pair.onA = reader.U32();
+                    pair.onB = reader.U32();
+                    if (!reader.Ok() || !SnapColliderOk(snap, touch.bodyA, pair.onA) ||
+                        !SnapColliderOk(snap, touch.bodyB, pair.onB))
+                    {
+                        return false;
+                    }
+                    touch.shapes.push_back(pair);
+                }
+                touches.push_back(std::move(touch));
+            }
+            return reader.Ok();
+        }
+
+        bool ReadCollisionEvents(SnapshotReader &reader, const Snapshot &snap, std::vector<SnapCollisionEvent> &events)
+        {
+            const std::uint32_t count = reader.U32();
+            if (!reader.Ok() || count > reader.Remaining())
+            {
+                return false;
+            }
+            events.reserve(count);
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                SnapCollisionEvent event;
+                event.bodyA = reader.Handle();
+                event.bodyB = reader.Handle();
+                event.colliderA = reader.U32();
+                event.colliderB = reader.U32();
+                const std::uint32_t points = reader.U32();
+                if (!reader.Ok() || points > reader.Remaining() || !SnapColliderOk(snap, event.bodyA, event.colliderA) ||
+                    !SnapColliderOk(snap, event.bodyB, event.colliderB))
+                {
+                    return false;
+                }
+                for (std::uint32_t j = 0; j < points; ++j)
+                {
+                    ContactPoint point;
+                    point.point = reader.Vec3();
+                    point.normal = reader.Vec3();
+                    point.separation = reader.F32();
+                    point.normalImpulse = reader.F32();
+                    point.tangentImpulse[0] = reader.F32();
+                    point.tangentImpulse[1] = reader.F32();
+                    event.contacts.push_back(point);
+                }
+                event.relativeVelocity = reader.Vec3();
+                event.impulse = reader.Vec3();
+                events.push_back(std::move(event));
+            }
+            return reader.Ok();
+        }
+
+        bool ReadTriggerEvents(SnapshotReader &reader, const Snapshot &snap, std::vector<SnapTriggerEvent> &events)
+        {
+            const std::uint32_t count = reader.U32();
+            if (!reader.Ok() || count > reader.Remaining())
+            {
+                return false;
+            }
+            events.reserve(count);
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                SnapTriggerEvent event;
+                event.bodyA = reader.Handle();
+                event.bodyB = reader.Handle();
+                event.colliderA = reader.U32();
+                event.colliderB = reader.U32();
+                if (!reader.Ok() || !SnapColliderOk(snap, event.bodyA, event.colliderA) ||
+                    !SnapColliderOk(snap, event.bodyB, event.colliderB))
+                {
+                    return false;
+                }
+                events.push_back(event);
+            }
+            return reader.Ok();
+        }
+
+        // Parses and checks the bytes of a snapshot (size, checksum, version, structure) without looking at the live
+        // backend. False with the reason in `why`; `snap.jolt` then views `in`.
+        bool ParseSnapshot(const std::span<const std::byte> in, Snapshot &snap, std::string &why)
+        {
+            constexpr std::size_t kChecksumBytes = sizeof(std::uint64_t);
+            if (in.size() < 2 * sizeof(std::uint32_t) + kChecksumBytes)
+            {
+                why = std::format("the {} bytes are too short to be a snapshot", in.size());
+                return false;
+            }
+            const std::span<const std::byte> body = in.first(in.size() - kChecksumBytes);
+            std::uint64_t checksum = 0;
+            std::memcpy(&checksum, in.data() + body.size(), kChecksumBytes);
+            if (checksum != Fnv1a(body))
+            {
+                why = "the checksum does not match (the bytes are damaged, cut short, or not a snapshot of this backend)";
+                return false;
+            }
+
+            SnapshotReader reader(body);
+            const std::uint32_t magic = reader.U32();
+            const std::uint32_t version = reader.U32();
+            if (magic != kSnapshotMagic || version != kSnapshotVersion)
+            {
+                why = "the bytes are not a snapshot of this backend's version";
+                return false;
+            }
+
+            const std::uint32_t slots = reader.U32();
+            if (!reader.Ok() || slots > reader.Remaining())
+            {
+                why = "the body table is cut short";
+                return false;
+            }
+            snap.bodies.resize(slots);
+            for (std::uint32_t i = 0; i < slots; ++i)
+            {
+                SnapBody &data = snap.bodies[i];
+                data.active = reader.Bool();
+                data.generation = reader.U32();
+                if (!data.active)
+                {
+                    continue;
+                }
+                data.joltId = reader.U32();
+                const std::uint8_t motion = reader.U8();
+                data.enabled = reader.Bool();
+                data.mass = reader.F32();
+                data.gravityEnabled = reader.Bool();
+                data.colliderCount = reader.U32();
+                data.hasKinematicTarget = reader.Bool();
+                data.targetPosition = reader.Vec3();
+                data.targetRotation = reader.Quat();
+                data.kinematicMoving = reader.Bool();
+                const std::uint32_t specs = reader.U32();
+                if (!reader.Ok() || motion > static_cast<std::uint8_t>(MotionKind::Kinematic) ||
+                    specs > reader.Remaining())
+                {
+                    why = "the body table is damaged";
+                    return false;
+                }
+                data.motion = static_cast<MotionKind>(motion);
+                for (std::uint32_t j = 0; j < specs; ++j)
+                {
+                    SnapSpec spec;
+                    spec.collider = reader.U32();
+                    const std::uint8_t kind = reader.U8();
+                    spec.radius = reader.F32();
+                    spec.height = reader.F32();
+                    spec.halfExtents = reader.Vec3();
+                    spec.offset = reader.Vec3();
+                    spec.material.staticFriction = reader.F32();
+                    spec.material.dynamicFriction = reader.F32();
+                    spec.material.restitution = reader.F32();
+                    spec.isTrigger = reader.Bool();
+                    spec.layer = reader.I32();
+                    if (!reader.Ok() || kind > static_cast<std::uint8_t>(ColliderKind::Capsule) ||
+                        !Layers::IsValid(spec.layer) ||
+                        (spec.collider != kNoCollider && spec.collider >= data.colliderCount))
+                    {
+                        why = "a collider description is damaged";
+                        return false;
+                    }
+                    spec.kind = static_cast<ColliderKind>(kind);
+                    data.specs.push_back(spec);
+                }
+            }
+
+            const std::uint32_t rows = reader.U32();
+            if (!reader.Ok() || rows != snap.matrixRows.size())
+            {
+                why = std::format("the layer matrix has {} rows and this build has {}", rows, snap.matrixRows.size());
+                return false;
+            }
+            for (std::uint32_t &row : snap.matrixRows)
+            {
+                row = reader.U32();
+            }
+            snap.gravity = reader.Vec3();
+            snap.hasPendingGravity = reader.Bool();
+            snap.pendingGravity = reader.Vec3();
+
+            const std::uint32_t contacts = reader.U32();
+            if (!reader.Ok() || contacts > reader.Remaining())
+            {
+                why = "the contact table is damaged";
+                return false;
+            }
+            snap.contacts.reserve(contacts);
+            for (std::uint32_t i = 0; i < contacts; ++i)
+            {
+                SnapContact contact;
+                const std::uint64_t lowOrder = reader.U64();
+                const std::uint64_t highOrder = reader.U64();
+                const std::uint32_t lowSub = reader.U32();
+                const std::uint32_t highSub = reader.U32();
+                contact.key = ContactKey{lowOrder, highOrder, lowSub, highSub};
+                contact.low = reader.Handle();
+                contact.high = reader.Handle();
+                contact.colliderLow = reader.U32();
+                contact.colliderHigh = reader.U32();
+                contact.trigger = reader.Bool();
+                contact.triggerOnHigh = reader.Bool();
+                contact.reported = reader.Bool();
+                contact.dormant = reader.Bool();
+                contact.seen = reader.Bool();
+                if (!reader.Ok() || !SnapColliderOk(snap, contact.low, contact.colliderLow) ||
+                    !SnapColliderOk(snap, contact.high, contact.colliderHigh))
+                {
+                    why = "the contact table is damaged";
+                    return false;
+                }
+                snap.contacts.push_back(contact);
+            }
+
+            if (!ReadTouches(reader, snap, snap.collisionTouches) || !ReadTouches(reader, snap, snap.triggerTouches) ||
+                !ReadCollisionEvents(reader, snap, snap.newCollisions) ||
+                !ReadCollisionEvents(reader, snap, snap.endedCollisions) ||
+                !ReadCollisionEvents(reader, snap, snap.forgottenCollisions) ||
+                !ReadTriggerEvents(reader, snap, snap.newTriggers) ||
+                !ReadTriggerEvents(reader, snap, snap.endedTriggers) ||
+                !ReadTriggerEvents(reader, snap, snap.forgottenTriggers))
+            {
+                why = "the touch and event tables are damaged";
+                return false;
+            }
+
+            const std::uint64_t joltSize = reader.U64();
+            if (!reader.Ok() || joltSize != reader.Remaining())
+            {
+                why = "Jolt's part of the state does not fit the rest";
+                return false;
+            }
+            snap.jolt = reader.Take(static_cast<std::size_t>(joltSize));
+            if (!reader.Ok())
+            {
+                why = "Jolt's part of the state is cut short";
+                return false;
+            }
+            return true;
+        }
+
+        bool SameSpec(const ColliderSpec &a, const ColliderSpec &b)
+        {
+            return a.collider == b.collider && a.kind == b.kind && a.radius == b.radius && a.height == b.height &&
+                   a.halfExtents.x == b.halfExtents.x && a.halfExtents.y == b.halfExtents.y &&
+                   a.halfExtents.z == b.halfExtents.z && a.offset.x == b.offset.x && a.offset.y == b.offset.y &&
+                   a.offset.z == b.offset.z && a.material.staticFriction == b.material.staticFriction &&
+                   a.material.dynamicFriction == b.material.dynamicFriction &&
+                   a.material.restitution == b.material.restitution && a.isTrigger == b.isTrigger &&
+                   a.layer == b.layer;
         }
     }
 
@@ -484,6 +1114,7 @@ namespace N2Engine::Physics
             void Handle(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
                         JPH::ContactSettings &settings, const RawContact::Kind kind) const
             {
+                _impl.NoteContactThread();
                 const std::uint64_t index1 = body1.GetShape()->GetSubShapeUserData(manifold.mSubShapeID1);
                 const std::uint64_t index2 = body2.GetShape()->GetSubShapeUserData(manifold.mSubShapeID2);
                 const ColliderSpec *collider1 = _impl.SpecFor(body1, index1);
@@ -642,14 +1273,13 @@ namespace N2Engine::Physics
         std::optional<Math::Vector3> pendingGravity;
 
         // Events: the listener buffers under the mutex, FoldContacts feeds the tracker after Update
-        std::mutex contactMutex;
+        mutable std::mutex contactMutex;
         std::vector<RawContact> rawContacts;
+        std::set<std::thread::id> contactThreads; // the threads that ran the listener (diagnostics), under the mutex
         Tracker tracker;
         std::map<ContactKey, ContactInfo> contacts;
         std::function<void(const GameObject &)> refilterObserver;
 
-        unsigned warned = 0;
-        unsigned warnCount = 0;
         bool updateErrorLogged = false;
 
         Impl()
@@ -673,15 +1303,12 @@ namespace N2Engine::Physics
         JPH::BodyInterface &Bodies() { return system->GetBodyInterface(); }
         const JPH::BodyInterface &Bodies() const { return system->GetBodyInterface(); }
 
-        void WarnOnce(const NotImplemented feature, const char *text)
+        // Called by the contact listener on its worker threads: remembers which threads ran it, so a test can tell that
+        // the thread pool really took part in the steps
+        void NoteContactThread()
         {
-            if ((warned & feature) != 0)
-            {
-                return;
-            }
-            warned |= feature;
-            ++warnCount;
-            Logger::Warn(std::format("Jolt backend: {} (not implemented yet; see docs/physics.html)", text));
+            const std::lock_guard lock(contactMutex);
+            contactThreads.insert(std::this_thread::get_id());
         }
 
         // ===== Handles (the PhysX backend's scheme, so both give the same handles for the same sequence) =====
@@ -1744,6 +2371,470 @@ namespace N2Engine::Physics
                 }
             }
         }
+
+        // ===== Snapshots (J6) =====
+
+        // A collider's index among the body's registered colliders (what a snapshot stores), kNoCollider for none
+        static std::uint32_t IndexOfCollider(const BodyData &data, const ICollider *collider)
+        {
+            if (!collider)
+            {
+                return kNoCollider;
+            }
+            const auto it = std::find(data.colliders.begin(), data.colliders.end(), collider);
+            return it == data.colliders.end() ? kNoCollider : static_cast<std::uint32_t>(it - data.colliders.begin());
+        }
+
+        // The same for the body behind a handle; kNoCollider when the body is gone
+        std::uint32_t EncodeCollider(const PhysicsBodyHandle handle, const ICollider *collider) const
+        {
+            const BodyData *data = GetData(handle);
+            return data ? IndexOfCollider(*data, collider) : kNoCollider;
+        }
+
+        // The registered collider of a live body that an index names; null for kNoCollider, a body that is gone, or an
+        // index past the list
+        ICollider *DecodeCollider(const PhysicsBodyHandle handle, const std::uint32_t index) const
+        {
+            const BodyData *data = GetData(handle);
+            return data && index < data->colliders.size() ? data->colliders[index] : nullptr;
+        }
+
+        // The GameObjects that own a pair's two bodies now, as the tracker records them on a forgotten pair (empty for a
+        // body that is gone)
+        PairOwners OwnersOfPair(const CollisionPair &pair) const
+        {
+            const auto ownerOf = [this](const PhysicsBodyHandle handle) -> std::weak_ptr<GameObject>
+            {
+                const BodyData *data = GetData(handle);
+                GameObject *owner = data ? OwnerOf(*data) : nullptr;
+                return owner ? owner->weak_from_this() : std::weak_ptr<GameObject>{};
+            };
+            return PairOwners{ownerOf(pair.bodyA), ownerOf(pair.bodyB)};
+        }
+
+        // Why a queue of forgotten pairs cannot be saved, or empty. An Exit that waits for a body that is already gone
+        // reaches the GameObject that owned it through a weak reference, which the bytes cannot hold; one whose owner is
+        // gone too needs nothing.
+        template <typename Event>
+        std::string UnsavableOwner(const std::vector<Event> &events) const
+        {
+            for (const Event &event : events)
+            {
+                if ((event.owners.a.lock() && !GetData(event.pair.bodyA)) ||
+                    (event.owners.b.lock() && !GetData(event.pair.bodyB)))
+                {
+                    return "an Exit is still waiting for a body that is already gone (ProcessCollisionCallbacks delivers it)";
+                }
+            }
+            return {};
+        }
+
+        void WriteTouches(SnapshotWriter &writer, const Tracker::TouchMap &touches) const
+        {
+            writer.U32(static_cast<std::uint32_t>(touches.size()));
+            for (const auto &[pair, shapes] : touches)
+            {
+                writer.Handle(pair.bodyA);
+                writer.Handle(pair.bodyB);
+                writer.U32(static_cast<std::uint32_t>(shapes.size()));
+                for (const Tracker::ShapePair &shape : shapes)
+                {
+                    writer.U32(EncodeCollider(pair.bodyA, shape.onA));
+                    writer.U32(EncodeCollider(pair.bodyB, shape.onB));
+                }
+            }
+        }
+
+        void WriteCollisionEvents(SnapshotWriter &writer, const std::vector<Tracker::CollisionEvent> &events) const
+        {
+            static const Collision kNoData;
+            writer.U32(static_cast<std::uint32_t>(events.size()));
+            for (const Tracker::CollisionEvent &event : events)
+            {
+                const Collision &data = event.data ? *event.data : kNoData;
+                writer.Handle(event.pair.bodyA);
+                writer.Handle(event.pair.bodyB);
+                writer.U32(EncodeCollider(event.pair.bodyA, data.collider));
+                writer.U32(EncodeCollider(event.pair.bodyB, data.otherCollider));
+                writer.U32(static_cast<std::uint32_t>(data.contacts.size()));
+                for (const ContactPoint &point : data.contacts)
+                {
+                    writer.Vec3(point.point);
+                    writer.Vec3(point.normal);
+                    writer.F32(point.separation);
+                    writer.F32(point.normalImpulse);
+                    writer.F32(point.tangentImpulse[0]);
+                    writer.F32(point.tangentImpulse[1]);
+                }
+                writer.Vec3(data.relativeVelocity);
+                writer.Vec3(data.impulse);
+            }
+        }
+
+        void WriteTriggerEvents(SnapshotWriter &writer, const std::vector<Tracker::TriggerEvent> &events) const
+        {
+            writer.U32(static_cast<std::uint32_t>(events.size()));
+            for (const Tracker::TriggerEvent &event : events)
+            {
+                writer.Handle(event.pair.bodyA);
+                writer.Handle(event.pair.bodyB);
+                writer.U32(EncodeCollider(event.pair.bodyA, event.colliderA));
+                writer.U32(EncodeCollider(event.pair.bodyB, event.colliderB));
+            }
+        }
+
+        // Writes the whole snapshot into `out` (replacing what it held, keeping its capacity). `strict` refuses a state
+        // that holds an Exit the bytes cannot carry; nothing is written then. False with the reason in `why`.
+        bool WriteSnapshot(std::vector<std::byte> &out, const bool strict, std::string &why) const
+        {
+            if (!initialized)
+            {
+                why = "the backend is not initialized";
+                return false;
+            }
+            if (strict)
+            {
+                std::string reason = UnsavableOwner(tracker.forgottenCollisions);
+                if (reason.empty())
+                {
+                    reason = UnsavableOwner(tracker.forgottenTriggers);
+                }
+                if (!reason.empty())
+                {
+                    why = std::move(reason);
+                    return false;
+                }
+            }
+
+            out.clear();
+            SnapshotWriter writer(out);
+            writer.U32(kSnapshotMagic);
+            writer.U32(kSnapshotVersion);
+
+            // Every body slot, so a restore can tell which bodies are the same ones. What a restore puts back is what the
+            // simulation does not carry itself: the mass, the gravity flag, the kinematic target, the collider specs.
+            writer.U32(static_cast<std::uint32_t>(bodies.size()));
+            for (const BodyData &data : bodies)
+            {
+                writer.Bool(data.active);
+                writer.U32(data.generation);
+                if (!data.active)
+                {
+                    continue;
+                }
+                writer.U32(data.id.GetIndexAndSequenceNumber());
+                writer.U8(static_cast<std::uint8_t>(data.motion));
+                writer.Bool(data.enabled);
+                writer.F32(data.mass);
+                writer.Bool(data.gravityEnabled);
+                writer.U32(static_cast<std::uint32_t>(data.colliders.size()));
+                writer.Bool(data.hasKinematicTarget);
+                writer.Vec3(data.targetPosition);
+                writer.Quat(data.targetRotation);
+                writer.Bool(data.kinematicMoving);
+                writer.U32(static_cast<std::uint32_t>(data.specs.size()));
+                for (const ColliderSpec &spec : data.specs)
+                {
+                    writer.U32(IndexOfCollider(data, spec.collider));
+                    writer.U8(static_cast<std::uint8_t>(spec.kind));
+                    writer.F32(spec.radius);
+                    writer.F32(spec.height);
+                    writer.Vec3(spec.halfExtents);
+                    writer.Vec3(spec.offset);
+                    writer.F32(spec.material.staticFriction);
+                    writer.F32(spec.material.dynamicFriction);
+                    writer.F32(spec.material.restitution);
+                    writer.Bool(spec.isTrigger);
+                    writer.I32(spec.layer);
+                }
+            }
+
+            writer.U32(static_cast<std::uint32_t>(matrix.rows.size()));
+            for (const std::uint32_t row : matrix.rows)
+            {
+                writer.U32(row);
+            }
+            writer.Vec3(currentGravity);
+            writer.Bool(pendingGravity.has_value());
+            writer.Vec3(pendingGravity.value_or(Math::Vector3::Zero));
+
+            writer.U32(static_cast<std::uint32_t>(contacts.size()));
+            for (const auto &[key, info] : contacts)
+            {
+                writer.U64(std::get<0>(key));
+                writer.U64(std::get<1>(key));
+                writer.U32(std::get<2>(key));
+                writer.U32(std::get<3>(key));
+                writer.Handle(info.low);
+                writer.Handle(info.high);
+                writer.U32(EncodeCollider(info.low, info.colliderLow));
+                writer.U32(EncodeCollider(info.high, info.colliderHigh));
+                writer.Bool(info.trigger);
+                writer.Bool(info.triggerOnHigh);
+                writer.Bool(info.reported);
+                writer.Bool(info.dormant);
+                writer.Bool(info.seen);
+            }
+
+            WriteTouches(writer, tracker.collisionTouches);
+            WriteTouches(writer, tracker.triggerTouches);
+            WriteCollisionEvents(writer, tracker.newCollisions);
+            WriteCollisionEvents(writer, tracker.endedCollisions);
+            WriteCollisionEvents(writer, tracker.forgottenCollisions);
+            WriteTriggerEvents(writer, tracker.newTriggers);
+            WriteTriggerEvents(writer, tracker.endedTriggers);
+            WriteTriggerEvents(writer, tracker.forgottenTriggers);
+
+            // Jolt's own state, straight into the same buffer behind its size
+            const std::size_t sizeAt = out.size();
+            writer.U64(0);
+            const std::size_t joltStart = out.size();
+            ByteRecorder recorder(out);
+            system->SaveState(recorder, JPH::EStateRecorderState::All);
+            if (recorder.IsFailed())
+            {
+                out.clear();
+                why = "Jolt could not save its state";
+                return false;
+            }
+            const std::uint64_t joltSize = static_cast<std::uint64_t>(out.size() - joltStart);
+            std::memcpy(out.data() + sizeAt, &joltSize, sizeof(joltSize));
+
+            const std::uint64_t checksum = Fnv1a(std::span<const std::byte>(out.data(), out.size()));
+            writer.U64(checksum);
+            return true;
+        }
+
+        // Whether the live backend can take the parsed snapshot: the bodies in the simulation (enabled) must be the same
+        // ones. A body that is disabled now and was disabled when saved (parked) may be anything. False with the reason.
+        bool CheckSnapshot(const Snapshot &snap, std::string &why) const
+        {
+            const std::size_t slots = std::max(snap.bodies.size(), bodies.size());
+            for (std::size_t i = 0; i < slots; ++i)
+            {
+                const BodyData *live = i < bodies.size() ? &bodies[i] : nullptr;
+                const SnapBody *was = i < snap.bodies.size() ? &snap.bodies[i] : nullptr;
+                const bool liveEnabled = live && live->active && live->enabled;
+                const bool wasEnabled = was && was->active && was->enabled;
+                if (!liveEnabled && !wasEnabled)
+                {
+                    continue;
+                }
+                if (liveEnabled != wasEnabled)
+                {
+                    why = std::format("the bodies in the simulation differ: body slot {} is {} now and was {} when the "
+                                      "state was saved (a body spawned or despawned inside the window must be parked "
+                                      "with SetBodyEnabled(false), not created or destroyed)",
+                                      i, liveEnabled ? "in the simulation" : "out of the simulation",
+                                      wasEnabled ? "in the simulation" : "out of the simulation");
+                    return false;
+                }
+                if (live->generation != was->generation || live->id.GetIndexAndSequenceNumber() != was->joltId ||
+                    live->motion != was->motion)
+                {
+                    why = std::format("body slot {} holds another body than when the state was saved (generation {} "
+                                      "against {})",
+                                      i, live->generation, was->generation);
+                    return false;
+                }
+                if (live->colliders.size() != was->colliderCount)
+                {
+                    why = std::format("body slot {} has {} registered colliders and had {} when the state was saved", i,
+                                      live->colliders.size(), was->colliderCount);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Puts back what the simulation does not carry for one body (see WriteSnapshot): it is the same body as in the
+        // snapshot (CheckSnapshot, or a parked body that is still there)
+        void RestoreBodyConfig(BodyData &live, const SnapBody &was)
+        {
+            live.hasKinematicTarget = was.hasKinematicTarget;
+            live.targetPosition = was.targetPosition;
+            live.targetRotation = was.targetRotation;
+            live.kinematicMoving = was.kinematicMoving;
+
+            if (live.gravityEnabled != was.gravityEnabled)
+            {
+                live.gravityEnabled = was.gravityEnabled;
+                if (live.motion != MotionKind::Static)
+                {
+                    Bodies().SetGravityFactor(live.id, live.gravityEnabled ? 1.0f : 0.0f);
+                }
+            }
+            const bool massChanged = live.mass != was.mass;
+            live.mass = was.mass;
+
+            // The collider specs: when any differs, the body's Jolt shape is rebuilt from the saved ones (a trigger flag, a
+            // layer, a size or a material changed inside the window)
+            bool specsChanged = false;
+            if (live.colliders.size() == was.colliderCount)
+            {
+                std::vector<ColliderSpec> specs;
+                specs.reserve(was.specs.size());
+                for (const SnapSpec &saved : was.specs)
+                {
+                    ColliderSpec spec;
+                    spec.collider = saved.collider == kNoCollider ? nullptr : live.colliders[saved.collider];
+                    spec.kind = saved.kind;
+                    spec.radius = saved.radius;
+                    spec.height = saved.height;
+                    spec.halfExtents = saved.halfExtents;
+                    spec.offset = saved.offset;
+                    spec.material = saved.material;
+                    spec.isTrigger = saved.isTrigger;
+                    spec.layer = saved.layer;
+                    specs.push_back(spec);
+                }
+                specsChanged = specs.size() != live.specs.size() ||
+                               !std::equal(specs.begin(), specs.end(), live.specs.begin(), SameSpec);
+                if (specsChanged)
+                {
+                    live.specs = std::move(specs);
+                }
+            }
+            if (specsChanged)
+            {
+                RebuildBody(live);
+            }
+            else if (massChanged)
+            {
+                ApplyMassProperties(live);
+            }
+        }
+
+        void RestoreTouches(Tracker::TouchMap &touches, const std::vector<SnapTouch> &saved) const
+        {
+            for (const SnapTouch &touch : saved)
+            {
+                std::vector<Tracker::ShapePair> &shapes = touches[CollisionPair{touch.bodyA, touch.bodyB}];
+                for (const SnapShapePair &pair : touch.shapes)
+                {
+                    Tracker::ShapePair shape;
+                    shape.onA = DecodeCollider(touch.bodyA, pair.onA);
+                    shape.onB = DecodeCollider(touch.bodyB, pair.onB);
+                    shapes.push_back(shape);
+                }
+            }
+        }
+
+        // `withOwners`: a forgotten pair, which also carries the objects that own its bodies
+        Tracker::CollisionEvent MakeCollisionEvent(const SnapCollisionEvent &saved, const bool withOwners) const
+        {
+            Tracker::CollisionEvent event;
+            event.pair = CollisionPair{saved.bodyA, saved.bodyB};
+            auto *data = new Collision();
+            data->collider = DecodeCollider(saved.bodyA, saved.colliderA);
+            data->otherCollider = DecodeCollider(saved.bodyB, saved.colliderB);
+            data->contacts = saved.contacts;
+            data->relativeVelocity = saved.relativeVelocity;
+            data->impulse = saved.impulse;
+            event.data = data;
+            if (withOwners)
+            {
+                event.owners = OwnersOfPair(event.pair);
+            }
+            return event;
+        }
+
+        Tracker::TriggerEvent MakeTriggerEvent(const SnapTriggerEvent &saved, const bool withOwners) const
+        {
+            Tracker::TriggerEvent event;
+            event.pair = CollisionPair{saved.bodyA, saved.bodyB};
+            event.colliderA = DecodeCollider(saved.bodyA, saved.colliderA);
+            event.colliderB = DecodeCollider(saved.bodyB, saved.colliderB);
+            if (withOwners)
+            {
+                event.owners = OwnersOfPair(event.pair);
+            }
+            return event;
+        }
+
+        // Puts a parsed and checked snapshot back. Only Jolt's own restore can fail (false); the rest is assignment. The
+        // order matters: shapes are rebuilt first (a rebuild may wake a body), then Jolt's restore sets every body's pose,
+        // velocities and awake state, then the contact bookkeeping that refers to them.
+        bool ApplySnapshot(const Snapshot &snap)
+        {
+            const std::size_t common = std::min(snap.bodies.size(), bodies.size());
+            for (std::size_t i = 0; i < common; ++i)
+            {
+                BodyData &live = bodies[i];
+                const SnapBody &was = snap.bodies[i];
+                if (!live.active || !was.active || live.generation != was.generation || live.motion != was.motion)
+                {
+                    continue; // not the same body: a parked one that the snapshot does not know
+                }
+                RestoreBodyConfig(live, was);
+            }
+
+            matrix.rows = snap.matrixRows;
+            currentGravity = snap.gravity;
+            if (snap.hasPendingGravity)
+            {
+                pendingGravity = snap.pendingGravity;
+            }
+            else
+            {
+                pendingGravity.reset();
+            }
+
+            ByteRecorder recorder(snap.jolt);
+            if (!system->RestoreState(recorder) || recorder.IsFailed())
+            {
+                return false;
+            }
+
+            tracker.Clear();
+            contacts.clear();
+            {
+                const std::lock_guard lock(contactMutex);
+                rawContacts.clear();
+            }
+            for (const SnapContact &saved : snap.contacts)
+            {
+                ContactInfo info;
+                info.low = saved.low;
+                info.high = saved.high;
+                info.colliderLow = DecodeCollider(saved.low, saved.colliderLow);
+                info.colliderHigh = DecodeCollider(saved.high, saved.colliderHigh);
+                info.trigger = saved.trigger;
+                info.triggerOnHigh = saved.triggerOnHigh;
+                info.reported = saved.reported;
+                info.dormant = saved.dormant;
+                info.seen = saved.seen;
+                contacts.emplace(saved.key, info);
+            }
+            RestoreTouches(tracker.collisionTouches, snap.collisionTouches);
+            RestoreTouches(tracker.triggerTouches, snap.triggerTouches);
+            for (const SnapCollisionEvent &saved : snap.newCollisions)
+            {
+                tracker.newCollisions.push_back(MakeCollisionEvent(saved, false));
+            }
+            for (const SnapCollisionEvent &saved : snap.endedCollisions)
+            {
+                tracker.endedCollisions.push_back(MakeCollisionEvent(saved, false));
+            }
+            for (const SnapCollisionEvent &saved : snap.forgottenCollisions)
+            {
+                tracker.forgottenCollisions.push_back(MakeCollisionEvent(saved, true));
+            }
+            for (const SnapTriggerEvent &saved : snap.newTriggers)
+            {
+                tracker.newTriggers.push_back(MakeTriggerEvent(saved, false));
+            }
+            for (const SnapTriggerEvent &saved : snap.endedTriggers)
+            {
+                tracker.endedTriggers.push_back(MakeTriggerEvent(saved, false));
+            }
+            for (const SnapTriggerEvent &saved : snap.forgottenTriggers)
+            {
+                tracker.forgottenTriggers.push_back(MakeTriggerEvent(saved, true));
+            }
+            return true;
+        }
     };
 
     // ===== Construction, lifetime =====
@@ -1804,8 +2895,8 @@ namespace N2Engine::Physics
         s.tempAllocator = std::make_unique<JPH::TempAllocatorImpl>(static_cast<JPH::uint>(kTempAllocatorBytes));
 
         // Single-threaded on the web (no pthreads) and when physics.deterministic asks for it; the thread pool
-        // otherwise. Until CI proves that Jolt's results do not depend on the thread count, the Deterministic preset
-        // must use the single-threaded one.
+        // otherwise. J6's tests prove same-binary 0-versus-N thread equality of the state, but the declaration stays
+        // conservative (DeclaredDeterminism): the Deterministic preset still runs the single-threaded job system.
 #ifdef N2ENGINE_SINGLE_THREADED
         s.singleThreaded = true;
 #else
@@ -1819,7 +2910,7 @@ namespace N2Engine::Physics
         else
         {
             s.jobSystem = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
-                                                                     kWorkerThreads);
+                                                                     _workerThreads);
         }
 #endif
 
@@ -1852,6 +2943,10 @@ namespace N2Engine::Physics
             s.tracker.Clear();
             s.contacts.clear();
             s.rawContacts.clear();
+            {
+                const std::lock_guard lock(s.contactMutex);
+                s.contactThreads.clear();
+            }
             s.bodies.clear();
             s.freeList.clear();
             s.pendingGravity.reset();
@@ -2622,22 +3717,104 @@ namespace N2Engine::Physics
 
     // ===== Snapshot (J6) =====
 
-    bool JoltBackend::SaveState(std::vector<std::byte> &) const
+    bool JoltBackend::SaveState(std::vector<std::byte> &out) const
     {
-        _impl->WarnOnce(kSnapshot, "SaveState, RestoreState and HashState are unsupported");
-        return false;
+        std::string why;
+        if (!_impl->WriteSnapshot(out, true, why))
+        {
+            Logger::Error(std::format("Jolt backend: SaveState refused: {}", why));
+            return false;
+        }
+        return true;
     }
 
-    bool JoltBackend::RestoreState(std::span<const std::byte>)
+    bool JoltBackend::RestoreState(const std::span<const std::byte> in)
     {
-        _impl->WarnOnce(kSnapshot, "SaveState, RestoreState and HashState are unsupported");
+        Impl &s = *_impl;
+        if (!s.initialized)
+        {
+            Logger::Error("Jolt backend: RestoreState refused: the backend is not initialized");
+            return false;
+        }
+
+        // Everything that can be refused is decided before anything changes
+        Snapshot snap;
+        std::string why;
+        if (!ParseSnapshot(in, snap, why) || !s.CheckSnapshot(snap, why))
+        {
+            Logger::Error(std::format("Jolt backend: RestoreState refused: {}", why));
+            return false;
+        }
+
+        // The state as it is now, in case Jolt itself fails half way (it cannot after the checks above, unless its own
+        // state and ours disagree): a failed restore puts this back
+        std::vector<std::byte> rescue;
+        std::string rescueWhy;
+        const bool haveRescue = s.WriteSnapshot(rescue, false, rescueWhy);
+
+        if (s.ApplySnapshot(snap))
+        {
+            return true;
+        }
+        Logger::Error("Jolt backend: RestoreState failed: Jolt could not restore its state");
+        Snapshot before;
+        if (haveRescue && ParseSnapshot(rescue, before, rescueWhy) && s.ApplySnapshot(before))
+        {
+            return false;
+        }
+        Logger::Error("Jolt backend: the simulation could not be put back as it was; the world is in an unknown state");
         return false;
     }
 
     std::optional<std::uint64_t> JoltBackend::HashState() const
     {
-        _impl->WarnOnce(kSnapshot, "SaveState, RestoreState and HashState are unsupported");
-        return std::nullopt;
+        const Impl &s = *_impl;
+        if (!s.initialized)
+        {
+            return std::nullopt;
+        }
+        // Bodies in handle order (the slot order), what makes each of them what it is, and for one in the simulation its
+        // pose, velocities and whether it is awake. Floats go in canonicalised (NaN, -0).
+        StateHasher hasher;
+        for (std::size_t i = 0; i < s.bodies.size(); ++i)
+        {
+            const Impl::BodyData &data = s.bodies[i];
+            if (!data.active)
+            {
+                continue;
+            }
+            hasher.Word(static_cast<std::uint32_t>(i));
+            hasher.Word(data.generation);
+            hasher.Word(data.enabled ? 1u : 0u);
+            hasher.Word(static_cast<std::uint32_t>(data.motion));
+            if (!data.enabled)
+            {
+                continue;
+            }
+            JPH::RVec3 position;
+            JPH::Quat rotation;
+            s.Bodies().GetPositionAndRotation(data.id, position, rotation);
+            hasher.Float(static_cast<float>(position.GetX()));
+            hasher.Float(static_cast<float>(position.GetY()));
+            hasher.Float(static_cast<float>(position.GetZ()));
+            hasher.Float(rotation.GetX());
+            hasher.Float(rotation.GetY());
+            hasher.Float(rotation.GetZ());
+            hasher.Float(rotation.GetW());
+            if (data.motion != MotionKind::Static)
+            {
+                const JPH::Vec3 linear = s.Bodies().GetLinearVelocity(data.id);
+                const JPH::Vec3 angular = s.Bodies().GetAngularVelocity(data.id);
+                hasher.Float(linear.GetX());
+                hasher.Float(linear.GetY());
+                hasher.Float(linear.GetZ());
+                hasher.Float(angular.GetX());
+                hasher.Float(angular.GetY());
+                hasher.Float(angular.GetZ());
+                hasher.Word(s.Bodies().IsActive(data.id) ? 1u : 0u);
+            }
+        }
+        return hasher.Value();
     }
 
     // ===== Diagnostics and tests =====
@@ -2683,9 +3860,15 @@ namespace N2Engine::Physics
         return _impl->initialized && _impl->singleThreaded;
     }
 
-    unsigned JoltBackend::GetNotImplementedWarningCount() const
+    int JoltBackend::GetJobSystemConcurrency() const
     {
-        return _impl->warnCount;
+        return _impl->jobSystem ? _impl->jobSystem->GetMaxConcurrency() : 0;
+    }
+
+    std::size_t JoltBackend::GetContactThreadCount() const
+    {
+        const std::lock_guard lock(_impl->contactMutex);
+        return _impl->contactThreads.size();
     }
 
     int JoltBackend::GlobalInitCount()
