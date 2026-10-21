@@ -61,7 +61,7 @@ TEST(PhysicsBackendKindTest, TheNamesRoundTripAndTheDisplayNamesAreForPeople)
     EXPECT_EQ(DisplayName(PhysicsBackendKind::Jolt), "Jolt");
 }
 
-TEST(PhysicsBackendKindTest, PhysXIsInTheBuildOnlyWithPhysXAndJoltIsNotInAnyBuildYet)
+TEST(PhysicsBackendKindTest, EachBackendIsInTheBuildOnlyWithItsOption)
 {
     using N2Engine::Physics::IsBackendCompiledIn;
 #ifdef N2ENGINE_PHYSX_ENABLED
@@ -69,7 +69,21 @@ TEST(PhysicsBackendKindTest, PhysXIsInTheBuildOnlyWithPhysXAndJoltIsNotInAnyBuil
 #else
     EXPECT_FALSE(IsBackendCompiledIn(PhysicsBackendKind::PhysX));
 #endif
+    // N2ENGINE_USE_JOLT puts the Jolt backend into the engine (N2ENGINE_JOLT_ENABLED)
+#ifdef N2ENGINE_JOLT_ENABLED
+    EXPECT_TRUE(IsBackendCompiledIn(PhysicsBackendKind::Jolt));
+#else
     EXPECT_FALSE(IsBackendCompiledIn(PhysicsBackendKind::Jolt));
+#endif
+}
+
+TEST(PhysicsBackendKindTest, ASelectedJoltIsRefusedForADeterministicProjectOnlyWhenTheBuildLacksIt)
+{
+    using N2Engine::Physics::IsBackendCompiledIn;
+    const N2Engine::Physics::BackendChoice choice =
+        N2Engine::Physics::ChooseBackend(PhysicsBackendKind::Jolt, true, IsBackendCompiledIn(PhysicsBackendKind::Jolt));
+    EXPECT_EQ(choice.refused, !IsBackendCompiledIn(PhysicsBackendKind::Jolt));
+    EXPECT_EQ(choice.selected, PhysicsBackendKind::Jolt);
 }
 
 // ===== the setting =====

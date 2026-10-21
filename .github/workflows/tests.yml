@@ -252,7 +252,7 @@ jobs:
         if: needs.changes.outputs.docs_only != 'true'
         run: cmake --build build --config ${{ matrix.config }} --parallel
 
-      # The vendored Jolt Physics (N2ENGINE_USE_JOLT, no engine target uses it yet): its smoke test run directly, because ctest
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce) is in this
       # job's log and summary
       - name: Jolt determinism numbers
@@ -265,6 +265,23 @@ jobs:
           Add-Content $env:GITHUB_STEP_SUMMARY 'windows ${{ matrix.config }}, PhysX ${{ matrix.physx }}:'
           Add-Content $env:GITHUB_STEP_SUMMARY ''
           Select-String -Path jolt-smoke.log -Pattern '^\[JOLT-DETERMINISM\]' | ForEach-Object { Add-Content $env:GITHUB_STEP_SUMMARY ('    ' + $_.Line) }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+
+      # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
+      # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
+      # The hashes must be equal on every leg that builds the backend: a difference is a finding, never a number to loosen
+      - name: Jolt backend determinism numbers
+        if: needs.changes.outputs.docs_only != 'true'
+        shell: pwsh
+        env:
+          ALSOFT_DRIVERS: "null"
+        run: |
+          & "./build/bin/${{ matrix.config }}/engine_tests.exe" --gtest_filter='JoltBackendDeterminismTest.*' | Tee-Object -FilePath jolt-backend.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Add-Content $env:GITHUB_STEP_SUMMARY 'windows ${{ matrix.config }}, PhysX ${{ matrix.physx }}:'
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Select-String -Path jolt-backend.log -Pattern '^\[JOLT-BACKEND-DETERMINISM\]' | ForEach-Object { Add-Content $env:GITHUB_STEP_SUMMARY ('    ' + $_.Line) }
           Add-Content $env:GITHUB_STEP_SUMMARY ''
 
       - name: Test
@@ -429,7 +446,7 @@ jobs:
       - name: Check the vendored Jolt Physics tree
         run: bash scripts/check-jolt-vendor.sh
 
-      # The vendored Jolt Physics (N2ENGINE_USE_JOLT, no engine target uses it yet): its smoke test run directly, because ctest
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
       # first cross-platform determinism data point) is in this job's log and summary
       - name: Jolt determinism numbers
@@ -437,6 +454,17 @@ jobs:
           set -o pipefail
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
+      # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
+      # The hashes must be equal on every leg that builds the backend: a difference is a finding, never a number to loosen
+      - name: Jolt backend determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/engine_tests --gtest_filter='JoltBackendDeterminismTest.*' | tee jolt-backend.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-BACKEND-DETERMINISM\]' jolt-backend.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ALSOFT_DRIVERS: "null"
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 600
@@ -563,7 +591,7 @@ jobs:
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests jolt_smoke_tests -- -k 0
 
-      # The vendored Jolt Physics (N2ENGINE_USE_JOLT, no engine target uses it yet): its smoke test run directly, because ctest
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
       # first cross-platform determinism data point) is in this job's log and summary
       - name: Jolt determinism numbers
@@ -571,6 +599,17 @@ jobs:
           set -o pipefail
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
+      # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
+      # The hashes must be equal on every leg that builds the backend: a difference is a finding, never a number to loosen
+      - name: Jolt backend determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/engine_tests --gtest_filter='JoltBackendDeterminismTest.*' | tee jolt-backend.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-BACKEND-DETERMINISM\]' jolt-backend.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ALSOFT_DRIVERS: "null"
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 600
@@ -675,7 +714,7 @@ jobs:
       - name: Build
         run: cmake --build build --parallel --target N2EditorHost math_tests text_tests assetimport_tests engine_tests renderer_tests editor_server_tests editor_project_tests jolt_smoke_tests -- -k 0
 
-      # The vendored Jolt Physics (N2ENGINE_USE_JOLT, no engine target uses it yet): its smoke test run directly, because ctest
+      # The vendored Jolt Physics (N2ENGINE_USE_JOLT): its smoke test (the library alone) run directly, because ctest
       # hides a passing test's output, so this leg's [JOLT-DETERMINISM] line (the state hash every leg must produce, the
       # first cross-platform determinism data point) is in this job's log and summary
       - name: Jolt determinism numbers
@@ -683,6 +722,17 @@ jobs:
           set -o pipefail
           ./build/bin/jolt_smoke_tests | tee jolt-smoke.log
           { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-DETERMINISM\]' jolt-smoke.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The Jolt BACKEND (engine/src/physics/jolt) stepping one scene twice in a process: its [JOLT-BACKEND-DETERMINISM] lines
+      # (compiler, job system, declared level, and the state hashes after 60 and 240 steps) are in this job's log and summary.
+      # The hashes must be equal on every leg that builds the backend: a difference is a finding, never a number to loosen
+      - name: Jolt backend determinism numbers
+        run: |
+          set -o pipefail
+          ./build/bin/engine_tests --gtest_filter='JoltBackendDeterminismTest.*' | tee jolt-backend.log
+          { echo; echo "${{ github.job }}:"; echo; grep '^\[JOLT-BACKEND-DETERMINISM\]' jolt-backend.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ALSOFT_DRIVERS: "null"
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 600
@@ -915,6 +965,15 @@ jobs:
           . "$HOME/emsdk/emsdk_env.sh"
           ctest --test-dir build-web --output-on-failure -V
 
+      # The Jolt BACKEND under node (single-threaded: the web build has no pthreads): its [JOLT-BACKEND-DETERMINISM] lines in the
+      # job's log and summary, to be compared with the native legs'
+      - name: Jolt backend determinism numbers
+        run: |
+          set -e -o pipefail
+          . "$HOME/emsdk/emsdk_env.sh"
+          node build-web/bin/engine_tests.js --gtest_filter='JoltBackendDeterminismTest.*' | tee jolt-backend.log
+          { echo; echo "web (node):"; echo; grep '^\[JOLT-BACKEND-DETERMINISM\]' jolt-backend.log | sed 's/^/    /'; echo; } >> "$GITHUB_STEP_SUMMARY"
+
       # Only reports (raw and gzip sizes in the job summary); the budgets are checked on the package below
       - name: Report artifact sizes
         run: bash scripts/web-size-report.sh build-web/bin
@@ -974,9 +1033,10 @@ jobs:
           bash scripts/web-size-report.sh build-web-size/web-package
           node scripts/web-budget-check.mjs build-web-size/web-package size
 
-      # Jolt Physics (N2ENGINE_USE_JOLT) is NOT linked into the player: two small programs of its own (cmake/jolt/probe) give
-      # its measured weight in this profile (the .wasm of the probe minus the baseline's, next to the player's own), and the
-      # probe, which runs the smoke test's scenario, must print the golden state hash (it exits non-zero otherwise)
+      # Jolt Physics (N2ENGINE_USE_JOLT) IS linked into the player since the Jolt backend (PR #205): the player's budgets were raised
+      # for it. Two small programs of its own (cmake/jolt/probe) still give the library's weight in this profile (the .wasm of
+      # the probe minus the baseline's), and the probe, which runs the smoke test's scenario, must print the golden state hash
+      # (it exits non-zero otherwise)
       - name: Measure Jolt Physics (size profile)
         run: |
           set -e
