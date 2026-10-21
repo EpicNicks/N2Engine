@@ -40,7 +40,7 @@ namespace fs = std::filesystem;
 
 // Where the host calls the hooks of a Lua editor extension, and Editor.Assets (E-X6), against a project with a real scene,
 // really executed through ExecuteCommand: OnSceneOpened after OpenScene and NewScene, OnSceneSaved after the file is written
-// and the history marked saved, OnBeforePlay before the play snapshot (its warnings are events, play is never blocked),
+// and the history marked saved, OnBeforePlay after the play snapshot is written and before the response (its warnings are events, play is never blocked),
 // OnAssetsChanged from a rescan, a client's write and the watcher's poll; a hook that fails changes nothing about the
 // triggering command; an extension's own asset write does not call the hook. Editor.Assets reads and writes text assets
 // through the client's own commands: res:// only, traversal and links refused, size caps, capabilities, the audit line and

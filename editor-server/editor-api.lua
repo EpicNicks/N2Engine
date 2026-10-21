@@ -237,7 +237,7 @@
 ---@class EditorHooks
 ---@field OnSceneOpened? fun(info: EditorSceneInfo) After OpenScene or NewScene made a scene the open one; needs scene.read
 ---@field OnSceneSaved? fun(info: EditorSceneInfo) After SaveSceneToFile wrote the file; needs scene.read
----@field OnBeforePlay? fun(info: EditorSceneInfo): EditorHookResult? Before the play snapshot is written; its warnings are shown and never block play; needs scene.read
+---@field OnBeforePlay? fun(info: EditorSceneInfo): EditorHookResult? Called once WritePlaySnapshot accepted the request and wrote the snapshot, before the response; its warnings are shown and never block play; needs scene.read
 ---@field OnAssetsChanged? fun(added: string[], removed: string[], modified: string[]) After assets changed (each list of res:// paths is cut to 1000); needs assets.read
 
 ---The table a file gives Editor.Extension and returns. A key this API version does not know fails the file.
