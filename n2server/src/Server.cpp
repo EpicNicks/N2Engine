@@ -480,6 +480,7 @@ namespace N2Engine::Server
                 network != nullptr && network->state == SubsystemState::Failed)
             {
                 std::println(stderr, "N2Server: the engine refused to start the project: {}", network->detail);
+                stopEngine();
                 return 1;
             }
             Logger::Info("Engine initialized (headless: no renderer, no window, no audio, physics GPU off)");
