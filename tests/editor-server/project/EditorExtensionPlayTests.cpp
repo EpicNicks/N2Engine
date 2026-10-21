@@ -199,6 +199,26 @@ TEST_F(EditorExtensionPlayTest, APlayHostRefusesTheReloadAndStillAnswersTheTwoRe
                   .at("extensions").size(), 1u);
 }
 
+TEST_F(EditorExtensionPlayTest, APlayHostRefusesInvokeMenuItemBeforeAnyLuaRuns)
+{
+    StartPlaying(true);
+    ASSERT_NE(play->GetEditorExtensions(), nullptr);
+    ASSERT_EQ(play->GetEditorExtensions()->LoadedCount(), 1u);
+    BufferWriter w;
+    w.WriteString("a.item");
+    WriteJson(w, json::array());
+    WriteJson(w, json::object());
+    w.WriteU32(play->GetEditorExtensions()->UiRevision());
+
+    // InvokeMenuItem is edit-only (since 1.15.0): a play host runs no extension, so the play gate answers first
+    const Frame refused = Execute(*play, CommandType::InvokeMenuItem, w.Release());
+    EXPECT_EQ(refused.type, ErrorType) << refused.Text();
+    EXPECT_NE(refused.Text().find("Not available in a play host"), std::string::npos) << refused.Text();
+    EXPECT_TRUE(EventsOfKind(*play, "extensionOutput").empty());
+    EXPECT_FALSE(play->GetHistory().InGroup());
+    EXPECT_EQ(play->GetEditorExtensions()->StateOf("a.lua"), ExtensionState::Loaded) << "nothing ran or failed";
+}
+
 TEST_F(EditorExtensionPlayTest, APlayHostWithoutTheFlagAnswersDisabledAndRefusesTheReloadAsAPlayHost)
 {
     StartPlaying(false);

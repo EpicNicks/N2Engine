@@ -101,6 +101,7 @@ namespace
             {"SetStartupScene", CommandType::SetStartupScene},
             {"ListEditorExtensions", CommandType::ListEditorExtensions},
             {"GetEditorUi", CommandType::GetEditorUi},
+            {"InvokeMenuItem", CommandType::InvokeMenuItem},
             {"ReloadEditorExtensions", CommandType::ReloadEditorExtensions},
             {"Undo", CommandType::Undo},
             {"Redo", CommandType::Redo},
@@ -155,6 +156,7 @@ namespace
             {"AssetCreated", ResponseType::AssetCreated},
             {"EditorExtensions", ResponseType::EditorExtensions},
             {"EditorUi", ResponseType::EditorUi},
+            {"ExtensionResult", ResponseType::ExtensionResult},
         };
         return responses;
     }
@@ -210,6 +212,7 @@ namespace
             {"SetProjectSettings", [](BufferReader &r) { (void)SetProjectSettingsCmd::Deserialize(r); }},
             {"SetStartupScene", [](BufferReader &r) { (void)SetStartupSceneCmd::Deserialize(r); }},
             {"BeginEditGroup", [](BufferReader &r) { (void)BeginEditGroupCmd::Deserialize(r); }},
+            {"InvokeMenuItem", [](BufferReader &r) { (void)InvokeMenuItemCmd::Deserialize(r); }},
         };
         return deserializers;
     }
@@ -631,8 +634,10 @@ TEST(ProtocolSpecTest, EveryCommandIsClassifiedForAPlayHost)
         {"ListAssets", false}, {"GetAssetInfo", false}, {"ReadTextAsset", false},
         {"WritePlaySnapshot", false}, {"SetPaused", false}, {"Step", false}, {"GetPlayState", false},
         {"SendInput", false}, {"Shutdown", false},
-        // A play host runs no editor extension: the lists answer (nothing is loaded there), the reload is refused
+        // A play host runs no editor extension: the lists answer (nothing is loaded there), the reload and the invocation
+        // are refused
         {"ListEditorExtensions", false}, {"GetEditorUi", false}, {"ReloadEditorExtensions", true},
+        {"InvokeMenuItem", true},
     };
 
     const spec_json spec = LoadSpec();

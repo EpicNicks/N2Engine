@@ -312,6 +312,15 @@ namespace N2Engine::Editor
 local FN = {}
 local MAX_DEPTH, MAX_NODES, MAX_STRING = 8, 4000, 4096
 local declared = nil
+local runs = {}
+-- What the host gave this state to reach it with, taken before any file code runs and then removed from the globals:
+-- the only way out of the state is these wrappers
+local host = __n2_host
+__n2_host = nil
+-- The library functions the wrappers use, taken now, so a file that later replaces `type` or `table.concat` in its own
+-- state cannot change what the wrappers do
+local type, next, rawget, rawequal, error, select, tostring = type, next, rawget, rawequal, error, select, tostring
+local concat, ssub = table.concat, string.sub
 
 local function copy(v, depth, count)
     local tv = type(v)
@@ -353,16 +362,146 @@ local function copy(v, depth, count)
     error("a " .. tv .. " value in the declaration", 0)
 end
 
+-- Editor.Log: the lines go to the host as requests; outside a menu item (while the file loads) they are dropped
+local function join(...)
+    local n = select("#", ...)
+    local parts = {}
+    for i = 1, n do
+        parts[i] = tostring((select(i, ...)))
+    end
+    local text = concat(parts, " ")
+    if #text > 4096 then
+        text = ssub(text, 1, 4096)
+    end
+    return text
+end
+
+local function logger(level)
+    return function(...)
+        host("log", { level = level, text = join(...) })
+    end
+end
+
+local Log = { Info = logger("info"), Warn = logger("warn"), Error = logger("error") }
+
+local function expect(value, kind, fname, what)
+    if type(value) ~= kind then
+        error(fname .. " expects " .. what .. ", got " .. type(value), 3)
+    end
+end
+
+-- Editor.Scene: installed by Editor.Extension for the capabilities the file declared. Every function is a request the
+-- host answers through its command layer; values are plain tables (the JSON of the protocol) and ids are strings.
+local function sceneApi(read, write)
+    local Scene = {}
+    if read then
+        function Scene.GetHierarchy()
+            return host("scene.getHierarchy")
+        end
+        function Scene.GetEntity(id)
+            expect(id, "string", "Editor.Scene.GetEntity", "an entity id (a string)")
+            return host("scene.getEntity", { id = id })
+        end
+        function Scene.GetComponent(entityId, componentId)
+            expect(entityId, "string", "Editor.Scene.GetComponent", "an entity id (a string)")
+            expect(componentId, "string", "Editor.Scene.GetComponent", "a component id (a string)")
+            return host("scene.getComponent", { entityId = entityId, componentId = componentId })
+        end
+        function Scene.GetLocalTransform(id)
+            expect(id, "string", "Editor.Scene.GetLocalTransform", "an entity id (a string)")
+            return host("scene.getLocalTransform", { id = id })
+        end
+        function Scene.FindByName(name)
+            expect(name, "string", "Editor.Scene.FindByName", "a name (a string)")
+            return host("scene.findByName", { name = name })
+        end
+        function Scene.GetComponentTypes()
+            return host("scene.getComponentTypes")
+        end
+    end
+    if write then
+        function Scene.CreateEntity(spec)
+            if spec == nil then
+                spec = {}
+            end
+            expect(spec, "table", "Editor.Scene.CreateEntity", "a table such as { name = \"Cube\", parent = id }")
+            return host("scene.createEntity", spec)
+        end
+        function Scene.Destroy(id)
+            expect(id, "string", "Editor.Scene.Destroy", "an entity id (a string)")
+            return host("scene.destroy", { id = id })
+        end
+        function Scene.Duplicate(id)
+            expect(id, "string", "Editor.Scene.Duplicate", "an entity id (a string)")
+            return host("scene.duplicate", { id = id })
+        end
+        function Scene.SetParent(id, parent, index)
+            expect(id, "string", "Editor.Scene.SetParent", "an entity id (a string)")
+            return host("scene.setParent", { id = id, parent = parent, index = index })
+        end
+        function Scene.SetProperties(id, properties)
+            expect(id, "string", "Editor.Scene.SetProperties", "an entity id (a string)")
+            expect(properties, "table", "Editor.Scene.SetProperties", "a table of name, tag, layer and active")
+            return host("scene.setProperties", { id = id, properties = properties })
+        end
+        function Scene.SetLocalTransform(id, transform)
+            expect(id, "string", "Editor.Scene.SetLocalTransform", "an entity id (a string)")
+            expect(transform, "table", "Editor.Scene.SetLocalTransform", "a table of position, rotation and scale")
+            return host("scene.setLocalTransform", { id = id, transform = transform })
+        end
+        function Scene.AddComponent(id, typeName, values)
+            expect(id, "string", "Editor.Scene.AddComponent", "an entity id (a string)")
+            expect(typeName, "string", "Editor.Scene.AddComponent", "a component type name (a string)")
+            return host("scene.addComponent", { id = id, type = typeName, values = values })
+        end
+        function Scene.RemoveComponent(entityId, componentId)
+            expect(entityId, "string", "Editor.Scene.RemoveComponent", "an entity id (a string)")
+            expect(componentId, "string", "Editor.Scene.RemoveComponent", "a component id (a string)")
+            return host("scene.removeComponent", { entityId = entityId, componentId = componentId })
+        end
+        function Scene.SetFields(entityId, componentId, values)
+            expect(entityId, "string", "Editor.Scene.SetFields", "an entity id (a string)")
+            expect(componentId, "string", "Editor.Scene.SetFields", "a component id (a string)")
+            expect(values, "table", "Editor.Scene.SetFields", "a table of field values")
+            return host("scene.setFields", { entityId = entityId, componentId = componentId, values = values })
+        end
+    end
+    return Scene
+end
+
 Editor = {
     Extension = function(declaration)
         if type(declaration) ~= "table" then
             error("Editor.Extension expects a table, got " .. type(declaration), 2)
         end
         declared = declaration
+        local read, write = false, false
+        local capabilities = rawget(declaration, "capabilities")
+        if type(capabilities) == "table" then
+            for _, capability in next, capabilities do
+                if capability == "scene.read" then
+                    read = true
+                elseif capability == "scene.write" then
+                    write = true
+                end
+            end
+        end
+        if read or write then
+            Editor.Scene = sceneApi(read, write)
+        else
+            Editor.Scene = nil
+        end
         return declaration
     end,
+    Log = Log,
 }
 
+-- The host's print is gone from the state (the profile removes it): print writes to the log, as Editor.Log.Info
+print = function(...)
+    Log.Info(...)
+end
+
+-- The first function reads the declaration back and keeps the functions of the menu; the second runs one of them
 return function(returned)
     if declared == nil then
         error("the file did not call Editor.Extension{...}", 0)
@@ -370,7 +509,27 @@ return function(returned)
     if not rawequal(returned, declared) then
         error("the file must return the table that Editor.Extension{...} gave it", 0)
     end
-    return copy(declared, 0, { 0 })
+    local snapshot = copy(declared, 0, { 0 })
+    -- The functions are taken now: what the file does to its own tables afterwards cannot change what runs
+    runs = {}
+    local menu = rawget(declared, "menu")
+    if type(menu) == "table" then
+        for _, item in next, menu do
+            if type(item) == "table" then
+                local id, run = rawget(item, "id"), rawget(item, "run")
+                if type(id) == "string" and type(run) == "function" then
+                    runs[id] = run
+                end
+            end
+        end
+    end
+    return snapshot
+end, function(itemId, ctx, params)
+    local run = runs[itemId]
+    if run == nil then
+        error("the extension has no menu item " .. tostring(itemId), 0)
+    end
+    return run(ctx, params)
 end
 )LUA";
 
@@ -1208,6 +1367,8 @@ end
         bool memoryExhausted = false;
         json snapshot;
         std::unique_ptr<Scripting::LuaSandbox> sandbox;
+        /// The registry reference of the prelude's invoker (runs one menu item), kept for the state's life
+        int invokeRef = LUA_NOREF;
     };
 
     struct ExtensionHost::Entry
@@ -1220,12 +1381,674 @@ end
         std::string error;
         std::vector<std::string> capabilities;
         std::vector<json> items;
-        /// The state the file ran in, kept for E-X3 (idle until then)
+        /// The state the file ran in (idle between invocations; null while an invocation owns it, and for good once one
+        /// was abandoned)
         std::unique_ptr<Scripting::LuaSandbox> sandbox;
+        /// The registry reference, in that state, of the function that runs one menu item
+        int invokeRef = LUA_NOREF;
         /// What the state held at its most while it loaded: its share of the total memory budget
         std::size_t chargedBytes = 0;
         std::deque<std::chrono::steady_clock::time_point> failures;
     };
+
+    // ==================== Invocation: the script's side ====================
+
+    // One invocation of a menu item on a worker thread. It owns copies of everything the worker touches and the state
+    // itself (moved in from the registry for the call), so an abandoned worker finds nothing it must not use: it never
+    // reads or writes the registry, and the state is closed by whichever side lets go last.
+    struct ExtensionInvokeJob
+    {
+        // Inputs: copies, the worker may outlive the caller
+        std::string id;
+        std::string itemId;
+        /// What the script gets as ctx: {itemId, selection}
+        json context;
+        json params;
+        Scripting::SandboxBudget budget;
+        int invokeRef = LUA_NOREF;
+        std::function<void(const std::string &)> hook;
+        std::unique_ptr<Scripting::LuaSandbox> sandbox;
+
+        // The conversation with the command thread, all under `mutex`
+        struct Request
+        {
+            std::string op;
+            json args;
+        };
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool done = false;
+        /// The command thread gave up waiting: a request now fails at once and a call that was waiting stops waiting
+        bool abandoned = false;
+        std::optional<Request> request;
+        std::optional<ExtensionHost::NestedAnswer> answer;
+
+        // Worker thread only
+        std::uint32_t nested = 0;
+        std::uint32_t logLines = 0;
+        std::uint64_t bytes = 0;
+
+        // The result (read by the command thread once `done`)
+        ExtensionHost::InvokeFailure failure = ExtensionHost::InvokeFailure::None;
+        std::string error;
+        json rawResult;
+    };
+
+    namespace
+    {
+        constexpr int MaxValueDepth = 64;
+        constexpr std::size_t MaxValueNodes = 200000;
+        // The address names the registry slot that holds the running invocation's job (a light userdata) for the host
+        // function; empty while no menu item runs
+        const char InvokeJobKey = 0;
+
+        // A value of the script as JSON, with the bytes it will move. Raw stack calls only (lua_next, lua_type and the
+        // conversions of values that need none), so nothing here can run a metamethod or allocate in the state. Throws
+        // std::runtime_error for a value that is not data, or too big; nothing is left to clean up but the stack, which
+        // the caller resets.
+        json ReadLuaValue(lua_State *L, const int index, const int depth, std::size_t &nodes, std::uint64_t &bytes)
+        {
+            if (++nodes > MaxValueNodes)
+            {
+                throw std::runtime_error("the value has more than 200000 entries");
+            }
+            bytes += 8;
+            switch (lua_type(L, index))
+            {
+            case LUA_TNIL:
+                return nullptr;
+            case LUA_TBOOLEAN:
+                return lua_toboolean(L, index) != 0;
+            case LUA_TNUMBER:
+            {
+                if (lua_isinteger(L, index) != 0)
+                {
+                    return static_cast<std::int64_t>(lua_tointeger(L, index));
+                }
+                const double number = static_cast<double>(lua_tonumber(L, index));
+                if (!std::isfinite(number))
+                {
+                    throw std::runtime_error("a number that is NaN or infinite cannot be sent to the host");
+                }
+                return number;
+            }
+            case LUA_TSTRING:
+            {
+                std::size_t length = 0;
+                const char *text = lua_tolstring(L, index, &length);
+                bytes += length;
+                return std::string(text, length);
+            }
+            case LUA_TTABLE:
+                break;
+            default:
+                throw std::runtime_error(std::format("a {} cannot be sent to the host (only nil, booleans, numbers, strings "
+                                                     "and tables of them can)",
+                                                     lua_typename(L, lua_type(L, index))));
+            }
+
+            if (depth >= MaxValueDepth)
+            {
+                throw std::runtime_error("the value is nested deeper than 64 levels");
+            }
+            if (lua_checkstack(L, 8) == 0)
+            {
+                throw std::runtime_error("the value is nested too deeply");
+            }
+            const int table = lua_absindex(L, index);
+            json object = json::object();
+            std::map<std::int64_t, json> list;
+            lua_pushnil(L);
+            while (lua_next(L, table) != 0)
+            {
+                const int keyType = lua_type(L, -2);
+                if (keyType == LUA_TSTRING)
+                {
+                    std::size_t length = 0;
+                    const char *text = lua_tolstring(L, -2, &length);
+                    bytes += length;
+                    std::string key(text, length);
+                    object[std::move(key)] = ReadLuaValue(L, -1, depth + 1, nodes, bytes);
+                }
+                else if (keyType == LUA_TNUMBER && lua_isinteger(L, -2) != 0)
+                {
+                    list[static_cast<std::int64_t>(lua_tointeger(L, -2))] = ReadLuaValue(L, -1, depth + 1, nodes, bytes);
+                }
+                else
+                {
+                    throw std::runtime_error("a table key is neither a string nor an integer");
+                }
+                lua_pop(L, 1);
+            }
+            if (list.empty())
+            {
+                return object; // an empty table is an empty object; a reader that wants a list takes it as an empty one
+            }
+            if (!object.empty())
+            {
+                throw std::runtime_error("a table mixes a list and named entries");
+            }
+            json array = json::array();
+            std::int64_t expected = 1;
+            for (auto &[key, value] : list)
+            {
+                if (key != expected++)
+                {
+                    throw std::runtime_error("a list has a gap (its keys must be 1, 2, 3 ...)");
+                }
+                array.push_back(std::move(value));
+            }
+            return array;
+        }
+
+        // An estimate of what a JSON value costs to move, for the invocation's byte cap (strings and keys by length, 8
+        // bytes a node), without recursion
+        std::uint64_t JsonBytes(const json &value)
+        {
+            std::uint64_t bytes = 0;
+            std::vector<const json *> pending{&value};
+            while (!pending.empty())
+            {
+                const json *item = pending.back();
+                pending.pop_back();
+                bytes += 8;
+                if (item->is_string())
+                {
+                    bytes += item->get_ref<const std::string &>().size();
+                }
+                else if (item->is_object())
+                {
+                    for (auto it = item->begin(); it != item->end(); ++it)
+                    {
+                        bytes += it.key().size();
+                        pending.push_back(&it.value());
+                    }
+                }
+                else if (item->is_array())
+                {
+                    for (const json &child : *item)
+                    {
+                        pending.push_back(&child);
+                    }
+                }
+            }
+            return bytes;
+        }
+
+        // JSON as a Lua value on the stack: plain tables and strings, an object's null entries left out. The value is
+        // first flattened, in C++ and outside any protected call, into a list of steps that point into the JSON; then a
+        // C function run under lua_pcall (PushJson) carries the steps out with raw stack calls. A Lua error there (a
+        // table the allocator refuses at the cap) leaves through that pcall past one frame that holds nothing with a
+        // destructor: no nlohmann iterator, no string, no vector is alive across it.
+        struct PushStep
+        {
+            enum class Kind : std::uint8_t
+            {
+                Nil,
+                Bool,
+                Integer,
+                Number,
+                String,
+                /// lua_createtable with `count` list slots
+                Array,
+                /// lua_createtable with `count` record slots
+                Object,
+                /// The value on top goes into the table below it at index `integer`
+                SetIndex,
+                /// The key and the value on top go into the table below them
+                SetField,
+            };
+            Kind kind = Kind::Nil;
+            bool boolean = false;
+            std::int64_t integer = 0;
+            double number = 0.0;
+            const char *text = nullptr;
+            std::size_t count = 0;
+        };
+
+        void FlattenJson(const json &value, const int depth, std::vector<PushStep> &steps)
+        {
+            if (depth > MaxValueDepth + 8)
+            {
+                throw std::runtime_error("the answer is nested too deeply");
+            }
+            PushStep step;
+            switch (value.type())
+            {
+            case json::value_t::boolean:
+                step.kind = PushStep::Kind::Bool;
+                step.boolean = value.get<bool>();
+                steps.push_back(step);
+                return;
+            case json::value_t::number_integer:
+                step.kind = PushStep::Kind::Integer;
+                step.integer = value.get<std::int64_t>();
+                steps.push_back(step);
+                return;
+            case json::value_t::number_unsigned:
+                step.kind = PushStep::Kind::Number;
+                step.number = static_cast<double>(value.get<std::uint64_t>());
+                steps.push_back(step);
+                return;
+            case json::value_t::number_float:
+                step.kind = PushStep::Kind::Number;
+                step.number = value.get<double>();
+                steps.push_back(step);
+                return;
+            case json::value_t::string:
+            {
+                const std::string &text = value.get_ref<const std::string &>();
+                step.kind = PushStep::Kind::String;
+                step.text = text.data();
+                step.count = text.size();
+                steps.push_back(step);
+                return;
+            }
+            case json::value_t::array:
+            {
+                step.kind = PushStep::Kind::Array;
+                step.count = std::min<std::size_t>(value.size(), 1u << 20);
+                steps.push_back(step);
+                std::int64_t slot = 1;
+                for (const json &item : value)
+                {
+                    FlattenJson(item, depth + 1, steps);
+                    PushStep set;
+                    set.kind = PushStep::Kind::SetIndex;
+                    set.integer = slot++;
+                    steps.push_back(set);
+                }
+                return;
+            }
+            case json::value_t::object:
+            {
+                step.kind = PushStep::Kind::Object;
+                step.count = std::min<std::size_t>(value.size(), 1u << 20);
+                steps.push_back(step);
+                for (auto it = value.begin(); it != value.end(); ++it)
+                {
+                    if (it.value().is_null())
+                    {
+                        continue;
+                    }
+                    const std::string &key = it.key();
+                    PushStep keyStep;
+                    keyStep.kind = PushStep::Kind::String;
+                    keyStep.text = key.data();
+                    keyStep.count = key.size();
+                    steps.push_back(keyStep);
+                    FlattenJson(it.value(), depth + 1, steps);
+                    PushStep set;
+                    set.kind = PushStep::Kind::SetField;
+                    steps.push_back(set);
+                }
+                return;
+            }
+            default:
+                steps.push_back(step); // nil
+                return;
+            }
+        }
+
+        // Runs under lua_pcall: only raw pointers and integers are alive here
+        int PushStepsThunk(lua_State *L)
+        {
+            const auto *steps = static_cast<const std::vector<PushStep> *>(lua_touserdata(L, 1));
+            const PushStep *step = steps->data();
+            const PushStep *const end = step + steps->size();
+            for (; step != end; ++step)
+            {
+                luaL_checkstack(L, 3, "the answer is nested too deeply");
+                switch (step->kind)
+                {
+                case PushStep::Kind::Nil:
+                    lua_pushnil(L);
+                    break;
+                case PushStep::Kind::Bool:
+                    lua_pushboolean(L, step->boolean ? 1 : 0);
+                    break;
+                case PushStep::Kind::Integer:
+                    lua_pushinteger(L, static_cast<lua_Integer>(step->integer));
+                    break;
+                case PushStep::Kind::Number:
+                    lua_pushnumber(L, static_cast<lua_Number>(step->number));
+                    break;
+                case PushStep::Kind::String:
+                    lua_pushlstring(L, step->text, step->count);
+                    break;
+                case PushStep::Kind::Array:
+                    lua_createtable(L, static_cast<int>(step->count), 0);
+                    break;
+                case PushStep::Kind::Object:
+                    lua_createtable(L, 0, static_cast<int>(step->count));
+                    break;
+                case PushStep::Kind::SetIndex:
+                    lua_rawseti(L, -2, static_cast<lua_Integer>(step->integer));
+                    break;
+                case PushStep::Kind::SetField:
+                    lua_rawset(L, -3);
+                    break;
+                }
+            }
+            return 1;
+        }
+
+        // Pushes `value` on the stack. False, with nothing pushed, when the state could not hold it. Throws
+        // std::runtime_error for a value nested too deeply (before anything is pushed).
+        bool PushJson(lua_State *L, const json &value)
+        {
+            std::vector<PushStep> steps;
+            FlattenJson(value, 0, steps);
+            lua_pushcfunction(L, &PushStepsThunk);
+            lua_pushlightuserdata(L, &steps);
+            if (lua_pcall(L, 1, 1, 0) != LUA_OK)
+            {
+                lua_pop(L, 1); // the error object
+                return false;
+            }
+            return true;
+        }
+
+        ExtensionHost::NestedAnswer Refused(std::string text)
+        {
+            ExtensionHost::NestedAnswer answer;
+            answer.ok = false;
+            answer.error = std::move(text);
+            return answer;
+        }
+
+        // The worker hands one request to the command thread and waits for its answer (or for the call to be abandoned)
+        ExtensionHost::NestedAnswer RequestFromHost(ExtensionInvokeJob &job, std::string op, json args)
+        {
+            std::unique_lock lock(job.mutex);
+            if (job.abandoned)
+            {
+                return Refused("the host stopped waiting for this call");
+            }
+            job.request = ExtensionInvokeJob::Request{std::move(op), std::move(args)};
+            job.changed.notify_all();
+            job.changed.wait(lock, [&job] { return job.answer.has_value() || job.abandoned; });
+            if (!job.answer.has_value())
+            {
+                return Refused("the host stopped waiting for this call");
+            }
+            ExtensionHost::NestedAnswer answer = std::move(*job.answer);
+            job.answer.reset();
+            return answer;
+        }
+
+        // What one host call came to: how many results it left on the stack, or -1 with the text of the Lua error
+        struct HostStep
+        {
+            int results = 0;
+            std::string error;
+        };
+
+        HostStep PerformHostCall(lua_State *L)
+        {
+            HostStep step;
+            const auto refuse = [&step](std::string text)
+            {
+                step.results = -1;
+                step.error = std::move(text);
+            };
+            try
+            {
+                if (lua_type(L, 1) != LUA_TSTRING)
+                {
+                    refuse("the host call needs the name of an operation");
+                    return step;
+                }
+                std::size_t length = 0;
+                const char *text = lua_tolstring(L, 1, &length);
+                const std::string op(text, length);
+
+                ExtensionInvokeJob *job = nullptr;
+                lua_rawgetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
+                if (lua_type(L, -1) == LUA_TLIGHTUSERDATA)
+                {
+                    job = static_cast<ExtensionInvokeJob *>(lua_touserdata(L, -1));
+                }
+                lua_pop(L, 1);
+                if (job == nullptr)
+                {
+                    if (op == "log")
+                    {
+                        return step; // while the file loads no menu item runs: there is nobody to write to
+                    }
+                    refuse("Editor.Scene can be used only while a menu item runs, not while its file loads");
+                    return step;
+                }
+
+                json args = nullptr;
+                if (lua_gettop(L) >= 2 && lua_type(L, 2) != LUA_TNIL)
+                {
+                    std::size_t nodes = 0;
+                    std::uint64_t bytes = 0;
+                    args = ReadLuaValue(L, 2, 0, nodes, bytes);
+                    job->bytes += bytes;
+                }
+
+                if (op == "log")
+                {
+                    ++job->logLines;
+                    if (job->logLines > ExtensionHost::MaxLogLines)
+                    {
+                        if (job->logLines > ExtensionHost::MaxLogLines + 1)
+                        {
+                            return step; // dropped
+                        }
+                        args = json{{"level", "warn"},
+                                    {"text", std::format("(more than {} lines in one call: the rest are dropped)",
+                                                         ExtensionHost::MaxLogLines)}};
+                    }
+                }
+                else if (++job->nested > ExtensionHost::MaxNested())
+                {
+                    refuse(std::format("the call sent more than {} commands to the host", ExtensionHost::MaxNested()));
+                    return step;
+                }
+                if (job->bytes > ExtensionHost::MaxInvocationBytes)
+                {
+                    refuse("the call moved more than 64 MiB between the script and the host");
+                    return step;
+                }
+
+                const ExtensionHost::NestedAnswer answer = RequestFromHost(*job, op, std::move(args));
+                if (!answer.ok)
+                {
+                    refuse(answer.error);
+                    return step;
+                }
+                if (answer.value.is_null())
+                {
+                    return step;
+                }
+                job->bytes += JsonBytes(answer.value);
+                if (job->bytes > ExtensionHost::MaxInvocationBytes)
+                {
+                    refuse("the call moved more than 64 MiB between the script and the host");
+                    return step;
+                }
+                if (!PushJson(L, answer.value))
+                {
+                    refuse("the answer is too large for the script's memory");
+                    return step;
+                }
+                step.results = 1;
+            }
+            catch (const std::exception &e)
+            {
+                refuse(e.what());
+            }
+            catch (...)
+            {
+                refuse("the host call failed");
+            }
+            return step;
+        }
+
+        // The one function the script reaches the host with (through the prelude's wrappers). It raises a Lua error,
+        // positioned at the script's call, for anything the host refuses.
+        int HostCall(lua_State *L)
+        {
+            // The message is pushed under a protected call (PushJson) while the C++ objects live; everything that can
+            // raise a Lua error (a refused allocation included) runs after they are gone, so no error leaves past one
+            bool pushed = false;
+            {
+                HostStep step = PerformHostCall(L);
+                if (step.results >= 0)
+                {
+                    return step.results;
+                }
+                try
+                {
+                    pushed = PushJson(L, json(std::move(step.error)));
+                }
+                catch (...)
+                {
+                    pushed = false; // the host's own memory ran out: the fixed text below
+                }
+            }
+            if (pushed)
+            {
+                luaL_where(L, 2);
+                lua_insert(L, -2);
+                lua_concat(L, 2);
+            }
+            else
+            {
+                lua_pushliteral(L, "the host refused the call");
+            }
+            return lua_error(L);
+        }
+
+        // The worker's whole job: the context, the call under the invocation budget, the result read back as JSON. Every
+        // way it can go wrong is data in the job.
+        void RunInvocation(ExtensionInvokeJob &job)
+        {
+            using namespace Scripting;
+            using Failure = ExtensionHost::InvokeFailure;
+            const auto fail = [&job](const Failure kind, std::string text)
+            {
+                job.failure = kind;
+                job.error = std::move(text);
+            };
+            try
+            {
+                if (job.hook)
+                {
+                    job.hook(job.id);
+                }
+                {
+                    const std::lock_guard lock(job.mutex);
+                    if (job.abandoned)
+                    {
+                        fail(Failure::Abandoned, "The call was abandoned before it started");
+                        return;
+                    }
+                }
+                lua_State *L = job.sandbox != nullptr ? job.sandbox->State() : nullptr;
+                if (L == nullptr)
+                {
+                    fail(Failure::HostError, "The extension's state is closed");
+                    return;
+                }
+                // The job's slot exists since the file loaded (false), so setting it never allocates
+                lua_settop(L, 0);
+                lua_pushlightuserdata(L, &job);
+                lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
+
+                // The arguments are pushed under protected calls (PushJson): the state's cap may refuse them
+                lua_rawgeti(L, LUA_REGISTRYINDEX, job.invokeRef);
+                if (!PushJson(L, json(job.itemId)) || !PushJson(L, job.context) || !PushJson(L, job.params))
+                {
+                    lua_settop(L, 0);
+                    lua_pushboolean(L, 0);
+                    lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
+                    fail(Failure::MemoryExhausted, "The extension's state has no room for the call's arguments");
+                    return;
+                }
+
+                job.sandbox->Arm(job.budget);
+                const int status = lua_pcall(L, 3, 1, 0);
+                job.sandbox->Disarm();
+                lua_pushboolean(L, 0);
+                lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
+                if (status != LUA_OK)
+                {
+                    const SandboxOutcome outcome = job.sandbox->FailureOutcome(status, "The menu item failed");
+                    lua_settop(L, 0);
+                    if (outcome.budgetExceeded)
+                    {
+                        fail(Failure::BudgetExceeded, outcome.error);
+                    }
+                    else if (outcome.memoryExhausted)
+                    {
+                        fail(Failure::MemoryExhausted, outcome.error);
+                    }
+                    else
+                    {
+                        fail(Failure::LuaError, outcome.error);
+                    }
+                    return;
+                }
+                try
+                {
+                    std::size_t nodes = 0;
+                    std::uint64_t bytes = 0;
+                    job.rawResult = ReadLuaValue(L, -1, 0, nodes, bytes);
+                }
+                catch (const std::exception &e)
+                {
+                    lua_settop(L, 0);
+                    fail(Failure::BadResult, std::string("The menu item returned something that is not a result: ") + e.what());
+                    return;
+                }
+                lua_settop(L, 0);
+            }
+            catch (const std::exception &e)
+            {
+                fail(Failure::HostError, std::string("The menu item could not be run: ") + e.what());
+            }
+            catch (...)
+            {
+                fail(Failure::HostError, "The menu item could not be run");
+            }
+        }
+
+        std::atomic<std::uint64_t> g_invokeInstructionsOverride{0};
+        std::atomic<std::uint64_t> g_invokeMillisOverride{0};
+        std::atomic<std::int64_t> g_invokeGraceOverride{-1};
+        std::atomic<std::uint32_t> g_maxNestedOverride{0};
+        std::function<void(const std::string &)> g_invokeHook;
+
+        std::function<void(const std::string &)> CurrentInvokeHook()
+        {
+            const std::lock_guard lock(g_hookMutex);
+            return g_invokeHook;
+        }
+
+        Scripting::SandboxBudget CurrentInvocationBudget()
+        {
+            Scripting::SandboxBudget budget = Scripting::SandboxDefaults::InvocationBudget;
+            if (const std::uint64_t instructions = g_invokeInstructionsOverride.load(); instructions != 0)
+            {
+                budget.instructions = instructions;
+            }
+            if (const std::uint64_t millis = g_invokeMillisOverride.load(); millis != 0)
+            {
+                budget.maxMillis = millis;
+            }
+            return budget;
+        }
+
+        std::uint64_t CurrentInvokeGraceMillis()
+        {
+            const std::int64_t value = g_invokeGraceOverride.load();
+            return value < 0 ? ExtensionHost::InvokeGraceMillis : static_cast<std::uint64_t>(value);
+        }
+    }
 
     namespace
     {
@@ -1240,6 +2063,30 @@ end
 
     namespace
     {
+        // Runs under lua_pcall with the prelude's two functions (1: the declaration reader, 2: the invoker): makes the
+        // registry slot of the running invocation's job (false: no menu item runs), so an invocation later sets it
+        // without an allocation, and references both functions. Returns the invoker's reference, then the reader's.
+        int InstallHostCall(lua_State *L)
+        {
+            // Under lua_pcall: the global's key may need an allocation the state's cap refuses
+            lua_pushcfunction(L, &HostCall);
+            lua_setglobal(L, "__n2_host");
+            return 0;
+        }
+
+        int RegisterPrelude(lua_State *L)
+        {
+            lua_pushboolean(L, 0);
+            lua_rawsetp(L, LUA_REGISTRYINDEX, &InvokeJobKey);
+            lua_pushvalue(L, 1);
+            const int reader = luaL_ref(L, LUA_REGISTRYINDEX);
+            lua_pushvalue(L, 2);
+            const int invoker = luaL_ref(L, LUA_REGISTRYINDEX);
+            lua_pushinteger(L, invoker);
+            lua_pushinteger(L, reader);
+            return 2;
+        }
+
         // The worker's whole job: a state, the prelude, the file's chunk, the declaration copy, and its reading. Every
         // way it can go wrong is data in the job.
         void EvaluateFile(ExtensionLoadJob &job)
@@ -1261,15 +2108,38 @@ end
                 }
                 lua_State *L = sandbox->State();
 
-                // The Editor namespace: the prelude returns the function that reads the declaration back
+                // The Editor namespace. The host's one entry point is a global the prelude takes into a local and removes
+                // before any file code runs; the prelude returns the function that reads the declaration back and the
+                // one that runs a menu item (on top)
+                lua_pushcfunction(L, &InstallHostCall);
+                if (const int status = lua_pcall(L, 0, 0, 0); status != LUA_OK)
+                {
+                    const SandboxOutcome failure = sandbox->FailureOutcome(status, "The editor API could not be set up");
+                    lua_settop(L, 0);
+                    Fail(job, failure.error, failure.memoryExhausted);
+                    return;
+                }
                 if (const SandboxOutcome prelude = sandbox->RunChunk(EditorPrelude, "=editor-prelude",
-                                                                      SandboxDefaults::LoadBudget, 1);
+                                                                      SandboxDefaults::LoadBudget, 2);
                     !prelude.ok)
                 {
                     Fail(job, "The editor API could not be set up: " + prelude.error, prelude.memoryExhausted);
                     return;
                 }
-                const int reader = luaL_ref(L, LUA_REGISTRYINDEX);
+                // The two functions go into the registry, and the slot of the running invocation's job is made, all
+                // under a protected call: each can allocate, and the state's cap may refuse it
+                lua_pushcfunction(L, &RegisterPrelude);
+                lua_insert(L, -3);
+                if (const int status = lua_pcall(L, 2, 2, 0); status != LUA_OK)
+                {
+                    const SandboxOutcome failure = sandbox->FailureOutcome(status, "The editor API could not be set up");
+                    lua_settop(L, 0);
+                    Fail(job, failure.error, failure.memoryExhausted);
+                    return;
+                }
+                const int reader = static_cast<int>(lua_tointeger(L, -1));
+                const int invoker = static_cast<int>(lua_tointeger(L, -2));
+                lua_settop(L, 0);
 
                 // The file's chunk. Its name is the file's path inside editor/ (never a host path)
                 if (const SandboxOutcome run = sandbox->RunChunk(job.source, "=" + job.id, SandboxDefaults::LoadBudget, 1);
@@ -1297,6 +2167,7 @@ end
                 lua_settop(L, 0);
                 luaL_unref(L, LUA_REGISTRYINDEX, reader);
 
+                job.invokeRef = invoker;
                 job.sandbox = std::move(sandbox);
                 job.ok = true;
             }
@@ -1706,6 +2577,7 @@ end
             entry.capabilities = std::move(parsed.capabilities);
             entry.items = std::move(parsed.items);
             entry.sandbox = std::move(job->sandbox);
+            entry.invokeRef = job->invokeRef;
             entry.chargedBytes = entry.sandbox != nullptr ? entry.sandbox->Counters().peakBytes : 0;
             entry.state = ExtensionState::Loaded;
         }
@@ -1995,5 +2867,467 @@ end
                 visit(entry.id, entry.sandbox->State());
             }
         }
+    }
+
+    // ==================== Invocation: the host's side ====================
+
+    bool ExtensionHost::IsUuidText(const std::string_view text)
+    {
+        if (text.size() != 36)
+        {
+            return false;
+        }
+        for (std::size_t i = 0; i < text.size(); ++i)
+        {
+            const char c = text[i];
+            if (i == 8 || i == 13 || i == 18 || i == 23)
+            {
+                if (c != '-')
+                {
+                    return false;
+                }
+            }
+            else if (!std::isxdigit(static_cast<unsigned char>(c)))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    namespace
+    {
+        // A text the client will show: control characters other than line breaks and tabs replaced, cut to `maxBytes`
+        std::string CleanShownText(const std::string_view text, const std::size_t maxBytes)
+        {
+            std::string result(text.substr(0, maxBytes));
+            for (char &c : result)
+            {
+                const auto byte = static_cast<unsigned char>(c);
+                if ((byte < 0x20 && c != '\n' && c != '\t') || byte == 0x7F)
+                {
+                    c = '?';
+                }
+            }
+            return result;
+        }
+
+        // What a menu item returned (design 4.1: { message, select, warnings }) as the ExtensionResultInfo of the wire:
+        // each part left out when empty. Throws ShapeError for anything else.
+        json ShapeInvokeResult(const json &raw)
+        {
+            json result = json::object();
+            if (raw.is_null())
+            {
+                return result; // returned nothing
+            }
+            if (!raw.is_object())
+            {
+                Bad("", std::format("the result must be a table such as {{ message = \"...\" }}, not {}", TypeOf(raw)));
+            }
+            CheckKeys(raw, {"message", "select", "warnings"}, "result");
+            if (const json *message = Find(raw, "message"))
+            {
+                if (!message->is_string())
+                {
+                    Bad("result", std::format("'message' must be a string, not {}", TypeOf(*message)));
+                }
+                if (const std::string text = CleanShownText(message->get_ref<const std::string &>(),
+                                                            ExtensionHost::MaxResultTextBytes);
+                    !text.empty())
+                {
+                    result["message"] = text;
+                }
+            }
+            if (const json *select = Find(raw, "select"))
+            {
+                if (!IsList(*select))
+                {
+                    Bad("result", std::format("'select' must be a list of entity ids, not {}", TypeOf(*select)));
+                }
+                if (select->size() > ExtensionHost::MaxResultSelect)
+                {
+                    Bad("result", std::format("'select' has more than {} entries", ExtensionHost::MaxResultSelect));
+                }
+                json ids = json::array();
+                for (const json &id : *select)
+                {
+                    if (!id.is_string() || !ExtensionHost::IsUuidText(id.get_ref<const std::string &>()))
+                    {
+                        Bad("result", "'select' must hold entity ids (UUID strings)");
+                    }
+                    ids.push_back(id);
+                }
+                if (!ids.empty())
+                {
+                    result["select"] = std::move(ids);
+                }
+            }
+            if (const json *warnings = Find(raw, "warnings"))
+            {
+                if (!IsList(*warnings))
+                {
+                    Bad("result", std::format("'warnings' must be a list of strings, not {}", TypeOf(*warnings)));
+                }
+                if (warnings->size() > ExtensionHost::MaxResultWarnings)
+                {
+                    Bad("result", std::format("'warnings' has more than {} entries", ExtensionHost::MaxResultWarnings));
+                }
+                json texts = json::array();
+                for (const json &warning : *warnings)
+                {
+                    if (!warning.is_string())
+                    {
+                        Bad("result", "'warnings' must be strings");
+                    }
+                    texts.push_back(CleanShownText(warning.get_ref<const std::string &>(), ExtensionHost::MaxResultTextBytes));
+                }
+                if (!texts.empty())
+                {
+                    result["warnings"] = std::move(texts);
+                }
+            }
+            return result;
+        }
+    }
+
+    void ExtensionHost::SetInvocationBudgetForTest(const std::uint64_t instructions, const std::uint64_t maxMillis)
+    {
+        g_invokeInstructionsOverride.store(instructions);
+        g_invokeMillisOverride.store(maxMillis);
+    }
+
+    void ExtensionHost::SetInvokeGraceMillisForTest(const std::int64_t millis)
+    {
+        g_invokeGraceOverride.store(millis);
+    }
+
+    void ExtensionHost::SetMaxNestedCommandsForTest(const std::uint32_t limit)
+    {
+        g_maxNestedOverride.store(limit);
+    }
+
+    std::uint32_t ExtensionHost::MaxNested()
+    {
+        const std::uint32_t value = g_maxNestedOverride.load();
+        return value == 0 ? MaxNestedCommands : value;
+    }
+
+    void ExtensionHost::SetInvokeHookForTest(std::function<void(const std::string &)> hook)
+    {
+        const std::lock_guard lock(g_hookMutex);
+        g_invokeHook = std::move(hook);
+    }
+
+    std::uint64_t ExtensionHost::InvokeAbandonMillis()
+    {
+        return CurrentInvocationBudget().maxMillis + CurrentInvokeGraceMillis();
+    }
+
+    std::optional<ExtensionHost::MenuItemRef> ExtensionHost::FindMenuItem(const std::string_view itemId) const
+    {
+        const std::lock_guard lock(_mutex);
+        for (const Entry &entry : _entries)
+        {
+            if (entry.state == ExtensionState::Failed)
+            {
+                continue;
+            }
+            for (const json &item : entry.items)
+            {
+                if (item.at("id").get_ref<const std::string &>() != itemId)
+                {
+                    continue;
+                }
+                MenuItemRef ref;
+                ref.extensionId = entry.id;
+                ref.extensionName = entry.name;
+                ref.sha8 = entry.sha256.substr(0, 8);
+                ref.state = entry.state;
+                ref.capabilities = entry.capabilities;
+                ref.itemId = std::string(itemId);
+                ref.title = item.at("title").get<std::string>();
+                ref.minRole = item.at("minRole").get<std::string>();
+                ref.form = item.contains("form") ? item.at("form") : json(nullptr);
+                return ref;
+            }
+        }
+        return std::nullopt;
+    }
+
+    ExtensionState ExtensionHost::FaultNow(const std::string_view id, const std::string_view reason)
+    {
+        std::function<void(std::uint32_t)> changed;
+        std::uint32_t revision = 0;
+        ExtensionState state = ExtensionState::Failed;
+        bool becameFaulted = false;
+        {
+            const std::lock_guard lock(_mutex);
+            for (Entry &entry : _entries)
+            {
+                if (entry.id != id)
+                {
+                    continue;
+                }
+                state = entry.state;
+                if (entry.state != ExtensionState::Loaded)
+                {
+                    break;
+                }
+                entry.state = ExtensionState::Faulted;
+                entry.error = Printable(std::format("Disabled until reload: {}", reason));
+                ++_uiRevision;
+                becameFaulted = true;
+                state = entry.state;
+                changed = _changed;
+                revision = _uiRevision;
+                break;
+            }
+        }
+        if (becameFaulted)
+        {
+            ServerLog::Warn(std::format("Editor extension {} is faulted until reload ({})", Printable(std::string(id), 120),
+                                     Printable(std::string(reason), 200)));
+            if (changed)
+            {
+                changed(revision);
+            }
+        }
+        return state;
+    }
+
+    ExtensionHost::InvokeOutcome ExtensionHost::Invoke(const MenuItemRef &item, const json &selection, const json &params,
+                                                       const NestedHandler &handler)
+    {
+        InvokeOutcome outcome;
+        const auto refuse = [this, &outcome](std::string text)
+        {
+            outcome.failure = InvokeFailure::HostError;
+            outcome.error = Printable(StripHostPaths(std::move(text), _root));
+            return outcome;
+        };
+
+        // A worker slot first, as a load takes one: at most MaxWorkers threads of extension code exist, abandoned ones
+        // included
+        WorkerCount &workers = SharedWorkerCount();
+        {
+            const std::lock_guard lock(workers.mutex);
+            if (workers.live >= MaxWorkers)
+            {
+                const int live = workers.live;
+                return refuse(std::format("{} extension calls are still running (abandoned ones count): try again later",
+                                          live));
+            }
+            ++workers.live;
+        }
+        {
+            const std::lock_guard lock(_tracker->mutex);
+            ++_tracker->live;
+        }
+        const std::shared_ptr<Tracker> tracker = _tracker;
+        const auto releaseSlot = [&workers, tracker]
+        {
+            {
+                const std::lock_guard lock(workers.mutex);
+                --workers.live;
+            }
+            {
+                const std::lock_guard lock(tracker->mutex);
+                --tracker->live;
+            }
+            tracker->changed.notify_all();
+        };
+
+        // The state moves into the job for the call
+        auto job = std::make_shared<ExtensionInvokeJob>();
+        bool stopping = false;
+        {
+            const std::lock_guard lock(_mutex);
+            stopping = _stopping;
+            if (!stopping)
+            {
+                for (Entry &entry : _entries)
+                {
+                    if (entry.id == item.extensionId)
+                    {
+                        if (entry.state == ExtensionState::Loaded && entry.sandbox != nullptr)
+                        {
+                            job->sandbox = std::move(entry.sandbox);
+                            job->invokeRef = entry.invokeRef;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        if (job->sandbox == nullptr)
+        {
+            releaseSlot();
+            return refuse(stopping ? "The host is shutting down" : "The extension is not loaded");
+        }
+
+        // The state goes back into the registry (when the entry is still there and still wants it)
+        const auto giveBack = [this, id = item.extensionId](std::unique_ptr<Scripting::LuaSandbox> sandbox)
+        {
+            std::unique_ptr<Scripting::LuaSandbox> dropped;
+            {
+                const std::lock_guard lock(_mutex);
+                for (Entry &entry : _entries)
+                {
+                    if (entry.id == id)
+                    {
+                        if (entry.sandbox == nullptr && entry.state != ExtensionState::Failed)
+                        {
+                            entry.sandbox = std::move(sandbox);
+                        }
+                        break;
+                    }
+                }
+                dropped = std::move(sandbox);
+            }
+            // Whatever the registry did not take closes here, outside its mutex
+        };
+
+        const Scripting::SandboxBudget budget = CurrentInvocationBudget();
+        job->id = item.extensionId;
+        job->itemId = item.itemId;
+        job->context = json{{"itemId", item.itemId}, {"selection", selection}};
+        job->params = params;
+        job->budget = budget;
+        job->hook = CurrentInvokeHook();
+
+        try
+        {
+            std::thread([job, tracker]
+            {
+                RunInvocation(*job);
+                // The call is over: the worker stops counting before anyone is told, as a load worker does
+                {
+                    WorkerCount &count = SharedWorkerCount();
+                    const std::lock_guard lock(count.mutex);
+                    --count.live;
+                }
+                {
+                    const std::lock_guard lock(tracker->mutex);
+                    --tracker->live;
+                }
+                tracker->changed.notify_all();
+                {
+                    const std::lock_guard lock(job->mutex);
+                    job->done = true;
+                }
+                job->changed.notify_all();
+            }).detach();
+        }
+        catch (...)
+        {
+            releaseSlot();
+            giveBack(std::move(job->sandbox));
+            return refuse("A thread could not be started to run the menu item");
+        }
+
+        // The conversation: the worker asks, the command thread answers, until the worker is done. A worker that is
+        // silent for the wall budget plus the grace is abandoned.
+        const std::chrono::milliseconds silenceLimit(InvokeAbandonMillis());
+        bool abandoned = false;
+        std::uint32_t answered = 0;
+        {
+            std::unique_lock lock(job->mutex);
+            auto silentSince = std::chrono::steady_clock::now();
+            for (;;)
+            {
+                const bool woke = job->changed.wait_until(lock, silentSince + silenceLimit,
+                                                          [&job] { return job->done || job->request.has_value(); });
+                if (!woke)
+                {
+                    abandoned = true;
+                    job->abandoned = true;
+                    job->changed.notify_all();
+                    break;
+                }
+                if (job->done)
+                {
+                    break;
+                }
+                ExtensionInvokeJob::Request request = std::move(*job->request);
+                job->request.reset();
+                lock.unlock();
+                NestedAnswer answer;
+                try
+                {
+                    answer = handler(request.op, request.args);
+                }
+                catch (const std::exception &e)
+                {
+                    answer = Refused(std::string("the host could not do it: ") + e.what());
+                }
+                catch (...)
+                {
+                    answer = Refused("the host could not do it");
+                }
+                if (request.op != "log")
+                {
+                    ++answered;
+                }
+                lock.lock();
+                job->answer = std::move(answer);
+                job->changed.notify_all();
+                silentSince = std::chrono::steady_clock::now();
+            }
+        }
+        outcome.nestedCommands = answered;
+
+        // The state: back into the registry unless the worker still has it
+        if (!abandoned)
+        {
+            giveBack(std::move(job->sandbox));
+        }
+
+        InvokeFailure failure = abandoned ? InvokeFailure::Abandoned : job->failure;
+        std::string text = abandoned ? std::format("The menu item did not answer within {} ms and was abandoned",
+                                                   silenceLimit.count())
+                                     : job->error;
+        if (failure == InvokeFailure::None)
+        {
+            try
+            {
+                outcome.result = ShapeInvokeResult(job->rawResult);
+            }
+            catch (const ShapeError &e)
+            {
+                failure = InvokeFailure::BadResult;
+                text = std::string("The menu item returned something that is not a result: ") + e.what();
+            }
+        }
+
+        outcome.failure = failure;
+        if (failure == InvokeFailure::None)
+        {
+            return outcome;
+        }
+        outcome.result = json::object();
+        outcome.error = Printable(StripHostPaths(std::move(text), _root));
+        switch (failure)
+        {
+        case InvokeFailure::LuaError:
+        case InvokeFailure::BadResult:
+            outcome.faulted = NoteFailure(item.extensionId) == ExtensionState::Faulted;
+            break;
+        case InvokeFailure::BudgetExceeded:
+            outcome.faulted = FaultNow(item.extensionId, "the menu item ran out of its budget") == ExtensionState::Faulted;
+            break;
+        case InvokeFailure::MemoryExhausted:
+            outcome.faulted = FaultNow(item.extensionId, "the menu item used all the memory of its state") ==
+                              ExtensionState::Faulted;
+            break;
+        case InvokeFailure::Abandoned:
+            outcome.faulted = FaultNow(item.extensionId, "the menu item stopped answering and was abandoned") ==
+                              ExtensionState::Faulted;
+            break;
+        case InvokeFailure::HostError:
+        case InvokeFailure::None:
+            break;
+        }
+        return outcome;
     }
 }

@@ -107,8 +107,10 @@ target_link_libraries(engine
 )
 
 # == n2net: ITransport, the in-memory SimTransport, the packet layer (acks, reliable and unreliable channels,
-# fragmentation). Standard library only: no sockets, no threads, no platform headers, no engine types, so it builds the
-# same on Windows, Linux, arm64 and the single-threaded web build. Headers are under include/engine/network/n2net/.
+# fragmentation) and, on native platforms only, UdpTransport. Everything but UdpTransport is standard library only: no
+# sockets, no threads, no platform headers, no engine types, so it builds the same on Windows, Linux, arm64 and the
+# single-threaded web build. UdpTransport.cpp uses BSD sockets or Winsock and compiles to nothing under Emscripten
+# (N2NET_HAS_UDP is 0 there). Headers are under include/engine/network/n2net/.
 file(GLOB N2NET_SOURCES "src/network/n2net/*.cpp")
 add_library(n2net STATIC ${N2NET_SOURCES})
 add_library(N2Engine::n2net ALIAS n2net)
@@ -123,6 +125,11 @@ set_target_properties(n2net PROPERTIES
     CXX_STANDARD_REQUIRED ON
     CXX_EXTENSIONS OFF
 )
+
+# Winsock for UdpTransport (the web build has no UdpTransport and no Winsock)
+if (WIN32)
+    target_link_libraries(n2net PUBLIC ws2_32)
+endif ()
 
 if (MSVC)
     target_compile_options(n2net PRIVATE /W4)
