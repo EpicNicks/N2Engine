@@ -410,6 +410,52 @@ namespace N2PhysicsTests
         EXPECT_TRUE(state.grounded);
     }
 
+    TYPED_TEST(CharacterMotorTest, AKerbIsNotClimbedWithoutAStepOffset)
+    {
+        this->SpawnGround();
+        this->SpawnBox("Kerb", Vector3(7.0f, 0.075f, 0.0f), Vector3(10.0f, 0.15f, 60.0f)); // x 2 to 12, top at y = 0.15
+        this->Build();
+        CharacterSettings settings;
+        settings.stepOffset = 0.0f;
+
+        CharacterState state = this->Settled(settings, Vector3(0.0f, 3.0f, 0.0f));
+        CharacterInput walk;
+        walk.move = Vector3(3.0f, 0.0f, 0.0f);
+        state = this->Run(settings, state, walk, 150);
+        EXPECT_LT(state.position.x, 1.7f) << "stopped at the face of the kerb (x = 2)";
+        EXPECT_NEAR(state.position.y, kRestHeight, 0.05f);
+    }
+
+    TYPED_TEST(CharacterMotorTest, AStepJustAboveTheStepOffsetIsNotClimbed)
+    {
+        this->SpawnGround();
+        this->SpawnBox("Step", Vector3(7.0f, 0.2f, 0.0f), Vector3(10.0f, 0.4f, 60.0f)); // x 2 to 12, top at y = 0.4
+        this->Build();
+        const CharacterSettings settings; // step offset 0.3
+
+        CharacterState state = this->Settled(settings, Vector3(0.0f, 3.0f, 0.0f));
+        CharacterInput walk;
+        walk.move = Vector3(3.0f, 0.0f, 0.0f);
+        state = this->Run(settings, state, walk, 150);
+        EXPECT_LT(state.position.x, 1.7f) << "stopped at the face of the step (x = 2)";
+        EXPECT_NEAR(state.position.y, kRestHeight, 0.05f);
+    }
+
+    TYPED_TEST(CharacterMotorTest, ASlowMoveStillClimbsAStep)
+    {
+        this->SpawnGround();
+        this->SpawnBox("Step", Vector3(7.0f, 0.1f, 0.0f), Vector3(10.0f, 0.2f, 60.0f)); // x 2 to 12, top at y = 0.2
+        this->Build();
+        const CharacterSettings settings;
+
+        CharacterState state = this->Settled(settings, Vector3(0.0f, 3.0f, 0.0f));
+        CharacterInput walk;
+        walk.move = Vector3(0.05f, 0.0f, 0.0f); // under a millimetre per tick
+        state = this->Run(settings, state, walk, 60 * 60);
+        EXPECT_GT(state.position.x, 2.0f) << "over the face of the step";
+        EXPECT_NEAR(state.position.y, kRestHeight + 0.2f, 0.05f);
+    }
+
     TYPED_TEST(CharacterMotorTest, ARaisedStepOffsetLetsItClimbTheTallerStep)
     {
         this->SpawnGround();

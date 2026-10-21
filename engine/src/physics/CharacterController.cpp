@@ -29,8 +29,8 @@ namespace N2Engine::Physics
         constexpr int kSlideIterations = 4;
         /// Penetration recovery looks this many rings out, each a step further, in 10 directions: at most 160 overlaps
         constexpr int kRecoveryRings = 16;
-        /// A step is taken only when it gets this much further than walking into the obstacle did
-        constexpr float kStepProgressGain = 1.0e-3f;
+        /// A step is taken only when it gets further than walking into the obstacle did, by more than float noise
+        constexpr float kStepProgressGain = 1.0e-6f;
         /// The slope test's tolerance: flat ground reports a normal a hair short of (0, 1, 0)
         constexpr float kGroundTolerance = 1.0e-3f;
 
@@ -105,6 +105,33 @@ namespace N2Engine::Physics
                 return backend.Overlap(shape, scratch, layerMask, QueryTriggers::Ignore) > 0;
             }
 
+            /// Whether a capsule contact with a ground-like normal is the edge of a step and not a slope: the surface
+            /// just beyond the contact point (along the horizontal move `direction`) is flat while the contact normal
+            /// is slanted (a capsule's round end meeting an edge reports a slanted normal at any step height)
+            bool IsStepEdge(const RaycastHit &contact, const Vector3 &direction, const Vector3 &normal) const
+            {
+                if (normal.y >= 1.0f - kGroundTolerance)
+                {
+                    return false;
+                }
+                const Vector3 across = UnitOr(Vector3(direction.x, 0.0f, direction.z), Vector3(0.0f, 0.0f, 0.0f));
+                if (across.x == 0.0f && across.z == 0.0f)
+                {
+                    return false;
+                }
+                const float inward = std::max(0.02f, skin);
+                const float lift = std::max(0.05f, 2.0f * skin);
+                const Vector3 origin(contact.point.x + across.x * inward, contact.point.y + lift,
+                                     contact.point.z + across.z * inward);
+                RaycastHit top;
+                if (!backend.Raycast(origin, Vector3(0.0f, -1.0f, 0.0f), top, 2.0f * lift, layerMask,
+                                     QueryTriggers::Ignore))
+                {
+                    return false;
+                }
+                return UnitOr(top.normal, Vector3(0.0f, 1.0f, 0.0f)).y >= 1.0f - kGroundTolerance;
+            }
+
             IPhysicsBackend &backend;
             float radius;
             /// Half the length of the segment between the centres of the end spheres
@@ -129,7 +156,7 @@ namespace N2Engine::Physics
             Vector3 walkableNormal = Vector3(0.0f, 1.0f, 0.0f);
             /// Vertical move only: stopped while going up
             bool hitCeiling = false;
-            /// Horizontal move only: met a surface steeper than the slope limit (a wall, or the face of a step)
+            /// Horizontal move only: met a surface steeper than the slope limit, or the edge of a step (a wall)
             bool hitWall = false;
         };
 
@@ -185,7 +212,7 @@ namespace N2Engine::Physics
                 else
                 {
                     Vector3 plane = normal;
-                    if (!walkable)
+                    if (!walkable || c.IsStepEdge(hit, direction, normal))
                     {
                         result.hitWall = true;
                         plane = UnitOr(Vector3(normal.x, 0.0f, normal.z), Vector3(-direction.x, 0.0f, -direction.z));
