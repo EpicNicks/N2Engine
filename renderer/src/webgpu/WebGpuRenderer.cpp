@@ -10,6 +10,7 @@
 
 #include "renderer/webgpu/WebGpuRenderer.hpp"
 #include "renderer/webgpu/WebGpuFactory.hpp"
+#include "renderer/webgpu/ReadbackRows.hpp"
 
 #include "WebGpuInternal.hpp"
 
@@ -274,12 +275,7 @@ namespace Renderer::WebGpu
                         static_cast<const std::uint8_t*>(wgpuBufferGetConstMappedRange(state.pendingReadback.Get(), 0, size));
                     if (mapped != nullptr)
                     {
-                        state.lastReadback.resize(static_cast<std::size_t>(rowBytes) * copyHeight);
-                        for (std::uint32_t y = 0; y < copyHeight; ++y)
-                        {
-                            std::memcpy(state.lastReadback.data() + static_cast<std::size_t>(y) * rowBytes,
-                                        mapped + static_cast<std::size_t>(y) * paddedRowBytes, rowBytes);
-                        }
+                        StripRowPadding(mapped, paddedRowBytes, rowBytes, copyHeight, state.lastReadback);
                         state.lastReadbackWidth = copyWidth;
                         state.lastReadbackHeight = copyHeight;
                     }
