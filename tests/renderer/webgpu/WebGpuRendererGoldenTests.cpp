@@ -37,8 +37,9 @@
 //   - STRICT with edges (the default 2/255, the pixels within one pixel of any colour change in either image left out): scenes
 //     with triangle edges that are not on pixel boundaries (cull modes, a rotated and projected cube). The rasterisation tie
 //     rules differ between backends, so the pixels ON an edge may fall on either side; everything else is held to 2/255.
-//   - LIT (mean error <= 2/255, <= 1% of the pixels over 8/255): linearly filtered textures and interpolated vertex colours.
-//     The GPU filters with fixed-point weights, the software renderer in floating point.
+//   - STRICT 2/255 with nothing left out: linearly filtered textures and interpolated vertex colours. The GPU filters with
+//     fixed-point weights, the software renderer in floating point; they differ by at most 1/255 on the scenes below, so the
+//     Vulkan tests' looser "lit" class (mean error <= 2/255, <= 1% over 8/255) is not needed here.
 // The software renderer has no mipmaps, so a minified mipmapped texture is checked against a CPU reference of the level the
 // sampler's LOD picks instead (the last test).
 //
@@ -113,9 +114,9 @@ namespace
         return options;
     }
 
-    Diff::Options Lit()
+    Diff::Options Strict()
     {
-        return Diff::Lit({0, 0, 0});
+        return Diff::Options{}; // 2/255 on every channel of every pixel
     }
 
     /// Row-major 4x4 products and transforms, as the engine has them (translation in the last column)
@@ -274,6 +275,13 @@ namespace
             const Diff::Result result = Diff::Compare(webgpu, reference, options);
             std::cout << "[ cross-diff ] " << what << ": " << result.Describe() << std::endl;
             EXPECT_TRUE(Diff::Agree(webgpu, reference, options)) << what;
+
+            // For the record (not asserted): the same frames with nothing left out, which says how much the edge exclusion
+            // of the scenes with triangle edges is needed on this device
+            Diff::Options everything;
+            everything.tolerance = options.tolerance;
+            const Diff::Result all = Diff::Compare(webgpu, reference, everything);
+            std::cout << "[ cross-diff ] " << what << " (nothing left out, not asserted): " << all.Describe() << std::endl;
         }
     };
 }
@@ -516,10 +524,10 @@ TEST_F(WebGpuGoldenTest, TwoCubesWithTheDepthTestAgreeWithTheSoftwareRendererAwa
 }
 
 // ============================================================================
-// Lit class: filtering and interpolation
+// Linear filtering and interpolation
 // ============================================================================
 
-TEST_F(WebGpuGoldenTest, ALinearlyFilteredMagnifiedTextureAgreesWithTheSoftwareRendererInTheLitClass)
+TEST_F(WebGpuGoldenTest, ALinearlyFilteredMagnifiedTextureAgreesWithTheSoftwareRendererWithinTheStrictTolerance)
 {
     ExpectSameAsSoftware("linear texture, clamp", [](IRenderer& r)
     {
@@ -532,10 +540,10 @@ TEST_F(WebGpuGoldenTest, ALinearlyFilteredMagnifiedTextureAgreesWithTheSoftwareR
         r.SetViewProjection(Identity, Identity);
         r.DrawMesh(quad, Identity, material);
         r.EndFrame();
-    }, Lit());
+    }, Strict());
 }
 
-TEST_F(WebGpuGoldenTest, ALinearlyFilteredRepeatedTextureAgreesWithTheSoftwareRendererInTheLitClass)
+TEST_F(WebGpuGoldenTest, ALinearlyFilteredRepeatedTextureAgreesWithTheSoftwareRendererWithinTheStrictTolerance)
 {
     ExpectSameAsSoftware("linear texture, repeat", [](IRenderer& r)
     {
@@ -554,10 +562,10 @@ TEST_F(WebGpuGoldenTest, ALinearlyFilteredRepeatedTextureAgreesWithTheSoftwareRe
         r.SetViewProjection(Identity, Identity);
         r.DrawMesh(quad, Identity, material);
         r.EndFrame();
-    }, Lit());
+    }, Strict());
 }
 
-TEST_F(WebGpuGoldenTest, InterpolatedVertexColoursAgreeWithTheSoftwareRendererInTheLitClass)
+TEST_F(WebGpuGoldenTest, InterpolatedVertexColoursAgreeWithTheSoftwareRendererWithinTheStrictTolerance)
 {
     ExpectSameAsSoftware("vertex colour gradient", [](IRenderer& r)
     {
@@ -575,7 +583,7 @@ TEST_F(WebGpuGoldenTest, InterpolatedVertexColoursAgreeWithTheSoftwareRendererIn
         r.SetViewProjection(Identity, Identity);
         r.DrawMesh(quad, Identity, white);
         r.EndFrame();
-    }, Lit());
+    }, Strict());
 }
 
 // ============================================================================

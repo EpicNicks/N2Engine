@@ -595,6 +595,21 @@ namespace Renderer::WebGpu
             const bool alignmentKnown =
                 limits.minUniformBufferOffsetAlignment != 0 && limits.minUniformBufferOffsetAlignment != WGPU_LIMIT_U32_UNDEFINED;
             _state->uniformAlignment = alignmentKnown ? limits.minUniformBufferOffsetAlignment : DefaultUniformAlignment;
+            // What the draws need (WebGpuDraw.cpp): a 192-byte block bound at a dynamic offset in group 0, a material block at a
+            // dynamic offset and five textures with five samplers in group 1. Every WebGPU device offers at least the core
+            // defaults, which are more than this; the check says so rather than assume it
+            const std::uint32_t slots = ShaderInterface::kSamplerCount;
+            if (limits.maxUniformBufferBindingSize < ShaderInterface::kPerDrawBlockSize ||
+                limits.maxDynamicUniformBuffersPerPipelineLayout < 2 || limits.maxBindGroups < 2 ||
+                limits.maxBindingsPerBindGroup < 1 + 2 * slots || limits.maxSampledTexturesPerShaderStage < slots ||
+                limits.maxSamplersPerShaderStage < slots)
+            {
+                return Fail(InitStatus::Failed, "the device's limits are below what the draws need (a uniform binding of " +
+                                                    std::to_string(ShaderInterface::kPerDrawBlockSize) +
+                                                    " bytes, 2 dynamic uniform buffers, 2 bind groups, " +
+                                                    std::to_string(1 + 2 * slots) + " bindings and " + std::to_string(slots) +
+                                                    " textures and samplers per stage)");
+            }
         }
         else
         {
