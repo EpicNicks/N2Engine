@@ -78,6 +78,9 @@ namespace N2Engine::N2Net
         /// Delivers what is due at the network's virtual time (the network's Advance moves time; Poll never does)
         void Poll(EventHandler handler) override;
         void Disconnect(PeerId peer) override;
+        /// The other endpoint's simulated address (SimNetwork::EndpointAddress); false for an id that is not an
+        /// endpoint, or this endpoint's own
+        [[nodiscard]] bool GetPeerEndpoint(PeerId peer, PeerEndpoint &endpoint) const override;
 
     private:
         friend class SimNetwork;
@@ -129,6 +132,12 @@ namespace N2Engine::N2Net
         bool SetLinkConfig(PeerId from, PeerId to, const SimLinkConfig &config);
         [[nodiscard]] const SimLinkStats *GetLinkStats(PeerId from, PeerId to) const noexcept;
 
+        /// The address an endpoint's datagrams appear to come from (SimTransport::GetPeerEndpoint). By default endpoint
+        /// n is the IPv4 address 10.x.y.z holding n in its low 24 bits, port 7777, so every endpoint has its own. A test
+        /// sets another to put two endpoints behind one address, or one on loopback. False for an unknown id.
+        bool SetEndpointAddress(PeerId id, const PeerEndpoint &endpoint);
+        [[nodiscard]] bool EndpointAddress(PeerId id, PeerEndpoint &endpoint) const;
+
         [[nodiscard]] std::uint64_t NowMicros() const noexcept { return now_; }
         void Advance(std::uint64_t micros) noexcept { now_ += micros; }
 
@@ -155,6 +164,8 @@ namespace N2Engine::N2Net
         std::uint64_t now_ = 0;
         std::uint64_t arrivalCounter_ = 0;
         std::vector<std::unique_ptr<SimTransport>> endpoints_;
+        /// Addresses set by SetEndpointAddress (the others are the default)
+        std::map<PeerId, PeerEndpoint> addresses_;
         std::map<std::pair<PeerId, PeerId>, Direction> directions_;
     };
 } // namespace N2Engine::N2Net
