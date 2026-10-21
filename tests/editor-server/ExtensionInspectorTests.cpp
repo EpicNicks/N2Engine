@@ -128,7 +128,9 @@ namespace
     // The registry entry of one file
     json EntryOf(const ExtensionHost &host, const std::string &id)
     {
-        for (const json &entry : host.DescribeJson().at("extensions"))
+        // Held in a local: a range-for over a member of a temporary would read it after it is gone
+        const json description = host.DescribeJson();
+        for (const json &entry : description.at("extensions"))
         {
             if (entry.at("id") == id)
                 return entry;
